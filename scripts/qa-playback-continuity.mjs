@@ -25,7 +25,7 @@ const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
 
 /**
  * The fixture's chapter densities, mirrored from `CONTINUITY_QA_MEDIA_COUNTS`
- * in src/main.tsx. Mirrored rather than imported because this script runs in
+ * in src/preview/qaEntry.tsx. Mirrored rather than imported because this script runs in
  * node against a served page, the same way `qa-playback-prefetch.mjs` mirrors
  * the beat table it drives.
  */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildPlaybackSteps, routePointChapterDensity } from "./journeyPlayback";
 import { playbackMapBridgeBoundary, resolvePlaybackMapBridge } from "./playbackMapBridge";
+import { buildPlaybackPlan } from "./journeyPlaybackPlan";
 import type { Journey } from "./types";
 
 function fixture(counts: number[]): Journey {
@@ -18,6 +19,29 @@ function fixture(counts: number[]): Journey {
 }
 
 describe("Playback map bridge boundaries", () => {
+  it("keeps the director's nearby fast travel budget unchanged by spatial presentation", () => {
+    const journey = fixture([0, 1, 3]);
+    journey.routePoints = journey.routePoints.map((point, index) => ({
+      ...point, latitude: 1.290256 + index * 0.01, longitude: 103.851471 + index * 0.01,
+    }));
+    const steps = buildPlaybackSteps(journey);
+    const plan = buildPlaybackPlan(journey, "fast");
+    const original = JSON.stringify(plan);
+    const travel = plan.segments.find((segment) => segment.stepIndex === 5)!;
+    expect(travel.kind).toBe("travel");
+    expect(travel.durationMs).toBeGreaterThanOrEqual(420);
+    expect(travel.durationMs).toBeLessThan(421);
+    const boundary = playbackMapBridgeBoundary(journey, steps[4], steps[5])!;
+    expect(boundary.direction).toBe("media-to-map");
+    for (const reduceMotion of [false, true]) {
+      resolvePlaybackMapBridge({ boundary, reduceMotion,
+        place: { left: 0, top: 0, width: 300, height: 100 },
+        media: { left: 30, top: 160, width: 600, height: 400 },
+      });
+      expect(JSON.stringify(buildPlaybackPlan(journey, "fast"))).toBe(original);
+    }
+  });
+
   it.each([0, 1, 2, 3, 4, 10])("bridges only sparse chapter edges (%i media)", (count) => {
     const journey = fixture([count, 0]);
     const steps = buildPlaybackSteps(journey);

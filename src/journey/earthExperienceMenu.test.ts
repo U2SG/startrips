@@ -234,7 +234,7 @@ describe("Earth experience hydration wiring", () => {
     expect(main).toContain("<LivingAtlasApp earthExperiencePolicy={policy} />");
     // The product path is the wrapper, not the bare Atlas that would keep the
     // hardcoded default.
-    expect(main).toContain("    : OwnerLivingAtlasApp;");
+    expect(main).toContain("const Experience = previews?.QaExperience ?? OwnerLivingAtlasApp;");
   });
 
   it("applies the account edge during render, not after paint", () => {

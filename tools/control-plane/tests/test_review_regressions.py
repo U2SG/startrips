@@ -112,10 +112,10 @@ class UnreadableCarrierCases(unittest.TestCase):
 
 
 class FailureFamilyOwnerCases(fixture.SyntheticOne):
-    def record(self):
+    def record(self, root_cause_required=True):
         fingerprint = 'd' * 64
-        return {'root_cause_required': True, 'fingerprint': fingerprint,
-                'family': fingerprint[:16]}
+        return {'root_cause_required': root_cause_required, 'fingerprint': fingerprint,
+                'family': fingerprint[:16], 'infrastructure': False}
 
     def issue_api(self, endpoint):
         return {'title': '', 'body': ''}
@@ -133,6 +133,78 @@ class FailureFamilyOwnerCases(fixture.SyntheticOne):
             owner = action_plan.failure_family_owner(
                 self.path, 'ST-001', fixture.REPO, [self.record()])
         self.assertEqual({'feature': 'ST-002', 'issue': 427, 'matched_tokens': [token]}, owner)
+
+    def test_first_occurrence_can_have_explicit_other_owner(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='pending', issue=454),
+        )
+        record = self.record(root_cause_required=False)
+        token = record['fingerprint'][:16]
+        def comments(endpoint):
+            return [{'body': 'exact CI family ' + token}] if '/issues/454/comments' in endpoint else []
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), \
+             mock.patch.object(action_plan, 'pages', side_effect=comments):
+            owner = action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [record])
+        self.assertEqual({'feature': 'ST-002', 'issue': 454, 'matched_tokens': [token]}, owner)
+
+    def test_mixed_owned_and_unowned_failures_stay_on_current_feature(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='pending', issue=454),
+        )
+        owned = self.record(root_cause_required=False)
+        unowned = dict(owned, fingerprint='e' * 64, family='e' * 16)
+        token = owned['fingerprint'][:16]
+        def comments(endpoint):
+            return [{'body': 'exact CI family ' + token}] if '/issues/454/comments' in endpoint else []
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), mock.patch.object(action_plan, 'pages', side_effect=comments):
+            owner = action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [owned, unowned])
+        self.assertIsNone(owner)
+
+    def test_multiple_failures_all_owned_by_same_external_feature_route_together(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='pending', issue=454),
+        )
+        first = self.record(root_cause_required=False)
+        second = dict(first, fingerprint='e' * 64, family='e' * 16)
+        tokens = [first['fingerprint'][:16], second['fingerprint'][:16]]
+        def comments(endpoint):
+            return [{'body': 'families ' + ' '.join(tokens)}] if '/issues/454/comments' in endpoint else []
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), mock.patch.object(action_plan, 'pages', side_effect=comments):
+            owner = action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [first, second])
+        self.assertEqual(
+            {'feature': 'ST-002', 'issue': 454, 'matched_tokens': tokens}, owner)
+
+    def test_plan_routes_first_occurrence_to_explicit_family_owner(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445,
+                            pr_links=['https://github.com/synthetic/project/pull/1']),
+            fixture.feature('ST-002', status='pending', issue=454),
+        )
+        record = self.record(root_cause_required=False)
+        pr = {'merged': False, 'state': 'open', 'mergeable': True,
+              'head': {'sha': fixture.A}}
+        relation = {'source_sha': fixture.A, 'final_sha': fixture.A, 'sealed': False}
+        review = {'head_sha': fixture.A, 'unresolved': 0, 'changes_requested': 0}
+        ci = {'state': 'failure', 'source_green': False, 'final_green': False, 'run': None}
+        owner = {'feature': 'ST-002', 'issue': 454,
+                 'matched_tokens': [record['fingerprint'][:16]]}
+        with mock.patch.object(action_plan, 'api', return_value=pr), \
+             mock.patch.object(action_plan, 'source_relation', return_value=relation), \
+             mock.patch.object(action_plan, 'review_backlog', return_value=review), \
+             mock.patch.object(action_plan, 'ledger_pending_final', return_value=False), \
+             mock.patch.object(action_plan, 'latest_ci', return_value=ci), \
+             mock.patch.object(action_plan, 'source_review', return_value='CLEAR'), \
+             mock.patch.object(action_plan, 'observe_failures', return_value=[record]), \
+             mock.patch.object(action_plan, 'failure_family_owner', return_value=owner):
+            result = action_plan.plan(self.path, 'ST-001', fixture.REPO, record_failures=True)
+        self.assertEqual('REPAIR_CI_FAMILY', result['action'])
+        self.assertEqual(owner, result['failure_family_owner'])
 
     def test_unique_current_owner_keeps_repair_on_current_feature(self):
         self.write(

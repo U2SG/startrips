@@ -15,7 +15,29 @@ import { useMobileSurfaceHistory } from "../journey/useMobileSurfaceHistory";
 import { useModalFocus } from "../journey/useModalFocus";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
 import { AtlasViewProvider, createOwnerAtlasView } from "../journey/atlasView";
-import { previousAccountSurface, shouldActivateAccountSheetFocus, shouldRenderStandaloneAccountDock, type AccountSurface } from "./accountSurface";
+import {
+  accountSurfaceEyebrow,
+  accountSurfaceFromLocationSearch,
+  accountSurfaceTitle,
+  isAccountFormSurface,
+  isAccountPasswordSurface,
+  nextPasswordLinkSurface,
+  passwordLinkSurfaceText,
+  previousAccountSurface,
+  shouldActivateAccountSheetFocus,
+  shouldRenderStandaloneAccountDock,
+  EXPIRED_PASSWORD_LINK_QUERY,
+  type AccountSurface,
+} from "./accountSurface";
+import {
+  AccountPasswordRefusal,
+  accountPasswordRefusalText,
+  loadAccountIdentityMethods,
+  requestSetPasswordLink,
+  resolveAccountPasswordState,
+  submitAccountPasswordChange,
+  type AccountPasswordState,
+} from "./accountPassword";
 import {
   EarthExperienceMenuEntry,
   earthExperienceEntryBusy,
@@ -138,7 +160,13 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   forceReady?: boolean;
   lightweightScene?: boolean;
 }) {
-  const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot">("sign-in");
+  // #346: an expired set-password link is often opened in another browser, or
+  // after the session ended. That person lands here rather than in the account
+  // surface, so the same marker opens the mode that can send them a new link
+  // instead of a sign-in form they have no password for.
+  const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot">(
+    () => accountSurfaceFromLocationSearch(window.location.search) ? "forgot" : "sign-in",
+  );
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -286,6 +314,12 @@ function ResetPassword() {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
+  // #346: this page redeems the account surface's set-password link as well as
+  // the sign-in gate's reset link, and the server's single-use lifetime is the
+  // only place either one can be found expired. When it is, the person is
+  // handed back to the surface that can send another — with the marker only,
+  // never the token.
+  const [linkExpired, setLinkExpired] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -293,9 +327,15 @@ function ResetPassword() {
     const result = await authClient.resetPassword({ token, newPassword: password });
     setPending(false);
     if (result.error || !result.data) {
-      setMessage(result.error?.message || "邀请已失效");
+      const code = String(result.error?.code ?? "");
+      const expired = !result.error?.message || code.includes("TOKEN");
+      setLinkExpired(expired);
+      setMessage(expired
+        ? passwordLinkSurfaceText("password-link-expired")
+        : String(result.error?.message));
       return;
     }
+    setLinkExpired(false);
     setMessage("密码已更新，现在可以返回登录。");
   }
 
@@ -315,6 +355,7 @@ function ResetPassword() {
           </form>
         ) : <p className="auth-message">重置链接无效或缺少 token。</p>}
         {message ? <p className="auth-message" role="status">{message}</p> : null}
+        {linkExpired ? <a className="auth-link" href={`/?${EXPIRED_PASSWORD_LINK_QUERY}`}>重新发送设置链接</a> : null}
         <a className="auth-link" href="/">返回登录</a>
       </section>
     </main>
@@ -361,6 +402,114 @@ function InvitationGate({ invitationId, onAccepted }: { invitationId: string; on
   );
 }
 
+/**
+ * #346: the account-surface password panel.
+ *
+ * Every field is uncontrolled on purpose. A controlled input would put the
+ * password itself in React state, where it outlives the submit and lands in
+ * any component state snapshot; here the value exists only inside the submit
+ * handler and the form is reset as soon as the server answers. The grant never
+ * reaches this component at all — `submitAccountPasswordChange` claims and
+ * spends it inside one call.
+ *
+ * The credential-less branch offers a set-password LINK rather than an
+ * enrollment form. The server's enrollment route needs a recent-control
+ * proof, and password re-verification — the only issuer #345 shipped — is
+ * exactly what an Account without a password cannot produce; per the owner's
+ * 2026-09-21 decision on #346 the verified-email link carries that proof
+ * instead. Offering a form that could not be submitted would be the
+ * untruthful-degradation failure.
+ */
+function AccountPasswordPanel({ state, surface, onSurface, email, className }: {
+  state: AccountPasswordState | null;
+  surface: AccountSurface;
+  onSurface: (next: AccountSurface) => void;
+  email: string;
+  className?: string;
+}) {
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState("");
+  const [tone, setTone] = useState<"error" | "success">("error");
+
+  async function sendSetPasswordLink() {
+    setPending(true);
+    setMessage("");
+    const result = await requestSetPasswordLink(
+      { email, redirectTo: `${window.location.origin}/reset-password` },
+      (input) => authClient.requestPasswordReset(input),
+    );
+    setPending(false);
+    onSurface(nextPasswordLinkSurface(surface, result.outcome));
+  }
+
+  async function submitChange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    setPending(true);
+    setMessage("");
+    try {
+      const result = await submitAccountPasswordChange({
+        currentPassword: String(fields.get("currentPassword") ?? ""),
+        newPassword: String(fields.get("newPassword") ?? ""),
+      }, { refreshSession: () => authClient.getSession() });
+      form.reset();
+      setTone("success");
+      setMessage(result.revokedOtherSessions > 0
+        ? `密码已更新，其他 ${result.revokedOtherSessions} 处登录已退出。`
+        : "密码已更新，当前登录继续有效。");
+    } catch (error) {
+      setTone("error");
+      setMessage(error instanceof AccountPasswordRefusal
+        ? accountPasswordRefusalText(error.code)
+        : "操作未完成，请稍后再试。");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const notice = message
+    ? <p className="auth-message" role={tone === "error" ? "alert" : "status"}>{message}</p>
+    : null;
+
+  if (!state) return <p className="auth-message" role="status">正在读取账户登录方式…</p>;
+
+  if (state.kind === "send-link") {
+    const sendable = surface !== "password-link-offered";
+    return (
+      <div className={className}>
+        <p className="auth-copy" role="status">{passwordLinkSurfaceText(surface)}</p>
+        <button type="button" disabled={pending} onClick={() => void sendSetPasswordLink()}>
+          {pending ? "发送中…" : sendable ? "重新发送设置链接" : "发送设置链接"}
+        </button>
+        {notice}
+      </div>
+    );
+  }
+
+  if (state.kind === "recover") {
+    return (
+      <div className={className}>
+        <p className="auth-copy" role="status">
+          {state.reason === "email-missing"
+            ? "这个账户还没有可用于恢复的邮箱，请先补充并验证邮箱，然后再设置密码。"
+            : "账户邮箱尚未验证，请先完成邮箱验证，然后再设置密码。"}
+        </p>
+        {notice}
+      </div>
+    );
+  }
+
+  return (
+    <form className={className} onSubmit={submitChange}>
+      <label><span>当前密码</span><input required name="currentPassword" type="password" autoComplete="current-password" maxLength={128} /></label>
+      <label><span>新密码</span><input required name="newPassword" type="password" autoComplete="new-password" minLength={10} maxLength={128} /></label>
+      <button type="submit" disabled={pending}>{pending ? "更新中…" : "更新密码"}</button>
+      {notice}
+    </form>
+  );
+}
+
 function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cinematicActive = false }: {
   children: ReactNode;
   activeOrganizationId?: string;
@@ -382,6 +531,15 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   const [editDedication, setEditDedication] = useState("");
   const [dockOpen, setDockOpen] = useState(false);
   const [accountSurface, setAccountSurface] = useState<AccountSurface>(null);
+  // #346: which password offer this Account is eligible for, as the server
+  // answers it. Null until the identity list has been read; nothing about the
+  // password itself is ever held here.
+  const [passwordState, setPasswordState] = useState<AccountPasswordState | null>(null);
+  const [passwordEmail, setPasswordEmail] = useState("");
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  // The password flow's own surface, shared by the desktop dock and the mobile
+  // sheet so the link flow reports sent / expired / failed in one vocabulary.
+  const [passwordSurface, setPasswordSurface] = useState<AccountSurface>(null);
   const [mobileAccountHost, setMobileAccountHost] = useState<HTMLElement | null>(null);
   const isMobileV2 = useCompactMobileLayout();
   // #332: the account menu is where a person changes the Earth experience.
@@ -410,7 +568,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
     [ownerRole],
   );
   const accountSheetOpen = isMobileV2 && accountSurface !== null;
-  const accountFormOpen = accountSurface === "invite" || accountSurface === "edit";
+  const accountFormOpen = isAccountFormSurface(accountSurface);
   const accountSheetFocusActive = shouldActivateAccountSheetFocus(accountSheetOpen, gate.kind === "ready");
   const accountSheetRef = useModalFocus<HTMLElement>(
     () => setAccountSurface((surface) => previousAccountSurface(surface)),
@@ -427,6 +585,63 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
     "account-form",
     () => setAccountSurface("menu"),
   );
+
+  // The password surface lives in two hosts. Moving it in one place keeps the
+  // mobile sheet's drill header and the dock panel on the same state, and the
+  // guard means an outcome cannot pull an unrelated surface into this flow.
+  const applyPasswordSurface = (next: AccountSurface) => {
+    setPasswordSurface(next);
+    setAccountSurface((current) => isAccountPasswordSurface(current) ? next : current);
+  };
+  // #346: the entry point reads the authoritative identity list before it
+  // decides what to render, so a credential-less Account is never shown a
+  // "current password" field and a credential-holding one is never offered
+  // the set-password link. A read that fails says so instead of guessing.
+  const openAccountPassword = async (initial: AccountSurface = null) => {
+    setInviteOpen(false);
+    setEditAtlasOpen(false);
+    setPasswordState(null);
+    // The surface is cleared with the state it belongs to: a read that fails,
+    // or an Account whose identity list has changed, must not reopen on the
+    // previous read's "link sent".
+    setPasswordSurface(null);
+    setPasswordOpen(true);
+    setMessage("正在读取账户登录方式…");
+    try {
+      const [methods, session] = await Promise.all([
+        loadAccountIdentityMethods(),
+        authClient.getSession(),
+      ]);
+      const user = session.data?.user;
+      const resolved = resolveAccountPasswordState(methods, {
+        email: user?.email ?? null,
+        emailVerified: Boolean(user?.emailVerified),
+      });
+      const surface: AccountSurface = resolved.kind === "change"
+        ? "password-change"
+        : initial ?? "password-link-offered";
+      setPasswordEmail(user?.email ?? "");
+      setPasswordState(resolved);
+      setPasswordSurface(surface);
+      setMessage("");
+      if (isMobileV2) setAccountSurface(surface);
+    } catch (error) {
+      setPasswordOpen(false);
+      setMessage(error instanceof AccountPasswordRefusal
+        ? accountPasswordRefusalText(error.code)
+        : "无法读取账户登录方式，请稍后再试。");
+    }
+  };
+
+  // Someone whose set-password link had already expired is handed back here by
+  // the reset page. The marker is consumed from the URL immediately so a
+  // reload or a shared link cannot re-open the expired state out of nowhere.
+  useEffect(() => {
+    if (gate.kind !== "ready") return;
+    if (accountSurfaceFromLocationSearch(window.location.search) === null) return;
+    window.history.replaceState(window.history.state, "", window.location.pathname);
+    void openAccountPassword("password-link-expired");
+  }, [gate.kind]);
 
   useEffect(() => {
     setSelectedActiveId(activeOrganizationId);
@@ -653,8 +868,9 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
             <span className="account-dock__identity"><strong>{gate.atlas.title}</strong> · {userName}</span>
             {message ? <small>{message}</small> : null}
             <div className="account-dock__actions">
-              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
-              <button type="button" onClick={() => { setInviteOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
+              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
+              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
+              <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}>账户密码</button>
               <EarthExperienceMenuEntry
                 surface="dock"
                 policy={earthExperience.policy}
@@ -676,6 +892,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                 <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
               </form>
             ) : null}
+            {passwordOpen ? <AccountPasswordPanel state={passwordState} surface={passwordSurface} onSurface={applyPasswordSurface} email={passwordEmail} /> : null}
           </div>
         </aside>
       ) : null}
@@ -694,6 +911,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                 <div className="account-sheet__actions">
                   {isOwner ? <button type="button" onClick={() => { setMessage(""); setAccountSurface("invite"); }}><span>邀请另一位</span><small>发送私人图谱邀请</small></button> : null}
                   <button type="button" onClick={openMobileEdit}><span>编辑图谱</span><small>修改名称与题词</small></button>
+                  <button type="button" onClick={() => void openAccountPassword()}><span>账户密码</span><small>修改或设置登录密码</small></button>
                   <EarthExperienceMenuEntry
                     surface="sheet"
                     policy={earthExperience.policy}
@@ -707,7 +925,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
               <>
                 <header className="account-sheet__drill-header">
                   <button type="button" onClick={() => setAccountSurface("menu")} aria-label="返回账户菜单">‹</button>
-                  <div><p>{accountSurface === "invite" ? "INVITATION" : "ATLAS DETAILS"}</p><h2 id="account-sheet-title">{accountSurface === "invite" ? "邀请另一位" : "编辑图谱"}</h2></div>
+                  <div><p>{accountSurfaceEyebrow(accountSurface)}</p><h2 id="account-sheet-title">{accountSurfaceTitle(accountSurface)}</h2></div>
                 </header>
                 {message ? <p className="account-sheet__message" role="alert">{message}</p> : null}
                 {accountSurface === "invite" ? (
@@ -715,12 +933,14 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                     <label><span>对方邮箱</span><input required type="email" inputMode="email" autoComplete="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
                     <button type="submit" disabled={pending}>{pending ? "发送中…" : "发送邀请"}</button>
                   </form>
-                ) : (
+                ) : accountSurface === "edit" ? (
                   <form className="account-sheet__form" onSubmit={saveAtlas}>
                     <label><span>图谱名称</span><input required maxLength={80} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
                     <label><span>题词（可选）</span><textarea rows={3} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
                     <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
                   </form>
+                ) : (
+                  <AccountPasswordPanel state={passwordState} surface={accountSurface} onSurface={applyPasswordSurface} email={passwordEmail} className="account-sheet__form" />
                 )}
               </>
             )}

@@ -1103,13 +1103,52 @@ describe("#368 cover-reveal worker protocol", () => {
       const reconciled = await reconcileCoverRevealDerivatives(
         context.backend.dependencies,
       );
-      expect(reconciled.superseded).toBeGreaterThanOrEqual(1);
+      expect(reconciled).toEqual({ examined: 1, superseded: 1 });
 
       const row = await readJob(context.claim.job.id);
       expect(row.state).toBe("superseded");
       expect(row.outputStorageKey).toBeNull();
       expect(context.backend.deleted).toContain(outputKey);
       expect(context.backend.objects.has(outputKey)).toBe(false);
+      expect(await reconcileCoverRevealDerivatives(context.backend.dependencies))
+        .toEqual({ examined: 0, superseded: 0 });
+    });
+
+    it("counts only the stale derivatives this pass supersedes", async () => {
+      const context = await queuedAndClaimed();
+      const first = await readJob(context.claim.job.id);
+      const [second] = await db.insert(coverRevealDerivatives).values({
+        ...first,
+        id: randomUUID(),
+        sourceContentHash: "b".repeat(64),
+        outputStorageKey: `${COVER_REVEAL_KEY_PREFIX}${randomUUID()}`,
+        leaseTokenHash: null,
+        leaseExpiresAt: null,
+        state: "queued",
+      }).returning();
+      await db.update(mediaAssets)
+        .set({ contentHash: "c".repeat(64) })
+        .where(eq(mediaAssets.id, context.asset.id));
+
+      const storage = context.backend.dependencies.configuredStorage();
+      const deleteObject = storage.deleteObject;
+      let interleaved = false;
+      let concurrentSuperseded = 0;
+      storage.deleteObject = async (input) => {
+        await deleteObject(input);
+        if (interleaved) return;
+        interleaved = true;
+        concurrentSuperseded = (
+          await reconcileCoverRevealDerivatives(context.backend.dependencies)
+        ).superseded;
+      };
+
+      const reconciled = await reconcileCoverRevealDerivatives(context.backend.dependencies);
+      expect(reconciled).toEqual({ examined: 1, superseded: 1 });
+      expect(concurrentSuperseded).toBe(1);
+      expect((await readJob(first.id)).state).toBe("superseded");
+      expect((await readJob(second.id)).state).toBe("superseded");
+      expect(context.backend.deleted).toHaveLength(2);
     });
 
     it("supersedes a live derivative once its Journey starts deleting", async () => {
@@ -1163,6 +1202,76 @@ describe("#368 cover-reveal worker protocol", () => {
         .from(coverRevealWrites)
         .where(eq(coverRevealWrites.storageKey, key));
       expect(remaining).toHaveLength(0);
+    });
+
+    it("settles referenced writes and retries only failed orphan deletions", async () => {
+      const context = await queuedAndClaimed();
+      const row = await readJob(context.claim.job.id);
+      const referencedKey = row.outputStorageKey!;
+      const orphanKey = `${COVER_REVEAL_KEY_PREFIX}${randomUUID()}`;
+      const failedKey = `${COVER_REVEAL_KEY_PREFIX}${randomUUID()}`;
+      const expiresAt = new Date("2000-01-01T00:00:00Z");
+      await db.insert(coverRevealWrites).values([referencedKey, orphanKey, failedKey].map((key) => ({
+        derivativeId: row.id,
+        storageDriver: key === referencedKey ? "s3" : "previous-backend",
+        storageKey: key,
+        expiresAt,
+      })));
+      for (const key of [referencedKey, orphanKey, failedKey]) {
+        context.backend.objects.set(key, GENERATED_DERIVATIVE);
+      }
+      const storage = context.backend.dependencies.configuredStorage();
+      const deleteObject = storage.deleteObject;
+      const resolvedBackends: string[] = [];
+      context.backend.dependencies.storageForBackend = (backendId) => {
+        resolvedBackends.push(backendId);
+        return storage;
+      };
+      storage.deleteObject = async (input) => {
+        if (input.key === failedKey) throw new Error("temporary storage outage");
+        await deleteObject(input);
+      };
+      const now = new Date("2000-01-01T01:00:00Z");
+      expect(await reconcileCoverRevealWrites(now, context.backend.dependencies))
+        .toEqual({ examined: 3, retired: 1, settled: 1 });
+      expect(context.backend.deleted).toEqual([orphanKey]);
+      expect(resolvedBackends).toEqual(["previous-backend", "previous-backend"]);
+      expect(context.backend.objects.has(referencedKey)).toBe(true);
+      expect(context.backend.objects.has(failedKey)).toBe(true);
+      const remaining = await db.select().from(coverRevealWrites)
+        .where(inArray(coverRevealWrites.storageKey, [referencedKey, orphanKey, failedKey]));
+      expect(remaining.map((write) => write.storageKey)).toEqual([failedKey]);
+
+      storage.deleteObject = deleteObject;
+      expect(await reconcileCoverRevealWrites(now, context.backend.dependencies))
+        .toEqual({ examined: 1, retired: 1, settled: 0 });
+      expect(context.backend.objects.has(failedKey)).toBe(false);
+    });
+
+    it("keeps referenced derivative objects and retries a failed namespace deletion", async () => {
+      const context = await queuedAndClaimed();
+      const row = await readJob(context.claim.job.id);
+      const referencedKey = row.outputStorageKey!;
+      const orphanKey = `${COVER_REVEAL_KEY_PREFIX}${randomUUID()}`;
+      const failedKey = `${COVER_REVEAL_KEY_PREFIX}${randomUUID()}`;
+      context.backend.objects.set(referencedKey, GENERATED_DERIVATIVE);
+      context.backend.objects.set(orphanKey, GENERATED_DERIVATIVE);
+      context.backend.objects.set(failedKey, GENERATED_DERIVATIVE);
+      const storage = context.backend.dependencies.configuredStorage();
+      const deleteObject = storage.deleteObject;
+      storage.deleteObject = async (input) => {
+        if (input.key === failedKey) throw new Error("temporary storage outage");
+        await deleteObject(input);
+      };
+      const swept = await reconcileCoverRevealNamespace(undefined, context.backend.dependencies);
+      expect(swept).toEqual({ examined: 3, retired: 1, continuationToken: undefined });
+      expect(context.backend.deleted).toEqual([orphanKey]);
+      expect(context.backend.objects.has(referencedKey)).toBe(true);
+      expect(context.backend.objects.has(failedKey)).toBe(true);
+      storage.deleteObject = deleteObject;
+      expect(await reconcileCoverRevealNamespace(undefined, context.backend.dependencies))
+        .toEqual({ examined: 2, retired: 1, continuationToken: undefined });
+      expect(context.backend.objects.has(failedKey)).toBe(false);
     });
   });
 });

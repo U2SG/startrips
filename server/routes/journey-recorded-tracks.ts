@@ -1,9 +1,11 @@
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { MAX_OPERATION_KEY_LENGTH } from "../journey/recorded-track";
+import { readRecordedTrackImport } from "../journey/recorded-track-import";
 import {
   deleteRecordedTrackForAtlas,
   listRecordedTracksForAtlas,
+  writeRecordedTrackForAtlas,
   type RecordedTrackOperation,
 } from "../repositories/journey-recorded-track-repository";
 import { readJsonObject } from "./json-body";
@@ -39,9 +41,78 @@ function serialize(operation: RecordedTrackOperation) {
 
 export const journeyRecordedTrackRoutes = new Hono();
 
-// Read-only on purpose. #341 still owns the decision about the first external
-// input format, so this slice exposes no import or upload surface; writes go
-// through `writeRecordedTrackForAtlas` only.
+/**
+ * Import one recorded-track file into an existing Journey.
+ *
+ * The path names the channel, never a format: a request declares which format
+ * its document is in, `readRecordedTrackImport` looks that name up in the
+ * format registration, and a second format becomes importable here without a
+ * second route. Nothing about GPX appears in this handler.
+ *
+ * The document travels as text in the JSON body. It is hashed as bytes, and
+ * that hash alone is the operation key, so re-submitting one file to one
+ * Journey replays the operation the first submission created instead of
+ * adding a second copy of the same recording.
+ *
+ * Authority is the session's Atlas through `requireAtlasAccess` and nothing
+ * else. A Journey belonging to another Atlas answers the same 404 a Journey
+ * that does not exist answers, so an import cannot be used to ask whether
+ * someone else's Journey is there.
+ */
+journeyRecordedTrackRoutes.post("/:journeyId/imports", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  context.header("Cache-Control", RECORDED_TRACK_CACHE_CONTROL);
+  const journeyId = context.req.param("journeyId");
+  if (!UUID_PATTERN.test(journeyId)) {
+    return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  }
+
+  const body = await readJsonObject(() => context.req.json());
+  const document = body?.document;
+  if (typeof document !== "string" || document.length === 0) {
+    return context.json({ error: "INVALID_IMPORT_REQUEST" }, 400);
+  }
+
+  const read = readRecordedTrackImport(
+    body?.format,
+    Buffer.from(document, "utf8"),
+  );
+  if (!read.ok) {
+    // The transport's own 413 says the request was too big to accept at all;
+    // this one says the declared format's ceiling refused the file. Distinct
+    // codes, so a client can tell which limit it met.
+    return context.json(
+      { error: read.reason },
+      read.reason === "FILE_TOO_LARGE" ? 413 : 400,
+    );
+  }
+
+  const result = await writeRecordedTrackForAtlas(
+    atlas.id,
+    journeyId,
+    read.write,
+  );
+  if (result.outcome === "journey-missing") {
+    return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  }
+  if (result.outcome === "operation-conflict") {
+    // The same bytes already stored under this Journey as different evidence —
+    // reachable only when one document reads differently under two formats.
+    return context.json({ error: "RECORDED_TRACK_CONFLICT" }, 409);
+  }
+
+  return context.json(
+    {
+      imported: {
+        format: read.format.id,
+        replayed: result.replayed,
+        recordedTrack: serialize(result.operation),
+      },
+    },
+    result.replayed ? 200 : 201,
+  );
+});
+
 journeyRecordedTrackRoutes.get("/:journeyId", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "read");
   const journeyId = context.req.param("journeyId");

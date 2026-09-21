@@ -103,6 +103,29 @@ class FingerprintCases(fixture.SyntheticOne):
         self.assertTrue(set(ci.DIMENSIONS) <= set(value))
         self.assertEqual(('city', '1280x720', '3'), (value['fixture'], value['viewport'], value['dpr']))
 
+    def test_shard_marker_preserves_pre_shard_logical_lane_and_fingerprint(self):
+        old_job = job('browser-qa / home-base-context', 9, 'failure',
+                      steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        shard_job = job('browser-qa / route-home-share', 10, 'failure',
+                        steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        diagnostic = 'AssertionError: context focus missing fixture=home viewport=390x844 DPR=3'
+        old = ci.normalize_failure(old_job, diagnostic)
+        sharded = ci.normalize_failure(shard_job, 'STARTRIPS_QA_SUITE=home-base-context\n' + diagnostic)
+        self.assertEqual('browser-qa / home-base-context', sharded['lane'])
+        self.assertEqual(old['lane'], sharded['lane'])
+        self.assertEqual(old['fingerprint'], sharded['fingerprint'])
+        self.assertEqual(old['family'], sharded['family'])
+
+    def test_city_label_family_uses_logical_suite_marker_without_keyword_hint(self):
+        shard_job = job('browser-qa / labels-recovery', 10, 'failure',
+                        steps=[{'name': 'Run browser QA shard', 'conclusion': 'failure'}])
+        value = ci.normalize_failure(
+            shard_job,
+            'STARTRIPS_QA_SUITE=city-label-anchoring\nAssertionError: label budget mismatch fixture=city',
+        )
+        self.assertEqual('browser-qa / city-label-anchoring', value['lane'])
+        self.assertEqual('city-label-anchoring', value['family'])
+
     def test_workflow_curl_fail_echo_is_not_a_runtime_assertion(self):
         text = ('2026-09-17T01:00:00Z \x1b[36;1mif curl --fail --silent http://localhost; then\x1b[0m\n'
                 '2026-09-17T01:00:01Z throw new Error(failures.join("; "));\n'
@@ -111,6 +134,35 @@ class FingerprintCases(fixture.SyntheticOne):
         self.assertTrue(value['assertion'].startswith('Error: [qa-city-label-anchoring]'))
         self.assertNotIn('curl', value['assertion']); self.assertNotIn('throw', value['assertion'])
         self.assertEqual('hong-kong-localization', value['fixture'])
+
+    def test_playwright_locator_timeout_beats_generic_job_footer(self):
+        failed = job('browser-qa / playback-continuity', 9, 'failure', steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        text = ("locator.evaluate: Timeout 30000ms exceeded.\n"
+                "Call log:\n"
+                "  - waiting for locator('.journey-playback__controls button[aria-label=\"next\"]')\n"
+                "##[error]Process completed with exit code 1.\n")
+        value = ci.normalize_failure(failed, text)
+        self.assertTrue(value['assertion'].startswith('locator.evaluate: Timeout <duration> exceeded.'))
+        self.assertIn('waiting for locator', value['assertion'])
+        self.assertNotIn('Process completed with exit code', value['assertion'])
+
+    def test_explicit_qa_fail_beats_generic_actions_footer(self):
+        failed = job('browser-qa / playback-continuity', 9, 'failure', steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        text = ('[qa-playback-continuity] ok compact-mobile:media-beat-occupies-the-stage {}\n'
+                '[qa-playback-continuity] FAIL compact-mobile:long-note-preserves-media-row '
+                '{"captionClientHeight":1346,"mediaHeight":855.203125}\n'
+                'ELIFECYCLE Command failed with exit code 1.\n'
+                '##[error]Process completed with exit code 1.\n')
+        value = ci.normalize_failure(failed, text)
+        self.assertTrue(value['assertion'].startswith('[qa-playback-continuity] FAIL compact-mobile:long-note-preserves-media-row'))
+        self.assertEqual('playback-continuity:compact-mobile', value['fixture'])
+        self.assertNotIn('Process completed with exit code', value['assertion'])
+
+    def test_playwright_timeout_duration_does_not_split_locator_family(self):
+        failed = job('browser-qa / playback-continuity', 9, 'failure', steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        a = ci.normalize_failure(failed, "locator.evaluate: Timeout 30000ms exceeded.\n- waiting for locator('#next')")
+        b = ci.normalize_failure(failed, "locator.evaluate: Timeout 45000ms exceeded.\n- waiting for locator('#next')")
+        self.assertEqual(a['fingerprint'], b['fingerprint'])
 
     def test_status_fixture_not_rendered_is_not_failed_fixture_identity(self):
         text = ('[qa-city-label-anchoring] dense-coastline fixture=not rendered\n'

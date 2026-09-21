@@ -130,19 +130,28 @@ claude_run() {
 #     dependent branched off main before its parent merged would be cut from a
 #     baseline that lacks the parent's code.
 next_feature() {
-local occupied_json='{}'
+local process_occupied_json='{}'
+local external_occupied_json='{}'
 if [[ "$STARTRIPS_LANE" == "experience" ]]; then
-  occupied_json="$(python3 -B "$ROOT/lib/execution.py" occupied "$ROOT" --lane experience)" || return 6
+  process_occupied_json="$(python3 -B "$ROOT/lib/execution.py" occupied "$ROOT" --lane experience)" || return 6
+  external_occupied_json="$(python3 -B "$ROOT/lib/external_execution.py" occupancy "$ROOT")" || return 6
 fi
-python3 - "$ROOT/feature_list.json" "$STARTRIPS_LANE" "$FEATURE_ALLOW" "$occupied_json" "${CARRIER_FEATURE:-}" "${FEATURE_SKIP:-}" <<'PY'
+python3 - "$ROOT/feature_list.json" "$STARTRIPS_LANE" "$FEATURE_ALLOW" "$process_occupied_json" "$external_occupied_json" "${CARRIER_FEATURE:-}" "${FEATURE_SKIP:-}" <<'PY'
 import json, re, sys
 
-p, lane, allow_raw, occupied_raw, carrier_feature, skip_raw = sys.argv[1:7]
+p, lane, allow_raw, process_raw, external_raw, carrier_feature, skip_raw = sys.argv[1:8]
 allow = set(allow_raw.split())
 skip = set(skip_raw.split())
-occupied = json.loads(occupied_raw or '{}')
-occupied_features = set(occupied.get('features') or [])
-experience_full = lane == 'experience' and not carrier_feature and occupied.get('available_slots', 1) <= 0
+process_occupied = json.loads(process_raw or '{}')
+external_occupied = json.loads(external_raw or '{}')
+process_features = set(process_occupied.get('features') or [])
+external_features = set(external_occupied.get('features') or [])
+occupied_features = process_features | external_features
+process_used = int(process_occupied.get('occupied_slots') or 0)
+external_used = int(external_occupied.get('occupied_slots') or 0)
+overlap = len(process_features & external_features)
+experience_used = process_used + external_used - overlap
+experience_full = lane == 'experience' and not carrier_feature and experience_used >= 2
 d = json.load(open(p, encoding='utf-8'))
 
 # Lane classification, derived and never written back to the matrix.
@@ -359,10 +368,10 @@ reconcile_merge_state() {
     --repo "$GH_REPO" --base "$BASE_BRANCH"
 }
 
-# An exhausted Claude quota is not a feature failure: the subprocess prints
-# "You've hit your session limit · resets 1:10pm (Asia/Singapore)" and produces
-# no work. Stop with a distinct code and the reset time instead of counting it
-# against the feature or letting `set -e` report a generic failure.
+# LOCAL Backend Claude quota is not a feature failure. Experience never reaches
+# this provider: it is dispatched to external Codexless execution after owner
+# preparation, so Backend session/weekly limits cannot block Experience.
+
 quota_stop() {
   local log="$1" who="$2" line
   line="$(grep -m1 -iE "hit your (weekly|session|usage) limit" "$log" 2>/dev/null || true)"
@@ -445,26 +454,27 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     echo "=== Reconciling merge state (iteration $i) ==="
     reconcile_merge_state
 
-  # New open issues become queue entries BEFORE the selection below, so a P0/P1
-  # regression triaged in this iteration is the one this iteration builds. Plain
-  # statement, never a subshell: a quota hit inside triage exits 5 and that has
-  # to reach the loop.
-  echo "=== Issue intake (iteration $i) ==="
-  PRE_INTAKE_FEATURE="$(read_next_feature)" || exit 6
-  if [[ -z "$PRE_INTAKE_FEATURE" && -z "$(ready_to_merge_prs)" ]]; then
-    intake_new_issues || exit 6
+  if [[ "$STARTRIPS_LANE" == "experience" ]]; then
+    # Experience is executed by the scheduled Codexless provider, not by the
+    # LOCAL Backend Claude CLI. Model-based intake/amend would silently consume
+    # the Backend account/session quota before Experience reaches its owner.
+    # Development Orchestrator owns product auto-feed and issue re-triage.
+    echo "=== Issue intake (iteration $i) ==="
+    echo "[intake] Experience provider is external Codexless; model intake/re-triage delegated to Orchestrator"
   else
-    # No bulk replenishment while registered work exists; urgent P0/P1 discovery
-    # still runs so pending work cannot hide a newly reported production regression.
-    INTAKE_URGENT_ONLY=1 intake_new_issues || exit 6
+    # Backend keeps the installed intake path until Orchestrator has a real
+    # executable intake implementation. This preserves queue replenishment and
+    # mapped-issue amend/gate clearing for the Backend lane.
+    echo "=== Issue intake (iteration $i) ==="
+    PRE_INTAKE_FEATURE="$(read_next_feature)" || exit 6
+    if [[ -z "$PRE_INTAKE_FEATURE" && -z "$(ready_to_merge_prs)" ]]; then
+      intake_new_issues || exit 6
+    else
+      INTAKE_URGENT_ONLY=1 intake_new_issues || exit 6
+    fi
+    echo "=== Issue update reconcile (iteration $i) ==="
+    intake_reconcile_issues
   fi
-
-  # Issues that ALREADY map to a feature are reconciled after the new-issue
-  # pass, so the shared per-iteration session budget goes to a fresh P0/P1
-  # regression first. A backfill, a curated note and plain snapshot bookkeeping
-  # cost no session at all; only an amend or a reopen follow-up does.
-  echo "=== Issue update reconcile (iteration $i) ==="
-  intake_reconcile_issues
 
   FEATURE="$(read_next_feature)" || exit 6
   if [[ -z "$FEATURE" ]]; then
@@ -573,6 +583,18 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
       exit 7
     fi
   fi
+  if [[ "$STARTRIPS_LANE" == "experience" ]]; then
+    ROW_TOKEN="$(printf '%s' "$PLAN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["row_token"])' | tr -d '\r')" || exit 6
+    DISPATCH="$(python3 -B "$ROOT/lib/external_execution.py" prepare "$ROOT" "$FEATURE" "$REPO" "$ACTION" "$ROW_TOKEN")" || exit 6
+    printf 'EXPERIENCE_EXTERNAL_DISPATCH=%s\n' "$DISPATCH"
+    echo "Experience owner prepared for external Codexless execution; LOCAL Claude was not invoked"
+    exit 0
+  fi
+  [[ "$STARTRIPS_LANE" == "backend" ]] || {
+    echo "LOCAL_MODEL_PROVIDER_FORBIDDEN_FOR_LANE=$STARTRIPS_LANE" >&2
+    exit 64
+  }
+
   BEFORE="$(python3 -B "$ROOT/lib/feature_state.py" fingerprint "$ROOT/feature_list.json" "$FEATURE" --repo-path "$REPO")" || exit 6
   # Persistent execution evidence survives this shell and supervisor restarts.
   # Exhaustion pauses model replay only; the next scheduled run still observes

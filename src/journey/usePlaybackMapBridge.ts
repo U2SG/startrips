@@ -62,11 +62,17 @@ export function usePlaybackMapBridge(input: {
       media: mediaRect.current?.stepIndex === stepIndex - 1 ? mediaRect.current.rect : null,
       reduceMotion: reduceMotion || paused,
     });
-    if (!element || !bridge.spatial) { commit(); return; }
+    // The director already authorized this spatial beat. Commit its target in
+    // the layout phase, before its timer can advance; the spring only presents
+    // that destination. A fast nearby travel beat can end before the spring
+    // settles, and cancelling that visual must not cancel the spatial intent.
+    commit();
+    if (!element || !bridge.spatial || !isCurrent()) return;
     element.style.transform = bridge.from.transform;
     element.style.opacity = String(bridge.from.opacity);
     const motion = springElementTo(element, bridge.to, { owner: `playback-map:${intentRevision}:${stepIndex}` });
-    void motion.finished.then(commit, () => undefined);
+    // No asynchronous focus commit survives seek/exit/step replacement.
+    void motion.finished.catch(() => undefined);
     return () => {
       cancelled = true;
       motion.cancel();

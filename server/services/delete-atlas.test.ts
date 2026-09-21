@@ -124,6 +124,60 @@ describe("deleteAtlasForOrganization", () => {
     });
   });
 
+  it("deduplicates preview, original and upload references within one backend", async () => {
+    const { storage, deps } = dependencies({
+      listStorageRefs: vi.fn(async () => ({
+        media: [{
+          storageDriver: "primary-media-v1",
+          storageKey: "shared-key",
+          previewStorageKey: "shared-key",
+        }],
+        uploads: [{
+          storageDriver: "primary-media-v1",
+          storageKey: "shared-key",
+          providerUploadId: "already-completed",
+        }],
+      })),
+    });
+
+    await deleteAtlasForOrganization("org-1", deps);
+
+    expect(storage.deleteObject).toHaveBeenCalledExactlyOnceWith({ key: "shared-key" });
+    expect(storage.inspectObject).not.toHaveBeenCalled();
+    expect(storage.abortMultipartUpload).not.toHaveBeenCalled();
+    expect(deps.deleteAtlasRow).toHaveBeenCalledWith(ATLAS.id);
+  });
+
+  it("keeps equal keys on different backends distinct", async () => {
+    const firstStorage = storageWith(false);
+    const secondStorage = storageWith(false);
+    const { deps } = dependencies({
+      storageForBackend: (backendId) => backendId === "first" ? firstStorage : secondStorage,
+      listStorageRefs: vi.fn(async () => ({
+        media: [{
+          storageDriver: "first",
+          storageKey: "shared-key",
+          previewStorageKey: null,
+        }],
+        uploads: [{
+          storageDriver: "second",
+          storageKey: "shared-key",
+          providerUploadId: "pending-upload",
+        }],
+      })),
+    });
+
+    await deleteAtlasForOrganization("org-1", deps);
+
+    expect(firstStorage.deleteObject).toHaveBeenCalledExactlyOnceWith({ key: "shared-key" });
+    expect(secondStorage.inspectObject).toHaveBeenCalledExactlyOnceWith({ key: "shared-key" });
+    expect(secondStorage.abortMultipartUpload).toHaveBeenCalledExactlyOnceWith({
+      key: "shared-key",
+      providerUploadId: "pending-upload",
+    });
+    expect(secondStorage.deleteObject).not.toHaveBeenCalled();
+  });
+
   it("returns false and touches nothing when the atlas does not exist", async () => {
     const { storage, deps } = dependencies({
       findAtlas: vi.fn(async () => undefined),
@@ -156,6 +210,11 @@ describe("deleteAtlasForOrganization", () => {
 
     await expect(deleteAtlasForOrganization("org-1", deps))
       .rejects.toThrow("object storage is down");
+    expect(storage.deleteObject).toHaveBeenCalledExactlyOnceWith({
+      key: "atlas/journey/previews/photo",
+    });
+    expect(storage.inspectObject).not.toHaveBeenCalled();
+    expect(storage.abortMultipartUpload).not.toHaveBeenCalled();
     expect(deps.deleteAtlasRow).not.toHaveBeenCalled();
     expect(clearAtlasDeleting).toHaveBeenCalledWith(ATLAS.id);
   });
@@ -169,6 +228,9 @@ describe("deleteAtlasForOrganization", () => {
 
     expect(deps.listStorageRefs).toHaveBeenCalledTimes(2);
     expect(deps.listStorageRefs).toHaveBeenCalledWith("journey-2");
+    // Each Journey owns its cleanup attempt even when the references coincide.
+    expect(storage.deleteObject).toHaveBeenCalledTimes(4);
+    expect(storage.abortMultipartUpload).toHaveBeenCalledTimes(2);
     expect(deps.deleteAtlasRow).toHaveBeenCalledWith(ATLAS.id);
   });
 });

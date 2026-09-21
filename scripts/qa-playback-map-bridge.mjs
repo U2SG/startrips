@@ -7,8 +7,8 @@ const image = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 const browser = await launchQaBrowser();
 const reports = [];
 
-async function open({ mobile = false, reduced = false, video = false, interrupt = null } = {}) {
-  const page = await browser.newPage({ viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
+async function open({ mobile = false, viewport = null, reduced = false, video = false, nearby = false, interrupt = null } = {}) {
+  const page = await browser.newPage({ viewport: viewport ?? (mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 }),
     reducedMotion: reduced ? "reduce" : "no-preference" });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -53,7 +53,7 @@ async function open({ mobile = false, reduced = false, video = false, interrupt 
     }),
   }));
   const query = new URLSearchParams({ qaState: "journey-playback", qaMode: "continuity",
-    qaReduceMotion: reduced ? "1" : "0", qaMapBridgeVideo: video ? "1" : "0" });
+    qaReduceMotion: reduced ? "1" : "0", qaMapBridgeVideo: video ? "1" : "0", qaMapBridgeNearby: nearby ? "1" : "0" });
   await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded" });
   await page.locator(".journey-playback").waitFor();
   await page.locator(".journey-playback__tempo select").selectOption("fast");
@@ -61,8 +61,13 @@ async function open({ mobile = false, reduced = false, video = false, interrupt 
 }
 
 try {
-  for (const mobile of [false, true]) for (const reduced of [false, true]) {
-    const { page, errors } = await open({ mobile, reduced });
+  const layouts = [
+    { name: "desktop", viewport: { width: 1280, height: 800 } },
+    { name: "portrait", viewport: { width: 390, height: 844 } },
+    { name: "landscape", viewport: { width: 844, height: 390 } },
+  ];
+  for (const layout of layouts) for (const reduced of [false, true]) {
+    const { page, errors } = await open({ viewport: layout.viewport, reduced, nearby: true });
     try {
       await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "outro"
         && window.__qaPlaybackContinuity?.cameraTargets.at(-1)?.key === "route", null, { timeout: 90_000 });
@@ -71,12 +76,18 @@ try {
       assert.deepEqual(seams, ["4:map-to-media:1", "5:media-to-map:1", "7:map-to-media:2", "10:media-to-map:2"]);
       assert.deepEqual([...new Set(trace.samples.map((s) => s.step))], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
       assert.deepEqual(trace.camera.map((c) => c.key), ["route", "point:0", "point:1", "point:2", "route"]);
+      // Nearby fast travel is ~420ms, shorter than the outgoing spring. The
+      // destination must be committed during travel step 5, not belatedly at
+      // stop step 6 after cleanup cancels the spring. Same contract in Reduced Motion.
+      const destination = trace.camera.find((c) => c.key === "point:2");
+      assert.deepEqual({ step: destination?.step, phase: destination?.phase },
+        { step: 5, phase: "travel" }, "short travel owns destination before visual settlement");
       for (const step of [4, 7, 8, 9]) {
         assert.ok(trace.samples.some((s) => s.step === step && s.presentation === "settled" && s.shown), `presented step ${step}`);
         assert.equal(trace.samples.some((s) => s.step === step && s.presentation === "moving"), !reduced, `motion at step ${step}`);
       }
       assert.deepEqual(errors, []);
-      reports.push({ mobile, reduced, seams });
+      reports.push({ layout: layout.name, reduced, seams, spatialCommits: trace.camera });
     } finally { await page.close(); }
   }
 

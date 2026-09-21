@@ -1812,9 +1812,7 @@
   color: var(--atlas-acid);
 }
 
-/* #14: cover badge on the overview tile, and the hover-visible set-cover
-   action. The tile's <li> is the drag surface, so the action sits inside it
-   above the thumbnail. */
+/* #14: cover badge on the overview tile. */
 .journey-story__media-grid > li {
   position: relative;
 }
@@ -1831,71 +1829,10 @@
   letter-spacing: 0.12em;
 }
 
-/* #20: batch move — the tile's selection checkbox, opposite corner from the
-   cover badge so the two never collide. */
-.journey-story__media-tile-check {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 18px;
-  height: 18px;
-  border: 1px solid rgba(200, 255, 61, 0.5);
-  border-radius: 50%;
-  background: rgba(2, 8, 8, 0.7);
-}
-
-.journey-story__media-tile-check.is-selected {
-  border-color: var(--atlas-acid);
-  background: var(--atlas-acid);
-  box-shadow: 0 0 0 3px rgba(200, 255, 61, 0.25);
-}
-
 .journey-story__media-grid > li:not(.is-cover) {
   display: grid;
   grid-template-rows: auto 32px;
   gap: 4px;
-}
-
-.journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
-  position: static;
-  z-index: auto;
-  justify-self: end;
-  width: 32px;
-  min-width: 32px;
-  min-height: 32px;
-  height: 32px;
-  aspect-ratio: 1;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  overflow: visible;
-  border: 1px solid rgba(200, 255, 61, 0.22);
-  background: rgba(2, 8, 8, 0.72);
-  color: var(--atlas-acid);
-  cursor: pointer;
-  font-size: 9px;
-  line-height: 1;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  opacity: 0.72;
-  transition: opacity var(--motion-instant, 120ms) ease, border-color var(--motion-instant, 120ms) ease, background var(--motion-instant, 120ms) ease;
-}
-
-.journey-story__media-grid > li:hover .journey-story__media-tile-set-cover,
-.journey-story__media-grid > li:focus-within .journey-story__media-tile-set-cover {
-  opacity: 1;
-  border-color: rgba(200, 255, 61, 0.48);
-  background: rgba(10, 20, 12, 0.9);
-}
-
-.journey-story__media-grid > li.is-dragging .journey-story__media-tile-set-cover {
-  display: none;
-}
-
-@media (hover: none) {
-  .journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
-    opacity: 1;
-  }
 }
 
 .journey-story__media-nav {
@@ -5901,8 +5838,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     gap: var(--mobile-control-cluster-gap, 6px);
   }
 
-  .journey-story__media-set-cover,
-  .journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
+  .journey-story__media-set-cover {
     width: 44px;
     min-width: 44px;
     height: 44px;

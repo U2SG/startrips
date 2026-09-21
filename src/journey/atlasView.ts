@@ -20,7 +20,7 @@ import {
   undoJourneyMediaMove,
   type JourneyMediaMoveUndo,
 } from "./journeyApi";
-import { uploadJourneyMedia } from "./JourneyComposer";
+import { uploadJourneyMedia } from "./journeyMediaUpload";
 import type { HomeBasePeriod } from "./homeBase";
 import type { HomeBaseDismissal } from "./homeBaseInference";
 import type { HomeBaseConfirmationRequest } from "./homeBaseSuggestion";
@@ -110,12 +110,7 @@ export function isReadOnlyAtlasView(
 /** Reading one private asset's short-lived signed URL. Never a mutation. */
 export type AtlasMediaRead = (assetId: string) => Promise<PrivateMediaRead>;
 
-/**
- * `uploadJourneyMedia` is typed through the module rather than imported as a
- * value here so this alias stays usable from a module that must not pull the
- * composer in at runtime.
- */
-export type UploadJourneyMedia = typeof import("./JourneyComposer")["uploadJourneyMedia"];
+export type UploadJourneyMedia = typeof uploadJourneyMedia;
 
 /**
  * Every write the Atlas surfaces can perform, in one object.

@@ -996,6 +996,13 @@ try {
     waitUntil: "domcontentloaded",
     timeout: 8_000,
   });
+  // DOMContentLoaded can precede the async DEV fixture and React commit.
+  // Wait for the rendered nodes; handoff deliberately makes them invisible.
+  await page.waitForFunction(() => (
+    document.querySelector(".auth-card--login-v3")
+    && document.querySelector("[data-login-v3-scene][data-login-v3-handoff]")
+    && document.querySelector(".auth-v3-scene__earth")
+  ), null, { timeout: 8_000 });
   const handoff = await page.evaluate(() => {
     const card = document.querySelector(".auth-card--login-v3");
     const scene = document.querySelector("[data-login-v3-scene]");

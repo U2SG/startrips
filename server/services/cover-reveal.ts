@@ -22,6 +22,11 @@ import {
 } from "../media/preview-image";
 import type { MultipartStorage } from "../storage/multipart-storage";
 import {
+  reconcileDerivedObjectNamespace,
+  retireDerivedObjectWrites,
+  type DerivedObjectCleanup,
+} from "../storage/derived-object-cleanup";
+import {
   getMultipartStorage,
   hasConfiguredStorageBackends,
 } from "../storage/storage-registry";
@@ -1167,7 +1172,7 @@ async function supersedeDerivative(
   >,
   dependencies: CoverRevealDependencies,
 ) {
-  await db
+  const superseded = await db
     .update(coverRevealDerivatives)
     .set({
       state: "superseded",
@@ -1180,12 +1185,18 @@ async function supersedeDerivative(
       outputHeight: null,
       updatedAt: new Date(),
     })
-    .where(eq(coverRevealDerivatives.id, job.id));
+    .where(and(
+      eq(coverRevealDerivatives.id, job.id),
+      inArray(coverRevealDerivatives.state, ["queued", "leased", "ready"]),
+    ))
+    .returning({ id: coverRevealDerivatives.id });
+  if (superseded.length === 0) return false;
   await discardDerivativeObject(
     job.outputStorageDriver,
     job.outputStorageKey,
     dependencies,
   );
+  return true;
 }
 
 async function supersedeStaleDerivatives(
@@ -1201,6 +1212,7 @@ async function supersedeStaleDerivatives(
       eq(coverRevealDerivatives.journeyId, journeyId),
       inArray(coverRevealDerivatives.state, ["queued", "leased", "ready"]),
     ));
+  let superseded = 0;
   for (const job of live) {
     if (
       job.sourceMediaAssetId === sourceMediaAssetId
@@ -1208,8 +1220,9 @@ async function supersedeStaleDerivatives(
     ) {
       continue;
     }
-    await supersedeDerivative(job, dependencies);
+    if (await supersedeDerivative(job, dependencies)) superseded += 1;
   }
+  return superseded;
 }
 
 /**
@@ -1237,27 +1250,12 @@ export async function reconcileCoverRevealDerivatives(
     const eligibility = journey
       ? evaluateCoverRevealEligibility(journey)
       : null;
-    const before = await db
-      .select({ id: coverRevealDerivatives.id })
-      .from(coverRevealDerivatives)
-      .where(and(
-        eq(coverRevealDerivatives.journeyId, journeyId),
-        inArray(coverRevealDerivatives.state, ["queued", "leased", "ready"]),
-      ));
-    await supersedeStaleDerivatives(
+    superseded += await supersedeStaleDerivatives(
       journeyId,
       eligibility?.ok ? eligibility.source.id : null,
       eligibility?.ok ? eligibility.contentHash : null,
       dependencies,
     );
-    const after = await db
-      .select({ id: coverRevealDerivatives.id })
-      .from(coverRevealDerivatives)
-      .where(and(
-        eq(coverRevealDerivatives.journeyId, journeyId),
-        inArray(coverRevealDerivatives.state, ["queued", "leased", "ready"]),
-      ));
-    superseded += before.length - after.length;
   }
   return { examined: live.length, superseded };
 }
@@ -1272,6 +1270,16 @@ const COVER_REVEAL_RECONCILE_INTERVAL_MS = 10 * 60 * 1_000;
 const COVER_REVEAL_WRITE_BATCH_SIZE = 50;
 const COVER_REVEAL_NAMESPACE_PAGES_PER_PASS = 10;
 
+function derivativeCleanup(dependencies: CoverRevealDependencies): DerivedObjectCleanup {
+  return {
+    findReferencedKeys: async (keys) => db
+      .select({ key: coverRevealDerivatives.outputStorageKey })
+      .from(coverRevealDerivatives)
+      .where(inArray(coverRevealDerivatives.outputStorageKey, keys)),
+    discardObject: (driver, key) => discardDerivativeObject(driver, key, dependencies),
+  };
+}
+
 /** Retire the record of every derivative write whose signature has closed. */
 export async function reconcileCoverRevealWrites(
   now = new Date(),
@@ -1285,30 +1293,9 @@ export async function reconcileCoverRevealWrites(
     .orderBy(coverRevealWrites.expiresAt)
     .limit(COVER_REVEAL_WRITE_BATCH_SIZE);
 
-  let retired = 0;
-  let settled = 0;
-  for (const write of writes) {
-    const [referencing] = await db
-      .select({ id: coverRevealDerivatives.id })
-      .from(coverRevealDerivatives)
-      .where(eq(coverRevealDerivatives.outputStorageKey, write.storageKey))
-      .limit(1);
-    if (referencing) {
-      settled += 1;
-    } else {
-      const discarded = await discardDerivativeObject(
-        write.storageDriver,
-        write.storageKey,
-        dependencies,
-      );
-      if (!discarded) continue;
-      retired += 1;
-    }
-    await db
-      .delete(coverRevealWrites)
-      .where(eq(coverRevealWrites.id, write.id));
-  }
-  return { examined: writes.length, retired, settled };
+  return retireDerivedObjectWrites(writes, derivativeCleanup(dependencies), async (id) => db
+    .delete(coverRevealWrites)
+    .where(eq(coverRevealWrites.id, id)));
 }
 
 /**
@@ -1323,43 +1310,13 @@ export async function reconcileCoverRevealNamespace(
   continuationToken?: string,
   dependencies: CoverRevealDependencies = defaultDependencies,
 ) {
-  const storage = dependencies.configuredStorage();
-  let cursor = continuationToken;
-  let examined = 0;
-  let retired = 0;
-
-  for (let page = 0; page < COVER_REVEAL_NAMESPACE_PAGES_PER_PASS; page += 1) {
-    const listed = await storage.listObjects({
-      prefix: COVER_REVEAL_KEY_PREFIX,
-      ...(cursor ? { continuationToken: cursor } : {}),
-    });
-    examined += listed.keys.length;
-    if (listed.keys.length > 0) {
-      const referenced = new Set(
-        (
-          await db
-            .select({ key: coverRevealDerivatives.outputStorageKey })
-            .from(coverRevealDerivatives)
-            .where(inArray(
-              coverRevealDerivatives.outputStorageKey,
-              listed.keys,
-            ))
-        ).map((row) => row.key),
-      );
-      for (const key of listed.keys) {
-        if (referenced.has(key)) continue;
-        const discarded = await discardDerivativeObject(
-          storage.driver,
-          key,
-          dependencies,
-        );
-        if (discarded) retired += 1;
-      }
-    }
-    cursor = listed.continuationToken;
-    if (!cursor) break;
-  }
-  return { examined, retired, continuationToken: cursor };
+  return reconcileDerivedObjectNamespace(
+    dependencies.configuredStorage(),
+    COVER_REVEAL_KEY_PREFIX,
+    COVER_REVEAL_NAMESPACE_PAGES_PER_PASS,
+    continuationToken,
+    derivativeCleanup(dependencies),
+  );
 }
 
 export function startCoverRevealReconciler() {

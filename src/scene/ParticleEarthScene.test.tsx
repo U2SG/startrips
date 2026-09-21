@@ -1079,7 +1079,7 @@ describe("#194 compact mobile layout is injected, never inferred", () => {
 });
 
 describe("#219 the focus signal shares the Route Point anchor", () => {
-  // qa-p-17 of the qa-route-southwest fixture in src/main.tsx: the Route Point
+  // qa-p-17 of the qa-route-southwest fixture in src/preview/qaEntry.tsx: the Route Point
   // scripts/qa-route-anchoring.mjs frames the focus signal on.
   const lasVegas = { lat: 36.1699, lon: -115.1398 };
   const fallback = { lat: 34.0522, lon: -118.2437 };

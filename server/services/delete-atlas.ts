@@ -3,24 +3,17 @@ import { db } from "../db/client";
 import { atlases, journeys, mediaAssets, mediaUploads } from "../db/app-schema";
 import type { MultipartStorage } from "../storage/multipart-storage";
 import { getMultipartStorage } from "../storage/storage-registry";
+import {
+  cleanupJourneyStorage,
+  type JourneyStorageReferences,
+} from "../storage/cleanup-journey-storage";
 
 export type DeleteAtlasDependencies = {
   findAtlas: (
     organizationId: string,
   ) => Promise<typeof atlases.$inferSelect | undefined>;
   listJourneys: (atlasId: string) => Promise<Array<{ id: string }>>;
-  listStorageRefs: (journeyId: string) => Promise<{
-    media: Array<{
-      storageDriver: string;
-      storageKey: string;
-      previewStorageKey: string | null;
-    }>;
-    uploads: Array<{
-      storageDriver: string;
-      storageKey: string;
-      providerUploadId: string;
-    }>;
-  }>;
+  listStorageRefs: (journeyId: string) => Promise<JourneyStorageReferences>;
   storageForBackend: (backendId: string) => MultipartStorage;
   deleteAtlasRow: (atlasId: string) => Promise<void>;
   markAtlasDeleting?: (atlasId: string) => Promise<boolean>;
@@ -89,10 +82,6 @@ const defaultDependencies: DeleteAtlasDependencies = {
   },
 };
 
-function storageReference(storageDriver: string, storageKey: string) {
-  return `${storageDriver}\0${storageKey}`;
-}
-
 export async function deleteAtlasForOrganization(
   organizationId: string,
   dependencies: DeleteAtlasDependencies = defaultDependencies,
@@ -106,34 +95,7 @@ export async function deleteAtlasForOrganization(
   try {
     for (const journey of await dependencies.listJourneys(atlas.id)) {
       const refs = await dependencies.listStorageRefs(journey.id);
-      const deletedObjects = new Set<string>();
-      for (const asset of refs.media) {
-        // Both objects of the asset, deduplicated together because they share
-        // one backend.
-        for (const key of [asset.previewStorageKey, asset.storageKey]) {
-          if (!key) continue;
-          const reference = storageReference(asset.storageDriver, key);
-          if (deletedObjects.has(reference)) continue;
-          await dependencies.storageForBackend(asset.storageDriver)
-            .deleteObject({ key });
-          deletedObjects.add(reference);
-        }
-      }
-      for (const upload of refs.uploads) {
-        const reference = storageReference(upload.storageDriver, upload.storageKey);
-        if (deletedObjects.has(reference)) continue;
-        const storage = dependencies.storageForBackend(upload.storageDriver);
-        const inspected = await storage.inspectObject({ key: upload.storageKey });
-        if (inspected.exists) {
-          await storage.deleteObject({ key: upload.storageKey });
-        } else {
-          await storage.abortMultipartUpload({
-            key: upload.storageKey,
-            providerUploadId: upload.providerUploadId,
-          });
-        }
-        deletedObjects.add(reference);
-      }
+      await cleanupJourneyStorage(refs, (backendId) => dependencies.storageForBackend(backendId));
     }
 
     // The atlas row delete cascades to journeys, route points, media assets,
