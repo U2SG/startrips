@@ -637,7 +637,10 @@ setInterval(() => {}, 1000);
       expect(source).toContain(prefix);
       if (verb) expect(source).toContain("/" + verb);
     }
-    expect(source).not.toMatch(/drizzle|pg|@aws-sdk|ssh/i);
+    // And no dynamic escape hatch: a bare-specifier `import()` or a `require()`
+    // would be a dependency the static import list above cannot see.
+    expect(source).not.toMatch(/\brequire\s*\(/);
+    expect(source).not.toMatch(/\bimport\s*\(\s*["'](?!node:)/);
   });
 
   it("refuses to start without its configuration", () => {
