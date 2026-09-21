@@ -61,7 +61,11 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
     const session = await requireSession(context.req.raw);
     if (!session) return context.json({ error: "UNAUTHORIZED" }, 401);
     const methods = await listAccountIdentityMethods(session.user.id, usableProviderIds);
-    return context.json({ methods });
+    // Read live rather than snapshotting at construction: `link-intents` and
+    // `link/complete` gate on `linkableProviderIds.has(...)` at request time, so
+    // an advertised provider is exactly a provider those writes accept.
+    const availableLinkProviders = [...linkableProviderIds].sort();
+    return context.json({ methods, availableLinkProviders });
   });
 
   routes.post("/reverify/password", async (context) => {
