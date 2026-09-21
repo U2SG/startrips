@@ -53,14 +53,19 @@ const journey: Journey = {
 };
 
 describe("meaningful Journey Playback navigation (#126)", () => {
-  it("skips travel bookkeeping in both manual directions", () => {
+  it("skips travel and populated-arrival bookkeeping in both manual directions", () => {
     const steps = buildPlaybackSteps(journey);
     expect(steps.map((step) => step.kind)).toEqual([
       "intro", "stop", "media", "travel", "stop", "media", "outro",
     ]);
+    // #456: both points are `single` density, so neither arrival is its own
+    // manual destination — the chapter's memory is.
     const meaningful = meaningfulPlaybackStepIndexes(steps);
-    expect(meaningfulPlaybackStepIndex(meaningful, 2, 1)).toBe(4);
-    expect(meaningfulPlaybackStepIndex(meaningful, 3, 1)).toBe(4);
+    expect(meaningful).toEqual([0, 2, 5, 6]);
+    expect(meaningfulPlaybackStepIndex(meaningful, 2, 1)).toBe(5);
+    expect(meaningfulPlaybackStepIndex(meaningful, 3, 1)).toBe(5);
+    expect(meaningfulPlaybackStepIndex(meaningful, 4, 1)).toBe(5);
+    expect(meaningfulPlaybackStepIndex(meaningful, 5, -1)).toBe(2);
     expect(meaningfulPlaybackStepIndex(meaningful, 4, -1)).toBe(2);
     expect(meaningfulPlaybackStepIndex(meaningful, 3, -1)).toBe(2);
   });
@@ -95,21 +100,91 @@ describe("meaningful Journey Playback navigation (#126)", () => {
   });
 
   it("maps manual next and previous to user-visible beats", () => {
+    // #456: one click per memory. The arrival of a populated chapter is no
+    // longer the extra click between the place and the photo it is about.
     let state = initialPlaybackState();
     state = playbackReducer(journey, state, { type: "next" });
-    expect(state.phase).toEqual({ type: "stop", pointIndex: 0 });
-    state = playbackReducer(journey, state, { type: "next" });
     expect(state.phase).toEqual({ type: "media", pointIndex: 0, mediaIndex: 0 });
     state = playbackReducer(journey, state, { type: "next" });
-    expect(state.phase).toEqual({ type: "stop", pointIndex: 1 });
+    expect(state.phase).toEqual({ type: "media", pointIndex: 1, mediaIndex: 0 });
     state = playbackReducer(journey, state, { type: "previous" });
     expect(state.phase).toEqual({ type: "media", pointIndex: 0, mediaIndex: 0 });
+  });
+
+  it("never lands manual navigation on a populated arrival, in either direction", () => {
+    const steps = buildPlaybackSteps(journey);
+    for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
+      for (const control of [{ type: "next" } as const, { type: "previous" } as const]) {
+        const landed = playbackReducer(
+          journey,
+          { stepIndex, phase: { type: "intro" }, paused: false },
+          control,
+        );
+        const landedStep = steps[landed.stepIndex];
+        expect(landedStep.kind === "stop" && landedStep.media.length > 0).toBe(false);
+      }
+    }
+  });
+
+  it("keeps an empty chapter's arrival as its sole manual destination", () => {
+    // 0 media: the place IS the memory, so the arrival must stay reachable —
+    // dropping it would make that Route Point unreachable by Next/Previous.
+    const emptyJourney: Journey = {
+      ...journey,
+      routePoints: [point("point-0", 0), point("empty-point", 1), point("point-1", 2)],
+      media: [media("media-0", "point-0"), media("media-1", "point-1")],
+    };
+    const steps = buildPlaybackSteps(emptyJourney);
+    expect(steps.map((step) => step.kind)).toEqual([
+      "intro", "stop", "media", "travel", "stop", "travel", "stop", "media", "outro",
+    ]);
+    const meaningful = meaningfulPlaybackStepIndexes(steps);
+    expect(meaningful).toEqual([0, 2, 4, 7, 8]);
+
+    let state = initialPlaybackState();
+    state = playbackReducer(emptyJourney, state, { type: "next" });
+    expect(state.phase).toEqual({ type: "media", pointIndex: 0, mediaIndex: 0 });
+    state = playbackReducer(emptyJourney, state, { type: "next" });
+    expect(state.phase).toEqual({ type: "stop", pointIndex: 1 });
+    state = playbackReducer(emptyJourney, state, { type: "next" });
+    expect(state.phase).toEqual({ type: "media", pointIndex: 2, mediaIndex: 0 });
+    state = playbackReducer(emptyJourney, state, { type: "previous" });
+    expect(state.phase).toEqual({ type: "stop", pointIndex: 1 });
+  });
+
+  it("keeps every media of a few-density chapter reachable in one continuous run", () => {
+    const fewJourney: Journey = {
+      ...journey,
+      routePoints: [point("point-0", 0)],
+      media: [
+        media("few-0", "point-0", 0),
+        media("few-1", "point-0", 1),
+        media("few-2", "point-0", 2),
+      ],
+    };
+    const steps = buildPlaybackSteps(fewJourney);
+    expect(steps.map((step) => step.kind)).toEqual([
+      "intro", "stop", "media", "media", "media", "outro",
+    ]);
+    expect(meaningfulPlaybackStepIndexes(steps)).toEqual([0, 2, 3, 4, 5]);
+
+    let state = initialPlaybackState();
+    const visited = [];
+    for (let click = 0; click < 4; click += 1) {
+      state = playbackReducer(fewJourney, state, { type: "next" });
+      visited.push(state.phase);
+    }
+    expect(visited).toEqual([
+      { type: "media", pointIndex: 0, mediaIndex: 0 },
+      { type: "media", pointIndex: 0, mediaIndex: 1 },
+      { type: "media", pointIndex: 0, mediaIndex: 2 },
+      { type: "outro" },
+    ]);
   });
 
 
   it("keeps Back usable while paused and preserves pause ownership", () => {
     let state = initialPlaybackState();
-    state = playbackReducer(journey, state, { type: "next" });
     state = playbackReducer(journey, state, { type: "next" });
     state = playbackReducer(journey, state, { type: "next" });
     state = playbackReducer(journey, state, { type: "pause" });
@@ -129,8 +204,8 @@ describe("meaningful Journey Playback navigation (#126)", () => {
 
     const next = playbackReducer(journey, pausedMedia, { type: "next" });
     expect(next).toEqual({
-      stepIndex: 4,
-      phase: { type: "paused", previous: { type: "stop", pointIndex: 1 } },
+      stepIndex: 5,
+      phase: { type: "paused", previous: { type: "media", pointIndex: 1, mediaIndex: 0 } },
       paused: true,
     });
 

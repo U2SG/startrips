@@ -26,4 +26,8 @@ STARTRIPS_OWN_PIDS="$(python3 -B "$ROOT/lib/execution.py" identity "$ROOT" $(nat
 }
 export STARTRIPS_OWN_PIDS
 token="experience-$(date +%s)-$$-$RANDOM"
+# The carrier token is non-secret invocation identity already published in argv.
+# Emit it before exec so transient pre-scope failures remain attributable after
+# the short-lived Windows/MSYS process disappears.
+printf 'EXPERIENCE_CARRIER_TOKEN=%s\n' "$token"
 exec "$ROOT/run-loop.sh" --carrier-lane=experience "--carrier-token=$token"

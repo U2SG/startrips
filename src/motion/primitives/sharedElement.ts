@@ -106,6 +106,10 @@ export type SharedElementMorphOptions = {
   /** Presentation-only geometry may be created for a handoff. Tie its lifetime
    * to this morph owner rather than introducing a second cleanup timer. */
   onCleanup?: () => void;
+  /** Keep the resolved destination live for hit-testing while the pointer-events-none
+   * clone owns visual continuity. Video fullscreen uses this so native controls
+   * become authoritative as soon as fullscreen state commits. */
+  keepTargetInteractive?: boolean;
 };
 
 let cancelActiveMorph: (() => void) | null = null;
@@ -149,6 +153,7 @@ export function runSharedElementMorph({
   durationMs = 560,
   isTargetCurrent,
   onCleanup,
+  keepTargetInteractive = false,
 }: SharedElementMorphOptions): void {
   // A rail-to-card snapshot may still be above the document when Story opens.
   // End that snapshot before the media clone takes ownership of the handoff.
@@ -271,10 +276,11 @@ export function runSharedElementMorph({
     target = candidate;
     window.clearTimeout(readinessTimer);
     previousTargetVisibility = target.style.visibility;
-    // The ready target is hidden before the next paint. The clone is the sole
-    // visible owner until animation completion restores the target and removes
-    // the clone in the same task; there is no extra fade/retention timeout.
-    target.style.visibility = "hidden";
+    // Images keep the clone as the sole visible owner until animation cleanup.
+    // A live video destination stays present and hit-testable underneath the
+    // pointer-events-none canvas snapshot so native controls become authoritative
+    // as soon as fullscreen state commits, without creating a second transport.
+    if (!keepTargetInteractive) target.style.visibility = "hidden";
     if (typeof clone.animate !== "function") {
       cleanup();
       return;

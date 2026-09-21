@@ -40,6 +40,7 @@ import {
   playbackMediaForPoint,
   playbackMediaWaitPolicy,
   playbackStepIdentity,
+  routePointChapterDensity,
   type CommittedPlaybackPosition,
   type PlaybackCameraTarget,
   type PlaybackStep,
@@ -183,6 +184,17 @@ export function playbackMediaGate(
   if (!isImage) return "ready";
   if (decodeReadiness?.status === "error") return "error";
   return decodeReadiness?.status === "decoded" ? "ready" : "waiting";
+}
+
+export function playbackChapterOpeningUrl(
+  stepKind: PlaybackStep["kind"] | undefined,
+  asset: Pick<JourneyMediaAsset, "mimeType"> | null,
+  read: MediaRead | null | undefined,
+  decodeReadiness: DecodedReadiness | undefined,
+): string | null {
+  if (stepKind !== "stop" || !asset?.mimeType.startsWith("image/")) return null;
+  if (playbackMediaGate(read, decodeReadiness, true) !== "ready") return null;
+  return read?.status === "ready" ? read.url : null;
 }
 
 /**
@@ -1187,6 +1199,34 @@ export function JourneyPlaybackOverlay({
     : step?.kind === "travel"
       ? journey.routePoints[step.to]
       : null;
+  // #456: one Route Point is one chapter. The arrival caption and the chapter's
+  // media live in the SAME container across the stop -> media seam, so entering
+  // the memory reflows one surface instead of swapping two full-screen ones.
+  // Density decides what that container may hold: an `empty` chapter is the
+  // place itself and gets no media region at all.
+  const chapterPointIndex = step?.kind === "stop" || step?.kind === "media"
+    ? step.pointIndex
+    : null;
+  const chapterDensity = chapterPointIndex === null
+    ? null
+    : routePointChapterDensity(journey, chapterPointIndex);
+  const chapterMedia = chapterPointIndex === null
+    ? []
+    : playbackMediaForPoint(journey, chapterPointIndex);
+  // The arrival beat already waits for this asset to decode (`playbackHoldReason`),
+  // so showing it as the chapter's opening still costs no extra read and removes
+  // the blank frame the media beat used to enter from. A video chapter keeps the
+  // reserved frame quiet until its own stage owns the runtime.
+  const chapterOpeningAsset = chapterMedia[0] ?? null;
+  const chapterOpeningRead = chapterOpeningAsset ? mediaReads[chapterOpeningAsset.id] : null;
+  const chapterOpeningUrl = playbackChapterOpeningUrl(
+    step?.kind,
+    chapterOpeningAsset,
+    chapterOpeningRead,
+    chapterOpeningAsset?.mimeType.startsWith("image/")
+      ? decodeRegistryRef.current.readiness(chapterOpeningAsset.id)
+      : undefined,
+  );
   // Where the beat that is playing starts on the plan: a full remaining budget
   // means nothing of it has been consumed yet.
   const beatStartFraction = playbackProgressFraction(plan, director.stepIndex, 1, 1);
@@ -1229,6 +1269,9 @@ export function JourneyPlaybackOverlay({
       // its runtime, not a lookahead that ran out.
       data-playback-hold={holdReason}
       data-playback-presentation-hold={presentationPending ? "waiting" : "none"}
+      // #456: the sparse chapter density of the Route Point on screen, so the
+      // continuity lane grades 0 / 1 / 3 media directly instead of counting DOM.
+      data-playback-chapter-density={chapterDensity ?? "none"}
     >
       <audio
         ref={audioRef}
@@ -1271,18 +1314,41 @@ export function JourneyPlaybackOverlay({
           </div>
         ) : null}
 
-        {step?.kind === "stop" && activePoint ? (
-          <div className="journey-playback__stop">
-            <div className="journey-playback__stop-cue" aria-hidden="true">
-              <StartripsJourneyCue state="arrived" size={52} />
+        {chapterPointIndex !== null && activePoint ? (
+          <div
+            className={`journey-playback__chapter journey-playback__chapter--${chapterDensity}`}
+            data-chapter-beat={step?.kind}
+            data-chapter-point={chapterPointIndex}
+          >
+            {/* The arrival caption is the chapter's own heading: it opens the
+                chapter and STAYS while its media plays, so a populated chapter
+                never reads as arrival-then-a-separate-screen. */}
+            <div className={`journey-playback__stop${step?.kind === "media" ? " is-receded" : ""}`}>
+              <div className="journey-playback__stop-cue" aria-hidden="true">
+                <StartripsJourneyCue state="arrived" size={52} />
+              </div>
+              <p>STOP {chapterPointIndex + 1}</p>
+              <h3>{activePoint.label || `途径点 ${chapterPointIndex + 1}`}</h3>
+              {activePoint.note ? (
+                <blockquote>{activePoint.note}</blockquote>
+              ) : null}
             </div>
-            <p>STOP {step.pointIndex + 1}</p>
-            <h3>{activePoint.label || `途径点 ${step.pointIndex + 1}`}</h3>
-            {activePoint.note ? (
-              <blockquote>{activePoint.note}</blockquote>
-            ) : null}
-          </div>
-        ) : null}
+
+            {/* `empty` renders no media region at all — the place IS the memory. */}
+            {chapterDensity === "empty" ? null : (
+              <div className="journey-playback__chapter-media">
+                {/* The arrival already waits for this asset to decode, so the
+                    media beat enters from the frame it is about to own rather
+                    than from a blank one. */}
+                {step?.kind === "stop" && chapterOpeningUrl ? (
+                  <img
+                    className="journey-playback__chapter-opening"
+                    src={chapterOpeningUrl}
+                    alt=""
+                    aria-hidden="true"
+                    draggable={false}
+                  />
+                ) : null}
 
         {step?.kind === "media" && activeMedia ? (
           <PlaybackMediaStage
@@ -1430,6 +1496,10 @@ export function JourneyPlaybackOverlay({
                   />
             ) : null}
           />
+        ) : null}
+              </div>
+            )}
+          </div>
         ) : null}
 
         {step?.kind === "outro" ? (

@@ -15,7 +15,7 @@ from feature_store import _storage_mutex, StoreConflict
 from github_evidence import api, _repo, EvidenceUnknown
 
 DIMENSIONS = ('lane', 'assertion', 'fixture', 'viewport', 'dpr', 'stage')
-PARSER_VERSION = 3
+PARSER_VERSION = 5
 INFRA = ('failed to resolve action download info', 'service unavailable',
          'failed to download action', 'the runner has lost communication')
 
@@ -102,17 +102,53 @@ def normalize_failure(job, text):
     # Match runtime diagnostics, not workflow command echoes such as curl --fail
     # or JavaScript source excerpts containing throw new Error(...).
     runtime = re.compile(r'^(?:[\w.]+(?:Error|Exception)|Error|Exception)(?:\s+\[[^\]]+\])?:', re.I)
-    errors = [line for line in lines if runtime.search(line)]
+    playwright_timeout = re.compile(r'^(?:locator|page|frame|elementhandle)\.[\w.]+:\s*Timeout\b', re.I)
+    qa_fail = re.compile(r'^\[qa-([\w.-]+)\]\s+FAIL\s+(.+)$', re.I)
+    qa_marker = re.compile(r'\[qa-([\w.-]+)\]', re.I)
+    suite_marker = re.compile(r'^STARTRIPS_QA_SUITE=([\w.-]+)$', re.I)
+
+    # A sharded job emits a stable logical-suite marker immediately before each
+    # existing QA command. Associate every later diagnostic with that suite so
+    # physical shard renames cannot reset recurring failure fingerprints. Old
+    # pre-shard logs have no marker and fall back to their original job name or
+    # an explicit [qa-<suite>] diagnostic marker.
+    active_suite = None
+    annotated = []
+    for line in lines:
+        marker = suite_marker.match(line)
+        if marker:
+            active_suite = marker.group(1).lower()
+            continue
+        annotated.append((line, active_suite))
+
+    errors = [(line, suite) for line, suite in annotated if runtime.search(line) or playwright_timeout.search(line)]
+    # Startrips browser harnesses publish the exact failed case as
+    # `[qa-<suite>] FAIL <case> ...`. Prefer that semantic assertion to the
+    # generic GitHub Actions footer (`Process completed with exit code 1`).
+    # Keep runtime/Playwright diagnostics ahead of it when those exist because
+    # they identify the lower-level actionable cause.
     if not errors:
-        errors = [line for line in lines if re.match(r'^(?:FAIL(?:\s|:)|Assertion failed(?:\s|:)|✗\s)', line, re.I)]
+        errors = [(line, suite) for line, suite in annotated if qa_fail.match(line)]
     if not errors:
-        errors = [line for line in lines if re.match(r'^(?:##\[error\]|The runner has lost communication|Failed to resolve action download info|Failed to download action|Service Unavailable)', line, re.I)]
-    primary = errors[0] if errors else 'unclassified-job-failure'
-    context = '\n'.join(errors)
+        errors = [(line, suite) for line, suite in annotated if re.match(r'^(?:FAIL(?:\s|:)|Assertion failed(?:\s|:)|✗\s)', line, re.I)]
+    if not errors:
+        errors = [(line, suite) for line, suite in annotated if re.match(r'^(?:##\[error\]|The runner has lost communication|Failed to resolve action download info|Failed to download action|Service Unavailable)', line, re.I)]
+    primary, primary_suite = errors[0] if errors else ('unclassified-job-failure', None)
+    marker = qa_marker.search(primary)
+    diagnostic_suite = marker.group(1).lower() if marker else None
+    # Playwright reports the actionable selector on the next `waiting for` line.
+    # Fold it into the primary assertion so two distinct locator timeouts in the
+    # same browser lane do not collapse into one generic timeout/exit-code family.
+    if playwright_timeout.search(primary):
+        wait_line = next((line for line in lines if re.match(r'^-\s+waiting for\s+', line, re.I)), '')
+        if wait_line:
+            primary = f'{primary} {wait_line}'
+    context = '\n'.join([primary, *(line for line, _suite in errors[1:])]) if errors else primary
     assertion = re.sub(r'\b[0-9a-f]{7,40}\b', '<sha>', primary)
     assertion = re.sub(r'https?://\S+', '<url>', assertion)
     assertion = re.sub(r'(?i)(bearer\s+)[^\s]+', r'\1<redacted>', assertion)
     assertion = re.sub(r'(?i)((?:token|secret|api[_-]?key|password)[\s:=]+)[^\s,;]+', r'\1<redacted>', assertion)
+    assertion = re.sub(r'(?i)\b\d+(?:\.\d+)?\s*(?:ms|sec(?:onds?)?|s)\b', '<duration>', assertion)
     # Measurements vary between occurrences of one assertion; viewport and DPR
     # remain explicit dimensions, never inferred from zoom or incidental numbers.
     assertion = re.sub(r'(?<![\w])\d+(?:\.\d+)?(?![\w])', '<number>', assertion)[:600]
@@ -123,21 +159,30 @@ def normalize_failure(job, text):
     failed_fixtures = re.findall(r'(?:\]\s+|;\s*)([\w.-]+)\s+@[\d.]+x\s*:', context)
     if explicit_fixture.lower() in {'unknown', 'not', 'none', 'null', 'true', 'false', 'rendered'}:
         explicit_fixture = '|'.join(dict.fromkeys(failed_fixtures))[:120] or 'unknown'
+    qa_match = qa_fail.match(primary)
+    if qa_match and explicit_fixture == 'unknown':
+        case_scope = qa_match.group(2).split(':', 1)[0].strip()
+        suite = qa_match.group(1).strip()
+        explicit_fixture = (suite + (':' + case_scope if case_scope else ''))[:120]
     stage = next((s['name'] for s in job.get('steps', []) if s.get('conclusion') == 'failure'), 'unknown')
-    dims = {'lane': job['name'], 'assertion': assertion,
+    physical_lane = job['name']
+    logical_lane = physical_lane
+    if physical_lane.lower().startswith('browser-qa / ') and primary_suite:
+        logical_lane = 'browser-qa / ' + primary_suite
+    dims = {'lane': logical_lane, 'assertion': assertion,
             'fixture': explicit_fixture,
             'viewport': field(r'viewport["\s:=]+(\d{3,4}\s*[x×]\s*\d{3,4})'),
             'dpr': field(r'(?:DPR|devicePixelRatio)["\s:=]+([1-9](?:\.\d+)?)'), 'stage': stage}
     fingerprint = hashlib.sha256(json.dumps(dims, sort_keys=True).encode()).hexdigest()
     diagnostic = primary.lower()
-    lane = job['name'].lower()
+    lane = logical_lane.lower()
     infrastructure = any(needle in diagnostic for needle in INFRA) and not re.search(r'assertionerror|assertion failed|\[qa[-_]', diagnostic)
     # Family routing is derived only from the current primary assertion and the
     # exact failing lane. Never let stale text elsewhere in a long browser log
     # relabel an unrelated current failure.
     if re.search(r'journey.?rail|rail.*hidden', diagnostic):
         family = 'journey-rail-visibility'
-    elif 'city-label' in lane or re.search(r'hong kong|inland.control', diagnostic):
+    elif 'city-label' in lane or diagnostic_suite == 'city-label-anchoring' or re.search(r'hong kong|inland.control', diagnostic):
         family = 'city-label-anchoring'
     else:
         family = fingerprint[:16]

@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   storyAutoplayVideoCandidate,
+  storyFullscreenTargetIsCurrent,
   storyAutoplayCanStart,
   storyStageVideoOwner,
   shouldRefreshStoryMediaRead,
@@ -77,6 +78,34 @@ describe("Story shared-element ownership", () => {
     expect(initialization).toContain("setFullscreenControlsHidden(false)");
     expect(initialization).not.toContain("exitFullscreen()");
     expect(initialization).not.toContain("presentFullscreen(");
+  });
+});
+
+describe("Story fullscreen morph ownership (#459)", () => {
+  const entering = {
+    mediaId: "asset-1",
+    nextFullscreen: true,
+    overlayHidden: false,
+    stagePresent: true,
+    currentPageId: "asset-1",
+    stageInterrupted: false,
+  };
+  const leaving = { ...entering, nextFullscreen: false, overlayHidden: true };
+
+  it("keeps compact-mobile entry and return bound to the same media identity", () => {
+    expect(storyFullscreenTargetIsCurrent(entering)).toBe(true);
+    expect(storyFullscreenTargetIsCurrent(leaving)).toBe(true);
+  });
+
+  it("lets a newer swipe, rapid close, or scope replacement cancel a stale handoff", () => {
+    expect(storyFullscreenTargetIsCurrent({ ...entering, currentPageId: "asset-2" })).toBe(false);
+    expect(storyFullscreenTargetIsCurrent({ ...entering, overlayHidden: true })).toBe(false);
+    expect(storyFullscreenTargetIsCurrent({ ...leaving, stagePresent: false, currentPageId: undefined })).toBe(false);
+    expect(storyFullscreenTargetIsCurrent({ ...entering, stageInterrupted: true })).toBe(false);
+  });
+
+  it("does not claim a video that never settled a shared media identity", () => {
+    expect(storyFullscreenTargetIsCurrent({ ...entering, mediaId: undefined, currentPageId: undefined })).toBe(false);
   });
 });
 

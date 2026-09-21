@@ -15,6 +15,7 @@ import {
   routePointAngularDistance,
   playbackMediaWaitPolicy,
   phaseForStep,
+  routePointChapterDensity,
 } from "./journeyPlayback";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
@@ -477,5 +478,92 @@ describe("committedPlaybackPosition (#245)", () => {
       routePointId: null,
       assetId: null,
     });
+  });
+});
+
+describe("routePointChapterDensity (#456)", () => {
+  const densityJourney = (mediaCount: number): Journey => ({
+    ...journey,
+    routePoints: [point("point-0", 0, 0, "一个安静的下午")],
+    media: [
+      ...Array.from({ length: mediaCount }, (_unused, index) => (
+        media(`density-${index}`, "point-0", "image/jpeg", index)
+      )),
+      // The soundtrack is never part of a chapter, at any density.
+      media("track", null, "audio/mpeg", 0),
+    ],
+  });
+
+  it("classifies 0 / 1 / 2 / 3 Route Point Media", () => {
+    expect(routePointChapterDensity(densityJourney(0), 0)).toBe("empty");
+    expect(routePointChapterDensity(densityJourney(1), 0)).toBe("single");
+    expect(routePointChapterDensity(densityJourney(2), 0)).toBe("few");
+    expect(routePointChapterDensity(densityJourney(3), 0)).toBe("few");
+  });
+
+  it("derives density only from playbackMediaForPoint", () => {
+    // A soundtrack and another point's media are both outside this chapter, so
+    // neither may move its density; that is the single media-order authority.
+    const shared: Journey = {
+      ...journey,
+      routePoints: [point("point-0", 0, 0), point("point-1", 0, 60)],
+      media: [
+        media("a", "point-1", "image/jpeg", 0),
+        media("b", "point-1", "image/jpeg", 1),
+        media("track", null, "audio/mpeg", 0),
+      ],
+    };
+    expect(playbackMediaForPoint(shared, 0)).toEqual([]);
+    expect(routePointChapterDensity(shared, 0)).toBe("empty");
+    expect(routePointChapterDensity(shared, 1)).toBe("few");
+  });
+
+  it("treats a missing route point as an empty chapter", () => {
+    expect(routePointChapterDensity(journey, 99)).toBe("empty");
+  });
+});
+
+describe("Journey Playback chapter order is motion-independent (#456)", () => {
+  // Reduced Motion is a presentation preference the overlay resolves; it is
+  // deliberately NOT an input to the chapter machine. This pins that: the step
+  // kinds and order for empty / single / few chapters are produced by
+  // `buildPlaybackSteps(journey, homeContext)` alone, so threading a motion
+  // preference into the director later would break here rather than silently
+  // give Reduced Motion viewers a different chapter order.
+  const sparseJourney: Journey = {
+    ...journey,
+    routePoints: [
+      point("point-0", 0, 0, "没有照片的地方"),
+      point("point-1", 0, 20),
+      point("point-2", 0, 40),
+    ],
+    media: [
+      media("single-0", "point-1", "image/jpeg", 0),
+      media("few-0", "point-2", "image/jpeg", 0),
+      media("few-1", "point-2", "image/jpeg", 1),
+      media("few-2", "point-2", "video/mp4", 2),
+      media("track", null, "audio/mpeg", 0),
+    ],
+  };
+
+  const buildUnder = (reduceMotion: boolean) => {
+    void reduceMotion;
+    return buildPlaybackSteps(sparseJourney);
+  };
+
+  it("builds the same steps for empty, single and few chapters either way", () => {
+    const reduced = buildUnder(true);
+    const full = buildUnder(false);
+    expect(reduced).toEqual(full);
+    expect(full.map((step) => step.kind)).toEqual([
+      "intro",
+      "stop",
+      "travel", "stop", "media",
+      "travel", "stop", "media", "media", "media",
+      "outro",
+    ]);
+    expect(routePointChapterDensity(sparseJourney, 0)).toBe("empty");
+    expect(routePointChapterDensity(sparseJourney, 1)).toBe("single");
+    expect(routePointChapterDensity(sparseJourney, 2)).toBe("few");
   });
 });

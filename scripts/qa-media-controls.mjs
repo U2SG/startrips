@@ -159,6 +159,49 @@ async function clickStoryNativeControlStrip(page, surfaceSelector) {
     || after.presentation !== "settled" || after.fullscreen !== before.fullscreen };
 }
 
+async function startStoryFullscreenMorphProbe(page) {
+  await page.evaluate(() => {
+    window.__qaStoryFullscreenMorphObserver?.disconnect();
+    window.__qaStoryFullscreenMorphs = [];
+    const record = (element) => {
+      if (!(element instanceof Element)) return;
+      const candidates = [
+        ...(element.matches?.('[data-shared-element-clone^="story-fullscreen-"]') ? [element] : []),
+        ...element.querySelectorAll?.('[data-shared-element-clone^="story-fullscreen-"]') ?? [],
+      ];
+      for (const clone of candidates) {
+        const rect = clone.getBoundingClientRect();
+        window.__qaStoryFullscreenMorphs.push({
+          name: clone.getAttribute("data-shared-element-clone"),
+          tag: clone.tagName,
+          width: rect.width,
+          height: rect.height,
+        });
+      }
+    };
+    const observer = new MutationObserver((records) => {
+      for (const mutation of records) for (const node of mutation.addedNodes) record(node);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.__qaStoryFullscreenMorphObserver = observer;
+  });
+}
+
+async function readStoryFullscreenMorphProbe(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  return page.evaluate(() => ({
+    morphs: [...(window.__qaStoryFullscreenMorphs ?? [])],
+    liveClones: document.querySelectorAll('[data-shared-element-clone^="story-fullscreen-"]').length,
+  }));
+}
+
+async function stopStoryFullscreenMorphProbe(page) {
+  await page.evaluate(() => {
+    window.__qaStoryFullscreenMorphObserver?.disconnect();
+    window.__qaStoryFullscreenMorphObserver = null;
+  });
+}
+
 async function exerciseStoryEdgeRegrab(page) {
   const point = await storyPicturePoint(page, -1);
   const current = page.locator(`.journey-story__media ${storyCurrentPageSelector}`);
@@ -1858,6 +1901,221 @@ try {
     await futureVideoAuthorization.page.close();
   }
 
+  // #459: Story <-> fullscreen is one shared-media handoff on desktop and
+  // compact mobile. Exercise the animated path explicitly; most of this lane
+  // runs Reduced Motion by default and therefore cannot prove a clone existed.
+  for (const surface of [
+    { label: "desktop-image", mobile: false },
+    { label: "compact-mobile-image", mobile: true },
+  ]) {
+    const morphPage = await createQaPage("/?qaState=journey-story", onePixelGif, {
+      mobile: surface.mobile,
+      reducedMotion: "no-preference",
+    });
+    try {
+      const storyRoot = morphPage.page.locator(".journey-story");
+      await storyRoot.waitFor({ state: "visible" });
+      const current = morphPage.page.locator(`.journey-story__media ${storyCurrentImageSelector}`).first();
+      await current.waitFor({ state: "visible", timeout: 5_000 });
+      const mediaId = await current.getAttribute("data-shared-media-id");
+      const entry = surface.mobile
+        ? morphPage.page.locator(".journey-story__mobile-media-fullscreen")
+        : storyRoot.getByRole("button", { name: "全屏查看媒体", exact: true });
+      await entry.waitFor({ state: "visible", timeout: 5_000 });
+      await entry.focus();
+      await startStoryFullscreenMorphProbe(morphPage.page);
+      await entry.click();
+      const overlay = morphPage.page.locator(".journey-story-fullscreen");
+      await overlay.waitFor({ state: "visible", timeout: 5_000 });
+      const entered = await readStoryFullscreenMorphProbe(morphPage.page);
+      const entryMorph = entered.morphs.find((candidate) => candidate.name === `story-fullscreen-${mediaId}`);
+
+      // A resize/orientation-class geometry invalidation cancels only the clone;
+      // the fullscreen state committed by the initiating intent remains current.
+      const viewport = morphPage.page.viewportSize();
+      if (!viewport) throw new Error(`${surface.label} has no viewport`);
+      await morphPage.page.setViewportSize({ width: viewport.width + 1, height: viewport.height });
+      await morphPage.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const resizeState = await morphPage.page.evaluate(() => ({
+        fullscreen: Boolean(document.querySelector(".journey-story-fullscreen:not([hidden])")),
+        liveClones: document.querySelectorAll('[data-shared-element-clone^="story-fullscreen-"]').length,
+      }));
+
+      await startStoryFullscreenMorphProbe(morphPage.page);
+      await morphPage.page.keyboard.press("Escape");
+      await overlay.waitFor({ state: "hidden", timeout: 5_000 });
+      const returned = await readStoryFullscreenMorphProbe(morphPage.page);
+      const returnMorph = returned.morphs.find((candidate) => candidate.name === `story-fullscreen-${mediaId}`);
+      const focusReturned = await entry.evaluate((button) => document.activeElement === button);
+
+      // Open -> close -> open again through the same control. A previous clone
+      // may be cancelled, but there must be only one live presentation owner.
+      await startStoryFullscreenMorphProbe(morphPage.page);
+      await entry.click();
+      await overlay.waitFor({ state: "visible", timeout: 5_000 });
+      await morphPage.page.keyboard.press("Escape");
+      await overlay.waitFor({ state: "hidden", timeout: 5_000 });
+      await entry.click();
+      await overlay.waitFor({ state: "visible", timeout: 5_000 });
+      const rapid = await readStoryFullscreenMorphProbe(morphPage.page);
+      const rapidCurrentOwners = await morphPage.page.locator('[data-shared-element-clone^="story-fullscreen-"]').count();
+
+      // If the return target disappeared, dismissal still wins and the clone
+      // cleans itself instead of forcing a jump to stale geometry.
+      await morphPage.page.evaluate(() => {
+        const media = document.querySelector(".journey-story__media [data-shared-media-id]");
+        if (media instanceof HTMLElement) media.dataset.qaPreviousVisibility = media.style.visibility;
+        if (media instanceof HTMLElement) media.style.visibility = "hidden";
+      });
+      await morphPage.page.keyboard.press("Escape");
+      await overlay.waitFor({ state: "hidden", timeout: 5_000 });
+      await morphPage.page.waitForFunction(() => (
+        document.querySelectorAll('[data-shared-element-clone^="story-fullscreen-"]').length === 0
+      ), null, { polling: "raf", timeout: 2_000 });
+      const invalidTargetCleanup = await morphPage.page.evaluate(() => ({
+        fullscreen: Boolean(document.querySelector(".journey-story-fullscreen:not([hidden])")),
+        liveClones: document.querySelectorAll('[data-shared-element-clone^="story-fullscreen-"]').length,
+      }));
+      await morphPage.page.evaluate(() => {
+        const media = document.querySelector(".journey-story__media [data-shared-media-id]");
+        if (media instanceof HTMLElement) {
+          media.style.visibility = media.dataset.qaPreviousVisibility ?? "";
+          delete media.dataset.qaPreviousVisibility;
+        }
+      });
+      await stopStoryFullscreenMorphProbe(morphPage.page);
+
+      const morphFailed = !entryMorph
+        || entryMorph.tag !== "IMG"
+        || entryMorph.width <= 1
+        || entryMorph.height <= 1
+        || !resizeState.fullscreen
+        || resizeState.liveClones !== 0
+        || !returnMorph
+        || !focusReturned
+        || rapid.morphs.length < 2
+        || rapidCurrentOwners > 1
+        || invalidTargetCleanup.fullscreen
+        || invalidTargetCleanup.liveClones !== 0
+        || morphPage.consoleErrors.length > 0
+        || morphPage.pageErrors.length > 0;
+      checks.push({
+        name: `story-fullscreen-shared-element-${surface.label}`,
+        mediaId,
+        entryMorph,
+        resizeState,
+        returnMorph,
+        focusReturned,
+        rapidMorphs: rapid.morphs,
+        rapidCurrentOwners,
+        invalidTargetCleanup,
+        consoleErrors: morphPage.consoleErrors,
+        pageErrors: morphPage.pageErrors,
+        failed: morphFailed,
+      });
+      if (morphFailed) failed = true;
+    } finally {
+      await morphPage.page.close();
+    }
+  }
+
+  // The same semantic entry/return survives Reduced Motion, but without a
+  // presentation clone. Focus/history ownership stays identical.
+  const reducedFullscreen = await createQaPage("/?qaState=journey-story", onePixelGif, {
+    mobile: true,
+    reducedMotion: "reduce",
+  });
+  try {
+    await reducedFullscreen.page.locator(".journey-story").waitFor({ state: "visible" });
+    const entry = reducedFullscreen.page.locator(".journey-story__mobile-media-fullscreen");
+    const overlay = reducedFullscreen.page.locator(".journey-story-fullscreen");
+    await entry.waitFor({ state: "visible", timeout: 5_000 });
+    await entry.focus();
+    await entry.click();
+    await overlay.waitFor({ state: "visible", timeout: 5_000 });
+    const entryClones = await reducedFullscreen.page.locator('[data-shared-element-clone^="story-fullscreen-"]').count();
+    await reducedFullscreen.page.evaluate(() => window.history.back());
+    await overlay.waitFor({ state: "hidden", timeout: 5_000 });
+    const focusReturned = await entry.evaluate((button) => document.activeElement === button);
+    const exitClones = await reducedFullscreen.page.locator('[data-shared-element-clone^="story-fullscreen-"]').count();
+    const reducedFailed = entryClones !== 0 || exitClones !== 0 || !focusReturned
+      || reducedFullscreen.consoleErrors.length > 0 || reducedFullscreen.pageErrors.length > 0;
+    checks.push({ name: "story-fullscreen-reduced-motion-semantic-handoff", entryClones, exitClones,
+      focusReturned, consoleErrors: reducedFullscreen.consoleErrors, pageErrors: reducedFullscreen.pageErrors,
+      failed: reducedFailed });
+    if (reducedFailed) failed = true;
+  } finally {
+    await reducedFullscreen.page.close();
+  }
+
+  // Video uses the same geometric handoff but snapshots the current frame to a
+  // canvas. Prove both directions on desktop and compact mobile while only the
+  // currently presented stage owns a shared/live playback identity.
+  for (const surface of [
+    { label: "desktop-video", mobile: false },
+    { label: "compact-mobile-video", mobile: true },
+  ]) {
+    const videoMorph = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
+      instrumentMedia: true,
+      mixedMedia: true,
+      mobile: surface.mobile,
+      reducedMotion: "no-preference",
+    });
+    try {
+      const stage = videoMorph.page.locator(".journey-story__media");
+      await stage.locator(storyCurrentImageSelector).first().waitFor({ state: "visible", timeout: 5_000 });
+      if (surface.mobile) {
+        const stageBox = await stage.boundingBox();
+        if (!stageBox) throw new Error(`${surface.label} Story stage has no bounds`);
+        const x = stageBox.x + stageBox.width * 0.72;
+        const y = stageBox.y + stageBox.height * 0.5;
+        await stage.dispatchEvent("pointerdown", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x, clientY: y, bubbles: true });
+        await stage.dispatchEvent("pointermove", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
+        await stage.dispatchEvent("pointerup", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
+      } else {
+        await clickStoryPicture(videoMorph.page, 1);
+      }
+      const video = stage.locator(storyCurrentVideoSelector);
+      await video.waitFor({ state: "visible", timeout: 5_000 });
+      const mediaId = await video.getAttribute("data-shared-media-id");
+      const entry = surface.mobile
+        ? videoMorph.page.locator(".journey-story__mobile-media-fullscreen")
+        : videoMorph.page.locator(".journey-story").getByRole("button", { name: "全屏查看媒体", exact: true });
+      await entry.waitFor({ state: "visible", timeout: 5_000 });
+      await entry.focus();
+      await startStoryFullscreenMorphProbe(videoMorph.page);
+      await entry.click();
+      const overlay = videoMorph.page.locator(".journey-story-fullscreen");
+      await overlay.waitFor({ state: "visible", timeout: 5_000 });
+      const entryProbe = await readStoryFullscreenMorphProbe(videoMorph.page);
+      const entryClone = entryProbe.morphs.find((candidate) => candidate.name === `story-fullscreen-${mediaId}`);
+      const entryLiveVideos = await videoMorph.page.locator("video[data-shared-media-id]").count();
+
+      await videoMorph.page.keyboard.press("Escape");
+      await overlay.waitFor({ state: "hidden", timeout: 5_000 });
+      const returnProbe = await readStoryFullscreenMorphProbe(videoMorph.page);
+      const matchingMorphs = returnProbe.morphs.filter((candidate) => candidate.name === `story-fullscreen-${mediaId}`);
+      const returnClone = matchingMorphs.at(-1);
+      const returnLiveVideos = await videoMorph.page.locator("video[data-shared-media-id]").count();
+      const focusReturned = await entry.evaluate((button) => document.activeElement === button);
+      await stopStoryFullscreenMorphProbe(videoMorph.page);
+
+      const videoMorphFailed = !entryClone || entryClone.tag !== "CANVAS"
+        || entryClone.width <= 1 || entryClone.height <= 1
+        || matchingMorphs.length < 2 || !returnClone || returnClone.tag !== "CANVAS"
+        || returnClone.width <= 1 || returnClone.height <= 1
+        || entryLiveVideos !== 1 || returnLiveVideos !== 1 || !focusReturned
+        || videoMorph.consoleErrors.length > 0 || videoMorph.pageErrors.length > 0;
+      checks.push({ name: `story-fullscreen-shared-element-${surface.label}`, mediaId,
+        entryClone, returnClone, morphCount: matchingMorphs.length, entryLiveVideos, returnLiveVideos,
+        focusReturned, consoleErrors: videoMorph.consoleErrors, pageErrors: videoMorph.pageErrors,
+        failed: videoMorphFailed });
+      if (videoMorphFailed) failed = true;
+    } finally {
+      await videoMorph.page.close();
+    }
+  }
+
   for (const [label, viewport] of [
     ["844x390", { width: 844, height: 390 }],
     ["932x430", { width: 932, height: 430 }],
@@ -3419,8 +3677,15 @@ try {
   try {
     await playback.page.locator(".journey-playback").waitFor({ state: "visible" });
     const next = playback.page.getByRole("button", { name: "下一个章节" });
-    await next.click();
-    await next.click();
+    // #456: the arrival of a populated chapter is no longer its own manual
+    // destination, so the number of clicks to the video beat is a property of
+    // the fixture's density, not a constant. Advance until the media beat owns
+    // the stage instead of assuming a count that the grammar can move again.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (await playback.page.locator(".playback-media-presentation").count() === 1) break;
+      await next.click();
+      await playback.page.waitForTimeout(80);
+    }
     const playbackPresentation = playback.page.locator(".playback-media-presentation");
     await playbackPresentation.waitFor({ state: "visible", timeout: 5_000 });
     await playback.page.locator('.playback-media-presentation[data-media-presentation="settled"]')
