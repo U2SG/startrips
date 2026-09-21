@@ -215,6 +215,46 @@ const PHANTOM_POINT_GPX = `<?xml version="1.0" encoding="UTF-8"?>
 </gpx>`;
 
 /**
+ * A document whose elements are written exactly like a track but belong to
+ * somebody else's namespace, and the same document with the prefix never
+ * declared at all. Both match `gpx`/`trk`/`trkseg`/`trkpt` on local name and
+ * both nest in the shape the structural reader selects, so nothing but the
+ * resolved namespace separates them from a recording.
+ */
+function lookalikeTrack(prefix: string, declaration: string) {
+  return [
+    `<${prefix}gpx version="1.1"${declaration}><${prefix}trk><${prefix}trkseg>`,
+    `<${prefix}trkpt lat="22.543096" lon="114.057865"/>`,
+    `<${prefix}trkpt lat="22.540100" lon="114.061200"/>`,
+    `</${prefix}trkseg></${prefix}trk></${prefix}gpx>`,
+  ].join("");
+}
+
+const FOREIGN_NAMESPACE_GPX = lookalikeTrack(
+  "evil:",
+  ' xmlns:evil="urn:startrips-test-evil"',
+);
+const UNDECLARED_PREFIX_GPX = lookalikeTrack("evil:", "");
+
+/** The same track under a prefix bound to the GPX namespace: a real GPX file. */
+const PREFIXED_GPX = `<?xml version="1.0" encoding="UTF-8"?>
+<g:gpx version="1.1" xmlns:g="http://www.topografix.com/GPX/1/1">
+  <g:trk><g:trkseg>
+    <g:trkpt lat="22.543096" lon="114.057865"><g:time>2026-09-01T00:00:00Z</g:time></g:trkpt>
+    <g:trkpt lat="22.540100" lon="114.061200"/>
+  </g:trkseg></g:trk>
+</g:gpx>`;
+
+/** GPX 1.0, which declares an older namespace and is still a recording. */
+const GPX_1_0 = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.0" xmlns="http://www.topografix.com/GPX/1/0">
+  <trk><trkseg>
+    <trkpt lat="22.543096" lon="114.057865"/>
+    <trkpt lat="22.540100" lon="114.061200"/>
+  </trkseg></trk>
+</gpx>`;
+
+/**
  * A latitude that is not the point's own `lat` attribute: an extension's
  * `data-lat`, a namespaced `gpx:lat`, and the characters of a lat attribute
  * written inside another attribute's quoted value. A reader searching the
@@ -455,6 +495,54 @@ describe("recorded-track import reading", () => {
       },
       { latitude: 22.5401, longitude: 114.0612, recordedAt: null },
     ]);
+  });
+
+  it("takes a track only from the GPX namespace, not from a local name", async () => {
+    const { limits } = RECORDED_TRACK_IMPORT_FORMATS.gpx;
+
+    // Somebody else's elements, and a prefix bound to nothing at all. Neither
+    // is a broken GPX file that a later slice could learn to read, so neither
+    // may borrow UNSUPPORTED_FORMAT from the wpt/rte document either.
+    for (const document of [FOREIGN_NAMESPACE_GPX, UNDECLARED_PREFIX_GPX]) {
+      expect(readGpxRecordedTrack(document, limits)).toEqual({
+        ok: false,
+        reason: "MALFORMED_FILE",
+      });
+      expect(
+        await importErrorCode(ownerJourneyId, { format: "gpx", document }),
+      ).toEqual({ status: 400, error: "MALFORMED_FILE" });
+    }
+    // The point of the rejection: no position from either document reached
+    // the store on the way to being refused.
+    expect((await readStoredSegments(ownerJourneyId)).samples).toHaveLength(0);
+
+    // A foreign `<wpt>` is not the unsupported-format document either: that
+    // code belongs to a real GPX file carrying waypoints.
+    expect(
+      readGpxRecordedTrack(
+        `<gpx xmlns="http://www.topografix.com/GPX/1/1"><evil:wpt xmlns:evil="urn:startrips-test-evil" lat="1" lon="2"/></gpx>`,
+        limits,
+      ),
+    ).toEqual({ ok: false, reason: "MALFORMED_FILE" });
+
+    // The other direction, which is what proves the prefix was resolved
+    // rather than banned: the same track under a prefix declared for the GPX
+    // namespace, and the older GPX namespace, are both read.
+    for (const document of [PREFIXED_GPX, GPX_1_0]) {
+      const read = readGpxRecordedTrack(document, limits);
+      expect(read.ok).toBe(true);
+      if (!read.ok) continue;
+      expect(read.segments).toHaveLength(1);
+      expect(read.segments[0].points).toHaveLength(2);
+      expect(read.segments[0].points[0].latitude).toBe(22.543096);
+    }
+    const prefixed = readGpxRecordedTrack(PREFIXED_GPX, limits);
+    expect(prefixed.ok).toBe(true);
+    // A `<time>` is the point's own child under the same resolved identity.
+    if (prefixed.ok) {
+      expect(prefixed.segments[0].points[0].recordedAt)
+        .toBe("2026-09-01T00:00:00Z");
+    }
   });
 
   it("reads a coordinate only from the point's own lat and lon", () => {

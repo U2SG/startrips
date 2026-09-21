@@ -137,7 +137,12 @@ const EXTERNAL_RESOLUTION = /<!DOCTYPE|<!ENTITY|<!\[CDATA\[\s*<!/i;
 type XmlElement = {
   /** Exactly as written, prefix included. A close tag must match it. */
   rawName: string;
-  /** Prefix removed and lower-cased; what element selection compares. */
+  /** The prefix resolved against the declarations in scope; "" when none. */
+  namespaceUri: string;
+  /**
+   * The part after the prefix, case preserved. XML names are case-sensitive,
+   * so `<TRKPT>` is a different element from `<trkpt>` and is not a sample.
+   */
   localName: string;
   /** The open tag's attributes, by the exact name each was written under. */
   attributes: XmlAttributes;
@@ -211,19 +216,97 @@ function parseAttributes(text: string): XmlAttributes | null {
 }
 
 /**
- * A namespace prefix is dropped rather than resolved, so `<gpx:trkpt>` reads
- * as a track point. That is safe here only because selection is structural: a
- * point is taken from a `trkseg` that is a direct child of a `trk` that is a
- * direct child of the document root, so a prefixed element anywhere else in
- * the tree is still not a sample.
+ * GPX element identity is the namespace plus the local name, never the local
+ * name alone. A document is free to write the track under any prefix it
+ * declares for the GPX namespace, and a writer that predates namespaces
+ * declares none at all — but `<evil:trkpt xmlns:evil="urn:evil">` is an
+ * element belonging to somebody else that happens to share five characters
+ * with this one. Selecting on the local name stores it as a recorded
+ * position, and structural context does not make it a GPX element: a foreign
+ * document is free to nest its own elements in exactly that shape.
+ *
+ * Three namespaces are accepted: GPX 1.1, which every current writer emits;
+ * GPX 1.0, because refusing a real recording as a broken file is worse than
+ * reading one more declared namespace; and the empty one, the no-namespace
+ * compatibility form used by writers that declare nothing. Accepting the
+ * empty namespace means a nested `xmlns=""` re-enters it — that is the price
+ * of the compatibility form, and it grants no element an identity a document
+ * declaring nothing at all would not already have.
  */
-function toLocalName(rawName: string): string {
+const GPX_NAMESPACES: ReadonlySet<string> = new Set([
+  "http://www.topografix.com/GPX/1/1",
+  "http://www.topografix.com/GPX/1/0",
+  "",
+]);
+
+const XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace";
+
+/**
+ * The declarations visible to one element, by prefix, with the default
+ * namespace under the empty key. A scope is copied only where a tag actually
+ * declares something, so an ordinary document carries one map.
+ */
+type NamespaceScope = ReadonlyMap<string, string>;
+
+const ROOT_SCOPE: NamespaceScope = new Map();
+
+/**
+ * Apply an open tag's own `xmlns` declarations. They bind the element that
+ * carries them, so `<gpx xmlns="...GPX/1/1">` is itself in that namespace.
+ * Returns null for a declaration XML forbids, which makes the document
+ * malformed rather than read under a prefix that means nothing.
+ */
+function extendScope(
+  parent: NamespaceScope,
+  attributes: XmlAttributes,
+): NamespaceScope | null {
+  let scope: Map<string, string> | null = null;
+  for (const [name, value] of attributes) {
+    let prefix: string;
+    if (name === "xmlns") prefix = "";
+    else if (name.startsWith("xmlns:")) prefix = name.slice(6);
+    else continue;
+    // `xmlns:` with no prefix, and a prefix bound to nothing, are both names
+    // that could never be resolved.
+    if (prefix === "" && name !== "xmlns") return null;
+    if (prefix !== "" && value === "") return null;
+    if (scope === null) scope = new Map(parent);
+    scope.set(prefix, value);
+  }
+  return scope ?? parent;
+}
+
+type ResolvedName = { namespaceUri: string; localName: string };
+
+/**
+ * Resolve an element name. An unprefixed name takes the default namespace in
+ * scope; a prefixed one takes its prefix's declaration, and an undeclared
+ * prefix is not a namespace-well-formed document — it is refused rather than
+ * read as if the prefix were decoration.
+ */
+function resolveElementName(
+  rawName: string,
+  scope: NamespaceScope,
+): ResolvedName | null {
   const colon = rawName.indexOf(":");
-  return (colon === -1 ? rawName : rawName.slice(colon + 1)).toLowerCase();
+  if (colon === -1) {
+    return { namespaceUri: scope.get("") ?? "", localName: rawName };
+  }
+  const prefix = rawName.slice(0, colon);
+  const localName = rawName.slice(colon + 1);
+  // An empty prefix, an empty local part or a second colon is not a name.
+  if (prefix === "" || localName === "" || localName.includes(":")) return null;
+  if (prefix === "xml") return { namespaceUri: XML_NAMESPACE, localName };
+  const namespaceUri = scope.get(prefix);
+  if (namespaceUri === undefined) return null;
+  return { namespaceUri, localName };
 }
 
 function parseXmlDocument(text: string): XmlParse {
   const stack: XmlElement[] = [];
+  // The declarations in scope for each open element, so a child resolves
+  // against everything its ancestors declared.
+  const scopes: NamespaceScope[] = [];
   let root: XmlElement | null = null;
   let index = 0;
 
@@ -270,6 +353,7 @@ function parseXmlDocument(text: string): XmlParse {
       const end = text.indexOf(">", index + 2);
       if (end === -1) return MALFORMED;
       const closing = stack.pop();
+      scopes.pop();
       if (!closing || closing.rawName !== text.slice(index + 2, end).trim()) {
         return MALFORMED;
       }
@@ -307,9 +391,22 @@ function parseXmlDocument(text: string): XmlParse {
     const attributes = parseAttributes(parts[2]);
     if (!attributes) return MALFORMED;
 
+    // Only the element name is resolved. An unprefixed attribute is in no
+    // namespace whatever the default declaration says, and a prefixed one
+    // belongs to whatever declared it rather than to this point, so `lat` and
+    // `lon` stay keyed on the exact names they were written under.
+    const scope = extendScope(
+      scopes[scopes.length - 1] ?? ROOT_SCOPE,
+      attributes,
+    );
+    if (!scope) return MALFORMED;
+    const resolved = resolveElementName(parts[1], scope);
+    if (!resolved) return MALFORMED;
+
     const element: XmlElement = {
       rawName: parts[1],
-      localName: toLocalName(parts[1]),
+      namespaceUri: resolved.namespaceUri,
+      localName: resolved.localName,
       attributes,
       children: [],
       text: "",
@@ -319,7 +416,10 @@ function parseXmlDocument(text: string): XmlParse {
     // One root element, and nothing beside it.
     else if (root) return MALFORMED;
     else root = element;
-    if (!selfClosing) stack.push(element);
+    if (!selfClosing) {
+      stack.push(element);
+      scopes.push(scope);
+    }
     index = end + 1;
   }
 
@@ -330,8 +430,21 @@ function parseXmlDocument(text: string): XmlParse {
   return { ok: true, root };
 }
 
+function isGpxElement(element: XmlElement, localName: string): boolean {
+  return (
+    element.localName === localName && GPX_NAMESPACES.has(element.namespaceUri)
+  );
+}
+
+/**
+ * The GPX children of one element. Structural position says where an element
+ * sits; the resolved namespace says whose element it is. Both have to hold,
+ * so a foreign `<evil:trkseg>` sitting in exactly the right place is not a
+ * segment, and a foreign `<evil:wpt>` does not make a document an unsupported
+ * format either.
+ */
 function childrenNamed(element: XmlElement, localName: string): XmlElement[] {
-  return element.children.filter((child) => child.localName === localName);
+  return element.children.filter((child) => isGpxElement(child, localName));
 }
 
 /**
@@ -353,12 +466,13 @@ function readCoordinate(value: string | undefined): number | null {
 /**
  * Read `<trk>/<trkseg>/<trkpt>` and nothing else.
  *
- * Every element is taken as a direct child of the element that may contain
- * it: a track under the root, a segment under a track, a point under a
- * segment, a `<time>` under a point. That is what makes a `<trkpt>` written
- * inside an `<extensions>` block, a comment or a CDATA section not a sample —
- * and it keeps such text out of the point ceilings too, which count what
- * would be stored rather than what the file mentions.
+ * Every element is a GPX element taken as a direct child of the element that
+ * may contain it: a track under the root, a segment under a track, a point
+ * under a segment, a `<time>` under a point. That is what makes a `<trkpt>`
+ * written inside an `<extensions>` block, a comment or a CDATA section not a
+ * sample, and what makes a namespace GPX never claimed not a track at all —
+ * and it keeps both out of the point ceilings too, which count what would be
+ * stored rather than what the file mentions.
  *
  * What it deliberately does not take:
  *
@@ -390,7 +504,10 @@ export function readGpxRecordedTrack(
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
 
   const root = parsed.root;
-  if (root.localName !== "gpx") return { ok: false, reason: "MALFORMED_FILE" };
+  // A root that is not a GPX `<gpx>` is a broken track document, not a format
+  // still to come: `UNSUPPORTED_FORMAT` is reserved for a real GPX file this
+  // slice does not read yet, and a lookalike root must not borrow it.
+  if (!isGpxElement(root, "gpx")) return { ok: false, reason: "MALFORMED_FILE" };
 
   const tracks = childrenNamed(root, "trk");
   if (tracks.length === 0) {
