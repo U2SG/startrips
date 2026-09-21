@@ -5,6 +5,7 @@
 // or semantic focus owner.
 import { mkdirSync } from "node:fs";
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { releaseFragmentReply, waitForFragmentReadback } from "./qa-fragment-observation.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const captureDir = "artifacts/home-base-context";
@@ -121,6 +122,7 @@ async function installOwnerApi(page, journeyRows = journeys) {
       const finished = new Promise((resolve) => { finish = resolve; });
       await new Promise((resolve) => {
         const release = async () => { resolve(); await finished; };
+        release.request = route.request();
         if (heldReads) heldReads.push(release);
         else fragments.release = release;
       });
@@ -340,7 +342,7 @@ async function fragmentQa(owner, name) {
     && editRequest.body.latitude === created.latitude && editRequest.body.longitude === created.longitude
     && await form.getByRole("button", { name: "保存中…" }).isDisabled());
   fragments.release();
-  await row.getByText("晚风", { exact: true }).waitFor();
+  await waitForFragmentReadback(row, "晚风");
   record(`${name}: edit renders optional place and note`, {}, (await row.innerText()).includes("深圳湾"));
   await row.getByRole("button", { name: "删除", exact: true }).click();
   fragments.rejectNext = { method: "DELETE", status: 503, code: "REQUEST_FAILED" };
@@ -377,10 +379,9 @@ async function fragmentQa(owner, name) {
   await row.getByRole("button", { name: "编辑", exact: true }).click();
   await row.getByLabel("随记（选填）").fill("最新编辑");
   await row.getByRole("button", { name: "保存日常" }).click();
-  await row.getByText("最新编辑", { exact: true }).waitFor();
-  const putReply = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().includes("everyday-fragments"));
-  await releasePut();
-  await (await putReply).finished();
+  await waitForFragmentReadback(row, "最新编辑");
+  const stalePut = await releaseFragmentReply(page, releasePut, 200);
+  record(`${name}: exact stale PUT payload was delivered`, { stalePut }, stalePut.fragment.note === "延迟的编辑");
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   record(`${name}: stale PUT cannot replace reopened edits`, {}, (await row.innerText()).includes("最新编辑"));
 
@@ -395,9 +396,8 @@ async function fragmentQa(owner, name) {
   await fillFragment(form, "保留的日常");
   await form.getByRole("button", { name: "保存日常" }).click();
   await row.getByText("保留的日常", { exact: true }).waitFor();
-  const deleteReply = page.waitForResponse((response) => response.request().method() === "DELETE" && response.url().includes("everyday-fragments"));
-  await releaseDelete();
-  await (await deleteReply).finished();
+  await releaseFragmentReply(page, releaseDelete, 204);
+  record(`${name}: exact stale DELETE returned 204`, { url: releaseDelete.request.url() }, true);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   record(`${name}: stale DELETE cannot remove new records`, {}, (await row.innerText()).includes("保留的日常"));
   record(`${name}: CRUD never refreshes or changes Journey list`, { journeyRequests },
