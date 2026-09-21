@@ -96,8 +96,8 @@ app.route("/api/home-bases", homeBaseRoutes);
 // session inside the route module, never from the path or the body.
 app.route("/api/everyday-fragments", everydayFragmentRoutes);
 app.route("/api/journeys", journeyRoutes);
-// #419: owner-only recorded-track evidence for one Journey. Read-only here —
-// the gated first input format stays with #341 — and never part of a guest
+// #419: owner-only recorded-track evidence for one Journey, and since #341
+// the format-neutral import channel that writes it. Never part of a guest
 // share payload, because these samples are precise.
 app.route("/api/journey-recorded-tracks", journeyRecordedTrackRoutes);
 app.route("/api/locations", locationRoutes);
