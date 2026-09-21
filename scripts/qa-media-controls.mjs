@@ -1,4 +1,5 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { apertureSeamId, expectedApertureSeams, gradeApertureContinuity } from "./qa-aperture-continuity.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
@@ -306,6 +307,30 @@ async function waitForStoryPicture(page, assetId, surfaceSelector = ".journey-st
     }, surfaceSelector);
     throw new Error(`Story picture ${assetId} did not settle: ${JSON.stringify(state)}`, { cause: error });
   });
+}
+
+// #482: the aperture seam evidence the mixed-aspect gate grades. It is the same
+// settled identity waitForStoryPicture awaits, read back as data instead of a
+// throw, so a seam the navigation never reached is reported by name next to the
+// seams that did settle rather than taking the whole lane record down with it.
+async function settleApertureSeam(page, assetId) {
+  try {
+    await waitForStoryPicture(page, assetId);
+  } catch (error) {
+    return { settled: false, detail: error.message };
+  }
+  return await page.evaluate((id) => {
+    const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+    const current = root?.querySelector('[data-media-page="current"]');
+    const presentation = root?.getAttribute("data-media-presentation");
+    return {
+      settled: presentation === "settled"
+        && current?.getAttribute("data-media-page-id") === id
+        && current?.getAttribute("data-media-page-ready") === "true",
+      presentation,
+      currentId: current?.getAttribute("data-media-page-id") ?? null,
+    };
+  }, assetId);
 }
 
 async function exerciseMobileStoryContinuitySwipe(page, touch, direction, expectedId) {
@@ -2862,16 +2887,27 @@ try {
       observer.observe(root, { subtree: true, attributes: true, attributeFilter: ["src"], attributeOldValue: true });
     });
     await storyPicture(manyPhotos.page).focus();
+    // #482: the media indices this sequence visits, in order — the key presses
+    // below plus the forward click and ArrowRight that close it. Each consecutive
+    // pair is one aperture seam the check requires evidence for; a disagreement
+    // with the sequence itself surfaces as an unreached or unexpected seam.
+    const apertureVisitPlan = [0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0, 1, 2];
+    const apertureSeams = [];
+    const recordApertureSeam = async (from, to) => {
+      const reached = await settleApertureSeam(manyPhotos.page, idFor(to));
+      apertureSeams.push({ seam: apertureSeamId(apertureSeams.length + 1, from, to), ...reached });
+      return reached.settled;
+    };
     for (const index of [1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0]) {
       const current = Number((await storyPicture(manyPhotos.page).getAttribute("data-shared-media-id")).slice(-3)) - 100;
       // Do not refocus the new slot: subsequent keys must work as typed by a user.
       await manyPhotos.page.keyboard.press(index > current ? "ArrowRight" : "ArrowLeft");
-      await waitForStoryPicture(manyPhotos.page, idFor(index));
+      if (!await recordApertureSeam(current, index)) break;
     }
     await clickStoryPicture(manyPhotos.page, 1);
-    await waitForStoryPicture(manyPhotos.page, idFor(1));
+    await recordApertureSeam(0, 1);
     await manyPhotos.page.keyboard.press("ArrowRight");
-    await waitForStoryPicture(manyPhotos.page, idFor(2));
+    await recordApertureSeam(1, 2);
     const stable = await manyPhotos.page.evaluate(() => {
       cancelAnimationFrame(window.__qaApertureFrame);
       const root = document.querySelector(".journey-story__media [data-story-media-pages]");
@@ -2886,9 +2922,16 @@ try {
       || manyPhotos.consoleErrors.length > 0 || manyPhotos.pageErrors.length > 0;
     checks.push({ name: "story-eight-photos-signed-read-cache-and-continuous-focus", ...stable, requests, failed: regressionFailed });
     if (regressionFailed) failed = true;
-    const apertureFailed = stable.aperture.boundaries < 12 || stable.aperture.jumps.length > 0;
-    checks.push({ name: "story-mixed-aspect-aperture-continuity", ...stable.aperture, failed: apertureFailed });
-    if (apertureFailed) failed = true;
+    // boundaries/samples/maxBoundaryDelta stay in the record as sampling
+    // diagnostics for #433; only the reached seams and real jumps gate the check.
+    const apertureGrade = gradeApertureContinuity({
+      expectedSeams: expectedApertureSeams(apertureVisitPlan),
+      reachedSeams: apertureSeams.filter((seam) => seam.settled).map((seam) => seam.seam),
+      jumps: stable.aperture.jumps,
+    });
+    checks.push({ name: "story-mixed-aspect-aperture-continuity", ...stable.aperture, ...apertureGrade,
+      seams: apertureSeams, failed: apertureGrade.failed });
+    if (apertureGrade.failed) failed = true;
   } finally {
     const video = manyPhotos.page.video();
     await manyPhotos.page.close();
