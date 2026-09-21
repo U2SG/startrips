@@ -32,8 +32,12 @@ def snapshot():
         # CreationDate is what separates a live process from a later one that merely
         # reuses its number: Windows documents ProcessId and ParentProcessId as
         # reusable, so neither is an identity on its own.
+        # Ask CIM only for the five fields the provider needs. Fetching the full
+        # Win32_Process schema can stall on unrelated expensive provider fields
+        # even though these identity/argv fields are healthy.
         command = ('$ErrorActionPreference="Stop"; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); '
-                   '@(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name,CommandLine,'
+                   '@(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop | '
+                   'Select-Object ProcessId,ParentProcessId,Name,CommandLine,'
                    "@{n='Started';e={if ($_.CreationDate) { $_.CreationDate.ToString('o') } else { '' }}}) | ConvertTo-Json -Compress")
         result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
                                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=25)

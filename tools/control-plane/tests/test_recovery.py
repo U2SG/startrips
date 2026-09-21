@@ -363,6 +363,18 @@ class ProcessClassificationCases(unittest.TestCase):
             self.assertEqual([], execution.competitors(
                 rows, self.root, 3, lane='experience'))
 
+    def test_windows_snapshot_projects_only_required_cim_fields(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='[]', stderr='')
+        with mock.patch.object(execution.os, 'name', 'nt'), \
+                mock.patch.object(execution.subprocess, 'run', return_value=completed) as run:
+            self.assertEqual([], execution.snapshot())
+        command = run.call_args.args[0][-1]
+        self.assertIn(
+            'Get-CimInstance Win32_Process -Property '
+            'ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop',
+            command)
+        self.assertNotIn('Get-CimInstance Win32_Process -ErrorAction Stop', command)
+
     def test_occupied_reobserves_process_birth_race(self):
         first = self.base + [process(10, 1, 'bash.exe', None)]
         token = 'experience-token-1234'
