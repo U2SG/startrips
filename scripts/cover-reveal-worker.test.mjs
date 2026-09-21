@@ -42,6 +42,8 @@ const JOURNEY_ID = "1b2c3d4e-5f60-4a1b-8c2d-3e4f5a6b7c8d";
 const LEASE_TOKEN = "lease-token-for-the-one-claim";
 const SOURCE_BYTES = Buffer.from("a pinned cover photograph");
 const OUTPUT_MAX_BYTES = 65536;
+/** The completion timestamp of an answer the server did not write twice. */
+const PRIOR_COMPLETED_AT = "2026-09-20T11:22:33.000Z";
 
 function jpeg(size = 512) {
   const buffer = Buffer.alloc(size, 0x20);
@@ -79,6 +81,7 @@ async function startStubServer(plan = {}) {
   const requests = [];
   const uploads = [];
   const completeScript = [...(plan.complete ?? [])];
+  let hungUpload = false;
   plan = { ...plan, outputUpload: [...(plan.outputUpload ?? [])] };
   const server = createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -117,6 +120,13 @@ async function startStubServer(plan = {}) {
         return;
       }
       if (url.pathname === "/stub/upload" && request.method === "PUT") {
+        if (plan.hangUpload && !hungUpload) {
+          // The body arrived and the answer never does, so the client sits in
+          // the PUT until it is signalled. Once only: the restart after the
+          // interruption has to be able to publish.
+          hungUpload = true;
+          return;
+        }
         uploads.push(raw);
         response.writeHead(200);
         response.end();
@@ -198,6 +208,24 @@ async function startStubServer(plan = {}) {
         }
         if (next === "too-large") {
           send(409, { error: "COVER_REVEAL_OUTPUT_TOO_LARGE" });
+          return;
+        }
+        if (next === "source-changed") {
+          send(409, { error: "COVER_REVEAL_SOURCE_CHANGED" });
+          return;
+        }
+        if (next === "already-ready") {
+          // The server's own early return for a completion this same claimant
+          // already applied: the job it answers with is the one the lost
+          // response published, carrying that earlier attempt rather than a
+          // second write.
+          send(200, {
+            derivative: {
+              ...derivative("ready"),
+              attempts: 1,
+              completedAt: PRIOR_COMPLETED_AT,
+            },
+          });
           return;
         }
         send(200, { derivative: { ...derivative("ready"), state: "ready" } });
@@ -447,6 +475,56 @@ describe("cover-reveal reference worker client (#468, slice 2 of #367)", () => {
     }
   });
 
+  it("fails closed when the pinned source moved before the read", async () => {
+    // The cover changed under the claim, so the object this job was pinned to
+    // is no longer the journey's source. The server refuses the read and the
+    // job is not this process's to settle any more.
+    const server = await startStubServer({
+      sourceRead: { status: 409, error: "COVER_REVEAL_SOURCE_CHANGED" },
+    });
+    try {
+      const generator = await writeGenerator("good.mjs", GOOD_GENERATOR);
+      const result = await runIteration(server, generator);
+      expect(result.outcome).toBe("lease-lost");
+      expect(result.exitCode).toBe(EXIT_CODES.leaseLost);
+      expect(result.exitCode).not.toBe(EXIT_CODES.ok);
+      expect(result.error).toBe("COVER_REVEAL_SOURCE_CHANGED");
+      // Nothing was generated against a stale source, nothing was published,
+      // and no failure was reported against a claim the server superseded.
+      expect(
+        server.requests.some((entry) => entry.pathname.endsWith("/output-upload")),
+      ).toBe(false);
+      expect(server.requests.some((entry) => entry.pathname.endsWith("/fail"))).toBe(
+        false,
+      );
+      expect(server.uploads).toHaveLength(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("fails closed when the pinned source moved before the completion", async () => {
+    // The whole attempt ran against a source revision the journey has since
+    // replaced. The server supersedes the derivative and drops the object; the
+    // client has to say so rather than exit 0 on bytes nobody will read.
+    const server = await startStubServer({ complete: ["source-changed"] });
+    try {
+      const generator = await writeGenerator("good.mjs", GOOD_GENERATOR);
+      const result = await runIteration(server, generator);
+      expect(result.outcome).toBe("superseded");
+      expect(result.exitCode).toBe(EXIT_CODES.leaseLost);
+      expect(result.exitCode).not.toBe(EXIT_CODES.ok);
+      expect(server.uploads).toHaveLength(1);
+      // The server already settled the derivative; a `fail` on top of it would
+      // be this client reporting an attempt against a claim it no longer owns.
+      expect(server.requests.some((entry) => entry.pathname.endsWith("/fail"))).toBe(
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("fails closed when the completion says another claimant settled the job", async () => {
     const server = await startStubServer({ complete: ["not-claimed"] });
     try {
@@ -480,6 +558,36 @@ describe("cover-reveal reference worker client (#468, slice 2 of #367)", () => {
       expect(result.logs.some((entry) => entry.event === "complete.ambiguous")).toBe(
         true,
       );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("accepts a completion this same claim already applied without writing twice", async () => {
+    // The first completion reached the server and its answer did not come
+    // back. The retry lands on an already-`ready` job, which the protocol
+    // documents as a `200` carrying the completion that was already made.
+    const server = await startStubServer({ complete: ["unavailable", "already-ready"] });
+    try {
+      const generator = await writeGenerator("good.mjs", GOOD_GENERATOR);
+      const result = await runIteration(server, generator);
+      expect(result.outcome).toBe("completed");
+      expect(result.exitCode).toBe(EXIT_CODES.ok);
+      expect(
+        server.requests.filter((entry) => entry.pathname.endsWith("/complete")),
+      ).toHaveLength(2);
+      // A replay is not a second delivery: the bytes are neither regenerated
+      // nor re-signed nor re-PUT, and nothing is reported as failed.
+      expect(server.uploads).toHaveLength(1);
+      expect(
+        server.requests.filter((entry) => entry.pathname.endsWith("/output-upload")),
+      ).toHaveLength(1);
+      expect(server.requests.some((entry) => entry.pathname.endsWith("/fail"))).toBe(
+        false,
+      );
+      expect(
+        result.logs.find((entry) => entry.event === "job.ready")?.state,
+      ).toBe("ready");
     } finally {
       await server.close();
     }
@@ -598,6 +706,71 @@ setInterval(() => {}, 1000);
         // so the crash cost one lease window and nothing else.
         const good = await writeGenerator("good.mjs", GOOD_GENERATOR);
         const restarted = await runIteration(server, good);
+        expect(restarted.outcome).toBe("completed");
+        expect(restarted.exitCode).toBe(EXIT_CODES.ok);
+        expect(server.uploads).toHaveLength(1);
+      } finally {
+        child.kill("SIGKILL");
+        await server.close();
+      }
+    },
+    20000,
+  );
+
+  it(
+    "publishes nothing and settles nothing when it is interrupted mid-upload",
+    async () => {
+      // The riskiest moment in the iteration: the bytes are in flight to the
+      // object store and the client cannot know whether they landed. It must
+      // still say nothing to the server, because `complete` here would claim a
+      // derivative it never confirmed and `fail` would settle a claim whose
+      // output may exist.
+      const server = await startStubServer({ hangUpload: true });
+      const generator = await writeGenerator("good.mjs", GOOD_GENERATOR);
+      const child = spawn(process.execPath, [CLIENT_PATH], {
+        env: {
+          ...process.env,
+          STARTRIPS_API_ORIGIN: server.origin,
+          COVER_REVEAL_WORKER_TOKEN: "a-worker-credential-of-more-than-32-bytes",
+          COVER_REVEAL_GENERATOR_COMMAND: process.execPath,
+          COVER_REVEAL_GENERATOR_ARGS: JSON.stringify([generator]),
+          COVER_REVEAL_WORKER_WORKDIR: workspace,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        await waitFor(async () =>
+          server.requests.some((entry) => entry.pathname === "/stub/upload"),
+        );
+        child.kill("SIGINT");
+        const [exitCode] = await new Promise((resolve) =>
+          child.once("exit", (code, signal) => resolve([code, signal])),
+        );
+
+        // The upload was issued but never acknowledged, and the job is exactly
+        // as the server left it: leased, unsettled, reclaimable by the
+        // existing lease expiry.
+        expect(server.uploads).toHaveLength(0);
+        expect(
+          server.requests.some(
+            (entry) =>
+              entry.pathname.endsWith("/complete") || entry.pathname.endsWith("/fail"),
+          ),
+        ).toBe(false);
+
+        if (process.platform !== "win32") {
+          // POSIX runs the handler, so the temporary directory holding the
+          // source and the output is removed. CI is ubuntu.
+          expect(exitCode).toBe(EXIT_CODES.interrupted);
+          const leftovers = (await readdir(workspace)).filter((entry) =>
+            entry.startsWith("startrips-cover-reveal-"),
+          );
+          expect(leftovers).toEqual([]);
+        }
+
+        // After the reclaim a fresh invocation regenerates and publishes once,
+        // so the interruption cost one lease window and produced no duplicate.
+        const restarted = await runIteration(server, generator);
         expect(restarted.outcome).toBe("completed");
         expect(restarted.exitCode).toBe(EXIT_CODES.ok);
         expect(server.uploads).toHaveLength(1);
