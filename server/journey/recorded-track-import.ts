@@ -225,13 +225,20 @@ function parseAttributes(text: string): XmlAttributes | null {
  * position, and structural context does not make it a GPX element: a foreign
  * document is free to nest its own elements in exactly that shape.
  *
- * Three namespaces are accepted: GPX 1.1, which every current writer emits;
- * GPX 1.0, because refusing a real recording as a broken file is worse than
- * reading one more declared namespace; and the empty one, the no-namespace
- * compatibility form used by writers that declare nothing. Accepting the
- * empty namespace means a nested `xmlns=""` re-enters it — that is the price
- * of the compatibility form, and it grants no element an identity a document
- * declaring nothing at all would not already have.
+ * Three namespaces are admitted at the root: GPX 1.1, which every current
+ * writer emits; GPX 1.0, because refusing a real recording as a broken file
+ * is worse than reading one more declared namespace; and the empty one, the
+ * no-namespace compatibility form used by writers that declare nothing.
+ *
+ * That set admits a *root*, and only a root. GPX identity is a document
+ * mode, not a per-element membership test: the root resolves the document's
+ * GPX namespace once, and every structural descendant has to be in that same
+ * namespace. So the compatibility form is a property of a document that
+ * declares nothing, never a re-entry a namespaced document can take inside
+ * itself. A nested `xmlns=""`, or a switch to the other GPX version, puts
+ * that element outside the document's own GPX namespace, and an element
+ * foreign to the root is not a track, a segment or a sample however it is
+ * nested.
  */
 const GPX_NAMESPACES: ReadonlySet<string> = new Set([
   "http://www.topografix.com/GPX/1/1",
@@ -430,21 +437,34 @@ function parseXmlDocument(text: string): XmlParse {
   return { ok: true, root };
 }
 
-function isGpxElement(element: XmlElement, localName: string): boolean {
-  return (
-    element.localName === localName && GPX_NAMESPACES.has(element.namespaceUri)
-  );
+/**
+ * Root admission: does this element open a GPX document at all, and in which
+ * of the accepted namespaces. This is the only place the accepted set is
+ * consulted, and its answer becomes the document namespace every element
+ * below is then held to.
+ */
+function gpxDocumentNamespace(root: XmlElement): string | null {
+  if (root.localName !== "gpx") return null;
+  return GPX_NAMESPACES.has(root.namespaceUri) ? root.namespaceUri : null;
 }
 
 /**
- * The GPX children of one element. Structural position says where an element
- * sits; the resolved namespace says whose element it is. Both have to hold,
- * so a foreign `<evil:trkseg>` sitting in exactly the right place is not a
- * segment, and a foreign `<evil:wpt>` does not make a document an unsupported
- * format either.
+ * The GPX children of one element, pinned to the document's own namespace.
+ * Structural position says where an element sits; the resolved namespace says
+ * whose element it is. Both have to hold, so a foreign `<evil:trkseg>`
+ * sitting in exactly the right place is not a segment, a `<trkpt xmlns="">`
+ * nested under a namespaced root is not a sample, and a foreign `<evil:wpt>`
+ * does not make a document an unsupported format either.
  */
-function childrenNamed(element: XmlElement, localName: string): XmlElement[] {
-  return element.children.filter((child) => isGpxElement(child, localName));
+function childrenNamed(
+  element: XmlElement,
+  namespaceUri: string,
+  localName: string,
+): XmlElement[] {
+  return element.children.filter(
+    (child) =>
+      child.localName === localName && child.namespaceUri === namespaceUri,
+  );
 }
 
 /**
@@ -507,13 +527,14 @@ export function readGpxRecordedTrack(
   // A root that is not a GPX `<gpx>` is a broken track document, not a format
   // still to come: `UNSUPPORTED_FORMAT` is reserved for a real GPX file this
   // slice does not read yet, and a lookalike root must not borrow it.
-  if (!isGpxElement(root, "gpx")) return { ok: false, reason: "MALFORMED_FILE" };
+  const gpxNamespace = gpxDocumentNamespace(root);
+  if (gpxNamespace === null) return { ok: false, reason: "MALFORMED_FILE" };
 
-  const tracks = childrenNamed(root, "trk");
+  const tracks = childrenNamed(root, gpxNamespace, "trk");
   if (tracks.length === 0) {
     // Ordered so a document carrying both is read as the track document it is.
-    return childrenNamed(root, "wpt").length > 0 ||
-        childrenNamed(root, "rte").length > 0
+    return childrenNamed(root, gpxNamespace, "wpt").length > 0 ||
+        childrenNamed(root, gpxNamespace, "rte").length > 0
       ? { ok: false, reason: "UNSUPPORTED_FORMAT" }
       // No track, no waypoint, no route: nothing this reader could have taken,
       // which is a broken track document rather than a format still to come.
@@ -523,9 +544,9 @@ export function readGpxRecordedTrack(
   const segments: ReadTrackSegment[] = [];
   let totalPoints = 0;
   for (const track of tracks) {
-    for (const trackSegment of childrenNamed(track, "trkseg")) {
+    for (const trackSegment of childrenNamed(track, gpxNamespace, "trkseg")) {
       const points: ReadTrackPoint[] = [];
-      for (const trackPoint of childrenNamed(trackSegment, "trkpt")) {
+      for (const trackPoint of childrenNamed(trackSegment, gpxNamespace, "trkpt")) {
         // The point's own `lat` and `lon`, under exactly those names: a
         // prefixed or vendor-namespaced coordinate belongs to whatever wrote
         // it, not to this sample.
@@ -535,7 +556,7 @@ export function readGpxRecordedTrack(
           return { ok: false, reason: "MALFORMED_FILE" };
         }
 
-        const time = childrenNamed(trackPoint, "time")[0];
+        const time = childrenNamed(trackPoint, gpxNamespace, "time")[0];
         points.push({
           latitude,
           longitude,

@@ -236,6 +236,44 @@ const FOREIGN_NAMESPACE_GPX = lookalikeTrack(
 );
 const UNDECLARED_PREFIX_GPX = lookalikeTrack("evil:", "");
 
+/**
+ * Two documents whose root is an admitted GPX root and whose track points
+ * then leave that namespace: one resets to the no-namespace compatibility
+ * form, the other switches to the other GPX version. Both nest in exactly the
+ * shape the reader selects and both sit under a genuine `<trk>/<trkseg>`, so
+ * only the document namespace the root resolved separates them from a sample.
+ */
+const NAMESPACE_RESET_GPX = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk><trkseg>
+    <trkpt xmlns="" lat="22.543096" lon="114.057865"/>
+    <trkpt xmlns="" lat="22.540100" lon="114.061200"/>
+  </trkseg></trk>
+</gpx>`;
+
+const NAMESPACE_SWITCH_GPX = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk><trkseg>
+    <trkpt xmlns="http://www.topografix.com/GPX/1/0" lat="22.543096" lon="114.057865"/>
+    <trkpt xmlns="http://www.topografix.com/GPX/1/0" lat="22.540100" lon="114.061200"/>
+  </trkseg></trk>
+</gpx>`;
+
+/**
+ * The same two lookalikes beside real track points in one segment, which is
+ * what a document would do to smuggle a position into an otherwise valid
+ * recording.
+ */
+const MIXED_NAMESPACE_GPX = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk><trkseg>
+    <trkpt lat="22.543096" lon="114.057865"/>
+    <trkpt xmlns="" lat="81.000000" lon="11.000000"/>
+    <trkpt xmlns="http://www.topografix.com/GPX/1/0" lat="82.000000" lon="12.000000"/>
+    <trkpt lat="22.540100" lon="114.061200"/>
+  </trkseg></trk>
+</gpx>`;
+
 /** The same track under a prefix bound to the GPX namespace: a real GPX file. */
 const PREFIXED_GPX = `<?xml version="1.0" encoding="UTF-8"?>
 <g:gpx version="1.1" xmlns:g="http://www.topografix.com/GPX/1/1">
@@ -543,6 +581,41 @@ describe("recorded-track import reading", () => {
       expect(prefixed.segments[0].points[0].recordedAt)
         .toBe("2026-09-01T00:00:00Z");
     }
+  });
+
+  it("holds a track point to the namespace its own root resolved", async () => {
+    const { limits } = RECORDED_TRACK_IMPORT_FORMATS.gpx;
+
+    // The root is a real GPX root either way, so nothing about the document's
+    // opening tag refuses these: the point is that GPX identity is resolved
+    // once for the document and a descendant that leaves it is somebody
+    // else's element, whether it resets to the compatibility form or switches
+    // to the other GPX version.
+    for (const document of [NAMESPACE_RESET_GPX, NAMESPACE_SWITCH_GPX]) {
+      expect(readGpxRecordedTrack(document, limits)).toEqual({
+        ok: false,
+        reason: "MALFORMED_FILE",
+      });
+      expect(
+        await importErrorCode(ownerJourneyId, { format: "gpx", document }),
+      ).toEqual({ status: 400, error: "MALFORMED_FILE" });
+    }
+    expect((await readStoredSegments(ownerJourneyId)).samples).toHaveLength(0);
+
+    // Beside real points, the two lookalikes contribute nothing rather than
+    // failing the document: the segment is exactly the track that was written
+    // in the document's own namespace, with no position from either of them.
+    const mixed = readGpxRecordedTrack(MIXED_NAMESPACE_GPX, limits);
+    expect(mixed.ok).toBe(true);
+    if (!mixed.ok) return;
+    expect(mixed.segments).toHaveLength(1);
+    expect(mixed.segments[0].points.map((point) => [
+      point.latitude,
+      point.longitude,
+    ])).toEqual([
+      [22.543096, 114.057865],
+      [22.5401, 114.0612],
+    ]);
   });
 
   it("reads a coordinate only from the point's own lat and lon", () => {
