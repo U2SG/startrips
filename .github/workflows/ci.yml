@@ -166,54 +166,55 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: login-media
-            command: pnpm qa:login-v3 && pnpm qa:media-controls && pnpm qa:media-reclassification
-          - name: post-login
-            command: pnpm qa:post-login-controls
-          - name: playback-prefetch
-            command: pnpm qa:playback-prefetch
-          - name: playback-continuity
-            command: pnpm qa:playback-continuity
-          - name: final-acceptance
-            command: pnpm qa:final-acceptance
-          - name: route-anchoring
-            command: pnpm qa:route-anchoring
-          - name: city-label-anchoring
-            command: pnpm qa:city-label-anchoring
-          - name: earth-dive
-            command: pnpm qa:earth-dive
-          - name: attention-hierarchy
-            command: pnpm qa:attention-hierarchy
-          - name: brand-signature-motion
-            command: pnpm qa:brand-signature-motion
-          - name: recovery-surfaces
-            command: pnpm qa:recovery-surfaces
-          - name: composer-route-points
-            command: pnpm qa:composer-route-points
-          - name: composer-playback-preview
-            command: pnpm qa:composer-playback-preview
-          - name: composer-mobile-ia
-            command: pnpm qa:composer-mobile-ia
-          - name: mobile-contract
-            command: pnpm qa:mobile-contract
-          - name: globe-focus-chrome
-            command: pnpm qa:globe-focus-chrome
-          - name: route-point-context
-            command: pnpm qa:route-point-context
-          - name: globe-render-budget
-            command: pnpm qa:globe-render-budget
-          - name: guest-share
-            command: pnpm qa:guest-share
-          - name: home-base-suggestion
-            command: pnpm qa:home-base-suggestion
-          - name: home-base-context
-            command: pnpm qa:home-base-context
-          - name: owner-share
-            command: pnpm qa:owner-share
-          - name: cover-reveal
-            command: pnpm qa:cover-reveal
-          - name: cover-reveal-opening
-            command: pnpm qa:cover-reveal-opening
+          - name: earth
+            suites: "|earth-dive|"
+            commands: |
+              pnpm qa:earth-dive
+          - name: auth-media
+            suites: "|login-media|composer-playback-preview|"
+            commands: |
+              QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification
+              pnpm qa:composer-playback-preview
+          - name: labels-recovery
+            suites: "|city-label-anchoring|recovery-surfaces|"
+            commands: |
+              pnpm qa:city-label-anchoring
+              pnpm qa:recovery-surfaces
+          - name: reveal-share
+            suites: "|cover-reveal-opening|cover-reveal|owner-share|"
+            commands: |
+              pnpm qa:cover-reveal-opening
+              pnpm qa:cover-reveal
+              pnpm qa:owner-share
+          - name: playback-brand
+            suites: "|playback-prefetch|playback-continuity|final-acceptance|brand-signature-motion|"
+            commands: |
+              pnpm qa:playback-prefetch
+              pnpm qa:playback-continuity
+              pnpm qa:final-acceptance
+              pnpm qa:brand-signature-motion
+          - name: shell-composer
+            suites: "|post-login|mobile-contract|composer-route-points|composer-mobile-ia|"
+            commands: |
+              pnpm qa:post-login-controls
+              pnpm qa:mobile-contract
+              pnpm qa:composer-route-points
+              pnpm qa:composer-mobile-ia
+          - name: globe-context
+            suites: "|globe-focus-chrome|globe-render-budget|route-point-context|attention-hierarchy|"
+            commands: |
+              pnpm qa:globe-focus-chrome
+              pnpm qa:globe-render-budget
+              pnpm qa:route-point-context
+              pnpm qa:attention-hierarchy
+          - name: route-home-share
+            suites: "|route-anchoring|guest-share|home-base-suggestion|home-base-context|"
+            commands: |
+              pnpm qa:route-anchoring
+              pnpm qa:guest-share
+              pnpm qa:home-base-suggestion
+              pnpm qa:home-base-context
+
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -226,10 +227,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Install Chromium
         run: pnpm exec playwright-core install --with-deps chromium
-      - name: Run browser QA
+      - name: Run browser QA shard
         env:
-          QA_COMMAND: ${{ matrix.command }}
-          QA_CAPTURE_MEDIA_MOTION: ${{ matrix.name == 'login-media' && '1' || '0' }}
+          QA_COMMANDS: ${{ matrix.commands }}
         run: |
           set -euo pipefail
           pnpm exec vite --host 127.0.0.1 --port 4173 > /tmp/startrips-vite.log 2>&1 &
@@ -242,9 +242,19 @@ jobs:
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
-          bash -lc "$QA_COMMAND"
+          status=0
+          while IFS= read -r qa_command; do
+            [[ -n "$qa_command" ]] || continue
+            echo "::group::$qa_command"
+            if ! bash -lc "$qa_command"; then
+              echo "::error::Browser QA command failed: $qa_command"
+              status=1
+            fi
+            echo "::endgroup::"
+          done <<< "$QA_COMMANDS"
+          exit "$status"
       - name: Upload coastline refinement review
-        if: ${{ always() && matrix.name == 'city-label-anchoring' }}
+        if: ${{ always() && contains(matrix.suites, '|city-label-anchoring|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: coastline-refinement-${{ github.run_attempt }}
@@ -253,7 +263,7 @@ jobs:
           retention-days: 7
 
       - name: Upload cover reveal QA
-        if: ${{ always() && matrix.name == 'cover-reveal' }}
+        if: ${{ always() && contains(matrix.suites, '|cover-reveal|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: cover-reveal-${{ github.run_attempt }}
@@ -262,7 +272,7 @@ jobs:
           retention-days: 7
 
       - name: Upload cover reveal opening QA
-        if: ${{ always() && matrix.name == 'cover-reveal-opening' }}
+        if: ${{ always() && contains(matrix.suites, '|cover-reveal-opening|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: cover-reveal-opening-${{ github.run_attempt }}
@@ -271,7 +281,7 @@ jobs:
           retention-days: 7
 
       - name: Upload Composer Route Point QA
-        if: ${{ always() && matrix.name == 'composer-route-points' }}
+        if: ${{ always() && contains(matrix.suites, '|composer-route-points|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: composer-route-points-${{ github.run_attempt }}
@@ -280,7 +290,7 @@ jobs:
           retention-days: 7
 
       - name: Upload Composer mobile IA QA
-        if: ${{ always() && matrix.name == 'composer-mobile-ia' }}
+        if: ${{ always() && contains(matrix.suites, '|composer-mobile-ia|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: composer-mobile-ia-${{ github.run_attempt }}
@@ -289,7 +299,7 @@ jobs:
           retention-days: 7
 
       - name: Upload Home Base suggestion capture
-        if: ${{ always() && matrix.name == 'home-base-suggestion' }}
+        if: ${{ always() && contains(matrix.suites, '|home-base-suggestion|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: home-base-suggestion-${{ github.run_attempt }}
@@ -297,7 +307,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload Home Base context capture
-        if: ${{ always() && matrix.name == 'home-base-context' }}
+        if: ${{ always() && contains(matrix.suites, '|home-base-context|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: home-base-context-${{ github.run_attempt }}
@@ -305,7 +315,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload owner share surface captures
-        if: ${{ always() && matrix.name == 'owner-share' }}
+        if: ${{ always() && contains(matrix.suites, '|owner-share|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: owner-share-surfaces-${{ github.run_attempt }}
@@ -314,7 +324,7 @@ jobs:
           retention-days: 7
 
       - name: Upload media motion review
-        if: ${{ always() && matrix.name == 'login-media' }}
+        if: ${{ always() && contains(matrix.suites, '|login-media|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: media-motion-${{ github.run_attempt }}
@@ -322,7 +332,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Upload visited imprint review
-        if: ${{ always() && matrix.name == 'globe-render-budget' }}
+        if: ${{ always() && contains(matrix.suites, '|globe-render-budget|') }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: visited-imprint-${{ github.run_attempt }}
