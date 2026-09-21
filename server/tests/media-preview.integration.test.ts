@@ -1346,6 +1346,75 @@ describe("#260 same-asset preview for private media reads", () => {
     ).toEqual([]);
   });
 
+  it("settles a referenced preview write and keeps a failed orphan for retry", async () => {
+    const backend = recordingStorage();
+    const asset = await insertAsset();
+    await deriveReadyPreview(asset.id, backend);
+    const referencedKey = (await readAsset(asset.id)).previewStorageKey!;
+    const orphanKey = `${PREVIEW_KEY_PREFIX}${randomUUID()}`;
+    const failedKey = `${PREVIEW_KEY_PREFIX}${randomUUID()}`;
+    const expiresAt = new Date("2000-01-01T00:00:00Z");
+    await db.update(mediaPreviewWrites).set({ expiresAt })
+      .where(eq(mediaPreviewWrites.storageKey, referencedKey));
+    await db.insert(mediaPreviewWrites).values([orphanKey, failedKey].map((key) => ({
+      mediaAssetId: asset.id,
+      storageDriver: "s3",
+      storageKey: key,
+      expiresAt,
+    })));
+    backend.objects.set(orphanKey, PRODUCED_PREVIEW);
+    backend.objects.set(failedKey, PRODUCED_PREVIEW);
+    const deleteObject = backend.storage.deleteObject;
+    backend.storage.deleteObject = async (input) => {
+      if (input.key === failedKey) throw new Error("temporary storage outage");
+      await deleteObject(input);
+    };
+    const now = new Date("2000-01-01T01:00:00Z");
+    expect(await reconcilePreviewWrites(now, backend.dependencies))
+      .toEqual({ examined: 3, retired: 1, settled: 1 });
+    expect(backend.deleted).toEqual([orphanKey]);
+    expect(backend.objects.has(referencedKey)).toBe(true);
+    expect(backend.objects.has(failedKey)).toBe(true);
+    expect(await writeRecordFor(referencedKey)).toBeUndefined();
+    expect(await writeRecordFor(orphanKey)).toBeUndefined();
+    expect(await writeRecordFor(failedKey)).toBeDefined();
+
+    backend.storage.deleteObject = deleteObject;
+    expect(await reconcilePreviewWrites(now, backend.dependencies))
+      .toEqual({ examined: 1, retired: 1, settled: 0 });
+    expect(await writeRecordFor(failedKey)).toBeUndefined();
+    expect(backend.objects.has(failedKey)).toBe(false);
+  });
+
+  it("retains the namespace checkpoint when a later listing fails", async () => {
+    const requested: Array<string | undefined> = [];
+    let failListing = true;
+    const backend = recordingStorage({
+      async listObjects(input) {
+        expect(input.prefix).toBe(PREVIEW_KEY_PREFIX);
+        requested.push(input.continuationToken);
+        if (input.continuationToken === "second" && failListing) {
+          throw new Error("listing unavailable");
+        }
+        return input.continuationToken === "first"
+          ? { keys: [], continuationToken: "second" }
+          : { keys: [] };
+      },
+    });
+    let checkpoint: string | undefined = "first";
+    const run = async () => {
+      checkpoint = (await reconcilePreviewNamespace(checkpoint, backend.dependencies))
+        .continuationToken;
+    };
+    await expect(run()).rejects.toThrow("listing unavailable");
+    expect(checkpoint).toBe("first");
+    failListing = false;
+    await run();
+    expect(requested).toEqual(["first", "second", "first", "second"]);
+    expect(checkpoint).toBeUndefined();
+    expect(backend.deleted).toEqual([]);
+  });
+
   it("keeps the preview across a soft delete and restore, and clears it on the hard delete", async () => {
     const doomed = await createJourneyForAtlas(
       identity.atlasId,

@@ -17,6 +17,11 @@ import {
 } from "../media/preview-image";
 import type { MultipartStorage } from "../storage/multipart-storage";
 import {
+  reconcileDerivedObjectNamespace,
+  retireDerivedObjectWrites,
+  type DerivedObjectCleanup,
+} from "../storage/derived-object-cleanup";
+import {
   getMultipartStorage,
   hasConfiguredStorageBackends,
 } from "../storage/storage-registry";
@@ -421,6 +426,16 @@ const PREVIEW_WRITE_BATCH_SIZE = 50;
  */
 const PREVIEW_NAMESPACE_PAGES_PER_PASS = 10;
 
+function previewCleanup(dependencies: MediaPreviewDependencies): DerivedObjectCleanup {
+  return {
+    findReferencedKeys: async (keys) => db
+      .select({ key: mediaAssets.previewStorageKey })
+      .from(mediaAssets)
+      .where(inArray(mediaAssets.previewStorageKey, keys)),
+    discardObject: (driver, key) => discardPreviewObject(driver, key, dependencies),
+  };
+}
+
 /**
  * Retire the record of every preview write whose signature has closed.
  *
@@ -469,31 +484,9 @@ export async function reconcilePreviewWrites(
     .orderBy(mediaPreviewWrites.expiresAt)
     .limit(PREVIEW_WRITE_BATCH_SIZE);
 
-  let retired = 0;
-  let settled = 0;
-  for (const write of writes) {
-    const [referencing] = await db
-      .select({ id: mediaAssets.id })
-      .from(mediaAssets)
-      .where(eq(mediaAssets.previewStorageKey, write.storageKey))
-      .limit(1);
-
-    if (referencing) {
-      settled += 1;
-    } else {
-      const discarded = await discardPreviewObject(
-        write.storageDriver,
-        write.storageKey,
-        dependencies,
-      );
-      if (!discarded) continue;
-      retired += 1;
-    }
-    await db
-      .delete(mediaPreviewWrites)
-      .where(eq(mediaPreviewWrites.id, write.id));
-  }
-  return { examined: writes.length, retired, settled };
+  return retireDerivedObjectWrites(writes, previewCleanup(dependencies), async (id) => db
+    .delete(mediaPreviewWrites)
+    .where(eq(mediaPreviewWrites.id, id)));
 }
 
 /**
@@ -521,43 +514,13 @@ export async function reconcilePreviewNamespace(
   continuationToken?: string,
   dependencies: MediaPreviewDependencies = defaultDependencies,
 ) {
-  const storage = dependencies.configuredStorage();
-  let cursor = continuationToken;
-  let examined = 0;
-  let retired = 0;
-
-  for (let page = 0; page < PREVIEW_NAMESPACE_PAGES_PER_PASS; page += 1) {
-    const listed = await storage.listObjects({
-      prefix: PREVIEW_KEY_PREFIX,
-      ...(cursor ? { continuationToken: cursor } : {}),
-    });
-    examined += listed.keys.length;
-    if (listed.keys.length > 0) {
-      const referenced = new Set(
-        (
-          await db
-            .select({ key: mediaAssets.previewStorageKey })
-            .from(mediaAssets)
-            .where(inArray(mediaAssets.previewStorageKey, listed.keys))
-        ).map((row) => row.key),
-      );
-      for (const key of listed.keys) {
-        if (referenced.has(key)) continue;
-        const discarded = await discardPreviewObject(
-          storage.driver,
-          key,
-          dependencies,
-        );
-        if (discarded) retired += 1;
-      }
-    }
-    cursor = listed.continuationToken;
-    // The listing ran out. The next pass starts from the first page again,
-    // which is what makes this a repeated contract and not a one-off cleanup.
-    if (!cursor) break;
-  }
-
-  return { examined, retired, continuationToken: cursor };
+  return reconcileDerivedObjectNamespace(
+    dependencies.configuredStorage(),
+    PREVIEW_KEY_PREFIX,
+    PREVIEW_NAMESPACE_PAGES_PER_PASS,
+    continuationToken,
+    previewCleanup(dependencies),
+  );
 }
 
 export function startPreviewReconciler() {
