@@ -723,6 +723,45 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("leaves an attempt unresolved when the fail report never lands", async () => {
+    const server = await startStubServer({
+      fail: { status: 503, error: "STORAGE_UNAVAILABLE" },
+    });
+    try {
+      const generator = await writeGenerator("failing.mjs", FAILING_GENERATOR);
+      const result = await runIteration(server, generator);
+      // Exit 4 asserts the server accepted the report. It did not: the job is
+      // still leased with nothing recorded against it, which is exit 6.
+      expect(result.outcome).toBe("unsettled");
+      expect(result.exitCode).toBe(EXIT_CODES.unavailable);
+      expect(result.exitCode).not.toBe(EXIT_CODES.attemptFailed);
+      expect(result.exitCode).not.toBe(EXIT_CODES.leaseLost);
+      const failLog = result.logs.find((entry) => entry.event === "attempt.failed");
+      expect(failLog?.reportDelivered).toBe(false);
+      expect(server.uploads).toHaveLength(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("leaves an attempt unresolved when the credential is refused at fail", async () => {
+    // The 4xx path does not throw, so it settles through a different branch of
+    // reportFailure than the 5xx case above, and carries the server's error.
+    const server = await startStubServer({
+      fail: { status: 401, error: "UNAUTHORIZED" },
+    });
+    try {
+      const generator = await writeGenerator("failing.mjs", FAILING_GENERATOR);
+      const result = await runIteration(server, generator);
+      expect(result.outcome).toBe("unsettled");
+      expect(result.exitCode).toBe(EXIT_CODES.unavailable);
+      expect(result.exitCode).not.toBe(EXIT_CODES.attemptFailed);
+      expect(result.error).toBe("UNAUTHORIZED");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("signals the generator's whole process group rather than the wrapper PID", async () => {
     // The adapter is usually a wrapper that launches the real model process, so
     // the client starts it as a process-group leader and signals the group.

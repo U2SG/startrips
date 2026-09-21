@@ -83,6 +83,16 @@ retryable rather than settling it, so the outcome is unresolved, not rejected.
 A lease can also be lost part-way through any of this, including in the act of
 reporting a failure: a `fail` answered `404`/`409` means the claim was already
 someone else's, so the run exits `3` rather than claiming it reported anything.
+`4` is equally strict in the other direction: it asserts the server *accepted*
+the report. A `fail` that never lands — a transport failure, a 5xx, a rejected
+credential — leaves the job leased until it expires with nothing recorded
+against it, so the run exits `6` instead, the same unresolved code an ambiguous
+completion takes. A locally detected rejection is settled with the same `fail`
+call and is held to the same rule: it takes `5` only when the server accepted
+the report, and `6` when it did not. Only a rejection the **server** itself
+settled — a `complete` answered `COVER_REVEAL_OUTPUT_TOO_LARGE`,
+`_PIXELS_TOO_LARGE` or `_UNREADABLE`, where the job is already resolved and no
+`fail` is posted — takes `5` unconditionally.
 
 ## Environment
 
@@ -210,8 +220,9 @@ unaffected.
 fixture generators that are ordinary Node scripts, so the whole iteration —
 including the spawn, the exit code and both object transfers — is covered with
 no browser, no model, no database and no object storage. It covers the no-job
-exit, the happy path, a generator failure, a stale lease, both ambiguous
-completion shapes, an output rejected before upload, and an interrupted run that
-cleans up and is picked up again by a later invocation.
+exit, the happy path, a generator failure, a stale lease, a failure report the
+server never accepted, both ambiguous completion shapes, an output rejected
+before upload, and an interrupted run that cleans up and is picked up again by a
+later invocation.
 
 It runs in the `core` CI job with the rest of the suite.

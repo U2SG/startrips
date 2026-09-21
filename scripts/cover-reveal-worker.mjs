@@ -223,7 +223,10 @@ function describeError(error) {
  */
 async function reportFailure(context, jobId, leaseToken, reason) {
   if (interrupted) {
-    return { delivered: false, leaseLost: false, error: null };
+    // Deliberately says nothing to the server; the run is already exiting 130
+    // and the lease expiry is the recovery mechanism, so this is not an
+    // undelivered report the caller has to re-classify.
+    return { delivered: false, skipped: true, leaseLost: false, error: null };
   }
   let result;
   try {
@@ -232,34 +235,55 @@ async function reportFailure(context, jobId, leaseToken, reason) {
       "/api/cover-reveal-worker/jobs/" + jobId + "/fail",
       { leaseToken, reason },
     );
-  } catch {
-    // Transport failure. The lease expiry reclaims the job anyway, so an
-    // undelivered report costs a wait rather than correctness — but the caller
-    // must not go on to say the attempt was reported.
-    context.log("attempt.failed", { jobId, reason, reportDelivered: false });
-    return { delivered: false, leaseLost: false, error: null };
+  } catch (error) {
+    // Transport failure, a 5xx or a non-JSON body. The lease expiry reclaims
+    // the job anyway, so an undelivered report costs a wait rather than
+    // correctness — but the caller must not go on to say the attempt was
+    // reported, and the detail is what makes the resulting exit actionable.
+    const detail = describeError(error);
+    context.log("attempt.failed", { jobId, reason, reportDelivered: false, detail });
+    return { delivered: false, skipped: false, leaseLost: false, error: detail };
   }
   if (result.ok) {
     context.log("attempt.failed", { jobId, reason });
-    return { delivered: true, leaseLost: false, error: null };
+    return { delivered: true, skipped: false, leaseLost: false, error: null };
   }
   // A long generation can lose its lease before it gets to report anything, and
   // `fail` then answers 404/409 like every other verb. That is a lost lease,
   // not a reported failure.
   const error = result.payload?.error ?? null;
   context.log("attempt.failed", { jobId, reason, reportDelivered: false, error });
-  return { delivered: false, leaseLost: isLeaseLost(result.status, error), error };
+  return {
+    delivered: false,
+    skipped: false,
+    leaseLost: isLeaseLost(result.status, error),
+    error,
+  };
 }
 
 /**
  * Settle this attempt, and let a lease lost in the very act of reporting win:
  * the outcome has to describe what the server actually accepted.
+ *
+ * Exit `4` states that the attempt failed *and was reported with `fail`*, so a
+ * report the server never accepted — a rejected credential, a 5xx, a dropped
+ * connection — cannot take that code. The job stays leased until it expires and
+ * nobody has been told why, which is exactly the unresolved outcome `6` names.
  */
 async function settleAttempt(context, job, leaseToken, reason, result) {
   const report = await reportFailure(context, job.id, leaseToken, reason);
   if (report.leaseLost) {
     context.log("lease.lost", { jobId: job.id, error: report.error, step: "fail" });
     return { outcome: "lease-lost", exitCode: EXIT_CODES.leaseLost, error: report.error };
+  }
+  if (!report.delivered && !report.skipped) {
+    context.log("attempt.unsettled", { jobId: job.id, reason, error: report.error });
+    return {
+      ...result,
+      outcome: "unsettled",
+      exitCode: EXIT_CODES.unavailable,
+      error: report.error ?? result.error ?? null,
+    };
   }
   return result;
 }
