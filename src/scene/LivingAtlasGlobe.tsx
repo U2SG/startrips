@@ -703,6 +703,9 @@ export function LivingAtlasGlobe({
 
   const handleDetailReadiness = useCallback((readiness: DetailReadiness) => {
     if (earthExperiencePolicyRef.current === "particle-only") return;
+    // MapLibre can repeat the settled notification after ownership commits.
+    // An unchanged input must not restart the stable detail resolver.
+    if (diveRef.current.stage === "detail" && readinessRef.current === readiness) return;
     readinessRef.current = readiness;
     scheduleDiveTick();
   }, [scheduleDiveTick]);
