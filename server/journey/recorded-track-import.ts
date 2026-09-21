@@ -139,8 +139,8 @@ type XmlElement = {
   rawName: string;
   /** Prefix removed and lower-cased; what element selection compares. */
   localName: string;
-  /** The raw attribute text of the open tag. */
-  attributes: string;
+  /** The open tag's attributes, by the exact name each was written under. */
+  attributes: XmlAttributes;
   children: XmlElement[];
   /** This element's own text and CDATA. A child's text is the child's. */
   text: string;
@@ -153,6 +153,62 @@ type XmlParse =
 const MALFORMED: XmlParse = { ok: false, reason: "MALFORMED_FILE" };
 
 const ELEMENT_NAME = /^([^\s/>]+)([\s\S]*)$/;
+
+/**
+ * An attribute is read from a parsed token, never searched for in the open
+ * tag's text. Searching cannot tell `lat` from `data-lat`, from a prefixed
+ * `gpx:lat`, or from the characters `lat="80"` sitting inside another
+ * attribute's quoted value - each of which would give a track point a
+ * latitude the document never declared for it. So the tag is tokenized into
+ * exact name="value" pairs first, and selection asks for the one name.
+ *
+ * Nothing is expanded: a value is the text between its quotes, entity
+ * references included. A tag that is not a sequence of quoted, singly
+ * declared, named attributes is not well-formed, and the document carrying
+ * it is malformed rather than half-read.
+ */
+type XmlAttributes = Map<string, string>;
+
+const WHITESPACE = /\s/;
+
+function parseAttributes(text: string): XmlAttributes | null {
+  const attributes: XmlAttributes = new Map();
+  let index = 0;
+  while (index < text.length) {
+    if (WHITESPACE.test(text[index])) {
+      index += 1;
+      continue;
+    }
+
+    let cursor = index;
+    while (
+      cursor < text.length &&
+      !WHITESPACE.test(text[cursor]) &&
+      text[cursor] !== "="
+    ) {
+      cursor += 1;
+    }
+    const name = text.slice(index, cursor);
+    if (name === "") return null;
+
+    while (cursor < text.length && WHITESPACE.test(text[cursor])) cursor += 1;
+    // A bare name carrying no value is not an XML attribute.
+    if (text[cursor] !== "=") return null;
+    cursor += 1;
+    while (cursor < text.length && WHITESPACE.test(text[cursor])) cursor += 1;
+
+    const quote = text[cursor];
+    if (quote !== '"' && quote !== "'") return null;
+    const end = text.indexOf(quote, cursor + 1);
+    if (end === -1) return null;
+
+    // A name declared twice leaves no single value to read.
+    if (attributes.has(name)) return null;
+    attributes.set(name, text.slice(cursor + 1, end));
+    index = end + 1;
+  }
+  return attributes;
+}
 
 /**
  * A namespace prefix is dropped rather than resolved, so `<gpx:trkpt>` reads
@@ -248,10 +304,13 @@ function parseXmlDocument(text: string): XmlParse {
     const parts = ELEMENT_NAME.exec(selfClosing ? trimmed.slice(0, -1) : inner);
     if (!parts) return MALFORMED;
 
+    const attributes = parseAttributes(parts[2]);
+    if (!attributes) return MALFORMED;
+
     const element: XmlElement = {
       rawName: parts[1],
       localName: toLocalName(parts[1]),
-      attributes: parts[2],
+      attributes,
       children: [],
       text: "",
     };
@@ -275,13 +334,6 @@ function childrenNamed(element: XmlElement, localName: string): XmlElement[] {
   return element.children.filter((child) => child.localName === localName);
 }
 
-function readAttribute(attributes: string, name: string): string | null {
-  const pattern = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i");
-  const match = pattern.exec(attributes);
-  if (!match) return null;
-  return match[2] ?? match[3] ?? null;
-}
-
 /**
  * A coordinate is read strictly. `Number` accepts `''`, `'0x1f'` and
  * whitespace, all of which would turn an unreadable attribute into a position
@@ -290,8 +342,8 @@ function readAttribute(attributes: string, name: string): string | null {
  */
 const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
-function readCoordinate(value: string | null): number | null {
-  if (value === null) return null;
+function readCoordinate(value: string | undefined): number | null {
+  if (value === undefined) return null;
   const text = value.trim();
   if (!DECIMAL.test(text)) return null;
   const parsed = Number(text);
@@ -357,12 +409,11 @@ export function readGpxRecordedTrack(
     for (const trackSegment of childrenNamed(track, "trkseg")) {
       const points: ReadTrackPoint[] = [];
       for (const trackPoint of childrenNamed(trackSegment, "trkpt")) {
-        const latitude = readCoordinate(
-          readAttribute(trackPoint.attributes, "lat"),
-        );
-        const longitude = readCoordinate(
-          readAttribute(trackPoint.attributes, "lon"),
-        );
+        // The point's own `lat` and `lon`, under exactly those names: a
+        // prefixed or vendor-namespaced coordinate belongs to whatever wrote
+        // it, not to this sample.
+        const latitude = readCoordinate(trackPoint.attributes.get("lat"));
+        const longitude = readCoordinate(trackPoint.attributes.get("lon"));
         if (latitude === null || longitude === null) {
           return { ok: false, reason: "MALFORMED_FILE" };
         }

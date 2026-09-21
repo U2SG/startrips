@@ -215,6 +215,29 @@ const PHANTOM_POINT_GPX = `<?xml version="1.0" encoding="UTF-8"?>
 </gpx>`;
 
 /**
+ * A latitude that is not the point's own `lat` attribute: an extension's
+ * `data-lat`, a namespaced `gpx:lat`, and the characters of a lat attribute
+ * written inside another attribute's quoted value. A reader searching the
+ * open tag's text takes a coordinate out of each of them and stores a
+ * position the document never declared for that point.
+ */
+const BORROWED_LATITUDE_ATTRIBUTES = [
+  'data-lat="80.000000" lon="10.000000"',
+  'gpx:lat="80.000000" lon="10.000000"',
+  `note='lat="80.000000"' lon="10.000000"`,
+];
+
+/** The second point of an otherwise readable two-point track. */
+function gpxWithTrackPointAttributes(attributes: string) {
+  return [
+    '<gpx version="1.1"><trk><trkseg>',
+    '<trkpt lat="22.543096" lon="114.057865"/>',
+    `<trkpt ${attributes}/>`,
+    "</trkseg></trk></gpx>",
+  ].join("");
+}
+
+/**
  * The two-segment document cut after its first complete `<trkseg>`, so three
  * points and a closed segment are intact while `<trk>` and `<gpx>` never
  * close.
@@ -430,6 +453,42 @@ describe("recorded-track import reading", () => {
         longitude: 114.057865,
         recordedAt: "2026-09-01T00:00:00Z",
       },
+      { latitude: 22.5401, longitude: 114.0612, recordedAt: null },
+    ]);
+  });
+
+  it("reads a coordinate only from the point's own lat and lon", () => {
+    const { limits } = RECORDED_TRACK_IMPORT_FORMATS.gpx;
+    for (const attributes of BORROWED_LATITUDE_ATTRIBUTES) {
+      // A point with no lat of its own is a broken document, never a sample
+      // positioned from an attribute that belongs to something else.
+      expect(
+        readGpxRecordedTrack(gpxWithTrackPointAttributes(attributes), limits),
+      ).toEqual({ ok: false, reason: "MALFORMED_FILE" });
+    }
+
+    // An open tag that is not a sequence of quoted, named attributes is not
+    // half-read either — wherever it appears in the document.
+    expect(
+      readGpxRecordedTrack(
+        gpxWithTrackPointAttributes('lat="22.540100" lon="114.061200" bare'),
+        limits,
+      ),
+    ).toEqual({ ok: false, reason: "MALFORMED_FILE" });
+
+    // The other direction: attributes this reader does not take leave the
+    // point's own coordinates exactly as readable as they were.
+    const read = readGpxRecordedTrack(
+      gpxWithTrackPointAttributes(
+        `lat="22.540100" lon="114.061200" gpx:lat="80.000000" note='lat="81.000000"'`,
+      ),
+      limits,
+    );
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.segments).toHaveLength(1);
+    expect(read.segments[0].points).toEqual([
+      { latitude: 22.543096, longitude: 114.057865, recordedAt: null },
       { latitude: 22.5401, longitude: 114.0612, recordedAt: null },
     ]);
   });
