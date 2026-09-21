@@ -2904,10 +2904,15 @@ try {
       await manyPhotos.page.keyboard.press(index > current ? "ArrowRight" : "ArrowLeft");
       if (!await recordApertureSeam(current, index)) break;
     }
-    await clickStoryPicture(manyPhotos.page, 1);
-    await recordApertureSeam(0, 1);
-    await manyPhotos.page.keyboard.press("ArrowRight");
-    await recordApertureSeam(1, 2);
+    // Once a seam has failed to settle, the click below would wait on animations
+    // that are already stuck and throw, taking the named-unreached-seam record
+    // down with it. Leave the rest of the plan unreached and go grade it.
+    if (apertureSeams.every((seam) => seam.settled)) {
+      await clickStoryPicture(manyPhotos.page, 1);
+      await recordApertureSeam(0, 1);
+      await manyPhotos.page.keyboard.press("ArrowRight");
+      await recordApertureSeam(1, 2);
+    }
     const stable = await manyPhotos.page.evaluate(() => {
       cancelAnimationFrame(window.__qaApertureFrame);
       const root = document.querySelector(".journey-story__media [data-story-media-pages]");
