@@ -161,9 +161,21 @@ function JourneyRoutesQaPreview() {
   const qaParams = new URLSearchParams(window.location.search);
   const routeOpticsQa = qaParams.get("qaRouteOptics") === "1";
   const labelArbitrationQa = qaParams.get("qaLabelArbitration") === "1";
-  const previewRoutes = labelArbitrationQa
-    ? [...globeQaRoutes, labelArbitrationQaRoute]
-    : globeQaRoutes;
+  const [qaRouteDataUpdated, setQaRouteDataUpdated] = useState(false);
+  // Match the product owner: selection changes keep the route data reference.
+  const previewRoutes = useMemo(() => {
+    const routes = labelArbitrationQa
+      ? [...globeQaRoutes, labelArbitrationQaRoute]
+      : globeQaRoutes;
+    if (!qaRouteDataUpdated) return routes;
+    return routes.map((route) => {
+      if (route.id !== "qa-route-southwest") return route;
+      const points = [...route.points];
+      [points[1], points[2]] = [points[2], points[1]];
+      points[0] = { ...points[0], lat: points[0].lat + 1, lon: points[0].lon + 0.5 };
+      return { ...route, color: "#e486b4", points };
+    });
+  }, [labelArbitrationQa, qaRouteDataUpdated]);
   const [labelArbitrationStage, setLabelArbitrationStage] = useState<"browse" | "current" | "rewound">("browse");
   // #194: the preview is a second owner of the scene, so it supplies the same
   // compact flag the product owner does - otherwise the QA lane that measures
@@ -338,6 +350,12 @@ function JourneyRoutesQaPreview() {
             <button type="button" data-qa-render-visibility="reveal" onClick={() => setQaVisibilityHint({ opaqueMediaCover: false, coverTransitionActive: false })}>reveal</button>
             <button type="button" data-qa-render-quality="low" onClick={() => setQaQuality("low")}>low quality</button>
             <button type="button" data-qa-render-quality="high" onClick={() => setQaQuality("high")}>high quality</button>
+            <button type="button" data-qa-route-clear onClick={() => {
+              setActiveRouteId(null);
+              setFocusRevision((revision) => revision + 1);
+            }}>clear route</button>
+            <button type="button" data-qa-route-data="updated" onClick={() => setQaRouteDataUpdated(true)}>update route data</button>
+            <button type="button" data-qa-route-data="original" onClick={() => setQaRouteDataUpdated(false)}>restore route data</button>
           </>
         ) : null}
         {previewRoutes.map((route) => (
