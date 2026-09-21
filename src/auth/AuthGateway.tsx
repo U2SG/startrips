@@ -25,6 +25,7 @@ import {
   passwordLinkSurfaceText,
   previousAccountSurface,
   shouldActivateAccountSheetFocus,
+  shouldOpenDockForRevealedPanel,
   shouldRenderStandaloneAccountDock,
   EXPIRED_PASSWORD_LINK_QUERY,
   type AccountSurface,
@@ -789,6 +790,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   const openAccountPassword = async (initial: AccountSurface = null) => {
     setInviteOpen(false);
     setEditAtlasOpen(false);
+    setIdentityOpen(false);
     setPasswordState(null);
     // The surface is cleared with the state it belongs to: a read that fails,
     // or an Account whose identity list has changed, must not reopen on the
@@ -838,6 +840,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
     );
     setIdentityOpen(true);
     if (isMobileV2) setAccountSurface("identity-links");
+    if (shouldOpenDockForRevealedPanel(isMobileV2)) setDockOpen(true);
     setBindReturn(result);
   }, [gate.kind]);
 
@@ -1076,8 +1079,8 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
             <span className="account-dock__identity"><strong>{gate.atlas.title}</strong> · {userName}</span>
             {message ? <small>{message}</small> : null}
             <div className="account-dock__actions">
-              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
-              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
+              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setIdentityOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
+              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setIdentityOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
               <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}>账户密码</button>
               <button type="button" onClick={() => { setInviteOpen(false); setEditAtlasOpen(false); setPasswordOpen(false); setMessage(""); setIdentityOpen((value) => !value); }}>登录方式</button>
               <EarthExperienceMenuEntry
