@@ -203,6 +203,46 @@ async function readDive(page) {
   });
 }
 
+async function measureIdleDiveScheduler(page, expectedStage) {
+  // Wait for the renderer and React commit, then sample actual animation
+  // frames. No delay stands in for readiness and no other renderer's rAF is
+  // counted: this probe belongs only to LivingAtlasGlobe's Dive scheduler.
+  await page.waitForFunction((stage) => {
+    const globe = document.querySelector(".living-atlas-globe");
+    const probe = window.__earthDiveDebug?.();
+    if (!probe || probe.pending || probe.stage !== stage || globe?.dataset.earthDive !== stage) return false;
+    if (stage === "detail") {
+      const map = document.querySelector(".detailed-earth-map");
+      const layer = document.querySelector(".living-atlas-globe__detail-layer");
+      return globe.dataset.earthDiveOwner === "detail"
+        && map?.dataset.mapReadiness === "fully-settled"
+        && map.dataset.mapPostSyncRenderRevision === map.dataset.mapRevealRevision
+        && layer?.dataset.earthDiveSpatialReveal === "off";
+    }
+    const scene = document.querySelector(".particle-earth-scene");
+    return globe.dataset.earthDiveOwner === "particle"
+      && Number(scene?.dataset.focusSettleCount ?? 0) > 0;
+  }, expectedStage, { timeout: 10_000 });
+  const measurement = await page.evaluate(async (stage) => {
+    const before = window.__earthDiveDebug();
+    const samples = [];
+    for (let index = 0; index < 12; index += 1) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const sample = window.__earthDiveDebug();
+      samples.push(sample);
+      if (sample.stage !== stage || sample.pending || sample.tickCount !== before.tickCount) break;
+    }
+    return { before, after: samples.at(-1), observedFrames: samples.length };
+  }, expectedStage);
+  if (
+    measurement.observedFrames !== 12
+    || measurement.after.pending
+    || measurement.after.stage !== expectedStage
+    || measurement.after.tickCount !== measurement.before.tickCount
+  ) throw new Error(`idle ${expectedStage} Dive scheduler kept running: ${JSON.stringify(measurement)}`);
+  return measurement;
+}
+
 /** The stage ladder as the DOM published it, in order, with duplicates dropped. */
 async function installStageRecorder(page) {
   await page.evaluate(() => {
@@ -1250,6 +1290,7 @@ try {
   // a radial reveal with synthetic progress=1.
   const commandRun = await openDivePage(context, { blockStyle: false, motion: "animate" });
   const commandIntent = commandRun.page.locator('[data-earth-dive-intent="true"]');
+  const commandIdleParticle = await measureIdleDiveScheduler(commandRun.page, "particle");
   await commandIntent.focus();
   await commandRun.page.keyboard.press("Enter");
   await commandRun.page.waitForFunction(() => window.__qaEarthDiveStages.some((entry) => entry.stage === "blending"));
@@ -1273,8 +1314,28 @@ try {
   if (!(commandBlendMs >= 500)) {
     commandFailures.push(`keyboard command lost the normal opacity transition duration: ${JSON.stringify(commandBlend)}`);
   }
+  const commandIdleDetail = await measureIdleDiveScheduler(commandRun.page, "detail");
+  await activateButton(commandRun.page, commandIntent);
+  const commandIdleReturned = await measureIdleDiveScheduler(commandRun.page, "particle");
+  await activateButton(commandRun.page, commandIntent);
+  const commandIdleReentered = await measureIdleDiveScheduler(commandRun.page, "detail");
+  const commandWakeStages = await stages(commandRun.page);
+  if (JSON.stringify(commandWakeStages) !== JSON.stringify([
+    "particle", "prewarm", "blending", "detail", "blending", "prewarm", "particle",
+    "prewarm", "blending", "detail",
+  ])) commandFailures.push(`idle command/release/reentry skipped a committed stage: ${JSON.stringify(commandWakeStages)}`);
   if (commandRun.pageErrors.length > 0) commandFailures.push("keyboard command page raised an error");
-  result.keyboardCommand = { blend: commandBlend, failures: commandFailures };
+  result.keyboardCommand = {
+    blend: commandBlend,
+    idleScheduler: {
+      particle: commandIdleParticle,
+      detail: commandIdleDetail,
+      returned: commandIdleReturned,
+      reentered: commandIdleReentered,
+      stages: commandWakeStages,
+    },
+    failures: commandFailures,
+  };
   await commandRun.page.close();
 
   const reducedCommandRun = await openDivePage(context, { blockStyle: false, motion: "reduce" });

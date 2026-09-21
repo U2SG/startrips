@@ -79,11 +79,9 @@ describe("Semantic Earth Dive renderer ownership", () => {
 
   it("keeps the resolver mirror and release latch on committed Dive presentation state", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
-    expect(globe).toMatch(/useEffect\(\(\) => \{\s*diveRef\.current = dive;\s*\}, \[dive\]\);/);
+    expect(globe).toMatch(/useEffect\(\(\) => \{\s*diveRef\.current = dive;[\s\S]*?\}, \[dive, scheduleDiveTick\]\);/);
     expect(globe).not.toContain("diveRef.current = next;");
-    expect(globe).toContain(
-      'if (previous.stage === "prewarm" || previous.stage === "particle") releaseRequestedRef.current = false;',
-    );
+    expect(globe).toMatch(/if \(\s*releaseRequestedRef\.current\s*&& \(previous\.stage === "prewarm" \|\| previous\.stage === "particle"\)\s*\) \{\s*releaseRequestedRef\.current = false;/);
     expect(globe).not.toContain(
       'if (next.stage === "prewarm" || next.stage === "particle") releaseRequestedRef.current = false;',
     );
@@ -107,8 +105,9 @@ describe("Semantic Earth Dive renderer ownership", () => {
   it("requires a post-policy intent instead of rearming from a stale semantic snapshot", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const semanticHandler = globe.match(
-      /const handleSemanticZoomSnapshot = useCallback\(\(snapshot: SemanticZoomSnapshot\) => \{[\s\S]*?\}, \[onSemanticZoomChange, syncDetailSpatialReveal\]\);/,
+      /const handleSemanticZoomSnapshot = useCallback\(\(snapshot: SemanticZoomSnapshot\) => \{[\s\S]*?\}, \[onSemanticZoomChange, scheduleDiveTick, syncDetailSpatialReveal\]\);/,
     )?.[0] ?? "";
+    expect(semanticHandler).not.toBe("");
     expect(semanticHandler).not.toContain("policyEntryArmedRef.current = true");
     expect(globe).toContain('if (earthExperiencePolicyRef.current === "default") policyEntryArmedRef.current = true;');
     expect(globe).toContain("nextFocusRevision !== policyFocusRevisionRef.current");

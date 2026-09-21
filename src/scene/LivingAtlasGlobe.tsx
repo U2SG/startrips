@@ -447,7 +447,7 @@ export function LivingAtlasGlobe({
   // #252: there is exactly one piece of Dive state and `earthDive.ts` decides
   // it. What used to be an `earthMode` / `transitionTarget` / `targetReady`
   // triple driven by a crossfade timer and a 12 s load timeout is now resolved
-  // every frame from four inputs: the zoom authority's snapshot, how far the
+  // from four inputs: the zoom authority's snapshot, how far the
   // detail renderer has come, the focus intent the handoff was armed against,
   // and the fallback command.
   const [dive, setDive] = useState<EarthDiveState>(INITIAL_EARTH_DIVE_STATE);
@@ -466,6 +466,8 @@ export function LivingAtlasGlobe({
     center?: { lat: number; lon: number };
   } | null>(null);
   const diveRef = useRef<EarthDiveState>(INITIAL_EARTH_DIVE_STATE);
+  const scheduleDiveTickRef = useRef<(() => void) | null>(null);
+  const scheduleDiveTick = useCallback(() => scheduleDiveTickRef.current?.(), []);
   // The resolver mirror follows the last COMMITTED presentation state. If the
   // rAF loop advances this ref before React commits, concurrent batching can
   // skip a semantic handoff stage in the DOM (notably reverse prewarm). Holding
@@ -473,7 +475,9 @@ export function LivingAtlasGlobe({
   // without a timer or second transition authority.
   useEffect(() => {
     diveRef.current = dive;
-  }, [dive]);
+    // Advance another stage only after this one reached React's commit.
+    scheduleDiveTick();
+  }, [dive, scheduleDiveTick]);
   const detailLayerRef = useRef<HTMLDivElement>(null);
   const detailCalibrationRef = useRef<((
     frame: ParticleAnchorFrame,
@@ -483,7 +487,6 @@ export function LivingAtlasGlobe({
   const snapshotRef = useRef<SemanticZoomSnapshot>({ level: "planet", zoom: 1, localProgress: 0 });
   const readinessRef = useRef<DetailReadiness>("unavailable");
   const reduceMotionRef = useRef(Boolean(reduceMotion));
-  reduceMotionRef.current = Boolean(reduceMotion);
   const commandRequestedRef = useRef(false);
   const releaseRequestedRef = useRef(false);
   const earthExperiencePolicyRef = useRef<EarthExperiencePolicy>(earthExperiencePolicy);
@@ -492,13 +495,16 @@ export function LivingAtlasGlobe({
   const pendingPolicyHandbackRef = useRef(false);
   const pendingPolicyHandbackCenterRef = useRef<{ lat: number; lon: number } | null>(null);
   const latestDetailObservationRef = useRef<{ lat: number; lon: number } | null>(null);
-  // #253: the Dive resolves on a rAF loop, so the mode's own suspension has to
-  // reach it as a ref like every other per-frame input rather than as an
-  // effect dependency that would restart the loop.
+  // #253: committed composition inputs wake the same resolver as camera input.
   const suspendedRef = useRef(globeFocusMode);
-  suspendedRef.current = globeFocusMode;
   const focusRevisionRef = useRef(focusRevision ?? 0);
   const handoffRevisionRef = useRef(focusRevision ?? 0);
+
+  useLayoutEffect(() => {
+    suspendedRef.current = globeFocusMode;
+    reduceMotionRef.current = Boolean(reduceMotion);
+    scheduleDiveTick();
+  }, [globeFocusMode, reduceMotion, scheduleDiveTick]);
 
   // Policy/focus refs are live inputs to the persistent rAF resolver, so they
   // must mirror COMMITTED React state. Mutating them during render lets an
@@ -508,6 +514,7 @@ export function LivingAtlasGlobe({
   useLayoutEffect(() => {
     const nextFocusRevision = focusRevision ?? 0;
     focusRevisionRef.current = nextFocusRevision;
+    scheduleDiveTick();
     const previousPolicy = earthExperiencePolicyRef.current;
     if (previousPolicy !== earthExperiencePolicy) {
       earthExperiencePolicyRef.current = earthExperiencePolicy;
@@ -536,7 +543,7 @@ export function LivingAtlasGlobe({
       policyEntryArmedRef.current = true;
       policyFocusRevisionRef.current = nextFocusRevision;
     }
-  }, [earthExperiencePolicy, focusRevision]);
+  }, [earthExperiencePolicy, focusRevision, scheduleDiveTick]);
 
   const syncDetailSpatialReveal = useCallback((
     stage = diveRef.current.stage,
@@ -643,12 +650,14 @@ export function LivingAtlasGlobe({
   const bindDetailLayer = useCallback((element: HTMLDivElement | null) => {
     detailLayerRef.current = element;
     if (element) syncDetailSpatialReveal();
-  }, [syncDetailSpatialReveal]);
+    scheduleDiveTick();
+  }, [scheduleDiveTick, syncDetailSpatialReveal]);
 
   // Stable identity: this callback travels through the persistent scene's
   // presentation, which is itself an effect dependency.
   const handleSemanticZoomSnapshot = useCallback((snapshot: SemanticZoomSnapshot) => {
     snapshotRef.current = snapshot;
+    scheduleDiveTick();
     const policy = earthExperiencePolicyRef.current;
     if (policy === "particle-only") {
       setParticleOnlyZoomedIn(snapshot.level === "local");
@@ -663,10 +672,11 @@ export function LivingAtlasGlobe({
         ? previous
         : snapshot
     ));
-  }, [onSemanticZoomChange, syncDetailSpatialReveal]);
+  }, [onSemanticZoomChange, scheduleDiveTick, syncDetailSpatialReveal]);
 
   const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame | null) => {
     particleFrameRef.current = frame;
+    scheduleDiveTick();
     if (frame && diveRef.current.owner === "particle") {
       // Keep the hidden/blending detail camera on the exact frame that was
       // just published, rather than waiting one React render/effect behind.
@@ -675,7 +685,7 @@ export function LivingAtlasGlobe({
     syncDetailSpatialReveal(diveRef.current.stage, snapshotRef.current, frame);
     if (diveRef.current.stage === "particle") return;
     setParticleFrame(frame);
-  }, [syncDetailSpatialReveal]);
+  }, [scheduleDiveTick, syncDetailSpatialReveal]);
 
   const handleHomeBasePresenceFrame = useCallback((frame: readonly ProjectedHomeBasePresence[]) => {
     const nextFrames = new Map(frame.map((entry) => [entry.periodId, entry]));
@@ -687,13 +697,15 @@ export function LivingAtlasGlobe({
 
   const handleManualCameraInteraction = useCallback(() => {
     if (earthExperiencePolicyRef.current === "default") policyEntryArmedRef.current = true;
+    scheduleDiveTick();
     onManualCameraInteraction?.();
-  }, [onManualCameraInteraction]);
+  }, [onManualCameraInteraction, scheduleDiveTick]);
 
   const handleDetailReadiness = useCallback((readiness: DetailReadiness) => {
     if (earthExperiencePolicyRef.current === "particle-only") return;
     readinessRef.current = readiness;
-  }, []);
+    scheduleDiveTick();
+  }, [scheduleDiveTick]);
 
   const handleDetailCameraObservation = useCallback((point: { latitude: number; longitude: number }) => {
     if (
@@ -733,6 +745,7 @@ export function LivingAtlasGlobe({
     if (diveRef.current.stage === "particle") return;
     commandRequestedRef.current = false;
     releaseRequestedRef.current = true;
+    scheduleDiveTick();
     // Only a dive the camera actually travelled into needs the camera moved
     // back: a dive the fallback command opened from a far band left the
     // particle zoom where it was, and writing it would zoom the globe IN on
@@ -743,7 +756,7 @@ export function LivingAtlasGlobe({
         revision: (previous?.revision ?? 0) + 1,
       }));
     }
-  }, []);
+  }, [scheduleDiveTick]);
 
   // #308: wheel/pinch and the keyboard intent affordance converge here. This
   // remains one semantic navigation command rather than a renderer switch.
@@ -765,12 +778,18 @@ export function LivingAtlasGlobe({
     }
     releaseRequestedRef.current = false;
     commandRequestedRef.current = true;
-  }, [particleOnlyZoomedIn, releaseDive]);
+    scheduleDiveTick();
+  }, [particleOnlyZoomedIn, releaseDive, scheduleDiveTick]);
 
   useEffect(() => {
     let frame = 0;
+    let tickCount = 0;
+    const schedule = () => {
+      if (frame === 0) frame = window.requestAnimationFrame(tick);
+    };
     const tick = () => {
-      frame = window.requestAnimationFrame(tick);
+      frame = 0;
+      if (import.meta.env.DEV) tickCount += 1;
       const previous = diveRef.current;
       // A handoff is armed against the focus intent that was current when it
       // left the ground. While the Dive has not opened a blend yet it keeps
@@ -792,7 +811,8 @@ export function LivingAtlasGlobe({
       const revealProgress = layer
         ? Number.parseFloat(layer.style.getPropertyValue("--earth-dive-reveal-progress"))
         : Number.NaN;
-      const opacityPresented = !layer || Number(window.getComputedStyle(layer).opacity) >= 0.99;
+      const opacityPresented = previous.stage !== "blending"
+        || !layer || Number(window.getComputedStyle(layer).opacity) >= 0.99;
       const spatialRevealPresented = revealMode === "on"
         ? Number.isFinite(revealProgress) && revealProgress >= 0.999
         : opacityPresented;
@@ -800,7 +820,7 @@ export function LivingAtlasGlobe({
         particleFrameRef.current,
         snapshotRef.current,
       );
-      let alignment = particleFrameMatchesZoom
+      let alignment = previous.stage === "blending" && particleFrameMatchesZoom
         ? resolveEarthDiveAlignment(
           particleFrameRef.current,
           readDetailedEarthScreenFrame(layer),
@@ -843,7 +863,7 @@ export function LivingAtlasGlobe({
         blendPresented,
         suspended: suspendedRef.current,
         entryAllowed: policyEntryArmedRef.current,
-        reduceMotion: Boolean(reduceMotion),
+        reduceMotion: reduceMotionRef.current,
       });
       if (layer && previous.owner !== "detail" && next.owner === "detail") {
         if (alignment?.aligned) {
@@ -864,8 +884,21 @@ export function LivingAtlasGlobe({
       // Keep the latch through that commit, then let the band decide from the
       // next frame onward. This still happens before the no-change exit so a
       // committed prewarm does not latch every later dive forever.
-      if (previous.stage === "prewarm" || previous.stage === "particle") releaseRequestedRef.current = false;
-      if (next.stage === previous.stage && next.owner === previous.owner && next.blendMs === previous.blendMs) return;
+      if (
+        releaseRequestedRef.current
+        && (previous.stage === "prewarm" || previous.stage === "particle")
+      ) {
+        releaseRequestedRef.current = false;
+        // The resolver just consumed the old latch; reconcile its cleared
+        // value even when this tick did not need a React state change.
+        schedule();
+      }
+      if (next.stage === previous.stage && next.owner === previous.owner && next.blendMs === previous.blendMs) {
+        // CSS presentation and post-render calibration have no input callback.
+        // Only their overlap window needs continuous observation.
+        if (previous.stage === "blending") schedule();
+        return;
+      }
       if (next.stage === "particle") {
         if (layer) {
           delete layer.dataset.earthDiveCommitAnchorDelta;
@@ -891,9 +924,19 @@ export function LivingAtlasGlobe({
       }
       setDive(next);
     };
-    frame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(frame);
-  }, [reduceMotion, syncDetailSpatialReveal]);
+    scheduleDiveTickRef.current = schedule;
+    const readScheduler = () => ({ tickCount, pending: frame !== 0, stage: diveRef.current.stage });
+    const debugWindow = window as Window & { __earthDiveDebug?: typeof readScheduler };
+    if (import.meta.env.DEV) debugWindow.__earthDiveDebug = readScheduler;
+    schedule();
+    return () => {
+      scheduleDiveTickRef.current = null;
+      window.cancelAnimationFrame(frame);
+      if (import.meta.env.DEV && debugWindow.__earthDiveDebug === readScheduler) {
+        delete debugWindow.__earthDiveDebug;
+      }
+    };
+  }, [syncDetailSpatialReveal]);
 
   useEffect(() => {
     if (dive.stage !== "detail") return;
