@@ -14,9 +14,26 @@ export function expectedApertureSeams(visited) {
   return visited.slice(1).map((to, index) => apertureSeamId(index + 1, visited[index], to));
 }
 
-// A seam that was never reached fails, and is named. Sample density does not
-// enter the verdict: a sparsely sampled run whose seams all settled and whose
-// clip-path deltas stayed continuous is a pass.
+// Each seam records the jump count observed when it settled, so the jumps the
+// sampler pushed between two settlements belong to the seam that closed the
+// window. Attribution happens here rather than in the sampler so the in-page
+// threshold expression stays untouched. A seam whose watermark could not be read
+// leaves its window unattributed; every raw jump still appears exactly once.
+export function attributeApertureJumps(seams, jumps) {
+  const attributed = [];
+  let cursor = 0;
+  for (const { seam, jumpWatermark } of seams) {
+    if (typeof jumpWatermark !== "number") continue;
+    for (; cursor < jumpWatermark && cursor < jumps.length; cursor += 1) attributed.push({ seam, ...jumps[cursor] });
+  }
+  for (; cursor < jumps.length; cursor += 1) attributed.push({ seam: null, ...jumps[cursor] });
+  return attributed;
+}
+
+// A seam that was never reached fails, and is named. A real jump fails and keeps
+// its seam id next to its delta/elapsed evidence. Sample density does not enter
+// the verdict: a sparsely sampled run whose seams all settled and whose clip-path
+// deltas stayed continuous is a pass.
 export function gradeApertureContinuity({ expectedSeams, reachedSeams, jumps }) {
   const reached = new Set(reachedSeams);
   const expected = new Set(expectedSeams);

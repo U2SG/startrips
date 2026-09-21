@@ -1,5 +1,5 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
-import { apertureSeamId, expectedApertureSeams, gradeApertureContinuity } from "./qa-aperture-continuity.mjs";
+import { apertureSeamId, attributeApertureJumps, expectedApertureSeams, gradeApertureContinuity } from "./qa-aperture-continuity.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
@@ -2893,9 +2893,13 @@ try {
     // with the sequence itself surfaces as an unreached or unexpected seam.
     const apertureVisitPlan = [0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0, 1, 2];
     const apertureSeams = [];
+    // The jump count read back when a seam settles closes that seam's sampling
+    // window, which is how a jump gets a seam id without touching the sampler.
     const recordApertureSeam = async (from, to) => {
       const reached = await settleApertureSeam(manyPhotos.page, idFor(to));
-      apertureSeams.push({ seam: apertureSeamId(apertureSeams.length + 1, from, to), ...reached });
+      const jumpWatermark = await manyPhotos.page
+        .evaluate(() => window.__qaAperture.jumps.length).catch(() => null);
+      apertureSeams.push({ seam: apertureSeamId(apertureSeams.length + 1, from, to), jumpWatermark, ...reached });
       return reached.settled;
     };
     for (const index of [1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0]) {
@@ -2932,7 +2936,7 @@ try {
     const apertureGrade = gradeApertureContinuity({
       expectedSeams: expectedApertureSeams(apertureVisitPlan),
       reachedSeams: apertureSeams.filter((seam) => seam.settled).map((seam) => seam.seam),
-      jumps: stable.aperture.jumps,
+      jumps: attributeApertureJumps(apertureSeams, stable.aperture.jumps),
     });
     checks.push({ name: "story-mixed-aspect-aperture-continuity", ...stable.aperture, ...apertureGrade,
       seams: apertureSeams, failed: apertureGrade.failed });
