@@ -1,6 +1,8 @@
 import { createContext, useContext } from "react";
 import {
   createHomeBasePeriod,
+  everydayFragmentClient,
+  type EverydayFragmentClient,
   enqueueCoverReveal,
   createShare,
   deleteJourney,
@@ -178,6 +180,8 @@ export type AtlasMutations = {
  * so the presentation components below it are the same code.
  */
 export type AtlasView = {
+  /** #463: absent in guest/demo views; never fall back to the owner client. */
+  everydayFragments?: EverydayFragmentClient;
   capabilities: AtlasViewCapabilities;
   listJourneys: () => Promise<Journey[]>;
   /** Owner-private Home history. Shared/guest mode exposes no reader at all. */
@@ -217,6 +221,7 @@ export function createOwnerAtlasView(
   const capabilities = { ...OWNER_ATLAS_VIEW_CAPABILITIES, ...overrides };
   return {
     capabilities,
+    everydayFragments: everydayFragmentClient,
     listJourneys: () => listJourneys(),
     listHomeBasePeriods: () => listHomeBasePeriods(),
     listHomeBaseDismissals: () => listHomeBaseDismissals(),

@@ -88,6 +88,40 @@ function record(name, data, condition) {
 }
 
 async function installOwnerApi(page, journeyRows = journeys) {
+  const fragments = { rows: [], requests: [], rejectNext: null, holdNext: null, release: null };
+  await page.route("**/api/everyday-fragments**", async (route) => {
+    const method = route.request().method();
+    const body = method === "POST" || method === "PUT" ? route.request().postDataJSON() : null;
+    const id = new URL(route.request().url()).pathname.split("/")[3];
+    fragments.requests.push({ method, id, body });
+    let status = method === "POST" ? 201 : method === "DELETE" ? 204 : 200;
+    let payload;
+    if (fragments.rejectNext?.method === method) {
+      status = fragments.rejectNext.status;
+      payload = { error: fragments.rejectNext.code };
+      fragments.rejectNext = null;
+    } else if (method === "GET") {
+      payload = { fragments: structuredClone(fragments.rows) };
+    } else if (method === "DELETE") {
+      fragments.rows = fragments.rows.filter((row) => row.id !== id);
+    } else {
+      const fragment = { ...body, id: id ?? `33333333-cccc-4333-8333-${String(fragments.requests.length).padStart(12, "0")}` };
+      fragments.rows = [...fragments.rows.filter((row) => row.id !== fragment.id), fragment];
+      payload = { fragment };
+    }
+    if (fragments.holdNext === method) {
+      fragments.holdNext = null;
+      let finish;
+      const finished = new Promise((resolve) => { finish = resolve; });
+      await new Promise((resolve) => { fragments.release = async () => { resolve(); await finished; }; });
+      fragments.release = null;
+      // The old GET may have been aborted when its disclosure closed.
+      await route.fulfill({ status, contentType: "application/json", body: payload ? JSON.stringify(payload) : "" }).catch(() => {});
+      finish();
+    } else {
+      await route.fulfill({ status, contentType: "application/json", body: payload ? JSON.stringify(payload) : "" });
+    }
+  });
   // Exercise the real city-label projection/arbitration with one deterministic
   // GeoNames-shaped city at Home. The production dataset/collision budget is
   // covered elsewhere; this lane owns the interaction boundary itself.
@@ -140,13 +174,14 @@ async function installOwnerApi(page, journeyRows = journeys) {
     contentType: "application/json",
     body: JSON.stringify({ periods: [HISTORICAL_HOME, CURRENT_HOME] }),
   }));
+  return fragments;
 }
 
 async function openOwner(viewport, { journeyRows = journeys } = {}) {
   const page = await browser.newPage({ viewport });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  await installOwnerApi(page, journeyRows);
+  const fragments = await installOwnerApi(page, journeyRows);
   // This contract starts from the EXISTING projected Home anchor, so the lane
   // must mount the real LivingAtlasGlobe rather than LivingAtlasQaGlobe (which
   // intentionally has no geographic Home projection surface).
@@ -195,7 +230,154 @@ async function openOwner(viewport, { journeyRows = journeys } = {}) {
     }, CURRENT_HOME.id);
     throw new Error(`Home marker did not become actionable: ${JSON.stringify(diagnostics)}; ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { page, pageErrors };
+  return { page, pageErrors, fragments };
+}
+
+async function waitForHeld(fragments) {
+  const deadline = Date.now() + 5_000;
+  while (!fragments.release) {
+    if (Date.now() > deadline) throw new Error("Expected a held fragment request");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+async function fillFragment(form, note = "") {
+  await form.getByLabel("日期", { exact: true }).fill("2020-05-06");
+  await form.getByLabel("纬度", { exact: true }).fill("22.5431");
+  await form.getByLabel("经度", { exact: true }).fill("114.0579");
+  await form.getByLabel("随记（选填）", { exact: true }).fill(note);
+}
+
+async function fragmentQa(owner, name) {
+  const { page, fragments } = owner;
+  const surface = page.locator("[data-everyday-fragments]");
+  const list = page.locator("#everyday-fragments-list");
+  const row = page.locator("[data-everyday-fragment-id]");
+  const journeySnapshot = () => page.evaluate(() => ({
+    rail: [...document.querySelectorAll(".living-atlas__journey-rail button")].map((button) => ({
+      text: button.textContent, active: button.getAttribute("aria-current"),
+    })),
+    timeline: [...document.querySelectorAll(".journey-timeline")].map((node) => node.textContent),
+    cursor: document.querySelector('.globe-time-scrubber input[type="range"]')?.value ?? null,
+  }));
+  const before = await journeySnapshot();
+  const journeyRequests = [];
+  const watchJourneys = (request) => {
+    if (new URL(request.url()).pathname === "/api/journeys") journeyRequests.push(request.method());
+  };
+  page.on("request", watchJourneys);
+  record(`${name}: fragments are lazy`, { requests: fragments.requests.length }, fragments.requests.length === 0);
+  fragments.holdNext = "GET";
+  await surface.getByRole("button", { name: "日常", exact: true }).click();
+  await waitForHeld(fragments);
+  const releaseGet = fragments.release;
+  record(`${name}: initial read owns loading`, {}, await list.getByRole("status").isVisible());
+  await surface.getByRole("button", { name: "日常", exact: true }).click();
+  fragments.release = null;
+  fragments.rejectNext = { method: "GET", status: 503, code: "REQUEST_FAILED" };
+  await surface.getByRole("button", { name: "日常", exact: true }).click();
+  await list.getByRole("alert").waitFor();
+  await list.getByRole("button", { name: "重试", exact: true }).click();
+  await list.getByText("还没有日常，记下某一天、某个地方。", { exact: true }).waitFor();
+  await list.getByRole("button", { name: "记录日常", exact: true }).click();
+  let form = list.getByRole("form", { name: "记录日常", exact: true });
+  await fillFragment(form);
+  const targets = await surface.locator("button, input, textarea").evaluateAll((nodes) => nodes.map((node) => {
+    const rect = node.getBoundingClientRect();
+    return { tag: node.tagName, width: rect.width, height: rect.height };
+  }));
+  const placement = await page.locator("[data-home-base-context]").evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return { fits: rect.top >= 0 && rect.right <= innerWidth && rect.left >= 0 && rect.bottom <= innerHeight, overflow: node.scrollWidth > node.clientWidth };
+  });
+  record(`${name}: fragment form fits and controls meet 44px`, { targets, placement },
+    targets.every((target) => target.width >= 44 && target.height >= 44) && placement.fits && !placement.overflow);
+  await page.screenshot({ path: `${captureDir}/${name}-everyday-form.png`, fullPage: false });
+  fragments.rejectNext = { method: "POST", status: 400, code: "EVERYDAY_FRAGMENT_INVALID_DATE" };
+  await form.getByRole("button", { name: "保存日常" }).click();
+  await form.getByRole("alert").waitFor();
+  record(`${name}: reason-coded validation preserves a recoverable draft`, { error: await form.getByRole("alert").innerText() },
+    (await form.getByRole("alert").innerText()).includes("有效的日期") && (await form.getByLabel("纬度", { exact: true }).inputValue()) === "22.5431");
+  fragments.holdNext = "POST";
+  await form.getByRole("button", { name: "保存日常" }).click();
+  await waitForHeld(fragments);
+  record(`${name}: create pending`, {}, await form.getByRole("button", { name: "保存中…" }).isDisabled());
+  fragments.release();
+  await row.getByText("22.54310, 114.05790", { exact: true }).waitFor();
+  await releaseGet();
+  record(`${name}: closed stale GET cannot erase a new fragment`, {}, await row.getByText("22.54310, 114.05790", { exact: true }).isVisible());
+  const created = fragments.rows[0];
+  record(`${name}: date + coordinates create an unassociated fragment`, { created },
+    created.occurredOn === "2020-05-06" && created.homeBasePeriodId === null && created.placeLabel === null && created.note === null);
+  await row.getByRole("button", { name: "编辑", exact: true }).click();
+  form = row.getByRole("form", { name: "编辑日常" });
+  await form.getByLabel("地点（选填）").fill("深圳湾");
+  await form.getByLabel("随记（选填）").fill("晚风");
+  fragments.holdNext = "PUT";
+  await form.getByRole("button", { name: "保存日常" }).click();
+  await waitForHeld(fragments);
+  record(`${name}: edit pending`, {}, await form.getByRole("button", { name: "保存中…" }).isDisabled());
+  fragments.release();
+  await row.getByText("晚风", { exact: true }).waitFor();
+  record(`${name}: edit renders optional place and note`, {}, (await row.innerText()).includes("深圳湾"));
+  await row.getByRole("button", { name: "删除", exact: true }).click();
+  fragments.rejectNext = { method: "DELETE", status: 503, code: "REQUEST_FAILED" };
+  await row.getByRole("button", { name: "确认删除", exact: true }).click();
+  await row.getByRole("alert").waitFor();
+  fragments.holdNext = "DELETE";
+  await row.getByRole("button", { name: "确认删除", exact: true }).click();
+  await waitForHeld(fragments);
+  record(`${name}: delete pending and retry`, {}, await row.getByRole("button", { name: "删除中…" }).isDisabled());
+  fragments.release();
+  await row.waitFor({ state: "detached" });
+  record(`${name}: delete returns to empty`, {}, await list.getByText("还没有日常，记下某一天、某个地方。", { exact: true }).isVisible());
+
+  // Closing the Home surface during PUT must not let its late result replace
+  // an edit in a newly opened context. The stub commits before holding replies.
+  await list.getByRole("button", { name: "记录日常", exact: true }).click();
+  await fillFragment(list.getByRole("form"), "原记录");
+  await list.getByRole("button", { name: "保存日常" }).click();
+  await row.getByText("原记录", { exact: true }).waitFor();
+  await row.getByRole("button", { name: "编辑", exact: true }).click();
+  await row.getByLabel("随记（选填）").fill("延迟的编辑");
+  fragments.holdNext = "PUT";
+  await row.getByRole("button", { name: "保存日常" }).click();
+  await waitForHeld(fragments);
+  const releasePut = fragments.release;
+  await closeContext(page);
+  await (await currentHomeMarker(page)).focus();
+  await page.keyboard.press("Enter");
+  await surface.getByRole("button", { name: "日常", exact: true }).click();
+  await row.getByText("延迟的编辑", { exact: true }).waitFor();
+  await row.getByRole("button", { name: "编辑", exact: true }).click();
+  await row.getByLabel("随记（选填）").fill("最新编辑");
+  await row.getByRole("button", { name: "保存日常" }).click();
+  await row.getByText("最新编辑", { exact: true }).waitFor();
+  const putReply = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().includes("everyday-fragments"));
+  await releasePut();
+  await (await putReply).finished();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  record(`${name}: stale PUT cannot replace reopened edits`, {}, (await row.innerText()).includes("最新编辑"));
+
+  await row.getByRole("button", { name: "删除", exact: true }).click();
+  fragments.holdNext = "DELETE";
+  await row.getByRole("button", { name: "确认删除", exact: true }).click();
+  await waitForHeld(fragments);
+  const releaseDelete = fragments.release;
+  await surface.getByRole("button", { name: "日常", exact: true }).click();
+  await surface.getByRole("button", { name: "记录日常", exact: true }).click();
+  form = list.getByRole("form", { name: "记录日常", exact: true });
+  await fillFragment(form, "保留的日常");
+  await form.getByRole("button", { name: "保存日常" }).click();
+  await row.getByText("保留的日常", { exact: true }).waitFor();
+  const deleteReply = page.waitForResponse((response) => response.request().method() === "DELETE" && response.url().includes("everyday-fragments"));
+  await releaseDelete();
+  await (await deleteReply).finished();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  record(`${name}: stale DELETE cannot remove new records`, {}, (await row.innerText()).includes("保留的日常"));
+  record(`${name}: CRUD never refreshes or changes Journey list`, { journeyRequests },
+    journeyRequests.length === 0 && JSON.stringify(before) === JSON.stringify(await journeySnapshot()));
+  page.off("request", watchJourneys);
 }
 
 async function currentHomeMarker(page) {
@@ -317,6 +499,9 @@ try {
     && currentContext.modal === null
   ));
 
+  await fragmentQa(desktop, "desktop");
+  const beforeHistory = structuredClone(desktop.fragments.rows);
+  const writesBeforeHistory = desktop.fragments.requests.filter((request) => request.method !== "GET").length;
   await closeContext(page);
   await page.locator(".living-atlas__globe-focus-exit").click();
   await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "off");
@@ -406,6 +591,11 @@ try {
     && historicalContext.text.includes("2022-01-01–2024-12-31")
     && historicalContext.text.includes("历史生活阶段")
   ));
+  await context.getByRole("button", { name: "日常", exact: true }).click();
+  await context.getByText("保留的日常", { exact: true }).waitFor();
+  record("changing visible Home preserves unassociated fragment truth", {},
+    JSON.stringify(beforeHistory) === JSON.stringify(desktop.fragments.rows)
+    && desktop.fragments.requests.filter((request) => request.method !== "GET").length === writesBeforeHistory);
   await closeContext(page);
   await page.locator(".living-atlas__globe-focus-exit").click();
   await page.close();
@@ -556,6 +746,7 @@ try {
     && mobilePlacement.permanentHomeTabs === 0
     && mobilePlacement.suggestionsWhileContextOpen === 0
   ));
+  await fragmentQa(mobile, "mobile");
   await closeContext(mobilePage);
   await mobilePage.close();
 

@@ -1,5 +1,6 @@
 import type { CoverRevealDisplayPayload } from "./coverRevealOpening";
 import type { HomeBasePeriod } from "./homeBase";
+import type { EverydayFragment, EverydayFragmentValues } from "./everydayFragment";
 import type { HomeBaseDismissal } from "./homeBaseInference";
 import type { HomeBaseConfirmationRequest } from "./homeBaseSuggestion";
 import type {
@@ -54,6 +55,33 @@ async function requestJson<T>(
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
+
+export const everydayFragmentClient = {
+  async list(signal: AbortSignal): Promise<EverydayFragment[]> {
+    const payload = await requestJson<{ fragments: EverydayFragment[] }>(
+      "/api/everyday-fragments", { cache: "no-store", signal },
+    );
+    return payload.fragments;
+  },
+  async create(values: EverydayFragmentValues): Promise<EverydayFragment> {
+    const payload = await requestJson<{ fragment: EverydayFragment }>(
+      "/api/everyday-fragments", { method: "POST", body: JSON.stringify(values) },
+    );
+    return payload.fragment;
+  },
+  async update(id: string, values: EverydayFragmentValues): Promise<EverydayFragment> {
+    const payload = await requestJson<{ fragment: EverydayFragment }>(
+      `/api/everyday-fragments/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(values) },
+    );
+    return payload.fragment;
+  },
+  async remove(id: string): Promise<void> {
+    await requestJson<void>(`/api/everyday-fragments/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+};
+
+export type EverydayFragmentClient = typeof everydayFragmentClient;
 
 export async function listHomeBasePeriods(fetcher: Fetcher = fetch): Promise<HomeBasePeriod[]> {
   const payload = await requestJson<{ periods: HomeBasePeriod[] }>(

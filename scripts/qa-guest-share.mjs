@@ -37,6 +37,7 @@ const VIEWPORTS = [
 
 /** Owner affordances, by the copy each one renders. None may exist for a guest. */
 const FORBIDDEN_CONTROL_TEXT = [
+  "记录日常",
   "记录旅程",
   "记录新旅程",
   "记录第一段旅程",
@@ -182,6 +183,9 @@ async function installGuestApi(page, state) {
     contentType: "application/json",
     body: JSON.stringify({ error: "OWNER_ROUTE_REACHED" }),
   }));
+  await page.route("**/api/everyday-fragments**", (route) => route.fulfill({
+    status: 500, contentType: "application/json", body: JSON.stringify({ error: "OWNER_ROUTE_REACHED" }),
+  }));
   await page.route("**/api/auth/**", (route) => route.fulfill({
     status: 500,
     contentType: "application/json",
@@ -277,7 +281,7 @@ try {
     }
     const homePrivateSurface = await page.evaluate(() => ({
       anchors: document.querySelectorAll("[data-home-base-period-id]").length,
-      contexts: document.querySelectorAll("[data-home-base-context]").length,
+      contexts: document.querySelectorAll("[data-home-base-context], [data-everyday-fragments]").length,
     }));
     if (homePrivateSurface.anchors !== 0 || homePrivateSurface.contexts !== 0) {
       failures.push(`${viewport.name}: guest document exposes private Home context ${JSON.stringify(homePrivateSurface)}`);
@@ -558,7 +562,7 @@ try {
       failures.push(`token exposure: ${leakedRequests.length} request URL(s) carried the token`);
     }
     const ownerRequests = requestedUrls.filter((url) =>
-      /\/api\/(journeys|atlases|auth|home-bases)/.test(url) || url.includes("/api/uploads"));
+      /\/api\/(journeys|atlases|auth|home-bases|everyday-fragments)/.test(url) || url.includes("/api/uploads"));
     if (ownerRequests.length > 0) {
       failures.push(`owner routes requested by a guest: ${JSON.stringify([...new Set(ownerRequests)].slice(0, 4))}`);
     }
