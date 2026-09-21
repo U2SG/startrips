@@ -118,7 +118,11 @@ def prepare(args: argparse.Namespace) -> dict:
 def record(args: argparse.Namespace) -> dict:
     root = Path(args.root).resolve()
     value = load_receipt(root, args.feature)
-    if args.request_id and value.get("request_id") != args.request_id:
+    # Every receipt update must name the generation it belongs to. While this
+    # comparison was skipped for a missing request id, a delayed generation-1
+    # update could land after generation 2 was prepared and overwrite its status
+    # and provider identity, pointing the scheduler at the wrong logical owner.
+    if value.get("request_id") != args.request_id:
         raise ReceiptError("request_id mismatch")
     if args.agent_ref:
         old = value.get("agent_ref")
@@ -166,7 +170,7 @@ def main() -> int:
     p.add_argument("root")
     p.add_argument("feature")
     p.add_argument("status")
-    p.add_argument("--request-id")
+    p.add_argument("--request-id", required=True)
     p.add_argument("--agent-ref")
     p.add_argument("--task-ref")
     p.add_argument("--turn-id")
