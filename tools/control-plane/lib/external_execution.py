@@ -154,6 +154,50 @@ def show(args: argparse.Namespace):
     return out
 
 
+def occupancy(args: argparse.Namespace) -> dict:
+    """Fail-closed Experience capacity derived from external provider receipts.
+
+    The local process provider only sees the bounded launcher/carrier transition.
+    Once that launcher exits, a formal Codex owner can still be running. Active
+    receipts therefore occupy Experience capacity until the scheduler has
+    reconciled the exact agent with agent_show and recorded a terminal/idle state.
+    """
+    root = Path(args.root).resolve()
+    active = []
+    directory = artifact_dir(root)
+    if directory.exists():
+        for path in sorted(directory.glob("ST-*.json")):
+            feature = path.stem
+            value = load_receipt(root, feature)
+            if value.get("status") not in ACTIVE_STATUSES:
+                continue
+            request_id = value.get("request_id")
+            worktree_raw = value.get("worktree")
+            if not isinstance(request_id, str) or not request_id:
+                raise ReceiptError(f"active external receipt missing request_id for {feature}")
+            if not isinstance(worktree_raw, str) or not worktree_raw:
+                raise ReceiptError(f"active external receipt missing worktree for {feature}")
+            worktree = Path(worktree_raw).resolve()
+            if not worktree.is_relative_to(root):
+                raise ReceiptError(f"active external receipt worktree escapes control-plane root for {feature}")
+            if value.get("status") in {"running", "awaitingApproval"} and not value.get("agent_ref"):
+                raise ReceiptError(f"active external receipt missing agent_ref for {feature}")
+            active.append((feature, str(worktree).replace("\\", "/"), value.get("status")))
+
+    if len(active) > 2:
+        raise ReceiptError("external Experience occupancy exceeds lane capacity")
+    return {
+        "lane": "experience",
+        "capacity": 2,
+        "occupied_slots": len(active),
+        "available_slots": max(0, 2 - len(active)),
+        "features": sorted(feature for feature, _, _ in active),
+        "worktrees": sorted(worktree for _, worktree, _ in active),
+        "claim_count": sum(1 for _, _, status in active if status == "prepared"),
+        "provider": "codexless-receipts",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -180,6 +224,10 @@ def main() -> int:
     p.add_argument("root")
     p.add_argument("feature", nargs="?")
     p.set_defaults(fn=show)
+
+    p = sub.add_parser("occupancy")
+    p.add_argument("root")
+    p.set_defaults(fn=occupancy)
 
     args = parser.parse_args()
     try:

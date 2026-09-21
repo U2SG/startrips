@@ -599,6 +599,32 @@ class WiringTests(SyntheticOne):
             }) + '))\n',
             encoding='utf-8', newline='\n')
 
+    def write_external_receipt(self, feature_id, *, status='running', agent_ref='agent-test'):
+        worktree = self.root / 'worker-worktrees' / feature_id.lower()
+        worktree.mkdir(parents=True, exist_ok=True)
+        receipt = {
+            'schema_version': 1,
+            'provider': 'codexless',
+            'feature': feature_id,
+            'owner_key': f'startrips-experience-{feature_id.lower()}-owner',
+            'generation': 1,
+            'worktree': str(worktree).replace('\\', '/'),
+            'branch': f'feat/{feature_id.lower()}',
+            'action': 'IMPLEMENT',
+            'row_token': 'row-token',
+            'request_id': f'{feature_id.lower()}-request',
+            'status': status,
+            'agent_ref': agent_ref,
+            'task_ref': None,
+            'turn_id': None,
+            'prepared_at': '2026-09-21T00:00:00+00:00',
+            'observed_at': None,
+        }
+        directory = self.root / '.agent-artifacts' / 'external-execution'
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f'{feature_id}.json').write_text(
+            json.dumps(receipt), encoding='utf-8', newline='\n')
+
     def test_experience_selector_skips_provider_occupied_owner(self):
         self.write(
             feature('ST-001', phase='P1-globe', status='in_progress',
@@ -610,9 +636,40 @@ class WiringTests(SyntheticOne):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual('ST-002', result.stdout.strip())
 
+    def test_experience_selector_skips_external_owner_when_local_carrier_is_gone(self):
+        self.write(
+            feature('ST-001', phase='P1-globe', status='in_progress'),
+            feature('ST-002', phase='P1-globe', priority=2),
+        )
+        self.write_occupied_probe(features=[], available_slots=2)
+        self.write_external_receipt('ST-001')
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-002', result.stdout.strip())
+
+    def test_experience_selector_counts_prepared_external_transition_as_occupied(self):
+        self.write(
+            feature('ST-001', phase='P1-globe', status='in_progress'),
+            feature('ST-002', phase='P1-globe', priority=2),
+        )
+        self.write_occupied_probe(features=[], available_slots=2)
+        self.write_external_receipt('ST-001', status='prepared', agent_ref=None)
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-002', result.stdout.strip())
+
     def test_experience_selector_returns_no_third_owner_when_two_slots_full(self):
         self.write(feature('ST-003', phase='P1-globe', priority=3))
         self.write_occupied_probe(features=['ST-001', 'ST-002'], available_slots=0)
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('', result.stdout.strip())
+
+    def test_experience_selector_returns_no_third_owner_when_external_slots_full(self):
+        self.write(feature('ST-003', phase='P1-globe', priority=3))
+        self.write_occupied_probe(features=[], available_slots=2)
+        self.write_external_receipt('ST-001')
+        self.write_external_receipt('ST-002')
         result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual('', result.stdout.strip())
@@ -692,7 +749,10 @@ class WiringTests(SyntheticOne):
         self.assertIn('Recurring CI family is canonically owned by $FAMILY_OWNER', loop)
         self.assertIn('EXPERIENCE_EXTERNAL_DISPATCH=', loop)
         self.assertIn('LOCAL_MODEL_PROVIDER_FORBIDDEN_FOR_LANE=', loop)
-        self.assertIn('Experience provider is external Codexless; model intake/re-triage delegated to Orchestrator', loop)
+        self.assertIn('Development lane model intake/re-triage delegated to Orchestrator (lane=$STARTRIPS_LANE)', loop)
+        self.assertNotIn('intake_new_issues || exit 6', loop)
+        self.assertNotIn('intake_reconcile_issues', loop)
+        self.assertNotIn('PRE_INTAKE_FEATURE=', loop)
         self.assertLess(loop.index('EXPERIENCE_EXTERNAL_DISPATCH='), loop.index('claude_run -p'))
         self.assertIn('if [[ "${EVAL_ONLY:-0}" == "1" ]]; then', loop)
         self.assertNotIn('if [[ "\\${EVAL_ONLY:-0}" == "1" ]]; then', loop)

@@ -83,6 +83,36 @@ class ReceiptGenerationBindingTests(unittest.TestCase):
         self.assertEqual('running', current['status'])
         self.assertEqual('agent-2', current['agent_ref'])
 
+    def test_external_occupancy_holds_slot_from_prepare_until_idle(self):
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            receipt = external.prepare(args)
+        report = external.occupancy(SimpleNamespace(root=str(self.root)))
+        self.assertEqual((1, 1, ['ST-001']),
+                         (report['occupied_slots'], report['available_slots'], report['features']))
+
+        external.record(SimpleNamespace(
+            root=str(self.root), feature='ST-001', status='running',
+            request_id=receipt['request_id'], agent_ref='agent-1',
+            task_ref='task-1', turn_id='turn-1'))
+        self.assertEqual(1, external.occupancy(SimpleNamespace(root=str(self.root)))['occupied_slots'])
+
+        external.record(SimpleNamespace(
+            root=str(self.root), feature='ST-001', status='idle',
+            request_id=receipt['request_id'], agent_ref='agent-1',
+            task_ref='task-1', turn_id='turn-1'))
+        self.assertEqual(0, external.occupancy(SimpleNamespace(root=str(self.root)))['occupied_slots'])
+
+    def test_external_occupancy_fails_closed_when_running_receipt_lacks_agent(self):
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            receipt = external.prepare(args)
+        receipt['status'] = 'running'
+        receipt['agent_ref'] = None
+        external.atomic_write(external.receipt_path(self.root, 'ST-001'), receipt)
+        with self.assertRaises(external.ReceiptError):
+            external.occupancy(SimpleNamespace(root=str(self.root)))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -130,19 +130,28 @@ claude_run() {
 #     dependent branched off main before its parent merged would be cut from a
 #     baseline that lacks the parent's code.
 next_feature() {
-local occupied_json='{}'
+local process_occupied_json='{}'
+local external_occupied_json='{}'
 if [[ "$STARTRIPS_LANE" == "experience" ]]; then
-  occupied_json="$(python3 -B "$ROOT/lib/execution.py" occupied "$ROOT" --lane experience)" || return 6
+  process_occupied_json="$(python3 -B "$ROOT/lib/execution.py" occupied "$ROOT" --lane experience)" || return 6
+  external_occupied_json="$(python3 -B "$ROOT/lib/external_execution.py" occupancy "$ROOT")" || return 6
 fi
-python3 - "$ROOT/feature_list.json" "$STARTRIPS_LANE" "$FEATURE_ALLOW" "$occupied_json" "${CARRIER_FEATURE:-}" "${FEATURE_SKIP:-}" <<'PY'
+python3 - "$ROOT/feature_list.json" "$STARTRIPS_LANE" "$FEATURE_ALLOW" "$process_occupied_json" "$external_occupied_json" "${CARRIER_FEATURE:-}" "${FEATURE_SKIP:-}" <<'PY'
 import json, re, sys
 
-p, lane, allow_raw, occupied_raw, carrier_feature, skip_raw = sys.argv[1:7]
+p, lane, allow_raw, process_raw, external_raw, carrier_feature, skip_raw = sys.argv[1:8]
 allow = set(allow_raw.split())
 skip = set(skip_raw.split())
-occupied = json.loads(occupied_raw or '{}')
-occupied_features = set(occupied.get('features') or [])
-experience_full = lane == 'experience' and not carrier_feature and occupied.get('available_slots', 1) <= 0
+process_occupied = json.loads(process_raw or '{}')
+external_occupied = json.loads(external_raw or '{}')
+process_features = set(process_occupied.get('features') or [])
+external_features = set(external_occupied.get('features') or [])
+occupied_features = process_features | external_features
+process_used = int(process_occupied.get('occupied_slots') or 0)
+external_used = int(external_occupied.get('occupied_slots') or 0)
+overlap = len(process_features & external_features)
+experience_used = process_used + external_used - overlap
+experience_full = lane == 'experience' and not carrier_feature and experience_used >= 2
 d = json.load(open(p, encoding='utf-8'))
 
 # Lane classification, derived and never written back to the matrix.
@@ -445,25 +454,13 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     echo "=== Reconciling merge state (iteration $i) ==="
     reconcile_merge_state
 
-  if [[ "$STARTRIPS_LANE" == "experience" ]]; then
-    # Experience is executed by the scheduled Codexless provider, not by the
-    # LOCAL Backend Claude CLI. Model-based intake/amend would silently consume
-    # the Backend account/session quota before Experience reaches its owner.
-    # Development Orchestrator owns product auto-feed and issue re-triage.
-    echo "=== Issue intake (iteration $i) ==="
-    echo "[intake] Experience provider is external Codexless; model intake/re-triage delegated to Orchestrator"
-  else
-    # New open issues become queue entries BEFORE the selection below.
-    echo "=== Issue intake (iteration $i) ==="
-    PRE_INTAKE_FEATURE="$(read_next_feature)" || exit 6
-    if [[ -z "$PRE_INTAKE_FEATURE" && -z "$(ready_to_merge_prs)" ]]; then
-      intake_new_issues || exit 6
-    else
-      INTAKE_URGENT_ONLY=1 intake_new_issues || exit 6
-    fi
-    echo "=== Issue update reconcile (iteration $i) ==="
-    intake_reconcile_issues
-  fi
+  # Development carriers consume registered ONE work only. New-issue intake,
+  # mapped-issue re-triage/follow-up and product auto-feed are coordinator work:
+  # letting a Backend owner discover/triage issues here can bulk-register client
+  # work before the Orchestrator applies lane/product/hotspot policy. Experience
+  # already needs this boundary because its model provider is external Codexless.
+  echo "=== Issue intake (iteration $i) ==="
+  echo "[intake] Development lane model intake/re-triage delegated to Orchestrator (lane=$STARTRIPS_LANE)"
 
   FEATURE="$(read_next_feature)" || exit 6
   if [[ -z "$FEATURE" ]]; then
