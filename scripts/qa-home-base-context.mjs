@@ -189,6 +189,11 @@ async function installOwnerApi(page, journeyRows = journeys) {
 
 async function openOwner(viewport, { journeyRows = journeys } = {}) {
   const page = await browser.newPage({ viewport });
+  // This script runs Playwright directly rather than through @playwright/test,
+  // so locator/action waits otherwise have no bounded default and a missing UI
+  // transition can consume the whole GitHub job timeout without a useful stack.
+  // Known long transitions below keep their explicit 15/20/30s budgets.
+  page.setDefaultTimeout(10_000);
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   const fragments = await installOwnerApi(page, journeyRows);
