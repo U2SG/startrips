@@ -214,11 +214,12 @@ async function measureIdleDiveScheduler(page, expectedStage) {
       frameRevision: scene?.dataset.sceneFrameRevision,
       ...Object.fromEntries(keys.map((key) => [key, scene?.dataset[key]])),
       zoom: window.__particleEarthDebug?.().zoom.toFixed(6),
+      published: window.__earthDiveDebug?.().inputs,
     };
   }, inputKeys);
   const warmupInputsBefore = await captureInputs();
   await page.waitForFunction((warmup) => {
-    const { stage, keys } = warmup;
+    const { stage } = warmup;
     const globe = document.querySelector(".living-atlas-globe");
     const probe = window.__earthDiveDebug?.();
     if (!probe || probe.stage !== stage || globe?.dataset.earthDive !== stage) return false;
@@ -232,13 +233,10 @@ async function measureIdleDiveScheduler(page, expectedStage) {
     }
     const scene = document.querySelector(".particle-earth-scene");
     const frame = scene?.dataset.sceneFrameRevision;
-    const inputs = JSON.stringify([
-      ...keys.map((key) => scene?.dataset[key]),
-      window.__particleEarthDebug?.().zoom.toFixed(6),
-    ]);
+    const inputs = JSON.stringify(probe.inputs);
     if (frame && frame !== warmup.frame) {
-      // Focus arrival still permits residual camera interpolation. Grade the
-      // actual projection over new renderer frames before requiring no wakes.
+      // The particle publisher filters sub-pixel interpolation. Wait for the
+      // actual Dive inputs to settle, not for unrelated raw DOM digits to stop.
       // Scheduler activity never resets this input-stability counter.
       warmup.stableFrames = inputs === warmup.inputs ? warmup.stableFrames + 1 : 0;
       warmup.frame = frame;
@@ -247,7 +245,7 @@ async function measureIdleDiveScheduler(page, expectedStage) {
     return globe.dataset.earthDiveOwner === "particle"
       && Number(scene?.dataset.focusSettleCount ?? 0) > 0
       && warmup.stableFrames >= 12 && !probe.pending;
-  }, { stage: expectedStage, keys: inputKeys, frame: null, inputs: null, stableFrames: 0 }, { timeout: 10_000 }).catch(async (error) => {
+  }, { stage: expectedStage, frame: null, inputs: null, stableFrames: 0 }, { timeout: 10_000 }).catch(async (error) => {
     throw new Error(`idle ${expectedStage} inputs never settled: ${JSON.stringify({
       before: warmupInputsBefore, after: await captureInputs(),
     })}`, { cause: error });

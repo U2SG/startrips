@@ -928,7 +928,17 @@ export function LivingAtlasGlobe({
       setDive(next);
     };
     scheduleDiveTickRef.current = schedule;
-    const readScheduler = () => ({ tickCount, pending: frame !== 0, stage: diveRef.current.stage });
+    const readScheduler = () => ({
+      tickCount,
+      pending: frame !== 0,
+      stage: diveRef.current.stage,
+      inputs: {
+        snapshot: snapshotRef.current,
+        particleFrame: particleFrameRef.current,
+        readiness: readinessRef.current,
+        focusRevision: focusRevisionRef.current,
+      },
+    });
     const debugWindow = window as Window & { __earthDiveDebug?: typeof readScheduler };
     if (import.meta.env.DEV) debugWindow.__earthDiveDebug = readScheduler;
     schedule();
