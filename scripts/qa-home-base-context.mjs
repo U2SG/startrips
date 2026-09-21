@@ -88,18 +88,22 @@ function record(name, data, condition) {
 }
 
 async function installOwnerApi(page, journeyRows = journeys) {
-  const fragments = { rows: [], requests: [], rejectNext: null, holdNext: null, release: null };
+  const fragments = { rows: [], requests: [], rejectReads: null, heldReads: null, rejectNext: null, holdNext: null, release: null };
   await page.route("**/api/everyday-fragments**", async (route) => {
     const method = route.request().method();
     const body = method === "POST" || method === "PUT" ? route.request().postDataJSON() : null;
     const id = new URL(route.request().url()).pathname.split("/")[3];
+    // Strict Mode can replay a mounted read and abort its first request. Read
+    // fixtures belong to the disclosure phase, not whichever request arrives first.
+    const heldReads = method === "GET" ? fragments.heldReads : null;
+    const rejection = method === "GET" ? fragments.rejectReads : fragments.rejectNext;
     fragments.requests.push({ method, id, body });
     let status = method === "POST" ? 201 : method === "DELETE" ? 204 : 200;
     let payload;
-    if (fragments.rejectNext?.method === method) {
-      status = fragments.rejectNext.status;
-      payload = { error: fragments.rejectNext.code };
-      fragments.rejectNext = null;
+    if (rejection && (method === "GET" || rejection.method === method)) {
+      status = rejection.status;
+      payload = { error: rejection.code };
+      if (method !== "GET") fragments.rejectNext = null;
     } else if (method === "GET") {
       payload = { fragments: structuredClone(fragments.rows) };
     } else if (method === "DELETE") {
@@ -109,12 +113,16 @@ async function installOwnerApi(page, journeyRows = journeys) {
       fragments.rows = [...fragments.rows.filter((row) => row.id !== fragment.id), fragment];
       payload = { fragment };
     }
-    if (fragments.holdNext === method) {
-      fragments.holdNext = null;
+    if (heldReads || fragments.holdNext === method) {
+      if (!heldReads) fragments.holdNext = null;
       let finish;
       const finished = new Promise((resolve) => { finish = resolve; });
-      await new Promise((resolve) => { fragments.release = async () => { resolve(); await finished; }; });
-      fragments.release = null;
+      await new Promise((resolve) => {
+        const release = async () => { resolve(); await finished; };
+        if (heldReads) heldReads.push(release);
+        else fragments.release = release;
+      });
+      if (!heldReads) fragments.release = null;
       // The old GET may have been aborted when its disclosure closed.
       await route.fulfill({ status, contentType: "application/json", body: payload ? JSON.stringify(payload) : "" }).catch(() => {});
       finish();
@@ -235,7 +243,7 @@ async function openOwner(viewport, { journeyRows = journeys } = {}) {
 
 async function waitForHeld(fragments) {
   const deadline = Date.now() + 5_000;
-  while (!fragments.release) {
+  while (!fragments.release && !fragments.heldReads?.length) {
     if (Date.now() > deadline) throw new Error("Expected a held fragment request");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -267,16 +275,18 @@ async function fragmentQa(owner, name) {
   };
   page.on("request", watchJourneys);
   record(`${name}: fragments are lazy`, { requests: fragments.requests.length }, fragments.requests.length === 0);
-  fragments.holdNext = "GET";
+  fragments.heldReads = [];
   await surface.getByRole("button", { name: "日常", exact: true }).click();
   await waitForHeld(fragments);
-  const releaseGet = fragments.release;
+  const heldReads = fragments.heldReads;
   record(`${name}: initial read owns loading`, {}, await list.getByRole("status").isVisible());
   await surface.getByRole("button", { name: "日常", exact: true }).click();
-  fragments.release = null;
-  fragments.rejectNext = { method: "GET", status: 503, code: "REQUEST_FAILED" };
+  await list.waitFor({ state: "detached" });
+  fragments.heldReads = null;
+  fragments.rejectReads = { status: 503, code: "REQUEST_FAILED" };
   await surface.getByRole("button", { name: "日常", exact: true }).click();
   await list.getByRole("alert").waitFor();
+  fragments.rejectReads = null;
   await list.getByRole("button", { name: "重试", exact: true }).click();
   await list.getByText("还没有日常，记下某一天、某个地方。", { exact: true }).waitFor();
   await list.getByRole("button", { name: "记录日常", exact: true }).click();
@@ -304,7 +314,7 @@ async function fragmentQa(owner, name) {
   record(`${name}: create pending`, {}, await form.getByRole("button", { name: "保存中…" }).isDisabled());
   fragments.release();
   await row.getByText("22.54310, 114.05790", { exact: true }).waitFor();
-  await releaseGet();
+  await Promise.all(heldReads.map((release) => release()));
   record(`${name}: closed stale GET cannot erase a new fragment`, {}, await row.getByText("22.54310, 114.05790", { exact: true }).isVisible());
   const created = fragments.rows[0];
   record(`${name}: date + coordinates create an unassociated fragment`, { created },
