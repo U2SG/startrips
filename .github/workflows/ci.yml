@@ -47,6 +47,8 @@ jobs:
         run: node --test scripts/pr-history.node-test.mjs
       - name: Test ledger-only final fast path
         run: node --test scripts/ci-ledger-fast-path.node-test.mjs
+      - name: Test browser QA shard runner
+        run: node --test scripts/browser-qa-shard.node-test.mjs
       - name: Validate sharded ledgers
         run: node scripts/pr-history.mjs validate-all
       - name: Validate current PR ledger
@@ -203,7 +205,9 @@ jobs:
   browser-qa:
     name: browser-qa / ${{ matrix.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    # Outer shard budget only. Each logical suite keeps its original 12-minute cap
+    # inside scripts/browser-qa-shard.mjs, so a hung suite cannot consume siblings.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -291,6 +295,7 @@ jobs:
         if: steps.final-plan.outputs.ledger_only_final != 'true'
         env:
           QA_COMMANDS: ${{ matrix.commands }}
+          QA_SUITE_TIMEOUT_MS: '720000'
         run: |
           set -euo pipefail
           pnpm exec vite --host 127.0.0.1 --port 4173 > /tmp/startrips-vite.log 2>&1 &
@@ -303,25 +308,7 @@ jobs:
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
-          status=0
-          while IFS= read -r qa_entry; do
-            [[ -n "$qa_entry" ]] || continue
-            qa_suite="${qa_entry%%::*}"
-            qa_command="${qa_entry#*::}"
-            if [[ -z "$qa_suite" || "$qa_suite" == "$qa_entry" || -z "$qa_command" ]]; then
-              echo "::error::Invalid browser QA shard entry: $qa_entry"
-              status=1
-              continue
-            fi
-            echo "STARTRIPS_QA_SUITE=$qa_suite"
-            echo "::group::$qa_suite :: $qa_command"
-            if ! bash -lc "$qa_command"; then
-              echo "::error::Browser QA command failed: $qa_suite :: $qa_command"
-              status=1
-            fi
-            echo "::endgroup::"
-          done <<< "$QA_COMMANDS"
-          exit "$status"
+          node scripts/browser-qa-shard.mjs
       - name: Upload coastline refinement review
         if: ${{ always() && steps.final-plan.outputs.ledger_only_final != 'true' && contains(matrix.suites, '|city-label-anchoring|') }}
         uses: actions/upload-artifact@v7.0.1
