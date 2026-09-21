@@ -103,6 +103,29 @@ class FingerprintCases(fixture.SyntheticOne):
         self.assertTrue(set(ci.DIMENSIONS) <= set(value))
         self.assertEqual(('city', '1280x720', '3'), (value['fixture'], value['viewport'], value['dpr']))
 
+    def test_shard_marker_preserves_pre_shard_logical_lane_and_fingerprint(self):
+        old_job = job('browser-qa / home-base-context', 9, 'failure',
+                      steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        shard_job = job('browser-qa / route-home-share', 10, 'failure',
+                        steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        diagnostic = 'AssertionError: context focus missing fixture=home viewport=390x844 DPR=3'
+        old = ci.normalize_failure(old_job, diagnostic)
+        sharded = ci.normalize_failure(shard_job, 'STARTRIPS_QA_SUITE=home-base-context\n' + diagnostic)
+        self.assertEqual('browser-qa / home-base-context', sharded['lane'])
+        self.assertEqual(old['lane'], sharded['lane'])
+        self.assertEqual(old['fingerprint'], sharded['fingerprint'])
+        self.assertEqual(old['family'], sharded['family'])
+
+    def test_city_label_family_uses_logical_suite_marker_without_keyword_hint(self):
+        shard_job = job('browser-qa / labels-recovery', 10, 'failure',
+                        steps=[{'name': 'Run browser QA shard', 'conclusion': 'failure'}])
+        value = ci.normalize_failure(
+            shard_job,
+            'STARTRIPS_QA_SUITE=city-label-anchoring\nAssertionError: label budget mismatch fixture=city',
+        )
+        self.assertEqual('browser-qa / city-label-anchoring', value['lane'])
+        self.assertEqual('city-label-anchoring', value['family'])
+
     def test_workflow_curl_fail_echo_is_not_a_runtime_assertion(self):
         text = ('2026-09-17T01:00:00Z \x1b[36;1mif curl --fail --silent http://localhost; then\x1b[0m\n'
                 '2026-09-17T01:00:01Z throw new Error(failures.join("; "));\n'
