@@ -26,6 +26,7 @@ process.env.GOOGLE_CLIENT_SECRET = "st132-test-client-secret";
 
 const { createEmailVerificationToken } = await import("better-auth/api");
 const { app } = await import("../app");
+const { auth } = await import("../auth");
 const { serverConfig } = await import("../config");
 const { atlases, accountIdentityAudit, accountIdentityOwnerships } = await import("../db/app-schema");
 const {
@@ -412,13 +413,17 @@ describe("google sign-in", () => {
     expect(users[0]!.id).toBe(existing.userId);
   });
 
-  it("refuses a sign-in that would return to another origin", async () => {
-    const rejected = await postJson("/api/auth/sign-in/social", {
-      provider: "google",
-      callbackURL: "https://evil.test/collect",
-      disableRedirect: true,
-    }, "");
-    expect(rejected.status).toBe(403);
+  it("trusts only this deployment's own origin as a return target", async () => {
+    // Better Auth validates `callbackURL` / `errorCallbackURL` with exactly this
+    // predicate before it issues an authorization URL. Asserting the predicate
+    // rather than a request is deliberate: 1.6.23 skips the URL half of its
+    // origin middleware whenever `NODE_ENV=test`, so a request-level assertion
+    // here would pass for the wrong reason and prove nothing about production.
+    const context = await auth.$context;
+    expect(context.isTrustedOrigin("/", { allowRelativePaths: true })).toBe(true);
+    expect(context.isTrustedOrigin(`${ORIGIN}/account`, { allowRelativePaths: true })).toBe(true);
+    expect(context.isTrustedOrigin("https://evil.test/collect", { allowRelativePaths: true })).toBe(false);
+    expect(context.isTrustedOrigin(`${ORIGIN}.evil.test/collect`, { allowRelativePaths: true })).toBe(false);
   });
 });
 
