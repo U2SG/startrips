@@ -7,6 +7,7 @@ import {
 } from "../repositories/journey-repository";
 import type { MultipartStorage } from "../storage/multipart-storage";
 import { getMultipartStorage } from "../storage/storage-registry";
+import { cleanupJourneyStorage } from "../storage/cleanup-journey-storage";
 
 const DELETION_RECONCILE_INTERVAL_MS = 5 * 60 * 1_000;
 
@@ -36,10 +37,6 @@ const defaultDependencies: DeleteJourneyDependencies = {
   },
 };
 
-function storageReference(storageDriver: string, storageKey: string) {
-  return `${storageDriver}\0${storageKey}`;
-}
-
 async function recordCleanupFailure(
   journeyId: string,
   atlasId: string,
@@ -62,38 +59,7 @@ async function finishJourneyDeletion(
   const candidate = await dependencies.getCandidate(journeyId, atlasId);
   if (!candidate) return;
 
-  const deletedObjects = new Set<string>();
-  for (const asset of candidate.media) {
-    // #260: the original and its derived preview are two objects under one
-    // row, and both belong to the Journey being destroyed. They share the
-    // deduplication set because they share a backend, so a preview key that
-    // somehow coincided with an original would still be deleted once.
-    for (const key of [asset.previewStorageKey, asset.storageKey]) {
-      if (!key) continue;
-      const reference = storageReference(asset.storageDriver, key);
-      if (deletedObjects.has(reference)) continue;
-      await dependencies.storageForBackend(asset.storageDriver).deleteObject({
-        key,
-      });
-      deletedObjects.add(reference);
-    }
-  }
-
-  for (const upload of candidate.uploads) {
-    const reference = storageReference(upload.storageDriver, upload.storageKey);
-    if (deletedObjects.has(reference)) continue;
-    const storage = dependencies.storageForBackend(upload.storageDriver);
-    const inspected = await storage.inspectObject({ key: upload.storageKey });
-    if (inspected.exists) {
-      await storage.deleteObject({ key: upload.storageKey });
-    } else {
-      await storage.abortMultipartUpload({
-        key: upload.storageKey,
-        providerUploadId: upload.providerUploadId,
-      });
-    }
-    deletedObjects.add(reference);
-  }
+  await cleanupJourneyStorage(candidate, (backendId) => dependencies.storageForBackend(backendId));
 
   await dependencies.deleteJourney(journeyId, atlasId);
 }

@@ -9,6 +9,7 @@ import {
   playbackCameraTargetForStep,
   playbackTravelChoreography,
   playbackCameraTargetKey,
+  playbackIntroMedia,
   playbackMediaForPoint,
   playbackStoryMedia,
   storyMediaForScope,
@@ -168,6 +169,91 @@ describe("Story whole-Journey media sequence (#76)", () => {
       "point-1-image",
       "point-2-video",
     ]);
+  });
+
+  it("preserves ties and input objects while excluding audio and unknown route points", () => {
+    const mixed: Journey = {
+      ...journey,
+      routePoints: [point("point-2", 0, 60), point("point-0", 0, 0), point("point-1", 0, 30)],
+      media: [
+        media("intro-tie-a", null, "image/jpeg", 2),
+        media("point-1-late", "point-1", "video/mp4", 3),
+        media("point-2-tie-a", "point-2", "image/jpeg", 1),
+        media("orphan", "unknown-point", "image/jpeg", 0),
+        media("intro-first", null, "video/mp4", 0),
+        media("point-2-first", "point-2", "image/jpeg", 0),
+        media("point-2-audio", "point-2", "audio/mpeg", -1),
+        media("point-2-tie-b", "point-2", "video/mp4", 1),
+        media("track", null, "audio/mpeg", 0),
+        media("point-1-first", "point-1", "image/jpeg", 0),
+        media("intro-tie-b", null, "image/jpeg", 2),
+        media("point-0-audio", "point-0", "audio/wav", 0),
+      ],
+    };
+    const original = structuredClone(mixed);
+    for (const asset of mixed.media) Object.freeze(asset);
+    for (const routePoint of mixed.routePoints) Object.freeze(routePoint);
+    Object.freeze(mixed.media);
+    Object.freeze(mixed.routePoints);
+    Object.freeze(mixed);
+
+    const story = playbackStoryMedia(mixed);
+    const steps = buildPlaybackSteps(mixed, homeNarrativeContext);
+    const stops = steps.filter((step) => step.kind === "stop");
+    const introIds = ["intro-first", "intro-tie-a", "intro-tie-b"];
+    const chapterIds = [
+      ["point-2-first", "point-2-tie-a", "point-2-tie-b"],
+      [],
+      ["point-1-first", "point-1-late"],
+    ];
+
+    expect(story.map((asset) => asset.id)).toEqual([...introIds, ...chapterIds.flat()]);
+    expect(playbackIntroMedia(mixed).map((asset) => asset.id)).toEqual(introIds);
+    expect(storyMediaForScope(mixed, null)).toEqual(story);
+    expect(storyMediaForScope(mixed, "unknown-point")).toEqual([]);
+    expect(stops.map((step) => step.media.map((asset) => asset.id))).toEqual(chapterIds);
+    for (const [pointIndex, routePoint] of mixed.routePoints.entries()) {
+      expect(playbackMediaForPoint(mixed, pointIndex).map((asset) => asset.id))
+        .toEqual(chapterIds[pointIndex]);
+      expect(storyMediaForScope(mixed, routePoint.id)).toEqual(stops[pointIndex].media);
+    }
+    expect(steps.map((step) => step.kind)).toEqual([
+      "home-prelude", "intro",
+      "stop", "media", "media", "media",
+      "travel", "stop",
+      "travel", "stop", "media", "media",
+      "home-epilogue", "outro",
+    ]);
+    for (const asset of [...story, ...stops.flatMap((step) => step.media)]) {
+      expect(asset).toBe(mixed.media.find((originalAsset) => originalAsset.id === asset.id));
+    }
+    expect(mixed).toEqual(original);
+  });
+
+  it("does not sort media belonging to owners the projection never consumes", () => {
+    const unreadOrder = (id: string, routePointId: string | null): JourneyMediaAsset => ({
+      ...media(id, routePointId, "image/jpeg"),
+      get sortOrder(): number {
+        throw new Error(`Unconsumed media must not be sorted: ${id}`);
+      },
+    });
+    const orphans = [unreadOrder("orphan-a", "missing"), unreadOrder("orphan-b", "missing")];
+    const scattered: Journey = {
+      ...journey,
+      routePoints: [point("point-0", 0, 0)],
+      media: [unreadOrder("intro-a", null), unreadOrder("intro-b", null), ...orphans],
+    };
+
+    expect(buildPlaybackSteps(scattered)).toEqual([
+      { kind: "intro" },
+      { kind: "stop", pointIndex: 0, media: [] },
+      { kind: "outro" },
+    ]);
+    const story: Journey = {
+      ...scattered,
+      media: [media("intro-b", null, "image/jpeg", 1), ...orphans, media("intro-a", null, "image/jpeg", 0)],
+    };
+    expect(playbackStoryMedia(story).map((asset) => asset.id)).toEqual(["intro-a", "intro-b"]);
   });
 });
 

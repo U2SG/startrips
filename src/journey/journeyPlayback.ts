@@ -8,6 +8,7 @@
 // machine pure makes the chapter order and pause/resume behavior unit-testable.
 
 import type { HomeNarrativeContext, HomeNarrativeCameraTarget } from "./homeBasePrelude";
+import { isVisualMediaAsset } from "./journeyModel";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 export type JourneyPlaybackPhase =
@@ -48,6 +49,34 @@ export function playbackMediaWaitPolicy(
   return "none";
 }
 
+function comparePlaybackMedia(left: JourneyMediaAsset, right: JourneyMediaAsset): number {
+  return left.sortOrder - right.sortOrder;
+}
+
+function orderedMediaForOwner(
+  journey: Journey,
+  routePointId: string | null,
+): JourneyMediaAsset[] {
+  return journey.media
+    .filter((asset) => asset.routePointId === routePointId && isVisualMediaAsset(asset))
+    .sort(comparePlaybackMedia);
+}
+
+/** Build once per projection, sorting only the owners it consumes. */
+function playbackMediaByOwner(
+  journey: Journey,
+  ownerIds: readonly (string | null)[],
+): Map<string | null, JourneyMediaAsset[]> {
+  const byOwner = new Map<string | null, JourneyMediaAsset[]>();
+  for (const ownerId of ownerIds) byOwner.set(ownerId, []);
+  for (const asset of journey.media) {
+    const media = byOwner.get(asset.routePointId);
+    if (media && isVisualMediaAsset(asset)) media.push(asset);
+  }
+  for (const media of byOwner.values()) media.sort(comparePlaybackMedia);
+  return byOwner;
+}
+
 /**
  * The media of one route point in playback order (visual media only; the
  * soundtrack never enters the chapter stream).
@@ -58,28 +87,23 @@ export function playbackMediaForPoint(
 ): JourneyMediaAsset[] {
   const point = journey.routePoints[pointIndex];
   if (!point) return [];
-  return journey.media
-    .filter((asset) => asset.routePointId === point.id)
-    .filter((asset) => !asset.mimeType.startsWith("audio/"))
-    .sort((left, right) => left.sortOrder - right.sortOrder);
+  return orderedMediaForOwner(journey, point.id);
 }
 
 /**
  * The journey-scoped visual media (routePointId null) shown in the intro.
  */
 export function playbackIntroMedia(journey: Journey): JourneyMediaAsset[] {
-  return journey.media
-    .filter((asset) => asset.routePointId === null)
-    .filter((asset) => !asset.mimeType.startsWith("audio/"))
-    .sort((left, right) => left.sortOrder - right.sortOrder);
+  return orderedMediaForOwner(journey, null);
 }
 
 /** Canonical Story media order for the whole Journey: intro media first, then
  * each route point's visual media in the same order used by Journey Playback. */
 export function playbackStoryMedia(journey: Journey): JourneyMediaAsset[] {
+  const byOwner = playbackMediaByOwner(journey, [null, ...journey.routePoints.map((point) => point.id)]);
   return [
-    ...playbackIntroMedia(journey),
-    ...journey.routePoints.flatMap((_, pointIndex) => playbackMediaForPoint(journey, pointIndex)),
+    ...(byOwner.get(null) ?? []),
+    ...journey.routePoints.flatMap((point) => byOwner.get(point.id) ?? []),
   ];
 }
 
@@ -117,8 +141,8 @@ export type RoutePointChapterDensity = "empty" | "single" | "few";
  * The density of an already-resolved chapter media list.
  *
  * Internal so there is exactly ONE media-order authority: every caller either
- * holds the list `playbackMediaForPoint` produced (the `stop` step carries it)
- * or goes through `routePointChapterDensity`, which calls that same resolver.
+ * holds a list in canonical playback order (the `stop` step carries it)
+ * or goes through `routePointChapterDensity` to resolve one chapter.
  */
 function chapterDensityForMedia(
   media: readonly JourneyMediaAsset[],
@@ -208,13 +232,14 @@ export function buildPlaybackSteps(
   journey: Journey,
   homeContext?: HomeNarrativeContext | null,
 ): PlaybackStep[] {
+  const byOwner = playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
   const steps: PlaybackStep[] = [];
   if (homeContext?.prelude.eligible) {
     steps.push({ kind: "home-prelude", cameraTarget: homeContext.prelude.cameraTarget });
   }
   steps.push({ kind: "intro" });
   for (let pointIndex = 0; pointIndex < journey.routePoints.length; pointIndex += 1) {
-    const media = playbackMediaForPoint(journey, pointIndex);
+    const media = byOwner.get(journey.routePoints[pointIndex].id) ?? [];
     if (pointIndex > 0) steps.push({ kind: "travel", to: pointIndex });
     steps.push({ kind: "stop", pointIndex, media });
     for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
@@ -364,7 +389,7 @@ export function isPlaybackTerminalState(state: PlaybackState): boolean {
  * reach the memory. The stop beat still plays in the automatic stream, and an
  * `empty` chapter keeps it as its sole destination — there the place IS the
  * memory. The density comes from the step's own `media`, which
- * `buildPlaybackSteps` filled from `playbackMediaForPoint`.
+ * `buildPlaybackSteps` filled in canonical playback order.
  */
 export function isMeaningfulPlaybackStep(step: PlaybackStep | undefined): boolean {
   if (!step) return false;

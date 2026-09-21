@@ -811,9 +811,6 @@ function StoryMediaTile({
   disabled,
   onRequestRead,
   onSelect,
-  onSetCover,
-  selected,
-  onToggleSelect,
 }: {
   asset: JourneyMediaAsset;
   index: number;
@@ -823,11 +820,6 @@ function StoryMediaTile({
   disabled: boolean;
   onRequestRead: (assetId: string) => void;
   onSelect: (index: number, source: HTMLButtonElement) => void;
-  onSetCover?: (assetId: string) => void;
-  // Move-selection mode (#20): when defined, a tap toggles selection instead
-  // of navigating to the tile, and the tile renders a checkbox affordance.
-  selected?: boolean;
-  onToggleSelect?: (assetId: string) => void;
 }) {
   const tileRef = useRef<HTMLButtonElement>(null);
   const isVideo = asset.mimeType.startsWith("video/");
@@ -863,61 +855,40 @@ function StoryMediaTile({
   }, [asset.id, isVideo, onRequestRead]);
 
   return (
-    <>
-      <button
-        ref={tileRef}
-        type="button"
-        className={isCurrent ? "is-current" : ""}
-        aria-current={isCurrent ? "true" : undefined}
-        aria-pressed={selected}
-        aria-label={selected === undefined
-          ? `第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`
-          : `${selected ? "取消选择" : "选择"} 第 ${index + 1} 个媒体 ${asset.fileName}`}
-        data-media-tile-index={index}
-        data-media-layer={layer?.kind}
-        data-media-preview-asset={layer?.kind === "preview" ? layer.assetId : undefined}
-        data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}
-        data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
-        style={layer?.kind === "preview" ? {
-          backgroundImage: `url(${JSON.stringify(layer.url)})`,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-        } : undefined}
-        disabled={disabled}
-        onClick={(event) => selected === undefined
-          ? onSelect(index, event.currentTarget)
-          : onToggleSelect?.(asset.id)}
-      >
-        {isVideo ? (
-          <span className="journey-story__media-tile-badge">
-            <IconVideo size={20} stroke={1.3} aria-hidden="true" />
-          </span>
-        ) : read?.status === "ready" ? (
-          <img src={read.url} alt={asset.fileName} loading="lazy" decoding="async"
-            onLoad={() => setOriginalReady(true)} />
-        ) : (
-          <span className="journey-story__media-tile-badge">
-            {read?.status === "error" ? "不可用" : "载入中"}
-          </span>
-        )}
-        {isCover ? <span className="journey-story__media-tile-cover">封面</span> : null}
-        {selected !== undefined ? (
-          <span className={`journey-story__media-tile-check${selected ? " is-selected" : ""}`} aria-hidden="true" />
-        ) : null}
-        <small>{String(index + 1).padStart(2, "0")}</small>
-      </button>
-      {onSetCover && !isCover ? (
-        <IconActionButton
-          type="button"
-          className="journey-story__media-tile-set-cover"
-          label={`将 ${asset.fileName} 设为封面`}
-          tooltip="设为封面"
-          onClick={() => onSetCover(asset.id)}
-        >
-          <IconPhotoStar size={16} stroke={1.35} aria-hidden="true" />
-        </IconActionButton>
-      ) : null}
-    </>
+    <button
+      ref={tileRef}
+      type="button"
+      className={isCurrent ? "is-current" : ""}
+      aria-current={isCurrent ? "true" : undefined}
+      aria-label={`第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`}
+      data-media-tile-index={index}
+      data-media-layer={layer?.kind}
+      data-media-preview-asset={layer?.kind === "preview" ? layer.assetId : undefined}
+      data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}
+      data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
+      style={layer?.kind === "preview" ? {
+        backgroundImage: `url(${JSON.stringify(layer.url)})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+      } : undefined}
+      disabled={disabled}
+      onClick={(event) => onSelect(index, event.currentTarget)}
+    >
+      {isVideo ? (
+        <span className="journey-story__media-tile-badge">
+          <IconVideo size={20} stroke={1.3} aria-hidden="true" />
+        </span>
+      ) : read?.status === "ready" ? (
+        <img src={read.url} alt={asset.fileName} loading="lazy" decoding="async"
+          onLoad={() => setOriginalReady(true)} />
+      ) : (
+        <span className="journey-story__media-tile-badge">
+          {read?.status === "error" ? "不可用" : "载入中"}
+        </span>
+      )}
+      {isCover ? <span className="journey-story__media-tile-cover">封面</span> : null}
+      <small>{String(index + 1).padStart(2, "0")}</small>
+    </button>
   );
 }
 
