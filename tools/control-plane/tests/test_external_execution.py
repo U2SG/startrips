@@ -1,5 +1,6 @@
 """Synthetic regressions for the external execution receipt. Run only in GitHub CI."""
 from __future__ import annotations
+import json
 import sys
 import tempfile
 import unittest
@@ -9,6 +10,10 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'lib'))
+# Keep this directory ahead of lib/ on sys.path, the same ordering the rest of
+# the suite asserts: a stale same-named module left in lib/ must not answer a
+# by-name import ahead of the test package.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import external_execution as external
 
 
@@ -23,6 +28,13 @@ class ReceiptGenerationBindingTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        # `prepare` refuses a root that is not a control plane. Only existence is
+        # checked, but write a structurally real ONE so the fixture cannot drift
+        # into asserting against a shape the store would reject.
+        (self.root / 'feature_list.json').write_text(json.dumps({
+            'schema_version': '3', 'program': 'synthetic', 'repository': 'synthetic/project',
+            'base_branch': 'main', 'rules': {}, 'features': [],
+        }, indent=2), encoding='utf-8')
 
     def tearDown(self):
         self.temp.cleanup()
