@@ -464,10 +464,14 @@ def _observed_executions(rows, root, self_pid):
 
 
 def _public_record(record, *, state=None):
+    # Carrier tokens are non-secret invocation identity already published in
+    # argv. Preserve them in failure evidence so a transient pre-scope row can
+    # be compared with the launcher's exact token after the process disappears.
     return {
         'pid': record['pid'], 'ppid': record['ppid'], 'kind': record['kind'],
         'state': state or record['state'], 'lane': record['lane'],
         'feature': record.get('feature'), 'worktree': record.get('worktree'),
+        'token': record.get('token'),
     }
 
 

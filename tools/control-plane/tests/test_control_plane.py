@@ -582,6 +582,8 @@ class WiringTests(SyntheticOne):
         triage_agent = (ROOT / '.claude/agents/startrips-triage.md').read_text(encoding='utf-8')
         self.assertIn('do **not** dump the whole raw file into model context', triage_agent)
         self.assertNotIn('The **whole** of `feature_list.json`', triage_agent)
+        launch = (ROOT / 'launch-experience.sh').read_text(encoding='utf-8')
+        self.assertIn('EXPERIENCE_CARRIER_TOKEN=%s', launch)
         self.assertIn('feature_state.py', loop)
         self.assertIn('github_evidence.py', loop)
         self.assertNotIn('|| echo 0', loop)

@@ -32,6 +32,18 @@ class ProcessClassificationCases(unittest.TestCase):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'))]
         self.assertEqual(10, execution.competitors(rows, self.root, 3)[0]['pid'])
 
+    def test_unscoped_claim_failure_preserves_carrier_token_evidence(self):
+        token = 'experience-token-0010'
+        rows = self.base + [process(
+            10,
+            command='bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token)]
+        conflict = execution.competitors(
+            rows, self.root, 3, lane='experience',
+            feature='ST-002', worktree=str(self.root / 'owner-two'))[0]
+        self.assertEqual(token, conflict['token'])
+        self.assertIsNone(conflict['feature'])
+
     def test_backend_loop_does_not_block_experience_lane(self):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
                                     + ' --carrier-lane=backend')]
