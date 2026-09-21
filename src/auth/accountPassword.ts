@@ -1,20 +1,27 @@
 /**
  * #346 (ST-124): the client half of the account password lifecycle.
  *
- * The server already owns both writes — `POST /api/account-identities/password`
- * replaces an existing credential (#410) and `POST .../password/enrollment`
- * gives a credential-less Account its first one (#445) — and both consume a
- * single-use recent-control grant from `POST .../reverify/password` (#345).
- * This module is the only place the browser speaks that contract.
+ * The browser performs exactly ONE password write: `POST
+ * /api/account-identities/password` (#410), which replaces the credential of
+ * an Account that already has a usable one and spends a single-use
+ * recent-control grant from `POST .../reverify/password` (#345).
+ *
+ * It performs no other one. `POST .../password/enrollment` (#445) keeps its
+ * server contract untouched, but no client path reaches it: the only grant
+ * issuer runs `auth.api.verifyPassword`, which is precisely what a
+ * credential-less Account cannot pass. Per the owner's 2026-09-21 decision on
+ * #346, that Account gets its first password through the verified-email
+ * set-password link instead — the same delivery the sign-in gate's
+ * forgot-password mode already uses — and the link itself is the proof.
  *
  * Two rules shape the signatures below.
  *
  * The grant never leaves an async local scope. It is claimed and spent inside
  * one call, so no component state, no URL, no storage and no log line can hold
  * it; the caller passes the proof it already has and receives only the
- * server's non-secret outcome.
+ * server's non-secret outcome. The link request claims no grant at all.
  *
- * Which write applies is the SERVER's answer, read from the authoritative
+ * Which offer applies is the SERVER's answer, read from the authoritative
  * identity list plus the Account's own recovery address, never inferred from
  * `user.email` — the #346 assumption audit names exactly that inference as the
  * thing this feature invalidates.
@@ -37,16 +44,15 @@ export type AccountRecoveryEmail = {
 
 /**
  * `change` — a usable password credential exists; ask for the current password.
- * `enroll` — no usable credential, but a verified recovery address exists.
- * `recover` — no usable credential AND no address that could recover one, so
- * the only truthful offer is verifying or recovering that address first. An
- * enrollment form here would collect a password the Account could neither use
- * nor recover, which is what the server refuses with
- * PASSWORD_ENROLL_RECOVERY_REQUIRED.
+ * `send-link` — no usable credential, but a verified address exists, so the
+ * only offer is a set-password link sent to it.
+ * `recover` — no usable credential AND no address the link could be sent to,
+ * so the only truthful offer is verifying that address first. Anything else
+ * here would promise a delivery that cannot happen.
  */
 export type AccountPasswordState =
   | { kind: "change" }
-  | { kind: "enroll" }
+  | { kind: "send-link" }
   | { kind: "recover"; reason: "email-missing" | "email-unverified" };
 
 export function resolveAccountPasswordState(
@@ -59,17 +65,7 @@ export function resolveAccountPasswordState(
   if (credential?.usable) return { kind: "change" };
   if (!account.email) return { kind: "recover", reason: "email-missing" };
   if (!account.emailVerified) return { kind: "recover", reason: "email-unverified" };
-  return { kind: "enroll" };
-}
-
-/**
- * A password CHANGE rotates a secret other sessions may be holding, so the
- * server revokes them. Enrollment ADDS a login method and deliberately does
- * not: those sessions were authorised by an identity that is still valid, and
- * signing every device out for adding a password would be a surprise.
- */
-export function passwordWriteRevokesOtherSessions(kind: "change" | "enroll"): boolean {
-  return kind === "change";
+  return { kind: "send-link" };
 }
 
 /**
@@ -104,7 +100,6 @@ export type AccountPasswordDeps = {
 const IDENTITIES_URL = "/api/account-identities";
 const REVERIFY_URL = "/api/account-identities/reverify/password";
 const CHANGE_URL = "/api/account-identities/password";
-const ENROLLMENT_URL = "/api/account-identities/password/enrollment";
 
 async function refusalCode(response: Response): Promise<string> {
   const payload = await response.json().catch(() => null) as { error?: string } | null;
@@ -183,30 +178,44 @@ export async function submitAccountPasswordChange(
 }
 
 /**
- * Give a credential-less Account its first password.
+ * Ask for a set-password link on behalf of a credential-less Account.
  *
- * The proof is a parameter rather than a password field because this flow's
- * whole premise is that the Account has no password to re-verify with; the
- * caller supplies whatever recent-control proof it legitimately holds.
+ * The delivery is injected rather than imported so this module stays free of
+ * the auth client, and — more to the point — so the only thing this function
+ * can reach is that delivery. There is no grant to claim, no password to
+ * carry and no session to refresh: the link the Account receives is itself the
+ * recent-control proof, redeemed on the reset page under the server's
+ * unchanged single-use lifetime.
  */
-export async function submitAccountPasswordEnrollment(
-  values: { newPassword: string; reverification: PasswordReverification },
-  deps: AccountPasswordDeps = {},
-): Promise<AccountPasswordOutcome> {
-  const fetchImpl = deps.fetchImpl ?? fetch;
-  const reverificationToken = await claimReverification(fetchImpl, values.reverification);
-  const payload = await postJson(fetchImpl, ENROLLMENT_URL, {
-    newPassword: values.newPassword,
-    reverificationToken,
-  });
-  await deps.refreshSession?.();
-  return outcome(payload, "enrolled", "alreadyEnrolled");
+export type SetPasswordLinkDelivery = (input: {
+  email: string;
+  redirectTo: string;
+}) => Promise<{ error?: { message?: string | null } | null } | null | undefined>;
+
+export type SetPasswordLinkResult =
+  | { outcome: "sent" }
+  | { outcome: "failed" };
+
+export async function requestSetPasswordLink(
+  input: { email: string; redirectTo: string },
+  deliver: SetPasswordLinkDelivery,
+): Promise<SetPasswordLinkResult> {
+  if (!input.email) return { outcome: "failed" };
+  try {
+    const result = await deliver(input);
+    return result?.error ? { outcome: "failed" } : { outcome: "sent" };
+  } catch {
+    return { outcome: "failed" };
+  }
 }
 
 /**
- * Every typed refusal the two write routes and the grant route can answer
- * with, in the words the person reading them needs. A code with no entry still
- * gets a truthful fallback rather than a raw identifier.
+ * Every typed refusal the change route, the grant route and the identity list
+ * can answer with, in the words the person reading them needs. The
+ * enrollment route's codes are deliberately absent: no client path posts to
+ * it, so mapping its refusals would describe an outcome this surface cannot
+ * produce. A code with no entry still gets a truthful fallback rather than a
+ * raw identifier.
  */
 export function accountPasswordRefusalText(code: string): string {
   switch (code) {
@@ -214,41 +223,27 @@ export function accountPasswordRefusalText(code: string): string {
       return "当前密码不正确，密码未修改。";
     case "PASSWORD_CHANGE_CREDENTIAL_NOT_FOUND":
       return "这个账户还没有密码，请改用设置密码的流程。";
-    case "PASSWORD_ENROLL_ALREADY_SET":
-      return "这个账户已经有密码，请改用修改密码的流程。";
-    case "PASSWORD_ENROLL_RECOVERY_REQUIRED":
-      return "请先验证账户邮箱，之后才能设置密码。";
     case "PASSWORD_CHANGE_PASSWORD_TOO_SHORT":
-    case "PASSWORD_ENROLL_PASSWORD_TOO_SHORT":
       return "新密码太短，请换一个更长的密码。";
     case "PASSWORD_CHANGE_PASSWORD_TOO_LONG":
-    case "PASSWORD_ENROLL_PASSWORD_TOO_LONG":
       return "新密码太长，请换一个更短的密码。";
     case "PASSWORD_CHANGE_REVERIFY_EXPIRED":
-    case "PASSWORD_ENROLL_REVERIFY_EXPIRED":
       return "身份确认已过期，请重新输入密码确认。";
     case "PASSWORD_CHANGE_REVERIFY_REPLAYED":
-    case "PASSWORD_ENROLL_REVERIFY_REPLAYED":
       return "这次身份确认已经用过了，请重新确认后再试。";
     case "PASSWORD_CHANGE_REVERIFY_INVALID":
-    case "PASSWORD_ENROLL_REVERIFY_INVALID":
       return "身份确认无效，请重新确认后再试。";
     case "PASSWORD_CHANGE_SESSION_CHANGED":
-    case "PASSWORD_ENROLL_SESSION_CHANGED":
       return "登录状态已经变化，请重新登录后再试。";
     case "PASSWORD_CHANGE_SESSION_EXPIRED":
-    case "PASSWORD_ENROLL_SESSION_EXPIRED":
     case "UNAUTHORIZED":
       return "登录状态已过期，请重新登录。";
     case "PASSWORD_CHANGE_ACCOUNT_NOT_FOUND":
-    case "PASSWORD_ENROLL_ACCOUNT_NOT_FOUND":
       return "找不到这个账户，请重新登录后再试。";
     case "PASSWORD_CHANGE_INVALID":
-    case "PASSWORD_ENROLL_INVALID":
     case "INVALID_IDENTITY_REVERIFY":
       return "请求不完整，请检查输入后再试。";
     case "PASSWORD_CHANGE_ORIGIN_REQUIRED":
-    case "PASSWORD_ENROLL_ORIGIN_REQUIRED":
     case "IDENTITY_ORIGIN_REQUIRED":
       return "请求来源不被信任，请在 Startrips 页面内重试。";
     case "IDENTITY_REVERIFY_FAILED":

@@ -3,13 +3,13 @@ import {
   AccountPasswordRefusal,
   accountPasswordRefusalText,
   loadAccountIdentityMethods,
-  passwordWriteRevokesOtherSessions,
+  requestSetPasswordLink,
   resolveAccountPasswordState,
   submitAccountPasswordChange,
-  submitAccountPasswordEnrollment,
   type AccountIdentityMethod,
 } from "./accountPassword";
 
+const IDENTITIES_URL = "/api/account-identities";
 const REVERIFY_URL = "/api/account-identities/reverify/password";
 const CHANGE_URL = "/api/account-identities/password";
 const ENROLLMENT_URL = "/api/account-identities/password/enrollment";
@@ -54,18 +54,18 @@ describe("account password state", () => {
       .toEqual({ kind: "change" });
   });
 
-  it("offers enrollment to a credential-less Account with a verified address", () => {
+  it("offers a set-password link to a credential-less Account with a verified address", () => {
     expect(resolveAccountPasswordState([], { email: "a@b.test", emailVerified: true }))
-      .toEqual({ kind: "enroll" });
+      .toEqual({ kind: "send-link" });
     // A credential row whose password is unset reads as unusable, not as a
     // password the person could type into a current-password field.
     expect(resolveAccountPasswordState(
       [method({ usable: false })],
       { email: "a@b.test", emailVerified: true },
-    )).toEqual({ kind: "enroll" });
+    )).toEqual({ kind: "send-link" });
   });
 
-  it("asks for recovery instead of an enrollment form without a usable address", () => {
+  it("asks for email verification instead of a link that cannot be delivered", () => {
     expect(resolveAccountPasswordState([], { email: "a@b.test", emailVerified: false }))
       .toEqual({ kind: "recover", reason: "email-unverified" });
     expect(resolveAccountPasswordState([], { email: null, emailVerified: true }))
@@ -110,28 +110,23 @@ describe("account password writes", () => {
     expect(refreshed).toBe(1);
   });
 
-  it("sends a credential-less Account to the enrollment route, which revokes nothing", async () => {
+  it("reads the identity list, then claims the grant, then writes the change", async () => {
     const { fetchImpl, calls } = stubFetch({
+      [IDENTITIES_URL]: { body: { methods: [method()] } },
       [REVERIFY_URL]: { body: { reverificationToken: "grant-2" } },
-      [ENROLLMENT_URL]: { body: { status: true, enrolled: true, alreadyEnrolled: false } },
+      [CHANGE_URL]: { body: { status: true, changed: true, alreadyChanged: false, revokedOtherSessions: 0 } },
     });
-    let refreshed = 0;
-    const result = await submitAccountPasswordEnrollment(
-      { newPassword: "first-password-1", reverification: { kind: "password", password: "proof-1" } },
-      { fetchImpl, refreshSession: async () => { refreshed += 1; } },
+    const methods = await loadAccountIdentityMethods({ fetchImpl });
+    // The server's answer, not the session user, decides that a change is the
+    // write this Account is eligible for.
+    expect(resolveAccountPasswordState(methods, { email: "a@b.test", emailVerified: true }))
+      .toEqual({ kind: "change" });
+    await submitAccountPasswordChange(
+      { currentPassword: "old-password-1", newPassword: "new-password-1" },
+      { fetchImpl },
     );
 
-    expect(calls.map((call) => call.url)).toEqual([REVERIFY_URL, ENROLLMENT_URL]);
-    expect(sentBody(calls[1].init)).toEqual({
-      newPassword: "first-password-1",
-      reverificationToken: "grant-2",
-    });
-    expect(result).toEqual({ applied: true, alreadyApplied: false, revokedOtherSessions: 0 });
-    expect(refreshed).toBe(1);
-    // The server's documented asymmetry: a change rotates a shared secret and
-    // revokes other sessions, enrollment adds a method and keeps them.
-    expect(passwordWriteRevokesOtherSessions("change")).toBe(true);
-    expect(passwordWriteRevokesOtherSessions("enroll")).toBe(false);
+    expect(calls.map((call) => call.url)).toEqual([IDENTITIES_URL, REVERIFY_URL, CHANGE_URL]);
   });
 
   it("reports the same grant's completed write instead of repeating it", async () => {
@@ -188,16 +183,73 @@ describe("account password writes", () => {
   });
 });
 
+describe("set-password link request", () => {
+  const input = { email: "a@b.test", redirectTo: "https://startrips.test/reset-password" };
+
+  /**
+   * The link request must reach the delivery and NOTHING else: no grant claim,
+   * no enrollment post, no session write. Watching the module's default
+   * transport is how that is proved rather than asserted in prose.
+   */
+  async function withFetchWatch<T>(run: () => Promise<T>): Promise<{ result: T; urls: string[] }> {
+    const urls: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (target: RequestInfo | URL) => {
+      urls.push(String(target));
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    try {
+      return { result: await run(), urls };
+    } finally {
+      globalThis.fetch = original;
+    }
+  }
+
+  it("delivers the link without claiming a grant or touching either write route", async () => {
+    const delivered: unknown[] = [];
+    const { result, urls } = await withFetchWatch(() => requestSetPasswordLink(input, async (sent) => {
+      delivered.push(sent);
+      return { error: null };
+    }));
+
+    expect(result).toEqual({ outcome: "sent" });
+    expect(delivered).toEqual([input]);
+    expect(urls).toEqual([]);
+    expect(urls).not.toContain(REVERIFY_URL);
+    expect(urls).not.toContain(ENROLLMENT_URL);
+    // The redirect target is the redemption page itself; the token is minted
+    // by the server and never passes through this call.
+    expect(input.redirectTo).not.toContain("token");
+  });
+
+  it("reports a refused or failed delivery instead of claiming it was sent", async () => {
+    expect(await requestSetPasswordLink(input, async () => ({ error: { message: "rate limited" } })))
+      .toEqual({ outcome: "failed" });
+    expect(await requestSetPasswordLink(input, async () => { throw new Error("offline"); }))
+      .toEqual({ outcome: "failed" });
+  });
+
+  it("never asks for a delivery to an address the Account does not have", async () => {
+    let called = 0;
+    const result = await requestSetPasswordLink(
+      { email: "", redirectTo: input.redirectTo },
+      async () => { called += 1; return { error: null }; },
+    );
+    expect(result).toEqual({ outcome: "failed" });
+    expect(called).toBe(0);
+  });
+});
+
 describe("account password refusal text", () => {
   it("gives each typed refusal its own sentence", () => {
     const codes = [
       "PASSWORD_CHANGE_CURRENT_PASSWORD_INVALID",
       "PASSWORD_CHANGE_CREDENTIAL_NOT_FOUND",
       "PASSWORD_CHANGE_REVERIFY_EXPIRED",
+      "PASSWORD_CHANGE_REVERIFY_REPLAYED",
       "PASSWORD_CHANGE_SESSION_CHANGED",
-      "PASSWORD_ENROLL_ACCOUNT_NOT_FOUND",
-      "PASSWORD_ENROLL_ALREADY_SET",
-      "PASSWORD_ENROLL_RECOVERY_REQUIRED",
+      "PASSWORD_CHANGE_ACCOUNT_NOT_FOUND",
+      "PASSWORD_CHANGE_PASSWORD_TOO_SHORT",
       "IDENTITY_REVERIFY_RATE_LIMITED",
     ];
     const texts = codes.map(accountPasswordRefusalText);
@@ -207,7 +259,7 @@ describe("account password refusal text", () => {
     }
   });
 
-  it("covers every code the two write routes and the grant route can answer with", () => {
+  it("covers every code the change route and the grant route can answer with", () => {
     const fallback = accountPasswordRefusalText("SOMETHING_UNMAPPED");
     const served = [
       "PASSWORD_CHANGE_INVALID",
@@ -222,18 +274,6 @@ describe("account password refusal text", () => {
       "PASSWORD_CHANGE_PASSWORD_TOO_SHORT",
       "PASSWORD_CHANGE_PASSWORD_TOO_LONG",
       "PASSWORD_CHANGE_ORIGIN_REQUIRED",
-      "PASSWORD_ENROLL_INVALID",
-      "PASSWORD_ENROLL_ACCOUNT_NOT_FOUND",
-      "PASSWORD_ENROLL_REVERIFY_INVALID",
-      "PASSWORD_ENROLL_REVERIFY_EXPIRED",
-      "PASSWORD_ENROLL_REVERIFY_REPLAYED",
-      "PASSWORD_ENROLL_SESSION_CHANGED",
-      "PASSWORD_ENROLL_SESSION_EXPIRED",
-      "PASSWORD_ENROLL_RECOVERY_REQUIRED",
-      "PASSWORD_ENROLL_ALREADY_SET",
-      "PASSWORD_ENROLL_PASSWORD_TOO_SHORT",
-      "PASSWORD_ENROLL_PASSWORD_TOO_LONG",
-      "PASSWORD_ENROLL_ORIGIN_REQUIRED",
       "IDENTITY_ORIGIN_REQUIRED",
       "INVALID_IDENTITY_REVERIFY",
       "IDENTITY_REVERIFY_FAILED",

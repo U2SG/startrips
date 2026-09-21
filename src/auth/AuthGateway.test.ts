@@ -30,13 +30,46 @@ describe("mobile account surface", () => {
       auth.indexOf("function WorkspaceGate"),
     );
     expect(panel).not.toBe("");
-    // The credential-less branch returns before the change form is reachable,
-    // so the only "current password" input belongs to the change surface.
-    const credentialLess = panel.indexOf('state.kind !== "change"');
+    // Both credential-less branches return before the change form is
+    // reachable, so the only "current password" input belongs to the change
+    // surface — and no branch renders a new-password field for them either.
+    const sendLink = panel.indexOf('state.kind === "send-link"');
+    const recover = panel.indexOf('state.kind === "recover"');
     const currentPasswordField = panel.indexOf('name="currentPassword"');
-    expect(credentialLess).toBeGreaterThan(-1);
-    expect(currentPasswordField).toBeGreaterThan(credentialLess);
+    expect(sendLink).toBeGreaterThan(-1);
+    expect(recover).toBeGreaterThan(sendLink);
+    expect(currentPasswordField).toBeGreaterThan(recover);
     expect(panel.split('name="currentPassword"')).toHaveLength(2);
+    expect(panel.split('type="password"')).toHaveLength(3);
+  });
+
+  it("gives a credential-less Account the link delivery, not the enrollment route", () => {
+    const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
+    // #346 option B: the account surface never posts to a route whose grant a
+    // passwordless Account cannot obtain, so those paths appear nowhere here.
+    expect(auth).not.toContain("password/enrollment");
+    expect(auth).not.toContain("reverify/password");
+    expect(auth).toContain("requestSetPasswordLink");
+    expect(auth).toContain("authClient.requestPasswordReset(input)");
+    // Each link outcome is read from the shared surface vocabulary rather than
+    // from an ad-hoc sentence in this component.
+    expect(auth).toContain("passwordLinkSurfaceText(surface)");
+    expect(auth).toContain("nextPasswordLinkSurface(surface, result.outcome)");
+  });
+
+  it("hands an expired link back to the surface that can resend it, without the token", () => {
+    const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
+    const resetPage = auth.slice(
+      auth.indexOf("function ResetPassword"),
+      auth.indexOf("function InvitationGate"),
+    );
+    expect(resetPage).toContain('passwordLinkSurfaceText("password-link-expired")');
+    expect(resetPage).toContain("href={`/?${EXPIRED_PASSWORD_LINK_QUERY}`}");
+    expect(resetPage).not.toContain("token=${");
+    // The invitation wording that used to answer a failed password redemption
+    // is gone; an expired set-password link now says so in its own words.
+    expect(resetPage).not.toContain("邀请已失效");
+    expect(auth).toContain('openAccountPassword("password-link-expired")');
   });
 
   it("holds no password, grant or token in account-panel component state", () => {

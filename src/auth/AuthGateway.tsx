@@ -17,17 +17,23 @@ import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
 import { AtlasViewProvider, createOwnerAtlasView } from "../journey/atlasView";
 import {
   accountSurfaceEyebrow,
+  accountSurfaceFromLocationSearch,
   accountSurfaceTitle,
   isAccountFormSurface,
+  isAccountPasswordSurface,
+  nextPasswordLinkSurface,
+  passwordLinkSurfaceText,
   previousAccountSurface,
   shouldActivateAccountSheetFocus,
   shouldRenderStandaloneAccountDock,
+  EXPIRED_PASSWORD_LINK_QUERY,
   type AccountSurface,
 } from "./accountSurface";
 import {
   AccountPasswordRefusal,
   accountPasswordRefusalText,
   loadAccountIdentityMethods,
+  requestSetPasswordLink,
   resolveAccountPasswordState,
   submitAccountPasswordChange,
   type AccountPasswordState,
@@ -302,6 +308,12 @@ function ResetPassword() {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
+  // #346: this page redeems the account surface's set-password link as well as
+  // the sign-in gate's reset link, and the server's single-use lifetime is the
+  // only place either one can be found expired. When it is, the person is
+  // handed back to the surface that can send another — with the marker only,
+  // never the token.
+  const [linkExpired, setLinkExpired] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -309,9 +321,15 @@ function ResetPassword() {
     const result = await authClient.resetPassword({ token, newPassword: password });
     setPending(false);
     if (result.error || !result.data) {
-      setMessage(result.error?.message || "邀请已失效");
+      const code = String(result.error?.code ?? "");
+      const expired = !result.error?.message || code.includes("TOKEN");
+      setLinkExpired(expired);
+      setMessage(expired
+        ? passwordLinkSurfaceText("password-link-expired")
+        : String(result.error?.message));
       return;
     }
+    setLinkExpired(false);
     setMessage("密码已更新，现在可以返回登录。");
   }
 
@@ -331,6 +349,7 @@ function ResetPassword() {
           </form>
         ) : <p className="auth-message">重置链接无效或缺少 token。</p>}
         {message ? <p className="auth-message" role="status">{message}</p> : null}
+        {linkExpired ? <a className="auth-link" href={`/?${EXPIRED_PASSWORD_LINK_QUERY}`}>重新发送设置链接</a> : null}
         <a className="auth-link" href="/">返回登录</a>
       </section>
     </main>
@@ -387,14 +406,18 @@ function InvitationGate({ invitationId, onAccepted }: { invitationId: string; on
  * reaches this component at all — `submitAccountPasswordChange` claims and
  * spends it inside one call.
  *
- * The credential-less branch renders the verified-address path rather than an
- * enrollment form: `POST .../password/enrollment` needs a recent-control proof
- * and password re-verification, the only mechanism #345 shipped, is exactly
- * what an Account without a password cannot produce. Offering a form that
- * could not be submitted would be the untruthful-degradation failure.
+ * The credential-less branch offers a set-password LINK rather than an
+ * enrollment form. The server's enrollment route needs a recent-control
+ * proof, and password re-verification — the only issuer #345 shipped — is
+ * exactly what an Account without a password cannot produce; per the owner's
+ * 2026-09-21 decision on #346 the verified-email link carries that proof
+ * instead. Offering a form that could not be submitted would be the
+ * untruthful-degradation failure.
  */
-function AccountPasswordPanel({ state, email, className }: {
+function AccountPasswordPanel({ state, surface, onSurface, email, className }: {
   state: AccountPasswordState | null;
+  surface: AccountSurface;
+  onSurface: (next: AccountSurface) => void;
   email: string;
   className?: string;
 }) {
@@ -402,16 +425,15 @@ function AccountPasswordPanel({ state, email, className }: {
   const [message, setMessage] = useState("");
   const [tone, setTone] = useState<"error" | "success">("error");
 
-  async function sendRecoveryLink() {
+  async function sendSetPasswordLink() {
     setPending(true);
     setMessage("");
-    const result = await authClient.requestPasswordReset({
-      email,
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
+    const result = await requestSetPasswordLink(
+      { email, redirectTo: `${window.location.origin}/reset-password` },
+      (input) => authClient.requestPasswordReset(input),
+    );
     setPending(false);
-    setTone(result.error ? "error" : "success");
-    setMessage(result.error?.message || "设置链接已经发送到账户邮箱。");
+    onSurface(nextPasswordLinkSurface(surface, result.outcome));
   }
 
   async function submitChange(event: FormEvent<HTMLFormElement>) {
@@ -446,19 +468,27 @@ function AccountPasswordPanel({ state, email, className }: {
 
   if (!state) return <p className="auth-message" role="status">正在读取账户登录方式…</p>;
 
-  if (state.kind !== "change") {
+  if (state.kind === "send-link") {
+    const sendable = surface !== "password-link-offered";
     return (
       <div className={className}>
-        <p className="auth-copy">
-          {state.kind === "enroll"
-            ? "这个账户还没有登录密码。我们会把设置链接发送到已验证的账户邮箱。"
-            : state.reason === "email-missing"
-              ? "这个账户还没有可用于恢复的邮箱，请先补充并验证邮箱，然后再设置密码。"
-              : "账户邮箱尚未验证，请先完成邮箱验证，然后再设置密码。"}
+        <p className="auth-copy" role="status">{passwordLinkSurfaceText(surface)}</p>
+        <button type="button" disabled={pending} onClick={() => void sendSetPasswordLink()}>
+          {pending ? "发送中…" : sendable ? "重新发送设置链接" : "发送设置链接"}
+        </button>
+        {notice}
+      </div>
+    );
+  }
+
+  if (state.kind === "recover") {
+    return (
+      <div className={className}>
+        <p className="auth-copy" role="status">
+          {state.reason === "email-missing"
+            ? "这个账户还没有可用于恢复的邮箱，请先补充并验证邮箱，然后再设置密码。"
+            : "账户邮箱尚未验证，请先完成邮箱验证，然后再设置密码。"}
         </p>
-        {state.kind === "enroll"
-          ? <button type="button" disabled={pending} onClick={() => void sendRecoveryLink()}>{pending ? "发送中…" : "发送设置链接"}</button>
-          : null}
         {notice}
       </div>
     );
@@ -495,12 +525,15 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   const [editDedication, setEditDedication] = useState("");
   const [dockOpen, setDockOpen] = useState(false);
   const [accountSurface, setAccountSurface] = useState<AccountSurface>(null);
-  // #346: which password write this Account is eligible for, as the server
+  // #346: which password offer this Account is eligible for, as the server
   // answers it. Null until the identity list has been read; nothing about the
   // password itself is ever held here.
   const [passwordState, setPasswordState] = useState<AccountPasswordState | null>(null);
   const [passwordEmail, setPasswordEmail] = useState("");
   const [passwordOpen, setPasswordOpen] = useState(false);
+  // The password flow's own surface, shared by the desktop dock and the mobile
+  // sheet so the link flow reports sent / expired / failed in one vocabulary.
+  const [passwordSurface, setPasswordSurface] = useState<AccountSurface>(null);
   const [mobileAccountHost, setMobileAccountHost] = useState<HTMLElement | null>(null);
   const isMobileV2 = useCompactMobileLayout();
   // #332: the account menu is where a person changes the Earth experience.
@@ -546,6 +579,59 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
     "account-form",
     () => setAccountSurface("menu"),
   );
+
+  // The password surface lives in two hosts. Moving it in one place keeps the
+  // mobile sheet's drill header and the dock panel on the same state, and the
+  // guard means an outcome cannot pull an unrelated surface into this flow.
+  const applyPasswordSurface = (next: AccountSurface) => {
+    setPasswordSurface(next);
+    setAccountSurface((current) => isAccountPasswordSurface(current) ? next : current);
+  };
+  // #346: the entry point reads the authoritative identity list before it
+  // decides what to render, so a credential-less Account is never shown a
+  // "current password" field and a credential-holding one is never offered
+  // the set-password link. A read that fails says so instead of guessing.
+  const openAccountPassword = async (initial: AccountSurface = null) => {
+    setInviteOpen(false);
+    setEditAtlasOpen(false);
+    setPasswordState(null);
+    setPasswordOpen(true);
+    setMessage("正在读取账户登录方式…");
+    try {
+      const [methods, session] = await Promise.all([
+        loadAccountIdentityMethods(),
+        authClient.getSession(),
+      ]);
+      const user = session.data?.user;
+      const resolved = resolveAccountPasswordState(methods, {
+        email: user?.email ?? null,
+        emailVerified: Boolean(user?.emailVerified),
+      });
+      const surface: AccountSurface = resolved.kind === "change"
+        ? "password-change"
+        : initial ?? "password-link-offered";
+      setPasswordEmail(user?.email ?? "");
+      setPasswordState(resolved);
+      setPasswordSurface(surface);
+      setMessage("");
+      if (isMobileV2) setAccountSurface(surface);
+    } catch (error) {
+      setPasswordOpen(false);
+      setMessage(error instanceof AccountPasswordRefusal
+        ? accountPasswordRefusalText(error.code)
+        : "无法读取账户登录方式，请稍后再试。");
+    }
+  };
+
+  // Someone whose set-password link had already expired is handed back here by
+  // the reset page. The marker is consumed from the URL immediately so a
+  // reload or a shared link cannot re-open the expired state out of nowhere.
+  useEffect(() => {
+    if (gate.kind !== "ready") return;
+    if (accountSurfaceFromLocationSearch(window.location.search) === null) return;
+    window.history.replaceState(window.history.state, "", window.location.pathname);
+    void openAccountPassword("password-link-expired");
+  }, [gate.kind]);
 
   useEffect(() => {
     setSelectedActiveId(activeOrganizationId);
@@ -726,37 +812,6 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   }
 
   const isOwner = gate.role.split(",").includes("owner");
-  // #346: the entry point reads the authoritative identity list before it
-  // decides what to render, so a credential-less Account is never shown a
-  // "current password" field and a credential-holding one is never offered
-  // first-password enrollment. A read that fails says so instead of guessing.
-  const openAccountPassword = async () => {
-    setInviteOpen(false);
-    setEditAtlasOpen(false);
-    setPasswordState(null);
-    setPasswordOpen(true);
-    setMessage("正在读取账户登录方式…");
-    try {
-      const [methods, session] = await Promise.all([
-        loadAccountIdentityMethods(),
-        authClient.getSession(),
-      ]);
-      const user = session.data?.user;
-      const resolved = resolveAccountPasswordState(methods, {
-        email: user?.email ?? null,
-        emailVerified: Boolean(user?.emailVerified),
-      });
-      setPasswordEmail(user?.email ?? "");
-      setPasswordState(resolved);
-      setMessage("");
-      if (isMobileV2) setAccountSurface(resolved.kind === "change" ? "password-change" : "password-enroll");
-    } catch (error) {
-      setPasswordOpen(false);
-      setMessage(error instanceof AccountPasswordRefusal
-        ? accountPasswordRefusalText(error.code)
-        : "无法读取账户登录方式，请稍后再试。");
-    }
-  };
   const openMobileEdit = () => {
     setEditTitle(gate.atlas.title);
     setEditDedication(gate.atlas.dedication);
@@ -827,7 +882,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                 <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
               </form>
             ) : null}
-            {passwordOpen ? <AccountPasswordPanel state={passwordState} email={passwordEmail} /> : null}
+            {passwordOpen ? <AccountPasswordPanel state={passwordState} surface={passwordSurface} onSurface={applyPasswordSurface} email={passwordEmail} /> : null}
           </div>
         </aside>
       ) : null}
@@ -875,7 +930,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                     <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
                   </form>
                 ) : (
-                  <AccountPasswordPanel state={passwordState} email={passwordEmail} className="account-sheet__form" />
+                  <AccountPasswordPanel state={passwordState} surface={accountSurface} onSurface={applyPasswordSurface} email={passwordEmail} className="account-sheet__form" />
                 )}
               </>
             )}
