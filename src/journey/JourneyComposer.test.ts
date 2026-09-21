@@ -12,8 +12,8 @@ import {
   resolvePendingMediaUploads,
   routePointFocusAfterRemoval,
   unknownCreateRecheckMessage,
-  uploadJourneyMedia,
 } from "./JourneyComposer";
+import { uploadJourneyMedia } from "./journeyMediaUpload";
 import { COMPACT_MOBILE_MEDIA_QUERY } from "./mobileLayout";
 import { moveRoutePoint, type RouteDraftPoint } from "./routeDraft";
 import type { Journey, JourneyInput } from "./types";

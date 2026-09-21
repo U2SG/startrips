@@ -25,10 +25,13 @@ import {
 } from "@tabler/icons-react";
 import { IconActionButton } from "../components/IconActionButton";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
+import { uploadMediaInParts } from "../api/multipartUpload";
 import {
-  uploadMediaInParts,
-  type UploadedMediaAsset,
-} from "../api/multipartUpload";
+  uploadJourneyMediaAssignments,
+  type JourneyMediaUploadAssignment,
+  type JourneyMediaUploadResult,
+  type UploadProgress,
+} from "./journeyMediaUpload";
 import {
   createJourney,
   JourneyApiError,
@@ -90,44 +93,13 @@ import {
 /** The upload allowlist the server enforces; every picker states the same one. */
 const MEDIA_FILE_ACCEPT = "image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm";
 
-type UploadProgress = {
-  fileName: string;
-  uploadedBytes: number;
-  totalBytes: number;
-};
-
 export type JourneySaveResult = {
   journey: Journey;
-  uploadedCount: number;
-  mediaErrors: Array<{ fileIndex: number; fileName: string; message: string }>;
-};
+} & Pick<JourneyMediaUploadResult, "uploadedCount" | "mediaErrors">;
 
 export type PendingJourneyMedia = {
   file: File;
   routePointDraftId: string | null;
-};
-
-type JourneyMediaUploadAssignment = {
-  file: File;
-  routePointId?: string;
-};
-
-type JourneyMediaUploadResult = Pick<
-  JourneySaveResult,
-  "uploadedCount" | "mediaErrors"
-> & {
-  // The completed assets, in upload order. Callers need the resolved id
-  // because the server deduplicates identical content inside a journey and
-  // then answers with the existing asset rather than a new one.
-  assets: UploadedMediaAsset[];
-};
-
-type UploadJourneyMediaOptions = {
-  journeyId: string;
-  routePointId?: string;
-  files: readonly File[];
-  upload?: typeof uploadMediaInParts;
-  onProgress?: (progress: UploadProgress) => void;
 };
 
 type PersistJourneyDraftOptions = {
@@ -138,76 +110,6 @@ type PersistJourneyDraftOptions = {
   upload?: typeof uploadMediaInParts;
   onProgress?: (progress: UploadProgress) => void;
 };
-
-type UploadJourneyMediaAssignmentsOptions = {
-  journeyId: string;
-  assignments: readonly JourneyMediaUploadAssignment[];
-  upload?: typeof uploadMediaInParts;
-  onProgress?: (progress: UploadProgress) => void;
-};
-
-async function uploadJourneyMediaAssignments({
-  journeyId,
-  assignments,
-  upload = uploadMediaInParts,
-  onProgress,
-}: UploadJourneyMediaAssignmentsOptions): Promise<JourneyMediaUploadResult> {
-  const totalBytes = assignments.reduce((sum, assignment) => sum + assignment.file.size, 0);
-  const mediaErrors: JourneySaveResult["mediaErrors"] = [];
-  const assets: UploadedMediaAsset[] = [];
-  let uploadedCount = 0;
-  let completedBytes = 0;
-
-  for (let fileIndex = 0; fileIndex < assignments.length; fileIndex += 1) {
-    const { file, routePointId } = assignments[fileIndex];
-    try {
-      const asset = await upload({
-        file,
-        fileName: file.name,
-        journeyId,
-        routePointId,
-        concurrency: 2,
-        onProgress: ({ uploadedBytes }) => onProgress?.({
-          fileName: file.name,
-          uploadedBytes: completedBytes + uploadedBytes,
-          totalBytes,
-        }),
-      });
-      if (asset) assets.push(asset);
-      uploadedCount += 1;
-    } catch (error) {
-      mediaErrors.push({
-        fileIndex,
-        fileName: file.name,
-        message: error instanceof Error ? error.message : "上传失败",
-      });
-    } finally {
-      completedBytes += file.size;
-      onProgress?.({
-        fileName: file.name,
-        uploadedBytes: completedBytes,
-        totalBytes,
-      });
-    }
-  }
-
-  return { uploadedCount, mediaErrors, assets };
-}
-
-export async function uploadJourneyMedia({
-  journeyId,
-  routePointId,
-  files,
-  upload = uploadMediaInParts,
-  onProgress,
-}: UploadJourneyMediaOptions): Promise<JourneyMediaUploadResult> {
-  return uploadJourneyMediaAssignments({
-    journeyId,
-    assignments: files.map((file) => ({ file, routePointId })),
-    upload,
-    onProgress,
-  });
-}
 
 export function resolvePendingMediaUploads(
   mediaFiles: readonly PendingJourneyMedia[],

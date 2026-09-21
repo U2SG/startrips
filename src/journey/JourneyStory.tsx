@@ -1165,6 +1165,15 @@ export function JourneyStory({
     });
   }
 
+  function notesPreventAction(savingMessage: string) {
+    const message = notesSaveState === "saving"
+      ? savingMessage
+      : notesDirty ? "还有未保存的感想，请先保存或放弃更改。" : null;
+    if (!message) return false;
+    notifyNotesGuard(message);
+    return true;
+  }
+
   function discardStoryNotes() {
     if (!journey || notesSaveState === "saving") return;
     setJourneyNoteDraft(undefined);
@@ -1266,14 +1275,7 @@ export function JourneyStory({
   }
 
   function navigateStory(targetJourneyId: string) {
-    if (notesSaveState === "saving") {
-      notifyNotesGuard("正在保存感想，完成后才能切换旅程。");
-      return;
-    }
-    if (notesDirty) {
-      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
-      return;
-    }
+    if (notesPreventAction("正在保存感想，完成后才能切换旅程。")) return;
     invalidatePlacementAnalysis();
     onNavigate(targetJourneyId);
   }
@@ -1412,14 +1414,7 @@ export function JourneyStory({
   }
 
   function exitMobileManageMode() {
-    if (notesSaveState === "saving") {
-      notifyNotesGuard("正在保存感想，完成后才能退出编辑。");
-      return false;
-    }
-    if (notesDirty) {
-      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
-      return false;
-    }
+    if (notesPreventAction("正在保存感想，完成后才能退出编辑。")) return false;
     if (mutationPending) return false;
     setDeleteState("idle");
     setDeleteMessage("");
@@ -1454,15 +1449,8 @@ export function JourneyStory({
       closeJourneyDelete();
       return;
     }
-    if (notesSaveState === "saving") {
-      setCloseBlocked(true);
-      notifyNotesGuard("正在保存感想，完成后即可安全退出。");
-      return;
-    }
-    if (notesDirty) {
-      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
-      return;
-    }
+    if (notesSaveState === "saving") setCloseBlocked(true);
+    if (notesPreventAction("正在保存感想，完成后即可安全退出。")) return;
     if (mobileLayout && mobileManageMode) {
       if (!exitMobileManageMode() && uploading) setCloseBlocked(true);
       return;
@@ -3413,14 +3401,7 @@ export function JourneyStory({
     if (!onDelete || uploadState.status === "uploading" || deleteState === "pending") {
       return;
     }
-    if (notesSaveState === "saving") {
-      notifyNotesGuard("正在保存感想，完成后才能删除旅程。");
-      return;
-    }
-    if (notesDirty) {
-      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
-      return;
-    }
+    if (notesPreventAction("正在保存感想，完成后才能删除旅程。")) return;
     setDeleteState("pending");
     setDeleteMessage("");
     try {
@@ -3960,26 +3941,12 @@ export function JourneyStory({
   );
 
   function openJourneyComposer() {
-    if (notesSaveState === "saving") {
-      notifyNotesGuard("正在保存感想，完成后才能编辑旅程。");
-      return;
-    }
-    if (notesDirty) {
-      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
-      return;
-    }
+    if (notesPreventAction("正在保存感想，完成后才能编辑旅程。")) return;
     onEdit?.(journey.id);
   }
 
   function openJourneyShare() {
-    if (notesSaveState === "saving") {
-      notifyNotesGuard("正在保存感想，完成后才能分享旅程。");
-      return;
-    }
-    if (notesDirty) {
-      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
-      return;
-    }
+    if (notesPreventAction("正在保存感想，完成后才能分享旅程。")) return;
     onShare?.(journey.id);
   }
 
@@ -4772,14 +4739,7 @@ export function JourneyStory({
               {canEditJourney ? <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={openJourneyComposer}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button> : null}
               {canShareJourney ? <button type="button" data-share-journey-trigger="true" disabled={mutationPending || deleteState !== "idle"} onClick={openJourneyShare}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享旅程</button> : null}
               {onDelete ? <button ref={journeyDeleteTriggerRef} className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => {
-                if (notesSaveState === "saving") {
-                  notifyNotesGuard("正在保存感想，完成后才能删除旅程。");
-                  return;
-                }
-                if (notesDirty) {
-                  notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
-                  return;
-                }
+                if (notesPreventAction("正在保存感想，完成后才能删除旅程。")) return;
                 setDeleteState("confirming");
                 setDeleteMessage("");
               }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
