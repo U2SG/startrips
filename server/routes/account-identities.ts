@@ -61,7 +61,13 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
     const session = await requireSession(context.req.raw);
     if (!session) return context.json({ error: "UNAUTHORIZED" }, 401);
     const methods = await listAccountIdentityMethods(session.user.id, usableProviderIds);
-    return context.json({ methods });
+    // Read live rather than snapshotting at construction: `link-intents` and
+    // `link/complete` gate on `linkableProviderIds.has(...)` at request time.
+    // Their format gate runs ahead of that set gate, so a configured id that
+    // `validProviderId` cannot parse is refused as an invalid request and is
+    // never advertised here. Every advertised provider is one those writes accept.
+    const availableLinkProviders = [...linkableProviderIds].filter(validProviderId).sort();
+    return context.json({ methods, availableLinkProviders });
   });
 
   routes.post("/reverify/password", async (context) => {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, like } from "drizzle-orm";
+import { Hono } from "hono";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { app } from "../app";
 import {
@@ -18,6 +19,7 @@ import {
   user as authUser,
 } from "../db/auth-schema";
 import { db, pool } from "../db/client";
+import { createAccountIdentityRoutes } from "../routes/account-identities";
 
 const TEST_ORIGIN = "http://127.0.0.1:5173";
 const PASSWORD = "test-only-password-345";
@@ -88,8 +90,10 @@ describe("account identity HTTP boundary", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as {
       methods: Array<Record<string, unknown>>;
+      availableLinkProviders: string[];
     };
     expect(body.methods).toHaveLength(1);
+    expect(body.availableLinkProviders).toEqual([]);
     expect(body.methods[0]).toMatchObject({
       type: "password",
       providerId: "credential",
@@ -273,6 +277,115 @@ describe("account identity HTTP boundary", () => {
     });
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({ error: "EMAIL_CHANGE_RECOVERY_REQUIRED" });
+  });
+
+  it("advertises exactly the providers the link-intent write path accepts", async () => {
+    await db.delete(rateLimit).where(like(
+      rateLimit.key,
+      `${ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_PREFIX}:%`,
+    ));
+
+    const configured = new Hono();
+    configured.route(
+      "/api/account-identities",
+      createAccountIdentityRoutes({ linkableProviderIds: new Set(["fake-provider"]) }),
+    );
+    const configuredRead = await configured.request(`${TEST_ORIGIN}/api/account-identities`, {
+      headers: headers(),
+    });
+    expect(configuredRead.status).toBe(200);
+    const configuredBody = await configuredRead.json() as {
+      methods: Array<Record<string, unknown>>;
+      availableLinkProviders: string[];
+    };
+    expect(configuredBody.availableLinkProviders).toEqual(["fake-provider"]);
+    // The method shape stays exactly what #345 shipped; capability discovery is additive.
+    expect(configuredBody.methods).toHaveLength(1);
+    expect(configuredBody.methods[0]).toMatchObject({
+      type: "password",
+      providerId: "credential",
+      verified: true,
+      usable: true,
+      canUnlink: false,
+    });
+    const configuredEncoded = JSON.stringify(configuredBody);
+    expect(configuredEncoded).not.toContain(PASSWORD);
+    expect(configuredEncoded).not.toMatch(/passwordHash|accessToken|refreshToken|idToken/i);
+
+    // A provider that is only usable for an existing link is never advertised
+    // as linkable, because the capability list reads the linkable set alone.
+    const split = new Hono();
+    split.route(
+      "/api/account-identities",
+      createAccountIdentityRoutes({
+        usableProviderIds: new Set(["usable-only-provider"]),
+        linkableProviderIds: new Set(["fake-provider"]),
+      }),
+    );
+    const splitRead = await split.request(`${TEST_ORIGIN}/api/account-identities`, {
+      headers: headers(),
+    });
+    expect(splitRead.status).toBe(200);
+    const splitBody = await splitRead.json() as { availableLinkProviders: string[] };
+    expect(splitBody.availableLinkProviders).toEqual(["fake-provider"]);
+
+    // A configured id the write path cannot parse is never advertised: its
+    // format gate runs before the configured-provider gate, so advertising it
+    // would offer a control that can only fail.
+    const malformed = new Hono();
+    malformed.route(
+      "/api/account-identities",
+      createAccountIdentityRoutes({
+        linkableProviderIds: new Set(["fake-provider", "Bad_Provider"]),
+      }),
+    );
+    const malformedRead = await malformed.request(`${TEST_ORIGIN}/api/account-identities`, {
+      headers: headers(),
+    });
+    expect(malformedRead.status).toBe(200);
+    const malformedBody = await malformedRead.json() as { availableLinkProviders: string[] };
+    expect(malformedBody.availableLinkProviders).toEqual(["fake-provider"]);
+
+    // One shared effective set: the advertised provider is accepted by the
+    // write path and the unadvertised one is refused as not configured. That
+    // provider gate runs before any proof is consumed, so the negative case
+    // needs no grant of its own.
+    const unadvertised = await split.request(`${TEST_ORIGIN}/api/account-identities/link-intents`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        providerId: "usable-only-provider",
+        reverificationToken: "unused-because-the-provider-gate-runs-first",
+      }),
+    });
+    expect(unadvertised.status).toBe(403);
+    expect(await unadvertised.json()).toEqual({ error: "IDENTITY_PROVIDER_NOT_CONFIGURED" });
+
+    const reverify = await split.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    expect(reverify.status).toBe(200);
+    const grant = await reverify.json() as { reverificationToken: string };
+    const advertised = await split.request(`${TEST_ORIGIN}/api/account-identities/link-intents`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        providerId: splitBody.availableLinkProviders[0],
+        reverificationToken: grant.reverificationToken,
+      }),
+    });
+    expect(advertised.status).toBe(200);
+    expect(await advertised.json()).toMatchObject({
+      actionId: expect.any(String),
+      intentToken: expect.any(String),
+    });
+
+    await db.delete(rateLimit).where(like(
+      rateLimit.key,
+      `${ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_PREFIX}:%`,
+    ));
   });
 
   it("fails link intent closed while no provider is configured", async () => {
