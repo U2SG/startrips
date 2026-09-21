@@ -222,17 +222,43 @@ function describeError(error) {
  * is not ours to do. The reason is one of the server's four allowlisted codes.
  */
 async function reportFailure(context, jobId, leaseToken, reason) {
+  let result;
   try {
-    await callWorkerRoute(context, "/api/cover-reveal-worker/jobs/" + jobId + "/fail", {
-      leaseToken,
-      reason,
-    });
-    context.log("attempt.failed", { jobId, reason });
+    result = await callWorkerRoute(
+      context,
+      "/api/cover-reveal-worker/jobs/" + jobId + "/fail",
+      { leaseToken, reason },
+    );
   } catch {
-    // The lease expiry reclaims the job anyway, so a lost `fail` costs a wait,
-    // never correctness. It must not mask the failure that caused it.
+    // Transport failure. The lease expiry reclaims the job anyway, so an
+    // undelivered report costs a wait rather than correctness — but the caller
+    // must not go on to say the attempt was reported.
     context.log("attempt.failed", { jobId, reason, reportDelivered: false });
+    return { delivered: false, leaseLost: false, error: null };
   }
+  if (result.ok) {
+    context.log("attempt.failed", { jobId, reason });
+    return { delivered: true, leaseLost: false, error: null };
+  }
+  // A long generation can lose its lease before it gets to report anything, and
+  // `fail` then answers 404/409 like every other verb. That is a lost lease,
+  // not a reported failure.
+  const error = result.payload?.error ?? null;
+  context.log("attempt.failed", { jobId, reason, reportDelivered: false, error });
+  return { delivered: false, leaseLost: isLeaseLost(result.status, error), error };
+}
+
+/**
+ * Settle this attempt, and let a lease lost in the very act of reporting win:
+ * the outcome has to describe what the server actually accepted.
+ */
+async function settleAttempt(context, job, leaseToken, reason, result) {
+  const report = await reportFailure(context, job.id, leaseToken, reason);
+  if (report.leaseLost) {
+    context.log("lease.lost", { jobId: job.id, error: report.error, step: "fail" });
+    return { outcome: "lease-lost", exitCode: EXIT_CODES.leaseLost, error: report.error };
+  }
+  return result;
 }
 
 async function downloadSource(context, url, destination, expectedBytes) {
@@ -288,9 +314,39 @@ export function buildGeneratorRequest({ job, output, sourcePath, outputPath }) {
  */
 const activeGenerators = new Set();
 
+/**
+ * A configured adapter is usually a wrapper script that launches the real model
+ * process, so signalling the spawned PID alone leaves the descendant running —
+ * burning CPU/GPU after the worker has already removed the directory it was
+ * writing into, and accumulating across scheduled runs. The child is therefore
+ * started as its own process-group leader and the whole group is signalled.
+ */
+function killProcessTree(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (typeof child.pid !== "number") return;
+  if (process.platform === "win32") {
+    // Windows has no process group to signal; `taskkill /T` is the tree walk.
+    try {
+      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    } catch {
+      child.kill("SIGKILL");
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already reaped.
+    }
+  }
+}
+
 export function terminateActiveGenerators() {
   for (const child of activeGenerators) {
-    child.kill("SIGKILL");
+    killProcessTree(child);
   }
   activeGenerators.clear();
 }
@@ -300,7 +356,12 @@ async function runGenerator(context, request) {
   return await new Promise((resolve) => {
     let child;
     try {
-      child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+      child = spawn(command, args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        // Its own process group, so a timeout or an interrupt can take the
+        // adapter's descendants down with it.
+        detached: process.platform !== "win32",
+      });
     } catch (error) {
       resolve({ ok: false, reason: describeError(error) });
       return;
@@ -316,7 +377,7 @@ async function runGenerator(context, request) {
       resolve(result);
     };
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      killProcessTree(child);
       finish({ ok: false, reason: "generator timed out" });
     }, timeoutMs);
     child.stdout.on("data", () => {});
@@ -403,15 +464,34 @@ async function completeWithRecovery(context, job, leaseToken, buffer) {
     if (error === "COVER_REVEAL_SOURCE_CHANGED") {
       return { outcome: "superseded", error };
     }
-    if (error === "COVER_REVEAL_OUTPUT_MISSING" && attempt < attempts) {
+    if (error === "COVER_REVEAL_OUTPUT_MISSING") {
       context.log("complete.output-missing", { jobId: job.id, attempt });
-      const resigned = await callWorkerRoute(
-        context,
-        "/api/cover-reveal-worker/jobs/" + job.id + "/output-upload",
-        { leaseToken },
-      );
+      if (attempt >= attempts) {
+        // The server leaves this job `leased` and retryable rather than
+        // settling it, so a spent budget means unresolved, never rejected.
+        return { outcome: "ambiguous", error };
+      }
+      let resigned;
+      try {
+        resigned = await callWorkerRoute(
+          context,
+          "/api/cover-reveal-worker/jobs/" + job.id + "/output-upload",
+          { leaseToken },
+        );
+      } catch {
+        return { outcome: "ambiguous", error };
+      }
       if (!resigned.ok) {
-        return { outcome: "rejected", error: resigned.payload?.error ?? error };
+        const resignError = resigned.payload?.error ?? error;
+        // The lease can be reclaimed between the completion and the re-sign.
+        // That is a lost lease, not a rejected output.
+        if (
+          isLeaseLost(resigned.status, resignError)
+          || resignError === "COVER_REVEAL_SOURCE_CHANGED"
+        ) {
+          return { outcome: "lease-lost", error: resignError };
+        }
+        return { outcome: "rejected", error: resignError };
       }
       const replayed = await uploadOutput(context, resigned.payload.upload, buffer);
       if (!replayed.ok) {
@@ -499,16 +579,21 @@ export async function runCoverRevealWorkerIteration(options) {
       return { outcome: "lease-lost", exitCode: EXIT_CODES.leaseLost, error };
     }
     context.log("source-read.refused", { jobId: job.id, error });
-    await reportFailure(context, job.id, leaseToken, "WORKER_SOURCE_UNREADABLE");
-    return { outcome: "source-unreadable", exitCode: EXIT_CODES.attemptFailed, error };
+    return await settleAttempt(context, job, leaseToken, "WORKER_SOURCE_UNREADABLE", {
+      outcome: "source-unreadable",
+      exitCode: EXIT_CODES.attemptFailed,
+      error,
+    });
   }
 
   const source = sourceRead.payload.source;
   const downloaded = await downloadSource(context, source.url, sourcePath, source.bytes);
   if (!downloaded.ok) {
     context.log("source.unreadable", { jobId: job.id, detail: downloaded.reason });
-    await reportFailure(context, job.id, leaseToken, "WORKER_SOURCE_UNREADABLE");
-    return { outcome: "source-unreadable", exitCode: EXIT_CODES.attemptFailed };
+    return await settleAttempt(context, job, leaseToken, "WORKER_SOURCE_UNREADABLE", {
+      outcome: "source-unreadable",
+      exitCode: EXIT_CODES.attemptFailed,
+    });
   }
   context.log("source.downloaded", { jobId: job.id, bytes: downloaded.bytes });
 
@@ -518,19 +603,38 @@ export async function runCoverRevealWorkerIteration(options) {
   );
   if (!generated.ok) {
     context.log("generator.failed", { jobId: job.id, detail: generated.reason });
-    await reportFailure(context, job.id, leaseToken, "WORKER_GENERATION_FAILED");
-    return { outcome: "generator-failed", exitCode: EXIT_CODES.attemptFailed };
+    return await settleAttempt(context, job, leaseToken, "WORKER_GENERATION_FAILED", {
+      outcome: "generator-failed",
+      exitCode: EXIT_CODES.attemptFailed,
+    });
   }
 
-  let buffer;
+  let stats;
   try {
-    await stat(outputPath);
-    buffer = await readFile(outputPath);
+    stats = await stat(outputPath);
   } catch {
     context.log("generator.no-output", { jobId: job.id });
-    await reportFailure(context, job.id, leaseToken, "WORKER_GENERATION_FAILED");
-    return { outcome: "generator-failed", exitCode: EXIT_CODES.attemptFailed };
+    return await settleAttempt(context, job, leaseToken, "WORKER_GENERATION_FAILED", {
+      outcome: "generator-failed",
+      exitCode: EXIT_CODES.attemptFailed,
+    });
   }
+  // The ceiling is applied to the file's size before its bytes are read, so a
+  // runaway generator cannot exhaust this process's memory and take the
+  // rejection, the failure report and the cleanup down with it.
+  if (stats.size > output.maxBytes) {
+    context.log("output.invalid", {
+      jobId: job.id,
+      reason: "OUTPUT_TOO_LARGE",
+      bytes: stats.size,
+    });
+    return await settleAttempt(context, job, leaseToken, "WORKER_GENERATION_FAILED", {
+      outcome: "output-invalid",
+      exitCode: EXIT_CODES.outputRejected,
+      reason: "OUTPUT_TOO_LARGE",
+    });
+  }
+  const buffer = await readFile(outputPath);
 
   const validated = validateGeneratedOutput({
     buffer,
@@ -539,12 +643,11 @@ export async function runCoverRevealWorkerIteration(options) {
   });
   if (!validated.ok) {
     context.log("output.invalid", { jobId: job.id, reason: validated.reason });
-    await reportFailure(context, job.id, leaseToken, "WORKER_GENERATION_FAILED");
-    return {
+    return await settleAttempt(context, job, leaseToken, "WORKER_GENERATION_FAILED", {
       outcome: "output-invalid",
       exitCode: EXIT_CODES.outputRejected,
       reason: validated.reason,
-    };
+    });
   }
   context.log("output.validated", { jobId: job.id, bytes: validated.bytes });
 
@@ -566,15 +669,20 @@ export async function runCoverRevealWorkerIteration(options) {
       return { outcome: "lease-lost", exitCode: EXIT_CODES.leaseLost, error };
     }
     context.log("output-upload.refused", { jobId: job.id, error });
-    await reportFailure(context, job.id, leaseToken, "WORKER_UPLOAD_FAILED");
-    return { outcome: "upload-failed", exitCode: EXIT_CODES.attemptFailed, error };
+    return await settleAttempt(context, job, leaseToken, "WORKER_UPLOAD_FAILED", {
+      outcome: "upload-failed",
+      exitCode: EXIT_CODES.attemptFailed,
+      error,
+    });
   }
 
   const uploaded = await uploadOutput(context, signed.payload.upload, buffer);
   if (!uploaded.ok) {
     context.log("upload.failed", { jobId: job.id, detail: uploaded.reason });
-    await reportFailure(context, job.id, leaseToken, "WORKER_UPLOAD_FAILED");
-    return { outcome: "upload-failed", exitCode: EXIT_CODES.attemptFailed };
+    return await settleAttempt(context, job, leaseToken, "WORKER_UPLOAD_FAILED", {
+      outcome: "upload-failed",
+      exitCode: EXIT_CODES.attemptFailed,
+    });
   }
   context.log("upload.complete", { jobId: job.id, bytes: validated.bytes });
 
@@ -596,8 +704,10 @@ export async function runCoverRevealWorkerIteration(options) {
     return { outcome: completion.outcome, exitCode: EXIT_CODES.leaseLost };
   }
   if (completion.outcome === "upload-failed") {
-    await reportFailure(context, job.id, leaseToken, "WORKER_UPLOAD_FAILED");
-    return { outcome: "upload-failed", exitCode: EXIT_CODES.attemptFailed };
+    return await settleAttempt(context, job, leaseToken, "WORKER_UPLOAD_FAILED", {
+      outcome: "upload-failed",
+      exitCode: EXIT_CODES.attemptFailed,
+    });
   }
   if (completion.outcome === "ambiguous") {
     // The bytes are uploaded and the job is still the server's to settle. The

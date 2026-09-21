@@ -79,6 +79,7 @@ async function startStubServer(plan = {}) {
   const requests = [];
   const uploads = [];
   const completeScript = [...(plan.complete ?? [])];
+  plan = { ...plan, outputUpload: [...(plan.outputUpload ?? [])] };
   const server = createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     const chunks = [];
@@ -164,6 +165,11 @@ async function startStubServer(plan = {}) {
         return;
       }
       if (url.pathname === base + "output-upload") {
+        const scripted = (plan.outputUpload ?? []).shift();
+        if (scripted) {
+          send(scripted.status, { error: scripted.error });
+          return;
+        }
         send(200, {
           upload: {
             url: serverOrigin + "/stub/upload",
@@ -198,6 +204,10 @@ async function startStubServer(plan = {}) {
         return;
       }
       if (url.pathname === base + "fail") {
+        if (plan.fail) {
+          send(plan.fail.status, { error: plan.fail.error });
+          return;
+        }
         send(200, { derivative: derivative("queued") });
         return;
       }
@@ -654,6 +664,72 @@ setInterval(() => {}, 1000);
         COVER_REVEAL_WORKER_TOKEN: "a-worker-credential-of-more-than-32-bytes",
       }),
     ).toThrow(/COVER_REVEAL_GENERATOR_COMMAND/);
+  });
+
+  it("reports an exhausted output-missing budget as unresolved, not rejected", async () => {
+    const server = await startStubServer({
+      complete: ["output-missing", "output-missing", "output-missing"],
+    });
+    try {
+      const generator = await writeGenerator("good.mjs", GOOD_GENERATOR);
+      const result = await runIteration(server, generator);
+      // The server leaves the job leased and retryable in this state, so
+      // calling it a rejection would tell the operator the wrong thing.
+      expect(result.outcome).toBe("ambiguous");
+      expect(result.exitCode).toBe(EXIT_CODES.unavailable);
+      expect(result.exitCode).not.toBe(EXIT_CODES.outputRejected);
+      expect(server.requests.some((entry) => entry.pathname.endsWith("/fail"))).toBe(
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps a lease lost while re-signing an upload as a lost lease", async () => {
+    const server = await startStubServer({
+      complete: ["output-missing", "ok"],
+      // The first signing succeeds; the re-sign after the missing output finds
+      // the claim reclaimed.
+      outputUpload: [null, { status: 409, error: "COVER_REVEAL_NOT_LEASED" }],
+    });
+    try {
+      const generator = await writeGenerator("good.mjs", GOOD_GENERATOR);
+      const result = await runIteration(server, generator);
+      expect(result.outcome).toBe("lease-lost");
+      expect(result.exitCode).toBe(EXIT_CODES.leaseLost);
+      expect(result.exitCode).not.toBe(EXIT_CODES.outputRejected);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not claim an attempt was reported when the fail itself is refused", async () => {
+    const server = await startStubServer({
+      fail: { status: 404, error: "COVER_REVEAL_NOT_CLAIMED" },
+    });
+    try {
+      const generator = await writeGenerator("failing.mjs", FAILING_GENERATOR);
+      const result = await runIteration(server, generator);
+      // The generation did fail, but the lease was gone before it could say so,
+      // and the outcome has to describe what the server accepted.
+      expect(result.outcome).toBe("lease-lost");
+      expect(result.exitCode).toBe(EXIT_CODES.leaseLost);
+      expect(result.exitCode).not.toBe(EXIT_CODES.attemptFailed);
+      const failLog = result.logs.find((entry) => entry.event === "attempt.failed");
+      expect(failLog?.reportDelivered).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("takes the generator's whole process tree down when it is interrupted", async () => {
+    // The adapter is usually a wrapper that launches the real model process, so
+    // the client starts it as a process-group leader and signals the group.
+    const source = await readFile(CLIENT_PATH, "utf8");
+    expect(source).toContain("detached: process.platform !== \"win32\"");
+    expect(source).toContain("process.kill(-child.pid");
+    expect(source).toContain("taskkill");
   });
 
   it("decides the output type from the bytes rather than from the file name", () => {

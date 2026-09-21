@@ -76,7 +76,13 @@ have been applied — is retried, because the protocol documents a repeated
 bounded retries are spent, the client exits `6` rather than guessing either way.
 `COVER_REVEAL_OUTPUT_MISSING` is the other, separate case: the protocol calls it
 retryable with the job left `leased`, so the client re-signs an upload and
-re-delivers the same bytes rather than regenerating them.
+re-delivers the same bytes rather than regenerating them. If that budget is
+spent too, the exit is `6` and not `5` — the server has left the job leased and
+retryable rather than settling it, so the outcome is unresolved, not rejected.
+
+A lease can also be lost part-way through any of this, including in the act of
+reporting a failure: a `fail` answered `404`/`409` means the claim was already
+someone else's, so the run exits `3` rather than claiming it reported anything.
 
 ## Environment
 
@@ -146,13 +152,21 @@ allowed but gives up that property.
 
 Everything else is a failure: a non-zero exit, a timeout, a missing output, an
 empty file, a file whose leading bytes are not the issued image type, or one
-over `maxBytes`. All of them are reported to the server as
+over `maxBytes` — which is checked against the file's size before its bytes are
+read, so a runaway generator cannot exhaust the client's memory instead of being
+rejected. All of them are reported to the server as
 `WORKER_GENERATION_FAILED` and consume one of `COVER_REVEAL_MAX_ATTEMPTS`
 attempts. Edge pixels are checked by the server inside `complete`, which
 measures the bytes it received and is the authority on them.
 
 Note what the adapter is *not* given: no URL, no lease token, no credential, no
 Journey id. It reads a local file and writes a local file.
+
+The adapter is started as its own process-group leader, and a timeout or an
+interrupt signals the whole group (`taskkill /T` on Windows). A wrapper script
+that launches a model process is the normal case, and killing only the wrapper
+would leave that process running after the worker has removed the directory it
+was writing into.
 
 ## Operating it
 
