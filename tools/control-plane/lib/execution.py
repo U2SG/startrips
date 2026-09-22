@@ -32,16 +32,22 @@ def snapshot():
         # CreationDate is what separates a live process from a later one that merely
         # reuses its number: Windows documents ProcessId and ParentProcessId as
         # reusable, so neither is an identity on its own.
-        # Query only carrier-like executables plus this observer and its direct
-        # parent. Even a property-bounded full Win32_Process enumeration can
-        # stall on Windows hosts with a sick/slow process provider; filtering at
-        # the provider keeps observation bounded without hiding relevant peers.
-        candidate_names = ('bash.exe', 'sh.exe', 'claude.exe', 'codex.exe', 'node.exe', 'nodejs.exe')
-        filter_terms = [f"Name='{name}'" for name in candidate_names]
-        filter_terms.extend(f'ProcessId={pid}' for pid in {os.getpid(), os.getppid()} if pid > 0)
-        process_filter = ' OR '.join(filter_terms)
+        # Discover candidate PIDs through the native process table first, then ask
+        # CIM only for those exact process ids. Name-filtered Win32_Process queries
+        # still intermittently enumerate/stall on this Windows host even after #474;
+        # a PID-bound query keeps CommandLine/CreationDate authority without making
+        # every selector wait on provider-wide name resolution.
+        candidate_names = ('bash', 'sh', 'claude', 'codex', 'node', 'nodejs')
+        names_ps = ','.join("'" + name + "'" for name in candidate_names)
+        own_pids = ','.join(str(pid) for pid in {os.getpid(), os.getppid()} if pid > 0)
         command = ('$ErrorActionPreference="Stop"; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); '
-                   f'@(Get-CimInstance Win32_Process -Filter "{process_filter}" '
+                   f'$candidateNames=@({names_ps}); '
+                   '$candidateIds=@(Get-Process -Name $candidateNames -ErrorAction SilentlyContinue | '
+                   'Select-Object -ExpandProperty Id); '
+                   f'$candidateIds += @({own_pids}); '
+                   '$candidateIds=@($candidateIds | Where-Object { $_ -gt 0 } | Sort-Object -Unique); '
+                   '$processFilter=($candidateIds | ForEach-Object { "ProcessId=" + $_ }) -join " OR "; '
+                   '@(Get-CimInstance Win32_Process -Filter $processFilter '
                    '-Property ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop | '
                    'Select-Object ProcessId,ParentProcessId,Name,CommandLine,'
                    "@{n='Started';e={if ($_.CreationDate) { $_.CreationDate.ToString('o') } else { '' }}}) | ConvertTo-Json -Compress")

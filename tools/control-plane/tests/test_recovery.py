@@ -375,7 +375,7 @@ class ProcessClassificationCases(unittest.TestCase):
             self.assertEqual([], execution.competitors(
                 rows, self.root, 3, lane='experience'))
 
-    def test_windows_snapshot_filters_carriers_and_projects_required_cim_fields(self):
+    def test_windows_snapshot_prefilters_native_processes_then_queries_cim_by_pid(self):
         completed = subprocess.CompletedProcess([], 0, stdout='[]', stderr='')
         with mock.patch.object(execution.os, 'name', 'nt'), \
                 mock.patch.object(execution.os, 'getpid', return_value=4321), \
@@ -383,18 +383,17 @@ class ProcessClassificationCases(unittest.TestCase):
                 mock.patch.object(execution.subprocess, 'run', return_value=completed) as run:
             self.assertEqual([], execution.snapshot())
         command = run.call_args.args[0][-1]
-        self.assertIn('Get-CimInstance Win32_Process -Filter "', command)
-        for name in ('bash.exe', 'sh.exe', 'claude.exe', 'codex.exe', 'node.exe', 'nodejs.exe'):
-            self.assertIn(f"Name='{name}'", command)
-        self.assertIn('ProcessId=4321', command)
-        self.assertIn('ProcessId=1234', command)
+        self.assertIn('Get-Process -Name $candidateNames -ErrorAction SilentlyContinue', command)
+        for name in ('bash', 'sh', 'claude', 'codex', 'node', 'nodejs'):
+            self.assertIn("'" + name + "'", command)
+        self.assertIn('$candidateIds += @(4321,1234)', command)
+        self.assertIn('"ProcessId=" + $_', command)
+        self.assertIn('Get-CimInstance Win32_Process -Filter $processFilter', command)
         self.assertIn(
             '-Property ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop',
             command)
-        self.assertNotIn(
-            'Get-CimInstance Win32_Process -Property '
-            'ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop',
-            command)
+        self.assertNotIn("Name='bash.exe'", command)
+        self.assertNotIn('Get-CimInstance Win32_Process -Filter "Name=', command)
 
     def test_occupied_reobserves_process_birth_race(self):
         first = self.base + [process(10, 1, 'bash.exe', None)]
