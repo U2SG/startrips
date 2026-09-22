@@ -31,12 +31,10 @@ type Props = {
   canNavigateNext?: boolean;
 };
 
-function containsMediaPoint(element: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement, x: number, y: number) {
+function containsMediaPoint(element: HTMLImageElement | HTMLCanvasElement, x: number, y: number) {
   const rect = element.getBoundingClientRect();
-  const width = element instanceof HTMLImageElement ? element.naturalWidth
-    : element instanceof HTMLVideoElement ? element.videoWidth : element.width;
-  const height = element instanceof HTMLImageElement ? element.naturalHeight
-    : element instanceof HTMLVideoElement ? element.videoHeight : element.height;
+  const width = element instanceof HTMLImageElement ? element.naturalWidth : element.width;
+  const height = element instanceof HTMLImageElement ? element.naturalHeight : element.height;
   if (!width || !height || !rect.width || !rect.height) return false;
   const scale = Math.min(rect.width / width, rect.height / height);
   const left = rect.left + (rect.width - width * scale) / 2;
@@ -436,12 +434,12 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
       props.onNavigate?.(direction, accessibleActivation);
     }
   };
-  const handlePictureClick = (event: MouseEvent<HTMLImageElement | HTMLVideoElement>) => {
+  // #489 A2: only a photograph resolves a click into navigation. The presented
+  // video's own surface belongs to its transport, so this never binds to it and
+  // no longer has to guess where a native control strip begins.
+  const handlePictureClick = (event: MouseEvent<HTMLImageElement>) => {
     if (!active) return;
     const media = event.currentTarget;
-    const rect = media.getBoundingClientRect();
-    if (media instanceof HTMLVideoElement && media.controls
-      && event.clientY >= rect.bottom - Math.min(72, rect.height * .25)) return;
     if (event.detail !== 0 && !containsMediaPoint(media, event.clientX, event.clientY)) return;
     event.stopPropagation();
     if (props.onNavigate) {
@@ -460,28 +458,37 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
       return;
     }
     if (!(target instanceof HTMLImageElement || target instanceof HTMLCanvasElement || target instanceof HTMLVideoElement)) return;
-    const rect = target.getBoundingClientRect();
-    // Match Story's native control strip guard. A scrubber or playback control
-    // remains interactive even when the contained picture has space below it.
-    if (target instanceof HTMLVideoElement && target.controls
-      && event.clientY >= rect.bottom - Math.min(72, rect.height * 0.25)) return;
+    // #489 A2: the presented transport owns its whole element, letterbox
+    // included. Closing Story from there would race the browser's own
+    // click-to-play, so the video surface never resolves into a backdrop.
+    if (target instanceof HTMLVideoElement) return;
     if (!containsMediaPoint(target, event.clientX, event.clientY)) props.onBackdropClick();
   };
   const stablePictureContains = (x: number, y: number) => {
     const surface = hitSurface.current;
     if (!surface) return false;
     const rect = surface.getBoundingClientRect();
+    // Only a photograph owns this surface now, so its aperture comes from the
+    // presented image itself rather than from a retained video frame.
     const asset = props.media.find((item) => item.id === props.currentId);
     const image = imageNodes.current[assigned.indexOf(props.currentId)];
-    const frame = props.currentId ? frames.current.get(props.currentId)?.canvas : null;
-    const width = asset?.displayWidth || (currentVideo ? frame?.width : image?.naturalWidth) || 0;
-    const height = asset?.displayHeight || (currentVideo ? frame?.height : image?.naturalHeight) || 0;
+    const width = asset?.displayWidth || image?.naturalWidth || 0;
+    const height = asset?.displayHeight || image?.naturalHeight || 0;
     if (!width || !height) return false;
     const scale = Math.min(rect.width / width, rect.height / height);
     return Math.abs(x - (rect.left + rect.width / 2)) <= width * scale / 2
       && Math.abs(y - (rect.top + rect.height / 2)) <= height * scale / 2;
   };
-  return <div ref={root} className="story-media-pages" data-story-media-pages tabIndex={-1}
+  // #489 A1: a video page has no focusable picture slot and no longer borrows a
+  // click surface, so the stage itself carries the advertised arrow navigation.
+  // `data-current-media-kind` publishes which input owns the presented picture,
+  // so QA and review read the actual contract instead of inferring it.
+  const videoStageNavigation = Boolean(currentVideo && canNavigate);
+  return <div ref={root} className="story-media-pages" data-story-media-pages
+    tabIndex={videoStageNavigation ? 0 : -1}
+    role={videoStageNavigation ? "group" : undefined}
+    aria-label={videoStageNavigation ? "视频。左右方向键切换媒体" : undefined}
+    aria-keyshortcuts={videoStageNavigation ? "ArrowLeft ArrowRight" : undefined}
     onKeyDown={(event) => {
       // A video has no focusable picture slot. Keep arrow navigation on the
       // stable stage without taking keys away from its native controls.
@@ -499,14 +506,12 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
         return;
       }
       const direction = navigationDirection(hitSurface.current, event.clientX);
-      const bounds = hitSurface.current.getBoundingClientRect();
-      const nativeControls = currentVideo && event.clientY >= bounds.bottom - Math.min(72, bounds.height * .25);
-      event.currentTarget.dataset.clickDirection = nativeControls ? ""
-        : direction < 0 && props.canNavigatePrevious ? "previous"
-          : direction > 0 && props.canNavigateNext ? "next" : "";
+      event.currentTarget.dataset.clickDirection = direction < 0 && props.canNavigatePrevious ? "previous"
+        : direction > 0 && props.canNavigateNext ? "next" : "";
     } : undefined}
     onPointerLeave={(event) => { delete event.currentTarget.dataset.clickDirection; }}
     data-click-navigation={props.onNavigate ? "true" : undefined}
+    data-current-media-kind={props.currentId ? (currentVideo ? "video" : "image") : undefined}
     data-media-presentation={movingId ? "moving" : props.incomingId ? "waiting" : "settled"}>
     {assigned.map((id, slot) => {
       const asset = props.media.find((item) => item.id === id);
@@ -587,9 +592,12 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
         <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined} />
       </div>;
     })}
-    {props.onNavigate && active && currentReady ? <div ref={hitSurface}
+    {/* #489 A1: a photograph's stationary click surface must never cover the
+        presented video. A clipped strip still left the transport's own picture
+        behind a navigation layer, so the video keeps its whole surface and
+        navigates by swipe or the arrow keys the stage advertises instead. */}
+    {props.onNavigate && active && currentReady && !currentVideo ? <div ref={hitSurface}
       className="story-media-pages__hit-surface" data-story-hit-surface aria-hidden="true"
-      style={currentVideo ? { clipPath: "inset(0 0 min(72px, 25%) 0)" } : undefined}
       onClick={(event) => {
         event.stopPropagation();
         if (!stablePictureContains(event.clientX, event.clientY)) { props.onBackdropClick?.(); return; }
@@ -604,7 +612,10 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
         preload: active && (binding.id === props.currentId || binding.id === props.incomingId) ? "auto" : "metadata",
         hidden: !videoVisible, "aria-hidden": !videoVisible,
         controls: videoVisible && binding.id === props.currentId,
-        onClick: videoVisible && props.onNavigate ? handlePictureClick : videoSource.props.onClick,
+        // #489 A2: the presented transport owns its own clicks. Play/pause,
+        // scrub and the native controls stay reachable; navigation never
+        // intercepts them.
+        onClick: videoSource.props.onClick,
         // Only the presented video is a shared-element target. Priming and
         // adjacent preparation never masquerade as a viewed media asset.
         ...{

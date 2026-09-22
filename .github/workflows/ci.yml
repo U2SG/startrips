@@ -225,6 +225,10 @@ jobs:
             commands: |
               login-media::QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification
               composer-playback-preview::pnpm qa:composer-playback-preview
+          - name: story-media
+            suites: "|story-media-handoff|"
+            commands: |
+              story-media-handoff::pnpm qa:story-media-handoff
           - name: labels-recovery
             suites: "|city-label-anchoring|recovery-surfaces|"
             commands: |
