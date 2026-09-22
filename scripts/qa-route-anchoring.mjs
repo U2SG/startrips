@@ -49,6 +49,18 @@ const shortLegQaUrl = new URL(
 const LEG_BULGE_FRACTION = 0.35;
 const LEG_BULGE_FLOOR_PX = 1.5;
 
+// #478 mixed-leg regression. This fixture is intentionally separate from the
+// #193 route above so the existing optics/focus assertions keep their pinned
+// identities while the whisker check can use LA → Vegas → Kingman → Page →
+// Grand Canyon exactly.
+const whiskerRouteId = "qa-route-southwest-whisker";
+const whiskerFocus = { lat: 35.75, lon: -114.15 };
+const whiskerQaUrl = new URL(
+  `/?qaState=journey-routes&qaQuality=high&qaFocusLat=${whiskerFocus.lat}&qaFocusLon=${whiskerFocus.lon}`,
+  baseUrl,
+).toString();
+const ANCHOR_HALF_PLANE_TOLERANCE_PX = 0.35;
+
 const browser = await launchQaBrowser({
   headless: true,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
@@ -268,6 +280,93 @@ async function measureLegShape(page, routeIdentifier) {
       projectedGlobeRadiusPx: window.__particleEarthDebug?.().projectedGlobeRadiusPx ?? 0,
       arcLift: Number(host?.dataset.routeArcLift),
     };
+  }, routeIdentifier);
+}
+
+/**
+ * #478: grade the projected path on both sides of every interior Route Point.
+ * The last incoming samples must remain on the pre-anchor half-plane and the
+ * first outgoing samples on the post-anchor half-plane of their shared screen
+ * tangent. A tiny spline whisker is exactly a sample that crosses that plane,
+ * turns around, then returns to the main path.
+ */
+async function measureAnchorPassage(page, routeIdentifier) {
+  return page.evaluate((identifier) => {
+    const group = document.querySelector(`[data-journey-route="${identifier}"]`);
+    if (!group) return { error: "whisker route group not rendered" };
+    const legs = [...group.querySelectorAll(".particle-earth-route__leg")];
+    if (legs.length < 2) return { error: "whisker route drew fewer than two legs" };
+
+    const fragmentsOf = (leg) => {
+      const fragments = [];
+      for (const command of (leg.getAttribute("d") ?? "").match(/[ML]-?[\d.]+ -?[\d.]+/g) ?? []) {
+        const [x, y] = command.slice(1).split(" ").map(Number);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        if (command.startsWith("M") || fragments.length === 0) fragments.push([]);
+        fragments[fragments.length - 1].push({ x, y });
+      }
+      return fragments.filter((fragment) => fragment.length >= 2);
+    };
+    const distance = (left, right) => Math.hypot(left.x - right.x, left.y - right.y);
+    const measurements = [];
+
+    for (let anchorIndex = 1; anchorIndex < legs.length; anchorIndex += 1) {
+      const marker = group.querySelector(`[data-route-point-index="${anchorIndex}"]`);
+      if (!marker || marker.style.display === "none") continue;
+      const anchor = {
+        x: Number(marker.dataset.anchorX),
+        y: Number(marker.dataset.anchorY),
+      };
+      if (!Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) continue;
+
+      const incoming = fragmentsOf(legs[anchorIndex - 1])
+        .map((fragment) => ({ fragment, distance: distance(fragment.at(-1), anchor) }))
+        .sort((left, right) => left.distance - right.distance)[0];
+      const outgoing = fragmentsOf(legs[anchorIndex])
+        .map((fragment) => ({ fragment, distance: distance(fragment[0], anchor) }))
+        .sort((left, right) => left.distance - right.distance)[0];
+      if (!incoming || !outgoing || incoming.distance > 1.5 || outgoing.distance > 1.5) continue;
+
+      const previous = incoming.fragment.at(-2);
+      const next = outgoing.fragment[1];
+      const incomingVector = { x: anchor.x - previous.x, y: anchor.y - previous.y };
+      const outgoingVector = { x: next.x - anchor.x, y: next.y - anchor.y };
+      const incomingLength = Math.hypot(incomingVector.x, incomingVector.y);
+      const outgoingLength = Math.hypot(outgoingVector.x, outgoingVector.y);
+      if (incomingLength < 0.01 || outgoingLength < 0.01) continue;
+      let tangent = {
+        x: (incomingVector.x / incomingLength) + (outgoingVector.x / outgoingLength),
+        y: (incomingVector.y / incomingLength) + (outgoingVector.y / outgoingLength),
+      };
+      let tangentLength = Math.hypot(tangent.x, tangent.y);
+      if (tangentLength < 0.01) {
+        tangent = { x: outgoingVector.x, y: outgoingVector.y };
+        tangentLength = outgoingLength;
+      }
+      tangent.x /= tangentLength;
+      tangent.y /= tangentLength;
+      if ((tangent.x * outgoingVector.x) + (tangent.y * outgoingVector.y) < 0) {
+        tangent.x *= -1;
+        tangent.y *= -1;
+      }
+
+      const side = (point) => (
+        ((point.x - anchor.x) * tangent.x) + ((point.y - anchor.y) * tangent.y)
+      );
+      const incomingLocal = incoming.fragment.slice(-Math.min(8, incoming.fragment.length));
+      const outgoingLocal = outgoing.fragment.slice(0, Math.min(8, outgoing.fragment.length));
+      const incomingCrossPx = Math.max(0, ...incomingLocal.map(side));
+      const outgoingCrossPx = Math.max(0, ...outgoingLocal.map((point) => -side(point)));
+      measurements.push({
+        anchorIndex,
+        incomingCrossPx,
+        outgoingCrossPx,
+        incomingEndpointErrorPx: incoming.distance,
+        outgoingEndpointErrorPx: outgoing.distance,
+      });
+    }
+
+    return { legCount: legs.length, measurements };
   }, routeIdentifier);
 }
 
@@ -674,6 +773,40 @@ try {
   if (failures.length > 0) {
     throw new Error(`[qa-route-anchoring] ${failures.join("; ")}`);
   }
+
+  // #478: use the exact mixed-leg Southwest sequence and inspect projected
+  // samples around every interior Route Point. The route is centred so all
+  // three joins are visible; missing measurements are a QA failure, not a skip.
+  await page.goto(whiskerQaUrl, { waitUntil: "domcontentloaded" });
+  await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()));
+  await page.waitForFunction((identifier) => Boolean(
+    document.querySelector(`[data-journey-route="${identifier}"] .particle-earth-route__leg`),
+  ), whiskerRouteId, { timeout: 30_000 });
+  await page.waitForTimeout(400);
+  await setZoom(page, 2);
+  await waitForRenderedFrame(page);
+  const anchorPassage = await measureAnchorPassage(page, whiskerRouteId);
+  if (anchorPassage.error) throw new Error(`[qa-route-anchoring] ${anchorPassage.error}`);
+  console.log("[qa-route-anchoring] southwest-whisker", JSON.stringify(anchorPassage));
+  if (anchorPassage.measurements.length !== 3) {
+    failures.push(`southwest whisker fixture measured ${anchorPassage.measurements.length}/3 interior Route Points`);
+  }
+  for (const measurement of anchorPassage.measurements) {
+    if (measurement.incomingCrossPx > ANCHOR_HALF_PLANE_TOLERANCE_PX) {
+      failures.push(`southwest Route Point ${measurement.anchorIndex}: incoming spline crossed ${measurement.incomingCrossPx.toFixed(2)}px past the shared anchor half-plane`);
+    }
+    if (measurement.outgoingCrossPx > ANCHOR_HALF_PLANE_TOLERANCE_PX) {
+      failures.push(`southwest Route Point ${measurement.anchorIndex}: outgoing spline crossed ${measurement.outgoingCrossPx.toFixed(2)}px back across the shared anchor half-plane`);
+    }
+  }
+  if (pageErrors.length > 0 || consoleErrors.length > 0) {
+    failures.push(`page errors: ${JSON.stringify({ pageErrors, consoleErrors })}`);
+  }
+  if (failures.length > 0) {
+    throw new Error(`[qa-route-anchoring] ${failures.join("; ")}`);
+  }
+
   // #242: the reported symptom is a shape defect that appears as a Journey
   // rotates toward the limb, at overview scale rather than max zoom only. Same
   // page, new framing on the synthetic short-leg chain.

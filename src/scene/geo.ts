@@ -108,6 +108,11 @@ type RouteSplineAnchor = {
   direction: Vector3;
   tangent: Vector3;
   turnScale: number;
+  /**
+   * Shorter of the two legs meeting this anchor. An interior handle may not
+   * borrow more room than both adjacent legs can support (#478).
+   */
+  adjacentLegAngle: number;
 };
 
 /**
@@ -120,13 +125,19 @@ type RouteSplineAnchor = {
 function buildRouteSplineAnchors(directions: readonly Vector3[]) {
   return directions.map((direction, index): RouteSplineAnchor => {
     if (directions.length < 2) {
-      return { direction, tangent: new Vector3(), turnScale: 0 };
+      return {
+        direction,
+        tangent: new Vector3(),
+        turnScale: 0,
+        adjacentLegAngle: 0,
+      };
     }
     if (index === 0) {
       return {
         direction,
         tangent: tangentToward(direction, directions[1]),
         turnScale: 1,
+        adjacentLegAngle: angularDistance(direction, directions[1]),
       };
     }
     if (index === directions.length - 1) {
@@ -134,6 +145,7 @@ function buildRouteSplineAnchors(directions: readonly Vector3[]) {
         direction,
         tangent: tangentToward(direction, directions[index - 1]).multiplyScalar(-1),
         turnScale: 1,
+        adjacentLegAngle: angularDistance(directions[index - 1], direction),
       };
     }
 
@@ -154,14 +166,24 @@ function buildRouteSplineAnchors(directions: readonly Vector3[]) {
       tangent.copy(outgoing.lengthSq() > 0 ? outgoing : incoming);
     }
     if (tangent.lengthSq() > 0) tangent.normalize();
-    return { direction, tangent, turnScale };
+    return {
+      direction,
+      tangent,
+      turnScale,
+      adjacentLegAngle: Math.min(previousAngle, nextAngle),
+    };
   });
 }
 
-function splineHandleAngle(legAngle: number, turnScale: number) {
+function splineHandleAngle(
+  legAngle: number,
+  adjacentLegAngle: number,
+  turnScale: number,
+) {
   return Math.min(
     MAX_ROUTE_SPLINE_HANDLE_ANGLE,
     legAngle * MAX_ROUTE_SPLINE_HANDLE_RATIO,
+    adjacentLegAngle * MAX_ROUTE_SPLINE_HANDLE_RATIO,
   ) * turnScale;
 }
 
@@ -750,10 +772,18 @@ export function planRouteArcLegs(
     const geodesicStart = tangentToward(start, end);
     const geodesicEnd = tangentToward(end, start).multiplyScalar(-1);
     const startHandleAngle = startAnchor.tangent.dot(geodesicStart) > 0
-      ? splineHandleAngle(angle, startAnchor.turnScale)
+      ? splineHandleAngle(
+        angle,
+        startAnchor.adjacentLegAngle,
+        startAnchor.turnScale,
+      )
       : 0;
     const endHandleAngle = endAnchor.tangent.dot(geodesicEnd) > 0
-      ? splineHandleAngle(angle, endAnchor.turnScale)
+      ? splineHandleAngle(
+        angle,
+        endAnchor.adjacentLegAngle,
+        endAnchor.turnScale,
+      )
       : 0;
     const shape: RouteSplineLegShape = {
       start,

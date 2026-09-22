@@ -552,6 +552,79 @@ describe("route arc geometry", () => {
     );
   });
 
+  it("bounds southwest shared handles by both adjacent legs without crossing the anchor half-plane (#478)", () => {
+    const points = [
+      { lat: 34.0522, lon: -118.2437 }, // Los Angeles
+      { lat: 36.1699, lon: -115.1398 }, // Las Vegas
+      { lat: 35.1894, lon: -114.0530 }, // Kingman
+      { lat: 36.9147, lon: -111.4558 }, // Page
+      { lat: 36.1069, lon: -112.1129 }, // Grand Canyon
+    ];
+    const maxSegmentAngle = Math.PI / 360;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, {});
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, {});
+
+    expect(plans).toHaveLength(points.length - 1);
+    expect(legs).toHaveLength(points.length - 1);
+
+    for (let anchorIndex = 1; anchorIndex < points.length - 1; anchorIndex += 1) {
+      const incomingPlan = plans[anchorIndex - 1];
+      const outgoingPlan = plans[anchorIndex];
+      const incomingLeg = legs[anchorIndex - 1];
+      const outgoingLeg = legs[anchorIndex];
+      const sharedTangent = incomingPlan.endTangent;
+      const anchor = incomingPlan.end;
+      const adjacentBound = Math.min(incomingPlan.angle, outgoingPlan.angle)
+        * MAX_ROUTE_SPLINE_HANDLE_RATIO;
+
+      expect(sharedTangent.distanceTo(outgoingPlan.startTangent)).toBeLessThan(1e-12);
+      expect(incomingPlan.endHandleAngle).toBeCloseTo(outgoingPlan.startHandleAngle, 12);
+      expect(incomingPlan.endHandleAngle)
+        .toBeLessThanOrEqual(Math.min(MAX_ROUTE_SPLINE_HANDLE_ANGLE, adjacentBound) + 1e-12);
+
+      if (incomingPlan.endHandleAngle > 0) {
+        // An active shared handle must keep both adjacent spans on their own
+        // side of the rendered shared-tangent plane for the whole span.
+        for (let vertex = 0; vertex < routeArcVertexCount(incomingLeg); vertex += 1) {
+          const direction = sampleAt(incomingLeg, vertex, 1, 0).normalize();
+          const side = direction
+            .clone()
+            .addScaledVector(anchor, -anchor.dot(direction))
+            .dot(sharedTangent);
+          expect(side).toBeLessThanOrEqual(1e-6);
+        }
+        for (let vertex = 0; vertex < routeArcVertexCount(outgoingLeg); vertex += 1) {
+          const direction = sampleAt(outgoingLeg, vertex, 1, 0).normalize();
+          const side = direction
+            .clone()
+            .addScaledVector(anchor, -anchor.dot(direction))
+            .dot(sharedTangent);
+          expect(side).toBeGreaterThanOrEqual(-1e-6);
+        }
+      } else {
+        // A sufficiently sharp/asymmetric turn can make the requested shared
+        // tangent unable to advance along one adjacent leg. That is the
+        // intentional clean-corner fallback: both handles collapse, so the
+        // unrendered shared tangent is no longer a meaningful half-plane for
+        // the outgoing leg. Prove the actual two geodesic spans remain locally
+        // monotonic instead of weakening the no-backtracking invariant.
+        expect(outgoingPlan.startHandleAngle).toBe(0);
+        let previousIncomingDistance = Number.POSITIVE_INFINITY;
+        for (let vertex = 0; vertex < routeArcVertexCount(incomingLeg); vertex += 1) {
+          const distance = sampleAt(incomingLeg, vertex, 1, 0).normalize().angleTo(anchor);
+          expect(distance).toBeLessThanOrEqual(previousIncomingDistance + 1e-6);
+          previousIncomingDistance = distance;
+        }
+        let previousOutgoingDistance = -1e-6;
+        for (let vertex = 0; vertex < routeArcVertexCount(outgoingLeg); vertex += 1) {
+          const distance = sampleAt(outgoingLeg, vertex, 1, 0).normalize().angleTo(anchor);
+          expect(distance + 1e-6).toBeGreaterThanOrEqual(previousOutgoingDistance);
+          previousOutgoingDistance = distance;
+        }
+      }
+    }
+  });
+
   it("removes the independent-leg hard kink in the southwest-US regression fixture (#352)", () => {
     const points = [
       { lat: 32.7157, lon: -117.1611 }, // San Diego

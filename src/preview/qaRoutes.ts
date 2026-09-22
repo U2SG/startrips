@@ -57,6 +57,21 @@ export const globeQaRoutes: JourneyRoute[] = [
     ],
   },
   {
+    // #478 fixture: mixed adjacent-leg lengths around the Route Points that
+    // exposed the post-#361 whisker/hook regression. Keep this route separate
+    // from qa-route-southwest because #193/#219 optics assertions pin that
+    // older fixture's point identities and focus semantics.
+    id: "qa-route-southwest-whisker",
+    color: "#f4ce73",
+    points: [
+      { id: "qa-whisker-1", lat: 34.0522, lon: -118.2437, isStop: true, label: "Los Angeles" },
+      { id: "qa-whisker-2", lat: 36.1699, lon: -115.1398, isStop: true, label: "Las Vegas" },
+      { id: "qa-whisker-3", lat: 35.1894, lon: -114.0530, isStop: false, label: "Kingman" },
+      { id: "qa-whisker-4", lat: 36.9147, lon: -111.4558, isStop: true, label: "Page" },
+      { id: "qa-whisker-5", lat: 36.1069, lon: -112.1129, isStop: true, label: "Grand Canyon" },
+    ],
+  },
+  {
     // #242 fixture: a SYNTHETIC chain of eight evenly spaced ~0.5 degree legs,
     // generated from one origin and a constant step rather than taken from any
     // real itinerary. Short legs are where the old sqrt lift policy stood
