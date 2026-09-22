@@ -445,95 +445,133 @@ async function dragBlankGlobe(page) {
 }
 
 try {
-  const photoRun = await openFocusAtlas({ realScene: true });
-  const { page } = photoRun;
-  const beforeFocus = await sceneFocusSnapshot(page);
-  const controlsBefore = await page.locator(".living-atlas-globe__controls").count();
+  // Grade real pointer/keyboard interaction against whichever active-Journey
+  // Route Point the current real camera actually exposes. Route Point context
+  // must not require QA to move the product camera to an otherwise off-screen
+  // record just to manufacture a hit target. The content-specific round below
+  // still pins the canonical photo fixture.
+  const interactionRun = await openFocusAtlas({ realScene: true });
+  const interactionPage = interactionRun.page;
+  const interactionBeforeFocus = await sceneFocusSnapshot(interactionPage);
 
   // Owner P2: the globe can expose hit targets for sibling Journeys, but Route
   // Point context is subordinate to the existing semantic active-Journey owner.
   // Attempting B while A is active must not reveal B or move focus/camera state.
-  const siblingTrigger = page.locator(`[data-qa-route-point-context-activate="${siblingPointId}"]`);
+  const siblingTrigger = interactionPage.locator(`[data-qa-route-point-context-activate="${siblingPointId}"]`);
   await siblingTrigger.waitFor({ state: "attached", timeout: 5_000 });
   await siblingTrigger.evaluate((button) => button.click());
-  await page.waitForTimeout(80);
-  const afterSiblingAttempt = await sceneFocusSnapshot(page);
+  const afterSiblingAttempt = await sceneFocusSnapshot(interactionPage);
   const siblingState = {
-    contextCount: await page.locator("[data-route-point-context]").count(),
+    contextCount: await interactionPage.locator("[data-route-point-context]").count(),
     activeRoute: afterSiblingAttempt.activeRoute,
   };
-  record("sibling Journey Route Point cannot split semantic ownership", { beforeFocus, afterSiblingAttempt, siblingState },
+  record("sibling Journey Route Point cannot split semantic ownership", {
+    beforeFocus: interactionBeforeFocus, afterSiblingAttempt, siblingState,
+  },
     siblingState.contextCount === 0
     && siblingState.activeRoute === journeyId
-    && JSON.stringify(beforeFocus) === JSON.stringify(afterSiblingAttempt));
+    && JSON.stringify(interactionBeforeFocus) === JSON.stringify(afterSiblingAttempt));
 
-  const markerClick = await clickRoutePointMarker(page, journeyId, photoPointId);
-  const context = page.locator("[data-route-point-context]");
-  await context.waitFor({ state: "visible", timeout: 5_000 });
-  const markerActivation = await routePointActivationEvidence(page);
-  const selectedMarkerRole = await page.locator(
-    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${photoPointId}"]`,
+  // The real globe owns camera composition. Choose a marker that is actually
+  // projected into the current viewport instead of assuming the first Journey
+  // record must be visible. This remains an actual pointer hit through the
+  // production Three.js/SVG interaction path and binds every assertion to the
+  // stable Route Point identity exposed by that hit target.
+  const visibleMarker = interactionPage.locator(
+    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+  ).first();
+  await visibleMarker.waitFor({ state: "visible", timeout: 5_000 });
+  const markerPointId = await visibleMarker.getAttribute("data-route-point-id");
+  if (!markerPointId) throw new Error("visible active-Journey Route Point marker has no stable id");
+  const markerClick = await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
+  const interactionContext = interactionPage.locator("[data-route-point-context]");
+  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  const markerActivation = await routePointActivationEvidence(interactionPage);
+  const selectedMarkerRole = await interactionPage.locator(
+    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${markerPointId}"]`,
   ).getAttribute("data-attention-role");
-  record("actual marker hit owns the same context identity", { markerClick, markerActivation, selectedMarkerRole },
+  record("actual marker hit owns the same context identity", {
+    markerPointId, markerClick, markerActivation, selectedMarkerRole,
+  },
     markerActivation.source === "marker"
     && markerActivation.journeyId === journeyId
-    && markerActivation.routePointId === photoPointId
+    && markerActivation.routePointId === markerPointId
     && markerActivation.eventTarget?.startsWith("canvas")
     && Math.abs(markerActivation.clientX - markerActivation.projectedX) < 12
     && Math.abs(markerActivation.clientY - markerActivation.projectedY) < 12
     && selectedMarkerRole === "selected");
 
-  const closeButton = context.locator("[data-route-point-context-close]");
-  const closeBox = await closeButton.boundingBox();
-  await closeButton.click();
-  await context.waitFor({ state: "detached", timeout: 5_000 });
+  const interactionCloseButton = interactionContext.locator("[data-route-point-context-close]");
+  const closeBox = await interactionCloseButton.boundingBox();
+  await interactionCloseButton.click();
+  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
   record("context close control is touch-safe and clears only the temporary selection", { closeBox }, Boolean(
     closeBox && closeBox.width >= 44 && closeBox.height >= 44
   ));
 
-  const labelClick = await clickRoutePointLabel(page, journeyId, photoPointId);
-  await context.waitFor({ state: "visible", timeout: 5_000 });
-  const labelActivation = await routePointActivationEvidence(page);
-  record("actual label hit preserves stable Route Point identity", { labelClick, labelActivation },
+  // Labels have their own declutter/culling policy, so grade whichever stable
+  // active-Journey label is actually visible rather than assuming it belongs to
+  // the marker chosen above. Identity must survive that independent hit surface.
+  const visibleLabel = interactionPage.locator(
+    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+  ).first();
+  await visibleLabel.waitFor({ state: "visible", timeout: 5_000 });
+  const labelPointId = await visibleLabel.getAttribute("data-route-point-id");
+  if (!labelPointId) throw new Error("visible active-Journey Route Point label has no stable id");
+  const labelClick = await clickRoutePointLabel(interactionPage, journeyId, labelPointId);
+  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  const labelActivation = await routePointActivationEvidence(interactionPage);
+  record("actual label hit preserves stable Route Point identity", { labelPointId, labelClick, labelActivation },
     labelActivation.source === "label"
     && labelActivation.journeyId === journeyId
-    && labelActivation.routePointId === photoPointId);
-  const focusModeBeforeEscape = await page.locator(".living-atlas").getAttribute("data-globe-focus");
-  await page.keyboard.press("Escape");
-  await context.waitFor({ state: "detached", timeout: 5_000 });
-  const focusModeAfterEscape = await page.locator(".living-atlas").getAttribute("data-globe-focus");
+    && labelActivation.routePointId === labelPointId);
+  const focusModeBeforeEscape = await interactionPage.locator(".living-atlas").getAttribute("data-globe-focus");
+  await interactionPage.keyboard.press("Escape");
+  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
+  const focusModeAfterEscape = await interactionPage.locator(".living-atlas").getAttribute("data-globe-focus");
   record("Escape closes context without exiting globe focus", { focusModeBeforeEscape, focusModeAfterEscape },
     focusModeBeforeEscape === focusModeAfterEscape);
 
-  const labelTrigger = page.locator(
-    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id="${photoPointId}"]`,
+  const labelTrigger = interactionPage.locator(
+    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id="${labelPointId}"]`,
   );
   await labelTrigger.focus();
   await labelTrigger.press("Enter");
-  await context.waitFor({ state: "visible", timeout: 5_000 });
-  const keyboardActivation = await routePointActivationEvidence(page);
-  await closeButton.click();
-  await context.waitFor({ state: "detached", timeout: 5_000 });
-  const focusReturn = await page.evaluate(() => ({
+  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  const keyboardActivation = await routePointActivationEvidence(interactionPage);
+  await interactionCloseButton.click();
+  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
+  const focusReturn = await interactionPage.evaluate(() => ({
     tag: document.activeElement?.tagName.toLowerCase() ?? null,
     routePointId: document.activeElement?.getAttribute("data-route-point-id") ?? null,
   }));
   record("keyboard label opens context and close restores the same legal trigger", { keyboardActivation, focusReturn },
     keyboardActivation.source === "keyboard-label"
-    && keyboardActivation.routePointId === photoPointId
-    && focusReturn.routePointId === photoPointId);
+    && keyboardActivation.routePointId === labelPointId
+    && focusReturn.routePointId === labelPointId);
 
-  await clickRoutePointMarker(page, journeyId, photoPointId);
-  await context.waitFor({ state: "visible", timeout: 5_000 });
-  const dragTarget = await dragBlankGlobe(page);
-  const dragContextId = await context.getAttribute("data-route-point-id");
+  await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
+  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  const dragTarget = await dragBlankGlobe(interactionPage);
+  const dragContextId = await interactionContext.getAttribute("data-route-point-id");
   record("globe drag does not dismiss or replace the selected context", { dragTarget, dragContextId },
-    dragContextId === photoPointId);
-  const blankTarget = await clickBlankGlobe(page);
-  await context.waitFor({ state: "detached", timeout: 5_000 });
+    dragContextId === markerPointId);
+  const blankTarget = await clickBlankGlobe(interactionPage);
+  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
   record("non-gesture blank globe click closes context", { blankTarget }, true);
+  record("real interaction page errors", { pageErrors: interactionRun.pageErrors }, interactionRun.pageErrors.length === 0);
+  await interactionPage.close();
 
-  await clickRoutePointMarker(page, journeyId, photoPointId);
+  // Keep the long-form context/Story/return regression on its deterministic QA
+  // scene. The real-scene round above exclusively proves the new product hit
+  // surfaces, while this round continues to pin the photo fixture whose media
+  // and Story identity the historical #291 contract asserts.
+  const photoRun = await openFocusAtlas();
+  const { page } = photoRun;
+  const beforeFocus = await sceneFocusSnapshot(page);
+  const controlsBefore = await page.locator(".living-atlas-globe__controls").count();
+  await activateRoutePoint(page, 0);
+  const context = page.locator("[data-route-point-context]");
   await context.waitFor({ state: "visible", timeout: 5_000 });
   const revealFocus = await sceneFocusSnapshot(page);
   const reveal = await context.evaluate((node) => ({
