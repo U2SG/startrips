@@ -394,6 +394,76 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBeNull();
   });
 
+  it.each([
+    [3, "2026-04-01", "candidate"],
+    [4, "2026-03-31", "candidate"],
+    [4, "2026-04-01", "move_suggested"],
+  ] as const)("keeps recent move qualification at %i Journeys ending %s", (count, lastDate, state) => {
+    const dates = count === 3
+      ? ["2026-01-01", "2026-02-01", lastDate]
+      : ["2026-01-01", "2026-02-01", "2026-03-01", lastDate];
+    const result = inferHomeBaseCandidate({
+      journeys: [
+        journey("old-holiday", "2023-06-01", TOKYO, TOKYO),
+        ...dates.map((date, index) => journey(`recent-${index}`, date, TOKYO, TOKYO)),
+      ],
+      confirmedPeriod: { ...SHENZHEN, startedOn: "2022-01-01", endedOn: null },
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe(state);
+    expect(result.proposedPeriodStart).toBe(state === "move_suggested" ? "2026-01-01" : null);
+    if (state === "move_suggested") {
+      expect(result.support).toMatchObject({
+        journeys: 4, starts: 4, ends: 4,
+        evidenceStartedOn: "2026-01-01", evidenceEndedOn: "2026-04-01", evidenceSpanDays: 90,
+      });
+    }
+  });
+
+  it.each(["start", "end"] as const)("requires two distinct recent Journeys with %s support for a move", (kind) => {
+    for (const supportingJourneys of [1, 2]) {
+      const otherMetros = [SHENZHEN, PARIS, SINGAPORE];
+      const recent = ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"]
+        .map((date, index) => {
+          const endpoint = index < supportingJourneys ? TOKYO : otherMetros[index - supportingJourneys];
+          return kind === "start"
+            ? journey(`recent-${index}`, date, endpoint, TOKYO)
+            : journey(`recent-${index}`, date, TOKYO, endpoint);
+        });
+      const result = inferHomeBaseCandidate({
+        journeys: [journey("old-holiday", "2023-06-01", TOKYO, TOKYO), ...recent],
+        confirmedPeriod: { ...SHENZHEN, startedOn: "2022-01-01", endedOn: null },
+        evaluationDate: "2026-06-01",
+      });
+      expect(result.state).toBe(supportingJourneys === 2 ? "move_suggested" : "candidate");
+      expect(result.proposedPeriodStart).toBe(supportingJourneys === 2 ? "2026-01-01" : null);
+      if (supportingJourneys === 2) {
+        expect(result.support.journeys).toBe(4);
+        expect(result.support[kind === "start" ? "starts" : "ends"]).toBe(2);
+      }
+    }
+  });
+
+  it("does not promote or shift a move when the same Journey endpoints appear twice", () => {
+    for (const dates of [
+      ["2026-01-01", "2026-02-01", "2026-04-01"],
+      ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"],
+    ]) {
+      const journeys = [
+        journey("old-holiday", "2023-06-01", TOKYO, TOKYO),
+        ...dates.map((date, index) => journey(`recent-${index}`, date, TOKYO, TOKYO)),
+      ];
+      const input = {
+        journeys,
+        confirmedPeriod: { ...SHENZHEN, startedOn: "2022-01-01", endedOn: null },
+        evaluationDate: "2026-06-01",
+      };
+      const expected = inferHomeBaseCandidate(input);
+      expect(expected.state).toBe(dates.length === 4 ? "move_suggested" : "candidate");
+      expect(inferHomeBaseCandidate({ ...input, journeys: [...journeys, ...journeys] })).toEqual(expected);
+    }
+  });
+
   it("starts a move at the sustained evidence window instead of an isolated old visit", () => {
     const confirmed = {
       startedOn: "2022-01-01",

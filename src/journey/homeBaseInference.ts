@@ -444,7 +444,10 @@ function evidenceRegions(evidence: readonly EndpointEvidence[]): EvidenceRegion[
   return [...bySupport.values()].sort(compareRegions);
 }
 
-function hasSuggestionEvidence(region: EvidenceRegion): boolean {
+function hasSuggestionEvidence(region: Pick<
+  EvidenceRegion,
+  "journeyCount" | "evidenceSpanDays" | "startCount" | "endCount"
+>): boolean {
   return region.journeyCount >= HOME_BASE_SUGGESTED_MIN_JOURNEYS
     && region.evidenceSpanDays >= HOME_BASE_SUGGESTED_MIN_SPAN_DAYS
     && region.startCount >= HOME_BASE_MIN_START_SUPPORT
@@ -528,7 +531,7 @@ type MoveWindowObservation = {
   currentnessReachedOn: string;
 };
 
-function isCandidateRegion(region: EvidenceRegion): boolean {
+function isCandidateRegion(region: Pick<EvidenceRegion, "journeyCount" | "evidenceSpanDays">): boolean {
   return region.journeyCount >= HOME_BASE_CANDIDATE_MIN_JOURNEYS
     && region.evidenceSpanDays >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS;
 }
@@ -594,29 +597,39 @@ function suggestionEvidenceReachedOn(region: EvidenceRegion): string {
   });
 }
 
-function hasCandidateEvidenceWindow(
+function evidenceWindowQualification(
   region: EvidenceRegion,
   startedOn: string,
   endedOn: string,
-): boolean {
-  if (spanDays(startedOn, endedOn) < HOME_BASE_CANDIDATE_MIN_SPAN_DAYS) return false;
+): { candidate: boolean; suggested: boolean } {
   const journeys = new Set<string>();
+  const starts = new Set<string>();
+  const ends = new Set<string>();
+  let firstDate: string | null = null;
+  let lastDate: string | null = null;
   for (const item of region.selectedEvidence) {
-    if (item.date >= startedOn && item.date <= endedOn) journeys.add(item.journeyId);
+    if (!(item.date >= startedOn && item.date <= endedOn)) continue;
+    journeys.add(item.journeyId);
+    if (item.kind === "start") starts.add(item.journeyId);
+    else ends.add(item.journeyId);
+    if (firstDate === null || item.date < firstDate) firstDate = item.date;
+    if (lastDate === null || item.date > lastDate) lastDate = item.date;
   }
-  return journeys.size >= HOME_BASE_CANDIDATE_MIN_JOURNEYS;
-}
-
-function hasSuggestionEvidenceWindow(
-  region: EvidenceRegion,
-  startedOn: string,
-  endedOn: string,
-): boolean {
-  const selected = region.selectedEvidence.filter((item) => (
-    item.date >= startedOn && item.date <= endedOn
-  ));
-  const windowRegion = regionFromSelectedEvidence(selected);
-  return windowRegion !== null && hasSuggestionEvidence(windowRegion);
+  if (firstDate === null || lastDate === null) return { candidate: false, suggested: false };
+  // Qualification needs only support counts and dates, not a new medoid. Keep
+  // candidate's requested window span distinct from suggested's evidence span.
+  return {
+    candidate: isCandidateRegion({
+      journeyCount: journeys.size,
+      evidenceSpanDays: spanDays(startedOn, endedOn),
+    }),
+    suggested: hasSuggestionEvidence({
+      journeyCount: journeys.size,
+      startCount: starts.size,
+      endCount: ends.size,
+      evidenceSpanDays: spanDays(firstDate, lastDate),
+    }),
+  };
 }
 
 function continuityBlocks(region: EvidenceRegion): ContinuityBlock[] {
@@ -636,8 +649,8 @@ function continuityBlocks(region: EvidenceRegion): ContinuityBlock[] {
     const blockEnd = blockDates[blockDates.length - 1];
     for (let index = blockDates.length - 1; index >= 1; index -= 1) {
       const suffixStart = blockDates[index];
-      const suggestionQualifiedSuffix = hasSuggestionEvidenceWindow(region, suffixStart, blockEnd);
-      const candidateQualifiedSuffix = hasCandidateEvidenceWindow(region, suffixStart, blockEnd);
+      const { suggested: suggestionQualifiedSuffix, candidate: candidateQualifiedSuffix } =
+        evidenceWindowQualification(region, suffixStart, blockEnd);
       if (!suggestionQualifiedSuffix && !candidateQualifiedSuffix) continue;
 
       const hiatusDays = spanDays(blockDates[index - 1], suffixStart);
