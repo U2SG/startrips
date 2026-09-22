@@ -3839,9 +3839,14 @@
 }
 
 .journey-recorded-tracks__import input[type="file"] {
+  min-height: 44px;
   max-width: 100%;
   color: #a7bbb5;
   font-size: 12px;
+}
+
+.journey-recorded-tracks__import input[type="file"]::file-selector-button {
+  min-height: 44px;
 }
 
 .journey-recorded-tracks__selection {
@@ -3861,7 +3866,7 @@
 .journey-recorded-tracks__import-button,
 .journey-recorded-tracks__withdraw,
 .journey-recorded-tracks__confirm button {
-  min-height: 38px;
+  min-height: 44px;
   padding: 8px 12px;
   border: 1px solid rgba(122, 244, 237, 0.2);
   border-radius: 4px;

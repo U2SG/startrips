@@ -217,6 +217,21 @@ async function exerciseRecordedTrackKeyboard(page, label, { mobileTask = false }
     document.activeElement?.classList.contains("is-destructive")
     && document.activeElement?.textContent?.trim() === "确认撤回"
   ));
+  const hitTargets = await page.evaluate(() => {
+    const selectors = {
+      file: '.journey-recorded-tracks input[type="file"]',
+      importButton: ".journey-recorded-tracks__import-button",
+      withdrawButton: ".journey-recorded-tracks__withdraw",
+      cancelButton: '.journey-recorded-tracks__confirm button:not(.is-destructive)',
+      confirmButton: ".journey-recorded-tracks__confirm .is-destructive",
+    };
+    return Object.fromEntries(Object.entries(selectors).map(([name, selector]) => {
+      const element = document.querySelector(selector);
+      const rect = element?.getBoundingClientRect();
+      return [name, rect ? { width: rect.width, height: rect.height } : null];
+    }));
+  });
+  const hitTargetsAtLeast44 = Object.values(hitTargets).every((rect) => rect && rect.height >= 44);
   if (confirmFocused) await page.keyboard.press("Enter");
   await confirmation.waitFor({ state: "detached" });
   await page.waitForFunction(() => document.querySelectorAll(".journey-recorded-tracks__list li").length === 1);
@@ -229,6 +244,8 @@ async function exerciseRecordedTrackKeyboard(page, label, { mobileTask = false }
     withdrawFocused,
     cancelFocused,
     confirmFocused,
+    hitTargets,
+    hitTargetsAtLeast44,
     remainingTracks: await page.locator(".journey-recorded-tracks__list li").count(),
   };
   if (mobileTask) {
@@ -491,6 +508,7 @@ try {
           && recordedTrackKeyboard.withdrawFocused
           && recordedTrackKeyboard.cancelFocused
           && recordedTrackKeyboard.confirmFocused
+          && recordedTrackKeyboard.hitTargetsAtLeast44
           && recordedTrackKeyboard.remainingTracks === 1);
       }
 
@@ -559,6 +577,7 @@ try {
       && recordedTrackKeyboard.withdrawFocused
       && recordedTrackKeyboard.cancelFocused
       && recordedTrackKeyboard.confirmFocused
+      && recordedTrackKeyboard.hitTargetsAtLeast44
       && recordedTrackKeyboard.remainingTracks === 1);
   } finally {
     await desktop.context.close();
