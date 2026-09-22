@@ -965,6 +965,40 @@ try {
   const detailReveal = await readSpatialReveal(forward.page);
   const firstReveal = await readDive(forward.page);
 
+  // The wheel-driven Dive preserves the geography under the user's pointer, so
+  // the separately selected Route Point may legitimately end up off-screen at
+  // the end of that manual zoom. Re-issue the fixture's existing focus intent
+  // before grading the Route Point hit contract; the handoff continuity above
+  // has already been captured against the untouched wheel-owned camera. Wait on
+  // projection truth rather than adding a timing delay.
+  const routePointOnScreen = await forward.page.evaluate(({ lon, lat }) => {
+    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    return Boolean(
+      projected
+      && Number.isFinite(projected.x)
+      && Number.isFinite(projected.y)
+      && projected.x >= 22
+      && projected.y >= 22
+      && projected.x <= window.innerWidth - 22
+      && projected.y <= window.innerHeight - 22
+    );
+  }, routePoint);
+  if (!routePointOnScreen) {
+    await activateButton(forward.page, forward.page.locator("[data-qa-earth-dive-refocus]"));
+    await forward.page.waitForFunction(({ lon, lat }) => {
+      const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+      return Boolean(
+        projected
+        && Number.isFinite(projected.x)
+        && Number.isFinite(projected.y)
+        && projected.x >= 22
+        && projected.y >= 22
+        && projected.x <= window.innerWidth - 22
+        && projected.y <= window.innerHeight - 22
+      );
+    }, routePoint, { timeout: 5_000 });
+  }
+
   // The Detailed Earth source is not decorative: its hit target must resolve
   // through the existing Route Point activation callback, and a rapid Journey
   // switch must replace the exact same source without rebuilding the map or
