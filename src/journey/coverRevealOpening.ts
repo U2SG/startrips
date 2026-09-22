@@ -33,6 +33,22 @@ export const REVEAL_PRESET_IDS: readonly RevealPresetId[] = [
 ];
 
 /**
+ * The shipped worker/server contract predates the five renderer ids and stores
+ * this pipeline-level preset on every existing derivative. Keep it as an
+ * explicit compatibility alias rather than treating arbitrary unknown strings
+ * as the renderer default: old ready derivatives become visible immediately,
+ * while truly unknown future metadata still fails closed.
+ */
+export const LEGACY_COVER_REVEAL_PRESET_ALIASES: Readonly<Record<string, RevealPresetId>> = {
+  "reveal-flow-ink-wash-v1": "ink-bloom",
+};
+
+export function resolveCoverRevealPresetId(presetId: string): RevealPresetId | null {
+  if (REVEAL_PRESET_IDS.includes(presetId as RevealPresetId)) return presetId as RevealPresetId;
+  return LEGACY_COVER_REVEAL_PRESET_ALIASES[presetId] ?? null;
+}
+
+/**
  * What `GET /api/cover-reveal/journeys/:id` (#386) answered.
  *
  * Deliberately typed as the wire shape rather than an already-validated one:
@@ -143,10 +159,12 @@ export function planCoverRevealOpening(
   ) {
     return { kind: "none", reason: "unusable-derivative" };
   }
-  // The preset is the server's choice, and an unrecognised one names a
-  // derivative this build cannot render. Substituting the renderer default
-  // would be inventing a visual direction the server never pinned.
-  if (!REVEAL_PRESET_IDS.includes(derivative.presetId as RevealPresetId)) {
+  // The preset is the server's choice. The one legacy pipeline-level id that
+  // shipped before renderer integration is an explicit compatibility alias;
+  // anything else unknown remains unusable rather than silently inheriting a
+  // renderer default the server never selected.
+  const revealPreset = resolveCoverRevealPresetId(derivative.presetId);
+  if (revealPreset === null) {
     return { kind: "none", reason: "unusable-derivative" };
   }
 
@@ -163,7 +181,7 @@ export function planCoverRevealOpening(
   return {
     kind: "open",
     identity,
-    preset: derivative.presetId as RevealPresetId,
+    preset: revealPreset,
     generatedUrl: display.url,
   };
 }

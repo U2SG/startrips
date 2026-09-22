@@ -76,6 +76,17 @@ describe("planCoverRevealOpening", () => {
     });
   });
 
+  it("maps the shipped legacy worker preset to the renderer's approved ink-bloom flow", () => {
+    expect(planCoverRevealOpening(
+      input({ payload: payload({ presetId: "reveal-flow-ink-wash-v1" }) }),
+    )).toEqual({
+      kind: "open",
+      identity: coverRevealOpeningIdentity(JOURNEY_ID, "asset-cover", COVER_HASH),
+      preset: "ink-bloom",
+      generatedUrl: "https://storage.example/derivative?sig=short-lived",
+    });
+  });
+
   it("never substitutes the renderer default for a preset this build cannot render", () => {
     const decision = planCoverRevealOpening(
       input({ payload: payload({ presetId: "ink-bloom-v2" }) }),
