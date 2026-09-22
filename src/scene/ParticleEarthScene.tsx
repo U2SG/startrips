@@ -1679,6 +1679,15 @@ async function loadLocalCoastlineChunk(
   }
 }
 
+function createPositionGeometry(positions: Float32Array, targetPositions?: Float32Array) {
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(positions, 3));
+  if (targetPositions) {
+    geometry.setAttribute("targetPosition", new BufferAttribute(targetPositions, 3));
+  }
+  return geometry;
+}
+
 function createBurstTargets(source: Float32Array) {
   const targets = new Float32Array(source.length);
   for (let index = 0; index < source.length; index += 3) {
@@ -2313,26 +2322,19 @@ export function ParticleEarthScene({
         })
       : null;
     if (archiveMaterial) {
-      const archiveGeometry = new BufferGeometry();
       const archivePositions = buildArtworkPointPositions(archivePoints, 1.43);
-      archiveGeometry.setAttribute("position", new BufferAttribute(archivePositions, 3));
-      archiveGeometry.setAttribute("targetPosition", new BufferAttribute(archivePositions.slice(), 3));
+      const archiveGeometry = createPositionGeometry(archivePositions, archivePositions.slice());
       const archiveSignals = new Points(archiveGeometry, archiveMaterial);
       archiveSignals.renderOrder = GLOBE_RENDER_ORDER.signal;
       globe.add(archiveSignals);
     }
 
-    const clusterGeometry = new BufferGeometry();
     const clusterPositions = buildRegionalClusterPositions(
       920,
       { lat: 40, lon: 65 },
       { lat: 24, lon: 24 },
     );
-    clusterGeometry.setAttribute("position", new BufferAttribute(clusterPositions, 3));
-    clusterGeometry.setAttribute(
-      "targetPosition",
-      new BufferAttribute(clusterPositions.slice(), 3),
-    );
+    const clusterGeometry = createPositionGeometry(clusterPositions, clusterPositions.slice());
     const clusterMaterial = createParticleEarthMaterial({
       color: 0xf19cff,
       opacity: 0,
@@ -2424,20 +2426,12 @@ export function ParticleEarthScene({
       host.dataset.particleActiveDimPointCount = String(activeDirections.length);
     };
 
-    const cyanClusterGeometry = new BufferGeometry();
     const cyanClusterPositions = buildRegionalClusterPositions(
       620,
       { lat: 28, lon: 55 },
       { lat: 38, lon: 36 },
     );
-    cyanClusterGeometry.setAttribute(
-      "position",
-      new BufferAttribute(cyanClusterPositions, 3),
-    );
-    cyanClusterGeometry.setAttribute(
-      "targetPosition",
-      new BufferAttribute(cyanClusterPositions.slice(), 3),
-    );
+    const cyanClusterGeometry = createPositionGeometry(cyanClusterPositions, cyanClusterPositions.slice());
     const cyanClusterMaterial = createParticleEarthMaterial({
       color: 0xa9fff4,
       opacity: 0,
@@ -2447,17 +2441,12 @@ export function ParticleEarthScene({
     cyanArchiveCluster.renderOrder = GLOBE_RENDER_ORDER.signal;
     globe.add(cyanArchiveCluster);
 
-    const shellGeometry = new BufferGeometry();
     const shellPositions = buildSeededSpherePoints(3_200, 2087);
     for (let index = 0; index < shellPositions.length; index += 1) {
       // #237: decorative archive shell, deliberately not a geographic layer.
       shellPositions[index] *= 1.405;
     }
-    shellGeometry.setAttribute("position", new BufferAttribute(shellPositions, 3));
-    shellGeometry.setAttribute(
-      "targetPosition",
-      new BufferAttribute(shellPositions.slice(), 3),
-    );
+    const shellGeometry = createPositionGeometry(shellPositions, shellPositions.slice());
     const shellMaterial = createParticleEarthMaterial({
       color: 0xa8f6f3,
       opacity: 0.15,
@@ -2466,7 +2455,6 @@ export function ParticleEarthScene({
     const particleShell = new Points(shellGeometry, shellMaterial);
     globe.add(particleShell);
 
-    const haloGeometry = new BufferGeometry();
     const haloPositions = buildSeededSpherePoints(1_100, 9917);
     for (let index = 0; index < haloPositions.length; index += 3) {
       const pointIndex = index / 3;
@@ -2475,11 +2463,7 @@ export function ParticleEarthScene({
       haloPositions[index + 1] *= radius;
       haloPositions[index + 2] *= radius;
     }
-    haloGeometry.setAttribute("position", new BufferAttribute(haloPositions, 3));
-    haloGeometry.setAttribute(
-      "targetPosition",
-      new BufferAttribute(haloPositions.slice(), 3),
-    );
+    const haloGeometry = createPositionGeometry(haloPositions, haloPositions.slice());
     const haloMaterial = createParticleEarthMaterial({
       color: 0x7ae9e2,
       opacity: 0,
@@ -2494,7 +2478,6 @@ export function ParticleEarthScene({
     particleDimmingMaterials.push(cyanClusterMaterial, shellMaterial, haloMaterial);
     syncParticleDimming(latestJourneyRoutes.current, latestActiveJourneyRouteId.current);
 
-    const personalGeometry = new BufferGeometry();
     const initialFallback =
       currentMode === "archiveBurst"
         ? { lat: -10, lon: -180 }
@@ -2504,11 +2487,7 @@ export function ParticleEarthScene({
       initialFallback,
     );
     const personalPositions = new Float32Array(personalPosition.toArray());
-    personalGeometry.setAttribute("position", new BufferAttribute(personalPositions, 3));
-    personalGeometry.setAttribute(
-      "targetPosition",
-      new BufferAttribute(personalPositions.slice(), 3),
-    );
+    const personalGeometry = createPositionGeometry(personalPositions, personalPositions.slice());
     const personalMaterial = createParticleEarthMaterial({
       color: 0xffdc72,
       opacity: 0,
@@ -3067,11 +3046,7 @@ export function ParticleEarthScene({
         });
       });
 
-      const nextPointGeometry = new BufferGeometry();
-      nextPointGeometry.setAttribute(
-        "position",
-        new BufferAttribute(pointPositions, 3),
-      );
+      const nextPointGeometry = createPositionGeometry(pointPositions);
       if (pointCount > 0) nextPointGeometry.computeBoundingSphere();
       const previousPointGeometry = routePointGeometry;
       routePointGeometry = nextPointGeometry;
@@ -4448,12 +4423,7 @@ export function ParticleEarthScene({
       sample: RegionalLandSample,
     ) => {
       if (activeRefinementLayer?.cacheKey === cacheKey) return;
-      const geometry = new BufferGeometry();
-      geometry.setAttribute("position", new BufferAttribute(sample.positions, 3));
-      geometry.setAttribute(
-        "targetPosition",
-        new BufferAttribute(createBurstTargets(sample.positions), 3),
-      );
+      const geometry = createPositionGeometry(sample.positions, createBurstTargets(sample.positions));
       geometry.setAttribute(
         "lodThreshold",
         new BufferAttribute(sample.lodThresholds, 1),
@@ -4601,8 +4571,7 @@ export function ParticleEarthScene({
         localVertexCount?: number;
       },
     ) => {
-      const nextGeometry = new BufferGeometry();
-      nextGeometry.setAttribute("position", new BufferAttribute(positions, 3));
+      const nextGeometry = createPositionGeometry(positions);
       if (positions.length > 0) nextGeometry.computeBoundingSphere();
       const previous = nearCoastlineGeometry;
       nearCoastlineGeometry = nextGeometry;
@@ -4903,12 +4872,7 @@ export function ParticleEarthScene({
       } = await buildLandVisualData(QUALITY_PROFILE[nextQuality].particleCount);
       if (disposed || revision !== qualityBuildRevision || currentQuality !== nextQuality) return;
 
-      const nextParticleGeometry = new BufferGeometry();
-      nextParticleGeometry.setAttribute("position", new BufferAttribute(particlePositions, 3));
-      nextParticleGeometry.setAttribute(
-        "targetPosition",
-        new BufferAttribute(createBurstTargets(particlePositions), 3),
-      );
+      const nextParticleGeometry = createPositionGeometry(particlePositions, createBurstTargets(particlePositions));
       nextParticleGeometry.computeBoundingSphere();
       if (particles) {
         const previousGeometry = particleGeometry;
@@ -4922,8 +4886,7 @@ export function ParticleEarthScene({
         globe.add(particles);
       }
 
-      const nextCoastlineGeometry = new BufferGeometry();
-      nextCoastlineGeometry.setAttribute("position", new BufferAttribute(coastlinePositions, 3));
+      const nextCoastlineGeometry = createPositionGeometry(coastlinePositions);
       if (coastlinePositions.length > 0) nextCoastlineGeometry.computeBoundingSphere();
       const previousCoastlineGeometry = coastlineGeometry;
       coastlineGeometry = nextCoastlineGeometry;
@@ -4931,8 +4894,7 @@ export function ParticleEarthScene({
       previousCoastlineGeometry.dispose();
       const applyDetailedCoastlinePositions = (positionsByLod: { mid: Float32Array; near: Float32Array }) => {
         for (const [lod, positions] of Object.entries(positionsByLod) as ["mid" | "near", Float32Array][]) {
-          const nextGeometry = new BufferGeometry();
-          nextGeometry.setAttribute("position", new BufferAttribute(positions, 3));
+          const nextGeometry = createPositionGeometry(positions);
           if (positions.length > 0) nextGeometry.computeBoundingSphere();
           if (lod === "mid") {
             const previous = midCoastlineGeometry; midCoastlineGeometry = nextGeometry; midCoastlines.geometry = nextGeometry; previous.dispose();
