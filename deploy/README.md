@@ -181,6 +181,14 @@ origin in production. Requested scopes are the adapter's defaults -- `openid`,
 `email`, `profile` -- and nothing widens them. Startrips never requests Drive,
 Photos or any other Google API scope.
 
+**Outbound network.** Completing a callback needs the API container to reach
+`https://oauth2.googleapis.com/token` (the code exchange) **and**
+`https://www.googleapis.com/oauth2/v3/certs` (Google's signing keys). The ID
+token's issuer, audience and signature are checked against that key document
+before Startrips believes the identity, so an egress policy that blocks it does
+not weaken the check -- it fails every Google sign-in closed. Allow both hosts
+wherever egress is filtered.
+
 **Injecting the secret.** `GOOGLE_CLIENT_SECRET` is a deployment secret on the
 same footing as `BETTER_AUTH_SECRET`: put it in the `.env` file the Compose
 stack reads (or your orchestrator's secret store) and nowhere else. It is read

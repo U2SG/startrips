@@ -8,10 +8,12 @@ export const GOOGLE_PROVIDER_ID = "google";
 /**
  * #349: the provider half of the ST-067 identity contract.
  *
- * Better Auth owns every OIDC check for the pinned 1.6.23 Google adapter --
- * issuer, audience, state, PKCE and the token exchange. This module only
- * decides WHETHER that adapter exists for a deployment, and carries the
- * verified identity the adapter already produced across to Startrips' own
+ * Better Auth owns the authorization request, state, PKCE and the token
+ * exchange. It does NOT own the ID-token checks by itself: the pinned 1.6.23
+ * adapter splits them in two, and `api/routes/callback.mjs` calls only the
+ * half that skips them. This module decides WHETHER that adapter exists for a
+ * deployment, runs the other half before any claim is believed, and carries
+ * the verified identity across to Startrips' own
  * `account_identity_ownerships` row.
  *
  * Scopes are deliberately not configured. The adapter's own defaults are
@@ -78,6 +80,44 @@ export function takeVerifiedProviderIdentity(
   return entry.identity;
 }
 
+type GoogleAdapter = ReturnType<typeof google>;
+
+/**
+ * The adapter's ID-token claims, but only once the adapter has verified them.
+ *
+ * In the pinned Better Auth 1.6.23, `verifyIdToken()` runs `jwtVerify()`
+ * against Google's JWKS with Google's issuer, this client as the audience and
+ * a one-hour maximum token age, while `getUserInfo()` merely `decodeJwt()`s
+ * the same string -- and `api/routes/callback.mjs` calls just `getUserInfo()`
+ * after the code exchange. Everything Startrips then persists comes from those
+ * claims: the subject an ownership row is keyed by, and the verified-email flag
+ * `accountIdentityUsable` reads. So both entries -- the native sign-in wrapper
+ * below and the explicit bind adapter further down -- run the verification
+ * half first and refuse the callback when it fails, per #349's requirement
+ * that issuer/audience/subject be validated by the pinned library.
+ */
+async function verifiedUserInfo(adapter: GoogleAdapter, tokens: OAuth2Tokens) {
+  const idToken = tokens.idToken;
+  if (!idToken || typeof adapter.verifyIdToken !== "function") return null;
+  let verified = false;
+  try {
+    // No nonce: the pinned adapter's authorization request does not send one,
+    // so there is none to bind the token back to.
+    verified = await adapter.verifyIdToken(idToken, undefined);
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    // The token is itself a bearer credential, so only the provider it
+    // belonged to is safe to record.
+    console.error("provider_id_token_verification_failed", {
+      providerId: GOOGLE_PROVIDER_ID,
+    });
+    return null;
+  }
+  return await adapter.getUserInfo(tokens);
+}
+
 /**
  * The options handed to `betterAuth({ socialProviders })`.
  *
@@ -94,7 +134,7 @@ export function googleSignInOptions(config: ServerConfig = serverConfig): Google
   return {
     ...base,
     async getUserInfo(tokens) {
-      const info = await baseProvider.getUserInfo(tokens);
+      const info = await verifiedUserInfo(baseProvider, tokens);
       const subject = info?.user?.id === undefined ? "" : String(info.user.id);
       if (info && subject) {
         const email = info.user.email ?? null;
@@ -136,7 +176,10 @@ export type IdentityBindProvider = {
 /**
  * The adapter the explicit bind flow drives directly. It is built from the
  * plain options, so a bind never writes a pending sign-in identity: that path
- * carries its verified identity in an ST-067 provider proof instead.
+ * carries its verified identity in an ST-067 provider proof instead. Its
+ * `getUserInfo` is the verifying one for the same reason the sign-in wrapper's
+ * is -- the bind proof names a subject, so an unverified subject would be a
+ * bind of whoever authored the token.
  */
 export function createBindProvider(
   providerId: string,
@@ -144,7 +187,13 @@ export function createBindProvider(
 ): IdentityBindProvider | null {
   if (providerId !== GOOGLE_PROVIDER_ID) return null;
   const base = googleBaseOptions(config);
-  return base ? google(base) : null;
+  if (!base) return null;
+  const adapter = google(base);
+  return {
+    createAuthorizationURL: adapter.createAuthorizationURL,
+    validateAuthorizationCode: adapter.validateAuthorizationCode,
+    getUserInfo: (tokens) => verifiedUserInfo(adapter, tokens),
+  };
 }
 
 export function configuredSocialProviderIds(

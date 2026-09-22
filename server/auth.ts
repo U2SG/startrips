@@ -1,5 +1,6 @@
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { betterAuth } from "better-auth";
+import { eq } from "drizzle-orm";
 import { organization } from "better-auth/plugins";
 import { recordProviderSignInOwnership } from "./account-identities/account-identity-repository";
 import {
@@ -49,6 +50,44 @@ export const STARTRIPS_DISABLED_IDENTITY_PATHS = [
   "/change-password",
 ] as const;
 
+/**
+ * Carry the identity this callback verified into Startrips' own ownership row.
+ *
+ * The account row is re-read by id rather than taken from the hook argument:
+ * `create.after` and `update.after` are handed whatever the adapter returned
+ * for that write, and this path must not depend on which columns that happens
+ * to include. A failure here must not fail the sign-in -- a missing or stale
+ * ownership row makes the method read as unusable, which is the fail-closed
+ * direction.
+ */
+async function syncProviderSignInOwnership(accountRecordId: string) {
+  try {
+    const [record] = await db
+      .select({
+        id: authSchema.account.id,
+        userId: authSchema.account.userId,
+        providerId: authSchema.account.providerId,
+        accountId: authSchema.account.accountId,
+      })
+      .from(authSchema.account)
+      .where(eq(authSchema.account.id, accountRecordId))
+      .limit(1);
+    if (!record || !SOCIAL_PROVIDER_IDS.has(record.providerId)) return;
+    const identity = takeVerifiedProviderIdentity(record.providerId, record.accountId);
+    if (!identity) return;
+    await recordProviderSignInOwnership({
+      userId: record.userId,
+      accountRecordId: record.id,
+      identity,
+    });
+  } catch (error) {
+    console.error("account_identity_ownership_record_failed", {
+      accountRecordId,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+  }
+}
+
 export const auth = betterAuth({
   appName: "Startrips",
   baseURL: serverConfig.appOrigin,
@@ -79,35 +118,16 @@ export const auth = betterAuth({
   socialProviders: googleOptions ? { google: googleOptions } : {},
   databaseHooks: {
     account: {
-      create: {
-        // #349: a native provider sign-up creates the Better Auth account row
-        // without Startrips' ownership row, which every ST-067 usability and
-        // last-usable-login decision reads. Record it from the identity Better
-        // Auth verified during this same callback. A failure here must not
-        // fail the sign-in: the missing row makes the method read as unusable,
-        // which is the fail-closed direction.
-        async after(account) {
-          if (!SOCIAL_PROVIDER_IDS.has(account.providerId)) return;
-          const identity = takeVerifiedProviderIdentity(
-            account.providerId,
-            account.accountId,
-          );
-          if (!identity) return;
-          try {
-            await recordProviderSignInOwnership({
-              userId: account.userId,
-              accountRecordId: account.id,
-              identity,
-            });
-          } catch (error) {
-            console.error("account_identity_ownership_record_failed", {
-              providerId: account.providerId,
-              accountRecordId: account.id,
-              message: error instanceof Error ? error.message : "unknown",
-            });
-          }
-        },
-      },
+      // #349: a native provider sign-up creates the Better Auth account row
+      // without Startrips' ownership row, which every ST-067 usability and
+      // last-usable-login decision reads. `create` covers the first callback;
+      // `update` covers every later one, because Better Auth refreshes the
+      // stored tokens of an existing linked account on each social sign-in and
+      // never creates that account again. Without the second entry a first
+      // callback that carried an unverified email would pin the method as
+      // permanently unusable.
+      create: { after: (account) => syncProviderSignInOwnership(account.id) },
+      update: { after: (account) => syncProviderSignInOwnership(account.id) },
     },
   },
   disabledPaths: [...STARTRIPS_DISABLED_IDENTITY_PATHS],

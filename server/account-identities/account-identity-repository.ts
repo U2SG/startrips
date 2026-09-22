@@ -535,16 +535,41 @@ export async function recordProviderSignInOwnership(values: {
       })
       .onConflictDoNothing()
       .returning({ id: accountIdentityOwnerships.id });
-    if (inserted.length === 0) return false;
-    await audit(transaction, {
-      userId: values.userId,
-      event: "link",
-      outcome: "success",
-      providerId: values.identity.providerId,
-      accountRecordId: values.accountRecordId,
-      reason: "provider-sign-in",
-    });
-    return true;
+    if (inserted.length > 0) {
+      await audit(transaction, {
+        userId: values.userId,
+        event: "link",
+        outcome: "success",
+        providerId: values.identity.providerId,
+        accountRecordId: values.accountRecordId,
+        reason: "provider-sign-in",
+      });
+      return true;
+    }
+    // #349: the row already exists, which is every sign-in after the first --
+    // Better Auth only creates the account once. The provider's verification
+    // claim is not a constant, though: a first callback carrying an unverified
+    // or absent email persists `providerEmailVerified: false`, which
+    // `accountIdentityUsable` reads as an unusable method, and without this
+    // refresh a later verified callback could never lift it. The refresh is
+    // scoped to this same user AND this same account row, so a subject that
+    // already belongs to somebody else is left untouched rather than
+    // transferred. It is a metadata correction, not a link, so it records no
+    // audit event.
+    await transaction
+      .update(accountIdentityOwnerships)
+      .set({
+        providerEmail: values.identity.email,
+        providerEmailVerified: values.identity.emailVerified,
+        verifiedAt: now,
+      })
+      .where(and(
+        eq(accountIdentityOwnerships.providerId, values.identity.providerId),
+        eq(accountIdentityOwnerships.providerSubject, values.identity.subject),
+        eq(accountIdentityOwnerships.userId, values.userId),
+        eq(accountIdentityOwnerships.accountRecordId, values.accountRecordId),
+      ));
+    return false;
   });
 }
 

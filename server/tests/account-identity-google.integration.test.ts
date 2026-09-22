@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -15,10 +15,18 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
  * exercises. Configuring it here is how this file gets the other half.
  *
  * The transport is a global `fetch` stub that answers Google's token endpoint
- * and THROWS on any other external host, so a regression that reaches the real
- * network fails loudly instead of quietly depending on it. Everything above
- * the transport -- state, PKCE, the authorization URL, the profile mapping --
- * is the pinned Better Auth 1.6.23 adapter doing its own work.
+ * and its JWKS document, and THROWS on any other external host, so a
+ * regression that reaches the real network fails loudly instead of quietly
+ * depending on it. Everything above the transport -- state, PKCE, the
+ * authorization URL, the profile mapping -- is the pinned Better Auth 1.6.23
+ * adapter doing its own work.
+ *
+ * The ID tokens are really RS256-signed against a keypair generated here and
+ * published through that JWKS document, because the claims are not believed on
+ * the strength of the TLS channel: `social-providers.ts` runs the adapter's
+ * `verifyIdToken()` first. A test issuing unsigned tokens would therefore
+ * prove nothing, and the wrong-signature/audience/issuer cases below are the
+ * regressions for that check.
  */
 const TEST_CLIENT_ID = "st132-test-client.apps.googleusercontent.test";
 process.env.GOOGLE_CLIENT_ID = TEST_CLIENT_ID;
@@ -40,10 +48,31 @@ const { db, pool } = await import("../db/client");
 
 const ORIGIN = serverConfig.appOrigin;
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const JWKS_ENDPOINT = "https://www.googleapis.com/oauth2/v3/certs";
 const PASSWORD = "st132-test-password-349";
+const SIGNING_KEY_ID = "st132-test-key";
+
+/** The key Google publishes, and one it does not. */
+const signingKeys = {
+  published: generateKeyPairSync("rsa", { modulusLength: 2048 }),
+  unpublished: generateKeyPairSync("rsa", { modulusLength: 2048 }),
+};
+
+/** What an ID token may claim other than the truth, one case per regression. */
+type TokenClaimOverrides = {
+  audience?: string;
+  issuer?: string;
+  signWith?: keyof typeof signingKeys;
+};
 
 type TokenAnswer =
-  | { kind: "tokens"; subject: string; email: string; emailVerified: boolean }
+  | {
+    kind: "tokens";
+    subject: string;
+    email: string;
+    emailVerified: boolean;
+    overrides?: TokenClaimOverrides;
+  }
   | { kind: "unavailable" };
 
 let tokenAnswer: TokenAnswer | null = null;
@@ -52,14 +81,19 @@ const createdOrganizationIds: string[] = [];
 
 const realFetch = globalThis.fetch;
 
-function fakeIdToken(subject: string, email: string, emailVerified: boolean): string {
+function fakeIdToken(
+  subject: string,
+  email: string,
+  emailVerified: boolean,
+  overrides: TokenClaimOverrides = {},
+): string {
   const segment = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const issuedAt = Math.floor(Date.now() / 1000);
-  return [
-    segment({ alg: "RS256", kid: "st132-test" }),
+  const signingInput = [
+    segment({ alg: "RS256", kid: SIGNING_KEY_ID }),
     segment({
-      iss: "https://accounts.google.com",
-      aud: TEST_CLIENT_ID,
+      iss: overrides.issuer ?? "https://accounts.google.com",
+      aud: overrides.audience ?? TEST_CLIENT_ID,
       sub: subject,
       email,
       email_verified: emailVerified,
@@ -68,16 +102,29 @@ function fakeIdToken(subject: string, email: string, emailVerified: boolean): st
       iat: issuedAt,
       exp: issuedAt + 3600,
     }),
-    // The authorization-code flow trusts the TLS channel to the token
-    // endpoint rather than this signature, exactly as the pinned adapter does.
-    "st132-test-signature",
   ].join(".");
+  const signature = createSign("RSA-SHA256")
+    .update(signingInput)
+    .sign(signingKeys[overrides.signWith ?? "published"].privateKey)
+    .toString("base64url");
+  return `${signingInput}.${signature}`;
+}
+
+/** Google's published signing keys, as the adapter's JWKS fetch expects them. */
+function jwksDocument(): Response {
+  const jwk = signingKeys.published.publicKey.export({ format: "jwk" });
+  return Response.json({
+    keys: [{ ...jwk, kid: SIGNING_KEY_ID, alg: "RS256", use: "sig" }],
+  });
 }
 
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string"
     ? input
     : input instanceof URL ? input.toString() : input.url;
+  // Answered unconditionally: it is a public document, and every ID token the
+  // pinned adapter verifies needs it.
+  if (url.startsWith(JWKS_ENDPOINT)) return jwksDocument();
   if (!url.startsWith(TOKEN_ENDPOINT)) {
     throw new Error(`ST-132 test reached an unexpected external host: ${url}`);
   }
@@ -92,7 +139,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   expect(body).toContain("code_verifier=");
   return Response.json({
     access_token: `st132-access-${randomUUID()}`,
-    id_token: fakeIdToken(tokenAnswer.subject, tokenAnswer.email, tokenAnswer.emailVerified),
+    id_token: fakeIdToken(
+      tokenAnswer.subject,
+      tokenAnswer.email,
+      tokenAnswer.emailVerified,
+      tokenAnswer.overrides,
+    ),
     token_type: "Bearer",
     expires_in: 3600,
     scope: "openid email profile",
@@ -155,8 +207,13 @@ async function finishSignIn(state: string, jar: string, query: Record<string, st
   });
 }
 
-async function signInWithGoogle(subject: string, email: string, emailVerified = true) {
-  tokenAnswer = { kind: "tokens", subject, email, emailVerified };
+async function signInWithGoogle(
+  subject: string,
+  email: string,
+  emailVerified = true,
+  overrides?: TokenClaimOverrides,
+) {
+  tokenAnswer = { kind: "tokens", subject, email, emailVerified, overrides };
   const started = await startSignIn();
   const callback = await finishSignIn(started.state, started.jar);
   return { callback, sessionCookie: jarFrom(callback) };
@@ -247,6 +304,15 @@ async function countOwnerships(subject: string) {
       eq(accountIdentityOwnerships.providerId, "google"),
       eq(accountIdentityOwnerships.providerSubject, subject),
     ));
+}
+
+async function googleMethodUsable(sessionCookie: string): Promise<boolean | undefined> {
+  const response = await app.request(`${ORIGIN}/api/account-identities`, {
+    headers: { cookie: sessionCookie },
+  });
+  expect(response.status).toBe(200);
+  const listed = await response.json() as { methods: { providerId: string; usable: boolean }[] };
+  return listed.methods.find((method) => method.providerId === "google")?.usable;
 }
 
 async function trackGoogleUser(email: string) {
@@ -413,6 +479,58 @@ describe("google sign-in", () => {
     expect(users[0]!.id).toBe(existing.userId);
   });
 
+  // The pinned adapter's `getUserInfo` only decodes the ID token, so these
+  // three cases are the whole reason `social-providers.ts` calls
+  // `verifyIdToken` before anything believes a subject. Each one is a token
+  // the token endpoint really returned over the transport; only the claims or
+  // the signing key are wrong.
+  for (const [name, overrides] of [
+    ["is signed by a key Google does not publish", { signWith: "unpublished" }],
+    ["names another audience", { audience: "st132-other-client.apps.googleusercontent.test" }],
+    ["names another issuer", { issuer: "https://accounts.evil.test" }],
+  ] as [string, TokenClaimOverrides][]) {
+    it(`refuses a sign-in whose id token ${name}`, async () => {
+      const subject = `st132-sub-${randomUUID()}`;
+      const email = `st132-${randomUUID()}@example.test`;
+      const { callback } = await signInWithGoogle(subject, email, true, overrides);
+
+      expect(callback.status).toBe(302);
+      expect(callback.headers.get("location") ?? "").toContain("error=");
+      expect(await countAccounts(subject)).toHaveLength(0);
+      expect(await countOwnerships(subject)).toHaveLength(0);
+      const users = await db.select({ id: authUser.id }).from(authUser).where(eq(authUser.email, email));
+      expect(users).toHaveLength(0);
+    });
+  }
+
+  it("lifts the google method once a later callback reports the email verified", async () => {
+    const subject = `st132-sub-${randomUUID()}`;
+    const email = `st132-${randomUUID()}@example.test`;
+    const first = await signInWithGoogle(subject, email, false);
+    expect(first.callback.status).toBe(302);
+    const user = await trackGoogleUser(email);
+    expect(user).toBeTruthy();
+    const unverified = await countOwnerships(subject);
+    expect(unverified).toHaveLength(1);
+    expect(unverified[0]!.verified).toBe(false);
+    expect(await googleMethodUsable(first.sessionCookie)).toBe(false);
+
+    // Better Auth creates that account row exactly once, so a recovery that
+    // only ran on creation could never lift the method again.
+    const second = await signInWithGoogle(subject, email, true);
+    expect(second.callback.status).toBe(302);
+    const verified = await countOwnerships(subject);
+    expect(verified).toHaveLength(1);
+    expect(verified[0]!.verified).toBe(true);
+    expect(verified[0]!.userId).toBe(user!.id);
+    expect(await googleMethodUsable(second.sessionCookie)).toBe(true);
+    // Recovered in place: no second user, no second account row.
+    expect(await countAccounts(subject)).toHaveLength(1);
+    const users = await db.select({ id: authUser.id }).from(authUser).where(eq(authUser.email, email));
+    expect(users).toHaveLength(1);
+    expect(users[0]!.id).toBe(user!.id);
+  });
+
   it("trusts only this deployment's own origin as a return target", async () => {
     // Better Auth validates `callbackURL` / `errorCallbackURL` with exactly this
     // predicate before it issues an authorization URL. Asserting the predicate
@@ -541,6 +659,32 @@ describe("explicit google bind", () => {
     expect(callback.status).toBe(302);
     const fragment = fragmentOf(callback.headers.get("location") ?? "");
     expect(fragment.get("identityLinkError")).toBe("IDENTITY_ACTION_SESSION_CHANGED");
+  });
+
+  it("refuses a bind whose id token is signed by a key Google does not publish", async () => {
+    const subject = `st132-bind-${randomUUID()}`;
+    const intent = await openLinkIntent(account.cookie);
+    const authorized = await authorizeBind(account.cookie, intent.actionId);
+    tokenAnswer = {
+      kind: "tokens",
+      subject,
+      email: account.email,
+      emailVerified: true,
+      overrides: { signWith: "unpublished" },
+    };
+    const callback = await bindCallback(
+      cookieHeader(account.cookie, authorized.bindCookie),
+      authorized.state,
+    );
+    expect(callback.status).toBe(302);
+    const fragment = fragmentOf(callback.headers.get("location") ?? "");
+    // An unverifiable token is indistinguishable from no usable answer at all,
+    // and both leave the intent unconsumed rather than issuing a proof.
+    expect(fragment.get("identityLink")).toBe("error");
+    expect(fragment.get("identityLinkProof")).toBeNull();
+    expect(fragment.get("identityLinkError")).toBe("IDENTITY_PROVIDER_UNAVAILABLE");
+    expect(await countOwnerships(subject)).toHaveLength(0);
+    expect(await countAccounts(subject)).toHaveLength(0);
   });
 
   it("refuses a callback whose state does not match the signed flow", async () => {
