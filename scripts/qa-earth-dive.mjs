@@ -143,13 +143,57 @@ async function readRoutePoint(page) {
   });
 }
 
-/** Which element a real gesture at this point would reach. */
+/** Resolve a pointer-reachable sample inside the Route Point's 44px hit area. */
 async function activateDetailedRoutePoint(page, routePoint) {
-  const target = await page.evaluate(({ lon, lat }) => (
-    window.__detailedEarthMapProject?.(lon, lat) ?? null
-  ), routePoint);
+  const target = await page.evaluate(({ lon, lat }) => {
+    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    if (!projected || !Number.isFinite(projected.x) || !Number.isFinite(projected.y)) return null;
+
+    // Floating Atlas chrome can legitimately cover the centre of a rendered
+    // marker. A real user still has the remainder of the 44px hit target, so
+    // probe only inside that same radius and require the sampled point to hit
+    // the Detailed Earth surface before dispatching the real pointer click.
+    // This keeps the QA bound to actual browser hit testing instead of calling
+    // the activation callback or MapLibre event machinery directly.
+    const samples = [{ x: projected.x, y: projected.y }];
+    for (const radius of [8, 14, 20]) {
+      for (let arm = 0; arm < 8; arm += 1) {
+        const angle = (arm * Math.PI) / 4;
+        samples.push({
+          x: projected.x + Math.cos(angle) * radius,
+          y: projected.y + Math.sin(angle) * radius,
+        });
+      }
+    }
+    for (const sample of samples) {
+      if (
+        sample.x < 0 || sample.y < 0
+        || sample.x >= window.innerWidth || sample.y >= window.innerHeight
+      ) continue;
+      const hit = document.elementFromPoint(sample.x, sample.y);
+      if (hit instanceof Element && hit.closest(".detailed-earth-map")) {
+        return {
+          ...sample,
+          projected,
+          hit: { tag: hit.tagName, className: hit.getAttribute("class") },
+        };
+      }
+    }
+    const centreHit = document.elementFromPoint(projected.x, projected.y);
+    return {
+      ...projected,
+      projected,
+      blocked: true,
+      hit: centreHit instanceof Element
+        ? { tag: centreHit.tagName, className: centreHit.getAttribute("class") }
+        : null,
+    };
+  }, routePoint);
   if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.y)) {
     throw new Error(`Detailed Earth did not publish a projection for Route Point ${routePoint.id}`);
+  }
+  if (target.blocked) {
+    throw new Error(`Detailed Earth Route Point ${routePoint.id} has no pointer-reachable sample inside its 44px hit area: ${JSON.stringify(target)}`);
   }
   await page.mouse.click(target.x, target.y);
   const expected = `${routePoint.journeyId}:${routePoint.id}`;
