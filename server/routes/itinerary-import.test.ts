@@ -253,11 +253,19 @@ describe("link-ingestion request forgery guard", () => {
     // The name answers publicly while it is being checked and link-locally
     // straight afterwards — the DNS rebinding case the pin exists for.
     lookup.mockResolvedValueOnce(PUBLIC_ADDRESS);
-    upstream.mockResolvedValueOnce(new Response("<html>plan</html>", {
-      headers: { "content-type": "text/html" },
-    }));
+    upstream
+      .mockResolvedValueOnce(new Response("<html>plan</html>", {
+        headers: { "content-type": "text/html" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(READING), {
+        headers: { "content-type": "application/json" },
+      }));
 
-    await post({ source: "link", link: "https://plans.example/tripmap/routePlan?id=1" });
+    const response = await post({
+      source: "link",
+      link: "https://plans.example/tripmap/routePlan?id=1",
+    });
+    expect(response.status).toBe(200);
 
     expect(hops).toHaveLength(1);
     // The request could only ever have connected to the checked address; the

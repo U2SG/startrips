@@ -58,9 +58,10 @@ function reading(
 
 describe("planning the bands of a long screenshot", () => {
   it("leaves an image that already fits as one whole segment", () => {
-    const plan = planItineraryImageSegments({ pageIndex: 0, width: 1000, height: 800 });
+    const height = Math.floor(MAX_SEGMENT_PIXELS / 1_000);
+    const plan = planItineraryImageSegments({ pageIndex: 0, width: 1_000, height });
     expect(plan).toEqual([
-      { pageIndex: 0, segmentIndex: 0, top: 0, height: 800, overlapWithPrevious: 0 },
+      { pageIndex: 0, segmentIndex: 0, top: 0, height, overlapWithPrevious: 0 },
     ]);
   });
 
