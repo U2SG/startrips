@@ -33,6 +33,18 @@ export function isJourneyRecordedTrackRequestCurrent(
     && request.revision === active.revision;
 }
 
+export async function runJourneyRecordedTrackScopedRequest<T>(
+  scope: JourneyRecordedTrackRequestScope,
+  activeScope: () => JourneyRecordedTrackRequestScope,
+  request: () => Promise<T>,
+  commit: (value: T) => void | Promise<void>,
+) {
+  const value = await request();
+  if (!isJourneyRecordedTrackRequestCurrent(scope, activeScope())) return false;
+  await commit(value);
+  return isJourneyRecordedTrackRequestCurrent(scope, activeScope());
+}
+
 export function journeyRecordedTrackErrorMessage(error: unknown, action: "load" | "import" | "withdraw") {
   if (!(error instanceof JourneyRecordedTrackApiError)) {
     return action === "import"
@@ -100,6 +112,7 @@ export function JourneyRecordedTracks({ journeyId }: { journeyId: string }) {
   const fileReadRef = useRef(0);
   const controllersRef = useRef(new Set<AbortController>());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const confirmCancelRef = useRef<HTMLButtonElement>(null);
 
   function abortRequests() {
     for (const controller of controllersRef.current) controller.abort();
@@ -150,6 +163,7 @@ export function JourneyRecordedTracks({ journeyId }: { journeyId: string }) {
     setMessage("");
     setImportPending(false);
     setWithdrawPending(false);
+    setReadingFile(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
     void refreshTracks(scope);
     return () => {
@@ -160,6 +174,11 @@ export function JourneyRecordedTracks({ journeyId }: { journeyId: string }) {
       abortRequests();
     };
   }, [journeyId]);
+
+  useEffect(() => {
+    if (!confirmWithdrawal) return;
+    confirmCancelRef.current?.focus({ preventScroll: true });
+  }, [confirmWithdrawal]);
 
   async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0] ?? null;
@@ -194,22 +213,27 @@ export function JourneyRecordedTracks({ journeyId }: { journeyId: string }) {
     setConfirmWithdrawal(null);
     setMessage("");
     try {
-      const result = await importJourneyRecordedTrack(scope.journeyId, selected.document, {
-        signal: controller.signal,
-      });
-      if (!scopeIsCurrent(scope)) return;
-      const confirmed = result.replayed
-        ? "服务器确认这份文件与已有记录相同；没有创建第二份记录。"
-        : "记录轨迹已导入。";
-      setMessage(confirmed);
-      const reconciled = await refreshTracks(scope, true);
-      if (!scopeIsCurrent(scope)) return;
-      if (!reconciled) {
-        setMessage(`${confirmed} 但当前无法重新读取列表；重新打开 Journey 后会从服务器恢复。`);
-        return;
-      }
-      setSelected(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      await runJourneyRecordedTrackScopedRequest(
+        scope,
+        () => activeScopeRef.current,
+        () => importJourneyRecordedTrack(scope.journeyId!, selected.document, {
+          signal: controller.signal,
+        }),
+        async (result) => {
+          const confirmed = result.replayed
+            ? "服务器确认这份文件与已有记录相同；没有创建第二份记录。"
+            : "记录轨迹已导入。";
+          setMessage(confirmed);
+          const reconciled = await refreshTracks(scope, true);
+          if (!scopeIsCurrent(scope)) return;
+          if (!reconciled) {
+            setMessage(`${confirmed} 但当前无法重新读取列表；重新打开 Journey 后会从服务器恢复。`);
+            return;
+          }
+          setSelected(null);
+          if (fileInputRef.current) fileInputRef.current.value = "";
+        },
+      );
     } catch (error) {
       if (controller.signal.aborted || !scopeIsCurrent(scope)) return;
       setMessage(journeyRecordedTrackErrorMessage(error, "import"));
@@ -231,11 +255,16 @@ export function JourneyRecordedTracks({ journeyId }: { journeyId: string }) {
     setWithdrawPending(true);
     setMessage("");
     try {
-      await withdrawJourneyRecordedTrack(scope.journeyId, operationKey, { signal: controller.signal });
-      if (!scopeIsCurrent(scope)) return;
-      setConfirmWithdrawal(null);
-      setTracks((current) => current.filter((track) => track.operationKey !== operationKey));
-      setMessage("这份记录轨迹已撤回；Route Point 和媒体没有被修改。 ");
+      await runJourneyRecordedTrackScopedRequest(
+        scope,
+        () => activeScopeRef.current,
+        () => withdrawJourneyRecordedTrack(scope.journeyId!, operationKey, { signal: controller.signal }),
+        () => {
+          setConfirmWithdrawal(null);
+          setTracks((current) => current.filter((track) => track.operationKey !== operationKey));
+          setMessage("这份记录轨迹已撤回；Route Point 和媒体没有被修改。 ");
+        },
+      );
     } catch (error) {
       if (controller.signal.aborted || !scopeIsCurrent(scope)) return;
       setMessage(journeyRecordedTrackErrorMessage(error, "withdraw"));
@@ -302,7 +331,14 @@ export function JourneyRecordedTracks({ journeyId }: { journeyId: string }) {
                   <div className="journey-recorded-tracks__confirm" role="alertdialog" aria-label={`确认撤回记录 ${index + 1}`}>
                     <p>只撤回这份记录轨迹；不会删除 Route Point、照片或视频。</p>
                     <div>
-                      <button type="button" disabled={withdrawPending} onClick={() => setConfirmWithdrawal(null)}>取消</button>
+                      <button
+                        ref={confirmCancelRef}
+                        type="button"
+                        disabled={withdrawPending}
+                        onClick={() => setConfirmWithdrawal(null)}
+                      >
+                        取消
+                      </button>
                       <button
                         type="button"
                         className="is-destructive"

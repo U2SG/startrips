@@ -1,11 +1,12 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  isJourneyRecordedTrackRequestCurrent,
   JourneyRecordedTracks,
   journeyRecordedTrackErrorMessage,
+  runJourneyRecordedTrackScopedRequest,
+  type JourneyRecordedTrackRequestScope,
 } from "./JourneyRecordedTracks";
 import { JourneyRecordedTrackApiError } from "./journeyRecordedTracksApi";
 
@@ -44,17 +45,41 @@ describe("JourneyRecordedTracks", () => {
     expect(message).not.toContain("没有写入");
   });
 
-  it("invalidates a late response after Journey switch or editor close", () => {
-    const request = { journeyId: "journey-a", revision: 7 };
-    expect(isJourneyRecordedTrackRequestCurrent(request, request)).toBe(true);
-    expect(isJourneyRecordedTrackRequestCurrent(request, {
-      journeyId: "journey-b",
-      revision: 8,
-    })).toBe(false);
-    expect(isJourneyRecordedTrackRequestCurrent(request, {
-      journeyId: null,
-      revision: 8,
-    })).toBe(false);
+  it("drops late import and withdrawal completions after Journey switch or editor close", async () => {
+    const deferred = <T,>() => {
+      let resolve!: (value: T | PromiseLike<T>) => void;
+      const promise = new Promise<T>((settle) => { resolve = settle; });
+      return { promise, resolve };
+    };
+
+    let active: JourneyRecordedTrackRequestScope = { journeyId: "journey-a", revision: 7 };
+    const importScope = active;
+    const importResponse = deferred<{ replayed: boolean }>();
+    const importCommit = vi.fn();
+    const importRequest = runJourneyRecordedTrackScopedRequest(
+      importScope,
+      () => active,
+      () => importResponse.promise,
+      importCommit,
+    );
+    active = { journeyId: "journey-b", revision: 8 };
+    importResponse.resolve({ replayed: false });
+    await expect(importRequest).resolves.toBe(false);
+    expect(importCommit).not.toHaveBeenCalled();
+
+    const withdrawalScope = active;
+    const withdrawalResponse = deferred<void>();
+    const withdrawalCommit = vi.fn();
+    const withdrawalRequest = runJourneyRecordedTrackScopedRequest(
+      withdrawalScope,
+      () => active,
+      () => withdrawalResponse.promise,
+      withdrawalCommit,
+    );
+    active = { journeyId: null, revision: 9 };
+    withdrawalResponse.resolve();
+    await expect(withdrawalRequest).resolves.toBe(false);
+    expect(withdrawalCommit).not.toHaveBeenCalled();
   });
 
   it("contains an explicit two-step withdrawal confirmation and no persistence/logging escape hatch", () => {
