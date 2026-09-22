@@ -46,7 +46,7 @@ import {
   type JourneySaveCallbackScope,
 } from "./journeySaveRecovery";
 import {
-  journeyVisualMedia,
+  isVisualMediaAsset,
   validateJourneyFiles,
   validateJourneyInput,
 } from "./journeyModel";
@@ -101,6 +101,51 @@ export type PendingJourneyMedia = {
   file: File;
   routePointDraftId: string | null;
 };
+
+export function composerMediaSummary(
+  journey: Pick<Journey, "media"> | null | undefined,
+  routePoints: readonly Pick<RouteDraftPoint, "id" | "draftId">[],
+  mediaFiles: readonly PendingJourneyMedia[],
+) {
+  type Names = { count: number; preview: string[] };
+  const persistedByPoint = new Map<string | null, Names>();
+  const pendingByDraft = new Map<string | null, Names>();
+  function appendName(groups: Map<string | null, Names>, id: string | null, name: string) {
+    let names = groups.get(id);
+    if (!names) {
+      names = { count: 0, preview: [] };
+      groups.set(id, names);
+    }
+    names.count += 1;
+    if (names.preview.length < 2) names.preview.push(name);
+  }
+
+  let existingVisualMediaCount = 0;
+  for (const media of journey?.media ?? []) {
+    if (!isVisualMediaAsset(media)) continue;
+    existingVisualMediaCount += 1;
+    appendName(persistedByPoint, media.routePointId, media.fileName);
+  }
+  for (const media of mediaFiles) {
+    appendName(pendingByDraft, media.routePointDraftId, media.file.name);
+  }
+
+  const byDraftId = new Map<string, { count: number; label: string }>();
+  for (const point of routePoints) {
+    const persisted = point.id ? persistedByPoint.get(point.id) : undefined;
+    const pending = pendingByDraft.get(point.draftId);
+    const count = (persisted?.count ?? 0) + (pending?.count ?? 0);
+    // Composer preserves model order, followed by the pending file order.
+    // Draft ids are separate from persisted ids, including an unsaved point.
+    const preview = [...(persisted?.preview ?? []), ...(pending?.preview ?? [])]
+      .slice(0, 2).join("、");
+    byDraftId.set(point.draftId, {
+      count,
+      label: count === 0 ? "暂无媒体归属此地点" : `${preview}${count > 2 ? ` 等 ${count} 个` : ""}`,
+    });
+  }
+  return { existingVisualMediaCount, byDraftId };
+}
 
 type PersistJourneyDraftOptions = {
   input: JourneyInput;
@@ -434,7 +479,10 @@ export function JourneyComposer({
   const activeLightEffect = LIGHT_EFFECTS.find((effect) => effect.id === lightEffect) ?? null;
   // The composer edits photos and videos; a journey soundtrack is managed in
   // the story dialog and is not counted here.
-  const existingVisualMediaCount = journey ? journeyVisualMedia(journey).length : 0;
+  const { existingVisualMediaCount, byDraftId: mediaSummaryByDraftId } = useMemo(
+    () => composerMediaSummary(journey, routePoints, mediaFiles),
+    [journey?.media, routePoints, mediaFiles],
+  );
   const safeLightColor = /^#[0-9a-fA-F]{6}$/.test(lightColor) ? lightColor : LIGHT_COLORS[0];
   const activeLightGradient = activeLightEffect
     ? getLightEffectGradient(activeLightEffect.id, safeLightColor)
@@ -1168,20 +1216,7 @@ export function JourneyComposer({
   }
 
   function routePointMediaAssociation(point: RouteDraftPoint) {
-    const pending = mediaFiles.filter((media) => media.routePointDraftId === point.draftId);
-    const persisted = point.id && journey
-      ? journeyVisualMedia(journey).filter((media) => media.routePointId === point.id)
-      : [];
-    const names = [
-      ...persisted.map((media) => media.fileName),
-      ...pending.map((media) => media.file.name),
-    ];
-    if (names.length === 0) {
-      return { count: 0, label: "暂无媒体归属此地点" };
-    }
-    const preview = names.slice(0, 2).join("、");
-    const remainder = names.length > 2 ? ` 等 ${names.length} 个` : "";
-    return { count: names.length, label: `${preview}${remainder}` };
+    return mediaSummaryByDraftId.get(point.draftId)!;
   }
 
   async function applySavedResult(

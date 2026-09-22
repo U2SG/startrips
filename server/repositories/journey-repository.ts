@@ -64,9 +64,10 @@ export async function lockActiveAtlas(
   return locked.rows.length > 0;
 }
 
-async function loadJourneys(atlasId: string, journeyId?: string) {
-  const atlasScope = journeyId
-    ? and(eq(journeys.atlasId, atlasId), eq(journeys.id, journeyId))
+async function loadJourneys(atlasId: string, requestedIds?: readonly string[]) {
+  if (requestedIds?.length === 0) return [];
+  const atlasScope = requestedIds
+    ? and(eq(journeys.atlasId, atlasId), inArray(journeys.id, [...requestedIds]))
     : eq(journeys.atlasId, atlasId);
   const journeyRows = await db
     .select({
@@ -138,7 +139,11 @@ export function listJourneysForAtlas(atlasId: string) {
 }
 
 export async function getJourneyForAtlas(journeyId: string, atlasId: string) {
-  return (await loadJourneys(atlasId, journeyId))[0];
+  return (await loadJourneys(atlasId, [journeyId]))[0];
+}
+
+export function getJourneysForAtlas(journeyIds: readonly string[], atlasId: string) {
+  return loadJourneys(atlasId, journeyIds);
 }
 
 export async function createJourneyForAtlas(

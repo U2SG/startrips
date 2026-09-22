@@ -21,7 +21,7 @@ import {
   completeAssetPreview,
   type PreviewSourceValues,
 } from "../services/media-preview";
-import { getJourneyForAtlas } from "../repositories/journey-repository";
+import { getJourneyForAtlas, getJourneysForAtlas } from "../repositories/journey-repository";
 import { attachRecordedEvidenceToNewAsset } from "../repositories/media-evidence-repository";
 import { writeJourneyMediaOrder } from "../repositories/media-order";
 import {
@@ -1618,11 +1618,12 @@ uploadRoutes.post("/assets/move", async (context) => {
     );
   }
 
-  const sourceJourney = await getJourneyForAtlas(sourceJourneyId, atlas.id);
   if (!crossJourney) {
-    return context.json({ journey: sourceJourney });
+    return context.json({ journey: await getJourneyForAtlas(sourceJourneyId, atlas.id) });
   }
-  const destinationJourney = await getJourneyForAtlas(targetJourneyId, atlas.id);
+  const updatedJourneys = await getJourneysForAtlas([sourceJourneyId, targetJourneyId], atlas.id);
+  const sourceJourney = updatedJourneys.find((journey) => journey.id === sourceJourneyId);
+  const destinationJourney = updatedJourneys.find((journey) => journey.id === targetJourneyId);
   const undo = typeof result === "object" ? result.undo : null;
   return context.json({
     journey: sourceJourney,
@@ -1852,8 +1853,9 @@ uploadRoutes.post("/assets/move/undo", async (context) => {
     );
   }
 
+  const updatedJourneys = await getJourneysForAtlas([input.sourceJourneyId, input.targetJourneyId], atlas.id);
   return context.json({
-    sourceJourney: await getJourneyForAtlas(input.sourceJourneyId, atlas.id),
-    destinationJourney: await getJourneyForAtlas(input.targetJourneyId, atlas.id),
+    sourceJourney: updatedJourneys.find((journey) => journey.id === input.sourceJourneyId),
+    destinationJourney: updatedJourneys.find((journey) => journey.id === input.targetJourneyId),
   });
 });

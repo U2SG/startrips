@@ -14,6 +14,7 @@ import { db, pool } from "../db/client";
 import {
   createJourneyForAtlas,
   getJourneyDeletionCandidateForAtlas,
+  getJourneysForAtlas,
   JOURNEY_DELETION_GRACE_MS,
   JourneyRouteChangedError,
   listJourneysPendingDeletion,
@@ -986,6 +987,7 @@ describe("media and atlas HTTP endpoints", () => {
     const destination = await createJourneyForAtlas(identity.atlasId, identity.userId, {
       ...baseJourney,
       title: "Cross move destination",
+      startedOn: "2026-08-10", // The batched read sorts destination before source.
     });
     if (!source || !destination) throw new Error("Cross-move fixtures were not created");
     const sourceStopId = source.routePoints[0].id;
@@ -1487,6 +1489,51 @@ describe("tenant-scoped journey repository", () => {
   it("never lists journeys from another atlas", async () => {
     const visible = await listJourneysForAtlas(atlasA);
     expect(visible.map((journey) => journey.title)).toEqual(["Only A"]);
+  });
+
+  it("loads only requested live Journeys with their own ordered route and media", async () => {
+    const [atlas] = await db.insert(atlases).values({
+      organizationId: `batch-journey-read-${randomUUID()}`,
+      title: "Batched reads",
+    }).returning({ id: atlases.id });
+    atlasIds.push(atlas.id);
+    const [early, late, unrequested, deleting] = await Promise.all([
+      ["Early", "2026-08-09"],
+      ["Late", "2026-08-11"],
+      ["Unrequested", "2026-08-10"],
+      ["Deleting", "2026-08-10"],
+    ].map(([title, startedOn]) => createJourneyForAtlas(atlas.id, "batch-reader", {
+      ...baseJourney,
+      title,
+      startedOn,
+    })));
+    if (!early || !late || !unrequested || !deleting) {
+      throw new Error("Batched Journey fixtures were not created");
+    }
+    await markJourneyForDeletionForAtlas(deleting.id, atlas.id);
+    const assets = await db.insert(mediaAssets).values([
+      { journeyId: late.id, routePointId: null, sortOrder: 3, fileName: "last.jpg" },
+      { journeyId: late.id, routePointId: late.routePoints[0].id, sortOrder: 0, fileName: "first.jpg" },
+      { journeyId: early.id, routePointId: early.routePoints[1].id, sortOrder: 4, fileName: "early.jpg" },
+    ].map((asset) => ({
+      ...asset,
+      storageDriver: "test",
+      storageKey: `${atlas.id}/${randomUUID()}`,
+      mimeType: "image/jpeg",
+      bytes: 128,
+      uploadedByUserId: "batch-reader",
+    }))).returning({ id: mediaAssets.id });
+
+    expect(await getJourneysForAtlas([], atlas.id)).toEqual([]);
+    expect(await getJourneysForAtlas([journeyB, deleting.id, randomUUID()], atlas.id)).toEqual([]);
+    const loaded = await getJourneysForAtlas([
+      late.id, early.id, late.id, journeyB, deleting.id, randomUUID(),
+    ], atlas.id);
+    expect(loaded.map((journey) => journey.id)).toEqual([early.id, late.id]);
+    expect(loaded.map((journey) => journey.routePoints.map((point) => point.id)))
+      .toEqual([early.routePoints.map((point) => point.id), late.routePoints.map((point) => point.id)]);
+    expect(loaded.map((journey) => journey.media.map((asset) => asset.id)))
+      .toEqual([[assets[2].id], [assets[1].id, assets[0].id]]);
   });
 
   it("cannot update a journey through another atlas id", async () => {

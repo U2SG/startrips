@@ -431,12 +431,45 @@ export function storyAssetIndexForId(
   media: readonly JourneyMediaAsset[],
   assetId: string | null,
   fallbackIndex: number,
+  indexById?: ReadonlyMap<string, number>,
 ) {
   if (assetId) {
-    const index = media.findIndex((asset) => asset.id === assetId);
+    const index = indexById
+      ? indexById.get(assetId) ?? -1
+      : media.findIndex((asset) => asset.id === assetId);
     if (index >= 0) return index;
   }
   return Math.min(Math.max(0, fallbackIndex), Math.max(0, media.length - 1));
+}
+
+export function indexStoryMedia(media: readonly JourneyMediaAsset[]) {
+  const byId = new Map<string, JourneyMediaAsset>();
+  const indexById = new Map<string, number>();
+  media.forEach((asset, index) => {
+    // Match find/findIndex if a malformed list repeats an id.
+    if (byId.has(asset.id)) return;
+    byId.set(asset.id, asset);
+    indexById.set(asset.id, index);
+  });
+  return { byId, indexById };
+}
+
+export function storyMediaInOptimisticOrder(
+  media: JourneyMediaAsset[],
+  localOrder: readonly string[] | null,
+) {
+  if (!localOrder) return media;
+  const byId = new Map(media.map((asset) => [asset.id, asset]));
+  const ordered = localOrder.map((id) => byId.get(id)).filter(
+    (asset): asset is JourneyMediaAsset => asset !== undefined,
+  );
+  const orderedIds = new Set(localOrder);
+  // Missing/deleted ids cannot revive media; newly received assets append in
+  // canonical scope order while the optimistic request is still in flight.
+  for (const asset of media) {
+    if (!orderedIds.has(asset.id)) ordered.push(asset);
+  }
+  return ordered;
 }
 
 export function storyAutoplayNextIndex(
@@ -1920,26 +1953,19 @@ export function JourneyStory({
     () => journey ? storyMediaForScope(journey, selectedRoutePointId) : [],
     [journey, selectedRoutePointId],
   );
+  const scopedMediaIndex = useMemo(() => indexStoryMedia(scopedMedia), [scopedMedia]);
   // Review P2: while a drag is pending, the overview renders the optimistic
   // order; otherwise it follows scopedMedia (server truth).
-  const orderedScopedMedia = useMemo(() => {
-    if (!localMediaOrder) return scopedMedia;
-    const byId = new Map(scopedMedia.map((asset) => [asset.id, asset]));
-    const ordered = localMediaOrder.map((id) => byId.get(id)).filter(
-      (asset): asset is JourneyMediaAsset => asset !== undefined,
-    );
-    // Any asset not in the local order (e.g. a just-uploaded one) appends.
-    for (const asset of scopedMedia) {
-      if (!localMediaOrder.includes(asset.id)) ordered.push(asset);
-    }
-    return ordered;
-  }, [localMediaOrder, scopedMedia]);
+  const orderedScopedMedia = useMemo(
+    () => storyMediaInOptimisticOrder(scopedMedia, localMediaOrder),
+    [localMediaOrder, scopedMedia],
+  );
   const soundtrack = journey ? journeySoundtrack(journey) : null;
   const activeAsset = scopedMedia[assetIndex] ?? null;
   if (incomingAssetId === null && pendingTargetRef.current === null) {
     requestedMediaRef.current = activeAsset?.id ?? null;
   }
-  const requestedMediaIndex = storyAssetIndexForId(scopedMedia, pendingMediaId ?? incomingAssetId, assetIndex);
+  const requestedMediaIndex = storyAssetIndexForId(scopedMedia, pendingMediaId ?? incomingAssetId, assetIndex, scopedMediaIndex.indexById);
   const autoplayVideoCandidate = storyAutoplayVideoCandidate(
     scopedMedia,
     assetIndex,
@@ -2273,13 +2299,13 @@ export function JourneyStory({
     // the settled media identity stable and rebase its index onto the new
     // sequence instead of silently switching to whichever asset inherited the
     // previous numeric index.
-    setAssetIndex((current) => storyAssetIndexForId(scopedMedia, shownAssetId, current));
-    if (shownAssetId && !scopedMedia.some((candidate) => candidate.id === shownAssetId)) {
+    setAssetIndex((current) => storyAssetIndexForId(scopedMedia, shownAssetId, current, scopedMediaIndex.indexById));
+    if (shownAssetId && !scopedMediaIndex.byId.has(shownAssetId)) {
       setShownAssetId(null);
       setIncomingAssetId(null);
       setPendingMediaTarget(null);
     }
-  }, [scopedMedia, shownAssetId]);
+  }, [scopedMedia, scopedMediaIndex, shownAssetId]);
 
   useEffect(() => {
     mediaReadsRef.current = mediaReads;
@@ -2362,18 +2388,21 @@ export function JourneyStory({
     if (autoplayVideoCandidate) loadMediaRead(autoplayVideoCandidate.id);
   }, [autoplayVideoCandidate?.id, loadMediaRead]);
 
-  const stackNeighborIndices = useMemo(() => mediaStackNeighbors(
-    scopedMedia.findIndex((candidate) => candidate.id === (shownAssetId ?? activeAsset?.id)),
-    scopedMedia.length,
-    selectedRoutePointId !== null,
-  ), [shownAssetId, activeAsset?.id, scopedMedia, selectedRoutePointId]);
+  const stackNeighborIndices = useMemo(() => {
+    const anchorId = shownAssetId ?? activeAsset?.id;
+    return mediaStackNeighbors(
+      anchorId === undefined ? -1 : scopedMediaIndex.indexById.get(anchorId) ?? -1,
+      scopedMedia.length,
+      selectedRoutePointId !== null,
+    );
+  }, [shownAssetId, activeAsset?.id, scopedMedia, scopedMediaIndex, selectedRoutePointId]);
 
   // #11: prepare adjacent slideshow media while the active one is on screen.
   // The window is next 1 + previous 1 for manual browsing, next 2 for
   // autoplay. Only images are decoded ahead; videos stay at preload metadata.
   useEffect(() => {
     if (!activeAsset || scopedMedia.length < 2) return;
-    const activeIndex = scopedMedia.findIndex((candidate) => candidate.id === activeAsset.id);
+    const activeIndex = scopedMediaIndex.indexById.get(activeAsset.id) ?? -1;
     if (activeIndex < 0) return;
     const windowFor = prefetchWindowFor(activeIndex, scopedMedia.length, playing);
     const target = new Set(
@@ -2395,7 +2424,7 @@ export function JourneyStory({
         decodeRegistryRef.current.release(assetId);
       }
     }
-  }, [activeAsset?.id, scopedMedia, playing, loadMediaRead, stackNeighborIndices]);
+  }, [activeAsset?.id, scopedMedia, scopedMediaIndex, playing, loadMediaRead, stackNeighborIndices]);
 
   // #11: start the browser decode for any image whose signed read became
   // ready inside the prefetch window (or is the current frame). Runs whenever
@@ -2403,7 +2432,7 @@ export function JourneyStory({
   useEffect(() => {
     const windowTargets = new Set<string>([activeAsset?.id ?? "", ...stackNeighborIndices.map((index) => scopedMedia[index].id)]);
     if (activeAsset && scopedMedia.length >= 2) {
-      const activeIndex = scopedMedia.findIndex((candidate) => candidate.id === activeAsset.id);
+      const activeIndex = scopedMediaIndex.indexById.get(activeAsset.id) ?? -1;
       if (activeIndex >= 0) {
         const windowFor = prefetchWindowFor(activeIndex, scopedMedia.length, playing);
         for (const index of [...windowFor.next, ...windowFor.previous]) {
@@ -2417,13 +2446,13 @@ export function JourneyStory({
         state.status === "ready"
         && windowTargets.has(assetId)
       ) {
-        const asset = scopedMedia.find((candidate) => candidate.id === assetId);
+        const asset = scopedMediaIndex.byId.get(assetId);
         if (asset?.mimeType.startsWith("image/")) {
           decodeRegistryRef.current.ensure(assetId, state.url);
         }
       }
     }
-  }, [mediaReads, activeAsset?.id, scopedMedia, playing, stackNeighborIndices]);
+  }, [mediaReads, activeAsset?.id, scopedMedia, scopedMediaIndex, playing, stackNeighborIndices]);
 
   // Initial selection has no prior page to preserve.
   useEffect(() => {
@@ -2442,7 +2471,7 @@ export function JourneyStory({
     if (mediaGestureHolding) return;
     const pendingId = pendingTargetRef.current;
     if (pendingId === null) return;
-    const pendingIndex = scopedMedia.findIndex((candidate) => candidate.id === pendingId);
+    const pendingIndex = scopedMediaIndex.indexById.get(pendingId) ?? -1;
     const target = scopedMedia[pendingIndex];
     if (!target) {
       setPendingMediaTarget(null);
@@ -2475,7 +2504,7 @@ export function JourneyStory({
     setPendingMediaTarget(null);
     setIncomingAssetId(target.id);
     setAssetIndex(pendingIndex);
-  }, [decodeSettleRevision, mediaReads, scopedMedia, activeAsset?.id, playing, pendingMediaId, mediaGestureHolding, setPendingMediaTarget, reportStageMediaError]);
+  }, [decodeSettleRevision, mediaReads, scopedMedia, scopedMediaIndex, activeAsset?.id, playing, pendingMediaId, mediaGestureHolding, setPendingMediaTarget, reportStageMediaError]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -2517,14 +2546,14 @@ export function JourneyStory({
     : "";
   // These are semantic identities; StoryMediaPages retains the physical pages.
   const shownAsset = shownAssetId
-    ? scopedMedia.find((candidate) => candidate.id === shownAssetId) ?? null
+    ? scopedMediaIndex.byId.get(shownAssetId) ?? null
     : asset;
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
   const incoming = incomingAssetId && incomingAssetId !== shownAssetId
-    ? scopedMedia.find((candidate) => candidate.id === incomingAssetId) ?? null
+    ? scopedMediaIndex.byId.get(incomingAssetId) ?? null
     : null;
   const pendingTarget = pendingTargetRef.current !== null
-    ? scopedMedia.find((candidate) => candidate.id === pendingTargetRef.current) ?? null
+    ? scopedMediaIndex.byId.get(pendingTargetRef.current) ?? null
     : null;
   const pendingTargetRead = pendingTarget ? mediaReads[pendingTarget.id] : null;
   const mediaStageWaiting = Boolean(
@@ -2649,7 +2678,7 @@ export function JourneyStory({
   function resolveMediaDragNeighbor(dx: number, wrap: boolean) {
     if (dx === 0) return null;
     const direction: -1 | 1 = dx < 0 ? 1 : -1;
-    const anchorIndex = storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex);
+    const anchorIndex = storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById);
     const index = storyMediaNeighborIndex(anchorIndex, scopedMedia.length, direction, wrap && selectedRoutePointId !== null);
     if (index === null) return null;
     const asset = scopedMedia[index];
@@ -2758,7 +2787,7 @@ export function JourneyStory({
       pages?.style.setProperty("--story-live-opacity", getComputedStyle(drag.base).opacity);
       setPendingMediaTarget(null);
       requestedMediaRef.current = shownAssetId;
-      setAssetIndex(storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex));
+      setAssetIndex(storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById));
       if (!drag.preserveNativeVideoCapture) {
         try {
           if (!drag.container.hasPointerCapture(pointerId)) {
@@ -3471,7 +3500,7 @@ export function JourneyStory({
 
   // Buttons, keyboard and automatic advance share the same readiness gate.
   function navigateMediaStep(direction: -1 | 1, wrap = false) {
-    const anchorIndex = storyAssetIndexForId(scopedMedia, requestedMediaRef.current, assetIndex);
+    const anchorIndex = storyAssetIndexForId(scopedMedia, requestedMediaRef.current, assetIndex, scopedMediaIndex.indexById);
     const index = storyMediaNeighborIndex(anchorIndex, scopedMedia.length, direction, wrap);
     if (index !== null) navigateToMedia(index, direction);
   }
@@ -3482,7 +3511,7 @@ export function JourneyStory({
     const target = scopedMedia[index];
     if (!target) return;
     mediaNavigationDirection.current = direction
-      ?? (index < storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex) ? -1 : 1);
+      ?? (index < storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById) ? -1 : 1);
     requestedMediaRef.current = target.id;
     // Reversing an in-flight transition back to the visible base needs no new
     // incoming layer (it would equal shownAssetId and never emit animationend).
@@ -3518,7 +3547,7 @@ export function JourneyStory({
       // image that never triggers a re-check.
       setPendingMediaTarget(target.id);
       setIncomingAssetId(null);
-      setAssetIndex(storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex));
+      setAssetIndex(storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById));
       if (targetRead?.status !== "ready") {
         loadMediaRead(target.id);
       } else if (target.mimeType.startsWith("image/")) {
@@ -3598,8 +3627,8 @@ export function JourneyStory({
   async function handleMediaReorderEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id || !manageMedia) return;
-    const activeAsset = scopedMedia.find((candidate) => candidate.id === active.id);
-    const overAsset = scopedMedia.find((candidate) => candidate.id === over.id);
+    const activeAsset = typeof active.id === "string" ? scopedMediaIndex.byId.get(active.id) : undefined;
+    const overAsset = typeof over.id === "string" ? scopedMediaIndex.byId.get(over.id) : undefined;
     if (!activeAsset || !overAsset) return;
     if (activeAsset.routePointId !== overAsset.routePointId) {
       setOrderMessage("整段旅程按章节排列；请选择同一章节内的媒体调整顺序。");
