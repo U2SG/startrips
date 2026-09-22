@@ -45,6 +45,7 @@ const TASKS = [
     capabilities: {
       "journey-dates": 'input[type="date"]',
       "journey-note": ".journey-story-fields textarea",
+      "recorded-track-management": '.journey-recorded-tracks input[type="file"]',
     },
   },
   {
@@ -401,6 +402,7 @@ try {
       lights: document.querySelectorAll(".journey-light-colors").length,
       precise: document.querySelectorAll(".journey-precise-location").length,
       picker: document.querySelectorAll(".journey-media-picker").length,
+      recordedTracks: document.querySelectorAll('.journey-recorded-tracks input[type="file"]').length,
     }));
     record("composer-mobile-ia:desktop:inline-architecture", { inline },
       inline.mobileLayout === null
@@ -410,6 +412,7 @@ try {
       && inline.lights === 1
       && inline.precise === 1
       && inline.picker === 1
+      && inline.recordedTracks === 1
       && desktop.pageErrors.length === 0);
   } finally {
     await desktop.context.close();

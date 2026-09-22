@@ -46,6 +46,7 @@ import {
   type PendingJourneyMedia,
 } from "./journeyDraftMedia";
 import { journeyLocationSearchErrorMessage } from "./journeyLocationSearchError";
+import { JourneyRecordedTracks } from "./JourneyRecordedTracks";
 import {
   ambiguousUnknownCreateMessage,
   confirmationRequiredUnknownCreateMessage,
@@ -1493,6 +1494,16 @@ export function JourneyComposer({
                 <label><span>旅程故事 <small>可选</small></span><textarea rows={5} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="记下沿途发生了什么，也可以留白。" /></label>
     </>
   );
+  const recordedTracksFragment = journey ? (
+    <JourneyRecordedTracks journeyId={journey.id} />
+  ) : (
+    <section className="journey-recorded-tracks journey-recorded-tracks--save-first" aria-label="记录轨迹">
+      <div className="journey-recorded-tracks__heading">
+        <div><small>RECORDED TRACE</small><h4>记录轨迹</h4></div>
+        <p>先保存这段 Journey，之后才能把 GPX 记录导入到它自己的私密轨迹中。</p>
+      </div>
+    </section>
+  );
   const appearanceFragment = (
     <>
                 <fieldset className="journey-light-colors">
@@ -1943,7 +1954,10 @@ export function JourneyComposer({
                     </h3>
                   </div>
                   {activeMobileTask === "journey-info" ? (
-                    <div className="journey-story-fields">{journeyMetaFragment}</div>
+                    <div className="journey-story-fields">
+                      {journeyMetaFragment}
+                      {recordedTracksFragment}
+                    </div>
                   ) : null}
                   {activeMobileTask === "media" ? mediaFieldsFragment : null}
                   {activeMobileTask === "appearance" ? (
@@ -1966,6 +1980,7 @@ export function JourneyComposer({
                   <div className="journey-story-fields">
                     {journeyTitleFragment}
                     {journeyMetaFragment}
+                    {recordedTracksFragment}
                     {appearanceFragment}
                   </div>
                 </section>
