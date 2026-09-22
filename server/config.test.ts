@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto";
+import { createPrivateKey, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { loadServerConfig } from "./config";
 
@@ -352,6 +352,10 @@ describe("Apple sign-in configuration", () => {
       ...appleEnvironment,
       APPLE_PRIVATE_KEY: privateKey.split("\n").join("\\n"),
     });
-    expect(config.applePrivateKey).toBe(privateKey.trim());
+    // The escaped form round-trips back to real PEM: the recovered text is
+    // the key it started as, and Node can still parse it as PKCS#8.
+    expect(config.applePrivateKey?.trim()).toBe(privateKey.trim());
+    expect(() => createPrivateKey(config.applePrivateKey as string))
+      .not.toThrow();
   });
 });
