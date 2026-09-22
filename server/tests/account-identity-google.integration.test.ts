@@ -501,7 +501,12 @@ describe("google sign-in", () => {
       const { callback } = await signInWithGoogle(subject, email, true, overrides);
 
       expect(callback.status).toBe(302);
-      expect(callback.headers.get("location") ?? "").toContain("error=");
+      // The exact code, not merely "some error": it is the one
+      // `callback.mjs` emits when `getUserInfo` returns null, so it is what
+      // distinguishes the adapter refusing this token from any other refusal
+      // that would also leave no rows behind.
+      expect(callback.headers.get("location") ?? "")
+        .toContain("error=unable_to_get_user_info");
       expect(await countAccounts(subject)).toHaveLength(0);
       expect(await countOwnerships(subject)).toHaveLength(0);
       const users = await db.select({ id: authUser.id }).from(authUser).where(eq(authUser.email, email));
