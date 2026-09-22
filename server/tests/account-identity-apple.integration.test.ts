@@ -8,7 +8,7 @@ import {
 } from "./apple-test-environment";
 import { randomUUID, sign } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
-import { and, eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray, like, not } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { app } from "../app";
 import {
@@ -18,6 +18,7 @@ import {
   listAccountIdentityMethods,
 } from "../account-identities/account-identity-repository";
 import { APPLE_PROVIDER_ID } from "../account-identities/apple-provider";
+import { ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_PREFIX } from "../account-identities/reverification-rate-limit";
 import {
   issueVerifiedProviderIdentityProof,
   verifyProviderIdentityProof,
@@ -184,12 +185,19 @@ beforeAll(() => {
 // One Apple authorization costs two `/api/auth/*` requests, and this file
 // drives a couple of dozen of them inside Better Auth's 60-second window
 // (`rateLimit.max` is 100, shared across every request the whole `core` suite
-// has already made). Clearing the budget is what
+// has already made). Clearing that budget is what
 // `account-identity-routes.integration.test.ts` does for the same reason: it
 // keeps these assertions about Apple rather than about whichever file ran
 // first. Nothing here asserts anything about rate limiting.
+//
+// The reverification limiter shares this one table, so its rows are left
+// alone: that suite asserts its own budget is actually spent, and a blanket
+// delete would be a cross-file reset waiting to happen.
 beforeEach(async () => {
-  await db.delete(rateLimit);
+  await db.delete(rateLimit).where(not(like(
+    rateLimit.key,
+    `${ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_PREFIX}%`,
+  )));
 });
 
 afterAll(async () => {
