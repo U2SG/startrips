@@ -248,18 +248,13 @@ export const nodeSourcePageTransport: SourcePageTransport = (request) =>
       (response) => {
         const chunks: Buffer[] = [];
         let size = 0;
-        let overflowed = false;
         response.on("data", (chunk: Buffer) => {
           size += chunk.byteLength;
           if (size > request.maxBytes) {
-            overflowed = true;
+            // Rejected here rather than on `end`: a destroyed response never
+            // emits `end`, so deferring the refusal would leave the read
+            // hanging until the outer timeout and report the wrong stage.
             response.destroy();
-            return;
-          }
-          chunks.push(chunk);
-        });
-        response.on("end", () => {
-          if (overflowed) {
             reject(new ItineraryImportStageError(
               "content-read",
               "ITINERARY_SOURCE_TOO_LARGE",
@@ -268,6 +263,9 @@ export const nodeSourcePageTransport: SourcePageTransport = (request) =>
             ));
             return;
           }
+          chunks.push(chunk);
+        });
+        response.on("end", () => {
           resolve({
             status: response.statusCode ?? 0,
             headers: response.headers as Record<string, string | undefined>,
