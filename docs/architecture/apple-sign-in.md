@@ -70,17 +70,40 @@ exchange fails and `/api/auth/callback/apple` redirects to the error URL with
   touched;
 - an already-bound Apple identity stays bound, and signs in again as soon as a
   valid key is configured;
-- every other way into the account — the password identity, and any other bound
-  provider — keeps working, which is the #345 last-actually-usable-method
-  guarantee.
+- every OTHER identity the account actually has — an enrolled password, any
+  other bound provider — keeps working untouched.
+
+What that list does not promise is that a second identity exists. An account
+created by a first-time Apple authorization has exactly one: Apple. Social
+sign-up writes a provider `account` row and its ownership row and no
+`credential` row, and `password-enrollment.ts` is an explicit, re-verified
+action the owner has to take later. #345's guarantee is
+`hasUsableLoginAfterRemoval` — it refuses to UNLINK a last usable method; it
+never manufactures a fallback for an account that only ever had one.
 
 `server/tests/account-identity-apple.integration.test.ts` asserts exactly this
 sequence: a rejected client secret, then the same account signing in unchanged
 once the credential works again.
 
-To stop offering Apple entirely, clear all five variables and restart. Accounts
-whose only bound identity was Apple keep their password identity; #345 is what
-prevents an account from reaching a state where Apple was its only way in.
+## Shutting Apple down, and who it locks out
+
+To stop offering Apple entirely, clear all five variables and restart. Read the
+consequence before doing it: `apple` leaves `usableProviderIds`, so every Apple
+`account` row stops satisfying `accountIdentityUsable`, and an account whose
+only identity is Apple — the normal shape of one created by Apple sign-up —
+has no way in at all. The same holds for the narrower case above while a
+revoked key is in place.
+
+Such an owner cannot self-serve out of it: password enrollment and identity
+management both require a signed-in, re-verified session, which is exactly what
+they no longer have. So a shutdown is reversible only from the operator's side:
+
+- before clearing the variables, give Apple-only owners a window to enroll a
+  password or bind another provider, and expect that not all of them will;
+- treat restoring the five variables as the recovery path for anyone who did
+  not, rather than assuming a password identity is waiting for them;
+- an outright Apple-Developer revocation with no intent to restore therefore
+  needs an out-of-band account-recovery plan, not this runbook.
 
 ## Identity is the subject, never the address
 
