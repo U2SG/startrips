@@ -119,7 +119,7 @@ bindable: `bindableSocialProviderIds` deliberately omits it while
 `configuredSocialProviderIds` includes it. An operator should expect Apple
 sign-in and returning sign-in to work, and explicit binding of an Apple subject
 to an existing account to be unavailable and unoffered rather than offered and
-broken. Issue #502 tracks building that path.
+broken. Issue #504 tracks building that path.
 
 A first-time Apple signup does record an ST-067 ownership row: the verified
 identity taken from the callback is carried across by
