@@ -381,6 +381,7 @@ export default function DetailedEarthMap({
     let idleCount = 0;
     let resizeCount = 0;
     let appliedJourneyOverlayRevision: string | null = null;
+    let loadedJourneyOverlayRevision: string | null = null;
     let paintedJourneyOverlayRevision: string | null = null;
     let pendingRevealCommit: {
       revision: number;
@@ -432,9 +433,15 @@ export default function DetailedEarthMap({
     const syncJourneyOverlay = () => {
       if (removed || !map.isStyleLoaded()) return false;
       const overlay = journeyOverlayRef.current;
+      const source = map.getSource(JOURNEY_OVERLAY_SOURCE_ID);
+      if (source && appliedJourneyOverlayRevision === overlay.revision) return true;
       try {
         installDetailedEarthJourneyOverlay(map, overlay);
         appliedJourneyOverlayRevision = overlay.revision;
+        loadedJourneyOverlayRevision = overlay.data.features.length === 0
+          || map.isSourceLoaded(JOURNEY_OVERLAY_SOURCE_ID)
+          ? overlay.revision
+          : null;
         paintedJourneyOverlayRevision = null;
         host.dataset.journeyOverlayReady = "false";
         host.dataset.journeyOverlayRevision = overlay.revision;
@@ -451,6 +458,7 @@ export default function DetailedEarthMap({
         return true;
       } catch (error) {
         appliedJourneyOverlayRevision = null;
+        loadedJourneyOverlayRevision = null;
         paintedJourneyOverlayRevision = null;
         host.dataset.journeyOverlayReady = "false";
         host.dataset.journeyOverlayError = error instanceof Error ? error.message : "journey-overlay-error";
@@ -694,11 +702,25 @@ export default function DetailedEarthMap({
     map.on("style.load", () => {
       if (removed) return;
       appliedJourneyOverlayRevision = null;
+      loadedJourneyOverlayRevision = null;
       paintedJourneyOverlayRevision = null;
       host.dataset.journeyOverlayReady = "false";
       applyMapLanguage(map, languageRef.current);
       const overlayReady = syncJourneyOverlay();
       if (overlayReady && initialLoadSettled) syncRevealSurface("stage");
+    });
+
+    map.on("sourcedata", (event) => {
+      if (
+        removed
+        || event.sourceId !== JOURNEY_OVERLAY_SOURCE_ID
+        || event.isSourceLoaded !== true
+        || appliedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+      ) return;
+      loadedJourneyOverlayRevision = appliedJourneyOverlayRevision;
+      // Source completion itself is not enough to reveal. Ask MapLibre for one
+      // later render so the exact loaded revision is proven on the framebuffer.
+      map.triggerRepaint();
     });
 
     map.on("render", () => {
@@ -716,8 +738,8 @@ export default function DetailedEarthMap({
         syncJourneyOverlay();
       } else if (
         overlayRevisionAtRenderStart === journeyOverlayRef.current.revision
+        && loadedJourneyOverlayRevision === journeyOverlayRef.current.revision
         && paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision
-        && map.isSourceLoaded(JOURNEY_OVERLAY_SOURCE_ID)
       ) {
         paintedJourneyOverlayRevision = journeyOverlayRef.current.revision;
         host.dataset.journeyOverlayReady = "true";
