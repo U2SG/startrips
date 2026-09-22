@@ -35,7 +35,6 @@ const CLIP = "/demo-media/east-star-orbit.webm";
 
 const STAGE = ".journey-story__media";
 const FULLSCREEN = ".journey-story-fullscreen";
-const PAGES = "[data-story-media-pages]";
 
 const checks = [];
 let failed = false;
@@ -269,7 +268,27 @@ async function samplePlayback(page, rootSelector, { samples = 4, everyMs = 180 }
   }, { selector: rootSelector, samples, everyMs });
 }
 
-/** Real mouse drag across the stage, above any native control chrome. */
+/** The navigating half of a photograph's stationary click surface. */
+async function photoClickPoint(page, rootSelector, direction) {
+  return await page.evaluate(({ selector, direction: step }) => {
+    const surface = document.querySelector(selector)?.querySelector("[data-story-hit-surface]");
+    if (!surface) throw new Error("the photograph has no stationary click surface");
+    const bounds = surface.getBoundingClientRect();
+    return {
+      x: bounds.left + bounds.width * (step < 0 ? 0.25 : 0.75),
+      y: bounds.top + bounds.height * 0.5,
+    };
+  }, { selector: rootSelector, direction });
+}
+
+/**
+ * Real mouse drag across the stage, above any native control chrome.
+ *
+ * The moves are paced like a hand rather than emitted in one tight loop: the
+ * product derives release velocity from consecutive pointer samples, and a
+ * burst with a zero millisecond delta carries no velocity at all. This is
+ * gesture fidelity, not a wait inserted to make an assertion pass.
+ */
 async function swipeStage(page, rootSelector, direction) {
   const geometry = await page.evaluate((selector) => {
     const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
@@ -279,10 +298,56 @@ async function swipeStage(page, rootSelector, direction) {
   const travel = Math.min(320, geometry.width * 0.45) * (direction > 0 ? -1 : 1);
   await page.mouse.move(geometry.x, geometry.y);
   await page.mouse.down();
-  for (let step = 1; step <= 8; step += 1) {
-    await page.mouse.move(geometry.x + travel * (step / 8), geometry.y);
+  for (let step = 1; step <= 10; step += 1) {
+    await page.mouse.move(geometry.x + travel * (step / 10), geometry.y);
+    await page.waitForTimeout(12);
   }
   await page.mouse.up();
+  return { ...geometry, travel };
+}
+
+/** Everything needed to attribute a stuck navigation to an instance. */
+async function stageDiagnostic(page, rootSelector) {
+  return await page.evaluate((selector) => {
+    const root = document.querySelector(selector);
+    const pages = root?.querySelector("[data-story-media-pages]");
+    const video = pages?.querySelector(".story-media-pages__video video");
+    return {
+      presentation: pages?.getAttribute("data-media-presentation") ?? null,
+      kind: pages?.getAttribute("data-current-media-kind") ?? null,
+      clickDirection: pages?.getAttribute("data-click-direction") ?? null,
+      hitSurfaces: pages?.querySelectorAll("[data-story-hit-surface]").length ?? 0,
+      slots: [...(pages?.querySelectorAll("[data-media-page]") ?? [])].map((slot) => ({
+        id: slot.getAttribute("data-media-page-id"),
+        role: slot.getAttribute("data-media-page"),
+        ready: slot.getAttribute("data-media-page-ready"),
+        incoming: slot.getAttribute("data-media-incoming"),
+        layer: slot.getAttribute("data-media-layer"),
+        zIndex: getComputedStyle(slot).zIndex,
+        transform: getComputedStyle(slot).transform,
+      })),
+      video: video instanceof HTMLVideoElement ? {
+        asset: video.getAttribute("data-shared-media-id"), hidden: video.hidden,
+        paused: video.paused, currentTime: Number(video.currentTime.toFixed(3)),
+        readyState: video.readyState, controls: video.controls,
+      } : null,
+    };
+  }, rootSelector);
+}
+
+/**
+ * One gesture-driven step. A step that never settles returns its diagnostic
+ * instead of throwing, so a single stuck transition cannot hide the rest of
+ * the lane's evidence.
+ */
+async function navigateByGesture(page, rootSelector, direction, expectedId) {
+  const gesture = await swipeStage(page, rootSelector, direction);
+  try {
+    await waitForSettledAsset(page, expectedId, rootSelector);
+    return { ok: true, gesture, expectedId };
+  } catch {
+    return { ok: false, gesture, expectedId, diagnostic: await stageDiagnostic(page, rootSelector) };
+  }
 }
 
 try {
@@ -300,12 +365,7 @@ try {
       // Reach the video the way a viewer does: click the photograph's right
       // half. Photo click navigation is unchanged by this fix.
       await startSampler(page, STAGE);
-      const photo = await page.evaluate((selector) => {
-        const surfaceNode = document.querySelector(selector).querySelector("[data-story-hit-surface]");
-        if (!surfaceNode) throw new Error("the photograph has no stationary click surface");
-        const bounds = surfaceNode.getBoundingClientRect();
-        return { x: bounds.left + bounds.width * 0.75, y: bounds.top + bounds.height * 0.5 };
-      }, STAGE);
+      const photo = await photoClickPoint(page, STAGE, 1);
       await page.mouse.click(photo.x, photo.y);
       await waitForSettledAsset(page, V1);
       const toVideoFrames = await stopSampler(page);
@@ -340,17 +400,21 @@ try {
       });
 
       // The native control strip stays the transport's, not navigation's.
+      // Chromium's shadow controls may legitimately contain their own pointer
+      // events, so the claim is the input path plus the absence of navigation
+      // -- real hit-testing and real mouse input -- not a particular play state.
       const controlBefore = await samplePlayback(page, surface.root, { samples: 1, everyMs: 0 });
       await page.mouse.click(controls.x, controls.y);
       const controlAfter = await samplePlayback(page, surface.root, { samples: 2, everyMs: 150 });
       const controlState = await currentAsset(page, surface.root);
+      const stillPresented = await page.locator(surface.root).isVisible();
       record({
         name: `story-${surface.label}-video-native-controls-reachable`,
-        claim: "the native control strip hit-tests to the video and toggles it without changing the presented asset",
-        controls, controlBefore, controlAfter, controlState,
-        failed: !controls.controls || !controls.hitIsVideo
-          || controlAfter.paused === controlBefore.paused
-          || controlState.id !== V1 || controlState.presentation !== "settled",
+        claim: "the native control strip hit-tests to the video itself and a real click there neither navigates nor dismisses the surface",
+        controls, controlBefore, controlAfter, controlState, stillPresented,
+        failed: !controls.controls || !controls.hitIsVideo || !stillPresented
+          || controlState.id !== V1 || controlState.kind !== "video"
+          || controlState.presentation !== "settled" || controlState.hitSurfaces !== 0,
       });
     } finally {
       await session.page.close();
@@ -366,20 +430,17 @@ try {
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
-      await swipeStage(page, STAGE, 1);
-      await waitForSettledAsset(page, V1);
+      const toVideo = await navigateByGesture(page, STAGE, 1, V1);
       const afterFirstSwipe = await currentAsset(page);
 
       await startSampler(page, STAGE);
-      await swipeStage(page, STAGE, 1);
-      await waitForSettledAsset(page, I2);
+      const offVideo = await navigateByGesture(page, STAGE, 1, I2);
       const swipeFrames = await stopSampler(page);
       const afterVideoSwipe = await currentAsset(page);
       const playbackAfterSwipe = await samplePlayback(page, STAGE, { samples: 2, everyMs: 120 });
 
       // Back onto the video, then advertise-driven keyboard navigation.
-      await swipeStage(page, STAGE, -1);
-      await waitForSettledAsset(page, V1);
+      const backToVideo = await navigateByGesture(page, STAGE, -1, V1);
       const stageRole = await page.evaluate((selector) => {
         const pages = document.querySelector(selector).querySelector("[data-story-media-pages]");
         pages.focus();
@@ -390,20 +451,21 @@ try {
         };
       }, STAGE);
       await page.keyboard.press("ArrowRight");
-      await waitForSettledAsset(page, I2);
-      const afterKeyboard = await currentAsset(page);
+      const keyboardSettled = await waitForSettledAsset(page, I2).then(() => true, () => false);
+      const afterKeyboard = keyboardSettled ? await currentAsset(page) : await stageDiagnostic(page, STAGE);
 
       record({
         name: "story-video-navigation-preserved",
         claim: "a swipe over the video navigates exactly one step without double-stepping or starting playback, and the stage's advertised arrow keys still navigate",
-        afterFirstSwipe, afterVideoSwipe, playbackAfterSwipe, stageRole, afterKeyboard,
+        toVideo, offVideo, backToVideo,
+        afterFirstSwipe, afterVideoSwipe, playbackAfterSwipe, stageRole, keyboardSettled, afterKeyboard,
         handoff: gradeContinuity(swipeFrames, { allowedAssets: [V1, I2] }),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: afterFirstSwipe.id !== V1 || afterVideoSwipe.id !== I2
+        failed: !toVideo.ok || !offVideo.ok || !backToVideo.ok || !keyboardSettled
+          || afterFirstSwipe.id !== V1 || afterVideoSwipe.id !== I2
           || playbackAfterSwipe.paused !== true
           || stageRole.tabIndex !== 0 || !stageRole.focused
           || stageRole.keyshortcuts !== "ArrowLeft ArrowRight"
-          || afterKeyboard.id !== I2
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
@@ -421,15 +483,8 @@ try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
       const photoState = await currentAsset(page);
-      const halves = await page.evaluate((selector) => {
-        const surfaceNode = document.querySelector(selector).querySelector("[data-story-hit-surface]");
-        const bounds = surfaceNode.getBoundingClientRect();
-        return {
-          next: { x: bounds.left + bounds.width * 0.75, y: bounds.top + bounds.height * 0.5 },
-          letterbox: { x: bounds.left + 4, y: bounds.top + 4 },
-        };
-      }, STAGE);
-      await page.mouse.click(halves.next.x, halves.next.y);
+      const halves = await photoClickPoint(page, STAGE, 1);
+      await page.mouse.click(halves.x, halves.y);
       await waitForSettledAsset(page, V1);
       const afterHalfClick = await currentAsset(page);
       record({
@@ -460,20 +515,24 @@ try {
       await waitForSettledAsset(page, I1);
       await startSampler(page, STAGE);
       const visited = [I1];
+      const steps = [];
       for (const [target, direction] of [[V1, 1], [I2, 1], [V1, -1], [I1, -1]]) {
-        await swipeStage(page, STAGE, direction);
-        await waitForSettledAsset(page, target);
+        const step = await navigateByGesture(page, STAGE, direction, target);
+        steps.push(step);
+        if (!step.ok) break;
         visited.push(target);
       }
       const frames = await stopSampler(page);
       const continuity = gradeContinuity(frames, { allowedAssets: [I1, V1, I2] });
+      const stuck = steps.filter((step) => !step.ok);
       record({
         name: `story-handoff-continuity-${profile.label}`,
         claim: "across image<->video and mixed aspect ratios the sampled stage points always show an asset the navigation currently owns, never an uncovered stage, never the waiting indicator, and never a second live transport",
-        viewport: profile.viewport, reducedMotion: profile.reducedMotion, visited,
+        viewport: profile.viewport, reducedMotion: profile.reducedMotion, visited, stuck,
         ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: continuity.failed || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+        failed: continuity.failed || stuck.length > 0
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
       await session.page.close();
@@ -534,14 +593,10 @@ try {
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
-      await page.mouse.click(...Object.values(await page.evaluate((selector) => {
-        const bounds = document.querySelector(selector)
-          .querySelector("[data-story-hit-surface]").getBoundingClientRect();
-        return { x: bounds.left + bounds.width * 0.75, y: bounds.top + bounds.height * 0.5 };
-      }, STAGE)));
+      const half = await photoClickPoint(page, STAGE, 1);
+      await page.mouse.click(half.x, half.y);
       await waitForSettledAsset(page, V1);
-      await swipeStage(page, STAGE, 1);
-      await waitForSettledAsset(page, I2);
+      const toLastVisible = await navigateByGesture(page, STAGE, 1, I2);
       const lastVisible = await currentAsset(page);
 
       await startSampler(page, FULLSCREEN);
@@ -563,9 +618,9 @@ try {
       record({
         name: "story-entry-exit-object-continuity",
         claim: "entering immersive viewing reveals only the targeted asset and leaving restores the same last-visible asset, with no prior asset flashing in between",
-        lastVisible, entered, exited, entry, exit,
+        toLastVisible, lastVisible, entered, exited, entry, exit,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: lastVisible.id !== I2 || entered.id !== I2 || exited.id !== I2
+        failed: !toLastVisible.ok || lastVisible.id !== I2 || entered.id !== I2 || exited.id !== I2
           || entry.failed || exit.failed
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
