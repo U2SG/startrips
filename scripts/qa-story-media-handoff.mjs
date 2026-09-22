@@ -82,7 +82,7 @@ function installStageSampler() {
   // inside the stage and records which asset actually draws the foreground
   // there, so a reversal, a stale layer or an uncovered stage is attributable
   // to a frame and an instance rather than to a screenshot.
-  const state = { running: false, frames: [], root: null, gestures: [] };
+  const state = { running: false, frames: [], root: null, gestures: [], unmeasurable: 0 };
   window.__qaStage = state;
   // A bounded trace of the input the product actually received. A drag that
   // never commits is attributable to a missing axis lock, a missing neighbour
@@ -114,6 +114,25 @@ function installStageSampler() {
     }
     note({ type: "pointermove", x: Math.round(event.clientX), y: Math.round(event.clientY), samples: 1 });
   }, true);
+  new MutationObserver((records) => {
+    for (const mutation of records) {
+      for (const [list, change] of [[mutation.addedNodes, "added"], [mutation.removedNodes, "removed"]]) {
+        for (const node of list) {
+          if (!(node instanceof Element)) continue;
+          if (node.matches("[data-story-hit-surface]") || node.querySelector?.("[data-story-hit-surface]")) {
+            note({ type: `hit-surface-${change}` });
+          }
+        }
+      }
+      if (mutation.type === "attributes") {
+        note({ type: "stage-attribute", name: mutation.attributeName,
+          value: mutation.target.getAttribute(mutation.attributeName) });
+      }
+    }
+  }).observe(document.documentElement, {
+    subtree: true, childList: true, attributes: true,
+    attributeFilter: ["data-current-media-kind", "data-media-presentation", "data-media-page-ready"],
+  });
   for (const type of ["story-media-grab", "story-media-recover"]) {
     document.addEventListener(type, (event) => {
       note({ type, neighborId: event.detail?.neighborId ?? null });
@@ -144,16 +163,35 @@ function installStageSampler() {
     }
     return null;
   };
+  // The rectangle the presented media actually occupies under `contain`. The
+  // coverage claim is made inside this aperture only; the surrounding letterbox
+  // is correct emptiness, not an uncovered stage.
+  const aperture = (pages) => {
+    const owner = pages.querySelector('[data-media-page="current"]');
+    const node = owner?.querySelector("img:not([hidden]), canvas:not([hidden])")
+      ?? pages.querySelector('.story-media-pages__video video:not([hidden])');
+    const box = (node ?? owner ?? pages).getBoundingClientRect();
+    const natural = node instanceof HTMLImageElement ? [node.naturalWidth, node.naturalHeight]
+      : node instanceof HTMLVideoElement ? [node.videoWidth, node.videoHeight]
+        : node instanceof HTMLCanvasElement ? [node.width, node.height] : [0, 0];
+    if (!natural[0] || !natural[1] || !box.width || !box.height) return box;
+    const scale = Math.min(box.width / natural[0], box.height / natural[1]);
+    const width = natural[0] * scale;
+    const height = natural[1] * scale;
+    return new DOMRect(box.left + (box.width - width) / 2, box.top + (box.height - height) / 2, width, height);
+  };
   const sample = () => {
+    requestAnimationFrame(sample);
     if (!state.running) return;
     const root = state.root && document.querySelector(state.root);
     const pages = root?.querySelector("[data-story-media-pages]");
     const measurable = pages ? pages.getBoundingClientRect() : null;
     if (pages && measurable.width > 0 && measurable.height > 0) {
-      const bounds = measurable;
-      const points = [[0.5, 0.5], [0.34, 0.5], [0.66, 0.5], [0.5, 0.36], [0.5, 0.62]];
-      const drawables = points.map(([fx, fy]) =>
-        drawableAt(bounds.left + bounds.width * fx, bounds.top + bounds.height * fy));
+      const bounds = aperture(pages);
+      const points = [[0.5, 0.5], [0.3, 0.5], [0.7, 0.5], [0.5, 0.3], [0.5, 0.7]];
+      const drawables = bounds.width > 0 && bounds.height > 0
+        ? points.map(([fx, fy]) => drawableAt(bounds.left + bounds.width * fx, bounds.top + bounds.height * fy))
+        : [];
       const current = pages.querySelector('[data-media-page="current"]');
       const incoming = pages.querySelector('[data-media-incoming="true"]');
       const videos = [...pages.querySelectorAll("video")];
@@ -163,28 +201,29 @@ function installStageSampler() {
         kind: pages.getAttribute("data-current-media-kind"),
         currentId: current?.getAttribute("data-media-page-id") ?? null,
         incomingId: incoming?.getAttribute("data-media-page-id") ?? null,
-        centre: drawables[0],
+        centre: drawables[0] ?? null,
         drawables,
+        aperture: { width: Math.round(bounds.width), height: Math.round(bounds.height) },
         uncovered: drawables.filter((entry) => entry === null).length,
         waiting: Boolean(root.querySelector(".starlight-media-state.is-waiting")),
         videoCount: videos.length,
         videoOwner: videos.map((video) => video.getAttribute("data-shared-media-id")),
       });
+    } else if (state.running) {
+      state.unmeasurable += 1;
     }
-    requestAnimationFrame(sample);
   };
+  requestAnimationFrame(sample);
   window.__qaStageStart = (rootSelector) => {
     state.root = rootSelector;
     state.frames = [];
     state.gestures = [];
-    state.generation = (state.generation ?? 0) + 1;
-    if (state.running) return;
+    state.unmeasurable = 0;
     state.running = true;
-    requestAnimationFrame(sample);
   };
   window.__qaStageStop = () => {
     state.running = false;
-    return { frames: state.frames, gestures: state.gestures };
+    return { frames: state.frames, gestures: state.gestures, unmeasurable: state.unmeasurable };
   };
 }
 /* eslint-enable no-undef */
@@ -198,7 +237,9 @@ async function stopSampler(page) {
 }
 
 async function stopSamplerFrames(page) {
-  return (await stopSampler(page)).frames;
+  const { frames, unmeasurable } = await stopSampler(page);
+  if (frames.length) frames[0].unmeasurableFramesInWindow = unmeasurable;
+  return frames;
 }
 
 /** Grade one recorded window against the B/C continuity acceptance. */
@@ -408,7 +449,7 @@ async function navigateByGesture(page, rootSelector, direction, expectedId) {
     return {
       ok: false, gesture, expectedId,
       diagnostic: await stageDiagnostic(page, rootSelector),
-      trace: await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-40)),
+      trace: await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-60)),
     };
   }
 }
