@@ -46,6 +46,29 @@ to the low-volume public Photon demo because it is reachable from the current ho
 demo has no availability guarantee, so production should use a contracted endpoint
 or a self-hosted compatible service.
 
+## Itinerary import
+
+Importing an itinerary (#512) uses two independent adapters, both `disabled` by
+default. Pasted text is read in the browser and needs neither of them, so a
+deployment that installs nothing still imports a plan a member can paste.
+
+`ITINERARY_SOURCE_FETCH_DRIVER` selects how a shared plan link is read: `http`
+reads the page as served, and `render` posts the URL to the bounded rendering
+service named by `ITINERARY_SOURCE_RENDER_URL` for a page that composes itself
+in a browser. Every hop, including each redirect, is resolved before it is
+requested and refused when it lands on a private, loopback, link-local or
+cloud-metadata address. A link this deployment cannot reach is reported as
+unreachable at the source-access stage, never as an invalid link.
+
+`ITINERARY_RECOGNITION_DRIVER=http-model` posts the submitted document to
+`ITINERARY_RECOGNITION_BASE_URL` with `ITINERARY_RECOGNITION_API_KEY` and
+accepts only versioned structured candidates in reply; anything else is refused
+at the extraction stage. `ITINERARY_RECOGNITION_MODEL` is recorded on every
+reading, so a draft stays attributable to the build that produced it and a
+newer build is a configuration change rather than a code change. The credential
+is never sent to a browser, and only what the member submitted for this import
+is sent to the provider.
+
 ## Detailed earth map
 
 The Living Atlas keeps its particle globe in Three.js and preloads a MapLibre
