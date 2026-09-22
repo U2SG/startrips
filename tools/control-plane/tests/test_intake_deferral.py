@@ -148,9 +148,10 @@ intake_triage() {
         if after_result:
             # The last result-field read falls between apply and touch. The
             # real touch helper must still reject this newly obsolete token.
-            script += """intake_field() {
+            script += """eval "$(declare -f intake_field | sed '1s/intake_field/intake_original_field/')"
+intake_field() {
   if [[ "$2" == "changed" ]]; then python3 "$ROOT/intervene.py"; fi
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get(sys.argv[2], ""))' "$1" "$2"
+  intake_original_field "$@"
 }
 """
         if hard_failure:
