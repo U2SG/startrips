@@ -133,7 +133,8 @@ function installDetailedEarthJourneyOverlay(
       },
     });
   }
-  if (!map.getLayer(JOURNEY_OVERLAY_LABEL_LAYER_ID)) {
+  const styleSupportsTextLabels = Boolean(map.getStyle().glyphs);
+  if (styleSupportsTextLabels && !map.getLayer(JOURNEY_OVERLAY_LABEL_LAYER_ID)) {
     map.addLayer({
       id: JOURNEY_OVERLAY_LABEL_LAYER_ID,
       type: "symbol",

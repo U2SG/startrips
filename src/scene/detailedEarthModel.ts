@@ -199,8 +199,8 @@ export function buildDetailedEarthJourneyOverlay({
       || !previous.presentation.temporalVisible
       || !current.presentation.temporalVisible
     ) continue;
-    let fromLongitude = normalizeLongitude(previous.point.lon);
-    let toLongitude = normalizeLongitude(current.point.lon);
+    const fromLongitude = previous.point.lon;
+    let toLongitude = current.point.lon;
     while (toLongitude - fromLongitude > 180) toLongitude -= 360;
     while (toLongitude - fromLongitude < -180) toLongitude += 360;
     features.push({
