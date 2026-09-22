@@ -7,6 +7,7 @@ import {
   type NarrativeSegmentKind,
   type NarrativeTempo,
   type NarrativeTimingContext,
+  type NarrativeTimingProfile,
 } from "./narrativeTiming";
 import {
   AUTO_EDIT_PHOTO_ROLES,
@@ -14,18 +15,47 @@ import {
   type AutoEditPhotoRole,
   type AutoEditTempo,
 } from "./autoEditPlan";
-import { PLAYBACK_TEMPO_PROFILES } from "./journeyPlaybackPlan";
 
-/**
- * The quick-recap and keepsake numbers, spelled out as literals.
- *
- * They used to be asserted against the constants they were seeded from
- * (`autoEditPlan.ts`'s dwell tables and camera / arrival floors, and the legacy
- * pacing table in `journeyPlayback.ts`). Those are deleted now that the
- * resolver is the only timing truth, so the equivalence anchors become plain
- * expected values: an unintended retune still fails here, it just no longer has
- * a second table to be compared against.
- */
+/** Literal expectations keep an unintended profile retune visible. */
+const FULL_EXPECTED: Record<NarrativeTempo, NarrativeTimingProfile> = {
+  fast: {
+    introMs: 800,
+    travelBaseMs: 420,
+    travelPerRadiansMs: 300,
+    travelMaxMs: 1_000,
+    arrivalBaseMs: 650,
+    arrivalPerNoteCharMs: 10,
+    arrivalMaxMs: 1_000,
+    imageRoleMs: { hero: 2_000, representative: 1_700, supporting: 1_200, burst: 700 },
+    videoMs: 4_200,
+    outroMs: 1_000,
+  },
+  standard: {
+    introMs: 1_100,
+    travelBaseMs: 650,
+    travelPerRadiansMs: 450,
+    travelMaxMs: 1_400,
+    arrivalBaseMs: 950,
+    arrivalPerNoteCharMs: 14,
+    arrivalMaxMs: 1_500,
+    imageRoleMs: { hero: 3_100, representative: 2_800, supporting: 1_800, burst: 900 },
+    videoMs: 6_000,
+    outroMs: 1_500,
+  },
+  immersive: {
+    introMs: 1_400,
+    travelBaseMs: 900,
+    travelPerRadiansMs: 650,
+    travelMaxMs: 1_900,
+    arrivalBaseMs: 1_500,
+    arrivalPerNoteCharMs: 18,
+    arrivalMaxMs: 2_600,
+    imageRoleMs: { hero: 4_900, representative: 4_500, supporting: 3_000, burst: 1_300 },
+    videoMs: 8_000,
+    outroMs: 2_000,
+  },
+};
+
 const QUICK_RECAP_IMAGE_DWELL_EXPECTED: Record<AutoEditTempo, Record<AutoEditPhotoRole, number>> = {
   fast: { hero: 2_000, representative: 1_600, supporting: 1_200, burst: 700 },
   standard: { hero: 3_100, representative: 2_500, supporting: 1_800, burst: 900 },
@@ -264,48 +294,29 @@ describe("resolveNarrativeTiming", () => {
 });
 
 describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
-  it("reproduces PLAYBACK_TEMPO_PROFILES for the full mode", () => {
-    for (const tempo of TEMPI) {
-      const seeded = NARRATIVE_TIMING_PROFILES.full[tempo];
-      const live = PLAYBACK_TEMPO_PROFILES[tempo];
-      expect(seeded.introMs).toBe(live.introMs);
-      expect(seeded.travelBaseMs).toBe(live.travelBaseMs);
-      expect(seeded.travelPerRadiansMs).toBe(live.travelPerRadiansMs);
-      expect(seeded.travelMaxMs).toBe(live.travelMaxMs);
-      expect(seeded.arrivalBaseMs).toBe(live.arrivalBaseMs);
-      expect(seeded.arrivalPerNoteCharMs).toBe(live.arrivalPerNoteCharMs);
-      expect(seeded.arrivalMaxMs).toBe(live.arrivalMaxMs);
-      expect(seeded.imageRoleMs.representative).toBe(live.imageMs);
-      expect(seeded.videoMs).toBe(live.videoMs);
-      expect(seeded.outroMs).toBe(live.outroMs);
-    }
+  it("keeps the original full Playback profile values", () => {
+    expect(NARRATIVE_TIMING_PROFILES.full).toEqual(FULL_EXPECTED);
   });
 
-  it("resolves the full mode exactly like playbackStepDurationForTempo composes it", () => {
-    for (const tempo of TEMPI) {
-      const live = PLAYBACK_TEMPO_PROFILES[tempo];
-      const routeDistanceRadians = 0.42;
-      const noteLength = 33;
+  it.each([
+    ["fast", 800, 546, 980, 1000],
+    ["standard", 1100, 839, 1412, 1500],
+    ["immersive", 1400, 1173, 2094, 2000],
+  ] as const)(
+    "resolves the seeded full-mode phases at %s tempo",
+    (tempo, introMs, travelMs, arrivalMs, outroMs) => {
       expect(resolveNarrativeTiming({ mode: "full", tempo, segmentKind: "intro" }))
-        .toBe(live.introMs);
+        .toBe(introMs);
       expect(resolveNarrativeTiming({ mode: "full", tempo, segmentKind: "outro" }))
-        .toBe(live.outroMs);
+        .toBe(outroMs);
       expect(
-        resolveNarrativeTiming({ mode: "full", tempo, segmentKind: "travel", routeDistanceRadians }),
-      ).toBe(
-        Math.round(
-          Math.min(live.travelMaxMs, live.travelBaseMs + routeDistanceRadians * live.travelPerRadiansMs),
-        ),
-      );
+        resolveNarrativeTiming({ mode: "full", tempo, segmentKind: "travel", routeDistanceRadians: 0.42 }),
+      ).toBe(travelMs);
       expect(
-        resolveNarrativeTiming({ mode: "full", tempo, segmentKind: "arrival", noteLength }),
-      ).toBe(
-        Math.round(
-          Math.min(live.arrivalMaxMs, live.arrivalBaseMs + noteLength * live.arrivalPerNoteCharMs),
-        ),
-      );
-    }
-  });
+        resolveNarrativeTiming({ mode: "full", tempo, segmentKind: "arrival", noteLength: 33 }),
+      ).toBe(arrivalMs);
+    },
+  );
 
   it("keeps the quick recap dwell, camera and arrival numbers", () => {
     for (const tempo of AUTO_EDIT_TEMPOS) {

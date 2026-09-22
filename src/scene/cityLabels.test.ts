@@ -1,66 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   cityLabelFacingThreshold,
-  parseCityFeatures,
   parseCityList,
   resolveCityDisplayName,
   selectCityCandidates,
 } from "./cityLabels";
-
-describe("parseCityFeatures", () => {
-  it("parses named cities with valid coordinates sorted by population", () => {
-    const cities = parseCityFeatures({
-      features: [
-        {
-          properties: { NAME: "Small Town", POP_MAX: 100 },
-          geometry: { coordinates: [10, 20] },
-        },
-        {
-          properties: { NAME: "Big City", POP_MAX: 5000 },
-          geometry: { coordinates: [30, 40] },
-        },
-      ],
-    });
-    expect(cities.map((city) => city.name)).toEqual(["Big City", "Small Town"]);
-    expect(cities[0]).toMatchObject({ latitude: 40, longitude: 30 });
-  });
-
-  it("precomputes unit directions on the globe-local sphere", () => {
-    const cities = parseCityFeatures({
-      features: [
-        {
-          properties: { NAME: "Sized", POP_MAX: 1 },
-          geometry: { coordinates: [10, 20] },
-        },
-      ],
-    });
-    const [x, y, z] = cities[0].direction;
-    expect(Math.hypot(x, y, z)).toBeCloseTo(1, 10);
-    expect(x).toBeGreaterThan(0.9);
-  });
-
-  it("skips unnamed, unlocated, or out-of-range features", () => {
-    const cities = parseCityFeatures({
-      features: [
-        { properties: { NAME: "", POP_MAX: 1 }, geometry: { coordinates: [1, 1] } },
-        { properties: { NAME: "No Coords", POP_MAX: 1 } },
-        { properties: { NAME: "Bad Range", POP_MAX: 1 }, geometry: { coordinates: [200, 91] } },
-        { properties: { NAME: "Not Array", POP_MAX: 1 }, geometry: { coordinates: "x" } },
-      ],
-    });
-    expect(cities).toEqual([]);
-  });
-
-  it("accepts a bounded top-N slice for label budgets", () => {
-    const cities = parseCityFeatures({
-      features: Array.from({ length: 5 }, (_, index) => ({
-        properties: { NAME: `City ${index}`, POP_MAX: index },
-        geometry: { coordinates: [index, index] },
-      })),
-    });
-    expect(cities.slice(0, 2).map((city) => city.name)).toEqual(["City 4", "City 3"]);
-  });
-});
 
 describe("parseCityList", () => {
   it("parses the compact GeoNames build with unit directions and ranks", () => {
@@ -132,20 +76,11 @@ describe("resolveCityDisplayName (#16)", () => {
 describe("selectCityCandidates", () => {
   // Facing along +X (globe-local): (0,0) is dead center, (45,10) is nearby
   // (facing ~0.70), (180,0) faces away entirely.
-  const cities = parseCityFeatures({
-    features: [
-      {
-        properties: { NAME: "Far", POP_MAX: 9000 },
-        geometry: { coordinates: [0, 0] },
-      },
-      {
-        properties: { NAME: "Near", POP_MAX: 100 },
-        geometry: { coordinates: [45, 10] },
-      },
-      {
-        properties: { NAME: "Behind", POP_MAX: 500 },
-        geometry: { coordinates: [180, 0] },
-      },
+  const cities = parseCityList({
+    cities: [
+      { n: "Far", la: 0, lo: 0, p: 9000, r: 1 },
+      { n: "Behind", la: 0, lo: 180, p: 500, r: 1 },
+      { n: "Near", la: 10, lo: 45, p: 100, r: 1 },
     ],
   });
 
@@ -165,16 +100,10 @@ describe("selectCityCandidates", () => {
   });
 
   it("breaks facing ties by population", () => {
-    const sameSpot = parseCityFeatures({
-      features: [
-        {
-          properties: { NAME: "Small", POP_MAX: 10 },
-          geometry: { coordinates: [0, 0] },
-        },
-        {
-          properties: { NAME: "Big", POP_MAX: 9000 },
-          geometry: { coordinates: [0, 0] },
-        },
+    const sameSpot = parseCityList({
+      cities: [
+        { n: "Big", la: 0, lo: 0, p: 9000, r: 1 },
+        { n: "Small", la: 0, lo: 0, p: 10, r: 1 },
       ],
     });
     const result = selectCityCandidates(sameSpot, [1, 0, 0], 0.5, 10);

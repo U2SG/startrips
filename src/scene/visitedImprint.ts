@@ -1,10 +1,6 @@
 import type { JourneyRoute } from "../journey/types";
+import { routePointTemporalProgress, type RouteTemporalReveal } from "./routePresentation";
 import type { GlobeSemanticZoom } from "./semanticZoom";
-
-export type VisitedImprintTemporalReveal = {
-  journeys: ReadonlyMap<string, number>;
-  points: ReadonlyMap<string, number>;
-};
 
 export const VISITED_IMPRINT_GAIN_CAP = 0.15;
 export const VISITED_IMPRINT_GAIN_SCALE = 3;
@@ -60,17 +56,6 @@ function regionIndex(latitude: number, longitude: number) {
     Math.max(0, Math.floor((lat + 90) / VISITED_IMPRINT_REGION_DEGREES)),
   );
   return y * VISITED_IMPRINT_TEXTURE_WIDTH + x;
-}
-
-function pointReveal(
-  route: JourneyRoute,
-  pointIndex: number,
-  temporalReveal?: VisitedImprintTemporalReveal,
-) {
-  const pointProgress = temporalReveal?.points.get(`${route.id}:${pointIndex}`);
-  if (pointProgress !== undefined) return clamp01(pointProgress);
-  const journeyProgress = temporalReveal?.journeys.get(route.id);
-  return journeyProgress === undefined ? 1 : clamp01(journeyProgress);
 }
 
 function addContribution(
@@ -173,7 +158,7 @@ export function visitedImprintZoomAttenuation(
 
 export function buildVisitedImprintField(
   routes: readonly JourneyRoute[],
-  temporalReveal?: VisitedImprintTemporalReveal,
+  temporalReveal?: RouteTemporalReveal,
 ): VisitedImprintField {
   const regions = new Map<number, RegionContributions>();
 
@@ -181,7 +166,7 @@ export function buildVisitedImprintField(
     for (let pointIndex = 0; pointIndex < route.points.length; pointIndex += 1) {
       const point = route.points[pointIndex];
       if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
-      const reveal = pointReveal(route, pointIndex, temporalReveal);
+      const reveal = routePointTemporalProgress(route.id, pointIndex, temporalReveal);
       addContribution(regions, regionIndex(point.lat, point.lon), route.id, reveal);
 
       if (pointIndex === 0) continue;

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../db/client";
 import {
   journeyRecordedTrackSamples,
@@ -11,7 +11,7 @@ import {
   type RecordedTrackSource,
   type RecordedTrackWrite,
 } from "../journey/recorded-track";
-import { lockActiveAtlas } from "./journey-repository";
+import { lockActiveAtlas, lockActiveJourney } from "./journey-repository";
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -52,27 +52,6 @@ function fingerprint(write: RecordedTrackWrite) {
   return createHash("sha256")
     .update(canonicalRecordedTrackPayload(write))
     .digest("hex");
-}
-
-/**
- * Take the Journey row under the caller's Atlas. The Atlas predicate is part
- * of the statement rather than a check applied afterwards, so a Journey owned
- * by another Atlas is simply not found.
- */
-async function lockJourney(
-  transaction: Transaction,
-  atlasId: string,
-  journeyId: string,
-) {
-  const result = await transaction.execute<{ id: string }>(sql`
-    select ${journeys.id} as id
-    from ${journeys}
-    where ${journeys.id} = ${journeyId}
-      and ${journeys.atlasId} = ${atlasId}
-      and ${journeys.deletionStartedAt} is null
-    for update
-  `);
-  return result.rows.length > 0;
 }
 
 type SegmentRow = typeof journeyRecordedTrackSegments.$inferSelect;
@@ -239,7 +218,7 @@ export async function writeRecordedTrackForAtlas(
     if (!await lockActiveAtlas(transaction, atlasId)) {
       return { outcome: "journey-missing" } as const;
     }
-    if (!await lockJourney(transaction, atlasId, journeyId)) {
+    if (!await lockActiveJourney(transaction, journeyId, atlasId)) {
       return { outcome: "journey-missing" } as const;
     }
 
@@ -335,7 +314,7 @@ export async function deleteRecordedTrackForAtlas(
     if (!await lockActiveAtlas(transaction, atlasId)) {
       return "journey-missing" as const;
     }
-    if (!await lockJourney(transaction, atlasId, journeyId)) {
+    if (!await lockActiveJourney(transaction, journeyId, atlasId)) {
       return "journey-missing" as const;
     }
     const removed = await transaction

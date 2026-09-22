@@ -6,7 +6,8 @@ import {
   prefetchDispatchDecision,
   readyMsAheadForTempo,
 } from "./playbackPrefetchPlan";
-import { PLAYBACK_TEMPO_PROFILES, type PlaybackTempo } from "./journeyPlaybackPlan";
+import type { PlaybackTempo } from "./journeyPlaybackPlan";
+import { NARRATIVE_TIMING_PROFILES } from "./narrativeTiming";
 import { buildPlaybackSteps, playbackMediaForPoint, playbackStepIdentity, playbackHoldTargetMedia } from "./journeyPlayback";
 import { resolvePlaybackSessionHomeContextSnapshot } from "./useJourneyPlaybackDirector";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
@@ -29,14 +30,14 @@ function planFor(steps: PrefetchStep[], stepIndex: number, budgetMs: number) {
  * tempo profile.
  */
 function imageJourneySteps(tempo: PlaybackTempo, pointCount: number, imagesPerPoint: number) {
-  const profile = PLAYBACK_TEMPO_PROFILES[tempo];
+  const profile = NARRATIVE_TIMING_PROFILES.full[tempo];
   const steps: PrefetchStep[] = [{ durationMs: profile.introMs, assetIds: [] }];
   for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
     if (pointIndex > 0) steps.push({ durationMs: profile.travelBaseMs, assetIds: [] });
     steps.push({ durationMs: profile.arrivalBaseMs, assetIds: [] });
     for (let imageIndex = 0; imageIndex < imagesPerPoint; imageIndex += 1) {
       steps.push({
-        durationMs: profile.imageMs,
+        durationMs: profile.imageRoleMs.representative,
         assetIds: [`p${pointIndex}-image${imageIndex}`],
       });
     }
@@ -84,7 +85,7 @@ describe("prefetchDispatchDecision", () => {
       stepCount: steps.length,
       stepIndex: stopIndex,
       budgetMs: readyMsAheadForTempo("standard"),
-      durationForStep: () => PLAYBACK_TEMPO_PROFILES.standard.imageMs,
+      durationForStep: () => NARRATIVE_TIMING_PROFILES.full.standard.imageRoleMs.representative,
       assetIdsForStep: (index) => {
         const step = steps[index];
         if (step?.kind !== "media") return [];
@@ -145,7 +146,7 @@ describe("Home hydration prefetch topology (#235)", () => {
         stepCount: steps.length,
         stepIndex,
         budgetMs: readyMsAheadForTempo("standard"),
-        durationForStep: () => PLAYBACK_TEMPO_PROFILES.standard.imageMs,
+        durationForStep: () => NARRATIVE_TIMING_PROFILES.full.standard.imageRoleMs.representative,
         assetIdsForStep: (index) => {
           const step = steps[index];
           if (step?.kind !== "media") return [];
@@ -182,6 +183,14 @@ describe("Home hydration prefetch topology (#235)", () => {
 });
 
 describe("readyMsAheadForTempo", () => {
+  it.each([
+    ["fast", 7300],
+    ["standard", 6200],
+    ["immersive", 4500],
+  ] as const)("keeps the %s tempo budget", (tempo, expectedMs) => {
+    expect(readyMsAheadForTempo(tempo)).toBe(expectedMs);
+  });
+
   it("prepares farther ahead in time as tempo gets faster", () => {
     expect(readyMsAheadForTempo("fast")).toBeGreaterThan(readyMsAheadForTempo("standard"));
     expect(readyMsAheadForTempo("standard")).toBeGreaterThan(readyMsAheadForTempo("immersive"));
@@ -190,7 +199,7 @@ describe("readyMsAheadForTempo", () => {
   it("never budgets less than one image beat of the same tempo", () => {
     for (const tempo of ["fast", "standard", "immersive"] as const) {
       expect(readyMsAheadForTempo(tempo))
-        .toBeGreaterThanOrEqual(PLAYBACK_TEMPO_PROFILES[tempo].imageMs);
+        .toBeGreaterThanOrEqual(NARRATIVE_TIMING_PROFILES.full[tempo].imageRoleMs.representative);
     }
   });
 });
@@ -240,7 +249,7 @@ describe("planPrefetchWindow", () => {
       const stepIndex = mediaStepIndex(steps, "p2-image0");
       const window = planFor(steps, stepIndex, budgetMs);
       expect(window.coveredDurationMs).toBeLessThanOrEqual(budgetMs);
-      expect(window.coveredDurationMs + PLAYBACK_TEMPO_PROFILES[tempo].imageMs)
+      expect(window.coveredDurationMs + NARRATIVE_TIMING_PROFILES.full[tempo].imageRoleMs.representative)
         .toBeGreaterThan(budgetMs);
     }
   });
@@ -277,7 +286,7 @@ describe("planPrefetchWindow", () => {
   });
 
   it("spends a video step's resolved duration rather than an image beat", () => {
-    const profile = PLAYBACK_TEMPO_PROFILES.fast;
+    const profile = NARRATIVE_TIMING_PROFILES.full.fast;
     const steps: PrefetchStep[] = [
       { durationMs: profile.arrivalBaseMs, assetIds: [] },
       ...Array.from({ length: 4 }, (_, index) => ({
@@ -291,7 +300,7 @@ describe("planPrefetchWindow", () => {
     // The same beats timed as images would have fitted more assets.
     const asImages = steps.map((step) => ({
       ...step,
-      durationMs: step.assetIds.length > 0 ? profile.imageMs : step.durationMs,
+      durationMs: step.assetIds.length > 0 ? profile.imageRoleMs.representative : step.durationMs,
     }));
     expect(planFor(asImages, 1, readyMsAheadForTempo("fast")).assetIds.length)
       .toBeGreaterThan(videoWindow.assetIds.length);

@@ -7,62 +7,15 @@ import {
   type PlaybackStep,
 } from "./journeyPlayback";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
-import { resolveNarrativeTiming } from "./narrativeTiming";
+import {
+  NARRATIVE_TIMING_PROFILES,
+  resolveNarrativeTiming,
+  type NarrativeTempo,
+  type NarrativeTimingProfile,
+} from "./narrativeTiming";
 import type { Journey } from "./types";
 
-export type PlaybackTempo = "fast" | "standard" | "immersive";
-
-export type PlaybackTempoProfile = {
-  introMs: number;
-  travelBaseMs: number;
-  travelPerRadiansMs: number;
-  travelMaxMs: number;
-  arrivalBaseMs: number;
-  arrivalPerNoteCharMs: number;
-  arrivalMaxMs: number;
-  imageMs: number;
-  videoMs: number;
-  outroMs: number;
-};
-
-export const PLAYBACK_TEMPO_PROFILES: Record<PlaybackTempo, PlaybackTempoProfile> = {
-  fast: {
-    introMs: 800,
-    travelBaseMs: 420,
-    travelPerRadiansMs: 300,
-    travelMaxMs: 1000,
-    arrivalBaseMs: 650,
-    arrivalPerNoteCharMs: 10,
-    arrivalMaxMs: 1000,
-    imageMs: 1700,
-    videoMs: 4200,
-    outroMs: 1000,
-  },
-  standard: {
-    introMs: 1100,
-    travelBaseMs: 650,
-    travelPerRadiansMs: 450,
-    travelMaxMs: 1400,
-    arrivalBaseMs: 950,
-    arrivalPerNoteCharMs: 14,
-    arrivalMaxMs: 1500,
-    imageMs: 2800,
-    videoMs: 6000,
-    outroMs: 1500,
-  },
-  immersive: {
-    introMs: 1400,
-    travelBaseMs: 900,
-    travelPerRadiansMs: 650,
-    travelMaxMs: 1900,
-    arrivalBaseMs: 1500,
-    arrivalPerNoteCharMs: 18,
-    arrivalMaxMs: 2600,
-    imageMs: 4500,
-    videoMs: 8000,
-    outroMs: 2000,
-  },
-};
+export type PlaybackTempo = NarrativeTempo;
 
 export type PlannedPlaybackSegment = {
   id: string;
@@ -86,7 +39,7 @@ export type PlaybackPlan = {
 export function playbackStepDurationForTempo(
   journey: Journey,
   step: PlaybackStep,
-  profile: PlaybackTempoProfile,
+  profile: NarrativeTimingProfile,
 ) {
   switch (step.kind) {
     case "home-prelude":
@@ -111,7 +64,7 @@ export function playbackStepDurationForTempo(
     }
     case "media": {
       const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
-      return asset?.mimeType.startsWith("video/") ? profile.videoMs : profile.imageMs;
+      return asset?.mimeType.startsWith("video/") ? profile.videoMs : profile.imageRoleMs.representative;
     }
     case "home-epilogue":
     case "outro":
@@ -122,7 +75,7 @@ export function playbackStepDurationForTempo(
 /**
  * An override for one beat's length.
  *
- * Declared here, beside the tempo profiles, because both the live director and
+ * Declared here, beside the live duration formula, because both the director and
  * the elapsed-time plan resolve durations through the same call; the director
  * re-exports the type from its own module for its callers.
  */
@@ -155,7 +108,7 @@ export function resolvePlaybackStepDurationMs(
   if (step.kind === "home-prelude" || step.kind === "home-epilogue") {
     return resolveNarrativeTiming({ mode: "full", tempo, segmentKind: step.kind });
   }
-  return playbackStepDurationForTempo(journey, step, PLAYBACK_TEMPO_PROFILES[tempo]);
+  return playbackStepDurationForTempo(journey, step, NARRATIVE_TIMING_PROFILES.full[tempo]);
 }
 
 type PlaybackSegmentIdentity = Pick<

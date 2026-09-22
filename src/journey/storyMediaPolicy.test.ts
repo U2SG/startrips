@@ -16,10 +16,10 @@ import {
   storyAutoplayWaitsForVideoEnd,
   shouldHoldWholeJourneyTerminalFrame,
   storyUploadedAssetIndex,
-  mediaForUploadRefreshScope,
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
 } from "./storyMediaPolicy";
+import { storyMediaForScope } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 const journey: Journey = {
@@ -82,7 +82,7 @@ describe("groupedPlacementRefreshSelection (#112 review)", () => {
   });
 });
 
-describe("mediaForUploadRefreshScope (#111 review)", () => {
+describe("storyMediaForScope after upload refresh (#111 review)", () => {
   it("filters refreshed media by the accepted upload destination instead of stale UI scope", () => {
     const refreshed: Journey = {
       ...journey,
@@ -95,7 +95,7 @@ describe("mediaForUploadRefreshScope (#111 review)", () => {
         { ...asset("uploaded-media", "image/jpeg", 1), routePointId: "new-point" },
       ],
     };
-    expect(mediaForUploadRefreshScope(refreshed, "new-point").map((item) => item.id))
+    expect(storyMediaForScope(refreshed, "new-point").map((item) => item.id))
       .toEqual(["uploaded-media"]);
   });
 });
@@ -443,7 +443,7 @@ describe("Story scoped media projection", () => {
         asset("soundtrack", "audio/mpeg", 0),
       ],
     };
-    const scopeA = mediaForUploadRefreshScope(original, "a");
+    const scopeA = storyMediaForScope(original, "a");
     const first = indexStoryMedia(scopeA);
     expect([...first.indexById]).toEqual([["early-a", 0], ["late-a", 1]]);
     expect(first.byId.get("late-a")).toBe(original.media[0]);
@@ -457,7 +457,7 @@ describe("Story scoped media projection", () => {
       original.media[2],
       { ...asset("uploaded-a", "image/jpeg", 0), routePointId: "a" },
     ] };
-    const nextScopeA = mediaForUploadRefreshScope(changed, "a");
+    const nextScopeA = storyMediaForScope(changed, "a");
     const next = indexStoryMedia(nextScopeA);
     expect([...next.indexById]).toEqual([["uploaded-a", 0]]);
     expect(next.byId.has("early-a")).toBe(false);
@@ -466,7 +466,7 @@ describe("Story scoped media projection", () => {
     expect(storyMediaInOptimisticOrder(nextScopeA, ["late-a", "early-a"]))
       .toEqual(nextScopeA);
 
-    const scopeB = mediaForUploadRefreshScope(changed, "b");
+    const scopeB = storyMediaForScope(changed, "b");
     const other = indexStoryMedia(scopeB);
     expect([...other.indexById]).toEqual([["other-b", 0], ["late-a", 1]]);
     expect(other.byId.get("late-a")).toBe(changed.media[0]);

@@ -100,8 +100,9 @@ Never animate card, route, globe, sidebar, and title simultaneously.
 
 ## Reduced motion
 
-One unified strategy: `useReducedMotion()` (React) /
-`prefersReducedMotion()` (one-shot) from `src/motion/preferences.ts`.
+Shared preference functions live in `src/motion/preferences.ts`:
+`prefersReducedMotion()` reads the current preference, and
+`onMotionPreferenceChange()` subscribes to changes and returns cleanup.
 
 - Tier 2/3 degrade to a short crossfade or an instant state; semantic completion does not wait for an animation event.
 - Continuous particle drift / route pulse / soundtrack strip flow stops

@@ -10,7 +10,8 @@
 // tempo, so Full Playback and Quick Recap plan their prefetch against the beats
 // they actually play — there is no second timing model here.
 
-import { PLAYBACK_TEMPO_PROFILES, type PlaybackTempo } from "./journeyPlaybackPlan";
+import type { PlaybackTempo } from "./journeyPlaybackPlan";
+import { NARRATIVE_TIMING_PROFILES } from "./narrativeTiming";
 
 /**
  * Hard ceiling on assets in one window, independent of the time budget.
@@ -55,8 +56,8 @@ export function includePlaybackPrefetchHoldTarget(
  * stays at roughly today's current + next.
  */
 export function readyMsAheadForTempo(tempo: PlaybackTempo): number {
-  const slowestImageMs = PLAYBACK_TEMPO_PROFILES.immersive.imageMs;
-  const imageMs = PLAYBACK_TEMPO_PROFILES[tempo].imageMs;
+  const slowestImageMs = NARRATIVE_TIMING_PROFILES.full.immersive.imageRoleMs.representative;
+  const imageMs = NARRATIVE_TIMING_PROFILES.full[tempo].imageRoleMs.representative;
   return Math.max(imageMs, 2 * slowestImageMs - imageMs);
 }
 

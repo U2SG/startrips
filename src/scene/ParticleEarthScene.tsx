@@ -108,13 +108,14 @@ import {
   PARTICLE_DIM_POINT_LIMIT,
 } from "./particleEarthMaterial";
 import {
-  CoastlineRefinementCache,
+  COASTLINE_SPATIAL_CACHE_LIMIT,
+  RefinementCache,
   buildRegionalCoastlinePositions,
   resolveCoastlineRefinementRegion,
 } from "./coastlineSpatialLod";
 import {
+  COASTLINE_LOCAL_CACHE_LIMIT,
   COASTLINE_LOCAL_MANIFEST_PATH,
-  CoastlineLocalChunkCache,
   buildLocalCoastlinePositions,
   mergeRegionalAndLocalCoastlinePositions,
   isLocalCoastlineTarget,
@@ -4201,14 +4202,11 @@ export function ParticleEarthScene({
     let baseCoastlineSourceAvailable = false;
     const refinementBuildGuard = new ParticleRefinementBuildGuard();
     refinementBuildGuard.setVisible(!document.hidden);
-    const refinementCache = new Map<
-      string,
-      {
-        region: ParticleRefinementRegion;
-        particleCap: number;
-        sample: RegionalLandSample;
-      }
-    >();
+    const refinementCache = new RefinementCache<{
+      region: ParticleRefinementRegion;
+      particleCap: number;
+      sample: RegionalLandSample;
+    }>(PARTICLE_REFINEMENT_CACHE_LIMIT);
     const refinementViewPosition = new Vector3();
     let activeRefinementLayer: ParticleRefinementLayer | null = null;
     let departingRefinementLayer: ParticleRefinementLayer | null = null;
@@ -4249,8 +4247,8 @@ export function ParticleEarthScene({
     let lastRefinementViewSampleAt = Number.NEGATIVE_INFINITY;
     let refinementBuildState = document.hidden ? "paused" : "idle";
     let landSourceDebug = "loading:ne_110m_land.geojson@110m";
-    const coastlineRefinementCache = new CoastlineRefinementCache();
-    const coastlineLocalChunkCache = new CoastlineLocalChunkCache();
+    const coastlineRefinementCache = new RefinementCache<Float32Array>(COASTLINE_SPATIAL_CACHE_LIMIT);
+    const coastlineLocalChunkCache = new RefinementCache<CoastlineLocalChunk>(COASTLINE_LOCAL_CACHE_LIMIT);
     const coastlineRefinementBuildGuard = new ParticleRefinementBuildGuard();
     coastlineRefinementBuildGuard.setVisible(!document.hidden);
     let detailedCoastlineRings: number[][][] = [];
@@ -4285,29 +4283,6 @@ export function ParticleEarthScene({
       removeVisitedImprintMaterial(layer.material);
       layer.geometry.dispose();
       layer.material.dispose();
-    };
-
-    const cacheRefinementSample = (
-      cacheKey: string,
-      region: ParticleRefinementRegion,
-      particleCap: number,
-      sample: RegionalLandSample,
-    ) => {
-      refinementCache.delete(cacheKey);
-      refinementCache.set(cacheKey, { region, particleCap, sample });
-      while (refinementCache.size > PARTICLE_REFINEMENT_CACHE_LIMIT) {
-        const oldestKey = refinementCache.keys().next().value;
-        if (typeof oldestKey !== "string") break;
-        refinementCache.delete(oldestKey);
-      }
-    };
-
-    const readCachedRefinement = (cacheKey: string) => {
-      const cached = refinementCache.get(cacheKey);
-      if (!cached) return null;
-      refinementCache.delete(cacheKey);
-      refinementCache.set(cacheKey, cached);
-      return cached;
     };
 
     const applyRefinementSample = (
@@ -4394,7 +4369,7 @@ export function ParticleEarthScene({
       if (requestedRefinementCacheKey === cacheKey) return;
       requestedRefinementCacheKey = cacheKey;
       const ticket = refinementBuildGuard.request(cacheKey);
-      const cached = readCachedRefinement(cacheKey);
+      const cached = refinementCache.get(cacheKey);
       if (cached) {
         refinementBuildState = "cached";
         if (refinementBuildGuard.isCurrent(ticket)) {
@@ -4440,7 +4415,7 @@ export function ParticleEarthScene({
           yieldControl: yieldRefinementBuild,
         });
         if (!sample || !refinementBuildGuard.isCurrent(ticket)) return;
-        cacheRefinementSample(cacheKey, region, particleCap, sample);
+        refinementCache.set(cacheKey, { region, particleCap, sample });
         applyRefinementSample(cacheKey, region, particleCap, sample);
       })();
     };

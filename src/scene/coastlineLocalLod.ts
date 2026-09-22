@@ -247,35 +247,3 @@ export function mergeRegionalAndLocalCoastlinePositions({
   merged.set(localPositions.slice(0, localLength), offset);
   return merged;
 }
-
-export class CoastlineLocalChunkCache {
-  private readonly values = new Map<string, CoastlineLocalChunk>();
-
-  constructor(private readonly limit = COASTLINE_LOCAL_CACHE_LIMIT) {}
-
-  get(key: string) {
-    const value = this.values.get(key);
-    if (!value) return null;
-    this.values.delete(key);
-    this.values.set(key, value);
-    return value;
-  }
-
-  set(key: string, value: CoastlineLocalChunk) {
-    this.values.delete(key);
-    this.values.set(key, value);
-    while (this.values.size > this.limit) {
-      const oldest = this.values.keys().next().value;
-      if (typeof oldest !== "string") break;
-      this.values.delete(oldest);
-    }
-  }
-
-  clear() {
-    this.values.clear();
-  }
-
-  get size() {
-    return this.values.size;
-  }
-}

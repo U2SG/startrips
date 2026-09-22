@@ -245,20 +245,13 @@ export function storySelectionContainsRoutePointMedia(
   return media.some((asset) => selectedIds.has(asset.id) && asset.routePointId !== null);
 }
 
-export function mediaForUploadRefreshScope(
-  target: Journey,
-  targetRoutePointId: string | null,
-) {
-  return storyMediaForScope(target, targetRoutePointId);
-}
-
 export function groupedPlacementRefreshSelection(
   target: Journey | null,
   targetRoutePointId: string | null,
   uploadedAssetIds: readonly string[],
 ) {
   if (!target) return null;
-  const media = mediaForUploadRefreshScope(target, targetRoutePointId);
+  const media = storyMediaForScope(target, targetRoutePointId);
   const assetIndex = storyUploadedAssetIndex(media, uploadedAssetIds);
   if (assetIndex === null) return null;
   return { media, assetIndex, assetId: media[assetIndex].id };

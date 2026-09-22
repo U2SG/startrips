@@ -1,8 +1,9 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../db/client";
-import { journeys, mediaAssets } from "../db/app-schema";
+import { mediaAssets } from "../db/app-schema";
 import type { MultipartStorage } from "../storage/multipart-storage";
 import { getMultipartStorage } from "../storage/storage-registry";
+import { findAssetForAtlas } from "./journey-media";
 
 export type DeleteMediaDependencies = {
   findAsset: (
@@ -14,19 +15,7 @@ export type DeleteMediaDependencies = {
 };
 
 const defaultDependencies: DeleteMediaDependencies = {
-  async findAsset(assetId, atlasId) {
-    const [row] = await db
-      .select({ asset: mediaAssets })
-      .from(mediaAssets)
-      .innerJoin(journeys, eq(journeys.id, mediaAssets.journeyId))
-      .where(and(
-        eq(mediaAssets.id, assetId),
-        eq(journeys.atlasId, atlasId),
-        isNull(journeys.deletionStartedAt),
-      ))
-      .limit(1);
-    return row?.asset;
-  },
+  findAsset: findAssetForAtlas,
   storageForBackend: getMultipartStorage,
   async deleteRow(assetId) {
     await db.delete(mediaAssets).where(eq(mediaAssets.id, assetId));

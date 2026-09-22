@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GEOGRAPHIC_SURFACE_RADIUS } from "./geo";
 import {
   COASTLINE_SPATIAL_VERTEX_BUDGET,
-  CoastlineRefinementCache,
+  RefinementCache,
   buildRegionalCoastlinePositions,
   resolveCoastlineRefinementRegion,
   selectRegionalCoastlineRings,
@@ -92,7 +92,7 @@ describe("spatial coastline refinement foundation (#154)", () => {
   });
 
   it("keeps a bounded LRU of recently viewed regions", () => {
-    const cache = new CoastlineRefinementCache(2);
+    const cache = new RefinementCache<Float32Array>(2);
     cache.set("a", new Float32Array([1]));
     cache.set("b", new Float32Array([2]));
     expect(cache.get("a")?.[0]).toBe(1);
@@ -101,5 +101,58 @@ describe("spatial coastline refinement foundation (#154)", () => {
     expect(cache.get("a")?.[0]).toBe(1);
     expect(cache.get("c")?.[0]).toBe(3);
     expect(cache.size).toBe(2);
+  });
+
+  it("promotes overwritten entries without growing the cache and retains value identity", () => {
+    const cache = new RefinementCache<Float32Array>(2);
+    cache.set("a", new Float32Array([1]));
+    cache.set("b", new Float32Array([2]));
+    const replacement = new Float32Array([3]);
+    cache.set("a", replacement);
+    expect(cache.size).toBe(2);
+    cache.set("c", new Float32Array([4]));
+    expect(cache.get("b")).toBeNull();
+    expect(cache.get("a")).toBe(replacement);
+  });
+
+  it("leaves eviction order and size unchanged on a miss", () => {
+    const cache = new RefinementCache<Float32Array>(2);
+    cache.set("a", new Float32Array([1]));
+    cache.set("b", new Float32Array([2]));
+    expect(cache.get("missing")).toBeNull();
+    expect(cache.size).toBe(2);
+    cache.set("c", new Float32Array([3]));
+    expect(cache.get("a")).toBeNull();
+    expect(cache.get("b")?.[0]).toBe(2);
+    expect(cache.get("c")?.[0]).toBe(3);
+  });
+
+  it("clears retained values and allows the cache to be reused", () => {
+    const cache = new RefinementCache<Float32Array>(2);
+    cache.set("a", new Float32Array([1]));
+    cache.set("b", new Float32Array([2]));
+    cache.clear();
+    expect(cache.size).toBe(0);
+    expect(cache.get("a")).toBeNull();
+    expect(cache.get("b")).toBeNull();
+    const next = new Float32Array([3]);
+    cache.set("c", next);
+    expect(cache.get("c")).toBe(next);
+    expect(cache.size).toBe(1);
+  });
+
+  it("keeps values, capacity and lifetime independent between cache instances", () => {
+    const first = new RefinementCache<Float32Array>(1);
+    const second = new RefinementCache<{ positions: Float32Array }>(2);
+    const retained = { positions: new Float32Array([2]) };
+    first.set("shared", new Float32Array([1]));
+    second.set("shared", retained);
+    first.set("next", new Float32Array([3]));
+    expect(first.get("shared")).toBeNull();
+    expect(second.get("shared")).toBe(retained);
+    first.clear();
+    expect(first.size).toBe(0);
+    expect(second.size).toBe(1);
+    expect(second.get("shared")).toBe(retained);
   });
 });

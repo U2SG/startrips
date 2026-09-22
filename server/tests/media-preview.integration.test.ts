@@ -5,7 +5,7 @@ import { eq, inArray, like } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
-import { atlases, mediaAssets, mediaPreviewWrites } from "../db/app-schema";
+import { atlases, everydayFragments, mediaAssets, mediaPreviewWrites } from "../db/app-schema";
 import {
   organization as authOrganizations,
   rateLimit,
@@ -25,7 +25,7 @@ import {
   restoreJourneyForAtlas,
 } from "../repositories/journey-repository";
 import { signSharedMediaRead } from "../routes/shares";
-import { signPrivateMediaRead } from "../services/journey-media";
+import { findAssetForAtlas, signPrivateMediaRead } from "../services/journey-media";
 import { deleteMediaAssetForAtlas } from "../services/delete-media";
 import { reconcileJourneyDeletionCandidates } from "../services/delete-journey";
 import {
@@ -1082,20 +1082,66 @@ describe("#260 same-asset preview for private media reads", () => {
     backend.deleted.length = 0;
 
     const deleted = await deleteMediaAssetForAtlas(asset.id, identity.atlasId, {
-      async findAsset(assetId) {
-        return await readAsset(assetId);
-      },
+      findAsset: findAssetForAtlas,
       storageForBackend: backend.resolve,
       async deleteRow(assetId) {
+        expect(backend.deleted).toEqual([stored.previewStorageKey!, stored.storageKey]);
         await db.delete(mediaAssets).where(eq(mediaAssets.id, assetId));
       },
     });
 
     expect(deleted).toBe(true);
-    expect(backend.deleted.sort()).toEqual(
-      [stored.previewStorageKey!, stored.storageKey].sort(),
-    );
+    expect(backend.deleted).toEqual([stored.previewStorageKey!, stored.storageKey]);
     expect(await readAsset(asset.id)).toBeUndefined();
+  });
+
+  it("does not find or delete Journey media through another Atlas", async () => {
+    const asset = await insertAsset();
+    const [otherAtlas] = await db.insert(atlases).values({
+      organizationId: randomUUID(),
+      title: "Other preview Atlas",
+    }).returning();
+    atlasIds.push(otherAtlas.id);
+
+    expect(await findAssetForAtlas(asset.id, identity.atlasId)).toEqual(asset);
+    expect(await findAssetForAtlas(asset.id, otherAtlas.id)).toBeUndefined();
+    expect(await deleteMediaAssetForAtlas(asset.id, otherAtlas.id)).toBe(false);
+    expect(await readAsset(asset.id)).toEqual(asset);
+  });
+
+  it("does not find or delete media while its Journey is deleting", async () => {
+    const doomed = await createJourneyForAtlas(
+      identity.atlasId,
+      identity.userId,
+      { ...baseJourney, title: "Deleting Journey media lookup" },
+    );
+    if (!doomed) throw new Error("Journey fixture was not created");
+    const asset = await insertAsset();
+    await db.update(mediaAssets).set({ journeyId: doomed.id })
+      .where(eq(mediaAssets.id, asset.id));
+    expect(await markJourneyForDeletionForAtlas(doomed.id, identity.atlasId))
+      .toBeTruthy();
+
+    expect(await findAssetForAtlas(asset.id, identity.atlasId)).toBeUndefined();
+    expect(await deleteMediaAssetForAtlas(asset.id, identity.atlasId)).toBe(false);
+    expect(await readAsset(asset.id)).toEqual({ ...asset, journeyId: doomed.id });
+  });
+
+  it("does not find or delete Fragment media through the Journey lookup", async () => {
+    const [fragment] = await db.insert(everydayFragments).values({
+      atlasId: identity.atlasId,
+      occurredOn: "2026-08-11",
+      latitude: 1.3521,
+      longitude: 103.8198,
+      createdByUserId: identity.userId,
+    }).returning();
+    const asset = await insertAsset();
+    const owner = { journeyId: null, everydayFragmentId: fragment.id };
+    await db.update(mediaAssets).set(owner).where(eq(mediaAssets.id, asset.id));
+
+    expect(await findAssetForAtlas(asset.id, identity.atlasId)).toBeUndefined();
+    expect(await deleteMediaAssetForAtlas(asset.id, identity.atlasId)).toBe(false);
+    expect(await readAsset(asset.id)).toEqual({ ...asset, ...owner });
   });
 
   /**
@@ -1121,9 +1167,7 @@ describe("#260 same-asset preview for private media reads", () => {
     const pendingKey = (await readAsset(asset.id)).previewStorageKey!;
 
     const deleted = await deleteMediaAssetForAtlas(asset.id, identity.atlasId, {
-      async findAsset(assetId) {
-        return await readAsset(assetId);
-      },
+      findAsset: findAssetForAtlas,
       storageForBackend: backend.resolve,
       async deleteRow(assetId) {
         await db.delete(mediaAssets).where(eq(mediaAssets.id, assetId));

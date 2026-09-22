@@ -32,6 +32,8 @@ The authority did **not** move: `activePointers`, drag/pinch samples, `interacti
 
 `globeMode.ts` owns the four mode names and their presentation constants; `renderBudget.ts` owns the quality profiles and drawing-buffer calculation. Both production and legacy consumers import these contracts directly. Projection helpers remain in `projection.ts`; the renderer does not re-export them. None of these modules owns a live scene, camera, viewport or quality revision.
 
+The renderer's particle, regional coastline and local coastline refinement caches share `RefinementCache<T>` from `coastlineSpatialLod.ts`. They remain three separate instances with their original capacities and cleanup calls. Sharing the LRU algorithm does not share samples, request guards, build revisions or resource lifetimes. City loading uses the compact `cities.json` format through `parseCityList`.
+
 ## `src/journey/JourneyStory.tsx`
 
 `JourneyStory` remains the Story composition root. `storyMediaPolicy.ts` owns media identity, scope, navigation and autoplay decisions; `storySurfacePolicy.ts` owns surface, history-layer and control descriptions. They receive snapshots and do not own the state described below. Signed-read decisions live in `mediaReadRefresh.ts`, while the cache and request lifecycle remain in the consuming root.
@@ -68,6 +70,8 @@ The authority did **not** move: `activePointers`, drag/pinch samples, `interacti
 | `mediaReadRefresh.ts` | Shared read-state shape and caller-specific freshness decisions | Story and Playback each retain their own signed-read cache and scope guards |
 
 Story's 60-second refresh margin and protected-video rule remain distinct from Playback's read-reuse policy. Sharing a contract does not merge their request lifecycles. Shell consumers import public types from their model owners instead of importing a UI root to obtain them.
+
+Full Playback and prefetch read tempo values directly from `NARRATIVE_TIMING_PROFILES.full`. The live duration calculation retains fractional travel milliseconds; `resolveNarrativeTiming` retains its rounded durations for its other consumers. The shared profile owns the values without changing either calculation's precision or override rules.
 
 ## Server background services and HTTP adapters
 

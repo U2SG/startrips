@@ -1,25 +1,17 @@
 import type { AutoEditPhotoRole } from "./autoEditPlan";
 
 /**
- * The single place that converts narrative context into milliseconds.
+ * The single owner of narrative timing profiles.
  *
- * Before this module the codebase held four independent timing truths: the live
- * Playback tempo profiles (`journeyPlaybackPlan.ts`), the Quick Recap dwell and
- * camera constants (`autoEditPlan.ts`), the Keepsake desired durations, and a
- * legacy pacing table in `journeyPlayback.ts` that Keepsake and the Quick Recap
- * budget still read. All four are gone; the Edit Plan decides what / order /
- * role / camera intent, this resolver decides how long, and the Director and
- * the Keepsake renderer only execute.
+ * Quick Recap and Keepsake resolve whole milliseconds here. Full Playback
+ * consumes the same profiles in `journeyPlaybackPlan.ts` while retaining its
+ * live formula's fractional travel duration and non-finite input behavior.
  *
  * Pure: no React, no I/O, no clock. Target-duration budgeting deliberately
  * stays outside — Quick Recap keeps its greedy selection loop and Keepsake
- * keeps `fitKeepsakeSceneDurations()`. This module answers "how long is this
- * beat", never "how many beats fit".
+ * keeps `fitKeepsakeSceneDurations()`.
  *
- * The tables below are seeded from the numbers that played before the switch,
- * so moving each caller over was a no-visual-change refactor;
- * `narrativeTiming.test.ts` pins those numbers as literals now that this module
- * is the only place they live.
+ * `narrativeTiming.test.ts` pins the original profile values as literals.
  */
 
 export type NarrativeMode = "full" | "quick-recap" | "keepsake";
@@ -66,12 +58,8 @@ export type NarrativeTimingContext = {
 const DEFAULT_PHOTO_ROLE: AutoEditPhotoRole = "representative";
 
 /**
- * Full Playback: every field is `PLAYBACK_TEMPO_PROFILES[tempo]` from
- * `journeyPlaybackPlan.ts:25-62`, unchanged. `imageRoleMs.representative` is
- * that profile's `imageMs`, so Full Playback — which never assigns a photo role
- * and therefore takes the default role — keeps exactly today's dwell; the other
- * three roles come from Quick Recap's per-role dwell table so that a future
- * role-aware Full Playback has numbers to read instead of inventing them.
+ * Full Playback retains its original phase values and uses the representative
+ * image dwell. The other photo roles retain Quick Recap's per-role values.
  */
 const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
   fast: {
@@ -82,8 +70,6 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
     arrivalBaseMs: 650,
     arrivalPerNoteCharMs: 10,
     arrivalMaxMs: 1000,
-    // representative: PLAYBACK_TEMPO_PROFILES.fast.imageMs; the other three roles are
-    // Quick Recap's fast dwell numbers.
     imageRoleMs: { hero: 2_000, representative: 1_700, supporting: 1_200, burst: 700 },
     videoMs: 4_200,
     outroMs: 1_000,
@@ -96,8 +82,6 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
     arrivalBaseMs: 950,
     arrivalPerNoteCharMs: 14,
     arrivalMaxMs: 1_500,
-    // representative: PLAYBACK_TEMPO_PROFILES.standard.imageMs; the other three roles are
-    // Quick Recap's standard dwell numbers.
     imageRoleMs: { hero: 3_100, representative: 2_800, supporting: 1_800, burst: 900 },
     videoMs: 6_000,
     outroMs: 1_500,
@@ -110,8 +94,6 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
     arrivalBaseMs: 1_500,
     arrivalPerNoteCharMs: 18,
     arrivalMaxMs: 2_600,
-    // representative: PLAYBACK_TEMPO_PROFILES.immersive.imageMs; the other three roles are
-    // Quick Recap's immersive dwell numbers.
     imageRoleMs: { hero: 4_900, representative: 4_500, supporting: 3_000, burst: 1_300 },
     videoMs: 8_000,
     outroMs: 2_000,
@@ -138,12 +120,8 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
  *   ST-010 scoped the decision to the camera floor alone.
  * - The slopes and the base→max span are Full Playback's, i.e. the same distance
  *   and note sensitivity as live Playback over a Quick Recap ceiling.
- * - `introMs` / `outroMs`: `PLAYBACK_TEMPO_PROFILES[tempo]` again, because
- *   `quickRecapStepDurationMs()` returns `undefined` for intro and outro
- *   (`quickRecapPlayback.ts:146`) and the director already spends the live
- *   profile's values for those two beats. The legacy 1200/1800 that Quick
- *   Recap's *budget* arithmetic subtracts (`quickRecapPlayback.ts:136`) is not
- *   what plays; PR 4 switches that budget onto this table.
+ * - `introMs` / `outroMs` match Full Playback: `quickRecapStepDurationMs()`
+ *   leaves those beats to the director's full profile.
  */
 const QUICK_RECAP_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
   fast: {

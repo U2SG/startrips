@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  PLAYBACK_TEMPO_PROFILES,
   buildPlaybackPlan,
   nextMeaningfulStepIndex,
   resolvePlaybackStepDurationMs,
@@ -11,6 +10,7 @@ import {
 } from "./journeyPlaybackPlan";
 import { buildPlaybackSteps, playbackCameraTargetForStep, playbackStepIdentity } from "./journeyPlayback";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
+import { NARRATIVE_TIMING_PROFILES } from "./narrativeTiming";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 function point(id: string, sortOrder: number, longitude: number, note: string | null = null): RoutePoint {
@@ -164,13 +164,43 @@ describe("Playback V2 timeline planner (#126)", () => {
     expect(playbackStepDurationForTempo(
       journey,
       mediaStep,
-      PLAYBACK_TEMPO_PROFILES.fast,
-    )).toBe(PLAYBACK_TEMPO_PROFILES.fast.imageMs);
+      NARRATIVE_TIMING_PROFILES.full.fast,
+    )).toBe(1700);
     expect(playbackStepDurationForTempo(
       journey,
       mediaStep,
-      PLAYBACK_TEMPO_PROFILES.immersive,
-    )).toBe(PLAYBACK_TEMPO_PROFILES.immersive.imageMs);
+      NARRATIVE_TIMING_PROFILES.full.immersive,
+    )).toBe(4500);
+  });
+
+  it.each([
+    ["fast", 425.235987755983],
+    ["standard", 657.8539816339745],
+    ["immersive", 911.3446401379631],
+  ] as const)("retains fractional live travel at %s tempo", (tempo, expectedMs) => {
+    const journey = fixture(1);
+    journey.routePoints = [
+      { ...point("p0", 0, 0), latitude: 0 },
+      { ...point("p1", 1, 1), latitude: 0 },
+    ];
+    // One degree along the equator has an independently known angular distance.
+    const durationMs = resolvePlaybackStepDurationMs(journey, { kind: "travel", to: 1 }, tempo);
+    expect(durationMs).toBeCloseTo(expectedMs, 10);
+    expect(Number.isInteger(durationMs)).toBe(false);
+    expect(buildPlaybackPlan(journey, tempo).segments.find((segment) => segment.kind === "travel")?.durationMs)
+      .toBe(durationMs);
+  });
+
+  it("preserves non-finite live travel and applies usable overrides before fallback", () => {
+    const journey = fixture(1);
+    journey.routePoints[1].longitude = Number.NaN;
+    const travel = { kind: "travel", to: 1 } as const;
+    expect(resolvePlaybackStepDurationMs(journey, travel, "standard")).toBeNaN();
+    expect(resolvePlaybackStepDurationMs(journey, travel, "standard", () => 0)).toBe(0);
+    for (const invalidOverride of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(resolvePlaybackStepDurationMs(journey, travel, "standard", () => invalidOverride))
+        .toBeNaN();
+    }
   });
 
   it("maps tempo independently by phase instead of applying one global multiplier", () => {
@@ -180,9 +210,10 @@ describe("Playback V2 timeline planner (#126)", () => {
     const immersive = buildPlaybackPlan(journey, "immersive");
     expect(fast.totalDurationMs).toBeLessThan(standard.totalDurationMs);
     expect(standard.totalDurationMs).toBeLessThan(immersive.totalDurationMs);
-    expect(PLAYBACK_TEMPO_PROFILES.fast.imageMs / PLAYBACK_TEMPO_PROFILES.standard.imageMs)
+    expect(NARRATIVE_TIMING_PROFILES.full.fast.imageRoleMs.representative
+      / NARRATIVE_TIMING_PROFILES.full.standard.imageRoleMs.representative)
       .not.toBeCloseTo(
-        PLAYBACK_TEMPO_PROFILES.fast.travelBaseMs / PLAYBACK_TEMPO_PROFILES.standard.travelBaseMs,
+        NARRATIVE_TIMING_PROFILES.full.fast.travelBaseMs / NARRATIVE_TIMING_PROFILES.full.standard.travelBaseMs,
         3,
       );
   });
@@ -249,11 +280,12 @@ describe("Playback V2 timeline planner (#126)", () => {
   it("adds exactly introMs + outroMs when both Home beats are eligible", () => {
     const journey = fixture(1);
     const context = homeContext();
+    const expectedHomeMs = { fast: 1800, standard: 2600, immersive: 3400 };
     for (const tempo of ["fast", "standard", "immersive"] as const) {
       const plain = buildPlaybackPlan(journey, tempo);
       const withHome = buildPlaybackPlan(journey, tempo, undefined, context);
       expect(withHome.totalDurationMs - plain.totalDurationMs).toBeCloseTo(
-        PLAYBACK_TEMPO_PROFILES[tempo].introMs + PLAYBACK_TEMPO_PROFILES[tempo].outroMs,
+        expectedHomeMs[tempo],
         8,
       );
     }

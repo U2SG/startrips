@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   StartripsBrandLoader,
   StartripsBrandMark,
-  StartripsLoadingPoints,
   StartripsWordmark,
 } from "./StartripsBrandMark";
 import { STARTRIPS_V12_MARK_MARKUP } from "./startripsV12Mark";
@@ -52,10 +51,6 @@ describe("Startrips v12 brand identity", () => {
     }
     expect(readFileSync("public/brand/startrips-v12-wordmark.svg", "utf8")).toContain('id="goat"');
     expect(readFileSync("public/brand/startrips-v12-wordmark-only.svg", "utf8")).not.toContain('id="goat"');
-  });
-
-  it("retires the legacy loading-particle signal so v12 keeps one four-point star", () => {
-    expect(renderToStaticMarkup(createElement(StartripsLoadingPoints))).toBe("");
   });
 
   it("uses the semantic loading clip on the existing product loader", () => {
