@@ -9,7 +9,6 @@ import {
   type PreviewCeilings,
 } from "../media/preview-derivation";
 import {
-  atlases,
   journeyRoutePoints,
   mediaAssets,
   mediaUploads,
@@ -21,7 +20,7 @@ import {
   completeAssetPreview,
   type PreviewSourceValues,
 } from "../services/media-preview";
-import { getJourneyForAtlas, getJourneysForAtlas } from "../repositories/journey-repository";
+import { getJourneyForAtlas, getJourneysForAtlas, lockActiveAtlas } from "../repositories/journey-repository";
 import { attachRecordedEvidenceToNewAsset } from "../repositories/media-evidence-repository";
 import { writeJourneyMediaOrder } from "../repositories/media-order";
 import {
@@ -436,6 +435,25 @@ async function findUpload(uploadId: string, atlasId: string) {
 }
 
 export type UploadRecord = NonNullable<Awaited<ReturnType<typeof findUpload>>>;
+
+type UploadTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function lockActiveJourney(
+  transaction: UploadTransaction,
+  journeyId: string,
+  // Only persisted, already-authorized upload records use the unscoped null case.
+  atlasId: string | null,
+): Promise<{ id: string; coverMediaAssetId: string | null } | undefined> {
+  const locked = await transaction.execute<{ id: string; coverMediaAssetId: string | null }>(sql`
+    select ${journeys.id} as id, ${journeys.coverMediaAssetId} as "coverMediaAssetId"
+    from ${journeys}
+    where ${journeys.id} = ${journeyId}
+      ${atlasId === null ? sql`` : sql`and ${journeys.atlasId} = ${atlasId}`}
+      and ${journeys.deletionStartedAt} is null
+    for update
+  `);
+  return locked.rows[0];
+}
 type CompletionLease = {
   attemptId: string;
   status: "finalizing" | "reconciling";
@@ -511,14 +529,7 @@ export async function finalizeUpload(
     }
   }
   const result = await db.transaction(async (transaction) => {
-    const lockedAtlas = await transaction.execute<{ id: string }>(sql`
-      select ${atlases.id} as id
-      from ${atlases}
-      where ${atlases.id} = ${upload.atlasId}
-        and ${atlases.deletionStartedAt} is null
-      for update
-    `);
-    if (lockedAtlas.rows.length === 0) {
+    if (!await lockActiveAtlas(transaction, upload.atlasId)) {
       throw new Error("Upload atlas no longer exists");
     }
 
@@ -535,14 +546,7 @@ export async function finalizeUpload(
         throw new Error("Upload completion lease was lost");
       }
     }
-    const lockedJourney = await transaction.execute<{ id: string }>(sql`
-      select ${journeys.id} as id
-      from ${journeys}
-      where ${journeys.id} = ${upload.journeyId}
-        and ${journeys.deletionStartedAt} is null
-      for update
-    `);
-    if (lockedJourney.rows.length === 0) {
+    if (!await lockActiveJourney(transaction, upload.journeyId, null)) {
       throw new Error("Upload journey no longer exists");
     }
 
@@ -910,24 +914,8 @@ uploadRoutes.post("/start", async (context) => {
 
   try {
     const upload = await db.transaction(async (transaction) => {
-      const lockedAtlas = await transaction.execute<{ id: string }>(sql`
-        select ${atlases.id} as id
-        from ${atlases}
-        where ${atlases.id} = ${atlas.id}
-          and ${atlases.deletionStartedAt} is null
-        for update
-      `);
-      if (lockedAtlas.rows.length === 0) return undefined;
-
-      const lockedJourney = await transaction.execute<{ id: string }>(sql`
-        select ${journeys.id} as id
-        from ${journeys}
-        where ${journeys.id} = ${input.journeyId}
-          and ${journeys.atlasId} = ${atlas.id}
-          and ${journeys.deletionStartedAt} is null
-        for update
-      `);
-      if (lockedJourney.rows.length === 0) return undefined;
+      if (!await lockActiveAtlas(transaction, atlas.id)) return undefined;
+      if (!await lockActiveJourney(transaction, input.journeyId, atlas.id)) return undefined;
 
       if (input.routePointId) {
         const [routePoint] = await transaction
@@ -1122,25 +1110,11 @@ uploadRoutes.post("/:id/complete", async (context) => {
   const storage = getMultipartStorage(upload.storageDriver);
   try {
     await db.transaction(async (transaction) => {
-      const lockedAtlas = await transaction.execute<{ id: string }>(sql`
-        select ${atlases.id} as id
-        from ${atlases}
-        where ${atlases.id} = ${atlas.id}
-          and ${atlases.deletionStartedAt} is null
-        for update
-      `);
-      if (lockedAtlas.rows.length === 0) {
+      if (!await lockActiveAtlas(transaction, atlas.id)) {
         throw new JourneyUnavailableForUploadError();
       }
 
-      const lockedJourney = await transaction.execute<{ id: string }>(sql`
-        select ${journeys.id} as id
-        from ${journeys}
-        where ${journeys.id} = ${upload.journeyId}
-          and ${journeys.deletionStartedAt} is null
-        for update
-      `);
-      if (lockedJourney.rows.length === 0) {
+      if (!await lockActiveJourney(transaction, upload.journeyId, null)) {
         throw new JourneyUnavailableForUploadError();
       }
       verifiedContentHash = await withCompletionLease(upload.id, attemptId, async () => {
@@ -1411,15 +1385,7 @@ uploadRoutes.post("/assets/reorder", async (context) => {
   }
 
   const ordered = await db.transaction(async (transaction) => {
-    const lockedJourney = await transaction.execute<{ id: string }>(sql`
-      select ${journeys.id} as id
-      from ${journeys}
-      where ${journeys.id} = ${input.journeyId}
-        and ${journeys.atlasId} = ${atlas.id}
-        and ${journeys.deletionStartedAt} is null
-      for update
-    `);
-    if (lockedJourney.rows.length === 0) return undefined;
+    if (!await lockActiveJourney(transaction, input.journeyId, atlas.id)) return undefined;
 
     const owned = await transaction
       .select({ id: mediaAssets.id })
@@ -1475,17 +1441,7 @@ uploadRoutes.post("/assets/move", async (context) => {
   const result = await db.transaction(async (transaction) => {
     const lockedJourneys = new Map<string, { id: string; coverMediaAssetId: string | null }>();
     for (const journeyId of [...new Set([sourceJourneyId, targetJourneyId])].sort()) {
-      const locked = await transaction.execute<{ id: string; coverMediaAssetId: string | null }>(sql`
-        select
-          ${journeys.id} as id,
-          ${journeys.coverMediaAssetId} as "coverMediaAssetId"
-        from ${journeys}
-        where ${journeys.id} = ${journeyId}
-          and ${journeys.atlasId} = ${atlas.id}
-          and ${journeys.deletionStartedAt} is null
-        for update
-      `);
-      const row = locked.rows[0];
+      const row = await lockActiveJourney(transaction, journeyId, atlas.id);
       if (!row) {
         return journeyId === sourceJourneyId
           ? "journey-not-found" as const
@@ -1647,15 +1603,9 @@ uploadRoutes.post("/assets/move/undo", async (context) => {
       );
     }
     const result = await db.transaction(async (transaction) => {
-      const lockedJourney = await transaction.execute<{ id: string }>(sql`
-        select ${journeys.id} as id
-        from ${journeys}
-        where ${journeys.id} = ${sameJourneyInput.journeyId}
-          and ${journeys.atlasId} = ${atlas.id}
-          and ${journeys.deletionStartedAt} is null
-        for update
-      `);
-      if (lockedJourney.rows.length === 0) return "journey-not-found" as const;
+      if (!await lockActiveJourney(transaction, sameJourneyInput.journeyId, atlas.id)) {
+        return "journey-not-found" as const;
+      }
 
       const lockedMedia = await transaction.execute<{
         id: string;
@@ -1740,17 +1690,7 @@ uploadRoutes.post("/assets/move/undo", async (context) => {
   const result = await db.transaction(async (transaction) => {
     const lockedJourneys = new Map<string, { id: string; coverMediaAssetId: string | null }>();
     for (const journeyId of [input.sourceJourneyId, input.targetJourneyId].sort()) {
-      const locked = await transaction.execute<{ id: string; coverMediaAssetId: string | null }>(sql`
-        select
-          ${journeys.id} as id,
-          ${journeys.coverMediaAssetId} as "coverMediaAssetId"
-        from ${journeys}
-        where ${journeys.id} = ${journeyId}
-          and ${journeys.atlasId} = ${atlas.id}
-          and ${journeys.deletionStartedAt} is null
-        for update
-      `);
-      const row = locked.rows[0];
+      const row = await lockActiveJourney(transaction, journeyId, atlas.id);
       if (!row) {
         return journeyId === input.sourceJourneyId
           ? "journey-not-found" as const
