@@ -364,6 +364,84 @@ async function activateRoutePoint(page, pointIndex) {
   await activateRoutePointId(page, pointId);
 }
 
+async function routePointActivationEvidence(page) {
+  return page.locator(".particle-earth-scene").evaluate((host) => ({
+    source: host.getAttribute("data-route-point-activation-source"),
+    journeyId: host.getAttribute("data-route-point-activation-journey-id"),
+    routePointId: host.getAttribute("data-route-point-activation-id"),
+    eventTarget: host.getAttribute("data-route-point-activation-event-target"),
+    clientX: Number(host.getAttribute("data-route-point-activation-client-x")),
+    clientY: Number(host.getAttribute("data-route-point-activation-client-y")),
+    projectedX: Number(host.getAttribute("data-route-point-activation-projected-x")),
+    projectedY: Number(host.getAttribute("data-route-point-activation-projected-y")),
+  }));
+}
+
+async function clickRoutePointMarker(page, routeId, pointId) {
+  const marker = page.locator(`.particle-earth-route__point[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
+  await marker.waitFor({ state: "visible", timeout: 5_000 });
+  const box = await marker.boundingBox();
+  if (!box) throw new Error(`Route Point ${pointId} has no projected marker geometry`);
+  const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.click(target.x, target.y);
+  return { box, target };
+}
+
+async function clickRoutePointLabel(page, routeId, pointId) {
+  const label = page.locator(`.particle-earth-route__label[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
+  await label.waitFor({ state: "visible", timeout: 5_000 });
+  const hitTarget = label.locator(".particle-earth-route__label-hit");
+  const box = await hitTarget.boundingBox();
+  if (!box) throw new Error(`Route Point ${pointId} has no visible label hit geometry`);
+  const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.click(target.x, target.y);
+  return { box, target };
+}
+
+async function findBlankGlobePoint(page) {
+  const target = await page.evaluate(() => {
+    const debug = window.__particleEarthDebug?.();
+    const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+    if (!debug || !(canvas instanceof HTMLCanvasElement)) return null;
+    const markers = [...document.querySelectorAll(".particle-earth-route__point")]
+      .map((node) => node.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 && rect.height > 0);
+    const canvasRect = canvas.getBoundingClientRect();
+    const centerX = canvasRect.left + debug.projectedGlobeCenterPx.x;
+    const centerY = canvasRect.top + debug.projectedGlobeCenterPx.y;
+    const radius = debug.projectedGlobeRadiusPx;
+    for (const angle of [0, Math.PI / 2, Math.PI, -Math.PI / 2, Math.PI / 4, -Math.PI / 4]) {
+      const x = centerX + Math.cos(angle) * radius * 0.55;
+      const y = centerY + Math.sin(angle) * radius * 0.55;
+      const element = document.elementFromPoint(x, y);
+      const clearOfMarkers = markers.every((rect) => {
+        const markerX = rect.x + rect.width / 2;
+        const markerY = rect.y + rect.height / 2;
+        return Math.hypot(x - markerX, y - markerY) > 44;
+      });
+      if (element === canvas && clearOfMarkers) return { x, y };
+    }
+    return null;
+  });
+  if (!target) throw new Error("could not find an unobstructed blank globe surface point");
+  return target;
+}
+
+async function clickBlankGlobe(page) {
+  const target = await findBlankGlobePoint(page);
+  await page.mouse.click(target.x, target.y);
+  return target;
+}
+
+async function dragBlankGlobe(page) {
+  const target = await findBlankGlobePoint(page);
+  await page.mouse.move(target.x, target.y);
+  await page.mouse.down();
+  await page.mouse.move(target.x + 36, target.y + 18, { steps: 4 });
+  await page.mouse.up();
+  return target;
+}
+
 try {
   const photoRun = await openFocusAtlas();
   const { page } = photoRun;
@@ -387,8 +465,73 @@ try {
     && siblingState.activeRoute === journeyId
     && JSON.stringify(beforeFocus) === JSON.stringify(afterSiblingAttempt));
 
-  await activateRoutePoint(page, 0);
+  const markerClick = await clickRoutePointMarker(page, journeyId, photoPointId);
   const context = page.locator("[data-route-point-context]");
+  await context.waitFor({ state: "visible", timeout: 5_000 });
+  const markerActivation = await routePointActivationEvidence(page);
+  const selectedMarkerRole = await page.locator(
+    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${photoPointId}"]`,
+  ).getAttribute("data-attention-role");
+  record("actual marker hit owns the same context identity", { markerClick, markerActivation, selectedMarkerRole },
+    markerActivation.source === "marker"
+    && markerActivation.journeyId === journeyId
+    && markerActivation.routePointId === photoPointId
+    && markerActivation.eventTarget?.startsWith("canvas")
+    && Math.abs(markerActivation.clientX - markerActivation.projectedX) < 12
+    && Math.abs(markerActivation.clientY - markerActivation.projectedY) < 12
+    && selectedMarkerRole === "selected");
+
+  const closeButton = context.locator("[data-route-point-context-close]");
+  const closeBox = await closeButton.boundingBox();
+  await closeButton.click();
+  await context.waitFor({ state: "detached", timeout: 5_000 });
+  record("context close control is touch-safe and clears only the temporary selection", { closeBox }, Boolean(
+    closeBox && closeBox.width >= 44 && closeBox.height >= 44
+  ));
+
+  const labelClick = await clickRoutePointLabel(page, journeyId, photoPointId);
+  await context.waitFor({ state: "visible", timeout: 5_000 });
+  const labelActivation = await routePointActivationEvidence(page);
+  record("actual label hit preserves stable Route Point identity", { labelClick, labelActivation },
+    labelActivation.source === "label"
+    && labelActivation.journeyId === journeyId
+    && labelActivation.routePointId === photoPointId);
+  const focusModeBeforeEscape = await page.locator(".living-atlas").getAttribute("data-globe-focus");
+  await page.keyboard.press("Escape");
+  await context.waitFor({ state: "detached", timeout: 5_000 });
+  const focusModeAfterEscape = await page.locator(".living-atlas").getAttribute("data-globe-focus");
+  record("Escape closes context without exiting globe focus", { focusModeBeforeEscape, focusModeAfterEscape },
+    focusModeBeforeEscape === focusModeAfterEscape);
+
+  const labelTrigger = page.locator(
+    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id="${photoPointId}"]`,
+  );
+  await labelTrigger.focus();
+  await labelTrigger.press("Enter");
+  await context.waitFor({ state: "visible", timeout: 5_000 });
+  const keyboardActivation = await routePointActivationEvidence(page);
+  await closeButton.click();
+  await context.waitFor({ state: "detached", timeout: 5_000 });
+  const focusReturn = await page.evaluate(() => ({
+    tag: document.activeElement?.tagName.toLowerCase() ?? null,
+    routePointId: document.activeElement?.getAttribute("data-route-point-id") ?? null,
+  }));
+  record("keyboard label opens context and close restores the same legal trigger", { keyboardActivation, focusReturn },
+    keyboardActivation.source === "keyboard-label"
+    && keyboardActivation.routePointId === photoPointId
+    && focusReturn.routePointId === photoPointId);
+
+  await clickRoutePointMarker(page, journeyId, photoPointId);
+  await context.waitFor({ state: "visible", timeout: 5_000 });
+  const dragTarget = await dragBlankGlobe(page);
+  const dragContextId = await context.getAttribute("data-route-point-id");
+  record("globe drag does not dismiss or replace the selected context", { dragTarget, dragContextId },
+    dragContextId === photoPointId);
+  const blankTarget = await clickBlankGlobe(page);
+  await context.waitFor({ state: "detached", timeout: 5_000 });
+  record("non-gesture blank globe click closes context", { blankTarget }, true);
+
+  await clickRoutePointMarker(page, journeyId, photoPointId);
   await context.waitFor({ state: "visible", timeout: 5_000 });
   const revealFocus = await sceneFocusSnapshot(page);
   const reveal = await context.evaluate((node) => ({
@@ -1038,11 +1181,13 @@ try {
       const root = node.closest(".living-atlas");
       const panel = node.getBoundingClientRect();
       const entry = node.querySelector(".living-atlas__route-point-context-entry")?.getBoundingClientRect() ?? null;
+      const close = node.querySelector("[data-route-point-context-close]")?.getBoundingClientRect() ?? null;
       return {
         mobileV2: root?.getAttribute("data-mobile-v2") ?? null,
         contextCount: document.querySelectorAll("[data-route-point-context]").length,
         panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom },
         entry: entry ? { width: entry.width, height: entry.height } : null,
+        close: close ? { width: close.width, height: close.height } : null,
         viewport: { width: innerWidth, height: innerHeight },
       };
     });
@@ -1054,7 +1199,9 @@ try {
       && compactState.panel.right <= compactState.viewport.width
       && compactState.panel.bottom <= compactState.viewport.height
       && (compactState.entry?.height ?? 0) >= 44
-      && (compactState.entry?.width ?? 0) >= 44);
+      && (compactState.entry?.width ?? 0) >= 44
+      && (compactState.close?.height ?? 0) >= 44
+      && (compactState.close?.width ?? 0) >= 44);
     record(`${viewport.name} context keeps camera focus owner`, { compactFocusBefore, compactFocusAfter },
       JSON.stringify(compactFocusBefore) === JSON.stringify(compactFocusAfter));
     if (viewport.name === "landscape-844x390") {

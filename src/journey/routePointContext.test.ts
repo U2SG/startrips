@@ -3,6 +3,7 @@ import { sharedJourneyToJourney, type SharedJourney } from "./sharedAtlas";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 import {
   buildRoutePointContext,
+  clearRoutePointContextSelection,
   emptyRoutePointContextSelection,
   requestRoutePointContextSelection,
   routePointContextTemporallyVisible,
@@ -362,5 +363,24 @@ describe("Route Point context newest-intent resolver", () => {
     selection = resolveRoutePointContextSelection(selection, c.intent, buildRoutePointContext(trip, "C"));
     expect(selection.context?.routePointId).toBe("C");
     expect(selection.intent).toEqual(c.intent);
+  });
+
+  it("keeps a closed context closed when its previous read resolves late", () => {
+    const trip = journey([point("A", { label: "A" })], []);
+    const requested = requestRoutePointContextSelection(
+      emptyRoutePointContextSelection(),
+      journeyId,
+      "A",
+    );
+    const closed = clearRoutePointContextSelection(requested.selection);
+    const late = resolveRoutePointContextSelection(
+      closed,
+      requested.intent,
+      buildRoutePointContext(trip, "A"),
+    );
+
+    expect(late.intent).toBeNull();
+    expect(late.context).toBeNull();
+    expect(late.revision).toBeGreaterThan(requested.intent.revision);
   });
 });

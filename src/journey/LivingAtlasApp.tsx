@@ -1113,12 +1113,21 @@ export function LivingAtlasApp({
     () => emptyRoutePointContextSelection(),
   );
   const routePointContextSelectionRef = useRef(routePointContextSelection);
+  const routePointContextReturnFocusRef = useRef<HTMLElement | null>(null);
   routePointContextSelectionRef.current = routePointContextSelection;
   const clearRoutePointContext = useCallback(() => {
     const next = clearRoutePointContextSelection(routePointContextSelectionRef.current);
     routePointContextSelectionRef.current = next;
     setRoutePointContextSelection(next);
   }, []);
+  const closeRoutePointContext = useCallback((restoreFocus = true) => {
+    const returnFocus = routePointContextReturnFocusRef.current;
+    routePointContextReturnFocusRef.current = null;
+    clearRoutePointContext();
+    if (restoreFocus && returnFocus?.isConnected) {
+      queueMicrotask(() => returnFocus.focus({ preventScroll: true }));
+    }
+  }, [clearRoutePointContext]);
   const [crossPointReadingIntent, setCrossPointReadingIntent] = useState<CrossPointReadingIntent | null>(null);
   const crossPointReadingRevisionRef = useRef(0);
   const closeCrossPointReading = useCallback(() => {
@@ -1793,12 +1802,38 @@ export function LivingAtlasApp({
     globeFocusTriggerRef.current?.focus();
   }, [clearRoutePointContext]);
 
+  useEffect(() => {
+    if (
+      !routePointContextSelection.context
+      || !routePointContextSelection.intent
+      || view !== "planet"
+      || storyJourneyId
+      || playbackActive
+      || crossPointReading
+    ) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeRoutePointContext();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    closeRoutePointContext,
+    crossPointReading,
+    playbackActive,
+    routePointContextSelection.context,
+    routePointContextSelection.intent,
+    storyJourneyId,
+    view,
+  ]);
+
   // Esc exits focus mode. The exit control is only visible inside focus mode,
   // so exiting returns focus to the trigger button in the header.
   useEffect(() => {
     if (!globeFocusMode) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.defaultPrevented) {
         exitGlobeFocus();
       }
     };
@@ -2193,6 +2228,17 @@ export function LivingAtlasApp({
   }
 
   function revealRoutePointContext(journeyId: string, routePointId: string) {
+    const activeElement = document.activeElement;
+    if (
+      activeElement instanceof HTMLElement
+      && activeElement !== document.body
+      && !activeElement.closest("[data-route-point-context]")
+    ) {
+      // Only retain a trigger that will still exist after the temporary card
+      // closes. Controls inside the current context disappear with it and must
+      // never become the focus-return owner for a subsequent Route Point.
+      routePointContextReturnFocusRef.current = activeElement;
+    }
     if (journeyId !== activeJourneyIdRef.current) {
       clearRoutePointContext();
       return;
@@ -2752,6 +2798,9 @@ export function LivingAtlasApp({
                 return;
               }
               revealRoutePointContext(journeyId, routePointId);
+            }}
+            onGlobeBlankActivate={() => {
+              if (routePointContextSelectionRef.current.context) closeRoutePointContext(false);
             }}
             onGlobePointPick={globePickActive ? completeGlobePick : undefined}
             onPickRequest={() => {
@@ -3326,6 +3375,15 @@ export function LivingAtlasApp({
               <p>ROUTE POINT · {String(context.routePointIndex + 1).padStart(2, "0")}/{String(context.routePointCount).padStart(2, "0")}</p>
               <h2>{context.routePointLabel}</h2>
               <span>{context.journeyTitle}</span>
+              <button
+                type="button"
+                className="living-atlas__route-point-context-close"
+                data-route-point-context-close
+                aria-label="收起地点详情"
+                onClick={() => closeRoutePointContext()}
+              >
+                <IconX size={17} stroke={1.35} aria-hidden="true" />
+              </button>
             </header>
             {visibleSameCoordinateRoutePoints.length > 1 ? (
               <>
