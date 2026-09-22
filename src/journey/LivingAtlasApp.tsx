@@ -65,6 +65,7 @@ import {
 } from "./homeBaseSuggestion";
 import { resolveHomeBaseCameraIntent, type HomeBaseCameraIntent } from "./homeBaseCameraPolicy";
 import { resolveHomeBaseContext } from "./homeBaseContext";
+import { EverydayFragments } from "./EverydayFragments";
 import { resolveHomeBasePresence, type HomeBaseTimelineContext, type ResolvedHomeBasePresence } from "./homeBasePresence";
 import type { GlobeSemanticZoom } from "../scene/semanticZoom";
 import {
@@ -1077,7 +1078,7 @@ export function LivingAtlasApp({
   // #200 phase D: the product mode. `capabilities` decides which affordances
   // exist; `mutations` is null in shared mode, so there is no client here that
   // could write and the owner-only surfaces below are never constructed.
-  const { capabilities, listJourneys, listHomeBasePeriods, listHomeBaseDismissals, readMedia, mutations } = useAtlasView();
+  const { capabilities, listJourneys, listHomeBasePeriods, listHomeBaseDismissals, readMedia, mutations, everydayFragments } = useAtlasView();
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
   // #200 phase E. Both halves must hold: the capability decides the affordance
   // exists, `mutations` decides a client capable of the call exists. In shared
@@ -3268,6 +3269,14 @@ export function LivingAtlasApp({
           <p className="living-atlas__home-base-context-note">
             这是你确认过的常住地阶段。它提供生活背景，不改变当前旅程、路线点或播放焦点。
           </p>
+          {everydayFragments ? (
+            <EverydayFragments
+              key={homeBaseContext.periodId}
+              client={everydayFragments}
+              canCreate={canCreateJourney}
+              canEdit={canEditJourney}
+            />
+          ) : null}
         </aside>
       ) : null}
 

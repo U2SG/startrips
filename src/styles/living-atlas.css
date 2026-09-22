@@ -7317,6 +7317,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   background: rgba(2, 10, 11, 0.78);
   box-shadow: 0 22px 64px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(18px);
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .living-atlas__home-base-context > header {
@@ -7378,7 +7381,94 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   left: 12px;
   width: auto;
   border-radius: 16px;
+  max-height: calc(100dvh - env(safe-area-inset-bottom) - 166px);
 }
+
+/* #463: keep the first Everyday surface within the existing Home context. */
+.everyday-fragments {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--atlas-line);
+  color: var(--atlas-text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.everyday-fragments__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.everyday-fragments button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--atlas-line);
+  border-radius: 12px;
+  color: var(--atlas-text);
+  background: rgba(119, 200, 194, 0.08);
+  font: inherit;
+  cursor: pointer;
+}
+
+.everyday-fragments button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.everyday-fragments :is(button, input, textarea):focus-visible {
+  outline: 2px solid var(--atlas-cyan);
+  outline-offset: 2px;
+}
+
+.everyday-fragments ul {
+  display: grid;
+  gap: 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.everyday-fragments li {
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--atlas-line);
+}
+
+.everyday-fragments time { color: var(--atlas-muted); }
+.everyday-fragments__note { white-space: pre-wrap; }
+.everyday-fragments [role="alert"] { color: #ffc4ac; }
+
+.everyday-fragments__form fieldset {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 12px 0;
+  padding: 0;
+  border: 0;
+}
+
+.everyday-fragments__form legend { padding: 0 0 10px; }
+.everyday-fragments__form label { display: grid; min-width: 0; gap: 5px; }
+.everyday-fragments__coordinates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.everyday-fragments__form :is(input, textarea) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid var(--atlas-line);
+  border-radius: 8px;
+  padding: 8px;
+  color: var(--atlas-text);
+  background: #071514;
+  color-scheme: dark;
+  font: inherit;
+  font-size: 16px;
+}
+
+.everyday-fragments__form textarea { resize: vertical; }
 
 /* #232: the quiet Home Base suggestion beside the Atlas timeline.
    Deliberately a flow-level card rather than an overlay: it has no backdrop,
