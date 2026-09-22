@@ -23,6 +23,22 @@ describe("mobile account surface", () => {
     expect(shouldRenderStandaloneAccountDock(true, true)).toBe(false);
   });
 
+  // #349 keeps registration and sign-in separate intents. The server half is
+  // `disableImplicitSignUp` on the Google options; this is the client half,
+  // and without it the server would refuse every Google registration.
+  it("asks to register only from the sign-up mode's own provider button", () => {
+    const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
+    // The intent is a parameter, never a constant: one button that always
+    // requested sign-up would register on a login attempt again.
+    expect(auth).toContain('async function signInWithProvider(providerId: "google", requestSignUp: boolean)');
+    expect(auth).toContain("requestSignUp,");
+    expect(auth).toContain('signInWithProvider("google", mode === "sign-up")');
+    expect(auth).not.toContain("requestSignUp: true");
+    // And the two intents are not the same button: the label says which one
+    // the person is about to take.
+    expect(auth).toContain('{mode === "sign-up" ? "使用 Google 注册" : "使用 Google 登录"}');
+  });
+
   it("never offers a current-password field to a credential-less Account", () => {
     const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
     const panel = auth.slice(

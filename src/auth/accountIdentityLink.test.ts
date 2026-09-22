@@ -6,6 +6,7 @@ import {
   bindableProviders,
   finishProviderBind,
   readProviderBindReturn,
+  socialSignInErrorText,
   unlinkProviderIdentity,
   type BindStorage,
 } from "./accountIdentityLink";
@@ -166,5 +167,18 @@ describe("unlinkProviderIdentity", () => {
 
     expect(outcome).toEqual({ unlinked: true, alreadyUnlinked: false });
     expect(calls[1]!.body).toEqual({ reverificationToken: "grant-2" });
+  });
+});
+
+describe("social sign-in refusals", () => {
+  // The provider is configured with `disableImplicitSignUp`, so this code is
+  // what a sign-in with an unrecognised Google account comes back as. Telling
+  // that person to retry would loop them forever; the message names the route
+  // that works.
+  it("sends an unregistered provider account to the sign-up route", () => {
+    expect(socialSignInErrorText("signup_disabled")).toContain("注册");
+    expect(socialSignInErrorText("signup_disabled"))
+      .not.toBe(socialSignInErrorText("account_not_linked"));
+    expect(socialSignInErrorText("signup_disabled")).not.toBe(socialSignInErrorText("unknown"));
   });
 });

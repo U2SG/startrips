@@ -222,13 +222,19 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
     setMessage(socialSignInErrorText(code));
   }, []);
 
-  async function signInWithProvider(providerId: "google") {
+  // #349 keeps registration, sign-in and binding three separate intents. The
+  // provider is configured with `disableImplicitSignUp`, so the server creates
+  // an Account only for a call that asked to register; a sign-in with an
+  // unrecognised Google subject comes back refused as `signup_disabled`
+  // instead of quietly registering one.
+  async function signInWithProvider(providerId: "google", requestSignUp: boolean) {
     setPending(true);
     setMessage("");
     const result = await authClient.signIn.social({
       provider: providerId,
       callbackURL: "/",
       errorCallbackURL: "/",
+      requestSignUp,
     });
     // A successful call navigates away; only a refusal returns here.
     if (result.error) {
@@ -337,8 +343,12 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
 
         {mode !== "forgot" && signInProviders.includes("google") ? (
           <div className="auth-providers">
-            <button type="button" disabled={pending} onClick={() => void signInWithProvider("google")}>
-              使用 Google 继续
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => void signInWithProvider("google", mode === "sign-up")}
+            >
+              {mode === "sign-up" ? "使用 Google 注册" : "使用 Google 登录"}
             </button>
           </div>
         ) : null}

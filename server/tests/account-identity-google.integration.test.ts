@@ -210,16 +210,43 @@ async function finishSignIn(state: string, jar: string, query: Record<string, st
   });
 }
 
-async function signInWithGoogle(
+/**
+ * #349 keeps registration and sign-in separate intents, and the provider is
+ * configured with `disableImplicitSignUp`, so a caller has to say which one it
+ * is. These two helpers exist rather than one with a flag so every test below
+ * reads as the intent it is actually exercising: only `signUpWithGoogle` may
+ * create an Account, and `signInWithGoogle` proves an existing subject still
+ * resolves without asking to register.
+ */
+async function googleCallback(
+  subject: string,
+  email: string,
+  emailVerified: boolean,
+  overrides: TokenClaimOverrides | undefined,
+  requestSignUp: boolean,
+) {
+  tokenAnswer = { kind: "tokens", subject, email, emailVerified, overrides };
+  const started = await startSignIn(requestSignUp ? { requestSignUp: true } : {});
+  const callback = await finishSignIn(started.state, started.jar);
+  return { callback, sessionCookie: jarFrom(callback) };
+}
+
+function signInWithGoogle(
   subject: string,
   email: string,
   emailVerified = true,
   overrides?: TokenClaimOverrides,
 ) {
-  tokenAnswer = { kind: "tokens", subject, email, emailVerified, overrides };
-  const started = await startSignIn();
-  const callback = await finishSignIn(started.state, started.jar);
-  return { callback, sessionCookie: jarFrom(callback) };
+  return googleCallback(subject, email, emailVerified, overrides, false);
+}
+
+function signUpWithGoogle(
+  subject: string,
+  email: string,
+  emailVerified = true,
+  overrides?: TokenClaimOverrides,
+) {
+  return googleCallback(subject, email, emailVerified, overrides, true);
 }
 
 async function seedPasswordAccount() {
@@ -353,7 +380,7 @@ describe("google sign-in", () => {
   it("creates one user, one account and one ownership, and initializes one atlas", async () => {
     const subject = `st132-sub-${randomUUID()}`;
     const email = `st132-${randomUUID()}@example.test`;
-    const { callback, sessionCookie } = await signInWithGoogle(subject, email);
+    const { callback, sessionCookie } = await signUpWithGoogle(subject, email);
     expect(callback.status).toBe(302);
     expect(callback.headers.get("location")).toBe("/");
     const user = await trackGoogleUser(email);
@@ -411,12 +438,44 @@ describe("google sign-in", () => {
     expect(atlasRows).toHaveLength(1);
   });
 
+  it("refuses to register an unrecognised subject that arrives through sign-in", async () => {
+    const subject = `st132-sub-${randomUUID()}`;
+    const email = `st132-${randomUUID()}@example.test`;
+    // The sign-in button's call: no request to register.
+    const refused = await signInWithGoogle(subject, email);
+
+    expect(refused.callback.status).toBe(302);
+    // The exact code `link-account.mjs` emits when the sign-up gate closes, so
+    // this cannot pass on some other refusal that would also leave no rows.
+    expect(refused.callback.headers.get("location") ?? "").toContain("error=signup_disabled");
+    // Nothing was created and nothing half-created: no Startrips user, no
+    // provider account row, and no ownership row the ST-067 layer could later
+    // read as a usable method.
+    expect(await countAccounts(subject)).toHaveLength(0);
+    expect(await countOwnerships(subject)).toHaveLength(0);
+    expect(
+      await db.select({ id: authUser.id }).from(authUser).where(eq(authUser.email, email)),
+    ).toHaveLength(0);
+    expect(refused.sessionCookie).not.toContain("session_token");
+
+    // The same subject through the sign-up button does register, exactly once,
+    // which is what makes the two intents distinct rather than one disabled.
+    const registered = await signUpWithGoogle(subject, email);
+    expect(registered.callback.status).toBe(302);
+    const user = await trackGoogleUser(email);
+    expect(user).toBeTruthy();
+    expect(await countAccounts(subject)).toHaveLength(1);
+    expect(await countOwnerships(subject)).toHaveLength(1);
+  });
+
   it("returns the same user for a later sign-in with the same subject", async () => {
     const subject = `st132-sub-${randomUUID()}`;
     const email = `st132-${randomUUID()}@example.test`;
-    await signInWithGoogle(subject, email);
+    await signUpWithGoogle(subject, email);
     const user = await trackGoogleUser(email);
 
+    // Plain sign-in, no request to register: an already known subject must
+    // resolve back to the same user without the sign-up intent.
     const again = await signInWithGoogle(subject, email);
     expect(again.callback.status).toBe(302);
     const accounts = await countAccounts(subject);
@@ -432,7 +491,7 @@ describe("google sign-in", () => {
     const subject = `st132-sub-${randomUUID()}`;
     const email = `st132-${randomUUID()}@example.test`;
     tokenAnswer = { kind: "tokens", subject, email, emailVerified: true };
-    const started = await startSignIn();
+    const started = await startSignIn({ requestSignUp: true });
     const first = await finishSignIn(started.state, started.jar);
     expect(first.status).toBe(302);
     await trackGoogleUser(email);
@@ -452,7 +511,10 @@ describe("google sign-in", () => {
     const subject = `st132-sub-${randomUUID()}`;
     const email = `st132-${randomUUID()}@example.test`;
     tokenAnswer = { kind: "tokens", subject, email, emailVerified: true };
-    const [left, right] = await Promise.all([startSignIn(), startSignIn()]);
+    const [left, right] = await Promise.all([
+      startSignIn({ requestSignUp: true }),
+      startSignIn({ requestSignUp: true }),
+    ]);
     await Promise.all([
       finishSignIn(left.state, left.jar),
       finishSignIn(right.state, right.jar),
@@ -498,7 +560,7 @@ describe("google sign-in", () => {
     it(`refuses a sign-in whose id token ${name}`, async () => {
       const subject = `st132-sub-${randomUUID()}`;
       const email = `st132-${randomUUID()}@example.test`;
-      const { callback } = await signInWithGoogle(subject, email, true, overrides);
+      const { callback } = await signUpWithGoogle(subject, email, true, overrides);
 
       expect(callback.status).toBe(302);
       // The exact code, not merely "some error": it is the one
@@ -517,7 +579,7 @@ describe("google sign-in", () => {
   it("lifts the google method once a later callback reports the email verified", async () => {
     const subject = `st132-sub-${randomUUID()}`;
     const email = `st132-${randomUUID()}@example.test`;
-    const first = await signInWithGoogle(subject, email, false);
+    const first = await signUpWithGoogle(subject, email, false);
     expect(first.callback.status).toBe(302);
     const user = await trackGoogleUser(email);
     expect(user).toBeTruthy();

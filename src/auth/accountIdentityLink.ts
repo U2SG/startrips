@@ -267,6 +267,11 @@ export function socialSignInErrorText(code: string | null): string {
   switch (code) {
     case "account_not_linked":
       return "这个邮箱已有 Startrips 账户，但还没有绑定该登录方式。请先用原有方式登录，再在「登录方式」里绑定。";
+    // The provider is configured with `disableImplicitSignUp`, so this is the
+    // refusal a sign-in gets when that Google account has no Startrips
+    // account yet. The route that works is the sign-up mode's own button.
+    case "signup_disabled":
+      return "这个 Google 账号还没有 Startrips 账户。请切换到注册，再用 Google 注册。";
     case "email_not_found":
       return "该登录方式没有返回邮箱地址，无法完成登录。";
     case "access_denied":

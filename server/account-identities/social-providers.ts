@@ -126,6 +126,16 @@ async function verifiedUserInfo(adapter: GoogleAdapter, tokens: OAuth2Tokens) {
  * Auth's; the wrapper only remembers the result. The base adapter is built
  * from options WITHOUT `getUserInfo`, which is what keeps the delegation from
  * recursing into itself.
+ *
+ * `disableImplicitSignUp` is what keeps #349's three intents three. Without
+ * it, the pinned 1.6.23 callback computes
+ * `disableSignUp = provider.disableImplicitSignUp && !requestSignUp`, which is
+ * falsy, so an unrecognised Google subject arriving through the SIGN-IN button
+ * silently registers a new Startrips user and Atlas. With it, registration
+ * happens only when the caller asked for it: `/sign-in/social` carries
+ * `requestSignUp` into the OAuth state, and the callback reads it back out.
+ * Not `disableSignUp`, which would refuse registration outright and leave
+ * Google sign-up impossible.
  */
 export function googleSignInOptions(config: ServerConfig = serverConfig): GoogleOptions | null {
   const base = googleBaseOptions(config);
@@ -133,6 +143,7 @@ export function googleSignInOptions(config: ServerConfig = serverConfig): Google
   const baseProvider = google(base);
   return {
     ...base,
+    disableImplicitSignUp: true,
     async getUserInfo(tokens) {
       const info = await verifiedUserInfo(baseProvider, tokens);
       const subject = info?.user?.id === undefined ? "" : String(info.user.id);
