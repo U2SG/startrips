@@ -210,7 +210,14 @@ def reconcile(path, repo, base):
                                               message='PR closed without merging; preserve existing delivery-unit owner for disposition.')
                     print(fid + ': ' + json.dumps(result))
             elif pr.get('state') == 'open':
-                if any(row.get('status') in {'ready_for_eval', 'ready_to_merge'} for row in rows):
+                if (any(row.get('status') == 'ready_to_merge' for row in rows)
+                        and pr.get('mergeable') is False
+                        and pr.get('mergeable_state') == 'dirty'):
+                    result = _apply_unit_state(
+                        path, fid, status='needs_work', passes=False,
+                        message='Concrete GitHub merge conflict on the handed-off PR; preserve the existing delivery-unit owner and route it back for REPAIR_CONFLICT.')
+                    print(fid + ': ' + json.dumps(result))
+                elif any(row.get('status') in {'ready_for_eval', 'ready_to_merge'} for row in rows):
                     review = review_backlog(repo, number)
                     if pr.get('head', {}).get('sha') != review['head_sha']:
                         raise EvidenceUnknown('Source changed between PR and review observations')
@@ -227,7 +234,15 @@ def reconcile(path, repo, base):
             else:
                 raise EvidenceUnknown('Unknown PR lifecycle')
         except (EvidenceUnknown, StoreConflict) as exc:
-            print(fid + ': UNKNOWN/WAIT: ' + str(exc), file=sys.stderr); unknown = True
+            message = str(exc)
+            integration_wait = isinstance(exc, EvidenceUnknown) and (
+                message.startswith('No exact-main push CI evidence')
+                or message.startswith('Exact-main CI is not SUCCESS:')
+            )
+            if integration_wait:
+                print(fid + ': WAIT_MAIN_CI: ' + message)
+                continue
+            print(fid + ': UNKNOWN/WAIT: ' + message, file=sys.stderr); unknown = True
     return 6 if unknown else 0
 
 

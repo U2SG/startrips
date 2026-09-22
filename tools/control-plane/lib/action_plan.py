@@ -8,6 +8,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlencode
 from feature_store import StoreConflict, load_document, commit_document
 from feature_state import target, row_token, TERMINAL
 from github_evidence import api, source_relation, review_backlog, merge_proof, EvidenceUnknown
@@ -152,7 +153,8 @@ def failure_family_owner(path, fid, repo, records):
         return int(match.group(1)) if match else None
 
     active_states = {'pending', 'in_progress', 'needs_work', 'ready_for_eval', 'ready_to_merge'}
-    candidates = []
+    candidates = set()
+    by_issue = {}
     owner_doc = load_document(path)
     for candidate in owner_doc['features']:
         if candidate.get('status') not in active_states or candidate.get('human_gate'):
@@ -164,29 +166,56 @@ def failure_family_owner(path, fid, repo, records):
             owner_id = canonical_lead(owner_doc, candidate['id'])
         except StoreConflict as exc:
             raise EvidenceUnknown(str(exc)) from exc
-        issue = api('repos/' + repo + '/issues/' + str(number))
-        comments = pages('repos/' + repo + '/issues/' + str(number) + '/comments')
-        if not isinstance(issue, dict) or not isinstance(comments, list):
-            raise EvidenceUnknown('Failure-family owner issue evidence incomplete')
-        text = '\n'.join(
-            [str(issue.get('title') or ''), str(issue.get('body') or '')]
-            + [str(comment.get('body') or '') for comment in comments]
-        ).lower()
-        candidates.append((owner_id, number, text))
+        candidates.add((owner_id, number))
+        by_issue.setdefault(number, set()).add(owner_id)
+
+    def collapse_matches(values):
+        by_owner = {}
+        for feature, number, hit in values:
+            if not hit:
+                continue
+            value = by_owner.setdefault(feature, {'feature': feature, 'issues': set(), 'matched_tokens': set()})
+            value['issues'].add(number); value['matched_tokens'].update(hit)
+        return [{'feature': value['feature'], 'issue': min(value['issues']),
+                 'matched_tokens': sorted(value['matched_tokens'])} for value in by_owner.values()]
+
+    def indexed_matches(tokens):
+        matched = {}
+        for token in sorted(tokens, key=lambda value: (len(value), value)):
+            query = urlencode({'q': f'repo:{repo} is:issue {token} in:title,body,comments', 'per_page': 100})
+            data = api('search/issues?' + query)
+            items = data.get('items') if isinstance(data, dict) else None
+            if (not isinstance(items, list) or data.get('incomplete_results') is True
+                    or data.get('total_count', 0) > len(items)):
+                return None
+            for issue in items:
+                number = issue.get('number') if isinstance(issue, dict) else None
+                for feature in by_issue.get(number, set()):
+                    matched.setdefault((feature, number), set()).add(token)
+        return collapse_matches((feature, number, hit) for (feature, number), hit in matched.items())
+
+    def exhaustive_matches(tokens):
+        values = []
+        for feature, number in sorted(candidates):
+            issue = api('repos/' + repo + '/issues/' + str(number))
+            comments = pages('repos/' + repo + '/issues/' + str(number) + '/comments')
+            if not isinstance(issue, dict) or not isinstance(comments, list):
+                raise EvidenceUnknown('Failure-family owner issue evidence incomplete')
+            text = '\n'.join(
+                [str(issue.get('title') or ''), str(issue.get('body') or '')]
+                + [str(comment.get('body') or '') for comment in comments]
+            ).lower()
+            values.append((feature, number, sorted(token for token in tokens if token.lower() in text)))
+        return collapse_matches(values)
 
     routed = []
     for record in product_records:
         tokens = record_tokens(record)
         if not tokens:
             return None
-        by_owner = {}
-        for feature, number, text in candidates:
-            hit = sorted(token for token in tokens if token.lower() in text)
-            if hit:
-                value = by_owner.setdefault(feature, {'feature': feature, 'issues': set(), 'matched_tokens': set()})
-                value['issues'].add(number); value['matched_tokens'].update(hit)
-        matches = [{'feature': value['feature'], 'issue': min(value['issues']),
-                    'matched_tokens': sorted(value['matched_tokens'])} for value in by_owner.values()]
+        matches = indexed_matches(tokens)
+        if matches is None or not matches:
+            matches = exhaustive_matches(tokens)
         if len(matches) > 1:
             raise EvidenceUnknown(
                 'Ambiguous failure-family ownership: '
@@ -204,6 +233,28 @@ def failure_family_owner(path, fid, repo, records):
         'issue': owner['issue'],
         'matched_tokens': sorted({token for match in routed for token in match['matched_tokens']}),
     }
+
+
+def family_history_shas(root, repo, records):
+    """Head SHAs on which recurring failure families were already observed."""
+    history = Path(root) / '.agent-artifacts/ci-failures'
+    families = {record['family'] for record in records
+                if record.get('root_cause_required') and record.get('family')}
+    seen = {}
+    if not families or not history.exists():
+        return seen
+    for item in history.glob('failure-*.json'):
+        try:
+            data = json.loads(item.read_bytes())
+        except (ValueError, OSError):
+            continue
+        if data.get('repo') != repo or data.get('family') not in families:
+            continue
+        sha = data.get('sha')
+        if isinstance(sha, str) and re.fullmatch(r'[0-9a-f]{40}', sha):
+            seen.setdefault(data['family'], set()).add(sha)
+    return seen
+
 
 def plan(path, fid, repo, *, record_failures=False):
     path = Path(path); root = path.parent; doc = load_document(path)
@@ -270,7 +321,20 @@ def plan(path, fid, repo, *, record_failures=False):
             result['action'] = 'REPAIR_CI_FAMILY'
             result['failure_family_owner'] = owner
         elif any(r['root_cause_required'] for r in records):
-            result['action'] = 'REPAIR_CI_FAMILY'
+            history = family_history_shas(root, repo, records)
+            commits = api(prefix + '/commits')
+            own = {commit['sha'] for commit in commits
+                   if isinstance(commit, dict) and commit.get('sha')}
+            # A full first page means the PR's own history may be truncated, so
+            # a sha absent from `own` cannot prove the family is external.
+            truncated = not isinstance(commits, list) or len(commits) >= 30
+            external = [] if truncated else sorted(
+                family for family, shas in history.items() if shas - own)
+            if external:
+                result['action'] = 'WAIT_CI_FAMILY_TRIAGE'
+                result['failure_family_unowned'] = external
+            else:
+                result['action'] = 'REPAIR_CI_FAMILY'
     final = api(prefix)
     if final['head']['sha'] != pr['head']['sha'] or final['state'] != pr['state'] or final.get('merged') != pr.get('merged'):
         raise EvidenceUnknown('PR lifecycle changed during planning')

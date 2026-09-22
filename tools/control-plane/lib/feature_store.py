@@ -254,6 +254,7 @@ def commit_document(path: str | Path, doc: Document, *,
         if json.loads(output) != expected:
             raise StoreConflict('Surgical JSON validation failed; nothing written')
         mode = path.stat().st_mode
+        keep_temp = False
         fd, name = tempfile.mkstemp(prefix='.' + path.name + '.', suffix='.tmp', dir=path.parent)
         temp = Path(name)
         try:
@@ -264,9 +265,24 @@ def commit_document(path: str | Path, doc: Document, *,
             os.chmod(temp, mode)
             if path.read_bytes() != raw:
                 raise StoreConflict('Legacy writer changed ONE during transaction; retry fresh')
-            os.replace(temp, path)
+            try:
+                os.replace(temp, path)
+            except PermissionError:
+                # Windows readers may deny FILE_SHARE_DELETE and block atomic replace.
+                # The bytes are already validated against the scoped transaction;
+                # preserve the recovery copy and write in place rather than weakening
+                # the expected-row/read-set guards.
+                keep_temp = True
+                with path.open('r+b') as stream:
+                    stream.seek(0)
+                    stream.truncate()
+                    stream.write(output)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                sys.stderr.write('feature_store: atomic replace blocked; wrote ONE in place, '
+                                 'recovery copy at ' + str(temp) + '\n')
         finally:
-            if temp.exists():
+            if not keep_temp and temp.exists():
                 temp.unlink()
         return {'changed': True, 'features': list(changes) + added,
                 'sha256': hashlib.sha256(output).hexdigest()}

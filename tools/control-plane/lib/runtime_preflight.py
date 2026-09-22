@@ -52,7 +52,7 @@ def prepare_unmapped(root, repository, row, repo, prepare, lane):
         observed_token = None
         observed_unit = [row]
     inventory = git(repository, 'worktree', 'list', '--porcelain')
-    candidates = []
+    named_candidates, issue_candidates = [], []
     issue_match = re.search(r'(\d+)\s*$', str(row.get('issue')))
     issue = issue_match.group(1) if issue_match else None
     siblings = [item for item in load_document(root / 'feature_list.json')['features'] if str(item.get('issue')) == str(row.get('issue')) and item.get('status') not in {'passed','blocked','cancelled_by_product_decision'}]
@@ -60,9 +60,18 @@ def prepare_unmapped(root, repository, row, repo, prepare, lane):
         fields = dict(line.split(' ', 1) for line in block.splitlines() if ' ' in line)
         path = Path(fields.get('worktree', '')).resolve()
         named = path.name.lower().startswith(compact + '-') or path.name.lower().startswith(fid.lower() + '-')
-        branch_owned = bool(issue and len(siblings) == 1 and re.match(r'^refs/heads/(?:feat|fix|chore)/issue' + re.escape(issue) + r'(?:-|/)', fields.get('branch', '')))
-        if path.is_relative_to(root) and (named or branch_owned):
-            candidates.append(path)
+        # A pending row has not claimed an issue branch yet. Issue-number inference
+        # must not borrow a terminal sibling's historical worktree for a fresh
+        # follow-up; an interrupted prepare is still recoverable by its ST-id name.
+        branch_owned = bool(row.get('status') != 'pending' and issue and len(siblings) == 1 and re.match(r'^refs/heads/(?:feat|fix|chore)/issue' + re.escape(issue) + r'(?:-|/)', fields.get('branch', '')))
+        if path.is_relative_to(root):
+            if named:
+                named_candidates.append(path)
+            elif branch_owned:
+                issue_candidates.append(path)
+    # The feature-id worktree is the strongest ownership evidence. Issue-number
+    # inference is only a recovery fallback when no such owner is present.
+    candidates = named_candidates or issue_candidates
     if len(candidates) > 1:
         raise StoreConflict('More than one existing owner carrier; do not choose a competitor')
     if candidates:

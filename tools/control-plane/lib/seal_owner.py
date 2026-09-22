@@ -49,8 +49,9 @@ def candidate_is_final(worktree, source, relative):
 def validate_node(worktree, number, final=False):
     commands = [['node', 'scripts/pr-history.mjs', 'validate-all']]
     if final:
-        base = git(worktree, 'merge-base', 'origin/main', 'HEAD')
-        commands.append(['node', 'scripts/pr-history.mjs', 'validate-pr', '--pr', str(number), '--base', base, '--head', 'HEAD'])
+        head = git(worktree, 'rev-parse', 'HEAD')
+        base = git(worktree, 'merge-base', 'origin/main', head)
+        commands.append(['node', 'scripts/pr-history.mjs', 'validate-pr', '--pr', str(number), '--base', base, '--head', head])
     for command in commands:
         result = subprocess.run(command, cwd=worktree, capture_output=True, text=True, encoding='utf-8', timeout=25)
         if result.returncode:

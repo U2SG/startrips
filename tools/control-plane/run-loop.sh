@@ -342,7 +342,6 @@ reconcile_merge_state() {
 # LOCAL Backend Claude quota is not a feature failure. Experience never reaches
 # this provider: it is dispatched to external Codexless execution after owner
 # preparation, so Backend session/weekly limits cannot block Experience.
-
 quota_stop() {
   local log="$1" who="$2" line
   line="$(grep -m1 -iE "hit your (weekly|session|usage) limit" "$log" 2>/dev/null || true)"
@@ -433,9 +432,7 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     echo "=== Issue intake (iteration $i) ==="
     echo "[intake] Experience provider is external Codexless; model intake/re-triage delegated to Orchestrator"
   else
-    # Backend keeps the installed intake path until Orchestrator has a real
-    # executable intake implementation. This preserves queue replenishment and
-    # mapped-issue amend/gate clearing for the Backend lane.
+    # New open issues become queue entries BEFORE the selection below.
     echo "=== Issue intake (iteration $i) ==="
     PRE_INTAKE_FEATURE="$(read_next_feature)" || exit 6
     if [[ -z "$PRE_INTAKE_FEATURE" && -z "$(ready_to_merge_prs)" ]]; then
@@ -511,6 +508,15 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     RECONCILE) reconcile_merge_state; continue ;;
     HANDOFF_REVIEW)
       python3 -B "$ROOT/lib/action_plan.py" "$ROOT/feature_list.json" "$FEATURE" --repo "$GH_REPO" --handoff || exit 6
+      if yield_waiting_feature "$FEATURE"; then continue; fi
+      exit 7 ;;
+    WAIT_CI_FAMILY_TRIAGE)
+      # Recurring, and already observed on a head outside this PR. Repairing it
+      # here would land an unrelated fix in this Source and spend this feature's
+      # attempts on someone else's failure, so it needs a queue decision first.
+      echo "Recurring CI family already seen outside this Source; needs triage, not repair here:"
+      printf '%s' "$PLAN" | python3 -c 'import json,sys; print("
+".join(json.load(sys.stdin).get("failure_family_unowned") or []))'
       if yield_waiting_feature "$FEATURE"; then continue; fi
       exit 7 ;;
     WAIT_*|OBSERVE|OWNERSHIP_RECONCILE)
