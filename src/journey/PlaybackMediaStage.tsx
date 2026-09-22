@@ -12,7 +12,7 @@ import {
   type VideoHTMLAttributes,
 } from "react";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
-import { mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
+import { mediaStackOpacity, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { springElementTo } from "../motion/springElement";
 import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import type { PlaybackMapBridge } from "./playbackMapBridge";
@@ -28,6 +28,7 @@ type Stage = {
   intent: string;
 };
 type VideoElement = ReactElement<VideoHTMLAttributes<HTMLVideoElement> & { ref?: Ref<HTMLVideoElement> }>;
+type SequencePeek = { asset: JourneyMediaAsset; url: string };
 type Props = {
   asset: JourneyMediaAsset;
   url: string | null;
@@ -48,6 +49,7 @@ type Props = {
   onUnavailable: () => void;
   mapEntrance?: (element: HTMLElement) => PlaybackMapBridge | null;
   isIntentCurrent?: () => boolean;
+  sequencePeeks?: readonly SequencePeek[];
 };
 
 // Keep the departing video frame in its physical slot without keeping a second
@@ -275,7 +277,19 @@ export function PlaybackMediaStage(props: Props) {
     <div className="journey-playback__media playback-media-presentation"
       data-media-presentation={failed ? "error" : moving ? "moving" : pending ? "waiting" : "settled"}
       data-presented-asset={hasFrame ? stage.slots[stage.shown!]?.asset.id : undefined}
-      data-requested-asset={props.asset.id}>
+      data-requested-asset={props.asset.id}
+      data-sequence-primary={props.sequencePeeks !== undefined ? props.asset.id : undefined}
+      data-sequence-peek-count={props.sequencePeeks?.length}>
+      {props.sequencePeeks?.slice(0, 2).map((peek, index) => {
+        const depth = index + 1;
+        return (
+          <div key={`peek:${peek.asset.id}`} className="playback-media-presentation__peek"
+            data-sequence-peek-depth={depth} data-media-asset={peek.asset.id}
+            style={{ transform: props.reduceMotion ? mediaStackRest(depth) : mediaStackReveal(depth, 0.16), opacity: mediaStackOpacity(depth) }}>
+            <img src={peek.url} alt="" aria-hidden="true" draggable={false} />
+          </div>
+        );
+      })}
       {([0, 1] as const).map((index) => {
         const slot = stage.slots[index];
         const ownsTarget = matches && stage.requested === index;

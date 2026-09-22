@@ -128,17 +128,16 @@ export type PlaybackStep =
   | { kind: "outro"; cameraTarget?: HomeNarrativeCameraTarget };
 
 /**
- * #456: how much media one Route Point chapter carries.
+ * How much media one Route Point chapter carries.
  *
- * Sparse only, on purpose. This slice owns chapter continuity for 0 / 1 / 2-3
- * media; the dense slices under #126 (4-9 stack/peek, 10+ album rhythm) will
- * split `few` further, so 4+ deliberately lands in `few` today rather than
- * introducing a fourth member this slice cannot honour.
+ * Sparse 0 / 1 / 2-3 chapters keep their existing grammar. The 4-9 band is
+ * `sequence`; 10+ deliberately keeps the old fallback until its dense chapter
+ * grammar lands in the follow-up slice.
  */
-export type RoutePointChapterDensity = "empty" | "single" | "few";
+export type RoutePointChapterDensity = "empty" | "single" | "few" | "sequence";
 
 /**
- * The density of an already-resolved chapter media list.
+ * The density of one already-resolved chapter media list.
  *
  * Internal so there is exactly ONE media-order authority: every caller either
  * holds a list in canonical playback order (the `stop` step carries it)
@@ -149,6 +148,8 @@ function chapterDensityForMedia(
 ): RoutePointChapterDensity {
   if (media.length === 0) return "empty";
   if (media.length === 1) return "single";
+  if (media.length <= 3) return "few";
+  if (media.length <= 9) return "sequence";
   return "few";
 }
 

@@ -7,6 +7,30 @@
   min-height: 0;
 }
 
+.playback-media-presentation__peek {
+  position: absolute;
+  inset: clamp(18px, 5%, 48px);
+  z-index: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  transform-origin: center;
+}
+
+.playback-media-presentation__peek[data-sequence-peek-depth="1"] { z-index: 1; }
+.playback-media-presentation__peek[data-sequence-peek-depth="2"] { z-index: 0; }
+
+.playback-media-presentation__peek > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 18px rgb(0 0 0 / 20%));
+}
+
 .playback-media-presentation__slot {
   position: absolute;
   inset: clamp(18px, 5%, 48px);
@@ -33,4 +57,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .playback-media-presentation__slot { will-change: auto; }
+  .playback-media-presentation__peek { transition: none; }
 }

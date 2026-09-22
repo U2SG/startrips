@@ -34,8 +34,11 @@ export function playbackMapBridgeBoundary(
     direction = "media-to-map";
   } else return null;
   const density = routePointChapterDensity(journey, pointIndex);
-  // Density currently groups 4+ as `few`; dense pacing is a separate slice.
-  if (density === "empty" || playbackMediaForPoint(journey, pointIndex).length > 3) return null;
+  // #492: a sequence is still one Route Point chapter, so it keeps the
+  // existing place -> first media / last media -> place bridge at its chapter
+  // edges. Only adjacent media stay quiet. The 10+ dense grammar is a later
+  // slice and keeps the pre-#492 no-bridge fallback for now.
+  if (density === "empty" || playbackMediaForPoint(journey, pointIndex).length > 9) return null;
   return { direction, pointIndex, density };
 }
 
