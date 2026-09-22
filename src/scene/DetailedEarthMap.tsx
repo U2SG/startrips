@@ -736,14 +736,26 @@ export default function DetailedEarthMap({
       const overlayRevisionAtRenderStart = appliedJourneyOverlayRevision;
       if (appliedJourneyOverlayRevision !== journeyOverlayRef.current.revision) {
         syncJourneyOverlay();
-      } else if (
-        overlayRevisionAtRenderStart === journeyOverlayRef.current.revision
-        && loadedJourneyOverlayRevision === journeyOverlayRef.current.revision
-        && paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision
-      ) {
-        paintedJourneyOverlayRevision = journeyOverlayRef.current.revision;
-        host.dataset.journeyOverlayReady = "true";
-        host.dataset.journeyOverlayPaintedRevision = paintedJourneyOverlayRevision;
+      } else {
+        // GeoJSON source completion can race the sourcedata listener on fast QA
+        // styles. Reconcile MapLibre's current source truth on its render event
+        // instead of requiring that one event edge to have been observed. This
+        // keeps the same loaded-before-painted invariant without timer/retry
+        // liveness or revealing an unready Journey revision.
+        if (
+          loadedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+          && map.getSource(JOURNEY_OVERLAY_SOURCE_ID)
+          && map.isSourceLoaded(JOURNEY_OVERLAY_SOURCE_ID)
+        ) loadedJourneyOverlayRevision = journeyOverlayRef.current.revision;
+        if (
+          overlayRevisionAtRenderStart === journeyOverlayRef.current.revision
+          && loadedJourneyOverlayRevision === journeyOverlayRef.current.revision
+          && paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+        ) {
+          paintedJourneyOverlayRevision = journeyOverlayRef.current.revision;
+          host.dataset.journeyOverlayReady = "true";
+          host.dataset.journeyOverlayPaintedRevision = paintedJourneyOverlayRevision;
+        }
       }
       const pending = pendingRevealCommit;
       if (
