@@ -9,7 +9,7 @@ import {
 import { randomUUID, sign } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
 import { and, eq, inArray, like } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { app } from "../app";
 import {
   completeIdentityLink,
@@ -31,6 +31,7 @@ import {
 import {
   account as authAccount,
   organization as authOrganization,
+  rateLimit,
   session as authSession,
   user as authUser,
 } from "../db/auth-schema";
@@ -180,6 +181,17 @@ beforeAll(() => {
   }) as typeof globalThis.fetch;
 });
 
+// One Apple authorization costs two `/api/auth/*` requests, and this file
+// drives a couple of dozen of them inside Better Auth's 60-second window
+// (`rateLimit.max` is 100, shared across every request the whole `core` suite
+// has already made). Clearing the budget is what
+// `account-identity-routes.integration.test.ts` does for the same reason: it
+// keeps these assertions about Apple rather than about whichever file ran
+// first. Nothing here asserts anything about rate limiting.
+beforeEach(async () => {
+  await db.delete(rateLimit);
+});
+
 afterAll(async () => {
   globalThis.fetch = realFetch;
   const created = await db
@@ -279,18 +291,10 @@ async function userCountForEmail(email: string) {
 }
 
 describe("Apple sign-in", () => {
-  it("advertises the apple provider only because the credential is configured", async () => {
+  it("registers the provider from the configured credential", () => {
     expect(serverConfig.appleServiceId).toBe(APPLE_SERVICE_ID);
-    const response = await app.request(`${AUTH_BASE}/sign-in/social`, {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: TEST_ORIGIN },
-      body: JSON.stringify({
-        provider: APPLE_PROVIDER_ID,
-        callbackURL: `${TEST_ORIGIN}/`,
-        disableRedirect: true,
-      }),
-    });
-    expect(response.status).toBe(200);
+    expect(serverConfig.appleTeamId).toBe(APPLE_TEAM_ID);
+    expect(serverConfig.appleKeyId).toBe(APPLE_KEY_ID);
   });
 
   it("creates exactly one user and one Atlas for a first-time subject", async () => {
