@@ -438,10 +438,13 @@ export default function DetailedEarthMap({
       try {
         installDetailedEarthJourneyOverlay(map, overlay);
         appliedJourneyOverlayRevision = overlay.revision;
-        loadedJourneyOverlayRevision = overlay.data.features.length === 0
-          || map.isSourceLoaded(JOURNEY_OVERLAY_SOURCE_ID)
-          ? overlay.revision
-          : null;
+        // This source is a complete in-memory FeatureCollection, not a tile or
+        // network-backed source. Once addSource/setData returns, the current
+        // Journey revision has been accepted by MapLibre; the later render
+        // below is the paint proof. Waiting for isSourceLoaded/sourcedata here
+        // can deadlock a hidden prewarm surface because a synchronous GeoJSON
+        // update is allowed to miss that lifecycle edge entirely.
+        loadedJourneyOverlayRevision = overlay.revision;
         paintedJourneyOverlayRevision = null;
         host.dataset.journeyOverlayReady = "false";
         host.dataset.journeyOverlayRevision = overlay.revision;
