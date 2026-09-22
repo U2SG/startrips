@@ -15,6 +15,7 @@ from feature_store import StoreConflict, commit_document, load_document
 from github_evidence import EvidenceUnknown, api, merge_proof, review_backlog, source_relation
 from delivery import (canonical_lead, package_snapshot, unit_pr_links, unit_rows,
                       unit_token, package_ledger_lines, validate_coverage)
+from delivery_issues import live_issues, assert_current
 
 
 TERMINAL = {'passed', 'blocked', 'cancelled_by_product_decision'}
@@ -170,6 +171,8 @@ def reconcile(path, repo, base):
             package = package_snapshot(doc, fid)
             if pr.get('merged'):
                 if package:
+                    current_issues = live_issues(doc, fid, repo)
+                    assert_current(doc, fid, current_issues)
                     relation = source_relation(repo, number)
                     _verify_package_review(path.parent, fid, number, relation, package)
                 proof = merge_proof(repo, number, base)

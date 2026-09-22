@@ -23,14 +23,20 @@ from types import SimpleNamespace
 
 VERSION = 1
 RECEIPT = '.agent-artifacts/evaluations/delivery-runtime.json'
-REQUIRED = ('CLAUDE.md', 'README.md', 'run-loop.sh', 'init.sh',
-            'launch-experience.sh', 'launch-supervisor.sh', 'loop-supervisor.sh',
-            'lib/delivery.py', 'lib/delivery_issues.py', 'lib/delivery_package.py',
-            'lib/delivery_runtime.py', 'lib/feature_store.py', 'lib/feature_state.py',
-            'lib/runtime_preflight.py', 'lib/action_plan.py', 'lib/policy_audit.py', 'lib/seal_owner.py',
-            'lib/external_execution.py', 'lib/execution.py', 'lib/evidence_capture.py',
-            'lib/intake.sh', 'lib/intake_guard.py',
-            '.claude/agents/startrips-evaluator.md', '.claude/agents/startrips-triage.md')
+# Only files whose submitted Source actually carries package semantics are part
+# of the activation manifest.  Launchers/provider observers that merely invoke
+# these consumers are deliberately excluded: copying their unchanged Source
+# bytes would roll back unrelated live reliability fixes while adding no package
+# awareness.  A conflicting hot change to one of THESE files still fails closed
+# until the package Source demonstrably subsumes it.
+REQUIRED = (
+    'CLAUDE.md', 'README.md', 'run-loop.sh',
+    'lib/delivery.py', 'lib/delivery_issues.py', 'lib/delivery_package.py',
+    'lib/delivery_runtime.py', 'lib/feature_store.py', 'lib/feature_state.py',
+    'lib/runtime_preflight.py', 'lib/action_plan.py', 'lib/policy_audit.py',
+    'lib/seal_owner.py', 'lib/evidence_capture.py', 'lib/intake.sh',
+    '.claude/agents/startrips-evaluator.md', '.claude/agents/startrips-triage.md',
+)
 
 
 def sha(data):
@@ -76,6 +82,37 @@ def git(repository, *args):
     return proc.stdout
 
 
+def _normalize(body):
+    return body.replace(b'\r\n', b'\n') if body is not None else None
+
+
+def _historical_predecessor(repository, base, relative, current):
+    """True when the installed consumer is an older committed version of base."""
+    if current is None:
+        return False
+    commits = git(repository, 'log', '--format=%H', base, '--', relative).decode().splitlines()
+    wanted = _normalize(current)
+    for commit in commits:
+        body = subprocess.run(['git', '-C', str(repository), 'show', commit + ':' + relative],
+                              capture_output=True, timeout=15)
+        if body.returncode == 0 and _normalize(body.stdout) == wanted:
+            return True
+    return False
+
+
+def _subsumed_hot_runtime(incoming, old, current):
+    """Prove a live hot patch is already included in the submitted Source bytes."""
+    if incoming is None or old is None or current is None:
+        return False
+    with tempfile.TemporaryDirectory() as directory:
+        directory = Path(directory)
+        local, base, remote = directory / 'incoming', directory / 'base', directory / 'current'
+        local.write_bytes(_normalize(incoming)); base.write_bytes(_normalize(old)); remote.write_bytes(_normalize(current))
+        merged = subprocess.run(['git', 'merge-file', '-p', str(local), str(base), str(remote)],
+                                capture_output=True, timeout=20)
+    return merged.returncode == 0 and _normalize(merged.stdout) == _normalize(incoming)
+
+
 def activation_plan(root, repository, base):
     root, repository = Path(root).resolve(), Path(repository).resolve()
     if git(repository, 'status', '--porcelain').strip():
@@ -83,7 +120,7 @@ def activation_plan(root, repository, base):
     source = git(repository, 'rev-parse', 'HEAD').decode().strip()
     subprocess.run(['git', '-C', str(repository), 'merge-base', '--is-ancestor', base, source],
                    check=True, capture_output=True, timeout=15)
-    result = {'source_sha': source, 'files': {}, 'expected': {}, 'conflicts': []}
+    result = {'source_sha': source, 'files': {}, 'expected': {}, 'conflicts': [], 'compatibility': {}}
     for name in REQUIRED:
         relative = 'tools/control-plane/' + name
         incoming = git(repository, 'show', source + ':' + relative)
@@ -91,12 +128,21 @@ def activation_plan(root, repository, base):
         current = installed.read_bytes() if installed.is_file() else None
         old = subprocess.run(['git', '-C', str(repository), 'show', base + ':' + relative],
                              capture_output=True, timeout=15)
-        normalize = lambda b: b.replace(b'\r\n', b'\n') if b is not None else None
-        if current is not None and normalize(current) != normalize(incoming):
-            if old.returncode or normalize(current) != normalize(old.stdout):
+        if current is not None and _normalize(current) != _normalize(incoming):
+            if old.returncode == 0 and _normalize(current) == _normalize(old.stdout):
+                result['compatibility'][name] = 'exact-base'
+            elif old.returncode == 0 and _historical_predecessor(repository, base, relative, current):
+                result['compatibility'][name] = 'stale-committed-predecessor'
+            elif old.returncode == 0 and _subsumed_hot_runtime(incoming, old.stdout, current):
+                result['compatibility'][name] = 'live-hot-change-subsumed-by-source'
+            else:
                 result['conflicts'].append(name)
         elif current is None and old.returncode == 0:
             result['conflicts'].append(name)  # Never silently recreate a missing legacy consumer.
+        elif current is not None:
+            result['compatibility'][name] = 'already-source'
+        else:
+            result['compatibility'][name] = 'new-source-consumer'
         result['files'][name] = sha(incoming)
         result['expected'][name] = sha(current) if current is not None else None
     return result

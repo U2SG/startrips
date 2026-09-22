@@ -65,6 +65,10 @@ def package_rows(*, status='pending', pr=False):
     return lead, member
 
 
+def issue_observations(*rows):
+    return {item['id']: copy.deepcopy(item['delivery_issue_observation']) for item in rows}
+
+
 def write_activation_receipt(root):
     files = {}
     for name in runtime.REQUIRED:
@@ -153,6 +157,21 @@ class DeliveryContractTests(unittest.TestCase):
             with self.assertRaises(store.StoreConflict):
                 packages.register(self.path,'ST-001',['ST-002'],'experience',self.root,self.root,REPO)
 
+    def test_open_pr_issue_link_rejects_member_without_branch_token(self):
+        unit=[row('ST-001',101),row('ST-002',102)]
+        worktrees=mock.Mock(returncode=0,stdout='worktree C:/repo/main\nHEAD abc\nbranch refs/heads/main\n\n')
+        cases=[
+            {'number':9,'headRefName':'feature/arbitrary','body':'Fixes #102','closingIssuesReferences':[]},
+            {'number':10,'headRefName':'feature/unrelated','body':'no inline issue token',
+             'closingIssuesReferences':[{'number':102}]},
+        ]
+        for item in cases:
+            with self.subTest(pr=item['number']):
+                prs=mock.Mock(returncode=0,stdout=json.dumps([item]))
+                with mock.patch.object(packages.subprocess,'run',side_effect=[worktrees,prs]):
+                    self.assertEqual(['open-pr:#'+str(item['number'])],
+                                     packages._ownership_conflicts(self.root,REPO,unit))
+
     def test_duplicate_member_and_missing_member_fail_closed(self):
         lead, member = package_rows()
         other = row('ST-003',103)
@@ -222,8 +241,10 @@ class DeliveryContractTests(unittest.TestCase):
                 self.path.write_text(json.dumps(document(lead,member),indent=2)+'\n',encoding='utf-8')
                 contract=delivery.snapshot(document(lead,member),'ST-001')
                 write_review_receipt(self.root, contract)
+                observed=issue_observations(lead,member)
                 before=self.path.read_bytes()
                 with mock.patch.object(state,'api',return_value={'merged':True}), \
+                     mock.patch.object(state,'live_issues',return_value=observed), \
                      mock.patch.object(state,'source_relation',return_value={'source_sha':A}), \
                      mock.patch.object(state,'merge_proof',side_effect=EvidenceUnknown(reason)):
                     self.assertEqual(6,state.reconcile(self.path,REPO,'main'))
@@ -232,11 +253,26 @@ class DeliveryContractTests(unittest.TestCase):
     def test_merged_package_without_current_member_review_stays_unpassed(self):
         lead,member=package_rows(status='ready_to_merge',pr=True)
         self.path.write_text(json.dumps(document(lead,member),indent=2)+'\n',encoding='utf-8')
+        observed=issue_observations(lead,member)
         before=self.path.read_bytes()
         with mock.patch.object(state,'api',return_value={'merged':True}), \
+             mock.patch.object(state,'live_issues',return_value=observed), \
              mock.patch.object(state,'source_relation',return_value={'source_sha':A}), \
              mock.patch.object(state,'merge_proof',return_value={'merge_sha':A,'main_sha':B,'main_ci':77,'main_ci_attempt':1}), \
              mock.patch.object(state,'_verify_package_ledger'):
+            self.assertEqual(6,state.reconcile(self.path,REPO,'main'))
+        self.assertEqual(before,self.path.read_bytes())
+
+    def test_post_review_issue_drift_blocks_terminal_reconcile(self):
+        lead,member=package_rows(status='ready_to_merge',pr=True)
+        self.path.write_text(json.dumps(document(lead,member),indent=2)+'\n',encoding='utf-8')
+        contract=delivery.snapshot(document(lead,member),'ST-001')
+        write_review_receipt(self.root, contract)
+        drift=issue_observations(lead,member)
+        drift['ST-002']['comments']={'77':'post-review-decision'}
+        before=self.path.read_bytes()
+        with mock.patch.object(state,'api',return_value={'merged':True}), \
+             mock.patch.object(state,'live_issues',return_value=drift):
             self.assertEqual(6,state.reconcile(self.path,REPO,'main'))
         self.assertEqual(before,self.path.read_bytes())
 
@@ -245,8 +281,10 @@ class DeliveryContractTests(unittest.TestCase):
         self.path.write_text(json.dumps(document(lead,member),indent=2)+'\n',encoding='utf-8')
         contract=delivery.snapshot(document(lead,member),'ST-001')
         write_review_receipt(self.root, contract)
+        observed=issue_observations(lead,member)
         proof={'merge_sha':A,'main_sha':B,'main_ci':77,'main_ci_attempt':1}
         with mock.patch.object(state,'api',return_value={'merged':True}), \
+             mock.patch.object(state,'live_issues',return_value=observed), \
              mock.patch.object(state,'source_relation',return_value={'source_sha':A}), \
              mock.patch.object(state,'merge_proof',return_value=proof), \
              mock.patch.object(state,'_verify_package_ledger'):
@@ -255,6 +293,75 @@ class DeliveryContractTests(unittest.TestCase):
         self.assertEqual({'passed'},{r['status'] for r in doc['features']})
         self.assertEqual({True},{r['passes'] for r in doc['features']})
         self.assertEqual(1,len(values))
+
+
+class RuntimeActivationPlanTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.repo = self.base / 'repo'
+        self.root = self.base / 'installed'
+        (self.repo / 'tools/control-plane').mkdir(parents=True)
+        self.root.mkdir()
+        subprocess.run(['git', 'init'], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(['git', 'config', 'user.email', 'ci@example.test'], cwd=self.repo, check=True)
+        subprocess.run(['git', 'config', 'user.name', 'CI'], cwd=self.repo, check=True)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def commit(self, body):
+        path = self.repo / 'tools/control-plane/consumer.txt'
+        path.write_text(body, encoding='utf-8')
+        subprocess.run(['git', 'add', 'tools/control-plane/consumer.txt'], cwd=self.repo, check=True)
+        subprocess.run(['git', 'commit', '-m', 'consumer'], cwd=self.repo, check=True, capture_output=True)
+        return subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=self.repo, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def plan(self, base):
+        with mock.patch.object(runtime, 'REQUIRED', ('consumer.txt',)):
+            return runtime.activation_plan(self.root, self.repo, base)
+
+    def test_activation_manifest_cannot_overwrite_unmodified_runtime_consumers(self):
+        expected = {
+            'CLAUDE.md', 'README.md', 'run-loop.sh',
+            'lib/delivery.py', 'lib/delivery_issues.py', 'lib/delivery_package.py',
+            'lib/delivery_runtime.py', 'lib/feature_store.py', 'lib/feature_state.py',
+            'lib/runtime_preflight.py', 'lib/action_plan.py', 'lib/policy_audit.py',
+            'lib/seal_owner.py', 'lib/evidence_capture.py', 'lib/intake.sh',
+            '.claude/agents/startrips-evaluator.md', '.claude/agents/startrips-triage.md',
+        }
+        self.assertEqual(expected, set(runtime.REQUIRED))
+        self.assertTrue({
+            'init.sh', 'launch-experience.sh', 'launch-supervisor.sh',
+            'loop-supervisor.sh', 'lib/external_execution.py', 'lib/execution.py',
+            'lib/intake_guard.py',
+        }.isdisjoint(runtime.REQUIRED))
+
+    def test_stale_committed_runtime_is_safe_predecessor(self):
+        stale = self.commit('one\nlegacy\nthree\n')
+        base = self.commit('one\nbase\nthree\n')
+        self.commit('one\nbase\nthree-package\n')
+        (self.root / 'consumer.txt').write_text('one\nlegacy\nthree\n', encoding='utf-8')
+        plan = self.plan(base)
+        self.assertEqual([], plan['conflicts'])
+        self.assertEqual('stale-committed-predecessor', plan['compatibility']['consumer.txt'])
+        self.assertNotEqual(stale, base)
+
+    def test_live_hot_change_already_in_source_is_safe(self):
+        base = self.commit('one\nmiddle\nthree\n')
+        self.commit('one-hot\nmiddle\nthree-package\n')
+        (self.root / 'consumer.txt').write_text('one-hot\nmiddle\nthree\n', encoding='utf-8')
+        plan = self.plan(base)
+        self.assertEqual([], plan['conflicts'])
+        self.assertEqual('live-hot-change-subsumed-by-source', plan['compatibility']['consumer.txt'])
+
+    def test_unreconciled_live_hot_change_stays_conflict(self):
+        base = self.commit('one\nmiddle\nthree\n')
+        self.commit('one-source\nmiddle\nthree-package\n')
+        (self.root / 'consumer.txt').write_text('one-live\nmiddle\nthree\n', encoding='utf-8')
+        plan = self.plan(base)
+        self.assertEqual(['consumer.txt'], plan['conflicts'])
 
 
 class PackageSelectorTests(unittest.TestCase):

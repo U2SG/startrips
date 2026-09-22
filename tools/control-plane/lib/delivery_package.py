@@ -10,9 +10,11 @@ from delivery_runtime import verify as verify_runtime
 
 
 def _ownership_conflicts(repository, repo, unit):
-    tokens=[]
+    tokens=[]; issue_numbers=[]
     for row in unit:
-        m=re.search(r'(\d+)\s*$',str(row.get('issue'))); tokens.append(('issue'+m.group(1)) if m else '')
+        issue=row.get('issue')
+        if type(issue) is int and issue > 0:
+            issue_numbers.append(issue); tokens.append('issue'+str(issue))
         tokens.append(row['id'].lower().replace('-',''))
     wt=subprocess.run(['git','-C',str(repository),'worktree','list','--porcelain'],capture_output=True,text=True,encoding='utf-8',timeout=15)
     if wt.returncode: raise StoreConflict('Worktree ownership evidence unavailable')
@@ -20,11 +22,23 @@ def _ownership_conflicts(repository, repo, unit):
     for block in wt.stdout.split('\n\n'):
         low=block.lower()
         if any(t and t in low for t in tokens): bad.append('worktree:'+block.replace('\n',' | '))
-    pr=subprocess.run(['gh','pr','list','--repo',repo,'--state','open','--limit','100','--json','number,headRefName,body'],capture_output=True,text=True,encoding='utf-8',timeout=20)
+    pr=subprocess.run(['gh','pr','list','--repo',repo,'--state','open','--limit','100','--json',
+                       'number,headRefName,body,closingIssuesReferences'],
+                      capture_output=True,text=True,encoding='utf-8',timeout=20)
     if pr.returncode: raise StoreConflict('Open PR ownership evidence unavailable')
+    issue_url_prefix='https://github.com/'+repo.lower()+'/issues/'
     for item in json.loads(pr.stdout or '[]'):
-        low=(str(item.get('headRefName') or '')+'\n'+str(item.get('body') or '')).lower()
-        if any(t and t in low for t in tokens): bad.append('open-pr:#'+str(item['number']))
+        branch=str(item.get('headRefName') or '').lower(); body=str(item.get('body') or '').lower()
+        linked={ref.get('number') for ref in (item.get('closingIssuesReferences') or []) if type(ref.get('number')) is int}
+        owned = any(t and t in branch for t in tokens)
+        for issue in issue_numbers:
+            if issue in linked:
+                owned=True; break
+            if re.search(r'(?<![0-9a-z_])#'+re.escape(str(issue))+r'(?!\d)', body):
+                owned=True; break
+            if re.search(re.escape(issue_url_prefix+str(issue))+r'(?!\d)', body):
+                owned=True; break
+        if owned: bad.append('open-pr:#'+str(item['number']))
     return bad
 
 
