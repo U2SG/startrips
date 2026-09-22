@@ -14,6 +14,8 @@ x-api-environment: &api-environment
   DATABASE_URL: postgresql://startrips:${POSTGRES_PASSWORD}@postgres:5432/startrips
   DATABASE_SSL: "false"
   BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
   SMTP_URL: smtp://mailpit:1025
   MAIL_FROM: Startrips Preview <no-reply@startrips.invalid>
   STORAGE_DRIVER: ${STORAGE_DRIVER:-disabled}

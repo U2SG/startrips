@@ -91,6 +91,14 @@ export function loadServerConfig(
   const mediaPreviewUploadExpiresInSeconds = Number(
     environment.MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS ?? 120,
   );
+  // #349: the one social sign-in provider Startrips configures. Both halves
+  // are deployment secrets with no development fallback, because a shared
+  // default OAuth client is the same as no client at all. Absent means this
+  // deployment does not offer Google at all: `server/auth.ts` omits the
+  // provider entirely rather than mounting a mocked one, and
+  // `/api/account-identities` never advertises it.
+  const googleClientId = environment.GOOGLE_CLIENT_ID?.trim() || null;
+  const googleClientSecret = environment.GOOGLE_CLIENT_SECRET?.trim() || null;
   // #368: the cover-reveal worker, which is off unless a deployment names a
   // credential. There is no development fallback and no production
   // requirement: an absent value means this deployment runs no worker, so the
@@ -277,6 +285,14 @@ export function loadServerConfig(
       throw new Error(`${name} must be between ${floor} and ${ceiling}`);
     }
   }
+  // Exactly one half is a deployment mistake, not a disabled provider: the
+  // operator meant to enable Google and would otherwise get a sign-in entry
+  // that cannot complete. Fail at startup like an incomplete S3 configuration.
+  if (Boolean(googleClientId) !== Boolean(googleClientSecret)) {
+    throw new Error(
+      "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together",
+    );
+  }
   // #368: an under-strength worker credential is refused at startup rather
   // than accepted and hashed. The credential is a bearer secret with no
   // second factor and no rate limit of its own, so its entropy is the whole
@@ -421,6 +437,8 @@ export function loadServerConfig(
     mediaPreviewMaxEdgePixels,
     mediaPreviewMaxBytes,
     mediaPreviewUploadExpiresInSeconds,
+    googleClientId,
+    googleClientSecret,
     coverRevealWorkerToken,
     coverRevealLeaseSeconds,
     coverRevealSourceReadExpiresInSeconds,

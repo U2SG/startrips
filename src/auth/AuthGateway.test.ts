@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { previousAccountSurface, shouldActivateAccountSheetFocus, shouldRenderStandaloneAccountDock } from "./accountSurface";
+import { previousAccountSurface, shouldActivateAccountSheetFocus, shouldOpenDockForRevealedPanel, shouldRenderStandaloneAccountDock } from "./accountSurface";
 
 describe("mobile account surface", () => {
   it("unwinds a nested form before closing the account sheet", () => {
@@ -21,6 +21,22 @@ describe("mobile account surface", () => {
     expect(shouldRenderStandaloneAccountDock(false, true)).toBe(true);
     expect(shouldRenderStandaloneAccountDock(true, false)).toBe(true);
     expect(shouldRenderStandaloneAccountDock(true, true)).toBe(false);
+  });
+
+  // #349 keeps registration and sign-in separate intents. The server half is
+  // `disableImplicitSignUp` on the Google options; this is the client half,
+  // and without it the server would refuse every Google registration.
+  it("asks to register only from the sign-up mode's own provider button", () => {
+    const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
+    // The intent is a parameter, never a constant: one button that always
+    // requested sign-up would register on a login attempt again.
+    expect(auth).toContain('async function signInWithProvider(providerId: "google", requestSignUp: boolean)');
+    expect(auth).toContain("requestSignUp,");
+    expect(auth).toContain('signInWithProvider("google", mode === "sign-up")');
+    expect(auth).not.toContain("requestSignUp: true");
+    // And the two intents are not the same button: the label says which one
+    // the person is about to take.
+    expect(auth).toContain('{mode === "sign-up" ? "使用 Google 注册" : "使用 Google 登录"}');
   });
 
   it("never offers a current-password field to a credential-less Account", () => {
@@ -127,6 +143,12 @@ describe("mobile account surface", () => {
     expect(entry("邀请另一位")).toContain("setEditAtlasOpen(false)");
     expect(entry("编辑图谱")).toContain("setPasswordOpen(false)");
     expect(entry("编辑图谱")).toContain("setInviteOpen(false)");
+    expect(entry("邀请另一位")).toContain("setIdentityOpen(false)");
+    expect(entry("编辑图谱")).toContain("setIdentityOpen(false)");
+    // The sign-in-methods entry clears the other three the same way.
+    expect(entry("登录方式")).toContain("setInviteOpen(false)");
+    expect(entry("登录方式")).toContain("setEditAtlasOpen(false)");
+    expect(entry("登录方式")).toContain("setPasswordOpen(false)");
     // The password entry clears the others through its own opener, which also
     // drops the previous read's surface so a stale "link sent" cannot reopen.
     const openerStart = auth.indexOf("const openAccountPassword");
@@ -138,6 +160,22 @@ describe("mobile account surface", () => {
     expect(opener).toContain("setInviteOpen(false)");
     expect(opener).toContain("setEditAtlasOpen(false)");
     expect(opener).toContain("setPasswordSurface(null)");
+    expect(opener).toContain("setIdentityOpen(false)");
+  });
+
+  it("opens the desktop dock when the provider return reveals the identity panel", () => {
+    // .account-dock__panel stays display:none until the dock is open, so a
+    // return that only set identityOpen rendered its outcome invisibly.
+    expect(shouldOpenDockForRevealedPanel(false)).toBe(true);
+    expect(shouldOpenDockForRevealedPanel(true)).toBe(false);
+    const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
+    const effect = auth.slice(
+      auth.indexOf("const result = readProviderBindReturn(window.location.hash);"),
+      auth.indexOf("setBindReturn(result);"),
+    );
+    expect(effect).not.toBe("");
+    expect(effect).toContain("shouldOpenDockForRevealedPanel(isMobileV2)");
+    expect(effect).toContain("setDockOpen(true)");
   });
 
   it("opens the recovery mode for a signed-out person whose link expired", () => {

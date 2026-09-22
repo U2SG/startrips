@@ -672,19 +672,38 @@ try {
       // reads at this very point.
       const inverted = samples.some((sample) => sample.color === "original-cover"
         && sample.origin !== "original-cover");
+      // `generated-first` is the ARMED state, not a played frame, so the
+      // identity stream cannot be asked to contain it (#491). The vendor flow
+      // renders progress 0 from `setImages` while this stage is still
+      // `preparing`, and the reducer drops a frame outside `revealing`; every
+      // played tick then advances by a strictly positive `now - _lastTime`
+      // delta. So the only way that identity reaches the DOM at all is React
+      // committing the `images-loaded` state before the first `frame` event
+      // batches in with it, which is a scheduling accident rather than a
+      // property of the renderer. The progress-0 draw itself is not lost:
+      // `openingImage` above is read off that exact draw, straight from the
+      // drawing buffer, and it is mandatory here because "unobserved" fails.
+      // The sibling `qa-cover-reveal.mjs` keeps grading
+      // `firstFrame.progress === 0` because its preview retains a sticky
+      // first-wins frame record instead of sampling mutations.
+      const midReveal = composited.filter((identity) => identity !== "original-cover");
       check(
         `${label}/first-frame-is-the-derivative`,
-        composited[0] === "generated-first"
-          && openingImage === "derivative"
+        openingImage === "derivative"
           && openingFrames.every((sample) => sample.color === "derivative")
           && !reopened
           && !inverted,
         { composited, opened, samples, openingPixel, openingImage },
       );
+      // The reveal must have been SEEN mid-flight and must not have frozen on
+      // the opening asset. A non-terminal identity is what a played reveal
+      // actually produces over its duration's worth of ticks, so unlike the
+      // single progress-0 commit it is not a race; a reveal that jumped
+      // straight to the settled cover leaves none.
       check(
         `${label}/the-reveal-actually-transitions`,
-        composited.includes("generated-first") && composited.at(-1) !== "generated-first",
-        { composited, opened, samples },
+        midReveal.length > 0 && composited.at(-1) !== "generated-first",
+        { composited, midReveal, opened, samples },
       );
       const settled = await coverState(page);
       const settledColor = classify(await compositedColor(page));

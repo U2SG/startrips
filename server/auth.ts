@@ -1,6 +1,13 @@
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { betterAuth } from "better-auth";
+import { eq } from "drizzle-orm";
 import { organization } from "better-auth/plugins";
+import { recordProviderSignInOwnership } from "./account-identities/account-identity-repository";
+import {
+  configuredSocialProviderIds,
+  googleSignInOptions,
+  takeVerifiedProviderIdentity,
+} from "./account-identities/social-providers";
 import { serverConfig } from "./config";
 import { db } from "./db/client";
 import * as authSchema from "./db/auth-schema";
@@ -10,6 +17,13 @@ import {
 } from "./email/email-sender";
 
 const emailSender = createEmailSender(serverConfig);
+
+// #349: present only when this deployment names both halves of a Google OAuth
+// client. An incomplete configuration never reaches here -- `config.ts`
+// refuses it at startup -- and an absent one omits the provider entirely
+// rather than mounting a mock, so the sign-in entry simply does not exist.
+const googleOptions = googleSignInOptions(serverConfig);
+const SOCIAL_PROVIDER_IDS = configuredSocialProviderIds(serverConfig);
 
 export const STARTRIPS_ACCOUNT_LINKING_POLICY = {
   enabled: false,
@@ -35,6 +49,44 @@ export const STARTRIPS_DISABLED_IDENTITY_PATHS = [
   // 1.6.23 change-password path through `auth.api.changePassword()`.
   "/change-password",
 ] as const;
+
+/**
+ * Carry the identity this callback verified into Startrips' own ownership row.
+ *
+ * The account row is re-read by id rather than taken from the hook argument:
+ * `create.after` and `update.after` are handed whatever the adapter returned
+ * for that write, and this path must not depend on which columns that happens
+ * to include. A failure here must not fail the sign-in -- a missing or stale
+ * ownership row makes the method read as unusable, which is the fail-closed
+ * direction.
+ */
+async function syncProviderSignInOwnership(accountRecordId: string) {
+  try {
+    const [record] = await db
+      .select({
+        id: authSchema.account.id,
+        userId: authSchema.account.userId,
+        providerId: authSchema.account.providerId,
+        accountId: authSchema.account.accountId,
+      })
+      .from(authSchema.account)
+      .where(eq(authSchema.account.id, accountRecordId))
+      .limit(1);
+    if (!record || !SOCIAL_PROVIDER_IDS.has(record.providerId)) return;
+    const identity = takeVerifiedProviderIdentity(record.providerId, record.accountId);
+    if (!identity) return;
+    await recordProviderSignInOwnership({
+      userId: record.userId,
+      accountRecordId: record.id,
+      identity,
+    });
+  } catch (error) {
+    console.error("account_identity_ownership_record_failed", {
+      accountRecordId,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+  }
+}
 
 export const auth = betterAuth({
   appName: "Startrips",
@@ -63,6 +115,21 @@ export const auth = betterAuth({
   account: {
     accountLinking: STARTRIPS_ACCOUNT_LINKING_POLICY,
   },
+  socialProviders: googleOptions ? { google: googleOptions } : {},
+  databaseHooks: {
+    account: {
+      // #349: a native provider sign-up creates the Better Auth account row
+      // without Startrips' ownership row, which every ST-067 usability and
+      // last-usable-login decision reads. `create` covers the first callback;
+      // `update` covers every later one, because Better Auth refreshes the
+      // stored tokens of an existing linked account on each social sign-in and
+      // never creates that account again. Without the second entry a first
+      // callback that carried an unverified email would pin the method as
+      // permanently unusable.
+      create: { after: (account) => syncProviderSignInOwnership(account.id) },
+      update: { after: (account) => syncProviderSignInOwnership(account.id) },
+    },
+  },
   disabledPaths: [...STARTRIPS_DISABLED_IDENTITY_PATHS],
   rateLimit: {
     enabled: true,
@@ -71,6 +138,10 @@ export const auth = betterAuth({
     max: 100,
     customRules: {
       "/sign-in/email": { window: 60, max: 10 },
+      // #349: one authorization redirect per person per few seconds is
+      // already generous; the callback itself is bounded by the single-use
+      // state Better Auth issues here.
+      "/sign-in/social": { window: 60, max: 10 },
       "/sign-up/email": { window: 60 * 10, max: 5 },
       "/request-password-reset": { window: 60 * 10, max: 3 },
     },

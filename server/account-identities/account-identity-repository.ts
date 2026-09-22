@@ -500,6 +500,79 @@ export async function completeIdentityLink(values: {
   return outcome.result;
 }
 
+/**
+ * #349: the ownership row for an account Better Auth created on its own.
+ *
+ * Until now `completeIdentityLink` was the only writer of
+ * `account_identity_ownerships`, so every non-credential account row had one
+ * by construction. A native Google sign-up creates the account row through
+ * Better Auth's adapter instead, and `accountIdentityUsable` would then read
+ * the method the person just signed in with as unusable. This records the
+ * identity Better Auth already verified for exactly that row.
+ *
+ * It never adopts an existing ownership: a duplicate callback or a concurrent
+ * login races on the same provider subject, and both unique indexes make the
+ * loser a no-op rather than a second claim. Returns whether this call wrote.
+ */
+export async function recordProviderSignInOwnership(values: {
+  userId: string;
+  accountRecordId: string;
+  identity: ProviderIdentityProof["identity"];
+  now?: Date;
+}): Promise<boolean> {
+  const now = values.now ?? new Date();
+  return await db.transaction(async (transaction) => {
+    const inserted = await transaction
+      .insert(accountIdentityOwnerships)
+      .values({
+        userId: values.userId,
+        accountRecordId: values.accountRecordId,
+        providerId: values.identity.providerId,
+        providerSubject: values.identity.subject,
+        providerEmail: values.identity.email,
+        providerEmailVerified: values.identity.emailVerified,
+        verifiedAt: now,
+      })
+      .onConflictDoNothing()
+      .returning({ id: accountIdentityOwnerships.id });
+    if (inserted.length > 0) {
+      await audit(transaction, {
+        userId: values.userId,
+        event: "link",
+        outcome: "success",
+        providerId: values.identity.providerId,
+        accountRecordId: values.accountRecordId,
+        reason: "provider-sign-in",
+      });
+      return true;
+    }
+    // #349: the row already exists, which is every sign-in after the first --
+    // Better Auth only creates the account once. The provider's verification
+    // claim is not a constant, though: a first callback carrying an unverified
+    // or absent email persists `providerEmailVerified: false`, which
+    // `accountIdentityUsable` reads as an unusable method, and without this
+    // refresh a later verified callback could never lift it. The refresh is
+    // scoped to this same user AND this same account row, so a subject that
+    // already belongs to somebody else is left untouched rather than
+    // transferred. It is a metadata correction, not a link, so it records no
+    // audit event.
+    await transaction
+      .update(accountIdentityOwnerships)
+      .set({
+        providerEmail: values.identity.email,
+        providerEmailVerified: values.identity.emailVerified,
+        verifiedAt: now,
+      })
+      .where(and(
+        eq(accountIdentityOwnerships.providerId, values.identity.providerId),
+        eq(accountIdentityOwnerships.providerSubject, values.identity.subject),
+        eq(accountIdentityOwnerships.userId, values.userId),
+        eq(accountIdentityOwnerships.accountRecordId, values.accountRecordId),
+      ));
+    return false;
+  });
+}
+
 async function loadUserIdentityState(
   executor: typeof db | Transaction,
   userId: string,

@@ -14,6 +14,9 @@ export type AccountSurface =
   | "invite"
   | "edit"
   | "password-change"
+  // #349: the sign-in methods on this Account -- which providers are bound,
+  // and the explicit bind/unbind actions over the ST-067 endpoints.
+  | "identity-links"
   | "password-link-offered"
   | "password-link-sent"
   | "password-link-expired"
@@ -30,6 +33,7 @@ const PASSWORD_LINK_SURFACES: readonly AccountSurface[] = [
 const DRILL_SURFACES: readonly AccountSurface[] = [
   "invite",
   "edit",
+  "identity-links",
   "password-change",
   ...PASSWORD_LINK_SURFACES,
 ];
@@ -104,11 +108,12 @@ export function accountSurfaceFromLocationSearch(search: string): AccountSurface
 }
 
 export function accountSurfaceEyebrow(surface: AccountSurface): string {
-  if (isAccountPasswordSurface(surface)) return "ACCOUNT SECURITY";
+  if (isAccountPasswordSurface(surface) || surface === "identity-links") return "ACCOUNT SECURITY";
   return surface === "invite" ? "INVITATION" : "ATLAS DETAILS";
 }
 
 export function accountSurfaceTitle(surface: AccountSurface): string {
+  if (surface === "identity-links") return "登录方式";
   if (surface === "password-change") return "修改密码";
   if (isPasswordLinkSurface(surface)) return "设置密码";
   return surface === "invite" ? "邀请另一位" : "编辑图谱";
@@ -139,4 +144,15 @@ export function shouldRenderStandaloneAccountDock(isMobileV2: boolean, hasMobile
 }
 export function shouldActivateAccountSheetFocus(accountSheetOpen: boolean, atlasReady: boolean): boolean {
   return accountSheetOpen && atlasReady;
+}
+
+/**
+ * #349: the standalone dock keeps its panel hidden until the dock itself is
+ * open, so a panel revealed by a return trip rather than by a click on the dock
+ * tab has to open the dock as well -- otherwise the bind outcome, success or
+ * refusal, renders where nobody can read it. The mobile sheet carries its own
+ * surface state and needs no dock.
+ */
+export function shouldOpenDockForRevealedPanel(isMobileV2: boolean): boolean {
+  return !isMobileV2;
 }

@@ -4,6 +4,7 @@ import {
   buildIdentityMethods,
   hasUsableLoginAfterRemoval,
   redactIdentityEmail,
+  safeReturnPath,
   validProviderId,
   type AccountIdentityAccount,
   type AccountIdentityOwnership,
@@ -76,5 +77,36 @@ describe("account identity policy", () => {
     expect(validProviderId("oidc.example-1")).toBe(true);
     expect(validProviderId("Google")).toBe(false);
     expect(validProviderId("../google")).toBe(false);
+  });
+});
+
+describe("safeReturnPath", () => {
+  it("accepts a same-document path", () => {
+    expect(safeReturnPath("/")).toBe("/");
+    expect(safeReturnPath("/account?panel=identity")).toBe("/account?panel=identity");
+  });
+
+  it("rejects every way out of the origin", () => {
+    // An absolute URL is never accepted, so no prefix comparison against
+    // appOrigin can be fooled by a lookalike host.
+    expect(safeReturnPath("https://evil.test/")).toBeNull();
+    expect(safeReturnPath("http://127.0.0.1:5173.evil.test/")).toBeNull();
+    // Authority-relative forms leave the origin without naming a scheme.
+    expect(safeReturnPath("//evil.test/")).toBeNull();
+    expect(safeReturnPath("/\\evil.test/")).toBeNull();
+    expect(safeReturnPath("javascript:alert(1)")).toBeNull();
+    expect(safeReturnPath("account")).toBeNull();
+  });
+
+  it("rejects a value that could split a Location header", () => {
+    expect(safeReturnPath("/account\r\nLocation: https://evil.test/")).toBeNull();
+    expect(safeReturnPath("/account\u0000")).toBeNull();
+  });
+
+  it("rejects a non-string or an unbounded value", () => {
+    expect(safeReturnPath(undefined)).toBeNull();
+    expect(safeReturnPath(12)).toBeNull();
+    expect(safeReturnPath("")).toBeNull();
+    expect(safeReturnPath(`/${"a".repeat(512)}`)).toBeNull();
   });
 });
