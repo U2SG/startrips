@@ -105,6 +105,7 @@ async function verifyLiveDesktopJourney() {
 
   try {
     const url = new URL(baseUrl);
+    url.searchParams.set("qaState", "legacy-live");
     url.searchParams.set("quality", "low");
     await page.goto(url.href, { waitUntil: "networkidle" });
     await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 15_000 });

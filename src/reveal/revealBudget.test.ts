@@ -5,8 +5,7 @@ import {
   rendererDrawingBufferPixels,
   resolveRevealBudget,
 } from "./revealBudget";
-import { resolveRenderBudget } from "../scene/renderBudget";
-import { QUALITY_PROFILE } from "../scene/ParticleEarthScene";
+import { QUALITY_PROFILE, resolveRenderBudget } from "../scene/renderBudget";
 
 const VIEWPORTS = [
   { label: "phone", viewportWidth: 390, viewportHeight: 844, deviceDpr: 3 },

@@ -1,3 +1,5 @@
+import type { GlobeMode } from "../scene/globeMode";
+
 export type ExperiencePhase =
   | "earthIntro"
   | "archive"
@@ -9,12 +11,6 @@ export type ExperiencePhase =
   | "earthReturn"
   | "personalGallery"
   | "momentDetail";
-
-export type GlobeMode =
-  | "particleSphere"
-  | "archiveBurst"
-  | "surfaceEarth"
-  | "focusPoint";
 
 export type TransitionDirection = "forward" | "back" | "still";
 

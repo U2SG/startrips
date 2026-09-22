@@ -520,3 +520,26 @@ export function phaseForStep(step: PlaybackStep): JourneyPlaybackPhase {
       return { type: "outro" };
   }
 }
+
+/**
+ * The asset the director may hold on for a step: a media step's own asset, and
+ * a stop step's first image — the frame the stop phase waits to decode.
+ */
+export function playbackHoldTargetMedia(
+  journey: Journey,
+  step: PlaybackStep | undefined,
+): JourneyMediaAsset | null {
+  if (step?.kind === "stop") {
+    return playbackMediaForPoint(journey, step.pointIndex)
+      .find((asset) => asset.mimeType.startsWith("image/")) ?? null;
+  }
+  return playbackMediaForStep(journey, step);
+}
+
+export function playbackMediaForStep(
+  journey: Journey,
+  step: PlaybackStep | undefined,
+): JourneyMediaAsset | null {
+  if (step?.kind !== "media") return null;
+  return playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex] ?? null;
+}

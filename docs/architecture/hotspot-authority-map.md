@@ -1,6 +1,6 @@
 # Hotspot authority map
 
-Issue #269 is an authority-preserving decomposition. The goal is not to make large files smaller by distributing current state; the goal is to make pure decisions movable while keeping every current intent in one place.
+This map records the authority boundaries established in issue #269 and the subsequent core refactor. Pure decisions may move into reusable modules while every current intent retains one writer.
 
 The rule used below is: **state may move only when its writer moves with it.** Read-only helpers may move freely. A -> B -> C remains owned by the composition root that can prove C is current.
 
@@ -24,15 +24,17 @@ The rule used below is: **state may move only when its writer moves with it.** R
 | `publishedAnchorFrame` | render-loop Earth Dive publisher | `onParticleAnchorFrame` / `LivingAtlasGlobe` handoff | current focus/route anchor plus current projection; disappearance invalidates by publishing `null` | a current centered focus has a current `diveAnchor`, finite scale and a materially changed frame; otherwise the prior frame is cleared |
 | `disposed`, `animationFrame`, renderer/scene resources | `useThreeScene` setup/cleanup | all renderer effects and async builders | `disposed` and animation-frame lifecycle | every async renderer completion checks its local revision/guard and `disposed` before touching resources |
 
-### Extracted boundary in this PR
+### Extracted renderer boundaries
 
 Before this change, pointer capacity, activation eligibility, drag threshold, zoom clamp, projected-radius rotation, pinch-anchor reliability, inertia limits/retention and drag-sample rebasing were **pure functions declared inside `ParticleEarthScene.tsx`** next to the current gesture state. After this change those rules live in `globePointerIntent.ts`.
 
 The authority did **not** move: `activePointers`, drag/pinch samples, `interactiveZoom`, camera rotations, velocities, focus revisions and the canonical `GeoProjectionFrame` all remain in `ParticleEarthScene.tsx`. The extracted module receives numbers / points and returns values; it has no setter, ref, event listener, effect, clock, renderer or viewport read.
 
+`globeMode.ts` owns the four mode names and their presentation constants; `renderBudget.ts` owns the quality profiles and drawing-buffer calculation. Both production and legacy consumers import these contracts directly. Projection helpers remain in `projection.ts`; the renderer does not re-export them. None of these modules owns a live scene, camera, viewport or quality revision.
+
 ## `src/journey/JourneyStory.tsx`
 
-`JourneyStory` remains the Story composition root. This PR documents it but moves no Story code. The rows below identify the state that later extractions must treat as read-only unless the whole writer contract moves.
+`JourneyStory` remains the Story composition root. `storyMediaPolicy.ts` owns media identity, scope, navigation and autoplay decisions; `storySurfacePolicy.ts` owns surface, history-layer and control descriptions. They receive snapshots and do not own the state described below. Signed-read decisions live in `mediaReadRefresh.ts`, while the cache and request lifecycle remain in the consuming root.
 
 | Authoritative state / ref | Single writer | Read-only consumers | Cancellation / revision token | Async completion may write back only when |
 | --- | --- | --- | --- | --- |
@@ -53,6 +55,38 @@ The authority did **not** move: `activePointers`, drag/pinch samples, `interacti
 | `mediaDragRef`, `mediaDragSettlingRef`, `mediaDragSettleCancelRef`, `mediaDragSettleFinishRef`, `mediaDragSprings`, `mediaTapTimerRef`, gesture-consumed refs | Story media pointer handlers | persistent media compositor and navigation commands | pointer id + explicit settle cancel handle; newer navigation calls `cancelPendingMediaDragSettle()` | a settling animation may commit navigation only if it was not cancelled/reclaimed by a newer gesture/navigation intent |
 | notes authority: `journeyNoteDraft`, `routePointNoteDrafts`, `notesDirty`, `notesDirtyRef`, `notesDraftJourneyRef`, `notesSaveState` | Story note editor/save command | close guard and note UI | current Journey id + dirty ref + save state | a draft reset/save completion applies only to the current Journey/draft; dirty current edits are not overwritten by prop refresh |
 | media mutation authority: upload/retry/placement state, delete state, order/cover pending, move selection/pending/message/`moveUndo` | Story mutation command handlers | Manage UI and close guard | current Journey/media ids plus each pending command state | mutation completion updates UI only for the command still represented by the current pending state; undo records the completed move rather than a second media owner |
+
+## Composer and Playback contracts
+
+| Read-only owner | Contract | Writer that remains in the composition root |
+| --- | --- | --- |
+| `routeDraft.ts` | Route Point draft conversion, coordinate input, removal focus and globe-pick shape | `JourneyComposer` owns the current draft, focus and editing intent |
+| `journeyDraftMedia.ts` | Pending-media shape, summary and draft-to-persisted Route Point mapping | `JourneyComposer` owns files, upload attempts and pending media changes |
+| `journeySaveRecovery.ts` | Save-result and uncertain-create shapes plus recovery copy | Composer's async save/reconcile command owns continuation and reconciliation |
+| `journeyPlayback.ts` | Playback sequence and step/hold-target media selection | The playback director owns the current run, step and clock |
+| `playbackMediaPresentation.ts` | Media readiness, hold reason and chapter-opening decisions | `JourneyPlaybackOverlay` owns presentation, decode, video and trim settlement |
+| `mediaReadRefresh.ts` | Shared read-state shape and caller-specific freshness decisions | Story and Playback each retain their own signed-read cache and scope guards |
+
+Story's 60-second refresh margin and protected-video rule remain distinct from Playback's read-reuse policy. Sharing a contract does not merge their request lifecycles. Shell consumers import public types from their model owners instead of importing a UI root to obtain them.
+
+## Server background services and HTTP adapters
+
+| Owner | Responsibility and preserved ordering |
+| --- | --- |
+| `server/media/upload-protocol.ts` | Pure request validation, limits and protocol types; no database, storage or HTTP framework ownership |
+| `server/services/multipart-uploads.ts` | The complete upload lifecycle: creation, parts, completion, abort, finalize claims/heartbeats, reconciliation and cleanup. Existing-upload/replay checks precede completion body parsing. |
+| `server/services/journey-media.ts` | Media lookup, signing, reorder and cross-Journey move/undo transactions |
+| `server/repositories/journey-repository.ts` | Shared active-Journey locking. Atlas/lease/ Journey lock order and sorted cross-Journey locks remain unchanged. |
+| `server/services/map-style-cache.ts` | Upstream map fetches, URL rewriting, disk cache and cache sweeper; provider requests retain an independent timeout signal |
+| `server/routes/uploads.ts`, `server/routes/mapstyle.ts` | HTTP permission and request/response adaptation; background startup imports services directly |
+
+`server/app.ts` composes routers. Bootstrap, services and repositories must not import router implementations. Upload and media services use the existing preview/delete services directly; HTTP extraction does not introduce a second status writer or change transaction scope.
+
+## Production and development entry boundaries
+
+`app.css` contains shared reset, scene and accessibility styles. Legacy shell rules live in `styles/legacy-shell.css` and load only with the explicit legacy preview family. Product fixtures must not load `App.tsx` or the legacy styles. Development fixture selection finishes before the single React root mounts; the existing Earth Experience provider remains the provider owner.
+
+The production Vite boundary check rejects legacy modules/styles in emitted chunks. The entry-boundary browser suite checks both product isolation and a functioning explicit legacy entry. `src/architecture/moduleBoundaries.test.ts` checks literal runtime import cycles, HTTP dependency direction and pure-owner imports in CI. These checks complement the existing behavior tests; they do not prove asynchronous authority by themselves.
 
 ## Guardrails for later phases
 

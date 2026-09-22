@@ -10,7 +10,7 @@ import {
   parseParts,
   parseReorderInput,
   parseStartUpload,
-} from "./uploads";
+} from "../media/upload-protocol";
 
 const JOURNEY_ID = "00000000-0000-4000-8000-000000000001";
 const ROUTE_POINT_ID = "00000000-0000-4000-8000-000000000002";

@@ -21,12 +21,12 @@ import { useAtlasView } from "./atlasView";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import { PlaybackMediaStage } from "./PlaybackMediaStage";
 import { usePlaybackMapBridge } from "./usePlaybackMapBridge";
-import { mediaReadIsFresh } from "./mediaReadRefresh";
+import { playbackReadIsReusable, type MediaReadState as MediaRead } from "./mediaReadRefresh";
+import { playbackMediaGate, playbackChapterOpeningUrl, playbackHoldReason, type PlaybackHoldReason } from "./playbackMediaPresentation";
 import {
   createDecodeRegistry,
   decodeImageUrl,
   mediaPrefetchUrlsForRead,
-  type DecodedReadiness,
 } from "./mediaPrefetch";
 import {
   playbackProgressFraction,
@@ -39,7 +39,8 @@ import {
   playbackCameraTargetForStep,
   playbackCameraTargetKey,
   playbackMediaForPoint,
-  playbackMediaWaitPolicy,
+  playbackMediaForStep,
+  playbackHoldTargetMedia,
   playbackStepIdentity,
   routePointChapterDensity,
   type CommittedPlaybackPosition,
@@ -84,76 +85,8 @@ import {
   writeAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
-import type { Journey, JourneyMediaAsset, MediaPreviewRead } from "./types";
+import type { Journey, JourneyMediaAsset } from "./types";
 import type { PlaybackReturnReason } from "./playbackReturn";
-
-type MediaRead =
-  | { status: "loading" }
-  | { status: "ready"; url: string; preview?: MediaPreviewRead; issuedAt: number; expiresAt: number }
-  | { status: "error"; message: string };
-
-/**
- * Whether a cached read may still be reused instead of re-signed.
- *
- * The overlay used to reuse a ready read forever, which was safe while every
- * signed URL lived 900 s: a whole playback ran well inside one lifetime. A
- * share-scoped read is capped at 90 s by default and again by the remaining
- * grant, so a URL prefetched at the head of the window can expire before the
- * chapter that needs it. Reuse is now a lifetime question.
- */
-export function playbackReadIsReusable(
-  read: MediaRead | undefined,
-  now: number,
-): boolean {
-  return read?.status === "ready"
-    && mediaReadIsFresh(read.issuedAt, read.expiresAt, now);
-}
-
-export type PlaybackMediaGate = "waiting" | "ready" | "error";
-
-/**
- * Why playback is waiting on the current beat, if it is.
- *
- * #197 needs `decode` separable from the rest: a video beat legitimately holds
- * the director for its whole runtime, and a trim positions the element before
- * its segment starts. Neither is a symptom of a lookahead that stayed fixed
- * while tempo got faster, so a capture that counted them all as one number
- * could not tell continuity apart from ordinary video playback.
- */
-export type PlaybackHoldReason = "none" | "decode" | "video" | "trim";
-
-/**
- * The single decision behind the hold, taken from already-resolved inputs so it
- * is unit-checkable without a journey, a director or a DOM.
- */
-export function playbackHoldReason(input: {
-  /** The current step's kind; `undefined` outside a run. */
-  stepKind: PlaybackStep["kind"] | undefined;
-  /** The asset this beat may wait on: a media step's own, or a stop's first image. */
-  asset: JourneyMediaAsset | null;
-  gate: PlaybackMediaGate;
-  /** This asset has already failed to play, so the legacy fallback timer owns the beat. */
-  videoPlaybackFailed: boolean;
-  /** The trim transport's status when the segment owns this beat, else null. */
-  trimStatus: VideoTrimSeekStatus | null;
-}): PlaybackHoldReason {
-  const { stepKind, asset, gate } = input;
-  if (!asset) return "none";
-  // A stop step waits only for its first image to be decodable, so the frame it
-  // hands to the media step is never blank.
-  if (stepKind === "stop") return gate === "waiting" ? "decode" : "none";
-  if (stepKind !== "media") return "none";
-  if (input.videoPlaybackFailed) return "none";
-  if (input.trimStatus) return videoTrimHoldsStep(input.trimStatus) ? "trim" : "none";
-  switch (playbackMediaWaitPolicy(asset, gate)) {
-    case "decode":
-      return "decode";
-    case "video-ended":
-      return "video";
-    case "none":
-      return "none";
-  }
-}
 
 const VIDEO_STALL_WATCHDOG_MS = 4_000;
 
@@ -173,29 +106,6 @@ function quickRecapOmissionReasonLabel(reason: QuickRecapOmissionReason) {
   switch (reason) {
     case "not-selected": return "本次快速回顾未选入";
   }
-}
-
-export function playbackMediaGate(
-  read: MediaRead | null | undefined,
-  decodeReadiness: DecodedReadiness | undefined,
-  isImage: boolean,
-): PlaybackMediaGate {
-  if (!read || read.status === "loading") return "waiting";
-  if (read.status === "error") return "error";
-  if (!isImage) return "ready";
-  if (decodeReadiness?.status === "error") return "error";
-  return decodeReadiness?.status === "decoded" ? "ready" : "waiting";
-}
-
-export function playbackChapterOpeningUrl(
-  stepKind: PlaybackStep["kind"] | undefined,
-  asset: Pick<JourneyMediaAsset, "mimeType"> | null,
-  read: MediaRead | null | undefined,
-  decodeReadiness: DecodedReadiness | undefined,
-): string | null {
-  if (stepKind !== "stop" || !asset?.mimeType.startsWith("image/")) return null;
-  if (playbackMediaGate(read, decodeReadiness, true) !== "ready") return null;
-  return read?.status === "ready" ? read.url : null;
 }
 
 /**
@@ -1680,27 +1590,4 @@ function playbackElapsedLabel(plan: PlaybackPlan | null, positionFraction: numbe
 function formatPlaybackClock(ms: number) {
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(totalSeconds / 60)}:${`${totalSeconds % 60}`.padStart(2, "0")}`;
-}
-
-/**
- * The asset the director may hold on for a step: a media step's own asset, and
- * a stop step's first image — the frame the stop phase waits to decode.
- */
-export function playbackHoldTargetMedia(
-  journey: Journey,
-  step: PlaybackStep | undefined,
-): JourneyMediaAsset | null {
-  if (step?.kind === "stop") {
-    return playbackMediaForPoint(journey, step.pointIndex)
-      .find((asset) => asset.mimeType.startsWith("image/")) ?? null;
-  }
-  return playbackMediaForStep(journey, step);
-}
-
-export function playbackMediaForStep(
-  journey: Journey,
-  step: PlaybackStep | undefined,
-): JourneyMediaAsset | null {
-  if (step?.kind !== "media") return null;
-  return playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex] ?? null;
 }

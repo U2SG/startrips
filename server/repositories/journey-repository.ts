@@ -64,6 +64,23 @@ export async function lockActiveAtlas(
   return locked.rows.length > 0;
 }
 
+export async function lockActiveJourney(
+  transaction: Transaction,
+  journeyId: string,
+  // Only persisted, already-authorized upload records use the unscoped null case.
+  atlasId: string | null,
+): Promise<{ id: string; coverMediaAssetId: string | null } | undefined> {
+  const locked = await transaction.execute<{ id: string; coverMediaAssetId: string | null }>(sql`
+    select ${journeys.id} as id, ${journeys.coverMediaAssetId} as "coverMediaAssetId"
+    from ${journeys}
+    where ${journeys.id} = ${journeyId}
+      ${atlasId === null ? sql`` : sql`and ${journeys.atlasId} = ${atlasId}`}
+      and ${journeys.deletionStartedAt} is null
+    for update
+  `);
+  return locked.rows[0];
+}
+
 async function loadJourneys(atlasId: string, requestedIds?: readonly string[]) {
   if (requestedIds?.length === 0) return [];
   const atlasScope = requestedIds

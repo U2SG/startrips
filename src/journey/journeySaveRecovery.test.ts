@@ -7,6 +7,7 @@ import {
 import {
   resolveJourneyArrivalHandoff,
   resolveJourneySaveRecovery,
+  unknownCreateRecheckMessage,
 } from "./journeySaveRecovery";
 import type { Journey, JourneyInput } from "./types";
 
@@ -169,5 +170,17 @@ describe("journey save recovery", () => {
     expect(message).toContain("纬度");
     expect(message).toContain("经度");
     expect(message).not.toContain("adapter missing");
+  });
+});
+
+describe("unknown create recovery guidance", () => {
+  it("keeps pending-media recovery in-session instead of advertising destructive refresh as safe", () => {
+    const message = unknownCreateRecheckMessage(true);
+
+    expect(message).toContain("当前 Atlas 会话");
+    expect(message).toContain("请不要刷新整个页面");
+    expect(message).toContain("尚未上传的本地媒体和路线点归属");
+    expect(message).toContain("需要重新选择");
+    expect(message).not.toContain("安全关闭创建器后刷新 Atlas");
   });
 });

@@ -25,7 +25,7 @@ import {
   restoreJourneyForAtlas,
 } from "../repositories/journey-repository";
 import { signSharedMediaRead } from "../routes/shares";
-import { signPrivateMediaRead } from "../routes/uploads";
+import { signPrivateMediaRead } from "../services/journey-media";
 import { deleteMediaAssetForAtlas } from "../services/delete-media";
 import { reconcileJourneyDeletionCandidates } from "../services/delete-journey";
 import {

@@ -1,4 +1,6 @@
-import type { RoutePointInput } from "./types";
+import type { Journey, RoutePointInput } from "./types";
+
+export type GlobePointPick = Pick<RoutePointInput, "latitude" | "longitude">;
 
 export type RouteDraftPoint = RoutePointInput & {
   draftId: string;
@@ -96,4 +98,43 @@ export function routeDraftToInput(
     ...point,
     label: point.label.trim(),
   }));
+}
+
+export function routePointFocusAfterRemoval(
+  routePoints: readonly RouteDraftPoint[],
+  routePointDraftId: string,
+): string | null {
+  const index = routePoints.findIndex((point) => point.draftId === routePointDraftId);
+  if (index < 0) return null;
+  return routePoints[index + 1]?.draftId ?? routePoints[index - 1]?.draftId ?? null;
+}
+
+export function journeyToDraftPoints(journey: Journey): RouteDraftPoint[] {
+  return journey.routePoints.map((point) => ({
+    draftId: `saved-${point.id}`,
+    id: point.id,
+    latitude: point.latitude,
+    longitude: point.longitude,
+    label: point.label,
+    isStop: point.isStop,
+    occurredAt: point.occurredAt,
+    // #10: echo the existing note back so a whole-list replace never clears
+    // it; absent notes stay absent.
+    note: point.note ?? null,
+  }));
+}
+
+export function parseCoordinateInput(
+  value: string,
+  minimum: number,
+  maximum: number,
+) {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  const coordinate = Number(normalized);
+  return Number.isFinite(coordinate)
+    && coordinate >= minimum
+    && coordinate <= maximum
+    ? coordinate
+    : null;
 }

@@ -1,3 +1,8 @@
+export const QUALITY_PROFILE = {
+  low: { particleCount: 12_000, maxDpr: 1, maxDrawingBufferPixels: 1_500_000 },
+  high: { particleCount: 28_000, maxDpr: 2, maxDrawingBufferPixels: 4_000_000 },
+} as const;
+
 export type RenderQualityBudget = {
   maxDpr: number;
   maxDrawingBufferPixels: number;

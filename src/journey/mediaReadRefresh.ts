@@ -1,3 +1,5 @@
+import type { MediaPreviewRead } from "./types";
+
 /**
  * When a signed private-media read should be replaced.
  *
@@ -58,4 +60,53 @@ export function mediaReadRefreshDelayMs(
 ): number {
   if (!Number.isFinite(expiresAt)) return fallbackMs;
   return Math.max(1_000, mediaReadRefreshAt(issuedAt, expiresAt, marginMs) - now);
+}
+
+export type MediaReadState =
+  | { status: "loading" }
+  | { status: "ready"; url: string; preview?: MediaPreviewRead; issuedAt: number; expiresAt: number }
+  | { status: "error"; message: string };
+
+/**
+ * Whether a cached read may still be reused instead of re-signed.
+ *
+ * The overlay used to reuse a ready read forever, which was safe while every
+ * signed URL lived 900 s: a whole playback ran well inside one lifetime. A
+ * share-scoped read is capped at 90 s by default and again by the remaining
+ * grant, so a URL prefetched at the head of the window can expire before the
+ * chapter that needs it. Reuse is now a lifetime question.
+ */
+export function playbackReadIsReusable(
+  read: MediaReadState | undefined,
+  now: number,
+): boolean {
+  return read?.status === "ready"
+    && mediaReadIsFresh(read.issuedAt, read.expiresAt, now);
+}
+
+const STORY_MEDIA_READ_REFRESH_MARGIN_MS = 60_000;
+
+/**
+ * A cached signed read is replaced once it is past half its own lifetime, and
+ * in any case `STORY_MEDIA_READ_REFRESH_MARGIN_MS` before it expires.
+ *
+ * The margin alone was enough while every read came from the owner route and
+ * lived 900 s. A share-scoped read is capped at 90 s by default and further
+ * capped by the remaining grant, so a read shorter than the margin would be
+ * stale on arrival and this would refresh it on every tick.
+ */
+export function shouldRefreshStoryMediaRead(
+  assetId: string,
+  state: { status: string; issuedAt?: number; expiresAt?: number },
+  now: number,
+  protectedPlaybackAssetId: string | null,
+) {
+  if (assetId === protectedPlaybackAssetId) return false;
+  if (state.status !== "ready") return false;
+  if (!Number.isFinite(state.expiresAt)) return false;
+  const expiresAt = state.expiresAt as number;
+  const issuedAt = Number.isFinite(state.issuedAt)
+    ? (state.issuedAt as number)
+    : expiresAt - STORY_MEDIA_READ_REFRESH_MARGIN_MS * 2;
+  return !mediaReadIsFresh(issuedAt, expiresAt, now, STORY_MEDIA_READ_REFRESH_MARGIN_MS);
 }

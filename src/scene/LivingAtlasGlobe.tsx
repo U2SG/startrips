@@ -47,7 +47,8 @@ import {
   initialGlobeGestureHintState,
   resolveGlobeGestureHint,
 } from "./globeGestureHint";
-import { GLOBE_MODE_CONFIG, ParticleEarthScene } from "./ParticleEarthScene";
+import { ParticleEarthScene } from "./ParticleEarthScene";
+import { GLOBE_MODE_CONFIG } from "./globeMode";
 import {
   GLOBE_SEMANTIC_ZOOM_CEILING,
   SEMANTIC_ZOOM_RELEASE_ZOOM,

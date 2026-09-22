@@ -29,12 +29,8 @@ import {
 } from "./coverRevealOpening";
 import type { CoverRevealImagePair } from "../reveal/coverRevealFlow";
 import { LivingAtlasGlobe, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
-import {
-  JourneyComposer,
-  type GlobePointPick,
-  type JourneySaveResult,
-  type UnknownJourneyCreateAttempt,
-} from "./JourneyComposer";
+import { JourneyComposer } from "./JourneyComposer";
+import type { GlobePointPick } from "./routeDraft";
 import {
   draftPlaybackPreviewOwnerKey,
   draftPlaybackPreviewStillOwnsComposer,
@@ -43,6 +39,8 @@ import {
 import {
   resolveJourneyArrivalHandoff,
   type JourneySaveCallbackScope,
+  type JourneySaveResult,
+  type UnknownJourneyCreateAttempt,
 } from "./journeySaveRecovery";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
@@ -87,7 +85,8 @@ import {
   type StorySnapState,
 } from "./playbackReturn";
 import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
-import { JourneyStory, type StoryLogicalObservation } from "./JourneyStory";
+import { JourneyStory } from "./JourneyStory";
+import type { StoryLogicalObservation } from "./storyMediaPolicy";
 import {
   cachedSoundtrackRead,
   prefetchSoundtrackRead,

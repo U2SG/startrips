@@ -7,7 +7,7 @@ export default defineConfig({
     name: "production-entry-boundary",
     apply: "build",
     generateBundle(_options, bundle) {
-      const developmentOnly = /\/src\/(?:App\.tsx|data\/archiveRecords\.ts|preview\/qaEntry\.tsx|styles\/(?:archive-shell|artwork-browser|personal-artifact|personal-gallery)\.css)$/;
+      const developmentOnly = /\/src\/(?:App\.tsx|data\/archiveRecords\.ts|preview\/[^/]+\.(?:ts|tsx)|reveal\/CoverRevealQaPreview\.tsx|styles\/(?:legacy-shell|archive-shell|artwork-browser|personal-artifact|personal-gallery)\.css)$/;
       const included = new Set<string>();
       for (const output of Object.values(bundle)) {
         if (output.type !== "chunk") continue;
