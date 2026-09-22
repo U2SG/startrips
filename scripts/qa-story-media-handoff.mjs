@@ -82,8 +82,43 @@ function installStageSampler() {
   // inside the stage and records which asset actually draws the foreground
   // there, so a reversal, a stale layer or an uncovered stage is attributable
   // to a frame and an instance rather than to a screenshot.
-  const state = { running: false, frames: [], root: null };
+  const state = { running: false, frames: [], root: null, gestures: [] };
   window.__qaStage = state;
+  // A bounded trace of the input the product actually received. A drag that
+  // never commits is attributable to a missing axis lock, a missing neighbour
+  // or a lost capture only with this, and none of it changes behaviour.
+  const note = (entry) => {
+    state.gestures.push({ at: Math.round(performance.now()), ...entry });
+    if (state.gestures.length > 240) state.gestures.shift();
+  };
+  for (const type of ["pointerdown", "pointerup", "pointercancel", "lostpointercapture", "click"]) {
+    document.addEventListener(type, (event) => {
+      const target = event.target;
+      note({
+        type,
+        pointerId: event.pointerId ?? null,
+        x: Math.round(event.clientX ?? 0),
+        y: Math.round(event.clientY ?? 0),
+        tag: target instanceof Element ? target.tagName : null,
+        cls: target instanceof Element ? String(target.className).slice(0, 60) : null,
+      });
+    }, true);
+  }
+  document.addEventListener("pointermove", (event) => {
+    const last = state.gestures.at(-1);
+    if (last?.type === "pointermove") {
+      last.x = Math.round(event.clientX);
+      last.samples += 1;
+      last.at = Math.round(performance.now());
+      return;
+    }
+    note({ type: "pointermove", x: Math.round(event.clientX), y: Math.round(event.clientY), samples: 1 });
+  }, true);
+  for (const type of ["story-media-grab", "story-media-recover"]) {
+    document.addEventListener(type, (event) => {
+      note({ type, neighborId: event.detail?.neighborId ?? null });
+    }, true);
+  }
   const identify = (node) => {
     if (!(node instanceof Element)) return null;
     const page = node.closest("[data-media-page]");
@@ -113,8 +148,9 @@ function installStageSampler() {
     if (!state.running) return;
     const root = state.root && document.querySelector(state.root);
     const pages = root?.querySelector("[data-story-media-pages]");
-    if (pages) {
-      const bounds = pages.getBoundingClientRect();
+    const measurable = pages ? pages.getBoundingClientRect() : null;
+    if (pages && measurable.width > 0 && measurable.height > 0) {
+      const bounds = measurable;
       const points = [[0.5, 0.5], [0.34, 0.5], [0.66, 0.5], [0.5, 0.36], [0.5, 0.62]];
       const drawables = points.map(([fx, fy]) =>
         drawableAt(bounds.left + bounds.width * fx, bounds.top + bounds.height * fy));
@@ -140,13 +176,15 @@ function installStageSampler() {
   window.__qaStageStart = (rootSelector) => {
     state.root = rootSelector;
     state.frames = [];
+    state.gestures = [];
+    state.generation = (state.generation ?? 0) + 1;
     if (state.running) return;
     state.running = true;
     requestAnimationFrame(sample);
   };
   window.__qaStageStop = () => {
     state.running = false;
-    return state.frames;
+    return { frames: state.frames, gestures: state.gestures };
   };
 }
 /* eslint-enable no-undef */
@@ -159,21 +197,42 @@ async function stopSampler(page) {
   return await page.evaluate(() => window.__qaStageStop());
 }
 
+async function stopSamplerFrames(page) {
+  return (await stopSampler(page)).frames;
+}
+
 /** Grade one recorded window against the B/C continuity acceptance. */
 function gradeContinuity(frames, { allowedAssets }) {
   const owned = new Set(allowedAssets);
   const staleFrames = frames.filter((frame) => frame.centre?.asset && !owned.has(frame.centre.asset));
+  if (!frames.length) {
+    return { sampledFrames: 0, failed: true, reason: "the sampler recorded no measurable frame for this window" };
+  }
   const blankFrames = frames.filter((frame) => frame.currentId && frame.uncovered > 0);
   const waitingFrames = frames.filter((frame) => frame.waiting && frame.currentId);
   const multiVideoFrames = frames.filter((frame) => frame.videoCount > 1);
-  // A foreground that goes new -> old -> new is the V1/V7 reversal. Compare
-  // consecutive distinct centre owners rather than only the final state.
+  // A foreground that goes new -> old -> new inside ONE transition is the
+  // V1/V7 reversal. A deliberate A -> B -> A navigation legitimately brings A
+  // back, so the chain is partitioned by the committed owner and each segment
+  // is graded on its own.
   const owners = [];
+  const reversals = [];
+  let segment = [];
+  let committed = null;
   for (const frame of frames) {
+    if (frame.currentId !== committed) {
+      committed = frame.currentId;
+      segment = [];
+    }
     const asset = frame.centre?.asset ?? null;
-    if (asset && owners.at(-1) !== asset) owners.push(asset);
+    if (!asset) continue;
+    if (owners.at(-1) !== asset) owners.push(asset);
+    if (segment.at(-1) === asset) continue;
+    segment.push(asset);
+    if (segment.length >= 3 && segment.at(-3) === asset) {
+      reversals.push({ at: frame.at, committed, sequence: segment.slice(-3) });
+    }
   }
-  const reversals = owners.filter((asset, index) => index >= 2 && owners[index - 2] === asset);
   return {
     sampledFrames: frames.length,
     foregroundSequence: owners,
@@ -346,7 +405,11 @@ async function navigateByGesture(page, rootSelector, direction, expectedId) {
     await waitForSettledAsset(page, expectedId, rootSelector);
     return { ok: true, gesture, expectedId };
   } catch {
-    return { ok: false, gesture, expectedId, diagnostic: await stageDiagnostic(page, rootSelector) };
+    return {
+      ok: false, gesture, expectedId,
+      diagnostic: await stageDiagnostic(page, rootSelector),
+      trace: await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-40)),
+    };
   }
 }
 
@@ -368,7 +431,7 @@ try {
       const photo = await photoClickPoint(page, STAGE, 1);
       await page.mouse.click(photo.x, photo.y);
       await waitForSettledAsset(page, V1);
-      const toVideoFrames = await stopSampler(page);
+      const toVideoFrames = await stopSamplerFrames(page);
 
       if (surface.enterFullscreen) {
         await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
@@ -435,7 +498,7 @@ try {
 
       await startSampler(page, STAGE);
       const offVideo = await navigateByGesture(page, STAGE, 1, I2);
-      const swipeFrames = await stopSampler(page);
+      const swipeFrames = await stopSamplerFrames(page);
       const afterVideoSwipe = await currentAsset(page);
       const playbackAfterSwipe = await samplePlayback(page, STAGE, { samples: 2, everyMs: 120 });
 
@@ -522,7 +585,7 @@ try {
         if (!step.ok) break;
         visited.push(target);
       }
-      const frames = await stopSampler(page);
+      const frames = await stopSamplerFrames(page);
       const continuity = gradeContinuity(frames, { allowedAssets: [I1, V1, I2] });
       const stuck = steps.filter((step) => !step.ok);
       record({
@@ -556,7 +619,7 @@ try {
         const pages = document.querySelector(selector).querySelector("[data-story-media-pages]");
         return pages.getAttribute("data-media-presentation") === "settled";
       }, STAGE, { polling: "raf", timeout: 10_000 });
-      const frames = await stopSampler(page);
+      const frames = await stopSamplerFrames(page);
       const settled = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
         document.querySelector(selector).querySelectorAll("video").length, STAGE);
@@ -599,18 +662,21 @@ try {
       const toLastVisible = await navigateByGesture(page, STAGE, 1, I2);
       const lastVisible = await currentAsset(page);
 
-      await startSampler(page, FULLSCREEN);
+      // The immersive surface exists in the tree while closed, so sampling it
+      // before it is on screen would record an unmeasurable root rather than a
+      // blank stage. Start each window on the root that is actually presented.
       await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
+      await startSampler(page, FULLSCREEN);
       await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
       await waitForSettledAsset(page, I2, FULLSCREEN);
-      const entryFrames = await stopSampler(page);
+      const entryFrames = await stopSamplerFrames(page);
       const entered = await currentAsset(page, FULLSCREEN);
 
       await startSampler(page, STAGE);
       await page.keyboard.press("Escape");
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       await waitForSettledAsset(page, I2);
-      const exitFrames = await stopSampler(page);
+      const exitFrames = await stopSamplerFrames(page);
       const exited = await currentAsset(page);
 
       const entry = gradeContinuity(entryFrames, { allowedAssets: [I2] });
