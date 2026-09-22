@@ -125,6 +125,22 @@ Audit trail: `.agent-artifacts/intake/decisions.log` (one line per issue),
 directory means previously skipped issues get re-triaged — use the `no-loop` label when the
 exclusion must be durable.
 
+### Concurrent amendment deferral
+
+A readable row that changed after its exact pre-model snapshot rejects the model
+result with internal intake code 10. The amend caller records `amend-deferred`,
+adds only that feature to the existing invocation-local `FEATURE_SKIP`, and lets
+the same canonical selector consider other work. No ONE status, attempt, gate,
+issue snapshot or product decision is changed by the rejected result. There is
+no immediate model replay; a fresh invocation re-reads ONE and the live issue.
+The same rule covers row drift before the later unchanged/moot snapshot write.
+Result artifacts are invocation-specific, so a peer cannot supply the verdict.
+
+Missing/malformed snapshot identity, unreadable ONE, write failures, unknown
+process/provider evidence and API failures are not known row drift: they remain
+fail-closed and retain the existing transient-failure path. This is not a blanket
+StoreConflict catch, a shorter supervisor retry, or permission to reuse old data.
+
 ## Merge policy
 
 **This loop never merges.** The repo's `merge-readiness` workflow is a human sign-off gate: the

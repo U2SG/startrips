@@ -838,8 +838,8 @@ for f in d['features']:
         continue
     expected_token = os.environ.get('INTAKE_EXPECTED_ROW', '')
     if expected_token:
-        from intake_guard import require_amend_snapshot
-        require_amend_snapshot(f, expected_token, upd, cnt)
+        from intake_guard import require_amend_snapshot_or_defer
+        require_amend_snapshot_or_defer(f, expected_token, upd, cnt)
     if f.get('status') in {'in_progress', 'needs_work', 'ready_for_eval'}:
         print('SKIP=builder-owns-issue-window')
         raise SystemExit(0)
@@ -885,7 +885,7 @@ intake_owner_attention() {
 # Amend re-triage of ONE auto-intake pending feature.
 intake_apply_amend() {
   local num="$1" fid="$2" log="$3"
-  INTAKE_LAST_RESULT="$INTAKE_DIR/amend-$fid.json"
+  INTAKE_LAST_RESULT="$INTAKE_DIR/amend-$fid-${BASHPID}.json"
 python3 - "$INTAKE_FEATURES" "$log" "$num" "$fid" "$INTAKE_LAST_RESULT" "$INTAKE_DRY_RUN" "$INTAKE_ROOT/lib" <<'PY'
 import copy, datetime, json, os, sys
 feat_p, log_p, num_s, fid, res_p, dry_s, libdir = sys.argv[1:8]
@@ -916,9 +916,9 @@ except InvalidOutput as exc:
 # The same immutable row was shown to the model before it ran. Re-loading a
 # newer row here does not authorize applying an older model result to it.
 d = load_document(feat_p)
-from intake_guard import require_amend_snapshot
+from intake_guard import require_amend_snapshot_or_defer
 from feature_state import target as feature_target
-require_amend_snapshot(feature_target(d, fid), os.environ.get('INTAKE_EXPECTED_ROW'), upd, cnt)
+require_amend_snapshot_or_defer(feature_target(d, fid), os.environ.get('INTAKE_EXPECTED_ROW'), upd, cnt)
 
 if obj.get('unchanged') is True:
     emit(decision='unchanged', issue=num, id=fid,
@@ -1066,8 +1066,32 @@ print(out + '\t' + row_token(row))
 PY
 }
 
+# Only the typed pre-model row mismatch is a local deferral. A storage/API/
+# permission failure is still UNKNOWN, not permission to continue blindly.
+intake_amend_failure() {
+  local fid="$1" num="$2" stage="$3" rc="$4"
+  if [[ "$rc" != "10" ]]; then
+    intake_record_decision "issue=$num feature=$fid amend-$stage-failed rc=$rc; evidence UNKNOWN"
+    return 6
+  fi
+  # Reuse the canonical selector's invocation-local exclusion. Never change
+  # status/gates/attempts or persist a second queue. A fresh run re-reads ONE.
+  case " ${FEATURE_SKIP:-} " in
+    *" $fid "*) ;;
+    *) FEATURE_SKIP="${FEATURE_SKIP:+$FEATURE_SKIP }$fid"; export FEATURE_SKIP ;;
+  esac
+  INTAKE_LAST_RESULT=""
+  intake_record_decision "issue=$num feature=$fid amend-deferred stage=$stage; known stale snapshot discarded; selector skips this feature for this invocation"
+  return 0
+}
+
 intake_amend() {
-  local num="$1" fid="$2" upd="$3" cnt="$4" dump prompt decision reason changed snapshot expected_row
+  local num="$1" fid="$2" upd="$3" cnt="$4" dump prompt decision reason changed snapshot expected_row amend_rc
+  case " ${FEATURE_SKIP:-} " in
+    *" $fid "*)
+      intake_record_decision "issue=$num feature=$fid amend deferred: already yielded in this invocation"
+      return 0 ;;
+  esac
   intake_budget_take || {
     intake_record_decision "issue=$num feature=$fid amend deferred: per-iteration session budget spent"
     return 0
@@ -1082,7 +1106,11 @@ intake_amend() {
     return 0
   }
   INTAKE_EXPECTED_ROW="$expected_row" INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" \
-    intake_apply_amend "$num" "$fid" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num amend-transaction-deferred"; return 6; }
+    intake_apply_amend "$num" "$fid" "$INTAKE_LAST_LOG" || {
+      amend_rc=$?
+      intake_amend_failure "$fid" "$num" apply "$amend_rc"
+      return $?
+    }
   [[ -f "$INTAKE_LAST_RESULT" ]] || {
     intake_record_decision "issue=$num feature=$fid amend-result-missing"
     return 0
@@ -1100,13 +1128,21 @@ intake_amend() {
       ;;
     unchanged)
       # The snapshot still advances, otherwise a label edit re-triages forever.
+      INTAKE_EXPECTED_ROW="$expected_row" intake_touch_feature "$fid" "$upd" "$cnt" || {
+        amend_rc=$?
+        intake_amend_failure "$fid" "$num" snapshot "$amend_rc"
+        return $?
+      }
       intake_record_decision "issue=$num feature=$fid decision=unchanged reason=$reason"
-      INTAKE_EXPECTED_ROW="$expected_row" intake_touch_feature "$fid" "$upd" "$cnt"
       ;;
     moot)
-      intake_record_decision "issue=$num feature=$fid decision=moot reason=$reason"
       INTAKE_EXPECTED_ROW="$expected_row" intake_touch_feature "$fid" "$upd" "$cnt" \
-        "intake amend session reported the issue as moot: $reason (queue entry left in place for the owner)"
+        "intake amend session reported the issue as moot: $reason (queue entry left in place for the owner)" || {
+          amend_rc=$?
+          intake_amend_failure "$fid" "$num" snapshot "$amend_rc"
+          return $?
+        }
+      intake_record_decision "issue=$num feature=$fid decision=moot reason=$reason"
       intake_owner_attention "$fid" "$num" \
         "The amend session reports the issue is now moot: $reason The queue entry was left pending; cancelling it is the owner's call."
       ;;
