@@ -1,6 +1,6 @@
 import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 /**
  * #349 (ST-132): Google sign-in and explicit binding, against a fake OAuth
@@ -191,7 +191,10 @@ async function startSignIn(overrides: Record<string, unknown> = {}) {
     disableRedirect: true,
     ...overrides,
   }, "");
-  if (response.status !== 200) return { response, state: "", jar: "" };
+  // Asserted rather than tolerated: `/sign-in/social` is rate limited, and a
+  // throttled start would otherwise reach the callback with an empty state and
+  // look exactly like the provider refusals asserted further down.
+  expect(response.status).toBe(200);
   const payload = await response.json() as { url: string };
   return {
     response,
@@ -321,7 +324,10 @@ async function trackGoogleUser(email: string) {
   return user;
 }
 
-beforeAll(async () => {
+// Per test, not once: this file drives more sign-in starts and more email
+// sign-ups than one rate-limit window allows, and a throttled request is a
+// refusal for the wrong reason.
+beforeEach(async () => {
   await db.delete(rateLimit);
 });
 
