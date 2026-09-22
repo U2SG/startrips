@@ -82,24 +82,31 @@ if [[ -n "$CARRIER_LANE" && -z "$CARRIER_TOKEN" && -z "${STARTRIPS_OWN_PIDS:-}" 
 fi
 if [[ -n "$CARRIER_TOKEN" ]]; then
   export STARTRIPS_CARRIER_TOKEN="$CARRIER_TOKEN"
-  native_pids() {
-    local pid out=""
-    for pid in $$ ${PPID:-}; do
-      [[ -n "$pid" ]] || continue
-      if [[ -r "/proc/$pid/winpid" ]]; then out="$out $(cat "/proc/$pid/winpid")"; else out="$out $pid"; fi
-    done
-    printf '%s' "$out"
-  }
-  # Extend any launcher-published identity with this exact carrier. This makes
-  # unreadable MSYS layers provable without allowing a different invocation.
-  # shellcheck disable=SC2046
-  CURRENT_OWN_PIDS="$(python3 -B "$ROOT/lib/execution.py" identity "$ROOT" $(native_pids))" || {
-    echo "Current execution identity is not observable; refusing to start" >&2; exit 64;
-  }
-  if [[ -n "${STARTRIPS_OWN_PIDS:-}" ]]; then
-    export STARTRIPS_OWN_PIDS="$STARTRIPS_OWN_PIDS,$CURRENT_OWN_PIDS"
-  else
-    export STARTRIPS_OWN_PIDS="$CURRENT_OWN_PIDS"
+  # Read-only probes are observers, not execution carriers. Their token remains
+  # provider-visible so execution.py can classify the probe/descendants without
+  # spending the synchronous Windows process-identity path that exists only to
+  # authorize a real carrier. If ancestry is unreadable, occupancy still fails
+  # closed; a selector probe never gains execution authority from this shortcut.
+  if [[ -z "$READONLY_PROBE" ]]; then
+    native_pids() {
+      local pid out=""
+      for pid in $$ ${PPID:-}; do
+        [[ -n "$pid" ]] || continue
+        if [[ -r "/proc/$pid/winpid" ]]; then out="$out $(cat "/proc/$pid/winpid")"; else out="$out $pid"; fi
+      done
+      printf '%s' "$out"
+    }
+    # Extend any launcher-published identity with this exact carrier. This makes
+    # unreadable MSYS layers provable without allowing a different invocation.
+    # shellcheck disable=SC2046
+    CURRENT_OWN_PIDS="$(python3 -B "$ROOT/lib/execution.py" identity "$ROOT" $(native_pids))" || {
+      echo "Current execution identity is not observable; refusing to start" >&2; exit 64;
+    }
+    if [[ -n "${STARTRIPS_OWN_PIDS:-}" ]]; then
+      export STARTRIPS_OWN_PIDS="$STARTRIPS_OWN_PIDS,$CURRENT_OWN_PIDS"
+    else
+      export STARTRIPS_OWN_PIDS="$CURRENT_OWN_PIDS"
+    fi
   fi
 fi
 export PYTHONIOENCODING=utf-8
