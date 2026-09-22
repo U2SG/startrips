@@ -401,6 +401,37 @@ class RuntimeActivationPlanTests(unittest.TestCase):
         self.assertEqual([], plan['conflicts'])
         self.assertEqual('live-hot-change-subsumed-by-source', plan['compatibility']['consumer.txt'])
 
+    def test_exact_reviewed_hot_predecessor_pair_is_safe(self):
+        base = self.commit('one\nmiddle\nthree\n')
+        self.commit('one-source\nmiddle\nthree-package\n')
+        incoming = (self.repo / 'tools/control-plane/consumer.txt').read_bytes()
+        current = b'one-live\nmiddle\nthree\n'
+        (self.root / 'consumer.txt').write_bytes(current)
+        reviewed = {'consumer.txt': {
+            runtime.sha(runtime._normalize(current)): runtime.sha(runtime._normalize(incoming))
+        }}
+        with mock.patch.object(runtime, 'REVIEWED_HOT_PREDECESSORS', reviewed):
+            plan = self.plan(base)
+        self.assertEqual([], plan['conflicts'])
+        self.assertEqual('reviewed-hot-predecessor', plan['compatibility']['consumer.txt'])
+
+    def test_reviewed_hot_predecessor_does_not_authorize_source_or_live_drift(self):
+        base = self.commit('one\nmiddle\nthree\n')
+        self.commit('one-source\nmiddle\nthree-package\n')
+        incoming = (self.repo / 'tools/control-plane/consumer.txt').read_bytes()
+        current = b'one-live\nmiddle\nthree\n'
+        reviewed = {'consumer.txt': {
+            runtime.sha(runtime._normalize(current)): runtime.sha(runtime._normalize(incoming))
+        }}
+        with mock.patch.object(runtime, 'REVIEWED_HOT_PREDECESSORS', reviewed):
+            (self.root / 'consumer.txt').write_bytes(b'one-new-live\nmiddle\nthree\n')
+            live_drift = self.plan(base)
+            self.assertEqual(['consumer.txt'], live_drift['conflicts'])
+            (self.root / 'consumer.txt').write_bytes(current)
+            self.commit('one-new-source\nmiddle\nthree-package\n')
+            source_drift = self.plan(base)
+            self.assertEqual(['consumer.txt'], source_drift['conflicts'])
+
     def test_unreconciled_live_hot_change_stays_conflict(self):
         base = self.commit('one\nmiddle\nthree\n')
         self.commit('one-source\nmiddle\nthree-package\n')

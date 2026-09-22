@@ -38,6 +38,28 @@ REQUIRED = (
     '.claude/agents/startrips-evaluator.md', '.claude/agents/startrips-triage.md',
 )
 
+# Exact predecessor -> submitted-byte pairs independently visible in Source review.
+# This is deliberately narrower than a semantic/fuzzy merge allowance: an entry
+# authorizes only one observed live consumer body to be replaced by one exact
+# reviewed package-aware body. Any later live drift or Source edit stops matching
+# and activation fails closed. These three pairs preserve already-installed
+# control-plane fixes whose package-aware convergence required manual conflict
+# resolution rather than a byte-identical clean three-way merge.
+REVIEWED_HOT_PREDECESSORS = {
+    'lib/feature_store.py': {
+        '98e1799a87dfdd778b24fbc4bd84989d9f96080442305ebebe8dc22bd87ce275':
+        '9047119f4dcbfb0f6c8276261b9721c721c237be46e29ff1d1027570dc822f23',
+    },
+    'lib/feature_state.py': {
+        '054c3ac531884661dcc0d95449a2308613270ced1166f6cd3b66209e9268f301':
+        'd7fd5a7ad12af3d5bbe919c881514a1a6875cbd26a9d4d7953655843d1e2daff',
+    },
+    'lib/action_plan.py': {
+        '93f6dbc6e6cfbff2cf1687aaab6a30348ff8feb9a75387430695f0858f39cf73':
+        '0fd225f644db7aa98e0f2d7ec78c731f0c01e0ffb35dfff8a44dec4a08f93b42',
+    },
+}
+
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -113,6 +135,15 @@ def _subsumed_hot_runtime(incoming, old, current):
     return merged.returncode == 0 and _normalize(merged.stdout) == _normalize(incoming)
 
 
+def _reviewed_hot_predecessor(name, incoming, current):
+    """Accept only an exact live/body pair explicitly frozen in reviewed Source."""
+    if incoming is None or current is None:
+        return False
+    current_sha = sha(_normalize(current))
+    incoming_sha = sha(_normalize(incoming))
+    return REVIEWED_HOT_PREDECESSORS.get(name, {}).get(current_sha) == incoming_sha
+
+
 def activation_plan(root, repository, base):
     root, repository = Path(root).resolve(), Path(repository).resolve()
     if git(repository, 'status', '--porcelain').strip():
@@ -135,6 +166,8 @@ def activation_plan(root, repository, base):
                 result['compatibility'][name] = 'stale-committed-predecessor'
             elif old.returncode == 0 and _subsumed_hot_runtime(incoming, old.stdout, current):
                 result['compatibility'][name] = 'live-hot-change-subsumed-by-source'
+            elif _reviewed_hot_predecessor(name, incoming, current):
+                result['compatibility'][name] = 'reviewed-hot-predecessor'
             else:
                 result['conflicts'].append(name)
         elif current is None and old.returncode == 0:
