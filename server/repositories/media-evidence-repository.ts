@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   everydayFragments,
   journeys,
@@ -121,11 +121,17 @@ function sameDisplay(left: MediaDisplayState, right: MediaDisplayState) {
   );
 }
 
-async function assetBelongsToAtlas(
+function mediaOwnerInAtlas(atlasId: string) {
+  return or(
+    and(eq(journeys.atlasId, atlasId), isNull(journeys.deletionStartedAt)),
+    eq(everydayFragments.atlasId, atlasId),
+  );
+}
+
+async function lockAssetForAtlas(
   transaction: Transaction,
   atlasId: string,
   assetId: string,
-  lock: boolean,
 ) {
   const statement = sql`
     select ${mediaAssets.id} as id
@@ -134,12 +140,8 @@ async function assetBelongsToAtlas(
     left join ${everydayFragments}
       on ${everydayFragments.id} = ${mediaAssets.everydayFragmentId}
     where ${mediaAssets.id} = ${assetId}
-      and (
-        (${journeys.atlasId} = ${atlasId}
-          and ${journeys.deletionStartedAt} is null)
-        or ${everydayFragments.atlasId} = ${atlasId}
-      )
-    ${lock ? sql`for update of ${mediaAssets}` : sql``}
+      and ${mediaOwnerInAtlas(atlasId)}
+    for update of ${mediaAssets}
   `;
   const result = await transaction.execute<{ id: string }>(statement);
   return result.rows.length > 0;
@@ -160,10 +162,15 @@ export async function readMediaEvidenceForAtlas(
 ): Promise<MediaEvidenceRecord | null> {
   return db.transaction(
     async (transaction) => {
-      if (!await assetBelongsToAtlas(transaction, atlasId, assetId, false)) {
-        return null;
-      }
-      return fromRow(assetId, await readRow(transaction, assetId));
+      const [row] = await transaction
+        .select({ evidence: mediaAssetEvidence })
+        .from(mediaAssets)
+        .leftJoin(journeys, eq(journeys.id, mediaAssets.journeyId))
+        .leftJoin(everydayFragments, eq(everydayFragments.id, mediaAssets.everydayFragmentId))
+        .leftJoin(mediaAssetEvidence, eq(mediaAssetEvidence.mediaAssetId, mediaAssets.id))
+        .where(and(eq(mediaAssets.id, assetId), mediaOwnerInAtlas(atlasId)))
+        .limit(1);
+      return row ? fromRow(assetId, row.evidence ?? undefined) : null;
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
@@ -231,7 +238,7 @@ export async function writeRecordedMediaEvidenceForAtlas(
     if (!await lockActiveAtlas(transaction, atlasId)) {
       return { outcome: "asset-missing" } as const;
     }
-    if (!await assetBelongsToAtlas(transaction, atlasId, assetId, true)) {
+    if (!await lockAssetForAtlas(transaction, atlasId, assetId)) {
       return { outcome: "asset-missing" } as const;
     }
     const currentRow = await readRow(transaction, assetId);
@@ -275,7 +282,7 @@ export async function writeMediaDisplayStateForAtlas(
     if (!await lockActiveAtlas(transaction, atlasId)) {
       return { outcome: "asset-missing" } as const;
     }
-    if (!await assetBelongsToAtlas(transaction, atlasId, assetId, true)) {
+    if (!await lockAssetForAtlas(transaction, atlasId, assetId)) {
       return { outcome: "asset-missing" } as const;
     }
     const currentRow = await readRow(transaction, assetId);

@@ -245,6 +245,53 @@ describe("media evidence owner API", () => {
     expect(rows).toHaveLength(0);
   });
 
+  it("reads absent Fragment evidence as unknown and refuses another Atlas's Fragment", async () => {
+    const [foreignAtlas] = await db.insert(atlases).values({
+      organizationId: `fragment-evidence-${randomUUID()}`,
+      title: "Foreign Fragment Atlas",
+    }).returning({ id: atlases.id });
+    atlasIds.push(foreignAtlas.id);
+    const fragments = await db.insert(everydayFragments).values([
+      identity.atlasId, foreignAtlas.id,
+    ].map((atlasId) => ({
+      atlasId,
+      occurredOn: "2026-09-03",
+      latitude: 1.3521,
+      longitude: 103.8198,
+      placeLabel: "Singapore",
+      createdByUserId: identity.userId,
+    }))).returning({ id: everydayFragments.id });
+    const assets = await db.insert(mediaAssets).values(fragments.map((fragment) => ({
+      everydayFragmentId: fragment.id,
+      storageDriver: "disabled",
+      storageKey: `evidence/${randomUUID()}/fragment.jpg`,
+      fileName: "fragment.jpg",
+      mimeType: "image/jpeg",
+      bytes: 512,
+      uploadedByUserId: identity.userId,
+    }))).returning({ id: mediaAssets.id });
+
+    const response = await evidenceRequest(identity.cookie, assets[0].id);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      evidence: {
+        mediaAssetId: assets[0].id,
+        revision: 0,
+        recorded: {
+          spatial: { source: "unknown", latitude: null, longitude: null },
+          captureTime: { source: "unknown", timezone: "unknown" },
+        },
+        display: { hidden: false, correction: null },
+        effective: null,
+        updatedAt: null,
+      },
+    });
+    expect((await evidenceRequest(identity.cookie, assets[1].id)).status).toBe(404);
+    expect(await db.select().from(mediaAssetEvidence)
+      .where(inArray(mediaAssetEvidence.mediaAssetId, assets.map((asset) => asset.id))))
+      .toEqual([]);
+  });
+
   it("persists normalized evidence idempotently and revision-guards display changes", async () => {
     const first = await evidenceRequest(identity.cookie, assetId, "/recorded", {
       method: "PUT",
