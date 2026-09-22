@@ -104,7 +104,7 @@ async function writeCached(path: string, data: Buffer) {
 }
 
 type MapStyleReadResult =
-  | { ok: true; body: Buffer | string; contentType: string; maxAgeSeconds: number }
+  | { ok: true; body: Buffer<ArrayBuffer> | string; contentType: string; maxAgeSeconds: number }
   | { ok: false; message: string };
 
 async function fetchMapAsset(path: string, accept: string): Promise<
