@@ -25,7 +25,7 @@ import {
   reconcileUploadCandidates,
   type ReconciliationDependencies,
   type UploadRecord,
-} from "../routes/uploads";
+} from "../services/multipart-uploads";
 
 const TEST_ORIGIN = "http://127.0.0.1:5173";
 const atlasIds: string[] = [];
@@ -466,6 +466,33 @@ describe("dedupe, replay and recovery", () => {
     const replayed = await finalizeUpload(reread as UploadRecord, contentHash("6"));
     expect(replayed.id).toBe(asset.id);
     expect(await evidenceRowFor(asset.id)).toEqual(before);
+  });
+
+  it("returns the completed asset before reading a malformed replay body", async () => {
+    const upload = await startedUpload({ recordedEvidence: TOKYO_EVIDENCE });
+    const asset = await finalizeUpload(upload, contentHash("malformed-replay"));
+    const before = await evidenceRowFor(asset.id);
+
+    const response = await app.request(`${TEST_ORIGIN}/api/uploads/${upload.id}/complete`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: "{",
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ asset: { id: asset.id }, completed: true });
+    expect(await evidenceRowFor(asset.id)).toEqual(before);
+  });
+
+  it("returns upload-not-found before reading a malformed completion body", async () => {
+    const response = await app.request(`${TEST_ORIGIN}/api/uploads/${randomUUID()}/complete`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: "{",
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "UPLOAD_NOT_FOUND" });
   });
 
   it("never rewrites the evidence of an asset the same storage key already named", async () => {

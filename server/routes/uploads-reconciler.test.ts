@@ -4,7 +4,7 @@ import {
   reconcileUploadCandidates,
   type ReconciliationDependencies,
   type UploadRecord,
-} from "./uploads";
+} from "../services/multipart-uploads";
 
 const NOW = new Date("2026-08-14T12:00:00.000Z");
 const CUTOFF = new Date("2026-08-13T12:00:00.000Z");

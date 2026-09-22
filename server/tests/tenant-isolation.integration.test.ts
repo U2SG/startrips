@@ -24,11 +24,8 @@ import {
   setJourneyCoverForAtlas,
   updateJourneyForAtlas,
 } from "../repositories/journey-repository";
-import {
-  finalizeUpload as finalizeVerifiedUpload,
-  MAX_MOVE_UNDO_ORDER,
-  type MediaMoveUndo,
-} from "../routes/uploads";
+import { finalizeUpload as finalizeVerifiedUpload } from "../services/multipart-uploads";
+import { MAX_MOVE_UNDO_ORDER, type MediaMoveUndo } from "../media/upload-protocol";
 import { resolveJourneySaveRecovery } from "../../src/journey/journeySaveRecovery";
 import type { Journey, JourneyInput } from "../../src/journey/types";
 

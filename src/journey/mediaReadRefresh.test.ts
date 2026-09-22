@@ -4,8 +4,9 @@ import {
   mediaReadIsFresh,
   mediaReadRefreshAt,
   mediaReadRefreshDelayMs,
+  playbackReadIsReusable,
+  shouldRefreshStoryMediaRead,
 } from "./mediaReadRefresh";
-import { playbackReadIsReusable } from "./JourneyPlaybackOverlay";
 
 const OWNER_TTL_MS = 900_000;
 const SHARE_TTL_MS = 90_000;
@@ -117,5 +118,46 @@ describe("playbackReadIsReusable (#200 phase D)", () => {
       issuedAt: Number.NEGATIVE_INFINITY,
       expiresAt: Number.POSITIVE_INFINITY,
     }, ISSUED)).toBe(true);
+  });
+});
+
+describe("shouldRefreshStoryMediaRead (#204 final review)", () => {
+  const now = 1_000_000;
+
+  it("defers signed URL replacement for the video currently owned by Story autoplay", () => {
+    expect(shouldRefreshStoryMediaRead(
+      "video-1",
+      { status: "ready", expiresAt: now + 30_000 },
+      now,
+      "video-1",
+    )).toBe(false);
+  });
+
+  it("continues refreshing other expiring reads while autoplay owns a video", () => {
+    expect(shouldRefreshStoryMediaRead(
+      "image-2",
+      { status: "ready", expiresAt: now + 30_000 },
+      now,
+      "video-1",
+    )).toBe(true);
+  });
+
+  it("refreshes the video again after autoplay releases ownership", () => {
+    expect(shouldRefreshStoryMediaRead(
+      "video-1",
+      { status: "ready", expiresAt: now + 30_000 },
+      now,
+      null,
+    )).toBe(true);
+  });
+
+  it("does not refresh non-ready or non-expiring reads", () => {
+    expect(shouldRefreshStoryMediaRead("video-1", { status: "loading" }, now, null)).toBe(false);
+    expect(shouldRefreshStoryMediaRead(
+      "video-1",
+      { status: "ready", expiresAt: now + 120_000 },
+      now,
+      null,
+    )).toBe(false);
   });
 });

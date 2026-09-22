@@ -24,7 +24,7 @@ page.on("console", (message) => {
 page.on("pageerror", (error) => pageErrors.push(error.message));
 
 try {
-  await page.goto("http://127.0.0.1:4173/?quality=low", {
+  await page.goto("http://127.0.0.1:4173/?qaState=legacy-live&quality=low", {
     waitUntil: "networkidle",
   });
   await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 15_000 });

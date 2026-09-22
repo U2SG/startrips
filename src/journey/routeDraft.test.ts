@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   appendRoutePoint,
+  parseCoordinateInput,
+  routePointFocusAfterRemoval,
   matchRouteDraftPoints,
   moveRoutePoint,
   removeRoutePoint,
@@ -165,5 +167,31 @@ describe("route draft operations", () => {
       isStop: true,
       occurredAt: "2026-09-03T08:00:00.000Z",
     });
+  });
+});
+
+describe("route draft editor input and focus", () => {
+  it("does not silently turn an empty coordinate into zero", () => {
+    expect(parseCoordinateInput("", -90, 90)).toBeNull();
+    expect(parseCoordinateInput("   ", -180, 180)).toBeNull();
+    expect(parseCoordinateInput("0", -90, 90)).toBe(0);
+    expect(parseCoordinateInput("22.543096", -90, 90)).toBe(22.543096);
+    expect(parseCoordinateInput("-90", -90, 90)).toBe(-90);
+    expect(parseCoordinateInput("180", -180, 180)).toBe(180);
+    expect(parseCoordinateInput("90.000001", -90, 90)).toBeNull();
+    expect(parseCoordinateInput("-180.000001", -180, 180)).toBeNull();
+  });
+
+  it("chooses a deterministic surviving draftId for focus after delete", () => {
+    const points = [
+      { draftId: "point-a", latitude: 1, longitude: 1, label: "A", isStop: true, occurredAt: null },
+      { draftId: "point-b", latitude: 2, longitude: 2, label: "B", isStop: true, occurredAt: null },
+      { draftId: "point-c", latitude: 3, longitude: 3, label: "C", isStop: true, occurredAt: null },
+    ] satisfies RouteDraftPoint[];
+
+    expect(routePointFocusAfterRemoval(points, "point-b")).toBe("point-c");
+    expect(routePointFocusAfterRemoval(points, "point-c")).toBe("point-b");
+    expect(routePointFocusAfterRemoval([points[0]], "point-a")).toBeNull();
+    expect(routePointFocusAfterRemoval(points, "missing")).toBeNull();
   });
 });

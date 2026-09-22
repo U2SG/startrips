@@ -1,4 +1,41 @@
+import type { PendingJourneyMedia } from "./journeyDraftMedia";
+import type { JourneyMediaUploadResult } from "./journeyMediaUpload";
+import type { RouteDraftPoint } from "./routeDraft";
 import type { Journey, JourneyInput, RoutePointInput } from "./types";
+
+export type JourneySaveResult = {
+  journey: Journey;
+} & Pick<JourneyMediaUploadResult, "uploadedCount" | "mediaErrors">;
+
+export type UnknownJourneyCreateAttempt = {
+  input: JourneyInput;
+  knownJourneyIdsBeforeCreate: string[];
+  mode: "recheck" | "confirmation-required" | "ambiguous";
+  routePoints?: RouteDraftPoint[];
+  mediaFiles?: PendingJourneyMedia[];
+};
+
+export function unknownCreateRecheckMessage(hasPendingMedia: boolean) {
+  const sameSession = "你可以重新确认，或先关闭创建器，稍后在当前 Atlas 会话中重新打开继续核对。";
+  const pendingMediaNotice = hasPendingMedia
+    ? "当前会话会保留尚未上传的本地媒体和路线点归属；请不要刷新整个页面，刷新后这些本地内容需要重新选择。"
+    : "请继续在当前 Atlas 会话中核对，不要把刷新整个页面当作保留这次恢复状态的方式。";
+  return `暂时无法确认这段旅程是否已经保存。${sameSession}${pendingMediaNotice}关闭不会创建另一段 Journey，也不会把这次不确定结果当作未保存。`;
+}
+
+export function confirmationRequiredUnknownCreateMessage(hasPendingMedia: boolean) {
+  const pendingMediaNotice = hasPendingMedia
+    ? "当前会话仍会保留尚未上传的本地媒体和路线点归属；请不要刷新整个页面。"
+    : "";
+  return `检测到一条与本次提交内容完全相同、且在本次尝试后出现的 Journey，但当前系统没有能证明它属于这次保存请求的服务端尝试标识。为避免把其他会话创建的 Journey 当成本次结果，当前不会自动采用它、上传媒体或触发抵达焦点，也不会再次创建。请先关闭创建器，在 Atlas 中核对这条 Journey。${pendingMediaNotice}`;
+}
+
+export function ambiguousUnknownCreateMessage(hasPendingMedia: boolean) {
+  const refreshWarning = hasPendingMedia
+    ? "如果你选择刷新整个页面，尚未上传的本地媒体和路线点归属会丢失，需要重新选择。"
+    : "";
+  return `检测到多条与本次提交完全相同的新 Journey，无法安全判断哪一条属于这次保存。为避免重复创建，当前不会再次提交；请关闭创建器后在 Atlas 中核对这些 Journey。${refreshWarning}`;
+}
 
 export type JourneySaveRecoveryDecision =
   | { status: "not-persisted" }

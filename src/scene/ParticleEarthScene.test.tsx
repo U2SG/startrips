@@ -10,9 +10,10 @@ import {
 } from "three";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import type { GlobeMode } from "../experience/types";
+import { GLOBE_MODE_CONFIG, type GlobeMode } from "./globeMode";
+import { QUALITY_PROFILE } from "./renderBudget";
+import { isLocalPointInsideClipViewport, isSphericalPointVisible } from "./projection";
 import {
-  GLOBE_MODE_CONFIG,
   GLOBE_IDLE_ALIGNMENT_SPEED,
   GLOBE_IDLE_RELEASE_BLEND_MS,
   GLOBE_IDLE_RESUME_DELAY_MS,
@@ -35,7 +36,6 @@ import {
   resolveRouteLabelLimit,
   resolveRouteLabelSafeArea,
   resolveRouteVertexShare,
-  QUALITY_PROFILE,
   buildJourneyConnector,
   buildJourneyConnectorPath,
   advanceGlobeIdleReleasePhase,
@@ -55,9 +55,7 @@ import {
   isFocusFlightActive,
   isIdleRotationSuppressed,
   isGlobeUpright,
-  isSphericalPointVisible,
   isProjectedPointInsideViewport,
-  isLocalPointInsideClipViewport,
   nearestEquivalentRotation,
   releaseFailedParticleRefinementRequest,
   selectRenderableJourneyRoutes,

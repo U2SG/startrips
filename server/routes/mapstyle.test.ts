@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isAllowedOpenFreemapPath,
   rewriteOpenFreemapUrls,
-} from "./mapstyle";
+} from "../services/map-style-cache";
 
 describe("mapstyle proxy validation", () => {
   it("allows only known OpenFreeMap resource prefixes", () => {

@@ -81,7 +81,9 @@ async function mountApp() {
   const previewRequested = import.meta.env.DEV && !localDemo && (
     sharedQa || (!shared && knownAppPath && Boolean(params.get("qaState")))
   );
-  const previews = import.meta.env.DEV && previewRequested ? await import("./preview/qaEntry") : null;
+  const previews = import.meta.env.DEV && previewRequested
+    ? await (await import("./preview/qaEntry")).resolveQaExperience(params, sharedQa)
+    : null;
   const Experience = previews?.QaExperience ?? OwnerLivingAtlasApp;
 
   createRoot(document.getElementById("root")!).render(

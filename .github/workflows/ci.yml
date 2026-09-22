@@ -241,12 +241,13 @@ jobs:
               final-acceptance::pnpm qa:final-acceptance
               brand-signature-motion::pnpm qa:brand-signature-motion
           - name: shell-composer
-            suites: "|post-login|mobile-contract|composer-route-points|composer-mobile-ia|"
+            suites: "|post-login|mobile-contract|composer-route-points|composer-mobile-ia|entry-boundaries|"
             commands: |
               post-login::pnpm qa:post-login-controls
               mobile-contract::pnpm qa:mobile-contract
               composer-route-points::pnpm qa:composer-route-points
               composer-mobile-ia::pnpm qa:composer-mobile-ia
+              entry-boundaries::pnpm qa:entry-boundaries
           - name: globe-context
             suites: "|globe-focus-chrome|globe-render-budget|route-point-context|attention-hierarchy|"
             commands: |
@@ -343,6 +344,15 @@ jobs:
         with:
           name: composer-route-points-${{ github.run_attempt }}
           path: artifacts/composer-route-points/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload entry boundary QA
+        if: ${{ always() && steps.final-plan.outputs.ledger_only_final != 'true' && contains(matrix.suites, '|entry-boundaries|') }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: entry-boundaries-${{ github.run_attempt }}
+          path: artifacts/entry-boundaries/
           if-no-files-found: error
           retention-days: 7
 

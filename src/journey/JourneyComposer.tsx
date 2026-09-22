@@ -29,7 +29,6 @@ import { uploadMediaInParts } from "../api/multipartUpload";
 import {
   uploadJourneyMediaAssignments,
   type JourneyMediaUploadAssignment,
-  type JourneyMediaUploadResult,
   type UploadProgress,
 } from "./journeyMediaUpload";
 import {
@@ -40,18 +39,32 @@ import {
   searchLocations,
   updateJourney,
 } from "./journeyApi";
+import {
+  clearRemovedMediaTarget,
+  composerMediaSummary,
+  resolvePendingMediaUploads,
+  type PendingJourneyMedia,
+} from "./journeyDraftMedia";
 import { journeyLocationSearchErrorMessage } from "./journeyLocationSearchError";
 import {
+  ambiguousUnknownCreateMessage,
+  confirmationRequiredUnknownCreateMessage,
   resolveJourneySaveRecovery,
+  unknownCreateRecheckMessage,
+  type JourneySaveResult,
+  type UnknownJourneyCreateAttempt,
   type JourneySaveCallbackScope,
 } from "./journeySaveRecovery";
 import {
-  isVisualMediaAsset,
   validateJourneyFiles,
   validateJourneyInput,
 } from "./journeyModel";
 import {
   appendRoutePoint,
+  journeyToDraftPoints,
+  parseCoordinateInput,
+  routePointFocusAfterRemoval,
+  type GlobePointPick,
   matchRouteDraftPoints,
   moveRoutePoint,
   removeRoutePoint,
@@ -93,60 +106,6 @@ import {
 /** The upload allowlist the server enforces; every picker states the same one. */
 const MEDIA_FILE_ACCEPT = "image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm";
 
-export type JourneySaveResult = {
-  journey: Journey;
-} & Pick<JourneyMediaUploadResult, "uploadedCount" | "mediaErrors">;
-
-export type PendingJourneyMedia = {
-  file: File;
-  routePointDraftId: string | null;
-};
-
-export function composerMediaSummary(
-  journey: Pick<Journey, "media"> | null | undefined,
-  routePoints: readonly Pick<RouteDraftPoint, "id" | "draftId">[],
-  mediaFiles: readonly PendingJourneyMedia[],
-) {
-  type Names = { count: number; preview: string[] };
-  const persistedByPoint = new Map<string | null, Names>();
-  const pendingByDraft = new Map<string | null, Names>();
-  function appendName(groups: Map<string | null, Names>, id: string | null, name: string) {
-    let names = groups.get(id);
-    if (!names) {
-      names = { count: 0, preview: [] };
-      groups.set(id, names);
-    }
-    names.count += 1;
-    if (names.preview.length < 2) names.preview.push(name);
-  }
-
-  let existingVisualMediaCount = 0;
-  for (const media of journey?.media ?? []) {
-    if (!isVisualMediaAsset(media)) continue;
-    existingVisualMediaCount += 1;
-    appendName(persistedByPoint, media.routePointId, media.fileName);
-  }
-  for (const media of mediaFiles) {
-    appendName(pendingByDraft, media.routePointDraftId, media.file.name);
-  }
-
-  const byDraftId = new Map<string, { count: number; label: string }>();
-  for (const point of routePoints) {
-    const persisted = point.id ? persistedByPoint.get(point.id) : undefined;
-    const pending = pendingByDraft.get(point.draftId);
-    const count = (persisted?.count ?? 0) + (pending?.count ?? 0);
-    // Composer preserves model order, followed by the pending file order.
-    // Draft ids are separate from persisted ids, including an unsaved point.
-    const preview = [...(persisted?.preview ?? []), ...(pending?.preview ?? [])]
-      .slice(0, 2).join("、");
-    byDraftId.set(point.draftId, {
-      count,
-      label: count === 0 ? "暂无媒体归属此地点" : `${preview}${count > 2 ? ` 等 ${count} 个` : ""}`,
-    });
-  }
-  return { existingVisualMediaCount, byDraftId };
-}
-
 type PersistJourneyDraftOptions = {
   input: JourneyInput;
   mediaFiles: readonly PendingJourneyMedia[];
@@ -155,45 +114,6 @@ type PersistJourneyDraftOptions = {
   upload?: typeof uploadMediaInParts;
   onProgress?: (progress: UploadProgress) => void;
 };
-
-export function resolvePendingMediaUploads(
-  mediaFiles: readonly PendingJourneyMedia[],
-  routePoints: readonly RouteDraftPoint[],
-  journey: Journey,
-): JourneyMediaUploadAssignment[] {
-  return mediaFiles.map(({ file, routePointDraftId }) => {
-    if (!routePointDraftId) return { file };
-    const draftIndex = routePoints.findIndex((point) => point.draftId === routePointDraftId);
-    const draftPoint = routePoints[draftIndex];
-    const persistedPoint = draftPoint?.id
-      ? journey.routePoints.find((point) => point.id === draftPoint.id)
-      : journey.routePoints.find((point) => point.sortOrder === draftIndex);
-    if (!persistedPoint) {
-      throw new Error("旅程已保存，但媒体归属无法确认；请重新打开旅程后添加媒体。");
-    }
-    return { file, routePointId: persistedPoint.id };
-  });
-}
-
-export function clearRemovedMediaTarget(
-  mediaFiles: readonly PendingJourneyMedia[],
-  routePointDraftId: string,
-): PendingJourneyMedia[] {
-  return mediaFiles.map((media) => (
-    media.routePointDraftId === routePointDraftId
-      ? { ...media, routePointDraftId: null }
-      : media
-  ));
-}
-
-export function routePointFocusAfterRemoval(
-  routePoints: readonly RouteDraftPoint[],
-  routePointDraftId: string,
-): string | null {
-  const index = routePoints.findIndex((point) => point.draftId === routePointDraftId);
-  if (index < 0) return null;
-  return routePoints[index + 1]?.draftId ?? routePoints[index - 1]?.draftId ?? null;
-}
 
 export class JourneyMediaContinuationError extends Error {
   readonly journey: Journey;
@@ -237,41 +157,6 @@ export async function reconcileUnknownJourneyCreate(
     await readJourneys(),
     { knownJourneyIdsBeforeCreate },
   );
-}
-
-export type GlobePointPick = {
-  latitude: number;
-  longitude: number;
-};
-
-export type UnknownJourneyCreateAttempt = {
-  input: JourneyInput;
-  knownJourneyIdsBeforeCreate: string[];
-  mode: "recheck" | "confirmation-required" | "ambiguous";
-  routePoints?: RouteDraftPoint[];
-  mediaFiles?: PendingJourneyMedia[];
-};
-
-export function unknownCreateRecheckMessage(hasPendingMedia: boolean) {
-  const sameSession = "你可以重新确认，或先关闭创建器，稍后在当前 Atlas 会话中重新打开继续核对。";
-  const pendingMediaNotice = hasPendingMedia
-    ? "当前会话会保留尚未上传的本地媒体和路线点归属；请不要刷新整个页面，刷新后这些本地内容需要重新选择。"
-    : "请继续在当前 Atlas 会话中核对，不要把刷新整个页面当作保留这次恢复状态的方式。";
-  return `暂时无法确认这段旅程是否已经保存。${sameSession}${pendingMediaNotice}关闭不会创建另一段 Journey，也不会把这次不确定结果当作未保存。`;
-}
-
-function confirmationRequiredUnknownCreateMessage(hasPendingMedia: boolean) {
-  const pendingMediaNotice = hasPendingMedia
-    ? "当前会话仍会保留尚未上传的本地媒体和路线点归属；请不要刷新整个页面。"
-    : "";
-  return `检测到一条与本次提交内容完全相同、且在本次尝试后出现的 Journey，但当前系统没有能证明它属于这次保存请求的服务端尝试标识。为避免把其他会话创建的 Journey 当成本次结果，当前不会自动采用它、上传媒体或触发抵达焦点，也不会再次创建。请先关闭创建器，在 Atlas 中核对这条 Journey。${pendingMediaNotice}`;
-}
-
-function ambiguousUnknownCreateMessage(hasPendingMedia: boolean) {
-  const refreshWarning = hasPendingMedia
-    ? "如果你选择刷新整个页面，尚未上传的本地媒体和路线点归属会丢失，需要重新选择。"
-    : "";
-  return `检测到多条与本次提交完全相同的新 Journey，无法安全判断哪一条属于这次保存。为避免重复创建，当前不会再次提交；请关闭创建器后在 Atlas 中核对这些 Journey。${refreshWarning}`;
 }
 
 type JourneyComposerProps = {
@@ -331,39 +216,9 @@ function toDraftPoint(
   };
 }
 
-export function journeyToDraftPoints(journey: Journey): RouteDraftPoint[] {
-  return journey.routePoints.map((point) => ({
-    draftId: `saved-${point.id}`,
-    id: point.id,
-    latitude: point.latitude,
-    longitude: point.longitude,
-    label: point.label,
-    isStop: point.isStop,
-    occurredAt: point.occurredAt,
-    // #10: echo the existing note back so a whole-list replace never clears
-    // it; absent notes stay absent.
-    note: point.note ?? null,
-  }));
-}
-
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-export function parseCoordinateInput(
-  value: string,
-  minimum: number,
-  maximum: number,
-) {
-  const normalized = value.trim();
-  if (!normalized) return null;
-  const coordinate = Number(normalized);
-  return Number.isFinite(coordinate)
-    && coordinate >= minimum
-    && coordinate <= maximum
-    ? coordinate
-    : null;
 }
 
 export function JourneyComposer({

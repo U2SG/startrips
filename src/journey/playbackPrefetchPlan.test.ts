@@ -7,8 +7,7 @@ import {
   readyMsAheadForTempo,
 } from "./playbackPrefetchPlan";
 import { PLAYBACK_TEMPO_PROFILES, type PlaybackTempo } from "./journeyPlaybackPlan";
-import { buildPlaybackSteps, playbackMediaForPoint, playbackStepIdentity } from "./journeyPlayback";
-import { playbackHoldTargetMedia } from "./JourneyPlaybackOverlay";
+import { buildPlaybackSteps, playbackMediaForPoint, playbackStepIdentity, playbackHoldTargetMedia } from "./journeyPlayback";
 import { resolvePlaybackSessionHomeContextSnapshot } from "./useJourneyPlaybackDirector";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 

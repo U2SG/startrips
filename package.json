@@ -22,6 +22,7 @@
     "qa:states": "node scripts/capture-comparison-states.mjs",
     "qa:memory": "node scripts/check-earth-memory.mjs",
     "qa:preview": "node scripts/preview-qa.mjs",
+    "qa:entry-boundaries": "node scripts/qa-entry-boundaries.mjs",
     "qa:live-globe": "node scripts/qa-live-globe.mjs",
     "qa:globe-interaction": "node scripts/qa-globe-interaction.mjs",
     "qa:particle-spatial-lod": "node scripts/qa-particle-spatial-lod.mjs",

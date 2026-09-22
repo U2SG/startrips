@@ -28,7 +28,7 @@ import {
   Vector3,
   WebGLRenderer,
 } from "three";
-import type { GlobeMode } from "../experience/types";
+import { GLOBE_MODE_CONFIG, type GlobeMode } from "./globeMode";
 import { getLightEffectPalette } from "../journey/lightEffects";
 import {
   audioAtmosphereGains,
@@ -152,7 +152,7 @@ import {
   type GeoProjectionFrame,
 } from "./projection";
 import type { ParticleAnchorFrame } from "./detailedEarthModel";
-import { resolveRenderBudget, type ResolvedRenderBudget } from "./renderBudget";
+import { QUALITY_PROFILE, resolveRenderBudget, type ResolvedRenderBudget } from "./renderBudget";
 import {
   globeRenderStateRunsScene,
   resolveGlobeRenderState,
@@ -179,11 +179,6 @@ import {
   visitedImprintZoomAttenuation,
   type VisitedImprintField,
 } from "./visitedImprint";
-
-export const QUALITY_PROFILE = {
-  low: { particleCount: 12_000, maxDpr: 1, maxDrawingBufferPixels: 1_500_000 },
-  high: { particleCount: 28_000, maxDpr: 2, maxDrawingBufferPixels: 4_000_000 },
-} as const;
 
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
@@ -312,7 +307,6 @@ export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
 export const CITY_LABEL_BUDGET = 72;
 export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
 export const COASTLINE_LOD_VERTEX_BUDGET = { far: 20_000, mid: 32_000, near: 52_000 } as const;
-export type CoastlineLod = keyof typeof COASTLINE_LOD_VERTEX_BUDGET;
 /**
  * #237 Phase A - the coastline reads above the particle surface through DEPTH,
  * not through a larger radius.
@@ -632,14 +626,6 @@ export function getGlobeIdleAlignmentRotation(
   return rotation + Math.sign(remaining) * maxStep;
 }
 
-export function coastlineLodWeights(zoom: number): Record<CoastlineLod, number> {
-  return resolveGlobeSemanticZoom({ zoom }).coastlineWeights;
-}
-
-export function activeCoastlineLod(zoom: number): CoastlineLod {
-  return resolveGlobeSemanticZoom({ zoom }).coastlineLod;
-}
-
 export function getProjectedGlobeRadiusPx(
   viewportHeight: number,
   verticalFovRadians: number,
@@ -811,13 +797,6 @@ export function getRouteFocusPhase(
   if (hasRouteFocus) return routeFocusSettling ? "flying" : "settled";
   return routeFocusZoomResetting ? "releasing" : "idle";
 }
-
-/**
- * #237: horizon occlusion and the cheap clip-space scan are properties of the
- * shared projection frame, so they live in ./projection. They stay exported
- * here because they are part of this module's established surface.
- */
-export { isLocalPointInsideClipViewport, isSphericalPointVisible };
 
 export function isProjectedPointInsideViewport(
   x: number,
@@ -1233,91 +1212,6 @@ function estimateRouteLabelWidth(label: string) {
   ), 0);
   return Math.min(184, Math.max(42, width));
 }
-
-export const GLOBE_MODE_CONFIG: Record<
-  GlobeMode,
-  {
-    x: number;
-    y: number;
-    scale: number;
-    burst: number;
-    particleOpacity: number;
-    shellOpacity: number;
-    haloOpacity: number;
-    surfaceOpacity: number;
-    signalOpacity: number;
-    clusterOpacity: number;
-    personalOpacity: number;
-    rotationY: number;
-    wireOpacity: number;
-    coastlineOpacity: number;
-  }
-> = {
-  particleSphere: {
-    x: 0.05,
-    y: 0.04,
-    scale: 0.93,
-    burst: 0,
-    particleOpacity: 0.12,
-    shellOpacity: 1,
-    haloOpacity: 0.55,
-    surfaceOpacity: 0,
-    signalOpacity: 0.8,
-    clusterOpacity: 0,
-    personalOpacity: 0.72,
-    rotationY: 0,
-    wireOpacity: 0.025,
-    coastlineOpacity: 0.12,
-  },
-  archiveBurst: {
-    x: 0.25,
-    y: 0.02,
-    scale: 0.98,
-    burst: 0.15,
-    particleOpacity: 0.66,
-    shellOpacity: 0.18,
-    haloOpacity: 0.03,
-    surfaceOpacity: 0,
-    signalOpacity: 1,
-    clusterOpacity: 0.16,
-    personalOpacity: 1,
-    rotationY: -1.92,
-    wireOpacity: 0.022,
-    coastlineOpacity: 0.18,
-  },
-  surfaceEarth: {
-    x: 0.12,
-    y: -0.12,
-    scale: 1.15,
-    burst: 0,
-    particleOpacity: 0.025,
-    shellOpacity: 0.005,
-    haloOpacity: 0,
-    surfaceOpacity: 1,
-    signalOpacity: 0.16,
-    clusterOpacity: 0,
-    personalOpacity: 0,
-    rotationY: -1.92,
-    wireOpacity: 0,
-    coastlineOpacity: 0.42,
-  },
-  focusPoint: {
-    x: 0.7,
-    y: -0.23,
-    scale: 1.15,
-    burst: 0,
-    particleOpacity: 0.62,
-    shellOpacity: 0.18,
-    haloOpacity: 0.05,
-    surfaceOpacity: 0.22,
-    signalOpacity: 0.72,
-    clusterOpacity: 0,
-    personalOpacity: 1,
-    rotationY: -1.57,
-    wireOpacity: 0.018,
-    coastlineOpacity: 0.3,
-  },
-};
 
 interface ParticleEarthSceneProps {
   mode: GlobeMode;
