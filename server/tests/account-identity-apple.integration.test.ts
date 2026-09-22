@@ -106,6 +106,7 @@ function signIdToken(claims: Record<string, unknown>): string {
 function appleIdToken(values: {
   subject: string;
   email?: string | null;
+  name?: string;
   emailVerified?: boolean | "true" | "false";
   audience?: string;
   issuedAt?: number;
@@ -122,6 +123,7 @@ function appleIdToken(values: {
     ...(values.email === undefined ? {} : values.email === null
       ? {}
       : { email: values.email }),
+    ...(values.name === undefined ? {} : { name: values.name }),
     ...(values.emailVerified === undefined
       ? {}
       : { email_verified: values.emailVerified }),
@@ -304,6 +306,35 @@ async function usersFor(subject: string) {
     ));
 }
 
+/** The stored profile of one user, so a later callback can be proved not to have touched it. */
+async function userRow(userId: string) {
+  const [row] = await db
+    .select({
+      name: authUser.name,
+      email: authUser.email,
+      emailVerified: authUser.emailVerified,
+      image: authUser.image,
+    })
+    .from(authUser)
+    .where(eq(authUser.id, userId));
+  return row;
+}
+
+/** The ST-067 ownership row `accountIdentityUsable` reads, for one Apple subject. */
+async function ownershipFor(subject: string) {
+  const [row] = await db
+    .select({
+      providerEmail: accountIdentityOwnerships.providerEmail,
+      providerEmailVerified: accountIdentityOwnerships.providerEmailVerified,
+    })
+    .from(accountIdentityOwnerships)
+    .where(and(
+      eq(accountIdentityOwnerships.providerId, APPLE_PROVIDER_ID),
+      eq(accountIdentityOwnerships.providerSubject, subject),
+    ));
+  return row;
+}
+
 async function userCountForEmail(email: string) {
   const rows = await db
     .select({ id: authUser.id })
@@ -400,7 +431,7 @@ describe("Apple sign-in", () => {
     expect(await usersFor(subject)).toEqual(accounts);
   });
 
-  it("refuses a returning authorization that carries no email", async () => {
+  it("refuses an UNKNOWN subject that carries no email", async () => {
     const subject = `apple-subject-nomail-${RUN}`;
     const outcome = await completeAuthorization({
       idToken: appleIdToken({ subject }),
@@ -408,6 +439,46 @@ describe("Apple sign-in", () => {
     expect(outcome.error).toBe("email_not_found");
     expect(outcome.sessionCookie).toBeNull();
     expect(await usersFor(subject)).toHaveLength(0);
+  });
+
+  // #350: Apple sends `email` only on the FIRST authorization. Every later one
+  // carries the stable `sub` alone, and the issue requires that to still sign
+  // the same person in -- without clearing the profile Apple did send once and
+  // without minting a second user. The pinned callback refuses `!email` before
+  // it looks the provider account up, so the subject has to be resolved first.
+  it("signs a returning subject back in when Apple omits the email", async () => {
+    const subject = `apple-subject-returning-${RUN}`;
+    const email = `apple-returning-${RUN}@example.test`;
+    const first = await completeAuthorization({
+      idToken: appleIdToken({
+        subject,
+        email,
+        emailVerified: true,
+        name: "Apple Returning",
+      }),
+    });
+    expect(first.error).toBeNull();
+    const established = await usersFor(subject);
+    expect(established).toHaveLength(1);
+    const userId = established[0].id;
+    const before = await userRow(userId);
+    const ownershipBefore = await ownershipFor(subject);
+    expect(ownershipBefore?.providerEmailVerified).toBe(true);
+
+    const returning = await completeAuthorization({ idToken: appleIdToken({ subject }) });
+    expect(returning.error).toBeNull();
+    expect(returning.sessionCookie).toBeTruthy();
+
+    // Same user, one account row, no second Startrips user.
+    expect(await usersFor(subject)).toEqual(established);
+    expect(await userCountForEmail(email)).toBe(1);
+    // The profile Apple sent once survives an authorization that sent none.
+    expect(await userRow(userId)).toEqual(before);
+    // And the recorded provider claim is not downgraded by the silence: the
+    // method stays usable per #345's last-usable-fallback rule.
+    const ownershipAfter = await ownershipFor(subject);
+    expect(ownershipAfter?.providerEmail).toBe(ownershipBefore?.providerEmail);
+    expect(ownershipAfter?.providerEmailVerified).toBe(true);
   });
 
   it("refuses a used state, so a replayed callback cannot mint a second identity", async () => {

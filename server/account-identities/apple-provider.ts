@@ -1,6 +1,9 @@
+import { and, eq } from "drizzle-orm";
 import type { OAuth2Tokens } from "better-auth/oauth2";
 import { apple, type AppleOptions } from "better-auth/social-providers";
 import { serverConfig, type ServerConfig } from "../config";
+import { db } from "../db/client";
+import { account as authAccount, user as authUser } from "../db/auth-schema";
 import {
   appleSigningCredential,
   createAppleClientSecretSource,
@@ -92,6 +95,49 @@ async function verifiedUserInfo(adapter: AppleAdapter, tokens: OAuth2Tokens) {
 }
 
 /**
+ * #350: the account this Apple subject is ALREADY bound to, if any.
+ *
+ * Apple sends `email` only on the very first authorization. Every later one
+ * carries the stable `sub` and nothing else, and the pinned 1.6.23
+ * `api/routes/callback.mjs` refuses `!userInfo.email` with `email_not_found`
+ * BEFORE it looks the provider account up -- so without this, a returning
+ * Apple user could never sign in again, which #350's second acceptance bullet
+ * forbids ("後續缺少姓名/郵箱仍可憑既有 subject 登入").
+ *
+ * The lookup is keyed on the account row `(providerId, accountId)` and on
+ * nothing else. It never queries by email, so it cannot become the
+ * auto-link-by-email path #345/#350 forbid: an unknown subject finds no row,
+ * the claims are returned untouched and `email_not_found` still stands. The
+ * email it hands back is the bound user's OWN address, so the identity is
+ * resolved by subject and the address only satisfies the library's gate.
+ *
+ * Only the sign-in resolution needs it. The callback's `link` branch runs
+ * earlier and compares the claim to the linking account's own address, but
+ * `/link-social` is in `STARTRIPS_DISABLED_IDENTITY_PATHS` and
+ * `accountLinking.enabled` is false, so that branch is unreachable here.
+ */
+async function boundIdentityEmail(
+  subject: string,
+): Promise<{ email: string; emailVerified: boolean } | null> {
+  const [row] = await db
+    .select({ email: authUser.email, emailVerified: authUser.emailVerified })
+    .from(authAccount)
+    .innerJoin(authUser, eq(authUser.id, authAccount.userId))
+    .where(and(
+      eq(authAccount.providerId, APPLE_PROVIDER_ID),
+      eq(authAccount.accountId, subject),
+    ))
+    .limit(1);
+  if (!row?.email) return null;
+  // The user's own stored flag, not `true`: `handleOAuthUserInfo` lifts
+  // `user.emailVerified` when a verified provider claim arrives for the same
+  // address, and this authorization carried no claim at all. Echoing the
+  // stored value keeps that comparison a no-op in both directions, so no
+  // verification is granted that Apple did not assert.
+  return { email: row.email, emailVerified: Boolean(row.emailVerified) };
+}
+
+/**
  * The options handed to `betterAuth({ socialProviders })`.
  *
  * The returned object is built field by field rather than spread from `base`:
@@ -122,6 +168,25 @@ export function appleSignInOptions(
     async getUserInfo(tokens) {
       const info = await verifiedUserInfo(baseProvider, tokens);
       const subject = info?.user?.id === undefined ? "" : String(info.user.id);
+      if (info && subject && (info.user.email ?? null) === null) {
+        // A returning authorization that carried no email. Recover the bound
+        // account by subject, or leave the refusal in place.
+        const bound = await boundIdentityEmail(subject);
+        if (!bound) return info;
+        // Deliberately NO `rememberVerifiedProviderIdentity` here. This
+        // callback refreshes the stored tokens of an existing account, which
+        // fires `databaseHooks.account.update.after`; a pending identity
+        // carrying `email: null, emailVerified: false` would overwrite the
+        // ownership row's `providerEmail`/`providerEmailVerified` and
+        // downgrade a previously verified method to unusable -- the exact
+        // last-usable-fallback protection #345 asks for. Apple retracted
+        // nothing by staying silent, so the recorded claim stays as it was:
+        // the hook finds no pending identity and writes nothing.
+        return {
+          ...info,
+          user: { ...info.user, email: bound.email, emailVerified: bound.emailVerified },
+        };
+      }
       if (info && subject) {
         const email = info.user.email ?? null;
         rememberVerifiedProviderIdentity({

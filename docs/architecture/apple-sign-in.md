@@ -121,6 +121,32 @@ sign-in and returning sign-in to work, and explicit binding of an Apple subject
 to an existing account to be unavailable and unoffered rather than offered and
 broken. Issue #504 tracks building that path.
 
+## A returning authorization carries only the subject
+
+Apple releases `email` and `name` on the **first** authorization for an app and
+never again. Every later authorization carries the stable `sub` and nothing
+else. The pinned Better Auth 1.6.23 `api/routes/callback.mjs` refuses
+`!userInfo.email` with `email_not_found` *before* it looks the provider account
+up, so a returning Apple user would otherwise be locked out of an account they
+had already created.
+
+`appleSignInOptions`'s `getUserInfo` closes that on the only seam the library
+leaves. When the verified claims carry no address it looks the account row up by
+`(providerId = "apple", accountId = sub)` — by subject, never by email — and
+hands the library that bound user's own address back. An **unknown** subject
+finds no row, the claims are returned untouched and `email_not_found` still
+stands, so this is not an email-matching path: it can only ever resolve a
+subject that is already bound.
+
+Two things it deliberately does not do. It echoes the stored `emailVerified`
+rather than asserting `true`, so no verification is granted that Apple did not
+send. And it records no pending identity, so the
+`databaseHooks.account.update.after` refresh finds nothing and leaves the
+ownership row's `providerEmail`/`providerEmailVerified` as the authorization
+that *did* carry a claim recorded them — silence from Apple is not a retraction,
+and a downgrade here would read as an unusable method under #345's
+last-usable-fallback rule.
+
 A first-time Apple signup does record an ST-067 ownership row: the verified
 identity taken from the callback is carried across by
 `rememberVerifiedProviderIdentity` and consumed in `databaseHooks.account.create`
@@ -135,7 +161,8 @@ recovery still depends on the account's own verified address.
 ## What CI does not prove
 
 The fake-provider tests run Better Auth's real Apple adapter against a fake
-Apple. They cover first-time signup, a returning authorization with no email, a
+Apple. They cover first-time signup, a returning authorization with no email signing
+the same subject back in, an unknown subject with no email being refused, a
 relay address, a rejected client secret, a wrong audience, a stale id token, a
 mismatched nonce, a replayed callback and a duplicate concurrent callback.
 
