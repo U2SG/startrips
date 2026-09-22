@@ -4501,13 +4501,15 @@
   font-size: 11px;
 }
 
-.journey-precise-location {
+.journey-precise-location,
+.journey-itinerary-import-panel {
   margin-top: 24px;
   border-top: 1px solid rgba(122, 244, 237, 0.16);
   border-bottom: 1px solid rgba(122, 244, 237, 0.16);
 }
 
-.journey-precise-location summary {
+.journey-precise-location summary,
+.journey-itinerary-import-panel summary {
   min-height: 66px;
   display: flex;
   align-items: center;
@@ -4518,11 +4520,13 @@
   list-style: none;
 }
 
-.journey-precise-location summary::-webkit-details-marker {
+.journey-precise-location summary::-webkit-details-marker,
+.journey-itinerary-import-panel summary::-webkit-details-marker {
   display: none;
 }
 
-.journey-precise-location summary > span {
+.journey-precise-location summary > span,
+.journey-itinerary-import-panel summary > span {
   display: inline-flex;
   align-items: center;
   gap: 9px;
@@ -4530,18 +4534,21 @@
   font-size: 13px;
 }
 
-.journey-precise-location summary > small {
+.journey-precise-location summary > small,
+.journey-itinerary-import-panel summary > small {
   color: #536963;
   font-size: 11px;
 }
 
-.journey-precise-location__chevron {
+.journey-precise-location__chevron,
+.journey-itinerary-import-panel__chevron {
   flex: 0 0 auto;
   color: var(--atlas-acid);
   transition: transform var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
 }
 
-.journey-precise-location[open] .journey-precise-location__chevron {
+.journey-precise-location[open] .journey-precise-location__chevron,
+.journey-itinerary-import-panel[open] .journey-itinerary-import-panel__chevron {
   transform: rotate(180deg);
 }
 

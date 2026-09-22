@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   IconChevronDown,
   IconMapPin,
@@ -75,15 +75,18 @@ export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props
   const [candidates, setCandidates] = useState<
     { entryId: string; results: LocationSearchResult[] } | null
   >(null);
-  const imageInputRef = useRef<HTMLInputElement | null>(null);
-
+  // What this deployment supports is asked for when the member chooses an
+  // entry point that needs a provider, not when the Composer mounts. Pasting
+  // text needs neither adapter, so building a Journey by hand never waits on,
+  // or fails because of, a capability nobody asked about.
   useEffect(() => {
+    if (mode === "text") return;
     const controller = new AbortController();
     readItineraryCapabilities(fetch, controller.signal)
       .then(setCapabilities)
       .catch(() => setCapabilities(null));
     return () => controller.abort();
-  }, []);
+  }, [mode]);
 
   const receive = useCallback((next: ItineraryImportDraft) => {
     setDraft(next);
@@ -211,11 +214,14 @@ export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props
     : 0;
 
   return (
-    <details className="journey-precise-location" open={mobileLayout || undefined}>
+    <details
+      className="journey-itinerary-import-panel"
+      open={mobileLayout || undefined}
+    >
       <summary>
         <span><IconUpload size={17} stroke={1.35} aria-hidden="true" />导入已有行程</span>
         <small>链接、截图或粘贴文本</small>
-        <IconChevronDown className="journey-precise-location__chevron" size={17} stroke={1.35} aria-hidden="true" />
+        <IconChevronDown className="journey-itinerary-import-panel__chevron" size={17} stroke={1.35} aria-hidden="true" />
       </summary>
 
       <div className="journey-itinerary-import">
@@ -275,7 +281,6 @@ export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props
           <label className="journey-itinerary-import__field">
             <span>行程截图</span>
             <input
-              ref={imageInputRef}
               type="file"
               accept="image/png,image/jpeg,image/webp"
               onChange={(event) => {
