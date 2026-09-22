@@ -127,8 +127,17 @@ def _verify_package_review(root, fid, number, relation, snapshot):
         raise EvidenceUnknown(str(exc)) from exc
 
 
-def _apply_unit_state(path, fid, *, status, passes, message, operation='unit', completion=None):
-    doc = load_document(path); rows = unit_rows(doc, fid); allowed = {}
+def _apply_unit_state(path, fid, *, status, passes, message, operation='unit', completion=None,
+                      expected_doc=None, expected_unit_token=None):
+    # Terminal package proof is expensive and must stay bound to the exact ONE
+    # unit observed before that proof began.  Re-loading here would allow a newer
+    # legal lifecycle transition to become the baseline for stale review/main
+    # evidence and then be overwritten.  commit_document already compares every
+    # expected row to expected_doc.original at write time.
+    doc = expected_doc if expected_doc is not None else load_document(path)
+    if expected_unit_token is not None and unit_token(doc, fid) != expected_unit_token:
+        raise StoreConflict('Delivery unit changed before terminal write; stale proof discarded')
+    rows = unit_rows(doc, fid); allowed = {}
     for row in rows:
         row.update(status=status, passes=passes)
         if completion is not None:
@@ -170,6 +179,8 @@ def reconcile(path, repo, base):
             pr = api('repos/' + repo + '/pulls/' + str(number))
             package = package_snapshot(doc, fid)
             if pr.get('merged'):
+                package_token = unit_token(doc, fid) if package else None
+                current_issues = None
                 if package:
                     current_issues = live_issues(doc, fid, repo)
                     assert_current(doc, fid, current_issues)
@@ -179,10 +190,19 @@ def reconcile(path, repo, base):
                 _verify_package_ledger(repo, number, proof['main_sha'], package)
                 completion = None
                 if package:
+                    # Source/main/ledger reads above can be slow.  Re-observe the
+                    # complete member window only after they finish and compare
+                    # the package-wide snapshot, so an issue that moved after its
+                    # earlier per-member read cannot still reach terminal state.
+                    final_issues = live_issues(doc, fid, repo)
+                    if final_issues != current_issues:
+                        raise EvidenceUnknown('Package member issues changed during terminal proof')
+                    assert_current(doc, fid, final_issues)
                     completion = {**proof, 'contract_sha256': package['contract_sha256']}
                 result = _apply_unit_state(path, fid, status='passed', passes=True,
                     message='Exact merge/main-CI delivery-unit reconcile ' + json.dumps(proof, sort_keys=True),
-                    operation='reconcile' if package else 'unit', completion=completion)
+                    operation='reconcile' if package else 'unit', completion=completion,
+                    expected_doc=doc if package else None, expected_unit_token=package_token)
                 print(fid + ': ' + json.dumps(result))
             elif pr.get('state') == 'closed':
                 if any(row.get('status') != 'needs_work' for row in rows):

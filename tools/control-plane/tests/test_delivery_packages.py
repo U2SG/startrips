@@ -276,6 +276,51 @@ class DeliveryContractTests(unittest.TestCase):
             self.assertEqual(6,state.reconcile(self.path,REPO,'main'))
         self.assertEqual(before,self.path.read_bytes())
 
+    def test_issue_drift_during_terminal_proof_blocks_package_completion(self):
+        lead,member=package_rows(status='ready_to_merge',pr=True)
+        self.path.write_text(json.dumps(document(lead,member),indent=2)+'\n',encoding='utf-8')
+        contract=delivery.snapshot(document(lead,member),'ST-001')
+        write_review_receipt(self.root, contract)
+        observed=issue_observations(lead,member)
+        drift=copy.deepcopy(observed)
+        drift['ST-001']['comments']={'88':'decision-arrived-during-proof'}
+        proof={'merge_sha':A,'main_sha':B,'main_ci':77,'main_ci_attempt':1}
+        before=self.path.read_bytes()
+        with mock.patch.object(state,'api',return_value={'merged':True}), \
+             mock.patch.object(state,'live_issues',side_effect=[observed,drift]), \
+             mock.patch.object(state,'source_relation',return_value={'source_sha':A}), \
+             mock.patch.object(state,'merge_proof',return_value=proof), \
+             mock.patch.object(state,'_verify_package_ledger'):
+            self.assertEqual(6,state.reconcile(self.path,REPO,'main'))
+        self.assertEqual(before,self.path.read_bytes())
+
+    def test_one_lifecycle_drift_during_terminal_proof_is_not_overwritten(self):
+        lead,member=package_rows(status='ready_to_merge',pr=True)
+        self.path.write_text(json.dumps(document(lead,member),indent=2)+'\n',encoding='utf-8')
+        contract=delivery.snapshot(document(lead,member),'ST-001')
+        write_review_receipt(self.root, contract)
+        observed=issue_observations(lead,member)
+        proof={'merge_sha':A,'main_sha':B,'main_ci':77,'main_ci_attempt':1}
+
+        def concurrent_lifecycle_change(*_args):
+            newer=store.load_document(self.path)
+            changed=delivery.unit_rows(newer,'ST-001')
+            for item in changed:
+                item.update(status='needs_work',passes=False)
+            store.commit_document(self.path,newer,
+                allowed={item['id']:{'status','passes'} for item in changed},
+                expected_rows={item['id'] for item in changed}, delivery_operation='unit')
+
+        with mock.patch.object(state,'api',return_value={'merged':True}), \
+             mock.patch.object(state,'live_issues',return_value=observed), \
+             mock.patch.object(state,'source_relation',return_value={'source_sha':A}), \
+             mock.patch.object(state,'merge_proof',return_value=proof), \
+             mock.patch.object(state,'_verify_package_ledger',side_effect=concurrent_lifecycle_change):
+            self.assertEqual(6,state.reconcile(self.path,REPO,'main'))
+        doc=store.load_document(self.path)
+        self.assertEqual({'needs_work'},{item['status'] for item in doc['features']})
+        self.assertEqual({False},{item['passes'] for item in doc['features']})
+
     def test_exact_green_merge_passes_every_member_with_same_completion(self):
         lead,member=package_rows(status='ready_to_merge',pr=True)
         self.path.write_text(json.dumps(document(lead,member),indent=2)+'\n',encoding='utf-8')
