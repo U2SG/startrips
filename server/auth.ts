@@ -3,6 +3,7 @@ import { betterAuth } from "better-auth";
 import { eq } from "drizzle-orm";
 import { organization } from "better-auth/plugins";
 import { recordProviderSignInOwnership } from "./account-identities/account-identity-repository";
+import { appleSignInOptions } from "./account-identities/apple-provider";
 import {
   configuredSocialProviderIds,
   googleSignInOptions,
@@ -23,6 +24,13 @@ const emailSender = createEmailSender(serverConfig);
 // refuses it at startup -- and an absent one omits the provider entirely
 // rather than mounting a mock, so the sign-in entry simply does not exist.
 const googleOptions = googleSignInOptions(serverConfig);
+// #350: the same rule for Sign in with Apple. Apple's credential is a Team
+// id, a Key id and a .p8 private key rather than a static secret, but the
+// consequence of an absent one is identical -- the key is left out of
+// `socialProviders` entirely, so `/api/auth/sign-in/social` reports an unknown
+// provider and `/api/auth/callback/apple` reports `oauth_provider_not_found`.
+// Both are true statements; a mocked provider would not be.
+const appleOptions = appleSignInOptions(serverConfig);
 const SOCIAL_PROVIDER_IDS = configuredSocialProviderIds(serverConfig);
 
 export const STARTRIPS_ACCOUNT_LINKING_POLICY = {
@@ -115,7 +123,10 @@ export const auth = betterAuth({
   account: {
     accountLinking: STARTRIPS_ACCOUNT_LINKING_POLICY,
   },
-  socialProviders: googleOptions ? { google: googleOptions } : {},
+  socialProviders: {
+    ...(googleOptions ? { google: googleOptions } : {}),
+    ...(appleOptions ? { apple: appleOptions } : {}),
+  },
   databaseHooks: {
     account: {
       // #349: a native provider sign-up creates the Better Auth account row

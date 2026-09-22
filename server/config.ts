@@ -173,6 +173,47 @@ export function loadServerConfig(
   ).replace(/\/$/, "");
   const locationSearchUserAgent = environment.LOCATION_SEARCH_USER_AGENT?.trim()
     || `Startrips/1.0 (${appOrigin})`;
+  // #350: Sign in with Apple. Apple issues no static client secret — the
+  // "secret" is an ES256 JWT this server signs from a Team id, a Key id and a
+  // downloaded .p8 private key, so all four values are one credential and none
+  // of them ever reaches the browser. They are optional the same way the
+  // storage credential is: a deployment that names none runs no Apple provider
+  // at all rather than a mocked one. Naming some but not all is a deployment
+  // mistake worth failing at startup for, in every environment, because a
+  // half-configured provider would advertise a sign-in that cannot complete.
+  const appleServiceId = environment.APPLE_SERVICE_ID?.trim() || null;
+  const appleTeamId = environment.APPLE_TEAM_ID?.trim() || null;
+  const appleKeyId = environment.APPLE_KEY_ID?.trim() || null;
+  // A .p8 file is PEM text. Passing it through a single environment variable
+  // means its newlines usually arrive as the two characters `\n`, so accept
+  // both forms rather than making every deployment pick the right one.
+  const applePrivateKey = environment.APPLE_PRIVATE_KEY?.trim()
+    .replace(/\\n/g, "\n") || null;
+  // The native app's bundle identifier, accepted as an additional id-token
+  // audience. #350 ships the web flow only, so this stays optional.
+  const appleAppBundleIdentifier =
+    environment.APPLE_APP_BUNDLE_IDENTIFIER?.trim() || null;
+  const appleConfigurationPresent = Boolean(
+    appleServiceId || appleTeamId || appleKeyId || applePrivateKey,
+  );
+  if (appleConfigurationPresent) {
+    const missing = [
+      ["APPLE_SERVICE_ID", appleServiceId],
+      ["APPLE_TEAM_ID", appleTeamId],
+      ["APPLE_KEY_ID", appleKeyId],
+      ["APPLE_PRIVATE_KEY", applePrivateKey],
+    ].filter(([, value]) => !value).map(([name]) => name);
+    if (missing.length > 0) {
+      throw new Error(
+        `${missing.join(", ")} required when Sign in with Apple is configured`,
+      );
+    }
+    if (!/^-----BEGIN PRIVATE KEY-----/.test(applePrivateKey as string)) {
+      throw new Error(
+        "APPLE_PRIVATE_KEY must be the PKCS#8 PEM text of the downloaded .p8 key",
+      );
+    }
+  }
 
   if (production && (!smtpUrl || !mailFrom)) {
     throw new Error("SMTP_URL and MAIL_FROM are required in production");
@@ -453,6 +494,11 @@ export function loadServerConfig(
     locationSearchDriver,
     locationSearchBaseUrl,
     locationSearchUserAgent,
+    appleServiceId,
+    appleTeamId,
+    appleKeyId,
+    applePrivateKey,
+    appleAppBundleIdentifier,
   } as const;
 }
 
