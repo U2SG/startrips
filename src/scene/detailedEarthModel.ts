@@ -81,6 +81,57 @@ export type DetailedEarthJourneyOverlay = {
   data: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>;
 };
 
+export type DetailedEarthJourneyRoutePointHit = {
+  journeyId: string;
+  routePointId: string;
+};
+
+/**
+ * Resolve a pointer against the current authorized Journey overlay using the
+ * map's own projection. The interaction radius is independent from the visible
+ * marker radius, so a tiny passthrough marker still has a touch-safe target.
+ * Hidden summary markers are not activatable because their source properties
+ * carry `activatable: false`.
+ */
+export function pickDetailedEarthJourneyRoutePointHit(
+  overlay: DetailedEarthJourneyOverlay,
+  point: { x: number; y: number },
+  project: (coordinates: [number, number]) => { x: number; y: number },
+  radiusPx = 22,
+): DetailedEarthJourneyRoutePointHit | null {
+  if (
+    !Number.isFinite(point.x)
+    || !Number.isFinite(point.y)
+    || !Number.isFinite(radiusPx)
+    || radiusPx <= 0
+  ) return null;
+
+  const radiusSquared = radiusPx * radiusPx;
+  let best: (DetailedEarthJourneyRoutePointHit & { distanceSquared: number }) | null = null;
+  for (const feature of overlay.data.features) {
+    if (
+      feature.properties.featureKind !== "route-point"
+      || feature.properties.activatable !== true
+      || feature.geometry.type !== "Point"
+    ) continue;
+    const [longitude, latitude] = feature.geometry.coordinates;
+    const routePointId = feature.properties.routePointId;
+    const journeyId = feature.properties.journeyId;
+    if (
+      typeof routePointId !== "string"
+      || typeof journeyId !== "string"
+      || !Number.isFinite(longitude)
+      || !Number.isFinite(latitude)
+    ) continue;
+    const projected = project([longitude, latitude]);
+    if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) continue;
+    const distanceSquared = ((projected.x - point.x) ** 2) + ((projected.y - point.y) ** 2);
+    if (distanceSquared > radiusSquared || (best && distanceSquared >= best.distanceSquared)) continue;
+    best = { journeyId, routePointId, distanceSquared };
+  }
+  return best ? { journeyId: best.journeyId, routePointId: best.routePointId } : null;
+}
+
 function overlayRevision(seed: string) {
   let hash = 0x811c9dc5;
   for (let index = 0; index < seed.length; index += 1) {

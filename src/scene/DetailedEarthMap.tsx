@@ -12,6 +12,7 @@ import {
   DETAILED_EARTH_DRAG_PAN_OPTIONS,
   getDetailedEarthRouteFrame,
   getDetailedEarthFocusDuration,
+  pickDetailedEarthJourneyRoutePointHit,
   getEarthDiveHandoffFrame,
   detailedEarthAnchorCorrection,
   solveDetailedEarthHandoffZoom,
@@ -177,7 +178,9 @@ function installDetailedEarthJourneyOverlay(
         ["==", ["get", "activatable"], true],
       ],
       paint: {
-        "circle-radius": 18,
+        // Visual marker size and interaction size are deliberately decoupled.
+        // 22px radius gives every disclosed Route Point a 44px pointer target.
+        "circle-radius": 22,
         "circle-opacity": 0,
       },
     });
@@ -882,20 +885,29 @@ export default function DetailedEarthMap({
     });
 
     map.on("click", (event) => {
+      let routePointHit: { journeyId: string; routePointId: string } | null = null;
       if (map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
         const [journeyHit] = map.queryRenderedFeatures(event.point, {
           layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
         });
         const journeyId = journeyHit?.properties?.journeyId;
         const routePointId = journeyHit?.properties?.routePointId;
-        if (
-          typeof journeyId === "string"
-          && typeof routePointId === "string"
-          && onJourneyRoutePointActivateRef.current
-        ) {
-          onJourneyRoutePointActivateRef.current(journeyId, routePointId);
-          return;
+        if (typeof journeyId === "string" && typeof routePointId === "string") {
+          routePointHit = { journeyId, routePointId };
         }
+      }
+      // Keep the interaction contract tied to the same authorized source
+      // revision even when MapLibre omits an invisible hit layer from a
+      // rendered-feature query. Resolve the disclosed Point features with the
+      // map's current projection instead of adding retries or timing waits.
+      routePointHit ??= pickDetailedEarthJourneyRoutePointHit(
+        journeyOverlayRef.current,
+        event.point,
+        (coordinates) => map.project(coordinates),
+      );
+      if (routePointHit && onJourneyRoutePointActivateRef.current) {
+        onJourneyRoutePointActivateRef.current(routePointHit.journeyId, routePointHit.routePointId);
+        return;
       }
       if (!onPickRef.current) return;
       onPickRef.current({

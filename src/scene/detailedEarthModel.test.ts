@@ -28,6 +28,7 @@ import {
   clampDetailedEarthPitch,
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
+  pickDetailedEarthJourneyRoutePointHit,
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
@@ -203,6 +204,31 @@ describe("detailed-earth Journey overlay", () => {
       ["point-b", "point-c"],
     ]);
     expect(scoped.revision).not.toBe(baseline.revision);
+  });
+
+  it("keeps a projection-driven 44px hit area independent from marker size and disclosure", () => {
+    const overlay = buildDetailedEarthJourneyOverlay({ route });
+    const project = ([longitude, latitude]: [number, number]) => ({
+      x: longitude * 1_000,
+      y: latitude * 1_000,
+    });
+    const pointB = project([route.points[1].lon, route.points[1].lat]);
+    expect(pickDetailedEarthJourneyRoutePointHit(
+      overlay,
+      { x: pointB.x + 20, y: pointB.y },
+      project,
+    )).toEqual({ journeyId: route.id, routePointId: "point-b" });
+    expect(pickDetailedEarthJourneyRoutePointHit(
+      overlay,
+      { x: pointB.x + 23, y: pointB.y },
+      project,
+    )).toBeNull();
+
+    const scoped = buildDetailedEarthJourneyOverlay({
+      route,
+      visibleRoutePointIds: new Set(["point-a", "point-c"]),
+    });
+    expect(pickDetailedEarthJourneyRoutePointHit(scoped, pointB, project)).toBeNull();
   });
 
   it("changes revision when order or Stop semantics change and clears cleanly with no active Journey", () => {
