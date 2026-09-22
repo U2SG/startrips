@@ -132,6 +132,7 @@ async function readRoutePoint(page) {
     if (!marker) return null;
     const scene = document.querySelector(".particle-earth-scene");
     return {
+      journeyId: marker.dataset.journeyId ?? null,
       id: marker.dataset.routePointId ?? null,
       lat: Number(marker.dataset.routePointLat),
       lon: Number(marker.dataset.routePointLon),
@@ -143,6 +144,26 @@ async function readRoutePoint(page) {
 }
 
 /** Which element a real gesture at this point would reach. */
+async function activateDetailedRoutePoint(page, routePoint) {
+  const target = await page.evaluate(({ lon, lat }) => (
+    window.__detailedEarthMapProject?.(lon, lat) ?? null
+  ), routePoint);
+  if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.y)) {
+    throw new Error(`Detailed Earth did not publish a projection for Route Point ${routePoint.id}`);
+  }
+  await page.mouse.click(target.x, target.y);
+  const expected = `${routePoint.journeyId}:${routePoint.id}`;
+  await page.waitForFunction((value) => (
+    document.querySelector("[data-qa-earth-dive-activated-route-point]")
+      ?.getAttribute("data-qa-earth-dive-activated-route-point") === value
+  ), expected, { timeout: 5_000 });
+  return {
+    target,
+    activated: await page.locator("[data-qa-earth-dive-activated-route-point]")
+      .getAttribute("data-qa-earth-dive-activated-route-point"),
+  };
+}
+
 async function hitTarget(page, point) {
   return page.evaluate(({ x, y }) => {
     const element = document.elementFromPoint(x, y);
@@ -180,6 +201,14 @@ async function readDive(page) {
       interactive: host?.getAttribute("data-interactive") ?? null,
       readiness: map?.getAttribute("data-map-readiness") ?? null,
       mapError: map?.getAttribute("data-map-error") ?? null,
+      journeyOverlayReady: map?.getAttribute("data-journey-overlay-ready") ?? null,
+      journeyOverlayRevision: map?.getAttribute("data-journey-overlay-revision") ?? null,
+      journeyOverlayJourneyId: map?.getAttribute("data-journey-overlay-journey-id") ?? null,
+      journeyOverlayPointCount: Number(map?.getAttribute("data-journey-overlay-point-count") ?? 0),
+      journeyOverlayStopCount: Number(map?.getAttribute("data-journey-overlay-stop-count") ?? 0),
+      journeyOverlayPassthroughCount: Number(map?.getAttribute("data-journey-overlay-passthrough-count") ?? 0),
+      journeyOverlayFeatureCount: Number(map?.getAttribute("data-journey-overlay-feature-count") ?? 0),
+      journeyOverlaySourceJourneyCount: Number(map?.getAttribute("data-journey-overlay-source-journey-count") ?? 0),
       mapLoadCount: Number(map?.getAttribute("data-map-load-count") ?? 0),
       mapLoadSource: map?.getAttribute("data-map-load-source") ?? null,
       mapRenderCount: Number(map?.getAttribute("data-map-render-count") ?? 0),
@@ -892,6 +921,37 @@ try {
   const detailReveal = await readSpatialReveal(forward.page);
   const firstReveal = await readDive(forward.page);
 
+  // The Detailed Earth source is not decorative: its hit target must resolve
+  // through the existing Route Point activation callback, and a rapid Journey
+  // switch must replace the exact same source without rebuilding the map or
+  // leaving the previous Journey's features behind.
+  const routePointActivation = await activateDetailedRoutePoint(forward.page, routePoint);
+  const overlayBeforeSwitch = await readDive(forward.page);
+  await activateButton(forward.page, forward.page.locator('[data-qa-earth-dive-route-switch="next"]'));
+  await forward.page.waitForFunction((previousJourneyId) => {
+    const marker = document.querySelector("[data-qa-earth-dive-route-point]");
+    const map = document.querySelector(".detailed-earth-map");
+    const nextJourneyId = marker?.getAttribute("data-journey-id");
+    return Boolean(
+      nextJourneyId
+      && nextJourneyId !== previousJourneyId
+      && map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === nextJourneyId,
+    );
+  }, routePoint.journeyId, { timeout: 5_000 });
+  const switchedRoutePoint = await readRoutePoint(forward.page);
+  const overlaySwitched = await readDive(forward.page);
+  // Switch back immediately, before the first focus flight has any authority to
+  // become a second source of Journey identity. The overlay revision must return
+  // to the original Route while the same map instance remains mounted.
+  await activateButton(forward.page, forward.page.locator('[data-qa-earth-dive-route-switch="first"]'));
+  await forward.page.waitForFunction((journeyId) => {
+    const map = document.querySelector(".detailed-earth-map");
+    return map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === journeyId;
+  }, routePoint.journeyId, { timeout: 5_000 });
+  const overlayReturned = await readDive(forward.page);
+
   const forwardStages = await stages(forward.page);
 
   // Zoom out again at the SAME point. The map owns the wheel now and its layer
@@ -1109,6 +1169,13 @@ try {
       cameraBefore: firstReveal.revealCameraBefore,
       cameraAfter: firstReveal.revealCameraAfter,
     },
+    journeyOverlay: {
+      activation: routePointActivation,
+      beforeSwitch: overlayBeforeSwitch,
+      switchedRoutePoint,
+      switched: overlaySwitched,
+      returned: overlayReturned,
+    },
     handoff: {
       atBlending: blendingFrames,
       commitAlignment,
@@ -1158,6 +1225,42 @@ try {
     || Math.abs(Number(routePoint?.focusPointLon) - routePoint.lon) > 0.001
   ) {
     ladderFailures.push(`Route Point focus did not publish its point-only coordinates: ${JSON.stringify(routePoint)}`);
+  }
+  for (const [label, sample] of [
+    ["blend", beforeCommit],
+    ["first reveal", firstReveal],
+    ["returned Journey", overlayReturned],
+  ]) {
+    if (
+      sample.journeyOverlayReady !== "true"
+      || sample.journeyOverlayJourneyId !== routePoint.journeyId
+      || sample.journeyOverlayPointCount !== 4
+      || sample.journeyOverlayStopCount !== 3
+      || sample.journeyOverlayPassthroughCount !== 1
+      || sample.journeyOverlayFeatureCount !== 7
+      || sample.journeyOverlaySourceJourneyCount !== 1
+    ) {
+      ladderFailures.push(`${label} did not contain the complete scoped active Journey overlay: ${JSON.stringify(sample)}`);
+    }
+  }
+  if (routePointActivation.activated !== `${routePoint.journeyId}:${routePoint.id}`) {
+    ladderFailures.push(`Detailed Earth Route Point hit did not reuse the existing activation callback: ${JSON.stringify(routePointActivation)}`);
+  }
+  if (
+    !switchedRoutePoint?.journeyId
+    || switchedRoutePoint.journeyId === routePoint.journeyId
+    || overlaySwitched.journeyOverlayReady !== "true"
+    || overlaySwitched.journeyOverlayJourneyId !== switchedRoutePoint.journeyId
+    || overlaySwitched.journeyOverlayPointCount !== 3
+    || overlaySwitched.journeyOverlayStopCount !== 3
+    || overlaySwitched.journeyOverlayPassthroughCount !== 0
+    || overlaySwitched.journeyOverlayFeatureCount !== 5
+    || overlaySwitched.journeyOverlaySourceJourneyCount !== 1
+    || overlaySwitched.mapConstructionCount !== overlayBeforeSwitch.mapConstructionCount
+    || overlayReturned.mapConstructionCount !== overlayBeforeSwitch.mapConstructionCount
+    || overlayReturned.journeyOverlayRevision !== overlayBeforeSwitch.journeyOverlayRevision
+  ) {
+    ladderFailures.push(`rapid Journey replacement left stale/mixed source data or rebuilt Detailed Earth: ${JSON.stringify({ before: overlayBeforeSwitch, switchedRoutePoint, switched: overlaySwitched, returned: overlayReturned })}`);
   }
   if (
     blendingReveal?.mode !== "on"

@@ -24,7 +24,11 @@ import {
   type HomeBasePresenceDrawable,
   type ProjectedHomeBasePresence,
 } from "./homeBasePresenceLayer";
-import type { DetailedEarthLanguage, ParticleAnchorFrame } from "./detailedEarthModel";
+import {
+  buildDetailedEarthJourneyOverlay,
+  type DetailedEarthLanguage,
+  type ParticleAnchorFrame,
+} from "./detailedEarthModel";
 import {
   INITIAL_EARTH_DIVE_STATE,
   resolveEarthDive,
@@ -422,6 +426,22 @@ export function LivingAtlasGlobe({
   const gestureHintVisible = globeGestureHintVisible(gestureHint);
   const modeNoteVisible = globeModeNoteVisible(gestureHint, { globeFocusMode, compactMobileLayout });
   const homeBaseLayer = useMemo(() => resolveLivingAtlasHomeBaseLayer(homeBasePresence), [homeBasePresence]);
+  const detailedEarthRoute = useMemo(() => (
+    journeyRoutes.find((route) => route.id === activeJourneyRouteId)
+      ?? focusRoute
+      ?? null
+  ), [activeJourneyRouteId, focusRoute, journeyRoutes]);
+  const detailedEarthJourneyOverlay = useMemo(() => buildDetailedEarthJourneyOverlay({
+    route: detailedEarthRoute,
+    selection: selectedJourneyRoutePoint,
+    narrativeSelection: narrativeJourneyRoutePoint,
+    temporalReveal,
+  }), [
+    detailedEarthRoute,
+    narrativeJourneyRoutePoint,
+    selectedJourneyRoutePoint,
+    temporalReveal,
+  ]);
   const homeBaseElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const homeBaseFramesRef = useRef(new Map<string, ProjectedHomeBasePresence>());
   const applyHomeBaseFrame = useCallback((
@@ -1115,9 +1135,11 @@ export function LivingAtlasGlobe({
               particleFrame={particleFrame}
               focusPoint={focusPoint}
               focusRoute={focusRoute}
+              journeyOverlay={detailedEarthJourneyOverlay}
               focusRevision={focusRevision}
               focusFlightProfile={focusFlightProfile}
               language={detailLanguage}
+              onJourneyRoutePointActivate={onJourneyRoutePointActivate}
               onGlobePointPick={detailMode ? onGlobePointPick : undefined}
               onOverviewRequest={releaseDive}
               onCameraObservation={handleDetailCameraObservation}

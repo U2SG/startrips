@@ -3,6 +3,7 @@ import {
   AttributionControl,
   Map as MapLibreMap,
   NavigationControl,
+  type GeoJSONSource,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { JourneyRoute } from "../journey/types";
@@ -20,6 +21,7 @@ import {
   DETAILED_EARTH_MAX_ZOOM,
   DETAILED_EARTH_MIN_ZOOM,
   DETAILED_EARTH_PITCH_SPEED,
+  type DetailedEarthJourneyOverlay,
   type DetailedEarthLanguage,
   type DetailedEarthFocusFlightProfile,
   DETAILED_EARTH_ROTATE_SPEED,
@@ -58,6 +60,129 @@ const CALIBRATION_ZOOM_EPSILON = 0.0005;
 const CALIBRATION_ANCHOR_EPSILON_PX = 0.05;
 const CALIBRATION_SCALE_ERROR_EPSILON = 0.0005;
 
+const JOURNEY_OVERLAY_SOURCE_ID = "startrips-active-journey";
+const JOURNEY_OVERLAY_ROUTE_LAYER_ID = "startrips-active-journey-route";
+const JOURNEY_OVERLAY_POINT_LAYER_ID = "startrips-active-journey-points";
+const JOURNEY_OVERLAY_LABEL_LAYER_ID = "startrips-active-journey-labels";
+const JOURNEY_OVERLAY_HIT_LAYER_ID = "startrips-active-journey-hit-targets";
+
+function installDetailedEarthJourneyOverlay(
+  map: MapLibreMap,
+  overlay: DetailedEarthJourneyOverlay,
+) {
+  const existingSource = map.getSource(JOURNEY_OVERLAY_SOURCE_ID) as GeoJSONSource | undefined;
+  if (existingSource) {
+    existingSource.setData(overlay.data);
+  } else {
+    map.addSource(JOURNEY_OVERLAY_SOURCE_ID, {
+      type: "geojson",
+      data: overlay.data,
+    });
+  }
+
+  if (!map.getLayer(JOURNEY_OVERLAY_ROUTE_LAYER_ID)) {
+    map.addLayer({
+      id: JOURNEY_OVERLAY_ROUTE_LAYER_ID,
+      type: "line",
+      source: JOURNEY_OVERLAY_SOURCE_ID,
+      filter: ["==", ["get", "featureKind"], "segment"],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": ["get", "color"],
+        "line-width": ["interpolate", ["linear"], ["zoom"], 5.6, 1.35, 10, 2.4, 16, 4.2],
+        "line-opacity": [
+          "match", ["get", "attentionRole"],
+          "narrative-current", 0.94,
+          "selected", 0.88,
+          0.72,
+        ],
+        "line-dasharray": [1.4, 1.2],
+      },
+    });
+  }
+  if (!map.getLayer(JOURNEY_OVERLAY_POINT_LAYER_ID)) {
+    map.addLayer({
+      id: JOURNEY_OVERLAY_POINT_LAYER_ID,
+      type: "circle",
+      source: JOURNEY_OVERLAY_SOURCE_ID,
+      filter: [
+        "all",
+        ["==", ["get", "featureKind"], "route-point"],
+        ["==", ["get", "markerVisible"], true],
+      ],
+      paint: {
+        "circle-color": ["get", "color"],
+        "circle-radius": [
+          "case",
+          ["==", ["get", "attentionRole"], "narrative-current"], 7,
+          ["==", ["get", "attentionRole"], "selected"], 6.4,
+          ["==", ["get", "semanticRole"], "stop"], 5,
+          3.1,
+        ],
+        "circle-opacity": [
+          "case",
+          ["==", ["get", "semanticRole"], "passthrough"], 0.55,
+          0.9,
+        ],
+        "circle-stroke-color": "rgba(9, 14, 18, 0.72)",
+        "circle-stroke-width": [
+          "case",
+          ["==", ["get", "attentionRole"], "ordinary"], 1.2,
+          2,
+        ],
+      },
+    });
+  }
+  if (!map.getLayer(JOURNEY_OVERLAY_LABEL_LAYER_ID)) {
+    map.addLayer({
+      id: JOURNEY_OVERLAY_LABEL_LAYER_ID,
+      type: "symbol",
+      source: JOURNEY_OVERLAY_SOURCE_ID,
+      minzoom: 7,
+      filter: [
+        "all",
+        ["==", ["get", "featureKind"], "route-point"],
+        ["==", ["get", "markerVisible"], true],
+        ["!=", ["get", "label"], ""],
+        [
+          "any",
+          ["==", ["get", "semanticRole"], "stop"],
+          ["!=", ["get", "attentionRole"], "ordinary"],
+        ],
+      ],
+      layout: {
+        "text-field": ["get", "label"],
+        "text-size": 11,
+        "text-offset": [0, 1.2],
+        "text-anchor": "top",
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+      },
+      paint: {
+        "text-color": "rgba(241, 247, 248, 0.92)",
+        "text-halo-color": "rgba(5, 11, 14, 0.86)",
+        "text-halo-width": 1.3,
+      },
+    });
+  }
+  if (!map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
+    map.addLayer({
+      id: JOURNEY_OVERLAY_HIT_LAYER_ID,
+      type: "circle",
+      source: JOURNEY_OVERLAY_SOURCE_ID,
+      filter: [
+        "all",
+        ["==", ["get", "featureKind"], "route-point"],
+        ["==", ["get", "activatable"], true],
+      ],
+      paint: {
+        "circle-radius": 18,
+        "circle-opacity": 0,
+      },
+    });
+  }
+}
+
 type DetailedEarthMapProps = {
   /** Which Dive stage this map is mounted under. */
   diveStage?: EarthDiveStage;
@@ -77,9 +202,12 @@ type DetailedEarthMapProps = {
   particleFrame?: ParticleAnchorFrame | null;
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
+  /** Active authorized Journey projected from the same Route consumed by Particle Earth. */
+  journeyOverlay: DetailedEarthJourneyOverlay;
   focusRevision?: number;
   focusFlightProfile?: DetailedEarthFocusFlightProfile;
   language: DetailedEarthLanguage;
+  onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onOverviewRequest?: () => void;
   /** Latest detail-owned geographic observation for a renderer-to-particle handback. */
@@ -146,9 +274,11 @@ export default function DetailedEarthMap({
   particleFrame = null,
   focusPoint,
   focusRoute,
+  journeyOverlay,
   focusRevision = 0,
   focusFlightProfile,
   language,
+  onJourneyRoutePointActivate,
   onGlobePointPick,
   onOverviewRequest,
   onCameraObservation,
@@ -166,6 +296,9 @@ export default function DetailedEarthMap({
   const languageRef = useRef(language);
   const focusPointRef = useRef(focusPoint);
   const focusRouteRef = useRef(focusRoute);
+  const journeyOverlayRef = useRef(journeyOverlay);
+  const syncJourneyOverlayRef = useRef<(() => void) | null>(null);
+  const onJourneyRoutePointActivateRef = useRef(onJourneyRoutePointActivate);
   const onPickRef = useRef(onGlobePointPick);
   const onOverviewRequestRef = useRef(onOverviewRequest);
   const onCameraObservationRef = useRef(onCameraObservation);
@@ -188,6 +321,8 @@ export default function DetailedEarthMap({
   languageRef.current = language;
   focusPointRef.current = focusPoint;
   focusRouteRef.current = focusRoute;
+  journeyOverlayRef.current = journeyOverlay;
+  onJourneyRoutePointActivateRef.current = onJourneyRoutePointActivate;
   onPickRef.current = onGlobePointPick;
   onOverviewRequestRef.current = onOverviewRequest;
   onCameraObservationRef.current = onCameraObservation;
@@ -244,6 +379,8 @@ export default function DetailedEarthMap({
     let renderCount = 0;
     let idleCount = 0;
     let resizeCount = 0;
+    let appliedJourneyOverlayRevision: string | null = null;
+    let paintedJourneyOverlayRevision: string | null = null;
     let pendingRevealCommit: {
       revision: number;
       stage: EarthDiveStage;
@@ -253,6 +390,18 @@ export default function DetailedEarthMap({
       reason: "load" | "stage" | "resize-observer";
     } | null = null;
     mapRef.current = map;
+    let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
+    if (import.meta.env.DEV && typeof window !== "undefined") {
+      const debugWindow = window as Window & {
+        __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
+      };
+      debugProject = (longitude, latitude) => {
+        const projected = map.project([longitude, latitude]);
+        const rect = host.getBoundingClientRect();
+        return { x: rect.left + projected.x, y: rect.top + projected.y };
+      };
+      debugWindow.__detailedEarthMapProject = debugProject;
+    }
     // Register the one-shot load observation immediately after construction.
     // A tiny inline/QA style can become style-loaded before the rest of this
     // effect has finished wiring calibration/reveal callbacks. Keep the event
@@ -279,6 +428,35 @@ export default function DetailedEarthMap({
       host.dataset.mapReadiness = readiness;
       onReadinessChangeRef.current?.(readiness);
     };
+    const syncJourneyOverlay = () => {
+      if (removed || !map.isStyleLoaded()) return false;
+      const overlay = journeyOverlayRef.current;
+      try {
+        installDetailedEarthJourneyOverlay(map, overlay);
+        appliedJourneyOverlayRevision = overlay.revision;
+        paintedJourneyOverlayRevision = null;
+        host.dataset.journeyOverlayReady = "false";
+        host.dataset.journeyOverlayRevision = overlay.revision;
+        host.dataset.journeyOverlayJourneyId = overlay.journeyId ?? "";
+        host.dataset.journeyOverlayPointCount = String(overlay.pointCount);
+        host.dataset.journeyOverlayStopCount = String(overlay.stopCount);
+        host.dataset.journeyOverlayPassthroughCount = String(overlay.passthroughCount);
+        host.dataset.journeyOverlayFeatureCount = String(overlay.data.features.length);
+        host.dataset.journeyOverlaySourceJourneyCount = String(new Set(
+          overlay.data.features.map((feature) => feature.properties.journeyId),
+        ).size);
+        delete host.dataset.journeyOverlayError;
+        map.triggerRepaint();
+        return true;
+      } catch (error) {
+        appliedJourneyOverlayRevision = null;
+        paintedJourneyOverlayRevision = null;
+        host.dataset.journeyOverlayReady = "false";
+        host.dataset.journeyOverlayError = error instanceof Error ? error.message : "journey-overlay-error";
+        return false;
+      }
+    };
+    syncJourneyOverlayRef.current = syncJourneyOverlay;
     const publishCameraObservation = () => {
       if (diveOwnerRef.current !== "detail") return;
       const center = map.getCenter();
@@ -512,6 +690,16 @@ export default function DetailedEarthMap({
     };
     revealSyncRef.current = syncRevealSurface;
 
+    map.on("style.load", () => {
+      if (removed) return;
+      appliedJourneyOverlayRevision = null;
+      paintedJourneyOverlayRevision = null;
+      host.dataset.journeyOverlayReady = "false";
+      applyMapLanguage(map, languageRef.current);
+      const overlayReady = syncJourneyOverlay();
+      if (overlayReady && initialLoadSettled) syncRevealSurface("stage");
+    });
+
     map.on("render", () => {
       renderCount += 1;
       renderEventObserved = true;
@@ -522,10 +710,23 @@ export default function DetailedEarthMap({
       // post-sync render revision.
       if (!initialLoadSettled && map.isStyleLoaded()) settleInitialLoad?.();
 
+      const overlayRevisionAtRenderStart = appliedJourneyOverlayRevision;
+      if (appliedJourneyOverlayRevision !== journeyOverlayRef.current.revision) {
+        syncJourneyOverlay();
+      } else if (
+        overlayRevisionAtRenderStart === journeyOverlayRef.current.revision
+        && paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+        && map.isSourceLoaded(JOURNEY_OVERLAY_SOURCE_ID)
+      ) {
+        paintedJourneyOverlayRevision = journeyOverlayRef.current.revision;
+        host.dataset.journeyOverlayReady = "true";
+        host.dataset.journeyOverlayPaintedRevision = paintedJourneyOverlayRevision;
+      }
       const pending = pendingRevealCommit;
       if (
         pending
         && !removed
+        && paintedJourneyOverlayRevision === journeyOverlayRef.current.revision
         && pending.revision === revealRevision
         && canCommitDetailedEarthReveal(renderCount, pending.afterRenderCount)
       ) {
@@ -595,8 +796,10 @@ export default function DetailedEarthMap({
         : renderEventObserved
           ? "render-bootstrap"
           : "style-loaded-recovery";
-      // Calibrate first, then require a post-sync MapLibre render for the
-      // current real host geometry before this renderer can become visual-ready.
+      // The personal Journey is part of detail readiness, not decoration that
+      // may pop in after the basemap. Install the current authorized revision
+      // before calibrating and arming the post-sync reveal frame.
+      syncJourneyOverlay();
       calibrateToParticle();
       syncRevealSurface("load");
     };
@@ -630,6 +833,21 @@ export default function DetailedEarthMap({
     });
 
     map.on("click", (event) => {
+      if (map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
+        const [journeyHit] = map.queryRenderedFeatures(event.point, {
+          layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
+        });
+        const journeyId = journeyHit?.properties?.journeyId;
+        const routePointId = journeyHit?.properties?.routePointId;
+        if (
+          typeof journeyId === "string"
+          && typeof routePointId === "string"
+          && onJourneyRoutePointActivateRef.current
+        ) {
+          onJourneyRoutePointActivateRef.current(journeyId, routePointId);
+          return;
+        }
+      }
       if (!onPickRef.current) return;
       onPickRef.current({
         latitude: event.lngLat.lat,
@@ -657,11 +875,16 @@ export default function DetailedEarthMap({
       mapRef.current = null;
       calibrateRef.current = null;
       revealSyncRef.current = null;
+      syncJourneyOverlayRef.current = null;
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       focusFlightActiveRef.current = false;
       map.remove();
       if (import.meta.env.DEV && typeof window !== "undefined") {
-        const debugWindow = window as Window & { __detailedEarthMapRemovalCount?: number };
+        const debugWindow = window as Window & {
+          __detailedEarthMapRemovalCount?: number;
+          __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
+        };
+        if (debugWindow.__detailedEarthMapProject === debugProject) delete debugWindow.__detailedEarthMapProject;
         debugWindow.__detailedEarthMapRemovalCount = (debugWindow.__detailedEarthMapRemovalCount ?? 0) + 1;
       }
     };
@@ -680,6 +903,11 @@ export default function DetailedEarthMap({
     if (!map?.isStyleLoaded()) return;
     applyMapLanguage(map, language);
   }, [language]);
+
+  useEffect(() => {
+    const overlayReady = syncJourneyOverlayRef.current?.() ?? false;
+    if (overlayReady && diveStage !== "particle") revealSyncRef.current?.("stage");
+  }, [journeyOverlay.revision]);
 
   useEffect(() => {
     const map = mapRef.current;

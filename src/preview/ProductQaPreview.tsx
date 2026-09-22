@@ -137,6 +137,8 @@ function EarthDiveQaPreview() {
   const persistentEarth = usePersistentEarth();
   const qaParams = new URLSearchParams(window.location.search);
   const [focusRevision, setFocusRevision] = useState(0);
+  const [activeRouteIndex, setActiveRouteIndex] = useState(0);
+  const [activatedRoutePoint, setActivatedRoutePoint] = useState("");
   const [earthExperiencePolicy, setEarthExperiencePolicy] = useState<"default" | "particle-only">(
     qaParams.get("qaPolicy") === "particle-only" ? "particle-only" : "default",
   );
@@ -149,8 +151,8 @@ function EarthDiveQaPreview() {
   // has to hold its anchor in both: a focused Route Point publishes a focus
   // point, while a focused Journey is owned by route fitting and publishes no
   // point at all - the branch whose anchor comes from the route frame.
-  const focusRoute = globeQaRoutes[0];
-  const routePoint = focusRoute.points[1];
+  const focusRoute = globeQaRoutes[activeRouteIndex] ?? globeQaRoutes[0];
+  const routePoint = focusRoute.points[Math.min(1, focusRoute.points.length - 1)];
   const routeFocus = qaParams.get("qaFocus") === "route";
   const requestedLat = Number(qaParams.get("qaFocusLat") ?? Number.NaN);
   const requestedLon = Number(qaParams.get("qaFocusLon") ?? Number.NaN);
@@ -170,18 +172,37 @@ function EarthDiveQaPreview() {
           journeyRoutes={globeQaRoutes}
           activeJourneyRouteId={focusRoute.id}
           onJourneyRouteActivate={() => undefined}
-          onJourneyRoutePointActivate={() => undefined}
+          onJourneyRoutePointActivate={(journeyId, routePointId) => {
+            setActivatedRoutePoint(`${journeyId}:${routePointId}`);
+          }}
           earthExperiencePolicy={earthExperiencePolicy}
           reduceMotion={qaReduceMotion}
         />
       </div>
       <output
         data-qa-earth-dive-route-point
+        data-journey-id={focusRoute.id}
         data-route-point-id={routePoint.id}
         data-route-point-lat={routePoint.lat}
         data-route-point-lon={routePoint.lon}
         style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
       >{routePoint.label}</output>
+      <output
+        data-qa-earth-dive-activated-route-point={activatedRoutePoint}
+        style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+      >{activatedRoutePoint}</output>
+      <button
+        type="button"
+        data-qa-earth-dive-route-switch="next"
+        onClick={() => { setActiveRouteIndex(1); setFocusRevision((revision) => revision + 1); }}
+        style={{ position: "absolute", zIndex: 60, bottom: 48, left: 14 }}
+      >QA 切换旅程</button>
+      <button
+        type="button"
+        data-qa-earth-dive-route-switch="first"
+        onClick={() => { setActiveRouteIndex(0); setFocusRevision((revision) => revision + 1); }}
+        style={{ position: "absolute", zIndex: 60, bottom: 48, left: 130 }}
+      >QA 返回首旅程</button>
       <button
         type="button"
         data-qa-earth-dive-refocus
