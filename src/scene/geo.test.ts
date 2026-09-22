@@ -582,21 +582,45 @@ describe("route arc geometry", () => {
       expect(incomingPlan.endHandleAngle)
         .toBeLessThanOrEqual(Math.min(MAX_ROUTE_SPLINE_HANDLE_ANGLE, adjacentBound) + 1e-12);
 
-      for (let vertex = 0; vertex < routeArcVertexCount(incomingLeg); vertex += 1) {
-        const direction = sampleAt(incomingLeg, vertex, 1, 0).normalize();
-        const side = direction
-          .clone()
-          .addScaledVector(anchor, -anchor.dot(direction))
-          .dot(sharedTangent);
-        expect(side).toBeLessThanOrEqual(1e-6);
-      }
-      for (let vertex = 0; vertex < routeArcVertexCount(outgoingLeg); vertex += 1) {
-        const direction = sampleAt(outgoingLeg, vertex, 1, 0).normalize();
-        const side = direction
-          .clone()
-          .addScaledVector(anchor, -anchor.dot(direction))
-          .dot(sharedTangent);
-        expect(side).toBeGreaterThanOrEqual(-1e-6);
+      if (incomingPlan.endHandleAngle > 0) {
+        // An active shared handle must keep both adjacent spans on their own
+        // side of the rendered shared-tangent plane for the whole span.
+        for (let vertex = 0; vertex < routeArcVertexCount(incomingLeg); vertex += 1) {
+          const direction = sampleAt(incomingLeg, vertex, 1, 0).normalize();
+          const side = direction
+            .clone()
+            .addScaledVector(anchor, -anchor.dot(direction))
+            .dot(sharedTangent);
+          expect(side).toBeLessThanOrEqual(1e-6);
+        }
+        for (let vertex = 0; vertex < routeArcVertexCount(outgoingLeg); vertex += 1) {
+          const direction = sampleAt(outgoingLeg, vertex, 1, 0).normalize();
+          const side = direction
+            .clone()
+            .addScaledVector(anchor, -anchor.dot(direction))
+            .dot(sharedTangent);
+          expect(side).toBeGreaterThanOrEqual(-1e-6);
+        }
+      } else {
+        // A sufficiently sharp/asymmetric turn can make the requested shared
+        // tangent unable to advance along one adjacent leg. That is the
+        // intentional clean-corner fallback: both handles collapse, so the
+        // unrendered shared tangent is no longer a meaningful half-plane for
+        // the outgoing leg. Prove the actual two geodesic spans remain locally
+        // monotonic instead of weakening the no-backtracking invariant.
+        expect(outgoingPlan.startHandleAngle).toBe(0);
+        let previousIncomingDistance = Number.POSITIVE_INFINITY;
+        for (let vertex = 0; vertex < routeArcVertexCount(incomingLeg); vertex += 1) {
+          const distance = sampleAt(incomingLeg, vertex, 1, 0).normalize().angleTo(anchor);
+          expect(distance).toBeLessThanOrEqual(previousIncomingDistance + 1e-6);
+          previousIncomingDistance = distance;
+        }
+        let previousOutgoingDistance = -1e-6;
+        for (let vertex = 0; vertex < routeArcVertexCount(outgoingLeg); vertex += 1) {
+          const distance = sampleAt(outgoingLeg, vertex, 1, 0).normalize().angleTo(anchor);
+          expect(distance + 1e-6).toBeGreaterThanOrEqual(previousOutgoingDistance);
+          previousOutgoingDistance = distance;
+        }
       }
     }
   });
