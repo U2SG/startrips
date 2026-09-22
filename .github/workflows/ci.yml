@@ -227,11 +227,12 @@ jobs:
               city-label-anchoring::pnpm qa:city-label-anchoring
               recovery-surfaces::pnpm qa:recovery-surfaces
           - name: reveal-share
-            suites: "|cover-reveal-opening|cover-reveal|owner-share|"
+            suites: "|cover-reveal-opening|cover-reveal|owner-share|playback-map-bridge|"
             commands: |
               cover-reveal-opening::pnpm qa:cover-reveal-opening
               cover-reveal::pnpm qa:cover-reveal
               owner-share::pnpm qa:owner-share
+              playback-map-bridge::pnpm qa:playback-map-bridge
           - name: playback-brand
             suites: "|playback-prefetch|playback-continuity|final-acceptance|brand-signature-motion|"
             commands: |

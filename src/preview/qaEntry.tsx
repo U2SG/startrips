@@ -1102,10 +1102,21 @@ const continuityQaJourney: Journey = (() => {
   };
 })();
 
-type ContinuityQaTrace = { cameraTargets: { key: string; at: number }[] };
+type ContinuityQaTrace = { cameraTargets: { key: string; at: number; step: number | null; phase: string | null }[] };
 
 function JourneyPlaybackContinuityQaPreview() {
   const params = new URLSearchParams(window.location.search);
+  const bridgeVideo = params.get("qaMapBridgeVideo") === "1";
+  const nearbyBridge = params.get("qaMapBridgeNearby") === "1";
+  const journey = useMemo(() => ({
+    ...continuityQaJourney,
+    routePoints: nearbyBridge ? continuityQaJourney.routePoints.map((point, index) => ({
+      ...point, latitude: 1.290256 + index * 0.01, longitude: 103.851471 + index * 0.01,
+    })) : continuityQaJourney.routePoints,
+    media: bridgeVideo ? continuityQaJourney.media.map((asset) => asset.id === "st109-p1-m0"
+      ? { ...asset, mimeType: "video/webm", fileName: "bridge.webm" } : asset) : continuityQaJourney.media,
+  }), [bridgeVideo, nearbyBridge]);
+  const [closed, setClosed] = useState(false);
   // Reduced Motion is a run parameter here, not a constant: acceptance 6 is
   // only observable if the SAME fixture can be played both ways.
   const reduceMotion = params.get("qaReduceMotion") !== "0";
@@ -1113,18 +1124,22 @@ function JourneyPlaybackContinuityQaPreview() {
     const store = window as unknown as { __qaPlaybackContinuity?: ContinuityQaTrace };
     const trace = store.__qaPlaybackContinuity ?? { cameraTargets: [] };
     store.__qaPlaybackContinuity = trace;
-    trace.cameraTargets.push({ key: playbackCameraTargetKey(target), at: Date.now() });
+    const overlay = document.querySelector<HTMLElement>(".journey-playback");
+    trace.cameraTargets.push({ key: playbackCameraTargetKey(target), at: Date.now(),
+      step: overlay ? Number(overlay.dataset.playbackStep) : null,
+      phase: overlay?.dataset.playbackPhase ?? null,
+    });
   }, []);
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
-      <JourneyPlaybackOverlay
-        journey={continuityQaJourney}
-        onClose={() => undefined}
+      {closed ? null : <JourneyPlaybackOverlay
+        journey={journey}
+        onClose={() => setClosed(true)}
         onCameraTargetChange={recordCameraTarget}
         playbackMode="full"
         reduceMotion={reduceMotion}
-      />
+      />}
     </main>
   );
 }

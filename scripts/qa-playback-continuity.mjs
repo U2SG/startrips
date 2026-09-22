@@ -342,6 +342,10 @@ for (const viewport of VIEWPORTS) {
     await run.page.waitForFunction(() => (
       document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "outro"
     ), null, { timeout: 90_000 });
+    // #465: the final spatial focus commits when the media-to-map bridge settles.
+    await run.page.waitForFunction(() => (
+      window.__qaPlaybackContinuity?.cameraTargets.at(-1)?.key === "route"
+    ));
     const trace = await readTrace(run.page);
 
     const cameraKeys = trace.cameraTargets.map((entry) => entry.key);
