@@ -45,7 +45,9 @@ export const LEGACY_COVER_REVEAL_PRESET_ALIASES: Readonly<Record<string, RevealP
 
 export function resolveCoverRevealPresetId(presetId: string): RevealPresetId | null {
   if (REVEAL_PRESET_IDS.includes(presetId as RevealPresetId)) return presetId as RevealPresetId;
-  return LEGACY_COVER_REVEAL_PRESET_ALIASES[presetId] ?? null;
+  return Object.hasOwn(LEGACY_COVER_REVEAL_PRESET_ALIASES, presetId)
+    ? LEGACY_COVER_REVEAL_PRESET_ALIASES[presetId] ?? null
+    : null;
 }
 
 /**

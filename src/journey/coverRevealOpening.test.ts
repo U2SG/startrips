@@ -94,6 +94,15 @@ describe("planCoverRevealOpening", () => {
     expect(decision).toEqual({ kind: "none", reason: "unusable-derivative" });
   });
 
+  it.each(["constructor", "toString"])(
+    "rejects inherited Object.prototype preset name %s",
+    (presetId) => {
+      expect(planCoverRevealOpening(
+        input({ payload: payload({ presetId }) }),
+      )).toEqual({ kind: "none", reason: "unusable-derivative" });
+    },
+  );
+
   it("takes the preset the server chose rather than a fixed one", () => {
     const decision = planCoverRevealOpening(
       input({ payload: payload({ presetId: "mist-veil" }) }),
