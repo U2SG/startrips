@@ -20,6 +20,7 @@ import "../styles/starlight-media.css";
 import { useAtlasView } from "./atlasView";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import { PlaybackMediaStage } from "./PlaybackMediaStage";
+import { playbackSequenceChapterPresentation } from "./playbackSequenceChapter";
 import { usePlaybackMapBridge } from "./usePlaybackMapBridge";
 import { playbackReadIsReusable, type MediaReadState as MediaRead } from "./mediaReadRefresh";
 import { playbackMediaGate, playbackChapterOpeningUrl, playbackHoldReason, type PlaybackHoldReason } from "./playbackMediaPresentation";
@@ -1125,6 +1126,16 @@ export function JourneyPlaybackOverlay({
   const chapterMedia = chapterPointIndex === null
     ? []
     : playbackMediaForPoint(journey, chapterPointIndex);
+  const sequencePresentation = playbackSequenceChapterPresentation(journey, step);
+  const sequencePeeks = sequencePresentation
+    ? sequencePresentation.peekMediaIndexes.flatMap((mediaIndex) => {
+      const asset = chapterMedia[mediaIndex];
+      const read = asset ? mediaReads[asset.id] : null;
+      if (!asset || read?.status !== "ready") return [];
+      const url = asset.mimeType.startsWith("image/") ? read.url : read.preview?.url;
+      return url ? [{ asset, url }] : [];
+    })
+    : undefined;
   // The arrival beat already waits for this asset to decode (`playbackHoldReason`),
   // so showing it as the chapter's opening still costs no extra read and removes
   // the blank frame the media beat used to enter from. A video chapter keeps the
@@ -1272,6 +1283,7 @@ export function JourneyPlaybackOverlay({
             intent={`${journey.id}:${playbackStepIdentity(journey, step)}:${director.stepIndex}:${director.intentRevision}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`}
             mapEntrance={mapBridge.entrance}
             isIntentCurrent={mapBridge.isCurrent}
+            sequencePeeks={sequencePeeks}
             stepIndex={director.stepIndex}
             imageReady={activeMediaGate === "ready"}
             videoPositionReady={!activeVideoTrim || (enteredVideoTrimKeyRef.current === activeVideoTrimKey

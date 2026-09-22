@@ -709,12 +709,10 @@ function JourneyPlaybackPrefetchQaPreview() {
   );
 }
 
-// #456: the sparse-chapter continuity fixture — three consecutive Route Points
-// carrying 0, 1 and 3 Route Point Media, which is exactly the density grammar
-// `routePointChapterDensity` classifies. The lane needs the camera commands the
-// overlay issues, and this preview is the only place that owns them, so it
-// records each one instead of discarding it like the other playback previews.
-const CONTINUITY_QA_MEDIA_COUNTS = [0, 1, 3];
+// #456 + #492: one fixture spans sparse chapters plus the 4/6/9 sequence band.
+// The six-media chapter includes one real video so the browser lane exercises
+// the same mixed-media stack while keeping the director as the only transport.
+const CONTINUITY_QA_MEDIA_COUNTS = [0, 1, 3, 4, 6, 9];
 
 const continuityQaJourneyId = "00000000-0000-4000-8000-000000000456";
 const continuityQaJourney: Journey = (() => {
@@ -741,8 +739,10 @@ const continuityQaJourney: Journey = (() => {
       routePointId: point.id,
       storageDriver: "qa",
       storageKey: `qa/continuity-${pointIndex}-${mediaIndex}`,
-      fileName: `continuity-${pointIndex}-${mediaIndex}.png`,
-      mimeType: "image/png",
+      fileName: pointIndex === 4 && mediaIndex === 2
+        ? `continuity-${pointIndex}-${mediaIndex}.webm`
+        : `continuity-${pointIndex}-${mediaIndex}.png`,
+      mimeType: pointIndex === 4 && mediaIndex === 2 ? "video/webm" : "image/png",
       bytes: 68,
       sortOrder: pointIndex * 10 + mediaIndex,
       uploadedByUserId: storyQaJourney.createdByUserId,

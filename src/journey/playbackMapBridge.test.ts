@@ -42,7 +42,7 @@ describe("Playback map bridge boundaries", () => {
     }
   });
 
-  it.each([0, 1, 2, 3, 4, 10])("bridges only sparse chapter edges (%i media)", (count) => {
+  it.each([0, 1, 2, 3, 4, 6, 9, 10])("bridges only sparse chapter edges (%i media)", (count) => {
     const journey = fixture([count, 0]);
     const steps = buildPlaybackSteps(journey);
     const before = JSON.stringify(steps);
@@ -50,10 +50,22 @@ describe("Playback map bridge boundaries", () => {
       const bridge = playbackMapBridgeBoundary(journey, steps[index - 1], step);
       return bridge ? [bridge] : [];
     });
-    expect(bridges.map((bridge) => bridge.direction)).toEqual(count > 0 && count <= 3
+    expect(bridges.map((bridge) => bridge.direction)).toEqual(count > 0 && count <= 9
       ? ["map-to-media", "media-to-map"] : []);
     expect(bridges.every((bridge) => bridge.density === routePointChapterDensity(journey, 0))).toBe(true);
     expect(JSON.stringify(steps)).toBe(before);
+  });
+
+  it("never turns adjacent 4-9 sequence media into a map boundary", () => {
+    const journey = fixture([6, 1]);
+    expect(routePointChapterDensity(journey, 0)).toBe("sequence");
+    for (let mediaIndex = 0; mediaIndex < 5; mediaIndex += 1) {
+      expect(playbackMapBridgeBoundary(
+        journey,
+        { kind: "media", pointIndex: 0, mediaIndex },
+        { kind: "media", pointIndex: 0, mediaIndex: mediaIndex + 1 },
+      )).toBeNull();
+    }
   });
 
   it("leaves adjacent media, reverse travel, and non-final media departures alone", () => {

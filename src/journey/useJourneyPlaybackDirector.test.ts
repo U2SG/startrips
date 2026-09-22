@@ -20,6 +20,7 @@ import {
   resolvePlaybackTimerBudget,
 } from "./useJourneyPlaybackDirector";
 import { buildPlaybackPlan } from "./journeyPlaybackPlan";
+import { playbackSequenceChapterPresentation } from "./playbackSequenceChapter";
 import { resolveVideoTrim, videoTrimPlayedFraction } from "./videoTrimPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -334,6 +335,55 @@ const progressJourney: Journey = {
   routePoints: [progressPoint("point-0", 0), progressPoint("point-1", 1)],
   media: [progressMedia("media-0", "point-0"), progressMedia("media-1", "point-1")],
 };
+
+describe("sequence chapter director ownership (#492)", () => {
+  const sequenceJourney: Journey = {
+    ...progressJourney,
+    routePoints: [progressPoint("point-sequence", 0)],
+    media: Array.from({ length: 6 }, (_unused, index) => ({
+      ...progressMedia(`sequence-${index}`, "point-sequence"),
+      sortOrder: index,
+    })),
+  };
+
+  it("derives stack primary and peeks from the director step across next, seek and tempo replanning", () => {
+    const steps = buildPlaybackSteps(sequenceJourney);
+    const mediaSteps = steps.flatMap((step, index) => step.kind === "media" ? [index] : []);
+    expect(mediaSteps).toHaveLength(6);
+
+    let state = playbackReducer(sequenceJourney, initialPlaybackState(), { type: "seek", stepIndex: mediaSteps[0] });
+    let presentation = playbackSequenceChapterPresentation(sequenceJourney, steps[state.stepIndex]);
+    expect(presentation).toMatchObject({ mediaIndex: 0, primaryAssetId: "sequence-0" });
+    expect(presentation?.peekAssetIds).toEqual(["sequence-1", "sequence-2"]);
+
+    state = playbackReducer(sequenceJourney, state, { type: "next" });
+    presentation = playbackSequenceChapterPresentation(sequenceJourney, steps[state.stepIndex]);
+    expect(presentation).toMatchObject({ mediaIndex: 1, primaryAssetId: "sequence-1" });
+    expect(steps[state.stepIndex - 1]).toMatchObject({ kind: "media", mediaIndex: 0 });
+
+    const beforeTempoStep = state.stepIndex;
+    expect(replanPlaybackTimerBudget(1400, 2800, 1700)).toBe(850);
+    expect(state.stepIndex).toBe(beforeTempoStep);
+    expect(playbackSequenceChapterPresentation(sequenceJourney, steps[state.stepIndex])?.primaryAssetId)
+      .toBe("sequence-1");
+
+    state = playbackReducer(sequenceJourney, state, { type: "seek", stepIndex: mediaSteps[4] });
+    presentation = playbackSequenceChapterPresentation(sequenceJourney, steps[state.stepIndex]);
+    expect(presentation).toMatchObject({ mediaIndex: 4, primaryAssetId: "sequence-4" });
+    expect(presentation?.peekAssetIds).toEqual(["sequence-3", "sequence-5"]);
+  });
+
+  it("keeps canonical order and primary identity independent of motion preference", () => {
+    const steps = buildPlaybackSteps(sequenceJourney);
+    const mediaStep = steps.find((step) => step.kind === "media" && step.mediaIndex === 3);
+    const projectUnder = (reduceMotion: boolean) => {
+      void reduceMotion;
+      return playbackSequenceChapterPresentation(sequenceJourney, mediaStep);
+    };
+    expect(projectUnder(true)).toEqual(projectUnder(false));
+    expect(projectUnder(true)?.primaryAssetId).toBe("sequence-3");
+  });
+});
 
 describe("completed director state (#126)", () => {
   it("keeps the final step selected while reporting that playback is no longer playing", () => {

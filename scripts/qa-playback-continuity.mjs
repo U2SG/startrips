@@ -22,14 +22,15 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+const tinyVideo = "/demo-media/east-star-orbit.webm";
 
 /**
  * The fixture's chapter densities, mirrored from `CONTINUITY_QA_MEDIA_COUNTS`
- * in src/preview/qaEntry.tsx. Mirrored rather than imported because this script runs in
+ * in src/preview/ProductQaPreview.tsx. Mirrored rather than imported because this script runs in
  * node against a served page, the same way `qa-playback-prefetch.mjs` mirrors
  * the beat table it drives.
  */
-const MEDIA_COUNTS = [0, 1, 3];
+const MEDIA_COUNTS = [0, 1, 3, 4, 6, 9];
 
 /** `buildPlaybackSteps` order for that fixture: intro, then per point a travel
  * (except the first), its arrival and one media beat per asset, then outro. */
@@ -49,7 +50,7 @@ function fixtureSteps() {
 const STEPS = fixtureSteps();
 
 const densityFor = (mediaCount) => (
-  mediaCount === 0 ? "empty" : mediaCount === 1 ? "single" : "few"
+  mediaCount === 0 ? "empty" : mediaCount === 1 ? "single" : mediaCount <= 3 ? "few" : "sequence"
 );
 
 /** The beats manual Next/Previous may land on: everything but travel and the
@@ -71,8 +72,8 @@ const EXPECTED_CAMERA_KEYS = [
 
 const VIEWPORTS = [
   { label: "desktop", width: 1280, height: 800 },
-  // #194's compact-mobile contract, the narrowest layout the product ships.
-  { label: "compact-mobile", width: 390, height: 844 },
+  { label: "phone-portrait", width: 390, height: 844, isMobile: true, hasTouch: true },
+  { label: "phone-landscape", width: 844, height: 390, isMobile: true, hasTouch: true },
 ];
 
 const browser = await launchQaBrowser();
@@ -88,6 +89,8 @@ async function open({ viewport, reduceMotion = true }) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
+    isMobile: viewport.isMobile ?? false,
+    hasTouch: viewport.hasTouch ?? false,
     reducedMotion: reduceMotion ? "reduce" : "no-preference",
   });
   const consoleErrors = [];
@@ -109,6 +112,7 @@ async function open({ viewport, reduceMotion = true }) {
     const sample = (overlay) => {
       const chapter = overlay.querySelector(".journey-playback__chapter");
       const mediaRegion = overlay.querySelector(".journey-playback__chapter-media");
+      const presentation = mediaRegion?.querySelector(".playback-media-presentation");
       return {
         at: Date.now(),
         step: Number(overlay.getAttribute("data-playback-step")),
@@ -119,7 +123,11 @@ async function open({ viewport, reduceMotion = true }) {
         chapterPoint: chapter?.getAttribute("data-chapter-point") ?? null,
         hasCaption: Boolean(overlay.querySelector(".journey-playback__stop h3")),
         hasMediaRegion: Boolean(mediaRegion),
-        hasMediaFrame: Boolean(mediaRegion?.querySelector("img, video")),
+        hasMediaFrame: Boolean(presentation?.getAttribute("data-presented-asset")),
+        requestedAsset: presentation?.getAttribute("data-requested-asset") ?? null,
+        presentedAsset: presentation?.getAttribute("data-presented-asset") ?? null,
+        sequencePrimary: presentation?.getAttribute("data-sequence-primary") ?? null,
+        sequencePeekCount: Number(presentation?.getAttribute("data-sequence-peek-count") ?? 0),
       };
     };
     const push = (overlay) => {
@@ -150,7 +158,7 @@ async function open({ viewport, reduceMotion = true }) {
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({
-      url: onePixelGif,
+      url: route.request().url().includes("st109-p4-m2") ? tinyVideo : onePixelGif,
       expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     }),
   }));
@@ -237,7 +245,7 @@ for (const viewport of VIEWPORTS) {
       collapsed: collapsedMediaBeats,
       failed: collapsedMediaBeats.length > 0,
     });
-    if (viewport.label === "compact-mobile") {
+    if (viewport.label === "phone-portrait") {
       const longNoteStep = STEPS.findIndex((candidate) => (
         candidate.kind === "media" && candidate.pointIndex === 1 && candidate.mediaIndex === 0
       ));
@@ -326,6 +334,64 @@ for (const viewport of VIEWPORTS) {
       consoleErrors: run.consoleErrors,
       pageErrors: run.pageErrors,
       failed: run.consoleErrors.length > 0 || run.pageErrors.length > 0,
+    });
+  } finally {
+    await run.page.close();
+  }
+}
+
+// ── Sequence stack stress: rapid seek + tempo churn must stay current ─────────
+{
+  const run = await open({ viewport: VIEWPORTS[2], reduceMotion: false });
+  try {
+    await pausePlayback(run.page);
+    for (let rewind = 0; rewind < STEPS.length; rewind += 1) {
+      await clickTransport(run.page, "上一个章节");
+    }
+    const targetStep = STEPS.findIndex((candidate) => (
+      candidate.kind === "media" && candidate.pointIndex === 5 && candidate.mediaIndex === 0
+    ));
+    for (let move = 0; move < EXPECTED_MEANINGFUL.length; move += 1) {
+      if ((await currentStep(run.page)).step === targetStep) break;
+      await clickTransport(run.page, "下一个章节");
+    }
+    await run.page.waitForFunction(() => (
+      document.querySelector(".playback-media-presentation")?.getAttribute("data-media-presentation") === "settled"
+    ));
+    await run.page.locator('.journey-playback__controls button[aria-label="继续播放"]').evaluate((button) => button.click());
+
+    const scrubber = run.page.locator('.journey-playback__progress input[type="range"]');
+    const tempo = run.page.locator(".journey-playback__tempo select");
+    await scrubber.press("ArrowRight");
+    await tempo.selectOption("fast");
+    await scrubber.press("ArrowRight");
+    await tempo.selectOption("immersive");
+    await scrubber.press("ArrowRight");
+    await tempo.selectOption("standard");
+    await run.page.waitForFunction(() => {
+      const overlay = document.querySelector(".journey-playback");
+      const presentation = document.querySelector(".playback-media-presentation");
+      return overlay?.getAttribute("data-playback-chapter-density") === "sequence"
+        && presentation?.getAttribute("data-media-presentation") === "settled"
+        && presentation.getAttribute("data-sequence-primary") === presentation.getAttribute("data-requested-asset")
+        && presentation.getAttribute("data-presented-asset") === presentation.getAttribute("data-requested-asset");
+    }, null, { timeout: 10_000 });
+    const final = await run.page.evaluate(() => {
+      const overlay = document.querySelector(".journey-playback");
+      const presentation = document.querySelector(".playback-media-presentation");
+      return {
+        step: Number(overlay?.getAttribute("data-playback-step")),
+        density: overlay?.getAttribute("data-playback-chapter-density"),
+        requested: presentation?.getAttribute("data-requested-asset"),
+        presented: presentation?.getAttribute("data-presented-asset"),
+        primary: presentation?.getAttribute("data-sequence-primary"),
+        peeks: Number(presentation?.getAttribute("data-sequence-peek-count") ?? 0),
+      };
+    });
+    record("phone-landscape:sequence-rapid-seek-tempo-stays-current", {
+      ...final,
+      failed: final.density !== "sequence" || final.primary !== final.requested
+        || final.presented !== final.requested || final.peeks < 1,
     });
   } finally {
     await run.page.close();

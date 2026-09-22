@@ -280,14 +280,16 @@
    the stage's ordinary centred single-item layout, because the place is all
    there is to show. */
 .journey-playback[data-playback-chapter-density="single"] .journey-playback__stage,
-.journey-playback[data-playback-chapter-density="few"] .journey-playback__stage {
+.journey-playback[data-playback-chapter-density="few"] .journey-playback__stage,
+.journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stage {
   /* Keep a real media viewport even when a Route Point note is very long. */
   grid-template-rows: minmax(0, 36%) minmax(0, 1fr);
   align-content: stretch;
 }
 
 .journey-playback[data-playback-chapter-density="single"] .journey-playback__stop,
-.journey-playback[data-playback-chapter-density="few"] .journey-playback__stop {
+.journey-playback[data-playback-chapter-density="few"] .journey-playback__stop,
+.journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop {
   min-height: 0;
   height: 100%;
   max-height: 100%;
