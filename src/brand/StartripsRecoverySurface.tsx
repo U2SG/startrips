@@ -5,7 +5,7 @@ import {
   getStartripsRecoveryDescriptor,
   type StartripsRecoveryActionKind,
   type StartripsRecoveryKind,
-} from "./startripsRecoverySurface";
+} from "./recoverySurfaces";
 
 const ACTION_ICON = {
   home: IconArrowLeft,

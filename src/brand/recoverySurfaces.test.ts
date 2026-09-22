@@ -3,7 +3,7 @@ import {
   canUseStartripsRecoveryBack,
   getStartripsRecoveryDescriptor,
   getStartripsRecoveryCopy,
-} from "./startripsRecoverySurface";
+} from "./recoverySurfaces";
 
 describe("Startrips recovery surface descriptors", () => {
   it("keeps empty truthful by omitting retry action and retry copy", () => {
