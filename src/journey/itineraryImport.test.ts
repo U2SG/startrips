@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyItineraryImport,
+  IMPORTED_ROUTE_POINT_FIELDS,
   buildItineraryImportDraft,
   defaultItinerarySelection,
   itineraryDraftEntries,
@@ -256,6 +257,41 @@ describe("applying a reviewed itinerary draft", () => {
     expect(replay.addedRoutePointCount).toBe(0);
     expect(replay.replayed).toBe(true);
     expect(replay.routePoints).toEqual(applied.routePoints);
+  });
+
+  it("is a plan, not a recording: no capture, no track, no Home Base evidence", () => {
+    const draft = draftOf(CHINESE_ITINERARY, "zh");
+    const imported = itineraryDraftToRoutePoints(
+      draft,
+      defaultItinerarySelection(draft),
+    );
+    const serialized = JSON.stringify(imported.map((item) => item.point));
+    // A recorded track carries samples with these; an imported plan has no
+    // shape to put one in, so a plan can never be read back as evidence that
+    // anybody was physically there.
+    for (const field of [
+      "recordedAt",
+      "accuracyMeters",
+      "segmentOrder",
+      "sampleOrder",
+      "mediaAssetId",
+      "capturedAt",
+      "contentHash",
+    ]) {
+      expect(serialized).not.toContain(field);
+    }
+    // And nothing it writes reaches the Home Base evidence surface, which
+    // reads saved Journeys rather than drafts.
+    expect(IMPORTED_ROUTE_POINT_FIELDS).toEqual([
+      "latitude",
+      "longitude",
+      "label",
+      "isStop",
+      "occurredAt",
+      "note",
+    ]);
+    expect(imported.every((item) => item.point.occurredAt === null
+      || /^\d{4}-\d{2}-\d{2}$/.test(item.point.occurredAt))).toBe(true);
   });
 
   it("sends only Route Point fields, with no plan-only context on the wire", () => {
