@@ -169,7 +169,9 @@ function derivativePayload(overrides = {}, displayUrl = DERIVATIVE_URL) {
       journeyId: JOURNEY_ID,
       generationKind: "cover-reveal",
       generationVersion: 1,
-      presetId: "ink-bloom",
+      // Match the metadata emitted by the shipped server/worker contract. The
+      // Web opening must accept this persisted legacy id without regeneration.
+      presetId: "reveal-flow-ink-wash-v1",
       sourceMediaAssetId: COVER_ASSET_ID,
       sourceContentHash: COVER_HASH,
       mimeType: "image/png",

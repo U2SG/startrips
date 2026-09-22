@@ -76,12 +76,32 @@ describe("planCoverRevealOpening", () => {
     });
   });
 
+  it("maps the shipped legacy worker preset to the renderer's approved ink-bloom flow", () => {
+    expect(planCoverRevealOpening(
+      input({ payload: payload({ presetId: "reveal-flow-ink-wash-v1" }) }),
+    )).toEqual({
+      kind: "open",
+      identity: coverRevealOpeningIdentity(JOURNEY_ID, "asset-cover", COVER_HASH),
+      preset: "ink-bloom",
+      generatedUrl: "https://storage.example/derivative?sig=short-lived",
+    });
+  });
+
   it("never substitutes the renderer default for a preset this build cannot render", () => {
     const decision = planCoverRevealOpening(
       input({ payload: payload({ presetId: "ink-bloom-v2" }) }),
     );
     expect(decision).toEqual({ kind: "none", reason: "unusable-derivative" });
   });
+
+  it.each(["constructor", "toString"])(
+    "rejects inherited Object.prototype preset name %s",
+    (presetId) => {
+      expect(planCoverRevealOpening(
+        input({ payload: payload({ presetId }) }),
+      )).toEqual({ kind: "none", reason: "unusable-derivative" });
+    },
+  );
 
   it("takes the preset the server chose rather than a fixed one", () => {
     const decision = planCoverRevealOpening(
