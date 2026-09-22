@@ -3,8 +3,9 @@
 // The unit tests own the grammar (`routePointChapterDensity`,
 // `meaningfulPlaybackStepIndexes`); they cannot see the thing the issue is
 // actually about, which is what a viewer sees at the seam between an arrival
-// and the memory it introduces. This lane plays the deterministic 0/1/3-media
-// fixture in a real browser and grades four claims that only exist on screen:
+// and the Route Point Media it introduces. This lane plays deterministic
+// 0/1/3/4/6/9-media chapters in a real browser and grades the claims that only
+// exist on screen:
 //
 //   1. no same-point globe re-focus — one camera command per Route Point, and
 //      never two in a row for the same target;
@@ -12,9 +13,10 @@
 //      a populated chapter's media region is never an empty frame once its
 //      media beat owns it;
 //   3. meaningful Next/Previous — an `empty` chapter's arrival is a
-//      destination, a populated chapter's arrival is not, and every media of a
-//      `few` chapter is reachable one click at a time;
-//   4. all of it on desktop AND on the compact-mobile layout.
+//      destination, a populated chapter's arrival is not, and every media beat
+//      stays reachable in canonical order;
+//   4. 4-9 sequence chapters expose bounded peeks without a second video;
+//   5. all of it on desktop, portrait phone AND phone landscape.
 //
 // It tunes nothing: the density grammar and the beat order are the product
 // decision, and this only grades the shipped ones.
@@ -128,6 +130,8 @@ async function open({ viewport, reduceMotion = true }) {
         presentedAsset: presentation?.getAttribute("data-presented-asset") ?? null,
         sequencePrimary: presentation?.getAttribute("data-sequence-primary") ?? null,
         sequencePeekCount: Number(presentation?.getAttribute("data-sequence-peek-count") ?? 0),
+        liveVideoCount: presentation?.querySelectorAll(".playback-media-presentation__slot video").length ?? 0,
+        peekVideoCount: presentation?.querySelectorAll(".playback-media-presentation__peek video").length ?? 0,
       };
     };
     const push = (overlay) => {
@@ -328,6 +332,36 @@ for (const viewport of VIEWPORTS) {
     record(`${viewport.label}:empty-chapter-has-no-media-stage`, {
       samples: emptyWithMedia.length,
       failed: emptyWithMedia.length > 0,
+    });
+
+    const sequencePointsWithPeek = [...new Set(trace.samples
+      .filter((entry) => (
+        entry.density === "sequence"
+        && entry.presentedAsset === entry.requestedAsset
+        && entry.sequencePeekCount > 0
+      ))
+      .map((entry) => Number(entry.chapterPoint))
+      .filter(Number.isFinite))]
+      .sort((left, right) => left - right);
+    record(`${viewport.label}:sequence-chapters-show-bounded-peek`, {
+      expectedPoints: [3, 4, 5],
+      actualPoints: sequencePointsWithPeek,
+      failed: JSON.stringify(sequencePointsWithPeek) !== JSON.stringify([3, 4, 5]),
+    });
+
+    const mixedVideoAsset = "st109-p4-m2";
+    const mixedVideoSamples = trace.samples.filter((entry) => entry.requestedAsset === mixedVideoAsset);
+    const mixedVideoSettled = mixedVideoSamples.some((entry) => (
+      entry.presentedAsset === mixedVideoAsset
+      && entry.liveVideoCount === 1
+      && entry.peekVideoCount === 0
+    ));
+    record(`${viewport.label}:sequence-video-has-one-live-transport`, {
+      samples: mixedVideoSamples.length,
+      maxLiveVideos: Math.max(0, ...mixedVideoSamples.map((entry) => entry.liveVideoCount)),
+      maxPeekVideos: Math.max(0, ...mixedVideoSamples.map((entry) => entry.peekVideoCount)),
+      failed: !mixedVideoSettled
+        || mixedVideoSamples.some((entry) => entry.liveVideoCount > 1 || entry.peekVideoCount > 0),
     });
 
     record(`${viewport.label}:manual-walk-clean`, {

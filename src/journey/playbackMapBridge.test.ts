@@ -42,7 +42,7 @@ describe("Playback map bridge boundaries", () => {
     }
   });
 
-  it.each([0, 1, 2, 3, 4, 6, 9, 10])("bridges only sparse chapter edges (%i media)", (count) => {
+  it.each([0, 1, 2, 3, 4, 6, 9, 10])("bridges supported chapter edges (%i media)", (count) => {
     const journey = fixture([count, 0]);
     const steps = buildPlaybackSteps(journey);
     const before = JSON.stringify(steps);
