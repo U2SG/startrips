@@ -193,6 +193,38 @@ def _replace(path, body):
             os.unlink(temporary)
 
 
+def _read_predecessor(path):
+    # Only absence is a legitimate empty predecessor; unreadable is UNKNOWN.
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _restore_predecessors(root, originals):
+    """Best-effort rollback followed by a separate, complete exact-byte proof."""
+    errors = []
+    for name, old in reversed(list(originals.items())):
+        path = root / name
+        try:
+            if _read_predecessor(path) == old:
+                continue
+            if old is None:
+                path.unlink(missing_ok=True)
+            else:
+                _replace(path, old)
+        except OSError as exc:
+            # One locked file must not prevent restoration of other consumers.
+            errors.append(name + ': ' + str(exc))
+    for name, old in originals.items():
+        try:
+            if _read_predecessor(root / name) != old:
+                errors.append(name + ': predecessor readback mismatch')
+        except OSError as exc:
+            errors.append(name + ': predecessor readback unavailable: ' + str(exc))
+    return errors
+
+
 def activate(root, repository, base, expected, repo):
     # Activation-only imports keep read-only selector/runtime verification usable
     # in legacy/synthetic consumers that intentionally expose only a minimal
@@ -207,15 +239,21 @@ def activate(root, repository, base, expected, repo):
     if planned['expected'] != expected:
         raise StoreConflict('Runtime bytes changed after the activation plan')
     ci = require_source_ci(repo, planned['source_sha'])
-    tag = ('delivery-activation:' + uuid.uuid4().hex + '\n').encode()
+    activation_id = uuid.uuid4().hex
+    tag = ('delivery-activation:' + activation_id + '\n').encode()
     stop = root / 'AGENT_STOP'
     # Existing human STOP is never cleared or repurposed by this operation.
     try:
         with stop.open('xb') as stream:
-            stream.write(tag)
+            stream.write(tag); stream.flush(); os.fsync(stream.fileno())
     except FileExistsError as exc:
         raise StoreConflict('Existing owner STOP preserved; package activation deferred') from exc
-    originals = {}; wrote = []
+    originals = {}
+    # Before the first runtime/receipt mutation a failed preflight may release
+    # only its own STOP. Once installation starts, release requires positive proof
+    # of either the complete new runtime or the complete predecessor restoration.
+    safe_to_resume = True
+    recovery = root / '.agent-artifacts/evaluations' / ('delivery-activation-' + activation_id)
     try:
         ensure_idle(root)
         if occupancy(SimpleNamespace(root=str(root)))['occupied_slots']:
@@ -223,32 +261,54 @@ def activate(root, repository, base, expected, repo):
         with _storage_mutex(root / 'feature_list.json'):
             # No model/owner is running and the existing STOP prevents a fresh launch.
             for name in REQUIRED:
-                path = root / name; body = path.read_bytes() if path.exists() else None
+                body = _read_predecessor(root / name)
                 if (sha(body) if body is not None else None) != expected[name]:
                     raise StoreConflict('Runtime drifted at the safe boundary: ' + name)
                 originals[name] = body
+            # A failed verify may happen AFTER the new receipt was published.
+            # Restore its exact previous bytes (or absence), not just runtime files.
+            originals[RECEIPT] = _read_predecessor(root / RECEIPT)
+            # Durable predecessor evidence survives even a rollback/process failure.
+            # This directory is recovery evidence, never an owner/dispatch registry.
+            for name, body in originals.items():
+                if body is not None:
+                    _replace(recovery / 'predecessors' / name, body)
+                    if (recovery / 'predecessors' / name).read_bytes() != body:
+                        raise StoreConflict('Activation predecessor backup mismatch: ' + name)
+            write_json(recovery / 'recovery.json', {
+                'source_sha': planned['source_sha'], 'owned_stop': tag.decode(),
+                'predecessors': {name: sha(body) if body is not None else None
+                                 for name, body in originals.items()},
+            })
+            if _read_predecessor(stop) != tag:
+                raise StoreConflict('Activation STOP changed ownership; no runtime installed')
+            safe_to_resume = False
             try:
                 for name in REQUIRED:
                     body = git(repository, 'show', planned['source_sha'] + ':tools/control-plane/' + name)
-                    _replace(root / name, body); wrote.append(name)
+                    _replace(root / name, body)
                 evidence = {'schema_version': VERSION, 'source_sha': planned['source_sha'],
                             'files': planned['files'], 'ci': ci, 'boundary_verified': True}
                 write_json(root / RECEIPT, evidence)
-                verify(root)
-            except BaseException:
-                # A caught write failure rolls back. A process crash leaves the
-                # exact owned STOP in place and no valid final manifest; packages
-                # stay disabled until explicit recovery inspects the partial bytes.
-                for name in reversed(wrote):
-                    old = originals[name]
-                    if old is None:
-                        (root / name).unlink(missing_ok=True)
-                    else:
-                        _replace(root / name, old)
+                if verify(root) != evidence:
+                    raise StoreConflict('Installed activation receipt changed during verification')
+                safe_to_resume = True
+            except BaseException as failure:
+                # Check ALL predecessors, including a write that replaced its file
+                # before raising. Returning from rollback is not restoration proof.
+                errors = _restore_predecessors(root, originals)
+                if errors:
+                    try:
+                        write_json(recovery / 'rollback-errors.json', {'errors': errors})
+                    except OSError:
+                        pass  # The owned STOP and pre-write recovery image remain.
+                    raise StoreConflict('Activation rollback incomplete; owned STOP retained; '
+                                        'recovery=' + str(recovery) + '; ' + '; '.join(errors)) from failure
+                safe_to_resume = True
                 raise
         return evidence
     finally:
-        if stop.exists() and stop.read_bytes() == tag:
+        if safe_to_resume and stop.exists() and stop.read_bytes() == tag:
             clear_owned_stop(root, 'AGENT_STOP', tag)
 
 

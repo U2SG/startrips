@@ -135,7 +135,13 @@ Runtime rollout is explicit: source changes under `tools/control-plane/` pass ex
 idle reversible boundary under an owned temporary STOP and expected-byte guards. Live old
 consumers/owners are never killed or restarted for activation. Package registration is forbidden
 until `delivery_runtime.py verify` proves the installed consumers exactly match that verified
-Source.
+Source. Before modifying consumers, activation saves exact predecessor bytes (including the prior
+activation receipt or its absence) under `.agent-artifacts/evaluations/delivery-activation-<id>/`.
+Its own temporary STOP is released only after complete installed-runtime verification or a full
+predecessor readback proof following rollback. An incomplete, failed or unreadable rollback keeps
+that owned STOP and recovery evidence intact for explicit recovery; a missing package receipt alone
+does not make a mixed runtime safe for ordinary single-issue scheduling. Human STOP ownership is
+never replaced or cleared by activation.
 
 ## Source review receipt
 

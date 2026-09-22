@@ -473,6 +473,185 @@ class RuntimeActivationPlanTests(unittest.TestCase):
         self.assertEqual(['consumer.txt'], plan['conflicts'])
 
 
+class RuntimeActivationFailureTests(unittest.TestCase):
+    """Synthetic install/rollback failures; never inspect the host's processes."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / 'installed'
+        self.root.mkdir()
+        self.repository = Path(self.temp.name) / 'source'
+        self.names = ('consumer-a.txt', 'consumer-b.txt', 'new-consumer.txt')
+        self.originals = {'consumer-a.txt': b'old-a\n', 'consumer-b.txt': b'old-b\n',
+                          'new-consumer.txt': None}
+        self.incoming = {name: ('new-' + name + '\n').encode() for name in self.names}
+        for name, body in self.originals.items():
+            if body is not None:
+                (self.root / name).write_bytes(body)
+        self.one = self.root / 'feature_list.json'
+        self.one.write_text(json.dumps(document(row('ST-001', 101))), encoding='utf-8')
+        self.one_before = self.one.read_bytes()
+        self.receipt = self.root / runtime.RECEIPT
+        self.receipt.parent.mkdir(parents=True, exist_ok=True)
+        self.plan = {'source_sha': A, 'conflicts': [],
+                     'files': {name: runtime.sha(body) for name, body in self.incoming.items()},
+                     'expected': {name: runtime.sha(body) if body is not None else None
+                                  for name, body in self.originals.items()}}
+        patches = [
+            mock.patch.object(runtime, 'REQUIRED', self.names),
+            mock.patch.object(runtime, 'activation_plan', return_value=self.plan),
+            mock.patch.object(runtime, 'require_source_ci',
+                              return_value={'head_sha': A, 'conclusion': 'success'}),
+            mock.patch.object(runtime, 'git', side_effect=lambda repo, cmd, ref:
+                              self.incoming[ref.split(':tools/control-plane/', 1)[1]]),
+            mock.patch('execution.ensure_idle', return_value={}),
+            mock.patch('external_execution.occupancy', return_value={'occupied_slots': 0}),
+        ]
+        for patcher in patches:
+            patcher.start(); self.addCleanup(patcher.stop)
+
+    def activate(self):
+        return runtime.activate(self.root, self.repository, B, self.plan['expected'], REPO)
+
+    def assert_predecessors(self):
+        for name, body in self.originals.items():
+            path = self.root / name
+            self.assertEqual(body, path.read_bytes() if path.exists() else None, name)
+        self.assertEqual(self.one_before, self.one.read_bytes())
+
+    def assert_stopped_with_recovery(self):
+        stop = (self.root / 'AGENT_STOP').read_bytes()
+        self.assertTrue(stop.startswith(b'delivery-activation:'))
+        directories = list((self.root / '.agent-artifacts/evaluations').glob('delivery-activation-*'))
+        self.assertEqual(1, len(directories))
+        recovery = directories[0]
+        manifest = json.loads((recovery / 'recovery.json').read_bytes())
+        self.assertEqual(stop.decode(), manifest['owned_stop'])
+        for name, body in self.originals.items():
+            self.assertEqual(runtime.sha(body) if body is not None else None,
+                             manifest['predecessors'][name])
+            if body is not None:
+                self.assertEqual(body, (recovery / 'predecessors' / name).read_bytes())
+        self.assertEqual(self.one_before, self.one.read_bytes())
+        return recovery
+
+    def test_success_releases_owned_stop_only_after_exact_runtime_verified(self):
+        result = self.activate()
+        self.assertEqual(result, runtime.verify(self.root))
+        self.assertFalse((self.root / 'AGENT_STOP').exists())
+        self.assertEqual(self.one_before, self.one.read_bytes())
+
+    def test_preflight_failure_releases_only_owned_stop_without_installing(self):
+        with mock.patch('execution.ensure_idle', side_effect=EvidenceUnknown('owner active')):
+            with self.assertRaisesRegex(EvidenceUnknown, 'owner active'):
+                self.activate()
+        self.assert_predecessors()
+        self.assertFalse((self.root / 'AGENT_STOP').exists())
+        self.assertFalse(self.receipt.exists())
+
+    def test_existing_human_stop_is_preserved(self):
+        stop = self.root / 'AGENT_STOP'; stop.write_bytes(b'human stop\n')
+        with self.assertRaisesRegex(store.StoreConflict, 'Existing owner STOP'):
+            self.activate()
+        self.assertEqual(b'human stop\n', stop.read_bytes())
+        self.assert_predecessors()
+
+    def test_verify_failure_restores_runtime_and_exact_previous_receipt_or_absence(self):
+        for previous in (None, b'{"previous":"receipt"}\n'):
+            with self.subTest(previous=previous):
+                if previous is None:
+                    self.receipt.unlink(missing_ok=True)
+                else:
+                    self.receipt.write_bytes(previous)
+                with mock.patch.object(runtime, 'verify', side_effect=store.StoreConflict('verify failed')):
+                    with self.assertRaisesRegex(store.StoreConflict, 'verify failed'):
+                        self.activate()
+                self.assert_predecessors()
+                self.assertEqual(previous, self.receipt.read_bytes() if self.receipt.exists() else None)
+                self.assertFalse((self.root / 'AGENT_STOP').exists())
+
+    def test_install_and_restore_failure_keeps_stop_and_durable_predecessors(self):
+        replace = runtime._replace
+
+        def fail_install_and_restore(path, body):
+            if path == self.root / 'consumer-b.txt' and body == self.incoming['consumer-b.txt']:
+                self.assertEqual(self.incoming['consumer-a.txt'],
+                                 (self.root / 'consumer-a.txt').read_bytes())
+                raise OSError('second install failed')
+            if path == self.root / 'consumer-a.txt' and body == self.originals['consumer-a.txt']:
+                raise PermissionError('predecessor restore locked')
+            return replace(path, body)
+
+        with mock.patch.object(runtime, '_replace', side_effect=fail_install_and_restore):
+            with self.assertRaisesRegex(store.StoreConflict, 'rollback incomplete; owned STOP retained'):
+                self.activate()
+        recovery = self.assert_stopped_with_recovery()
+        self.assertIn('restore locked', (recovery / 'rollback-errors.json').read_text(encoding='utf-8'))
+        self.assertFalse(self.receipt.exists())
+        with self.assertRaises(store.StoreConflict):
+            runtime.verify(self.root)
+
+    def test_write_that_replaces_then_raises_is_also_rolled_back(self):
+        replace = runtime._replace
+
+        def replace_then_fail(path, body):
+            replace(path, body)
+            if path == self.root / 'consumer-b.txt' and body == self.incoming['consumer-b.txt']:
+                raise OSError('post-replace failure')
+
+        with mock.patch.object(runtime, '_replace', side_effect=replace_then_fail):
+            with self.assertRaisesRegex(OSError, 'post-replace failure'):
+                self.activate()
+        self.assert_predecessors()
+        self.assertFalse((self.root / 'AGENT_STOP').exists())
+
+    def test_silent_restore_mismatch_keeps_stop(self):
+        replace = runtime._replace
+
+        def silently_skip_restore(path, body):
+            if path == self.root / 'consumer-b.txt' and body == self.incoming['consumer-b.txt']:
+                raise OSError('install failed')
+            if path == self.root / 'consumer-a.txt' and body == self.originals['consumer-a.txt']:
+                return  # A successful return is not proof that predecessor bytes returned.
+            return replace(path, body)
+
+        with mock.patch.object(runtime, '_replace', side_effect=silently_skip_restore):
+            with self.assertRaisesRegex(store.StoreConflict, 'predecessor readback mismatch'):
+                self.activate()
+        self.assert_stopped_with_recovery()
+
+    def test_receipt_restore_failure_keeps_stop_even_after_all_consumers_restored(self):
+        previous = b'{"previous":"receipt"}\n'; self.receipt.write_bytes(previous)
+        replace = runtime._replace
+
+        def fail_receipt_restore(path, body):
+            if path == self.receipt and body == previous:
+                raise PermissionError('receipt restore locked')
+            return replace(path, body)
+
+        with mock.patch.object(runtime, '_replace', side_effect=fail_receipt_restore), \
+                mock.patch.object(runtime, 'verify', side_effect=store.StoreConflict('verify failed')):
+            with self.assertRaisesRegex(store.StoreConflict, 'receipt restore locked'):
+                self.activate()
+        self.assert_predecessors()
+        recovery = self.assert_stopped_with_recovery()
+        self.assertEqual(previous, (recovery / 'predecessors' / runtime.RECEIPT).read_bytes())
+        with self.assertRaises(store.StoreConflict):
+            runtime.verify(self.root)
+
+    def test_human_stop_replacing_activation_tag_is_never_cleared(self):
+        verify = runtime.verify
+
+        def human_stops(root):
+            (root / 'AGENT_STOP').write_bytes(b'human changed stop\n')
+            return verify(root)
+
+        with mock.patch.object(runtime, 'verify', side_effect=human_stops):
+            self.activate()
+        self.assertEqual(b'human changed stop\n', (self.root / 'AGENT_STOP').read_bytes())
+
+
 class PackageSelectorTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)/'cp'
