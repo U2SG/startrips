@@ -310,6 +310,7 @@ async function openFocusAtlas({
   reduceMotion = false,
   journeysPayload = [siblingJourney, journey],
   initialPointId = photoPointId,
+  realScene = false,
 } = {}) {
   const page = await browser.newPage({
     viewport,
@@ -326,8 +327,9 @@ async function openFocusAtlas({
   // still invoking the production `onJourneyRoutePointActivate` callback. The
   // ordinary globe-chrome lane remains on the real globe and continues to own
   // raycast/focus-mode chrome coverage.
+  const sceneParams = realScene ? "&qaRealRoutePointScene=1" : "&qaLite=1&qaSpatialHandoff=1";
   await page.goto(
-    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1&qaRoutePointContext=1&qaSpatialHandoff=1`,
+    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaRoutePointContext=1${sceneParams}`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator("[data-qa-route-point-context-focus]").waitFor({ state: "attached", timeout: 20_000 });
@@ -443,7 +445,7 @@ async function dragBlankGlobe(page) {
 }
 
 try {
-  const photoRun = await openFocusAtlas();
+  const photoRun = await openFocusAtlas({ realScene: true });
   const { page } = photoRun;
   const beforeFocus = await sceneFocusSnapshot(page);
   const controlsBefore = await page.locator(".living-atlas-globe__controls").count();

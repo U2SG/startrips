@@ -3433,6 +3433,7 @@ export function ParticleEarthScene({
             ];
             let placement: {
               box: ProjectedRouteLabelBox;
+              hitBox: ProjectedRouteLabelBox;
               horizontal: number;
               vertical: number;
               textX: number;
@@ -3443,11 +3444,17 @@ export function ParticleEarthScene({
               const textY = y + vertical * 22 + (vertical > 0 ? 5 : 0);
               const textLeft = horizontal > 0 ? textX : textX - label.width;
               const textRight = horizontal > 0 ? textX + label.width : textX;
-              // The collision budget is also the real touch target. Keeping the
-              // >=44px target inside arbitration prevents adjacent labels from
-              // acquiring overlapping invisible hit areas whose DOM order would
-              // decide which Route Point opens.
+              // Keep visual label arbitration on the authored text footprint so
+              // making labels touch-safe cannot make distant, otherwise valid
+              // labels disappear. Pointer overlap is resolved by nearest Route
+              // Point identity below instead of by SVG DOM order.
               const box = {
+                left: textLeft,
+                top: textY - 13,
+                right: textRight,
+                bottom: textY + 4,
+              };
+              const hitBox = {
                 left: textLeft - 8,
                 top: textY - 26,
                 right: textRight + 8,
@@ -3462,7 +3469,7 @@ export function ParticleEarthScene({
               ) {
                 continue;
               }
-              placement = { box, horizontal, vertical, textX, textY };
+              placement = { box, hitBox, horizontal, vertical, textX, textY };
               break;
             }
             if (!placement) return;
@@ -3483,10 +3490,10 @@ export function ParticleEarthScene({
               "text-anchor",
               placement.horizontal > 0 ? "start" : "end",
             );
-            label.hitTarget.setAttribute("x", placement.box.left.toFixed(1));
-            label.hitTarget.setAttribute("y", placement.box.top.toFixed(1));
-            label.hitTarget.setAttribute("width", (placement.box.right - placement.box.left).toFixed(1));
-            label.hitTarget.setAttribute("height", (placement.box.bottom - placement.box.top).toFixed(1));
+            label.hitTarget.setAttribute("x", placement.hitBox.left.toFixed(1));
+            label.hitTarget.setAttribute("y", placement.hitBox.top.toFixed(1));
+            label.hitTarget.setAttribute("width", (placement.hitBox.right - placement.hitBox.left).toFixed(1));
+            label.hitTarget.setAttribute("height", (placement.hitBox.bottom - placement.hitBox.top).toFixed(1));
             label.hitTarget.setAttribute("rx", "8");
             label.element.style.removeProperty("display");
             labelBoxes.push(placement.box);
@@ -4026,6 +4033,42 @@ export function ParticleEarthScene({
       const routePointId = label?.dataset.routePointId;
       return journeyId && routePointId ? { journeyId, routePointId } : null;
     };
+    const routeLabelTargetFromPointer = (event: PointerEvent) => {
+      const candidates = [...routeVectorLayer.querySelectorAll<SVGGElement>(
+        ".particle-earth-route__label[data-journey-route][data-route-point-id]",
+      )]
+        .filter((label) => label.style.display !== "none")
+        .map((label) => {
+          const hit = label.querySelector<SVGRectElement>(".particle-earth-route__label-hit");
+          const journeyId = label.dataset.journeyRoute;
+          const routePointId = label.dataset.routePointId;
+          if (!hit || !journeyId || !routePointId) return null;
+          const hitRect = hit.getBoundingClientRect();
+          if (
+            event.clientX < hitRect.left || event.clientX > hitRect.right
+            || event.clientY < hitRect.top || event.clientY > hitRect.bottom
+          ) return null;
+          const marker = [...routeVectorLayer.querySelectorAll<SVGCircleElement>(
+            ".particle-earth-route__point[data-journey-route][data-route-point-id]",
+          )].find((candidate) => (
+            candidate.dataset.journeyRoute === journeyId
+            && candidate.dataset.routePointId === routePointId
+          )) ?? null;
+          const markerRect = marker?.getBoundingClientRect() ?? null;
+          const markerX = markerRect ? markerRect.left + markerRect.width / 2 : hitRect.left + hitRect.width / 2;
+          const markerY = markerRect ? markerRect.top + markerRect.height / 2 : hitRect.top + hitRect.height / 2;
+          return {
+            journeyId,
+            routePointId,
+            distance: Math.hypot(event.clientX - markerX, event.clientY - markerY),
+          };
+        })
+        .filter((candidate): candidate is { journeyId: string; routePointId: string; distance: number } => Boolean(candidate))
+        .sort((left, right) => left.distance - right.distance);
+      return candidates[0]
+        ? { journeyId: candidates[0].journeyId, routePointId: candidates[0].routePointId }
+        : routeLabelTargetFromEventTarget(event.target);
+    };
 
     const onPointerDown = (event: PointerEvent) => {
       if (
@@ -4300,7 +4343,7 @@ export function ParticleEarthScene({
       onWheel(event);
     };
     const onRouteLayerPointerDown = (event: PointerEvent) => {
-      const routeTarget = routeLabelTargetFromEventTarget(event.target);
+      const routeTarget = routeLabelTargetFromPointer(event);
       if (!routeTarget) return;
       event.stopPropagation();
       routeLabelPointerTargets.set(event.pointerId, routeTarget);
@@ -4313,7 +4356,7 @@ export function ParticleEarthScene({
     };
     const onRouteLayerPointerUp = (event: PointerEvent) => {
       const routeTarget = routeLabelPointerTargets.get(event.pointerId)
-        ?? routeLabelTargetFromEventTarget(event.target);
+        ?? routeLabelTargetFromPointer(event);
       if (!routeTarget) return;
       event.stopPropagation();
       onPointerUp(event, null, routeTarget);

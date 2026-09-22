@@ -1091,7 +1091,8 @@ describe("Route Point context integration (#291)", () => {
 
   it("releases Route Point context when semantic Journey ownership changes", () => {
     const revealStart = appSource.indexOf("function revealRoutePointContext(journeyId: string, routePointId: string)");
-    const revealBlock = appSource.slice(revealStart, revealStart + 520);
+    const revealEnd = appSource.indexOf("function openCrossPointReading", revealStart);
+    const revealBlock = appSource.slice(revealStart, revealEnd);
     const ownerEffectStart = appSource.indexOf("if (!context || context.journeyId === activeJourneyId) return;");
     const ownerEffectBlock = appSource.slice(ownerEffectStart, ownerEffectStart + 320);
 
