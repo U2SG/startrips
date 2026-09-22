@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
-import type { StartripsRecoveryKind } from "../brand/startripsRecoverySurface";
+import type { StartripsRecoveryKind } from "../brand/recoverySurfaces";
 import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
 import { LivingAtlasApp } from "../journey/LivingAtlasApp";
 import { JourneyComposer } from "../journey/JourneyComposer";
