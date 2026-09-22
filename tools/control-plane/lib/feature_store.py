@@ -267,20 +267,17 @@ def commit_document(path: str | Path, doc: Document, *,
                 raise StoreConflict('Legacy writer changed ONE during transaction; retry fresh')
             try:
                 os.replace(temp, path)
-            except PermissionError:
+            except PermissionError as exc:
                 # Windows readers may deny FILE_SHARE_DELETE and block atomic replace.
-                # The bytes are already validated against the scoped transaction;
-                # preserve the recovery copy and write in place rather than weakening
-                # the expected-row/read-set guards.
+                # Never degrade that failure into an in-place truncate/write: a crash
+                # could leave ONE partial, and any bytes that changed after the last
+                # read-set check must win over this stale transaction. Preserve the
+                # fully validated temporary image as recovery evidence and fail closed.
                 keep_temp = True
-                with path.open('r+b') as stream:
-                    stream.seek(0)
-                    stream.truncate()
-                    stream.write(output)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                sys.stderr.write('feature_store: atomic replace blocked; wrote ONE in place, '
-                                 'recovery copy at ' + str(temp) + '\n')
+                changed = path.read_bytes() != raw
+                detail = ('; live ONE changed concurrently and was preserved' if changed else '')
+                raise StoreConflict('Atomic replace blocked; ONE unchanged by this transaction'
+                                    + detail + '; recovery copy at ' + str(temp)) from exc
         finally:
             if not keep_temp and temp.exists():
                 temp.unlink()

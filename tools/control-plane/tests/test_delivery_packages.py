@@ -135,6 +135,39 @@ class DeliveryContractTests(unittest.TestCase):
         self.assertEqual('experience', doc['features'][0]['delivery_package']['lane'])
         self.assertTrue(again['idempotent'])
 
+    def test_atomic_replace_permission_error_preserves_live_one_and_recovery_copy(self):
+        before = self.path.read_bytes()
+        doc = store.load_document(self.path)
+        doc['features'][0]['notes'] = 'candidate'
+        with mock.patch.object(store.os, 'replace', side_effect=PermissionError('reader blocks replace')):
+            with self.assertRaisesRegex(store.StoreConflict, 'Atomic replace blocked'):
+                store.commit_document(self.path, doc, allowed={'ST-001': {'notes'}})
+        self.assertEqual(before, self.path.read_bytes())
+        recovery = list(self.root.glob('.feature_list.json.*.tmp'))
+        self.assertEqual(1, len(recovery))
+        recovered = json.loads(recovery[0].read_text(encoding='utf-8'))
+        self.assertEqual('candidate', recovered['features'][0]['notes'])
+
+    def test_atomic_replace_failure_never_clobbers_concurrent_live_update(self):
+        doc = store.load_document(self.path)
+        doc['features'][0]['notes'] = 'candidate'
+        current = json.loads(self.path.read_text(encoding='utf-8'))
+        current['features'][1]['notes'] = 'concurrent-newer'
+        newer = (json.dumps(current, indent=2) + '\n').encode('utf-8')
+
+        def block_after_live_change(_source, _target):
+            self.path.write_bytes(newer)
+            raise PermissionError('reader blocks replace')
+
+        with mock.patch.object(store.os, 'replace', side_effect=block_after_live_change):
+            with self.assertRaisesRegex(store.StoreConflict, 'live ONE changed concurrently'):
+                store.commit_document(self.path, doc, allowed={'ST-001': {'notes'}})
+        self.assertEqual(newer, self.path.read_bytes())
+        recovery = list(self.root.glob('.feature_list.json.*.tmp'))
+        self.assertEqual(1, len(recovery))
+        recovered = json.loads(recovery[0].read_text(encoding='utf-8'))
+        self.assertEqual('candidate', recovered['features'][0]['notes'])
+
     def test_registration_requires_verified_runtime(self):
         with mock.patch.object(packages, 'verify_runtime', side_effect=store.StoreConflict('DELIVERY_RUNTIME_NOT_INSTALLED')):
             with self.assertRaises(store.StoreConflict):

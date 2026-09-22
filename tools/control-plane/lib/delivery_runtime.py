@@ -48,7 +48,7 @@ REQUIRED = (
 REVIEWED_HOT_PREDECESSORS = {
     'lib/feature_store.py': {
         '98e1799a87dfdd778b24fbc4bd84989d9f96080442305ebebe8dc22bd87ce275':
-        '9047119f4dcbfb0f6c8276261b9721c721c237be46e29ff1d1027570dc822f23',
+        'e81b0082d503d28fefe97fa008741ac0d538bb51f0e3ba1d5853acaa393aff11',
     },
     'lib/feature_state.py': {
         '054c3ac531884661dcc0d95449a2308613270ced1166f6cd3b66209e9268f301':
