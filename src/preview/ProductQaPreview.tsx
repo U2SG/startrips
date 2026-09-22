@@ -709,14 +709,15 @@ function JourneyPlaybackPrefetchQaPreview() {
   );
 }
 
-// #456 + #492: one fixture spans sparse chapters plus the 4/6/9 sequence band.
-// The six-media chapter includes one real video so the browser lane exercises
-// the same mixed-media stack while keeping the director as the only transport.
-const CONTINUITY_QA_MEDIA_COUNTS = [0, 1, 3, 4, 6, 9];
+// #456's original 0/1/3 fixture is also consumed by the #465 map-bridge
+// lane. Keep that contract stable; #492 opts into the richer 4/6/9 fixture
+// explicitly so one QA slice cannot silently renumber another slice's beats.
+const CONTINUITY_QA_MEDIA_COUNTS = [0, 1, 3];
+const SEQUENCE_CONTINUITY_QA_MEDIA_COUNTS = [0, 1, 3, 4, 6, 9];
 
 const continuityQaJourneyId = "00000000-0000-4000-8000-000000000456";
-const continuityQaJourney: Journey = (() => {
-  const routePoints = CONTINUITY_QA_MEDIA_COUNTS.map((_unused, pointIndex) => ({
+function buildContinuityQaJourney(mediaCounts: readonly number[]): Journey {
+  const routePoints = mediaCounts.map((_unused, pointIndex) => ({
     id: `st109-point-${pointIndex}`,
     journeyId: continuityQaJourneyId,
     sortOrder: pointIndex,
@@ -733,7 +734,7 @@ const continuityQaJourney: Journey = (() => {
     createdAt: "2026-09-20T00:00:00.000Z",
   }));
   const media = routePoints.flatMap((point, pointIndex) => (
-    Array.from({ length: CONTINUITY_QA_MEDIA_COUNTS[pointIndex] }, (_unused, mediaIndex) => ({
+    Array.from({ length: mediaCounts[pointIndex] }, (_unused, mediaIndex) => ({
       id: `st109-p${pointIndex}-m${mediaIndex}`,
       journeyId: continuityQaJourneyId,
       routePointId: point.id,
@@ -757,7 +758,9 @@ const continuityQaJourney: Journey = (() => {
     routePoints,
     media,
   };
-})();
+}
+const continuityQaJourney = buildContinuityQaJourney(CONTINUITY_QA_MEDIA_COUNTS);
+const sequenceContinuityQaJourney = buildContinuityQaJourney(SEQUENCE_CONTINUITY_QA_MEDIA_COUNTS);
 
 type ContinuityQaTrace = { cameraTargets: { key: string; at: number; step: number | null; phase: string | null }[] };
 
@@ -765,14 +768,16 @@ function JourneyPlaybackContinuityQaPreview() {
   const params = new URLSearchParams(window.location.search);
   const bridgeVideo = params.get("qaMapBridgeVideo") === "1";
   const nearbyBridge = params.get("qaMapBridgeNearby") === "1";
+  const sequenceDensityQa = params.get("qaSequenceDensity") === "1";
+  const baseJourney = sequenceDensityQa ? sequenceContinuityQaJourney : continuityQaJourney;
   const journey = useMemo(() => ({
-    ...continuityQaJourney,
-    routePoints: nearbyBridge ? continuityQaJourney.routePoints.map((point, index) => ({
+    ...baseJourney,
+    routePoints: nearbyBridge ? baseJourney.routePoints.map((point, index) => ({
       ...point, latitude: 1.290256 + index * 0.01, longitude: 103.851471 + index * 0.01,
-    })) : continuityQaJourney.routePoints,
-    media: bridgeVideo ? continuityQaJourney.media.map((asset) => asset.id === "st109-p1-m0"
-      ? { ...asset, mimeType: "video/webm", fileName: "bridge.webm" } : asset) : continuityQaJourney.media,
-  }), [bridgeVideo, nearbyBridge]);
+    })) : baseJourney.routePoints,
+    media: bridgeVideo ? baseJourney.media.map((asset) => asset.id === "st109-p1-m0"
+      ? { ...asset, mimeType: "video/webm", fileName: "bridge.webm" } : asset) : baseJourney.media,
+  }), [baseJourney, bridgeVideo, nearbyBridge]);
   const [closed, setClosed] = useState(false);
   // Reduced Motion is a run parameter here, not a constant: acceptance 6 is
   // only observable if the SAME fixture can be played both ways.

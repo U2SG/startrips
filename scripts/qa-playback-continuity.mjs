@@ -170,6 +170,7 @@ async function open({ viewport, reduceMotion = true }) {
   const query = new URLSearchParams({
     qaState: "journey-playback",
     qaMode: "continuity",
+    qaSequenceDensity: "1",
     qaReduceMotion: reduceMotion ? "1" : "0",
   });
   await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded" });
