@@ -35,6 +35,7 @@ import {
   fetchItinerarySourcePage,
   type AddressLookup,
   type ItinerarySourceDriver,
+  type SourcePageTransport,
 } from "../itinerary/itinerary-source-fetch";
 import { readJsonObject } from "./json-body";
 
@@ -50,6 +51,7 @@ export const ITINERARY_IMPORT_CACHE_CONTROL = "private, no-store, max-age=0";
 export type ItineraryImportDependencies = {
   fetcher?: typeof fetch;
   lookup?: AddressLookup;
+  sourceTransport?: SourcePageTransport;
 };
 
 /**
@@ -106,6 +108,7 @@ itineraryImportRoutes.post("/", async (context) => {
       maxBytes: serverConfig.itinerarySourceMaxBytes,
       fetcher: itineraryImportDependencies.fetcher,
       lookup: itineraryImportDependencies.lookup,
+      transport: itineraryImportDependencies.sourceTransport,
     });
     if (page.text.trim().length === 0) {
       throw new ItineraryImportStageError(

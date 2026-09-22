@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  IconArrowDown,
+  IconArrowUp,
   IconChevronDown,
   IconMapPin,
   IconPlus,
   IconSearch,
+  IconTrash,
   IconUpload,
 } from "@tabler/icons-react";
 import { searchLocations } from "./journeyApi";
@@ -26,6 +29,12 @@ import {
   readItineraryFromLink,
   type ItineraryImportCapabilities,
 } from "./itineraryImportApi";
+import {
+  mergeItinerarySegmentReadings,
+  planItineraryImageSegments,
+  type ItineraryImageSegmentPlan,
+  type ItinerarySegmentReading,
+} from "./itineraryImageSegments";
 import { readTextItinerary } from "./itineraryText";
 import type { LocationSearchResult } from "./types";
 
@@ -62,13 +71,66 @@ type Props = {
   mobileLayout?: boolean;
 };
 
+/** One screenshot the member chose, in the order they arranged it. */
+type ChosenImage = { id: string; file: File };
+
+/** JPEG keeps a band inside the per-segment ceiling the server enforces. */
+const SEGMENT_MIME_TYPE = "image/jpeg";
+const SEGMENT_QUALITY = 0.82;
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Cut one band out of one screenshot, at the screenshot's own resolution.
+ *
+ * Nothing is scaled: a long plan is read in bands precisely so that a printed
+ * name never has to survive being shrunk into a few pixels first.
+ */
+async function encodeSegment(
+  bitmap: ImageBitmap,
+  segment: ItineraryImageSegmentPlan,
+): Promise<{ mimeType: string; base64: string }> {
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = segment.height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("this browser cannot read a screenshot here");
+  context.drawImage(
+    bitmap,
+    0,
+    segment.top,
+    bitmap.width,
+    segment.height,
+    0,
+    0,
+    bitmap.width,
+    segment.height,
+  );
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, SEGMENT_MIME_TYPE, SEGMENT_QUALITY)
+  );
+  if (!blob) throw new Error("this browser cannot read a screenshot here");
+  return {
+    mimeType: SEGMENT_MIME_TYPE,
+    base64: bytesToBase64(new Uint8Array(await blob.arrayBuffer())),
+  };
+}
+
 export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props) {
   const [mode, setMode] = useState<"text" | "link" | "image">("text");
   const [text, setText] = useState("");
   const [link, setLink] = useState("");
   const [draft, setDraft] = useState<ItineraryImportDraft | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const [images, setImages] = useState<ChosenImage[]>([]);
   const [reading, setReading] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<ItineraryImportCapabilities | null>(null);
   const [locating, setLocating] = useState<string | null>(null);
@@ -131,30 +193,81 @@ export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props
     }
   }, [fail, link, receive]);
 
-  const readImage = useCallback(async (file: File) => {
+  const addImages = useCallback((files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setImages((current) => [
+      ...current,
+      ...[...files].map((file, index) => ({
+        id: `${file.name}:${file.size}:${file.lastModified}:${current.length + index}`,
+        file,
+      })),
+    ]);
+    setError(null);
+  }, []);
+
+  const moveImage = useCallback((index: number, delta: number) => {
+    setImages((current) => {
+      const target = index + delta;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }, []);
+
+  const removeImage = useCallback((id: string) => {
+    setImages((current) => current.filter((image) => image.id !== id));
+  }, []);
+
+  /**
+   * Read every chosen screenshot, in the member's order, as one plan.
+   *
+   * A tall screenshot is cut into bounded overlapping bands and each band is
+   * submitted on its own, because one long image neither fits a request nor
+   * survives being scaled down to fit. The bands come back as readings of the
+   * same plan and are assembled into one draft here — a screenshot is never a
+   * separate itinerary, and the member reviews one list, not one per image.
+   */
+  const readImages = useCallback(async () => {
+    if (images.length === 0) return;
     setReading(true);
     setError(null);
+    setProgress({ done: 0, total: images.length });
+    const readings: ItinerarySegmentReading[] = [];
     try {
-      const buffer = await file.arrayBuffer();
-      let binary = "";
-      const bytes = new Uint8Array(buffer);
-      for (let index = 0; index < bytes.length; index += 1) {
-        binary += String.fromCharCode(bytes[index]);
+      for (const [pageIndex, image] of images.entries()) {
+        const bitmap = await createImageBitmap(image.file);
+        try {
+          const segments = planItineraryImageSegments({
+            pageIndex,
+            width: bitmap.width,
+            height: bitmap.height,
+          });
+          for (const segment of segments) {
+            const recognition = await readItineraryFromImage(
+              await encodeSegment(bitmap, segment),
+            );
+            readings.push({ segment, recognition });
+          }
+        } finally {
+          bitmap.close();
+        }
+        setProgress({ done: pageIndex + 1, total: images.length });
       }
-      const recognition = await readItineraryFromImage({
-        mimeType: file.type,
-        base64: btoa(binary),
-      });
       receive(buildItineraryImportDraft(
-        recognition,
-        itineraryImportJobKey("image", `${file.name}:${file.size}`),
+        mergeItinerarySegmentReadings(readings),
+        itineraryImportJobKey(
+          "image",
+          images.map((image) => `${image.file.name}:${image.file.size}`).join("|"),
+        ),
       ));
     } catch (cause) {
       fail(cause);
     } finally {
+      setProgress(null);
       setReading(false);
     }
-  }, [fail, receive]);
+  }, [fail, images, receive]);
 
   const locate = useCallback(async (entry: ItineraryEntryDraft) => {
     setLocating(entry.entryId);
@@ -278,21 +391,74 @@ export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props
         ) : null}
 
         {mode === "image" ? (
-          <label className="journey-itinerary-import__field">
-            <span>行程截图</span>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void readImage(file);
-              }}
-              disabled={reading || capabilities?.recognition.configured === false}
-            />
+          <div className="journey-itinerary-import__field">
+            <label className="journey-itinerary-import__file">
+              <span>行程截图（可选多张，长图会自动分段读取）</span>
+              <input
+                type="file"
+                multiple
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(event) => {
+                  addImages(event.target.files);
+                  event.target.value = "";
+                }}
+                disabled={reading || capabilities?.recognition.configured === false}
+              />
+            </label>
+            {images.length > 0 ? (
+              <ol className="journey-itinerary-import__pages">
+                {images.map((image, index) => (
+                  <li key={image.id}>
+                    <span>第 {index + 1} 张 · {image.file.name}</span>
+                    <button
+                      type="button"
+                      aria-label={`把第 ${index + 1} 张往前移`}
+                      onClick={() => moveImage(index, -1)}
+                      disabled={reading || index === 0}
+                    >
+                      <IconArrowUp size={16} stroke={1.4} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`把第 ${index + 1} 张往后移`}
+                      onClick={() => moveImage(index, 1)}
+                      disabled={reading || index === images.length - 1}
+                    >
+                      <IconArrowDown size={16} stroke={1.4} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`移除第 ${index + 1} 张`}
+                      onClick={() => removeImage(image.id)}
+                      disabled={reading}
+                    >
+                      <IconTrash size={16} stroke={1.4} aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void readImages()}
+              disabled={
+                reading
+                || images.length === 0
+                || capabilities?.recognition.configured === false
+              }
+            >
+              <IconSearch size={16} stroke={1.4} aria-hidden="true" />
+              {reading ? "正在读取…" : `读取 ${images.length || ""} 张截图`}
+            </button>
+            {progress ? (
+              <small role="status">
+                正在读取第 {Math.min(progress.done + 1, progress.total)} / {progress.total} 张；长图会分成几段依次识别。
+              </small>
+            ) : null}
             {capabilities?.recognition.configured === false ? (
               <small>这台服务器还没有配置识别服务；可以先粘贴文本。</small>
             ) : null}
-          </label>
+          </div>
         ) : null}
 
         {error ? <p className="journey-itinerary-import__error" role="alert">{error}</p> : null}

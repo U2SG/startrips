@@ -343,6 +343,57 @@ try {
           returned.activeEntry === expectedEntry && !returned.menuOpen);
       }
 
+      // #512: the itinerary import controls live inside the location task, and
+      // they are held to the same touch-target contract as every other shared
+      // control here. Measured rather than asserted from the stylesheet, because
+      // a control that collapses under its own layout still fails a thumb.
+      await page.locator(".journey-composer__task-more").click();
+      await page.locator("#journey-composer-more-menu").waitFor({ state: "visible" });
+      await page.locator('[data-composer-task-entry="location"]').click();
+      await page.locator('[data-composer-task="location"]').waitFor({ state: "visible" });
+      const importText = await page.evaluate(() => {
+        const panel = document.querySelector(".journey-itinerary-import");
+        const rects = [...(panel?.querySelectorAll("button, input, label.journey-checkbox") ?? [])]
+          .map((node) => {
+            const rect = node.getBoundingClientRect();
+            return {
+              tag: node.tagName.toLowerCase(),
+              label: node.getAttribute("aria-label") ?? node.textContent?.trim().slice(0, 12) ?? "",
+              height: Math.round(rect.height),
+              width: Math.round(rect.width),
+            };
+          });
+        return { present: Boolean(panel), rects };
+      });
+      record(`composer-mobile-ia:${viewport.label}:itinerary-import-targets`, { importText },
+        importText.present
+        && importText.rects.length > 0
+        && importText.rects.every((rect) => rect.height >= 44 && rect.width >= 44));
+
+      // The screenshot entry takes more than one image and orders them, which is
+      // what a plan spread over several long screenshots actually needs.
+      await page.locator('.journey-itinerary-import__modes > button:nth-child(3)').click();
+      const importImage = await page.evaluate(() => {
+        const input = document.querySelector('.journey-itinerary-import__file input[type="file"]');
+        const rects = [...document.querySelectorAll(".journey-itinerary-import button, .journey-itinerary-import input")]
+          .map((node) => {
+            const rect = node.getBoundingClientRect();
+            return { height: Math.round(rect.height), width: Math.round(rect.width) };
+          });
+        return {
+          multiple: input?.hasAttribute("multiple") ?? false,
+          accept: input?.getAttribute("accept") ?? null,
+          rects,
+        };
+      });
+      record(`composer-mobile-ia:${viewport.label}:itinerary-import-images`, { importImage },
+        importImage.multiple
+        && Boolean(importImage.accept?.includes("image/png"))
+        && importImage.rects.every((rect) => rect.height >= 44 && rect.width >= 44));
+
+      await page.locator("[data-composer-task-back]").click();
+      await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+
       // Acceptance 1 / owner decision: media belongs to a Route Point.
       const firstRow = page.locator(".journey-route-draft > li:not(.is-empty)").first();
       await firstRow.locator(".journey-route-draft__summary").click();

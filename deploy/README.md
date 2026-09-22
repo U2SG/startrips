@@ -57,8 +57,25 @@ reads the page as served, and `render` posts the URL to the bounded rendering
 service named by `ITINERARY_SOURCE_RENDER_URL` for a page that composes itself
 in a browser. Every hop, including each redirect, is resolved before it is
 requested and refused when it lands on a private, loopback, link-local or
-cloud-metadata address. A link this deployment cannot reach is reported as
-unreachable at the source-access stage, never as an invalid link.
+cloud-metadata address, and the request is then pinned to the addresses that
+were checked, so a name that answers differently a moment later cannot move the
+connection. A link this deployment cannot reach is reported as unreachable at
+the source-access stage, never as an invalid link.
+
+The `render` driver connects from inside the rendering service, where this app
+cannot pin anything, so the service is held to the same contract from its own
+side and must satisfy both halves of it:
+
+- it answers with `hops`, an ordered array of `{ url, address }` for every hop
+  it followed, starting with exactly the URL it was given, and `finalUrl`
+  matching the last of them. A reading whose hops are missing, undescribable or
+  inconsistent is refused as `ITINERARY_SOURCE_RENDER_UNVERIFIED` rather than
+  read, and a reported private address is refused as `ITINERARY_SOURCE_BLOCKED`;
+- it runs with egress restricted to the public internet. The hop report is what
+  this app can check, not a substitute for the service being unable to reach
+  your private network in the first place.
+
+It is passed `maxRedirects` and must not follow more.
 
 `ITINERARY_RECOGNITION_DRIVER=http-model` posts the submitted document to
 `ITINERARY_RECOGNITION_BASE_URL` with `ITINERARY_RECOGNITION_API_KEY` and

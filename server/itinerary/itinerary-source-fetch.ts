@@ -17,9 +17,30 @@
  * followed manually for exactly that reason: `redirect: "follow"` would make
  * the check unenforceable, because the dangerous request is the one the
  * runtime performs on its own.
+ *
+ * Checking a hop and then handing the hostname back to the runtime to resolve
+ * again is the same hole one step later: a name that answered a public address
+ * while it was being checked is free to answer a link-local address a
+ * millisecond later, and the socket goes where the second answer says. So a
+ * checked hop is *pinned* — the request is made through a resolver that can
+ * only return the addresses this module already validated, and that resolves
+ * no name itself. The hostname still travels as the `Host` header and as the
+ * TLS server name, so certificate validation is unaffected; only the choice of
+ * destination address is taken out of the network's hands.
+ *
+ * The rendering driver cannot be pinned the same way, because the connection
+ * is made inside another process. It is held to the same contract from the
+ * other end instead: the renderer reports the hops it actually followed and
+ * the addresses it actually connected to, and a reading whose reported hops do
+ * not all pass this module's own check is refused rather than read. A renderer
+ * that reports nothing is refused too — an unverifiable reading is not a safe
+ * one. `deploy/README.md` carries the deployment half of that contract.
  */
 
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { lookup as dnsLookup } from "node:dns/promises";
+import type { LookupFunction } from "node:net";
 import { ItineraryImportStageError } from "./itinerary-recognition";
 
 export type ItinerarySourceDriver = "disabled" | "http" | "render";
@@ -35,6 +56,13 @@ export type ItinerarySourcePage = {
 
 export type LookupAddress = { address: string; family: number };
 export type AddressLookup = (hostname: string) => Promise<LookupAddress[]>;
+
+/**
+ * A Node-style resolver handed to one request. It answers from a fixed list
+ * and never consults DNS, which is the whole point. Typed as the socket
+ * layer's own resolver so it is the thing `node:http` actually accepts.
+ */
+export type PinnedLookup = LookupFunction;
 
 export const MAX_SOURCE_REDIRECTS = 4;
 
@@ -93,16 +121,12 @@ export function isBlockedSourceAddress(address: string): boolean {
 }
 
 /**
- * Check one hop before it is requested.
+ * The syntactic half of the hop check, applied to a URL on its own.
  *
- * Scheme, port and credentials are checked on the URL; the destination is
- * checked on every address the hostname resolves to, not just the first, so a
- * name answering one public and one private address cannot pass by ordering.
+ * Kept separate because it is also what a hop *reported back* by the rendering
+ * service is held to, where there is nothing left for this process to resolve.
  */
-export async function assertFetchableSourceUrl(
-  url: URL,
-  lookup: AddressLookup,
-): Promise<void> {
+export function assertSourceUrlShape(url: URL): void {
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     refuse("ITINERARY_SOURCE_UNSUPPORTED", "Only an http or https link can be read");
   }
@@ -112,6 +136,24 @@ export async function assertFetchableSourceUrl(
   if (url.port && url.port !== "80" && url.port !== "443") {
     refuse("ITINERARY_SOURCE_UNSUPPORTED", "Only the standard web ports are read");
   }
+}
+
+/**
+ * Check one hop before it is requested, and return the addresses it is allowed
+ * to be requested at.
+ *
+ * Scheme, port and credentials are checked on the URL; the destination is
+ * checked on every address the hostname resolves to, not just the first, so a
+ * name answering one public and one private address cannot pass by ordering.
+ * The return value is what the caller pins the connection to, so the check and
+ * the connection share one set of addresses by construction — there is no
+ * second resolution in between for anyone to change the answer to.
+ */
+export async function assertFetchableSourceUrl(
+  url: URL,
+  lookup: AddressLookup,
+): Promise<LookupAddress[]> {
+  assertSourceUrlShape(url);
 
   let addresses: LookupAddress[];
   try {
@@ -135,7 +177,110 @@ export async function assertFetchableSourceUrl(
   if (addresses.some((entry) => isBlockedSourceAddress(entry.address))) {
     refuse("ITINERARY_SOURCE_BLOCKED", "That link resolves to a private address");
   }
+  return addresses;
 }
+
+/**
+ * A resolver that can only answer with addresses that were already checked.
+ *
+ * The hostname argument is deliberately ignored: this is not a lookup, it is
+ * the refusal to perform a second one. Every address is re-checked on the way
+ * out as well, so a mistake upstream still cannot produce a private connection.
+ */
+export function createPinnedLookup(
+  verified: readonly LookupAddress[],
+): PinnedLookup {
+  const allowed = verified.filter((entry) => !isBlockedSourceAddress(entry.address));
+  return (_hostname, options, callback) => {
+    if (allowed.length === 0) {
+      callback(new Error("no verified address remains for this hop"), []);
+      return;
+    }
+    if (options?.all) {
+      callback(null, allowed.map((entry) => ({ ...entry })));
+      return;
+    }
+    callback(null, allowed[0].address, allowed[0].family);
+  };
+}
+
+/** One hop's reply, reduced to what this module reads. */
+export type SourcePageReply = {
+  status: number;
+  headers: Record<string, string | undefined>;
+  body: Uint8Array;
+};
+
+export type SourcePageRequest = {
+  url: URL;
+  /** The only addresses this request may connect to. */
+  lookup: PinnedLookup;
+  timeoutMs: number;
+  maxBytes: number;
+  signal: AbortSignal;
+};
+
+export type SourcePageTransport = (
+  request: SourcePageRequest,
+) => Promise<SourcePageReply>;
+
+/**
+ * The default hop transport: one request, no redirect following, connecting
+ * only where `request.lookup` allows. `node:http`/`node:https` are used rather
+ * than `fetch` for exactly one reason — they take the resolver as a per-request
+ * option, which is what makes the pin enforceable without a new dependency.
+ */
+export const nodeSourcePageTransport: SourcePageTransport = (request) =>
+  new Promise<SourcePageReply>((resolve, reject) => {
+    const send = request.url.protocol === "https:" ? httpsRequest : httpRequest;
+    const call = send(
+      request.url,
+      {
+        method: "GET",
+        lookup: request.lookup,
+        timeout: request.timeoutMs,
+        headers: {
+          accept: "text/html,application/xhtml+xml,application/json",
+          "accept-encoding": "identity",
+        },
+        signal: request.signal,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let overflowed = false;
+        response.on("data", (chunk: Buffer) => {
+          size += chunk.byteLength;
+          if (size > request.maxBytes) {
+            overflowed = true;
+            response.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        response.on("end", () => {
+          if (overflowed) {
+            reject(new ItineraryImportStageError(
+              "content-read",
+              "ITINERARY_SOURCE_TOO_LARGE",
+              "The page is larger than this deployment reads",
+              413,
+            ));
+            return;
+          }
+          resolve({
+            status: response.statusCode ?? 0,
+            headers: response.headers as Record<string, string | undefined>,
+            body: Buffer.concat(chunks),
+          });
+        });
+        response.on("error", reject);
+      },
+    );
+    call.on("timeout", () => call.destroy(new Error("the hop timed out")));
+    call.on("error", reject);
+    call.end();
+  });
 
 export const defaultAddressLookup: AddressLookup = (hostname) =>
   dnsLookup(hostname, { all: true });
@@ -146,16 +291,14 @@ export type ItinerarySourceFetchOptions = {
   renderUrl: string | null;
   timeoutMs: number;
   maxBytes: number;
+  /** Used for the rendering service only; a member's link never reaches it. */
   fetcher?: typeof fetch;
   lookup?: AddressLookup;
+  transport?: SourcePageTransport;
 };
 
-async function readBounded(
-  response: Response,
-  maxBytes: number,
-): Promise<string> {
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > maxBytes) {
+function decodeBounded(body: Uint8Array, maxBytes: number): string {
+  if (body.byteLength > maxBytes) {
     throw new ItineraryImportStageError(
       "content-read",
       "ITINERARY_SOURCE_TOO_LARGE",
@@ -163,7 +306,106 @@ async function readBounded(
       413,
     );
   }
-  return new TextDecoder("utf-8").decode(buffer);
+  return new TextDecoder("utf-8").decode(body);
+}
+
+/**
+ * What the rendering service has to say about where it actually went.
+ *
+ * `finalUrl` and every hop before it are checked here with the same rules a
+ * local hop gets, over the renderer's own report of the sockets it opened.
+ * This is a contract, not a courtesy: a renderer that omits it gets its
+ * reading refused, because "we cannot tell where this came from" and "this
+ * came from somewhere safe" are not the same sentence.
+ */
+type RenderedReply = {
+  html?: unknown;
+  text?: unknown;
+  finalUrl?: unknown;
+  hops?: unknown;
+};
+
+function assertRenderedHops(reply: RenderedReply, requested: URL): string {
+  const hops = Array.isArray(reply.hops) ? reply.hops : null;
+  if (!hops || hops.length === 0) {
+    throw new ItineraryImportStageError(
+      "source-access",
+      "ITINERARY_SOURCE_RENDER_UNVERIFIED",
+      "The rendering service did not report where it connected",
+      502,
+    );
+  }
+  if (hops.length > MAX_SOURCE_REDIRECTS + 1) {
+    throw new ItineraryImportStageError(
+      "source-access",
+      "ITINERARY_SOURCE_UNREACHABLE",
+      "The link redirected more times than this deployment follows",
+      502,
+    );
+  }
+
+  let last: URL | null = null;
+  let first: URL | null = null;
+  for (const hop of hops) {
+    const entry = hop as { url?: unknown; address?: unknown };
+    if (typeof entry.url !== "string" || typeof entry.address !== "string") {
+      throw new ItineraryImportStageError(
+        "source-access",
+        "ITINERARY_SOURCE_RENDER_UNVERIFIED",
+        "The rendering service reported a hop it could not describe",
+        502,
+      );
+    }
+    let hopUrl: URL;
+    try {
+      hopUrl = new URL(entry.url);
+    } catch {
+      refuse(
+        "ITINERARY_SOURCE_UNSUPPORTED",
+        "The rendering service reported an unreadable hop",
+      );
+    }
+    assertSourceUrlShape(hopUrl);
+    if (isBlockedSourceAddress(entry.address)) {
+      refuse(
+        "ITINERARY_SOURCE_BLOCKED",
+        "The rendering service reached a private address for that link",
+      );
+    }
+    first ??= hopUrl;
+    last = hopUrl;
+  }
+
+  if (first === null || first.toString() !== requested.toString()) {
+    throw new ItineraryImportStageError(
+      "source-access",
+      "ITINERARY_SOURCE_RENDER_UNVERIFIED",
+      "The rendering service started somewhere other than the requested link",
+      502,
+    );
+  }
+
+  const reported = typeof reply.finalUrl === "string" ? reply.finalUrl : null;
+  if (reported === null) return (last ?? requested).toString();
+  let finalUrl: URL;
+  try {
+    finalUrl = new URL(reported);
+  } catch {
+    refuse(
+      "ITINERARY_SOURCE_UNSUPPORTED",
+      "The rendering service reported an unreadable final link",
+    );
+  }
+  assertSourceUrlShape(finalUrl);
+  if (last && finalUrl.toString() !== last.toString()) {
+    throw new ItineraryImportStageError(
+      "source-access",
+      "ITINERARY_SOURCE_RENDER_UNVERIFIED",
+      "The rendering service read a page it did not report reaching",
+      502,
+    );
+  }
+  return finalUrl.toString();
 }
 
 /**
@@ -197,6 +439,7 @@ export async function fetchItinerarySourcePage(
 
   const fetcher = options.fetcher ?? fetch;
   const lookup = options.lookup ?? defaultAddressLookup;
+  const transport = options.transport ?? nodeSourcePageTransport;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs);
 
@@ -210,13 +453,16 @@ export async function fetchItinerarySourcePage(
           503,
         );
       }
-      // The member's link is still checked before it is handed on, so the
-      // renderer is not turned into the request forgery this guard prevents.
+      // The member's link is checked before it is handed on, and the hops the
+      // renderer reports back are checked before its reading is accepted.
       await assertFetchableSourceUrl(url, lookup);
       const rendered = await fetcher(options.renderUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: url.toString() }),
+        body: JSON.stringify({
+          url: url.toString(),
+          maxRedirects: MAX_SOURCE_REDIRECTS,
+        }),
         signal: controller.signal,
       });
       if (!rendered.ok) {
@@ -227,26 +473,43 @@ export async function fetchItinerarySourcePage(
           502,
         );
       }
+      const payload = await rendered.json().catch(() => null) as RenderedReply | null;
+      if (!payload || typeof payload !== "object") {
+        throw new ItineraryImportStageError(
+          "content-read",
+          "ITINERARY_SOURCE_RENDER_FAILED",
+          "The rendering service answered with something unreadable",
+          502,
+        );
+      }
+      const finalUrl = assertRenderedHops(payload, url);
+      const body = typeof payload.html === "string"
+        ? payload.html
+        : typeof payload.text === "string"
+          ? payload.text
+          : "";
       return {
-        finalUrl: url.toString(),
-        contentType: rendered.headers.get("content-type") ?? "text/html",
-        text: await readBounded(rendered, options.maxBytes),
+        finalUrl,
+        contentType: typeof payload.html === "string" ? "text/html" : "text/plain",
+        text: decodeBounded(new TextEncoder().encode(body), options.maxBytes),
         readVia: "render",
       };
     }
 
     let current = url;
     for (let hop = 0; hop <= MAX_SOURCE_REDIRECTS; hop += 1) {
-      await assertFetchableSourceUrl(current, lookup);
-      const response = await fetcher(current.toString(), {
-        method: "GET",
-        redirect: "manual",
-        headers: { accept: "text/html,application/xhtml+xml,application/json" },
+      const verified = await assertFetchableSourceUrl(current, lookup);
+      const response = await transport({
+        url: current,
+        // The connection may go to the addresses just checked and nowhere else.
+        lookup: createPinnedLookup(verified),
+        timeoutMs: options.timeoutMs,
+        maxBytes: options.maxBytes,
         signal: controller.signal,
       });
 
       if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
+        const location = response.headers.location ?? null;
         if (!location) {
           throw new ItineraryImportStageError(
             "source-access",
@@ -260,7 +523,7 @@ export async function fetchItinerarySourcePage(
         continue;
       }
 
-      if (!response.ok) {
+      if (response.status < 200 || response.status >= 300) {
         throw new ItineraryImportStageError(
           "source-access",
           "ITINERARY_SOURCE_UNREACHABLE",
@@ -271,8 +534,8 @@ export async function fetchItinerarySourcePage(
 
       return {
         finalUrl: current.toString(),
-        contentType: response.headers.get("content-type") ?? "text/html",
-        text: await readBounded(response, options.maxBytes),
+        contentType: response.headers["content-type"] ?? "text/html",
+        text: decodeBounded(response.body, options.maxBytes),
         readVia: "http",
       };
     }

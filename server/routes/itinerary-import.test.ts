@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PinnedLookup } from "../itinerary/itinerary-source-fetch";
 
 /**
  * #512, the HTTP surface of the import channel.
@@ -38,12 +39,14 @@ const {
   itineraryImportStageFailure,
   parseRecognitionCandidates,
 } = await import("../itinerary/itinerary-recognition");
-const { isBlockedSourceAddress } = await import(
-  "../itinerary/itinerary-source-fetch"
-);
+const {
+  createPinnedLookup,
+  isBlockedSourceAddress,
+} = await import("../itinerary/itinerary-source-fetch");
 type AddressLookup = (hostname: string) => Promise<
   Array<{ address: string; family: number }>
 >;
+
 
 // The same mapping `server/app.ts` answers with, so the envelope under test is
 // the envelope a client sees.
@@ -61,6 +64,48 @@ const PUBLIC_ADDRESS = [{ address: "93.184.216.34", family: 4 }];
 
 const upstream = vi.fn<typeof fetch>();
 const lookup = vi.fn<AddressLookup>();
+
+/**
+ * Every hop a member's link produces, as the route actually issued it.
+ *
+ * The hop transport is injected rather than `fetch`-shaped because the guard's
+ * whole point is that a hop is pinned to the addresses that were checked: the
+ * pin travels as `request.lookup`, so a test can ask that resolver where the
+ * connection would have been allowed to go. `upstream` still answers the hop,
+ * so the existing call-count assertions keep meaning what they said.
+ */
+const hops: Array<{ url: string; lookup: PinnedLookup }> = [];
+
+const sourceTransport = async (
+  request: { url: URL; lookup: PinnedLookup },
+): Promise<{
+  status: number;
+  headers: Record<string, string | undefined>;
+  body: Uint8Array;
+}> => {
+  hops.push({ url: request.url.toString(), lookup: request.lookup });
+  const response = await upstream(request.url.toString(), {
+    method: "GET",
+    redirect: "manual",
+  });
+  const headers: Record<string, string | undefined> = {};
+  response.headers.forEach((value, key) => { headers[key] = value; });
+  return {
+    status: response.status,
+    headers,
+    body: new Uint8Array(await response.arrayBuffer()),
+  };
+};
+
+/** What one pinned resolver is willing to answer with. */
+function pinnedAddresses(pin: PinnedLookup): string[] {
+  let answered: string[] = [];
+  pin("anything.example", { all: true }, (error, addresses) => {
+    if (error || typeof addresses === "string") return;
+    answered = addresses.map((entry) => entry.address);
+  });
+  return answered;
+}
 
 function post(body: unknown) {
   return app.request("/api/itinerary-import", {
@@ -97,9 +142,11 @@ const READING = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hops.length = 0;
   lookup.mockResolvedValue(PUBLIC_ADDRESS);
   itineraryImportDependencies.fetcher = upstream;
   itineraryImportDependencies.lookup = lookup;
+  itineraryImportDependencies.sourceTransport = sourceTransport;
   Object.assign(config.serverConfig, {
     itineraryRecognitionDriver: "disabled",
     itineraryRecognitionBaseUrl: null,
@@ -116,6 +163,7 @@ beforeEach(() => {
 afterEach(() => {
   itineraryImportDependencies.fetcher = undefined;
   itineraryImportDependencies.lookup = undefined;
+  itineraryImportDependencies.sourceTransport = undefined;
 });
 
 function enableProviders() {
@@ -198,6 +246,122 @@ describe("link-ingestion request forgery guard", () => {
       });
     }
     expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("pins the hop to the addresses it checked, so a rebound name cannot be reached", async () => {
+    enableProviders();
+    // The name answers publicly while it is being checked and link-locally
+    // straight afterwards — the DNS rebinding case the pin exists for.
+    lookup.mockResolvedValueOnce(PUBLIC_ADDRESS);
+    upstream.mockResolvedValueOnce(new Response("<html>plan</html>", {
+      headers: { "content-type": "text/html" },
+    }));
+
+    await post({ source: "link", link: "https://plans.example/tripmap/routePlan?id=1" });
+
+    expect(hops).toHaveLength(1);
+    // The request could only ever have connected to the checked address; the
+    // resolver it was given consults no name at all.
+    expect(pinnedAddresses(hops[0].lookup)).toEqual(["93.184.216.34"]);
+  });
+
+  it("refuses to answer a pinned lookup with an address that was never cleared", () => {
+    const pin = createPinnedLookup([
+      { address: "93.184.216.34", family: 4 },
+      { address: "169.254.169.254", family: 4 },
+    ]);
+    expect(pinnedAddresses(pin)).toEqual(["93.184.216.34"]);
+
+    let failure: Error | null = null;
+    createPinnedLookup([{ address: "10.0.0.5", family: 4 }])(
+      "plans.example",
+      { all: true },
+      (error) => { failure = error; },
+    );
+    expect(failure).toBeInstanceOf(Error);
+  });
+
+  it("refuses a rendered reading whose hops the service did not report", async () => {
+    enableProviders();
+    config.serverConfig.itinerarySourceFetchDriver = "render";
+    config.serverConfig.itinerarySourceRenderUrl = "https://renderer.internal/read";
+    upstream.mockResolvedValueOnce(new Response(JSON.stringify({
+      html: "<html>plan</html>",
+      finalUrl: "https://plans.example/tripmap/routePlan?id=1",
+    }), { headers: { "content-type": "application/json" } }));
+
+    const response = await post({
+      source: "link",
+      link: "https://plans.example/tripmap/routePlan?id=1",
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      error: "ITINERARY_SOURCE_RENDER_UNVERIFIED",
+      stage: "source-access",
+    });
+    // The reading was refused, so it never reached the recogniser.
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a rendered reading that reports reaching a private address", async () => {
+    enableProviders();
+    config.serverConfig.itinerarySourceFetchDriver = "render";
+    config.serverConfig.itinerarySourceRenderUrl = "https://renderer.internal/read";
+    upstream.mockResolvedValueOnce(new Response(JSON.stringify({
+      html: "<html>plan</html>",
+      finalUrl: "http://metadata.example/latest/meta-data/",
+      hops: [
+        { url: "https://plans.example/tripmap/routePlan?id=1", address: "93.184.216.34" },
+        { url: "http://metadata.example/latest/meta-data/", address: "169.254.169.254" },
+      ],
+    }), { headers: { "content-type": "application/json" } }));
+
+    const response = await post({
+      source: "link",
+      link: "https://plans.example/tripmap/routePlan?id=1",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "ITINERARY_SOURCE_BLOCKED",
+      stage: "source-access",
+    });
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a rendered page whose every reported hop stays public", async () => {
+    enableProviders();
+    config.serverConfig.itinerarySourceFetchDriver = "render";
+    config.serverConfig.itinerarySourceRenderUrl = "https://renderer.internal/read";
+    upstream
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        html: "<html>plan</html>",
+        finalUrl: "https://plans.example/tripmap/routePlan?id=1&expanded=1",
+        hops: [
+          { url: "https://plans.example/tripmap/routePlan?id=1", address: "93.184.216.34" },
+          {
+            url: "https://plans.example/tripmap/routePlan?id=1&expanded=1",
+            address: "93.184.216.34",
+          },
+        ],
+      }), { headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(READING), {
+        headers: { "content-type": "application/json" },
+      }));
+
+    const response = await post({
+      source: "link",
+      link: "https://plans.example/tripmap/routePlan?id=1",
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.sourceRead).toEqual({ readVia: "render", contentType: "text/html" });
+    // The member's link is never handed to the renderer's own redirect policy
+    // without a bound on how far it may go.
+    const rendered = JSON.parse(String(upstream.mock.calls[0][1]?.body));
+    expect(rendered.maxRedirects).toBe(4);
   });
 });
 
