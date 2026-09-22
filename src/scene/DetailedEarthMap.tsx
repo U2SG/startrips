@@ -885,8 +885,21 @@ export default function DetailedEarthMap({
     });
 
     map.on("click", (event) => {
-      let routePointHit: { journeyId: string; routePointId: string } | null = null;
-      if (map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
+      // Resolve Route Point identity from the current authorized overlay and
+      // projection first. Invisible 44px hit circles may overlap; letting
+      // queryRenderedFeatures choose the first rendered feature would make
+      // layer order, rather than pointer proximity, decide which Point opens.
+      // The projection resolver deterministically picks the nearest disclosed
+      // Point while preserving the same touch-safe radius.
+      let routePointHit = pickDetailedEarthJourneyRoutePointHit(
+        journeyOverlayRef.current,
+        event.point,
+        (coordinates) => map.project(coordinates),
+      );
+      // Retain the rendered-feature lookup only as a bounded fallback for a
+      // future style/projection edge where MapLibre reports a hit that cannot
+      // be reproduced from the current projected source coordinates.
+      if (!routePointHit && map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
         const [journeyHit] = map.queryRenderedFeatures(event.point, {
           layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
         });
@@ -896,15 +909,6 @@ export default function DetailedEarthMap({
           routePointHit = { journeyId, routePointId };
         }
       }
-      // Keep the interaction contract tied to the same authorized source
-      // revision even when MapLibre omits an invisible hit layer from a
-      // rendered-feature query. Resolve the disclosed Point features with the
-      // map's current projection instead of adding retries or timing waits.
-      routePointHit ??= pickDetailedEarthJourneyRoutePointHit(
-        journeyOverlayRef.current,
-        event.point,
-        (coordinates) => map.project(coordinates),
-      );
       if (routePointHit && onJourneyRoutePointActivateRef.current) {
         onJourneyRoutePointActivateRef.current(routePointHit.journeyId, routePointHit.routePointId);
         return;

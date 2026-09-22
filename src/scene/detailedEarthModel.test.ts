@@ -206,16 +206,24 @@ describe("detailed-earth Journey overlay", () => {
     expect(scoped.revision).not.toBe(baseline.revision);
   });
 
-  it("keeps a projection-driven 44px hit area independent from marker size and disclosure", () => {
+  it("keeps a projection-driven 44px hit area independent from marker size, overlap order and disclosure", () => {
     const overlay = buildDetailedEarthJourneyOverlay({ route });
     const project = ([longitude, latitude]: [number, number]) => ({
       x: longitude * 1_000,
       y: latitude * 1_000,
     });
+    const pointA = project([route.points[0].lon, route.points[0].lat]);
     const pointB = project([route.points[1].lon, route.points[1].lat]);
     expect(pickDetailedEarthJourneyRoutePointHit(
       overlay,
       { x: pointB.x + 20, y: pointB.y },
+      project,
+    )).toEqual({ journeyId: route.id, routePointId: "point-b" });
+    // A and B's 22px interaction radii overlap here. Feature/render order must
+    // not let A steal a click that is geometrically closer to B.
+    expect(pickDetailedEarthJourneyRoutePointHit(
+      overlay,
+      { x: pointA.x + 18, y: pointA.y + 12 },
       project,
     )).toEqual({ journeyId: route.id, routePointId: "point-b" });
     expect(pickDetailedEarthJourneyRoutePointHit(
