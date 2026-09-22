@@ -16,7 +16,6 @@ import {
   storyMediaAvailability,
   storyAutoplayWaitsForVideoEnd,
   storyUploadedAssetIndex,
-  mediaForUploadRefreshScope,
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
 } from "./storyMediaPolicy";
@@ -2778,7 +2777,7 @@ export function JourneyStory({
       try {
         const refreshedJourney = await onMediaAdded(journey.id);
         const refreshedMedia = refreshedJourney
-          ? mediaForUploadRefreshScope(refreshedJourney, targetRoutePointId)
+          ? storyMediaForScope(refreshedJourney, targetRoutePointId)
           : [];
         const uploadedAssetIndex = storyUploadedAssetIndex(
           refreshedMedia,

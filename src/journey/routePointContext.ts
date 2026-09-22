@@ -186,12 +186,3 @@ export function clearRoutePointContextSelection(
 ): RoutePointContextSelection {
   return { revision: current.revision + 1, intent: null, context: null };
 }
-
-export function isCurrentRoutePointContextIntent(
-  selection: RoutePointContextSelection,
-  intent: RoutePointContextIntent,
-) {
-  return selection.intent?.revision === intent.revision
-    && selection.intent.journeyId === intent.journeyId
-    && selection.intent.routePointId === intent.routePointId;
-}

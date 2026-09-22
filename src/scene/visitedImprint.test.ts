@@ -104,6 +104,28 @@ describe("visited imprint policy", () => {
     expect(visitedImprintGainAt(ownerField, 51.5, -0.1)).toBeGreaterThan(0);
   });
 
+  it.each([
+    { name: "point override", point: 0.25, journey: 0.75, expected: 0.25 },
+    { name: "hidden point override", point: 0, journey: 1, expected: 0 },
+    { name: "Journey fallback", point: undefined, journey: 0.5, expected: 0.5 },
+    { name: "missing progress default", point: undefined, journey: undefined, expected: 1 },
+    { name: "point upper bound", point: 2, journey: 0.5, expected: 1 },
+    { name: "Journey lower bound", point: undefined, journey: -1, expected: 0 },
+    { name: "NaN point override", point: Number.NaN, journey: 1, expected: 0 },
+    { name: "infinite point override", point: Infinity, journey: 1, expected: 0 },
+    { name: "NaN Journey fallback", point: undefined, journey: Number.NaN, expected: 0 },
+    { name: "infinite Journey fallback", point: undefined, journey: -Infinity, expected: 0 },
+  ])("respects temporal reveal $name", ({ point, journey, expected }) => {
+    const field = buildVisitedImprintField([
+      route("journey-a", [{ lat: 22, lon: 114 }]),
+    ], {
+      journeys: new Map(journey === undefined ? [] : [["journey-a", journey]]),
+      points: new Map(point === undefined ? [] : [["journey-a:0", point]]),
+    });
+    expect(visitedImprintGainAt(field, 22, 114)).toBeCloseTo(visitedImprintGain(expected), 7);
+    expect(field.activeRegionCount).toBe(expected > 0 ? 1 : 0);
+  });
+
   it("keeps sparse route corridors broad, weaker and bounded", () => {
     const sparse = buildVisitedImprintField([
       route("journey-long", [

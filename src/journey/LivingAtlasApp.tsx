@@ -508,12 +508,6 @@ function preferredReducedMotion() {
   return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
-function journeyFocus(journey: Journey | null) {
-  if (!journey || journey.routePoints.length === 0) return null;
-  const point = journey.routePoints[Math.floor((journey.routePoints.length - 1) / 2)];
-  return { lat: point.latitude, lon: point.longitude };
-}
-
 export function resolveMobilePlaybackPresentation(
   journeys: readonly Journey[],
   selection: { journeyId: string; pointIndex: number | null } | null,

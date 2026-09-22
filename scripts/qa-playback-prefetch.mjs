@@ -20,7 +20,7 @@ const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
 /**
  * The artificial latency of every signed read, chosen to sit BETWEEN the two
  * tempos' image dwells (`fast` 1700 ms, `standard` 2800 ms in
- * `PLAYBACK_TEMPO_PROFILES`).
+ * `NARRATIVE_TIMING_PROFILES.full`).
  *
  * That is what makes this lane a detector rather than a tautology: a planner
  * regressed to `current + next` requests beat k+1 as beat k begins, which

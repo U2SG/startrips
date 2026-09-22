@@ -15,58 +15,6 @@ export type CityPoint = {
   direction: readonly [number, number, number];
 };
 
-export type CityTier = "coarse" | "fine";
-
-type CityFeature = {
-  properties?: {
-    NAME?: unknown;
-    POP_MAX?: unknown;
-  };
-  geometry?: {
-    coordinates?: unknown;
-  };
-};
-
-export function parseCityFeatures(
-  payload: { features?: unknown },
-): CityPoint[] {
-  if (!Array.isArray(payload.features)) return [];
-  const cities: CityPoint[] = [];
-  for (const raw of payload.features) {
-    const feature = raw as CityFeature;
-    const coordinates = feature.geometry?.coordinates;
-    const name = typeof feature.properties?.NAME === "string"
-      ? feature.properties.NAME.trim()
-      : "";
-    if (!Array.isArray(coordinates) || !name) continue;
-    const longitude = Number(coordinates[0]);
-    const latitude = Number(coordinates[1]);
-    if (
-      !Number.isFinite(latitude)
-      || latitude < -90
-      || latitude > 90
-      || !Number.isFinite(longitude)
-      || longitude < -180
-      || longitude > 180
-    ) {
-      continue;
-    }
-    const population = Number(feature.properties?.POP_MAX ?? 0);
-    const vector = latLonToVector3(latitude, longitude, 1);
-    cities.push({
-      name,
-      latitude,
-      longitude,
-      population: Number.isFinite(population) ? population : 0,
-      // Natural Earth 110m populated places are capitals and major cities.
-      rank: 1,
-      direction: [vector.x, vector.y, vector.z],
-    });
-  }
-  // Largest first so a bounded label budget keeps the most important cities.
-  return cities.sort((left, right) => right.population - left.population);
-}
-
 /**
  * Parse the compact GeoNames build (public/earth/cities.json): an array of
  * { n: asciiname, z?: localized name, la: latitude, lo: longitude, p:

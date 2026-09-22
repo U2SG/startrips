@@ -15,48 +15,6 @@ type StartripsBrandMarkProps = {
 const V12_WORDMARK = "/brand/startrips-v12-wordmark.svg";
 const V12_WORDMARK_ONLY = "/brand/startrips-v12-wordmark-only.svg";
 
-/**
- * Kept as a compatibility export for older call sites. v12 deliberately has
- * one four-point star only (the wordmark i-dot), so the legacy particle ring
- * no longer renders another competing brand signal.
- */
-export function StartripsLoadingPoints() {
-  return null;
-}
-
-/**
- * Compact v12 identity: the approved articulated mountain-goat silhouette and
- * the same four-point star geometry used by the wordmark study.
- */
-export function StartripsLamb({
-  className = "",
-  state = "rest",
-  title,
-}: {
-  className?: string;
-  state?: StartripsBrandState;
-  title?: string;
-}) {
-  return (
-    <span
-      className={`startrips-v12-mark is-${state} ${className}`}
-      role={title ? "img" : undefined}
-      aria-label={title}
-      aria-hidden={title ? undefined : true}
-      data-brand-version="12"
-      data-brand-state={state}
-    >
-      <svg
-        className="startrips-v12-mark__svg"
-        viewBox={STARTRIPS_V12_MARK_VIEWBOX}
-        aria-hidden="true"
-        focusable="false"
-        dangerouslySetInnerHTML={{ __html: STARTRIPS_V12_MARK_MARKUP }}
-      />
-    </span>
-  );
-}
-
 export function StartripsBrandMark({
   className = "",
   loading = false,

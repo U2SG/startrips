@@ -117,22 +117,22 @@ export function buildRegionalCoastlinePositions({
   );
 }
 
-export class CoastlineRefinementCache {
-  private readonly values = new Map<string, Float32Array>();
+export class RefinementCache<T> {
+  private readonly values = new Map<string, T>();
 
-  constructor(private readonly limit = COASTLINE_SPATIAL_CACHE_LIMIT) {}
+  constructor(private readonly limit: number) {}
 
   get(key: string) {
     const value = this.values.get(key);
-    if (!value) return null;
+    if (value === undefined) return null;
     this.values.delete(key);
     this.values.set(key, value);
     return value;
   }
 
-  set(key: string, positions: Float32Array) {
+  set(key: string, value: T) {
     this.values.delete(key);
-    this.values.set(key, positions);
+    this.values.set(key, value);
     while (this.values.size > this.limit) {
       const oldest = this.values.keys().next().value;
       if (typeof oldest !== "string") break;

@@ -192,18 +192,13 @@ export async function moveJourneyMediaForAtlas(
       .from(mediaAssets)
       .where(eq(mediaAssets.journeyId, sourceJourneyId))
       .orderBy(mediaAssets.sortOrder);
-    const moving = new Set(input.assetIds);
     const sourceOrder = sourceAll.map((asset) => asset.id);
-    const movedInSourceOrder = sourceOrder.filter((id) => moving.has(id));
 
     if (!crossJourney) {
       if (!moveUndoOrdersFitLimit(sourceOrder)) {
         return "undo-state-too-large" as const;
       }
-      const nextOrder = [
-        ...sourceOrder.filter((id) => !moving.has(id)),
-        ...movedInSourceOrder,
-      ];
+      const nextOrder = mediaOrderAfterMove(sourceOrder, input.assetIds);
       await writeJourneyMediaOrder(transaction, atlasId, sourceJourneyId, nextOrder, {
         sourceJourneyId,
         placements: input.assetIds.map((assetId) => ({ assetId, routePointId: input.routePointId })),
@@ -211,6 +206,8 @@ export async function moveJourneyMediaForAtlas(
       return "ok" as const;
     }
 
+    const moving = new Set(input.assetIds);
+    const movedInSourceOrder = sourceOrder.filter((id) => moving.has(id));
     const targetAll = await transaction
       .select({ id: mediaAssets.id })
       .from(mediaAssets)

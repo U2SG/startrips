@@ -5,7 +5,6 @@ import {
   COASTLINE_LOCAL_COMBINED_VERTEX_BUDGET,
   COASTLINE_LOCAL_COVERAGE_REGIONS,
   COASTLINE_LOCAL_VERTEX_BUDGET,
-  CoastlineLocalChunkCache,
   buildLocalCoastlinePositions,
   isLocalCoastlineTarget,
   mergeRegionalAndLocalCoastlinePositions,
@@ -16,6 +15,7 @@ import {
   type CoastlineLocalChunk,
   type CoastlineLocalManifest,
 } from "./coastlineLocalLod";
+import { RefinementCache } from "./coastlineSpatialLod";
 import { ParticleRefinementBuildGuard } from "./particleSpatialLod";
 
 const manifest = JSON.parse(
@@ -232,15 +232,17 @@ describe("local 10m coastline refinement (#154)", () => {
   });
 
   it("keeps a bounded LRU of immutable local chunks", () => {
-    const cache = new CoastlineLocalChunkCache(2);
+    const cache = new RefinementCache<CoastlineLocalChunk>(2);
     const a = chunk("+20_+112");
     const b = chunk("+22_+112");
     const c = chunk("+22_+114");
     cache.set(a.id, a);
     cache.set(b.id, b);
     expect(cache.get(a.id)?.id).toBe(a.id);
+    expect(cache.get(a.id)).toBe(a);
     cache.set(c.id, c);
     expect(cache.get(b.id)).toBeNull();
+    expect(cache.get(c.id)).toBe(c);
     expect(cache.size).toBe(2);
   });
 });
