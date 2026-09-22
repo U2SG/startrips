@@ -30,6 +30,8 @@ import {
   storyImmersiveEntryKeepsPlaying,
   showMobileStoryPlayControl,
   storyAssetIndexForId,
+  indexStoryMedia,
+  storyMediaInOptimisticOrder,
   storyAutoplayAdvance,
   storyAutoplayNextIndex,
   storyAutoplayWaitsForVideoEnd,
@@ -913,6 +915,83 @@ describe("storyAssetIndexForId (#76)", () => {
   it("clamps the numeric fallback when the settled asset disappeared", () => {
     const only = asset("only", "image/jpeg", 0, "only.jpg");
     expect(storyAssetIndexForId([only], "gone", 4)).toBe(0);
+  });
+});
+
+describe("Story scoped media projection", () => {
+  it("preserves optimistic order, drops deleted ids and appends new scoped assets", () => {
+    const first = asset("first", "image/jpeg", 0);
+    const second = asset("second", "video/mp4", 1);
+    const uploaded = asset("uploaded", "image/jpeg", 2);
+    const media = [first, second, uploaded];
+    const localOrder = ["deleted", "second", "first", "outside-scope"];
+
+    expect(storyMediaInOptimisticOrder(media, localOrder)).toEqual([second, first, uploaded]);
+    expect(storyMediaInOptimisticOrder(media, null)).toBe(media);
+    expect(storyMediaInOptimisticOrder(media, [])).toEqual(media);
+    expect(media).toEqual([first, second, uploaded]);
+    expect(localOrder).toEqual(["deleted", "second", "first", "outside-scope"]);
+  });
+
+  it("indexes only the current visual scope and replaces removed or moved identities", () => {
+    const original: Journey = {
+      ...journey,
+      routePoints: [
+        { id: "a", journeyId: journey.id, sortOrder: 0, label: "A", latitude: 1, longitude: 1, occurredAt: null, isStop: true, createdAt: journey.createdAt },
+        { id: "b", journeyId: journey.id, sortOrder: 1, label: "B", latitude: 2, longitude: 2, occurredAt: null, isStop: true, createdAt: journey.createdAt },
+      ],
+      media: [
+        { ...asset("late-a", "video/mp4", 5), routePointId: "a" },
+        { ...asset("early-a", "image/jpeg", 1), routePointId: "a" },
+        { ...asset("other-b", "image/jpeg", 0), routePointId: "b" },
+        asset("intro", "image/jpeg", 8),
+        asset("soundtrack", "audio/mpeg", 0),
+      ],
+    };
+    const scopeA = mediaForUploadRefreshScope(original, "a");
+    const first = indexStoryMedia(scopeA);
+    expect([...first.indexById]).toEqual([["early-a", 0], ["late-a", 1]]);
+    expect(first.byId.get("late-a")).toBe(original.media[0]);
+    for (const unavailable of ["other-b", "intro", "soundtrack", "missing"]) {
+      expect(first.byId.has(unavailable)).toBe(false);
+      expect(storyAssetIndexForId(scopeA, unavailable, 9, first.indexById)).toBe(1);
+    }
+
+    const changed: Journey = { ...original, media: [
+      { ...original.media[0], routePointId: "b" },
+      original.media[2],
+      { ...asset("uploaded-a", "image/jpeg", 0), routePointId: "a" },
+    ] };
+    const nextScopeA = mediaForUploadRefreshScope(changed, "a");
+    const next = indexStoryMedia(nextScopeA);
+    expect([...next.indexById]).toEqual([["uploaded-a", 0]]);
+    expect(next.byId.has("early-a")).toBe(false);
+    expect(next.byId.has("late-a")).toBe(false);
+    expect(storyAssetIndexForId(nextScopeA, "late-a", 1, next.indexById)).toBe(0);
+    expect(storyMediaInOptimisticOrder(nextScopeA, ["late-a", "early-a"]))
+      .toEqual(nextScopeA);
+
+    const scopeB = mediaForUploadRefreshScope(changed, "b");
+    const other = indexStoryMedia(scopeB);
+    expect([...other.indexById]).toEqual([["other-b", 0], ["late-a", 1]]);
+    expect(other.byId.get("late-a")).toBe(changed.media[0]);
+    expect(first.byId.get("late-a")?.routePointId).toBe("a");
+    expect(storyAssetIndexForId(scopeB, "late-a", 0, other.indexById)).toBe(1);
+  });
+
+  it("preserves first-match lookup and fallback bounds for empty or repeated identities", () => {
+    const original = asset("same", "image/jpeg", 0);
+    const repeated = asset("same", "video/mp4", 1);
+    const media = [original, repeated];
+    const index = indexStoryMedia(media);
+    expect(index.byId.get("same")).toBe(original);
+    expect(storyAssetIndexForId(media, "same", 1, index.indexById)).toBe(0);
+    expect(storyAssetIndexForId(media, null, -4, index.indexById)).toBe(0);
+    expect(storyAssetIndexForId([], "same", 4, indexStoryMedia([]).indexById)).toBe(0);
+    // Optimistic ordering still follows its existing last-value Map behavior;
+    // indexing does not introduce deduplication or rewrite the media input.
+    expect(storyMediaInOptimisticOrder(media, ["same", "same"]))
+      .toEqual([repeated, repeated]);
   });
 });
 

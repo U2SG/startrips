@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   clearRemovedMediaTarget,
+  composerMediaSummary,
   JourneyComposer,
   JourneyMediaContinuationError,
   journeyToDraftPoints,
@@ -16,7 +17,7 @@ import {
 import { uploadJourneyMedia } from "./journeyMediaUpload";
 import { COMPACT_MOBILE_MEDIA_QUERY } from "./mobileLayout";
 import { moveRoutePoint, type RouteDraftPoint } from "./routeDraft";
-import type { Journey, JourneyInput } from "./types";
+import type { Journey, JourneyInput, JourneyMediaAsset } from "./types";
 
 const input: JourneyInput = {
   title: "Night train",
@@ -38,6 +39,79 @@ const journey = {
   routePoints: [],
   media: [],
 } as unknown as Journey;
+
+describe("composerMediaSummary", () => {
+  const media = (id: string, routePointId: string | null, mimeType = "image/jpeg", sortOrder = 0) => ({
+    id, routePointId, mimeType, sortOrder, fileName: `${id}.jpg`,
+  }) as JourneyMediaAsset;
+  const pending = (name: string, routePointDraftId: string | null) => ({
+    file: { name, type: "image/jpeg" } as File,
+    routePointDraftId,
+  });
+
+  it("keeps persisted input order before pending order and excludes the soundtrack", () => {
+    const existing = { media: [
+      media("model-first", "point-a", "video/mp4", 8),
+      media("soundtrack", "point-a", "audio/legacy", 0),
+      media("model-second", "point-a", "image/jpeg", 1),
+      media("point-b", "point-b"),
+      media("whole-journey", null),
+    ] };
+    const summary = composerMediaSummary(existing, [
+      { id: "point-a", draftId: "draft-a" },
+      { id: "point-b", draftId: "draft-b" },
+      { draftId: "new-point" },
+      { draftId: "empty-point" },
+    ], [
+      pending("pending-a.jpg", "draft-a"),
+      pending("pending-b-first.jpg", "draft-b"),
+      pending("pending-b-second.jpg", "draft-b"),
+      pending("new-first.jpg", "new-point"),
+      pending("new-second.jpg", "new-point"),
+    ]);
+
+    expect(summary.existingVisualMediaCount).toBe(4);
+    expect([...summary.byDraftId]).toEqual([
+      ["draft-a", { count: 3, label: "model-first.jpg、model-second.jpg 等 3 个" }],
+      ["draft-b", { count: 3, label: "point-b.jpg、pending-b-first.jpg 等 3 个" }],
+      ["new-point", { count: 2, label: "new-first.jpg、new-second.jpg" }],
+      ["empty-point", { count: 0, label: "暂无媒体归属此地点" }],
+    ]);
+    expect(existing.media.map((asset) => asset.id)).toEqual([
+      "model-first", "soundtrack", "model-second", "point-b", "whole-journey",
+    ]);
+  });
+
+  it("does not confuse persisted ids with draft ids or adopt deleted-point media", () => {
+    const files = [
+      pending("correct.jpg", "draft-a"),
+      pending("wrong-id.jpg", "point-a"),
+      pending("deleted.jpg", "deleted-draft"),
+      pending("journey.jpg", null),
+    ];
+    const existing = { media: [media("saved", "point-a"), media("orphan", "deleted-point")] };
+    const points = [{ id: "point-a", draftId: "draft-a" }, { draftId: "new-draft" }];
+    const before = composerMediaSummary(existing, points, files);
+    expect(before.existingVisualMediaCount).toBe(2);
+    expect(before.byDraftId.get("draft-a")).toEqual({ count: 2, label: "saved.jpg、correct.jpg" });
+    expect(before.byDraftId.get("new-draft")?.count).toBe(0);
+    expect(before.byDraftId.has("deleted-draft")).toBe(false);
+
+    const after = composerMediaSummary(existing, [points[1]], clearRemovedMediaTarget(files, "draft-a"));
+    expect([...after.byDraftId]).toEqual([["new-draft", { count: 0, label: "暂无媒体归属此地点" }]]);
+    expect(files[0].routePointDraftId).toBe("draft-a");
+  });
+
+  it("reflects new files and reassignment without mutating the previous summary", () => {
+    const points = [{ draftId: "a" }, { draftId: "b" }];
+    const first = composerMediaSummary(undefined, points, [pending("same.jpg", "a")]);
+    const next = composerMediaSummary(null, points, [pending("same.jpg", "b"), pending("same.jpg", "b")]);
+    expect(first.existingVisualMediaCount).toBe(0);
+    expect(first.byDraftId.get("a")).toEqual({ count: 1, label: "same.jpg" });
+    expect(next.byDraftId.get("a")?.count).toBe(0);
+    expect(next.byDraftId.get("b")).toEqual({ count: 2, label: "same.jpg、same.jpg" });
+  });
+});
 
 describe("persistJourneyDraft", () => {
   it("does not silently turn an empty coordinate into zero", () => {
