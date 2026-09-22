@@ -46,6 +46,14 @@ def audit(root):
     for needle in ['When `main` advances under an open PR: rebase', '**Every top-level review thread must be answered**']:
         if needle in manual: problems.append('Conflicting live policy: ' + needle)
     if 'Source review receipt' not in manual: problems.append('Source-review receipt contract missing')
+    if '## Coherent delivery packages' not in manual:
+        problems.append('Delivery-package contract missing')
+    for required in ['delivery.py','delivery_package.py','delivery_runtime.py','delivery_issues.py']:
+        if not (root / 'lib' / required).is_file(): problems.append('missing lib/' + required)
+    if 'verify_delivery_runtime' not in loop or "f.get('delivery_lead')" not in loop:
+        problems.append('Package selector/runtime gate not wired')
+    if 'package-window' not in texts.get('lib/intake.sh', ''):
+        problems.append('Package issue-snapshot guard not wired')
     if any(line.strip() == '# STAGED_PLACEHOLDER' for path in (root / 'lib').glob('*.py') if not path.name.startswith('test_') for line in path.read_text(encoding='utf-8-sig').splitlines()):
         problems.append('Incomplete staged runtime module')
     return problems

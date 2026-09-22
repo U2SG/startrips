@@ -12,6 +12,10 @@ from feature_store import StoreConflict, load_document, commit_document
 from feature_state import target, row_token, TERMINAL
 from github_evidence import api, source_relation, review_backlog, merge_proof, EvidenceUnknown
 from ci_observer import latest_ci, observe_failures, write_json, pages
+from delivery import (blockers as delivery_blockers, canonical_lead, grouped,
+                      package_snapshot, review_snapshot, unit_pr_links, unit_rows, unit_token,
+                      validate_coverage)
+from delivery_issues import assert_current as assert_issue_current, live_issues
 
 
 def receipt_path(root, fid, sha):
@@ -20,7 +24,7 @@ def receipt_path(root, fid, sha):
     return Path(root) / '.agent-artifacts/evaluations' / (fid + '-' + sha + '-source-review.json')
 
 
-def source_review(root, fid, pr, sha):
+def source_review(root, fid, pr, sha, delivery=None):
     path = receipt_path(root, fid, sha)
     if not path.exists():
         return 'MISSING'
@@ -32,6 +36,17 @@ def source_review(root, fid, pr, sha):
             or not isinstance(data.get('findings'), list)):
         raise EvidenceUnknown('Source review receipt identity/evidence invalid')
     verdict = data.get('verdict')
+    if delivery is not None:
+        if data.get('delivery_package') != delivery:
+            raise EvidenceUnknown('Source review delivery scope/revision is stale')
+        try:
+            coverage = validate_coverage(delivery, data.get('member_coverage'), require_pass=(verdict == 'CLEAR'))
+            if verdict == 'CHANGES_REQUESTED' and not any(item.get('verdict') == 'CHANGES_REQUESTED' for item in coverage.values()):
+                raise StoreConflict('Package CHANGES_REQUESTED must identify at least one affected member')
+        except StoreConflict as exc:
+            raise EvidenceUnknown(str(exc)) from exc
+    elif data.get('delivery_package') not in (None, {}):
+        raise EvidenceUnknown('Single-feature review unexpectedly carries delivery scope')
     if verdict == 'CLEAR':
         if data['findings']:
             raise EvidenceUnknown('CLEAR Source review carries findings')
@@ -138,12 +153,17 @@ def failure_family_owner(path, fid, repo, records):
 
     active_states = {'pending', 'in_progress', 'needs_work', 'ready_for_eval', 'ready_to_merge'}
     candidates = []
-    for candidate in load_document(path)['features']:
+    owner_doc = load_document(path)
+    for candidate in owner_doc['features']:
         if candidate.get('status') not in active_states or candidate.get('human_gate'):
             continue
         number = mapped_issue(candidate.get('issue'))
         if not number:
             continue
+        try:
+            owner_id = canonical_lead(owner_doc, candidate['id'])
+        except StoreConflict as exc:
+            raise EvidenceUnknown(str(exc)) from exc
         issue = api('repos/' + repo + '/issues/' + str(number))
         comments = pages('repos/' + repo + '/issues/' + str(number) + '/comments')
         if not isinstance(issue, dict) or not isinstance(comments, list):
@@ -152,18 +172,21 @@ def failure_family_owner(path, fid, repo, records):
             [str(issue.get('title') or ''), str(issue.get('body') or '')]
             + [str(comment.get('body') or '') for comment in comments]
         ).lower()
-        candidates.append((candidate['id'], number, text))
+        candidates.append((owner_id, number, text))
 
     routed = []
     for record in product_records:
         tokens = record_tokens(record)
         if not tokens:
             return None
-        matches = []
+        by_owner = {}
         for feature, number, text in candidates:
             hit = sorted(token for token in tokens if token.lower() in text)
             if hit:
-                matches.append({'feature': feature, 'issue': number, 'matched_tokens': hit})
+                value = by_owner.setdefault(feature, {'feature': feature, 'issues': set(), 'matched_tokens': set()})
+                value['issues'].add(number); value['matched_tokens'].update(hit)
+        matches = [{'feature': value['feature'], 'issue': min(value['issues']),
+                    'matched_tokens': sorted(value['matched_tokens'])} for value in by_owner.values()]
         if len(matches) > 1:
             raise EvidenceUnknown(
                 'Ambiguous failure-family ownership: '
@@ -183,12 +206,33 @@ def failure_family_owner(path, fid, repo, records):
     }
 
 def plan(path, fid, repo, *, record_failures=False):
-    path = Path(path); root = path.parent
-    row = target(load_document(path), fid)
-    result = {'feature': fid, 'row_token': row_token(row), 'action': derive(row), 'source_sha': None, 'final_sha': None}
-    if row.get('status') in TERMINAL or row.get('human_gate') or not row.get('pr_links'):
+    path = Path(path); root = path.parent; doc = load_document(path)
+    if canonical_lead(doc, fid) != fid:
+        raise StoreConflict('Package member must be planned through canonical lead')
+    rows = unit_rows(doc, fid); row = rows[0]; package = review_snapshot(doc, fid)
+    statuses = {member.get('status') for member in rows}; pass_values = {bool(member.get('passes')) for member in rows}
+    if package and (len(statuses) != 1 or len(pass_values) != 1):
+        raise StoreConflict('Delivery package lifecycle drift')
+    gated = [(member['id'], member.get('human_gate')) for member in rows if member.get('human_gate')]
+    if gated:
+        unit_row = dict(row, human_gate='; '.join(mid + ': ' + str(gate) for mid, gate in gated))
+    else:
+        unit_row = row
+    token = unit_token(doc, fid)
+    result = {'feature': fid, 'row_token': token, 'action': derive(unit_row),
+              'source_sha': None, 'final_sha': None}
+    if package:
+        # A package review/owner cannot silently outlive changed member issue scope.
+        # The registered observation is frozen in ONE; new content must be
+        # explicitly acknowledged/revised before any next action is trusted.
+        current_issues = live_issues(doc, fid, repo)
+        assert_issue_current(doc, fid, current_issues)
+        result['delivery_package'] = package
+        result['members'] = [item['id'] for item in package['members']]
+        result['issue_observation'] = current_issues
+    urls = unit_pr_links(doc, fid)
+    if unit_row.get('status') in TERMINAL or gated or not urls:
         return result
-    urls = row['pr_links']
     if len(urls) != 1:
         raise StoreConflict('Ambiguous PR ownership')
     match = re.fullmatch('https://github\\.com/' + re.escape(repo) + '/pull/(\\d+)/?', urls[0])
@@ -211,8 +255,8 @@ def plan(path, fid, repo, *, record_failures=False):
         raise EvidenceUnknown('Head moved across evidence reads')
     missing = not relation['sealed'] and ledger_pending_final(repo, number, relation['source_sha'])
     ci = latest_ci(repo, relation['final_sha'], missing_ledger=missing)
-    source_verdict = source_review(root, fid, number, relation['source_sha'])
-    result.update(action=derive(row, pr, relation, review, ci, source_verdict), pr=number, **relation,
+    source_verdict = source_review(root, fid, number, relation['source_sha'], package)
+    result.update(action=derive(unit_row, pr, relation, review, ci, source_verdict), pr=number, **relation,
                   source_review_clear=(source_verdict == 'CLEAR'), source_review_verdict=source_verdict,
                   ci_state=ci['state'], source_green=ci['source_green'],
                   final_green=ci['final_green'], ci_run=ci['run']['id'] if ci['run'] else None,
@@ -230,8 +274,9 @@ def plan(path, fid, repo, *, record_failures=False):
     final = api(prefix)
     if final['head']['sha'] != pr['head']['sha'] or final['state'] != pr['state'] or final.get('merged') != pr.get('merged'):
         raise EvidenceUnknown('PR lifecycle changed during planning')
-    if row_token(target(load_document(path), fid)) != result['row_token']:
-        raise StoreConflict('Feature changed during planning')
+    confirmed = load_document(path)
+    if canonical_lead(confirmed, fid) != fid or unit_token(confirmed, fid) != result['row_token']:
+        raise StoreConflict('Delivery unit changed during planning')
     return result
 
 
@@ -240,9 +285,9 @@ def handoff(path, fid, repo):
     if observed['action'] == 'WAIT_REVIEW': return {'changed': False, 'action': 'WAIT_REVIEW'}
     if observed['action'] != 'HANDOFF_REVIEW':
         raise StoreConflict('Handoff not eligible: ' + observed['action'])
-    path = Path(path); doc = load_document(path); row = target(doc, fid)
-    if row_token(row) != observed['row_token']:
-        raise StoreConflict('Feature changed before handoff')
+    path = Path(path); doc = load_document(path)
+    if canonical_lead(doc, fid) != fid or unit_token(doc, fid) != observed['row_token']:
+        raise StoreConflict('Delivery unit changed before handoff')
     from runtime_preflight import preflight
     from evidence_capture import capture
     owner = preflight(path.parent, path.parent / 'startrips', os.environ.get('STARTRIPS_LANE'), fid, repo)
@@ -254,20 +299,27 @@ def handoff(path, fid, repo):
     if any(captured.get(left) != observed.get(right) for left, right in identity_fields.items()):
         raise StoreConflict('Captured handoff evidence changed identity; discard the mixed snapshot')
     confirmed = plan(path, fid, repo)
-    keys = ('pr', 'source_sha', 'final_sha', 'ci_run', 'ci_attempt', 'row_token')
+    keys = ('pr', 'source_sha', 'final_sha', 'ci_run', 'ci_attempt', 'row_token', 'delivery_package')
     if confirmed.get('action') != 'HANDOFF_REVIEW' or any(confirmed.get(k) != observed.get(k) for k in keys):
-        raise StoreConflict('Handoff gate changed after capture; re-read Source review and CI')
+        raise StoreConflict('Handoff gate changed after capture; re-read Source review, package scope and CI')
 
     relative = '.agent-artifacts/evaluations/' + fid + '-' + observed['final_sha'] + '-handoff.json'
     output = path.parent / relative
     if not output.exists():
         write_json(output, {'feature': fid, 'pr': observed['pr'], 'source_sha': observed['source_sha'],
                             'final_sha': observed['final_sha'], 'ci_run': observed['ci_run'],
-                            'ci_attempt': observed['ci_attempt'], 'kind': 'HANDOFF_REVIEW'})
-    row.update(status='ready_for_eval', passes=False)
-    if captured['path'] not in row.setdefault('evidence', []): row['evidence'].append(captured['path'])
-    if relative not in row.setdefault('evidence', []): row['evidence'].append(relative)
-    result = commit_document(path, doc, allowed={fid: {'status', 'passes', 'evidence'}})
+                            'ci_attempt': observed['ci_attempt'], 'kind': 'HANDOFF_REVIEW',
+                            'delivery_package': observed.get('delivery_package')})
+    doc = load_document(path)
+    if unit_token(doc, fid) != observed['row_token']:
+        raise StoreConflict('Delivery unit changed before state handoff')
+    allowed = {}
+    for row in unit_rows(doc, fid):
+        row.update(status='ready_for_eval', passes=False)
+        if captured['path'] not in row.setdefault('evidence', []): row['evidence'].append(captured['path'])
+        if relative not in row.setdefault('evidence', []): row['evidence'].append(relative)
+        allowed[row['id']] = {'status', 'passes', 'evidence'}
+    result = commit_document(path, doc, allowed=allowed, expected_rows=set(allowed), delivery_operation='unit')
     return {**result, 'action': 'HANDOFF_REVIEW', 'final_sha': observed['final_sha']}
 
 
@@ -275,12 +327,25 @@ def record_source_review(path, fid, repo, review_file):
     if os.environ.get('STARTRIPS_ROLE') != 'hourly-review':
         raise StoreConflict('Only the independent Hourly Review role records Source review')
     data = json.loads(Path(review_file).read_bytes())
-    root = Path(path).parent; row = target(load_document(path), fid)
+    root = Path(path).parent; doc = load_document(path)
+    if canonical_lead(doc, fid) != fid:
+        raise StoreConflict('Independent review must target the canonical package lead')
+    package = review_snapshot(doc, fid); rows = unit_rows(doc, fid)
     number = data.get('pr'); sha = data.get('source_sha')
-    if row.get('pr_links') != ['https://github.com/' + repo + '/pull/' + str(number)]:
-        raise StoreConflict('Review is not bound to this feature PR')
+    expected_url = 'https://github.com/' + repo + '/pull/' + str(number)
+    if any(row.get('pr_links') != [expected_url] for row in rows):
+        raise StoreConflict('Review is not bound to every delivery-unit member')
     if data.get('feature') != fid or data.get('verdict') not in {'CLEAR', 'CHANGES_REQUESTED'}:
         raise StoreConflict('Invalid independent review result')
+    if package is not None:
+        if data.get('delivery_package') != package:
+            raise StoreConflict('Review package scope/revision does not match current ONE')
+        coverage = data.get('member_coverage')
+        validate_coverage(package, coverage, require_pass=(data.get('verdict') == 'CLEAR'))
+        if data.get('verdict') == 'CHANGES_REQUESTED' and not any(item.get('verdict') == 'CHANGES_REQUESTED' for item in coverage.values()):
+            raise StoreConflict('Package CHANGES_REQUESTED must identify at least one affected member')
+    elif data.get('delivery_package') not in (None, {}):
+        raise StoreConflict('Single-feature review cannot claim a delivery package')
     relation = source_relation(repo, number)
     if relation['source_sha'] != sha:
         raise EvidenceUnknown('Review Source changed')
@@ -296,6 +361,9 @@ def record_source_review(path, fid, repo, review_file):
         raise StoreConflict('CLEAR cannot carry unresolved findings')
     if data['verdict'] == 'CHANGES_REQUESTED' and not data['findings']:
         raise StoreConflict('CHANGES_REQUESTED must carry actionable findings')
+    confirmed = load_document(path)
+    if unit_token(confirmed, fid) != unit_token(doc, fid):
+        raise StoreConflict('Delivery-unit scope changed during independent review')
     if source_relation(repo, number)['source_sha'] != sha:
         raise EvidenceUnknown('Source changed while recording independent review')
     data.update(reviewer_role='hourly-review', completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import hashlib
 import json
@@ -11,7 +12,9 @@ import sys
 from pathlib import Path
 
 from feature_store import StoreConflict, commit_document, load_document
-from github_evidence import EvidenceUnknown, api, merge_proof, review_backlog
+from github_evidence import EvidenceUnknown, api, merge_proof, review_backlog, source_relation
+from delivery import (canonical_lead, package_snapshot, unit_pr_links, unit_rows,
+                      unit_token, package_ledger_lines, validate_coverage)
 
 
 TERMINAL = {'passed', 'blocked', 'cancelled_by_product_decision'}
@@ -38,16 +41,18 @@ def row_token(row):
                                      allow_nan=False).encode('utf-8')).hexdigest()
 
 
-def validate_evaluation(row, expected_row, repo_path, expected_head):
+def validate_evaluation(path, fid, expected_row, repo_path, expected_head):
     if not expected_row or not expected_head or repo_path is None:
-        raise StoreConflict('Evaluation writes require pre-evaluation row and Source identity')
-    if row_token(row) != expected_row:
-        raise StoreConflict('Feature changed during evaluation; stale verdict discarded')
+        raise StoreConflict('Evaluation writes require pre-evaluation unit and Source identity')
+    doc = load_document(path)
+    if canonical_lead(doc, fid) != fid:
+        raise StoreConflict('Only the canonical package lead may be evaluated')
+    if unit_token(doc, fid) != expected_row:
+        raise StoreConflict('Delivery unit changed during evaluation; stale verdict discarded')
     result = subprocess.run(['git', '-C', str(repo_path), 'rev-parse', 'HEAD'],
                             capture_output=True, text=True, timeout=10)
     if result.returncode or result.stdout.strip() != expected_head:
         raise StoreConflict('Source changed during evaluation; stale verdict discarded')
-    # A dirty tree cannot be the exact evaluated Source, even if HEAD is stable.
     result = subprocess.run(['git', '-C', str(repo_path), 'status', '--porcelain'],
                             capture_output=True, text=True, timeout=10)
     if result.returncode or result.stdout.strip():
@@ -55,88 +60,151 @@ def validate_evaluation(row, expected_row, repo_path, expected_head):
 
 
 def mark_ready(path, fid, evidence, *, expected_row=None, repo_path=None, expected_head=None):
-    doc = load_document(path)
-    row = target(doc, fid)
-    validate_evaluation(row, expected_row, repo_path, expected_head)
-    if row.get('status') in TERMINAL:
-        raise StoreConflict('Cannot overwrite terminal feature ' + fid)
-    if row.get('status') == 'ready_to_merge' and evidence in row.get('evidence', []):
-        return {'changed': False}
-    row.update(status='ready_to_merge', passes=True, evaluated_at=now())
-    if evidence not in row.setdefault('evidence', []):
-        row['evidence'].append(evidence)
-    return commit_document(path, doc, allowed={fid: {'status', 'passes', 'evaluated_at', 'evidence'}})
+    validate_evaluation(path, fid, expected_row, repo_path, expected_head)
+    doc = load_document(path); rows = unit_rows(doc, fid); package = package_snapshot(doc, fid)
+    if any(row.get('status') in TERMINAL for row in rows):
+        raise StoreConflict('Cannot partially overwrite terminal delivery unit ' + fid)
+    allowed = {}
+    for row in rows:
+        # Package members are not individually 'passed' by evaluator approval.
+        # They remain passes=false until the one exact-main reconcile proves the
+        # complete package. Legacy single-issue semantics stay unchanged.
+        row.update(status='ready_to_merge', passes=False if package else True, evaluated_at=now())
+        if evidence not in row.setdefault('evidence', []):
+            row['evidence'].append(evidence)
+        allowed[row['id']] = {'status', 'passes', 'evaluated_at', 'evidence'}
+    return commit_document(path, doc, allowed=allowed, expected_rows=set(allowed), delivery_operation='unit')
 
 
 def mark_needs_work(path, fid, cap, *, expected_row=None, repo_path=None, expected_head=None):
-    doc = load_document(path)
-    row = target(doc, fid)
-    validate_evaluation(row, expected_row, repo_path, expected_head)
-    if row.get('status') in TERMINAL:
-        return {'changed': False, 'kept_terminal': row['status']}
-    attempts = int(row.get('attempts', 0)) + 1
-    row.update(passes=False, attempts=attempts,
-               status='blocked' if attempts >= cap else 'needs_work')
-    if attempts >= cap:
-        note(row, 'Implementation evaluation retry budget exhausted; owner must inspect actual findings.')
-    return commit_document(path, doc, allowed={fid: {'status', 'passes', 'attempts', 'notes'}})
+    validate_evaluation(path, fid, expected_row, repo_path, expected_head)
+    doc = load_document(path); rows = unit_rows(doc, fid)
+    if any(row.get('status') in TERMINAL for row in rows):
+        return {'changed': False, 'kept_terminal': ','.join(row['id'] for row in rows if row.get('status') in TERMINAL)}
+    attempts = max(int(row.get('attempts', 0)) for row in rows) + 1
+    allowed = {}
+    for row in rows:
+        row.update(passes=False, attempts=attempts,
+                   status='blocked' if attempts >= cap else 'needs_work')
+        if attempts >= cap:
+            note(row, 'Delivery-unit evaluation retry budget exhausted; owner must inspect actual findings.')
+        allowed[row['id']] = {'status', 'passes', 'attempts', 'notes'}
+    return commit_document(path, doc, allowed=allowed, expected_rows=set(allowed), delivery_operation='unit')
+
+
+def _verify_package_ledger(repo, number, ref, snapshot):
+    if not snapshot:
+        return
+    content = api('repos/' + repo + '/contents/docs/pr-history/' + str(number) + '.md?ref=' + ref)
+    if content.get('encoding') != 'base64':
+        raise EvidenceUnknown('Package ledger encoding unavailable')
+    text = base64.b64decode(content['content']).decode('utf-8')
+    for line in package_ledger_lines(snapshot):
+        if text.count(line) != 1:
+            raise EvidenceUnknown('Package ledger/member coverage mismatch')
+
+
+def _verify_package_review(root, fid, number, relation, snapshot):
+    if not snapshot:
+        return
+    source = relation.get('source_sha')
+    if not isinstance(source, str) or not re.fullmatch(r'[0-9a-f]{40}', source):
+        raise EvidenceUnknown('Package Source identity unavailable at merge reconcile')
+    receipt = Path(root) / '.agent-artifacts' / 'evaluations' / (fid + '-' + source + '-source-review.json')
+    if not receipt.is_file():
+        raise EvidenceUnknown('Package merge lacks independent Source review coverage')
+    data = json.loads(receipt.read_bytes())
+    if (data.get('feature') != fid or data.get('pr') != number or data.get('source_sha') != source
+            or data.get('reviewer_role') != 'hourly-review' or data.get('verdict') != 'CLEAR'
+            or data.get('findings') not in ([], None) or not data.get('completed_at')):
+        raise EvidenceUnknown('Package Source review identity/verdict is not merge-clear')
+    if data.get('delivery_package') != snapshot:
+        raise EvidenceUnknown('Package Source review scope/revision is stale at merge reconcile')
+    try:
+        validate_coverage(snapshot, data.get('member_coverage'), require_pass=True)
+    except StoreConflict as exc:
+        raise EvidenceUnknown(str(exc)) from exc
+
+
+def _apply_unit_state(path, fid, *, status, passes, message, operation='unit', completion=None):
+    doc = load_document(path); rows = unit_rows(doc, fid); allowed = {}
+    for row in rows:
+        row.update(status=status, passes=passes)
+        if completion is not None:
+            row['delivery_completion'] = completion
+        note(row, message)
+        allowed[row['id']] = {'status', 'passes', 'notes'} | ({'delivery_completion'} if completion is not None else set())
+    return commit_document(path, doc, allowed=allowed, expected_rows=set(allowed), delivery_operation=operation)
 
 
 def reconcile(path, repo, base):
     snapshot = load_document(path)
-    candidates = [f['id'] for f in snapshot['features']
-                  if f.get('status') not in TERMINAL and f.get('pr_links')]
-    unknown = False
-    for fid in candidates:
-        doc = load_document(path)
-        row = target(doc, fid)
-        if row.get('status') in TERMINAL:
+    candidates, seen = [], set(); unknown = False
+    for row in snapshot['features']:
+        if row.get('status') in TERMINAL or not row.get('pr_links'):
             continue
-        urls = row.get('pr_links') or []
-        if len(urls) != 1:
-            print(fid + ': ambiguous PR mapping; left unchanged')
-            unknown = True
-            continue
-        match = re.fullmatch(r'https://github\.com/' + re.escape(repo) + r'/pull/(\d+)/?', urls[0])
-        if not match:
-            print(fid + ': invalid PR mapping; left unchanged')
-            unknown = True
-            continue
-        number = int(match.group(1))
         try:
+            lead = canonical_lead(snapshot, row['id'])
+        except StoreConflict as exc:
+            print(row['id'] + ': UNKNOWN/WAIT: ' + str(exc), file=sys.stderr); unknown = True; continue
+        if lead not in seen:
+            seen.add(lead); candidates.append(lead)
+    for fid in candidates:
+        try:
+            doc = load_document(path)
+            if canonical_lead(doc, fid) != fid:
+                continue
+            rows = unit_rows(doc, fid)
+            if any(row.get('status') in TERMINAL for row in rows):
+                raise StoreConflict('Delivery package has partial terminal state')
+            urls = unit_pr_links(doc, fid)
+            if len(urls) != 1:
+                print(fid + ': ambiguous PR mapping; left unchanged')
+                unknown = True; continue
+            match = re.fullmatch(r'https://github\.com/' + re.escape(repo) + r'/pull/(\d+)/?', urls[0])
+            if not match:
+                print(fid + ': invalid PR mapping; left unchanged')
+                unknown = True; continue
+            number = int(match.group(1))
             pr = api('repos/' + repo + '/pulls/' + str(number))
+            package = package_snapshot(doc, fid)
             if pr.get('merged'):
+                if package:
+                    relation = source_relation(repo, number)
+                    _verify_package_review(path.parent, fid, number, relation, package)
                 proof = merge_proof(repo, number, base)
-                row.update(status='passed', passes=True)
-                note(row, 'Exact merge/main-CI reconcile ' + json.dumps(proof, sort_keys=True))
-                result = commit_document(path, doc, allowed={fid: {'status', 'passes', 'notes'}})
+                _verify_package_ledger(repo, number, proof['main_sha'], package)
+                completion = None
+                if package:
+                    completion = {**proof, 'contract_sha256': package['contract_sha256']}
+                result = _apply_unit_state(path, fid, status='passed', passes=True,
+                    message='Exact merge/main-CI delivery-unit reconcile ' + json.dumps(proof, sort_keys=True),
+                    operation='reconcile' if package else 'unit', completion=completion)
                 print(fid + ': ' + json.dumps(result))
             elif pr.get('state') == 'closed':
-                if row.get('status') != 'needs_work':
-                    row.update(status='needs_work', passes=False)
-                    note(row, 'PR closed without merging; preserve existing owner for disposition.')
-                    print(fid + ': ' + json.dumps(commit_document(path, doc, allowed={fid: {'status', 'passes', 'notes'}})))
+                if any(row.get('status') != 'needs_work' for row in rows):
+                    result = _apply_unit_state(path, fid, status='needs_work', passes=False,
+                                              message='PR closed without merging; preserve existing delivery-unit owner for disposition.')
+                    print(fid + ': ' + json.dumps(result))
             elif pr.get('state') == 'open':
-                if row.get('status') in {'ready_for_eval', 'ready_to_merge'}:
+                if any(row.get('status') in {'ready_for_eval', 'ready_to_merge'} for row in rows):
                     review = review_backlog(repo, number)
                     if pr.get('head', {}).get('sha') != review['head_sha']:
                         raise EvidenceUnknown('Source changed between PR and review observations')
                     if review['unresolved'] or review['changes_requested']:
-                        row.update(status='needs_work', passes=False)
-                        note(row, 'Effective review blocker on ' + review['head_sha'] + ': ' +
-                             str(review['unresolved']) + ' unresolved threads, ' +
-                             str(review['changes_requested']) + ' active change requests; no prose acknowledgement required.')
-                        print(fid + ': ' + json.dumps(commit_document(path, doc, allowed={fid: {'status', 'passes', 'notes'}})))
+                        result = _apply_unit_state(path, fid, status='needs_work', passes=False,
+                            message='Effective review blocker on ' + review['head_sha'] + ': ' +
+                                    str(review['unresolved']) + ' unresolved threads, ' +
+                                    str(review['changes_requested']) + ' active change requests; no prose acknowledgement required.')
+                        print(fid + ': ' + json.dumps(result))
                     else:
-                        print(fid + ': effective review clear; preserve owner handoff state')
+                        print(fid + ': effective review clear; preserve delivery-unit owner handoff state')
                 else:
-                    print(fid + ': existing owner continues; no state rewrite')
+                    print(fid + ': existing delivery-unit owner continues; no state rewrite')
             else:
                 raise EvidenceUnknown('Unknown PR lifecycle')
         except (EvidenceUnknown, StoreConflict) as exc:
-            print(fid + ': UNKNOWN/WAIT: ' + str(exc), file=sys.stderr)
-            unknown = True
-    # No checkout/reset/fetch side effects: a clean tree may still belong to a worker.
+            print(fid + ': UNKNOWN/WAIT: ' + str(exc), file=sys.stderr); unknown = True
     return 6 if unknown else 0
 
 
@@ -157,9 +225,11 @@ def next_action(row):
 
 def fingerprint(path, fid, repo_path):
     doc = load_document(path)
-    row = target(doc, fid)
-    identity = {k: v for k, v in row.items()
-                if k not in {'notes', 'issue_snapshot_at', 'issue_snapshot_comments'}}
+    if canonical_lead(doc, fid) != fid:
+        raise StoreConflict('Only the canonical package lead may be fingerprinted')
+    identity = [{k: v for k, v in row.items()
+                 if k not in {'notes', 'issue_snapshot_at', 'issue_snapshot_comments'}}
+                for row in unit_rows(doc, fid)]
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode('utf-8'))
     for args in [['rev-parse', 'HEAD'], ['diff', '--no-ext-diff', '--binary', 'HEAD'],
                  ['ls-files', '--others', '--exclude-standard', '-z']]:
@@ -197,10 +267,18 @@ def main():
             return reconcile(args.path, args.repo, args.base)
         if not args.feature:
             parser.error('feature is required')
-        if args.action == 'action':
-            print(next_action(target(load_document(args.path), args.feature)))
-        elif args.action == 'token':
-            print(row_token(target(load_document(args.path), args.feature)))
+        if args.action in {'action', 'token'}:
+            document = load_document(args.path)
+            if canonical_lead(document, args.feature) != args.feature:
+                raise StoreConflict('Package member must use canonical delivery lead')
+            if args.action == 'action':
+                rows = unit_rows(document, args.feature)
+                if len({row.get('status') for row in rows}) != 1 or any(row.get('human_gate') for row in rows):
+                    print('OBSERVE')
+                else:
+                    print(next_action(rows[0]))
+            else:
+                print(unit_token(document, args.feature))
         elif args.action == 'fingerprint':
             if args.repo_path is None:
                 parser.error('--repo-path is required')

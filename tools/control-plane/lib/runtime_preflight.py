@@ -12,6 +12,7 @@ from feature_state import target, next_action, note
 from execution import ensure_idle, stopped
 import datetime
 from github_evidence import api, EvidenceUnknown
+from delivery import canonical_lead, unit_pr_links, unit_rows, unit_token, package_snapshot
 
 
 def git(path, *args):
@@ -35,6 +36,11 @@ def recovery_action(owner, requested_owner, old_execution, same_worktree, same_b
 
 def prepare_unmapped(root, repository, row, repo, prepare, lane):
     fid = row['id']; compact = fid.lower().replace('-', '')
+    observed_doc = load_document(root / 'feature_list.json')
+    if canonical_lead(observed_doc, fid) != fid:
+        raise StoreConflict('Package member cannot prepare an independent owner')
+    observed_token = unit_token(observed_doc, fid)
+    observed_unit = unit_rows(observed_doc, fid)
     inventory = git(repository, 'worktree', 'list', '--porcelain')
     candidates = []
     issue_match = re.search(r'(\d+)\s*$', str(row.get('issue')))
@@ -50,9 +56,33 @@ def prepare_unmapped(root, repository, row, repo, prepare, lane):
     if len(candidates) > 1:
         raise StoreConflict('More than one existing owner carrier; do not choose a competitor')
     if candidates:
-        return candidates[0]
-    if row.get('status') != 'pending':
-        raise StoreConflict('In-flight owner carrier missing; reconcile, never create a competitor')
+        candidate = candidates[0]
+        # A crash after `git worktree add` but before ONE claim is recoverable for
+        # packages without creating a second worktree. Re-bind that exact carrier
+        # atomically to every member before any product write can resume.
+        package = package_snapshot(observed_doc, fid)
+        if package and all(member.get('status') == 'pending' for member in observed_unit):
+            branch = git(candidate, 'branch', '--show-current')
+            if not branch:
+                raise StoreConflict('Interrupted package owner worktree is detached')
+            head = git(candidate, 'rev-parse', 'HEAD')
+            base = git(candidate, 'merge-base', 'origin/main', 'HEAD')
+            if head != base or git(candidate, 'status', '--porcelain'):
+                raise StoreConflict('Unclaimed package worktree already contains work; preserve for owner reconciliation')
+            current = load_document(root / 'feature_list.json')
+            if canonical_lead(current, fid) != fid or unit_token(current, fid) != observed_token:
+                raise StoreConflict('Delivery unit changed before interrupted-owner claim')
+            owner = {'lead': fid, 'lane': lane, 'worktree': str(candidate).replace('\\', '/'),
+                     'branch': branch, 'created_from_main': base}
+            allowed = {}
+            for latest in unit_rows(current, fid):
+                latest['status'] = 'in_progress'; latest['delivery_owner'] = owner
+                note(latest, 'Recovered exact pre-write delivery-unit owner carrier ' + str(candidate) + ' branch ' + branch)
+                allowed[latest['id']] = {'status','delivery_owner','notes'}
+            commit_document(root / 'feature_list.json', current, allowed=allowed, expected_rows=set(allowed), delivery_operation='claim')
+        return candidate
+    if any(member.get('status') != 'pending' for member in observed_unit):
+        raise StoreConflict('In-flight delivery-unit owner carrier missing; reconcile, never create a competitor')
     if not prepare:
         raise StoreConflict('NEW_OWNER_WORKTREE_REQUIRED: use authorized worker prepare, not the old checkout')
     if stopped(root, lane=lane): raise StoreConflict('Owner STOP prevents new worktree preparation')
@@ -74,16 +104,24 @@ def prepare_unmapped(root, repository, row, repo, prepare, lane):
     if worktree.exists():
         raise StoreConflict('Owner destination exists but is not in git inventory')
     document = load_document(root / 'feature_list.json')
-    latest = target(document, fid)
-    if latest != row:
-        raise StoreConflict('Feature changed before owner claim')
+    if canonical_lead(document, fid) != fid or unit_token(document, fid) != observed_token:
+        raise StoreConflict('Delivery unit changed before owner claim')
     worktree.parent.mkdir(exist_ok=True)
     created = subprocess.run(['git', '-C', str(repository), 'worktree', 'add', '-b', branch, str(worktree), main], capture_output=True, timeout=30)
     if created.returncode:
         raise StoreConflict('Owner branch/worktree creation conflicted; preserve existing git state')
-    latest['status'] = 'in_progress'
-    note(latest, 'Existing selector authorized owner carrier ' + str(worktree) + ' branch ' + branch + ' from exact current main ' + main)
-    commit_document(root / 'feature_list.json', document, allowed={fid: {'status', 'notes'}})
+    allowed = {}
+    package = package_snapshot(document, fid)
+    owner = {'lead': fid, 'lane': lane, 'worktree': str(worktree).replace('\\', '/'),
+             'branch': branch, 'created_from_main': main}
+    for latest in unit_rows(document, fid):
+        latest['status'] = 'in_progress'
+        if package:
+            latest['delivery_owner'] = owner
+        note(latest, 'Existing selector authorized delivery-unit owner carrier ' + str(worktree) + ' branch ' + branch + ' from exact current main ' + main)
+        allowed[latest['id']] = {'status', 'notes'} | ({'delivery_owner'} if package else set())
+    commit_document(root / 'feature_list.json', document, allowed=allowed, expected_rows=set(allowed),
+                    delivery_operation='claim' if package else None)
     return worktree
 
 
@@ -95,15 +133,20 @@ def preflight(root, worktree, lane, fid, repo, prepare=False):
         raise StoreConflict('Run-loop cwd differs from its authoritative workspace')
     if not worktree.is_relative_to(root):
         raise StoreConflict('Worktree outside this authorized workspace')
-    row = target(load_document(root / 'feature_list.json'), fid)
+    document = load_document(root / 'feature_list.json')
+    if canonical_lead(document, fid) != fid:
+        raise StoreConflict('Package member cannot own an independent worktree')
+    rows = unit_rows(document, fid); row = rows[0]
+    if len({member.get('status') for member in rows}) != 1 or any(member.get('human_gate') for member in rows):
+        raise StoreConflict('Delivery package lifecycle/gate is not executable')
     if next_action(row) not in {'IMPLEMENT', 'EVALUATE'}:
-        raise StoreConflict('Selected feature has no executable action')
+        raise StoreConflict('Selected delivery unit has no executable action')
     if Path(git(worktree, 'rev-parse', '--show-toplevel')).resolve() != worktree:
         raise StoreConflict('Worktree root does not match actual git cwd')
     branch = git(worktree, 'branch', '--show-current')
     if not branch:
         raise StoreConflict('Detached HEAD cannot carry this logical owner')
-    prs = row.get('pr_links') or []
+    prs = unit_pr_links(document, fid)
     if prs:
         if len(prs) != 1:
             raise StoreConflict('Ambiguous PR ownership')

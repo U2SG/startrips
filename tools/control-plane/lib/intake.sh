@@ -726,6 +726,7 @@ feat_p, states_p, libdir = sys.argv[1:4]
 sys.path.insert(0, libdir)
 from feature_store import load_document, commit_document
 from intake_json import is_auto_intake, issue_number, moved
+from delivery import grouped
 
 d = load_document(feat_p)
 skip_label = ((d.get('rules') or {}).get('intake') or {}).get('skip_label', 'no-loop')
@@ -787,6 +788,8 @@ for f in d['features']:
             action, detail = 'backfill', 'no snapshot recorded yet'
         elif not mv:
             action, detail = 'untouched', 'issue has not moved since the snapshot'
+        elif grouped(f):
+            action, detail = 'package-window', 'registered delivery member moved; preserve snapshot until canonical package scope revision'
         elif status == 'pending' and is_auto_intake(f):
             action, detail = 'amend', 'auto-intake entry still pending; re-triage in amend mode'
         elif status == 'pending':
@@ -1292,6 +1295,12 @@ intake_reconcile_issues() {
         # [issue_snapshot_at, now] and the builder advances it once it has read
         # the comments, so no round's comments can be skipped.
         intake_record_decision "issue=$num feature=$fid builder-window snapshot=$snap comments=$snapc->$cnt (left for the builder to read and advance)"
+        ;;
+      package-window)
+        # Package scope is frozen across every member. Per-row intake must not
+        # rewrite acceptance or advance the snapshot behind the package review
+        # identity; the canonical package revision consumes this window atomically.
+        intake_record_decision "issue=$num feature=$fid package-window snapshot=$snap comments=$snapc->$cnt (canonical delivery revision required; state unchanged)"
         ;;
       follow-up)
         intake_followup "$num" "$fid" "$upd" "$cnt"
