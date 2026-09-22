@@ -215,6 +215,68 @@ describe("single projection space (#237)", () => {
     expect(projectLocalPoint(frame, front.x, front.y, front.z, nearGated)).toBe(true);
   });
 
+  it("reuses a fixed local anchor across candidate rotations without changing radius or output ownership", () => {
+    const { camera, globe } = buildScene();
+    const candidateFrame = createGeoProjectionFrame();
+    const candidateModel = new Matrix4();
+    const projected = { x: 0, y: 0 };
+    const expected = { x: 0, y: 0 };
+    let occludedCandidates = 0;
+
+    for (const radius of [ROUTE_ANCHOR_RADIUS, ROUTE_ANCHOR_RADIUS * 0.75]) {
+      for (const place of [
+        ...PLACES,
+        { lat: 0, lon: 0 },
+        // The radius changes whether this near-pole component is snapped.
+        { lat: 90 - 5e-11, lon: 0 },
+      ]) {
+        const anchor = routePointAnchor(place.lat, place.lon, radius);
+        const originalAnchor = anchor.clone();
+        for (const rotationY of [globe.rotation.y, globe.rotation.y + 0.0025, globe.rotation.y + Math.PI]) {
+          updateGeoProjectionFrame(
+            candidateFrame,
+            camera,
+            composeGlobeModelMatrix(candidateModel, {
+              rotationX: globe.rotation.x + 0.0025,
+              rotationY,
+              rotationZ: globe.rotation.z,
+              scale: globe.scale.x,
+              positionX: globe.position.x,
+              positionY: globe.position.y,
+              positionZ: globe.position.z,
+            }),
+            VIEWPORT.width,
+            VIEWPORT.height,
+          );
+          if (!isSphericalPointVisible(candidateFrame.cameraLocal, anchor)) {
+            occludedCandidates += 1;
+          }
+          const result = projectLocalPointToViewport(
+            candidateFrame,
+            anchor.x,
+            anchor.y,
+            anchor.z,
+            projected,
+          );
+          projectGeographicAnchorToViewport(
+            candidateFrame,
+            place.lat,
+            place.lon,
+            expected,
+            radius,
+          );
+          expect(result).toBe(projected);
+          expect(Number.isFinite(projected.x)).toBe(true);
+          expect(Number.isFinite(projected.y)).toBe(true);
+          expect(Object.is(projected.x, expected.x)).toBe(true);
+          expect(Object.is(projected.y, expected.y)).toBe(true);
+          expect(anchor).toEqual(originalAnchor);
+        }
+      }
+    }
+    expect(occludedCandidates).toBeGreaterThan(0);
+  });
+
   it("maps normalised device coordinates onto the frame's own viewport", () => {
     const { camera, globe } = buildScene();
     const centred = new Group();

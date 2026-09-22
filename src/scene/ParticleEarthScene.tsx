@@ -147,6 +147,7 @@ import {
   projectGeographicAnchor,
   projectGeographicAnchorToViewport,
   projectLocalPoint,
+  projectLocalPointToViewport,
   updateGeoProjectionFrame,
   type GeoProjectionFrame,
 } from "./projection";
@@ -2072,15 +2073,14 @@ export function ParticleEarthScene({
     const focusCandidateFrame = createGeoProjectionFrame();
     const focusCandidateModel = new Matrix4();
     const focusCandidatePoint = { x: 0, y: 0 };
-    const projectFocusPointForRotation = (
-      point: { lat: number; lon: number },
+    const projectFocusAnchorForRotation = (
+      anchor: Readonly<Vector3>,
       rotationX: number,
       rotationY: number,
       scale: number,
       positionX: number,
       positionY: number,
       targetScreen: Vector2,
-      pointRadius = ROUTE_ANCHOR_RADIUS,
     ) => {
       composeGlobeModelMatrix(focusCandidateModel, {
         rotationX,
@@ -2098,15 +2098,33 @@ export function ParticleEarthScene({
         targetSize.x,
         targetSize.y,
       );
-      projectGeographicAnchorToViewport(
+      projectLocalPointToViewport(
         focusCandidateFrame,
-        point.lat,
-        point.lon,
+        anchor.x,
+        anchor.y,
+        anchor.z,
         focusCandidatePoint,
-        pointRadius,
       );
       return targetScreen.set(focusCandidatePoint.x, focusCandidatePoint.y);
     };
+    const projectFocusPointForRotation = (
+      point: { lat: number; lon: number },
+      rotationX: number,
+      rotationY: number,
+      scale: number,
+      positionX: number,
+      positionY: number,
+      targetScreen: Vector2,
+      pointRadius = ROUTE_ANCHOR_RADIUS,
+    ) => projectFocusAnchorForRotation(
+      routePointAnchor(point.lat, point.lon, pointRadius),
+      rotationX,
+      rotationY,
+      scale,
+      positionX,
+      positionY,
+      targetScreen,
+    );
     const solveFocusRotationForViewport = (
       point: { lat: number; lon: number },
       seedRotationX: number,
@@ -2117,19 +2135,22 @@ export function ParticleEarthScene({
       targetScreen: ScreenPoint = sampledFocusCenter,
       pointRadius = ROUTE_ANCHOR_RADIUS,
     ) => {
+      // A solve rotates one fixed geographic anchor. Keep its canonical
+      // radius/snap conversion outside the finite-difference probes, without
+      // retaining an anchor across focus revisions or synchronous solves.
+      const anchor = routePointAnchor(point.lat, point.lon, pointRadius);
       return solveScreenAnchorRotation(
         seedRotationX,
         seedRotationY,
         targetScreen,
-        (rotationX, rotationY) => projectFocusPointForRotation(
-          point,
+        (rotationX, rotationY) => projectFocusAnchorForRotation(
+          anchor,
           rotationX,
           rotationY,
           scale,
           positionX,
           positionY,
           focusProjectionScreen,
-          pointRadius,
         ),
       );
     };
@@ -3083,6 +3104,18 @@ export function ParticleEarthScene({
       z: number,
       target: ProjectedRoutePoint,
     ) => projectLocalPoint(geoFrame, x, y, z, target);
+    // City coordinates are fixed by the data loader. Cache only this scene's
+    // canonical anchors: scaling the already-snapped unit direction would
+    // change near-zero components at the geographic surface radius.
+    const cityAnchors = new WeakMap<CityPoint, Vector3>();
+    const projectCityPoint = (city: CityPoint, target: ProjectedRoutePoint) => {
+      let anchor = cityAnchors.get(city);
+      if (!anchor) {
+        anchor = routePointAnchor(city.latitude, city.longitude);
+        cityAnchors.set(city, anchor);
+      }
+      return projectRoutePoint(anchor.x, anchor.y, anchor.z, target);
+    };
 
     // #237 QA anchor: a real vertex of the coastline the frame is DRAWING,
     // projected through the shared frame and published beside the place-label
@@ -3614,8 +3647,7 @@ export function ParticleEarthScene({
             .filter((entry) => {
               const city = entry.city;
               if (!city || entry.element.style.display === "none") return false;
-              const vector = routePointAnchor(city.latitude, city.longitude);
-              if (!projectRoutePoint(vector.x, vector.y, vector.z, routeProjectedPoint)) {
+              if (!projectCityPoint(city, routeProjectedPoint)) {
                 return false;
               }
               return isProjectedPointInsideViewport(
@@ -3670,13 +3702,7 @@ export function ParticleEarthScene({
           const displayName = resolveCityDisplayName(city, cityLabelLocale);
           const entry = ensureCityLabel(index);
           if (!entry) break;
-          const vector = routePointAnchor(city.latitude, city.longitude);
-          if (!projectRoutePoint(
-            vector.x,
-            vector.y,
-            vector.z,
-            routeProjectedPoint,
-          ) || !isProjectedPointInsideViewport(
+          if (!projectCityPoint(city, routeProjectedPoint) || !isProjectedPointInsideViewport(
             routeProjectedPoint.x,
             routeProjectedPoint.y,
             targetSize.x,
