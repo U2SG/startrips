@@ -223,7 +223,14 @@ afterAll(async () => {
  * plus the cookies Better Auth expects on the callback. The state is minted by
  * Better Auth, never by the test.
  */
-async function beginAuthorization(authorization: PendingAuthorization) {
+async function beginAuthorization(
+  authorization: PendingAuthorization,
+  // #349/#350: `disableImplicitSignUp` keeps the three intents three, so an
+  // unrecognised subject registers only when the caller asked for it. Most
+  // cases here are about a first-time Apple subject and therefore carry the
+  // sign-up intent; the case that must NOT register omits it deliberately.
+  requestSignUp = true,
+) {
   const response = await app.request(`${AUTH_BASE}/sign-in/social`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: TEST_ORIGIN },
@@ -232,6 +239,7 @@ async function beginAuthorization(authorization: PendingAuthorization) {
       callbackURL: `${TEST_ORIGIN}/`,
       errorCallbackURL: `${TEST_ORIGIN}/auth-error`,
       disableRedirect: true,
+      ...(requestSignUp ? { requestSignUp: true } : {}),
     }),
   });
   expect(response.status).toBe(200);
@@ -271,8 +279,14 @@ function readCallback(response: Response): CallbackOutcome {
 }
 
 /** Drive one complete Apple authorization through Better Auth's callback. */
-async function completeAuthorization(authorization: PendingAuthorization) {
-  const { state, code, cookies } = await beginAuthorization(authorization);
+async function completeAuthorization(
+  authorization: PendingAuthorization,
+  requestSignUp = true,
+) {
+  const { state, code, cookies } = await beginAuthorization(
+    authorization,
+    requestSignUp,
+  );
   const response = await app.request(
     `${AUTH_BASE}/callback/apple?state=${encodeURIComponent(state)}&code=${encodeURIComponent(code)}`,
     { headers: cookies ? { cookie: cookies } : {}, redirect: "manual" },
@@ -303,6 +317,23 @@ describe("Apple sign-in", () => {
     expect(serverConfig.appleServiceId).toBe(APPLE_SERVICE_ID);
     expect(serverConfig.appleTeamId).toBe(APPLE_TEAM_ID);
     expect(serverConfig.appleKeyId).toBe(APPLE_KEY_ID);
+  });
+
+  // #350 keeps Apple's three intents three, exactly as #349 does for Google:
+  // without `disableImplicitSignUp` the pinned 1.6.23 callback would let an
+  // unrecognised subject arriving through the SIGN-IN button silently register
+  // a new Startrips user and Atlas.
+  it("refuses to register an unknown subject that arrived without the sign-up intent", async () => {
+    const subject = `apple-subject-nosignup-${RUN}`;
+    const email = `apple-nosignup-${RUN}@example.test`;
+    const outcome = await completeAuthorization(
+      { idToken: appleIdToken({ subject, email, emailVerified: true }) },
+      false,
+    );
+    expect(outcome.error).toBe("signup_disabled");
+    expect(outcome.sessionCookie).toBeNull();
+    expect(await usersFor(subject)).toHaveLength(0);
+    expect(await userCountForEmail(email)).toBe(0);
   });
 
   it("creates exactly one user and one Atlas for a first-time subject", async () => {
@@ -444,7 +475,11 @@ describe("Apple sign-in", () => {
 });
 
 describe("Apple id token verification", () => {
-  async function signInWithIdToken(token: string, nonce?: string) {
+  async function signInWithIdToken(
+    token: string,
+    nonce?: string,
+    requestSignUp = true,
+  ) {
     return await app.request(`${AUTH_BASE}/sign-in/social`, {
       method: "POST",
       headers: { "content-type": "application/json", origin: TEST_ORIGIN },
@@ -452,6 +487,7 @@ describe("Apple id token verification", () => {
         provider: APPLE_PROVIDER_ID,
         callbackURL: `${TEST_ORIGIN}/`,
         idToken: { token, ...(nonce ? { nonce } : {}) },
+        ...(requestSignUp ? { requestSignUp: true } : {}),
       }),
     });
   }
