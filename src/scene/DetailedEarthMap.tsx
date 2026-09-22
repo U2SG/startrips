@@ -706,8 +706,19 @@ export default function DetailedEarthMap({
       paintedJourneyOverlayRevision = null;
       host.dataset.journeyOverlayReady = "false";
       applyMapLanguage(map, languageRef.current);
+      if (!initialLoadSettled) {
+        // Do not add the Journey source before the initial style has been
+        // acknowledged. Adding a source from inside the first style.load edge
+        // makes MapLibre's own load/isStyleLoaded barrier include that newly
+        // introduced source, which can strand the hidden prewarm surface at
+        // `mounted`. Settle the already-loaded base style first; that routine
+        // installs this exact Journey revision and still gates visual readiness
+        // on a later source-loaded + painted render.
+        settleInitialLoad?.();
+        return;
+      }
       const overlayReady = syncJourneyOverlay();
-      if (overlayReady && initialLoadSettled) syncRevealSurface("stage");
+      if (overlayReady) syncRevealSurface("stage");
     });
 
     map.on("sourcedata", (event) => {
