@@ -134,6 +134,23 @@ class FailureFamilyOwnerCases(fixture.SyntheticOne):
                 self.path, 'ST-001', fixture.REPO, [self.record()])
         self.assertEqual({'feature': 'ST-002', 'issue': 427, 'matched_tokens': [token]}, owner)
 
+    def test_indexed_issue_search_short_circuits_full_active_issue_scan(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='pending', issue=427),
+        )
+        token = self.record()['fingerprint'][:16]
+        def api(endpoint):
+            if endpoint.startswith('search/issues?'):
+                self.assertIn(token, endpoint)
+                return {'total_count': 1, 'incomplete_results': False, 'items': [{'number': 427}]}
+            raise AssertionError('indexed match should avoid per-issue REST reads')
+        with mock.patch.object(action_plan, 'api', side_effect=api), \
+             mock.patch.object(action_plan, 'pages', side_effect=AssertionError('indexed match should avoid comments pagination')):
+            owner = action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [self.record()])
+        self.assertEqual({'feature': 'ST-002', 'issue': 427, 'matched_tokens': sorted([token, self.record()['fingerprint']])}, owner)
+
     def test_first_occurrence_can_have_explicit_other_owner(self):
         self.write(
             fixture.feature('ST-001', status='in_progress', issue=445),

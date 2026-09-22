@@ -8,6 +8,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlencode
 from feature_store import StoreConflict, load_document, commit_document
 from feature_state import target, row_token, TERMINAL
 from github_evidence import api, source_relation, review_backlog, merge_proof, EvidenceUnknown
@@ -138,32 +139,57 @@ def failure_family_owner(path, fid, repo, records):
 
     active_states = {'pending', 'in_progress', 'needs_work', 'ready_for_eval', 'ready_to_merge'}
     candidates = []
+    by_issue = {}
     for candidate in load_document(path)['features']:
         if candidate.get('status') not in active_states or candidate.get('human_gate'):
             continue
         number = mapped_issue(candidate.get('issue'))
         if not number:
             continue
-        issue = api('repos/' + repo + '/issues/' + str(number))
-        comments = pages('repos/' + repo + '/issues/' + str(number) + '/comments')
-        if not isinstance(issue, dict) or not isinstance(comments, list):
-            raise EvidenceUnknown('Failure-family owner issue evidence incomplete')
-        text = '\n'.join(
-            [str(issue.get('title') or ''), str(issue.get('body') or '')]
-            + [str(comment.get('body') or '') for comment in comments]
-        ).lower()
-        candidates.append((candidate['id'], number, text))
+        candidates.append((candidate['id'], number))
+        by_issue.setdefault(number, []).append(candidate['id'])
+
+    def indexed_matches(tokens):
+        matched = {}
+        for token in sorted(tokens, key=lambda value: (len(value), value)):
+            query = urlencode({'q': f'repo:{repo} is:issue {token} in:title,body,comments', 'per_page': 100})
+            data = api('search/issues?' + query)
+            items = data.get('items') if isinstance(data, dict) else None
+            if not isinstance(items, list) or data.get('incomplete_results') is True or data.get('total_count', 0) > len(items):
+                return None
+            for issue in items:
+                number = issue.get('number') if isinstance(issue, dict) else None
+                for feature in by_issue.get(number, []):
+                    matched.setdefault((feature, number), set()).add(token)
+        return [
+            {'feature': feature, 'issue': number, 'matched_tokens': sorted(hit)}
+            for (feature, number), hit in matched.items()
+        ]
+
+    def exhaustive_matches(tokens):
+        matches = []
+        for feature, number in candidates:
+            issue = api('repos/' + repo + '/issues/' + str(number))
+            comments = pages('repos/' + repo + '/issues/' + str(number) + '/comments')
+            if not isinstance(issue, dict) or not isinstance(comments, list):
+                raise EvidenceUnknown('Failure-family owner issue evidence incomplete')
+            text = '\n'.join(
+                [str(issue.get('title') or ''), str(issue.get('body') or '')]
+                + [str(comment.get('body') or '') for comment in comments]
+            ).lower()
+            hit = sorted(token for token in tokens if token.lower() in text)
+            if hit:
+                matches.append({'feature': feature, 'issue': number, 'matched_tokens': hit})
+        return matches
 
     routed = []
     for record in product_records:
         tokens = record_tokens(record)
         if not tokens:
             return None
-        matches = []
-        for feature, number, text in candidates:
-            hit = sorted(token for token in tokens if token.lower() in text)
-            if hit:
-                matches.append({'feature': feature, 'issue': number, 'matched_tokens': hit})
+        matches = indexed_matches(tokens)
+        if matches is None or not matches:
+            matches = exhaustive_matches(tokens)
         if len(matches) > 1:
             raise EvidenceUnknown(
                 'Ambiguous failure-family ownership: '
