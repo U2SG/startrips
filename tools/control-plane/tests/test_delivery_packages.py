@@ -479,7 +479,9 @@ class RuntimeActivationFailureTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name) / 'installed'
+        # Match activate()'s canonical root, including Windows TEMP short-name
+        # aliases/junctions, so injected failures bind the actual installed file.
+        self.root = (Path(self.temp.name) / 'installed').resolve()
         self.root.mkdir()
         self.repository = Path(self.temp.name) / 'source'
         self.names = ('consumer-a.txt', 'consumer-b.txt', 'new-consumer.txt')
