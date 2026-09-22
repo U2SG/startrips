@@ -31,6 +31,7 @@ const IMPLEMENTED_CAPABILITIES: readonly ComposerCapabilityId[] = [
   "journey-title",
   "journey-dates",
   "journey-note",
+  "recorded-track-management",
   "place-search",
   "record-lookup",
   "route-point-list",
@@ -94,7 +95,11 @@ describe("#375 composer mobile capability map", () => {
   });
 
   it("matches the approved placement for every non-primary capability", () => {
-    expect(composerCapabilitiesForTask("journey-info").sort()).toEqual(["journey-dates", "journey-note"]);
+    expect(composerCapabilitiesForTask("journey-info").sort()).toEqual([
+      "journey-dates",
+      "journey-note",
+      "recorded-track-management",
+    ]);
     expect(composerCapabilitiesForTask("media").sort()).toEqual([
       "media-assignment",
       "media-order",
