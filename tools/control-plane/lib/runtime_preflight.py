@@ -37,10 +37,20 @@ def recovery_action(owner, requested_owner, old_execution, same_worktree, same_b
 def prepare_unmapped(root, repository, row, repo, prepare, lane):
     fid = row['id']; compact = fid.lower().replace('-', '')
     observed_doc = load_document(root / 'feature_list.json')
-    if canonical_lead(observed_doc, fid) != fid:
-        raise StoreConflict('Package member cannot prepare an independent owner')
-    observed_token = unit_token(observed_doc, fid)
-    observed_unit = unit_rows(observed_doc, fid)
+    observed_row = next((item for item in observed_doc['features'] if item.get('id') == fid), None)
+    # Preserve the legacy lane-exclusion ordering for a stale caller: the
+    # provider guard still runs before a new owner can be prepared, but a row
+    # that disappeared from ONE is rejected before any GitHub/network/write
+    # action. A real registered package must of course exist in ONE so its lead
+    # and complete member read set can be validated atomically.
+    if observed_row is not None:
+        if canonical_lead(observed_doc, fid) != fid:
+            raise StoreConflict('Package member cannot prepare an independent owner')
+        observed_token = unit_token(observed_doc, fid)
+        observed_unit = unit_rows(observed_doc, fid)
+    else:
+        observed_token = None
+        observed_unit = [row]
     inventory = git(repository, 'worktree', 'list', '--porcelain')
     candidates = []
     issue_match = re.search(r'(\d+)\s*$', str(row.get('issue')))
@@ -87,6 +97,8 @@ def prepare_unmapped(root, repository, row, repo, prepare, lane):
         raise StoreConflict('NEW_OWNER_WORKTREE_REQUIRED: use authorized worker prepare, not the old checkout')
     if stopped(root, lane=lane): raise StoreConflict('Owner STOP prevents new worktree preparation')
     ensure_idle(root, lane=lane, feature=fid)
+    if observed_row is None:
+        raise StoreConflict('Feature changed before owner claim')
     issue = re.search(r'(\d+)\s*$', str(row.get('issue')))
     if not issue:
         raise StoreConflict('New owner requires its actual issue identity')
