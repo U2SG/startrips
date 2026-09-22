@@ -97,11 +97,36 @@ The only way to attach an Apple identity to an existing account is the ST-067
 pipeline — `createIdentityLinkIntent` → `verifyProviderIdentityProof` →
 `completeIdentityLink` — driven by the signed-in owner after re-verification.
 
-One consequence to be aware of when operating a deployment: a first-time Apple
-signup creates a Better Auth sign-in method, but it has no ST-067 ownership row
-until such a bind records one, so `/api/account-identities` reports it as
-unverified and unusable until then. That is the truthful reading of what the
-server actually knows, not an oversight.
+That pipeline is not yet reachable for Apple, and the reason is Apple's return
+mode rather than a missing proof issuer. #349 shipped the shared callback
+contract this feature was sequenced behind — `issueVerifiedProviderIdentityProof`
+and the `/providers/:providerId/authorize` → `/providers/:providerId/callback`
+round trip — but that round trip assumes the provider hands the browser back
+with a same-site GET. Apple's authorization uses `response_mode=form_post`, so
+it returns a cross-site POST, and three things in the shared flow assume
+otherwise:
+
+- the callback route is a `GET` and reads `state`/`code` from the query string;
+- `IDENTITY_BIND_COOKIE` is `SameSite=Lax`, which a browser does not send on a
+  cross-site POST at all, so the flow could not even recover its own state;
+- the pinned `apple` adapter's `createAuthorizationURL` never forwards
+  `codeVerifier`, so no PKCE challenge is sent, while the shared token exchange
+  sends `code_verifier` whenever one is present.
+
+`availableLinkProviders` drives a generic bind button in
+`src/auth/AuthGateway.tsx`, so Startrips does **not** advertise `apple` as
+bindable: `bindableSocialProviderIds` deliberately omits it while
+`configuredSocialProviderIds` includes it. An operator should expect Apple
+sign-in and returning sign-in to work, and explicit binding of an Apple subject
+to an existing account to be unavailable and unoffered rather than offered and
+broken. Issue #502 tracks building that path.
+
+A first-time Apple signup does record an ST-067 ownership row: the verified
+identity taken from the callback is carried across by
+`rememberVerifiedProviderIdentity` and consumed in `databaseHooks.account.create`
+/`update`, exactly as Google's is. What it records is what Apple actually
+asserted — an unverified or absent address is stored as unverified, so the
+method reads as unusable rather than as verified-by-assumption.
 
 A relay address is a deliverable channel only while the person keeps the app
 authorized. Treat it as a login identity, not as a guaranteed recovery channel:
