@@ -19,8 +19,6 @@ import uuid
 from feature_store import StoreConflict, _storage_mutex
 from github_evidence import api, EvidenceUnknown
 from ci_observer import write_json
-from execution import ensure_idle, clear_owned_stop
-from external_execution import occupancy
 from types import SimpleNamespace
 
 VERSION = 1
@@ -117,6 +115,12 @@ def _replace(path, body):
 
 
 def activate(root, repository, base, expected, repo):
+    # Activation-only imports keep read-only selector/runtime verification usable
+    # in legacy/synthetic consumers that intentionally expose only a minimal
+    # execution provider surface. Ordinary single-issue work must not depend on
+    # activation-only process controls being importable.
+    from execution import ensure_idle, clear_owned_stop
+    from external_execution import occupancy
     root, repository = Path(root).resolve(), Path(repository).resolve()
     planned = activation_plan(root, repository, base)
     if planned['conflicts']:
