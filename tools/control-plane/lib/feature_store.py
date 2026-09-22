@@ -25,6 +25,10 @@ class StoreConflict(RuntimeError):
     pass
 
 
+class StaleObservation(StoreConflict):
+    """A validated row/rules revision changed before a rejected write."""
+
+
 class Document(dict):
     def __init__(self, path: Path, raw: bytes):
         super().__init__(json.loads(raw))
@@ -190,10 +194,12 @@ def commit_document(path: str | Path, doc: Document, *,
         current = json.loads(raw)
         current_rows = _rows(current)
         if {k: v for k, v in current.items() if k != 'features'} != metadata:
-            raise StoreConflict('ONE rules changed since observation; re-read')
+            raise StaleObservation('ONE rules changed since observation; re-read')
         for fid in set(changes) | set(expected_rows or ()):
-            if fid not in before or current_rows.get(fid) != before[fid]:
-                raise StoreConflict(fid + ' changed since observation; re-read, do not overwrite')
+            if fid not in before:
+                raise StoreConflict('Expected feature was not observed: ' + fid)
+            if current_rows.get(fid) != before[fid]:
+                raise StaleObservation(fid + ' changed since observation; re-read, do not overwrite')
         if added:
             if any(fid in current_rows for fid in added):
                 raise StoreConflict('Concurrent intake allocated the same feature id')
