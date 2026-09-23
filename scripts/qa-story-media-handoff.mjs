@@ -435,7 +435,14 @@ function installStageSampler() {
         return mediaStyle.visibility !== "hidden" && Number(mediaStyle.opacity) > 0.05
           && pageStyle.visibility !== "hidden" && Number(pageStyle.opacity) > 0.05;
       })(),
-      waiting: Boolean(root.querySelector(".starlight-media-state.is-waiting")),
+      // The MEDIA STACK's own "正在准备画面…" overlay -- the one acceptance item
+      // 3 names, rendered by StoryMediaPages when it owns a page it cannot
+      // present. `.journey-story__media-state` is a different statement: the
+      // stage cue for a COLD asset the viewer has just asked for, which is
+      // correct product behaviour and is recorded separately rather than
+      // graded as the stack failing to present what it owns.
+      waiting: Boolean(pages.querySelector(":scope > .starlight-media-state.is-waiting")),
+      stageStatus: Boolean(root.querySelector(".journey-story__media-state.is-waiting")),
       videoCount: videos.length,
       videoOwner: videos.map((video) => video.getAttribute("data-shared-media-id")),
       morphs,
