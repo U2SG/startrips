@@ -37,6 +37,7 @@ import {
   type ItinerarySourceDriver,
   type SourcePageTransport,
 } from "../itinerary/itinerary-source-fetch";
+import { pageRecognitionDocument } from "../itinerary/recognition-document";
 import { readJsonObject } from "./json-body";
 
 /** What a member submits. Nothing else about them reaches a provider. */
@@ -110,14 +111,19 @@ itineraryImportRoutes.post("/", async (context) => {
       lookup: itineraryImportDependencies.lookup,
       transport: itineraryImportDependencies.sourceTransport,
     });
-    if (page.text.trim().length === 0) {
+    // The page is minimised before anything is decided about it: markup,
+    // scripts and every link the page printed - the signed share URL among
+    // them - are gone, and what is left is the text a person would have read.
+    // A body that carries no such text is empty for this purpose even if its
+    // markup was large.
+    request = pageRecognitionDocument(page);
+    if (request.text.trim().length === 0) {
       throw new ItineraryImportStageError(
         "content-read",
         "ITINERARY_SOURCE_EMPTY",
         "The page was reached but carried no readable itinerary content",
       );
     }
-    request = { kind: "page", url: page.finalUrl, text: page.text };
   } else if (source === "text") {
     const text = body?.text;
     if (

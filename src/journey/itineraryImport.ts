@@ -476,7 +476,12 @@ export type ItineraryApplyResult = {
 };
 
 /**
- * Append an import to a Route draft without touching what is already there.
+ * Add an import to a Route draft without touching what is already there.
+ *
+ * Without `insertAtIndex` the points are appended; with one they go in at that
+ * position, which is how an explicit "insert after this stop" choice reaches
+ * the draft. Either way nothing already in the draft moves relative to
+ * anything else.
  *
  * Existing points keep their ids, order, labels, notes and any unsaved manual
  * edit. Re-applying the same job — a retry, a lost response, a double click —
@@ -484,6 +489,27 @@ export type ItineraryApplyResult = {
  * key and its entry, so a point already present is recognised rather than
  * added a second time.
  */
+/**
+ * Where the member said this import should land.
+ *
+ * `null` is the default and means the end of the draft: an import appends,
+ * because appending cannot disturb an order somebody already arranged. When
+ * the member picks an existing point to insert after, the new points go
+ * directly behind it. A point that is no longer in the draft - deleted while
+ * the review panel was open - falls back to appending rather than guessing a
+ * position, so an import never lands somewhere nobody chose.
+ */
+export function resolveInsertAtIndex(
+  existing: readonly RouteDraftPoint[],
+  insertAfterDraftId: string | null,
+): number | undefined {
+  if (!insertAfterDraftId) return undefined;
+  const index = existing.findIndex(
+    (point) => point.draftId === insertAfterDraftId,
+  );
+  return index === -1 ? undefined : index + 1;
+}
+
 export function applyItineraryImport(
   existing: readonly RouteDraftPoint[],
   imported: readonly ItineraryRoutePointDraft[],

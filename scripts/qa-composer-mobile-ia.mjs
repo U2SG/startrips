@@ -353,7 +353,7 @@ try {
       await page.locator('[data-composer-task="location"]').waitFor({ state: "visible" });
       const importText = await page.evaluate(() => {
         const panel = document.querySelector(".journey-itinerary-import");
-        const rects = [...(panel?.querySelectorAll("button, input, label.journey-checkbox") ?? [])]
+        const rects = [...(panel?.querySelectorAll("button, input, select, label.journey-checkbox") ?? [])]
           .map((node) => {
             const rect = node.getBoundingClientRect();
             return {
@@ -375,7 +375,7 @@ try {
       await page.locator('.journey-itinerary-import__modes > button:nth-child(3)').click();
       const importImage = await page.evaluate(() => {
         const input = document.querySelector('.journey-itinerary-import__file input[type="file"]');
-        const rects = [...document.querySelectorAll(".journey-itinerary-import button, .journey-itinerary-import input")]
+        const rects = [...document.querySelectorAll(".journey-itinerary-import button, .journey-itinerary-import input, .journey-itinerary-import select")]
           .map((node) => {
             const rect = node.getBoundingClientRect();
             return { height: Math.round(rect.height), width: Math.round(rect.width) };

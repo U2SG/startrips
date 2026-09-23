@@ -7,6 +7,7 @@ import {
   itineraryDraftEntries,
   itineraryDraftToRoutePoints,
   itineraryImportJobKey,
+  resolveInsertAtIndex,
   resolveItineraryEntryPosition,
   withAddedRoutePointCount,
 } from "./itineraryImport";
@@ -257,6 +258,77 @@ describe("applying a reviewed itinerary draft", () => {
     expect(replay.addedRoutePointCount).toBe(0);
     expect(replay.replayed).toBe(true);
     expect(replay.routePoints).toEqual(applied.routePoints);
+  });
+
+  it("inserts after a chosen existing stop and leaves the rest in place", () => {
+    const journey = {
+      routePoints: ["saved-1", "saved-2", "saved-3"].map((id, index) => ({
+        id,
+        journeyId: "j1",
+        sortOrder: index,
+        latitude: index,
+        longitude: index,
+        label: `已有地点 ${index + 1}`,
+        isStop: true,
+        occurredAt: null,
+        note: "手写备注",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })),
+    } as unknown as Journey;
+    const existing = journeyToDraftPoints(journey);
+    const draft = draftOf(CHINESE_ITINERARY, "zh");
+    const imported = itineraryDraftToRoutePoints(
+      draft,
+      defaultItinerarySelection(draft),
+    );
+
+    // "After the second stop" is a position in the draft, resolved by id
+    // rather than by the index the panel happened to render.
+    const insertAtIndex = resolveInsertAtIndex(existing, existing[1].draftId);
+    expect(insertAtIndex).toBe(2);
+
+    const applied = applyItineraryImport(existing, imported, { insertAtIndex });
+    expect(applied.routePoints.slice(0, 2)).toEqual(existing.slice(0, 2));
+    expect(applied.routePoints.slice(2, 2 + imported.length))
+      .toEqual(imported.map((item) => item.point));
+    expect(applied.routePoints.slice(2 + imported.length)).toEqual(existing.slice(2));
+    expect(applied.addedRoutePointCount).toBe(imported.length);
+
+    // Every existing point keeps its id, label and unsaved note wherever it
+    // ended up relative to the import.
+    expect(applied.routePoints.filter((point) => point.note === "手写备注"))
+      .toHaveLength(existing.length);
+
+    // The same job again is still a replay, wherever it was inserted.
+    const replay = applyItineraryImport(applied.routePoints, imported, { insertAtIndex });
+    expect(replay.addedRoutePointCount).toBe(0);
+    expect(replay.routePoints).toEqual(applied.routePoints);
+  });
+
+  it("appends when no position was chosen, or when the chosen stop is gone", () => {
+    const journey = {
+      routePoints: [
+        {
+          id: "saved-1",
+          journeyId: "j1",
+          sortOrder: 0,
+          latitude: 1,
+          longitude: 2,
+          label: "已有地点",
+          isStop: true,
+          occurredAt: null,
+          note: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    } as unknown as Journey;
+    const existing = journeyToDraftPoints(journey);
+
+    expect(resolveInsertAtIndex(existing, null)).toBeUndefined();
+    // Deleted from the draft while the review panel was open: appending is the
+    // only position nobody has to guess.
+    expect(resolveInsertAtIndex(existing, "draft-that-was-removed")).toBeUndefined();
+    expect(resolveInsertAtIndex([], "saved-1")).toBeUndefined();
   });
 
   it("is a plan, not a recording: no capture, no track, no Home Base evidence", () => {

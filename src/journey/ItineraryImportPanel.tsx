@@ -66,9 +66,14 @@ const FLAG_LABELS: Record<string, string> = {
 };
 
 type Props = {
-  onApply: (imported: readonly ItineraryRoutePointDraft[]) => void;
+  onApply: (
+    imported: readonly ItineraryRoutePointDraft[],
+    insertAfterDraftId: string | null,
+  ) => void;
   onMessage: (message: string) => void;
   mobileLayout?: boolean;
+  /** The draft this import would join, so a position can be chosen in it. */
+  existingPoints?: readonly { draftId: string; label: string }[];
 };
 
 /** One screenshot the member chose, in the order they arranged it. */
@@ -122,12 +127,20 @@ async function encodeSegment(
   };
 }
 
-export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props) {
+export function ItineraryImportPanel({
+  onApply,
+  onMessage,
+  mobileLayout,
+  existingPoints = [],
+}: Props) {
   const [mode, setMode] = useState<"text" | "link" | "image">("text");
   const [text, setText] = useState("");
   const [link, setLink] = useState("");
   const [draft, setDraft] = useState<ItineraryImportDraft | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  // #512: null is "append to the end", the default that cannot disturb an
+  // order the member already arranged.
+  const [insertAfterDraftId, setInsertAfterDraftId] = useState<string | null>(null);
   const [images, setImages] = useState<ChosenImage[]>([]);
   const [reading, setReading] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -304,6 +317,14 @@ export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props
     setCandidates(null);
   }, []);
 
+  // A point deleted from the draft while this panel was open is no longer a
+  // position: the choice falls back to appending rather than to a stale id.
+  const insertAfter = existingPoints.some(
+    (point) => point.draftId === insertAfterDraftId,
+  )
+    ? insertAfterDraftId
+    : null;
+
   const apply = useCallback(() => {
     if (!draft) return;
     const imported = itineraryDraftToRoutePoints(draft, selected);
@@ -311,8 +332,8 @@ export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props
       setError("还没有可添加的地点：先确认这些条目的位置。");
       return;
     }
-    onApply(imported);
-  }, [draft, onApply, selected]);
+    onApply(imported, insertAfter);
+  }, [draft, insertAfter, onApply, selected]);
 
   const toggle = useCallback((entryId: string) => {
     setSelected((current) =>
@@ -544,9 +565,29 @@ export function ItineraryImportPanel({ onApply, onMessage, mobileLayout }: Props
               ))}
             </ol>
 
+            {existingPoints.length > 0 ? (
+              <label className="journey-itinerary-import__position">
+                <span>插入位置</span>
+                <select
+                  value={insertAfter ?? ""}
+                  onChange={(event) =>
+                    setInsertAfterDraftId(event.target.value || null)}
+                >
+                  <option value="">追加到路线末尾</option>
+                  {existingPoints.map((point, index) => (
+                    <option key={point.draftId} value={point.draftId}>
+                      插入到第 {index + 1} 个「{point.label || "未命名地点"}」之后
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+
             <button type="button" onClick={apply} disabled={willAdd === 0}>
               <IconPlus size={16} stroke={1.4} aria-hidden="true" />
-              添加 {willAdd} 个地点到路线
+              {insertAfter === null
+                ? `在末尾添加 ${willAdd} 个地点`
+                : `按所选位置插入 ${willAdd} 个地点`}
             </button>
           </div>
         ) : null}

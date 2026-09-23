@@ -63,6 +63,7 @@ import {
 } from "./journeyModel";
 import {
   applyItineraryImport,
+  resolveInsertAtIndex,
   type ItineraryRoutePointDraft,
 } from "./itineraryImport";
 import {
@@ -1807,19 +1808,26 @@ export function JourneyComposer({
                 })}
               </ol>
   );
-  // #512: an imported plan joins the draft the same way a searched place does
-  // — appended to the end, leaving every existing point, note and unsaved edit
-  // where it is. Re-applying the same import adds nothing, so a retry or a
-  // second click cannot duplicate a Route.
+  // #512: an imported plan joins the draft the same way a searched place does,
+  // leaving every existing point, note and unsaved edit where it is. It is
+  // appended by default; when the member picked a stop to insert after in the
+  // review panel, it goes in directly behind that stop instead. Re-applying
+  // the same import adds nothing, so a retry or a second click cannot
+  // duplicate a Route.
   const applyItineraryDraft = useCallback((
     imported: readonly ItineraryRoutePointDraft[],
+    insertAfterDraftId: string | null,
   ) => {
     setRoutePoints((current) => {
-      const applied = applyItineraryImport(current, imported);
+      const insertAtIndex = resolveInsertAtIndex(current, insertAfterDraftId);
+      const applied = applyItineraryImport(current, imported, { insertAtIndex });
+      const where = insertAtIndex === undefined
+        ? "在路线末尾"
+        : `在第 ${insertAtIndex} 个地点之后`;
       setMessage(
         applied.addedRoutePointCount === 0
           ? "这些地点已经在路线里了，没有重复添加。"
-          : `已添加 ${applied.addedRoutePointCount} 个地点；保存前可以继续调整。`,
+          : `已${where}添加 ${applied.addedRoutePointCount} 个地点；保存前可以继续调整。`,
       );
       return applied.routePoints;
     });
@@ -1829,6 +1837,7 @@ export function JourneyComposer({
       onApply={applyItineraryDraft}
       onMessage={setMessage}
       mobileLayout={mobileLayout}
+      existingPoints={routePoints}
     />
   );
   const preciseLocationFragment = (

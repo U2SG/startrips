@@ -68,10 +68,16 @@ export function itineraryImportStageFailure(error: ItineraryImportStageError) {
   };
 }
 
-/** The document handed to a recogniser. Nothing else about the member travels. */
+/**
+ * The document handed to a recogniser. Nothing else about the member travels.
+ *
+ * A page carries its origin rather than its address: the query of a shared
+ * link is the member's signature, and `server/itinerary/recognition-document.ts`
+ * is the only place a fetched page becomes one of these.
+ */
 export type ItineraryRecognitionRequest =
   | { kind: "text"; text: string }
-  | { kind: "page"; url: string; text: string }
+  | { kind: "page"; sourceOrigin: string | null; text: string }
   | { kind: "image"; mimeType: string; base64: string };
 
 export type ItineraryRecognitionCandidateEntry = {

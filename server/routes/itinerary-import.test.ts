@@ -373,6 +373,57 @@ describe("link-ingestion request forgery guard", () => {
   });
 });
 
+describe("what a link contributes to a recognition request", () => {
+  it("hands the recogniser the read plan and not the link that carried it", async () => {
+    enableProviders();
+    const signed = "https://plans.example/tripmap/routePlan?sid=99&sig=ab12cd34&uid=7";
+    upstream
+      .mockResolvedValueOnce(new Response(
+        `<html><head><link rel="canonical" href="${signed}">`
+        + `<script>var share="${signed}";</script></head>`
+        + `<body><p>第 1 天 外滩 The Bund</p><a href="${signed}&day=1">分享</a></body></html>`,
+        { headers: { "content-type": "text/html" } },
+      ))
+      .mockResolvedValueOnce(new Response(JSON.stringify(READING), {
+        headers: { "content-type": "application/json" },
+      }));
+
+    const response = await post({ source: "link", link: signed });
+    expect(response.status).toBe(200);
+
+    const sent = String(upstream.mock.calls[1][1]?.body);
+    expect(sent).toContain("外滩 The Bund");
+    // #512 minimises what enters the recognition service: the signature, the
+    // member id, the path and every link the page printed stay here.
+    expect(sent).not.toContain("sig=ab12cd34");
+    expect(sent).not.toContain("uid=7");
+    expect(sent).not.toContain("routePlan");
+    expect(sent).not.toContain("var share");
+    expect(JSON.parse(sent).document.sourceOrigin).toBe("https://plans.example");
+  });
+
+  it("reports a page whose readable text is only markup as empty, not as a reading", async () => {
+    enableProviders();
+    upstream.mockResolvedValueOnce(new Response(
+      "<html><head><script>var plan=[1,2];</script></head><body> </body></html>",
+      { headers: { "content-type": "text/html" } },
+    ));
+
+    const response = await post({
+      source: "link",
+      link: "https://plans.example/tripmap/routePlan?id=1",
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      error: "ITINERARY_SOURCE_EMPTY",
+      stage: "content-read",
+    });
+    // Nothing was recognised, so nothing was sent.
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("an unconfigured deployment", () => {
   it("reports that link reading is not configured, not that the link is invalid", async () => {
     const response = await post({
