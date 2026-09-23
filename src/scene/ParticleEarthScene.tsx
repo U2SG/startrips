@@ -3801,7 +3801,7 @@ export function ParticleEarthScene({
     const activatePointerTarget = (
       event: PointerEvent,
       explicitGlobePick: { latitude: number; longitude: number } | null = null,
-      explicitRouteTarget: { journeyId: string; routePointId: string } | null = null,
+      explicitRouteTarget: RouteLayerPointerTarget | null = null,
     ) => {
       const canPickGlobe = Boolean(latestOnGlobePointPick.current);
       const canActivateJourney = Boolean(
@@ -3844,7 +3844,7 @@ export function ParticleEarthScene({
       }
       if (canActivateJourney) {
         if (explicitRouteTarget && latestOnJourneyRoutePointActivate.current) {
-          publishRoutePointActivationEvidence(event, explicitRouteTarget, "label");
+          publishRoutePointActivationEvidence(event, explicitRouteTarget, explicitRouteTarget.source);
           latestOnJourneyRoutePointActivate.current(
             explicitRouteTarget.journeyId,
             explicitRouteTarget.routePointId,
@@ -4020,7 +4020,12 @@ export function ParticleEarthScene({
     };
 
     const cityPointerPicks = new Map<number, { latitude: number; longitude: number }>();
-    const routeLabelPointerTargets = new Map<number, { journeyId: string; routePointId: string }>();
+    type RouteLayerPointerTarget = {
+      journeyId: string;
+      routePointId: string;
+      source: "marker" | "label";
+    };
+    const routeLabelPointerTargets = new Map<number, RouteLayerPointerTarget>();
     const cityPickFromEventTarget = (target: EventTarget | null) => {
       if (!(target instanceof SVGTextElement) || !target.classList.contains("particle-earth-city")) return null;
       const entry = cityLabelPool.find((candidate) => candidate.element === target) ?? null;
@@ -4033,7 +4038,40 @@ export function ParticleEarthScene({
       const routePointId = label?.dataset.routePointId;
       return journeyId && routePointId ? { journeyId, routePointId } : null;
     };
-    const routeLabelTargetFromPointer = (event: PointerEvent) => {
+    const routeLabelTargetFromPointer = (event: PointerEvent): RouteLayerPointerTarget | null => {
+      // A visible marker owns its own visual center even when a neighbouring
+      // 44px label hit box overlaps that pixel. Resolve that stable geographic
+      // identity first; otherwise the transparent label rectangle can steal a
+      // marker click and open a different Route Point context.
+      const markerCandidates = [...routeVectorLayer.querySelectorAll<SVGCircleElement>(
+        ".particle-earth-route__point[data-journey-route][data-route-point-id]",
+      )]
+        .filter((marker) => marker.style.display !== "none")
+        .map((marker) => {
+          const journeyId = marker.dataset.journeyRoute;
+          const routePointId = marker.dataset.routePointId;
+          if (!journeyId || !routePointId) return null;
+          const rect = marker.getBoundingClientRect();
+          if (
+            event.clientX < rect.left || event.clientX > rect.right
+            || event.clientY < rect.top || event.clientY > rect.bottom
+          ) return null;
+          const centerX = rect.left + rect.width / 2;
+          const centerY = rect.top + rect.height / 2;
+          return {
+            journeyId,
+            routePointId,
+            source: "marker" as const,
+            distance: Math.hypot(event.clientX - centerX, event.clientY - centerY),
+          };
+        })
+        .filter((candidate): candidate is RouteLayerPointerTarget & { distance: number } => Boolean(candidate))
+        .sort((left, right) => left.distance - right.distance);
+      if (markerCandidates[0]) {
+        const { journeyId, routePointId, source } = markerCandidates[0];
+        return { journeyId, routePointId, source };
+      }
+
       const candidates = [...routeVectorLayer.querySelectorAll<SVGGElement>(
         ".particle-earth-route__label[data-journey-route][data-route-point-id]",
       )]
@@ -4060,14 +4098,18 @@ export function ParticleEarthScene({
           return {
             journeyId,
             routePointId,
+            source: "label" as const,
             distance: Math.hypot(event.clientX - markerX, event.clientY - markerY),
           };
         })
-        .filter((candidate): candidate is { journeyId: string; routePointId: string; distance: number } => Boolean(candidate))
+        .filter((candidate): candidate is RouteLayerPointerTarget & { distance: number } => Boolean(candidate))
         .sort((left, right) => left.distance - right.distance);
-      return candidates[0]
-        ? { journeyId: candidates[0].journeyId, routePointId: candidates[0].routePointId }
-        : routeLabelTargetFromEventTarget(event.target);
+      if (candidates[0]) {
+        const { journeyId, routePointId, source } = candidates[0];
+        return { journeyId, routePointId, source };
+      }
+      const target = routeLabelTargetFromEventTarget(event.target);
+      return target ? { ...target, source: "label" } : null;
     };
 
     const onPointerDown = (event: PointerEvent) => {
@@ -4187,7 +4229,7 @@ export function ParticleEarthScene({
       event: PointerEvent,
       allowActivation: boolean,
       explicitGlobePick: { latitude: number; longitude: number } | null = null,
-      explicitRouteTarget: { journeyId: string; routePointId: string } | null = null,
+      explicitRouteTarget: RouteLayerPointerTarget | null = null,
     ) => {
       if (!activePointers.has(event.pointerId)) return;
       const wasGesture = gestureConsumed || dragStarted || activePointers.size > 1;
@@ -4230,7 +4272,7 @@ export function ParticleEarthScene({
     const onPointerUp = (
       event: PointerEvent,
       explicitGlobePick: { latitude: number; longitude: number } | null = null,
-      explicitRouteTarget: { journeyId: string; routePointId: string } | null = null,
+      explicitRouteTarget: RouteLayerPointerTarget | null = null,
     ) => {
       const cityPick = explicitGlobePick ?? cityPointerPicks.get(event.pointerId) ?? null;
       const routeTarget = explicitRouteTarget ?? routeLabelPointerTargets.get(event.pointerId) ?? null;

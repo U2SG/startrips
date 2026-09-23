@@ -1113,7 +1113,9 @@ export function LivingAtlasApp({
     () => emptyRoutePointContextSelection(),
   );
   const routePointContextSelectionRef = useRef(routePointContextSelection);
-  const routePointContextReturnFocusRef = useRef<HTMLElement | null>(null);
+  const routePointContextReturnFocusRef = useRef<(
+    Element & { focus: (options?: FocusOptions) => void }
+  ) | null>(null);
   routePointContextSelectionRef.current = routePointContextSelection;
   const clearRoutePointContext = useCallback(() => {
     const next = clearRoutePointContextSelection(routePointContextSelectionRef.current);
@@ -1840,7 +1842,11 @@ export function LivingAtlasApp({
   useEffect(() => {
     if (!globeFocusMode) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) {
+      if (
+        event.key === "Escape"
+        && !event.defaultPrevented
+        && !routePointContextSelectionRef.current.context
+      ) {
         exitGlobeFocus();
       }
     };
@@ -2237,14 +2243,17 @@ export function LivingAtlasApp({
   function revealRoutePointContext(journeyId: string, routePointId: string) {
     const activeElement = document.activeElement;
     if (
-      activeElement instanceof HTMLElement
+      activeElement instanceof Element
       && activeElement !== document.body
+      && typeof (activeElement as Element & { focus?: unknown }).focus === "function"
       && !activeElement.closest("[data-route-point-context]")
     ) {
-      // Only retain a trigger that will still exist after the temporary card
-      // closes. Controls inside the current context disappear with it and must
-      // never become the focus-return owner for a subsequent Route Point.
-      routePointContextReturnFocusRef.current = activeElement;
+      // SVG Route Point labels are legal keyboard triggers too. Preserve the
+      // focused Element structurally instead of requiring HTMLElement, or a
+      // keyboard-opened context has no return target and focus falls to body.
+      routePointContextReturnFocusRef.current = activeElement as Element & {
+        focus: (options?: FocusOptions) => void;
+      };
     }
     if (journeyId !== activeJourneyIdRef.current) {
       clearRoutePointContext();
