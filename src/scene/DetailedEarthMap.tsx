@@ -375,6 +375,11 @@ export default function DetailedEarthMap({
       fadeDuration: 650,
     });
     let initialLoadSettled = false;
+    // MapLibre does not preserve originalEvent on every frame of a continuous
+    // wheel/pinch zoom. Remember the user provenance from zoomstart so the
+    // threshold-crossing zoom frame can still hand ownership back immediately,
+    // while jumpTo/flyTo/calibration remain programmatic and ineligible.
+    let userZoomGestureActive = false;
     let removed = false;
     let revealRevision = 0;
     let fullySettled = false;
@@ -1009,17 +1014,19 @@ export default function DetailedEarthMap({
         longitude: event.lngLat.lng,
       });
     });
-    map.on("zoom", (event) => {
-      // Only a detail-owned USER zoom may hand the camera back to Particle
-      // Earth. MapLibre publishes the originating pointer/key event on each
-      // handler-owned zoom frame, while jumpTo/flyTo calibration emits zoom
-      // without an originalEvent. Grade that live provenance at the return
-      // threshold itself: waiting for zoomend lets a continuous wheel gesture
-      // cross far into the overview range while Detail keeps consuming input.
-      // Focus flights and resize/calibration corrections therefore remain
-      // programmatic, but a real retreat hands ownership home immediately.
+    map.on("zoomstart", (event) => {
+      // Programmatic camera moves also emit zoomstart. Only a start backed by
+      // real input arms the gesture lifetime; later zoom frames may omit the
+      // originalEvent even though the same wheel/pinch interaction continues.
+      userZoomGestureActive = Boolean(event.originalEvent);
+    });
+    map.on("zoom", () => {
+      // Grade the live detail-owned USER gesture at the return threshold.
+      // Waiting for zoomend lets a continuous wheel gesture cross far into the
+      // overview range while Detail keeps consuming input. The zoomstart latch
+      // preserves input provenance without admitting jumpTo/flyTo/calibration.
       if (
-        !event.originalEvent
+        !userZoomGestureActive
         || !initialLoadSettled
         || diveOwnerRef.current !== "detail"
         || overviewRequestedRef.current
@@ -1027,6 +1034,9 @@ export default function DetailedEarthMap({
       ) return;
       overviewRequestedRef.current = true;
       onOverviewRequestRef.current?.();
+    });
+    map.on("zoomend", () => {
+      userZoomGestureActive = false;
     });
     map.on("error", (event) => {
       host.dataset.mapError = event.error?.message ?? "map-error";

@@ -70,9 +70,9 @@ describe("Semantic Earth Dive renderer ownership", () => {
 
   it("hands user zoom back at the return threshold without accepting programmatic zoom", () => {
     const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
-    expect(detail).toContain('map.on("zoom", (event) => {');
-    expect(detail).toMatch(/map\.on\("zoom", \(event\) => \{[\s\S]*?!event\.originalEvent[\s\S]*?shouldReturnToParticleEarth\(map\.getZoom\(\)\)/);
-    expect(detail).not.toContain('map.on("zoomend", (event) => {');
+    expect(detail).toMatch(/map\.on\("zoomstart", \(event\) => \{[\s\S]*?userZoomGestureActive = Boolean\(event\.originalEvent\)/);
+    expect(detail).toMatch(/map\.on\("zoom", \(\) => \{[\s\S]*?!userZoomGestureActive[\s\S]*?shouldReturnToParticleEarth\(map\.getZoom\(\)\)/);
+    expect(detail).toMatch(/map\.on\("zoomend", \(\) => \{\s*userZoomGestureActive = false;/);
   });
 
   it("reconciles fully-settled readiness on the terminal camera edge", () => {
