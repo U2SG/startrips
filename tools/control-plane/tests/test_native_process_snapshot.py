@@ -9,7 +9,7 @@ import subprocess
 import sys
 import unittest
 from unittest import mock
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
+import test_control_plane as fixture  # Preserve the suite's tests-before-lib import order.
 import execution
 
 
