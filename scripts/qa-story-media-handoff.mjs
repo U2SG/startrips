@@ -14,9 +14,11 @@
  *   - `HTMLMediaElement` is never patched, so `currentTime` is the real one.
  *
  * What the continuity sampler actually claims is stated per check: it observes
- * the stage on every animation frame and records which asset owns the painted
- * foreground at a set of sampled points. That is evidence about those points on
- * those frames, not a proof about every pixel of every display refresh.
+ * the stage on every DOM mutation and on every animation frame its chain
+ * delivers, and records which asset owns the painted foreground at points
+ * inside the presented media's own aperture. That is evidence about those
+ * points on those frames, not a proof about every pixel of every refresh, and
+ * each graded window reports its tick count so the two sources stay separable.
  */
 import { launchQaBrowser } from "./qa-browser.mjs";
 
@@ -309,6 +311,10 @@ function gradeContinuity(frames, { allowedAssets, requireCoverage = true }) {
   }
   return {
     sampledFrames: frames.length,
+    // Frames arrive from the animation-frame chain and from DOM mutations. The
+    // tick count says which, so a claim about frames is never broader than the
+    // observation that produced them.
+    samplerTicks: frames.ticks ?? null,
     foregroundSequence: owners,
     staleForeground: staleFrames.slice(0, 4),
     blankStage: blankFrames.slice(0, 4),
@@ -547,7 +553,7 @@ try {
       const stillPresented = await page.locator(surface.root).isVisible();
       record({
         name: `story-${surface.label}-video-native-controls-reachable`,
-        claim: "the native control strip hit-tests to the video itself and a real click there neither navigates nor dismisses the surface",
+        claim: "Chromium's lower-left native control region hit-tests to the video itself and a real click there neither navigates nor dismisses the surface; the reachability of individual controls beyond that region is not asserted here",
         controls, controlBefore, controlAfter, controlState, stillPresented,
         failed: !controls.controls || !controls.hitIsVideo || !stillPresented
           || controlState.id !== V1 || controlState.kind !== "video"
@@ -593,7 +599,7 @@ try {
 
       record({
         name: "story-video-navigation-preserved",
-        claim: "a swipe over the video navigates exactly one step without double-stepping or starting playback, and the stage's advertised arrow keys still navigate",
+        claim: "a swipe over the video lands exactly one step away without starting playback, so its compatibility click did not add a second step, and the stage's advertised arrow keys still navigate",
         toVideo, offVideo, backToVideo,
         afterFirstSwipe, afterVideoSwipe, playbackAfterSwipe, stageRole, keyboardSettled, afterKeyboard,
         handoff: gradeContinuity(swipeFrames, { allowedAssets: [V1, I2] }),
@@ -664,7 +670,7 @@ try {
       const stuck = steps.filter((step) => !step.ok);
       record({
         name: `story-handoff-continuity-${profile.label}`,
-        claim: "across image<->video and mixed aspect ratios the sampled stage points always show an asset the navigation currently owns, never an uncovered stage, never the waiting indicator, and never a second live transport",
+        claim: "sampled on every DOM mutation and on every animation frame the chain delivers, the stage points inside the presented aperture always show an asset the navigation currently owns, never an uncovered aperture, never the waiting indicator, and never a second live transport",
         viewport: profile.viewport, reducedMotion: profile.reducedMotion, visited, stuck,
         ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
