@@ -844,6 +844,11 @@ export default function DetailedEarthMap({
         host.dataset.mapRevealCameraAfter = cameraSignature(cameraAfter);
         publishAnchorFrame();
         publishReadiness(fullySettled ? "fully-settled" : "visual-ready");
+        // The post-sync revision is written on this exact render. Reconcile
+        // durable style/tile/camera truth again after that commit so a map
+        // whose last idle/moveend edge happened before this framebuffer proof
+        // cannot remain stranded at visual-ready with no later event to promote it.
+        reconcileFullySettled();
       }
     });
     map.on("resize", () => {
