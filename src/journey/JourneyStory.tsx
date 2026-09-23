@@ -3666,6 +3666,10 @@ export function JourneyStory({
             className={`journey-story__media${overview && manageMedia ? " is-organizing" : ""}`}
             aria-label="旅程媒体"
             data-mobile-layout={mobileLayout ? "true" : undefined}
+            data-media-requested={/* #489: the media the viewer last asked for,
+              cold targets included. Without it a stage that has silently
+              dropped a navigation looks identical to one nobody navigated. */
+              pendingMediaId ?? incomingAssetId ?? undefined}
             onPointerDown={handleStoryMediaPointerDown}
             onPointerMove={handleStoryMediaPointerMove}
             onPointerUp={handleStoryMediaPointerUp}

@@ -221,6 +221,48 @@ function installStageSampler() {
     }
     return null;
   };
+  // An uncovered point is only useful if it says what WAS there. Clip paths
+  // remove a region from hit testing, so the element stack plus each page's
+  // clip and the presented picture's own geometry distinguish "the stage was
+  // bare" from "the current picture is clipped away from this point" from
+  // "the sampler aimed outside the real picture".
+  const probeAt = (x, y) => {
+    const stack = document.elementsFromPoint(x, y).slice(0, 6).map((node) => {
+      const style = getComputedStyle(node);
+      return {
+        tag: node.tagName,
+        cls: String(node.className ?? "").slice(0, 48),
+        page: node.closest?.("[data-media-page]")?.getAttribute("data-media-page-id") ?? null,
+        clip: style.clipPath === "none" ? null : style.clipPath.slice(0, 72),
+        opacity: style.opacity,
+        visibility: style.visibility,
+      };
+    });
+    const round = (rect) => rect ? {
+      x: Math.round(rect.left), y: Math.round(rect.top),
+      w: Math.round(rect.width), h: Math.round(rect.height),
+    } : null;
+    const pages = [...document.querySelectorAll("[data-media-page]")].map((page) => {
+      const media = page.querySelector("img:not([hidden]), canvas:not([hidden])");
+      return {
+        id: page.getAttribute("data-media-page-id"),
+        role: page.getAttribute("data-media-page"),
+        ready: page.getAttribute("data-media-page-ready"),
+        clip: getComputedStyle(page).clipPath.slice(0, 72),
+        transform: getComputedStyle(page).transform.slice(0, 72),
+        box: round(page.getBoundingClientRect()),
+        media: media ? {
+          tag: media.tagName,
+          box: round(media.getBoundingClientRect()),
+          natural: media instanceof HTMLImageElement
+            ? [media.naturalWidth, media.naturalHeight] : [media.width, media.height],
+          objectFit: getComputedStyle(media).objectFit,
+          clip: getComputedStyle(media).clipPath.slice(0, 72),
+        } : null,
+      };
+    });
+    return { point: { x: Math.round(x), y: Math.round(y) }, stack, pages };
+  };
   // The rectangle the presented media actually occupies under `contain`. The
   // coverage claim is made inside this aperture only; the surrounding letterbox
   // is correct emptiness, not an uncovered stage.
@@ -259,9 +301,11 @@ function installStageSampler() {
     if (!pages || !(measurable.width > 0) || !(measurable.height > 0)) return null;
     const bounds = aperture(pages);
     const points = [[0.5, 0.5], [0.3, 0.5], [0.7, 0.5], [0.5, 0.3], [0.5, 0.7]];
+    const at = ([fx, fy]) => [bounds.left + bounds.width * fx, bounds.top + bounds.height * fy];
     const drawables = bounds.width > 0 && bounds.height > 0
-      ? points.map(([fx, fy]) => drawableAt(bounds.left + bounds.width * fx, bounds.top + bounds.height * fy))
+      ? points.map((point) => drawableAt(...at(point)))
       : [];
+    const bare = drawables.indexOf(null);
     const current = pages.querySelector('[data-media-page="current"]');
     const incoming = pages.querySelector('[data-media-incoming="true"]');
     const videos = [...pages.querySelectorAll("video")];
@@ -276,6 +320,7 @@ function installStageSampler() {
       drawables,
       aperture: { width: Math.round(bounds.width), height: Math.round(bounds.height) },
       uncovered: drawables.filter((entry) => entry === null).length,
+      bareProbe: bare >= 0 ? probeAt(...at(points[bare])) : undefined,
       waiting: Boolean(root.querySelector(".starlight-media-state.is-waiting")),
       videoCount: videos.length,
       videoOwner: videos.map((video) => video.getAttribute("data-shared-media-id")),
@@ -533,6 +578,10 @@ async function stageDiagnostic(page, rootSelector) {
     return {
       presentation: pages?.getAttribute("data-media-presentation") ?? null,
       kind: pages?.getAttribute("data-current-media-kind") ?? null,
+      // What the viewer last asked for, cold targets included, so a dropped
+      // navigation is attributable instead of looking like no navigation.
+      requested: root?.closest("[data-media-requested]")?.getAttribute("data-media-requested")
+        ?? document.querySelector("[data-media-requested]")?.getAttribute("data-media-requested") ?? null,
       clickDirection: pages?.getAttribute("data-click-direction") ?? null,
       hitSurfaces: pages?.querySelectorAll("[data-story-hit-surface]").length ?? 0,
       slots: [...(pages?.querySelectorAll("[data-media-page]") ?? [])].map((slot) => ({
@@ -820,7 +869,13 @@ try {
       await startSampler(page, STAGE);
       await swipeStage(page, STAGE, 1);
       await swipeStage(page, STAGE, -1);
-      await waitForSettledAsset(page, I1);
+      // The product's own contract here is cancel-and-stay: a reverse input
+      // while the next frame is still cold drops that request and keeps the
+      // visible page, because the reversal's own neighbour IS the visible page
+      // (JourneyStory.navigateToMedia, "a reverse input can cancel a cold
+      // next-frame request while staying here"). So the committed owner must
+      // be V1 -- both now and after the abandoned read finally lands.
+      await waitForSettledAsset(page, V1);
       const afterReversal = await currentAsset(page);
       // Outlive the held read, then look again: this window exists to catch a
       // late completion, so it has to still be recording when the read lands.
@@ -836,10 +891,11 @@ try {
       const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
       record({
         name: "story-late-read-never-takes-the-stage",
-        claim: "a read URL that resolves after its navigation was abandoned neither moves the committed owner nor leaves the aperture uncovered",
+        claim: "a read URL that resolves after its navigation was abandoned neither moves the committed owner nor leaves the aperture uncovered; the reversal cancels that cold request and keeps the visible page",
+        abandonedIntent: V2, expectedOwner: V1,
         afterReversal, afterLateRead, transports, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: continuity.failed || afterReversal.id !== I1 || afterLateRead.id !== I1
+        failed: continuity.failed || afterReversal.id !== V1 || afterLateRead.id !== V1
           || afterLateRead.presentation !== "settled" || transports !== 1
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
