@@ -531,9 +531,11 @@ export default function DetailedEarthMap({
       const particle = frameOverride ?? particleFrameRef.current;
       const frame = handoffFrame(frameOverride);
       if (!particle || !frame) return;
-      // Particle-owned calibration is an authorized camera intent. A reveal
-      // synchronization armed before this frame may not restore over it.
-      cameraIntentRevisionRef.current += 1;
+      // A fresh particle-frame synchronization is an authorized camera intent.
+      // A bounded retry is the SAME already-authorized frame: advancing the
+      // revision on every Dive rAF retry would make the reveal commit stale on
+      // every render and could starve a fully-settled blend forever.
+      if (mode === "sync") cameraIntentRevisionRef.current += 1;
       // A NEW particle frame reseeds the geographic center. A retry of the SAME
       // stable frame must preserve the center correction already accumulated by
       // previous passes, otherwise every Dive rAF would erase its own progress.
