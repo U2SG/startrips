@@ -380,6 +380,14 @@ export default function DetailedEarthMap({
     // threshold-crossing zoom frame can still hand ownership back immediately,
     // while jumpTo/flyTo/calibration remain programmatic and ineligible.
     let userZoomGestureActive = false;
+    // A user wheel can interrupt an already-running programmatic focus flight.
+    // MapLibre may then continue the existing zoom lifetime without publishing a
+    // fresh zoomstart, so capture the real DOM input before its handler mutates
+    // camera state. Programmatic jumpTo/flyTo never pass through this gate.
+    const markUserWheelZoom = () => {
+      if (diveOwnerRef.current === "detail") userZoomGestureActive = true;
+    };
+    host.addEventListener("wheel", markUserWheelZoom, { capture: true, passive: true });
     let removed = false;
     let revealRevision = 0;
     let fullySettled = false;
@@ -1015,10 +1023,12 @@ export default function DetailedEarthMap({
       });
     });
     map.on("zoomstart", (event) => {
-      // Programmatic camera moves also emit zoomstart. Only a start backed by
-      // real input arms the gesture lifetime; later zoom frames may omit the
-      // originalEvent even though the same wheel/pinch interaction continues.
-      userZoomGestureActive = Boolean(event.originalEvent);
+      // A real MapLibre input edge can arm the gesture too, but it must never
+      // erase provenance already captured by the DOM wheel gate above. A user
+      // wheel can interrupt an existing programmatic camera lifetime and that
+      // continuation is allowed to publish zoomstart without originalEvent.
+      // Pure jumpTo/flyTo/calibration starts still leave the latch false.
+      userZoomGestureActive ||= Boolean(event.originalEvent);
     });
     map.on("zoom", () => {
       // Grade the live detail-owned USER gesture at the return threshold.
@@ -1053,6 +1063,7 @@ export default function DetailedEarthMap({
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       focusFlightActiveRef.current = false;
       host.removeEventListener("click", handleJourneyRoutePointClickCapture, { capture: true });
+      host.removeEventListener("wheel", markUserWheelZoom, { capture: true });
       map.remove();
       if (import.meta.env.DEV && typeof window !== "undefined") {
         const debugWindow = window as Window & {
