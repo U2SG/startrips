@@ -214,8 +214,16 @@ function installStageSampler() {
       live: false,
     };
   };
-  const drawableAt = (x, y) => {
+  // Hit testing is document-wide, so a window that spans a surface change
+  // reads one stage through whatever is painted over it. A point on the
+  // inline stage that the immersive surface has taken over is owned by that
+  // surface -- it is attributable, not a bare stage -- while a point owned by
+  // nothing at all still is. `peers` carries the other surfaces this window is
+  // already observing; nothing outside that set can excuse a bare point.
+  const drawableAt = (x, y, own, peers) => {
     for (const node of document.elementsFromPoint(x, y)) {
+      const peer = peers.find((entry) => entry.node !== own && entry.node.contains(node));
+      if (peer) return { occludedBy: peer.selector };
       const found = identify(node);
       if (!found) continue;
       const style = getComputedStyle(node);
@@ -266,11 +274,32 @@ function installStageSampler() {
     });
     return { point: { x: Math.round(x), y: Math.round(y) }, stack, pages };
   };
+  // Which page the stack's clips are authored against. `mediaStackClip`
+  // returns a zero inset for the front page and only for it, so the unclipped
+  // page IS the front -- the committed current page at rest, and the neighbour
+  // a finger has pulled forward mid-drag, whose aperture the base is then
+  // legitimately clipped into. Reading the front from the product's own
+  // invariant is what separates that legitimate clip from a stale one: a
+  // measurable stack in which NO page is unclipped has lost its aperture, and
+  // `sampleRoot` reports that frame instead of quietly widening the claim.
+  const frontPage = (pages) => {
+    const slots = [...pages.querySelectorAll("[data-media-page-id]")]
+      .filter((page) => page.getBoundingClientRect().width > 0);
+    if (!slots.length) return null;
+    const unclipped = (page) => {
+      const clip = getComputedStyle(page).clipPath;
+      if (clip === "none") return true;
+      const inset = /^inset\(\s*(-?[\d.]+)%\s+(-?[\d.]+)%/.exec(clip);
+      return Boolean(inset) && Math.abs(Number(inset[1])) < 0.75 && Math.abs(Number(inset[2])) < 0.75;
+    };
+    const current = pages.querySelector('[data-media-page="current"]');
+    if (current && slots.includes(current) && unclipped(current)) return current;
+    return slots.find(unclipped) ?? null;
+  };
   // The rectangle the presented media actually occupies under `contain`. The
   // coverage claim is made inside this aperture only; the surrounding letterbox
   // is correct emptiness, not an uncovered stage.
-  const aperture = (pages) => {
-    const owner = pages.querySelector('[data-media-page="current"]');
+  const aperture = (pages, owner) => {
     const node = owner?.querySelector("img:not([hidden]), canvas:not([hidden])")
       ?? pages.querySelector('.story-media-pages__video video:not([hidden])');
     const box = (node ?? owner ?? pages).getBoundingClientRect();
@@ -297,16 +326,17 @@ function installStageSampler() {
         .slice(0, 6);
     } catch { return []; }
   };
-  function sampleRoot(selector, morphs) {
+  function sampleRoot(selector, morphs, peers) {
     const root = document.querySelector(selector);
     const pages = root?.querySelector("[data-story-media-pages]");
     const measurable = pages ? pages.getBoundingClientRect() : null;
     if (!pages || !(measurable.width > 0) || !(measurable.height > 0)) return null;
-    const bounds = aperture(pages);
+    const front = frontPage(pages);
+    const bounds = aperture(pages, front ?? pages.querySelector('[data-media-page="current"]'));
     const points = [[0.5, 0.5], [0.3, 0.5], [0.7, 0.5], [0.5, 0.3], [0.5, 0.7]];
     const at = ([fx, fy]) => [bounds.left + bounds.width * fx, bounds.top + bounds.height * fy];
     const drawables = bounds.width > 0 && bounds.height > 0
-      ? points.map((point) => drawableAt(...at(point)))
+      ? points.map((point) => drawableAt(...at(point), root, peers))
       : [];
     const bare = drawables.indexOf(null);
     const current = pages.querySelector('[data-media-page="current"]');
@@ -319,9 +349,19 @@ function installStageSampler() {
       kind: pages.getAttribute("data-current-media-kind"),
       currentId: current?.getAttribute("data-media-page-id") ?? null,
       incomingId: incoming?.getAttribute("data-media-page-id") ?? null,
-      centre: drawables[0] ?? null,
+      centre: drawables[0]?.occludedBy ? null : drawables[0] ?? null,
       drawables,
       aperture: { width: Math.round(bounds.width), height: Math.round(bounds.height) },
+      // The front this aperture was read from, and whether the stack had one
+      // at all. A measurable stack with no unclipped page cannot say where its
+      // picture is, so that frame fails as a stale aperture rather than being
+      // graded against a rectangle nothing authored.
+      front: front ? {
+        id: front.getAttribute("data-media-page-id"),
+        role: front.getAttribute("data-media-page"),
+      } : null,
+      staleAperture: !front,
+      occluded: drawables.filter((entry) => entry?.occludedBy).length,
       uncovered: drawables.filter((entry) => entry === null).length,
       bareProbe: bare >= 0 ? probeAt(...at(points[bare])) : undefined,
       // The presented page's own clip, every frame. A stale inset left over
@@ -341,12 +381,19 @@ function installStageSampler() {
     const morphs = viewTransitions();
     // Every root is read on the same frame, so a window that spans a surface
     // change grades the union rather than one stage that has already gone.
-    const observed = state.roots.map((selector) => sampleRoot(selector, morphs)).filter(Boolean);
+    const peers = state.roots
+      .map((selector) => ({ selector, node: document.querySelector(selector) }))
+      .filter((entry) => entry.node);
+    const observed = state.roots.map((selector) => sampleRoot(selector, morphs, peers)).filter(Boolean);
     if (!observed.length) { state.unmeasurable += 1; return; }
     if (observed.length === 1) { state.frames.push(observed[0]); return; }
     // One logical frame per tick: the surface presenting the picture owns it,
     // and a stage that is present but drawing nothing is the weaker claim.
-    const owner = observed.find((entry) => entry.uncovered === 0 && entry.currentId)
+    // A surface that only reports coverage because a peer is painted over it
+    // is not the one drawing the picture, so a surface that actually draws is
+    // preferred over a merely occluded one.
+    const owner = observed.find((entry) => entry.uncovered === 0 && entry.centre && entry.currentId)
+      ?? observed.find((entry) => entry.uncovered === 0 && entry.currentId)
       ?? observed.find((entry) => entry.currentId) ?? observed[0];
     state.frames.push({ ...owner, surfaces: observed.map((entry) => ({
       root: entry.root, currentId: entry.currentId, uncovered: entry.uncovered,
@@ -416,6 +463,10 @@ function gradeContinuity(frames, { allowedAssets, requireCoverage = true }) {
   const blankFrames = requireCoverage
     ? frames.filter((frame) => frame.currentId && frame.uncovered > 0 && !(frame.morphs?.length > 0))
     : [];
+  // A measurable stack whose pages are all clipped has no front to author
+  // those clips, so the aperture it is showing belongs to no page. That is the
+  // stale-clip failure the front rule exists to keep detectable.
+  const staleApertureFrames = frames.filter((frame) => frame.staleAperture && frame.currentId);
   const waitingFrames = frames.filter((frame) => frame.waiting && frame.currentId);
   const multiVideoFrames = frames.filter((frame) => frame.videoCount > 1);
   // A foreground that goes new -> old -> new inside ONE transition is the
@@ -451,10 +502,16 @@ function gradeContinuity(frames, { allowedAssets, requireCoverage = true }) {
     foregroundSequence: owners,
     staleForeground: staleFrames.slice(0, 4),
     blankStage: blankFrames.slice(0, 4),
+    staleAperture: staleApertureFrames.slice(0, 4),
+    // Points this surface no longer owns because another observed surface is
+    // painted over them. Reported so a window that spans a surface change says
+    // where its picture went rather than claiming it vanished.
+    occludedFrames: frames.filter((frame) => frame.occluded > 0).length,
     waitingWhileOwned: waitingFrames.slice(0, 4),
     concurrentLiveVideos: multiVideoFrames.slice(0, 2),
     foregroundReversals: reversals,
     failed: frames.length === 0 || staleFrames.length > 0 || blankFrames.length > 0
+      || staleApertureFrames.length > 0
       || waitingFrames.length > 0 || multiVideoFrames.length > 0 || reversals.length > 0,
   };
 }
@@ -578,6 +635,39 @@ async function swipeStage(page, rootSelector, direction) {
   return { ...geometry, travel };
 }
 
+/**
+ * One gesture that changes its mind: the finger travels past the commit
+ * threshold one way and then back past it the other way without ever lifting.
+ *
+ * This is the only construction that exercises "a reversal fired before the
+ * first navigation settles". Two separate swipes cannot: `swipeStage` ends in
+ * `mouse.up()`, so the first navigation has already committed and the second
+ * gesture addresses a stack that has already moved. Within one stream
+ * `updateMediaDrag` reselects the neighbour every time `dx` changes, so the
+ * committed target must be the neighbour in the FINAL direction.
+ */
+async function reverseSwipeStage(page, rootSelector, firstDirection) {
+  const geometry = await page.evaluate((selector) => {
+    const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const bounds = pages.getBoundingClientRect();
+    return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height * 0.35, width: bounds.width };
+  }, rootSelector);
+  const reach = Math.min(320, geometry.width * 0.45);
+  const offset = (direction) => (direction > 0 ? -1 : 1) * reach;
+  const glide = async (from, to, steps) => {
+    for (let step = 1; step <= steps; step += 1) {
+      await page.mouse.move(geometry.x + from + (to - from) * (step / steps), geometry.y);
+      await page.waitForTimeout(12);
+    }
+  };
+  await page.mouse.move(geometry.x, geometry.y);
+  await page.mouse.down();
+  await glide(0, offset(firstDirection), 8);
+  await glide(offset(firstDirection), offset(-firstDirection), 16);
+  await page.mouse.up();
+  return { ...geometry, reach, firstDirection, finalDirection: -firstDirection };
+}
+
 /** Everything needed to attribute a stuck navigation to an instance. */
 async function stageDiagnostic(page, rootSelector) {
   return await page.evaluate((selector) => {
@@ -611,6 +701,31 @@ async function stageDiagnostic(page, rootSelector) {
   }, rootSelector);
 }
 
+/** Which pages the stack currently reports as readable, and which own it. */
+async function pageReadiness(page, rootSelector) {
+  return await page.evaluate((selector) => {
+    const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const slots = [...(pages?.querySelectorAll("[data-media-page-id]") ?? [])];
+    return {
+      presentation: pages?.getAttribute("data-media-presentation") ?? null,
+      current: pages?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
+      ready: Object.fromEntries(slots.map((slot) => [
+        slot.getAttribute("data-media-page-id"),
+        slot.getAttribute("data-media-page-ready") === "true",
+      ])),
+    };
+  }, rootSelector);
+}
+
+async function waitForReadablePage(page, rootSelector, assetId, timeout = 10_000) {
+  await page.waitForFunction(({ selector, expected }) => {
+    const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const slot = [...(pages?.querySelectorAll("[data-media-page-id]") ?? [])]
+      .find((page) => page.getAttribute("data-media-page-id") === expected);
+    return slot?.getAttribute("data-media-page-ready") === "true";
+  }, { selector: rootSelector, expected: assetId }, { polling: "raf", timeout });
+}
+
 /**
  * One gesture-driven step. A step that never settles returns its diagnostic
  * instead of throwing, so a single stuck transition cannot hide the rest of
@@ -618,12 +733,17 @@ async function stageDiagnostic(page, rootSelector) {
  */
 async function navigateByGesture(page, rootSelector, direction, expectedId) {
   const gesture = await swipeStage(page, rootSelector, direction);
+  // Read the stack the moment the finger lifts. Whether the target was cold at
+  // release is what decides between a stuck navigation and the stack's own
+  // cold-neighbour resistance, and by the time a settle wait times out the
+  // target has long since become readable.
+  const atRelease = await pageReadiness(page, rootSelector);
   try {
     await waitForSettledAsset(page, expectedId, rootSelector);
-    return { ok: true, gesture, expectedId };
+    return { ok: true, gesture, expectedId, atRelease };
   } catch {
     return {
-      ok: false, gesture, expectedId,
+      ok: false, gesture, expectedId, atRelease,
       diagnostic: await stageDiagnostic(page, rootSelector),
       trace: await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-60)),
     };
@@ -844,21 +964,44 @@ try {
       await waitForSettledAsset(page, I1);
       await startSampler(page, STAGE);
       const steps = [];
+      const resisted = [];
       for (const [target, direction] of [[V1, 1], [V2, 1], [I2, 1], [I3, 1]]) {
-        const step = await navigateByGesture(page, STAGE, direction, target);
+        let step = await navigateByGesture(page, STAGE, direction, target);
+        if (!step.ok && step.atRelease?.ready?.[target] === false) {
+          // The stack's own contract for direct manipulation: "a cold neighbor
+          // resists and returns to rest; its eventual decode never navigates by
+          // itself" (JourneyStory.settleMediaDrag). Under held-back bytes that
+          // resistance is the expected outcome, not a stuck navigation -- so it
+          // is graded as such: the page the stack already owned must still be
+          // settled and readable, nothing may be left requested, and the SAME
+          // gesture must commit once the neighbour is readable. A step that
+          // fails while its target WAS readable stays stuck.
+          const held = await currentAsset(page, STAGE);
+          const requested = await stageDiagnostic(page, STAGE);
+          await waitForReadablePage(page, STAGE, target);
+          const retry = await navigateByGesture(page, STAGE, direction, target);
+          resisted.push({
+            target, atRelease: step.atRelease, held, requested: requested.requested,
+            keptItsPage: held.id !== target && held.ready && held.presentation === "settled",
+            committedOnRetry: retry.ok,
+          });
+          step = retry;
+        }
         steps.push(step);
         if (!step.ok) break;
       }
       const frames = await stopSamplerFrames(page);
       const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
       const stuck = steps.filter((step) => !step.ok);
+      const mishandledResistance = resisted.filter((entry) =>
+        !entry.keptItsPage || !entry.committedOnRetry || entry.requested !== null);
       record({
         name: "story-handoff-continuity-delayed-readiness",
-        claim: "with the media bytes and one read URL deliberately held back, every handoff still keeps a legitimate drawable inside the aperture, never shows the waiting indicator while a page owns the stage, and never spawns a second transport",
+        claim: "with the media bytes and one read URL deliberately held back, every handoff still keeps a legitimate drawable inside the aperture, never shows the waiting indicator while a page owns the stage, and never spawns a second transport; a neighbour that is still cold at release resists, keeps the page the stack already owned, leaves nothing requested, and commits on the same gesture once it is readable",
         delays: { bytes: { [I2]: 1_200, [V2]: 900 }, read: { [I3]: 900 } },
-        stuck, ...continuity,
+        stuck, resisted, mishandledResistance, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: continuity.failed || stuck.length > 0
+        failed: continuity.failed || stuck.length > 0 || mishandledResistance.length > 0
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
@@ -933,9 +1076,9 @@ try {
       const abandonedIntent = I2;
       const latestIntent = V1;
       await startSampler(page, STAGE);
-      await swipeStage(page, STAGE, 1);
-      // No wait: reverse while the previous intent is still in flight.
-      await swipeStage(page, STAGE, -1);
+      // One stream: past the threshold toward I2, then back past it toward V1
+      // without lifting, so the reversal really is pre-commit.
+      const gesture = await reverseSwipeStage(page, STAGE, 1);
       await page.waitForFunction((selector) => {
         const pages = document.querySelector(selector).querySelector("[data-story-media-pages]");
         return pages.getAttribute("data-media-presentation") === "settled";
@@ -951,14 +1094,23 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 500));
         return { first, second: read() };
       }, STAGE);
+      // The neighbours the product itself announced during the stream. The
+      // first must be the abandoned target and the last the reversal's own, so
+      // the retarget is read from the product rather than assumed.
+      const grabs = (await page.evaluate(() => (window.__qaStage?.gestures ?? [])))
+        .filter((entry) => entry.type === "story-media-grab")
+        .map((entry) => entry.neighborId);
+      const trace = await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-80));
       record({
         name: "story-reversal-commits-latest-intent",
-        claim: "a reversal fired before the first navigation settles commits the reversal's own target, never the abandoned one, and leaves exactly one settled owner, one live transport and no late write-back",
+        claim: "a reversal fired before the first navigation settles retargets within the same gesture and commits the reversal's own target, never the abandoned one, and leaves exactly one settled owner, one live transport and no late write-back",
         startedFrom, abandonedIntent, latestIntent, settled, transports, stable,
+        gesture, grabs: [...new Set(grabs)], trace,
         sampledFrames: frames.length,
         concurrentLiveVideos: frames.filter((frame) => frame.videoCount > 1).slice(0, 2),
         failed: settled.presentation !== "settled" || !settled.ready
           || settled.id !== latestIntent
+          || grabs[0] !== abandonedIntent || grabs.at(-1) !== latestIntent
           || transports !== 1 || stable.first !== stable.second
           || frames.some((frame) => frame.videoCount > 1)
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
