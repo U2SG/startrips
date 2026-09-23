@@ -102,6 +102,14 @@ def derive(row, pr=None, relation=None, review=None, ci=None, source_verdict='MI
         return 'WAIT_SOURCE_REVIEW'
     if not relation['sealed']:
         return 'SEAL'
+    if row.get('status') == 'needs_work':
+        # `needs_work` is an explicit owner-repair disposition. It may be written
+        # after a product/security clarification without changing the already
+        # sealed PR head, so a SHA-only historical CLEAR must never promote that
+        # old final directly to handoff. The owner must first produce a Source
+        # that represents the current accepted contract; normal Source/CI/review
+        # gates will then apply to that new head.
+        return 'IMPLEMENT'
     if row.get('status') in {'ready_for_eval', 'ready_to_merge'}:
         return 'WAIT_REVIEW'
     return 'HANDOFF_REVIEW'

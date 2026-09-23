@@ -274,6 +274,12 @@ class HandoffIdentityCases(fixture.SyntheticOne):
         with self.assertRaises(fixture.store.StoreConflict): self.handoff(confirmed=dict(self.observed, action='WAIT_SOURCE_REVIEW'))
         self.assertEqual(before,self.path.read_bytes())
 
+    def test_scope_returned_to_needs_work_prevents_old_final_handoff(self):
+        before=self.path.read_bytes()
+        with self.assertRaises(fixture.store.StoreConflict):
+            self.handoff(confirmed=dict(self.observed, action='IMPLEMENT'))
+        self.assertEqual(before,self.path.read_bytes())
+
     def test_new_identity_during_gate_revalidation_prevents_handoff(self):
         before=self.path.read_bytes()
         with self.assertRaises(fixture.store.StoreConflict): self.handoff(confirmed=dict(self.observed, final_sha=fixture.C))

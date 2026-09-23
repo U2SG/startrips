@@ -95,9 +95,16 @@ CLEAR requires no findings, the full changed-file set and actual review evidence
 The helper verifies live Source and adds `reviewer_role` and `completed_at`.
 Builder/Experience/Backend must never manufacture this receipt. Absence of an
 external comment, a requested review, or zero unresolved threads is not approval.
-A valid one-commit ledger final preserves its reviewed CODE Source. Local activation
-of harness code is not sign/merge approval. Unmapped PRs retain their existing owner;
-Hourly Review records its normal independent PR review without inventing an ST.
+A valid one-commit ledger final preserves its reviewed CODE Source only while the
+accepted feature contract has not been returned to owner repair. If a later explicit
+product/security clarification moves an already sealed feature to `needs_work`, that
+status invalidates direct handoff from the historical sealed CLEAR even when the PR
+head did not move: the original owner must first produce a Source representing the
+current accepted contract, then normal Source CI and independent review apply again.
+Do not delete historical receipts or ledger evidence; they remain history rather than
+a current approval. Local activation of harness code is not sign/merge approval.
+Unmapped PRs retain their existing owner; Hourly Review records its normal independent
+PR review without inventing an ST.
 
 The owner consumes live plans: IMPLEMENT, REPAIR_REVIEW, REPAIR_CONFLICT, REPAIR_CI,
 REPAIR_CI_FAMILY, WAIT_SOURCE_CI, WAIT_SOURCE_REVIEW, SEAL, WAIT_FINAL_CI,
