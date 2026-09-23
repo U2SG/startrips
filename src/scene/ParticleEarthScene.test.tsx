@@ -149,6 +149,12 @@ describe("ParticleEarthScene contracts", () => {
   });
   it("does not gate Route Point semantics on land-visual readiness", () => {
     const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const hookSource = readFileSync(new URL("./useThreeScene.ts", import.meta.url), "utf8");
+    const controllerAssignedIndex = hookSource.indexOf("controllerRef.current = controller;");
+    const revisionPublishedIndex = hookSource.indexOf("setControllerRevision((revision) => revision + 1);");
+    expect(controllerAssignedIndex).toBeGreaterThan(0);
+    expect(revisionPublishedIndex).toBeGreaterThan(controllerAssignedIndex);
+    expect(hookSource).toContain("return { hostRef, controllerRef, controllerRevision }");
     for (const setter of [
       "setFocusIntent(",
       "setJourneyRoutes(",
@@ -161,9 +167,10 @@ describe("ParticleEarthScene contracts", () => {
       expect(setterIndex).toBeGreaterThan(effectIndex);
       const effect = source.slice(effectIndex, setterIndex);
       expect(effect).not.toContain("if (!ready) return;");
-      expect(effect).toContain("if (!controllerReady) return;");
+      expect(effect).toContain("if (!controllerRevision) return;");
     }
-    expect(source).toContain("setControllerReady(true)");
+    expect(source).toContain("const { hostRef, controllerRef, controllerRevision } = useThreeScene");
+    expect(source).not.toContain("setControllerReady(true)");
   });
 
   it("wakes an idle renderer for Route Point semantic projection changes", () => {

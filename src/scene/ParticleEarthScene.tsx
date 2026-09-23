@@ -1661,10 +1661,6 @@ export function ParticleEarthScene({
   rotationYOverride,
 }: ParticleEarthSceneProps) {
   const [ready, setReady] = useState(false);
-  // Controller availability is independent from the asynchronous land/coastline
-  // visual build. Semantic Journey/Route Point state must replay as soon as the
-  // imperative controller exists, without waiting for `ready`.
-  const [controllerReady, setControllerReady] = useState(false);
   const latestMode = useRef(mode);
   const latestQuality = useRef(quality);
   const latestFocusPoint = useRef(focusPoint);
@@ -1732,7 +1728,7 @@ export function ParticleEarthScene({
   latestCompactMobileLayout.current = compactMobileLayout;
   latestVisibilityHint.current = visibilityHint;
 
-  const { hostRef, controllerRef } = useThreeScene((host) => {
+  const { hostRef, controllerRef, controllerRevision } = useThreeScene((host) => {
     let disposed = false;
     let animationFrame = 0;
     let lastTime = performance.now();
@@ -5898,10 +5894,6 @@ export function ParticleEarthScene({
     applyFocusPoint(latestFocusPoint.current);
     applyJourneyRoutes(latestJourneyRoutes.current);
     updateRenderLoopVisibility();
-    // The controller is usable now; the asynchronous land/coastline visual
-    // build can finish later. Replay semantic props once `useThreeScene` has
-    // assigned controllerRef.current instead of losing the mount-time effects.
-    setControllerReady(true);
 
     return {
       setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"]) {
@@ -6159,77 +6151,77 @@ export function ParticleEarthScene({
   });
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setInitialCameraAnchor(initialCameraAnchor);
-  }, [controllerReady, controllerRef, initialCameraAnchor?.lat, initialCameraAnchor?.lon]);
+  }, [controllerRevision, controllerRef, initialCameraAnchor?.lat, initialCameraAnchor?.lon]);
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setHomeBasePresence(homeBasePresence);
-  }, [controllerReady, controllerRef, homeBasePresence]);
+  }, [controllerRevision, controllerRef, homeBasePresence]);
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setQuality(quality);
-  }, [controllerReady, controllerRef, quality]);
+  }, [controllerRevision, controllerRef, quality]);
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setMode(mode);
-  }, [controllerReady, controllerRef, mode]);
+  }, [controllerRevision, controllerRef, mode]);
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     // Route/focus semantics are controller-ready, not land-visual-ready.
     // Async journey data and focus-mode transitions must reach the controller
     // before the expensive land rebuild finishes so Route Points can project.
     controllerRef.current?.setFocusIntent(
       resolveGlobeFocusIntent(focusPoint, focusRoute, focusRevision),
     );
-  }, [controllerReady, controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, focusRoute]);
+  }, [controllerRevision, controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, focusRoute]);
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setFocusColor(focusColor);
-  }, [controllerReady, controllerRef, focusColor]);
+  }, [controllerRevision, controllerRef, focusColor]);
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setCompactMobileLayout(compactMobileLayout);
-  }, [compactMobileLayout, controllerReady, controllerRef]);
+  }, [compactMobileLayout, controllerRevision, controllerRef]);
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setVisibilityHint(visibilityHint);
-  }, [controllerReady, controllerRef, visibilityHint.opaqueMediaCover, visibilityHint.coverTransitionActive, visibilityHint.earthDiveOverlapActive]);
+  }, [controllerRevision, controllerRef, visibilityHint.opaqueMediaCover, visibilityHint.coverTransitionActive, visibilityHint.earthDiveOverlapActive]);
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
-  }, [activeJourneyRouteId, controllerReady, controllerRef, journeyRoutes]);
+  }, [activeJourneyRouteId, controllerRevision, controllerRef, journeyRoutes]);
 
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setSelectedJourneyRoutePoint(selectedJourneyRoutePoint);
   }, [
-    controllerReady,
+    controllerRevision,
     controllerRef,
     selectedJourneyRoutePoint?.journeyId,
     selectedJourneyRoutePoint?.routePointId,
     selectedJourneyRoutePoint?.pointIndex,
   ]);
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     controllerRef.current?.setNarrativeJourneyRoutePoint(narrativeJourneyRoutePoint);
   }, [
-    controllerReady,
+    controllerRevision,
     controllerRef,
     narrativeJourneyRoutePoint?.journeyId,
     narrativeJourneyRoutePoint?.routePointId,
     narrativeJourneyRoutePoint?.pointIndex,
   ]);
   useEffect(() => {
-    if (!controllerReady) return;
+    if (!controllerRevision) return;
     // Temporal reveal is Route Point semantic state, just like route/selection
     // identity above. Publish it as soon as the controller exists instead of
     // waiting for the unrelated async land-visual rebuild; otherwise the real
@@ -6237,7 +6229,7 @@ export function ParticleEarthScene({
     // Review P2: also called with `undefined` so leaving focus mode resets
     // every route's temporal reveal to full visibility.
     controllerRef.current?.setTemporalReveal(temporalReveal);
-  }, [controllerReady, controllerRef, temporalReveal]);
+  }, [controllerRevision, controllerRef, temporalReveal]);
 
   return (
     <div
