@@ -38,8 +38,11 @@ const SEQUENCE = [I1, V1, V2, I2, I3];
 // Checked-in artworks and clips with deliberately different aspect ratios, so
 // every handoff above is also a mixed-aspect-ratio handoff: a wide scroll, a
 // square clip, a vertical clip, a tall coffin lid and a second wide picture.
+// Checked against the files themselves rather than their names: 1920x1167,
+// 1280x1916 and 1280x893. The previous `TALL_PHOTO` here was 1920x873 -- also
+// landscape -- so the sequence claimed a mixed-aspect handoff it never ran.
 const WIDE_PHOTO = "/artworks/china-handscroll.jpg";
-const TALL_PHOTO = "/artworks/egypt-coffin.jpg";
+const TALL_PHOTO = "/artworks/mughal-akbarnama.jpg";
 const SECOND_WIDE_PHOTO = "/artworks/hokusai-wave.jpg";
 const CLIP = "/demo-media/east-star-orbit.webm";
 const VERTICAL_CLIP = "/demo-media/qa-vertical-drift.webm";
@@ -321,6 +324,12 @@ function installStageSampler() {
       aperture: { width: Math.round(bounds.width), height: Math.round(bounds.height) },
       uncovered: drawables.filter((entry) => entry === null).length,
       bareProbe: bare >= 0 ? probeAt(...at(points[bare])) : undefined,
+      // The presented page's own clip, every frame. A stale inset left over
+      // from an earlier front is invisible in an end-state screenshot but
+      // removes part of the picture from hit testing and from view, so the
+      // frame that first wrote it is what separates "never reset" from
+      // "reset and then overwritten".
+      currentClip: current ? getComputedStyle(current).clipPath.slice(0, 40) : null,
       waiting: Boolean(root.querySelector(".starlight-media-state.is-waiting")),
       videoCount: videos.length,
       videoOwner: videos.map((video) => video.getAttribute("data-shared-media-id")),
