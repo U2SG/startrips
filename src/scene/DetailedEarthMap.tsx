@@ -470,6 +470,10 @@ export default function DetailedEarthMap({
       try {
         installDetailedEarthJourneyOverlay(map, overlay);
         appliedJourneyOverlayRevision = overlay.revision;
+        // A new Journey revision owns a new settled lifecycle. Never let an
+        // earlier overlay's fully-settled bit survive a rapid Route/Journey
+        // switch and make the replacement look settled before its own frame.
+        fullySettled = false;
         // This source is a complete in-memory FeatureCollection, not a tile or
         // network-backed source. Once addSource/setData returns, the current
         // Journey revision has been accepted by MapLibre; the later render
@@ -764,9 +768,9 @@ export default function DetailedEarthMap({
         || event.sourceId !== JOURNEY_OVERLAY_SOURCE_ID
         || event.isSourceLoaded !== true
         || appliedJourneyOverlayRevision !== journeyOverlayRef.current.revision
-        || loadedJourneyOverlayRevision === appliedJourneyOverlayRevision
       ) return;
       loadedJourneyOverlayRevision = appliedJourneyOverlayRevision;
+      reconcileFullySettled();
       // Source completion itself is not enough to reveal. Ask MapLibre for one
       // later render so the exact loaded revision is proven on the framebuffer.
       map.triggerRepaint();
@@ -857,11 +861,11 @@ export default function DetailedEarthMap({
     });
     map.on("idle", () => {
       idleCount += 1;
-      fullySettled = true;
       host.dataset.mapIdleCount = String(idleCount);
-      if (host.dataset.mapPostSyncRenderRevision === host.dataset.mapRevealRevision) {
-        publishReadiness("fully-settled");
-      }
+      // `idle` is only an edge. Grade the same durable source/frame/style/tile/
+      // camera invariant as render/moveend so an old idle cannot settle a new
+      // Journey revision and a current idle cannot be lost before its paint.
+      reconcileFullySettled();
     });
 
     if (typeof ResizeObserver !== "undefined") {
