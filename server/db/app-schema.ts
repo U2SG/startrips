@@ -1111,3 +1111,29 @@ export const journeyRecordedTrackSamples = pgTable(
     ),
   ],
 );
+
+// #350 owner decision B: the record that makes a provider ID token single-use.
+//
+// The row is a DIGEST, never the token: the token is a bearer credential and
+// this table is readable by everything that can read the database. It is also
+// not an identity -- no subject, no email, no user id -- so it can never be
+// mistaken for an `account_identity_ownerships` row or be joined into one.
+//
+// `expires_at` is the end of the window in which the provider adapter would
+// still accept that token, so the table stays bounded by that window alone
+// and a prune can only ever remove a token that is already refused for being
+// too old. The primary key is what makes consumption atomic across processes:
+// an `insert ... on conflict do nothing` returns a row to exactly one caller,
+// whichever instance it runs on.
+export const providerIdTokenConsumptions = pgTable(
+  "provider_id_token_consumptions",
+  {
+    tokenDigest: text("token_digest").primaryKey(),
+    providerId: text("provider_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("provider_id_token_consumptions_expires_idx").on(table.expiresAt),
+  ],
+);

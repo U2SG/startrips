@@ -18,6 +18,10 @@ import {
   listAccountIdentityMethods,
 } from "../account-identities/account-identity-repository";
 import { APPLE_PROVIDER_ID } from "../account-identities/apple-provider";
+import {
+  consumeVerifiedIdToken,
+  idTokenDigest,
+} from "../account-identities/id-token-consumption";
 import { ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_PREFIX } from "../account-identities/reverification-rate-limit";
 import {
   issueVerifiedProviderIdentityProof,
@@ -28,6 +32,7 @@ import {
   accountIdentityAudit,
   accountIdentityOwnerships,
   atlases,
+  providerIdTokenConsumptions,
 } from "../db/app-schema";
 import {
   account as authAccount,
@@ -216,6 +221,10 @@ afterAll(async () => {
       .where(inArray(accountIdentityOwnerships.userId, ids));
   }
   await db.delete(authOrganization).where(like(authOrganization.slug, `st133-${RUN}%`));
+  // The consumption records this run wrote expire on their own, but the two
+  // this file inserts by hand carry a readable digest rather than a real one.
+  await db.delete(providerIdTokenConsumptions)
+    .where(like(providerIdTokenConsumptions.tokenDigest, `st133-${RUN}%`));
   if (ids.length > 0) await db.delete(authUser).where(inArray(authUser.id, ids));
   await pool.end();
 });
@@ -333,6 +342,15 @@ async function ownershipFor(subject: string) {
       eq(accountIdentityOwnerships.providerSubject, subject),
     ));
   return row;
+}
+
+/** Every live session of one user, so a refused replay can be proved not to have touched them. */
+async function sessionIdsFor(userId: string) {
+  const rows = await db
+    .select({ id: authSession.id })
+    .from(authSession)
+    .where(eq(authSession.userId, userId));
+  return rows.map((row) => row.id).sort();
 }
 
 async function userCountForEmail(email: string) {
@@ -602,16 +620,154 @@ describe("Apple id token verification", () => {
     expect(await usersFor(subject)).toHaveLength(0);
   });
 
-  it("resolves a replayed id token back to the same user rather than a second one", async () => {
+  /**
+   * #350 owner decision B (comment 5786871300). Everything below is about the
+   * TOKEN, not the subject and not the account: a spent token is refused, a
+   * fresh one for the same subject still works, and a refusal touches neither
+   * the session the first use established nor the account itself.
+   */
+  it("spends a valid id token exactly once", async () => {
     const subject = `apple-subject-idreplay-${RUN}`;
     const email = `apple-idreplay-${RUN}@example.test`;
     const token = appleIdToken({ subject, email, emailVerified: true });
+
     expect((await signInWithIdToken(token)).status).toBe(200);
-    const first = await usersFor(subject);
-    expect(first).toHaveLength(1);
-    expect((await signInWithIdToken(token)).status).toBe(200);
-    expect(await usersFor(subject)).toEqual(first);
+    const accounts = await usersFor(subject);
+    expect(accounts).toHaveLength(1);
+    const established = await sessionIdsFor(accounts[0].id);
+    expect(established).toHaveLength(1);
+
+    // Same token, a whole new request. Better Auth's `state` never entered
+    // this path, so nothing but the consumption record can refuse it.
+    expect((await signInWithIdToken(token)).status).toBe(401);
+    expect(await usersFor(subject)).toEqual(accounts);
     expect(await userCountForEmail(email)).toBe(1);
+    // The refusal is of the token alone: the first session survives it.
+    expect(await sessionIdsFor(accounts[0].id)).toEqual(established);
+  });
+
+  it("signs the same subject back in with a freshly minted token", async () => {
+    const subject = `apple-subject-idfresh-${RUN}`;
+    const email = `apple-idfresh-${RUN}@example.test`;
+    expect((await signInWithIdToken(
+      appleIdToken({ subject, email, emailVerified: true }),
+    )).status).toBe(200);
+    const accounts = await usersFor(subject);
+    expect(accounts).toHaveLength(1);
+    const established = await sessionIdsFor(accounts[0].id);
+
+    // A distinct token for the same Apple subject: a different `iat`, so a
+    // different string and a different digest.
+    const later = appleIdToken({
+      subject,
+      email,
+      emailVerified: true,
+      issuedAt: Math.floor(Date.now() / 1000) - 5,
+    });
+    expect((await signInWithIdToken(later)).status).toBe(200);
+    expect(await usersFor(subject)).toEqual(accounts);
+    expect(await userCountForEmail(email)).toBe(1);
+    const after = await sessionIdsFor(accounts[0].id);
+    expect(after.length).toBe(established.length + 1);
+    expect(after).toEqual(expect.arrayContaining(established));
+  });
+
+  it("lets at most one of several concurrent presentations of one token succeed", async () => {
+    const subject = `apple-subject-idrace-${RUN}`;
+    const email = `apple-idrace-${RUN}@example.test`;
+    const token = appleIdToken({ subject, email, emailVerified: true });
+
+    // The consumption record lives in the shared database and is claimed with
+    // one `insert ... on conflict do nothing ... returning`, so this race is
+    // decided by PostgreSQL rather than by any per-process state -- the same
+    // decision a second API instance would be subject to.
+    const statuses = await Promise.all(
+      Array.from({ length: 4 }, () => signInWithIdToken(token).then((r) => r.status)),
+    );
+    expect(statuses.filter((status) => status === 200)).toHaveLength(1);
+    expect(statuses.filter((status) => status === 401)).toHaveLength(3);
+    expect(await usersFor(subject)).toHaveLength(1);
+    expect(await userCountForEmail(email)).toBe(1);
+    expect(await ownershipFor(subject)).toBeTruthy();
+  });
+
+  it("does not let a refused token occupy the record a valid presentation needs", async () => {
+    const subject = `apple-subject-idpoison-${RUN}`;
+    const email = `apple-idpoison-${RUN}@example.test`;
+    const token = appleIdToken({
+      subject,
+      email,
+      emailVerified: true,
+      nonce: "nonce-for-this-authorization",
+    });
+
+    // Presented against the wrong nonce first: verification fails, so the
+    // token must not be marked as spent.
+    expect((await signInWithIdToken(token, "nonce-from-another-authorization")).status)
+      .toBe(401);
+    expect(await usersFor(subject)).toHaveLength(0);
+
+    expect((await signInWithIdToken(token, "nonce-for-this-authorization")).status)
+      .toBe(200);
+    expect(await usersFor(subject)).toHaveLength(1);
+  });
+
+  it("keeps the spent token in shared storage rather than in this process", async () => {
+    const subject = `apple-subject-idstore-${RUN}`;
+    const token = appleIdToken({
+      subject,
+      email: `apple-idstore-${RUN}@example.test`,
+      emailVerified: true,
+    });
+    expect((await signInWithIdToken(token)).status).toBe(200);
+
+    const digest = idTokenDigest(APPLE_PROVIDER_ID, token);
+    const [record] = await db
+      .select()
+      .from(providerIdTokenConsumptions)
+      .where(eq(providerIdTokenConsumptions.tokenDigest, digest));
+    expect(record).toBeTruthy();
+    expect(record.providerId).toBe(APPLE_PROVIDER_ID);
+    // A digest and a window, never the credential itself.
+    expect(JSON.stringify(record)).not.toContain(token);
+    expect(record.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    expect(record.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 60 * 60 * 1000);
+
+    // A restarted process holds no memory of the request above and reaches the
+    // same verdict, because the verdict is a row: the token is still inside its
+    // acceptance window and still refused.
+    expect(await consumeVerifiedIdToken({ providerId: APPLE_PROVIDER_ID, token }))
+      .toBe(false);
+  });
+
+  it("prunes only records whose acceptance window has already closed", async () => {
+    const closed = `st133-${RUN}-closed`;
+    const open = `st133-${RUN}-open`;
+    await db.insert(providerIdTokenConsumptions).values([
+      {
+        tokenDigest: closed,
+        providerId: APPLE_PROVIDER_ID,
+        expiresAt: new Date(Date.now() - 60_000),
+      },
+      {
+        tokenDigest: open,
+        providerId: APPLE_PROVIDER_ID,
+        expiresAt: new Date(Date.now() + 10 * 60_000),
+      },
+    ]);
+
+    const token = appleIdToken({
+      subject: `apple-subject-idprune-${RUN}`,
+      email: `apple-idprune-${RUN}@example.test`,
+      emailVerified: true,
+    });
+    expect(await consumeVerifiedIdToken({ providerId: APPLE_PROVIDER_ID, token })).toBe(true);
+
+    const remaining = await db
+      .select({ tokenDigest: providerIdTokenConsumptions.tokenDigest })
+      .from(providerIdTokenConsumptions)
+      .where(inArray(providerIdTokenConsumptions.tokenDigest, [closed, open]));
+    expect(remaining.map((row) => row.tokenDigest)).toEqual([open]);
   });
 });
 

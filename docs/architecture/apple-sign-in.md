@@ -181,6 +181,53 @@ A relay address is a deliverable channel only while the person keeps the app
 authorized. Treat it as a login identity, not as a guaranteed recovery channel:
 recovery still depends on the account's own verified address.
 
+## An id token is spent once
+
+The Web flow is protected by its own single-use `code` and `state`. The direct
+`POST /api/auth/sign-in/social` path with an `idToken` body has neither: the
+pinned Better Auth 1.6.23 router verifies the token and signs the subject in,
+so the same still-valid token posted a second time -- from another client,
+without the original request -- would be a second successful authentication.
+
+`appleSignInOptions` therefore supplies `verifyIdToken`. It runs the adapter's
+own checks first, through a base provider built without the override, and only
+a token that passed signature, issuer, audience, age and nonce is then spent
+through `consumeVerifiedIdToken` in
+`server/account-identities/id-token-consumption.ts`. That ordering matters: a
+token that failed verification is never recorded, so a forged string cannot
+occupy the record a genuine token would later need.
+
+What is recorded is one row in `provider_id_token_consumptions`:
+
+- a SHA-256 digest of the provider id and the token -- never the token, in the
+  table, in a log or in an error;
+- the provider id;
+- `expires_at`, the end of the window in which the adapter would still accept
+  that token: the earlier of the token's own `exp` and the adapter's one-hour
+  maximum age.
+
+The digest is the primary key, and the row is taken with a single
+`insert ... on conflict do nothing ... returning`. That is what makes the rule
+hold across instances rather than per process: concurrent presentations of one
+token, on any number of API processes, are decided by PostgreSQL and exactly
+one of them receives the row. A restarted process reaches the same verdict for
+the same reason -- the verdict is a row, not memory.
+
+Pruning happens on the same path and deletes only rows whose `expires_at` has
+already passed, which is to say only tokens the adapter already refuses for
+being too old. The table is therefore bounded by that one-hour window without a
+background task, and cleanup can never make an acceptable token replayable.
+
+A storage failure refuses the token. Treating an unreachable replay store as
+"probably fine" would turn any transient database fault into an open replay
+window, so `consumeVerifiedIdToken` returns `false` and the sign-in answers
+`401`.
+
+What is single-use is the token, not the person: a freshly issued token for an
+Apple subject that already owns an account signs that same account back in, and
+a refused replay neither revokes the session the first use established nor
+marks the account in any way.
+
 ## What CI does not prove
 
 The fake-provider tests run Better Auth's real Apple adapter against a fake
@@ -188,6 +235,13 @@ Apple. They cover first-time signup, a returning authorization with no email sig
 the same subject back in, an unknown subject with no email being refused, a
 relay address, a rejected client secret, a wrong audience, a stale id token, a
 mismatched nonce, a replayed callback and a duplicate concurrent callback.
+They also cover the one-time id token above: a spent token refused on its
+second presentation, at most one success among concurrent presentations of the
+same token, a fresh token for the same subject still signing in, a failed
+verification not spending the token, the record surviving the request that
+wrote it, and pruning that removes only closed windows. The replay store's own
+failure behaviour is covered by
+`server/account-identities/id-token-consumption.test.ts`.
 
 They do **not** prove an approved Service identifier, a registered return URL, a
 live Apple key, or a real Web authorization and bind. That evidence is an

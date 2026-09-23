@@ -8,6 +8,7 @@ import {
   appleSigningCredential,
   createAppleClientSecretSource,
 } from "./apple-client-secret";
+import { consumeVerifiedIdToken } from "./id-token-consumption";
 import {
   APPLE_PROVIDER_ID,
   rememberVerifiedProviderIdentity,
@@ -165,6 +166,41 @@ export function appleSignInOptions(
       return base.clientSecret;
     },
     disableImplicitSignUp: true,
+    // #350 owner decision B. This override exists only for the direct
+    // `/sign-in/social` `idToken` path: the pinned 1.6.23 router calls
+    // `verifyIdToken` there and nowhere else that is reachable here --
+    // `api/routes/callback.mjs` calls only `getUserInfo`, and the other caller,
+    // `/link-social`, is in `STARTRIPS_DISABLED_IDENTITY_PATHS`. So the
+    // authorization-code flow, which is already single-use through its own
+    // `code` and `state`, is untouched, and the path that has no such
+    // protection gains it.
+    //
+    // The adapter's own checks run FIRST, through the base provider built
+    // without this override, so there is no recursion and a token that fails
+    // signature, issuer, audience, age or nonce never reaches the store. That
+    // ordering is what keeps a forged token from occupying the digest a
+    // genuine one would later need.
+    async verifyIdToken(token: string, nonce?: string) {
+      let verified = false;
+      try {
+        verified = await baseProvider.verifyIdToken(token, nonce);
+      } catch {
+        verified = false;
+      }
+      if (!verified) return false;
+      const consumed = await consumeVerifiedIdToken({
+        providerId: APPLE_PROVIDER_ID,
+        token,
+      });
+      if (!consumed) {
+        // Either a replay or an unusable replay store. Both are refusals of
+        // this token and of nothing else: no session is revoked, no account is
+        // marked, and a freshly issued token for the same subject still signs
+        // that subject in.
+        console.warn("provider_id_token_replayed", { providerId: APPLE_PROVIDER_ID });
+      }
+      return consumed;
+    },
     async getUserInfo(tokens) {
       const info = await verifiedUserInfo(baseProvider, tokens);
       const subject = info?.user?.id === undefined ? "" : String(info.user.id);
