@@ -501,7 +501,30 @@ async function clickRoutePointLabel(page, routeId, pointId) {
   const hitTarget = label.locator(".particle-earth-route__label-hit");
   const box = await hitTarget.boundingBox();
   if (!box) throw new Error(`Route Point ${pointId} has no visible label hit geometry`);
-  const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  // A label's 44px touch target may legitimately overlap a neighbouring 6px
+  // Route Point marker. The visible marker owns its own pixels; grade the label
+  // through a real browser-hit pixel that belongs to this label and is not
+  // physically occupied by any marker. If no such pixel exists, the product
+  // label is effectively unclickable and this still fails closed.
+  const target = await label.evaluate((node) => {
+    const hit = node.querySelector(".particle-earth-route__label-hit");
+    if (!(hit instanceof SVGGraphicsElement)) return null;
+    const rect = hit.getBoundingClientRect();
+    const markerRects = [...document.querySelectorAll(".particle-earth-route__point")]
+      .filter((marker) => marker instanceof SVGGraphicsElement && marker.style.display !== "none")
+      .map((marker) => marker.getBoundingClientRect());
+    for (let y = rect.top + 4; y <= rect.bottom - 4; y += 4) {
+      for (let x = rect.left + 4; x <= rect.right - 4; x += 4) {
+        if (markerRects.some((marker) => (
+          x >= marker.left && x <= marker.right && y >= marker.top && y <= marker.bottom
+        ))) continue;
+        const hitElement = document.elementFromPoint(x, y);
+        if (hitElement?.closest(".particle-earth-route__label") === node) return { x, y };
+      }
+    }
+    return null;
+  });
+  if (!target) throw new Error(`Route Point ${pointId} has no unambiguous label-owned hit pixel`);
   await page.mouse.click(target.x, target.y);
   return { box, target };
 }
@@ -599,10 +622,15 @@ try {
   const markerClick = await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
   const interactionContext = interactionPage.locator("[data-route-point-context]");
   await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  const selectedMarker = interactionPage.locator(
+    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${markerPointId}"][data-attention-role="selected"]`,
+  );
+  // The card and renderer-owned SVG update in separate React/effect phases.
+  // Wait on the exact semantic state, not elapsed time, so a missing persistent
+  // selection still fails while a normal one-frame propagation is not a race.
+  await selectedMarker.waitFor({ state: "attached", timeout: 5_000 });
   const markerActivation = await routePointActivationEvidence(interactionPage);
-  const selectedMarkerRole = await interactionPage.locator(
-    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${markerPointId}"]`,
-  ).getAttribute("data-attention-role");
+  const selectedMarkerRole = await selectedMarker.getAttribute("data-attention-role");
   record("actual marker hit owns the same context identity", {
     markerPointId, markerClick, markerActivation, selectedMarkerRole,
   },

@@ -4065,7 +4065,7 @@ export function ParticleEarthScene({
             distance: Math.hypot(event.clientX - centerX, event.clientY - centerY),
           };
         })
-        .filter((candidate): candidate is RouteLayerPointerTarget & { distance: number } => Boolean(candidate))
+        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
         .sort((left, right) => left.distance - right.distance);
       if (markerCandidates[0]) {
         const { journeyId, routePointId, source } = markerCandidates[0];
@@ -4102,7 +4102,7 @@ export function ParticleEarthScene({
             distance: Math.hypot(event.clientX - markerX, event.clientY - markerY),
           };
         })
-        .filter((candidate): candidate is RouteLayerPointerTarget & { distance: number } => Boolean(candidate))
+        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
         .sort((left, right) => left.distance - right.distance);
       if (candidates[0]) {
         const { journeyId, routePointId, source } = candidates[0];
