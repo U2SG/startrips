@@ -129,7 +129,10 @@ function installStageSampler() {
           value: mutation.target.getAttribute(mutation.attributeName) });
       }
     }
-  }).observe(document.documentElement, {
+  // `document` is the observation root on purpose: this script runs before the
+  // document element exists, and observing a null target throws away the whole
+  // instrumentation.
+  }).observe(document, {
     subtree: true, childList: true, attributes: true,
     attributeFilter: ["data-current-media-kind", "data-media-presentation", "data-media-page-ready"],
   });
