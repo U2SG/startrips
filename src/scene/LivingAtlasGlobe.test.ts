@@ -98,7 +98,8 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(globe).toContain('detailCalibrationRef.current?.(frame, "sync")');
     expect(globe).toContain('detailCalibrationRef.current?.(particleFrameRef.current, "retry")');
     expect(detail).toContain('mode: "sync" | "retry" = "sync"');
-    expect(detail).toContain('if (mode === "sync") map.jumpTo({ center: frame.center })');
+    expect(detail).toContain('const newParticleFrame = mode === "sync" && isNewParticleCalibrationFrame(particle)');
+    expect(detail).toMatch(/if \(newParticleFrame\) \{[\s\S]*?cameraIntentRevisionRef\.current \+= 1;[\s\S]*?map\.jumpTo\(\{ center: frame\.center \}\);/);
     expect(detail).toContain("CALIBRATION_RETRY_PASSES = 2");
     expect(detail).toContain("[diveOwner, diveStage, focusPoint, focusRoute]");
     expect(detail).not.toContain("[diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute, particleFrame]");

@@ -548,6 +548,23 @@ export default function DetailedEarthMap({
       host.dataset.handoffScale = measured.pxPerDegreeLat.toFixed(3);
     };
 
+    const synchronizedParticleFrame = { current: null as ParticleAnchorFrame | null };
+    const isNewParticleCalibrationFrame = (next: ParticleAnchorFrame) => {
+      const previous = synchronizedParticleFrame.current;
+      if (!previous) return true;
+      const zoomChanged = next.zoom === undefined || previous.zoom === undefined
+        ? next.zoom !== previous.zoom
+        : Math.abs(next.zoom - previous.zoom) > CALIBRATION_ZOOM_EPSILON;
+      const scaleChanged = previous.pxPerDegreeLat <= 0
+        || Math.abs(next.pxPerDegreeLat / previous.pxPerDegreeLat - 1) > CALIBRATION_SCALE_ERROR_EPSILON;
+      return Math.abs(next.anchor.lat - previous.anchor.lat) > 1e-7
+        || Math.abs(next.anchor.lon - previous.anchor.lon) > 1e-7
+        || Math.hypot(next.screen.x - previous.screen.x, next.screen.y - previous.screen.y)
+          > CALIBRATION_ANCHOR_EPSILON_PX
+        || scaleChanged
+        || zoomChanged;
+    };
+
     /**
      * Solve this map's camera to what the particle Earth is showing.
      *
@@ -565,16 +582,27 @@ export default function DetailedEarthMap({
       const particle = frameOverride ?? particleFrameRef.current;
       const frame = handoffFrame(frameOverride);
       if (!particle || !frame) return;
-      // A fresh particle-frame synchronization is an authorized camera intent.
-      // A bounded retry is the SAME already-authorized frame: advancing the
-      // revision on every Dive rAF retry would make the reveal commit stale on
-      // every render and could starve a fully-settled blend forever.
-      if (mode === "sync") cameraIntentRevisionRef.current += 1;
-      // A NEW particle frame reseeds the geographic center. A retry of the SAME
-      // stable frame must preserve the center correction already accumulated by
-      // previous passes, otherwise every Dive rAF would erase its own progress.
-      if (mode === "sync") map.jumpTo({ center: frame.center });
-      const maxPasses = mode === "retry" ? CALIBRATION_RETRY_PASSES : CALIBRATION_MAX_PASSES;
+      // The particle scene publishes every rendered frame, including identical
+      // resting frames. Only a materially new camera frame is a new intent.
+      // Treating every callback as new would invalidate the pending reveal on
+      // every rAF and permanently starve the blending handoff.
+      const newParticleFrame = mode === "sync" && isNewParticleCalibrationFrame(particle);
+      if (newParticleFrame) {
+        cameraIntentRevisionRef.current += 1;
+        synchronizedParticleFrame.current = {
+          anchor: { ...particle.anchor },
+          screen: { ...particle.screen },
+          pxPerDegreeLat: particle.pxPerDegreeLat,
+          zoom: particle.zoom,
+        };
+        // A NEW particle frame reseeds the geographic center. Repeated copies
+        // of the same stable frame preserve the correction already accumulated
+        // by the fixed-point solver instead of erasing it each render.
+        map.jumpTo({ center: frame.center });
+      }
+      const maxPasses = mode === "retry" || !newParticleFrame
+        ? CALIBRATION_RETRY_PASSES
+        : CALIBRATION_MAX_PASSES;
       for (let pass = 0; pass < maxPasses; pass += 1) {
         const measured = measureAnchorFrame(frameOverride);
         if (!measured) return;
