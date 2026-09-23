@@ -2146,7 +2146,13 @@ export function JourneyStory({
     ? scopedMediaIndex.byId.get(pendingTargetRef.current) ?? null
     : null;
   const pendingTargetRead = pendingTarget ? mediaReads[pendingTarget.id] : null;
-  const mediaStageWaiting = Boolean(
+  // #489 B/acceptance 3: once a page owns the stage the handoff is hidden by
+  // contract -- the stack keeps that presentable frame and commits when the new
+  // source is really drawable. A stage-level waiting cue over it is the
+  // "loading flash" the issue forbids, so the cue belongs to a stage no page
+  // owns yet (cold open, or a shown asset whose own read is still loading).
+  const stageOwnedByPage = shownRead?.status === "ready";
+  const mediaStageWaiting = !stageOwnedByPage && Boolean(
     (shownAsset && (!shownRead || shownRead.status === "loading"))
     || (
       pendingTarget
@@ -2157,8 +2163,8 @@ export function JourneyStory({
   const mediaStageStatus = (
     <>
       {mediaStageWaiting ? (
-        <div className={`journey-story__media-state starlight-media-state is-waiting${shownRead?.status === "ready" ? " is-over-media" : ""}`} role="status" aria-live="polite">
-          {shownRead?.status !== "ready" || !mobileLayout ? <StartripsJourneyCue state="waiting" size={shownRead?.status === "ready" ? 24 : 58} className="starlight-media-state__cue" /> : null}
+        <div className="journey-story__media-state starlight-media-state is-waiting" role="status" aria-live="polite">
+          <StartripsJourneyCue state="waiting" size={58} className="starlight-media-state__cue" />
           <div className="starlight-media-state__copy" aria-label="正在载入媒体">
             <strong className={!mobileLayout ? "story-visually-hidden" : undefined}>{pendingTarget ? "正在打开所选媒体…" : "正在打开媒体…"}</strong>
           </div>

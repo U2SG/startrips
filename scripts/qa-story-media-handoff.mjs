@@ -437,14 +437,16 @@ function installStageSampler() {
         return mediaStyle.visibility !== "hidden" && Number(mediaStyle.opacity) > 0.05
           && pageStyle.visibility !== "hidden" && Number(pageStyle.opacity) > 0.05;
       })(),
-      // The MEDIA STACK's own "正在准备画面…" overlay -- the one acceptance item
-      // 3 names, rendered by StoryMediaPages when it owns a page it cannot
-      // present. `.journey-story__media-state` is a different statement: the
-      // stage cue for a COLD asset the viewer has just asked for, which is
-      // correct product behaviour and is recorded separately rather than
-      // graded as the stack failing to present what it owns.
+      // Both waiting indicators acceptance item 3 names, kept apart because
+      // they are different statements. `waiting` is the MEDIA STACK's own
+      // "正在准备画面…" overlay, rendered by StoryMediaPages when it owns a
+      // page it cannot present. `stageStatus` is JourneyStory's stage-level cue
+      // for an asset whose read is still cold; over a stage NO page owns yet
+      // that cue is correct product behaviour, which is why it is graded
+      // against `currentReady` below rather than on its own.
       waiting: Boolean(pages.querySelector(":scope > .starlight-media-state.is-waiting")),
       stageStatus: Boolean(root.querySelector(".journey-story__media-state.is-waiting")),
+      currentReady: current?.getAttribute("data-media-page-ready") === "true",
       videoCount: videos.length,
       videoOwner: videos.map((video) => video.getAttribute("data-shared-media-id")),
       morphs,
@@ -543,6 +545,12 @@ function gradeContinuity(frames, { allowedAssets, requireCoverage = true }) {
   // detectable.
   const staleApertureFrames = frames.filter((frame) => frame.staleAperture && frame.currentId);
   const waitingFrames = frames.filter((frame) => frame.waiting && frame.currentId);
+  // #489 acceptance 3: the stage-level cue is forbidden "while a page is the
+  // current owner", i.e. exactly when the stack has a presented page it can
+  // already draw. The same cue over a stage that owns nothing yet is the cold
+  // open and stays legal, so the grade is the cue AND a ready presented page.
+  const stageWaitingFrames = frames.filter((frame) =>
+    frame.stageStatus && frame.currentId && frame.currentReady);
   const multiVideoFrames = frames.filter((frame) => frame.videoCount > 1);
   // A foreground that goes new -> old -> new inside ONE transition is the
   // V1/V7 reversal. A deliberate A -> B -> A navigation legitimately brings A
@@ -583,11 +591,13 @@ function gradeContinuity(frames, { allowedAssets, requireCoverage = true }) {
     // where its picture went rather than claiming it vanished.
     occludedFrames: frames.filter((frame) => frame.occluded > 0).length,
     waitingWhileOwned: waitingFrames.slice(0, 4),
+    stageWaitingWhileOwned: stageWaitingFrames.slice(0, 4),
     concurrentLiveVideos: multiVideoFrames.slice(0, 2),
     foregroundReversals: reversals,
     failed: frames.length === 0 || staleFrames.length > 0 || blankFrames.length > 0
       || staleApertureFrames.length > 0
-      || waitingFrames.length > 0 || multiVideoFrames.length > 0 || reversals.length > 0,
+      || waitingFrames.length > 0 || stageWaitingFrames.length > 0
+      || multiVideoFrames.length > 0 || reversals.length > 0,
   };
 }
 
@@ -1190,6 +1200,57 @@ try {
         stuck, resisted, mishandledResistance, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: continuity.failed || stuck.length > 0 || mishandledResistance.length > 0
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // B (continued). The counter-example for acceptance item 3's stage cue.
+  // A gesture toward a cold neighbour resists and leaves nothing requested,
+  // so it never reaches JourneyStory's cold-request branch. The advertised
+  // arrow-key step does: it asks for the neighbour whatever its read state,
+  // which is the one input that can hold a pending target while a ready page
+  // still owns the stage. That is the exact window in which a stage-level
+  // waiting cue would be the forbidden loading flash over the hidden handoff.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: false, readDelays: { [V1]: 5_000 } });
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      await startSampler(page, STAGE);
+      await page.keyboard.press("ArrowRight");
+      // The window is only discriminating while the request is actually
+      // pending against a ready owner. Observing it is part of the claim: if
+      // the neighbour were already readable there would be no cold request to
+      // grade, and a silent pass would mean nothing.
+      const pending = await page.waitForFunction(({ selector, expected }) => {
+        const root = document.querySelector(selector);
+        const requested = document.querySelector("[data-media-requested]")
+          ?.getAttribute("data-media-requested") ?? null;
+        const current = root?.querySelector("[data-story-media-pages]")
+          ?.querySelector('[data-media-page="current"]');
+        return requested === expected
+          && current?.getAttribute("data-media-page-ready") === "true"
+          ? { requested, heldBy: current.getAttribute("data-media-page-id") }
+          : null;
+      }, { selector: STAGE, expected: V1 }, { polling: "raf", timeout: 2_000 })
+        .then((handle) => handle.jsonValue(), () => null);
+      // The cold request must still commit once its read lands; suppressing a
+      // cue may not turn into a navigation that never arrives.
+      const committed = await waitForSettledAsset(page, V1, STAGE).then(() => true, () => false);
+      const frames = await stopSamplerFrames(page);
+      const settled = await currentAsset(page);
+      const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
+      record({
+        name: "story-cold-step-keeps-the-hidden-handoff-hidden",
+        claim: "an arrow-key step toward a neighbour whose read is deliberately held back really does hold a pending request while the previous page is still the settled, readable owner, and through that whole window the stage shows no waiting indicator over it -- then commits to the requested asset once the read lands",
+        readDelays: { [V1]: 5_000 }, pending, committed, settled, ...continuity,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: continuity.failed || !pending || !committed || settled.id !== V1
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
