@@ -342,10 +342,13 @@ async function openFocusAtlas({
     await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === "on");
   }
   if (realScene) {
-    // The real Three.js scene becomes interactive asynchronously. Grade pointer
-    // identity only after the product readiness contract is true instead of
-    // racing scene startup behind an arbitrary sleep/marker timeout.
-    await page.locator('.particle-earth-scene[data-scene-ready="true"]').waitFor({ timeout: 20_000 });
+    // This round grades the Route Point pointer surface, so wait on that exact
+    // interaction contract rather than the broader land-mask/coastline build.
+    // A marker must be genuinely projected and visible before the pointer round
+    // starts; if route projection never becomes usable this still fails closed.
+    await page.locator(
+      `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+    ).first().waitFor({ state: "visible", timeout: 20_000 });
   } else {
     await page.waitForTimeout(80);
   }
