@@ -1332,6 +1332,11 @@ try {
       for (const expected of [V1, V2, I2]) {
         steps.push(await navigateByGesture(page, STAGE, 1, expected));
       }
+      // The abandoned handoff only exists when the request really becomes an
+      // in-flight one: a cold target stays a pending request, the stack never
+      // starts a spring, and there is nothing to abandon. Wait for the wide
+      // neighbour to be readable so the arrow key commits a real handoff.
+      await waitForReadablePage(page, STAGE, I3);
       const beforeGrab = await stackRestState(page, STAGE);
       await startSampler(page, STAGE);
       const gesture = await grabDuringNavigation(page, STAGE);
@@ -1353,6 +1358,14 @@ try {
         name: "story-abandoned-handoff-reclaims-presentation",
         claim: "a navigation abandoned by the finger that grabs the stack leaves the presented page unclipped and painted above every retained page, with the retained pages back inside the presented picture's aperture, and never leaves a residual aperture cutting the presented photograph away",
         presented: I2, steps, gesture, grabs: grabs.map((entry) => entry.type),
+        // Proof the replay exercised an in-flight handoff rather than a cold
+        // pending request: the stack must have declared the target readable
+        // before the arrow key, and must have moved the presented page's
+        // aperture away from rest at least once during the window.
+        targetReadableBeforeRequest: beforeGrab.pages
+          .some((slot) => slot.id === I3 && slot.ready === "true"),
+        apertureMoved: frames.some((frame) => frame.currentClip
+          && frame.currentClip !== "none" && frame.currentClip !== "inset(0%)"),
         beforeGrab, afterGrab, rest, settled, stillPresented,
         sampledFrames: frames.length,
         // The frames whose presented page was clipped while nothing was in
@@ -1364,6 +1377,7 @@ try {
         continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: steps.some((step) => !step.ok) || !stillPresented
+          || !beforeGrab.pages.some((slot) => slot.id === I3 && slot.ready === "true")
           || settled.id !== I2 || rest.failed || continuity.failed
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
