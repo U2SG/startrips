@@ -448,6 +448,14 @@ class RuntimeActivationPlanTests(unittest.TestCase):
         self.assertEqual([], plan['conflicts'])
         self.assertEqual('reviewed-hot-predecessor', plan['compatibility']['consumer.txt'])
 
+    def test_deployed_action_plan_predecessor_is_frozen_to_current_package_source(self):
+        predecessor = '93f6dbc6e6cfbff2cf1687aaab6a30348ff8feb9a75387430695f0858f39cf73'
+        incoming = runtime.sha(runtime._normalize((ROOT / 'lib/action_plan.py').read_bytes()))
+        self.assertEqual(
+            incoming,
+            runtime.REVIEWED_HOT_PREDECESSORS['lib/action_plan.py'][predecessor],
+        )
+
     def test_reviewed_hot_predecessor_does_not_authorize_source_or_live_drift(self):
         base = self.commit('one\nmiddle\nthree\n')
         self.commit('one-source\nmiddle\nthree-package\n')

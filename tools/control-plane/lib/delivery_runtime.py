@@ -55,8 +55,12 @@ REVIEWED_HOT_PREDECESSORS = {
         'd7fd5a7ad12af3d5bbe919c881514a1a6875cbd26a9d4d7953655843d1e2daff',
     },
     'lib/action_plan.py': {
+        # The installed predecessor predates package planning. The first reviewed
+        # package Source targeted 0fd225f; subsequent independently reviewed
+        # stale-scope repair (#523) is now part of the converged package Source.
+        # Both targets are exact hashes: any other Source or live drift fails closed.
         '93f6dbc6e6cfbff2cf1687aaab6a30348ff8feb9a75387430695f0858f39cf73':
-        '0fd225f644db7aa98e0f2d7ec78c731f0c01e0ffb35dfff8a44dec4a08f93b42',
+        'ab161a3abb92bb4fae75faeae2dc5be9001712e803fe6f7536c8c536a2a8e3f3',
     },
 }
 
