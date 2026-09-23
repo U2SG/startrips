@@ -756,29 +756,17 @@ async function cdpFor(page) {
  * at, and whether that centre is on screen and hit-tests to the transport --
  * which is exactly what acceptance item 2 asks about each of them.
  */
-async function nativeControls(page, rootSelector) {
-  const cdp = await cdpFor(page);
-  const { root } = await cdp.send("DOM.getDocument", { depth: 1 });
-  const { nodeId } = await cdp.send("DOM.querySelector", {
-    nodeId: root.nodeId, selector: `${rootSelector} .story-media-pages__video video`,
-  });
-  if (!nodeId) throw new Error("no presented video on the stage");
-  const { nodes } = await cdp.send("Accessibility.queryAXTree", { nodeId });
-  const resolved = [];
-  for (const node of nodes ?? []) {
-    const name = node.name?.value;
-    const role = node.role?.value;
-    if (!name || (role !== "button" && role !== "slider")) continue;
-    let quad = null;
-    try {
-      quad = (await cdp.send("DOM.getBoxModel", { backendNodeId: node.backendDOMNodeId })).model?.border ?? null;
-    } catch { quad = null; }
-    if (!Array.isArray(quad)) continue;
-    const [left, top, , , right, bottom] = quad;
-    resolved.push({
-      name, role, x: (left + right) / 2, y: (top + bottom) / 2,
-      box: { left: Math.round(left), top: Math.round(top), right: Math.round(right), bottom: Math.round(bottom) },
-    });
+async function nativeControls(page, rootSelector, { timeout = 4_000 } = {}) {
+  // Chromium lays its control panel out from the element box, so a query taken
+  // in the same frame as a resize can still see buttons parked in the overflow
+  // menu. Poll until the panel reports a play entry rather than grading a
+  // half-laid-out panel; the wait is a settle condition on the read, and every
+  // assertion downstream is unchanged by it.
+  const deadline = Date.now() + timeout;
+  let resolved = await readNativeControls(page, rootSelector);
+  while (!playEntry(resolved.controls) && Date.now() < deadline) {
+    await page.waitForTimeout(120);
+    resolved = await readNativeControls(page, rootSelector);
   }
   const reach = await page.evaluate(({ selector, points }) => {
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
@@ -792,8 +780,42 @@ async function nativeControls(page, rootSelector) {
         reachable: onScreen && hit === video,
       };
     });
-  }, { selector: rootSelector, points: resolved.map(({ x, y }) => ({ x, y })) });
-  return resolved.map((control, index) => ({ ...control, ...reach[index] }));
+  }, { selector: rootSelector, points: resolved.controls.map(({ x, y }) => ({ x, y })) });
+  const controls = resolved.controls.map((control, index) => ({ ...control, ...reach[index] }));
+  // The whole accessibility view of the panel travels with the graded controls,
+  // so a panel that really is missing a control reads as that rather than as a
+  // script that failed to find one.
+  controls.panel = resolved.panel;
+  return controls;
+}
+
+async function readNativeControls(page, rootSelector) {
+  const cdp = await cdpFor(page);
+  const { root } = await cdp.send("DOM.getDocument", { depth: 1 });
+  const { nodeId } = await cdp.send("DOM.querySelector", {
+    nodeId: root.nodeId, selector: `${rootSelector} .story-media-pages__video video`,
+  });
+  if (!nodeId) throw new Error("no presented video on the stage");
+  const { nodes } = await cdp.send("Accessibility.queryAXTree", { nodeId });
+  const resolved = [];
+  const panel = [];
+  for (const node of nodes ?? []) {
+    const name = node.name?.value;
+    const role = node.role?.value;
+    if (role === "button" || role === "slider") panel.push({ role, name: name ?? null, ignored: Boolean(node.ignored) });
+    if (!name || (role !== "button" && role !== "slider")) continue;
+    let quad = null;
+    try {
+      quad = (await cdp.send("DOM.getBoxModel", { backendNodeId: node.backendDOMNodeId })).model?.border ?? null;
+    } catch { quad = null; }
+    if (!Array.isArray(quad)) continue;
+    const [left, top, , , right, bottom] = quad;
+    resolved.push({
+      name, role, x: (left + right) / 2, y: (top + bottom) / 2,
+      box: { left: Math.round(left), top: Math.round(top), right: Math.round(right), bottom: Math.round(bottom) },
+    });
+  }
+  return { controls: resolved, panel };
 }
 
 /** The play entry a viewer's finger aims at; named "pause" once it is running. */
@@ -1192,7 +1214,8 @@ try {
       record({
         name: `story-${surface.label}-video-native-controls-reachable`,
         claim: "every native control this transport provides is on screen and hit-tests to the video itself -- intercepted by no navigation surface -- and a real click on its own play entry toggles the transport without navigating or dismissing the surface",
-        controls, entry, unreachable, controlBefore, controlAfter, controlState, stillPresented,
+        controls, panel: controls.panel, entry, unreachable,
+        controlBefore, controlAfter, controlState, stillPresented,
         failed: !entry || unreachable.length > 0 || !stillPresented
           || controlAfter.paused === controlBefore.paused
           || controlState.id !== V1 || controlState.kind !== "video"
@@ -1348,7 +1371,8 @@ try {
         claim: "on a compact-mobile viewport driven by real browser touch, a swipe commits the step onto the video, a tap inside the presented video's contained picture reaches the transport itself without navigating and with no navigation surface over it, every native control that transport provides is on screen and hit-tests to it, and a real touch tap on its own play entry starts the actual clock -- currentTime advancing across repeated samples -- while the stage keeps exactly one live transport and does not navigate",
         viewport: profile.viewport, pointerTypes, toVideo,
         before, geometry, point, pointError, idle, playback, after, transports,
-        controls, entry, unreachable, beforePlayTap, playStartedBy, controlPlayback, controlState, stillPresented,
+        controls, panel: controls.panel, entry, unreachable,
+        beforePlayTap, playStartedBy, controlPlayback, controlState, stillPresented,
         handoffToVideo: gradeContinuity(toVideoFrames, { allowedAssets: [I1, V1] }),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: Boolean(pointError)

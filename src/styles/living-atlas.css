@@ -1655,6 +1655,16 @@
   bottom: 72px;
 }
 
+/* #489 acceptance 2, regression family of the rule above: the inline stage
+   already lifts its own bottom chrome clear of a presented transport's native
+   control strip, but the immersive viewer's nav stayed at bottom:22px and sat
+   right on top of it -- the transport's time scrubber hit-tested to this
+   button instead of to the video. The offset clears the stage's own bottom
+   inset plus Chromium's control panel. */
+.journey-story-fullscreen:has([data-story-media-pages] video[data-shared-media-id]) .journey-story-fullscreen__nav {
+  bottom: calc(clamp(28px, 6vh, 60px) + 84px);
+}
+
 .journey-story__media-grid {
   height: 100%;
   margin: 0;
