@@ -1688,7 +1688,14 @@ export function LivingAtlasApp({
   useEffect(() => {
     if (selectedJourneyIdForHomeCamera !== null || hasManualAtlasCameraInteraction || playbackActive || timeCursor.timelineRevision > 0) {
       atlasHomeCameraFreshRef.current = false;
-      setInitialHomeCameraIntent(null);
+      if (initialHomeCameraIntent) {
+        // Releasing Home camera ownership is itself a camera-authority edge.
+        // Advance the shared revision before publishing the Journey focus so
+        // the controller cannot consume the selection while Home still masks
+        // focusRoute and then reject the unmasked route as an older revision.
+        setInitialHomeCameraRevision(nextInitialHomeCameraFocusRevision);
+        setInitialHomeCameraIntent(null);
+      }
       return;
     }
     if (!listHomeBasePeriods || !atlasHomeCameraFreshRef.current || initialHomeCameraIntent) return;
@@ -2740,9 +2747,10 @@ export function LivingAtlasApp({
               : initialHomeCameraAnchor ? null : focusRoute}
             initialCameraAnchor={initialHomeCameraAnchor}
             focusRevision={playbackSession.cameraCommand?.revision
-              ?? (initialHomeCameraAnchor
-                ? Math.max(focusRevision, playbackReleaseFocusRevision) + initialHomeCameraRevision
-                : Math.max(focusRevision, playbackReleaseFocusRevision))}
+              ?? Math.max(
+                focusRevision + initialHomeCameraRevision,
+                playbackReleaseFocusRevision,
+              )}
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}

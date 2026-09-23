@@ -163,8 +163,9 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
     expect(nextInitialHomeCameraFocusRevision(0)).toBe(1);
     expect(nextInitialHomeCameraFocusRevision(7)).toBe(8);
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
-    expect(source).toContain("setInitialHomeCameraRevision(nextInitialHomeCameraFocusRevision)");
-    expect(source).toContain("+ initialHomeCameraRevision");
+    expect(source.match(/setInitialHomeCameraRevision\(nextInitialHomeCameraFocusRevision\)/g)).toHaveLength(2);
+    expect(source).toContain("focusRevision + initialHomeCameraRevision");
+    expect(source).not.toMatch(/focusRevision=\{playbackSession\.cameraCommand\?\.revision\s+\?\? \(initialHomeCameraAnchor/);
   });
 
   it("seeds Home camera only for a fresh, unclaimed Atlas with no selected Journey", () => {
