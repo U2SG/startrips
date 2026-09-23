@@ -91,7 +91,10 @@ function installStageSampler() {
     state.gestures.push({ at: Math.round(performance.now()), ...entry });
     if (state.gestures.length > 240) state.gestures.shift();
   };
-  for (const type of ["pointerdown", "pointerup", "pointercancel", "lostpointercapture", "click"]) {
+  for (const type of [
+    "pointerdown", "pointerup", "pointercancel", "lostpointercapture", "click",
+    "dragstart", "drag", "selectstart",
+  ]) {
     document.addEventListener(type, (event) => {
       const target = event.target;
       note({
@@ -101,6 +104,11 @@ function installStageSampler() {
         y: Math.round(event.clientY ?? 0),
         tag: target instanceof Element ? target.tagName : null,
         cls: target instanceof Element ? String(target.className).slice(0, 60) : null,
+        ...(type === "pointercancel" ? {
+          selection: String(getSelection?.() ?? "").slice(0, 40),
+          focused: document.hasFocus(),
+          targetConnected: target instanceof Element ? target.isConnected : null,
+        } : {}),
       });
     }, true);
   }
@@ -241,7 +249,7 @@ async function stopSampler(page) {
 
 async function stopSamplerFrames(page) {
   const { frames, unmeasurable } = await stopSampler(page);
-  if (frames.length) frames[0].unmeasurableFramesInWindow = unmeasurable;
+  frames.unmeasurable = unmeasurable;
   return frames;
 }
 
@@ -250,7 +258,11 @@ function gradeContinuity(frames, { allowedAssets }) {
   const owned = new Set(allowedAssets);
   const staleFrames = frames.filter((frame) => frame.centre?.asset && !owned.has(frame.centre.asset));
   if (!frames.length) {
-    return { sampledFrames: 0, failed: true, reason: "the sampler recorded no measurable frame for this window" };
+    return {
+      sampledFrames: 0, failed: true,
+      unmeasurableFrames: frames.unmeasurable ?? null,
+      reason: "the sampler recorded no measurable frame for this window",
+    };
   }
   const blankFrames = frames.filter((frame) => frame.currentId && frame.uncovered > 0);
   const waitingFrames = frames.filter((frame) => frame.waiting && frame.currentId);
