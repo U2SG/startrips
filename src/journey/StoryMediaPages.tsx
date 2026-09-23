@@ -598,6 +598,7 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
         navigates by swipe or the arrow keys the stage advertises instead. */}
     {props.onNavigate && active && currentReady && !currentVideo ? <div ref={hitSurface}
       className="story-media-pages__hit-surface" data-story-hit-surface aria-hidden="true"
+      draggable={false}
       onClick={(event) => {
         event.stopPropagation();
         if (!stablePictureContains(event.clientX, event.clientY)) { props.onBackdropClick?.(); return; }

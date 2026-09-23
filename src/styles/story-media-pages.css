@@ -57,11 +57,17 @@
   transition: transform var(--media-settle-duration) var(--media-settle-easing), opacity var(--media-settle-duration) var(--media-settle-easing);
 }
 /* #489 A1: the surface is only rendered over a photograph now, so it never
-   needs to clip itself out of a native video control strip. */
+   needs to clip itself out of a native video control strip.
+   #489: it is also the one media surface that was left draggable. Chromium
+   promoted a horizontal drag on it into a native drag-and-drop and cancelled
+   the pointer mid-swipe, so the gesture never reached its commit. The pictures
+   underneath already refuse both; this decorative overlay now matches them. */
 .story-media-pages__hit-surface {
   z-index: 8;
   transform: none;
   will-change: auto;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 .story-media-pages .journey-story__media-drag-settle {
   transition: transform var(--media-settle-duration) var(--media-settle-easing), opacity var(--media-settle-duration) var(--media-settle-easing);

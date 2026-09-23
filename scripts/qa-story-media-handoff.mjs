@@ -192,7 +192,6 @@ function installStageSampler() {
     return new DOMRect(box.left + (box.width - width) / 2, box.top + (box.height - height) / 2, width, height);
   };
   const sample = () => {
-    requestAnimationFrame(sample);
     if (!state.running) return;
     const root = state.root && document.querySelector(state.root);
     const pages = root?.querySelector("[data-story-media-pages]");
@@ -224,13 +223,23 @@ function installStageSampler() {
       state.unmeasurable += 1;
     }
   };
-  requestAnimationFrame(sample);
+  // Each window owns its own chain, retired by generation. A chain started at
+  // document-start is not reliably carried into the committed document, and a
+  // chain that only restarts on demand can be lost when a window closes.
   window.__qaStageStart = (rootSelector) => {
     state.root = rootSelector;
     state.frames = [];
     state.gestures = [];
     state.unmeasurable = 0;
     state.running = true;
+    state.generation = (state.generation ?? 0) + 1;
+    const generation = state.generation;
+    const loop = () => {
+      if (state.generation !== generation) return;
+      requestAnimationFrame(loop);
+      sample();
+    };
+    requestAnimationFrame(loop);
   };
   window.__qaStageStop = () => {
     state.running = false;
