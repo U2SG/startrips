@@ -87,8 +87,8 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(end).toBeGreaterThan(start);
     const reconcile = detail.slice(start, end);
     expect(reconcile).toContain("paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision");
-    expect(reconcile).toContain("!map.isStyleLoaded()");
     expect(reconcile).toContain("map.isMoving()");
+    expect(reconcile).not.toContain("map.isStyleLoaded()");
     expect(reconcile).not.toContain("map.areTilesLoaded()");
   });
 

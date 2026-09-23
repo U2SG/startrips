@@ -438,18 +438,16 @@ export default function DetailedEarthMap({
         fullySettled
         || !initialLoadSettled
         || paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision
-        || !map.isStyleLoaded()
         || map.isMoving()
       ) return;
       // `idle` is an event edge, not durable renderer truth. Installing the
       // in-memory Journey GeoJSON source can legally make that edge occur before
       // the current overlay's post-sync paint. Reconcile the same settled
-      // invariant from durable style/overlay/camera state on render so a painted
+      // invariant from durable overlay/camera state on render so a painted
       // Journey cannot remain permanently `visual-ready` merely because the one
-      // `idle` edge was missed. Do not gate this on global `areTilesLoaded()`:
-      // vector-globe basemap tiles may remain busy after the usable style and the
-      // exact personal Journey revision are already loaded and painted. The
-      // Journey source has its own loaded+painted revision gates above.
+      // `idle` edge was missed. `initialLoadSettled` already proves the style was
+      // usable once; later global style/tile churn is not part of this personal
+      // Journey's readiness. Its exact loaded+painted revision gates above are.
       fullySettled = true;
       if (host.dataset.mapPostSyncRenderRevision === host.dataset.mapRevealRevision) {
         publishReadiness("fully-settled");
