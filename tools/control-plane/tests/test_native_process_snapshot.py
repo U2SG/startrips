@@ -147,15 +147,12 @@ class NativeWindowsSmokeTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(str(os.getpid()) + '@' + own['started'], result.stdout.strip())
 
-    def test_live_cim_publication_matches_native_creation_identity(self):
-        own = next(r for r in execution.native_windows_snapshot(required_pids=[os.getpid()])
-                   if r['pid'] == os.getpid())
-        # Own-PID compatibility check on clean CI only, not the live snapshot path.
-        command = '(Get-CimInstance Win32_Process -Filter "ProcessId=' + str(os.getpid()) + '").CreationDate.ToString("o")'
-        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
-                                capture_output=True, text=True, encoding='utf-8', timeout=20)
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(result.stdout.strip(), own['started'])
+    def test_runtime_source_does_not_reintroduce_cim_or_powershell(self):
+        import inspect
+        source = inspect.getsource(execution.snapshot)
+        self.assertNotIn('Get-CimInstance', source)
+        self.assertNotIn('powershell.exe', source)
+        self.assertIn('native-snapshot', source)
 
 
 if __name__ == '__main__':

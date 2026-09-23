@@ -243,7 +243,8 @@ native ABI/buffer, PID birth/reuse during observation and provider failure remai
 UNKNOWN. Handles close even on failed reads. Only an exact signalled handle or a
 fresh complete table proving a vanished PID permits dropping an exited candidate.
 CIM-compatible pid@creation publication (microseconds plus .NET trailing zero and
-local UTC offset) preserves existing owner identity during a safe rollout; tests
-include a real own-PID Windows comparison as well as synthetic failure boundaries.
+local UTC offset) preserves existing owner identity during a safe rollout. The
+pre-install compatibility probe compares old/new identities; CI exercises a real
+native own-PID roundtrip plus synthetic failure boundaries without calling CIM.
 No owner/capacity/STOP/selector authorization changes. Runtime installation must
 still bind exact source bytes and a safe process boundary; merging is not installing.
