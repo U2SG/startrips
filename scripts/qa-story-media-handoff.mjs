@@ -1587,24 +1587,50 @@ try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
       await navigateByGesture(page, STAGE, 1, V1);
+      // Root cause of a claim that used to pass without ever being exercised:
+      // this window was driven by two swipes, but a gesture toward a neighbour
+      // that is not readable at release RESISTS and requests nothing (the
+      // `story-cold-swipe-resists` claim above). So whenever V2 really was
+      // still cold there was no abandoned request at all -- the second swipe
+      // was an ordinary step back to I1, whose release springs land about a
+      // second later, and the check failed; and whenever V2 happened to be warm
+      // by then there was no late read to grade either. The claim only ever
+      // passed in the case it is not about.
+      //
+      // The advertised arrow-key step is the one input that holds a pending
+      // target while a ready page still owns the stage (JourneyStory
+      // `navigateToMedia`, cold disposition), and `navigateMediaStep` anchors
+      // the next step on that pending target, so the opposite key is the
+      // reverse input whose neighbour IS the visible page -- the
+      // `index === assetIndex` cancel-and-stay branch. That is the situation
+      // this scenario claims, so it is now the situation it drives.
+      const stageRole = await page.evaluate((selector) => {
+        const pages = document.querySelector(selector).querySelector("[data-story-media-pages]");
+        pages.focus();
+        return {
+          tabIndex: pages.tabIndex,
+          keyshortcuts: pages.getAttribute("aria-keyshortcuts"),
+          focused: document.activeElement === pages,
+        };
+      }, STAGE);
       await startSampler(page, STAGE);
-      await swipeStage(page, STAGE, 1);
-      // The precondition this scenario grades, proved rather than assumed: the
-      // first swipe has to have left a request for the cold V2 outstanding, so
-      // the swipe that follows really is the reverse input that cancels it. A
-      // gesture toward a neighbour that is not readable at release resists and
-      // requests nothing (the `story-cold-swipe-resists` claim above), and from
-      // there a second swipe is an ordinary step back to the previous asset --
-      // a different situation that must not be graded as this one.
-      const pendingBeforeReversal = await stageDiagnostic(page, STAGE);
-      await swipeStage(page, STAGE, -1);
-      const afterReversalGesture = await stageDiagnostic(page, STAGE);
-      // The product's own contract here is cancel-and-stay: a reverse input
-      // while the next frame is still cold drops that request and keeps the
-      // visible page, because the reversal's own neighbour IS the visible page
-      // (JourneyStory.navigateToMedia, "a reverse input can cancel a cold
-      // next-frame request while staying here"). So the committed owner must
-      // be V1 -- both now and after the abandoned read finally lands.
+      await page.keyboard.press("ArrowRight");
+      // Observing the abandoned request is part of the claim: with nothing
+      // pending against a ready owner there is no stale read to grade, and a
+      // silent pass would mean nothing.
+      const pending = await page.waitForFunction(({ selector, expected, owner }) => {
+        const requested = document.querySelector("[data-media-requested]")
+          ?.getAttribute("data-media-requested") ?? null;
+        const current = document.querySelector(selector)?.querySelector("[data-story-media-pages]")
+          ?.querySelector('[data-media-page="current"]');
+        return requested === expected
+          && current?.getAttribute("data-media-page-id") === owner
+          && current?.getAttribute("data-media-page-ready") === "true"
+          ? { requested, heldBy: current.getAttribute("data-media-page-id") }
+          : null;
+      }, { selector: STAGE, expected: V2, owner: V1 }, { polling: "raf", timeout: 2_000 })
+        .then((handle) => handle.jsonValue(), () => null);
+      await page.keyboard.press("ArrowLeft");
       await waitForSettledAsset(page, V1);
       const afterReversal = await currentAsset(page);
       // Outlive the held read, then look again: this window exists to catch a
@@ -1625,13 +1651,14 @@ try {
       const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
       record({
         name: "story-late-read-never-takes-the-stage",
-        claim: "a read URL that resolves after its navigation was abandoned neither moves the committed owner nor leaves the aperture uncovered; the reversal cancels that cold request and keeps the visible page",
+        claim: "an arrow-key step really does leave a request for a cold neighbour pending while the readable previous page still owns the stage, the opposite key cancels that request and keeps the visible page, and the read URL that resolves afterwards neither moves the committed owner at any point across the window nor leaves the aperture uncovered",
         abandonedIntent: V2, expectedOwner: V1,
-        pendingBeforeReversal, afterReversalGesture, lateWindow,
+        readDelays: { [V2]: 2_500 }, stageRole, pending, lateWindow,
         afterReversal, afterLateRead, transports, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: continuity.failed
-          || pendingBeforeReversal.requested !== V2
+          || !stageRole.focused || !pending
+          || lateWindow.some((sample) => sample.id !== V1)
           || afterReversal.id !== V1 || afterLateRead.id !== V1
           || afterLateRead.presentation !== "settled" || transports !== 1
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
