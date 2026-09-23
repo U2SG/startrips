@@ -198,6 +198,7 @@ Rules the parent enforces, so save yourself the rejected turn:
   New work the issue merely suggests is a separate issue, not a bigger feature.
 - `dependencies` entries and a `placement.anchor` must exist in `feature_list.json`, and neither
   may be the feature itself.
+- A row carrying `delivery_package` or `delivery_lead` is never amended independently: its issue movement is left for one canonical package acknowledge/revision transaction. Do not emit an amend for a registered delivery member.
 - Only a **pending** entry created by intake (its `notes` start with `auto-intake`) can be
   amended. ST-000..ST-020 are the owner's curated contract: for those the parent records the
   update and flags it for the owner, and your amend would be refused. An in-flight feature is not

@@ -11,6 +11,7 @@ from pathlib import Path
 from action_plan import plan
 from feature_store import StoreConflict, load_document, _storage_mutex
 from feature_state import target
+from delivery import canonical_lead, package_ledger_lines, package_snapshot, unit_token
 from ci_observer import write_json
 from execution import ensure_idle, stopped
 from github_evidence import api, EvidenceUnknown
@@ -26,15 +27,17 @@ def git(worktree, *args):
 def ledger_text(row, observed):
     def line(value): return ' '.join(str(value).splitlines()).strip()
     source = observed['source_sha']; number = observed['pr']
+    package_lines = package_ledger_lines(observed.get('delivery_package'))
     return '\n'.join([
         '# PR #' + str(number) + ' - ' + line(row['title']), '',
         '- **Source head:** `' + source + '`',
         '- **Scope:** ' + line(row.get('description') or row['title']),
         '- **User-visible change:** ' + line(row['title']),
-        '- **Review fixes:** Independent Hourly Review cleared this exact CODE Source; resolved thread dispositions remain in the PR review history.',
-        '- **Follow-up:** The linked issue retains its product scope; this ledger creates no additional product behavior or authority.',
+        *package_lines,
+        '- **Review fixes:** Independent Hourly Review cleared this exact CODE Source and delivery contract; resolved thread dispositions remain in the PR review history.',
+        '- **Follow-up:** Every registered delivery member retains its original issue scope; this ledger creates no additional product behavior or authority.',
         '- **Validation:** Exact Source CI ' + str(observed['ci_run']) + ' attempt ' + str(observed['ci_attempt']) +
-        ' passed the real product lanes; independent Source review is recorded. This final commit changes only this ledger. Exact final-head CI remains required before HANDOFF_REVIEW.', ''])
+        ' passed the real product lanes; independent Source review and per-member acceptance coverage are recorded. This final commit changes only this ledger. Exact final-head CI remains required before HANDOFF_REVIEW.', ''])
 
 
 def candidate_is_final(worktree, source, relative):
@@ -46,8 +49,9 @@ def candidate_is_final(worktree, source, relative):
 def validate_node(worktree, number, final=False):
     commands = [['node', 'scripts/pr-history.mjs', 'validate-all']]
     if final:
-        base = git(worktree, 'merge-base', 'origin/main', 'HEAD')
-        commands.append(['node', 'scripts/pr-history.mjs', 'validate-pr', '--pr', str(number), '--base', base, '--head', 'HEAD'])
+        head = git(worktree, 'rev-parse', 'HEAD')
+        base = git(worktree, 'merge-base', 'origin/main', head)
+        commands.append(['node', 'scripts/pr-history.mjs', 'validate-pr', '--pr', str(number), '--base', base, '--head', head])
     for command in commands:
         result = subprocess.run(command, cwd=worktree, capture_output=True, text=True, encoding='utf-8', timeout=25)
         if result.returncode:
@@ -70,7 +74,12 @@ def seal(root, worktree, fid, repo):
     pr = api('repos/' + repo + '/pulls/' + str(number))
     if pr['head']['sha'] != source or git(worktree, 'branch', '--show-current') != pr['head']['ref']:
         raise StoreConflict('Owner branch/Source changed before seal')
-    row = target(load_document(root / 'feature_list.json'), fid)
+    seal_doc = load_document(root / 'feature_list.json')
+    if canonical_lead(seal_doc, fid) != fid:
+        raise StoreConflict('Only canonical delivery lead may seal')
+    row = target(seal_doc, fid)
+    delivery = package_snapshot(seal_doc, fid)
+    expected_unit = unit_token(seal_doc, fid)
     relative = 'docs/pr-history/' + str(number) + '.md'
     path = (worktree / relative).resolve()
     if not path.is_relative_to(worktree) or path.relative_to(worktree).as_posix() != relative:
@@ -79,7 +88,7 @@ def seal(root, worktree, fid, repo):
     with _storage_mutex(root / 'feature_list.json'):
         if intent.exists():
             data = json.loads(intent.read_bytes())
-            if any(data.get(k) != v for k, v in {'feature': fid, 'pr': number, 'source_sha': source, 'ledger_path': relative}.items()):
+            if any(data.get(k) != v for k, v in {'feature': fid, 'pr': number, 'source_sha': source, 'ledger_path': relative, 'unit_token': expected_unit, 'delivery_package': delivery}.items()):
                 raise StoreConflict('Seal checkpoint belongs to another identity')
             body = data['body']
             if hashlib.sha256(body.encode('utf-8')).hexdigest() != data['body_sha256']:
@@ -87,7 +96,7 @@ def seal(root, worktree, fid, repo):
         else:
             body = ledger_text(row, observed)
             write_json(intent, {'feature': fid, 'pr': number, 'source_sha': source,
-                                'ledger_path': relative, 'body': body,
+                                'ledger_path': relative, 'unit_token': expected_unit, 'delivery_package': delivery, 'body': body,
                                 'body_sha256': hashlib.sha256(body.encode('utf-8')).hexdigest()})
     head = git(worktree, 'rev-parse', 'HEAD')
     if head == source:
@@ -116,6 +125,8 @@ def seal(root, worktree, fid, repo):
                 os.replace(temporary, path)
             finally:
                 if os.path.exists(temporary): os.unlink(temporary)
+        if unit_token(load_document(root / 'feature_list.json'), fid) != expected_unit:
+            raise StoreConflict('Delivery scope changed before ledger commit')
         validate_node(worktree, number)
         if stopped(root, lane=lane): raise StoreConflict('STOP arrived; preserve the pending ledger for same-owner recovery')
         git(worktree, 'add', '--', relative)

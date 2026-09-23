@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from feature_store import StoreConflict, load_document
 from feature_state import target
+from delivery import canonical_lead, package_snapshot, unit_pr_links, unit_rows, unit_token
 from github_evidence import api, source_relation, EvidenceUnknown
 from ci_observer import latest_ci
 from action_plan import ledger_pending_final
@@ -21,9 +22,12 @@ def git(path, *args):
 
 def capture(root, worktree, fid, number, repo):
     root, worktree = Path(root).resolve(), Path(worktree).resolve()
-    row = target(load_document(root / 'feature_list.json'), fid)
-    if row.get('pr_links') != ['https://github.com/' + repo + '/pull/' + str(number)]:
-        raise StoreConflict('Evidence PR is not this feature owner')
+    document = load_document(root / 'feature_list.json')
+    if canonical_lead(document, fid) != fid:
+        raise StoreConflict('Evidence must target canonical delivery lead')
+    row = target(document, fid); expected_unit = unit_token(document, fid)
+    if unit_pr_links(document, fid) != ['https://github.com/' + repo + '/pull/' + str(number)]:
+        raise StoreConflict('Evidence PR is not this delivery-unit owner')
     head, branch = git(worktree, 'rev-parse', 'HEAD'), git(worktree, 'branch', '--show-current')
     if git(worktree, 'status', '--porcelain'): raise StoreConflict('Dirty worktree cannot stamp committed evidence')
     pr = api('repos/' + repo + '/pulls/' + str(number))
@@ -49,11 +53,14 @@ def capture(root, worktree, fid, number, repo):
     code = 0 if green else 1
     text = '\n'.join(['EVIDENCE_HEAD=' + head, 'EVIDENCE_BRANCH=' + branch,
                       'EVIDENCE_KIND=' + kind, 'SOURCE_HEAD=' + relation['source_sha'],
+                      'DELIVERY_CONTRACT=' + ((package_snapshot(document, fid) or {}).get('contract_sha256') or 'single'),
                       'CI_RUN=' + str(run['id']), 'CI_ATTEMPT=' + str(run['run_attempt']),
                       'CI_URL=' + run['html_url'], 'SOURCE_PRODUCT_LANES_GREEN=' + str(int(ci['source_green'])),
                       'FINAL_CI_GREEN=' + str(int(ci['final_green'])), json.dumps(jobs, sort_keys=True), 'EXIT=' + str(code), ''])
     directory = root / '.agent-artifacts' / fid.lower(); directory.mkdir(parents=True, exist_ok=True)
     path = directory / ('ci-%s-%s-%s-%s.log' % (number, head, run['id'], run['run_attempt']))
+    if unit_token(load_document(root / 'feature_list.json'), fid) != expected_unit:
+        raise StoreConflict('Delivery unit changed during evidence capture')
     if path.exists():
         if path.read_text(encoding='utf-8') != text: raise StoreConflict('Existing evidence identity has different contents')
     else:
@@ -78,13 +85,19 @@ def check_log(text, source, final, branch):
 
 
 def check(root, worktree, fid, repo):
-    root = Path(root).resolve(); row = target(load_document(root / 'feature_list.json'), fid)
-    urls = row.get('pr_links') or []
+    root = Path(root).resolve(); document = load_document(root / 'feature_list.json')
+    if canonical_lead(document, fid) != fid:
+        raise StoreConflict('Evidence check must target canonical delivery lead')
+    rows = unit_rows(document, fid); row = rows[0]
+    urls = unit_pr_links(document, fid)
     if len(urls) != 1 or not re.fullmatch('https://github\\.com/' + re.escape(repo) + r'/pull/\d+', urls[0]):
         raise StoreConflict('Evidence requires one exact owner PR')
     number = int(urls[0].rsplit('/', 1)[1]); relation = source_relation(repo, number)
     branch = git(worktree, 'branch', '--show-current'); head = git(worktree, 'rev-parse', 'HEAD')
     if head != relation['final_sha']: raise StoreConflict('Worktree does not match submitted final head')
+    evidence_sets = {tuple(member.get('evidence') or []) for member in rows}
+    if len(evidence_sets) != 1:
+        raise StoreConflict('Delivery member evidence lists drifted')
     checked = []
     for name in row.get('evidence') or []:
         if not name.endswith('.log'): continue
