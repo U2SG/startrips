@@ -478,6 +478,43 @@ describe("a configured deployment", () => {
     });
   });
 
+  it("separates a source that answered and refused from one it could not reach", async () => {
+    // Measured against the owner-supplied real share link: the host answers a
+    // non-2xx status to a static read no matter what headers are sent, which
+    // is a statement about the reading method, not about reach and not about
+    // the link. Reporting it as `source-access`/unreachable would collapse it
+    // with an unresolvable name, which is exactly the collapse #512 forbids.
+    enableProviders();
+    upstream.mockResolvedValueOnce(
+      new Response("forbidden", { status: 432, headers: { "content-type": "text/plain" } }),
+    );
+
+    const refused = await post({
+      source: "link",
+      link: "https://plans.example/tripmap/routePlan?id=1",
+    });
+    expect(refused.status).toBe(502);
+    const refusedBody = await refused.json();
+    expect(refusedBody).toMatchObject({
+      error: "ITINERARY_SOURCE_REFUSED",
+      stage: "content-read",
+    });
+    // The upstream status travels, so a deployment can tell a challenge from a
+    // gone page without a second attempt.
+    expect(String(refusedBody.message)).toContain("432");
+
+    // ...and the unreachable case still reports itself as one.
+    lookup.mockRejectedValueOnce(new Error("ENOTFOUND"));
+    const unreachable = await post({
+      source: "link",
+      link: "https://plans.example/tripmap/routePlan?id=1",
+    });
+    expect(await unreachable.json()).toMatchObject({
+      error: "ITINERARY_SOURCE_UNREACHABLE",
+      stage: "source-access",
+    });
+  });
+
   it("reports a transport fault as unreachable rather than as an invalid link", async () => {
     enableProviders();
     upstream.mockRejectedValueOnce(new TypeError("fetch failed"));

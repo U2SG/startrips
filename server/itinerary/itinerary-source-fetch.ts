@@ -522,10 +522,20 @@ export async function fetchItinerarySourcePage(
       }
 
       if (response.status < 200 || response.status >= 300) {
+        // The host answered. Reach is settled, so this is not a source-access
+        // fact and saying "unreachable" would make a live refusal
+        // indistinguishable from an unresolvable name or a blocked socket.
+        // What actually happened is that the source would not serve *this*
+        // reading: a page a member opens in a browser is routinely answered
+        // with a challenge or an interstitial when a static client asks for
+        // it, which is a statement about this deployment's reading method and
+        // never a verdict on the link.
         throw new ItineraryImportStageError(
-          "source-access",
-          "ITINERARY_SOURCE_UNREACHABLE",
-          `The link answered ${response.status} from here`,
+          "content-read",
+          "ITINERARY_SOURCE_REFUSED",
+          `The link answered ${response.status} to a static read from here; `
+            + "a source that composes itself in a browser needs the rendering "
+            + "driver rather than a second static attempt",
           502,
         );
       }

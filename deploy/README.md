@@ -62,6 +62,16 @@ were checked, so a name that answers differently a moment later cannot move the
 connection. A link this deployment cannot reach is reported as unreachable at
 the source-access stage, never as an invalid link.
 
+A host that answers is a separate outcome from one that cannot be reached. When
+a source answers a non-2xx status to the `http` driver it is reported as
+`ITINERARY_SOURCE_REFUSED` at the `content-read` stage with the status it gave,
+because reach is already settled and the refusal is about the reading method.
+Real consumer itinerary hosts do this routinely: the same link a member opens in
+a browser is answered with a challenge or an interstitial for a static client
+regardless of the request headers. That is the case `render` exists for, so a
+deployment that has to read such links needs `ITINERARY_SOURCE_FETCH_DRIVER=render`
+and a rendering service; retrying `http` will not change the answer.
+
 The `render` driver connects from inside the rendering service, where this app
 cannot pin anything, so the service is held to the same contract from its own
 side and must satisfy both halves of it:
