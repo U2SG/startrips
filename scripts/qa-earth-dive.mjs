@@ -1738,7 +1738,10 @@ try {
     hasTouch: true,
   });
   const compactRun = await openDivePage(compactContext, { blockStyle: false });
-  await compactRun.page.locator('.living-atlas[data-mobile-v2="on"]').waitFor({ state: "attached", timeout: 5_000 });
+  // The dedicated Earth-Dive fixture mounts the real LivingAtlasGlobe directly,
+  // not LivingAtlasApp, so the product compact-mobile contract is published by
+  // the real ParticleEarthScene rather than by the Atlas shell wrapper.
+  await compactRun.page.locator('.particle-earth-scene[data-mobile-v2="on"]').waitFor({ state: "attached", timeout: 5_000 });
   const compactPoint = await gesturePoint(compactRun.page);
   await wheelUntil(
     compactRun.page, compactPoint, APPROACH_WHEEL_DELTA,
@@ -1823,7 +1826,10 @@ try {
   ), compactRoutePoint.journeyId, { timeout: 5_000 });
   const compactBeforeResize = await readDive(compactRun.page);
   await compactRun.page.setViewportSize({ width: 430, height: 740 });
-  await compactRun.page.locator('.living-atlas[data-mobile-v2="on"]').waitFor({ state: "attached", timeout: 5_000 });
+  // The dedicated Earth-Dive fixture mounts the real LivingAtlasGlobe directly,
+  // not LivingAtlasApp, so the product compact-mobile contract is published by
+  // the real ParticleEarthScene rather than by the Atlas shell wrapper.
+  await compactRun.page.locator('.particle-earth-scene[data-mobile-v2="on"]').waitFor({ state: "attached", timeout: 5_000 });
   await compactRun.page.waitForFunction((journeyId) => {
     const map = document.querySelector(".detailed-earth-map");
     return map?.getAttribute("data-journey-overlay-ready") === "true"
