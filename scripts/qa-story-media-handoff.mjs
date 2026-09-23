@@ -779,6 +779,34 @@ async function presentedVideoBox(page, rootSelector) {
   }, rootSelector);
 }
 
+/**
+ * Whether the native control point is something a finger can actually reach,
+ * and if not, what stands in the way: the point lies outside the viewport, or
+ * another element hit-tests in front of the transport. The surrounding scroll
+ * extent comes with it, because a strip below the fold on a scrollable stage
+ * and one on a stage that cannot scroll are different findings.
+ */
+async function controlReachability(page, rootSelector, point) {
+  return await page.evaluate(({ selector, x, y }) => {
+    const root = document.querySelector(selector);
+    const video = root?.querySelector(".story-media-pages__video video");
+    const hit = document.elementFromPoint(x, y);
+    const onScreen = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight;
+    const scroller = root?.closest("[data-story-scroll], .journey-story__body") ?? document.scrollingElement;
+    return {
+      onScreen,
+      hitIsVideo: hit === video,
+      hitTag: hit instanceof Element ? hit.tagName : null,
+      hitClass: hit instanceof Element ? String(hit.className).slice(0, 80) : null,
+      viewport: { width: innerWidth, height: innerHeight },
+      scroll: scroller instanceof Element
+        ? { scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight }
+        : null,
+      tappable: onScreen && hit === video,
+    };
+  }, { selector: rootSelector, x: point.x, y: point.y });
+}
+
 /** How many transports the stack is actually holding, live and total. */
 async function liveTransports(page, rootSelector) {
   return await page.evaluate((selector) => {
@@ -1249,19 +1277,25 @@ try {
       const transports = await liveTransports(page, STAGE);
 
       // The native control strip stays the transport's here too: a touch there
-      // must neither navigate nor dismiss the stage.
+      // must neither navigate nor dismiss the stage. On a compact viewport the
+      // strip is not always on screen -- the presented video's element box can
+      // run past the fold -- so the point is resolved first and only tapped
+      // when it is really the transport's. A point that is not reachable is
+      // recorded with the geometry that made it unreachable instead of being
+      // tapped into the backdrop and reported as a control.
       const controls = await nativeControlPoint(page, STAGE);
-      await input(page).click(controls.x, controls.y);
+      const reach = await controlReachability(page, STAGE, controls);
+      if (reach.tappable) await input(page).click(controls.x, controls.y);
       const controlState = await currentAsset(page, STAGE);
       const stillPresented = await page.locator(STAGE).isVisible();
       const pointerTypes = await observedPointerTypes(page);
 
       record({
         name: `story-mobile-touch-video-tap-${profile.label}`,
-        claim: "on a compact-mobile viewport driven by real browser touch, a swipe commits the step onto the video and a tap inside the presented video's contained picture reaches the transport itself without navigating, without a navigation surface over it and without a second live transport; what that tap does to playback is Chromium's touch control chrome and is reported rather than asserted",
+        claim: "on a compact-mobile viewport driven by real browser touch, a swipe commits the step onto the video and a tap inside the presented video's contained picture reaches the transport itself without navigating, without a navigation surface over it and without a second live transport; what that tap does to playback is Chromium's touch control chrome and is reported rather than asserted, and the native control point is tapped only when it really is the transport's -- its reachability is recorded, not claimed",
         viewport: profile.viewport, pointerTypes, toVideo,
         before, geometry, point, pointError, idle, playback, after, transports,
-        controls, controlState, stillPresented,
+        controls, controlReach: reach, controlState, stillPresented,
         handoffToVideo: gradeContinuity(toVideoFrames, { allowedAssets: [I1, V1] }),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: Boolean(pointError)
