@@ -355,6 +355,20 @@ async function openFocusAtlas({
   await page.locator(`[data-qa-route-point-context-activate="${initialPointId}"]`).waitFor({ state: "attached", timeout: 5_000 });
   if (!compact) {
     await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 5_000 });
+    if (realScene) {
+      // The normal Atlas may still be showing the inferred Home Base camera even
+      // though the latest Journey owns the active card. Select the Journey through
+      // the real rail before grading its real pointer surface; this is the user
+      // action that releases Home-owned camera composition, not a QA camera hack.
+      const targetJourney = journeysPayload.find((candidate) => candidate.id === journeyId);
+      if (!targetJourney) throw new Error(`missing real-scene Journey ${journeyId}`);
+      const focusProbe = page.locator("[data-qa-route-point-context-focus]");
+      const revisionBeforeSelection = Number(await focusProbe.getAttribute("data-focus-revision") ?? 0);
+      await page.locator(".living-atlas__journey-rail button", { hasText: targetJourney.title }).first().click();
+      await page.waitForFunction((before) => (
+        Number(document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-revision") ?? 0) > before
+      ), revisionBeforeSelection, { timeout: 5_000 });
+    }
     await page.locator(".living-atlas__globe-focus").click();
     await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
   } else {
