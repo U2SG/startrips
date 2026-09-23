@@ -735,21 +735,23 @@ try {
       const toLastVisible = await navigateByGesture(page, STAGE, 1, I2);
       const lastVisible = await currentAsset(page);
 
-      // The immersive surface exists in the tree while closed, so sampling it
-      // before it is on screen would record an unmeasurable root rather than a
-      // blank stage. Start each window on the root that is actually presented.
-      await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
+      // Both windows observe the immersive surface, opened and closed. It
+      // exists in the tree while closed, so its unmeasurable frames are counted
+      // separately rather than graded as an uncovered stage -- and the window
+      // has to open BEFORE the entry gesture, or the reveal it exists to watch
+      // has already happened by the time recording starts.
       await startSampler(page, FULLSCREEN);
+      await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
       await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
       await waitForSettledAsset(page, I2, FULLSCREEN);
       const entryFrames = await stopSamplerFrames(page);
       const entered = await currentAsset(page, FULLSCREEN);
 
-      await startSampler(page, STAGE);
+      await startSampler(page, FULLSCREEN);
       await page.keyboard.press("Escape");
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
-      await waitForSettledAsset(page, I2);
       const exitFrames = await stopSamplerFrames(page);
+      await waitForSettledAsset(page, I2);
       const exited = await currentAsset(page);
 
       const entry = gradeContinuity(entryFrames, { allowedAssets: [I2] });
