@@ -699,9 +699,14 @@ async function waitForSettledAsset(page, assetId, rootSelector = STAGE, timeout 
   }, { selector: rootSelector, expected: assetId }, { polling: "raf", timeout });
 }
 
-/** The point a viewer aims at: the centre of the contained picture. */
-async function presentedVideoPoint(page, rootSelector, { fraction = 0.5 } = {}) {
-  return await page.evaluate(({ selector, fraction: at }) => {
+/**
+ * The point a viewer aims at: the centre of the contained picture, above the
+ * transport's own control chrome. #489 forbids guessing where that chrome
+ * begins from a fixed bottom inset, so `controlsTop` is the top of the real
+ * control boxes `nativeControls` resolved from the browser itself.
+ */
+async function presentedVideoPoint(page, rootSelector, { fraction = 0.5, controlsTop = null } = {}) {
+  return await page.evaluate(({ selector, fraction: at, controlsTop: chromeTop }) => {
     const root = document.querySelector(selector);
     const video = root?.querySelector(".story-media-pages__video video");
     if (!(video instanceof HTMLVideoElement)) throw new Error("no presented video on the stage");
@@ -713,7 +718,7 @@ async function presentedVideoPoint(page, rootSelector, { fraction = 0.5 } = {}) 
     const height = video.videoHeight * scale;
     const x = bounds.left + bounds.width / 2;
     const y = bounds.top + (bounds.height - height) / 2 + height * at;
-    const controlStrip = bounds.bottom - Math.min(72, bounds.height * 0.25);
+    const controlStrip = chromeTop ?? bounds.bottom;
     if (y >= controlStrip) throw new Error("the sampled point falls inside the native control strip");
     const hit = document.elementFromPoint(x, y);
     return {
@@ -723,19 +728,88 @@ async function presentedVideoPoint(page, rootSelector, { fraction = 0.5 } = {}) 
       hitClass: hit instanceof Element ? hit.className : null,
       asset: video.getAttribute("data-shared-media-id"),
     };
-  }, { selector: rootSelector, fraction });
+  }, { selector: rootSelector, fraction, controlsTop });
 }
 
-/** Native control chrome: Chromium's lower-left play/pause region. */
-async function nativeControlPoint(page, rootSelector) {
-  return await page.evaluate((selector) => {
-    const root = document.querySelector(selector);
-    const video = root?.querySelector(".story-media-pages__video video");
-    if (!(video instanceof HTMLVideoElement)) throw new Error("no presented video on the stage");
-    const bounds = video.getBoundingClientRect();
-    const point = { x: bounds.left + 28, y: bounds.bottom - 24 };
-    return { ...point, controls: video.controls, hitIsVideo: document.elementFromPoint(point.x, point.y) === video };
-  }, rootSelector);
+const cdpSessions = new WeakMap();
+
+async function cdpFor(page) {
+  let session = cdpSessions.get(page);
+  if (!session) {
+    session = await page.context().newCDPSession(page);
+    await session.send("Accessibility.enable");
+    cdpSessions.set(page, session);
+  }
+  return session;
+}
+
+/**
+ * The transport's own native control chrome, resolved from the browser rather
+ * than guessed from the element box. #489 A says outright that a fixed bottom
+ * inset must not stand in for the real hit range of the native controls, and
+ * the guess this replaces was wrong in both directions: on desktop it aimed at
+ * the time scrubber and silently seeked instead of reaching play/pause, and on
+ * phone landscape it aimed below the fold and reported the whole strip out of
+ * reach while play, mute and full screen were on screen all along.
+ *
+ * Each control comes back with its accessible name, the centre a finger aims
+ * at, and whether that centre is on screen and hit-tests to the transport --
+ * which is exactly what acceptance item 2 asks about each of them.
+ */
+async function nativeControls(page, rootSelector) {
+  const cdp = await cdpFor(page);
+  const { root } = await cdp.send("DOM.getDocument", { depth: 1 });
+  const { nodeId } = await cdp.send("DOM.querySelector", {
+    nodeId: root.nodeId, selector: `${rootSelector} .story-media-pages__video video`,
+  });
+  if (!nodeId) throw new Error("no presented video on the stage");
+  const { nodes } = await cdp.send("Accessibility.queryAXTree", { nodeId });
+  const resolved = [];
+  for (const node of nodes ?? []) {
+    const name = node.name?.value;
+    const role = node.role?.value;
+    if (!name || (role !== "button" && role !== "slider")) continue;
+    let quad = null;
+    try {
+      quad = (await cdp.send("DOM.getBoxModel", { backendNodeId: node.backendDOMNodeId })).model?.border ?? null;
+    } catch { quad = null; }
+    if (!Array.isArray(quad)) continue;
+    const [left, top, , , right, bottom] = quad;
+    resolved.push({
+      name, role, x: (left + right) / 2, y: (top + bottom) / 2,
+      box: { left: Math.round(left), top: Math.round(top), right: Math.round(right), bottom: Math.round(bottom) },
+    });
+  }
+  const reach = await page.evaluate(({ selector, points }) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    return points.map(({ x, y }) => {
+      const hit = document.elementFromPoint(x, y);
+      const onScreen = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight;
+      return {
+        onScreen, hitIsVideo: hit === video,
+        hitTag: hit instanceof Element ? hit.tagName : null,
+        hitClass: hit instanceof Element ? String(hit.className).slice(0, 60) : null,
+        reachable: onScreen && hit === video,
+      };
+    });
+  }, { selector: rootSelector, points: resolved.map(({ x, y }) => ({ x, y })) });
+  return resolved.map((control, index) => ({ ...control, ...reach[index] }));
+}
+
+/** The play entry a viewer's finger aims at; named "pause" once it is running. */
+function playEntry(controls) {
+  return controls.find((control) => control.role === "button" && /^(play|pause)$/i.test(control.name)) ?? null;
+}
+
+/** Controls the viewer cannot get to: off screen, or something else in front. */
+function unreachableControls(controls) {
+  return controls.filter((control) => !control.reachable)
+    .map(({ name, box, onScreen, hitTag, hitClass }) => ({ name, box, onScreen, hitTag, hitClass }));
+}
+
+/** The top of the real control chrome, so a picture point can stay above it. */
+function controlChromeTop(controls) {
+  return controls.length ? Math.min(...controls.map((control) => control.box.top)) : null;
 }
 
 /** Real transport observation: the element's own clock, sampled repeatedly. */
@@ -777,34 +851,6 @@ async function presentedVideoBox(page, rootSelector) {
       controlGuard: Math.round(Math.min(72, bounds.height * 0.25)),
     };
   }, rootSelector);
-}
-
-/**
- * Whether the native control point is something a finger can actually reach,
- * and if not, what stands in the way: the point lies outside the viewport, or
- * another element hit-tests in front of the transport. The surrounding scroll
- * extent comes with it, because a strip below the fold on a scrollable stage
- * and one on a stage that cannot scroll are different findings.
- */
-async function controlReachability(page, rootSelector, point) {
-  return await page.evaluate(({ selector, x, y }) => {
-    const root = document.querySelector(selector);
-    const video = root?.querySelector(".story-media-pages__video video");
-    const hit = document.elementFromPoint(x, y);
-    const onScreen = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight;
-    const scroller = root?.closest("[data-story-scroll], .journey-story__body") ?? document.scrollingElement;
-    return {
-      onScreen,
-      hitIsVideo: hit === video,
-      hitTag: hit instanceof Element ? hit.tagName : null,
-      hitClass: hit instanceof Element ? String(hit.className).slice(0, 80) : null,
-      viewport: { width: innerWidth, height: innerHeight },
-      scroll: scroller instanceof Element
-        ? { scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight }
-        : null,
-      tappable: onScreen && hit === video,
-    };
-  }, { selector: rootSelector, x: point.x, y: point.y });
 }
 
 /** How many transports the stack is actually holding, live and total. */
@@ -1110,8 +1156,8 @@ try {
       }
 
       const before = await currentAsset(page, surface.root);
-      const point = await presentedVideoPoint(page, surface.root);
-      const controls = await nativeControlPoint(page, surface.root);
+      const controls = await nativeControls(page, surface.root);
+      const point = await presentedVideoPoint(page, surface.root, { controlsTop: controlChromeTop(controls) });
       const idle = await samplePlayback(page, surface.root, { samples: 2, everyMs: 120 });
       await input(page).click(point.x, point.y);
       const playback = await samplePlayback(page, surface.root);
@@ -1132,20 +1178,23 @@ try {
         failed: clickFailed,
       });
 
-      // The native control strip stays the transport's, not navigation's.
-      // Chromium's shadow controls may legitimately contain their own pointer
-      // events, so the claim is the input path plus the absence of navigation
-      // -- real hit-testing and real mouse input -- not a particular play state.
+      // Acceptance 2: every control the transport actually provides -- each one
+      // resolved from the browser by its own accessible name, not guessed from
+      // a bottom inset -- is on screen and hit-tests to the transport, and a
+      // real click on its play entry toggles that transport without navigating.
+      const entry = playEntry(controls);
+      const unreachable = unreachableControls(controls);
       const controlBefore = await samplePlayback(page, surface.root, { samples: 1, everyMs: 0 });
-      await input(page).click(controls.x, controls.y);
+      if (entry) await input(page).click(entry.x, entry.y);
       const controlAfter = await samplePlayback(page, surface.root, { samples: 2, everyMs: 150 });
       const controlState = await currentAsset(page, surface.root);
       const stillPresented = await page.locator(surface.root).isVisible();
       record({
         name: `story-${surface.label}-video-native-controls-reachable`,
-        claim: "Chromium's lower-left native control region hit-tests to the video itself and a real click there neither navigates nor dismisses the surface; the reachability of individual controls beyond that region is not asserted here",
-        controls, controlBefore, controlAfter, controlState, stillPresented,
-        failed: !controls.controls || !controls.hitIsVideo || !stillPresented
+        claim: "every native control this transport provides is on screen and hit-tests to the video itself -- intercepted by no navigation surface -- and a real click on its own play entry toggles the transport without navigating or dismissing the surface",
+        controls, entry, unreachable, controlBefore, controlAfter, controlState, stillPresented,
+        failed: !entry || unreachable.length > 0 || !stillPresented
+          || controlAfter.paused === controlBefore.paused
           || controlState.id !== V1 || controlState.kind !== "video"
           || controlState.presentation !== "settled" || controlState.hitSurfaces !== 0,
       });
@@ -1237,15 +1286,16 @@ try {
   // A (continued). The same input claim on compact mobile, reached by a real
   // browser touch stream in both representative orientations.
   //
-  // What is graded here is the half #489 A owns: a touch swipe really commits
-  // the step, and a real tap inside the presented video's contained picture
-  // hit-tests to the transport itself, is intercepted by no navigation surface,
-  // does not navigate, and leaves exactly one live transport. The reported
-  // `playback` is recorded, not graded: this product deliberately ships no play
-  // affordance of its own, so what a tap does to a paused video under touch
-  // belongs to Chromium's own control chrome -- the same boundary the desktop
-  // native-control check already states. The transport's own advancing clock is
-  // proved by the desktop tap above, which is the input that owns it.
+  // #489 A asks for a real touch on "the play entry the viewer sees", and under
+  // touch that entry is the transport's own play button: Chromium deliberately
+  // does not treat a tap on the picture body as an activation the way a mouse
+  // click is, and this product ships no play affordance of its own to put there
+  // (#244 forbids a second media authority). So the picture-body tap is still
+  // driven and graded for what it owns -- it must reach the transport and must
+  // not navigate -- while playback is graded from a real touch tap on the play
+  // button the browser itself exposes, resolved by its accessible name and
+  // required to be on screen first. Every control that transport provides is
+  // graded reachable on both orientations, which is acceptance item 2.
   // ---------------------------------------------------------------------
   for (const profile of [
     { label: "phone-portrait", viewport: { width: 390, height: 844 } },
@@ -1263,10 +1313,11 @@ try {
 
       const before = await currentAsset(page, STAGE);
       const geometry = await presentedVideoBox(page, STAGE);
+      const controls = await nativeControls(page, STAGE);
       let point = { hitIsVideo: false, controls: false };
       let pointError = null;
       try {
-        point = await presentedVideoPoint(page, STAGE);
+        point = await presentedVideoPoint(page, STAGE, { controlsTop: controlChromeTop(controls) });
       } catch (error) {
         pointError = error instanceof Error ? error.message : String(error);
       }
@@ -1276,26 +1327,28 @@ try {
       const after = await currentAsset(page, STAGE);
       const transports = await liveTransports(page, STAGE);
 
-      // The native control strip stays the transport's here too: a touch there
-      // must neither navigate nor dismiss the stage. On a compact viewport the
-      // strip is not always on screen -- the presented video's element box can
-      // run past the fold -- so the point is resolved first and only tapped
-      // when it is really the transport's. A point that is not reachable is
-      // recorded with the geometry that made it unreachable instead of being
-      // tapped into the backdrop and reported as a control.
-      const controls = await nativeControlPoint(page, STAGE);
-      const reach = await controlReachability(page, STAGE, controls);
-      if (reach.tappable) await input(page).click(controls.x, controls.y);
+      // The play entry under touch. It is the transport's own control, so the
+      // tap must start the real clock and must still not navigate.
+      const entry = playEntry(controls);
+      const unreachable = unreachableControls(controls);
+      const beforePlayTap = await samplePlayback(page, STAGE, { samples: 2, everyMs: 120 });
+      // The picture tap above is the other real touch in this scenario. If a
+      // future Chromium ever treats it as an activation, that already satisfies
+      // the criterion and tapping play again would only stop the clock, so the
+      // graded outcome is the running transport rather than which tap started it.
+      const playStartedBy = beforePlayTap.paused ? "native play entry" : "picture tap";
+      if (entry?.reachable && beforePlayTap.paused) await input(page).click(entry.x, entry.y);
+      const controlPlayback = await samplePlayback(page, STAGE);
       const controlState = await currentAsset(page, STAGE);
       const stillPresented = await page.locator(STAGE).isVisible();
       const pointerTypes = await observedPointerTypes(page);
 
       record({
         name: `story-mobile-touch-video-tap-${profile.label}`,
-        claim: "on a compact-mobile viewport driven by real browser touch, a swipe commits the step onto the video and a tap inside the presented video's contained picture reaches the transport itself without navigating, without a navigation surface over it and without a second live transport; what that tap does to playback is Chromium's touch control chrome and is reported rather than asserted, and the native control point is tapped only when it really is the transport's -- its reachability is recorded, not claimed",
+        claim: "on a compact-mobile viewport driven by real browser touch, a swipe commits the step onto the video, a tap inside the presented video's contained picture reaches the transport itself without navigating and with no navigation surface over it, every native control that transport provides is on screen and hit-tests to it, and a real touch tap on its own play entry starts the actual clock -- currentTime advancing across repeated samples -- while the stage keeps exactly one live transport and does not navigate",
         viewport: profile.viewport, pointerTypes, toVideo,
         before, geometry, point, pointError, idle, playback, after, transports,
-        controls, controlReach: reach, controlState, stillPresented,
+        controls, entry, unreachable, beforePlayTap, playStartedBy, controlPlayback, controlState, stillPresented,
         handoffToVideo: gradeContinuity(toVideoFrames, { allowedAssets: [I1, V1] }),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: Boolean(pointError)
@@ -1306,6 +1359,8 @@ try {
           || after.id !== V1 || after.presentation !== "settled" || after.hitSurfaces !== 0
           || transports.presented !== 1 || transports.total !== 1
           || idle.paused !== true
+          || !entry || !entry.reachable || unreachable.length > 0
+          || controlPlayback.paused !== false || !controlPlayback.advanced || !controlPlayback.monotonic
           || !stillPresented || controlState.id !== V1 || controlState.kind !== "video"
           || controlState.presentation !== "settled" || controlState.hitSurfaces !== 0
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,

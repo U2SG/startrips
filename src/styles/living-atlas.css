@@ -5688,6 +5688,27 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     min-height: 300px;
   }
 
+  /* #489 acceptance 2 / #531: on a short (landscape) phone the sheet was 72svh
+     and the media floor 240px, so the presented video's element box ran past
+     the bottom of the screen and Chromium's own control strip -- its time
+     scrubber first -- ended up where no finger could reach it. There is no
+     spare height to give back here, so the sheet takes the room it needs and
+     the media region is sized to what is left above the fold rather than to a
+     floor the viewport cannot honour. 106px is this block's own sticky sheet
+     handle (44px) plus header (62px). */
+  @media (max-height: 480px) {
+    .journey-story {
+      height: min(92svh, 680px);
+      max-height: min(92svh, 680px);
+    }
+
+    .journey-story__media,
+    .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
+      height: calc(92svh - 106px);
+      min-height: 0;
+    }
+  }
+
   .journey-story__copy {
     min-height: 48svh;
     padding: 30px 22px 44px;
