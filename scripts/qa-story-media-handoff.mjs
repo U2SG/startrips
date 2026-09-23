@@ -214,6 +214,25 @@ function installStageSampler() {
       live: false,
     };
   };
+  // A shared-element morph paints the handed-off picture from a clone that
+  // `sharedElement.ts` appends to `document.body` with `pointer-events: none`
+  // and strips of `data-shared-media-id`, while the destination image is held
+  // at `visibility: hidden` for the whole morph. Neither node is reachable
+  // through `elementsFromPoint`, so a point the morph is covering reads bare.
+  // The clone publishes `data-shared-element-clone`; a connected, sized clone
+  // whose box contains the point is positive evidence that the picture WAS
+  // drawn there, which is what separates a handoff from a blank stage.
+  const morphAt = (x, y) => {
+    for (const clone of document.querySelectorAll("[data-shared-element-clone]")) {
+      const box = clone.getBoundingClientRect();
+      if (!(box.width > 0 && box.height > 0)) continue;
+      if (x < box.left || x > box.right || y < box.top || y > box.bottom) continue;
+      const style = getComputedStyle(clone);
+      if (style.visibility === "hidden" || Number(style.opacity) <= 0.05) continue;
+      return { kind: "morph", asset: null, morph: clone.dataset.sharedElementClone, live: false };
+    }
+    return null;
+  };
   // Hit testing is document-wide, so a window that spans a surface change
   // reads one stage through whatever is painted over it. A point on the
   // inline stage that the immersive surface has taken over is owned by that
@@ -230,7 +249,7 @@ function installStageSampler() {
       if (style.visibility === "hidden" || Number(style.opacity) <= 0.05) continue;
       return found;
     }
-    return null;
+    return morphAt(x, y);
   };
   // An uncovered point is only useful if it says what WAS there. Clip paths
   // remove a region from hit testing, so the element stack plus each page's
@@ -274,65 +293,86 @@ function installStageSampler() {
     });
     return { point: { x: Math.round(x), y: Math.round(y) }, stack, pages };
   };
-  // Which page the stack's clips are authored against. `mediaStackClip`
-  // returns a zero inset for the front page and only for it, so the unclipped
-  // page IS the front -- the committed current page at rest, and the neighbour
-  // a finger has pulled forward mid-drag, whose aperture the base is then
-  // legitimately clipped into. Reading the front from the product's own
-  // invariant is what separates that legitimate clip from a stale one: a
-  // measurable stack in which NO page is unclipped has lost its aperture, and
-  // `sampleRoot` reports that frame instead of quietly widening the claim.
-  const frontPage = (pages) => {
-    const slots = [...pages.querySelectorAll("[data-media-page-id]")]
-      .filter((page) => page.getBoundingClientRect().width > 0);
-    if (!slots.length) return null;
-    const unclipped = (page) => {
-      const clip = getComputedStyle(page).clipPath;
-      if (clip === "none") return true;
-      const inset = /^inset\(\s*(-?[\d.]+)%\s+(-?[\d.]+)%/.exec(clip);
-      return Boolean(inset) && Math.abs(Number(inset[1])) < 0.75 && Math.abs(Number(inset[2])) < 0.75;
-    };
-    const current = pages.querySelector('[data-media-page="current"]');
-    if (current && slots.includes(current) && unclipped(current)) return current;
-    return slots.find(unclipped) ?? null;
+  // The page whose aperture the coverage claim is graded against. A page's
+  // clip inset is NOT an identity signal: `applyMediaDragTransform` never
+  // writes clipPath, so every inset read during a drag or a settle is the
+  // PREVIOUS settle's spring output, in which the base is deliberately clipped
+  // into the neighbour's aperture while `data-media-page="current"` never
+  // moved. Read the presented page from the identity the product publishes,
+  // and use the clip only to narrow the probe rectangle to the pixels that
+  // page is actually allowed to paint.
+  const presentedPage = (pages) => {
+    const measurable = (page) => page && page.getBoundingClientRect().width > 0 ? page : null;
+    return measurable(pages.querySelector('[data-media-page="current"]'))
+      ?? measurable(pages.querySelector('[data-media-incoming="true"]'));
+  };
+  // `inset()` is a box shorthand and the computed value drops repeated sides,
+  // so `inset(0% 0%)` reads back as `inset(0%)`. Expand it with the CSS
+  // top/right/bottom/left omission rules before resolving the visible band.
+  const clipBand = (page, box) => {
+    const clip = getComputedStyle(page).clipPath;
+    if (!clip.startsWith("inset(")) return box;
+    const sides = (clip.match(/-?[\d.]+%/g) ?? []).map((side) => Number(side.slice(0, -1)));
+    if (!sides.length) return box;
+    const [top, right = top, bottom = top, left = right] = sides;
+    return new DOMRect(box.left + box.width * left / 100, box.top + box.height * top / 100,
+      box.width * (1 - (left + right) / 100), box.height * (1 - (top + bottom) / 100));
+  };
+  const intersect = (a, b) => {
+    const left = Math.max(a.left, b.left);
+    const top = Math.max(a.top, b.top);
+    return new DOMRect(left, top,
+      Math.max(0, Math.min(a.right, b.right) - left), Math.max(0, Math.min(a.bottom, b.bottom) - top));
   };
   // The rectangle the presented media actually occupies under `contain`. The
   // coverage claim is made inside this aperture only; the surrounding letterbox
   // is correct emptiness, not an uncovered stage.
   const aperture = (pages, owner) => {
-    const node = owner?.querySelector("img:not([hidden]), canvas:not([hidden])")
+    if (!owner) return new DOMRect(0, 0, 0, 0);
+    const node = owner.querySelector("img:not([hidden]), canvas:not([hidden])")
       ?? pages.querySelector('.story-media-pages__video video:not([hidden])');
-    const box = (node ?? owner ?? pages).getBoundingClientRect();
+    const box = (node ?? owner).getBoundingClientRect();
     const natural = node instanceof HTMLImageElement ? [node.naturalWidth, node.naturalHeight]
       : node instanceof HTMLVideoElement ? [node.videoWidth, node.videoHeight]
         : node instanceof HTMLCanvasElement ? [node.width, node.height] : [0, 0];
-    if (!natural[0] || !natural[1] || !box.width || !box.height) return box;
-    const scale = Math.min(box.width / natural[0], box.height / natural[1]);
-    const width = natural[0] * scale;
-    const height = natural[1] * scale;
-    return new DOMRect(box.left + (box.width - width) / 2, box.top + (box.height - height) / 2, width, height);
+    const scale = natural[0] && natural[1] && box.width && box.height
+      ? Math.min(box.width / natural[0], box.height / natural[1]) : 0;
+    const fitted = scale > 0
+      ? new DOMRect(box.left + (box.width - natural[0] * scale) / 2,
+        box.top + (box.height - natural[1] * scale) / 2, natural[0] * scale, natural[1] * scale)
+      : box;
+    // The presented page may legitimately be clipped into a neighbour's
+    // aperture mid-settle. Those pixels are not part of the picture it is
+    // being asked to draw, so the claim is made inside the band its own clip
+    // still allows -- never widened, only narrowed to what it may paint.
+    return intersect(fitted, clipBand(owner, owner.getBoundingClientRect()));
   };
-  // A shared-element morph runs through the View Transitions API, whose
-  // snapshots are browser-composited pseudo-elements rather than nodes, so
-  // `elementsFromPoint` cannot see them. Recording which view-transition
-  // groups are animating on a frame is what makes an uncovered stage during
-  // entry or exit attributable: either a morph owns the picture on that frame,
-  // or nothing does and the stage really was bare.
-  const viewTransitions = () => {
+  // Which morph snapshots are on screen this frame. Both kinds are invisible
+  // to a DOM hit test: a View Transitions snapshot is a browser-composited
+  // pseudo-element, and this product's own `runSharedElementMorph` clone is a
+  // `pointer-events: none` node on `document.body`. Recording them is what
+  // makes an uncovered stage during entry or exit attributable: either a morph
+  // owns the picture on that frame, or nothing does and the stage was bare.
+  const morphSnapshots = () => {
+    const clones = [...document.querySelectorAll("[data-shared-element-clone]")]
+      .filter((clone) => {
+        const box = clone.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      })
+      .map((clone) => clone.dataset.sharedElementClone);
     try {
-      return document.getAnimations()
+      return [...document.getAnimations()
         .filter((animation) => String(animation.effect?.pseudoElement ?? "").startsWith("::view-transition"))
-        .map((animation) => animation.effect.pseudoElement)
-        .slice(0, 6);
-    } catch { return []; }
+        .map((animation) => animation.effect.pseudoElement), ...clones].slice(0, 6);
+    } catch { return clones.slice(0, 6); }
   };
   function sampleRoot(selector, morphs, peers) {
     const root = document.querySelector(selector);
     const pages = root?.querySelector("[data-story-media-pages]");
     const measurable = pages ? pages.getBoundingClientRect() : null;
     if (!pages || !(measurable.width > 0) || !(measurable.height > 0)) return null;
-    const front = frontPage(pages);
-    const bounds = aperture(pages, front ?? pages.querySelector('[data-media-page="current"]'));
+    const front = presentedPage(pages);
+    const bounds = aperture(pages, front);
     const points = [[0.5, 0.5], [0.3, 0.5], [0.7, 0.5], [0.5, 0.3], [0.5, 0.7]];
     const at = ([fx, fy]) => [bounds.left + bounds.width * fx, bounds.top + bounds.height * fy];
     const drawables = bounds.width > 0 && bounds.height > 0
@@ -352,15 +392,16 @@ function installStageSampler() {
       centre: drawables[0]?.occludedBy ? null : drawables[0] ?? null,
       drawables,
       aperture: { width: Math.round(bounds.width), height: Math.round(bounds.height) },
-      // The front this aperture was read from, and whether the stack had one
-      // at all. A measurable stack with no unclipped page cannot say where its
-      // picture is, so that frame fails as a stale aperture rather than being
-      // graded against a rectangle nothing authored.
+      // The page this aperture was read from, and whether the stack offered a
+      // usable one at all. A measurable stack that declares no presented page,
+      // or whose presented page is clipped entirely out of its own picture,
+      // cannot say where the picture is -- that frame fails as a stale
+      // aperture rather than being graded against a rectangle nothing authored.
       front: front ? {
         id: front.getAttribute("data-media-page-id"),
         role: front.getAttribute("data-media-page"),
       } : null,
-      staleAperture: !front,
+      staleAperture: !front || !(bounds.width > 0 && bounds.height > 0),
       occluded: drawables.filter((entry) => entry?.occludedBy).length,
       uncovered: drawables.filter((entry) => entry === null).length,
       bareProbe: bare >= 0 ? probeAt(...at(points[bare])) : undefined,
@@ -378,7 +419,7 @@ function installStageSampler() {
   }
   function sample() {
     if (!state.running) return;
-    const morphs = viewTransitions();
+    const morphs = morphSnapshots();
     // Every root is read on the same frame, so a window that spans a surface
     // change grades the union rather than one stage that has already gone.
     const peers = state.roots
@@ -463,9 +504,10 @@ function gradeContinuity(frames, { allowedAssets, requireCoverage = true }) {
   const blankFrames = requireCoverage
     ? frames.filter((frame) => frame.currentId && frame.uncovered > 0 && !(frame.morphs?.length > 0))
     : [];
-  // A measurable stack whose pages are all clipped has no front to author
-  // those clips, so the aperture it is showing belongs to no page. That is the
-  // stale-clip failure the front rule exists to keep detectable.
+  // A measurable stack that declares no presented page, or whose presented
+  // page is clipped entirely out of its own picture, is showing an aperture
+  // that belongs to nothing. That is the failure the front rule keeps
+  // detectable.
   const staleApertureFrames = frames.filter((frame) => frame.staleAperture && frame.currentId);
   const waitingFrames = frames.filter((frame) => frame.waiting && frame.currentId);
   const multiVideoFrames = frames.filter((frame) => frame.videoCount > 1);
@@ -1079,10 +1121,15 @@ try {
       // One stream: past the threshold toward I2, then back past it toward V1
       // without lifting, so the reversal really is pre-commit.
       const gesture = await reverseSwipeStage(page, STAGE, 1);
-      await page.waitForFunction((selector) => {
-        const pages = document.querySelector(selector).querySelector("[data-story-media-pages]");
-        return pages.getAttribute("data-media-presentation") === "settled";
-      }, STAGE, { polling: "raf", timeout: 10_000 });
+      // Wait on the committed ID, not on `data-media-presentation`. A drag
+      // commit never routes through `incomingAssetId`, so the presentation
+      // attribute reads "settled" for the whole gesture and that wait returns
+      // on its first frame -- while the release springs, seeded with the
+      // gesture's own velocity, take most of a second to converge and only
+      // then run `landMediaDrag`. Reading the owner in that gap reports the
+      // page the gesture started from and calls a late commit a lost one.
+      const committed = await waitForSettledAsset(page, latestIntent, STAGE)
+        .then(() => null, async () => await stageDiagnostic(page, STAGE));
       const frames = await stopSamplerFrames(page);
       const settled = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
@@ -1105,7 +1152,7 @@ try {
         name: "story-reversal-commits-latest-intent",
         claim: "a reversal fired before the first navigation settles retargets within the same gesture and commits the reversal's own target, never the abandoned one, and leaves exactly one settled owner, one live transport and no late write-back",
         startedFrom, abandonedIntent, latestIntent, settled, transports, stable,
-        gesture, grabs: [...new Set(grabs)], trace,
+        gesture, grabs: [...new Set(grabs)], trace, committed,
         sampledFrames: frames.length,
         concurrentLiveVideos: frames.filter((frame) => frame.videoCount > 1).slice(0, 2),
         failed: settled.presentation !== "settled" || !settled.ready
