@@ -743,6 +743,7 @@ export default function DetailedEarthMap({
         || event.sourceId !== JOURNEY_OVERLAY_SOURCE_ID
         || event.isSourceLoaded !== true
         || appliedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+        || loadedJourneyOverlayRevision === appliedJourneyOverlayRevision
       ) return;
       loadedJourneyOverlayRevision = appliedJourneyOverlayRevision;
       // Source completion itself is not enough to reveal. Ask MapLibre for one
