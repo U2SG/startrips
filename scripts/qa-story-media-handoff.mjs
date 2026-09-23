@@ -1590,7 +1590,8 @@ try {
       // Root cause of a claim that used to pass without ever being exercised:
       // this window was driven by two swipes, but a gesture toward a neighbour
       // that is not readable at release RESISTS and requests nothing (the
-      // `story-cold-swipe-resists` claim above). So whenever V2 really was
+      // `story-handoff-continuity-delayed-readiness` claim above,
+      // whose `heldBy`/`requested` record states it outright). So whenever V2 really was
       // still cold there was no abandoned request at all -- the second swipe
       // was an ordinary step back to I1, whose release springs land about a
       // second later, and the check failed; and whenever V2 happened to be warm

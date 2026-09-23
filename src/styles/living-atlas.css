@@ -5705,7 +5705,13 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
      spare height to give back here, so the sheet takes the room it needs and
      the media region is sized to what is left above the fold rather than to a
      floor the viewport cannot honour. 106px is this block's own sticky sheet
-     handle (44px) plus header (62px). */
+     handle (44px) plus header (62px); the one later rule that changes either --
+     `.living-atlas.is-mobile-v2 .journey-story > header`, 56px + safe area --
+     only makes the header shorter, and its `.journey-story__media` height of
+     54svh is already inside the budget below. `max-height` carries the fit
+     independently of `height`, so a later, more specific height (that one, or
+     a future one) still cannot put the transport's control strip below the
+     fold; `min-height: 0` is what retires the floor that did. */
   @media (max-height: 480px) {
     .journey-story {
       height: min(92svh, 680px);
@@ -5715,6 +5721,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     .journey-story__media,
     .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
       height: calc(92svh - 106px);
+      max-height: calc(92svh - 106px);
       min-height: 0;
     }
   }
