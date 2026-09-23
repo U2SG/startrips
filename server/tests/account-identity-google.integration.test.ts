@@ -1,4 +1,6 @@
+import { execFile } from "node:child_process";
 import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -36,12 +38,22 @@ const { createEmailVerificationToken } = await import("better-auth/api");
 const { app } = await import("../app");
 const { auth } = await import("../auth");
 const { serverConfig } = await import("../config");
-const { atlases, accountIdentityAudit, accountIdentityOwnerships } = await import("../db/app-schema");
+const {
+  atlases,
+  accountIdentityAudit,
+  accountIdentityOwnerships,
+  providerIdTokenConsumptions,
+} = await import("../db/app-schema");
+const { GOOGLE_PROVIDER_ID } = await import("../account-identities/social-providers");
+const { consumeVerifiedIdToken, idTokenDigest } = await import(
+  "../account-identities/id-token-consumption"
+);
 const {
   account: authAccount,
   member: authMember,
   organization: authOrganization,
   rateLimit,
+  session: authSession,
   user: authUser,
 } = await import("../db/auth-schema");
 const { db, pool } = await import("../db/client");
@@ -63,6 +75,15 @@ type TokenClaimOverrides = {
   audience?: string;
   issuer?: string;
   signWith?: keyof typeof signingKeys;
+  /**
+   * #528. `issuedAt` is what makes two tokens for one subject distinguishable
+   * -- a different `iat` is a different string and therefore a different
+   * consumption digest -- and, moved far enough back, what makes a token stale
+   * past the adapter's own one-hour maximum age. `nonce` is the claim the
+   * pinned adapter compares against the one the caller presents.
+   */
+  issuedAt?: number;
+  nonce?: string;
 };
 
 type TokenAnswer =
@@ -88,7 +109,7 @@ function fakeIdToken(
   overrides: TokenClaimOverrides = {},
 ): string {
   const segment = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  const issuedAt = Math.floor(Date.now() / 1000);
+  const issuedAt = overrides.issuedAt ?? Math.floor(Date.now() / 1000);
   const signingInput = [
     segment({ alg: "RS256", kid: SIGNING_KEY_ID }),
     segment({
@@ -101,6 +122,7 @@ function fakeIdToken(
       picture: "https://example.test/avatar.png",
       iat: issuedAt,
       exp: issuedAt + 3600,
+      ...(overrides.nonce ? { nonce: overrides.nonce } : {}),
     }),
   ].join(".");
   const signature = createSign("RSA-SHA256")
@@ -770,5 +792,288 @@ describe("explicit google bind", () => {
     expect(callback.status).toBe(302);
     const fragment = fragmentOf(callback.headers.get("location") ?? "");
     expect(fragment.get("identityLinkError")).toBe("IDENTITY_BIND_STATE_INVALID");
+  });
+});
+
+/**
+ * #528 (ST-150): the direct `/sign-in/social` `idToken` path, which the whole
+ * file above never touches.
+ *
+ * Everything else here drives the authorization-code flow, where `code` and
+ * `state` are each single-use and a replay dies on the state. The native path
+ * has neither: the pinned 1.6.23 `api/routes/sign-in.mjs` runs
+ * `provider.verifyIdToken(token, nonce)` and signs the subject in, and
+ * verification answers only "did Google mint this for this audience". So the
+ * same still-valid token, posted again from any client, used to be a second
+ * successful authentication. `googleSignInOptions` now spends the token
+ * through `consumeVerifiedIdToken`, exactly as `apple-provider.ts` does under
+ * #350 owner decision B.
+ *
+ * What is single-use is the TOKEN, not the Google subject.
+ */
+describe("google id token sign-in", () => {
+  /**
+   * The same production `consumeVerifiedIdToken`, run by a SECOND Node
+   * process. `node --import tsx` gives it its own module registry and its own
+   * connection pool, so anything the two processes agree about is agreed
+   * through the shared table rather than through memory this one holds. The
+   * token goes over stdin, never argv; only the verdict comes back.
+   */
+  const CONSUMPTION_CHILD = fileURLToPath(
+    new URL("./id-token-consumption-child.ts", import.meta.url),
+  );
+
+  function consumeInSeparateProcess(token: string): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      const child = execFile(
+        process.execPath,
+        ["--import", "tsx", CONSUMPTION_CHILD],
+        { timeout: 60_000 },
+        (error, stdout, stderr) => {
+          if (error) {
+            reject(new Error(`consumption process failed: ${error.message}\n${stderr}`));
+            return;
+          }
+          const printed = stdout.trim().split("\n").at(-1) ?? "";
+          try {
+            resolve((JSON.parse(printed) as { consumed: boolean }).consumed);
+          } catch {
+            reject(new Error(
+              `consumption process printed ${JSON.stringify(printed)}\n${stderr}`,
+            ));
+          }
+        },
+      );
+      child.stdin?.end(JSON.stringify({ providerId: GOOGLE_PROVIDER_ID, token }));
+    });
+  }
+
+  async function signInWithIdToken(
+    token: string,
+    nonce?: string,
+    requestSignUp = true,
+  ) {
+    return await app.request(`${ORIGIN}/api/auth/sign-in/social`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN },
+      body: JSON.stringify({
+        provider: "google",
+        callbackURL: "/",
+        idToken: { token, ...(nonce ? { nonce } : {}) },
+        ...(requestSignUp ? { requestSignUp: true } : {}),
+      }),
+    });
+  }
+
+  async function usersFor(subject: string) {
+    return await db
+      .select({ id: authAccount.userId })
+      .from(authAccount)
+      .where(and(eq(authAccount.providerId, "google"), eq(authAccount.accountId, subject)));
+  }
+
+  /** Every live session of one user, so a refused replay can be proved not to have touched them. */
+  async function sessionIdsFor(userId: string) {
+    const rows = await db
+      .select({ id: authSession.id })
+      .from(authSession)
+      .where(eq(authSession.userId, userId));
+    return rows.map((row) => row.id).sort();
+  }
+
+  async function consumptionRecordFor(token: string) {
+    const [record] = await db
+      .select()
+      .from(providerIdTokenConsumptions)
+      .where(eq(
+        providerIdTokenConsumptions.tokenDigest,
+        idTokenDigest(GOOGLE_PROVIDER_ID, token),
+      ));
+    return record ?? null;
+  }
+
+  /** A first sign-in plus the client's own organization -> Atlas walk. */
+  async function establishAccount(subject: string, email: string) {
+    const response = await signInWithIdToken(fakeIdToken(subject, email, true));
+    expect(response.status).toBe(200);
+    const user = await trackGoogleUser(email);
+    expect(user).toBeTruthy();
+    const sessionCookie = jarFrom(response);
+
+    const organization = await postJson("/api/auth/organization/create", {
+      name: "ST-150 Atlas",
+      slug: `st150-${randomUUID()}`,
+    }, sessionCookie);
+    expect(organization.status).toBe(200);
+    const { id: organizationId } = await organization.json() as { id: string };
+    createdOrganizationIds.push(organizationId);
+    const activated = await postJson(
+      "/api/auth/organization/set-active",
+      { organizationId },
+      sessionCookie,
+    );
+    expect(activated.status).toBe(200);
+    const bootstrap = await postJson("/api/atlases/bootstrap", {
+      title: "ST-150",
+      dedication: "",
+    }, cookieHeader(sessionCookie, jarFrom(activated)));
+    expect(bootstrap.status).toBe(201);
+    return { userId: user!.id, organizationId };
+  }
+
+  async function atlasIdsFor(organizationId: string) {
+    const rows = await db
+      .select({ id: atlases.id })
+      .from(atlases)
+      .where(eq(atlases.organizationId, organizationId));
+    return rows.map((row) => row.id).sort();
+  }
+
+  it("spends a valid id token exactly once", async () => {
+    const subject = `st150-sub-replay-${randomUUID()}`;
+    const email = `st150-replay-${randomUUID()}@example.test`;
+    const token = fakeIdToken(subject, email, true);
+
+    expect((await signInWithIdToken(token)).status).toBe(200);
+    const user = await trackGoogleUser(email);
+    expect(user).toBeTruthy();
+    const accounts = await usersFor(subject);
+    expect(accounts).toHaveLength(1);
+    const established = await sessionIdsFor(user!.id);
+    expect(established).toHaveLength(1);
+
+    // The same token, a whole new request. No `state` and no `code` ever
+    // entered this path, so nothing but the consumption record can refuse it.
+    expect((await signInWithIdToken(token)).status).toBe(401);
+    expect(await usersFor(subject)).toEqual(accounts);
+    expect(await countAccounts(subject)).toHaveLength(1);
+    // The refusal is of the token alone: the session the first use established
+    // survives it.
+    expect(await sessionIdsFor(user!.id)).toEqual(established);
+  });
+
+  it("lets at most one of several concurrent presentations of one token succeed", async () => {
+    const subject = `st150-sub-race-${randomUUID()}`;
+    const email = `st150-race-${randomUUID()}@example.test`;
+    const token = fakeIdToken(subject, email, true);
+
+    // The record is claimed with one `insert ... on conflict do nothing ...
+    // returning`, so this race is decided by PostgreSQL rather than by any
+    // per-process state -- the same decision a second API instance would be
+    // subject to. The losers are asserted as 401 rather than merely "not 200",
+    // so a throttled request would fail as the throttle it is.
+    const statuses = await Promise.all(
+      Array.from({ length: 4 }, () => signInWithIdToken(token).then((r) => r.status)),
+    );
+    expect(statuses.filter((status) => status === 200)).toHaveLength(1);
+    expect(statuses.filter((status) => status === 401)).toHaveLength(3);
+
+    const user = await trackGoogleUser(email);
+    expect(user).toBeTruthy();
+    expect(await countAccounts(subject)).toHaveLength(1);
+    expect(await countOwnerships(subject)).toHaveLength(1);
+    expect(await sessionIdsFor(user!.id)).toHaveLength(1);
+  });
+
+  it("signs a subject whose token was already spent back into its own user and atlas", async () => {
+    const subject = `st150-sub-fresh-${randomUUID()}`;
+    const email = `st150-fresh-${randomUUID()}@example.test`;
+    const { userId, organizationId } = await establishAccount(subject, email);
+    const atlasesBefore = await atlasIdsFor(organizationId);
+    expect(atlasesBefore).toHaveLength(1);
+    const established = await sessionIdsFor(userId);
+
+    // A distinct token for the same Google subject: a different `iat`, so a
+    // different string and a different digest. It carries the sign-IN intent
+    // alone, which is what a returning user sends.
+    const later = fakeIdToken(subject, email, true, {
+      issuedAt: Math.floor(Date.now() / 1000) - 5,
+    });
+    expect((await signInWithIdToken(later, undefined, false)).status).toBe(200);
+
+    expect(await usersFor(subject)).toEqual([{ id: userId }]);
+    expect(await countAccounts(subject)).toHaveLength(1);
+    expect(await atlasIdsFor(organizationId)).toEqual(atlasesBefore);
+    const after = await sessionIdsFor(userId);
+    expect(after.length).toBe(established.length + 1);
+    expect(after).toEqual(expect.arrayContaining(established));
+  });
+
+  /**
+   * The load-bearing poisoning case: ONE token, refused and then accepted, so
+   * both presentations carry the SAME digest. A pair of different tokens could
+   * not prove anything here -- different strings hash to different records --
+   * which is why the nonce mismatch is the shape used. What is under test is
+   * the ordering inside the override: verification first, consumption only
+   * after it passes.
+   */
+  it("does not let a refused token occupy the record its own valid presentation needs", async () => {
+    const subject = `st150-sub-poison-${randomUUID()}`;
+    const email = `st150-poison-${randomUUID()}@example.test`;
+    const token = fakeIdToken(subject, email, true, {
+      nonce: "st150-nonce-for-this-authorization",
+    });
+
+    expect((await signInWithIdToken(token, "st150-nonce-from-another-authorization")).status)
+      .toBe(401);
+    expect(await usersFor(subject)).toHaveLength(0);
+    expect(await consumptionRecordFor(token)).toBeNull();
+
+    expect((await signInWithIdToken(token, "st150-nonce-for-this-authorization")).status)
+      .toBe(200);
+    expect(await trackGoogleUser(email)).toBeTruthy();
+    expect(await usersFor(subject)).toHaveLength(1);
+  });
+
+  it("leaves no record behind for a token the adapter itself refuses", async () => {
+    const subject = `st150-sub-unverified-${randomUUID()}`;
+    const email = `st150-unverified-${randomUUID()}@example.test`;
+    const wrongAudience = fakeIdToken(subject, email, true, {
+      audience: "st150-other-client.apps.googleusercontent.test",
+    });
+    const stale = fakeIdToken(subject, email, true, {
+      issuedAt: Math.floor(Date.now() / 1000) - 2 * 60 * 60,
+    });
+
+    expect((await signInWithIdToken(wrongAudience)).status).toBe(401);
+    expect((await signInWithIdToken(stale)).status).toBe(401);
+    expect(await consumptionRecordFor(wrongAudience)).toBeNull();
+    expect(await consumptionRecordFor(stale)).toBeNull();
+    expect(await usersFor(subject)).toHaveLength(0);
+
+    // Neither refusal cost the subject its sign-in.
+    expect((await signInWithIdToken(fakeIdToken(subject, email, true))).status).toBe(200);
+    expect(await trackGoogleUser(email)).toBeTruthy();
+    expect(await usersFor(subject)).toHaveLength(1);
+  });
+
+  it("records a spent token as a shared row that refuses it in another process", async () => {
+    const subject = `st150-sub-store-${randomUUID()}`;
+    const email = `st150-store-${randomUUID()}@example.test`;
+    const token = fakeIdToken(subject, email, true);
+    expect((await signInWithIdToken(token)).status).toBe(200);
+    expect(await trackGoogleUser(email)).toBeTruthy();
+
+    const record = await consumptionRecordFor(token);
+    expect(record).toBeTruthy();
+    expect(record!.providerId).toBe(GOOGLE_PROVIDER_ID);
+    // A digest and a window, never the credential itself.
+    expect(JSON.stringify(record)).not.toContain(token);
+    expect(record!.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    expect(record!.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 60 * 60 * 1000);
+
+    // A SECOND Node process, with its own module registry and its own pool,
+    // agrees the token is spent -- so the refusal is the row and not memory
+    // this process happens to hold. And a token spent over there is refused
+    // here, which is the direction a second API instance would exercise.
+    expect(await consumeInSeparateProcess(token)).toBe(false);
+    const spentThere = fakeIdToken(
+      `st150-sub-store-other-${randomUUID()}`,
+      `st150-store-other-${randomUUID()}@example.test`,
+      true,
+    );
+    expect(await consumeInSeparateProcess(spentThere)).toBe(true);
+    expect(await consumeVerifiedIdToken({ providerId: GOOGLE_PROVIDER_ID, token: spentThere }))
+      .toBe(false);
   });
 });
