@@ -434,10 +434,18 @@ export default function DetailedEarthMap({
       onReadinessChangeRef.current?.(readiness);
     };
     const syncJourneyOverlay = () => {
-      if (removed || !map.isStyleLoaded()) return false;
+      if (removed) return false;
       const overlay = journeyOverlayRef.current;
       const source = map.getSource(JOURNEY_OVERLAY_SOURCE_ID);
       if (source && appliedJourneyOverlayRevision === overlay.revision) return true;
+      // A GeoJSON `setData()` temporarily makes MapLibre report the overall
+      // style as not loaded while that source update is being processed. Once
+      // our source already exists, that is exactly when a rapid Journey switch
+      // still needs to replace its data; treating `isStyleLoaded()` as an
+      // update gate can strand the previous Journey forever. Keep the full-style
+      // barrier only for first install / style-reload recovery, where addSource
+      // and addLayer genuinely require the style to be ready.
+      if (!source && !map.isStyleLoaded()) return false;
       try {
         installDetailedEarthJourneyOverlay(map, overlay);
         appliedJourneyOverlayRevision = overlay.revision;
