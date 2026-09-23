@@ -1,9 +1,14 @@
 import type { OAuth2Tokens } from "better-auth/oauth2";
 import { google, type GoogleOptions } from "better-auth/social-providers";
 import { serverConfig, type ServerConfig } from "../config";
+import { appleSigningCredential } from "./apple-client-secret";
 import type { VerifiedProviderIdentity } from "./provider-proof";
 
 export const GOOGLE_PROVIDER_ID = "google";
+// #350: declared here rather than in `apple-provider.ts` so this module stays
+// the one provider registry. `apple-provider.ts` re-exports it and imports the
+// pending-identity bridge from here, which keeps the dependency one-way.
+export const APPLE_PROVIDER_ID = "apple";
 
 /**
  * #349: the provider half of the ST-067 identity contract.
@@ -207,7 +212,37 @@ export function createBindProvider(
   };
 }
 
+/**
+ * Every provider this deployment can complete a SIGN-IN with.
+ *
+ * Derived from the same credentials the adapters are derived from, so the
+ * identity surface can never advertise a login with no provider behind it.
+ * Binding is a strictly narrower question -- see `createBindProvider`.
+ */
 export function configuredSocialProviderIds(
+  config: ServerConfig = serverConfig,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (googleBaseOptions(config)) ids.add(GOOGLE_PROVIDER_ID);
+  if (appleSigningCredential(config)) ids.add(APPLE_PROVIDER_ID);
+  return ids;
+}
+
+/**
+ * The providers an EXISTING account may additionally bind, which is not the
+ * same set as the one above.
+ *
+ * Apple is deliberately absent. Its authorization returns with
+ * `response_mode=form_post`, i.e. a cross-site POST, and three things in the
+ * #349 bind flow assume a same-site GET: the callback route is a GET reading
+ * `context.req.query`, `IDENTITY_BIND_COOKIE` is `SameSite=Lax` and so is not
+ * sent on a cross-site POST at all, and the pinned `apple`
+ * `createAuthorizationURL` never forwards `codeVerifier` while the shared
+ * exchange sends `code_verifier` whenever one is present. Advertising apple
+ * here would render a bind button that cannot succeed, so it stays out until
+ * that path is built.
+ */
+export function bindableSocialProviderIds(
   config: ServerConfig = serverConfig,
 ): ReadonlySet<string> {
   const ids = new Set<string>();

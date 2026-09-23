@@ -28,6 +28,7 @@ import {
   verifyProviderIdentityProof,
 } from "../account-identities/provider-proof";
 import {
+  bindableSocialProviderIds,
   configuredSocialProviderIds,
   createBindProvider,
   identityBindRedirectUri,
@@ -109,8 +110,13 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
   // The sign-in gate renders its provider button from this, so it has to be
   // readable without a session. It exposes only which providers this
   // deployment configured -- the same fact the button itself would reveal.
+  //
+  // #350: this is the SIGN-IN set, so it reads `usableProviderIds`. It read
+  // `linkableProviderIds` while Google made the two identical; Apple is a
+  // provider this server can sign in with but cannot yet receive a bind
+  // callback from, and a sign-in button is exactly what it should still offer.
   routes.get("/providers", (context) => context.json({
-    signInProviders: [...linkableProviderIds].filter(validProviderId).sort(),
+    signInProviders: [...usableProviderIds].filter(validProviderId).sort(),
   }));
 
   routes.post("/reverify/password", async (context) => {
@@ -405,13 +411,19 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
   return routes;
 }
 
-// #349: the explicitly configured provider ids this deployment has, which is
-// empty whenever no Google client is configured. Both sets are the same one:
-// a provider Startrips accepts as a usable login is exactly a provider it
-// lets somebody bind.
-const SOCIAL_PROVIDER_IDS = configuredSocialProviderIds();
-
+// #349/#350: the explicitly configured provider ids this deployment has, empty
+// whenever it names no social credential at all.
+//
+// The two sets were the same one while Google was the only provider, and they
+// are no longer. A provider Startrips accepts as a usable login is one it can
+// complete a sign-in with; a provider somebody can BIND additionally needs the
+// #349 authorize/callback round trip, which assumes a same-site GET return.
+// Apple returns with `response_mode=form_post`, so it is a usable login and is
+// not yet bindable -- `bindableSocialProviderIds` carries the reasoning. This
+// is the truthful degradation: `availableLinkProviders` drives a generic bind
+// button in `src/auth/AuthGateway.tsx`, so advertising apple here would render
+// a control that can only fail.
 export const accountIdentityRoutes = createAccountIdentityRoutes({
-  usableProviderIds: SOCIAL_PROVIDER_IDS,
-  linkableProviderIds: SOCIAL_PROVIDER_IDS,
+  usableProviderIds: configuredSocialProviderIds(),
+  linkableProviderIds: bindableSocialProviderIds(),
 });
