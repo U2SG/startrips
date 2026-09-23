@@ -537,6 +537,20 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
   REPO="$(python3 "$ROOT/lib/runtime_preflight.py" "$ROOT" "$REPO" "$STARTRIPS_LANE" "$FEATURE" --repo "$GH_REPO" --worktree-only --prepare | tr -d '\r')"
   OWNER_WORKTREE64="$(python3 -c 'import base64,sys; print(base64.urlsafe_b64encode(sys.argv[1].encode("utf-8")).decode("ascii").rstrip("="))' "$REPO")" || exit 6
   if [[ -z "$CARRIER_FEATURE" ]]; then
+    # An exhausted replay budget has to be seen BEFORE the carrier binds, not
+    # after. A bound carrier cannot yield -- `yield_waiting_feature` refuses
+    # once CARRIER_FEATURE is set, and rightly so, because a carrier published
+    # for one owner must not silently retarget. So the post-binding budget
+    # check below can only exit, and the selector's first pick keeps re-locking
+    # the lane on an owner it cannot advance while every other eligible owner
+    # starves behind it. Asking here is free: progress_budget writes only when
+    # --after is supplied, so this read leaves the evidence untouched, and the
+    # post-binding check still guards the carrier itself.
+    BEFORE="$(python3 -B "$ROOT/lib/feature_state.py" fingerprint "$ROOT/feature_list.json" "$FEATURE" --repo-path "$REPO")" || exit 6
+    budget_rc=0
+    python3 -B "$ROOT/lib/progress_budget.py" "$ROOT" "$FEATURE" "$BEFORE" --context "$PLAN" --cap "$MAX_NO_CHANGE" || budget_rc=$?
+    if [[ "$budget_rc" == "7" ]] && yield_waiting_feature "$FEATURE"; then continue; fi
+    [[ "$budget_rc" == "0" ]] || exit "$budget_rc"
     # Publish exact logical-owner scope on this carrier before any SEAL/CI/model
     # work. Base64url keeps argv parsing independent of legal path characters.
     token="${CARRIER_TOKEN:-scope-$(date +%s)-$$-$RANDOM}"
