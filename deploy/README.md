@@ -46,6 +46,60 @@ to the low-volume public Photon demo because it is reachable from the current ho
 demo has no availability guarantee, so production should use a contracted endpoint
 or a self-hosted compatible service.
 
+## Itinerary import
+
+Importing an itinerary (#512) uses two independent adapters, both `disabled` by
+default. Pasted text is read in the browser and needs neither of them, so a
+deployment that installs nothing still imports a plan a member can paste.
+
+`ITINERARY_SOURCE_FETCH_DRIVER` selects how a shared plan link is read: `http`
+reads the page as served, and `render` posts the URL to the bounded rendering
+service named by `ITINERARY_SOURCE_RENDER_URL` for a page that composes itself
+in a browser. Every hop, including each redirect, is resolved before it is
+requested and refused when it lands on a private, loopback, link-local or
+cloud-metadata address, and the request is then pinned to the addresses that
+were checked, so a name that answers differently a moment later cannot move the
+connection. A link this deployment cannot reach is reported as unreachable at
+the source-access stage, never as an invalid link.
+
+A host that answers is a separate outcome from one that cannot be reached. When
+a source answers a non-2xx status to the `http` driver it is reported as
+`ITINERARY_SOURCE_REFUSED` at the `content-read` stage with the status it gave,
+because reach is already settled and what failed is the reading. The status it
+gave is carried in the message, because the answers do not all mean the same
+thing: a challenge or a throttle (401, 403, 405, 406, 429, 432, 503) says a
+static client is the wrong reader and is the case `render` exists for, and only
+those statuses are answered with that advice. A source known to answer a static
+read this way — a shared plan page that composes itself in a browser will, no
+matter what request headers are sent — needs
+`ITINERARY_SOURCE_FETCH_DRIVER=render` and a rendering service; retrying `http`
+will not change the answer. A 404, a 410 or a 5xx is a different sentence and
+is reported as itself, with no driver suggested.
+
+The `render` driver connects from inside the rendering service, where this app
+cannot pin anything, so the service is held to the same contract from its own
+side and must satisfy both halves of it:
+
+- it answers with `hops`, an ordered array of `{ url, address }` for every hop
+  it followed, starting with exactly the URL it was given, and `finalUrl`
+  matching the last of them. A reading whose hops are missing, undescribable or
+  inconsistent is refused as `ITINERARY_SOURCE_RENDER_UNVERIFIED` rather than
+  read, and a reported private address is refused as `ITINERARY_SOURCE_BLOCKED`;
+- it runs with egress restricted to the public internet. The hop report is what
+  this app can check, not a substitute for the service being unable to reach
+  your private network in the first place.
+
+It is passed `maxRedirects` and must not follow more.
+
+`ITINERARY_RECOGNITION_DRIVER=http-model` posts the submitted document to
+`ITINERARY_RECOGNITION_BASE_URL` with `ITINERARY_RECOGNITION_API_KEY` and
+accepts only versioned structured candidates in reply; anything else is refused
+at the extraction stage. `ITINERARY_RECOGNITION_MODEL` is recorded on every
+reading, so a draft stays attributable to the build that produced it and a
+newer build is a configuration change rather than a code change. The credential
+is never sent to a browser, and only what the member submitted for this import
+is sent to the provider.
+
 ## Detailed earth map
 
 The Living Atlas keeps its particle globe in Three.js and preloads a MapLibre
