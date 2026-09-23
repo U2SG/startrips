@@ -425,14 +425,55 @@ const storyQaMixedJourney: Journey = {
   } : asset),
 };
 
+// #489 (ST-134). The handoff contract names image<->image, image<->video,
+// video<->video and mixed aspect ratio as four separate classes, so the lane
+// that proves them needs a sequence carrying two differently shaped transports
+// and two adjacent photographs. `mixed-media` keeps its three-asset shape
+// because the existing media-controls lane navigates it by position.
+const STORY_QA_MIXED_VERTICAL_VIDEO_ASSET_ID = "00000000-0000-4000-8000-000000000153";
+const STORY_QA_MIXED_SECOND_PHOTO_ASSET_ID = "00000000-0000-4000-8000-000000000103";
+const storyQaMixedPairJourney: Journey = {
+  ...storyQaJourney,
+  media: [
+    { ...storyQaJourney.media[0], sortOrder: 0 },
+    {
+      ...storyQaJourney.media[1],
+      id: STORY_QA_MIXED_VIDEO_ASSET_ID,
+      storageKey: "qa/story-mixed-video",
+      fileName: "mixed-video.mp4",
+      mimeType: "video/mp4",
+      sortOrder: 1,
+    },
+    {
+      ...storyQaJourney.media[1],
+      id: STORY_QA_MIXED_VERTICAL_VIDEO_ASSET_ID,
+      storageKey: "qa/story-mixed-video-vertical",
+      fileName: "mixed-video-vertical.webm",
+      mimeType: "video/webm",
+      sortOrder: 2,
+    },
+    { ...storyQaJourney.media[2], sortOrder: 3 },
+    {
+      ...storyQaJourney.media[2],
+      id: STORY_QA_MIXED_SECOND_PHOTO_ASSET_ID,
+      storageKey: "qa/story-seed-3",
+      fileName: "seed-3.png",
+      sortOrder: 4,
+    },
+  ],
+};
+
 const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
 
 function JourneyStoryQaPreview() {
   const qaMode = new URLSearchParams(window.location.search).get("qaMode");
   const mixedMediaMode = qaMode === "mixed-media";
+  const mixedMediaPairMode = qaMode === "mixed-media-pair";
   const manyMediaMode = qaMode === "many-media";
   const routeBoundaryMode = qaMode === "route-boundary";
-  const initialJourney = mixedMediaMode
+  const initialJourney = mixedMediaPairMode
+    ? storyQaMixedPairJourney
+    : mixedMediaMode
     ? storyQaMixedJourney
     : routeBoundaryMode
       ? storyQaRouteBoundaryJourney

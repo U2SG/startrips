@@ -23,17 +23,34 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
-const storyPath = "/?qaState=journey-story&qaMode=mixed-media";
+const storyPath = "/?qaState=journey-story&qaMode=mixed-media-pair";
 
-// The mixed-media preview journey is image -> video -> image inside one scope.
+// The preview journey is image -> video -> video -> image -> image inside one
+// scope, so every handoff class the acceptance names has an adjacent pair:
+// image<->video (I1/V1), video<->video (V1/V2), video<->image (V2/I2) and
+// image<->image (I2/I3).
 const I1 = "00000000-0000-4000-8000-000000000100";
 const V1 = "00000000-0000-4000-8000-000000000152";
+const V2 = "00000000-0000-4000-8000-000000000153";
 const I2 = "00000000-0000-4000-8000-000000000102";
-// Checked-in artworks with deliberately different aspect ratios, so an
-// image<->video handoff is also a mixed-aspect-ratio handoff.
+const I3 = "00000000-0000-4000-8000-000000000103";
+const SEQUENCE = [I1, V1, V2, I2, I3];
+// Checked-in artworks and clips with deliberately different aspect ratios, so
+// every handoff above is also a mixed-aspect-ratio handoff: a wide scroll, a
+// square clip, a vertical clip, a tall coffin lid and a second wide picture.
 const WIDE_PHOTO = "/artworks/china-handscroll.jpg";
 const TALL_PHOTO = "/artworks/egypt-coffin.jpg";
+const SECOND_WIDE_PHOTO = "/artworks/hokusai-wave.jpg";
 const CLIP = "/demo-media/east-star-orbit.webm";
+const VERTICAL_CLIP = "/demo-media/qa-vertical-drift.webm";
+
+const ASSET_URLS = {
+  [I1]: WIDE_PHOTO,
+  [V1]: CLIP,
+  [V2]: VERTICAL_CLIP,
+  [I2]: TALL_PHOTO,
+  [I3]: SECOND_WIDE_PHOTO,
+};
 
 const STAGE = ".journey-story__media";
 const FULLSCREEN = ".journey-story-fullscreen";
@@ -48,7 +65,19 @@ function record(entry) {
 
 const browser = await launchQaBrowser();
 
-async function createStoryPage({ mobile = false, viewport, reducedMotion = "no-preference" } = {}) {
+/**
+ * `readDelays` and `byteDelays` hold the read-url and the media response of one
+ * asset back by a fixed number of milliseconds. This is the acceptance matrix's
+ * own row -- delayed image decode, delayed video first frame, a representative
+ * frame ready while the live transport is not, a stale result arriving late --
+ * and it makes the readiness gating do work that a file served off localhost
+ * never asks of it. It is a scenario, not a wait inserted to pass: nothing is
+ * asserted about the delay itself, and no assertion is relaxed while it runs.
+ */
+async function createStoryPage({
+  mobile = false, viewport, reducedMotion = "no-preference",
+  readDelays = {}, byteDelays = {},
+} = {}) {
   const page = await browser.newPage({
     viewport: viewport ?? (mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 }),
     isMobile: mobile,
@@ -64,15 +93,27 @@ async function createStoryPage({ mobile = false, viewport, reducedMotion = "no-p
   await page.route("**/api/auth/get-session", (route) => route.fulfill({
     status: 200, contentType: "application/json", body: "null",
   }));
-  await page.route("**/api/uploads/assets/*/read-url", (route) => {
+  const hold = (ms) => ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : null;
+  await page.route("**/api/uploads/assets/*/read-url", async (route) => {
     const request = route.request().url();
-    const url = request.includes(V1) ? CLIP : request.includes(I2) ? TALL_PHOTO : WIDE_PHOTO;
+    const asset = Object.keys(ASSET_URLS).find((id) => request.includes(id));
+    await hold(readDelays[asset] ?? 0);
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ url, expiresAt: new Date(Date.now() + 900_000).toISOString() }),
+      body: JSON.stringify({
+        url: ASSET_URLS[asset] ?? WIDE_PHOTO,
+        expiresAt: new Date(Date.now() + 900_000).toISOString(),
+      }),
     });
   });
+  for (const [asset, ms] of Object.entries(byteDelays)) {
+    if (!ms) continue;
+    await page.route(`**${ASSET_URLS[asset]}`, async (route) => {
+      await hold(ms);
+      return route.continue();
+    });
+  }
   await page.goto(`${origin}${storyPath}`, { waitUntil: "domcontentloaded" });
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
   return { page, consoleErrors, pageErrors };
@@ -84,7 +125,7 @@ function installStageSampler() {
   // inside the stage and records which asset actually draws the foreground
   // there, so a reversal, a stale layer or an uncovered stage is attributable
   // to a frame and an instance rather than to a screenshot.
-  const state = { running: false, frames: [], root: null, gestures: [], unmeasurable: 0 };
+  const state = { running: false, frames: [], roots: [], gestures: [], unmeasurable: 0 };
   window.__qaStage = state;
   // A bounded trace of the input the product actually received. A drag that
   // never commits is attributable to a missing axis lock, a missing neighbour
@@ -197,43 +238,72 @@ function installStageSampler() {
     const height = natural[1] * scale;
     return new DOMRect(box.left + (box.width - width) / 2, box.top + (box.height - height) / 2, width, height);
   };
-  function sample() {
-    if (!state.running) return;
-    const root = state.root && document.querySelector(state.root);
+  // A shared-element morph runs through the View Transitions API, whose
+  // snapshots are browser-composited pseudo-elements rather than nodes, so
+  // `elementsFromPoint` cannot see them. Recording which view-transition
+  // groups are animating on a frame is what makes an uncovered stage during
+  // entry or exit attributable: either a morph owns the picture on that frame,
+  // or nothing does and the stage really was bare.
+  const viewTransitions = () => {
+    try {
+      return document.getAnimations()
+        .filter((animation) => String(animation.effect?.pseudoElement ?? "").startsWith("::view-transition"))
+        .map((animation) => animation.effect.pseudoElement)
+        .slice(0, 6);
+    } catch { return []; }
+  };
+  function sampleRoot(selector, morphs) {
+    const root = document.querySelector(selector);
     const pages = root?.querySelector("[data-story-media-pages]");
     const measurable = pages ? pages.getBoundingClientRect() : null;
-    if (pages && measurable.width > 0 && measurable.height > 0) {
-      const bounds = aperture(pages);
-      const points = [[0.5, 0.5], [0.3, 0.5], [0.7, 0.5], [0.5, 0.3], [0.5, 0.7]];
-      const drawables = bounds.width > 0 && bounds.height > 0
-        ? points.map(([fx, fy]) => drawableAt(bounds.left + bounds.width * fx, bounds.top + bounds.height * fy))
-        : [];
-      const current = pages.querySelector('[data-media-page="current"]');
-      const incoming = pages.querySelector('[data-media-incoming="true"]');
-      const videos = [...pages.querySelectorAll("video")];
-      state.frames.push({
-        at: Math.round(performance.now()),
-        presentation: pages.getAttribute("data-media-presentation"),
-        kind: pages.getAttribute("data-current-media-kind"),
-        currentId: current?.getAttribute("data-media-page-id") ?? null,
-        incomingId: incoming?.getAttribute("data-media-page-id") ?? null,
-        centre: drawables[0] ?? null,
-        drawables,
-        aperture: { width: Math.round(bounds.width), height: Math.round(bounds.height) },
-        uncovered: drawables.filter((entry) => entry === null).length,
-        waiting: Boolean(root.querySelector(".starlight-media-state.is-waiting")),
-        videoCount: videos.length,
-        videoOwner: videos.map((video) => video.getAttribute("data-shared-media-id")),
-      });
-    } else if (state.running) {
-      state.unmeasurable += 1;
-    }
+    if (!pages || !(measurable.width > 0) || !(measurable.height > 0)) return null;
+    const bounds = aperture(pages);
+    const points = [[0.5, 0.5], [0.3, 0.5], [0.7, 0.5], [0.5, 0.3], [0.5, 0.7]];
+    const drawables = bounds.width > 0 && bounds.height > 0
+      ? points.map(([fx, fy]) => drawableAt(bounds.left + bounds.width * fx, bounds.top + bounds.height * fy))
+      : [];
+    const current = pages.querySelector('[data-media-page="current"]');
+    const incoming = pages.querySelector('[data-media-incoming="true"]');
+    const videos = [...pages.querySelectorAll("video")];
+    return {
+      root: selector,
+      at: Math.round(performance.now()),
+      presentation: pages.getAttribute("data-media-presentation"),
+      kind: pages.getAttribute("data-current-media-kind"),
+      currentId: current?.getAttribute("data-media-page-id") ?? null,
+      incomingId: incoming?.getAttribute("data-media-page-id") ?? null,
+      centre: drawables[0] ?? null,
+      drawables,
+      aperture: { width: Math.round(bounds.width), height: Math.round(bounds.height) },
+      uncovered: drawables.filter((entry) => entry === null).length,
+      waiting: Boolean(root.querySelector(".starlight-media-state.is-waiting")),
+      videoCount: videos.length,
+      videoOwner: videos.map((video) => video.getAttribute("data-shared-media-id")),
+      morphs,
+    };
+  }
+  function sample() {
+    if (!state.running) return;
+    const morphs = viewTransitions();
+    // Every root is read on the same frame, so a window that spans a surface
+    // change grades the union rather than one stage that has already gone.
+    const observed = state.roots.map((selector) => sampleRoot(selector, morphs)).filter(Boolean);
+    if (!observed.length) { state.unmeasurable += 1; return; }
+    if (observed.length === 1) { state.frames.push(observed[0]); return; }
+    // One logical frame per tick: the surface presenting the picture owns it,
+    // and a stage that is present but drawing nothing is the weaker claim.
+    const owner = observed.find((entry) => entry.uncovered === 0 && entry.currentId)
+      ?? observed.find((entry) => entry.currentId) ?? observed[0];
+    state.frames.push({ ...owner, surfaces: observed.map((entry) => ({
+      root: entry.root, currentId: entry.currentId, uncovered: entry.uncovered,
+      videoCount: entry.videoCount,
+    })) });
   }
   // Each window owns its own chain, retired by generation. A chain started at
   // document-start is not reliably carried into the committed document, and a
   // chain that only restarts on demand can be lost when a window closes.
   window.__qaStageStart = (rootSelector) => {
-    state.root = rootSelector;
+    state.roots = Array.isArray(rootSelector) ? rootSelector : [rootSelector];
     state.frames = [];
     state.gestures = [];
     state.unmeasurable = 0;
@@ -283,8 +353,15 @@ function gradeContinuity(frames, { allowedAssets, requireCoverage = true }) {
       reason: "the sampler recorded no measurable frame for this window",
     };
   }
+  // A frame whose aperture is uncovered while a view-transition group is
+  // animating is owned by the morph snapshot, which no DOM hit test can see.
+  // Those frames are counted and reported separately instead of being graded
+  // as a bare stage or silently dropped from the claim.
+  const morphCovered = frames.filter((frame) =>
+    frame.currentId && frame.uncovered > 0 && frame.morphs?.length > 0);
   const blankFrames = requireCoverage
-    ? frames.filter((frame) => frame.currentId && frame.uncovered > 0) : [];
+    ? frames.filter((frame) => frame.currentId && frame.uncovered > 0 && !(frame.morphs?.length > 0))
+    : [];
   const waitingFrames = frames.filter((frame) => frame.waiting && frame.currentId);
   const multiVideoFrames = frames.filter((frame) => frame.videoCount > 1);
   // A foreground that goes new -> old -> new inside ONE transition is the
@@ -311,6 +388,8 @@ function gradeContinuity(frames, { allowedAssets, requireCoverage = true }) {
   }
   return {
     sampledFrames: frames.length,
+    morphCoveredFrames: morphCovered.length,
+    morphNames: [...new Set(morphCovered.flatMap((frame) => frame.morphs))].slice(0, 6),
     // Frames arrive from the animation-frame chain and from DOM mutations. The
     // tick count says which, so a claim about frames is never broader than the
     // observation that produced them.
@@ -577,12 +656,13 @@ try {
       const afterFirstSwipe = await currentAsset(page);
 
       await startSampler(page, STAGE);
-      const offVideo = await navigateByGesture(page, STAGE, 1, I2);
+      // V1 -> V2 is the video<->video class: one transport, two sources.
+      const offVideo = await navigateByGesture(page, STAGE, 1, V2);
       const swipeFrames = await stopSamplerFrames(page);
       const afterVideoSwipe = await currentAsset(page);
       const playbackAfterSwipe = await samplePlayback(page, STAGE, { samples: 2, everyMs: 120 });
 
-      // Back onto the video, then advertise-driven keyboard navigation.
+      // Back onto the first video, then advertise-driven keyboard navigation.
       const backToVideo = await navigateByGesture(page, STAGE, -1, V1);
       const stageRole = await page.evaluate((selector) => {
         const pages = document.querySelector(selector).querySelector("[data-story-media-pages]");
@@ -594,18 +674,18 @@ try {
         };
       }, STAGE);
       await page.keyboard.press("ArrowRight");
-      const keyboardSettled = await waitForSettledAsset(page, I2).then(() => true, () => false);
+      const keyboardSettled = await waitForSettledAsset(page, V2).then(() => true, () => false);
       const afterKeyboard = keyboardSettled ? await currentAsset(page) : await stageDiagnostic(page, STAGE);
 
       record({
         name: "story-video-navigation-preserved",
-        claim: "a swipe over the video lands exactly one step away without starting playback, so its compatibility click did not add a second step, and the stage's advertised arrow keys still navigate",
+        claim: "a swipe over the video lands exactly one step away -- onto the second, differently shaped video -- without starting playback, so its compatibility click did not add a second step, and the stage's advertised arrow keys still navigate",
         toVideo, offVideo, backToVideo,
         afterFirstSwipe, afterVideoSwipe, playbackAfterSwipe, stageRole, keyboardSettled, afterKeyboard,
-        handoff: gradeContinuity(swipeFrames, { allowedAssets: [V1, I2] }),
+        handoff: gradeContinuity(swipeFrames, { allowedAssets: [V1, V2] }),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !toVideo.ok || !offVideo.ok || !backToVideo.ok || !keyboardSettled
-          || afterFirstSwipe.id !== V1 || afterVideoSwipe.id !== I2
+          || afterFirstSwipe.id !== V1 || afterVideoSwipe.id !== V2
           || playbackAfterSwipe.paused !== true
           || stageRole.tabIndex !== 0 || !stageRole.focused
           || stageRole.keyshortcuts !== "ArrowLeft ArrowRight"
@@ -650,7 +730,9 @@ try {
     { label: "desktop", mobile: false, viewport: { width: 1280, height: 800 }, reducedMotion: "no-preference" },
     { label: "desktop-reduced", mobile: false, viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" },
     { label: "phone-portrait", mobile: true, viewport: { width: 390, height: 844 }, reducedMotion: "no-preference" },
+    { label: "phone-portrait-reduced", mobile: true, viewport: { width: 390, height: 844 }, reducedMotion: "reduce" },
     { label: "phone-landscape", mobile: true, viewport: { width: 844, height: 390 }, reducedMotion: "no-preference" },
+    { label: "phone-landscape-reduced", mobile: true, viewport: { width: 844, height: 390 }, reducedMotion: "reduce" },
   ]) {
     const session = await createStoryPage(profile);
     try {
@@ -659,14 +741,18 @@ try {
       await startSampler(page, STAGE);
       const visited = [I1];
       const steps = [];
-      for (const [target, direction] of [[V1, 1], [I2, 1], [V1, -1], [I1, -1]]) {
+      // Forward through every adjacent pair -- image->video, video->video,
+      // video->image, image->image -- and back again, so each class is graded
+      // in both directions on this viewport and motion mode.
+      const route = [[V1, 1], [V2, 1], [I2, 1], [I3, 1], [I2, -1], [V2, -1], [V1, -1], [I1, -1]];
+      for (const [target, direction] of route) {
         const step = await navigateByGesture(page, STAGE, direction, target);
         steps.push(step);
         if (!step.ok) break;
         visited.push(target);
       }
       const frames = await stopSamplerFrames(page);
-      const continuity = gradeContinuity(frames, { allowedAssets: [I1, V1, I2] });
+      const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
       const stuck = steps.filter((step) => !step.ok);
       record({
         name: `story-handoff-continuity-${profile.label}`,
@@ -683,6 +769,86 @@ try {
   }
 
   // ---------------------------------------------------------------------
+  // B (continued). Readiness under latency. Served off a local preview server
+  // every asset is ready almost immediately, which never asks currentReady /
+  // targetReady / the retained frame to do their job. These two windows hold
+  // the read URL and the media bytes back so the handoff has to wait, and the
+  // continuity assertions are exactly the ones above -- unchanged.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({
+      mobile: false,
+      byteDelays: { [I2]: 1_200, [V2]: 900 },
+      readDelays: { [I3]: 900 },
+    });
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      await startSampler(page, STAGE);
+      const steps = [];
+      for (const [target, direction] of [[V1, 1], [V2, 1], [I2, 1], [I3, 1]]) {
+        const step = await navigateByGesture(page, STAGE, direction, target);
+        steps.push(step);
+        if (!step.ok) break;
+      }
+      const frames = await stopSamplerFrames(page);
+      const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
+      const stuck = steps.filter((step) => !step.ok);
+      record({
+        name: "story-handoff-continuity-delayed-readiness",
+        claim: "with the media bytes and one read URL deliberately held back, every handoff still keeps a legitimate drawable inside the aperture, never shows the waiting indicator while a page owns the stage, and never spawns a second transport",
+        delays: { bytes: { [I2]: 1_200, [V2]: 900 }, read: { [I3]: 900 } },
+        stuck, ...continuity,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: continuity.failed || stuck.length > 0
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  {
+    // The reversal happens while the abandoned target is still unreadable, so
+    // its read resolves after the user has already committed elsewhere. The
+    // stale result must not take the stage back.
+    const session = await createStoryPage({ mobile: false, readDelays: { [V2]: 2_500 } });
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      await navigateByGesture(page, STAGE, 1, V1);
+      await startSampler(page, STAGE);
+      await swipeStage(page, STAGE, 1);
+      await swipeStage(page, STAGE, -1);
+      await waitForSettledAsset(page, I1);
+      const afterReversal = await currentAsset(page);
+      // Outlive the held read, then look again: this window exists to catch a
+      // late completion, so it has to still be recording when the read lands.
+      await page.waitForTimeout(3_000);
+      const frames = await stopSamplerFrames(page);
+      const afterLateRead = await currentAsset(page);
+      const transports = await page.evaluate((selector) =>
+        document.querySelector(selector).querySelectorAll("video").length, STAGE);
+      // A neighbour that peeks during the drag is the stack's own grammar, so
+      // the whole sequence is allowed here; what this window forbids is the
+      // committed owner moving, or the stage going bare, once the late read
+      // finally lands.
+      const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
+      record({
+        name: "story-late-read-never-takes-the-stage",
+        claim: "a read URL that resolves after its navigation was abandoned neither moves the committed owner nor leaves the aperture uncovered",
+        afterReversal, afterLateRead, transports, ...continuity,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: continuity.failed || afterReversal.id !== I1 || afterLateRead.id !== I1
+          || afterLateRead.presentation !== "settled" || transports !== 1
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // B (continued). A reversal fired before the spring settles commits only
   // the latest intent, and no stale completion writes back.
   // ---------------------------------------------------------------------
@@ -691,6 +857,16 @@ try {
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
+      // Start from the middle of the sequence on purpose. From the first asset
+      // a reverse swipe has no previous neighbour, so the first intent wins by
+      // default and the check could pass while a stale completion decided the
+      // outcome. Here both directions address a real, different asset, so the
+      // latest intent is a named target rather than "either is legitimate".
+      await navigateByGesture(page, STAGE, 1, V1);
+      await navigateByGesture(page, STAGE, 1, V2);
+      const startedFrom = await currentAsset(page);
+      const abandonedIntent = I2;
+      const latestIntent = V1;
       await startSampler(page, STAGE);
       await swipeStage(page, STAGE, 1);
       // No wait: reverse while the previous intent is still in flight.
@@ -703,8 +879,6 @@ try {
       const settled = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
         document.querySelector(selector).querySelectorAll("video").length, STAGE);
-      // Either intent is a legitimate outcome of a race the user created; what
-      // must hold is a single settled owner, one transport and no later write.
       const stable = await page.evaluate(async (selector) => {
         const read = () => document.querySelector(selector)
           .querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id");
@@ -714,11 +888,12 @@ try {
       }, STAGE);
       record({
         name: "story-reversal-commits-latest-intent",
-        claim: "a second navigation fired before the first settles leaves exactly one settled owner, one live transport and no late write-back",
-        settled, transports, stable,
+        claim: "a reversal fired before the first navigation settles commits the reversal's own target, never the abandoned one, and leaves exactly one settled owner, one live transport and no late write-back",
+        startedFrom, abandonedIntent, latestIntent, settled, transports, stable,
         sampledFrames: frames.length,
         concurrentLiveVideos: frames.filter((frame) => frame.videoCount > 1).slice(0, 2),
-        failed: settled.presentation !== "settled" || !settled.id || !settled.ready
+        failed: settled.presentation !== "settled" || !settled.ready
+          || settled.id !== latestIntent
           || transports !== 1 || stable.first !== stable.second
           || frames.some((frame) => frame.videoCount > 1)
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
@@ -739,6 +914,7 @@ try {
       const half = await photoClickPoint(page, STAGE, 1);
       await page.mouse.click(half.x, half.y);
       await waitForSettledAsset(page, V1);
+      const toSecondVideo = await navigateByGesture(page, STAGE, 1, V2);
       const toLastVisible = await navigateByGesture(page, STAGE, 1, I2);
       const lastVisible = await currentAsset(page);
 
@@ -747,37 +923,38 @@ try {
       // separately rather than graded as an uncovered stage -- and the window
       // has to open BEFORE the entry gesture, or the reveal it exists to watch
       // has already happened by the time recording starts.
-      await startSampler(page, FULLSCREEN);
+      // Both stages are observed on the same frames, and a morph snapshot is
+      // now attributable, so coverage across the surface change is graded
+      // rather than excused.
+      await startSampler(page, [STAGE, FULLSCREEN]);
       await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
       await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
       await waitForSettledAsset(page, I2, FULLSCREEN);
       const entryFrames = await stopSamplerFrames(page);
       const entered = await currentAsset(page, FULLSCREEN);
 
-      await startSampler(page, STAGE);
+      await startSampler(page, [STAGE, FULLSCREEN]);
       await page.keyboard.press("Escape");
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       await waitForSettledAsset(page, I2);
       const exitFrames = await stopSamplerFrames(page);
       const exited = await currentAsset(page);
 
-      // Coverage is deliberately not claimed across the surface change. The
-      // continuity of the reveal itself is carried by the shared-element morph,
-      // which lives outside both media stages, so this sampler cannot attribute
-      // an uncovered stage frame to a defect rather than to its own blind spot.
-      // Asset identity and transport count it can attribute, and does.
-      const entry = gradeContinuity(entryFrames, { allowedAssets: [I2], requireCoverage: false });
-      const exit = gradeContinuity(exitFrames, { allowedAssets: [I2], requireCoverage: false });
+      // The reveal is carried by the shared-element morph, whose snapshots are
+      // View Transitions pseudo-elements rather than nodes. The sampler now
+      // records which view-transition groups animate on each frame, so an
+      // uncovered aperture is either owned by a running morph -- reported as
+      // morphCoveredFrames -- or is a genuinely bare stage, which fails.
+      const entry = gradeContinuity(entryFrames, { allowedAssets: [I2] });
+      const exit = gradeContinuity(exitFrames, { allowedAssets: [I2] });
       record({
         name: "story-entry-exit-object-continuity",
-        claim: "entering immersive viewing presents only the targeted asset and leaving restores the same last-visible asset, with no other asset owning the foreground and no second transport; blank-stage coverage across the surface change is NOT claimed here",
+        claim: "entering immersive viewing presents only the targeted asset and leaving restores the same last-visible asset, with no other asset owning the foreground, no second transport, and no frame in which neither stage draws the picture while no shared-element morph owns it",
         entryFrames: entryFrames.length, exitFrames: exitFrames.length,
-        toLastVisible, lastVisible, entered, exited, entry, exit,
+        toSecondVideo, toLastVisible, lastVisible, entered, exited, entry, exit,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: !toLastVisible.ok || lastVisible.id !== I2 || entered.id !== I2 || exited.id !== I2
-          || entry.staleForeground?.length > 0 || exit.staleForeground?.length > 0
-          || entry.concurrentLiveVideos?.length > 0 || exit.concurrentLiveVideos?.length > 0
-          || entryFrames.length === 0
+        failed: !toSecondVideo.ok || !toLastVisible.ok || lastVisible.id !== I2 || entered.id !== I2 || exited.id !== I2
+          || entry.failed || exit.failed
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
