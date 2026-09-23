@@ -323,7 +323,9 @@ function installStageSampler() {
   const clipBand = (page, box) => {
     const clip = getComputedStyle(page).clipPath;
     if (!clip.startsWith("inset(")) return box;
-    const sides = (clip.match(/-?[\d.]+%/g) ?? []).map((side) => Number(side.slice(0, -1)));
+    // A computed inset can carry exponent notation (`7.06392e-05%`), and a
+    // digits-only pattern reads its exponent back as a separate negative side.
+    const sides = (clip.match(/-?\d*\.?\d+(?:e[-+]?\d+)?%/gi) ?? []).map((side) => Number(side.slice(0, -1)));
     if (!sides.length) return box;
     const [top, right = top, bottom = top, left = right] = sides;
     return new DOMRect(box.left + box.width * left / 100, box.top + box.height * top / 100,
@@ -757,7 +759,9 @@ async function stackRestState(page, rootSelector) {
     const insets = (node) => {
       const clip = getComputedStyle(node).clipPath;
       if (!clip.startsWith("inset(")) return [0, 0, 0, 0];
-      const sides = (clip.match(/-?[\d.]+%/g) ?? []).map((side) => Number(side.slice(0, -1)));
+      // A computed inset can carry exponent notation (`7.06392e-05%`), and a
+    // digits-only pattern reads its exponent back as a separate negative side.
+    const sides = (clip.match(/-?\d*\.?\d+(?:e[-+]?\d+)?%/gi) ?? []).map((side) => Number(side.slice(0, -1)));
       if (!sides.length) return [0, 0, 0, 0];
       const [top, right = top, bottom = top, left = right] = sides;
       return [top, right, bottom, left];
@@ -1353,6 +1357,15 @@ try {
       const grabs = (await page.evaluate(() => (window.__qaStage?.gestures ?? [])))
         .filter((entry) => entry.type === "story-media-grab" || entry.type === "story-media-recover");
       const rest = gradeRestState(afterGrab, I2);
+      // The recorded phenomenon itself: the presented page carrying an aperture
+      // it was written into for a target that never arrived, while the stack
+      // declares nothing in flight. Graded per frame, not read from the end
+      // state -- the residue clears itself once something else happens to
+      // re-derive the aperture, which is exactly why a screenshot shows
+      // nothing wrong.
+      const clippedWhileSettled = frames.filter((frame) =>
+        frame.presentation === "settled" && frame.currentClip
+        && frame.currentClip !== "none" && !/^inset\(0%\)$/.test(frame.currentClip));
       const continuity = gradeContinuity(frames, { allowedAssets: [I2, I3] });
       record({
         name: "story-abandoned-handoff-reclaims-presentation",
@@ -1368,17 +1381,13 @@ try {
           && frame.currentClip !== "none" && frame.currentClip !== "inset(0%)"),
         beforeGrab, afterGrab, rest, settled, stillPresented,
         sampledFrames: frames.length,
-        // The frames whose presented page was clipped while nothing was in
-        // flight. They are the recorded phenomenon itself, not a sample of it.
-        clippedWhileSettled: frames
-          .filter((frame) => frame.presentation === "settled" && frame.currentClip
-            && frame.currentClip !== "none" && !/^inset\(0%\)$/.test(frame.currentClip))
-          .slice(0, 4),
+        clippedWhileSettled: { frames: clippedWhileSettled.length, first: clippedWhileSettled.slice(0, 3) },
         continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: steps.some((step) => !step.ok) || !stillPresented
           || !beforeGrab.pages.some((slot) => slot.id === I3 && slot.ready === "true")
           || settled.id !== I2 || rest.failed || continuity.failed
+          || clippedWhileSettled.length > 0
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
