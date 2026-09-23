@@ -211,4 +211,85 @@ describe("Journey keepsake render manifest (#87)", () => {
     expect(manifests[2].actualDurationMs).toBeGreaterThanOrEqual(60_000);
     expect(buildKeepsakeRenderManifest(journey, 30)).toEqual(manifests[1]);
   });
+
+  it("preserves large mixed chapters and intro media with only linear media-owner reads", () => {
+    const excluded = [
+      media("orphan-a", "missing", "image/jpeg", 0),
+      media("orphan-b", "missing", "video/mp4", 1),
+      media("audio-a", "p0", "audio/mpeg", 0),
+      media("audio-b", "p0", "audio/mpeg", 1),
+    ];
+    for (const asset of excluded) {
+      Object.defineProperty(asset, "sortOrder", {
+        get: () => { throw new Error("excluded media must not be sorted"); },
+      });
+    }
+    const mixed: Journey = {
+      ...journey,
+      routePoints: [point("p1", 1, 121), point("empty", 2, 125), point("p0", 0, 114)],
+      media: [
+        media("intro-a", null, "image/jpeg", 1),
+        media("intro-b", null, "video/mp4", 0),
+        ...["p0", "p1"].flatMap((owner) => Array.from({ length: 80 }, (_, index) => (
+          media(`${owner}-${index}`, owner, index % 3 === 0 ? "video/mp4" : "image/jpeg", Math.floor((79 - index) / 2))
+        ))),
+        ...excluded,
+      ],
+    };
+    const originalMedia = mixed.media.slice();
+    let ownerReads = 0;
+    for (const asset of mixed.media) {
+      const owner = asset.routePointId;
+      Object.defineProperty(asset, "routePointId", { get: () => { ownerReads += 1; return owner; } });
+      Object.freeze(asset);
+    }
+    Object.freeze(mixed.media);
+    Object.freeze(mixed.routePoints);
+
+    const manifest = buildKeepsakeRenderManifest(mixed, 15);
+    const manifestOwnerReads = ownerReads;
+    const sortedIndexes = Array.from({ length: 40 }, (_, pair) => [78 - pair * 2, 79 - pair * 2]).flat();
+    const expectedMedia = [
+      { kind: "media", pointIndex: null, routePointId: null, mediaAssetId: "intro-b", mediaType: "video", durationMs: 1800 },
+      { kind: "media", pointIndex: null, routePointId: null, mediaAssetId: "intro-a", mediaType: "image", durationMs: 1500 },
+      ...["p1", "p0"].flatMap((owner, ownerIndex) => sortedIndexes.map((index) => ({
+        kind: "media",
+        pointIndex: ownerIndex * 2,
+        routePointId: owner,
+        mediaAssetId: `${owner}-${index}`,
+        mediaType: index % 3 === 0 ? "video" : "image",
+        durationMs: index % 3 === 0 ? 1800 : 1500,
+      }))),
+    ];
+    expect(manifest.scenes.filter((scene) => scene.kind === "media")).toEqual(expectedMedia);
+    expect(manifest.narrativeSnapshot).toEqual({
+      routePointIds: ["p1", "empty", "p0"],
+      visualMedia: expectedMedia.map(({ mediaAssetId, routePointId }) => ({ mediaAssetId, routePointId })),
+    });
+    expect(manifest.scenes.filter((scene) => scene.kind === "map" && scene.role === "arrival")
+      .map((scene) => scene.routePointId)).toEqual(["p1", "empty", "p0"]);
+    expect(manifestOwnerReads).toBeGreaterThanOrEqual(mixed.media.length);
+    expect(manifestOwnerReads).toBeLessThanOrEqual(4 * mixed.media.length);
+    mixed.media.forEach((asset, index) => expect(asset).toBe(originalMedia[index]));
+  });
+
+  it("rereads the same Journey after media changes when validating and rebuilding", () => {
+    const current: Journey = { ...journey, media: journey.media.map((asset) => ({ ...asset })) };
+    const original = buildKeepsakeRenderManifest(current, 30);
+    const moved = current.media.find((asset) => asset.id === "p1-video")!;
+    moved.routePointId = "p0";
+    moved.sortOrder = 2;
+    current.media.push(media("new-p1", "p1", "image/jpeg", 0));
+
+    expect(() => assertKeepsakeManifestRevision(original, current))
+      .toThrow("keepsake_manifest_narrative_mismatch");
+    const rebuilt = buildKeepsakeRenderManifest(current, 30);
+    expect(rebuilt.scenes.filter((scene) => scene.kind === "media").map((scene) => scene.mediaAssetId))
+      .toEqual(["opening", "p0-photo", "p0-photo-2", "p1-video", "new-p1", "p2-photo"]);
+    expect(original.scenes.find((scene) => scene.kind === "media" && scene.mediaAssetId === "p1-video"))
+      .toMatchObject({ routePointId: "p1", pointIndex: 1 });
+    expect(rebuilt.scenes.find((scene) => scene.kind === "media" && scene.mediaAssetId === "p1-video"))
+      .toMatchObject({ routePointId: "p0", pointIndex: 0 });
+    expect(() => assertKeepsakeManifestRevision(rebuilt, current)).not.toThrow();
+  });
 });
