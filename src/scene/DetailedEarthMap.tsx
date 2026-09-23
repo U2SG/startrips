@@ -433,6 +433,27 @@ export default function DetailedEarthMap({
       host.dataset.mapReadiness = readiness;
       onReadinessChangeRef.current?.(readiness);
     };
+    const reconcileFullySettled = () => {
+      if (
+        fullySettled
+        || !initialLoadSettled
+        || paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+        || !map.isStyleLoaded()
+        || !map.areTilesLoaded()
+        || map.isMoving()
+      ) return;
+      // `idle` is an event edge, not durable renderer truth. Installing the
+      // in-memory Journey GeoJSON source can legally make that edge occur before
+      // the current overlay's post-sync paint. Reconcile the same settled
+      // invariant from MapLibre's durable style/tile/camera state on render so
+      // a painted Journey cannot remain permanently `visual-ready` merely
+      // because the one `idle` edge was missed. This does not relax network
+      // readiness: every style tile still has to report loaded first.
+      fullySettled = true;
+      if (host.dataset.mapPostSyncRenderRevision === host.dataset.mapRevealRevision) {
+        publishReadiness("fully-settled");
+      }
+    };
     const syncJourneyOverlay = () => {
       if (removed) return false;
       const overlay = journeyOverlayRef.current;
@@ -785,6 +806,7 @@ export default function DetailedEarthMap({
           host.dataset.journeyOverlayPaintedRevision = paintedJourneyOverlayRevision;
         }
       }
+      reconcileFullySettled();
       const pending = pendingRevealCommit;
       if (
         pending
