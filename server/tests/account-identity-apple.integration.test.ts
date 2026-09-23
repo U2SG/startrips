@@ -6,7 +6,9 @@ import {
   applePrivateKey,
   applePublicKey,
 } from "./apple-test-environment";
+import { execFile } from "node:child_process";
 import { randomUUID, sign } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { createEmailVerificationToken } from "better-auth/api";
 import { and, eq, inArray, like, not } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -361,6 +363,64 @@ async function userCountForEmail(email: string) {
   return rows.length;
 }
 
+/**
+ * #350: the sizes a successful sign-in would grow, so a refusal can be proved
+ * to have grown none of them. Counted rather than named because the point is
+ * that NOTHING was created -- a user, its organization, that organization's
+ * Atlas or a session -- and this suite is the only writer while it runs
+ * (`vitest run --maxWorkers=1`).
+ */
+async function identityWorldSize() {
+  const { rows } = await pool.query<{
+    users: string;
+    sessions: string;
+    organizations: string;
+    atlases: string;
+  }>(`select
+        (select count(*) from "user") as users,
+        (select count(*) from "session") as sessions,
+        (select count(*) from "organization") as organizations,
+        (select count(*) from "atlases") as atlases`);
+  return rows[0];
+}
+
+/**
+ * The same production `consumeVerifiedIdToken`, run by a SECOND Node process.
+ *
+ * `node --import tsx` gives that process its own module registry and its own
+ * connection pool, so anything it agrees with this one about is agreed through
+ * the shared database and not through memory this process happens to hold. The
+ * token goes over stdin, never argv; only the verdict comes back.
+ */
+const CONSUMPTION_CHILD = fileURLToPath(
+  new URL("./id-token-consumption-child.ts", import.meta.url),
+);
+
+function consumeInSeparateProcess(token: string): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      process.execPath,
+      ["--import", "tsx", CONSUMPTION_CHILD],
+      { timeout: 60_000 },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`consumption process failed: ${error.message}\n${stderr}`));
+          return;
+        }
+        const printed = stdout.trim().split("\n").at(-1) ?? "";
+        try {
+          resolve((JSON.parse(printed) as { consumed: boolean }).consumed);
+        } catch {
+          reject(new Error(
+            `consumption process printed ${JSON.stringify(printed)}\n${stderr}`,
+          ));
+        }
+      },
+    );
+    child.stdin?.end(JSON.stringify({ providerId: APPLE_PROVIDER_ID, token }));
+  });
+}
+
 describe("Apple sign-in", () => {
   it("registers the provider from the configured credential", () => {
     expect(serverConfig.appleServiceId).toBe(APPLE_SERVICE_ID);
@@ -712,7 +772,7 @@ describe("Apple id token verification", () => {
     expect(await usersFor(subject)).toHaveLength(1);
   });
 
-  it("keeps the spent token in shared storage rather than in this process", async () => {
+  it("records a spent token as a digest and a window, never the credential", async () => {
     const subject = `apple-subject-idstore-${RUN}`;
     const token = appleIdToken({
       subject,
@@ -733,12 +793,42 @@ describe("Apple id token verification", () => {
     expect(record.expiresAt.getTime()).toBeGreaterThan(Date.now());
     expect(record.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 60 * 60 * 1000);
 
-    // A restarted process holds no memory of the request above and reaches the
-    // same verdict, because the verdict is a row: the token is still inside its
-    // acceptance window and still refused.
+    // The record, not any per-request state, is what refuses the token: asked
+    // again through the same production entry point it is already spent. The
+    // process boundary that proves this is not merely in-process memory is the
+    // next test.
     expect(await consumeVerifiedIdToken({ providerId: APPLE_PROVIDER_ID, token }))
       .toBe(false);
   });
+
+  it("keeps a spent token spent across a real process boundary", async () => {
+    const subject = `apple-subject-idprocess-${RUN}`;
+    const spentHere = appleIdToken({
+      subject,
+      email: `apple-idprocess-${RUN}@example.test`,
+      emailVerified: true,
+    });
+    expect((await signInWithIdToken(spentHere)).status).toBe(200);
+
+    // A second Node process, started after that sign-in: no module state, no
+    // connection pool and no request history in common with this one. The
+    // token is still well inside its acceptance window, so the only thing that
+    // can refuse it over there is the record written over here.
+    expect(await consumeInSeparateProcess(spentHere)).toBe(false);
+
+    // And the other direction, which is what a restart really is: a token this
+    // process has never seen, spent by the other one, is already spent when the
+    // production sign-in path meets it here.
+    const otherSubject = `apple-subject-idprocess-restart-${RUN}`;
+    const spentThere = appleIdToken({
+      subject: otherSubject,
+      email: `apple-idprocess-restart-${RUN}@example.test`,
+      emailVerified: true,
+    });
+    expect(await consumeInSeparateProcess(spentThere)).toBe(true);
+    expect((await signInWithIdToken(spentThere)).status).toBe(401);
+    expect(await usersFor(otherSubject)).toHaveLength(0);
+  }, 120_000);
 
   it("prunes only records whose acceptance window has already closed", async () => {
     const closed = `st133-${RUN}-closed`;
@@ -768,6 +858,47 @@ describe("Apple id token verification", () => {
       .from(providerIdTokenConsumptions)
       .where(inArray(providerIdTokenConsumptions.tokenDigest, [closed, open]));
     expect(remaining.map((row) => row.tokenDigest)).toEqual([open]);
+  });
+
+  /**
+   * Last in this block on purpose: it takes the consumption table away from
+   * the running app for the length of one request, so anything scheduled after
+   * it would be running against a restored-but-recently-renamed table for no
+   * reason.
+   */
+  it("refuses a token and creates nothing when the replay store is unreachable", async () => {
+    const subject = `apple-subject-idoutage-${RUN}`;
+    const email = `apple-idoutage-${RUN}@example.test`;
+    const token = appleIdToken({ subject, email, emailVerified: true });
+    const before = await identityWorldSize();
+
+    // A real outage of the real store, not an injected one: the production
+    // path's own queries are what fail, on the app the product ships.
+    await pool.query(
+      'alter table "provider_id_token_consumptions" rename to "st133_outage_consumptions"',
+    );
+    try {
+      expect((await signInWithIdToken(token)).status).toBe(401);
+    } finally {
+      await pool.query(
+        'alter table "st133_outage_consumptions" rename to "provider_id_token_consumptions"',
+      );
+      // Fail HERE if the restore did not take, rather than in whatever runs next.
+      await pool.query('select 1 from "provider_id_token_consumptions" limit 1');
+    }
+
+    // An unusable replay store is a closed door, not an open one: no user, no
+    // Atlas, no session and no ownership row came out of that request.
+    expect(await usersFor(subject)).toHaveLength(0);
+    expect(await userCountForEmail(email)).toBe(0);
+    expect(await ownershipFor(subject)).toBeFalsy();
+    expect(await identityWorldSize()).toEqual(before);
+
+    // The refusal did not spend the token either -- the failure happened before
+    // anything could be claimed -- so the same still-valid token works once the
+    // store is back, exactly as an unverified token must not poison its digest.
+    expect((await signInWithIdToken(token)).status).toBe(200);
+    expect(await usersFor(subject)).toHaveLength(1);
   });
 });
 
