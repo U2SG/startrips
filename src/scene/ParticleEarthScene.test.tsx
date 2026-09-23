@@ -163,6 +163,14 @@ describe("ParticleEarthScene contracts", () => {
     }
   });
 
+  it("wakes an idle renderer for Route Point semantic projection changes", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/setJourneyRoutes\([\s\S]*?applyJourneyRoutes\(routes\);[\s\S]*?wakeRenderLoop\(\);/);
+    expect(source).toMatch(/setSelectedJourneyRoutePoint\([\s\S]*?routeProjectionRevision \+= 1;[\s\S]*?wakeRenderLoop\(\);/);
+    expect(source).toMatch(/setNarrativeJourneyRoutePoint\([\s\S]*?routeProjectionRevision \+= 1;[\s\S]*?wakeRenderLoop\(\);/);
+    expect(source).toMatch(/setTemporalReveal\([\s\S]*?syncRouteTemporalReveal\(\);[\s\S]*?wakeRenderLoop\(\);/);
+  });
+
   it("uses one geographic surface anchor for map semantics", () => {
     // #224 already unified place labels, the focus signal and route geometry
     // behind ROUTE_ANCHOR_RADIUS. #196 is the remaining half: that one anchor

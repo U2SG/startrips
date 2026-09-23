@@ -6050,15 +6050,26 @@ export function ParticleEarthScene({
           updateRouteLabelSafeArea();
           syncRoutePresentations();
           appliedActiveJourneyRouteId = activeRouteId;
+          // Active-route presentation can create a new label set without moving
+          // the camera. Force the next frame to lay out that semantic change.
+          routeProjectionRevision += 1;
         }
+        // Route data often arrives after an idle scene has paused. Building the
+        // SVG/point layer is not enough: one real frame must project its anchors
+        // and clear stale display:none from their previous hemisphere.
+        wakeRenderLoop();
       },
       setSelectedJourneyRoutePoint(selection: RoutePointSelection) {
         latestSelectedJourneyRoutePoint.current = selection;
         syncRoutePresentations();
+        routeProjectionRevision += 1;
+        wakeRenderLoop();
       },
       setNarrativeJourneyRoutePoint(selection: RoutePointSelection) {
         latestNarrativeJourneyRoutePoint.current = selection;
         syncRoutePresentations();
+        routeProjectionRevision += 1;
+        wakeRenderLoop();
       },
       // #21: update per-route AND per-point temporal reveal without rebuilding
       // the layer, so the time cursor does not restart route animations.
@@ -6082,6 +6093,10 @@ export function ParticleEarthScene({
         );
         syncVisitedImprint(latestJourneyRoutes.current, reveal);
         syncRouteTemporalReveal();
+        // Temporal reveal also changes GPU dimming/imprint state. If the scene
+        // is idle, publish that state on one real frame instead of waiting for
+        // an unrelated pointer/camera event to wake the renderer.
+        wakeRenderLoop();
       },
       dispose() {
         disposed = true;
