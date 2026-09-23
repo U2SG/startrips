@@ -180,6 +180,28 @@ describe("detailed-earth Journey overlay", () => {
     expect(overlay.data.features.filter((feature) => feature.properties.featureKind === "segment")).toHaveLength(1);
   });
 
+  it("keeps the overlay revision stable across continuous visible reveal progress", () => {
+    const buildAt = (progress: number) => buildDetailedEarthJourneyOverlay({
+      route,
+      temporalReveal: {
+        journeys: new Map([[route.id, 1]]),
+        points: new Map([
+          [`${route.id}:0`, 1],
+          [`${route.id}:1`, progress],
+          [`${route.id}:2`, 0],
+        ]),
+      },
+    });
+    const earlyVisible = buildAt(0.2);
+    const laterVisible = buildAt(0.8);
+    const hidden = buildAt(0);
+
+    expect(laterVisible.revision).toBe(earlyVisible.revision);
+    expect(laterVisible.data).toEqual(earlyVisible.data);
+    expect(hidden.revision).not.toBe(earlyVisible.revision);
+    expect(hidden.pointCount).toBe(1);
+  });
+
   it("keeps hidden local-detail points in canonical route geometry while removing their marker hit targets", () => {
     const baseline = buildDetailedEarthJourneyOverlay({ route });
     const scoped = buildDetailedEarthJourneyOverlay({

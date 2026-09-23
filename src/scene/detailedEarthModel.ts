@@ -65,7 +65,6 @@ export type DetailedEarthJourneyOverlayProperties = GeoJsonProperties & {
   routePointId?: string;
   routePointOrder?: number;
   label?: string;
-  temporalProgress?: number;
   markerVisible?: boolean;
   activatable?: boolean;
   fromRoutePointId?: string;
@@ -234,7 +233,6 @@ export function buildDetailedEarthJourneyOverlay({
         routePointId,
         routePointOrder: record.pointIndex,
         label: record.point.label ?? "",
-        temporalProgress: record.presentation.temporalProgress,
         markerVisible: record.markerVisible,
         activatable: Boolean(record.point.id) && record.markerVisible,
       },
@@ -293,7 +291,12 @@ export function buildDetailedEarthJourneyOverlay({
       label: point.label ?? "",
       valid,
       attentionRole: presentation.attentionRole,
-      temporalProgress: presentation.temporalProgress,
+      // Detailed Earth currently consumes the temporal reveal as a visibility
+      // boundary, not as a continuous opacity/progress animation. Keep source
+      // revisions discrete so a running timeline does not turn every frame into
+      // a new GeoJSON setData/repaint cycle while preserving the exact moment a
+      // Route Point enters or leaves the authorized visible overlay.
+      temporalVisible: presentation.temporalVisible,
       markerVisible: visibleRoutePointIds === undefined
         || visibleRoutePointIds.has(point.id ?? `${route.id}:${pointIndex}`),
     })),
