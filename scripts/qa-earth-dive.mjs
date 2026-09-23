@@ -1724,6 +1724,217 @@ try {
   }
   await blocked.page.close();
 
+  // ------------------------------------------ compact-mobile real Journey Dive
+  // Source-review regression: desktop portrait is not compact mobile. Exercise
+  // the real <=760px product mode with the same Journey overlay and ownership
+  // ladder, including a rapid Journey swap, compact resize, reverse handback,
+  // re-entry, reduced motion and the hard particle-only policy. Keep this
+  // bounded to product-state edges rather than cloning every desktop metric.
+  const compactFailures = [];
+  const compactContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 1,
+    isMobile: true,
+    hasTouch: true,
+  });
+  const compactRun = await openDivePage(compactContext, { blockStyle: false });
+  await compactRun.page.locator('.living-atlas[data-mobile-v2="on"]').waitFor({ state: "attached", timeout: 5_000 });
+  const compactPoint = await gesturePoint(compactRun.page);
+  await wheelUntil(
+    compactRun.page, compactPoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "compact-mobile Journey Dive never reached local",
+  );
+  await wheelUntil(
+    compactRun.page, compactPoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "compact-mobile Journey Dive never reached blending",
+    90, true,
+  );
+  await wheelUntilDetailWithStableRetry(
+    compactRun.page, compactPoint, FINE_WHEEL_DELTA,
+    "compact-mobile Journey Dive never committed",
+  );
+  const compactRoutePoint = await readRoutePoint(compactRun.page);
+  const compactFirst = await readDive(compactRun.page);
+  if (
+    compactFirst.journeyOverlayReady !== "true"
+    || compactFirst.journeyOverlayJourneyId !== compactRoutePoint?.journeyId
+    || compactFirst.journeyOverlayPointCount !== 4
+    || compactFirst.journeyOverlayStopCount !== 3
+    || compactFirst.journeyOverlayPassthroughCount !== 1
+    || compactFirst.journeyOverlayFeatureCount !== 7
+    || compactFirst.journeyOverlaySourceJourneyCount !== 1
+  ) {
+    compactFailures.push(`compact-mobile initial Journey overlay was not exact: ${JSON.stringify(compactFirst)}`);
+  }
+  const compactRoutePointOnScreen = await compactRun.page.evaluate(({ lon, lat }) => {
+    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    return Boolean(
+      projected
+      && Number.isFinite(projected.x)
+      && Number.isFinite(projected.y)
+      && projected.x >= 22
+      && projected.y >= 22
+      && projected.x <= window.innerWidth - 22
+      && projected.y <= window.innerHeight - 22
+    );
+  }, compactRoutePoint);
+  if (!compactRoutePointOnScreen) {
+    await activateButton(compactRun.page, compactRun.page.locator("[data-qa-earth-dive-refocus]"));
+    await compactRun.page.waitForFunction(({ lon, lat }) => {
+      const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+      return Boolean(
+        projected
+        && Number.isFinite(projected.x)
+        && Number.isFinite(projected.y)
+        && projected.x >= 22
+        && projected.y >= 22
+        && projected.x <= window.innerWidth - 22
+        && projected.y <= window.innerHeight - 22
+      );
+    }, compactRoutePoint, { timeout: 5_000 });
+  }
+  const compactActivation = await activateDetailedRoutePoint(compactRun.page, compactRoutePoint);
+  await activateButton(compactRun.page, compactRun.page.locator('[data-qa-earth-dive-route-switch="next"]'));
+  await compactRun.page.waitForFunction((previousJourneyId) => {
+    const map = document.querySelector(".detailed-earth-map");
+    const marker = document.querySelector("[data-qa-earth-dive-route-point]");
+    const journeyId = marker?.getAttribute("data-journey-id");
+    return Boolean(
+      journeyId && journeyId !== previousJourneyId
+      && map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === journeyId
+    );
+  }, compactRoutePoint.journeyId, { timeout: 5_000 });
+  const compactSwitched = await readDive(compactRun.page);
+  if (
+    compactSwitched.journeyOverlayPointCount !== 3
+    || compactSwitched.journeyOverlayStopCount !== 3
+    || compactSwitched.journeyOverlayPassthroughCount !== 0
+    || compactSwitched.journeyOverlayFeatureCount !== 5
+    || compactSwitched.journeyOverlaySourceJourneyCount !== 1
+  ) {
+    compactFailures.push(`compact-mobile A->B Journey overlay leaked stale geometry: ${JSON.stringify(compactSwitched)}`);
+  }
+  await activateButton(compactRun.page, compactRun.page.locator('[data-qa-earth-dive-route-switch="first"]'));
+  await compactRun.page.waitForFunction((journeyId) => (
+    document.querySelector(".detailed-earth-map")?.getAttribute("data-journey-overlay-journey-id") === journeyId
+  ), compactRoutePoint.journeyId, { timeout: 5_000 });
+  const compactBeforeResize = await readDive(compactRun.page);
+  await compactRun.page.setViewportSize({ width: 430, height: 740 });
+  await compactRun.page.locator('.living-atlas[data-mobile-v2="on"]').waitFor({ state: "attached", timeout: 5_000 });
+  await compactRun.page.waitForFunction((journeyId) => {
+    const map = document.querySelector(".detailed-earth-map");
+    return map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === journeyId;
+  }, compactRoutePoint.journeyId, { timeout: 5_000 });
+  const compactResized = await readDive(compactRun.page);
+  if (
+    compactResized.mapConstructionCount !== compactBeforeResize.mapConstructionCount
+    || compactResized.journeyOverlayPointCount !== 4
+    || compactResized.journeyOverlayPassthroughCount !== 1
+  ) {
+    compactFailures.push(`compact-mobile resize rebuilt or lost Journey scope: ${JSON.stringify({ before: compactBeforeResize, after: compactResized })}`);
+  }
+  const compactRetreatPoint = await gesturePoint(compactRun.page, compactPoint);
+  await wheelUntil(
+    compactRun.page, compactRetreatPoint, RETREAT_WHEEL_DELTA,
+    (state, ladder) => state.owner === "particle"
+      && ladder.lastIndexOf("detail") >= 0
+      && ladder.lastIndexOf("prewarm") > ladder.lastIndexOf("detail"),
+    "compact-mobile detail never handed input back to Particle Earth",
+  );
+  await wheelUntil(
+    compactRun.page, compactRetreatPoint, RETREAT_WHEEL_DELTA,
+    (state) => state.stage === "particle",
+    "compact-mobile reverse handoff never returned to particle",
+  );
+  await compactRun.page.evaluate(() => window.__qaEarthDiveReset());
+  const compactReentryPoint = await gesturePoint(compactRun.page, compactRetreatPoint);
+  await wheelUntil(
+    compactRun.page, compactReentryPoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "compact-mobile re-entry never reached local",
+  );
+  await wheelUntil(
+    compactRun.page, compactReentryPoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "compact-mobile re-entry never reached blending",
+    90, true,
+  );
+  await wheelUntilDetailWithStableRetry(
+    compactRun.page, compactReentryPoint, FINE_WHEEL_DELTA,
+    "compact-mobile re-entry never committed",
+  );
+  const compactReentry = await readDive(compactRun.page);
+  if (
+    compactReentry.journeyOverlayJourneyId !== compactRoutePoint.journeyId
+    || compactReentry.journeyOverlaySourceJourneyCount !== 1
+  ) {
+    compactFailures.push(`compact-mobile re-entry lost the current Journey scope: ${JSON.stringify(compactReentry)}`);
+  }
+  result.compactMobileJourneyDive = {
+    initial: compactFirst,
+    activation: compactActivation,
+    switched: compactSwitched,
+    resized: compactResized,
+    reentry: compactReentry,
+  };
+  if (compactRun.pageErrors.length > 0) compactFailures.push("compact-mobile Journey Dive raised a page error");
+  await compactRun.page.close();
+
+  const compactReduced = await openDivePage(compactContext, { blockStyle: false, motion: "reduce" });
+  const compactReducedPoint = await gesturePoint(compactReduced.page);
+  await wheelUntil(
+    compactReduced.page, compactReducedPoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "compact-mobile reduced-motion Dive never reached local",
+  );
+  await wheelUntil(
+    compactReduced.page, compactReducedPoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "compact-mobile reduced-motion Dive never reached blending",
+    90, true,
+  );
+  await wheelUntilDetailWithStableRetry(
+    compactReduced.page, compactReducedPoint, FINE_WHEEL_DELTA,
+    "compact-mobile reduced-motion Dive never committed",
+  );
+  const compactReducedDetail = await readDive(compactReduced.page);
+  const compactReducedReveal = await readSpatialReveal(compactReduced.page);
+  if (
+    compactReducedDetail.journeyOverlayReady !== "true"
+    || compactReducedDetail.journeyOverlayPointCount !== 4
+    || compactReducedDetail.journeyOverlayPassthroughCount !== 1
+    || compactReducedReveal.mode !== "off"
+  ) {
+    compactFailures.push(`compact-mobile reduced motion lost Journey or reveal semantics: ${JSON.stringify({ detail: compactReducedDetail, reveal: compactReducedReveal })}`);
+  }
+  if (compactReduced.pageErrors.length > 0) compactFailures.push("compact-mobile reduced-motion Dive raised a page error");
+  await compactReduced.page.close();
+
+  const compactParticleOnly = await openDivePage(compactContext, { blockStyle: false, policy: "particle-only" });
+  const compactParticlePoint = await gesturePoint(compactParticleOnly.page);
+  await wheelUntil(
+    compactParticleOnly.page, compactParticlePoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "compact-mobile particle-only Earth never reached local",
+  );
+  const compactParticleHeld = await readDive(compactParticleOnly.page);
+  if (
+    compactParticleHeld.stage !== "particle"
+    || compactParticleHeld.owner !== "particle"
+    || compactParticleHeld.earthPolicy !== "particle-only"
+    || compactParticleHeld.mapConstructionCount !== 0
+  ) {
+    compactFailures.push(`compact-mobile particle-only policy admitted Detail: ${JSON.stringify(compactParticleHeld)}`);
+  }
+  if (compactParticleOnly.pageErrors.length > 0) compactFailures.push("compact-mobile particle-only Earth raised a page error");
+  result.compactMobileParticleOnly = compactParticleHeld;
+  await compactParticleOnly.page.close();
+  await compactContext.close();
+
   // ------------------------------------------------------- 1920 cold reveal
   // #355 was observed at 1920x1080 specifically. Exercise a fresh map instance
   // at that geometry instead of resizing the existing page: a successful run
@@ -1807,6 +2018,7 @@ try {
     ...reducedCommandFailures,
     ...reducedFailures,
     ...blockedFailures,
+    ...compactFailures,
     ...wideFailures,
   ];
   console.log(JSON.stringify(result, null, 2));
