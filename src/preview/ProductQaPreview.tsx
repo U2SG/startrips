@@ -223,7 +223,9 @@ function EarthDiveQaPreview() {
 }
 
 export function LivingAtlasGlobeChromeQa(props: LivingAtlasGlobeProps) {
-  const qaRoundTrip = new URLSearchParams(window.location.search).get("qaMode") === "globe-chrome";
+  const qaParams = new URLSearchParams(window.location.search);
+  const qaRoundTrip = qaParams.get("qaMode") === "globe-chrome";
+  const routePointContextQa = qaParams.get("qaRoutePointContext") === "1";
   return (
     <>
       <LivingAtlasGlobe {...props} />
@@ -234,6 +236,7 @@ export function LivingAtlasGlobeChromeQa(props: LivingAtlasGlobeProps) {
             type="button"
             data-qa-globe-route-point-activate={point.id}
             data-qa-globe-route-id={route.id}
+            data-qa-route-point-context-activate={routePointContextQa ? point.id : undefined}
             aria-hidden="true"
             tabIndex={-1}
             onClick={() => props.onJourneyRoutePointActivate(route.id, point.id!)}
@@ -241,6 +244,16 @@ export function LivingAtlasGlobeChromeQa(props: LivingAtlasGlobeProps) {
           >{point.label ?? point.id}</button>
         ) : []
       ))) : null}
+      {routePointContextQa ? (
+        <output
+          data-qa-route-point-context-focus
+          data-focus-revision={props.focusRevision ?? 0}
+          data-focus-point={props.focusPoint ? `${props.focusPoint.lat},${props.focusPoint.lon}` : ""}
+          data-focus-route={props.focusRoute?.id ?? ""}
+          data-active-route={props.activeJourneyRouteId ?? ""}
+          style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+        />
+      ) : null}
     </>
   );
 }
@@ -249,12 +262,23 @@ function LivingAtlasQaPreview() {
   // #253: the globe-focus chrome lane needs the real `LivingAtlasGlobe`, since
   // `.living-atlas-globe__controls` and the transient gesture hint live there.
   // #291's dedicated lane adds qaRoutePointContext=1 and intentionally keeps
-  // the deterministic QA globe: it grades the product callback/identity/context
-  // contract, while scene boot/raycast timing is already owned by scene lanes.
+  // the deterministic QA globe unless a real-pointer round explicitly asks for
+  // the production scene. That round must also claim the persistent Earth stage:
+  // unlike AuthGateway, this QA preview renders LivingAtlasApp directly, so merely
+  // swapping in the real Globe component leaves PersistentEarthProvider at idle.
   const params = new URLSearchParams(window.location.search);
   const globeChrome = params.get("qaMode") === "globe-chrome";
   const routePointContextQa = params.get("qaRoutePointContext") === "1";
-  if (globeChrome && !routePointContextQa) return <LivingAtlasApp GlobeComponent={LivingAtlasGlobeChromeQa} />;
+  const realRoutePointScene = params.get("qaRealRoutePointScene") === "1";
+  const persistentEarth = usePersistentEarth();
+  useEffect(() => {
+    if (!realRoutePointScene) return undefined;
+    persistentEarth.setStage("atlas");
+    return () => persistentEarth.setStage("idle");
+  }, [persistentEarth, realRoutePointScene]);
+  if (globeChrome && (!routePointContextQa || realRoutePointScene)) {
+    return <LivingAtlasApp GlobeComponent={LivingAtlasGlobeChromeQa} />;
+  }
   return <LivingAtlasApp GlobeComponent={LivingAtlasQaGlobe} />;
 }
 

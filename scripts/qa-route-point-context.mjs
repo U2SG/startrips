@@ -126,6 +126,25 @@ const siblingJourney = {
   media: [],
 };
 
+// The real-pointer round must start with personal Route Points on the product's
+// naturally visible hemisphere. The long-form media/Story rounds below keep the
+// Hong Kong fixture; this interaction-only projection uses the public Southwest
+// geography from the original report instead of silently steering the camera to
+// an off-screen test record before grading the hit surface.
+const interactionJourney = {
+  ...journey,
+  title: "美国西南路线点命中",
+  routePoints: journey.routePoints.map((point, index) => ({
+    ...point,
+    ...[
+      { latitude: 34.0522, longitude: -118.2437, label: "洛杉矶" },
+      { latitude: 36.1699, longitude: -115.1398, label: "拉斯维加斯" },
+      { latitude: 36.0544, longitude: -112.1401, label: "大峡谷" },
+      { latitude: 36.9147, longitude: -111.4558, label: "Page" },
+    ][index],
+  })),
+};
+
 const sameCoordinateJourneyId = "qa-same-coordinate-journey";
 const same02Id = "qa-same-coordinate-02";
 const same07Id = "qa-same-coordinate-07";
@@ -310,6 +329,7 @@ async function openFocusAtlas({
   reduceMotion = false,
   journeysPayload = [siblingJourney, journey],
   initialPointId = photoPointId,
+  realScene = false,
 } = {}) {
   const page = await browser.newPage({
     viewport,
@@ -326,20 +346,108 @@ async function openFocusAtlas({
   // still invoking the production `onJourneyRoutePointActivate` callback. The
   // ordinary globe-chrome lane remains on the real globe and continues to own
   // raycast/focus-mode chrome coverage.
+  const sceneParams = realScene ? "&qaRealRoutePointScene=1" : "&qaLite=1&qaSpatialHandoff=1";
   await page.goto(
-    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1&qaRoutePointContext=1&qaSpatialHandoff=1`,
+    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaRoutePointContext=1${sceneParams}`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator("[data-qa-route-point-context-focus]").waitFor({ state: "attached", timeout: 20_000 });
   await page.locator(`[data-qa-route-point-context-activate="${initialPointId}"]`).waitFor({ state: "attached", timeout: 5_000 });
   if (!compact) {
     await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 5_000 });
+    if (realScene) {
+      // The normal Atlas may still be showing the inferred Home Base camera even
+      // though the latest Journey owns the active card. Select the Journey through
+      // the real rail before grading its real pointer surface; this is the user
+      // action that releases Home-owned camera composition, not a QA camera hack.
+      const targetJourney = journeysPayload.find((candidate) => candidate.id === journeyId);
+      if (!targetJourney) throw new Error(`missing real-scene Journey ${journeyId}`);
+      const focusProbe = page.locator("[data-qa-route-point-context-focus]");
+      const revisionBeforeSelection = Number(await focusProbe.getAttribute("data-focus-revision") ?? 0);
+      await page.locator(".living-atlas__journey-rail button", { hasText: targetJourney.title }).first().click();
+      await page.waitForFunction((before) => (
+        Number(document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-revision") ?? 0) > before
+      ), revisionBeforeSelection, { timeout: 5_000 });
+    }
     await page.locator(".living-atlas__globe-focus").click();
     await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
   } else {
     await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === "on");
   }
-  await page.waitForTimeout(80);
+  if (realScene) {
+    // This round grades the Route Point pointer surface, so wait on that exact
+    // interaction contract rather than the broader land-mask/coastline build.
+    // A marker must be genuinely projected and visible before the pointer round
+    // starts; if route projection never becomes usable this still fails closed.
+    const realRoutePoint = page.locator(
+      `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+    ).first();
+    try {
+      await realRoutePoint.waitFor({ state: "visible", timeout: 20_000 });
+    } catch (error) {
+      const diagnostics = await page.evaluate((targetJourneyId) => {
+        const scene = document.querySelector(".particle-earth-scene");
+        const layer = document.querySelector(".particle-earth-route-layer");
+        const markers = [...document.querySelectorAll(
+          `.particle-earth-route__point[data-journey-route="${targetJourneyId}"][data-route-point-id]`,
+        )].map((marker) => {
+          const element = marker;
+          const group = element.closest(".particle-earth-route");
+          const style = getComputedStyle(element);
+          const groupStyle = group ? getComputedStyle(group) : null;
+          const rect = element.getBoundingClientRect();
+          return {
+            id: element.getAttribute("data-route-point-id"),
+            display: style.display,
+            inlineDisplay: element.style.display || null,
+            visibility: style.visibility,
+            opacity: style.opacity,
+            rect: [rect.left, rect.top, rect.width, rect.height],
+            cx: element.getAttribute("cx"),
+            cy: element.getAttribute("cy"),
+            r: element.getAttribute("r"),
+            temporal: element.getAttribute("data-temporal-reveal"),
+            temporalVisible: element.getAttribute("data-temporal-visible"),
+            groupOpacity: groupStyle?.opacity ?? null,
+            groupTemporal: group?.getAttribute("data-temporal-reveal") ?? null,
+            groupClass: group?.getAttribute("class") ?? null,
+          };
+        });
+        const layerStyle = layer ? getComputedStyle(layer) : null;
+        const layerRect = layer?.getBoundingClientRect();
+        return {
+          markerCount: markers.length,
+          markers,
+          layer: {
+            opacity: layerStyle?.opacity ?? null,
+            display: layerStyle?.display ?? null,
+            visibility: layerStyle?.visibility ?? null,
+            rect: layerRect ? [layerRect.left, layerRect.top, layerRect.width, layerRect.height] : null,
+          },
+          scene: scene ? {
+            ready: scene.getAttribute("data-scene-ready"),
+            routeFocusPhase: scene.getAttribute("data-route-focus-phase"),
+            routeFocusLat: scene.getAttribute("data-route-focus-lat"),
+            routeFocusLon: scene.getAttribute("data-route-focus-lon"),
+            routeFocusZoom: scene.getAttribute("data-route-focus-zoom"),
+            focusPointLat: scene.getAttribute("data-focus-point-lat"),
+            focusPointLon: scene.getAttribute("data-focus-point-lon"),
+            focusArrivalX: scene.getAttribute("data-focus-arrival-x"),
+            focusArrivalY: scene.getAttribute("data-focus-arrival-y"),
+            focusArrivalCenterX: scene.getAttribute("data-focus-arrival-center-x"),
+            focusArrivalCenterY: scene.getAttribute("data-focus-arrival-center-y"),
+            focusViewportCenterX: scene.getAttribute("data-focus-viewport-center-x"),
+            focusViewportCenterY: scene.getAttribute("data-focus-viewport-center-y"),
+            journeyRouteProjectionReady: window.__particleEarthDebug?.().journeyRouteProjectionReady ?? null,
+          } : null,
+          atlasGlobeFocus: document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") ?? null,
+        };
+      }, journeyId);
+      throw new Error(`real Route Point never became visible: ${JSON.stringify(diagnostics)}`, { cause: error });
+    }
+  } else {
+    await page.waitForTimeout(80);
+  }
   return { page, pageErrors };
 }
 
@@ -364,29 +472,245 @@ async function activateRoutePoint(page, pointIndex) {
   await activateRoutePointId(page, pointId);
 }
 
+async function routePointActivationEvidence(page) {
+  return page.locator(".particle-earth-scene").evaluate((host) => ({
+    source: host.getAttribute("data-route-point-activation-source"),
+    journeyId: host.getAttribute("data-route-point-activation-journey-id"),
+    routePointId: host.getAttribute("data-route-point-activation-id"),
+    eventTarget: host.getAttribute("data-route-point-activation-event-target"),
+    clientX: Number(host.getAttribute("data-route-point-activation-client-x")),
+    clientY: Number(host.getAttribute("data-route-point-activation-client-y")),
+    projectedX: Number(host.getAttribute("data-route-point-activation-projected-x")),
+    projectedY: Number(host.getAttribute("data-route-point-activation-projected-y")),
+  }));
+}
+
+async function clickRoutePointMarker(page, routeId, pointId) {
+  const marker = page.locator(`.particle-earth-route__point[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
+  await marker.waitFor({ state: "visible", timeout: 5_000 });
+  const box = await marker.boundingBox();
+  if (!box) throw new Error(`Route Point ${pointId} has no projected marker geometry`);
+  const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.click(target.x, target.y);
+  return { box, target };
+}
+
+async function clickRoutePointLabel(page, routeId, pointId) {
+  const label = page.locator(`.particle-earth-route__label[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
+  await label.waitFor({ state: "visible", timeout: 5_000 });
+  const hitTarget = label.locator(".particle-earth-route__label-hit");
+  const box = await hitTarget.boundingBox();
+  if (!box) throw new Error(`Route Point ${pointId} has no visible label hit geometry`);
+  // A label's 44px touch target may legitimately overlap a neighbouring 6px
+  // Route Point marker. The visible marker owns its own pixels; grade the label
+  // through a real browser-hit pixel that belongs to this label and is not
+  // physically occupied by any marker. If no such pixel exists, the product
+  // label is effectively unclickable and this still fails closed.
+  const target = await label.evaluate((node) => {
+    const hit = node.querySelector(".particle-earth-route__label-hit");
+    if (!(hit instanceof SVGGraphicsElement)) return null;
+    const rect = hit.getBoundingClientRect();
+    const markerRects = [...document.querySelectorAll(".particle-earth-route__point")]
+      .filter((marker) => marker instanceof SVGGraphicsElement && marker.style.display !== "none")
+      .map((marker) => marker.getBoundingClientRect());
+    for (let y = rect.top + 4; y <= rect.bottom - 4; y += 4) {
+      for (let x = rect.left + 4; x <= rect.right - 4; x += 4) {
+        if (markerRects.some((marker) => (
+          x >= marker.left && x <= marker.right && y >= marker.top && y <= marker.bottom
+        ))) continue;
+        const hitElement = document.elementFromPoint(x, y);
+        if (hitElement?.closest(".particle-earth-route__label") === node) return { x, y };
+      }
+    }
+    return null;
+  });
+  if (!target) throw new Error(`Route Point ${pointId} has no unambiguous label-owned hit pixel`);
+  await page.mouse.click(target.x, target.y);
+  return { box, target };
+}
+
+async function findBlankGlobePoint(page) {
+  const target = await page.evaluate(() => {
+    const debug = window.__particleEarthDebug?.();
+    const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+    if (!debug || !(canvas instanceof HTMLCanvasElement)) return null;
+    const markers = [...document.querySelectorAll(".particle-earth-route__point")]
+      .map((node) => node.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 && rect.height > 0);
+    const canvasRect = canvas.getBoundingClientRect();
+    const centerX = canvasRect.left + debug.projectedGlobeCenterPx.x;
+    const centerY = canvasRect.top + debug.projectedGlobeCenterPx.y;
+    const radius = debug.projectedGlobeRadiusPx;
+    for (const angle of [0, Math.PI / 2, Math.PI, -Math.PI / 2, Math.PI / 4, -Math.PI / 4]) {
+      const x = centerX + Math.cos(angle) * radius * 0.55;
+      const y = centerY + Math.sin(angle) * radius * 0.55;
+      const element = document.elementFromPoint(x, y);
+      const clearOfMarkers = markers.every((rect) => {
+        const markerX = rect.x + rect.width / 2;
+        const markerY = rect.y + rect.height / 2;
+        return Math.hypot(x - markerX, y - markerY) > 44;
+      });
+      if (element === canvas && clearOfMarkers) return { x, y };
+    }
+    return null;
+  });
+  if (!target) throw new Error("could not find an unobstructed blank globe surface point");
+  return target;
+}
+
+async function clickBlankGlobe(page) {
+  const target = await findBlankGlobePoint(page);
+  await page.mouse.click(target.x, target.y);
+  return target;
+}
+
+async function dragBlankGlobe(page) {
+  const target = await findBlankGlobePoint(page);
+  await page.mouse.move(target.x, target.y);
+  await page.mouse.down();
+  await page.mouse.move(target.x + 36, target.y + 18, { steps: 4 });
+  await page.mouse.up();
+  return target;
+}
+
 try {
-  const photoRun = await openFocusAtlas();
-  const { page } = photoRun;
-  const beforeFocus = await sceneFocusSnapshot(page);
-  const controlsBefore = await page.locator(".living-atlas-globe__controls").count();
+  // Grade real pointer/keyboard interaction against whichever active-Journey
+  // Route Point the current real camera actually exposes. Route Point context
+  // must not require QA to move the product camera to an otherwise off-screen
+  // record just to manufacture a hit target. The content-specific round below
+  // still pins the canonical photo fixture.
+  // Pointer identity is independent of the cinematic route-focus flight. Use the
+  // product's supported reduced-motion path so this real-scene round waits on
+  // projected hit geometry, not on SwiftShader frame throughput in CI.
+  const interactionRun = await openFocusAtlas({
+    realScene: true,
+    reduceMotion: true,
+    journeysPayload: [siblingJourney, interactionJourney],
+  });
+  const interactionPage = interactionRun.page;
+  const interactionBeforeFocus = await sceneFocusSnapshot(interactionPage);
 
   // Owner P2: the globe can expose hit targets for sibling Journeys, but Route
   // Point context is subordinate to the existing semantic active-Journey owner.
   // Attempting B while A is active must not reveal B or move focus/camera state.
-  const siblingTrigger = page.locator(`[data-qa-route-point-context-activate="${siblingPointId}"]`);
+  const siblingTrigger = interactionPage.locator(`[data-qa-route-point-context-activate="${siblingPointId}"]`);
   await siblingTrigger.waitFor({ state: "attached", timeout: 5_000 });
   await siblingTrigger.evaluate((button) => button.click());
-  await page.waitForTimeout(80);
-  const afterSiblingAttempt = await sceneFocusSnapshot(page);
+  const afterSiblingAttempt = await sceneFocusSnapshot(interactionPage);
   const siblingState = {
-    contextCount: await page.locator("[data-route-point-context]").count(),
+    contextCount: await interactionPage.locator("[data-route-point-context]").count(),
     activeRoute: afterSiblingAttempt.activeRoute,
   };
-  record("sibling Journey Route Point cannot split semantic ownership", { beforeFocus, afterSiblingAttempt, siblingState },
+  record("sibling Journey Route Point cannot split semantic ownership", {
+    beforeFocus: interactionBeforeFocus, afterSiblingAttempt, siblingState,
+  },
     siblingState.contextCount === 0
     && siblingState.activeRoute === journeyId
-    && JSON.stringify(beforeFocus) === JSON.stringify(afterSiblingAttempt));
+    && JSON.stringify(interactionBeforeFocus) === JSON.stringify(afterSiblingAttempt));
 
+  // The real globe owns camera composition. Choose a marker that is actually
+  // projected into the current viewport instead of assuming the first Journey
+  // record must be visible. This remains an actual pointer hit through the
+  // production Three.js/SVG interaction path and binds every assertion to the
+  // stable Route Point identity exposed by that hit target.
+  const visibleMarker = interactionPage.locator(
+    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+  ).first();
+  await visibleMarker.waitFor({ state: "visible", timeout: 5_000 });
+  const markerPointId = await visibleMarker.getAttribute("data-route-point-id");
+  if (!markerPointId) throw new Error("visible active-Journey Route Point marker has no stable id");
+  const markerClick = await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
+  const interactionContext = interactionPage.locator("[data-route-point-context]");
+  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  const selectedMarker = interactionPage.locator(
+    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${markerPointId}"][data-attention-role="selected"]`,
+  );
+  // The card and renderer-owned SVG update in separate React/effect phases.
+  // Wait on the exact semantic state, not elapsed time, so a missing persistent
+  // selection still fails while a normal one-frame propagation is not a race.
+  await selectedMarker.waitFor({ state: "attached", timeout: 5_000 });
+  const markerActivation = await routePointActivationEvidence(interactionPage);
+  const selectedMarkerRole = await selectedMarker.getAttribute("data-attention-role");
+  record("actual marker hit owns the same context identity", {
+    markerPointId, markerClick, markerActivation, selectedMarkerRole,
+  },
+    markerActivation.source === "marker"
+    && markerActivation.journeyId === journeyId
+    && markerActivation.routePointId === markerPointId
+    && markerActivation.eventTarget?.startsWith("canvas")
+    && Math.abs(markerActivation.clientX - markerActivation.projectedX) < 12
+    && Math.abs(markerActivation.clientY - markerActivation.projectedY) < 12
+    && selectedMarkerRole === "selected");
+
+  const interactionCloseButton = interactionContext.locator("[data-route-point-context-close]");
+  const closeBox = await interactionCloseButton.boundingBox();
+  await interactionCloseButton.click();
+  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
+  record("context close control is touch-safe and clears only the temporary selection", { closeBox }, Boolean(
+    closeBox && closeBox.width >= 44 && closeBox.height >= 44
+  ));
+
+  // Labels have their own declutter/culling policy, so grade whichever stable
+  // active-Journey label is actually visible rather than assuming it belongs to
+  // the marker chosen above. Identity must survive that independent hit surface.
+  const visibleLabel = interactionPage.locator(
+    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+  ).first();
+  await visibleLabel.waitFor({ state: "visible", timeout: 5_000 });
+  const labelPointId = await visibleLabel.getAttribute("data-route-point-id");
+  if (!labelPointId) throw new Error("visible active-Journey Route Point label has no stable id");
+  const labelClick = await clickRoutePointLabel(interactionPage, journeyId, labelPointId);
+  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  const labelActivation = await routePointActivationEvidence(interactionPage);
+  record("actual label hit preserves stable Route Point identity", { labelPointId, labelClick, labelActivation },
+    labelActivation.source === "label"
+    && labelActivation.journeyId === journeyId
+    && labelActivation.routePointId === labelPointId);
+  const focusModeBeforeEscape = await interactionPage.locator(".living-atlas").getAttribute("data-globe-focus");
+  await interactionPage.keyboard.press("Escape");
+  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
+  const focusModeAfterEscape = await interactionPage.locator(".living-atlas").getAttribute("data-globe-focus");
+  record("Escape closes context without exiting globe focus", { focusModeBeforeEscape, focusModeAfterEscape },
+    focusModeBeforeEscape === focusModeAfterEscape);
+
+  const labelTrigger = interactionPage.locator(
+    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id="${labelPointId}"]`,
+  );
+  await labelTrigger.focus();
+  await labelTrigger.press("Enter");
+  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  const keyboardActivation = await routePointActivationEvidence(interactionPage);
+  await interactionCloseButton.click();
+  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
+  const focusReturn = await interactionPage.evaluate(() => ({
+    tag: document.activeElement?.tagName.toLowerCase() ?? null,
+    routePointId: document.activeElement?.getAttribute("data-route-point-id") ?? null,
+  }));
+  record("keyboard label opens context and close restores the same legal trigger", { keyboardActivation, focusReturn },
+    keyboardActivation.source === "keyboard-label"
+    && keyboardActivation.routePointId === labelPointId
+    && focusReturn.routePointId === labelPointId);
+
+  await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
+  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  const dragTarget = await dragBlankGlobe(interactionPage);
+  const dragContextId = await interactionContext.getAttribute("data-route-point-id");
+  record("globe drag does not dismiss or replace the selected context", { dragTarget, dragContextId },
+    dragContextId === markerPointId);
+  const blankTarget = await clickBlankGlobe(interactionPage);
+  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
+  record("non-gesture blank globe click closes context", { blankTarget }, true);
+  record("real interaction page errors", { pageErrors: interactionRun.pageErrors }, interactionRun.pageErrors.length === 0);
+  await interactionPage.close();
+
+  // Keep the long-form context/Story/return regression on its deterministic QA
+  // scene. The real-scene round above exclusively proves the new product hit
+  // surfaces, while this round continues to pin the photo fixture whose media
+  // and Story identity the historical #291 contract asserts.
+  const photoRun = await openFocusAtlas();
+  const { page } = photoRun;
+  const beforeFocus = await sceneFocusSnapshot(page);
+  const controlsBefore = await page.locator(".living-atlas-globe__controls").count();
   await activateRoutePoint(page, 0);
   const context = page.locator("[data-route-point-context]");
   await context.waitFor({ state: "visible", timeout: 5_000 });
@@ -1038,11 +1362,13 @@ try {
       const root = node.closest(".living-atlas");
       const panel = node.getBoundingClientRect();
       const entry = node.querySelector(".living-atlas__route-point-context-entry")?.getBoundingClientRect() ?? null;
+      const close = node.querySelector("[data-route-point-context-close]")?.getBoundingClientRect() ?? null;
       return {
         mobileV2: root?.getAttribute("data-mobile-v2") ?? null,
         contextCount: document.querySelectorAll("[data-route-point-context]").length,
         panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom },
         entry: entry ? { width: entry.width, height: entry.height } : null,
+        close: close ? { width: close.width, height: close.height } : null,
         viewport: { width: innerWidth, height: innerHeight },
       };
     });
@@ -1054,7 +1380,9 @@ try {
       && compactState.panel.right <= compactState.viewport.width
       && compactState.panel.bottom <= compactState.viewport.height
       && (compactState.entry?.height ?? 0) >= 44
-      && (compactState.entry?.width ?? 0) >= 44);
+      && (compactState.entry?.width ?? 0) >= 44
+      && (compactState.close?.height ?? 0) >= 44
+      && (compactState.close?.width ?? 0) >= 44);
     record(`${viewport.name} context keeps camera focus owner`, { compactFocusBefore, compactFocusAfter },
       JSON.stringify(compactFocusBefore) === JSON.stringify(compactFocusAfter));
     if (viewport.name === "landscape-844x390") {

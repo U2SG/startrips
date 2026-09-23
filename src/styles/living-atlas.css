@@ -5032,8 +5032,32 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .living-atlas__route-point-context > header {
+  position: relative;
   display: grid;
   gap: 5px;
+  padding-right: 48px;
+}
+
+.living-atlas__route-point-context-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+}
+
+.living-atlas__route-point-context-close:hover,
+.living-atlas__route-point-context-close:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--atlas-text);
 }
 
 .living-atlas__route-point-context > header p,
