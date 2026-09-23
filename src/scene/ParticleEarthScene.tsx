@@ -6195,7 +6195,10 @@ export function ParticleEarthScene({
     narrativeJourneyRoutePoint?.pointIndex,
   ]);
   useEffect(() => {
-    if (!ready) return;
+    // Temporal reveal is Route Point semantic state, just like route/selection
+    // identity above. Publish it as soon as the controller exists instead of
+    // waiting for the unrelated async land-visual rebuild; otherwise the real
+    // pointer surface can remain unprojected while the Journey is already live.
     // Review P2: also called with `undefined` so leaving focus mode resets
     // every route's temporal reveal to full visibility.
     controllerRef.current?.setTemporalReveal(temporalReveal);
