@@ -815,10 +815,21 @@ function gradeRestState(state, expectedFrontId, tolerance = 0.75) {
  * mid-flight, so the handoff ends without the presented identity ever changing.
  */
 async function grabDuringNavigation(page, rootSelector) {
-  const half = await photoClickPoint(page, rootSelector, 1);
-  await page.mouse.click(half.x, half.y);
+  // The arrow key the presented picture advertises, not a click half: a click
+  // half is a point on the stationary surface, and on a portrait photograph
+  // that point is outside the picture, where the surface correctly resolves to
+  // the backdrop. Either input reaches the same `step()`; only this one is
+  // aspect-ratio independent.
+  await page.evaluate((selector) => {
+    const image = document.querySelector(selector)
+      ?.querySelector('[data-media-page="current"] img:not([hidden])');
+    if (!image) throw new Error("the presented page has no focusable picture");
+    image.focus();
+  }, rootSelector);
+  await page.keyboard.press("ArrowRight");
   const geometry = await page.evaluate((selector) => {
     const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    if (!pages) throw new Error("the media stage left the tree before the grab");
     const bounds = pages.getBoundingClientRect();
     return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height * 0.35, width: bounds.width };
   }, rootSelector);
@@ -831,7 +842,7 @@ async function grabDuringNavigation(page, rootSelector) {
     await page.waitForTimeout(40);
   }
   await page.mouse.up();
-  return { ...geometry, clickedAt: half };
+  return { ...geometry, navigatedBy: "ArrowRight" };
 }
 
 /** Everything needed to attribute a stuck navigation to an instance. */
