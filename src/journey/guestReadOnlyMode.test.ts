@@ -211,6 +211,16 @@ describe("guest-reachable modules import no owner API client", () => {
     });
   }
 
+  it("keeps recorded-track management out of every guest/share surface", () => {
+    for (const moduleName of GUEST_REACHABLE_MODULES) {
+      const source = readFileSync(new URL(moduleName, import.meta.url), "utf8");
+      expect(source).not.toContain("journeyRecordedTracksApi");
+      expect(source).not.toContain("JourneyRecordedTracks");
+    }
+    const app = readFileSync(new URL("LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(app).toContain("composerOpen && (canCreateJourney || canEditJourney)");
+  });
+
   it("keeps the owner client in exactly one place", () => {
     const source = readFileSync(new URL("atlasView.ts", import.meta.url), "utf8");
     expect(source).toContain('from "./journeyApi"');

@@ -583,6 +583,28 @@ class WiringTests(SyntheticOne):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual('ST-001', result.stdout.strip())
 
+    def test_readonly_selector_does_not_require_carrier_identity_provider(self):
+        self.write(feature())
+        # Identity is required for real carriers, but a read-only selector is only
+        # an observer. Make identity fail loudly while occupancy remains known; the
+        # selector must still return the eligible feature rather than hanging/failing
+        # on a provider path that cannot grant it execution authority.
+        (self.root / 'lib' / 'execution.py').write_text(
+            """import json, sys
+if len(sys.argv) > 1 and sys.argv[1] == 'identity':
+    raise SystemExit(91)
+if len(sys.argv) > 1 and sys.argv[1] == 'occupied':
+    print(json.dumps({'lane': 'experience', 'capacity': 2, 'occupied_slots': 0,
+                      'available_slots': 2, 'features': [], 'worktrees': [],
+                      'claim_count': 0, 'stop_markers': []}))
+    raise SystemExit(0)
+raise SystemExit(92)
+""",
+            encoding='utf-8', newline='\n')
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-001', result.stdout.strip())
+
     def test_executing_shell_lane_selects_backend_only(self):
         self.write(feature(), feature('ST-002', phase='P0-process'))
         result = self.invoke('export STARTRIPS_LANE=backend; bash run-loop.sh --next')

@@ -1,6 +1,6 @@
 import { StartripsWordmark } from "./StartripsBrandMark";
 import { StartripsRecoverySurface } from "./StartripsRecoverySurface";
-import { canUseStartripsRecoveryBack } from "./startripsRecoverySurface";
+import { canUseStartripsRecoveryBack } from "./recoverySurfaces";
 
 export function StartripsNotFound() {
   const canGoBack = canUseStartripsRecoveryBack({

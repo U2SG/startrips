@@ -43,6 +43,10 @@ jobs:
         run: |
           node scripts/cfaa.mjs impact --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" --event "$GITHUB_EVENT_PATH" --output "$RUNNER_TEMP/cfaa-impact.md"
           cat "$RUNNER_TEMP/cfaa-impact.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Test case-insensitive path guard
+        run: node --test scripts/check-path-case.node-test.mjs
+      - name: Reject tracked paths that collide on case-insensitive filesystems
+        run: node scripts/check-path-case.mjs
       - name: Test ledger tooling
         run: node --test scripts/pr-history.node-test.mjs
       - name: Test ledger-only final fast path
