@@ -228,3 +228,22 @@ Read `run-loop.sh --plan` for live evidence-derived next action. The offline
 produced by Hourly Review according to CLAUDE.md, not by an owner acknowledging a
 comment. All code/behavior regressions execute in GitHub CI; local startup checks
 are static and non-destructive provider/evidence probes.
+
+
+## Windows native execution snapshots
+
+The existing `lib/execution.py occupied/check/identity` provider now reads the
+native process table and query-only process handles instead of the intermittently
+stalled Win32_Process CIM service. Toolhelp supplies candidate name/parent/PID;
+GetProcessTimes and bounded ProcessCommandLineInformation reads bind the same
+handle to creation time and actual command line. No PEB offsets, debug privileges,
+process termination, extra dependencies, cached empty occupancy or WMI fallback.
+The read-only child has the same 25-second maximum. Access denied, incomplete
+native ABI/buffer, PID birth/reuse during observation and provider failure remain
+UNKNOWN. Handles close even on failed reads. Only an exact signalled handle or a
+fresh complete table proving a vanished PID permits dropping an exited candidate.
+CIM-compatible pid@creation publication (microseconds plus .NET trailing zero and
+local UTC offset) preserves existing owner identity during a safe rollout; tests
+include a real own-PID Windows comparison as well as synthetic failure boundaries.
+No owner/capacity/STOP/selector authorization changes. Runtime installation must
+still bind exact source bytes and a safe process boundary; merging is not installing.
