@@ -147,6 +147,22 @@ describe("ParticleEarthScene contracts", () => {
       expect(source).toContain(`measure("${id}"`);
     }
   });
+  it("does not gate Route Point semantics on land-visual readiness", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    for (const setter of [
+      "setFocusIntent(",
+      "setJourneyRoutes(",
+      "setSelectedJourneyRoutePoint(",
+      "setNarrativeJourneyRoutePoint(",
+      "setTemporalReveal(",
+    ]) {
+      const setterIndex = source.indexOf(`controllerRef.current?.${setter}`);
+      const effectIndex = source.lastIndexOf("useEffect(() => {", setterIndex);
+      expect(setterIndex).toBeGreaterThan(effectIndex);
+      expect(source.slice(effectIndex, setterIndex)).not.toContain("if (!ready) return;");
+    }
+  });
+
   it("uses one geographic surface anchor for map semantics", () => {
     // #224 already unified place labels, the focus signal and route geometry
     // behind ROUTE_ANCHOR_RADIUS. #196 is the remaining half: that one anchor
