@@ -886,21 +886,36 @@ export default function DetailedEarthMap({
       if (!map.isMoving()) focusFlightActiveRef.current = false;
     });
 
-    map.on("click", (event) => {
-      // Resolve Route Point identity from the current authorized overlay and
-      // projection first. Invisible 44px hit circles may overlap; letting
-      // queryRenderedFeatures choose the first rendered feature would make
-      // layer order, rather than pointer proximity, decide which Point opens.
-      // The projection resolver deterministically picks the nearest disclosed
-      // Point while preserving the same touch-safe radius.
-      let routePointHit = pickDetailedEarthJourneyRoutePointHit(
+    const projectedJourneyRoutePointHit = (point: { x: number; y: number }) => (
+      pickDetailedEarthJourneyRoutePointHit(
         journeyOverlayRef.current,
-        event.point,
+        point,
         (coordinates) => map.project(coordinates),
-      );
-      // Retain the rendered-feature lookup only as a bounded fallback for a
-      // future style/projection edge where MapLibre reports a hit that cannot
-      // be reproduced from the current projected source coordinates.
+      )
+    );
+    const handleJourneyRoutePointClickCapture = (event: MouseEvent) => {
+      if (diveOwnerRef.current !== "detail" || !onJourneyRoutePointActivateRef.current) return;
+      const rect = host.getBoundingClientRect();
+      const routePointHit = projectedJourneyRoutePointHit({
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      });
+      if (!routePointHit) return;
+      // MapLibre is constructed non-interactive for prewarm and its handlers are
+      // enabled only after ownership commits. Keep Route Point activation bound
+      // to the real DOM pointer target instead of depending on MapLibre's
+      // synthesized `click` event surviving that lifecycle transition. Stop the
+      // click before it reaches MapLibre so one pointer action has one owner.
+      event.stopPropagation();
+      onJourneyRoutePointActivateRef.current(routePointHit.journeyId, routePointHit.routePointId);
+    };
+    host.addEventListener("click", handleJourneyRoutePointClickCapture, { capture: true });
+
+    map.on("click", (event) => {
+      // The capture listener above owns ordinary Route Point activation. Keep a
+      // MapLibre-layer lookup as a bounded projection/style fallback and retain
+      // this event for explicit map-point picking outside Journey hit targets.
+      let routePointHit = projectedJourneyRoutePointHit(event.point);
       if (!routePointHit && map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
         const [journeyHit] = map.queryRenderedFeatures(event.point, {
           layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
@@ -945,6 +960,7 @@ export default function DetailedEarthMap({
       syncJourneyOverlayRef.current = null;
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       focusFlightActiveRef.current = false;
+      host.removeEventListener("click", handleJourneyRoutePointClickCapture, { capture: true });
       map.remove();
       if (import.meta.env.DEV && typeof window !== "undefined") {
         const debugWindow = window as Window & {
