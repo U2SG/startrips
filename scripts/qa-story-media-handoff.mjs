@@ -1589,7 +1589,16 @@ try {
       await navigateByGesture(page, STAGE, 1, V1);
       await startSampler(page, STAGE);
       await swipeStage(page, STAGE, 1);
+      // The precondition this scenario grades, proved rather than assumed: the
+      // first swipe has to have left a request for the cold V2 outstanding, so
+      // the swipe that follows really is the reverse input that cancels it. A
+      // gesture toward a neighbour that is not readable at release resists and
+      // requests nothing (the `story-cold-swipe-resists` claim above), and from
+      // there a second swipe is an ordinary step back to the previous asset --
+      // a different situation that must not be graded as this one.
+      const pendingBeforeReversal = await stageDiagnostic(page, STAGE);
       await swipeStage(page, STAGE, -1);
+      const afterReversalGesture = await stageDiagnostic(page, STAGE);
       // The product's own contract here is cancel-and-stay: a reverse input
       // while the next frame is still cold drops that request and keeps the
       // visible page, because the reversal's own neighbour IS the visible page
@@ -1600,7 +1609,11 @@ try {
       const afterReversal = await currentAsset(page);
       // Outlive the held read, then look again: this window exists to catch a
       // late completion, so it has to still be recording when the read lands.
-      await page.waitForTimeout(3_000);
+      const lateWindow = [];
+      for (let tick = 0; tick < 6; tick += 1) {
+        await page.waitForTimeout(500);
+        lateWindow.push({ at: (tick + 1) * 500, ...await currentAsset(page) });
+      }
       const frames = await stopSamplerFrames(page);
       const afterLateRead = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
@@ -1614,9 +1627,12 @@ try {
         name: "story-late-read-never-takes-the-stage",
         claim: "a read URL that resolves after its navigation was abandoned neither moves the committed owner nor leaves the aperture uncovered; the reversal cancels that cold request and keeps the visible page",
         abandonedIntent: V2, expectedOwner: V1,
+        pendingBeforeReversal, afterReversalGesture, lateWindow,
         afterReversal, afterLateRead, transports, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: continuity.failed || afterReversal.id !== V1 || afterLateRead.id !== V1
+        failed: continuity.failed
+          || pendingBeforeReversal.requested !== V2
+          || afterReversal.id !== V1 || afterLateRead.id !== V1
           || afterLateRead.presentation !== "settled" || transports !== 1
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
