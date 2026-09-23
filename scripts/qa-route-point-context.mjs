@@ -341,7 +341,14 @@ async function openFocusAtlas({
   } else {
     await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === "on");
   }
-  await page.waitForTimeout(80);
+  if (realScene) {
+    // The real Three.js scene becomes interactive asynchronously. Grade pointer
+    // identity only after the product readiness contract is true instead of
+    // racing scene startup behind an arbitrary sleep/marker timeout.
+    await page.locator('.particle-earth-scene[data-scene-ready="true"]').waitFor({ timeout: 20_000 });
+  } else {
+    await page.waitForTimeout(80);
+  }
   return { page, pageErrors };
 }
 
