@@ -379,9 +379,72 @@ async function openFocusAtlas({
     // interaction contract rather than the broader land-mask/coastline build.
     // A marker must be genuinely projected and visible before the pointer round
     // starts; if route projection never becomes usable this still fails closed.
-    await page.locator(
+    const realRoutePoint = page.locator(
       `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
-    ).first().waitFor({ state: "visible", timeout: 20_000 });
+    ).first();
+    try {
+      await realRoutePoint.waitFor({ state: "visible", timeout: 20_000 });
+    } catch (error) {
+      const diagnostics = await page.evaluate((targetJourneyId) => {
+        const scene = document.querySelector(".particle-earth-scene");
+        const layer = document.querySelector(".particle-earth-route-layer");
+        const markers = [...document.querySelectorAll(
+          `.particle-earth-route__point[data-journey-route="${targetJourneyId}"][data-route-point-id]`,
+        )].map((marker) => {
+          const element = marker;
+          const group = element.closest(".particle-earth-route");
+          const style = getComputedStyle(element);
+          const groupStyle = group ? getComputedStyle(group) : null;
+          const rect = element.getBoundingClientRect();
+          return {
+            id: element.getAttribute("data-route-point-id"),
+            display: style.display,
+            inlineDisplay: element.style.display || null,
+            visibility: style.visibility,
+            opacity: style.opacity,
+            rect: [rect.left, rect.top, rect.width, rect.height],
+            cx: element.getAttribute("cx"),
+            cy: element.getAttribute("cy"),
+            r: element.getAttribute("r"),
+            temporal: element.getAttribute("data-temporal-reveal"),
+            temporalVisible: element.getAttribute("data-temporal-visible"),
+            groupOpacity: groupStyle?.opacity ?? null,
+            groupTemporal: group?.getAttribute("data-temporal-reveal") ?? null,
+            groupClass: group?.getAttribute("class") ?? null,
+          };
+        });
+        const layerStyle = layer ? getComputedStyle(layer) : null;
+        const layerRect = layer?.getBoundingClientRect();
+        return {
+          markerCount: markers.length,
+          markers,
+          layer: {
+            opacity: layerStyle?.opacity ?? null,
+            display: layerStyle?.display ?? null,
+            visibility: layerStyle?.visibility ?? null,
+            rect: layerRect ? [layerRect.left, layerRect.top, layerRect.width, layerRect.height] : null,
+          },
+          scene: scene ? {
+            ready: scene.getAttribute("data-scene-ready"),
+            routeFocusPhase: scene.getAttribute("data-route-focus-phase"),
+            routeFocusLat: scene.getAttribute("data-route-focus-lat"),
+            routeFocusLon: scene.getAttribute("data-route-focus-lon"),
+            routeFocusZoom: scene.getAttribute("data-route-focus-zoom"),
+            focusPointLat: scene.getAttribute("data-focus-point-lat"),
+            focusPointLon: scene.getAttribute("data-focus-point-lon"),
+            focusArrivalX: scene.getAttribute("data-focus-arrival-x"),
+            focusArrivalY: scene.getAttribute("data-focus-arrival-y"),
+            focusArrivalCenterX: scene.getAttribute("data-focus-arrival-center-x"),
+            focusArrivalCenterY: scene.getAttribute("data-focus-arrival-center-y"),
+            focusViewportCenterX: scene.getAttribute("data-focus-viewport-center-x"),
+            focusViewportCenterY: scene.getAttribute("data-focus-viewport-center-y"),
+            journeyRouteProjectionReady: window.__particleEarthDebug?.().journeyRouteProjectionReady ?? null,
+          } : null,
+          atlasGlobeFocus: document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") ?? null,
+        };
+      }, journeyId);
+      throw new Error(`real Route Point never became visible: ${JSON.stringify(diagnostics)}`, { cause: error });
+    }
   } else {
     await page.waitForTimeout(80);
   }
