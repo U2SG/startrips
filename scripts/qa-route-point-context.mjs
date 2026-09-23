@@ -460,7 +460,10 @@ try {
   // must not require QA to move the product camera to an otherwise off-screen
   // record just to manufacture a hit target. The content-specific round below
   // still pins the canonical photo fixture.
-  const interactionRun = await openFocusAtlas({ realScene: true });
+  // Pointer identity is independent of the cinematic route-focus flight. Use the
+  // product's supported reduced-motion path so this real-scene round waits on
+  // projected hit geometry, not on SwiftShader frame throughput in CI.
+  const interactionRun = await openFocusAtlas({ realScene: true, reduceMotion: true });
   const interactionPage = interactionRun.page;
   const interactionBeforeFocus = await sceneFocusSnapshot(interactionPage);
 
