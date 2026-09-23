@@ -375,19 +375,17 @@ export default function DetailedEarthMap({
       fadeDuration: 650,
     });
     let initialLoadSettled = false;
-    // MapLibre does not preserve originalEvent on every frame of a continuous
-    // wheel/pinch zoom. Remember the user provenance from zoomstart so the
-    // threshold-crossing zoom frame can still hand ownership back immediately,
-    // while jumpTo/flyTo/calibration remain programmatic and ineligible.
-    let userZoomGestureActive = false;
-    // A user wheel can interrupt an already-running programmatic focus flight.
-    // MapLibre may then continue the existing zoom lifetime without publishing a
-    // fresh zoomstart, so capture the real DOM input before its handler mutates
-    // camera state. Programmatic jumpTo/flyTo never pass through this gate.
-    const markUserWheelZoom = () => {
-      if (diveOwnerRef.current === "detail") userZoomGestureActive = true;
-    };
-    host.addEventListener("wheel", markUserWheelZoom, { capture: true, passive: true });
+    // MapLibre's input handlers are the authority for user zoom provenance.
+    // Event.originalEvent is not preserved on every animated zoom frame, and a
+    // resize/focus lifetime can publish zoomend after a real wheel interrupts it.
+    // The handlers keep their own active lifetime through the rendered gesture,
+    // so programmatic jumpTo/flyTo/calibration stay ineligible without a fragile
+    // DOM/event latch.
+    const userZoomHandlerActive = () => (
+      map.scrollZoom.isActive()
+      || map.touchZoomRotate.isActive()
+      || map.keyboard.isActive()
+    );
     let removed = false;
     let revealRevision = 0;
     let fullySettled = false;
@@ -1022,21 +1020,14 @@ export default function DetailedEarthMap({
         longitude: event.lngLat.lng,
       });
     });
-    map.on("zoomstart", (event) => {
-      // A real MapLibre input edge can arm the gesture too, but it must never
-      // erase provenance already captured by the DOM wheel gate above. A user
-      // wheel can interrupt an existing programmatic camera lifetime and that
-      // continuation is allowed to publish zoomstart without originalEvent.
-      // Pure jumpTo/flyTo/calibration starts still leave the latch false.
-      userZoomGestureActive ||= Boolean(event.originalEvent);
-    });
     map.on("zoom", () => {
-      // Grade the live detail-owned USER gesture at the return threshold.
-      // Waiting for zoomend lets a continuous wheel gesture cross far into the
-      // overview range while Detail keeps consuming input. The zoomstart latch
-      // preserves input provenance without admitting jumpTo/flyTo/calibration.
+      // Grade only a zoom currently owned by a real MapLibre input handler. The
+      // handler's active lifetime survives animation frames where originalEvent
+      // is absent and is independent from overlapping resize/focus moveend edges.
+      // Programmatic camera work has no active user handler and cannot release
+      // Detail ownership even if it happens to cross the return threshold.
       if (
-        !userZoomGestureActive
+        !userZoomHandlerActive()
         || !initialLoadSettled
         || diveOwnerRef.current !== "detail"
         || overviewRequestedRef.current
@@ -1044,9 +1035,6 @@ export default function DetailedEarthMap({
       ) return;
       overviewRequestedRef.current = true;
       onOverviewRequestRef.current?.();
-    });
-    map.on("zoomend", () => {
-      userZoomGestureActive = false;
     });
     map.on("error", (event) => {
       host.dataset.mapError = event.error?.message ?? "map-error";
@@ -1063,7 +1051,6 @@ export default function DetailedEarthMap({
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       focusFlightActiveRef.current = false;
       host.removeEventListener("click", handleJourneyRoutePointClickCapture, { capture: true });
-      host.removeEventListener("wheel", markUserWheelZoom, { capture: true });
       map.remove();
       if (import.meta.env.DEV && typeof window !== "undefined") {
         const debugWindow = window as Window & {
