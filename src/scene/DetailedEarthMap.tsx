@@ -914,7 +914,13 @@ export default function DetailedEarthMap({
       // `map.resize()` can emit moveend while an explicit flyTo/fitBounds is
       // still easing. Only retire focus-flight ownership when MapLibre itself
       // says that ease has actually completed or been interrupted.
-      if (!map.isMoving()) focusFlightActiveRef.current = false;
+      if (!map.isMoving()) {
+        focusFlightActiveRef.current = false;
+        // The final camera frame can be followed by `moveend` without another
+        // render/idle edge. Reconcile durable style/tile/camera truth here so a
+        // post-sync Journey frame cannot remain stranded at `visual-ready`.
+        reconcileFullySettled();
+      }
     });
 
     const projectedJourneyRoutePointHit = (point: { x: number; y: number }) => (

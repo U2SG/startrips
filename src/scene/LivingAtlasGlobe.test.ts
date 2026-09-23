@@ -74,6 +74,11 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(detail).toMatch(/map\.on\("zoomend", \(event\) => \{[\s\S]*?!event\.originalEvent[\s\S]*?shouldReturnToParticleEarth\(map\.getZoom\(\)\)/);
   });
 
+  it("reconciles fully-settled readiness on the terminal camera edge", () => {
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    expect(detail).toMatch(/map\.on\("moveend", \(\) => \{[\s\S]*?!map\.isMoving\(\)[\s\S]*?reconcileFullySettled\(\)/);
+  });
+
   it("keeps per-frame handoff calibration on the imperative publish path", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
