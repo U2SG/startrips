@@ -91,6 +91,60 @@ describe("journeyRecordedTracksApi", () => {
     expect(JSON.stringify(result)).not.toContain("114");
   });
 
+  it("summarizes unsorted segments while preserving declared counts and wire-string time order", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ recordedTracks: [{
+      ...operation,
+      segments: [
+        { sampleCount: 9, samples: [
+          { recordedAt: "2026-09-21T10:00:00+03:00" },
+          { recordedAt: null },
+          { recordedAt: "" },
+        ] },
+        { samples: [
+          { recordedAt: "2026-09-21T08:00:00Z" },
+          { recordedAt: "2026-09-21T10:00:00+03:00" },
+        ] },
+        { sampleCount: 0, samples: [{ recordedAt: "2026-09-21T09:00:00Z" }] },
+        { sampleCount: 3 },
+        {},
+      ],
+    }] })) as unknown as typeof fetch;
+
+    expect(await listJourneyRecordedTracks("journey-1", { fetcher })).toEqual([{
+      journeyId: operation.journeyId,
+      operationKey: operation.operationKey,
+      source: operation.source,
+      provenance: operation.provenance,
+      segmentCount: 5,
+      sampleCount: 14,
+      startedAt: "2026-09-21T08:00:00Z",
+      endedAt: "2026-09-21T10:00:00+03:00",
+    }]);
+  });
+
+  it.each([
+    { name: "no segments", segments: [], sampleCount: 0 },
+    { name: "declared count without samples", segments: [{ sampleCount: 4 }], sampleCount: 4 },
+    { name: "untimed samples", segments: [{ samples: [
+      {}, { recordedAt: null }, { recordedAt: "" },
+    ] }], sampleCount: 3 },
+  ])("keeps unknown time coverage null for $name", async ({ segments, sampleCount }) => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      recordedTracks: [{ ...operation, segments }],
+    })) as unknown as typeof fetch;
+
+    expect(await listJourneyRecordedTracks("journey-1", { fetcher })).toEqual([{
+      journeyId: operation.journeyId,
+      operationKey: operation.operationKey,
+      source: operation.source,
+      provenance: operation.provenance,
+      segmentCount: segments.length,
+      sampleCount,
+      startedAt: null,
+      endedAt: null,
+    }]);
+  });
+
   it("sends withdrawal operationKey only in the DELETE JSON body", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ deleted: true }));
     const fetcher = fetchMock as unknown as typeof fetch;

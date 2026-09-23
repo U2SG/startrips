@@ -555,12 +555,63 @@ describe("recorded-track authorization", () => {
       "private, no-store, max-age=0",
     );
     const payload = await response.json() as {
-      recordedTracks: Array<{ operationKey: string; journeyId: string }>;
+      recordedTracks: Array<{
+        operationKey: string;
+        journeyId: string;
+        segments: Array<{
+          segmentOrder: number;
+          sampleCount: number;
+          samples: Array<{
+            sampleOrder: number;
+            latitude: number;
+            longitude: number;
+            recordedAt: string | null;
+            accuracyMeters: number | null;
+          }>;
+        }>;
+      }>;
     };
     expect(payload.recordedTracks.length).toBeGreaterThan(0);
     expect(payload.recordedTracks.every(
       (track) => track.journeyId === ownerJourneyId,
     )).toBe(true);
+    const track = payload.recordedTracks.find(
+      (candidate) => candidate.operationKey === TWO_SEGMENT_BODY.operationKey,
+    );
+    expect(track).toBeDefined();
+    if (!track) return;
+    expect(Object.keys(track).sort()).toEqual([
+      "journeyId", "operationKey", "provenance", "segments", "source",
+    ]);
+    expect(track).toMatchObject({
+      source: "device-recording",
+      provenance: "test recorder",
+    });
+    for (const segment of track.segments) {
+      expect(Object.keys(segment).sort()).toEqual([
+        "id", "sampleCount", "samples", "segmentOrder",
+      ]);
+      for (const sample of segment.samples) {
+        expect(Object.keys(sample).sort()).toEqual([
+          "accuracyMeters", "id", "latitude", "longitude", "recordedAt", "sampleOrder",
+        ]);
+      }
+    }
+    expect(track.segments.map((segment) => segment.segmentOrder)).toEqual([0, 1]);
+    expect(track.segments.map((segment) => segment.sampleCount)).toEqual([2, 1]);
+    expect(track.segments.map((segment) => segment.samples.map((sample) => [
+      sample.sampleOrder,
+      sample.latitude,
+      sample.longitude,
+      sample.recordedAt,
+      sample.accuracyMeters,
+    ]))).toEqual([
+      [
+        [0, 22.543096, 114.057865, "2026-09-01T00:00:00.000Z", 8.5],
+        [1, 22.5401, 114.0612, "2026-09-01T00:01:00.000Z", null],
+      ],
+      [[0, 22.3193, 114.1694, null, 42]],
+    ]);
   });
 
   it("requires a session", async () => {

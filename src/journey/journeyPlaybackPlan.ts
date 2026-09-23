@@ -13,7 +13,7 @@ import {
   type NarrativeTempo,
   type NarrativeTimingProfile,
 } from "./narrativeTiming";
-import type { Journey } from "./types";
+import type { Journey, JourneyMediaAsset } from "./types";
 
 export type PlaybackTempo = NarrativeTempo;
 
@@ -41,6 +41,18 @@ export function playbackStepDurationForTempo(
   step: PlaybackStep,
   profile: NarrativeTimingProfile,
 ) {
+  const asset = step.kind === "media"
+    ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
+    : undefined;
+  return playbackStepDuration(journey, step, profile, asset);
+}
+
+function playbackStepDuration(
+  journey: Journey,
+  step: PlaybackStep,
+  profile: NarrativeTimingProfile,
+  asset: JourneyMediaAsset | undefined,
+) {
   switch (step.kind) {
     case "home-prelude":
     case "intro":
@@ -62,10 +74,8 @@ export function playbackStepDurationForTempo(
         profile.arrivalBaseMs + noteLength * profile.arrivalPerNoteCharMs,
       );
     }
-    case "media": {
-      const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
+    case "media":
       return asset?.mimeType.startsWith("video/") ? profile.videoMs : profile.imageRoleMs.representative;
-    }
     case "home-epilogue":
     case "outro":
       return profile.outroMs;
@@ -88,7 +98,7 @@ export type PlaybackStepDurationResolver = (
 /**
  * The single place a beat becomes a number of milliseconds: the injected
  * resolver when it answers with a usable number, the tempo profile otherwise.
- * The director's timer and `buildPlaybackPlan` both call this, so a plan-driven
+ * The director's timer and `buildPlaybackPlan` share this policy, so a plan-driven
  * progress bar cannot disagree with the timer that is draining — in Quick Recap
  * the resolver overrides most beats, and a plan that ignored it would place
  * every later beat at the wrong point on the bar.
@@ -99,6 +109,22 @@ export function resolvePlaybackStepDurationMs(
   tempo: PlaybackTempo,
   resolveStepDuration?: PlaybackStepDurationResolver,
 ): number {
+  return resolvePlaybackStepDurationWithFallback(
+    journey,
+    step,
+    tempo,
+    resolveStepDuration,
+    () => playbackStepDurationForTempo(journey, step, NARRATIVE_TIMING_PROFILES.full[tempo]),
+  );
+}
+
+function resolvePlaybackStepDurationWithFallback(
+  journey: Journey,
+  step: PlaybackStep,
+  tempo: PlaybackTempo,
+  resolveStepDuration: PlaybackStepDurationResolver | undefined,
+  fallbackDuration: () => number,
+): number {
   const overrideDurationMs = resolveStepDuration?.(journey, step, tempo);
   if (overrideDurationMs !== undefined
     && Number.isFinite(overrideDurationMs)
@@ -108,7 +134,7 @@ export function resolvePlaybackStepDurationMs(
   if (step.kind === "home-prelude" || step.kind === "home-epilogue") {
     return resolveNarrativeTiming({ mode: "full", tempo, segmentKind: step.kind });
   }
-  return playbackStepDurationForTempo(journey, step, NARRATIVE_TIMING_PROFILES.full[tempo]);
+  return fallbackDuration();
 }
 
 type PlaybackSegmentIdentity = Pick<
@@ -120,6 +146,7 @@ function segmentIdentity(
   journey: Journey,
   step: PlaybackStep,
   stepIndex: number,
+  asset: JourneyMediaAsset | undefined,
 ): PlaybackSegmentIdentity {
   switch (step.kind) {
     case "home-prelude":
@@ -148,7 +175,6 @@ function segmentIdentity(
     }
     case "media": {
       const point = journey.routePoints[step.pointIndex];
-      const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
       return {
         id: `media:${asset?.id ?? stepIndex}`,
         kind: "media" as const,
@@ -184,10 +210,20 @@ export function buildPlaybackPlan(
 ): PlaybackPlan {
   const steps = buildPlaybackSteps(journey, homeContext);
   let cursorMs = 0;
+  let currentChapterMedia: readonly JourneyMediaAsset[] = [];
   const segments = steps.map((step, stepIndex) => {
-    const durationMs = resolvePlaybackStepDurationMs(journey, step, tempo, resolveStepDuration);
+    // Every chapter's stop precedes its media and already owns the sorted list.
+    if (step.kind === "stop") currentChapterMedia = step.media;
+    const asset = step.kind === "media" ? currentChapterMedia[step.mediaIndex] : undefined;
+    const durationMs = resolvePlaybackStepDurationWithFallback(
+      journey,
+      step,
+      tempo,
+      resolveStepDuration,
+      () => playbackStepDuration(journey, step, NARRATIVE_TIMING_PROFILES.full[tempo], asset),
+    );
     const segment: PlannedPlaybackSegment = {
-      ...segmentIdentity(journey, step, stepIndex),
+      ...segmentIdentity(journey, step, stepIndex, asset),
       stepIndex,
       startMs: cursorMs,
       durationMs,

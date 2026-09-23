@@ -2,13 +2,12 @@ import {
   buildPlaybackSteps,
   playbackCameraTargetForStep,
   playbackIntroMedia,
-  playbackMediaForPoint,
   playbackStoryMedia,
   routePointAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
 import { resolveNarrativeTiming, type NarrativeTimingContext } from "./narrativeTiming";
-import type { Journey } from "./types";
+import type { Journey, JourneyMediaAsset } from "./types";
 
 export type KeepsakeDurationPreset = 15 | 30 | 60;
 export type KeepsakeAspect = "portrait" | "landscape";
@@ -138,7 +137,11 @@ export function keepsakeNarrativeSnapshotsEqual(
   ));
 }
 
-function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
+function sceneForStep(
+  journey: Journey,
+  step: PlaybackStep,
+  asset: JourneyMediaAsset | undefined,
+): SceneDraft[] {
   const camera = playbackCameraTargetForStep(step);
   switch (step.kind) {
     case "home-prelude":
@@ -187,7 +190,6 @@ function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
       }];
     }
     case "media": {
-      const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
       if (!asset) return [];
       const type = mediaType(asset.mimeType);
       const point = journey.routePoints[step.pointIndex];
@@ -263,8 +265,11 @@ export function buildKeepsakeRenderManifest(
         : KEEPSAKE_MIN_DURATION_MS.image,
     };
   });
+  let currentChapterMedia: readonly JourneyMediaAsset[] = [];
   const drafts = playbackSteps.flatMap((step, stepIndex) => {
-    const scenes = sceneForStep(journey, step);
+    if (step.kind === "stop") currentChapterMedia = step.media;
+    const asset = step.kind === "media" ? currentChapterMedia[step.mediaIndex] : undefined;
+    const scenes = sceneForStep(journey, step, asset);
     return stepIndex === 0 ? [...scenes, ...introMediaDrafts] : scenes;
   });
   const targetDurationMs = presetSeconds * 1000;

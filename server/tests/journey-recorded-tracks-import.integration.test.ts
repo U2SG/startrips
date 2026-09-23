@@ -719,12 +719,15 @@ describe("recorded-track import over HTTP", () => {
         format: string;
         replayed: boolean;
         recordedTrack: {
+          journeyId: string;
           operationKey: string;
           source: string;
           provenance: string;
           segments: Array<{
+            segmentOrder: number;
             sampleCount: number;
             samples: Array<{
+              sampleOrder: number;
               latitude: number;
               longitude: number;
               recordedAt: string | null;
@@ -741,23 +744,51 @@ describe("recorded-track import over HTTP", () => {
     expect(importedKey).toBe(
       recordedTrackImportOperationKey(Buffer.from(TWO_SEGMENT_GPX, "utf8")),
     );
+    expect(Object.keys(track).sort()).toEqual([
+      "journeyId", "operationKey", "provenance", "segments", "source",
+    ]);
+    expect(track).toMatchObject({
+      journeyId: ownerJourneyId,
+      source: "imported-file",
+      provenance: "gpx",
+    });
+    for (const segment of track.segments) {
+      expect(Object.keys(segment).sort()).toEqual([
+        "id", "sampleCount", "samples", "segmentOrder",
+      ]);
+      for (const sample of segment.samples) {
+        expect(Object.keys(sample).sort()).toEqual([
+          "accuracyMeters", "id", "latitude", "longitude", "recordedAt", "sampleOrder",
+        ]);
+      }
+    }
 
     // The empty <trkseg> was not a break; the two real ones survived intact
     // and nothing was interpolated across the gap between them.
+    expect(track.segments.map((segment) => segment.segmentOrder)).toEqual([0, 1]);
     expect(track.segments.map((segment) => segment.sampleCount))
       .toEqual(TWO_SEGMENT_SAMPLE_COUNTS);
     expect(track.segments[0].samples.map((sample) => [
+      sample.sampleOrder,
       sample.latitude,
       sample.longitude,
       sample.recordedAt,
       sample.accuracyMeters,
     ])).toEqual([
-      [22.543096, 114.057865, "2026-09-01T00:00:00.000Z", null],
-      [22.5401, 114.0612, "2026-09-01T00:01:00.000Z", null],
-      [22.538, 114.065, null, null],
+      [0, 22.543096, 114.057865, "2026-09-01T00:00:00.000Z", null],
+      [1, 22.5401, 114.0612, "2026-09-01T00:01:00.000Z", null],
+      [2, 22.538, 114.065, null, null],
     ]);
-    expect(track.segments[1].samples.map((sample) => sample.latitude))
-      .toEqual([22.3193, 22.32]);
+    expect(track.segments[1].samples.map((sample) => [
+      sample.sampleOrder,
+      sample.latitude,
+      sample.longitude,
+      sample.recordedAt,
+      sample.accuracyMeters,
+    ])).toEqual([
+      [0, 22.3193, 114.1694, "2026-09-02T03:04:05.000Z", null],
+      [1, 22.32, 114.17, null, null],
+    ]);
 
     // The store names the format that produced the segments, in a column that
     // names no format itself.

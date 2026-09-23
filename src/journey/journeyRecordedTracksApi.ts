@@ -71,23 +71,27 @@ async function readError(response: Response) {
 }
 
 function summarize(operation: RecordedTrackWireOperation): JourneyRecordedTrackSummary {
-  const times = operation.segments
-    .flatMap((segment) => segment.samples ?? [])
-    .map((sample) => sample.recordedAt)
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .sort();
+  let sampleCount = 0;
+  let startedAt: string | null = null;
+  let endedAt: string | null = null;
+  for (const segment of operation.segments) {
+    sampleCount += segment.sampleCount ?? segment.samples?.length ?? 0;
+    for (const sample of segment.samples ?? []) {
+      const time = sample.recordedAt;
+      if (typeof time !== "string" || time.length === 0) continue;
+      if (startedAt === null || time < startedAt) startedAt = time;
+      if (endedAt === null || time > endedAt) endedAt = time;
+    }
+  }
   return {
     journeyId: operation.journeyId,
     operationKey: operation.operationKey,
     source: operation.source,
     provenance: operation.provenance,
     segmentCount: operation.segments.length,
-    sampleCount: operation.segments.reduce(
-      (total, segment) => total + (segment.sampleCount ?? segment.samples?.length ?? 0),
-      0,
-    ),
-    startedAt: times[0] ?? null,
-    endedAt: times.at(-1) ?? null,
+    sampleCount,
+    startedAt,
+    endedAt,
   };
 }
 
