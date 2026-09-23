@@ -960,6 +960,15 @@ export function JourneyStory({
         ? [...targetRoot()?.querySelectorAll<HTMLElement>("[data-shared-media-id]") ?? []]
           .find((node) => node.dataset.sharedMediaId === mediaId) ?? null
         : null,
+      // #489 C/V6: the destination page is in the tree as soon as the surface
+      // commits, and it paints as soon as the browser decodes its picture --
+      // before readiness lets resolveTarget claim it. Own it from the commit.
+      claimDestination: () => {
+        const stage = targetRoot();
+        if (!mediaId || !stage) return null;
+        return [...stage.querySelectorAll<HTMLElement>("[data-media-page-id]")]
+          .find((node) => node.dataset.mediaPageId === mediaId) ?? null;
+      },
       isTargetCurrent: () => {
         const stage = targetRoot();
         return storyFullscreenTargetIsCurrent({
