@@ -65,12 +65,16 @@ the source-access stage, never as an invalid link.
 A host that answers is a separate outcome from one that cannot be reached. When
 a source answers a non-2xx status to the `http` driver it is reported as
 `ITINERARY_SOURCE_REFUSED` at the `content-read` stage with the status it gave,
-because reach is already settled and the refusal is about the reading method.
-Real consumer itinerary hosts do this routinely: the same link a member opens in
-a browser is answered with a challenge or an interstitial for a static client
-regardless of the request headers. That is the case `render` exists for, so a
-deployment that has to read such links needs `ITINERARY_SOURCE_FETCH_DRIVER=render`
-and a rendering service; retrying `http` will not change the answer.
+because reach is already settled and what failed is the reading. The status it
+gave is carried in the message, because the answers do not all mean the same
+thing: a challenge or a throttle (401, 403, 405, 406, 429, 432, 503) says a
+static client is the wrong reader and is the case `render` exists for, and only
+those statuses are answered with that advice. A source known to answer a static
+read this way — a shared plan page that composes itself in a browser will, no
+matter what request headers are sent — needs
+`ITINERARY_SOURCE_FETCH_DRIVER=render` and a rendering service; retrying `http`
+will not change the answer. A 404, a 410 or a 5xx is a different sentence and
+is reported as itself, with no driver suggested.
 
 The `render` driver connects from inside the rendering service, where this app
 cannot pin anything, so the service is held to the same contract from its own

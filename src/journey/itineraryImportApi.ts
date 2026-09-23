@@ -125,6 +125,11 @@ export function itineraryImportStageMessage(error: ItineraryImportError): string
     return `无法从这里打开这个链接（${error.code}）。链接本身可能是好的；先试试图片或粘贴文本。`;
   }
   if (error.stage === "content-read") {
+    // A refusal is a content-read outcome too, but the page was never served,
+    // so the "opened it and found nothing" sentence would be untrue.
+    if (error.code === "ITINERARY_SOURCE_REFUSED") {
+      return `对方站点回应了，但没有把这个页面给到这里（${error.code}）。先试试图片或粘贴文本。`;
+    }
     return `已经打开了页面，但没读到可用的行程内容（${error.code}）。`;
   }
   if (error.stage === "ai-extraction") {

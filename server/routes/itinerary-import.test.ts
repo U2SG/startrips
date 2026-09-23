@@ -502,6 +502,22 @@ describe("a configured deployment", () => {
     // The upstream status travels, so a deployment can tell a challenge from a
     // gone page without a second attempt.
     expect(String(refusedBody.message)).toContain("432");
+    expect(String(refusedBody.message)).toContain("rendering driver");
+
+    // ...but a gone page is not a rendering problem, and must not be answered
+    // with rendering advice.
+    upstream.mockResolvedValueOnce(new Response("gone", { status: 404 }));
+    const missing = await post({
+      source: "link",
+      link: "https://plans.example/tripmap/routePlan?id=1",
+    });
+    const missingBody = await missing.json();
+    expect(missingBody).toMatchObject({
+      error: "ITINERARY_SOURCE_REFUSED",
+      stage: "content-read",
+    });
+    expect(String(missingBody.message)).toContain("404");
+    expect(String(missingBody.message)).not.toContain("rendering driver");
 
     // ...and the unreachable case still reports itself as one.
     lookup.mockRejectedValueOnce(new Error("ENOTFOUND"));

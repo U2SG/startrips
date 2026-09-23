@@ -66,6 +66,13 @@ export type PinnedLookup = LookupFunction;
 
 export const MAX_SOURCE_REDIRECTS = 4;
 
+/**
+ * The answered statuses a rendering driver actually helps with: a source
+ * refusing, throttling or challenging a static client. A 404 or a 5xx is a
+ * different sentence and must not be answered with the same advice.
+ */
+const STATIC_READ_CHALLENGE_STATUSES = new Set([401, 403, 405, 406, 429, 432, 503]);
+
 function refuse(code: string, message: string, status = 400): never {
   throw new ItineraryImportStageError("source-access", code, message, status);
 }
@@ -525,17 +532,23 @@ export async function fetchItinerarySourcePage(
         // The host answered. Reach is settled, so this is not a source-access
         // fact and saying "unreachable" would make a live refusal
         // indistinguishable from an unresolvable name or a blocked socket.
-        // What actually happened is that the source would not serve *this*
-        // reading: a page a member opens in a browser is routinely answered
-        // with a challenge or an interstitial when a static client asks for
-        // it, which is a statement about this deployment's reading method and
-        // never a verdict on the link.
+        //
+        // What the answer *means* is not one thing, and guessing costs the
+        // member a wrong instruction: a challenge or an interstitial says this
+        // deployment's reading method is wrong and the rendering driver is the
+        // answer, while a gone page or a broken upstream says nothing of the
+        // kind and no driver will change it. So the status travels as itself
+        // and only the family actually served by rendering carries that
+        // advice.
         throw new ItineraryImportStageError(
           "content-read",
           "ITINERARY_SOURCE_REFUSED",
-          `The link answered ${response.status} to a static read from here; `
-            + "a source that composes itself in a browser needs the rendering "
-            + "driver rather than a second static attempt",
+          `The link answered ${response.status} and did not serve the page`
+            + (STATIC_READ_CHALLENGE_STATUSES.has(response.status)
+              ? "; a source that composes itself in a browser answers a static "
+                + "client this way, and needs the rendering driver rather than "
+                + "a second static attempt"
+              : ""),
           502,
         );
       }
