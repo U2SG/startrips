@@ -1009,14 +1009,15 @@ export default function DetailedEarthMap({
         longitude: event.lngLat.lng,
       });
     });
-    map.on("zoomend", (event) => {
+    map.on("zoom", (event) => {
       // Only a detail-owned USER zoom may hand the camera back to Particle
-      // Earth. Handoff calibration uses jumpTo while Particle still owns the
-      // view, and its queued zoomend can arrive just after ownership commits.
-      // Treating that programmatic edge as user retreat makes the keyboard
-      // Dive flash through detail and immediately collapse to the far globe.
-      // Focus flights and resize/calibration corrections are programmatic too;
-      // they must never become a second, implicit overview command.
+      // Earth. MapLibre publishes the originating pointer/key event on each
+      // handler-owned zoom frame, while jumpTo/flyTo calibration emits zoom
+      // without an originalEvent. Grade that live provenance at the return
+      // threshold itself: waiting for zoomend lets a continuous wheel gesture
+      // cross far into the overview range while Detail keeps consuming input.
+      // Focus flights and resize/calibration corrections therefore remain
+      // programmatic, but a real retreat hands ownership home immediately.
       if (
         !event.originalEvent
         || !initialLoadSettled
