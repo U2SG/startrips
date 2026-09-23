@@ -79,6 +79,19 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(detail).toMatch(/map\.on\("moveend", \(\) => \{[\s\S]*?!map\.isMoving\(\)[\s\S]*?reconcileFullySettled\(\)/);
   });
 
+  it("does not block Journey readiness on unrelated basemap tile churn", () => {
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    const start = detail.indexOf("const reconcileFullySettled = () => {");
+    const end = detail.indexOf("const syncJourneyOverlay = () => {", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const reconcile = detail.slice(start, end);
+    expect(reconcile).toContain("paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision");
+    expect(reconcile).toContain("!map.isStyleLoaded()");
+    expect(reconcile).toContain("map.isMoving()");
+    expect(reconcile).not.toContain("map.areTilesLoaded()");
+  });
+
   it("keeps per-frame handoff calibration on the imperative publish path", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
