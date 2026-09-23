@@ -1221,6 +1221,19 @@ try {
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
+      // The presented photograph carries the stage's advertised arrow
+      // navigation on its own focusable picture (StoryMediaPages, role=button
+      // + aria-keyshortcuts), so the step is driven through the input the
+      // product advertises rather than through a navigation setter.
+      const focused = await page.evaluate((selector) => {
+        const current = document.querySelector(selector)
+          ?.querySelector('[data-media-page="current"]')?.querySelector("img");
+        current?.focus();
+        return {
+          keyshortcuts: current?.getAttribute("aria-keyshortcuts") ?? null,
+          focused: document.activeElement === current,
+        };
+      }, STAGE);
       await startSampler(page, STAGE);
       await page.keyboard.press("ArrowRight");
       // The window is only discriminating while the request is actually
@@ -1248,9 +1261,10 @@ try {
       record({
         name: "story-cold-step-keeps-the-hidden-handoff-hidden",
         claim: "an arrow-key step toward a neighbour whose read is deliberately held back really does hold a pending request while the previous page is still the settled, readable owner, and through that whole window the stage shows no waiting indicator over it -- then commits to the requested asset once the read lands",
-        readDelays: { [V1]: 5_000 }, pending, committed, settled, ...continuity,
+        readDelays: { [V1]: 5_000 }, focused, pending, committed, settled, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: continuity.failed || !pending || !committed || settled.id !== V1
+        failed: continuity.failed || !focused.focused || !pending || !committed
+          || settled.id !== V1
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
