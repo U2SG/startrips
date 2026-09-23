@@ -219,9 +219,13 @@ function installStageSampler() {
   // and strips of `data-shared-media-id`, while the destination image is held
   // at `visibility: hidden` for the whole morph. Neither node is reachable
   // through `elementsFromPoint`, so a point the morph is covering reads bare.
-  // The clone publishes `data-shared-element-clone`; a connected, sized clone
-  // whose box contains the point is positive evidence that the picture WAS
-  // drawn there, which is what separates a handoff from a blank stage.
+  // The clone publishes `data-shared-element-clone`, whose value is the morph
+  // name `story-fullscreen-<assetId>`; a connected, sized clone whose box
+  // contains the point is positive evidence that the picture WAS drawn there,
+  // which is what separates a handoff from a blank stage. The asset is read
+  // back out of that name on purpose: a morph carrying a picture this window
+  // does not own is graded as a stale foreground like any other drawable,
+  // rather than excusing the point because something was painted over it.
   const morphAt = (x, y) => {
     for (const clone of document.querySelectorAll("[data-shared-element-clone]")) {
       const box = clone.getBoundingClientRect();
@@ -229,7 +233,11 @@ function installStageSampler() {
       if (x < box.left || x > box.right || y < box.top || y > box.bottom) continue;
       const style = getComputedStyle(clone);
       if (style.visibility === "hidden" || Number(style.opacity) <= 0.05) continue;
-      return { kind: "morph", asset: null, morph: clone.dataset.sharedElementClone, live: false };
+      const name = clone.dataset.sharedElementClone;
+      return {
+        kind: "morph", morph: name, live: false,
+        asset: /^story-fullscreen-(.+)$/.exec(name)?.[1] ?? null,
+      };
     }
     return null;
   };
@@ -302,9 +310,12 @@ function installStageSampler() {
   // and use the clip only to narrow the probe rectangle to the pixels that
   // page is actually allowed to paint.
   const presentedPage = (pages) => {
-    const measurable = (page) => page && page.getBoundingClientRect().width > 0 ? page : null;
-    return measurable(pages.querySelector('[data-media-page="current"]'))
-      ?? measurable(pages.querySelector('[data-media-incoming="true"]'));
+    // Only the declared current page. An incoming page is by definition not
+    // the presented one, so a stack whose current page is unmeasurable has no
+    // aperture to grade and fails as stale rather than being graded against a
+    // neighbour that is not yet showing the picture.
+    const current = pages.querySelector('[data-media-page="current"]');
+    return current && current.getBoundingClientRect().width > 0 ? current : null;
   };
   // `inset()` is a box shorthand and the computed value drops repeated sides,
   // so `inset(0% 0%)` reads back as `inset(0%)`. Expand it with the CSS
