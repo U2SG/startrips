@@ -126,6 +126,25 @@ const siblingJourney = {
   media: [],
 };
 
+// The real-pointer round must start with personal Route Points on the product's
+// naturally visible hemisphere. The long-form media/Story rounds below keep the
+// Hong Kong fixture; this interaction-only projection uses the public Southwest
+// geography from the original report instead of silently steering the camera to
+// an off-screen test record before grading the hit surface.
+const interactionJourney = {
+  ...journey,
+  title: "美国西南路线点命中",
+  routePoints: journey.routePoints.map((point, index) => ({
+    ...point,
+    ...[
+      { latitude: 34.0522, longitude: -118.2437, label: "洛杉矶" },
+      { latitude: 36.1699, longitude: -115.1398, label: "拉斯维加斯" },
+      { latitude: 36.0544, longitude: -112.1401, label: "大峡谷" },
+      { latitude: 36.9147, longitude: -111.4558, label: "Page" },
+    ][index],
+  })),
+};
+
 const sameCoordinateJourneyId = "qa-same-coordinate-journey";
 const same02Id = "qa-same-coordinate-02";
 const same07Id = "qa-same-coordinate-07";
@@ -463,7 +482,11 @@ try {
   // Pointer identity is independent of the cinematic route-focus flight. Use the
   // product's supported reduced-motion path so this real-scene round waits on
   // projected hit geometry, not on SwiftShader frame throughput in CI.
-  const interactionRun = await openFocusAtlas({ realScene: true, reduceMotion: true });
+  const interactionRun = await openFocusAtlas({
+    realScene: true,
+    reduceMotion: true,
+    journeysPayload: [siblingJourney, interactionJourney],
+  });
   const interactionPage = interactionRun.page;
   const interactionBeforeFocus = await sceneFocusSnapshot(interactionPage);
 
