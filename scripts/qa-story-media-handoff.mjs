@@ -422,6 +422,19 @@ function installStageSampler() {
       // frame that first wrote it is what separates "never reset" from
       // "reset and then overwritten".
       currentClip: current ? getComputedStyle(current).clipPath.slice(0, 40) : null,
+      // #489 C/V6: whether the presented page is drawing its OWN picture this
+      // frame. A destination that paints while a shared-element clone is still
+      // flying is the recorded reveal-then-hide-then-smaller-reopen, and it is
+      // invisible to the coverage grade because a painted destination reads as
+      // perfectly covered.
+      frontDrawn: (() => {
+        const media = front?.querySelector("img:not([hidden]), canvas:not([hidden])");
+        if (!media || !front) return false;
+        const mediaStyle = getComputedStyle(media);
+        const pageStyle = getComputedStyle(front);
+        return mediaStyle.visibility !== "hidden" && Number(mediaStyle.opacity) > 0.05
+          && pageStyle.visibility !== "hidden" && Number(pageStyle.opacity) > 0.05;
+      })(),
       waiting: Boolean(root.querySelector(".starlight-media-state.is-waiting")),
       videoCount: videos.length,
       videoOwner: videos.map((video) => video.getAttribute("data-shared-media-id")),
@@ -719,6 +732,106 @@ async function reverseSwipeStage(page, rootSelector, firstDirection) {
   await glide(offset(firstDirection), offset(-firstDirection), 16);
   await page.mouse.up();
   return { ...geometry, reach, firstDirection, finalDirection: -firstDirection };
+}
+
+/**
+ * The stack's own rest contract, read back from the DOM: the presented page is
+ * the top-painted one and is not clipped out of its own picture, and every
+ * retained page is clipped into the presented page's aperture. `expected` is
+ * recomputed here from the presented picture's natural size rather than
+ * trusting the product's numbers, so a residue left by an abandoned handoff is
+ * attributable to the page that wears it.
+ */
+async function stackRestState(page, rootSelector) {
+  return await page.evaluate((selector) => {
+    const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const slots = [...(pages?.querySelectorAll("[data-media-page-id]") ?? [])];
+    const front = pages?.querySelector('[data-media-page="current"]') ?? null;
+    const insets = (node) => {
+      const clip = getComputedStyle(node).clipPath;
+      if (!clip.startsWith("inset(")) return [0, 0, 0, 0];
+      const sides = (clip.match(/-?[\d.]+%/g) ?? []).map((side) => Number(side.slice(0, -1)));
+      if (!sides.length) return [0, 0, 0, 0];
+      const [top, right = top, bottom = top, left = right] = sides;
+      return [top, right, bottom, left];
+    };
+    // The same fit the product computes for a rear page: the front picture's
+    // aperture expressed as a percentage inset of the page box.
+    const media = front?.querySelector("img:not([hidden]), canvas:not([hidden])") ?? null;
+    const natural = media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight]
+      : media instanceof HTMLCanvasElement ? [media.width, media.height] : [0, 0];
+    const box = front ? { width: front.clientWidth, height: front.clientHeight } : { width: 0, height: 0 };
+    const fit = natural[0] && natural[1] && box.width && box.height
+      ? Math.min(box.width / natural[0], box.height / natural[1]) : 0;
+    const expectedRear = fit > 0
+      ? [(1 - natural[1] * fit / box.height) * 50, (1 - natural[0] * fit / box.width) * 50]
+      : [0, 0];
+    return {
+      frontId: front?.getAttribute("data-media-page-id") ?? null,
+      frontNatural: natural,
+      expectedRear: expectedRear.map((value) => Number(value.toFixed(2))),
+      pages: slots.map((slot) => {
+        const [top, right, bottom, left] = insets(slot);
+        return {
+          id: slot.getAttribute("data-media-page-id"),
+          role: slot.getAttribute("data-media-page"),
+          ready: slot.getAttribute("data-media-page-ready"),
+          zIndex: Number(getComputedStyle(slot).zIndex) || 0,
+          clip: getComputedStyle(slot).clipPath.slice(0, 48),
+          inset: [top, right, bottom, left].map((value) => Number(value.toFixed(2))),
+        };
+      }),
+    };
+  }, rootSelector);
+}
+
+/**
+ * Grade one rest state. The presented page must be unclipped -- the product's
+ * own `mediaStackClip` returns a zero inset for the front page, so any residue
+ * there is an aperture nobody reclaimed -- must be painted above every other
+ * page, and the retained pages must wear the presented picture's aperture.
+ */
+function gradeRestState(state, expectedFrontId, tolerance = 0.75) {
+  const front = state.pages.find((slot) => slot.role === "current");
+  const rear = state.pages.filter((slot) => slot.role !== "current");
+  const frontResidue = front ? Math.max(...front.inset) : Number.POSITIVE_INFINITY;
+  const misclipped = rear.filter((slot) =>
+    Math.abs(slot.inset[0] - state.expectedRear[0]) > tolerance
+    || Math.abs(slot.inset[1] - state.expectedRear[1]) > tolerance);
+  const occluding = rear.filter((slot) => front && slot.zIndex >= front.zIndex);
+  return {
+    front, rear, frontResidue, expectedRear: state.expectedRear,
+    misclipped, occluding,
+    failed: !front || front.id !== expectedFrontId || frontResidue > tolerance
+      || misclipped.length > 0 || occluding.length > 0,
+  };
+}
+
+/**
+ * The recorded sequence that leaves the stack's imperative presentation state
+ * without an owner: commit a program navigation so its springs are running,
+ * then take the stack with a finger. `updateMediaDrag` clears `incomingId`
+ * inside a `flushSync` and the grab that follows cancels those springs
+ * mid-flight, so the handoff ends without the presented identity ever changing.
+ */
+async function grabDuringNavigation(page, rootSelector) {
+  const half = await photoClickPoint(page, rootSelector, 1);
+  await page.mouse.click(half.x, half.y);
+  const geometry = await page.evaluate((selector) => {
+    const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const bounds = pages.getBoundingClientRect();
+    return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height * 0.35, width: bounds.width };
+  }, rootSelector);
+  await page.mouse.move(geometry.x, geometry.y);
+  await page.mouse.down();
+  // Past the 8px axis lock so the grab really fires, far short of the commit
+  // threshold and slow enough that release velocity cannot commit either.
+  for (let step = 1; step <= 4; step += 1) {
+    await page.mouse.move(geometry.x - step * 5, geometry.y);
+    await page.waitForTimeout(40);
+  }
+  await page.mouse.up();
+  return { ...geometry, clickedAt: half };
 }
 
 /** Everything needed to attribute a stuck navigation to an instance. */
@@ -1179,6 +1292,69 @@ try {
   }
 
   // ---------------------------------------------------------------------
+  // B (continued). An abandoned handoff hands the stack's presentation back.
+  // This is the #489 B root cause, not a sampled window: a navigation's
+  // springs are running when the finger takes the stack, `updateMediaDrag`
+  // clears `incomingId` inside a flushSync, and the grab cancels those springs
+  // mid-flight. The presented identity never changes, so nothing re-derived
+  // the aperture the abandoned target had been written into -- the presented
+  // photograph stayed clipped into a picture that never arrived, and the rear
+  // pages kept an aperture that was no longer anyone's.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: false });
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      // Land on the portrait photograph, whose neighbour is a wide one. The
+      // residue is only visible when the abandoned target's aperture differs
+      // from the presented one's, which is the mixed-aspect-ratio case the
+      // recording shows.
+      const steps = [];
+      for (const expected of [V1, V2, I2]) {
+        steps.push(await navigateByGesture(page, STAGE, 1, expected));
+      }
+      const beforeGrab = await stackRestState(page, STAGE);
+      await startSampler(page, STAGE);
+      const gesture = await grabDuringNavigation(page, STAGE);
+      // The abandoned navigation must not commit, and the drag was far short
+      // of its own threshold, so the presented page is still the portrait one.
+      const stillPresented = await page.waitForFunction(() => {
+        const pages = document.querySelector(".journey-story__media [data-story-media-pages]");
+        return pages?.getAttribute("data-media-presentation") === "settled";
+      }, undefined, { polling: "raf", timeout: 10_000 }).then(() => true, () => false);
+      await page.waitForTimeout(700);
+      const frames = await stopSamplerFrames(page);
+      const afterGrab = await stackRestState(page, STAGE);
+      const settled = await currentAsset(page);
+      const grabs = (await page.evaluate(() => (window.__qaStage?.gestures ?? [])))
+        .filter((entry) => entry.type === "story-media-grab" || entry.type === "story-media-recover");
+      const rest = gradeRestState(afterGrab, I2);
+      const continuity = gradeContinuity(frames, { allowedAssets: [I2, I3] });
+      record({
+        name: "story-abandoned-handoff-reclaims-presentation",
+        claim: "a navigation abandoned by the finger that grabs the stack leaves the presented page unclipped and painted above every retained page, with the retained pages back inside the presented picture's aperture, and never leaves a residual aperture cutting the presented photograph away",
+        presented: I2, steps, gesture, grabs: grabs.map((entry) => entry.type),
+        beforeGrab, afterGrab, rest, settled, stillPresented,
+        sampledFrames: frames.length,
+        // The frames whose presented page was clipped while nothing was in
+        // flight. They are the recorded phenomenon itself, not a sample of it.
+        clippedWhileSettled: frames
+          .filter((frame) => frame.presentation === "settled" && frame.currentClip
+            && frame.currentClip !== "none" && !/^inset\(0%\)$/.test(frame.currentClip))
+          .slice(0, 4),
+        continuity,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: steps.some((step) => !step.ok) || !stillPresented
+          || settled.id !== I2 || rest.failed || continuity.failed
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // C. Entering and leaving immersive viewing stays on the same object.
   // ---------------------------------------------------------------------
   {
@@ -1222,14 +1398,26 @@ try {
       // morphCoveredFrames -- or is a genuinely bare stage, which fails.
       const entry = gradeContinuity(entryFrames, { allowedAssets: [I2] });
       const exit = gradeContinuity(exitFrames, { allowedAssets: [I2] });
+      // #489 C/V6: the destination must never draw its own picture while the
+      // shared-element clone is still flying. A frame with both is the recorded
+      // reveal-then-hide-then-smaller-reopen, and the coverage grade above
+      // cannot see it -- a destination painted at full size reads as covered.
+      const morphExposure = (frames) => frames.filter((frame) => frame.frontDrawn
+        && frame.kind === "image"
+        && (frame.morphs ?? []).some((name) => !String(name).startsWith("::view-transition")));
+      const entryExposure = morphExposure(entryFrames);
+      const exitExposure = morphExposure(exitFrames);
       record({
         name: "story-entry-exit-object-continuity",
-        claim: "entering immersive viewing presents only the targeted asset and leaving restores the same last-visible asset, with no other asset owning the foreground, no second transport, and no frame in which neither stage draws the picture while no shared-element morph owns it",
+        claim: "entering immersive viewing presents only the targeted asset and leaving restores the same last-visible asset, with no other asset owning the foreground, no second transport, no frame in which neither stage draws the picture while no shared-element morph owns it, and no frame in which the destination draws its own picture while that morph is still flying",
         entryFrames: entryFrames.length, exitFrames: exitFrames.length,
         toSecondVideo, toLastVisible, lastVisible, entered, exited, entry, exit,
+        entryExposure: { frames: entryExposure.length, first: entryExposure.slice(0, 2) },
+        exitExposure: { frames: exitExposure.length, first: exitExposure.slice(0, 2) },
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !toSecondVideo.ok || !toLastVisible.ok || lastVisible.id !== I2 || entered.id !== I2 || exited.id !== I2
           || entry.failed || exit.failed
+          || entryExposure.length > 0 || exitExposure.length > 0
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {

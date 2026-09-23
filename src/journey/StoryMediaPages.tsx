@@ -294,9 +294,25 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
       }
       clipOwners.current[slot] = assigned[slot];
     });
-  }, [slotSignature, props.currentId, revision, liveReady, layoutRevision]);
+    // #489 B root cause: the aperture is written imperatively by this effect
+    // and by the handoff springs, so the stack returning to rest is the moment
+    // the aperture has to be reclaimed. `incomingId` and `movingId` decide that
+    // rest condition above but were missing here, so an abandoned handoff --
+    // the flushSync that clears `incomingId` in updateMediaDrag, then the grab
+    // that cancels the springs mid-flight -- left the presented page wearing
+    // the aperture computed for a target that never arrived, and the rear pages
+    // wearing none. Nothing recomputed it until the next navigation happened to
+    // move one of the old dependencies, which is why the recorded exposure
+    // appears mid-handoff and clears itself one navigation later.
+  }, [slotSignature, props.currentId, props.incomingId, movingId, revision, liveReady, layoutRevision]);
   const targetReady = ready(props.incomingId);
   const currentReady = ready(props.currentId);
+  // #489 C/V8: a presentable target is painted in front of the page it
+  // replaces, so it is already the media the viewer last saw. Shared-element
+  // identity has to follow that painted foreground; publishing it from the
+  // settled index instead made a close during a handoff hand the previous
+  // photograph to the return morph while the new one was on screen.
+  const foregroundId = props.incomingId && targetReady ? props.incomingId : props.currentId;
   useLayoutEffect(() => {
     if (!active) return;
     // Physical slots outlive their media. Carry keyboard focus with the
@@ -358,8 +374,11 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
       const isTarget = assetId === id;
       const depth = recovering ? depths[slot]
         : isTarget ? 0 : isCurrent ? (direction > 0 ? 2 : 1) : depths[slot];
-      node.style.zIndex = recovering ? (isCurrent ? "5" : String(3 - depth))
-        : isTarget ? "4" : "2";
+      // #489 B: paint order is published by the render below and nowhere else.
+      // Writing it here too made the DOM diverge from the order React believes
+      // it rendered, and React skips the corrective write whenever its own
+      // value is unchanged -- so a handoff that ended without changing the
+      // presented identity left the stack painted in the abandoned order.
       const front = pageNodes.current[assigned.indexOf(recovering ? props.currentId : id)];
       return [springElementTo(node, { transform: mediaStackRest(depth), opacity: mediaStackOpacity(depth),
         clipInset: mediaStackClip(node, front) },
@@ -389,7 +408,6 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
         const assetId = node?.dataset.mediaPageId;
         if (!node || !assetId || assetId === latest.current.currentId || assetId === neighborId) return [];
         const depth = Number(node.style.getPropertyValue("--stack-depth")) || 1;
-        node.style.zIndex = String(3 - depth);
         const spring = springElementTo(node, { transform: mediaStackRest(depth), opacity: mediaStackOpacity(depth) }, { owner: assetId });
         void spring.finished.catch(() => undefined);
         return [spring];
@@ -540,7 +558,14 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
           // A physical slot changes owners without remounting. Commit its
           // painted order with that identity, including synchronous reduced-
           // motion handoffs, so a former top page cannot intercept the next tap.
-          zIndex: current ? 5 : id !== null && id === props.incomingId ? 4 : 3 - depths[slot],
+          // #489 B: this is the only writer of that order. A presentable target
+          // comes forward and the page it replaces drops behind it for exactly
+          // as long as that handoff is the product's own state; an abandoned
+          // handoff restores the rest order by re-rendering, not by hoping an
+          // imperative write is undone somewhere else.
+          zIndex: current ? (props.incomingId && targetReady ? 2 : 5)
+            : id !== null && id === props.incomingId && targetReady ? 4
+              : 3 - depths[slot],
           transform: mediaStackRest(depths[slot]),
           opacity: mediaStackOpacity(depths[slot]),
           // Same-asset layer authority keeps the preview under this physical
@@ -559,8 +584,8 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
             ? `${asset?.fileName ?? "照片"}。左侧上一张，右侧下一张，方向键切换`
             : current && props.onImageClick ? `沉浸查看：${asset?.fileName ?? "照片"}` : undefined}
           aria-keyshortcuts={current && canNavigate ? "ArrowLeft ArrowRight" : undefined}
-          data-shared-media-id={current && !isVideo && pageReady ? id : undefined}
-          data-shared-journey-cover={current && !isVideo && pageReady && id === props.coverId ? "true" : undefined}
+          data-shared-media-id={id !== null && id === foregroundId && !isVideo && pageReady ? id : undefined}
+          data-shared-journey-cover={id !== null && id === foregroundId && !isVideo && pageReady && id === props.coverId ? "true" : undefined}
           onLoad={(event) => {
             const image = event.currentTarget;
             if (!id || !url) return;
