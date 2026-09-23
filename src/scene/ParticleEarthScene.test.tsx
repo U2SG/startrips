@@ -159,8 +159,11 @@ describe("ParticleEarthScene contracts", () => {
       const setterIndex = source.indexOf(`controllerRef.current?.${setter}`);
       const effectIndex = source.lastIndexOf("useEffect(() => {", setterIndex);
       expect(setterIndex).toBeGreaterThan(effectIndex);
-      expect(source.slice(effectIndex, setterIndex)).not.toContain("if (!ready) return;");
+      const effect = source.slice(effectIndex, setterIndex);
+      expect(effect).not.toContain("if (!ready) return;");
+      expect(effect).toContain("if (!controllerReady) return;");
     }
+    expect(source).toContain("setControllerReady(true)");
   });
 
   it("wakes an idle renderer for Route Point semantic projection changes", () => {

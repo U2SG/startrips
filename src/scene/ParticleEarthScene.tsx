@@ -1661,6 +1661,10 @@ export function ParticleEarthScene({
   rotationYOverride,
 }: ParticleEarthSceneProps) {
   const [ready, setReady] = useState(false);
+  // Controller availability is independent from the asynchronous land/coastline
+  // visual build. Semantic Journey/Route Point state must replay as soon as the
+  // imperative controller exists, without waiting for `ready`.
+  const [controllerReady, setControllerReady] = useState(false);
   const latestMode = useRef(mode);
   const latestQuality = useRef(quality);
   const latestFocusPoint = useRef(focusPoint);
@@ -5894,6 +5898,10 @@ export function ParticleEarthScene({
     applyFocusPoint(latestFocusPoint.current);
     applyJourneyRoutes(latestJourneyRoutes.current);
     updateRenderLoopVisibility();
+    // The controller is usable now; the asynchronous land/coastline visual
+    // build can finish later. Replay semantic props once `useThreeScene` has
+    // assigned controllerRef.current instead of losing the mount-time effects.
+    setControllerReady(true);
 
     return {
       setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"]) {
@@ -6151,65 +6159,77 @@ export function ParticleEarthScene({
   });
 
   useEffect(() => {
-    if (!ready) return;
+    if (!controllerReady) return;
     controllerRef.current?.setInitialCameraAnchor(initialCameraAnchor);
-  }, [controllerRef, initialCameraAnchor?.lat, initialCameraAnchor?.lon, ready]);
+  }, [controllerReady, controllerRef, initialCameraAnchor?.lat, initialCameraAnchor?.lon]);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!controllerReady) return;
     controllerRef.current?.setHomeBasePresence(homeBasePresence);
-  }, [controllerRef, homeBasePresence, ready]);
+  }, [controllerReady, controllerRef, homeBasePresence]);
 
   useEffect(() => {
+    if (!controllerReady) return;
     controllerRef.current?.setQuality(quality);
-  }, [controllerRef, quality]);
+  }, [controllerReady, controllerRef, quality]);
 
   useEffect(() => {
+    if (!controllerReady) return;
     controllerRef.current?.setMode(mode);
-  }, [controllerRef, mode]);
+  }, [controllerReady, controllerRef, mode]);
 
   useEffect(() => {
+    if (!controllerReady) return;
     // Route/focus semantics are controller-ready, not land-visual-ready.
     // Async journey data and focus-mode transitions must reach the controller
     // before the expensive land rebuild finishes so Route Points can project.
     controllerRef.current?.setFocusIntent(
       resolveGlobeFocusIntent(focusPoint, focusRoute, focusRevision),
     );
-  }, [controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, focusRoute]);
+  }, [controllerReady, controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, focusRoute]);
 
   useEffect(() => {
+    if (!controllerReady) return;
     controllerRef.current?.setFocusColor(focusColor);
-  }, [controllerRef, focusColor]);
+  }, [controllerReady, controllerRef, focusColor]);
 
   useEffect(() => {
+    if (!controllerReady) return;
     controllerRef.current?.setCompactMobileLayout(compactMobileLayout);
-  }, [compactMobileLayout, controllerRef]);
+  }, [compactMobileLayout, controllerReady, controllerRef]);
 
   useEffect(() => {
+    if (!controllerReady) return;
     controllerRef.current?.setVisibilityHint(visibilityHint);
-  }, [controllerRef, visibilityHint.opaqueMediaCover, visibilityHint.coverTransitionActive, visibilityHint.earthDiveOverlapActive]);
+  }, [controllerReady, controllerRef, visibilityHint.opaqueMediaCover, visibilityHint.coverTransitionActive, visibilityHint.earthDiveOverlapActive]);
 
   useEffect(() => {
+    if (!controllerReady) return;
     controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
-  }, [activeJourneyRouteId, controllerRef, journeyRoutes]);
+  }, [activeJourneyRouteId, controllerReady, controllerRef, journeyRoutes]);
 
   useEffect(() => {
+    if (!controllerReady) return;
     controllerRef.current?.setSelectedJourneyRoutePoint(selectedJourneyRoutePoint);
   }, [
+    controllerReady,
     controllerRef,
     selectedJourneyRoutePoint?.journeyId,
     selectedJourneyRoutePoint?.routePointId,
     selectedJourneyRoutePoint?.pointIndex,
   ]);
   useEffect(() => {
+    if (!controllerReady) return;
     controllerRef.current?.setNarrativeJourneyRoutePoint(narrativeJourneyRoutePoint);
   }, [
+    controllerReady,
     controllerRef,
     narrativeJourneyRoutePoint?.journeyId,
     narrativeJourneyRoutePoint?.routePointId,
     narrativeJourneyRoutePoint?.pointIndex,
   ]);
   useEffect(() => {
+    if (!controllerReady) return;
     // Temporal reveal is Route Point semantic state, just like route/selection
     // identity above. Publish it as soon as the controller exists instead of
     // waiting for the unrelated async land-visual rebuild; otherwise the real
@@ -6217,7 +6237,7 @@ export function ParticleEarthScene({
     // Review P2: also called with `undefined` so leaving focus mode resets
     // every route's temporal reveal to full visibility.
     controllerRef.current?.setTemporalReveal(temporalReveal);
-  }, [controllerRef, temporalReveal]);
+  }, [controllerReady, controllerRef, temporalReveal]);
 
   return (
     <div
