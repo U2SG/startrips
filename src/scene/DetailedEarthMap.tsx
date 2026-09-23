@@ -967,9 +967,17 @@ export default function DetailedEarthMap({
         longitude: event.lngLat.lng,
       });
     });
-    map.on("zoomend", () => {
+    map.on("zoomend", (event) => {
+      // Only a detail-owned USER zoom may hand the camera back to Particle
+      // Earth. Handoff calibration uses jumpTo while Particle still owns the
+      // view, and its queued zoomend can arrive just after ownership commits.
+      // Treating that programmatic edge as user retreat makes the keyboard
+      // Dive flash through detail and immediately collapse to the far globe.
+      // Focus flights and resize/calibration corrections are programmatic too;
+      // they must never become a second, implicit overview command.
       if (
-        !initialLoadSettled
+        !event.originalEvent
+        || !initialLoadSettled
         || diveOwnerRef.current !== "detail"
         || overviewRequestedRef.current
         || !shouldReturnToParticleEarth(map.getZoom())

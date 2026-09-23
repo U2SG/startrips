@@ -65,6 +65,12 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(detail).toContain("map.scrollZoom.disable()");
   });
 
+  it("does not interpret programmatic detail zoom as an overview request", () => {
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    expect(detail).toContain('map.on("zoomend", (event) => {');
+    expect(detail).toMatch(/map\.on\("zoomend", \(event\) => \{[\s\S]*?!event\.originalEvent[\s\S]*?shouldReturnToParticleEarth\(map\.getZoom\(\)\)/);
+  });
+
   it("keeps per-frame handoff calibration on the imperative publish path", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
