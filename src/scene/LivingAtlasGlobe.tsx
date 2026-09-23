@@ -697,6 +697,11 @@ export function LivingAtlasGlobe({
 
   const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame | null) => {
     particleFrameRef.current = frame;
+    // Once Detailed Earth owns the camera, Particle Earth is no longer a
+    // handoff input. Keep the last frame for a later release, but do not let
+    // background particle frames wake the otherwise-idle Dive scheduler or
+    // push stale particle geometry back into the detail renderer.
+    if (diveRef.current.owner === "detail") return;
     scheduleDiveTick();
     if (frame && diveRef.current.owner === "particle") {
       // Keep the hidden/blending detail camera on the exact frame that was

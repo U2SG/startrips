@@ -52,7 +52,10 @@ describe("Semantic Earth Dive renderer ownership", () => {
   it("mounts detail non-interactive and only enables particle hold after detail owns input", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    const particle = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
     expect(globe).toContain('cameraHold={Boolean(atlas) && atlas?.inputOwner === "detail"}');
+    expect(globe).toContain('if (diveRef.current.owner === "detail") return;');
+    expect(particle).toMatch(/!cameraHeldByDetail[\s\S]*?getGlobeIdleRotationDelta/);
     expect(detail).toContain("interactive: false");
     expect(detail).toContain('const owns = diveOwner === "detail";');
     expect(detail).toContain("canvas.tabIndex = 0");
