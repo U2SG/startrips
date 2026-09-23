@@ -123,6 +123,10 @@ function installStageSampler() {
     note({ type: "pointermove", x: Math.round(event.clientX), y: Math.round(event.clientY), samples: 1 });
   }, true);
   new MutationObserver((records) => {
+    // A reveal-then-hide is a DOM/style change, so mutations sample too. An
+    // animation-frame chain alone can go quiet in a window that contains no
+    // pointer input, and a window with no observation is not evidence.
+    sample();
     for (const mutation of records) {
       for (const [list, change] of [[mutation.addedNodes, "added"], [mutation.removedNodes, "removed"]]) {
         for (const node of list) {
@@ -191,7 +195,7 @@ function installStageSampler() {
     const height = natural[1] * scale;
     return new DOMRect(box.left + (box.width - width) / 2, box.top + (box.height - height) / 2, width, height);
   };
-  const sample = () => {
+  function sample() {
     if (!state.running) return;
     const root = state.root && document.querySelector(state.root);
     const pages = root?.querySelector("[data-story-media-pages]");
@@ -222,7 +226,7 @@ function installStageSampler() {
     } else if (state.running) {
       state.unmeasurable += 1;
     }
-  };
+  }
   // Each window owns its own chain, retired by generation. A chain started at
   // document-start is not reliably carried into the committed document, and a
   // chain that only restarts on demand can be lost when a window closes.
@@ -234,8 +238,10 @@ function installStageSampler() {
     state.running = true;
     state.generation = (state.generation ?? 0) + 1;
     const generation = state.generation;
+    state.ticks = 0;
     const loop = () => {
       if (state.generation !== generation) return;
+      state.ticks += 1;
       requestAnimationFrame(loop);
       sample();
     };
@@ -243,7 +249,7 @@ function installStageSampler() {
   };
   window.__qaStageStop = () => {
     state.running = false;
-    return { frames: state.frames, gestures: state.gestures, unmeasurable: state.unmeasurable };
+    return { frames: state.frames, gestures: state.gestures, unmeasurable: state.unmeasurable, ticks: state.ticks };
   };
 }
 /* eslint-enable no-undef */
@@ -257,8 +263,9 @@ async function stopSampler(page) {
 }
 
 async function stopSamplerFrames(page) {
-  const { frames, unmeasurable } = await stopSampler(page);
+  const { frames, unmeasurable, ticks } = await stopSampler(page);
   frames.unmeasurable = unmeasurable;
+  frames.ticks = ticks;
   return frames;
 }
 
@@ -270,6 +277,7 @@ function gradeContinuity(frames, { allowedAssets }) {
     return {
       sampledFrames: 0, failed: true,
       unmeasurableFrames: frames.unmeasurable ?? null,
+      samplerTicks: frames.ticks ?? null,
       reason: "the sampler recorded no measurable frame for this window",
     };
   }
