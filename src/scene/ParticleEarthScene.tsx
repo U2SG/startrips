@@ -6154,11 +6154,13 @@ export function ParticleEarthScene({
   }, [controllerRef, mode]);
 
   useEffect(() => {
-    if (!ready) return;
+    // Route/focus semantics are controller-ready, not land-visual-ready.
+    // Async journey data and focus-mode transitions must reach the controller
+    // before the expensive land rebuild finishes so Route Points can project.
     controllerRef.current?.setFocusIntent(
       resolveGlobeFocusIntent(focusPoint, focusRoute, focusRevision),
     );
-  }, [controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, focusRoute, ready]);
+  }, [controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, focusRoute]);
 
   useEffect(() => {
     controllerRef.current?.setFocusColor(focusColor);
@@ -6173,26 +6175,21 @@ export function ParticleEarthScene({
   }, [controllerRef, visibilityHint.opaqueMediaCover, visibilityHint.coverTransitionActive, visibilityHint.earthDiveOverlapActive]);
 
   useEffect(() => {
-    if (!ready) return;
     controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
-  }, [activeJourneyRouteId, controllerRef, journeyRoutes, ready]);
+  }, [activeJourneyRouteId, controllerRef, journeyRoutes]);
 
   useEffect(() => {
-    if (!ready) return;
     controllerRef.current?.setSelectedJourneyRoutePoint(selectedJourneyRoutePoint);
   }, [
     controllerRef,
-    ready,
     selectedJourneyRoutePoint?.journeyId,
     selectedJourneyRoutePoint?.routePointId,
     selectedJourneyRoutePoint?.pointIndex,
   ]);
   useEffect(() => {
-    if (!ready) return;
     controllerRef.current?.setNarrativeJourneyRoutePoint(narrativeJourneyRoutePoint);
   }, [
     controllerRef,
-    ready,
     narrativeJourneyRoutePoint?.journeyId,
     narrativeJourneyRoutePoint?.routePointId,
     narrativeJourneyRoutePoint?.pointIndex,
@@ -6202,7 +6199,7 @@ export function ParticleEarthScene({
     // Review P2: also called with `undefined` so leaving focus mode resets
     // every route's temporal reveal to full visibility.
     controllerRef.current?.setTemporalReveal(temporalReveal);
-  }, [controllerRef, ready, temporalReveal]);
+  }, [controllerRef, temporalReveal]);
 
   return (
     <div
