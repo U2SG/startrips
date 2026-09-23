@@ -69,6 +69,73 @@ function record(entry) {
 const browser = await launchQaBrowser();
 
 /**
+ * Input modality is part of what this lane claims, so it is part of what the
+ * lane produces. A phone-shaped viewport with `hasTouch` driven by `page.mouse`
+ * still delivers `pointerType: "mouse"`, and the product branches on exactly
+ * that:
+ *
+ *   - `JourneyStory.handleStorySheetPointerDown` returns early for
+ *     `pointerType === "mouse"`, so the compact story sheet's own gesture never
+ *     runs under a mouse;
+ *   - `beginMediaDrag` deliberately does NOT call `setPointerCapture` when the
+ *     gesture started over a video on compact mobile (`preserveNativeVideoCapture`),
+ *     because the UA's implicit touch capture already owns the stream and taking
+ *     it would take the native transport's controls with it. Under a mouse there
+ *     is no implicit capture, so the drag only holds together incidentally;
+ *   - `pointercancel` effectively never fires for a mouse, leaving
+ *     `handleStoryMediaPointerCancel` / `handleStoryMediaLostPointerCapture`
+ *     unexercised.
+ *
+ * So every compact-mobile profile below drives real browser touch input. The
+ * points go through CDP `Input.dispatchTouchEvent` -- the same browser-level
+ * injection `page.touchscreen.tap` uses -- and never through page-script
+ * `dispatchEvent`, which would produce untrusted events and prove nothing about
+ * hit testing, capture or native control ownership.
+ */
+const inputDrivers = new WeakMap();
+
+function mouseDriver(page) {
+  return {
+    kind: "mouse",
+    down: async (x, y) => { await page.mouse.move(x, y); await page.mouse.down(); },
+    move: async (x, y) => { await page.mouse.move(x, y); },
+    up: async () => { await page.mouse.up(); },
+    click: async (x, y) => { await page.mouse.click(x, y); },
+  };
+}
+
+async function touchDriver(page) {
+  const cdp = await page.context().newCDPSession(page);
+  const send = (type, touchPoints) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints });
+  // One finger, one identifier for the whole stream. `touchEnd` carries no
+  // points: the protocol expects the remaining contacts, and there are none.
+  const finger = (x, y) => [{ x: Math.round(x), y: Math.round(y), id: 1 }];
+  return {
+    kind: "touch",
+    down: async (x, y) => { await send("touchStart", finger(x, y)); },
+    move: async (x, y) => { await send("touchMove", finger(x, y)); },
+    up: async () => { await send("touchEnd", []); },
+    click: async (x, y) => { await page.touchscreen.tap(x, y); },
+  };
+}
+
+/** The modality this page was opened with. Every gesture helper goes through it. */
+function input(page) {
+  const driver = inputDrivers.get(page);
+  if (!driver) throw new Error("the page was opened without an input driver");
+  return driver;
+}
+
+/**
+ * What the page actually received, read back from the trusted events the
+ * sampler recorded rather than from what this script believes it sent.
+ */
+async function observedPointerTypes(page) {
+  return await page.evaluate(() => [...new Set((window.__qaStage?.gestures ?? [])
+    .map((entry) => entry.pointerType).filter(Boolean))].sort());
+}
+
+/**
  * `readDelays` and `byteDelays` hold the read-url and the media response of one
  * asset back by a fixed number of milliseconds. This is the acceptance matrix's
  * own row -- delayed image decode, delayed video first frame, a representative
@@ -88,6 +155,7 @@ async function createStoryPage({
     deviceScaleFactor: 1,
     reducedMotion,
   });
+  inputDrivers.set(page, mobile ? await touchDriver(page) : mouseDriver(page));
   const consoleErrors = [];
   const pageErrors = [];
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
@@ -146,6 +214,9 @@ function installStageSampler() {
       note({
         type,
         pointerId: event.pointerId ?? null,
+        // Which modality the page actually received. A phone-shaped viewport
+        // proves nothing about this on its own, and the product branches on it.
+        pointerType: event.pointerType ?? null,
         x: Math.round(event.clientX ?? 0),
         y: Math.round(event.clientY ?? 0),
         tag: target instanceof Element ? target.tagName : null,
@@ -166,7 +237,10 @@ function installStageSampler() {
       last.at = Math.round(performance.now());
       return;
     }
-    note({ type: "pointermove", x: Math.round(event.clientX), y: Math.round(event.clientY), samples: 1 });
+    note({
+      type: "pointermove", pointerType: event.pointerType ?? null,
+      x: Math.round(event.clientX), y: Math.round(event.clientY), samples: 1,
+    });
   }, true);
   new MutationObserver((records) => {
     // A reveal-then-hide is a DOM/style change, so mutations sample too. An
@@ -682,6 +756,38 @@ async function samplePlayback(page, rootSelector, { samples = 4, everyMs = 180 }
   }, { selector: rootSelector, samples, everyMs });
 }
 
+/**
+ * The presented transport's raw geometry. `presentedVideoPoint` refuses to
+ * return a point it cannot defend, and on a narrow viewport a contained picture
+ * really can be too short for one. This is what that refusal is attributed
+ * with, so a bad box reads as a bad box instead of as a navigation defect.
+ */
+async function presentedVideoBox(page, rootSelector) {
+  return await page.evaluate((selector) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    if (!(video instanceof HTMLVideoElement)) return { present: false };
+    const bounds = video.getBoundingClientRect();
+    return {
+      present: true, hidden: video.hidden, controls: video.controls,
+      videoWidth: video.videoWidth, videoHeight: video.videoHeight,
+      box: {
+        left: Math.round(bounds.left), top: Math.round(bounds.top),
+        width: Math.round(bounds.width), height: Math.round(bounds.height),
+      },
+      controlGuard: Math.round(Math.min(72, bounds.height * 0.25)),
+    };
+  }, rootSelector);
+}
+
+/** How many transports the stack is actually holding, live and total. */
+async function liveTransports(page, rootSelector) {
+  return await page.evaluate((selector) => {
+    const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const videos = [...(pages?.querySelectorAll("video") ?? [])];
+    return { total: videos.length, presented: videos.filter((video) => !video.hidden).length };
+  }, rootSelector);
+}
+
 /** The navigating half of a photograph's stationary click surface. */
 async function photoClickPoint(page, rootSelector, direction) {
   return await page.evaluate(({ selector, direction: step }) => {
@@ -696,7 +802,8 @@ async function photoClickPoint(page, rootSelector, direction) {
 }
 
 /**
- * Real mouse drag across the stage, above any native control chrome.
+ * Real drag across the stage, above any native control chrome, in this page's
+ * own modality: a mouse on desktop, a browser touch stream on compact mobile.
  *
  * The moves are paced like a hand rather than emitted in one tight loop: the
  * product derives release velocity from consecutive pointer samples, and a
@@ -710,14 +817,14 @@ async function swipeStage(page, rootSelector, direction) {
     return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height * 0.35, width: bounds.width };
   }, rootSelector);
   const travel = Math.min(320, geometry.width * 0.45) * (direction > 0 ? -1 : 1);
-  await page.mouse.move(geometry.x, geometry.y);
-  await page.mouse.down();
+  const pointer = input(page);
+  await pointer.down(geometry.x, geometry.y);
   for (let step = 1; step <= 10; step += 1) {
-    await page.mouse.move(geometry.x + travel * (step / 10), geometry.y);
+    await pointer.move(geometry.x + travel * (step / 10), geometry.y);
     await page.waitForTimeout(12);
   }
-  await page.mouse.up();
-  return { ...geometry, travel };
+  await pointer.up();
+  return { ...geometry, travel, input: pointer.kind };
 }
 
 /**
@@ -739,18 +846,18 @@ async function reverseSwipeStage(page, rootSelector, firstDirection) {
   }, rootSelector);
   const reach = Math.min(320, geometry.width * 0.45);
   const offset = (direction) => (direction > 0 ? -1 : 1) * reach;
+  const pointer = input(page);
   const glide = async (from, to, steps) => {
     for (let step = 1; step <= steps; step += 1) {
-      await page.mouse.move(geometry.x + from + (to - from) * (step / steps), geometry.y);
+      await pointer.move(geometry.x + from + (to - from) * (step / steps), geometry.y);
       await page.waitForTimeout(12);
     }
   };
-  await page.mouse.move(geometry.x, geometry.y);
-  await page.mouse.down();
+  await pointer.down(geometry.x, geometry.y);
   await glide(0, offset(firstDirection), 8);
   await glide(offset(firstDirection), offset(-firstDirection), 16);
-  await page.mouse.up();
-  return { ...geometry, reach, firstDirection, finalDirection: -firstDirection };
+  await pointer.up();
+  return { ...geometry, reach, firstDirection, finalDirection: -firstDirection, input: pointer.kind };
 }
 
 /**
@@ -854,16 +961,16 @@ async function grabDuringNavigation(page, rootSelector) {
     const bounds = pages.getBoundingClientRect();
     return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height * 0.35, width: bounds.width };
   }, rootSelector);
-  await page.mouse.move(geometry.x, geometry.y);
-  await page.mouse.down();
+  const pointer = input(page);
+  await pointer.down(geometry.x, geometry.y);
   // Past the 8px axis lock so the grab really fires, far short of the commit
   // threshold and slow enough that release velocity cannot commit either.
   for (let step = 1; step <= 4; step += 1) {
-    await page.mouse.move(geometry.x - step * 5, geometry.y);
+    await pointer.move(geometry.x - step * 5, geometry.y);
     await page.waitForTimeout(40);
   }
-  await page.mouse.up();
-  return { ...geometry, navigatedBy: "ArrowRight" };
+  await pointer.up();
+  return { ...geometry, navigatedBy: "ArrowRight", input: pointer.kind };
 }
 
 /** Everything needed to attribute a stuck navigation to an instance. */
@@ -964,7 +1071,7 @@ try {
       // half. Photo click navigation is unchanged by this fix.
       await startSampler(page, STAGE);
       const photo = await photoClickPoint(page, STAGE, 1);
-      await page.mouse.click(photo.x, photo.y);
+      await input(page).click(photo.x, photo.y);
       await waitForSettledAsset(page, V1);
       const toVideoFrames = await stopSamplerFrames(page);
 
@@ -978,7 +1085,7 @@ try {
       const point = await presentedVideoPoint(page, surface.root);
       const controls = await nativeControlPoint(page, surface.root);
       const idle = await samplePlayback(page, surface.root, { samples: 2, everyMs: 120 });
-      await page.mouse.click(point.x, point.y);
+      await input(page).click(point.x, point.y);
       const playback = await samplePlayback(page, surface.root);
       const after = await currentAsset(page, surface.root);
 
@@ -1002,7 +1109,7 @@ try {
       // events, so the claim is the input path plus the absence of navigation
       // -- real hit-testing and real mouse input -- not a particular play state.
       const controlBefore = await samplePlayback(page, surface.root, { samples: 1, everyMs: 0 });
-      await page.mouse.click(controls.x, controls.y);
+      await input(page).click(controls.x, controls.y);
       const controlAfter = await samplePlayback(page, surface.root, { samples: 2, everyMs: 150 });
       const controlState = await currentAsset(page, surface.root);
       const stillPresented = await page.locator(surface.root).isVisible();
@@ -1083,7 +1190,7 @@ try {
       await waitForSettledAsset(page, I1);
       const photoState = await currentAsset(page);
       const halves = await photoClickPoint(page, STAGE, 1);
-      await page.mouse.click(halves.x, halves.y);
+      await input(page).click(halves.x, halves.y);
       await waitForSettledAsset(page, V1);
       const afterHalfClick = await currentAsset(page);
       record({
@@ -1099,8 +1206,86 @@ try {
   }
 
   // ---------------------------------------------------------------------
+  // A (continued). The same input claim on compact mobile, reached by a real
+  // browser touch stream in both representative orientations.
+  //
+  // What is graded here is the half #489 A owns: a touch swipe really commits
+  // the step, and a real tap inside the presented video's contained picture
+  // hit-tests to the transport itself, is intercepted by no navigation surface,
+  // does not navigate, and leaves exactly one live transport. The reported
+  // `playback` is recorded, not graded: this product deliberately ships no play
+  // affordance of its own, so what a tap does to a paused video under touch
+  // belongs to Chromium's own control chrome -- the same boundary the desktop
+  // native-control check already states. The transport's own advancing clock is
+  // proved by the desktop tap above, which is the input that owns it.
+  // ---------------------------------------------------------------------
+  for (const profile of [
+    { label: "phone-portrait", viewport: { width: 390, height: 844 } },
+    { label: "phone-landscape", viewport: { width: 844, height: 390 } },
+  ]) {
+    const session = await createStoryPage({ mobile: true, viewport: profile.viewport });
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      await startSampler(page, STAGE);
+      // Reach the video by the gesture compact mobile actually offers, so the
+      // touch swipe is proved before anything is claimed about the tap.
+      const toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      const toVideoFrames = await stopSamplerFrames(page);
+
+      const before = await currentAsset(page, STAGE);
+      const geometry = await presentedVideoBox(page, STAGE);
+      let point = { hitIsVideo: false, controls: false };
+      let pointError = null;
+      try {
+        point = await presentedVideoPoint(page, STAGE);
+      } catch (error) {
+        pointError = error instanceof Error ? error.message : String(error);
+      }
+      const idle = await samplePlayback(page, STAGE, { samples: 2, everyMs: 120 });
+      if (!pointError) await input(page).click(point.x, point.y);
+      const playback = await samplePlayback(page, STAGE);
+      const after = await currentAsset(page, STAGE);
+      const transports = await liveTransports(page, STAGE);
+
+      // The native control strip stays the transport's here too: a touch there
+      // must neither navigate nor dismiss the stage.
+      const controls = await nativeControlPoint(page, STAGE);
+      await input(page).click(controls.x, controls.y);
+      const controlState = await currentAsset(page, STAGE);
+      const stillPresented = await page.locator(STAGE).isVisible();
+      const pointerTypes = await observedPointerTypes(page);
+
+      record({
+        name: `story-mobile-touch-video-tap-${profile.label}`,
+        claim: "on a compact-mobile viewport driven by real browser touch, a swipe commits the step onto the video and a tap inside the presented video's contained picture reaches the transport itself without navigating, without a navigation surface over it and without a second live transport; what that tap does to playback is Chromium's touch control chrome and is reported rather than asserted",
+        viewport: profile.viewport, pointerTypes, toVideo,
+        before, geometry, point, pointError, idle, playback, after, transports,
+        controls, controlState, stillPresented,
+        handoffToVideo: gradeContinuity(toVideoFrames, { allowedAssets: [I1, V1] }),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: Boolean(pointError)
+          || !pointerTypes.includes("touch") || pointerTypes.includes("mouse")
+          || !toVideo.ok || toVideo.gesture.input !== "touch"
+          || before.kind !== "video" || before.id !== V1 || before.hitSurfaces !== 0
+          || !point.hitIsVideo || !point.controls
+          || after.id !== V1 || after.presentation !== "settled" || after.hitSurfaces !== 0
+          || transports.presented !== 1 || transports.total !== 1
+          || idle.paused !== true
+          || !stillPresented || controlState.id !== V1 || controlState.kind !== "video"
+          || controlState.presentation !== "settled" || controlState.hitSurfaces !== 0
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // B. Handoff continuity across the whole mixed sequence, both motion modes
-  // and the viewports the report covers.
+  // and the viewports the report covers. The compact-mobile rows are driven by
+  // a real touch stream, the desktop rows by a real mouse -- modality is added
+  // to the matrix, not substituted into it.
   // ---------------------------------------------------------------------
   for (const profile of [
     { label: "desktop", mobile: false, viewport: { width: 1280, height: 800 }, reducedMotion: "no-preference" },
@@ -1130,13 +1315,21 @@ try {
       const frames = await stopSamplerFrames(page);
       const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
       const stuck = steps.filter((step) => !step.ok);
+      // The modality is graded from the trusted events the page received, so a
+      // row can never silently fall back to the weaker mouse configuration.
+      const expectedInput = profile.mobile ? "touch" : "mouse";
+      const pointerTypes = await observedPointerTypes(page);
+      const wrongModality = pointerTypes.some((type) => type !== expectedInput)
+        || !pointerTypes.includes(expectedInput)
+        || steps.some((step) => step.gesture?.input !== expectedInput);
       record({
         name: `story-handoff-continuity-${profile.label}`,
-        claim: "sampled on every DOM mutation and on every animation frame the chain delivers, the stage points inside the presented aperture always show an asset the navigation currently owns, never an uncovered aperture, never the waiting indicator, and never a second live transport",
+        claim: "sampled on every DOM mutation and on every animation frame the chain delivers, the stage points inside the presented aperture always show an asset the navigation currently owns, never an uncovered aperture, never the waiting indicator, and never a second live transport -- with every gesture on a compact-mobile row delivered as real browser touch and every desktop gesture as a real mouse",
         viewport: profile.viewport, reducedMotion: profile.reducedMotion, visited, stuck,
+        expectedInput, pointerTypes, wrongModality,
         ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: continuity.failed || stuck.length > 0
+        failed: continuity.failed || stuck.length > 0 || wrongModality
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
@@ -1479,7 +1672,7 @@ try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
       const half = await photoClickPoint(page, STAGE, 1);
-      await page.mouse.click(half.x, half.y);
+      await input(page).click(half.x, half.y);
       await waitForSettledAsset(page, V1);
       const toSecondVideo = await navigateByGesture(page, STAGE, 1, V2);
       const toLastVisible = await navigateByGesture(page, STAGE, 1, I2);
