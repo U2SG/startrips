@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDetailedEarthLabelExpression,
   DEFAULT_DETAILED_EARTH_STYLE_URL,
@@ -36,12 +36,14 @@ function chineseLabel(schema: DetailedEarthLabelSchema, properties: Record<strin
   return evaluateNameExpression(createDetailedEarthLabelExpression("zh", schema), properties);
 }
 
-const env = import.meta.env as Record<string, string | undefined>;
-const ENV_KEYS = ["VITE_ATLAS_MAP_STYLE_URL", "VITE_ATLAS_PMTILES_URL", "VITE_ATLAS_PMTILES_GLYPHS_URL"];
-const originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, env[key]]));
+function stubMapEnv(styleUrl: string, pmtilesUrl: string) {
+  vi.stubEnv("VITE_ATLAS_MAP_STYLE_URL", styleUrl);
+  vi.stubEnv("VITE_ATLAS_PMTILES_URL", pmtilesUrl);
+  vi.stubEnv("VITE_ATLAS_PMTILES_GLYPHS_URL", "");
+}
 
 afterEach(() => {
-  for (const key of ENV_KEYS) env[key] = originalEnv[key];
+  vi.unstubAllEnvs();
 });
 
 describe("detailed earth label expression per tile schema", () => {
@@ -79,23 +81,20 @@ describe("detailed earth label expression per tile schema", () => {
 
 describe("optional self-hosted PMTiles basemap", () => {
   it("stays on the proxied OpenFreeMap style when no PMTiles URL is set", () => {
-    env.VITE_ATLAS_MAP_STYLE_URL = "";
-    env.VITE_ATLAS_PMTILES_URL = "";
+    stubMapEnv("", "");
     expect(isPmtilesDetailedEarth()).toBe(false);
     expect(getDetailedEarthLabelSchema()).toBe("openmaptiles");
     expect(getDetailedEarthStyle()).toBe(DEFAULT_DETAILED_EARTH_STYLE_URL);
   });
 
   it("lets an explicit style URL keep precedence over a PMTiles URL", () => {
-    env.VITE_ATLAS_MAP_STYLE_URL = "https://startrips.example/styles/contracted.json";
-    env.VITE_ATLAS_PMTILES_URL = "/basemap/region.pmtiles";
+    stubMapEnv("https://startrips.example/styles/contracted.json", "/basemap/region.pmtiles");
     expect(isPmtilesDetailedEarth()).toBe(false);
     expect(getDetailedEarthStyle()).toBe("https://startrips.example/styles/contracted.json");
   });
 
   it("builds a Protomaps style with Chinese labels when only PMTiles is configured", () => {
-    env.VITE_ATLAS_MAP_STYLE_URL = "";
-    env.VITE_ATLAS_PMTILES_URL = "https://media.startrips.example/basemap/region.pmtiles";
+    stubMapEnv("", "https://media.startrips.example/basemap/region.pmtiles");
     expect(isPmtilesDetailedEarth()).toBe(true);
     expect(getDetailedEarthLabelSchema()).toBe("protomaps");
     const style = getDetailedEarthStyle();
