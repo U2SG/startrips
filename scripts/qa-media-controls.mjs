@@ -1758,12 +1758,18 @@ try {
     const validScreen = observation?.screenPixels?.length === 5 && observation.screenPixels.every(Boolean);
     const foregroundDistance = front?.sourcePixels && validScreen
       ? pixelDistance(observation.screenPixels, front.sourcePixels) : Infinity;
+    // A uniformly dark frame can still be closer to the expected photo than
+    // to every neighboring photo. Require the composited pixels to be much
+    // closer to this photo than an unpainted black stage would be.
+    const blackDistance = front?.sourcePixels?.length === 5
+      ? pixelDistance(Array(5).fill("0,0,0,255"), front.sourcePixels) : 0;
     return observation?.id === id && observation.presentation === "settled"
       && (!requireHitSurface || observation.hitSurface)
       && observation.apertureWidth > 0 && observation.apertureHeight > 0
       && validScreen
       && front?.ready && front.pixelSample && front.opacity > 0.99
       && front.sourcePixels?.length === 5 && Number.isFinite(foregroundDistance)
+      && blackDistance > 0 && foregroundDistance < blackDistance / 2
       && front.clips.length > 0 && front.clips.every((part) => Math.abs(part) <= 0.1)
       && front.bounds.width > 0 && front.bounds.height > 0 && front.transform !== "none"
       && others.length > 0 && others.some((item) => item.pixelSample !== front.pixelSample)
@@ -1878,9 +1884,14 @@ try {
     await page.waitForFunction((id) => document.querySelector(
       `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
     ), second, { polling: "raf" });
-    // The mobile Story itself is still entering after its first image is
-    // decoded. Compare composited pixels once that entrance has settled.
-    await storyPicturePoint(page, 1);
+    // The first image can decode while the mobile Story itself is still
+    // fading in. Inspect pixels after that finite entrance owns a full frame.
+    await page.waitForFunction(() => {
+      const story = document.querySelector(".journey-story");
+      return story && Number(getComputedStyle(story).opacity) > .99
+        && !story.getAnimations().some((animation) => animation.animationName === "atlasViewIn"
+          && animation.playState === "running");
+    }, null, { polling: "raf", timeout: 3_000 });
     const beforeBack = await inspectStagePaint(page, ".journey-story__media");
     await page.locator(".journey-story__mobile-media-fullscreen").click();
     const overlay = page.locator(".journey-story-fullscreen");
