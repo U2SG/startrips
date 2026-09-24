@@ -426,9 +426,20 @@ describe("journeyApi", () => {
     };
     const fetcher = vi.fn(async () => Response.json(response)) as unknown as typeof fetch;
 
-    await expect(searchLocations("National Gallery Singapore", fetcher)).resolves.toEqual(response);
+    await expect(searchLocations("National Gallery Singapore", null, fetcher)).resolves.toEqual(response);
     expect(fetcher).toHaveBeenCalledWith(
       "/api/locations/search?q=National%20Gallery%20Singapore",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("sends a Journey-context focus as lat and lon only when one is given", async () => {
+    const fetcher = vi.fn(async () => Response.json({ results: [], attribution: null })) as unknown as typeof fetch;
+
+    await searchLocations("故宫", { latitude: 39.9163, longitude: 116.3972 }, fetcher);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      `/api/locations/search?q=${encodeURIComponent("故宫")}&lat=39.9163&lon=116.3972`,
       expect.objectContaining({ credentials: "include" }),
     );
   });

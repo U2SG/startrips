@@ -2,7 +2,11 @@ import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
 import { createLocationSearch } from "../location/create-location-search";
-import type { LocationSearch } from "../location/location-search";
+import {
+  LocationSearchInvalidError,
+  type LocationSearch,
+  type LocationSearchFocus,
+} from "../location/location-search";
 
 const MIN_QUERY_LENGTH = 2;
 const MAX_QUERY_LENGTH = 120;
@@ -23,6 +27,29 @@ function coordinateValue(
     : null;
 }
 
+/**
+ * #539: the optional Journey-context bias. Both coordinates or neither; a
+ * half-given, non-numeric or out-of-range focus is refused rather than
+ * silently searched without a bias.
+ */
+export function parseLocationSearchFocus(
+  rawLatitude: string | undefined,
+  rawLongitude: string | undefined,
+): LocationSearchFocus | undefined {
+  const latitudeText = rawLatitude?.trim() ?? "";
+  const longitudeText = rawLongitude?.trim() ?? "";
+  if (!latitudeText && !longitudeText) return undefined;
+  const latitude = coordinateValue(latitudeText, -90, 90);
+  const longitude = coordinateValue(longitudeText, -180, 180);
+  if (latitude === null || longitude === null) {
+    throw new LocationSearchInvalidError(
+      "INVALID_LOCATION_FOCUS",
+      "Search focus needs a valid lat and lon together",
+    );
+  }
+  return { latitude, longitude };
+}
+
 export function createLocationRoutes(
   locationSearch: LocationSearch,
 ) {
@@ -41,9 +68,15 @@ export function createLocationRoutes(
       );
     }
 
+    const focus = parseLocationSearchFocus(
+      context.req.query("lat"),
+      context.req.query("lon"),
+    );
+
     const results = await locationSearch.search(query, {
       limit: RESULT_LIMIT,
       signal: context.req.raw.signal,
+      ...(focus ? { focus } : {}),
     });
     return context.json({ results, attribution: locationSearch.attribution });
   });

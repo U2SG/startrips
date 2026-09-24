@@ -376,12 +376,22 @@ export async function setJourneyCover(
   return payload.journey;
 }
 
+/** #539: a coordinate the server may bias place search towards. */
+export type PlaceSearchFocus = {
+  latitude: number;
+  longitude: number;
+};
+
 export async function searchLocations(
   query: string,
+  focus?: PlaceSearchFocus | null,
   fetcher: Fetcher = fetch,
 ): Promise<LocationSearchResponse> {
+  const focusParams = focus
+    ? `&lat=${encodeURIComponent(String(focus.latitude))}&lon=${encodeURIComponent(String(focus.longitude))}`
+    : "";
   return requestJson<LocationSearchResponse>(
-    `/api/locations/search?q=${encodeURIComponent(query.trim())}`,
+    `/api/locations/search?q=${encodeURIComponent(query.trim())}${focusParams}`,
     {},
     fetcher,
   );

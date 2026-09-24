@@ -124,6 +124,25 @@ export function journeyToDraftPoints(journey: Journey): RouteDraftPoint[] {
   }));
 }
 
+/**
+ * #539: the place search bias for a Journey being composed. The last Route
+ * Point, not a centroid: a Route through Beijing and Shanghai has its centroid
+ * in neither city, while the next place is usually added near the last one.
+ */
+export function routeDraftSearchFocus(
+  points: readonly RoutePointInput[],
+): GlobePointPick | null {
+  const last = points.at(-1);
+  if (
+    !last
+    || !Number.isFinite(last.latitude)
+    || !Number.isFinite(last.longitude)
+  ) {
+    return null;
+  }
+  return { latitude: last.latitude, longitude: last.longitude };
+}
+
 export function parseCoordinateInput(
   value: string,
   minimum: number,

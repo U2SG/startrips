@@ -75,6 +75,7 @@ import {
   matchRouteDraftPoints,
   moveRoutePoint,
   removeRoutePoint,
+  routeDraftSearchFocus,
   routeDraftToInput,
   suggestPointLabel,
   toggleRouteStop,
@@ -801,7 +802,10 @@ export function JourneyComposer({
     setSearchPending(true);
     setMessage("");
     try {
-      const response = await searchLocations(query);
+      const response = await searchLocations(
+        query,
+        routeDraftSearchFocus(routePointsRef.current),
+      );
       if (!composerMountedRef.current || searchRevisionRef.current !== revision) return;
       setSearchResults(response.results);
       setSearchAttribution(response.attribution);

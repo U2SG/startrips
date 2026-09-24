@@ -218,4 +218,42 @@ describe("NominatimLocationSearch", () => {
     expect(errors).toHaveLength(24);
     expect(errors.every((error) => error instanceof LocationSearchUnavailableError)).toBe(true);
   });
+
+  it("biases towards a Journey-context focus with an unbounded viewbox and caches per focus", async () => {
+    const fetchMock = vi.fn(async () => Response.json([]));
+    const search = new NominatimLocationSearch({
+      baseUrl: "https://nominatim.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await search.search("故宫", { limit: 8 });
+    await search.search("故宫", { limit: 8, focus: { latitude: 39.9042, longitude: 116.4074 } });
+    await search.search("故宫", { limit: 8, focus: { latitude: 39.9042, longitude: 116.4074 } });
+    await search.search("故宫", { limit: 8, focus: { latitude: 22.3193, longitude: 114.1694 } });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const urls = fetchMock.mock.calls.map((call) => (call as unknown as [URL])[0]);
+    expect(urls[0].searchParams.has("viewbox")).toBe(false);
+    expect(urls[0].searchParams.has("bounded")).toBe(false);
+    expect(urls[1].searchParams.get("viewbox")).toBe("115.91,40.4,116.91,39.4");
+    expect(urls[1].searchParams.get("bounded")).toBe("0");
+    expect(urls[2].searchParams.get("viewbox")).toBe("113.67,22.82,114.67,21.82");
+  });
+
+  it("clamps the focus viewbox to valid coordinates near the poles and antimeridian", async () => {
+    const fetchMock = vi.fn(async () => Response.json([]));
+    const search = new NominatimLocationSearch({
+      baseUrl: "https://nominatim.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await search.search("station", { limit: 8, focus: { latitude: 89.9, longitude: 179.9 } });
+
+    const url = (fetchMock.mock.calls[0] as unknown as [URL])[0];
+    expect(url.searchParams.get("viewbox")).toBe("179.4,90,180,89.4");
+  });
 });

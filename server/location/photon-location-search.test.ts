@@ -610,4 +610,58 @@ describe("PhotonLocationSearch", () => {
 
     await expect(search.reverse(0, 0, {})).resolves.toBeNull();
   });
+
+  it("forwards a rounded Journey-context focus as lat/lon and caches per focus", async () => {
+    const fetchMock = vi.fn(async () => Response.json({
+      features: [{
+        geometry: { coordinates: [121.6570, 31.1440] },
+        properties: { osm_type: "W", osm_id: 1, name: "Disneyland", countrycode: "CN" },
+      }],
+    }));
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await search.search("Disneyland", { limit: 8 });
+    await search.search("Disneyland", { limit: 8, focus: { latitude: 31.23041, longitude: 121.47372 } });
+    // Rounds to the same ~1 km cell as the previous focus: served from cache.
+    await search.search("Disneyland", { limit: 8, focus: { latitude: 31.2311, longitude: 121.4749 } });
+    await search.search("Disneyland", { limit: 8, focus: { latitude: 35.6762, longitude: 139.6503 } });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const urls = fetchMock.mock.calls.map((call) => (call as unknown as [URL])[0]);
+    expect(urls[0].searchParams.has("lat")).toBe(false);
+    expect(urls[0].searchParams.has("lon")).toBe(false);
+    expect(urls[1].searchParams.get("lat")).toBe("31.23");
+    expect(urls[1].searchParams.get("lon")).toBe("121.47");
+    expect(urls[2].searchParams.get("lat")).toBe("35.68");
+    expect(urls[2].searchParams.get("lon")).toBe("139.65");
+  });
+
+  it("carries the focus into the English round trip as well", async () => {
+    const fetchMock = vi.fn(async () => Response.json({
+      features: [{
+        geometry: { coordinates: [114.0413, 22.3129] },
+        properties: { osm_type: "W", osm_id: 2, name: "迪士尼", countrycode: "HK" },
+      }],
+    }));
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+      placeNameAliases: async () => "Disneyland",
+    });
+
+    await search.search("迪士尼", { limit: 8, focus: { latitude: 22.3193, longitude: 114.1694 } });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const englishUrl = (fetchMock.mock.calls[1] as unknown as [URL])[0];
+    expect(englishUrl.searchParams.get("lang")).toBe("en");
+    expect(englishUrl.searchParams.get("lat")).toBe("22.32");
+    expect(englishUrl.searchParams.get("lon")).toBe("114.17");
+  });
 });

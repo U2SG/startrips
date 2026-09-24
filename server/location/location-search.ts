@@ -11,9 +11,21 @@ export type LocationSearchResult = {
   longitude: number;
 };
 
+/**
+ * #539: a coordinate the provider may rank nearby places ahead of. The route
+ * forwards only these two numbers; no Journey, Atlas or member identifier
+ * ever reaches a provider.
+ */
+export type LocationSearchFocus = {
+  latitude: number;
+  longitude: number;
+};
+
 export type LocationSearchOptions = {
   limit: number;
   signal?: AbortSignal;
+  /** Optional bias only: providers still return far-away matches. */
+  focus?: LocationSearchFocus;
 };
 
 export type ReverseLocationOptions = {
@@ -44,6 +56,40 @@ export class LocationSearchUnavailableError extends Error {
     super(message);
     this.name = "LocationSearchUnavailableError";
   }
+}
+
+/** A request whose search parameters are unusable (answered with 400). */
+export class LocationSearchInvalidError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "LocationSearchInvalidError";
+    this.code = code;
+  }
+}
+
+const FOCUS_DECIMALS = 2;
+
+/**
+ * Rounds a focus to about one kilometre. That is plenty for ranking bias,
+ * sends the provider less precision than a Route Point holds, and lets nearby
+ * searches share one cache entry.
+ */
+export function roundLocationSearchFocus(
+  focus: LocationSearchFocus | undefined,
+): LocationSearchFocus | undefined {
+  if (!focus) return undefined;
+  const factor = 10 ** FOCUS_DECIMALS;
+  return {
+    latitude: Math.round(focus.latitude * factor) / factor,
+    longitude: Math.round(focus.longitude * factor) / factor,
+  };
+}
+
+/** Cache-key suffix; empty without a focus so unbiased keys stay unchanged. */
+export function locationSearchFocusKey(focus: LocationSearchFocus | undefined): string {
+  return focus ? `::focus=${focus.latitude},${focus.longitude}` : "";
 }
 
 export function throwIfLocationSearchAborted(signal?: AbortSignal): void {
