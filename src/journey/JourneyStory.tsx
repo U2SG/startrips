@@ -655,6 +655,10 @@ export function JourneyStory({
   const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
   const fullscreenMobileIdleTimerRef = useRef(0);
   const storyMediaGestureConsumedRef = useRef(false);
+  const videoStepTouchRef = useRef<{
+    pointerId: number; direction: -1 | 1; x: number; y: number; moved: boolean;
+  } | null>(null);
+  const videoStepTouchClickAtRef = useRef(0);
   const inlineStageRef = useRef<StoryMediaPagesHandle>(null);
   const fullscreenStageRef = useRef<StoryMediaPagesHandle>(null);
   const [mobileManageMode, setMobileManageMode] = useState(false);
@@ -2645,6 +2649,51 @@ export function JourneyStory({
     if (index !== null) navigateToMedia(index, direction);
   }
 
+  function videoStepButtonInput(direction: -1 | 1) {
+    const navigate = () => navigateMediaStep(direction, selectedRoutePointId !== null);
+    return {
+      onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (event.pointerType !== "touch" || !event.isPrimary) {
+          videoStepTouchRef.current = null;
+          videoStepTouchClickAtRef.current = 0;
+          return;
+        }
+        videoStepTouchRef.current = {
+          pointerId: event.pointerId, direction, x: event.clientX, y: event.clientY, moved: false,
+        };
+      },
+      onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        const touch = videoStepTouchRef.current;
+        if (!touch || touch.pointerId !== event.pointerId) return;
+        if (Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 12) touch.moved = true;
+      },
+      onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (videoStepTouchRef.current?.pointerId === event.pointerId) videoStepTouchRef.current = null;
+      },
+      onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        const touch = videoStepTouchRef.current;
+        if (!touch || touch.pointerId !== event.pointerId || touch.direction !== direction) return;
+        videoStepTouchRef.current = null;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const inside = event.clientX >= bounds.left && event.clientX <= bounds.right
+          && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+        // A fast swipe followed by a touch button press can deliver pointerup
+        // without a browser click. Complete that one touch here, and consume
+        // its optional compatibility click below.
+        videoStepTouchClickAtRef.current = performance.now();
+        if (!touch.moved && inside) navigate();
+      },
+      onClick: (event: MouseEvent<HTMLButtonElement>) => {
+        if (event.detail > 0 && videoStepTouchClickAtRef.current > 0
+          && performance.now() - videoStepTouchClickAtRef.current < 1_000) {
+          event.preventDefault();
+          return;
+        }
+        navigate();
+      },
+    };
+  }
+
   function navigateToMedia(index: number, direction?: -1 | 1) {
     if (index < 0 || index >= scopedMedia.length) return;
     cancelPendingMediaDragSettle();
@@ -3356,7 +3405,7 @@ export function JourneyStory({
                   onClick={() => enterFullscreen(mobileStoryImmersiveKeepsPlaying)}
                 ><IconMaximize size={19} stroke={1.35} aria-hidden="true" /></IconActionButton>
                 {videoNavigationVisible ? <button type="button" data-video-step="previous"
-                  disabled={!canStepPrevious} onClick={() => navigateMediaStep(-1, selectedRoutePointId !== null)}
+                  disabled={!canStepPrevious} {...videoStepButtonInput(-1)}
                   aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button> : null}
                 <button
                   type="button"
@@ -3378,7 +3427,7 @@ export function JourneyStory({
                     : <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />}
                 </button>
                 {videoNavigationVisible ? <button type="button" data-video-step="next"
-                  disabled={!canStepNext} onClick={() => navigateMediaStep(1, selectedRoutePointId !== null)}
+                  disabled={!canStepNext} {...videoStepButtonInput(1)}
                   aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button> : null}
                 </nav>
               </div>
@@ -3388,11 +3437,11 @@ export function JourneyStory({
               <div className="journey-story__mobile-media-actions">
                 {videoNavigationVisible && !mobileManageMode && mediaDeleteState === "idle" ? <nav className="journey-story__mobile-video-nav" aria-label="视频媒体导航">
                   <button type="button" data-video-step="previous" disabled={!canStepPrevious}
-                    onClick={() => navigateMediaStep(-1, selectedRoutePointId !== null)} aria-label="上一个媒体">
+                    {...videoStepButtonInput(-1)} aria-label="上一个媒体">
                     <IconArrowLeft size={19} stroke={1.5} aria-hidden="true" />
                   </button>
                   <button type="button" data-video-step="next" disabled={!canStepNext}
-                    onClick={() => navigateMediaStep(1, selectedRoutePointId !== null)} aria-label="下一个媒体">
+                    {...videoStepButtonInput(1)} aria-label="下一个媒体">
                     <IconArrowRight size={19} stroke={1.5} aria-hidden="true" />
                   </button>
                 </nav> : null}
@@ -4005,7 +4054,7 @@ export function JourneyStory({
                 type="button"
                 data-video-step="previous"
                 disabled={!canStepPrevious}
-                onClick={() => navigateMediaStep(-1, selectedRoutePointId !== null)}
+                {...videoStepButtonInput(-1)}
                 aria-label="上一个媒体"
               >
                 <IconArrowLeft size={22} stroke={1.35} aria-hidden="true" />
@@ -4030,7 +4079,7 @@ export function JourneyStory({
                 type="button"
                 data-video-step="next"
                 disabled={!canStepNext}
-                onClick={() => navigateMediaStep(1, selectedRoutePointId !== null)}
+                {...videoStepButtonInput(1)}
                 aria-label="下一个媒体"
               >
                 <IconArrowRight size={22} stroke={1.35} aria-hidden="true" />

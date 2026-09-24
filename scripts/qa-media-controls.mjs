@@ -121,8 +121,21 @@ async function clickStoryVideoStep(page, direction, surfaceSelector = ".journey-
   if (!hit.targetIsButton || !await button.isEnabled()) {
     throw new Error(`Video step button is covered or disabled: ${JSON.stringify({ step, hit })}`);
   }
-  if (mobile) await button.tap();
-  else await button.click();
+  if (mobile) {
+    // A zero-duration tap immediately after a video touch can end without a
+    // browser click. Press the real hit target briefly, with no delay before
+    // this next gesture, so the button receives a human-length touch.
+    const touch = await page.context().newCDPSession(page);
+    try {
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchStart", touchPoints: [{ x: hit.x, y: hit.y, id: 1 }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 64));
+      await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } finally {
+      await touch.detach();
+    }
+  } else await button.click();
   return hit;
 }
 
@@ -2173,12 +2186,13 @@ try {
   try {
     await mixedMediaMobile.page.evaluate(() => {
       window.__qaNativeVideoTouches = [];
-      for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "gotpointercapture", "lostpointercapture"]) {
+      for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "gotpointercapture", "lostpointercapture", "click"]) {
         document.addEventListener(type, (event) => {
           const target = event.target;
           if (!(target instanceof Element)) return;
           const stage = target.closest(".journey-story__media, .journey-story-fullscreen");
           window.__qaNativeVideoTouches.push({ type, time: event.timeStamp, pointerId: event.pointerId,
+            trusted: event.isTrusted, detail: event.detail,
             target: `${target.tagName}.${target.className}`, x: event.clientX, y: event.clientY,
             stage: stage?.className ?? null,
             asset: stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") });
