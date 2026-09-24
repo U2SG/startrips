@@ -931,7 +931,7 @@ async function swipeStage(page, rootSelector, direction) {
  * first navigation settles". Two separate swipes cannot: `swipeStage` ends in
  * `mouse.up()`, so the first navigation has already committed and the second
  * gesture addresses a stack that has already moved. Within one stream
- * `updateMediaDrag` reselects the neighbour every time `dx` changes, so the
+ * the stage reselects the neighbour every time `dx` changes, so the
  * committed target must be the neighbour in the FINAL direction.
  */
 async function reverseSwipeStage(page, rootSelector, firstDirection) {
@@ -943,6 +943,19 @@ async function reverseSwipeStage(page, rootSelector, firstDirection) {
   const reach = Math.min(320, geometry.width * 0.45);
   const offset = (direction) => (direction > 0 ? -1 : 1) * reach;
   const pointer = input(page);
+  const paintedTarget = async () => page.evaluate(async (selector) => {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const current = stage?.querySelector('[data-media-page="current"]');
+    if (!stage || !current) return null;
+    const currentZ = Number(getComputedStyle(current).zIndex);
+    const neighbor = [...stage.querySelectorAll("[data-media-page-id]")]
+      .filter((node) => node !== current && node.getAttribute("data-media-page-ready") === "true")
+      .sort((left, right) => Number(getComputedStyle(right).zIndex) - Number(getComputedStyle(left).zIndex))[0];
+    const z = neighbor ? Number(getComputedStyle(neighbor).zIndex) : -Infinity;
+    return z > currentZ && stage.getAttribute("data-media-presentation") === "dragging"
+      ? { id: neighbor.getAttribute("data-media-page-id"), z, currentZ } : null;
+  }, rootSelector);
   const glide = async (from, to, steps) => {
     for (let step = 1; step <= steps; step += 1) {
       await pointer.move(geometry.x + from + (to - from) * (step / steps), geometry.y);
@@ -951,9 +964,12 @@ async function reverseSwipeStage(page, rootSelector, firstDirection) {
   };
   await pointer.down(geometry.x, geometry.y);
   await glide(0, offset(firstDirection), 8);
+  const firstPaintedTarget = await paintedTarget();
   await glide(offset(firstDirection), offset(-firstDirection), 16);
+  const latestPaintedTarget = await paintedTarget();
   await pointer.up();
-  return { ...geometry, reach, firstDirection, finalDirection: -firstDirection, input: pointer.kind };
+  return { ...geometry, reach, firstDirection, finalDirection: -firstDirection,
+    input: pointer.kind, paintedTargets: [firstPaintedTarget, latestPaintedTarget] };
 }
 
 /**
@@ -1712,23 +1728,21 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 500));
         return { first, second: read() };
       }, STAGE);
-      // The neighbours the product itself announced during the stream. The
-      // first must be the abandoned target and the last the reversal's own, so
-      // the retarget is read from the product rather than assumed.
-      const grabs = (await page.evaluate(() => (window.__qaStage?.gestures ?? [])))
-        .filter((entry) => entry.type === "story-media-grab")
-        .map((entry) => entry.neighborId);
+      // Read which decoded neighbour was actually raised above the current
+      // page at each end of the same pointer stream. The stage no longer
+      // publishes the former `story-media-grab` control event.
+      const paintedTargets = gesture.paintedTargets.map((entry) => entry?.id);
       const trace = await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-80));
       record({
         name: "story-reversal-commits-latest-intent",
         claim: "a reversal fired before the first navigation settles retargets within the same gesture and commits the reversal's own target, never the abandoned one, and leaves exactly one settled owner, one live transport and no late write-back",
         startedFrom, abandonedIntent, latestIntent, settled, transports, stable,
-        gesture, grabs: [...new Set(grabs)], trace, committed,
+        gesture, paintedTargets, trace, committed,
         sampledFrames: frames.length,
         concurrentLiveVideos: frames.filter((frame) => frame.videoCount > 1).slice(0, 2),
         failed: settled.presentation !== "settled" || !settled.ready
           || settled.id !== latestIntent
-          || grabs[0] !== abandonedIntent || grabs.at(-1) !== latestIntent
+          || paintedTargets[0] !== abandonedIntent || paintedTargets[1] !== latestIntent
           || transports !== 1 || stable.first !== stable.second
           || frames.some((frame) => frame.videoCount > 1)
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
@@ -1779,8 +1793,6 @@ try {
       const frames = await stopSamplerFrames(page);
       const afterGrab = await stackRestState(page, STAGE);
       const settled = await currentAsset(page);
-      const grabs = (await page.evaluate(() => (window.__qaStage?.gestures ?? [])))
-        .filter((entry) => entry.type === "story-media-grab" || entry.type === "story-media-recover");
       const rest = gradeRestState(afterGrab, I2);
       // The recorded phenomenon itself: the presented page carrying an aperture
       // it was written into for a target that never arrived, while the stack
@@ -1795,7 +1807,7 @@ try {
       record({
         name: "story-abandoned-handoff-reclaims-presentation",
         claim: "a navigation abandoned by the finger that grabs the stack leaves the presented page unclipped and painted above every retained page, with the retained pages back inside the presented picture's aperture, and never leaves a residual aperture cutting the presented photograph away",
-        presented: I2, steps, gesture, grabs: grabs.map((entry) => entry.type),
+        presented: I2, steps, gesture,
         // Proof the replay exercised an in-flight handoff rather than a cold
         // pending request: the stack must have declared the target readable
         // before the arrow key, and must have moved the presented page's

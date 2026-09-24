@@ -888,6 +888,7 @@ try {
     record("story-media", await scanButtons(story.page, ".journey-story"));
 
     const mediaStage = story.page.locator(".journey-story__media");
+    const mediaGestureStage = mediaStage.locator(storyMediaPagesSelector);
     const touch = await story.page.context().newCDPSession(story.page);
     const settledMedia = story.page.locator(storyCurrentMediaSelector).first();
     const firstMediaLabel = await settledMedia.getAttribute("alt");
@@ -898,8 +899,8 @@ try {
     if (!stageBox) throw new Error("mobile story media stage has no bounds");
     const swipeStartX = stageBox.x + stageBox.width * 0.72;
     const swipeY = stageBox.y + stageBox.height * 0.5;
-    await mediaStage.evaluate((stage) => {
-      stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
+    await mediaGestureStage.evaluate((stage) => {
+      stage.addEventListener("gotpointercapture", (event) => { if (event.target === stage) stage.dataset.qaCapturedPointer = String(event.pointerId); });
       stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage && String(event.pointerId) === stage.dataset.qaCapturedPointer) stage.dataset.qaReleasedPointer = String(event.pointerId); });
     });
     // At the first asset, a large outward drag has no neighbor. It must spring
@@ -927,19 +928,19 @@ try {
       type: "touchMove",
       touchPoints: [{ x: swipeStartX - 30, y: swipeY }],
     });
-    const inlineCapturedDuringDrag = await mediaStage.evaluate((stage) => {
+    const inlineCapturedDuringDrag = await mediaGestureStage.evaluate((stage) => {
       const pointerId = Number(stage.dataset.qaCapturedPointer);
       return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
     });
     // Once horizontal intent owns the pointer, move outside the inline
     // media stage and release there. Capture must keep routing the terminal
-    // event back to the stage so the gesture cannot strand its transform.
+    // event back to the gesture stage so it cannot strand its transform.
     await touch.send("Input.dispatchTouchEvent", {
       type: "touchMove",
       touchPoints: [{ x: swipeStartX - 30, y: 10 }],
     });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    const inlineReleasedAfterDrag = await mediaStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
+    const inlineReleasedAfterDrag = await mediaGestureStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
     // The 30px horizontal move above intentionally crosses the 8px intent
     // lock but stays below the 48px navigation threshold. Because pointer
     // capture retargets the eventual click to the stage, the component must
@@ -992,7 +993,7 @@ try {
     }, { selector: storyCurrentMediaSelector, expected: firstMediaLabel }, { timeout: 3_000 });
     const inlineVelocityReverseReturned = true;
 
-    await mediaStage.dispatchEvent("pointerdown", {
+    await mediaGestureStage.dispatchEvent("pointerdown", {
       pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
@@ -1000,7 +1001,7 @@ try {
       clientY: swipeY,
       bubbles: true,
     });
-    await mediaStage.dispatchEvent("pointermove", {
+    await mediaGestureStage.dispatchEvent("pointermove", {
       pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
@@ -1008,7 +1009,7 @@ try {
       clientY: swipeY,
       bubbles: true,
     });
-    await mediaStage.dispatchEvent("pointerup", {
+    await mediaGestureStage.dispatchEvent("pointerup", {
       pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
@@ -1357,19 +1358,20 @@ try {
 
     await settledMedia.click();
     const fullscreen = story.page.locator(".journey-story-fullscreen");
+    const fullscreenGestureStage = fullscreen.locator(storyMediaPagesSelector);
     await fullscreen.waitFor({ state: "visible" });
     const fullscreenInitiallyImmersive = await fullscreen.evaluate((root) => root.classList.contains("is-controls-hidden"));
     const fullscreenBox = await fullscreen.boundingBox();
     if (!fullscreenBox) throw new Error("mobile fullscreen has no bounds");
     const fullX = fullscreenBox.x + fullscreenBox.width * 0.5;
     const fullY = fullscreenBox.y + fullscreenBox.height * 0.45;
-    await fullscreen.dispatchEvent("pointerdown", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
-    await fullscreen.dispatchEvent("pointerup", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     const fullscreenCloseBox = await fullscreen.locator(".journey-story-fullscreen__close").boundingBox();
     const fullscreenCloseTouchTarget = fullscreenCloseBox ? Math.min(fullscreenCloseBox.width, fullscreenCloseBox.height) : 0;
     const fullscreenPositionBefore = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
-    await fullscreen.evaluate((stage) => {
-      stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
+    await fullscreenGestureStage.evaluate((stage) => {
+      stage.addEventListener("gotpointercapture", (event) => { if (event.target === stage) stage.dataset.qaCapturedPointer = String(event.pointerId); });
       stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage && String(event.pointerId) === stage.dataset.qaCapturedPointer) stage.dataset.qaReleasedPointer = String(event.pointerId); });
     });
     await touch.send("Input.dispatchTouchEvent", {
@@ -1382,15 +1384,15 @@ try {
       type: "touchMove",
       touchPoints: [{ x: fullX - 30, y: fullY }],
     });
-    const fullscreenCapturedDuringDrag = await fullscreen.evaluate((stage) => {
+    const fullscreenCapturedDuringDrag = await fullscreenGestureStage.evaluate((stage) => {
       const pointerId = Number(stage.dataset.qaCapturedPointer);
       return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
     });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    const fullscreenReleasedAfterDrag = await fullscreen.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
-    await fullscreen.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
-    await fullscreen.dispatchEvent("pointermove", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
-    await fullscreen.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
+    const fullscreenReleasedAfterDrag = await fullscreenGestureStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointermove", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
     await story.page.waitForFunction((before) => {
       const position = document.querySelector(".journey-story-fullscreen__nav span")?.textContent;
       return Boolean(position && position !== before);
@@ -1411,8 +1413,8 @@ try {
         || !fullscreenCapturedDuringDrag
         || !fullscreenReleasedAfterDrag,
     });
-    await fullscreen.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
-    await fullscreen.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });
     await fullscreen.waitFor({ state: "hidden" });
 
     await settledMedia.click();
@@ -1967,27 +1969,29 @@ try {
     });
     await mixedMediaMobile.page.locator(".journey-story").waitFor({ state: "visible" });
     const inlineStage = mixedMediaMobile.page.locator(".journey-story__media");
+    const inlineGestureStage = inlineStage.locator(storyMediaPagesSelector);
     const initialImage = inlineStage.locator(storyCurrentImageSelector).first();
     await initialImage.waitFor({ state: "visible" });
     await initialImage.click();
 
     const fullscreenStage = mixedMediaMobile.page.locator(".journey-story-fullscreen");
+    const fullscreenGestureStage = fullscreenStage.locator(storyMediaPagesSelector);
     await fullscreenStage.waitFor({ state: "visible" });
     const fullscreenBox = await fullscreenStage.boundingBox();
     if (!fullscreenBox) throw new Error("mobile mixed-media fullscreen has no bounds");
     const fullStartX = fullscreenBox.x + fullscreenBox.width * 0.72;
     const fullSwipeY = fullscreenBox.y + fullscreenBox.height * 0.42;
     // Land on the video deterministically before exercising real touch. This
-    // setup gesture targets the stage directly; the assertions below use CDP
+    // setup gesture targets the gesture stage directly; the assertions below use CDP
     // touch so the browser gives the <video> its normal implicit capture.
-    await fullscreenStage.dispatchEvent("pointerdown", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
-    await fullscreenStage.dispatchEvent("pointermove", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
-    await fullscreenStage.dispatchEvent("pointerup", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointermove", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
 
     const fullscreenVideo = fullscreenStage.locator("video[data-shared-media-id]");
     await fullscreenVideo.waitFor({ state: "visible", timeout: 3_000 });
     const touch = await mixedMediaMobile.page.context().newCDPSession(mixedMediaMobile.page);
-    await fullscreenStage.evaluate((stage) => {
+    await fullscreenGestureStage.evaluate((stage) => {
       stage.dataset.qaVideoStageCapture = "";
       stage.addEventListener("gotpointercapture", (event) => {
         if (event.target === stage) stage.dataset.qaVideoStageCapture = String(event.pointerId);
@@ -2006,7 +2010,7 @@ try {
     const fullscreenVideoY = fullscreenVideoPoint.y;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenVideoX, y: fullscreenVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenVideoX + 30, y: fullscreenVideoY }] });
-    const fullscreenVideoStageCapturedOnJitter = await fullscreenStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
+    const fullscreenVideoStageCapturedOnJitter = await fullscreenGestureStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const fullscreenVideoPointerUps = Number(await fullscreenVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
@@ -2023,9 +2027,9 @@ try {
 
     // Return to the video, then exit fullscreen so the inline stage can run
     // the same native-capture contract.
-    await fullscreenStage.dispatchEvent("pointerdown", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
-    await fullscreenStage.dispatchEvent("pointermove", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
-    await fullscreenStage.dispatchEvent("pointerup", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointermove", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
     await fullscreenVideo.waitFor({ state: "visible", timeout: 3_000 });
     await mixedMediaMobile.page.keyboard.press("Escape");
     // The fullscreen stage stays mounted but hidden so its exact <video> node
@@ -2034,7 +2038,7 @@ try {
 
     const inlineVideo = inlineStage.locator(storyCurrentVideoSelector);
     await inlineVideo.waitFor({ state: "visible", timeout: 3_000 });
-    await inlineStage.evaluate((stage) => {
+    await inlineGestureStage.evaluate((stage) => {
       stage.dataset.qaVideoStageCapture = "";
       stage.addEventListener("gotpointercapture", (event) => {
         if (event.target === stage) stage.dataset.qaVideoStageCapture = String(event.pointerId);
@@ -2053,7 +2057,7 @@ try {
     const inlineVideoY = inlineVideoPoint.y;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineVideoX, y: inlineVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineVideoX + 30, y: inlineVideoY }] });
-    const inlineVideoStageCapturedOnJitter = await inlineStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
+    const inlineVideoStageCapturedOnJitter = await inlineGestureStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const inlineVideoPointerUps = Number(await inlineVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
@@ -2349,15 +2353,16 @@ try {
     });
     try {
       const stage = videoMorph.page.locator(".journey-story__media");
+      const gestureStage = stage.locator(storyMediaPagesSelector);
       await stage.locator(storyCurrentImageSelector).first().waitFor({ state: "visible", timeout: 5_000 });
       if (surface.mobile) {
         const stageBox = await stage.boundingBox();
         if (!stageBox) throw new Error(`${surface.label} Story stage has no bounds`);
         const x = stageBox.x + stageBox.width * 0.72;
         const y = stageBox.y + stageBox.height * 0.5;
-        await stage.dispatchEvent("pointerdown", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x, clientY: y, bubbles: true });
-        await stage.dispatchEvent("pointermove", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
-        await stage.dispatchEvent("pointerup", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
+        await gestureStage.dispatchEvent("pointerdown", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x, clientY: y, bubbles: true });
+        await gestureStage.dispatchEvent("pointermove", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
+        await gestureStage.dispatchEvent("pointerup", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
       } else {
         await clickStoryPicture(videoMorph.page, 1);
       }
@@ -2613,6 +2618,7 @@ try {
   try {
     await videoAutoplay.page.locator(".journey-story").waitFor({ state: "visible" });
     const videoStage = videoAutoplay.page.locator(".journey-story__media");
+    const videoGestureStage = videoStage.locator(storyMediaPagesSelector);
     const firstImage = videoStage.locator(storyCurrentImageSelector).first();
     await firstImage.waitFor({ state: "visible" });
     const videoStageBox = await videoStage.boundingBox();
@@ -2620,9 +2626,9 @@ try {
     const videoSwipeX = videoStageBox.x + videoStageBox.width * 0.72;
     const videoSwipeY = videoStageBox.y + videoStageBox.height * 0.5;
     // One committed swipe lands on the video asset at index 1.
-    await videoStage.dispatchEvent("pointerdown", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX, clientY: videoSwipeY, bubbles: true });
-    await videoStage.dispatchEvent("pointermove", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
-    await videoStage.dispatchEvent("pointerup", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
+    await videoGestureStage.dispatchEvent("pointerdown", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX, clientY: videoSwipeY, bubbles: true });
+    await videoGestureStage.dispatchEvent("pointermove", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
+    await videoGestureStage.dispatchEvent("pointerup", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
     const settledVideo = videoStage.locator(storyCurrentVideoSelector);
     await settledVideo.waitFor({ state: "visible", timeout: 5_000 });
 
@@ -2788,14 +2794,15 @@ try {
   try {
     await videoImmersive.page.locator(".journey-story").waitFor({ state: "visible" });
     const stage = videoImmersive.page.locator(".journey-story__media");
+    const gestureStage = stage.locator(storyMediaPagesSelector);
     await stage.locator(storyCurrentImageSelector).first().waitFor({ state: "visible" });
     const stageBox = await stage.boundingBox();
     if (!stageBox) throw new Error("mixed-media story stage has no bounds");
     const swipeX = stageBox.x + stageBox.width * 0.72;
     const swipeY = stageBox.y + stageBox.height * 0.5;
-    await stage.dispatchEvent("pointerdown", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX, clientY: swipeY, bubbles: true });
-    await stage.dispatchEvent("pointermove", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
-    await stage.dispatchEvent("pointerup", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
+    await gestureStage.dispatchEvent("pointerdown", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX, clientY: swipeY, bubbles: true });
+    await gestureStage.dispatchEvent("pointermove", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
+    await gestureStage.dispatchEvent("pointerup", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
     await stage.locator(storyCurrentVideoSelector).waitFor({ state: "visible", timeout: 5_000 });
     const currentIsVideo = await videoImmersive.page.evaluate((selector) => (
       document.querySelector(selector)?.tagName === "VIDEO"
@@ -2889,6 +2896,7 @@ try {
     });
     try {
       const stage = mobileContinuity.page.locator(".journey-story__media");
+      const gestureStage = stage.locator(storyMediaPagesSelector);
       await stage.waitFor({ state: "visible" });
       const base = stage.locator(storyCurrentMediaSelector).first();
       await base.waitFor({ state: "visible", timeout: 3_000 });
@@ -2918,7 +2926,7 @@ try {
       if (!box) throw new Error(`mobile continuity ${label}: stage has no bounds`);
       const startX = box.x + box.width * 0.72;
       const y = box.y + box.height * 0.5;
-      await stage.dispatchEvent("pointerdown", {
+      await gestureStage.dispatchEvent("pointerdown", {
         pointerId: 41,
         pointerType: "touch",
         isPrimary: true,
@@ -2928,7 +2936,7 @@ try {
       });
       // See the earlier comment: the live-drag gesture needs a pointermove
       // to resolve a neighbor and commit at all.
-      await stage.dispatchEvent("pointermove", {
+      await gestureStage.dispatchEvent("pointermove", {
         pointerId: 41,
         pointerType: "touch",
         isPrimary: true,
@@ -2968,7 +2976,7 @@ try {
           legacyIncomingCount: root.querySelectorAll(".journey-story__media-incoming").length,
         };
       }, { pagesSelector: storyMediaPagesSelector });
-      await stage.dispatchEvent("pointerup", {
+      await gestureStage.dispatchEvent("pointerup", {
         pointerId: 41,
         pointerType: "touch",
         isPrimary: true,
