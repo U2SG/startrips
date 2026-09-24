@@ -79,7 +79,8 @@
     "pg": "^8.23.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "three": "^0.179.1"
+    "three": "^0.179.1",
+    "xstate": "^5.33.2"
   },
   "devDependencies": {
     "@types/geojson": "^7946.0.16",
