@@ -530,10 +530,10 @@ function installStageSampler() {
         ready: frame instanceof HTMLCanvasElement && frame.width > 0 && frame.height > 0 },
     };
   };
-  // Capture the source on the trusted entry/Close click, before React's click
-  // handler snapshots and pauses it. Back is captured before the registered
-  // surface listener performs the reverse handoff. The 64x64 pixels stay in
-  // page memory; each sampled clone records only the comparison and signal.
+  // Capture before the entry/Close handler snapshots and pauses the source.
+  // Mobile controls can activate on pointerup when a native scrub suppresses
+  // the compatibility click; Back is captured before the surface listener.
+  // The pixels stay in page memory; clone samples record only comparisons.
   const pixels64 = (source) => {
     const canvas = document.createElement("canvas");
     canvas.width = 64; canvas.height = 64;
@@ -554,6 +554,10 @@ function installStageSampler() {
     if (!state.running) return;
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
     if (!(video instanceof HTMLVideoElement) || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      // A rapid Back can reverse an unready destination while the entry clone
+      // still owns the picture. Its already captured inline frame is the only
+      // decoded source; do not replace it with the empty destination.
+      if (trigger === "browser-back" && state.handoffSource?.pixels) return;
       state.handoffSource = { trigger, wallAt: Date.now(), error: "source has no decoded frame" };
       return;
     }
@@ -563,31 +567,58 @@ function installStageSampler() {
         time: video.currentTime, paused: video.paused, pixels, nonBlack: signalOf(pixels) };
       state.handoffSource = source;
       // The capture listener runs before React takes the snapshot and pauses a
-      // playing video. A decoded frame can advance during that same click. Read
+      // playing video. A decoded frame can advance during that gesture. Read
       // the now-paused source after the handler, while its frame still exists.
-      queueMicrotask(() => {
+      const capturePausedSource = () => {
         if (state.handoffSource !== source || source.paused || !video.paused
           || video.getAttribute("data-shared-media-id") !== source.asset
           || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
           || Math.abs(video.currentTime - source.time) > 0.12) return;
         try {
           const settledPixels = pixels64(video);
+          if (!settledPixels) return;
           source.settled = { time: video.currentTime, pixels: settledPixels,
             nonBlack: signalOf(settledPixels) };
-        } catch { /* The click frame remains the only admissible reference. */ }
+        } catch { /* The gesture frame remains the only admissible reference. */ }
+      };
+      queueMicrotask(() => {
+        capturePausedSource();
+        if (!source.settled) requestAnimationFrame(capturePausedSource);
       });
     } catch (error) {
       state.handoffSource = { trigger, wallAt: Date.now(), error: String(error) };
     }
   };
-  document.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
+  const handoffControl = (target) => {
+    if (!(target instanceof Element)) return null;
     if (target.closest(".journey-story__fullscreen-entry, .journey-story__mobile-media-fullscreen")) {
-      captureSource(".journey-story__media", "entry-click");
-    } else if (target.closest(".journey-story-fullscreen__close")) {
-      captureSource(".journey-story-fullscreen", "close-click");
+      return { kind: "entry", source: ".journey-story__media" };
     }
+    if (target.closest(".journey-story-fullscreen__close")) {
+      return { kind: "close", source: ".journey-story-fullscreen" };
+    }
+    return null;
+  };
+  let lastTouchHandoff = null;
+  document.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch") lastTouchHandoff = null;
+  }, true);
+  document.addEventListener("pointerup", (event) => {
+    if (event.pointerType !== "touch") return;
+    const control = handoffControl(event.target);
+    if (!control) return;
+    captureSource(control.source, `${control.kind}-touch`);
+    lastTouchHandoff = { kind: control.kind, at: performance.now() };
+  }, true);
+  document.addEventListener("click", (event) => {
+    const control = handoffControl(event.target);
+    if (!control) return;
+    if (event.detail > 0 && lastTouchHandoff?.kind === control.kind
+      && performance.now() - lastTouchHandoff.at < 1_000) {
+      lastTouchHandoff = null;
+      return;
+    }
+    captureSource(control.source, `${control.kind}-click`);
   }, true);
   window.addEventListener("popstate", () => captureSource(".journey-story-fullscreen", "browser-back"), true);
   const cloneFrameIdentity = (clone, asset) => {
@@ -1870,6 +1901,15 @@ async function pausedVideoScreenPixels(page, rootSelector) {
     const left = box.left + (box.width - width) / 2, top = box.top + (box.height - height) / 2;
     const screenshotScaleX = image.naturalWidth / innerWidth;
     const screenshotScaleY = image.naturalHeight / innerHeight;
+    const raster = document.createElement("canvas");
+    raster.width = Math.max(1, Math.round(width * screenshotScaleX));
+    raster.height = Math.max(1, Math.round(height * screenshotScaleY));
+    const rasterContext = raster.getContext("2d");
+    if (!rasterContext) return { failed: true, reason: "screen raster unavailable" };
+    rasterContext.drawImage(video, 0, 0, raster.width, raster.height);
+    frameContext.clearRect(0, 0, 64, 64);
+    frameContext.drawImage(raster, 0, 0, 64, 64);
+    const screenExpected = frameContext.getImageData(0, 0, 64, 64).data;
     // Compare the same 64x64 spatial footprint. Reading one screenshot pixel
     // against a downsampled decoded frame mistakes compositor scaling for a
     // different picture, especially on sparse star fields.
@@ -1892,10 +1932,12 @@ async function pausedVideoScreenPixels(page, rootSelector) {
       const sy = Math.round(y * screenshotScaleY);
       const offscreen = sx < 0 || sy < 0 || sx >= image.naturalWidth || sy >= image.naturalHeight;
       const decoded = [pixels[at], pixels[at + 1], pixels[at + 2]];
-      let visible = [0, 0, 0], delta = 255;
-      // The browser can filter a bright source texel into a neighbouring
-      // output texel. Permit one 64px cell of registration error, but require
-      // a real bright pixel with matching colour in that local footprint.
+      const expected = [screenExpected[at], screenExpected[at + 1], screenExpected[at + 2]];
+      let visible = [0, 0, 0];
+      let delta = expected.reduce((sum, channel) => sum + channel, 0) / 3;
+      // Filtering can move a source texel by one 64px cell. Keep the nearest
+      // matching light there; the bright-count and spread checks reject a
+      // blank or covered picture even when a weak texel filters to black.
       for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) {
         const nx = px + dx, ny = py + dy;
         if (nx < 0 || ny < 0 || nx >= 64 || ny >= 64) continue;
@@ -1903,10 +1945,10 @@ async function pausedVideoScreenPixels(page, rootSelector) {
         const candidate = [visiblePixels[near], visiblePixels[near + 1], visiblePixels[near + 2]];
         if (Math.max(...candidate) <= 24) continue;
         const candidateDelta = candidate.reduce((sum, channel, index) =>
-          sum + Math.abs(channel - decoded[index]), 0) / 3;
+          sum + Math.abs(channel - expected[index]), 0) / 3;
         if (candidateDelta < delta) { delta = candidateDelta; visible = candidate; }
       }
-      return { fx, fy, hitIsVideo: hit === video, offscreen, visible, decoded,
+      return { fx, fy, hitIsVideo: hit === video, offscreen, visible, decoded, expected,
         delta: Number(delta.toFixed(1)) };
     });
     const meanDelta = samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length;
@@ -2030,7 +2072,16 @@ async function activeCloneScreenPixels(page, assetId, { stationary = false } = {
     }
     const screenshotScaleX = image.naturalWidth / innerWidth;
     const screenshotScaleY = image.naturalHeight / innerHeight;
+    const raster = document.createElement("canvas");
+    const rasterContext = raster.getContext("2d");
+    if (!rasterContext) return { failed: true, reason: "clone screen raster unavailable" };
     const candidate = (box) => {
+      raster.width = Math.max(1, Math.round(box.width * screenshotScaleX));
+      raster.height = Math.max(1, Math.round(box.height * screenshotScaleY));
+      rasterContext.drawImage(clone, 0, 0, raster.width, raster.height);
+      frameContext.clearRect(0, 0, 64, 64);
+      frameContext.drawImage(raster, 0, 0, 64, 64);
+      const expectedPixels = frameContext.getImageData(0, 0, 64, 64).data;
       screenContext.clearRect(0, 0, 64, 64);
       screenContext.drawImage(image, box.x * screenshotScaleX, box.y * screenshotScaleY,
         box.width * screenshotScaleX, box.height * screenshotScaleY, 0, 0, 64, 64);
@@ -2049,8 +2100,9 @@ async function activeCloneScreenPixels(page, assetId, { stationary = false } = {
           return { x, y, strength, offscreen: true, delta: 255 };
         }
         const offset = (y * 64 + x) * 4;
-        const expectedRgb = [pixels[offset], pixels[offset + 1], pixels[offset + 2]];
-        let delta = 255, visibleRgb = [0, 0, 0];
+        const expectedRgb = [expectedPixels[offset], expectedPixels[offset + 1], expectedPixels[offset + 2]];
+        let visibleRgb = [0, 0, 0];
+        let delta = expectedRgb.reduce((sum, channel) => sum + channel, 0) / 3;
         // The moving clone crosses fractional device pixels. Resample its
         // screenshot footprint before matching local bright texels instead
         // of comparing a raw screen pixel with a downsampled canvas texel.
