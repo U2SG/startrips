@@ -392,6 +392,111 @@ async function verifyAuthenticatedDirectGate(label, path, targetSelector) {
   }
 }
 
+async function verifyResetPasswordCancellation() {
+  console.error("[qa-login-v3] reset password cancellation");
+  const gateway = await createGatewayPage({
+    initialPath: "/reset-password?token=qa-reset-token&qaState=login-gateway&qaLite=1",
+    waitForAuthCard: false,
+  });
+  let releaseResponse;
+  try {
+    let resetRequests = 0;
+    let requestCaptured;
+    const intercepted = new Promise((resolve) => { requestCaptured = resolve; });
+    await gateway.page.route("**/api/auth/reset-password", async (route) => {
+      resetRequests += 1;
+      if (resetRequests === 2) {
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "INVALID_TOKEN", message: "Invalid token" }),
+        });
+        return;
+      }
+      await new Promise((resolve) => {
+        releaseResponse = resolve;
+        requestCaptured();
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: true }),
+      });
+    });
+    await gateway.page.locator('input[autocomplete="new-password"]').fill("qa-new-password-123");
+    const requestStarted = gateway.page.waitForRequest((request) => (
+      new URL(request.url()).pathname === "/api/auth/reset-password"
+    ), { timeout: 4_000 });
+    await gateway.page.getByRole("button", { name: "更新密码" }).click();
+    await requestStarted;
+    await intercepted;
+    const cancel = gateway.page.getByRole("button", { name: "取消等待" });
+    await cancel.waitFor({ state: "visible", timeout: 4_000 });
+    const pending = {
+      busy: await gateway.page.locator(".auth-card").getAttribute("aria-busy"),
+      submitDisabled: await gateway.page.getByRole("button", { name: "请稍候…" }).isDisabled(),
+    };
+    // A real pointer click checks that the recovery control is reachable.
+    await cancel.click();
+    const alert = gateway.page.getByRole("alert");
+    await alert.waitFor({ state: "visible", timeout: 4_000 });
+    const responseReceived = gateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/reset-password"
+    ), { timeout: 4_000 });
+    releaseResponse();
+    await responseReceived;
+    await gateway.page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    const recovered = {
+      busy: await gateway.page.locator(".auth-card").getAttribute("aria-busy"),
+      alert: await alert.textContent(),
+      submitEnabled: await gateway.page.getByRole("button", { name: "更新密码" }).isEnabled(),
+      requestAgainVisible: await gateway.page.getByRole("link", { name: "重新申请重置链接" }).isVisible(),
+      successVisible: await gateway.page.getByRole("status").count() > 0,
+    };
+    const retryResponse = gateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/reset-password" && response.status() === 400
+    ), { timeout: 4_000 });
+    await gateway.page.getByRole("button", { name: "更新密码" }).click();
+    await retryResponse;
+    await gateway.page.waitForFunction(() => (
+      document.querySelector('[role="alert"]')?.textContent?.includes("前一次提交结果仍未确认")
+    ), null, { timeout: 4_000 });
+    const retry = {
+      alert: await alert.textContent(),
+      requestAgainVisible: await gateway.page.getByRole("link", { name: "重新申请重置链接" }).isVisible(),
+      returnLoginVisible: await gateway.page.getByRole("link", { name: "返回登录" }).isVisible(),
+      submitGone: await gateway.page.getByRole("button", { name: "更新密码" }).count() === 0,
+    };
+    const unexpectedErrors = gateway.errors.filter((message) => !message.includes("400 (Bad Request)"));
+    return {
+      label: "reset-password-cancel-late-success-retry-invalid-token",
+      pending,
+      recovered,
+      retry,
+      errors: unexpectedErrors,
+      failed: pending.busy !== "true"
+        || !pending.submitDisabled
+        || recovered.busy !== "false"
+        || !recovered.alert?.includes("无法确认密码是否已更新")
+        || !recovered.submitEnabled
+        || !recovered.requestAgainVisible
+        || recovered.successVisible
+        || resetRequests !== 2
+        || !retry.alert?.includes("前一次提交结果仍未确认")
+        || !retry.alert?.includes("前一次提交的密码尝试登录")
+        || !retry.requestAgainVisible
+        || !retry.returnLoginVisible
+        || !retry.submitGone
+        || unexpectedErrors.length > 0,
+    };
+  } finally {
+    releaseResponse?.();
+    await gateway.close();
+  }
+}
+
 async function verifyLoginEarthIntroRotationContinuity() {
   console.error("[qa-login-v3] login earth intro rotation continuity");
   const gateway = await createGatewayPage({
@@ -1036,6 +1141,9 @@ try {
   );
   if (resetPasswordPointers.failed) failed = true;
   results.push(resetPasswordPointers);
+  const resetPasswordCancellation = await verifyResetPasswordCancellation();
+  if (resetPasswordCancellation.failed) failed = true;
+  results.push(resetPasswordCancellation);
   const invitationPointers = await verifyAuthenticatedDirectGate(
     "gateway-authenticated-invitation-pointer-ownership",
     "/accept-invitation?id=qa-invitation",

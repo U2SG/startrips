@@ -129,9 +129,9 @@ export function passwordLinkSurfaceText(surface: AccountSurface): string {
     case "password-link-offered":
       return "这个账户还没有登录密码。我们会把设置密码的链接发送到已验证的账户邮箱。";
     case "password-link-sent":
-      return "设置密码的链接已经发送到账户邮箱，请在链接过期前打开它。";
+      return "请求已受理。请留意稍后收到的设置密码邮件，并在链接过期前打开。";
     case "password-link-expired":
-      return "这个设置链接已经失效，请重新发送一封。";
+      return "这个密码设置或重置链接已失效，可能已过期或已使用，请重新申请。";
     case "password-link-failed":
       return "设置链接没有发送成功，请稍后再试。";
     default:
