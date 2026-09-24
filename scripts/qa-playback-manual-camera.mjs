@@ -692,6 +692,7 @@ try {
         && document.querySelector(".journey-playback")?.dataset.playbackStep === "1", null, { timeout: 40_000 });
       await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
       await page.locator(".journey-playback.is-paused").waitFor();
+      await waitForVisibleStop(page, 1);
       const wheelPoint = await stopBlankPoint(page);
       const scaleBeforeWheel = await page.evaluate(({ longitude, latitude }) => {
         const a = window.__detailedEarthMapProject?.(longitude, latitude);

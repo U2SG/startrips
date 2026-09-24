@@ -960,7 +960,8 @@ export function JourneyPlaybackOverlay({
       && (arrivalGate.intentRevision === director.intentRevision || arrivalGate.released)
       && arrivalGate.routePointId === routePointId ? arrivalGate : null;
     let deferArrival = currentGate ? arrivalHolding : false;
-    if (playbackMode === "full" && director.step?.kind === "stop" && routePointId
+    if (playbackMode === "full" && cameraFollowing !== undefined
+      && director.step?.kind === "stop" && routePointId
       && (cameraFollowing !== false || explicitlySelected) && !currentGate) {
       // Claim the Stop before its first position commit. A new point command is
       // issued below; an already flying command for this point keeps its revision.
