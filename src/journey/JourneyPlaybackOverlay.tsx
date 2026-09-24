@@ -95,7 +95,11 @@ type PlaybackArrivalGate = {
   journeyId: string;
   routePointId: string;
   stepIndex: number;
-  cameraRevision: number;
+  intentRevision: number;
+  pointIndex: number;
+  minCameraRevision: number;
+  reclaimFromFree: boolean;
+  released: boolean;
 };
 
 function quickRecapSelectionReasonLabel(reason: AutoEditSelectionReason) {
@@ -194,8 +198,14 @@ export function JourneyPlaybackOverlay({
   // just as a media beat waits for its own presentation, without a second timer.
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const [arrivalGate, setArrivalGate] = useState<PlaybackArrivalGate | null>(null);
-  const arrivalHolding = Boolean(arrivalGate && cameraFollowing !== false
-    && cameraFlight?.revision === arrivalGate.cameraRevision && !cameraFlight.settled);
+  const arrivalHolding = Boolean(playbackMode === "full" && arrivalGate && !arrivalGate.released
+    && arrivalGate.journeyId === journey?.id
+    && (cameraFollowing !== false || (arrivalGate.reclaimFromFree
+      && (cameraFlight?.revision ?? 0) < arrivalGate.minCameraRevision))
+    && !(cameraFlight?.target.kind === "point"
+      && cameraFlight.target.pointIndex === arrivalGate.pointIndex
+      && cameraFlight.revision >= arrivalGate.minCameraRevision
+      && cameraFlight.settled));
   const hold = holdReason !== "none" || presentationPending || arrivalHolding;
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver, homeNarrativeContext);
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
@@ -933,65 +943,66 @@ export function JourneyPlaybackOverlay({
   // reissuing the same point command across automatic stop -> media chapters.
   // An explicit chapter choice may reclaim a camera the viewer released.
   const lastCameraTargetKeyRef = useRef<string | null>(null);
-  const commitSpatial = useCallback((arrivingFromTravel: boolean) => {
-    const currentStopIsPending = Boolean(arrivalGate && journey && arrivalGate.journeyId === journey.id
-      && arrivalGate.stepIndex === director.stepIndex
-      && director.step?.kind === "stop"
-      && journey.routePoints[director.step.pointIndex]?.id === arrivalGate.routePointId);
-    const deferArrival = (arrivingFromTravel || currentStopIsPending) && playbackMode === "full"
-      && cameraFollowing !== false && director.step?.kind === "stop"
-      && cameraFlight?.target.kind === "point"
-      && cameraFlight.target.pointIndex === director.step.pointIndex
-      && (!arrivalGate || cameraFlight.revision === arrivalGate.cameraRevision)
-      && !cameraFlight.settled;
-    if (journey && director.step && director.step.kind !== "media"
-      && director.step.kind !== "travel" && !deferArrival) {
-      committedPositionRef.current = committedPlaybackPosition(journey, director.step);
-    }
+  const commitSpatial = useCallback((_arrivingFromTravel: boolean) => {
     const target = playbackCameraTargetForStep(director.step, journey);
     if (!target || !journey) return;
     const explicitlySelected = explicitCameraIntentRef.current === director.intentRevision;
     explicitCameraIntentRef.current = null;
     const routePointId = target.kind === "point" ? journey.routePoints[target.pointIndex]?.id ?? "" : "";
     const targetKey = `${journey.id}:${playbackCameraTargetKey(target)}:${routePointId}`;
-    if (lastCameraTargetKeyRef.current === targetKey
-      && !(explicitlySelected && cameraFollowing === false)) return;
-    lastCameraTargetKeyRef.current = targetKey;
-    onCameraTargetChange(target, explicitlySelected);
+    const matchingFlight = Boolean(target.kind === "point" && cameraFlight?.target.kind === "point"
+      && cameraFlight.target.pointIndex === target.pointIndex);
+    const needsCameraCommand = lastCameraTargetKeyRef.current !== targetKey
+      || (explicitlySelected && cameraFollowing === false)
+      || (cameraFollowing !== false && director.step?.kind === "stop" && !matchingFlight);
+    const currentGate = arrivalGate?.journeyId === journey.id
+      && arrivalGate.stepIndex === director.stepIndex
+      && (arrivalGate.intentRevision === director.intentRevision || arrivalGate.released)
+      && arrivalGate.routePointId === routePointId ? arrivalGate : null;
+    let deferArrival = currentGate ? arrivalHolding : false;
+    if (playbackMode === "full" && director.step?.kind === "stop" && routePointId
+      && (cameraFollowing !== false || explicitlySelected) && !currentGate) {
+      // Claim the Stop before its first position commit. A new point command is
+      // issued below; an already flying command for this point keeps its revision.
+      const minCameraRevision = needsCameraCommand
+        ? (cameraFlight?.revision ?? 0) + 1 : cameraFlight?.revision ?? 0;
+      const released = !needsCameraCommand && matchingFlight && Boolean(cameraFlight?.settled);
+      const nextGate: PlaybackArrivalGate = {
+        journeyId: journey.id, routePointId, stepIndex: director.stepIndex,
+        intentRevision: director.intentRevision, pointIndex: director.step.pointIndex,
+        minCameraRevision, reclaimFromFree: cameraFollowing === false, released,
+      };
+      setArrivalGate(nextGate);
+      deferArrival = !released;
+    }
+    if (director.step && director.step.kind !== "media"
+      && director.step.kind !== "travel" && !deferArrival) {
+      committedPositionRef.current = committedPlaybackPosition(journey, director.step);
+    }
+    if (needsCameraCommand) {
+      lastCameraTargetKeyRef.current = targetKey;
+      onCameraTargetChange(target, explicitlySelected);
+    }
   }, [arrivalGate, cameraFlight, cameraFollowing, director.intentRevision, director.step,
-    director.stepIndex, journey, onCameraTargetChange, playbackMode]);
+    director.stepIndex, journey, onCameraTargetChange, playbackMode, arrivalHolding]);
   const mapBridge = usePlaybackMapBridge({ journey, director, root: overlayRef,
     reduceMotion: audioReactiveReducedMotion, commitSpatial });
   const arrivalGateMatchesCurrent = Boolean(arrivalGate && journey && journey.id === arrivalGate.journeyId
     && director.step?.kind === "stop" && director.stepIndex === arrivalGate.stepIndex
+    && (director.intentRevision === arrivalGate.intentRevision || arrivalGate.released)
     && journey.routePoints[director.step.pointIndex]?.id === arrivalGate.routePointId);
   const arrivalPresentationPending = arrivalGateMatchesCurrent && arrivalHolding;
   useLayoutEffect(() => {
-    if (!mapBridge.arrivingFromTravel || playbackMode !== "full" || !journey
-      || director.step?.kind !== "stop" || cameraFlight?.target.kind !== "point"
-      || cameraFlight.target.pointIndex !== director.step.pointIndex) return;
-    const routePointId = journey.routePoints[director.step.pointIndex]?.id;
-    if (!routePointId) return;
-    const nextGate: PlaybackArrivalGate = {
-      journeyId: journey.id,
-      routePointId,
-      stepIndex: director.stepIndex,
-      cameraRevision: cameraFlight.revision,
-    };
-    setArrivalGate((current) => current?.journeyId === nextGate.journeyId
-      && current.routePointId === nextGate.routePointId
-      && current.stepIndex === nextGate.stepIndex
-      && current.cameraRevision === nextGate.cameraRevision ? current : nextGate);
-  }, [cameraFlight?.revision, cameraFlight?.target, director.step, director.stepIndex,
-    journey, mapBridge.arrivingFromTravel, playbackMode]);
-  useLayoutEffect(() => {
     if (!arrivalGate) return;
     if (!arrivalGateMatchesCurrent) {
-      setArrivalGate(null);
+      // The map bridge may already have queued this Stop's replacement gate in
+      // an earlier layout effect. Clear only the stale gate this render saw.
+      setArrivalGate((current) => current === arrivalGate ? null : current);
       return;
     }
     if (!arrivalPresentationPending && journey && director.step?.kind === "stop") {
       committedPositionRef.current = committedPlaybackPosition(journey, director.step);
+      if (!arrivalGate.released) setArrivalGate({ ...arrivalGate, released: true });
     }
   }, [arrivalGate, arrivalGateMatchesCurrent, arrivalPresentationPending, director.step, journey]);
   const handlePresentationCommit = useCallback((presentedAssetId: string) => {
@@ -1280,7 +1291,7 @@ export function JourneyPlaybackOverlay({
       data-playback-phase={step?.kind ?? "idle"}
       data-arrival-gate={arrivalPresentationPending ? "pending"
         : arrivalGateMatchesCurrent ? cameraFollowing === false ? "free" : "settled" : "none"}
-      data-arrival-camera-revision={arrivalGateMatchesCurrent ? arrivalGate?.cameraRevision : undefined}
+      data-arrival-camera-revision={arrivalGateMatchesCurrent ? arrivalGate?.minCameraRevision : undefined}
       data-playback-mode={playbackMode}
       data-playback-step={director.stepIndex}
       data-playback-steps={director.steps.length}

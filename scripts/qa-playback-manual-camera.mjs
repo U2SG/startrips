@@ -37,7 +37,7 @@ const imageUrl = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' w
 const browser = await launchQaBrowser({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 const reports = [];
 
-async function open({ mobile = false, reduced = false, holdImage = false } = {}) {
+async function open({ mobile = false, reduced = false, holdImage = false, fixtureJourney = journey } = {}) {
   const page = await browser.newPage({
     // Start through the real desktop Playback chooser, then cross the compact
     // boundary on this same page; the mobile sheet has no Playback action.
@@ -56,7 +56,7 @@ async function open({ mobile = false, reduced = false, holdImage = false } = {})
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/auth/get-session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "null" }));
   await page.route("**/api/journeys", (route) => route.fulfill({
-    status: 200, contentType: "application/json", body: JSON.stringify({ journeys: [journey] }),
+    status: 200, contentType: "application/json", body: JSON.stringify({ journeys: [fixtureJourney] }),
   }));
   await page.route(mapStylePattern, (route) => route.fulfill({
     status: 200, contentType: "application/json", body: JSON.stringify(mapStyle),
@@ -80,7 +80,7 @@ async function open({ mobile = false, reduced = false, holdImage = false } = {})
   await page.locator(".living-atlas").waitFor({ state: "visible", timeout: 20_000 });
   await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 25_000 });
   await page.locator(".living-atlas__active-play").waitFor({ state: "visible" });
-  await page.locator(".living-atlas__journey-rail button", { hasText: journey.title }).first().click();
+  await page.locator(".living-atlas__journey-rail button", { hasText: fixtureJourney.title }).first().click();
   return { page, errors, imageRequested, releaseImage };
 }
 
@@ -528,6 +528,76 @@ async function recordArrivalProjection(page) {
   }, points[2]);
 }
 
+async function armArrivalGateTrace(page, step) {
+  await page.evaluate((expectedStep) => {
+    const root = document.querySelector(".journey-playback");
+    if (!(root instanceof HTMLElement)) throw new Error("Playback root missing before arrival gate trace");
+    const trace = { pending: [], settled: null };
+    window.__qaPlaybackArrivalGateTrace = trace;
+    const read = () => {
+      const heading = root.querySelector(".journey-playback__stop h3");
+      const headingRect = heading?.getBoundingClientRect();
+      const hit = headingRect?.width && headingRect.height
+        ? document.elementFromPoint(headingRect.left + headingRect.width / 2,
+          headingRect.top + headingRect.height / 2) : null;
+      const fill = root.querySelector(".journey-playback__progress-fill");
+      const track = root.querySelector(".journey-playback__progress");
+      const center = document.querySelector(".detailed-earth-map")?.dataset.mapCameraObservation
+        ?.split(",").map(Number) ?? [];
+      return {
+        step: root.dataset.playbackStep, phase: root.dataset.playbackPhase,
+        gate: root.dataset.arrivalGate, following: root.dataset.cameraFollow,
+        headingPresent: Boolean(heading), headingHit: hit === heading || Boolean(heading?.contains(hit)),
+        center,
+        fraction: fill && track?.getBoundingClientRect().width
+          ? fill.getBoundingClientRect().width / track.getBoundingClientRect().width : null,
+        transitionSeconds: fill ? Number.parseFloat(getComputedStyle(fill).transitionDuration) : null,
+      };
+    };
+    const sample = () => {
+      if (!root.isConnected) return;
+      const current = read();
+      if (current.step === String(expectedStep) && current.phase === "stop") {
+        if (current.gate === "pending") trace.pending.push(current);
+        else if (trace.pending.length) {
+          trace.settled = current;
+          return;
+        }
+      } else if (trace.pending.length) {
+        trace.settled = current;
+        return;
+      }
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, step);
+}
+
+async function waitForCenteredStop(page, step, point) {
+  const handle = await page.waitForFunction(({ step, longitude, latitude }) => {
+    const root = document.querySelector(".journey-playback");
+    const map = document.querySelector(".detailed-earth-map");
+    const heading = root?.querySelector(".journey-playback__stop h3");
+    const headingRect = heading?.getBoundingClientRect();
+    const headingHit = headingRect?.width && headingRect.height
+      ? document.elementFromPoint(headingRect.left + headingRect.width / 2,
+        headingRect.top + headingRect.height / 2) : null;
+    const center = map?.dataset.mapCameraObservation?.split(",").map(Number);
+    const projected = window.__detailedEarthMapProject?.(longitude, latitude);
+    const mapRect = map?.getBoundingClientRect();
+    const projectedDistance = projected && mapRect
+      ? Math.hypot(projected.x - (mapRect.left + mapRect.width / 2),
+        projected.y - (mapRect.top + mapRect.height / 2)) : Infinity;
+    if (root?.dataset.playbackStep !== String(step) || root.dataset.playbackPhase !== "stop"
+      || root.dataset.arrivalGate === "pending" || root.dataset.cameraFollow !== "follow"
+      || (headingHit !== heading && !heading?.contains(headingHit)) || center?.length !== 2
+      || Math.hypot(center[0] - longitude, center[1] - latitude) >= 0.05
+      || projectedDistance >= 30) return false;
+    return { center, projectedDistance, heading: heading?.textContent };
+  }, { step, ...point }, { timeout: 15_000 });
+  return handle.jsonValue();
+}
+
 try {
   // One real Atlas fixture crosses Story video, fullscreen, Full Playback,
   // and the Playback return. The selected Route Point and one visible video
@@ -693,6 +763,7 @@ try {
         return root?.dataset.playbackPhase === "stop" && root.dataset.cameraFollow === "free"
           && center?.length === 2 && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.0001;
       }, beforeStopDrag.mapCenter, { timeout: 8_000 });
+      await armArrivalGateTrace(page, 3);
       await armPauseAtStop(page, 3);
       await page.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
       await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "travel"
@@ -706,6 +777,8 @@ try {
       const free = await snapshot(page);
       const stopCapture = await waitForCapturedStop(page, 3);
       await waitForVisibleStop(page, 3);
+      assert.equal((await page.evaluate(() => window.__qaPlaybackArrivalGateTrace.pending)).length, 0,
+        "an automatic Stop with a free camera must not wait for camera arrival");
       const populatedStop = await stopBlankPoint(page);
       assert.equal(populatedStop.chapterDensity, "single", "Seoul image chapter must use populated stop layout");
       assert.ok(populatedStop.stageHeight > 0
@@ -781,6 +854,97 @@ try {
     } finally { await page.close(); }
   }
 
+  // A long-haul camera flight must own a crossed-point Stop before the chapter
+  // consumes time. The native progress scrub is a second, independent intent.
+  {
+    const london = { ...points[1], latitude: 51.5072, longitude: -0.1276, label: "伦敦" };
+    const longHaulJourney = {
+      ...journey,
+      routePoints: journey.routePoints.map((point) => point.id === london.id ? { ...point, ...london } : point),
+    };
+    const { page, errors } = await open({ fixtureJourney: longHaulJourney });
+    try {
+      await enterDetail(page);
+      await startPlayback(page);
+      await armPauseAtStop(page, 1);
+      await waitForCapturedStop(page, 1);
+      await waitForVisibleStop(page, 1);
+      await waitForCenteredStop(page, 1, points[0]);
+
+      await armArrivalGateTrace(page, 3);
+      await page.locator('.journey-playback__controls button[aria-label="下一个章节"]').click();
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackStep === "2"
+        && document.querySelector(".journey-playback")?.dataset.playbackPhase === "travel");
+      await page.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
+      await page.locator('.journey-playback__controls button[aria-label="下一个章节"]').click();
+      await page.waitForFunction(() => window.__qaPlaybackArrivalGateTrace?.pending.length > 0,
+        null, { timeout: 8_000 });
+      const pendingGate = await page.evaluate(() => window.__qaPlaybackArrivalGateTrace.pending[0]);
+      assert.equal(pendingGate.step, "3", "explicit Next must reach London's Stop");
+      assert.equal(pendingGate.following, "follow", "explicit Next must reclaim the camera");
+      assert.equal(pendingGate.headingPresent, false, "Stop heading appeared before camera settlement");
+
+      await page.waitForFunction(() => window.__qaPlaybackArrivalGateTrace?.settled !== null,
+        null, { timeout: 15_000 });
+      const gateTrace = await page.evaluate(() => window.__qaPlaybackArrivalGateTrace);
+      assert.equal(gateTrace.settled.gate, "settled", `arrival gate did not settle: ${JSON.stringify(gateTrace)}`);
+      assert.ok(gateTrace.pending.every((frame) => !frame.headingPresent),
+        `Stop heading leaked during flight: ${JSON.stringify(gateTrace)}`);
+      const heldFrames = gateTrace.pending.filter((frame) => frame.transitionSeconds === 0
+        && Number.isFinite(frame.fraction) && frame.center.length === 2);
+      assert.ok(heldFrames.length >= 2, `no observable held camera flight: ${JSON.stringify(gateTrace)}`);
+      const fractions = heldFrames.map((frame) => frame.fraction);
+      assert.ok(Math.max(...fractions) - Math.min(...fractions) < 0.002,
+        `Stop chapter consumed progress before camera settlement: ${JSON.stringify(gateTrace)}`);
+      assert.ok(Math.hypot(heldFrames.at(-1).center[0] - heldFrames[0].center[0],
+        heldFrames.at(-1).center[1] - heldFrames[0].center[1]) > 1,
+      `camera did not move during held Stop: ${JSON.stringify(gateTrace)}`);
+      const centered = await waitForCenteredStop(page, 3, london);
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackStep === "4"
+        && document.querySelector(".journey-playback")?.dataset.playbackPhase === "media",
+      null, { timeout: 15_000 });
+      const image = await visibleImage(page, imageId);
+      await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
+      await page.locator(".journey-playback.is-paused").waitFor();
+
+      await armArrivalGateTrace(page, 6);
+      const scrubTarget = await page.locator('.journey-playback__progress input[type="range"]').evaluate((range) => {
+        const tick = document.querySelectorAll(".journey-playback__progress-chapters i")[2];
+        if (!(tick instanceof HTMLElement)) throw new Error("Osaka Stop scrub tick missing");
+        const fraction = Number.parseFloat(tick.style.left) / 100 + 0.004;
+        const rect = range.getBoundingClientRect();
+        const thumbInset = 8;
+        return { x: rect.left + thumbInset + (rect.width - thumbInset * 2) * fraction,
+          y: rect.top + rect.height / 2, fraction };
+      });
+      await page.mouse.click(scrubTarget.x, scrubTarget.y);
+      await page.waitForFunction(() => window.__qaPlaybackArrivalGateTrace?.pending.length > 0,
+        null, { timeout: 8_000 });
+      const scrubPending = await page.evaluate(() => window.__qaPlaybackArrivalGateTrace.pending[0]);
+      assert.equal(scrubPending.step, "6", `native scrub missed Osaka Stop: ${JSON.stringify({ scrubTarget, scrubPending })}`);
+      assert.equal(scrubPending.headingPresent, false, "scrubbed Stop appeared before camera settlement");
+      await page.locator('.journey-playback__controls button[aria-label="上一个章节"]').click();
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackStep === "5"
+        && document.querySelector(".journey-playback")?.dataset.playbackPhase === "travel"
+        && document.querySelector(".journey-playback")?.dataset.arrivalGate === "none");
+      await page.locator(".journey-playback__close").click();
+      await page.locator(".journey-story").waitFor({ state: "visible" });
+      await page.waitForFunction(({ routePointId, assetId }) => {
+        const selected = document.querySelector(
+          `.journey-story__route-points button[data-route-point-id="${routePointId}"]`,
+        );
+        const media = document.querySelector(
+          `.journey-story [data-media-page="current"][data-media-page-id="${assetId}"]`,
+        );
+        return selected?.getAttribute("aria-pressed") === "true" && Boolean(media);
+      }, { routePointId: london.id, assetId: imageId }, { timeout: 8_000 });
+      assert.deepEqual(errors, []);
+      reports.push({ mode: "detail-long-haul-arrival-gate", pendingSamples: gateTrace.pending.length,
+        heldProgress: [Math.min(...fractions), Math.max(...fractions)], centered, image,
+        scrubTarget, scrubPending, returnedRoutePointId: london.id });
+    } finally { await page.close(); }
+  }
+
   // A manual chapter choice at the same Route Point reclaims a released Detail
   // camera; the automatic stop -> media transition above must keep it free.
   {
@@ -827,6 +991,8 @@ try {
       const returned = await snapshot(page);
       assert.ok(returned.focusPoint?.includes(`${points[1].latitude},${points[1].longitude}`),
         `explicit same-point Next focused another location: ${JSON.stringify(returned)}`);
+      assert.equal(await page.locator(".journey-playback").getAttribute("data-arrival-gate"), "none",
+        "an already settled Route Point must not open an arrival gate");
       assert.deepEqual(errors, []);
       reports.push({ mode: "detail-explicit-same-point-next", wheelPoint, free, returned, stopCapture });
     } finally { await page.close(); }
