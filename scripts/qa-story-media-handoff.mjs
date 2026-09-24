@@ -3311,7 +3311,6 @@ try {
           || progress.atResize.width <= progress.atResize.height
           || progress.atResize.clone !== `story-fullscreen-${V1}`
           || progress.atResize.targetReadyState === null || progress.atResize.targetReadyState >= 2
-          || progress.resizeEvent?.clone !== `story-fullscreen-${V1}`
           || progress.resizeEvent?.targetReadyState === null || progress.resizeEvent?.targetReadyState >= 2
           || progress.afterResizeViewport.width >= progress.afterResizeViewport.height
           || progress.coverage.failed || progress.afterPixels.failed || progress.frameIdentity.failed
