@@ -113,9 +113,8 @@ async function touchDriver(page) {
     move: async (x, y) => { await send("touchMove", finger(x, y)); },
     up: async () => { await send("touchEnd", []); },
     click: async (x, y) => {
-      // Chromium's zero-duration touchscreen.tap can omit a compatibility
-      // click immediately after a pan. Keep this trusted press and release
-      // immediate, so the test exercises that actual input cadence.
+      // The step commits on pointerup, so this trusted touch can release
+      // immediately without relying on a browser compatibility click.
       await send("touchStart", finger(x, y));
       await send("touchEnd", []);
     },
@@ -1060,7 +1059,7 @@ async function nativeControls(page, rootSelector, { timeout = 4_000 } = {}) {
   const deadline = Date.now() + timeout;
   let resolved = await readNativeControls(page, rootSelector);
   while (!playEntry(resolved.controls) && Date.now() < deadline) {
-    await page.waitForTimeout(120);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     resolved = await readNativeControls(page, rootSelector);
   }
   const reach = await page.evaluate(({ selector, points }) => {
@@ -1148,7 +1147,7 @@ async function seekNativeTimeline(page, rootSelector, { targetFraction = 0.7 } =
   let slider = timeline(controls);
   const deadline = Date.now() + 4_000;
   while ((!slider?.reachable || slider.box.right - slider.box.left < 32) && Date.now() < deadline) {
-    await page.waitForTimeout(100);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     controls = await nativeControls(page, rootSelector, { timeout: 500 });
     slider = timeline(controls);
   }
@@ -1207,7 +1206,7 @@ async function seekNativeTimeline(page, rootSelector, { targetFraction = 0.7 } =
   await pointer.down(startX, y);
   for (let step = 1; step <= 8; step += 1) {
     await pointer.move(startX + (endX - startX) * step / 8, y);
-    await page.waitForTimeout(12);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   }
   await pointer.up();
   const reached = await page.waitForFunction(({ selector, duration, target }) => {
@@ -1335,10 +1334,8 @@ async function photoClickPoint(page, rootSelector, direction) {
  * Real drag across the stage, above any native control chrome, in this page's
  * own modality: a mouse on desktop, a browser touch stream on compact mobile.
  *
- * The moves are paced like a hand rather than emitted in one tight loop: the
- * product derives release velocity from consecutive pointer samples, and a
- * burst with a zero millisecond delta carries no velocity at all. This is
- * gesture fidelity, not a wait inserted to make an assertion pass.
+ * Each move crosses a browser frame so the product receives distinct pointer
+ * samples and can derive release velocity from the real event timestamps.
  */
 async function swipeStage(page, rootSelector, direction) {
   const geometry = await page.evaluate((selector) => {
@@ -1351,7 +1348,7 @@ async function swipeStage(page, rootSelector, direction) {
   await pointer.down(geometry.x, geometry.y);
   for (let step = 1; step <= 10; step += 1) {
     await pointer.move(geometry.x + travel * (step / 10), geometry.y);
-    await page.waitForTimeout(12);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   }
   await pointer.up();
   return { ...geometry, travel, input: pointer.kind };
@@ -1393,7 +1390,7 @@ async function reverseSwipeStage(page, rootSelector, firstDirection) {
   const glide = async (from, to, steps) => {
     for (let step = 1; step <= steps; step += 1) {
       await pointer.move(geometry.x + from + (to - from) * (step / steps), geometry.y);
-      await page.waitForTimeout(12);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     }
   };
   await pointer.down(geometry.x, geometry.y);
@@ -1507,11 +1504,15 @@ async function grabDuringNavigation(page, rootSelector) {
   }, rootSelector);
   const pointer = input(page);
   await pointer.down(geometry.x, geometry.y);
-  // Past the 8px axis lock so the grab really fires, far short of the commit
-  // threshold and slow enough that release velocity cannot commit either.
+  // Past the 8px axis lock so the grab really fires, while 20px remains below
+  // even the 36px minimum flick distance. Two browser frames per move preserve
+  // a deliberate slow grab without a fixed millisecond hold.
   for (let step = 1; step <= 4; step += 1) {
     await pointer.move(geometry.x - step * 5, geometry.y);
-    await page.waitForTimeout(40);
+    await page.evaluate(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
   }
   await pointer.up();
   return { ...geometry, navigatedBy: "ArrowRight", input: pointer.kind };
@@ -2785,6 +2786,16 @@ try {
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
+      // V2 is prefetched as soon as V1 becomes current, so arm this before
+      // entering V1 rather than missing the delayed response in flight.
+      let v2ResponseReceived = false;
+      const v2ReadResponse = page.waitForResponse((response) =>
+        response.url().includes(`/api/uploads/assets/${V2}/read-url`), { timeout: 8_000 })
+        .then(async (response) => {
+          v2ResponseReceived = true;
+          return { status: response.status(), body: await response.json() };
+        })
+        .catch((error) => ({ error: String(error) }));
       await navigateByGesture(page, STAGE, 1, V1);
       // Root cause of a claim that used to pass without ever being exercised:
       // this window was driven by two swipes, but a gesture toward a neighbour
@@ -2823,42 +2834,60 @@ try {
           ?.getAttribute("data-media-requested") ?? null;
         const current = document.querySelector(selector)?.querySelector("[data-story-media-pages]")
           ?.querySelector('[data-media-page="current"]');
+        const target = [...(document.querySelector(selector)
+          ?.querySelectorAll("[data-media-page-id]") ?? [])]
+          .find((node) => node.getAttribute("data-media-page-id") === expected);
         return requested === expected
           && current?.getAttribute("data-media-page-id") === owner
           && current?.getAttribute("data-media-page-ready") === "true"
-          ? { requested, heldBy: current.getAttribute("data-media-page-id") }
+          && target && target.getAttribute("data-media-page-ready") !== "true"
+          ? { requested, heldBy: current.getAttribute("data-media-page-id"), targetReady: false }
           : null;
       }, { selector: STAGE, expected: V2, owner: V1 }, { polling: "raf", timeout: 2_000 })
         .then((handle) => handle.jsonValue(), () => null);
       await page.keyboard.press("ArrowLeft");
+      const responseBeforeReversal = v2ResponseReceived;
       await waitForSettledAsset(page, V1);
       const afterReversal = await currentAsset(page);
-      // Outlive the held read, then look again: this window exists to catch a
-      // late completion, so it has to still be recording when the read lands.
-      const lateWindow = [];
-      for (let tick = 0; tick < 6; tick += 1) {
-        await page.waitForTimeout(500);
-        lateWindow.push({ at: (tick + 1) * 500, ...await currentAsset(page) });
-      }
+      // The route response, then the neighbour's ready page, prove that the
+      // delayed signed read finished and React consumed it. Keep the sampler
+      // running through both and for eight subsequent browser frames.
+      const readResponse = await v2ReadResponse;
+      const readProcessed = readResponse.status === 200 && readResponse.body?.url === VERTICAL_CLIP
+        ? await page.waitForFunction(({ selector, assetId }) => {
+          const page = [...document.querySelectorAll(`${selector} [data-media-page-id]`)]
+            .find((node) => node.getAttribute("data-media-page-id") === assetId);
+          return page?.getAttribute("data-media-page-ready") === "true"
+            ? { id: assetId, layer: page.getAttribute("data-media-layer") } : null;
+        }, { selector: STAGE, assetId: V2 }, { polling: "raf", timeout: 5_000 })
+          .then((handle) => handle.jsonValue(), () => null) : null;
+      const postReadStart = await page.evaluate(() => window.__qaStage?.ticks ?? null);
+      const postReadObserved = await page.waitForFunction((start) =>
+        start !== null && window.__qaStage?.running
+          && window.__qaStage.ticks - start >= 8,
+      postReadStart, { polling: "raf", timeout: 5_000 }).then(() => true, () => false);
       const frames = await stopSamplerFrames(page);
       const afterLateRead = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
         document.querySelector(selector).querySelectorAll("video").length, STAGE);
-      // A neighbour that peeks during the drag is the stack's own grammar, so
-      // the whole sequence is allowed here; what this window forbids is the
-      // committed owner moving, or the stage going bare, once the late read
-      // finally lands.
-      const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
+      const continuity = gradeContinuity(frames, { allowedAssets: [V1] });
+      const wrongOwnerFrames = frames.filter((frame) => frame.currentId !== V1);
       record({
         name: "story-late-read-never-takes-the-stage",
         claim: "an arrow-key step really does leave a request for a cold neighbour pending while the readable previous page still owns the stage, the opposite key cancels that request and keeps the visible page, and the read URL that resolves afterwards neither moves the committed owner at any point across the window nor leaves the aperture uncovered",
         abandonedIntent: V2, expectedOwner: V1,
-        readDelays: { [V2]: 2_500 }, stageRole, pending, lateWindow,
+        readDelays: { [V2]: 2_500 }, stageRole, pending,
+        readResponse, readProcessed, postReadObserved, responseBeforeReversal,
+        postReadTicks: frames.ticks - postReadStart,
+        wrongOwnerFrames: wrongOwnerFrames.slice(0, 3),
         afterReversal, afterLateRead, transports, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: continuity.failed
           || !stageRole.focused || !pending
-          || lateWindow.some((sample) => sample.id !== V1)
+          || responseBeforeReversal
+          || readResponse.status !== 200 || readResponse.body?.url !== VERTICAL_CLIP
+          || !readProcessed || !postReadObserved || frames.unmeasurable > 0
+          || wrongOwnerFrames.length > 0
           || afterReversal.id !== V1 || afterLateRead.id !== V1
           || afterLateRead.presentation !== "settled" || transports !== 1
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
@@ -2898,17 +2927,27 @@ try {
       // page the gesture started from and calls a late commit a lost one.
       const committed = await waitForSettledAsset(page, latestIntent, STAGE)
         .then(() => null, async () => await stageDiagnostic(page, STAGE));
-      const frames = await stopSamplerFrames(page);
+      // Keep sampling after commit. A one-time owner read misses a transient
+      // flash back to the abandoned page or an uncovered video aperture.
+      const postCommitStart = await page.evaluate(() => ({
+        at: Math.ceil(performance.now()), ticks: window.__qaStage?.ticks ?? null,
+        unmeasurable: window.__qaStage?.unmeasurable ?? null,
+      }));
       const settled = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
         document.querySelector(selector).querySelectorAll("video").length, STAGE);
-      const stable = await page.evaluate(async (selector) => {
-        const read = () => document.querySelector(selector)
-          .querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id");
-        const first = read();
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        return { first, second: read() };
-      }, STAGE);
+      // Thirty delivered browser frames preserve the old post-commit visual
+      // observation window without treating elapsed wall time as evidence.
+      const postCommitObserved = await page.waitForFunction((start) =>
+        start !== null && window.__qaStage?.running
+          && window.__qaStage.ticks - start >= 30,
+      postCommitStart.ticks, { polling: "raf", timeout: 10_000 }).then(() => true, () => false);
+      const stable = { first: settled.id, second: (await currentAsset(page)).id };
+      const frames = await stopSamplerFrames(page);
+      const postCommitFrames = frames.filter((frame) => frame.at > postCommitStart.at);
+      const postCommitContinuity = gradeContinuity(postCommitFrames, { allowedAssets: [latestIntent] });
+      const postCommitWrongOwner = postCommitFrames.filter((frame) => frame.currentId !== latestIntent);
+      const postCommitUnmeasurable = frames.unmeasurable - postCommitStart.unmeasurable;
       // Read which decoded neighbour the stage ordered above the current
       // page at each end of the same pointer stream. This is page ordering;
       // the frame sampler below separately checks what the viewport shows.
@@ -2920,12 +2959,17 @@ try {
         claim: "a reversal fired before the first navigation settles retargets within the same gesture and commits the reversal's own target, never the abandoned one, and leaves exactly one settled owner, one live transport and no late write-back",
         startedFrom, abandonedIntent, latestIntent, settled, transports, stable,
         gesture, orderedNeighbors, trace, committed, continuity,
+        postCommitObserved, postCommitTicks: frames.ticks - postCommitStart.ticks,
+        postCommitContinuity, postCommitWrongOwner: postCommitWrongOwner.slice(0, 3),
+        postCommitUnmeasurable,
         sampledFrames: frames.length,
         concurrentLiveVideos: frames.filter((frame) => frame.videoCount > 1).slice(0, 2),
         failed: settled.presentation !== "settled" || !settled.ready
           || settled.id !== latestIntent
           || orderedNeighbors[0] !== abandonedIntent || orderedNeighbors[1] !== latestIntent
           || transports !== 1 || stable.first !== stable.second
+          || !postCommitObserved || postCommitContinuity.failed || postCommitWrongOwner.length > 0
+          || postCommitStart.unmeasurable === null || postCommitUnmeasurable !== 0
           || continuity.failed || frames.some((frame) => frame.videoCount > 1)
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
@@ -2967,7 +3011,7 @@ try {
         const pages = document.querySelector(".journey-story__media [data-story-media-pages]");
         return pages?.getAttribute("data-media-presentation") === "settled";
       }, undefined, { polling: "raf", timeout: 10_000 }).then(() => true, () => false);
-      await page.waitForTimeout(700);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
       const frames = await stopSamplerFrames(page);
       const afterGrab = await stackRestState(page, STAGE);
       const settled = await currentAsset(page);
