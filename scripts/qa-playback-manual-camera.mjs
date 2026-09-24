@@ -168,8 +168,55 @@ async function stopBlankPoint(page) {
     }
     return null;
   });
-  assert.ok(point, "Stop caption's visible blank area must pass real pointer input to Detail Map");
+  if (!point) {
+    const diagnostic = await page.evaluate(() => {
+      const root = document.querySelector(".journey-playback");
+      const stop = root?.querySelector(".journey-playback__stop");
+      const heading = stop?.querySelector("h3");
+      const canvas = document.querySelector(".maplibregl-canvas");
+      const describe = (element) => element instanceof Element
+        ? `${element.tagName.toLowerCase()}.${typeof element.className === "string" ? element.className : ""}` : null;
+      const rect = stop?.getBoundingClientRect();
+      const headingRect = heading?.getBoundingClientRect();
+      const style = stop instanceof HTMLElement ? getComputedStyle(stop) : null;
+      const samples = rect ? [0.3, 0.6, 0.8].flatMap((fy) => [0.16, 0.84].map((fx) => {
+        const x = Math.round(rect.left + rect.width * fx);
+        const y = Math.round(rect.top + rect.height * fy);
+        return { x, y, hit: describe(document.elementFromPoint(x, y)) };
+      })) : [];
+      return {
+        phase: root?.dataset.playbackPhase, step: root?.dataset.playbackStep,
+        arrivalGate: root?.dataset.arrivalGate, mapInteractive: root?.dataset.mapInteractive,
+        chapterDensity: root?.dataset.playbackChapterDensity,
+        mapOwner: document.querySelector(".detailed-earth-map")?.getAttribute("data-dive-owner"),
+        canvas: describe(canvas), stop: describe(stop),
+        stopRect: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+        stopStyle: style ? { display: style.display, visibility: style.visibility,
+          opacity: style.opacity, pointerEvents: style.pointerEvents } : null,
+        headingRect: headingRect ? { x: headingRect.x, y: headingRect.y,
+          width: headingRect.width, height: headingRect.height } : null,
+        headingHit: headingRect ? describe(document.elementFromPoint(
+          headingRect.left + headingRect.width / 2, headingRect.top + headingRect.height / 2)) : null,
+        samples,
+      };
+    });
+    assert.fail(`Stop caption's visible blank area must pass real pointer input to Detail Map: ${JSON.stringify(diagnostic)}`);
+  }
   return point;
+}
+
+async function waitForVisibleStop(page, step) {
+  await page.waitForFunction((expectedStep) => {
+    const root = document.querySelector(".journey-playback");
+    if (root?.dataset.playbackPhase !== "stop" || root.dataset.playbackStep !== String(expectedStep)
+      || root.dataset.arrivalGate === "pending") return false;
+    const heading = root.querySelector(".journey-playback__stop h3");
+    if (!(heading instanceof HTMLElement)) return false;
+    const rect = heading.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return hit === heading || heading.contains(hit);
+  }, step, { timeout: 8_000 });
 }
 
 async function dragSurface(page, detail) {
@@ -380,6 +427,7 @@ try {
       await page.mouse.move(16, 16);
       await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
       await page.locator(".journey-playback.is-paused").waitFor();
+      await waitForVisibleStop(page, 3);
       const populatedStop = await stopBlankPoint(page);
       assert.equal(populatedStop.chapterDensity, "single", "Seoul image chapter must use populated stop layout");
       assert.ok(populatedStop.stageHeight > 0
@@ -462,14 +510,11 @@ try {
     try {
       await enterDetail(page);
       await startPlayback(page);
-      await page.waitForFunction(() => {
-        const root = document.querySelector(".journey-playback");
-        return root?.dataset.playbackPhase === "stop" && root.dataset.playbackStep === "3"
-          && root.dataset.arrivalGate !== "pending"
-          && Boolean(root.querySelector(".journey-playback__stop h3"));
-      }, null, { timeout: 40_000 });
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "stop"
+        && document.querySelector(".journey-playback")?.dataset.playbackStep === "3", null, { timeout: 40_000 });
       await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
       await page.locator(".journey-playback.is-paused").waitFor();
+      await waitForVisibleStop(page, 3);
       const wheelPoint = await stopBlankPoint(page);
       await page.mouse.move(wheelPoint.x, wheelPoint.y);
       await page.mouse.wheel(0, -120);
