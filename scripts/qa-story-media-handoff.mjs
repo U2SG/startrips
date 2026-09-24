@@ -559,8 +559,23 @@ function installStageSampler() {
     }
     try {
       const pixels = pixels64(video);
-      state.handoffSource = { trigger, wallAt: Date.now(), asset: video.getAttribute("data-shared-media-id"),
-        time: video.currentTime, pixels, nonBlack: signalOf(pixels) };
+      const source = { trigger, wallAt: Date.now(), asset: video.getAttribute("data-shared-media-id"),
+        time: video.currentTime, paused: video.paused, pixels, nonBlack: signalOf(pixels) };
+      state.handoffSource = source;
+      // The capture listener runs before React takes the snapshot and pauses a
+      // playing video. A decoded frame can advance during that same click. Read
+      // the now-paused source after the handler, while its frame still exists.
+      queueMicrotask(() => {
+        if (state.handoffSource !== source || source.paused || !video.paused
+          || video.getAttribute("data-shared-media-id") !== source.asset
+          || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+          || Math.abs(video.currentTime - source.time) > 0.12) return;
+        try {
+          const settledPixels = pixels64(video);
+          source.settled = { time: video.currentTime, pixels: settledPixels,
+            nonBlack: signalOf(settledPixels) };
+        } catch { /* The click frame remains the only admissible reference. */ }
+      });
     } catch (error) {
       state.handoffSource = { trigger, wallAt: Date.now(), error: String(error) };
     }
@@ -588,37 +603,43 @@ function installStageSampler() {
         source: source ? { trigger: source.trigger, asset: source.asset, error: source.error } : null,
         nonBlack };
     }
-    let total = 0;
-    let retained = 0;
-    let signalDelta = 0;
-    for (let index = 0; index < pixels.length; index += 4) {
-      total += Math.abs(pixels[index] - source.pixels[index]);
-      total += Math.abs(pixels[index + 1] - source.pixels[index + 1]);
-      total += Math.abs(pixels[index + 2] - source.pixels[index + 2]);
-      if (Math.max(source.pixels[index], source.pixels[index + 1], source.pixels[index + 2]) <= 24) continue;
-      const x = (index / 4) % 64, y = Math.floor(index / (64 * 4));
-      let closest = 255;
-      for (let dy = -2; dy <= 2; dy += 1) for (let dx = -2; dx <= 2; dx += 1) {
-        const nx = x + dx, ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= 64 || ny >= 64) continue;
-        const at = (ny * 64 + nx) * 4;
-        if (Math.max(pixels[at], pixels[at + 1], pixels[at + 2]) <= 24) continue;
-        const delta = (Math.abs(pixels[at] - source.pixels[index])
-          + Math.abs(pixels[at + 1] - source.pixels[index + 1])
-          + Math.abs(pixels[at + 2] - source.pixels[index + 2])) / 3;
-        closest = Math.min(closest, delta);
+    const compare = (candidate, label) => {
+      let total = 0, retained = 0, signalDelta = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        total += Math.abs(pixels[index] - candidate.pixels[index]);
+        total += Math.abs(pixels[index + 1] - candidate.pixels[index + 1]);
+        total += Math.abs(pixels[index + 2] - candidate.pixels[index + 2]);
+        if (Math.max(candidate.pixels[index], candidate.pixels[index + 1], candidate.pixels[index + 2]) <= 24) continue;
+        const x = (index / 4) % 64, y = Math.floor(index / (64 * 4));
+        let closest = 255;
+        for (let dy = -2; dy <= 2; dy += 1) for (let dx = -2; dx <= 2; dx += 1) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= 64 || ny >= 64) continue;
+          const at = (ny * 64 + nx) * 4;
+          if (Math.max(pixels[at], pixels[at + 1], pixels[at + 2]) <= 24) continue;
+          const delta = (Math.abs(pixels[at] - candidate.pixels[index])
+            + Math.abs(pixels[at + 1] - candidate.pixels[index + 1])
+            + Math.abs(pixels[at + 2] - candidate.pixels[index + 2])) / 3;
+          closest = Math.min(closest, delta);
+        }
+        if (closest <= 45) retained += 1;
+        signalDelta += closest;
       }
-      if (closest <= 45) retained += 1;
-      signalDelta += closest;
-    }
-    const meanDelta = total / (64 * 64 * 3);
-    const retainedRatio = source.nonBlack ? retained / source.nonBlack : 0;
-    const signalMeanDelta = source.nonBlack ? signalDelta / source.nonBlack : 255;
-    return { trigger: source.trigger, sourceTime: source.time, nonBlack,
-      sourceNonBlack: source.nonBlack, meanDelta: Number(meanDelta.toFixed(2)),
-      retainedRatio: Number(retainedRatio.toFixed(2)), signalMeanDelta: Number(signalMeanDelta.toFixed(1)),
-      failed: source.nonBlack < 16 || nonBlack < source.nonBlack * 0.6
-        || retainedRatio < 0.7 || signalMeanDelta > 35 || meanDelta > 8 };
+      const meanDelta = total / (64 * 64 * 3);
+      const retainedRatio = candidate.nonBlack ? retained / candidate.nonBlack : 0;
+      const signalMeanDelta = candidate.nonBlack ? signalDelta / candidate.nonBlack : 255;
+      return { frame: label, frameTime: candidate.time, sourceNonBlack: candidate.nonBlack,
+        meanDelta: Number(meanDelta.toFixed(2)), retainedRatio: Number(retainedRatio.toFixed(2)),
+        signalMeanDelta: Number(signalMeanDelta.toFixed(1)),
+        failed: candidate.nonBlack < 16 || nonBlack < candidate.nonBlack * 0.6
+          || retainedRatio < 0.7 || signalMeanDelta > 35 || meanDelta > 8 };
+    };
+    const candidates = [compare(source, "click")];
+    if (!source.paused && source.settled) candidates.push(compare(source.settled, "snapshot"));
+    const matching = candidates.find((entry) => !entry.failed)
+      ?? candidates.sort((left, right) => left.signalMeanDelta - right.signalMeanDelta)[0];
+    return { trigger: source.trigger, sourceTime: source.time, pausedAtClick: source.paused,
+      nonBlack, candidates, ...matching };
   };
   function sampleRoot(selector, morphs, peers) {
     const root = document.querySelector(selector);
@@ -1788,6 +1809,16 @@ async function clickHandoffButton(page, selector) {
   return { selector, input: input(page).kind, hit };
 }
 
+/** Reveal the desktop overlay with real pointer activity before Close. */
+async function clickFullscreenClose(page) {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("fullscreen viewport unavailable");
+  await page.mouse.move(viewport.width - 40, 40);
+  const selector = `${FULLSCREEN} .journey-story-fullscreen__close`;
+  await page.locator(selector).waitFor({ state: "visible", timeout: 2_000 });
+  return await clickHandoffButton(page, selector);
+}
+
 /** Prove that the paused frame in the screenshot is the decoded video frame. */
 async function pausedVideoScreenPixels(page, rootSelector) {
   const screenshot = (await page.screenshot()).toString("base64");
@@ -1800,13 +1831,12 @@ async function pausedVideoScreenPixels(page, rootSelector) {
     image.src = `data:image/png;base64,${png}`;
     await image.decode();
     const screen = document.createElement("canvas");
-    screen.width = image.naturalWidth; screen.height = image.naturalHeight;
+    screen.width = 64; screen.height = 64;
     const screenContext = screen.getContext("2d", { willReadFrequently: true });
     const frame = document.createElement("canvas");
     frame.width = 64; frame.height = 64;
     const frameContext = frame.getContext("2d", { willReadFrequently: true });
     if (!screenContext || !frameContext) return { failed: true, reason: "canvas context unavailable" };
-    screenContext.drawImage(image, 0, 0);
     frameContext.drawImage(video, 0, 0, 64, 64);
     const pixels = frameContext.getImageData(0, 0, 64, 64).data;
     const asset = video.getAttribute("data-shared-media-id");
@@ -1830,23 +1860,52 @@ async function pausedVideoScreenPixels(page, rootSelector) {
         if (!points.some((selected) => selected.at === point.at)) points.push(point);
       }
       reference = { asset, pixels: new Uint8ClampedArray(pixels), signal: signal.map((point) => point.at),
-        brightPixels: signal.length, spreadCells: spread.filter(Boolean).length, points };
+        brightPixels: signal.length, cells: spread.flatMap((point, cell) => point ? [cell] : []),
+        spreadCells: spread.filter(Boolean).length, points };
       window.__qaPausedFrameReference = reference;
     }
     const box = video.getBoundingClientRect();
     const scale = Math.min(box.width / video.videoWidth, box.height / video.videoHeight);
     const width = video.videoWidth * scale, height = video.videoHeight * scale;
     const left = box.left + (box.width - width) / 2, top = box.top + (box.height - height) / 2;
+    const screenshotScaleX = image.naturalWidth / innerWidth;
+    const screenshotScaleY = image.naturalHeight / innerHeight;
+    // Compare the same 64x64 spatial footprint. Reading one screenshot pixel
+    // against a downsampled decoded frame mistakes compositor scaling for a
+    // different picture, especially on sparse star fields.
+    screenContext.drawImage(image, left * screenshotScaleX, top * screenshotScaleY,
+      width * screenshotScaleX, height * screenshotScaleY, 0, 0, 64, 64);
+    const visiblePixels = screenContext.getImageData(0, 0, 64, 64).data;
+    const visibleCells = new Set();
+    for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
+      const at = (y * 64 + x) * 4;
+      if (Math.max(visiblePixels[at], visiblePixels[at + 1], visiblePixels[at + 2]) > 24) {
+        visibleCells.add(Math.floor(y / 16) * 4 + Math.floor(x / 16));
+      }
+    }
+    const retainedCells = reference.cells.filter((cell) => visibleCells.has(cell)).length;
     const samples = reference.points.map(({ x: px, y: py, at }) => {
       const fx = (px + 0.5) / 64, fy = (py + 0.5) / 64;
       const x = left + width * fx, y = top + height * fy;
       const hit = document.elementFromPoint(x, y);
-      const sx = Math.round(x * image.naturalWidth / innerWidth);
-      const sy = Math.round(y * image.naturalHeight / innerHeight);
+      const sx = Math.round(x * screenshotScaleX);
+      const sy = Math.round(y * screenshotScaleY);
       const offscreen = sx < 0 || sy < 0 || sx >= image.naturalWidth || sy >= image.naturalHeight;
-      const visible = offscreen ? [0, 0, 0] : [...screenContext.getImageData(sx, sy, 1, 1).data].slice(0, 3);
       const decoded = [pixels[at], pixels[at + 1], pixels[at + 2]];
-      const delta = visible.reduce((sum, channel, index) => sum + Math.abs(channel - decoded[index]), 0) / 3;
+      let visible = [0, 0, 0], delta = 255;
+      // The browser can filter a bright source texel into a neighbouring
+      // output texel. Permit one 64px cell of registration error, but require
+      // a real bright pixel with matching colour in that local footprint.
+      for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) {
+        const nx = px + dx, ny = py + dy;
+        if (nx < 0 || ny < 0 || nx >= 64 || ny >= 64) continue;
+        const near = (ny * 64 + nx) * 4;
+        const candidate = [visiblePixels[near], visiblePixels[near + 1], visiblePixels[near + 2]];
+        if (Math.max(...candidate) <= 24) continue;
+        const candidateDelta = candidate.reduce((sum, channel, index) =>
+          sum + Math.abs(channel - decoded[index]), 0) / 3;
+        if (candidateDelta < delta) { delta = candidateDelta; visible = candidate; }
+      }
       return { fx, fy, hitIsVideo: hit === video, offscreen, visible, decoded,
         delta: Number(delta.toFixed(1)) };
     });
@@ -1864,10 +1923,11 @@ async function pausedVideoScreenPixels(page, rootSelector) {
     const visibleBright = samples.filter((sample) => Math.max(...sample.visible) > 24).length;
     return { meanDelta: Number(meanDelta.toFixed(1)), samples,
       brightPixels: reference.brightPixels, spreadCells: reference.spreadCells,
-      visibleBright, retainedRatio: Number(retainedRatio.toFixed(2)),
+      retainedCells, visibleBright, retainedRatio: Number(retainedRatio.toFixed(2)),
       signalMeanDelta: Number(signalMeanDelta.toFixed(1)),
       failed: asset !== reference.asset || reference.brightPixels < 16 || reference.spreadCells < 3
         || samples.length < 8 || visibleBright < Math.ceil(samples.length * 0.6)
+        || retainedCells < Math.ceil(reference.spreadCells * 0.6)
         || samples.some((sample) => !sample.hitIsVideo || sample.offscreen) || meanDelta > 18
         || retainedRatio < 0.75 || signalMeanDelta > 20 };
   }, { selector: rootSelector, png: screenshot });
@@ -1935,13 +1995,12 @@ async function activeCloneScreenPixels(page, assetId, { stationary = false } = {
     image.src = `data:image/png;base64,${screenshot}`;
     await image.decode();
     const screen = document.createElement("canvas");
-    screen.width = image.naturalWidth; screen.height = image.naturalHeight;
+    screen.width = 64; screen.height = 64;
     const screenContext = screen.getContext("2d", { willReadFrequently: true });
     const frame = document.createElement("canvas");
     frame.width = 64; frame.height = 64;
     const frameContext = frame.getContext("2d", { willReadFrequently: true });
     if (!screenContext || !frameContext) return { failed: true, reason: "canvas context unavailable" };
-    screenContext.drawImage(image, 0, 0);
     frameContext.drawImage(clone, 0, 0, 64, 64);
     const pixels = frameContext.getImageData(0, 0, 64, 64).data;
     const bright = [];
@@ -1969,31 +2028,70 @@ async function activeCloneScreenPixels(page, assetId, { stationary = false } = {
       return { failed: true, reason: "clone has too little visible image signal or no geometry samples",
         brightPixels: bright.length, spreadCells, boxes: probe.boxes.length };
     }
+    const screenshotScaleX = image.naturalWidth / innerWidth;
+    const screenshotScaleY = image.naturalHeight / innerHeight;
     const candidate = (box) => {
+      screenContext.clearRect(0, 0, 64, 64);
+      screenContext.drawImage(image, box.x * screenshotScaleX, box.y * screenshotScaleY,
+        box.width * screenshotScaleX, box.height * screenshotScaleY, 0, 0, 64, 64);
+      const visiblePixels = screenContext.getImageData(0, 0, 64, 64).data;
+      const visibleCells = new Set();
+      for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
+        const at = (y * 64 + x) * 4;
+        if (Math.max(visiblePixels[at], visiblePixels[at + 1], visiblePixels[at + 2]) > 24) {
+          visibleCells.add(Math.floor(y / 16) * 4 + Math.floor(x / 16));
+        }
+      }
       const samples = points.map(({ x, y, strength }) => {
-        const sx = Math.round((box.x + box.width * (x + 0.5) / 64) * image.naturalWidth / innerWidth);
-        const sy = Math.round((box.y + box.height * (y + 0.5) / 64) * image.naturalHeight / innerHeight);
+        const sx = Math.round((box.x + box.width * (x + 0.5) / 64) * screenshotScaleX);
+        const sy = Math.round((box.y + box.height * (y + 0.5) / 64) * screenshotScaleY);
         if (sx < 0 || sy < 0 || sx >= image.naturalWidth || sy >= image.naturalHeight) {
           return { x, y, strength, offscreen: true, delta: 255 };
         }
-        const visible = screenContext.getImageData(sx, sy, 1, 1).data;
         const offset = (y * 64 + x) * 4;
         const expectedRgb = [pixels[offset], pixels[offset + 1], pixels[offset + 2]];
-        const delta = expectedRgb.reduce((sum, channel, index) => sum + Math.abs(channel - visible[index]), 0) / 3;
-        return { x, y, strength, expectedRgb, visibleRgb: [...visible].slice(0, 3),
+        let delta = 255, visibleRgb = [0, 0, 0];
+        // The moving clone crosses fractional device pixels. Resample its
+        // screenshot footprint before matching local bright texels instead
+        // of comparing a raw screen pixel with a downsampled canvas texel.
+        for (let dy = -2; dy <= 2; dy += 1) for (let dx = -2; dx <= 2; dx += 1) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= 64 || ny >= 64) continue;
+          const near = (ny * 64 + nx) * 4;
+          const rgb = [visiblePixels[near], visiblePixels[near + 1], visiblePixels[near + 2]];
+          if (Math.max(...rgb) <= 24) continue;
+          const nearDelta = expectedRgb.reduce((sum, channel, index) =>
+            sum + Math.abs(channel - rgb[index]), 0) / 3;
+          if (nearDelta < delta) { delta = nearDelta; visibleRgb = rgb; }
+        }
+        return { x, y, strength, expectedRgb, visibleRgb,
           delta: Number(delta.toFixed(1)) };
       });
-      return { box, samples, meanDelta: samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length };
+      const retainedCells = spread.reduce((count, entry, cell) =>
+        count + Number(Boolean(entry) && visibleCells.has(cell)), 0);
+      const visibleBright = samples.filter((sample) =>
+        sample.visibleRgb && Math.max(...sample.visibleRgb) > 24).length;
+      const meanDelta = samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length;
+      return { box, samples, retainedCells, visibleBright, meanDelta,
+        failed: samples.some((sample) => sample.offscreen)
+          || retainedCells < Math.ceil(spreadCells * 0.6)
+          || visibleBright < Math.ceil(samples.length * 0.6) || meanDelta > 22 };
     };
-    const matching = probe.boxes.map(candidate).sort((left, right) => left.meanDelta - right.meanDelta)[0];
-    const visibleBright = matching.samples.filter((sample) =>
-      sample.visibleRgb && Math.max(...sample.visibleRgb) > 24).length;
-    return { candidateBoxes: probe.boxes.length, brightPixels: bright.length,
-      spreadCells, visibleBright,
+    // A screenshot can land between rAF samples during a moving morph. Each
+    // midpoint remains on the observed path, rather than fitting arbitrary
+    // image locations to the source frame.
+    const candidateBoxes = probe.boxes.flatMap((box, index) => {
+      const next = probe.boxes[index + 1];
+      return next ? [box, { x: (box.x + next.x) / 2, y: (box.y + next.y) / 2,
+        width: (box.width + next.width) / 2, height: (box.height + next.height) / 2 }] : [box];
+    });
+    const scored = candidateBoxes.map(candidate).sort((left, right) => left.meanDelta - right.meanDelta);
+    const matching = scored.find((entry) => !entry.failed) ?? scored[0];
+    return { candidateBoxes: candidateBoxes.length, brightPixels: bright.length,
+      spreadCells, retainedCells: matching.retainedCells, visibleBright: matching.visibleBright,
       meanDelta: Number(matching.meanDelta.toFixed(1)), bestBox: matching.box,
       samples: matching.samples,
-      failed: matching.samples.some((sample) => sample.offscreen)
-        || visibleBright < Math.ceil(matching.samples.length * 0.6) || matching.meanDelta > 22 };
+      failed: matching.failed };
   }, { expected: assetId, screenshot: png });
   return { ...screenPixels, capturedAt };
 }
@@ -2850,7 +2948,7 @@ try {
       progress.fullscreenPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
 
       await startSampler(page, [STAGE, FULLSCREEN]);
-      await page.locator(`${FULLSCREEN} .journey-story-fullscreen__close`).click();
+      progress.close = await clickFullscreenClose(page);
       progress.exitScreen = await activeCloneScreenPixels(page, V1);
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       await waitForVideoHandoffState(page, STAGE, V1, true);
@@ -2930,7 +3028,7 @@ try {
       progress.entryClock = gradeVideoClock(progress.before, progress.fullscreen, true);
       progress.fullscreenPoint = await presentedVideoPoint(page, FULLSCREEN);
       await startSampler(page, [STAGE, FULLSCREEN]);
-      await page.locator(`${FULLSCREEN} .journey-story-fullscreen__close`).click();
+      progress.close = await clickFullscreenClose(page);
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       progress.after = await waitForVideoHandoffState(page, STAGE, V1, true);
       progress.exit = gradeVideoFullscreenFrames(await stopSamplerFrames(page), V1, { requireClone: false });

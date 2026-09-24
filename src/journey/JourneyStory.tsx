@@ -657,10 +657,12 @@ export function JourneyStory({
   const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
   const fullscreenMobileIdleTimerRef = useRef(0);
   const storyMediaGestureConsumedRef = useRef(false);
-  const videoStepTouchRef = useRef<{
-    pointerId: number; direction: -1 | 1; x: number; y: number; moved: boolean;
+  const mediaButtonTouchRef = useRef<{
+    pointerId: number; key: "previous" | "next" | "play" | "fullscreen"; x: number; y: number; moved: boolean;
   } | null>(null);
-  const videoStepTouchClickRef = useRef<{ at: number; direction: -1 | 1 } | null>(null);
+  const mediaButtonTouchClickRef = useRef<{
+    at: number; key: "previous" | "next" | "play" | "fullscreen";
+  } | null>(null);
   const inlineStageRef = useRef<StoryMediaPagesHandle>(null);
   const fullscreenStageRef = useRef<StoryMediaPagesHandle>(null);
   const [mobileManageMode, setMobileManageMode] = useState(false);
@@ -2923,51 +2925,55 @@ export function JourneyStory({
     if (index !== null) navigateToMedia(index, direction);
   }
 
-  function videoStepButtonInput(direction: -1 | 1) {
-    const navigate = () => navigateMediaStep(direction, selectedRoutePointId !== null);
+  function mediaButtonInput(key: "previous" | "next" | "play" | "fullscreen", activate: () => void) {
     return {
       onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
         if (event.pointerType !== "touch" || !event.isPrimary) {
-          videoStepTouchRef.current = null;
-          videoStepTouchClickRef.current = null;
+          mediaButtonTouchRef.current = null;
+          mediaButtonTouchClickRef.current = null;
           return;
         }
-        videoStepTouchRef.current = {
-          pointerId: event.pointerId, direction, x: event.clientX, y: event.clientY, moved: false,
+        mediaButtonTouchRef.current = {
+          pointerId: event.pointerId, key, x: event.clientX, y: event.clientY, moved: false,
         };
       },
       onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => {
-        const touch = videoStepTouchRef.current;
+        const touch = mediaButtonTouchRef.current;
         if (!touch || touch.pointerId !== event.pointerId) return;
         if (Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 12) touch.moved = true;
       },
       onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => {
-        if (videoStepTouchRef.current?.pointerId === event.pointerId) videoStepTouchRef.current = null;
+        if (mediaButtonTouchRef.current?.pointerId === event.pointerId) mediaButtonTouchRef.current = null;
       },
       onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
-        const touch = videoStepTouchRef.current;
-        if (!touch || touch.pointerId !== event.pointerId || touch.direction !== direction) return;
-        videoStepTouchRef.current = null;
+        const touch = mediaButtonTouchRef.current;
+        if (!touch || touch.pointerId !== event.pointerId || touch.key !== key) return;
+        mediaButtonTouchRef.current = null;
         const bounds = event.currentTarget.getBoundingClientRect();
         const inside = event.clientX >= bounds.left && event.clientX <= bounds.right
           && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
         // A fast swipe followed by a touch button press can deliver pointerup
         // without a browser click. Complete that one touch here, and consume
         // its optional compatibility click below.
-        videoStepTouchClickRef.current = { at: performance.now(), direction };
-        if (!touch.moved && inside && !event.currentTarget.disabled) navigate();
+        mediaButtonTouchClickRef.current = { at: performance.now(), key };
+        if (!touch.moved && inside && !event.currentTarget.disabled) activate();
       },
       onClick: (event: MouseEvent<HTMLButtonElement>) => {
-        const touchClick = videoStepTouchClickRef.current;
-        if (event.detail > 0 && touchClick !== null && touchClick.direction === direction
+        const touchClick = mediaButtonTouchClickRef.current;
+        if (event.detail > 0 && touchClick !== null && touchClick.key === key
           && performance.now() - touchClick.at < 1_000) {
-          videoStepTouchClickRef.current = null;
+          mediaButtonTouchClickRef.current = null;
           event.preventDefault();
           return;
         }
-        navigate();
+        activate();
       },
     };
+  }
+
+  function videoStepButtonInput(direction: -1 | 1) {
+    return mediaButtonInput(direction === -1 ? "previous" : "next",
+      () => navigateMediaStep(direction, selectedRoutePointId !== null));
   }
 
   function navigateToMedia(index: number, direction?: -1 | 1) {
@@ -3742,7 +3748,7 @@ export function JourneyStory({
                     type="button"
                     className={`journey-story__mobile-media-fullscreen${mobileStoryPlayControlVisible ? "" : " is-compact"}`}
                     label="沉浸查看媒体"
-                    onClick={() => enterFullscreen(mobileStoryImmersiveKeepsPlaying)}
+                    {...mediaButtonInput("fullscreen", () => enterFullscreen(mobileStoryImmersiveKeepsPlaying))}
                   >
                     <IconMaximize size={19} stroke={1.5} aria-hidden="true" />
                   </IconActionButton>
@@ -3760,7 +3766,7 @@ export function JourneyStory({
                       storyMediaAvailability(autoplayVideoCandidateRead?.status),
                     ))
                     }
-                    onClick={togglePlaying}
+                    {...mediaButtonInput("play", togglePlaying)}
                   >
                     {playing
                       ? <IconPlayerPause size={19} stroke={1.5} aria-hidden="true" />
