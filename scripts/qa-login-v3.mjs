@@ -649,16 +649,37 @@ async function verifyResetPasswordMailLinkHappyPath() {
 
     const resetMailLink = await awaitMail(resetMailPromise, "password reset mail");
     const mailUrl = new URL(resetMailLink);
-    const resetToken = mailUrl.searchParams.get("token");
+    const resetEndpointPrefix = "/api/auth/reset-password/";
+    const encodedResetToken = mailUrl.pathname.startsWith(resetEndpointPrefix)
+      ? mailUrl.pathname.slice(resetEndpointPrefix.length)
+      : "";
+    const resetToken = encodedResetToken ? decodeURIComponent(encodedResetToken) : "";
+    const callbackValue = mailUrl.searchParams.get("callbackURL");
+    const callbackUrl = callbackValue ? new URL(callbackValue, origin) : null;
     const legalMailLink = mailUrl.origin === origin
-      && mailUrl.pathname === "/reset-password"
-      && Boolean(resetToken);
-    if (!legalMailLink || !resetToken) {
+      && mailUrl.pathname.startsWith(resetEndpointPrefix)
+      && Boolean(resetToken)
+      && callbackUrl?.origin === origin
+      && callbackUrl.pathname === "/reset-password";
+    const mailRedirect = legalMailLink && resetToken
+      ? await authRequest(resetMailLink)
+      : null;
+    const redirectValue = mailRedirect?.headers.get("location") ?? "";
+    const redirectUrl = redirectValue ? new URL(redirectValue, origin) : null;
+    const redirectToken = redirectUrl?.searchParams.get("token") ?? "";
+    const legalResetTarget = Boolean(mailRedirect)
+      && mailRedirect.status >= 300
+      && mailRedirect.status < 400
+      && redirectUrl?.origin === origin
+      && redirectUrl.pathname === "/reset-password"
+      && redirectToken === resetToken;
+    if (!legalMailLink || !resetToken || !legalResetTarget || !redirectUrl) {
       return {
         label: "reset-password-emitted-mail-happy-path",
         mail: {
           captured: Boolean(resetMailLink),
           legalTarget: legalMailLink,
+          legalRedirect: legalResetTarget,
           requestAccepted: requestResponse.status() === 200,
           requestPayloadValid,
         },
@@ -671,10 +692,10 @@ async function verifyResetPasswordMailLinkHappyPath() {
       };
     }
 
-    mailUrl.searchParams.set("qaState", "login-gateway");
-    mailUrl.searchParams.set("qaLite", "1");
+    redirectUrl.searchParams.set("qaState", "login-gateway");
+    redirectUrl.searchParams.set("qaLite", "1");
     resetGateway = await createGatewayPage({
-      initialPath: `${mailUrl.pathname}${mailUrl.search}`,
+      initialPath: `${redirectUrl.pathname}${redirectUrl.search}`,
       waitForAuthCard: false,
     });
     resetGateway.page.on("console", (message) => flowConsole.push(message.text()));
@@ -735,7 +756,8 @@ async function verifyResetPasswordMailLinkHappyPath() {
       mail: {
         captured: true,
         legalTarget: true,
-        path: mailUrl.pathname,
+        legalRedirect: true,
+        callbackPath: callbackUrl.pathname,
         tokenPresent: true,
         requestAccepted: requestResponse.status() === 200,
         requestPayloadValid,
