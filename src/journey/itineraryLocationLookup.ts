@@ -55,6 +55,30 @@ export function itineraryLocationSuggestion(
   return first;
 }
 
+/** A model-corrected, distinctive name may identify a rural POI whose map data
+ * records only county and state. Require one exact provider name in the stated
+ * state and country; generic or duplicate names still need a member's choice. */
+export function itineraryCorrectedLocationSuggestion(
+  entry: ItineraryEntryDraft,
+  correctedQuery: string,
+  results: readonly LocationSearchResult[],
+): LocationSearchResult | null {
+  const namedEntry = { ...entry, aliases: [...entry.aliases, correctedQuery] };
+  const strict = itineraryLocationSuggestion(namedEntry, results);
+  if (strict) return strict;
+  const state = nameKey(entry.searchArea?.split(",")[1] ?? "");
+  const correctedName = nameKey(correctedQuery);
+  if (!entry.countryCode || !state || correctedName.split(" ").length < 3
+    || entry.flags.includes("source-invalid") || entry.flags.includes("truncated")) return null;
+  const matches = results.filter((result) =>
+    result.countryCode === entry.countryCode
+    && contextNamesLocality(result.context, state)
+    && [result.label, result.labelEnglish, result.labelLocal]
+      .some((label) => label && nameKey(label) === correctedName)
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /** Show a source name beside provider names only after the strict match agrees. */
 export function itineraryLocationDisplayNames(
   entry: ItineraryEntryDraft,

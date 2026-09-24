@@ -11,6 +11,7 @@ import {
 } from "@tabler/icons-react";
 import { searchLocations } from "./journeyApi";
 import {
+  itineraryCorrectedLocationSuggestion,
   itineraryLocationDisplayNames,
   itineraryLocationSuggestion,
 } from "./itineraryLocationLookup";
@@ -221,14 +222,23 @@ export function ItineraryImportPanel({
       try {
         const query = searchableName(entry);
         const aliases = [entry.name, ...entry.aliases].filter((name) => name !== query);
-        const cacheKey = JSON.stringify([query, aliases, entry.searchArea, entry.countryCode]);
+        const englishAlias = entry.aliases.find((name) =>
+          name.length >= 2 && name.length <= 120 && /^[\x20-\x7e]+$/.test(name)
+        );
+        const cacheKey = JSON.stringify([query, aliases, englishAlias, entry.searchArea, entry.countryCode]);
         let results = lookupCache.get(cacheKey);
         if (!results) {
-          results = (await searchLocations(query, fetch, {
-            aliases,
-            searchArea: entry.searchArea,
-            countryCode: entry.countryCode,
-          })).results;
+          // Most translated names return a candidate in one provider request.
+          // The whole-plan review checks that candidate's place and context;
+          // only an empty answer needs the slower locality/alias sweep.
+          results = englishAlias ? (await searchLocations(englishAlias)).results : [];
+          if (results.length === 0) {
+            results = (await searchLocations(query, fetch, {
+              aliases,
+              searchArea: entry.searchArea,
+              countryCode: entry.countryCode,
+            })).results;
+          }
           lookupCache.set(cacheKey, results);
         }
         if (lookupGeneration.current !== generation) return;
@@ -305,10 +315,9 @@ export function ItineraryImportPanel({
             countryCode: entry.countryCode,
           });
           if (lookupGeneration.current !== generation) return;
-          const correction = itineraryLocationSuggestion({
-            ...entry,
-            aliases: [...entry.aliases, decision.correctedQuery],
-          }, results);
+          const correction = itineraryCorrectedLocationSuggestion(
+            entry, decision.correctedQuery, results,
+          );
           if (correction) reviewed.push({ entry, result: correction });
         } catch {
           // A correction without a provider-backed result stays unresolved.
@@ -850,6 +859,9 @@ export function ItineraryImportPanel({
                               <span>{entry.name}</span>
                             </label>
                           )}
+                          {entry.latitude !== null && entry.aliases.length > 0 ? (
+                            <small>地点别名：{entry.aliases[entry.aliases.length - 1]}</small>
+                          ) : null}
                           <small>
                             {isEndpointOnlyLeg(entry)
                               ? "航段记录，无需定位"

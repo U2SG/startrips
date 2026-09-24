@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildItineraryImportDraft, itineraryDraftEntries } from "./itineraryImport";
-import { itineraryLocationDisplayNames, itineraryLocationSuggestion } from "./itineraryLocationLookup";
+import {
+  itineraryCorrectedLocationSuggestion,
+  itineraryLocationDisplayNames,
+  itineraryLocationSuggestion,
+} from "./itineraryLocationLookup";
 import type { LocationSearchResult } from "./types";
 
 function entry(
@@ -103,5 +107,23 @@ describe("itinerary location lookup", () => {
       ...result("The Strip", "US", 36.3),
       context: "North Las Vegas, Clark, Nevada, United States",
     }])).toBeNull();
+  });
+
+  it("accepts one exact model-corrected rural POI without a city field", () => {
+    const rookery = entry("象海豹聚集区", ["Piedras Blancas Elephant Seal Rookery"], "US", "San Simeon, California");
+    const vista = {
+      ...result("Elephant Seal Vista Point", "US", 35.663502),
+      context: "San Luis Obispo, California, United States",
+    };
+    expect(itineraryCorrectedLocationSuggestion(rookery, "Elephant Seal Vista Point", [vista]))
+      .toEqual(vista);
+    expect(itineraryCorrectedLocationSuggestion(rookery, "Elephant Seal Vista Point", [
+      vista, { ...vista, id: "another-vista", latitude: 35.7 },
+    ])).toBeNull();
+    expect(itineraryCorrectedLocationSuggestion(rookery, "Elephant Seal Vista Point", [
+      { ...vista, context: "San Luis Obispo, Oregon, United States" },
+    ])).toBeNull();
+    expect(itineraryCorrectedLocationSuggestion(rookery, "Vista Point", [vista]))
+      .toBeNull();
   });
 });
