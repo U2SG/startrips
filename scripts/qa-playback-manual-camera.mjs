@@ -875,10 +875,12 @@ try {
   // A long-haul camera flight must own a crossed-point Stop before the chapter
   // consumes time. The native progress scrub is a second, independent intent.
   {
-    const london = { ...points[1], latitude: 51.5072, longitude: -0.1276, label: "伦敦" };
+    const london = { ...journey.routePoints[1], id: "qa-camera-london", sortOrder: 1,
+      latitude: 51.5072, longitude: -0.1276, label: "伦敦" };
     const longHaulJourney = {
       ...journey,
-      routePoints: journey.routePoints.map((point) => point.id === london.id ? { ...point, ...london } : point),
+      routePoints: [journey.routePoints[0], london,
+        { ...journey.routePoints[1], sortOrder: 2 }, { ...journey.routePoints[2], sortOrder: 3 }],
     };
     const { page, errors } = await open({ fixtureJourney: longHaulJourney });
     try {
@@ -891,16 +893,13 @@ try {
 
       await armArrivalGateTrace(page, 3);
       await page.locator('.journey-playback__controls button[aria-label="下一个章节"]').click();
-      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackStep === "2"
-        && document.querySelector(".journey-playback")?.dataset.playbackPhase === "travel");
-      await page.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
-      await page.locator('.journey-playback__controls button[aria-label="下一个章节"]').click();
       await page.waitForFunction(() => window.__qaPlaybackArrivalGateTrace?.pending.length > 0,
         null, { timeout: 8_000 });
       const pendingGate = await page.evaluate(() => window.__qaPlaybackArrivalGateTrace.pending[0]);
       assert.equal(pendingGate.step, "3", "explicit Next must reach London's Stop");
       assert.equal(pendingGate.following, "follow", "explicit Next must reclaim the camera");
       assert.equal(pendingGate.headingPresent, false, "Stop heading appeared before camera settlement");
+      await page.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
 
       await page.waitForFunction(() => window.__qaPlaybackArrivalGateTrace?.settled !== null,
         null, { timeout: 15_000 });
@@ -918,16 +917,17 @@ try {
         heldFrames.at(-1).center[1] - heldFrames[0].center[1]) > 1,
       `camera did not move during held Stop: ${JSON.stringify(gateTrace)}`);
       const centered = await waitForCenteredStop(page, 3, london);
-      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackStep === "4"
+      await page.locator('.journey-playback__controls button[aria-label="下一个章节"]').click();
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackStep === "6"
         && document.querySelector(".journey-playback")?.dataset.playbackPhase === "media",
       null, { timeout: 15_000 });
       const image = await visibleImage(page, imageId);
       await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
       await page.locator(".journey-playback.is-paused").waitFor();
 
-      await armArrivalGateTrace(page, 6);
+      await armArrivalGateTrace(page, 8);
       const scrubTarget = await page.locator('.journey-playback__progress input[type="range"]').evaluate((range) => {
-        const tick = document.querySelectorAll(".journey-playback__progress-chapters i")[2];
+        const tick = document.querySelectorAll(".journey-playback__progress-chapters i")[3];
         if (!(tick instanceof HTMLElement)) throw new Error("Osaka Stop scrub tick missing");
         const fraction = Number.parseFloat(tick.style.left) / 100 + 0.004;
         const rect = range.getBoundingClientRect();
@@ -939,12 +939,14 @@ try {
       await page.waitForFunction(() => window.__qaPlaybackArrivalGateTrace?.pending.length > 0,
         null, { timeout: 8_000 });
       const scrubPending = await page.evaluate(() => window.__qaPlaybackArrivalGateTrace.pending[0]);
-      assert.equal(scrubPending.step, "6", `native scrub missed Osaka Stop: ${JSON.stringify({ scrubTarget, scrubPending })}`);
+      assert.equal(scrubPending.step, "8", `native scrub missed Osaka Stop: ${JSON.stringify({ scrubTarget, scrubPending })}`);
       assert.equal(scrubPending.headingPresent, false, "scrubbed Stop appeared before camera settlement");
       await page.locator('.journey-playback__controls button[aria-label="上一个章节"]').click();
-      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackStep === "5"
-        && document.querySelector(".journey-playback")?.dataset.playbackPhase === "travel"
-        && document.querySelector(".journey-playback")?.dataset.arrivalGate === "none");
+      await page.waitForFunction((asset) => document.querySelector(".journey-playback")?.dataset.playbackStep === "6"
+        && document.querySelector(".journey-playback")?.dataset.playbackPhase === "media"
+        && document.querySelector(".journey-playback")?.dataset.arrivalGate === "none"
+        && document.querySelector(`[data-presented-asset="${asset}"]`)?.getAttribute("data-media-presentation") === "settled",
+      imageId, { timeout: 15_000 });
       await page.locator(".journey-playback__close").click();
       await page.locator(".journey-story").waitFor({ state: "visible" });
       await page.waitForFunction(({ routePointId, assetId }) => {
@@ -955,11 +957,11 @@ try {
           `.journey-story [data-media-page="current"][data-media-page-id="${assetId}"]`,
         );
         return selected?.getAttribute("aria-pressed") === "true" && Boolean(media);
-      }, { routePointId: london.id, assetId: imageId }, { timeout: 8_000 });
+      }, { routePointId: points[1].id, assetId: imageId }, { timeout: 8_000 });
       assert.deepEqual(errors, []);
       reports.push({ mode: "detail-long-haul-arrival-gate", pendingSamples: gateTrace.pending.length,
         heldProgress: [Math.min(...fractions), Math.max(...fractions)], centered, image,
-        scrubTarget, scrubPending, returnedRoutePointId: london.id });
+        scrubTarget, scrubPending, returnedRoutePointId: points[1].id });
     } finally { await page.close(); }
   }
 
