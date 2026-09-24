@@ -1850,8 +1850,7 @@
   z-index: 3;
   right: 16px;
   bottom: 16px;
-  display: grid;
-  grid-template-columns: 40px 40px auto 40px;
+  display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px;
@@ -6025,8 +6024,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     grid-column: 1 / -1;
   }
 
-  /* Mobile Story is gesture-first: horizontal swipes replace persistent
-     previous/next controls, while management lives behind one quiet entry. */
+  /* Mobile Story keeps image swipes; a presented video uses explicit
+     navigation so its native controls own every gesture on the transport. */
   .journey-story__media[data-mobile-layout="true"] {
     touch-action: pan-y;
   }
@@ -6036,6 +6035,39 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     z-index: 8;
     inset: 0;
     pointer-events: none;
+  }
+
+  .journey-story__mobile-video-nav {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    display: flex;
+    gap: 8px;
+    pointer-events: auto;
+  }
+
+  .journey-story__mobile-video-nav button {
+    width: var(--mobile-control-hit-size, 44px);
+    height: var(--mobile-control-hit-size, 44px);
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid rgba(118, 227, 211, 0.18);
+    border-radius: var(--mobile-control-radius, 999px);
+    background: rgba(2, 10, 11, 0.46);
+    color: rgba(224, 242, 235, 0.82);
+    backdrop-filter: blur(12px);
+    cursor: pointer;
+  }
+
+  .journey-story__mobile-video-nav button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .journey-story__mobile-video-nav button:is(:hover, :focus-visible):not(:disabled) {
+    border-color: rgba(118, 227, 211, 0.56);
+    color: #eef7f3;
   }
 
   .journey-story__mobile-media-menu-trigger,

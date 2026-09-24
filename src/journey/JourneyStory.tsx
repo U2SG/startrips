@@ -67,11 +67,11 @@ import {
 import { IconActionButton } from "../components/IconActionButton";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import { StoryMediaRail } from "./StoryMediaRail";
-import { StoryMediaPages } from "./StoryMediaPages";
+import { StoryMediaPages, type StoryMediaPagesHandle } from "./StoryMediaPages";
 import { StoryMediaOrganizer } from "./StoryMediaOrganizer";
 import { StoryNotesEditor, type StoryNotesSaveState } from "./StoryNotesEditor";
 import { CoverRevealRequest } from "./CoverRevealRequest";
-import { MEDIA_STACK_DURATION, mediaStackClip, mediaStackOpacity, mediaStackNeighbors, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
+import { MEDIA_STACK_DURATION, mediaStackNeighbors } from "./mediaStackMotion";
 import "../styles/starlight-media.css";
 import "../styles/story-experience.css";
 import {
@@ -93,7 +93,6 @@ import {
   writeAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
-import { springElementTo, springTransformVelocity, type SpringElementHandle } from "../motion/springElement";
 import {
   applyScopeReorder,
   journeyCover,
@@ -115,7 +114,6 @@ import { createPlacementAnalysisAuthority, placementAnalysisScope, type Placemen
 import { isModalFocusCandidate, useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
-import { MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
 import "../styles/story-notes.css";
 
 const SOUNDTRACK_INPUT_ACCEPT = [
@@ -657,34 +655,12 @@ export function JourneyStory({
   const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
   const fullscreenMobileIdleTimerRef = useRef(0);
   const storyMediaGestureConsumedRef = useRef(false);
-  // Inline and fullscreen manipulate the same persistent-page contract.
-  // Pointer motion changes page transforms, never React state per frame.
-  const mediaDragRef = useRef<{
-    container: HTMLElement;
-    base: HTMLElement;
-    peek: HTMLElement | null;
-    startX: number;
-    startY: number;
-    pointerId: number;
-    dx: number;
-    velocityX: number;
-    lastX: number;
-    lastTime: number;
-    axis: "x" | "y" | null;
-    tapOpensFullscreen: boolean;
-    preserveNativeVideoCapture: boolean;
-    wrap: boolean;
-    neighborIndex: number;
-    neighborAsset: JourneyMediaAsset | null;
-    width: number;
-    originTransform: string;
-    settleTakeover: boolean;
+  const videoStepTouchRef = useRef<{
+    pointerId: number; direction: -1 | 1; x: number; y: number; moved: boolean;
   } | null>(null);
-  const mediaDragSettlingRef = useRef(false);
-  const mediaDragSettleCancelRef = useRef<(() => void) | null>(null);
-  const mediaDragSettleFinishRef = useRef<(() => void) | null>(null);
-  const mediaDragSprings = useRef<SpringElementHandle[]>([]);
-  const deferredFullscreenCancelRef = useRef<(() => void) | null>(null);
+  const videoStepTouchClickRef = useRef<{ at: number; direction: -1 | 1 } | null>(null);
+  const inlineStageRef = useRef<StoryMediaPagesHandle>(null);
+  const fullscreenStageRef = useRef<StoryMediaPagesHandle>(null);
   const [mobileManageMode, setMobileManageMode] = useState(false);
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
   const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -938,12 +914,9 @@ export function JourneyStory({
   }
 
   function presentFullscreen(nextFullscreen: boolean) {
-    // #459: the compact layout and video sources used to skip the handoff
-    // entirely. They now resolve through the same primitive; only the inline
-    // drag settle stays desktop-scoped, because on compact mobile the
-    // fullscreen swipe in handleFullscreenPointerUp owns the same drag refs
-    // and a close must not drop the navigation commit it just started.
-    if (!mobileLayout) cancelPendingMediaDragSettle();
+    // The departing stage releases pointer capture and its paint before the
+    // other surface becomes active. Story keeps the fullscreen intent.
+    cancelPendingMediaDragSettle();
     const inlineStage = () => dialogRef.current?.querySelector<HTMLElement>(".journey-story__media") ?? null;
     const sourceRoot = nextFullscreen ? inlineStage() : fullscreenRef.current;
     const source = sourceRoot?.querySelector<HTMLElement>("[data-shared-media-id]") ?? null;
@@ -2138,6 +2111,11 @@ export function JourneyStory({
   const shownAsset = shownAssetId
     ? scopedMediaIndex.byId.get(shownAssetId) ?? null
     : asset;
+  const videoNavigationVisible = Boolean(shownAsset?.mimeType.startsWith("video/") && scopedMedia.length > 1);
+  const canStepPrevious = !mutationPending && scopedMedia.length > 1
+    && (selectedRoutePointId !== null || requestedMediaIndex > 0);
+  const canStepNext = !mutationPending && scopedMedia.length > 1
+    && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1);
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
   const incoming = incomingAssetId && incomingAssetId !== shownAssetId
     ? scopedMediaIndex.byId.get(incomingAssetId) ?? null
@@ -2258,414 +2236,43 @@ export function JourneyStory({
     event.preventDefault();
   }
 
-  function mediaGestureCanStart(target: EventTarget | null, clientY: number) {
-    if (!(target instanceof Element)) return false;
-    const video = target.closest("video");
-    if (video instanceof HTMLVideoElement) {
-      // Keep the native scrubber/control strip untouched while still allowing
-      // the upper video surface to participate in gesture-first navigation.
-      const rect = video.getBoundingClientRect();
-      const nativeControlGuard = Math.min(72, rect.height * 0.25);
-      if (clientY >= rect.bottom - nativeControlGuard) return false;
-    }
-    return !target.closest("button, input, select, textarea, [role='button']:not(img)");
-  }
-
-  function resolveMediaDragNeighbor(dx: number, wrap: boolean) {
-    if (dx === 0) return null;
-    const direction: -1 | 1 = dx < 0 ? 1 : -1;
-    const anchorIndex = storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById);
-    const index = storyMediaNeighborIndex(anchorIndex, scopedMedia.length, direction, wrap && selectedRoutePointId !== null);
-    if (index === null) return null;
-    const asset = scopedMedia[index];
-    return asset ? { index, asset } : null;
-  }
-
-  function attachMediaDragPeek(container: HTMLElement, neighbor: JourneyMediaAsset | null) {
-    if (!neighbor) return null;
-    const read = mediaReads[neighbor.id];
-    if (read?.status !== "ready") return null;
-    const page = Array.from(container.querySelectorAll<HTMLElement>("[data-media-page-id]"))
-      .find((candidate) => candidate.dataset.mediaPageId === neighbor.id);
-    return page?.dataset.mediaPageReady === "true" ? page : null;
-  }
-
-  function applyMediaDragTransform() {
-    const drag = mediaDragRef.current;
-    if (!drag) return;
-    const dx = drag.peek ? drag.dx : drag.dx * 0.3;
-    const transform = `${mediaStackPull(dx, drag.width)} ${drag.originTransform === "none" ? "" : drag.originTransform}`;
-    drag.base.style.transform = transform;
-    const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
-    pages?.style.setProperty("--story-drag-x", `${dx}px`);
-    pages?.style.setProperty("--story-live-transform", transform);
-    if (drag.peek) {
-      const depth = Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1;
-      drag.peek.style.zIndex = "4";
-      drag.peek.style.transform = mediaStackReveal(depth, Math.abs(dx) / drag.width);
-    }
-  }
-
-  function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, eventTime: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
-    if (!container || mutationPending || overview || scopedMedia.length < 2) return;
-    // A new gesture takes over the pixels of a settling drag, whether it was
-    // committed to a decoded destination or is returning from an edge.
-    const completePreviousDrag = mediaDragSettleFinishRef.current;
-    if (completePreviousDrag) {
-      completePreviousDrag();
-    } else if (mediaDragSettlingRef.current) {
-      cancelPendingMediaDragSettle();
-    }
-    // #204 CFAA: hidden authorization/priming media is implementation detail,
-    // not the semantic settled frame the user's finger is manipulating.
-    const base = container.querySelector<HTMLElement>('[data-media-page="current"]');
-    if (!base) return;
-    const pages = container.querySelector<HTMLElement>("[data-story-media-pages]");
-    const originTransform = getComputedStyle(base).transform;
-    pages?.style.setProperty("--story-live-transform", originTransform);
-    pages?.style.setProperty("--story-live-opacity", getComputedStyle(base).opacity);
-    // A pointer-down may still become a picture click. Keep the latest cold
-    // navigation intent until an actual horizontal drag takes ownership.
-    setMediaGestureHolding(true);
-    mediaDragRef.current = {
-      container,
-      base,
-      peek: null,
-      startX: clientX,
-      startY: clientY,
-      pointerId,
-      dx: 0,
-      velocityX: 0,
-      lastX: clientX,
-      lastTime: eventTime,
-      axis: null,
-      tapOpensFullscreen,
-      preserveNativeVideoCapture,
-      wrap,
-      neighborIndex: -1,
-      neighborAsset: null,
-      width: base.clientWidth,
-      originTransform,
-      settleTakeover: Boolean(completePreviousDrag),
-    };
-  }
-
-  // Locks onto an axis (8px of intent) the first time either axis moves
-  // enough to tell horizontal from vertical, then live-tracks the pointer
-  // on the horizontal axis only; a vertical lock leaves the gesture alone so
-  // the fullscreen stage's own swipe-down-to-exit keeps working unchanged.
-  function updateMediaDrag(pointerId: number, clientX: number, clientY: number, eventTime: number) {
-    const drag = mediaDragRef.current;
-    if (!drag || drag.pointerId !== pointerId) return;
-    if (drag.axis === null) {
-      const dx = clientX - drag.startX;
-      const dy = clientY - drag.startY;
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-      if (Math.abs(dx) <= Math.abs(dy) * 1.15) {
-        drag.axis = "y";
-        return;
-      }
-      drag.axis = "x";
-      for (const spring of mediaDragSprings.current) spring.cancel();
-      mediaDragSprings.current = [];
-      if (incomingMediaRef.current !== null) {
-        flushSync(() => {
-          setIncomingAssetId(null);
-          setPendingMediaTarget(null);
-        });
-      }
-      const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
-      pages?.dispatchEvent(new CustomEvent("story-media-grab", {
-        detail: { neighborId: resolveMediaDragNeighbor(dx, drag.wrap)?.asset.id },
-      }));
-      drag.originTransform = getComputedStyle(drag.base).transform;
-      pages?.style.setProperty("--story-live-transform", drag.originTransform);
-      pages?.style.setProperty("--story-live-opacity", getComputedStyle(drag.base).opacity);
-      setPendingMediaTarget(null);
-      requestedMediaRef.current = shownAssetId;
-      setAssetIndex(storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById));
-      if (!drag.preserveNativeVideoCapture) {
-        try {
-          if (!drag.container.hasPointerCapture(pointerId)) {
-            drag.container.setPointerCapture(pointerId);
-          }
-        } catch {
-          // Synthetic QA events and a pointer cancelled by the browser between
-          // dispatch and this handler can no longer be captured. The existing
-          // local-event path still settles safely if its terminal event arrives.
-        }
-      }
-    }
-    if (drag.axis !== "x") return;
-    drag.dx = clientX - drag.startX;
-    const elapsed = eventTime - drag.lastTime;
-    if (elapsed > 0) {
-      drag.velocityX = nextMediaSwipeVelocity(drag.velocityX, clientX - drag.lastX, elapsed);
-      drag.lastX = clientX;
-      drag.lastTime = eventTime;
-    }
-    const neighbor = resolveMediaDragNeighbor(drag.dx, drag.wrap);
-    const neighborIndex = neighbor?.index ?? -1;
-    if (neighborIndex !== drag.neighborIndex || !drag.peek) {
-      drag.neighborIndex = neighborIndex;
-      drag.neighborAsset = neighbor?.asset ?? null;
-      const previousPeek = drag.peek;
-      drag.peek = attachMediaDragPeek(drag.container, drag.neighborAsset);
-      if (previousPeek && previousPeek !== drag.peek) {
-        previousPeek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
-      }
-      drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.dispatchEvent(new CustomEvent("story-media-grab", {
-        detail: { neighborId: drag.neighborAsset?.id },
-      }));
-    }
-    applyMediaDragTransform();
-  }
-
   function cancelPendingMediaDragSettle() {
-    for (const spring of mediaDragSprings.current) spring.cancel();
-    mediaDragSprings.current = [];
-    const cancelPendingSettle = mediaDragSettleCancelRef.current;
-    const cancelDeferredFullscreen = deferredFullscreenCancelRef.current;
-    mediaDragSettleCancelRef.current = null;
-    mediaDragSettleFinishRef.current = null;
-    deferredFullscreenCancelRef.current = null;
-    cancelPendingStoryMediaOwners(cancelPendingSettle, cancelDeferredFullscreen);
-    const activeDrag = mediaDragRef.current;
-    mediaDragRef.current = null;
-    if (activeDrag) finishMediaDrag(activeDrag);
+    inlineStageRef.current?.cancelGesture();
+    fullscreenStageRef.current?.cancelGesture();
     setMediaGestureHolding(false);
-    mediaDragSettlingRef.current = false;
   }
 
-  function finishMediaDrag(drag: NonNullable<typeof mediaDragRef.current>) {
-    setMediaGestureHolding(false);
-    const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
-    pages?.style.removeProperty("--story-drag-x");
-    pages?.style.removeProperty("--story-live-transform");
-    pages?.style.removeProperty("--story-live-opacity");
-    pages?.style.removeProperty("--story-live-z");
-    const liveShell = pages?.querySelector<HTMLElement>(".story-media-pages__video");
-    if (liveShell) { liveShell.style.transform = ""; liveShell.style.opacity = ""; liveShell.style.clipPath = ""; }
-    pages?.classList.remove("is-drag-settling");
-    try {
-      if (drag.container.hasPointerCapture(drag.pointerId)) drag.container.releasePointerCapture(drag.pointerId);
-    } catch { /* The browser may already have cancelled this pointer. */ }
-    drag.base.style.transition = "";
-    drag.base.style.transform = "";
-    drag.base.style.zIndex = "";
-    drag.base.style.opacity = "";
-    drag.base.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
-    if (drag.peek) {
-      drag.peek.style.transition = "";
-      drag.peek.style.transform = "";
-      drag.peek.style.zIndex = "";
-      drag.peek.style.opacity = "";
-      drag.peek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
-    }
+  function claimStoryMediaGesture(currentId: string) {
+    // The stage owns the paint and pointer. Story only reclaims its latest
+    // semantic request when a horizontal gesture actually takes ownership.
+    setIncomingAssetId(null);
+    setPendingMediaTarget(null);
+    requestedMediaRef.current = currentId;
+    setAssetIndex(storyAssetIndexForId(scopedMedia, currentId, assetIndex, scopedMediaIndex.indexById));
   }
 
-  // A neighbor with a cached read isn't necessarily safe to land on: images
-  // also need their browser-side decode to finish (#11) or the settled
-  // frame flashes an undecoded paint. Mirrors navigateToMedia's own check.
-  function isMediaDragTargetReady(asset: JourneyMediaAsset) {
-    const read = mediaReads[asset.id];
-    return read?.status === "ready"
-      && (asset.mimeType.startsWith("video/") || decodeRegistryRef.current.isDecoded(asset.id));
-  }
-
-  function landMediaDrag(asset: JourneyMediaAsset, index: number) {
+  function commitStoryMediaGesture(targetId: string) {
+    const index = scopedMediaIndex.indexById.get(targetId);
+    if (index === undefined) return;
+    requestedMediaRef.current = targetId;
     setPendingMediaTarget(null);
     setIncomingAssetId(null);
     setAssetIndex(index);
-    setShownAssetId(asset.id);
+    setShownAssetId(targetId);
   }
 
-  // The same neighbor page becomes current after the snap. A cold neighbor
-  // resists and returns to rest; its eventual decode never navigates by itself.
-  function settleMediaDrag(commit: boolean, releaseVelocityX = 0) {
-    const drag = mediaDragRef.current;
-    mediaDragRef.current = null;
-    if (!drag) return;
-    try {
-      if (drag.container.hasPointerCapture(drag.pointerId)) {
-        drag.container.releasePointerCapture(drag.pointerId);
-      }
-    } catch {
-      // The browser may already have dropped capture before pointercancel.
-    }
-    // A click or vertical gesture never owned the page transform. In
-    // particular, an ignored click at the last item must not cancel the
-    // ongoing navigation spring and strand its pending semantic handoff.
-    if (drag.axis !== "x") {
-      setMediaGestureHolding(false);
-      const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
-      pages?.style.removeProperty("--story-live-transform");
-      pages?.style.removeProperty("--story-live-opacity");
-      if (drag.settleTakeover) pages?.dispatchEvent(new Event("story-media-recover"));
-      return;
-    }
-    mediaDragSettlingRef.current = !prefersReducedMotion();
-    const asset = commit ? drag.neighborAsset : null;
-    const ready = asset !== null && drag.peek !== null && isMediaDragTargetReady(asset);
-    if (asset && !ready) {
-      const read = mediaReads[asset.id];
-      if (read?.status !== "ready") {
-        loadMediaRead(asset.id);
-      } else if (asset.mimeType.startsWith("image/")) {
-        decodeRegistryRef.current.ensure(asset.id, read.url);
-      }
-    }
-    if (prefersReducedMotion()) {
-      if (ready && asset) {
-        finalizeMediaDragCommit(
-          () => landMediaDrag(asset, drag.neighborIndex),
-          () => finishMediaDrag(drag),
-        );
-      } else {
-        finishMediaDrag(drag);
-      }
-      mediaDragSettlingRef.current = false;
-      return;
-    }
-    const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
-    const rearDepth = ready && asset ? (drag.dx < 0 ? 2 : 1) : 0;
-    const targetTransform = mediaStackRest(rearDepth);
-    const velocitySampleSeconds = 1 / 120;
-    const sample = (distance: number) => new DOMMatrixReadOnly(mediaStackPull(
-      drag.peek ? distance : distance * 0.3, drag.width,
-    )).multiply(new DOMMatrixReadOnly(drag.originTransform === "none" ? undefined : drag.originTransform)).toFloat64Array();
-    const transformVelocity = springTransformVelocity(sample(drag.dx),
-      sample(drag.dx + releaseVelocityX * 1000 * velocitySampleSeconds), velocitySampleSeconds);
-    if (ready && asset) {
-      drag.base.style.zIndex = "2";
-      pages?.style.setProperty("--story-live-z", "2");
-      if (drag.peek) drag.peek.style.zIndex = "5";
-    }
-    const springs = [springElementTo(drag.base, {
-      transform: targetTransform, opacity: mediaStackOpacity(rearDepth),
-      clipInset: mediaStackClip(drag.base, ready ? drag.peek : drag.base),
-    }, { owner: drag.base.dataset.mediaPageId, transformVelocity })];
-    const liveShell = pages?.querySelector<HTMLElement>('.story-media-pages__video[data-video-visible="true"]');
-    if (liveShell) springs.push(springElementTo(liveShell, {
-      transform: targetTransform, opacity: mediaStackOpacity(rearDepth),
-      clipInset: mediaStackClip(drag.base, ready ? drag.peek : drag.base),
-    }, { owner: drag.base.dataset.mediaPageId, transformVelocity }));
-    if (drag.peek) springs.push(springElementTo(drag.peek, {
-      transform: mediaStackRest(ready ? 0 : Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1),
-      opacity: ready ? 1 : mediaStackOpacity(Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1),
-      clipInset: mediaStackClip(drag.peek, ready ? drag.peek : drag.base),
-    }, { owner: drag.peek.dataset.mediaPageId }));
-    for (const page of pages?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? []) {
-      if (page === drag.base || page === drag.peek) continue;
-      springs.push(springElementTo(page, {
-        transform: getComputedStyle(page).transform,
-        clipInset: mediaStackClip(page, ready ? drag.peek : drag.base),
-      }, { owner: page.dataset.mediaPageId }));
-    }
-    mediaDragSprings.current = springs;
-    let pending = true;
-    const commitDrag = () => {
-      if (!pending) return;
-      pending = false;
-      mediaDragSettleCancelRef.current = null;
-      mediaDragSettleFinishRef.current = null;
-      mediaDragSprings.current = [];
-      if (ready && asset) finalizeMediaDragCommit(
-        () => landMediaDrag(asset, drag.neighborIndex), () => finishMediaDrag(drag),
-      );
-      else finishMediaDrag(drag);
-      mediaDragSettlingRef.current = false;
-    };
-    mediaDragSettleFinishRef.current = () => {
-      // Commit identity for the new input, while preserving the pixels and
-      // momentum from which its gesture (or click) will take over.
-      for (const spring of springs) spring.cancel();
-      const painted = Array.from(pages?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? [])
-        .map((node) => ({ node, transform: getComputedStyle(node).transform, opacity: getComputedStyle(node).opacity,
-          clipPath: getComputedStyle(node).clipPath }));
-      commitDrag();
-      for (const { node, transform, opacity, clipPath } of painted) {
-        node.style.transform = transform;
-        node.style.opacity = opacity;
-        node.style.clipPath = clipPath;
-      }
-      // Keep the taken-over pixels under the held pointer. Pointer release
-      // resumes recovery; a horizontal move takes over the whole stack.
-    };
-    mediaDragSettleCancelRef.current = () => {
-      pending = false;
-      for (const spring of springs) spring.cancel();
-      mediaDragSettleFinishRef.current = null;
-      finishMediaDrag(drag);
-      mediaDragSettlingRef.current = false;
-    };
-    void Promise.all(springs.map((spring) => spring.finished)).then(commitDrag, () => undefined);
+  function prepareStoryMediaGestureTarget(targetId: string) {
+    const asset = scopedMediaIndex.byId.get(targetId);
+    if (!asset) return;
+    const read = mediaReads[targetId];
+    if (read?.status !== "ready") loadMediaRead(targetId);
+    else if (asset.mimeType.startsWith("image/")) decodeRegistryRef.current.ensure(targetId, read.url);
   }
 
-  function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
-    storyMediaGestureConsumedRef.current = false;
-    if (overview || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    beginMediaDrag(
-      event.currentTarget,
-      event.pointerId,
-      event.clientX,
-      event.clientY,
-      event.timeStamp,
-      !mobileLayout && selectedRoutePointId !== null,
-      mobileLayout && event.target instanceof HTMLImageElement,
-      mobileLayout && event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
-    );
-  }
-
-  function handleStoryMediaPointerMove(event: ReactPointerEvent<HTMLElement>) {
-    if (!event.isPrimary) return;
-    updateMediaDrag(event.pointerId, event.clientX, event.clientY, event.timeStamp);
-  }
-
-  function handleStoryMediaPointerUp(event: ReactPointerEvent<HTMLElement>) {
-    if (!event.isPrimary) return;
-    const drag = mediaDragRef.current;
-    if (drag && drag.pointerId !== event.pointerId) return;
-    const releaseVelocityX = drag && event.timeStamp - drag.lastTime <= MEDIA_SWIPE_VELOCITY_MAX_AGE_MS ? drag.velocityX : 0;
-    // Distance or a recent same-direction flick can own the gesture. Slow
-    // sub-threshold movement remains an image tap; an edge flick with no
-    // neighbor is still consumed as swipe intent so it only springs back.
-    const swipeIntent = Boolean(drag && drag.axis === "x" && isMediaSwipeIntent(drag.dx, releaseVelocityX));
-    const commit = Boolean(drag && drag.axis === "x" && shouldCommitMediaSwipe(drag.dx, releaseVelocityX, Boolean(drag.neighborAsset)));
-    const reopenFullscreenAfterSettle = Boolean(
-      drag
-      && drag.axis === "x"
-      && !swipeIntent
-      && drag.tapOpensFullscreen,
-    );
-    if (swipeIntent || reopenFullscreenAfterSettle || (!mobileLayout && drag && drag.axis !== null)) {
-      storyMediaGestureConsumedRef.current = true;
-    }
-    settleMediaDrag(commit, releaseVelocityX);
-    if (reopenFullscreenAfterSettle) {
-      const capturedScopeRevision = storyScopeRevisionRef.current;
-      deferredFullscreenCancelRef.current?.();
-      deferredFullscreenCancelRef.current = scheduleCancelableDeferredFullscreenEntry(
-        () => {
-          deferredFullscreenCancelRef.current = null;
-          enterFullscreen(false);
-        },
-        capturedScopeRevision,
-        () => storyScopeRevisionRef.current,
-        prefersReducedMotion() ? 0 : MEDIA_DRAG_SETTLE_MS,
-      );
-    }
-  }
-
-  function handleStoryMediaPointerCancel(event: ReactPointerEvent<HTMLElement>) {
-    if (mediaDragRef.current?.pointerId !== event.pointerId) return;
-    settleMediaDrag(false);
-  }
-
-  function handleStoryMediaLostPointerCapture(event: ReactPointerEvent<HTMLElement>) {
-    if (event.target !== event.currentTarget) return;
-    if (mediaDragRef.current?.pointerId !== event.pointerId) return;
-    settleMediaDrag(false);
+  function openFullscreenAfterStoryGesture() {
+    // Story chooses the destination; the active stage reports the real spring
+    // completion only while that gesture still owns its media and surface.
+    enterFullscreen(false);
   }
 
   function openImageFullscreenAfterTap(accessibleActivation = false) {
@@ -2696,65 +2303,6 @@ export function JourneyStory({
       () => setFullscreenControlsHidden(true),
       2500,
     );
-  }
-
-  function handleFullscreenPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    storyMediaGestureConsumedRef.current = false;
-    if (!event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    beginMediaDrag(
-      event.currentTarget,
-      event.pointerId,
-      event.clientX,
-      event.clientY,
-      event.timeStamp,
-      true,
-      false,
-      mobileLayout && event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
-    );
-  }
-
-  function handleFullscreenPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!event.isPrimary) return;
-    updateMediaDrag(event.pointerId, event.clientX, event.clientY, event.timeStamp);
-  }
-
-  function handleFullscreenPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!event.isPrimary) return;
-    const drag = mediaDragRef.current;
-    if (drag && drag.pointerId !== event.pointerId) return;
-    if (!drag) {
-      revealMobileFullscreenControls();
-      return;
-    }
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
-    const releaseVelocityX = event.timeStamp - drag.lastTime <= MEDIA_SWIPE_VELOCITY_MAX_AGE_MS ? drag.velocityX : 0;
-    // Once a desktop drag owns an axis, its synthetic click is not a backdrop
-    // click, even when the distance only warrants springing the photo back.
-    if ((!mobileLayout && drag.axis !== null) || (drag.axis === "x" && isMediaSwipeIntent(dx, releaseVelocityX))) {
-      storyMediaGestureConsumedRef.current = true;
-    }
-    if (drag.axis === "x" && shouldCommitMediaSwipe(dx, releaseVelocityX, Boolean(drag.neighborAsset))) {
-      settleMediaDrag(true, releaseVelocityX);
-      return;
-    }
-    settleMediaDrag(false, releaseVelocityX);
-    if (mobileLayout && dy >= 72 && Math.abs(dy) > Math.abs(dx) * 1.15) {
-      exitFullscreen();
-      return;
-    }
-    if (drag.axis === null) revealMobileFullscreenControls();
-  }
-
-  function handleFullscreenPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
-    if (mediaDragRef.current?.pointerId !== event.pointerId) return;
-    settleMediaDrag(false);
-  }
-
-  function handleFullscreenLostPointerCapture(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.target !== event.currentTarget) return;
-    if (mediaDragRef.current?.pointerId !== event.pointerId) return;
-    settleMediaDrag(false);
   }
 
   async function uploadFiles(
@@ -3099,6 +2647,53 @@ export function JourneyStory({
     const anchorIndex = storyAssetIndexForId(scopedMedia, requestedMediaRef.current, assetIndex, scopedMediaIndex.indexById);
     const index = storyMediaNeighborIndex(anchorIndex, scopedMedia.length, direction, wrap);
     if (index !== null) navigateToMedia(index, direction);
+  }
+
+  function videoStepButtonInput(direction: -1 | 1) {
+    const navigate = () => navigateMediaStep(direction, selectedRoutePointId !== null);
+    return {
+      onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (event.pointerType !== "touch" || !event.isPrimary) {
+          videoStepTouchRef.current = null;
+          videoStepTouchClickRef.current = null;
+          return;
+        }
+        videoStepTouchRef.current = {
+          pointerId: event.pointerId, direction, x: event.clientX, y: event.clientY, moved: false,
+        };
+      },
+      onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        const touch = videoStepTouchRef.current;
+        if (!touch || touch.pointerId !== event.pointerId) return;
+        if (Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 12) touch.moved = true;
+      },
+      onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (videoStepTouchRef.current?.pointerId === event.pointerId) videoStepTouchRef.current = null;
+      },
+      onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        const touch = videoStepTouchRef.current;
+        if (!touch || touch.pointerId !== event.pointerId || touch.direction !== direction) return;
+        videoStepTouchRef.current = null;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const inside = event.clientX >= bounds.left && event.clientX <= bounds.right
+          && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+        // A fast swipe followed by a touch button press can deliver pointerup
+        // without a browser click. Complete that one touch here, and consume
+        // its optional compatibility click below.
+        videoStepTouchClickRef.current = { at: performance.now(), direction };
+        if (!touch.moved && inside && !event.currentTarget.disabled) navigate();
+      },
+      onClick: (event: MouseEvent<HTMLButtonElement>) => {
+        const touchClick = videoStepTouchClickRef.current;
+        if (event.detail > 0 && touchClick !== null && touchClick.direction === direction
+          && performance.now() - touchClick.at < 1_000) {
+          videoStepTouchClickRef.current = null;
+          event.preventDefault();
+          return;
+        }
+        navigate();
+      },
+    };
   }
 
   function navigateToMedia(index: number, direction?: -1 | 1) {
@@ -3685,11 +3280,6 @@ export function JourneyStory({
               cold targets included. Without it a stage that has silently
               dropped a navigation looks identical to one nobody navigated. */
               pendingMediaId ?? incomingAssetId ?? undefined}
-            onPointerDown={handleStoryMediaPointerDown}
-            onPointerMove={handleStoryMediaPointerMove}
-            onPointerUp={handleStoryMediaPointerUp}
-            onPointerCancel={handleStoryMediaPointerCancel}
-            onLostPointerCapture={handleStoryMediaLostPointerCapture}
           >
             {scopedMedia.length > 0 && !mobileLayout && desktopEditing ? (
               <button
@@ -3777,7 +3367,11 @@ export function JourneyStory({
             ) : null}
             {!overview && !fullscreen ? mediaStageStatus : null}
             {!overview ? <StoryMediaPages
+              ref={inlineStageRef}
+              scopeKey={`${journeyId}:${selectedRoutePointId ?? ""}`}
               active={!fullscreen}
+              gestureEnabled={!mutationPending}
+              mobileLayout={mobileLayout}
               media={scopedMedia}
               currentId={shownAsset?.id ?? null}
               coverId={cover?.id ?? null}
@@ -3789,10 +3383,16 @@ export function JourneyStory({
               onSettled={settleIncoming}
               onMediaError={reportStageMediaError}
               onPlaybackReady={inlinePlaybackReady}
+              onGestureClaim={claimStoryMediaGesture}
+              onGestureHoldingChange={setMediaGestureHolding}
+              onGestureConsumed={(consumed) => { storyMediaGestureConsumedRef.current = consumed; }}
+              onGestureCommit={commitStoryMediaGesture}
+              onGesturePrepare={prepareStoryMediaGestureTarget}
+              onGestureTapAfterSettle={openFullscreenAfterStoryGesture}
               onImageClick={mobileLayout ? openImageFullscreenAfterTap : undefined}
               onNavigate={!mobileLayout ? navigateFromPicture : undefined}
-              canNavigatePrevious={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex > 0)}
-              canNavigateNext={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1)}
+              canNavigatePrevious={canStepPrevious}
+              canNavigateNext={canStepNext}
               onBackdropClick={!mobileLayout ? () => { if (!storyMediaGestureConsumedRef.current) requestClose(); } : undefined}
               video={renderStageVideo(false)}
             /> : null}
@@ -3806,6 +3406,9 @@ export function JourneyStory({
                   disabled={mutationPending}
                   onClick={() => enterFullscreen(mobileStoryImmersiveKeepsPlaying)}
                 ><IconMaximize size={19} stroke={1.35} aria-hidden="true" /></IconActionButton>
+                {videoNavigationVisible ? <button type="button" data-video-step="previous"
+                  disabled={!canStepPrevious} {...videoStepButtonInput(-1)}
+                  aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button> : null}
                 <button
                   type="button"
                   className={playing ? "is-active" : ""}
@@ -3825,12 +3428,25 @@ export function JourneyStory({
                     ? <IconPlayerPause size={17} stroke={1.35} aria-hidden="true" />
                     : <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />}
                 </button>
+                {videoNavigationVisible ? <button type="button" data-video-step="next"
+                  disabled={!canStepNext} {...videoStepButtonInput(1)}
+                  aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button> : null}
                 </nav>
               </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
             {mobileLayout && !overview && asset ? (
               <div className="journey-story__mobile-media-actions">
+                {videoNavigationVisible && !mobileManageMode && mediaDeleteState === "idle" ? <nav className="journey-story__mobile-video-nav" aria-label="视频媒体导航">
+                  <button type="button" data-video-step="previous" disabled={!canStepPrevious}
+                    {...videoStepButtonInput(-1)} aria-label="上一个媒体">
+                    <IconArrowLeft size={19} stroke={1.5} aria-hidden="true" />
+                  </button>
+                  <button type="button" data-video-step="next" disabled={!canStepNext}
+                    {...videoStepButtonInput(1)} aria-label="下一个媒体">
+                    <IconArrowRight size={19} stroke={1.5} aria-hidden="true" />
+                  </button>
+                </nav> : null}
                 {showMobileStoryFullscreenControl({
                   mobileLayout,
                   overview,
@@ -4393,11 +4009,6 @@ export function JourneyStory({
           data-focus-trap-exempt="true"
           data-mobile-layout={mobileLayout ? "true" : undefined}
           aria-label="沉浸播放媒体"
-          onPointerDown={handleFullscreenPointerDown}
-          onPointerMove={handleFullscreenPointerMove}
-          onPointerUp={handleFullscreenPointerUp}
-          onPointerCancel={handleFullscreenPointerCancel}
-          onLostPointerCapture={handleFullscreenLostPointerCapture}
           onClick={(event) => {
             if (storyMediaGestureConsumedRef.current) {
               storyMediaGestureConsumedRef.current = false;
@@ -4409,7 +4020,12 @@ export function JourneyStory({
           <button className="journey-story-fullscreen__close" type="button" onClick={() => exitFullscreen()} aria-label="退出沉浸媒体"><IconX size={22} stroke={1.35} aria-hidden="true" /></button>
           {fullscreen ? mediaStageStatus : null}
           <StoryMediaPages
+            ref={fullscreenStageRef}
+            scopeKey={`${journeyId}:${selectedRoutePointId ?? ""}`}
             active={fullscreen}
+            gestureEnabled={!mutationPending}
+            mobileLayout={mobileLayout}
+            fullscreen
             media={scopedMedia}
             currentId={shownAsset?.id ?? null}
             coverId={cover?.id ?? null}
@@ -4421,18 +4037,26 @@ export function JourneyStory({
             onSettled={settleIncoming}
             onMediaError={reportStageMediaError}
             onPlaybackReady={fullscreenPlaybackReady}
+            onGestureClaim={claimStoryMediaGesture}
+            onGestureHoldingChange={setMediaGestureHolding}
+            onGestureConsumed={(consumed) => { storyMediaGestureConsumedRef.current = consumed; }}
+            onGestureCommit={commitStoryMediaGesture}
+            onGesturePrepare={prepareStoryMediaGestureTarget}
+            onGestureExitFullscreen={exitFullscreen}
+            onGestureRevealFullscreenControls={revealMobileFullscreenControls}
             onNavigate={!mobileLayout ? navigateFromPicture : undefined}
-            canNavigatePrevious={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex > 0)}
-            canNavigateNext={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1)}
+            canNavigatePrevious={canStepPrevious}
+            canNavigateNext={canStepNext}
             onBackdropClick={!mobileLayout ? () => { if (!storyMediaGestureConsumedRef.current) exitFullscreen(); } : undefined}
             video={renderStageVideo(true)}
           />
           {scopedMedia.length > 1 || !mobileLayout ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
-              {mobileLayout ? <button
+              {mobileLayout || videoNavigationVisible ? <button
                 type="button"
-                disabled={selectedRoutePointId === null && requestedMediaIndex === 0}
-                onClick={() => navigateMediaStep(-1, selectedRoutePointId !== null)}
+                data-video-step="previous"
+                disabled={!canStepPrevious}
+                {...videoStepButtonInput(-1)}
                 aria-label="上一个媒体"
               >
                 <IconArrowLeft size={22} stroke={1.35} aria-hidden="true" />
@@ -4453,10 +4077,11 @@ export function JourneyStory({
                   : <IconPlayerPlay size={22} stroke={1.35} aria-hidden="true" />}
               </button>
               {mobileLayout ? <span>{assetIndex + 1} / {scopedMedia.length}</span> : null}
-              {mobileLayout ? <button
+              {mobileLayout || videoNavigationVisible ? <button
                 type="button"
-                disabled={selectedRoutePointId === null && requestedMediaIndex === scopedMedia.length - 1}
-                onClick={() => navigateMediaStep(1, selectedRoutePointId !== null)}
+                data-video-step="next"
+                disabled={!canStepNext}
+                {...videoStepButtonInput(1)}
                 aria-label="下一个媒体"
               >
                 <IconArrowRight size={22} stroke={1.35} aria-hidden="true" />
