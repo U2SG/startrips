@@ -219,6 +219,70 @@ async function waitForVisibleStop(page, step) {
   }, step, { timeout: 8_000 });
 }
 
+async function armPauseAtStop(page, step) {
+  await page.evaluate((expectedStep) => {
+    const root = document.querySelector(".journey-playback");
+    if (!(root instanceof HTMLElement)) throw new Error("Playback root missing before Stop capture");
+    const state = () => ({
+      phase: root.dataset.playbackPhase, step: root.dataset.playbackStep,
+      paused: root.classList.contains("is-paused"), arrivalGate: root.dataset.arrivalGate,
+      following: root.dataset.cameraFollow,
+    });
+    const capture = { armed: state(), transitions: [], triggered: null };
+    window.__qaPlaybackCameraStopCapture = capture;
+    let lastTransition = "";
+    const onTransition = () => {
+      const current = state();
+      const key = `${current.step}:${current.phase}:${current.paused}`;
+      if (key !== lastTransition && capture.transitions.length < 16) {
+        capture.transitions.push(current);
+        lastTransition = key;
+      }
+      if (current.phase !== "stop" || current.step !== String(expectedStep)) return;
+      observer.disconnect();
+      const button = root.querySelector('.journey-playback__controls button[aria-label="暂停播放"]');
+      capture.triggered = { ...current, buttonFound: button instanceof HTMLButtonElement,
+        buttonDisabled: button instanceof HTMLButtonElement ? button.disabled : null,
+        headingPresent: Boolean(root.querySelector(".journey-playback__stop h3")),
+        clicked: false };
+      if (current.paused) return;
+      if (button instanceof HTMLButtonElement && !button.disabled) {
+        // Pause the brief beat through its own control before QA crosses the process boundary.
+        button.click();
+        capture.triggered.clicked = true;
+      }
+    };
+    const observer = new MutationObserver(onTransition);
+    observer.observe(root, { attributes: true,
+      attributeFilter: ["data-playback-phase", "data-playback-step"] });
+    onTransition();
+  }, step);
+}
+
+async function waitForCapturedStop(page, step) {
+  try {
+    await page.waitForFunction((expectedStep) => {
+      const root = document.querySelector(".journey-playback");
+      return root?.dataset.playbackPhase === "stop" && root.dataset.playbackStep === String(expectedStep)
+        && root.classList.contains("is-paused")
+        && window.__qaPlaybackCameraStopCapture?.triggered?.clicked;
+    }, step, { timeout: 40_000 });
+  } catch (error) {
+    const diagnostic = await page.evaluate(() => ({
+      capture: window.__qaPlaybackCameraStopCapture ?? null,
+      current: (() => {
+        const root = document.querySelector(".journey-playback");
+        return root ? { phase: root.dataset.playbackPhase, step: root.dataset.playbackStep,
+          paused: root.classList.contains("is-paused"), arrivalGate: root.dataset.arrivalGate,
+          following: root.dataset.cameraFollow,
+          pauseControl: Boolean(root.querySelector('.journey-playback__controls button[aria-label="暂停播放"]')) } : null;
+      })(),
+    }));
+    throw new Error(`Stop was not captured and paused: ${JSON.stringify(diagnostic)}`, { cause: error });
+  }
+  return page.evaluate(() => window.__qaPlaybackCameraStopCapture);
+}
+
 async function dragSurface(page, detail) {
   const point = await steeringPoint(page, detail);
   await page.mouse.move(point.x, point.y);
@@ -444,6 +508,7 @@ try {
         return root?.dataset.playbackPhase === "stop" && root.dataset.cameraFollow === "free"
           && center?.length === 2 && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.0001;
       }, beforeStopDrag.mapCenter, { timeout: 8_000 });
+      await armPauseAtStop(page, 3);
       await page.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
       await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "travel"
         && document.querySelector(".journey-playback")?.dataset.playbackStep === "2", null, { timeout: 40_000 });
@@ -454,11 +519,7 @@ try {
         return center?.length === 2 && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.0001;
       }, beforeDrag.mapCenter, { timeout: 8_000 });
       const free = await snapshot(page);
-      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "stop"
-        && document.querySelector(".journey-playback")?.dataset.playbackStep === "3", null, { timeout: 40_000 });
-      await page.mouse.move(16, 16);
-      await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
-      await page.locator(".journey-playback.is-paused").waitFor();
+      const stopCapture = await waitForCapturedStop(page, 3);
       await waitForVisibleStop(page, 3);
       const populatedStop = await stopBlankPoint(page);
       assert.equal(populatedStop.chapterDensity, "single", "Seoul image chapter must use populated stop layout");
@@ -487,7 +548,7 @@ try {
       const image = await visibleImage(page, imageId);
       assert.deepEqual(errors, []);
       reports.push({ mode: "detail", input: "stop blank wheel and drag, keyboard, travel drag",
-        stopBlank: wheelPoint, populatedStop, drag, free, media, image });
+        stopBlank: wheelPoint, populatedStop, drag, free, media, image, stopCapture });
       await page.locator(".journey-playback__return-location").click();
       await page.waitForFunction((revision) => document.querySelector(".journey-playback")?.dataset.cameraFollow === "follow"
         && Number(document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-revision")) > revision,
@@ -542,10 +603,8 @@ try {
     try {
       await enterDetail(page);
       await startPlayback(page);
-      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "stop"
-        && document.querySelector(".journey-playback")?.dataset.playbackStep === "3", null, { timeout: 40_000 });
-      await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
-      await page.locator(".journey-playback.is-paused").waitFor();
+      await armPauseAtStop(page, 3);
+      const stopCapture = await waitForCapturedStop(page, 3);
       await waitForVisibleStop(page, 3);
       const wheelPoint = await stopBlankPoint(page);
       await page.mouse.move(wheelPoint.x, wheelPoint.y);
@@ -584,7 +643,7 @@ try {
       assert.ok(returned.focusPoint?.includes(`${points[1].latitude},${points[1].longitude}`),
         `explicit same-point Next focused another location: ${JSON.stringify(returned)}`);
       assert.deepEqual(errors, []);
-      reports.push({ mode: "detail-explicit-same-point-next", wheelPoint, free, returned });
+      reports.push({ mode: "detail-explicit-same-point-next", wheelPoint, free, returned, stopCapture });
     } finally { await page.close(); }
   }
 
