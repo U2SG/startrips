@@ -991,11 +991,14 @@ export default function DetailedEarthMap({
         reconcileFullySettled();
       }
     });
+    let lastManualInput: Event | null = null;
     const claimManualCamera = (event: { originalEvent?: Event }) => {
       // MapLibre's keyboard pan begins a move without a drag/zoom/rotate edge.
       // Programmatic flyTo, fitBounds and resize have no originating input;
       // those camera events must never transfer ownership to the viewer.
-      if (diveOwnerRef.current !== "detail" || !event.originalEvent) return;
+      if (diveOwnerRef.current !== "detail" || !event.originalEvent
+        || event.originalEvent === lastManualInput) return;
+      lastManualInput = event.originalEvent;
       if (focusFlightActiveRef.current) {
         focusFlightActiveRef.current = false;
         map.stop();
@@ -1007,6 +1010,14 @@ export default function DetailedEarthMap({
     map.on("dragstart", claimManualCamera);
     map.on("zoomstart", claimManualCamera);
     map.on("rotatestart", claimManualCamera);
+    map.on("wheel", (event) => {
+      // The first wheel event can be classified asynchronously by MapLibre,
+      // leaving its later movestart/zoomstart without originalEvent. Claim the
+      // actual gesture before ScrollZoomHandler handles it; a stopped focus
+      // flight cannot reset the wheel zoom that follows in the same event.
+      if (map.scrollZoom.isEnabled() && !event.defaultPrevented
+        && event.originalEvent.deltaY !== 0) claimManualCamera(event);
+    });
     const claimNativeCameraControl = (event: MouseEvent) => {
       if (event.target instanceof Element && event.target.closest(
         ".maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out, .maplibregl-ctrl-compass",
