@@ -7,6 +7,10 @@ import { ShareAccessError } from "./authorization/share-access";
 import { CoverRevealWorkerAccessError } from "./cover-reveal/worker-credential";
 import { db } from "./db/client";
 import { LocationSearchUnavailableError } from "./location/location-search";
+import {
+  ItineraryImportStageError,
+  itineraryImportStageFailure,
+} from "./itinerary/itinerary-recognition";
 import { HomeBasePeriodConflictError } from "./repositories/home-base-repository";
 import { requestLog } from "./request-log";
 import { accountEmailChangeRoutes } from "./routes/account-email-change";
@@ -23,6 +27,7 @@ import {
   EverydayFragmentInvalidError,
 } from "./routes/everyday-fragments";
 import { homeBaseRoutes } from "./routes/home-bases";
+import { itineraryImportRoutes } from "./routes/itinerary-import";
 import { journeyRecordedTrackRoutes } from "./routes/journey-recorded-tracks";
 import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
@@ -95,6 +100,11 @@ app.route("/api/home-bases", homeBaseRoutes);
 // Journey surface stays Journey-only; the Atlas is still derived from the
 // session inside the route module, never from the path or the body.
 app.route("/api/everyday-fragments", everydayFragmentRoutes);
+// #512: reading an itinerary a member already holds into a reviewable draft.
+// It writes nothing: the draft is saved through the Journey routes above,
+// under the same authorization and the same revision guard as a hand-built
+// Route.
+app.route("/api/itinerary-import", itineraryImportRoutes);
 app.route("/api/journeys", journeyRoutes);
 // #419: owner-only recorded-track evidence for one Journey, and since #341
 // the format-neutral import channel that writes it. Never part of a guest
@@ -157,6 +167,14 @@ app.onError((error, context) => {
       { error: error.code, message: error.message },
       400,
     );
+  }
+  // #512: an import refusal always says which of the three stages it happened
+  // in. A deployment that cannot reach a page, one that cannot yet render it
+  // and a reading that failed are different problems, and the client shows
+  // each of them as itself instead of as "the link is invalid".
+  if (error instanceof ItineraryImportStageError) {
+    const failure = itineraryImportStageFailure(error);
+    return context.json(failure.body, failure.status as 400);
   }
   if (error instanceof StorageUnavailableError) {
     return context.json(

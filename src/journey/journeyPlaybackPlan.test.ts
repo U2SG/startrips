@@ -8,7 +8,7 @@ import {
   playbackSegmentAtElapsed,
   playbackStepDurationForTempo,
 } from "./journeyPlaybackPlan";
-import { buildPlaybackSteps, playbackCameraTargetForStep, playbackStepIdentity } from "./journeyPlayback";
+import { buildPlaybackSteps, playbackCameraTargetForStep, playbackStepIdentity, type PlaybackStep } from "./journeyPlayback";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import { NARRATIVE_TIMING_PROFILES } from "./narrativeTiming";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
@@ -247,6 +247,106 @@ describe("Playback V2 timeline planner (#126)", () => {
     expect(fast.segments.filter((segment) => segment.kind === "media")).toHaveLength(50);
     expect(fast.totalDurationMs).toBeLessThan(standard.totalDurationMs);
   });
+
+  it("plans large mixed chapters with stable ties and only linear media-owner reads", () => {
+    const journey = fixture(0);
+    journey.routePoints = [point("p1", 1, 114.2), point("empty", 2, 114.3), point("p0", 0, 114.1)];
+    const unconsumed = [
+      media("intro-a", null), media("intro-b", null),
+      media("orphan-a", "missing"), media("orphan-b", "missing"),
+      media("audio-a", "p0", "audio/mpeg"), media("audio-b", "p0", "audio/mpeg"),
+    ];
+    for (const asset of unconsumed) {
+      Object.defineProperty(asset, "sortOrder", {
+        get: () => { throw new Error("unconsumed media must not be sorted"); },
+      });
+    }
+    journey.media = [
+      ...["p0", "p1"].flatMap((owner) => Array.from({ length: 80 }, (_, index) => (
+        media(`${owner}-${index}`, owner, index % 3 === 0 ? "video/mp4" : "image/jpeg", Math.floor((79 - index) / 2))
+      ))),
+      ...unconsumed,
+    ];
+    const originalMedia = journey.media.slice();
+    let ownerReads = 0;
+    for (const asset of journey.media) {
+      const owner = asset.routePointId;
+      Object.defineProperty(asset, "routePointId", { get: () => { ownerReads += 1; return owner; } });
+      Object.freeze(asset);
+    }
+    Object.freeze(journey.media);
+    Object.freeze(journey.routePoints);
+
+    const plan = buildPlaybackPlan(journey, "standard");
+    const planOwnerReads = ownerReads;
+    const sortedIndexes = Array.from({ length: 40 }, (_, pair) => [78 - pair * 2, 79 - pair * 2]).flat();
+    expect(plan.segments.filter((segment) => segment.kind === "media").map((segment) => ({
+      id: segment.id, assetId: segment.assetId, routePointId: segment.routePointId, durationMs: segment.durationMs,
+    }))).toEqual(["p1", "p0"].flatMap((owner) => sortedIndexes.map((index) => ({
+      id: `media:${owner}-${index}`,
+      assetId: `${owner}-${index}`,
+      routePointId: owner,
+      durationMs: index % 3 === 0 ? 6000 : 2800,
+    }))));
+    expect(plan.segments.filter((segment) => segment.kind === "arrival").map((segment) => segment.routePointId))
+      .toEqual(["p1", "empty", "p0"]);
+    expect(planOwnerReads).toBeGreaterThanOrEqual(journey.media.length);
+    expect(planOwnerReads).toBeLessThanOrEqual(2 * journey.media.length);
+    journey.media.forEach((asset, index) => expect(asset).toBe(originalMedia[index]));
+  });
+
+  it("rebuilds media ownership and order from changed input without altering the prior plan", () => {
+    const journey = fixture(1);
+    const original = buildPlaybackPlan(journey);
+    journey.media[0].routePointId = "p1";
+    journey.media[0].sortOrder = 1;
+    journey.media.push(media("new-p0", "p0"));
+    const rebuilt = buildPlaybackPlan(journey);
+    expect(original.segments.filter((segment) => segment.kind === "media").map((segment) => segment.assetId))
+      .toEqual(["p0-m0", "p1-m0"]);
+    expect(rebuilt.segments.filter((segment) => segment.kind === "media").map((segment) => segment.assetId))
+      .toEqual(["new-p0", "p1-m0", "p0-m0"]);
+  });
+
+  it("invokes overrides once with the original arguments before reading the duration fallback", () => {
+    const journey = fixture(1);
+    const mediaStep = { kind: "media", pointIndex: 0, mediaIndex: 0 } as const;
+    const directJourney = { ...journey };
+    Object.defineProperty(directJourney, "media", {
+      get: () => { throw new Error("a usable override must bypass media selection"); },
+    });
+    let directCalls = 0;
+    expect(resolvePlaybackStepDurationMs(directJourney, mediaStep, "standard", (target, step, tempo) => {
+      directCalls += 1;
+      expect(target).toBe(directJourney);
+      expect(step).toBe(mediaStep);
+      expect(tempo).toBe("standard");
+      return 0;
+    })).toBe(0);
+    expect(directCalls).toBe(1);
+  });
+
+  it.each([0, 625, undefined, Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    "evaluates each plan override once and preserves Home/fallback timing for %s",
+    (override) => {
+      const journey = fixture(1);
+      const seen: PlaybackStep[] = [];
+      const plan = buildPlaybackPlan(journey, "standard", (target, step, tempo) => {
+        expect(target).toBe(journey);
+        expect(tempo).toBe("standard");
+        seen.push(step);
+        return override;
+      }, homeContext());
+      expect(seen.map((step) => step.kind)).toEqual([
+        "home-prelude", "intro", "stop", "media", "travel", "stop", "media", "home-epilogue", "outro",
+      ]);
+      const usableOverride = override !== undefined && Number.isFinite(override) && override >= 0;
+      expect(plan.segments.map((segment) => segment.durationMs)).toEqual(seen.map((step) => (
+        usableOverride ? override : resolvePlaybackStepDurationMs(journey, step, "standard")
+      )));
+    },
+  );
+
   it("keeps Home context first-class and aligned without fabricating Route Points", () => {
     const journey = fixture(1);
     const routeBefore = structuredClone(journey.routePoints);

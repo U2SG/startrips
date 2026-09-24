@@ -134,6 +134,23 @@ class FailureFamilyOwnerCases(fixture.SyntheticOne):
                 self.path, 'ST-001', fixture.REPO, [self.record()])
         self.assertEqual({'feature': 'ST-002', 'issue': 427, 'matched_tokens': [token]}, owner)
 
+    def test_indexed_issue_search_short_circuits_full_active_issue_scan(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='pending', issue=427),
+        )
+        token = self.record()['fingerprint'][:16]
+        def api(endpoint):
+            if endpoint.startswith('search/issues?'):
+                self.assertIn(token, endpoint)
+                return {'total_count': 1, 'incomplete_results': False, 'items': [{'number': 427}]}
+            raise AssertionError('indexed match should avoid per-issue REST reads')
+        with mock.patch.object(action_plan, 'api', side_effect=api), \
+             mock.patch.object(action_plan, 'pages', side_effect=AssertionError('indexed match should avoid comments pagination')):
+            owner = action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [self.record()])
+        self.assertEqual({'feature': 'ST-002', 'issue': 427, 'matched_tokens': sorted([token, self.record()['fingerprint']])}, owner)
+
     def test_first_occurrence_can_have_explicit_other_owner(self):
         self.write(
             fixture.feature('ST-001', status='in_progress', issue=445),
@@ -274,6 +291,12 @@ class HandoffIdentityCases(fixture.SyntheticOne):
         with self.assertRaises(fixture.store.StoreConflict): self.handoff(confirmed=dict(self.observed, action='WAIT_SOURCE_REVIEW'))
         self.assertEqual(before,self.path.read_bytes())
 
+    def test_scope_returned_to_needs_work_prevents_old_final_handoff(self):
+        before=self.path.read_bytes()
+        with self.assertRaises(fixture.store.StoreConflict):
+            self.handoff(confirmed=dict(self.observed, action='IMPLEMENT'))
+        self.assertEqual(before,self.path.read_bytes())
+
     def test_new_identity_during_gate_revalidation_prevents_handoff(self):
         before=self.path.read_bytes()
         with self.assertRaises(fixture.store.StoreConflict): self.handoff(confirmed=dict(self.observed, final_sha=fixture.C))
@@ -330,6 +353,40 @@ class ActualLoopReplayCases(fixture.WiringTests):
         self.assertEqual(['called']*3,(self.root/'.agent-artifacts/model-calls.log').read_text().splitlines())
         self.assertFalse((self.root/'AGENT_STOP').exists())
         self.assertEqual('in_progress',fixture.store.load_document(self.path)['features'][0]['status'])
+
+    def test_an_exhausted_owner_yields_the_lane_instead_of_relocking_it(self):
+        # ST-001 sorts first on priority but has spent its replay budget, while
+        # ST-002 is ready to run. The budget verdict used to be read only after
+        # the carrier had already bound itself to ST-001, and a bound carrier
+        # cannot yield -- so every round re-locked the lane on the owner it could
+        # not advance, and ST-002 never got a turn.
+        self.write(fixture.feature(phase='P0-process', status='in_progress'),
+                   fixture.feature('ST-002', phase='P0-process', status='in_progress'))
+        (self.root/'startrips').mkdir()
+        stubs={
+          'execution.py':'print("{}")\n',
+          'runtime_preflight.py':'from pathlib import Path\nprint(Path.cwd() / "startrips")\n',
+          'action_plan.py':('import sys,json\n'
+                            'picked=[a for a in sys.argv if a.startswith("ST-")]\n'
+                            'fid=picked[0] if picked else "ST-001"\n'
+                            'print("IMPLEMENT" if "--action-only" in sys.argv '
+                            'else json.dumps({"action":"IMPLEMENT","feature":fid}))\n'),
+          'feature_state.py':'import sys\nif __name__=="__main__": print("same-fingerprint" if sys.argv[1]=="fingerprint" else "")\n',
+          'intake.sh':'intake_new_issues() { :; }\nintake_reconcile_issues() { :; }\n',
+        }
+        for name,body in stubs.items():(self.root/'lib'/name).write_text(body,encoding='utf-8',newline='\n')
+        binpath=self.root/'fake-bin';binpath.mkdir()
+        for name,body in [('gh','#!/usr/bin/env bash\nexit 0\n'),
+                          ('claude','#!/usr/bin/env bash\nprintf "%s\\n" "$*" | grep -oE "feature=ST-[0-9]+" | head -1 >> .agent-artifacts/model-calls.log\nexit 0\n')]:
+            path=binpath/name;path.write_text(body,encoding='utf-8',newline='\n');path.chmod(0o755)
+        run=lambda: self.invoke('export PATH="$PWD/fake-bin:$PATH"; export STARTRIPS_LANE=backend; MAX_NO_CHANGE=3 bash run-loop.sh')
+        for _ in range(3):
+            self.assertEqual(7,run().returncode)
+        final=run()
+        self.assertEqual(7,final.returncode,final.stdout+final.stderr)
+        self.assertIn('Yielding non-productive owner ST-001',final.stdout)
+        self.assertEqual(['feature=ST-001']*3+['feature=ST-002'],
+                         (self.root/'.agent-artifacts/model-calls.log').read_text().splitlines())
 
 
 class IntakeDiscoveryCases(fixture.WiringTests):

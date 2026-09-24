@@ -216,6 +216,13 @@ export const COMPOSER_CAPABILITIES = {
     entry: "主界面的旅程信息",
     returnTo: PRIMARY_SURFACE,
   },
+  "recorded-track-management": {
+    label: "导入与管理记录轨迹",
+    tier: "contextual",
+    task: "journey-info",
+    entry: "主界面的旅程信息；未保存 Journey 会说明需要先保存",
+    returnTo: PRIMARY_SURFACE,
+  },
   "media-upload": {
     label: "添加照片或视频",
     tier: "secondary",

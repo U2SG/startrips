@@ -50,6 +50,25 @@ describe("runSharedElementMorph (#18)", () => {
     expect(onCleanup).toHaveBeenCalledTimes(1);
   });
 
+  // #489 C/V6: the recorded reveal-then-hide-then-smaller-reopen is the window
+  // between the commit that reveals the destination and the readiness that
+  // lets `resolveTarget` claim it. The claim has to happen in the same
+  // synchronous block as the update, before the browser can paint it, and it
+  // must suppress painting without making the destination unresolvable.
+  it("owns a not-yet-presentable destination from the update itself (#489)", () => {
+    const primitive = readFileSync(new URL("./sharedElement.ts", import.meta.url), "utf8");
+    const update = primitive.indexOf("flushSync(update);");
+    const claim = primitive.indexOf("claimPendingDestination();", update);
+    const observer = primitive.indexOf("new MutationObserver(advance)", update);
+    expect(update).toBeGreaterThan(-1);
+    expect(claim).toBeGreaterThan(update);
+    expect(claim).toBeLessThan(observer);
+    // Opacity, not visibility: `canPresent` rejects a hidden destination, so
+    // hiding it here would keep the morph from ever landing on it.
+    expect(primitive).toContain('pending.style.opacity = "0";');
+    expect(primitive).not.toContain('pending.style.visibility = "hidden";');
+  });
+
   it("keeps an opted-in live destination interactive under the visual clone (#459)", () => {
     const primitive = readFileSync(new URL("./sharedElement.ts", import.meta.url), "utf8");
     expect(primitive).toContain("keepTargetInteractive = false");

@@ -1,3 +1,4 @@
+import { createPrivateKey, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { loadServerConfig } from "./config";
 
@@ -294,5 +295,67 @@ describe("Google sign-in configuration", () => {
     });
     expect(config.googleClientId).toBe("client.apps.googleusercontent.test");
     expect(config.googleClientSecret).toBe("secret");
+  });
+});
+
+// #350: the analogous config-driven cover for Sign in with Apple. Apple's
+// credential is four values rather than two, and the private key is PEM text,
+// so a half-named credential and a malformed key are both deployment mistakes
+// worth refusing at startup rather than degrading into a provider that cannot
+// complete an authorization.
+describe("Apple sign-in configuration", () => {
+  const privateKey = generateKeyPairSync("ec", { namedCurve: "P-256" })
+    .privateKey.export({ type: "pkcs8", format: "pem" })
+    .toString();
+  const appleEnvironment = {
+    APPLE_SERVICE_ID: "com.example.startrips.web",
+    APPLE_TEAM_ID: "TEAM123456",
+    APPLE_KEY_ID: "KEY7890123",
+    APPLE_PRIVATE_KEY: privateKey,
+  };
+
+  it("leaves the provider absent when no credential is configured", () => {
+    const config = loadServerConfig(productionEnvironment);
+    expect(config.appleServiceId).toBeNull();
+    expect(config.appleTeamId).toBeNull();
+    expect(config.appleKeyId).toBeNull();
+    expect(config.applePrivateKey).toBeNull();
+    expect(config.appleAppBundleIdentifier).toBeNull();
+  });
+
+  it("refuses a half-named credential at startup", () => {
+    expect(() => loadServerConfig({
+      ...productionEnvironment,
+      APPLE_SERVICE_ID: appleEnvironment.APPLE_SERVICE_ID,
+    })).toThrow("APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY required");
+  });
+
+  it("refuses a private key that is not PKCS#8 PEM text", () => {
+    expect(() => loadServerConfig({
+      ...productionEnvironment,
+      ...appleEnvironment,
+      APPLE_PRIVATE_KEY: "not-a-pem",
+    })).toThrow("APPLE_PRIVATE_KEY must be the PKCS#8 PEM text");
+  });
+
+  it("accepts the whole credential together", () => {
+    const config = loadServerConfig({ ...productionEnvironment, ...appleEnvironment });
+    expect(config.appleServiceId).toBe(appleEnvironment.APPLE_SERVICE_ID);
+    expect(config.appleTeamId).toBe(appleEnvironment.APPLE_TEAM_ID);
+    expect(config.appleKeyId).toBe(appleEnvironment.APPLE_KEY_ID);
+    expect(config.applePrivateKey).toContain("-----BEGIN PRIVATE KEY-----");
+  });
+
+  it("accepts a .p8 whose newlines arrived escaped through one variable", () => {
+    const config = loadServerConfig({
+      ...productionEnvironment,
+      ...appleEnvironment,
+      APPLE_PRIVATE_KEY: privateKey.split("\n").join("\\n"),
+    });
+    // The escaped form round-trips back to real PEM: the recovered text is
+    // the key it started as, and Node can still parse it as PKCS#8.
+    expect(config.applePrivateKey?.trim()).toBe(privateKey.trim());
+    expect(() => createPrivateKey(config.applePrivateKey as string))
+      .not.toThrow();
   });
 });

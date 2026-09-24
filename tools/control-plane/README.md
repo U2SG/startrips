@@ -141,6 +141,41 @@ process/provider evidence and API failures are not known row drift: they remain
 fail-closed and retain the existing transient-failure path. This is not a blanket
 StoreConflict catch, a shorter supervisor retry, or permission to reuse old data.
 
+## Delivery packages
+
+Ordinary ST rows remain fully supported. A coherent multi-issue unit is registered only after the
+package-aware runtime is exact-byte activated and verified; it is never represented by another
+backlog. The lead ST is the single selector/owner/PR identity and every member row remains in ONE.
+
+```bash
+# Read-only runtime verification; packages stay disabled if this fails.
+python -B lib/delivery_runtime.py verify . --repo U2SG/startrips
+
+# Guarded registration of a fresh same-lane set. The first id is the lead.
+python -B lib/delivery_package.py register feature_list.json ST-150 ST-151 ST-152 \
+  --lane experience --root . --repository startrips --repo U2SG/startrips
+
+# Observe exact membership/contract and execution token.
+python -B lib/delivery_package.py show feature_list.json ST-150
+
+# A material issue/scope change is one atomic package revision. Optional JSON files
+# map member ids to acceptance/description/dependency/gate patches and exact comment ids.
+python -B lib/delivery_package.py revise feature_list.json ST-150 \
+  --scope-json scope.json --decisions-json decisions.json --repo U2SG/startrips
+```
+
+Do not register an active/dirty/open-PR member. Internal dependencies stay in the original rows and
+are implemented in topological order inside the Source; external dependencies must already be
+complete. Intake never amends a registered member independently. Selector/provider accounting
+counts the lead once and suppresses non-lead claims. One independent Source review covers the
+complete changed-file set and carries per-member acceptance evidence; one ledger-only final records
+the delivery contract. Exact green resulting main promotes every member together or none.
+
+Package source activation is a separate safe-boundary operation. `delivery_runtime.py plan` records
+expected installed hashes, exact Source CI must be green, and `activate` refuses live owners,
+external execution, human STOP or drifted runtime bytes. A valid activation receipt is installation
+evidence only, never an owner or queue.
+
 ## Merge policy
 
 **This loop never merges.** The repo's `merge-readiness` workflow is a human sign-off gate: the
@@ -193,3 +228,23 @@ Read `run-loop.sh --plan` for live evidence-derived next action. The offline
 produced by Hourly Review according to CLAUDE.md, not by an owner acknowledging a
 comment. All code/behavior regressions execute in GitHub CI; local startup checks
 are static and non-destructive provider/evidence probes.
+
+
+## Windows native execution snapshots
+
+The existing `lib/execution.py occupied/check/identity` provider now reads the
+native process table and query-only process handles instead of the intermittently
+stalled Win32_Process CIM service. Toolhelp supplies candidate name/parent/PID;
+GetProcessTimes and bounded ProcessCommandLineInformation reads bind the same
+handle to creation time and actual command line. No PEB offsets, debug privileges,
+process termination, extra dependencies, cached empty occupancy or WMI fallback.
+The read-only child has the same 25-second maximum. Access denied, incomplete
+native ABI/buffer, PID birth/reuse during observation and provider failure remain
+UNKNOWN. Handles close even on failed reads. Only an exact signalled handle or a
+fresh complete table proving a vanished PID permits dropping an exited candidate.
+CIM-compatible pid@creation publication (microseconds plus .NET trailing zero and
+local UTC offset) preserves existing owner identity during a safe rollout. The
+pre-install compatibility probe compares old/new identities; CI exercises a real
+native own-PID roundtrip plus synthetic failure boundaries without calling CIM.
+No owner/capacity/STOP/selector authorization changes. Runtime installation must
+still bind exact source bytes and a safe process boundary; merging is not installing.

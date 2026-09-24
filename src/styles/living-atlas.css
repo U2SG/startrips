@@ -1655,6 +1655,16 @@
   bottom: 72px;
 }
 
+/* #489 acceptance 2, regression family of the rule above: the inline stage
+   already lifts its own bottom chrome clear of a presented transport's native
+   control strip, but the immersive viewer's nav stayed at bottom:22px and sat
+   right on top of it -- the transport's time scrubber hit-tested to this
+   button instead of to the video. The offset clears the stage's own bottom
+   inset plus Chromium's control panel. */
+.journey-story-fullscreen:has([data-story-media-pages] video[data-shared-media-id]) .journey-story-fullscreen__nav {
+  bottom: calc(clamp(28px, 6vh, 60px) + 84px);
+}
+
 .journey-story__media-grid {
   height: 100%;
   margin: 0;
@@ -3080,6 +3090,226 @@
   color: var(--atlas-cyan);
 }
 
+/* #512: reviewing an imported plan. The data layer stays sharp and flat —
+   this is a list of what is about to be written, not a card. Everything the
+   plan listed is visible at once; no grouping has to be opened to finish. */
+.journey-itinerary-import {
+  padding: 8px 0 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.journey-itinerary-import__modes {
+  display: flex;
+  gap: 8px;
+}
+
+.journey-itinerary-import__modes > button {
+  /* #512: every import control is a real touch target, like the rest of the
+     mobile-primary Composer. A mode switch is not smaller because it is small. */
+  min-height: var(--mobile-control-hit-size, 44px);
+  padding: 0 14px;
+  border: 1px solid rgba(122, 244, 237, 0.16);
+  background: transparent;
+  color: #849994;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.journey-itinerary-import__modes > button[aria-pressed="true"] {
+  border-color: var(--atlas-acid);
+  color: #dcece8;
+}
+
+.journey-itinerary-import__field {
+  display: grid;
+  gap: 10px;
+  font-size: 12px;
+  color: #849994;
+}
+
+.journey-itinerary-import__field textarea {
+  min-height: 132px;
+  resize: vertical;
+}
+
+.journey-itinerary-import__field > button,
+.journey-itinerary-import__field input[type="file"],
+.journey-itinerary-import__file input[type="file"],
+.journey-itinerary-import__position select,
+.journey-itinerary-import__review > button {
+  min-height: var(--mobile-control-hit-size, 44px);
+}
+
+/* #512: where an import lands in an existing Route, chosen before it lands. */
+.journey-itinerary-import__position {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  color: #849994;
+  font-size: 12px;
+}
+
+.journey-itinerary-import__position select {
+  width: 100%;
+  padding: 0 30px 0 10px;
+  border: 1px solid rgba(122, 244, 237, 0.2);
+  border-radius: 0;
+  background: #071713;
+  color: #a9bbb5;
+  font: 500 11px/1.3 var(--archive-sans);
+  color-scheme: dark;
+}
+
+.journey-itinerary-import__position select:focus-visible {
+  border-color: var(--atlas-acid);
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: 2px;
+}
+
+.journey-itinerary-import__file {
+  display: grid;
+  gap: 10px;
+}
+
+.journey-itinerary-import__pages {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.journey-itinerary-import__pages > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--mobile-control-hit-size, 44px);
+  border-top: 1px solid rgba(122, 244, 237, 0.1);
+  color: #bacbc6;
+  font-size: 12px;
+}
+
+.journey-itinerary-import__pages > li > span {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journey-itinerary-import__pages > li > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--mobile-control-hit-size, 44px);
+  min-width: var(--mobile-control-hit-size, 44px);
+  min-height: var(--mobile-control-hit-size, 44px);
+  border: 1px solid rgba(122, 244, 237, 0.16);
+  background: transparent;
+  color: #849994;
+  cursor: pointer;
+}
+
+.journey-itinerary-import__error {
+  margin: 0;
+  color: #e0a2a2;
+  font-size: 12px;
+}
+
+.journey-itinerary-import__counts,
+.journey-itinerary-import__notice,
+.journey-itinerary-import__empty {
+  margin: 0;
+  color: #849994;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.journey-itinerary-import__days {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 18px;
+}
+
+.journey-itinerary-import__days h4 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 8px;
+  color: #bacbc6;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.journey-itinerary-import__days h4 > small {
+  color: #536963;
+  font-size: 11px;
+}
+
+.journey-itinerary-import__days ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.journey-itinerary-import__days ul > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(122, 244, 237, 0.1);
+  color: #bacbc6;
+  font-size: 13px;
+}
+
+.journey-itinerary-import__days ul > li > button,
+.journey-itinerary-import__days ul > li > .journey-checkbox {
+  min-height: var(--mobile-control-hit-size, 44px);
+}
+
+.journey-itinerary-import__days ul > li > small {
+  color: #536963;
+  font-size: 11px;
+}
+
+.journey-itinerary-import__flag {
+  padding: 2px 8px;
+  border: 1px solid rgba(224, 162, 162, 0.35);
+  color: #e0a2a2;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.journey-itinerary-import__candidates {
+  flex: 1 0 100%;
+  display: grid;
+  gap: 4px;
+}
+
+.journey-itinerary-import__candidates button {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(122, 244, 237, 0.16);
+  background: transparent;
+  color: #bacbc6;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.journey-itinerary-import__candidates button > small {
+  color: #536963;
+}
+
 .journey-coordinate-fields {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3779,6 +4009,190 @@
   line-height: 1.8;
 }
 
+.journey-recorded-tracks {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(122, 244, 237, 0.14);
+}
+
+.journey-recorded-tracks__heading {
+  display: grid;
+  gap: 7px;
+}
+
+.journey-recorded-tracks__heading > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.journey-recorded-tracks__heading small {
+  color: var(--atlas-acid);
+  font: 500 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.14em;
+}
+
+.journey-recorded-tracks__heading h4,
+.journey-recorded-tracks__heading p,
+.journey-recorded-tracks__confirm p,
+.journey-recorded-tracks__message,
+.journey-recorded-tracks__empty {
+  margin: 0;
+}
+
+.journey-recorded-tracks__heading h4 {
+  color: var(--atlas-text);
+  font-family: var(--archive-serif);
+  font-size: 20px;
+  font-weight: 400;
+}
+
+.journey-recorded-tracks__heading p,
+.journey-recorded-tracks__selection small,
+.journey-recorded-tracks__empty {
+  color: #718780;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.journey-recorded-tracks__import {
+  display: grid;
+  gap: 10px;
+}
+
+.journey-recorded-tracks__import label {
+  display: grid;
+  gap: 7px;
+}
+
+.journey-recorded-tracks__import input[type="file"] {
+  min-height: 44px;
+  max-width: 100%;
+  color: #a7bbb5;
+  font-size: 12px;
+}
+
+.journey-recorded-tracks__import input[type="file"]::file-selector-button {
+  min-height: 44px;
+}
+
+.journey-recorded-tracks__selection {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.journey-recorded-tracks__selection > span {
+  overflow: hidden;
+  color: #d9e5e1;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journey-recorded-tracks__import-button,
+.journey-recorded-tracks__withdraw,
+.journey-recorded-tracks__confirm button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid rgba(122, 244, 237, 0.2);
+  border-radius: 4px;
+  background: rgba(5, 31, 30, 0.5);
+  color: #c9dad5;
+  font-size: 11px;
+}
+
+.journey-recorded-tracks__import-button:disabled,
+.journey-recorded-tracks__withdraw:disabled,
+.journey-recorded-tracks__confirm button:disabled {
+  cursor: default;
+  opacity: 0.46;
+}
+
+.journey-recorded-tracks__list {
+  display: grid;
+  gap: 10px;
+}
+
+.journey-recorded-tracks__list-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: #8da09b;
+  font-size: 11px;
+}
+
+.journey-recorded-tracks__list ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.journey-recorded-tracks__list li {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(122, 244, 237, 0.1);
+}
+
+.journey-recorded-tracks__summary {
+  display: grid;
+  gap: 3px;
+}
+
+.journey-recorded-tracks__summary strong {
+  color: #d9e5e1;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.journey-recorded-tracks__summary span,
+.journey-recorded-tracks__summary small {
+  color: #718780;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.journey-recorded-tracks__confirm {
+  display: grid;
+  gap: 9px;
+  padding: 10px 0 0;
+  border-top: 1px solid rgba(225, 128, 112, 0.18);
+}
+
+.journey-recorded-tracks__confirm p,
+.journey-recorded-tracks__message {
+  color: #9eb1ab;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.journey-recorded-tracks__confirm > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.journey-recorded-tracks__confirm .is-destructive {
+  border-color: rgba(225, 128, 112, 0.28);
+  color: #e5a496;
+}
+
+.journey-recorded-tracks__message {
+  padding-left: 10px;
+  border-left: 2px solid rgba(122, 244, 237, 0.32);
+}
+
+.journey-recorded-tracks--save-first {
+  padding-bottom: 4px;
+}
+
 .journey-light-colors {
   gap: 12px;
   padding-top: 20px;
@@ -4181,13 +4595,15 @@
   font-size: 11px;
 }
 
-.journey-precise-location {
+.journey-precise-location,
+.journey-itinerary-import-panel {
   margin-top: 24px;
   border-top: 1px solid rgba(122, 244, 237, 0.16);
   border-bottom: 1px solid rgba(122, 244, 237, 0.16);
 }
 
-.journey-precise-location summary {
+.journey-precise-location summary,
+.journey-itinerary-import-panel summary {
   min-height: 66px;
   display: flex;
   align-items: center;
@@ -4198,11 +4614,13 @@
   list-style: none;
 }
 
-.journey-precise-location summary::-webkit-details-marker {
+.journey-precise-location summary::-webkit-details-marker,
+.journey-itinerary-import-panel summary::-webkit-details-marker {
   display: none;
 }
 
-.journey-precise-location summary > span {
+.journey-precise-location summary > span,
+.journey-itinerary-import-panel summary > span {
   display: inline-flex;
   align-items: center;
   gap: 9px;
@@ -4210,18 +4628,21 @@
   font-size: 13px;
 }
 
-.journey-precise-location summary > small {
+.journey-precise-location summary > small,
+.journey-itinerary-import-panel summary > small {
   color: #536963;
   font-size: 11px;
 }
 
-.journey-precise-location__chevron {
+.journey-precise-location__chevron,
+.journey-itinerary-import-panel__chevron {
   flex: 0 0 auto;
   color: var(--atlas-acid);
   transition: transform var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
 }
 
-.journey-precise-location[open] .journey-precise-location__chevron {
+.journey-precise-location[open] .journey-precise-location__chevron,
+.journey-itinerary-import-panel[open] .journey-itinerary-import-panel__chevron {
   transform: rotate(180deg);
 }
 
@@ -4621,8 +5042,32 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .living-atlas__route-point-context > header {
+  position: relative;
   display: grid;
   gap: 5px;
+  padding-right: 48px;
+}
+
+.living-atlas__route-point-context-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+}
+
+.living-atlas__route-point-context-close:hover,
+.living-atlas__route-point-context-close:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--atlas-text);
 }
 
 .living-atlas__route-point-context > header p,
@@ -5502,6 +5947,34 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
     height: 47svh;
     min-height: 300px;
+  }
+
+  /* #489 acceptance 2 / #531: on a short (landscape) phone the sheet was 72svh
+     and the media floor 240px, so the presented video's element box ran past
+     the bottom of the screen and Chromium's own control strip -- its time
+     scrubber first -- ended up where no finger could reach it. There is no
+     spare height to give back here, so the sheet takes the room it needs and
+     the media region is sized to what is left above the fold rather than to a
+     floor the viewport cannot honour. 106px is this block's own sticky sheet
+     handle (44px) plus header (62px); the one later rule that changes either --
+     `.living-atlas.is-mobile-v2 .journey-story > header`, 56px + safe area --
+     only makes the header shorter, and its `.journey-story__media` height of
+     54svh is already inside the budget below. `max-height` carries the fit
+     independently of `height`, so a later, more specific height (that one, or
+     a future one) still cannot put the transport's control strip below the
+     fold; `min-height: 0` is what retires the floor that did. */
+  @media (max-height: 480px) {
+    .journey-story {
+      height: min(92svh, 680px);
+      max-height: min(92svh, 680px);
+    }
+
+    .journey-story__media,
+    .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
+      height: calc(92svh - 106px);
+      max-height: calc(92svh - 106px);
+      min-height: 0;
+    }
   }
 
   .journey-story__copy {

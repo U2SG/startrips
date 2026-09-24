@@ -161,7 +161,8 @@ def _dump(value: Any) -> str:
 
 def commit_document(path: str | Path, doc: Document, *,
                     allowed: dict[str, set[str]], allow_append: bool = False,
-                    expected_rows: set[str] | None = None) -> dict:
+                    expected_rows: set[str] | None = None,
+                    delivery_operation: str | None = None) -> dict:
     path = Path(path).resolve()
     if not isinstance(doc, Document) or path != doc.path:
         raise StoreConflict('Use load_document on this exact ONE before writing')
@@ -185,13 +186,15 @@ def commit_document(path: str | Path, doc: Document, *,
             raise StoreConflict('Unapproved fields for ' + fid + ': ' + ','.join(sorted(delta)))
         if delta:
             changes[fid] = delta
+    from delivery import transaction_read_set, grouped, rows as delivery_rows
+    package_read_set = transaction_read_set(doc.original, doc, changes, delivery_operation)
     with _storage_mutex(path):
         raw = path.read_bytes()
         current = json.loads(raw)
         current_rows = _rows(current)
         if {k: v for k, v in current.items() if k != 'features'} != metadata:
             raise StoreConflict('ONE rules changed since observation; re-read')
-        for fid in set(changes) | set(expected_rows or ()):
+        for fid in set(changes) | set(expected_rows or ()) | package_read_set:
             if fid not in before or current_rows.get(fid) != before[fid]:
                 raise StoreConflict(fid + ' changed since observation; re-read, do not overwrite')
         if added:
@@ -200,6 +203,18 @@ def commit_document(path: str | Path, doc: Document, *,
             priorities = {f.get('priority') for f in current_rows.values()}
             if any(after[fid].get('priority') in priorities for fid in added):
                 raise StoreConflict('Concurrent intake occupied the requested priority')
+        # Revalidate the actual merged projection, not only the caller's old ONE.
+        # A concurrent package registration or appended duplicate cannot hide in
+        # an unrelated row while this scoped transaction commits.
+        projected = copy.deepcopy(current)
+        for row in projected['features']:
+            row.update(changes.get(row['id'], {}))
+        projected['features'].extend(copy.deepcopy(after[fid]) for fid in added)
+        transaction_read_set(current, projected, changes, delivery_operation)
+        grouped_issues = {str(row.get('issue')) for row in current_rows.values()
+                          if grouped(row) and row.get('status') != 'passed'}
+        if any(str(after[fid].get('issue')) in grouped_issues for fid in added):
+            raise StoreConflict('Intake cannot duplicate an unfinished delivery member issue')
         if not changes and not added:
             return {'changed': False, 'sha256': hashlib.sha256(raw).hexdigest()}
         text = raw.decode('utf-8')
@@ -239,6 +254,7 @@ def commit_document(path: str | Path, doc: Document, *,
         if json.loads(output) != expected:
             raise StoreConflict('Surgical JSON validation failed; nothing written')
         mode = path.stat().st_mode
+        keep_temp = False
         fd, name = tempfile.mkstemp(prefix='.' + path.name + '.', suffix='.tmp', dir=path.parent)
         temp = Path(name)
         try:
@@ -249,9 +265,21 @@ def commit_document(path: str | Path, doc: Document, *,
             os.chmod(temp, mode)
             if path.read_bytes() != raw:
                 raise StoreConflict('Legacy writer changed ONE during transaction; retry fresh')
-            os.replace(temp, path)
+            try:
+                os.replace(temp, path)
+            except PermissionError as exc:
+                # Windows readers may deny FILE_SHARE_DELETE and block atomic replace.
+                # Never degrade that failure into an in-place truncate/write: a crash
+                # could leave ONE partial, and any bytes that changed after the last
+                # read-set check must win over this stale transaction. Preserve the
+                # fully validated temporary image as recovery evidence and fail closed.
+                keep_temp = True
+                changed = path.read_bytes() != raw
+                detail = ('; live ONE changed concurrently and was preserved' if changed else '')
+                raise StoreConflict('Atomic replace blocked; ONE unchanged by this transaction'
+                                    + detail + '; recovery copy at ' + str(temp)) from exc
         finally:
-            if temp.exists():
+            if not keep_temp and temp.exists():
                 temp.unlink()
         return {'changed': True, 'features': list(changes) + added,
                 'sha256': hashlib.sha256(output).hexdigest()}

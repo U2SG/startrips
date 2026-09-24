@@ -27,33 +27,176 @@ def stopped(root, lane=None):
     return [name for name in names if (Path(root) / name).exists()]
 
 
+WINDOWS_CARRIERS = frozenset({'bash.exe', 'sh.exe', 'claude.exe', 'codex.exe', 'node.exe', 'nodejs.exe'})
+
+
+def windows_started(ticks, zone=None):
+    """Preserve the old CIM/.NET microsecond+trailing-zero identity without floats."""
+    value = (datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+             + datetime.timedelta(microseconds=ticks // 10)).astimezone(zone)
+    return value.strftime('%Y-%m-%dT%H:%M:%S.') + f'{value.microsecond:06d}0' + value.isoformat()[-6:]
+
+
+class WindowsProcessReader:
+    """Read-only native process handles; no WMI, elevation or PEB offsets."""
+
+    def __init__(self):
+        import ctypes as c
+        from ctypes import wintypes as w
+        self.c, self.w = c, w
+
+        class Entry(c.Structure):
+            _fields_ = [('size', w.DWORD), ('usage', w.DWORD), ('pid', w.DWORD),
+                        ('heap', c.c_size_t), ('module', w.DWORD), ('threads', w.DWORD),
+                        ('ppid', w.DWORD), ('priority', w.LONG), ('flags', w.DWORD),
+                        ('name', w.WCHAR * 260)]
+
+        class Unicode(c.Structure):
+            _fields_ = [('length', w.USHORT), ('maximum', w.USHORT), ('buffer', c.c_void_p)]
+
+        self.Entry, self.Unicode = Entry, Unicode
+        self.kernel = c.WinDLL('kernel32', use_last_error=True)
+        self.nt = c.WinDLL('ntdll', use_last_error=True)
+        functions = {
+            'CreateToolhelp32Snapshot': ([w.DWORD, w.DWORD], w.HANDLE),
+            'Process32FirstW': ([w.HANDLE, c.POINTER(Entry)], w.BOOL),
+            'Process32NextW': ([w.HANDLE, c.POINTER(Entry)], w.BOOL),
+            'OpenProcess': ([w.DWORD, w.BOOL, w.DWORD], w.HANDLE),
+            'CloseHandle': ([w.HANDLE], w.BOOL),
+            'WaitForSingleObject': ([w.HANDLE, w.DWORD], w.DWORD),
+            'GetProcessTimes': ([w.HANDLE] + [c.POINTER(w.FILETIME)] * 4, w.BOOL),
+            'GetSystemTimePreciseAsFileTime': ([c.POINTER(w.FILETIME)], None),
+            'QueryFullProcessImageNameW': ([w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)], w.BOOL),
+        }
+        for name, (args, result) in functions.items():
+            fn = getattr(self.kernel, name); fn.argtypes, fn.restype = args, result
+        self.nt.NtQueryInformationProcess.argtypes = [w.HANDLE, w.ULONG, c.c_void_p, w.ULONG, c.POINTER(w.ULONG)]
+        self.nt.NtQueryInformationProcess.restype = w.LONG
+
+    @staticmethod
+    def ticks(value):
+        return (value.dwHighDateTime << 32) | value.dwLowDateTime
+
+    def now(self):
+        value = self.w.FILETIME()
+        self.kernel.GetSystemTimePreciseAsFileTime(self.c.byref(value))
+        return self.ticks(value)
+
+    def entries(self):
+        c = self.c
+        handle = self.kernel.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS only.
+        if handle == c.c_void_p(-1).value:
+            raise EvidenceUnknown('Native process-table snapshot unavailable')
+        try:
+            item = self.Entry(); item.size = c.sizeof(item)
+            more = self.kernel.Process32FirstW(handle, c.byref(item)); rows = []
+            while more:
+                rows.append({'pid': int(item.pid), 'ppid': int(item.ppid), 'name': item.name})
+                more = self.kernel.Process32NextW(handle, c.byref(item))
+            if c.get_last_error() != 18:
+                raise EvidenceUnknown('Native process-table enumeration incomplete')
+            return rows
+        finally:
+            self.kernel.CloseHandle(handle)
+
+    def read(self, entry, snapshot_started):
+        c, w = self.c, self.w
+        # QUERY_LIMITED_INFORMATION + SYNCHRONIZE only. No debug privilege,
+        # remote-memory read, termination, mutation or privileged fallback.
+        handle = self.kernel.OpenProcess(0x1000 | 0x100000, False, entry['pid'])
+        if not handle:
+            error = c.get_last_error()
+            if error == 87 and not any(r['pid'] == entry['pid'] for r in self.entries()):
+                return None  # A fresh complete table proves this candidate exited.
+            raise EvidenceUnknown('Native candidate handle unavailable for pid ' + str(entry['pid']))
+        try:
+            state = self.kernel.WaitForSingleObject(handle, 0)
+            if state == 0:
+                return None  # The exact handle is signalled, not a guessed dead PID.
+            if state != 258:
+                raise EvidenceUnknown('Native candidate liveness unavailable')
+            times = [w.FILETIME() for _ in range(4)]
+            if not self.kernel.GetProcessTimes(handle, *(c.byref(v) for v in times)):
+                raise EvidenceUnknown('Native creation identity unavailable')
+            started = self.ticks(times[0])
+            if not started or started > snapshot_started:
+                raise EvidenceUnknown('Process born/reused during native snapshot; reobserve')
+            name = c.create_unicode_buffer(32768); length = w.DWORD(len(name))
+            if not self.kernel.QueryFullProcessImageNameW(handle, 0, name, c.byref(length)):
+                raise EvidenceUnknown('Native candidate image identity unavailable')
+            if name.value.replace('\\', '/').rsplit('/', 1)[-1].lower() != entry['name'].lower():
+                raise EvidenceUnknown('Native candidate image changed during observation')
+            # ProcessCommandLineInformation (60), on current Windows. A fixed
+            # bounded buffer and checked pointer/length; unsupported native ABI
+            # stays UNKNOWN, never a WMI or hard-coded PEB-offset fallback.
+            buffer = c.create_string_buffer(131072); returned = w.ULONG()
+            status = self.nt.NtQueryInformationProcess(handle, 60, buffer, len(buffer), c.byref(returned))
+            if status < 0:
+                if self.kernel.WaitForSingleObject(handle, 0) == 0:
+                    return None
+                raise EvidenceUnknown('Native command-line observation unavailable for pid ' + str(entry['pid']))
+            text = self.Unicode.from_buffer(buffer); begin = c.addressof(buffer)
+            if (returned.value > len(buffer) or text.length > text.maximum or text.length % 2
+                    or not text.buffer or text.buffer < begin + c.sizeof(self.Unicode)
+                    or text.buffer + text.length > begin + len(buffer)):
+                raise EvidenceUnknown('Native command-line buffer is invalid')
+            command = c.string_at(text.buffer, text.length).decode('utf-16-le')
+            if not command.strip() or '\x00' in command:
+                raise EvidenceUnknown('Native command line is empty/incomplete')
+            state = self.kernel.WaitForSingleObject(handle, 0)
+            if state == 0:
+                return None
+            if state != 258:
+                raise EvidenceUnknown('Native candidate liveness changed to UNKNOWN')
+            return {**entry, 'command': command, 'started': windows_started(started)}
+        finally:
+            self.kernel.CloseHandle(handle)
+
+
+def native_windows_snapshot(reader=None, required_pids=None):
+    reader = reader or WindowsProcessReader()
+    requested = list(required_pids if required_pids is not None else (os.getpid(), os.getppid()))
+    if not requested or requested[0] <= 0:
+        raise EvidenceUnknown('Native observer identity was not specified')
+    required = {pid for pid in requested if pid > 0}
+    began = reader.now(); entries = reader.entries(); rows = []
+    if len({r['pid'] for r in entries}) != len(entries):
+        raise EvidenceUnknown('Duplicate native process identity')
+    for entry in entries:
+        if entry['name'].lower() not in WINDOWS_CARRIERS and entry['pid'] not in required:
+            continue
+        row = reader.read(entry, began)
+        if row is not None:
+            if (row.get('pid') != entry['pid'] or not row.get('started')
+                    or not isinstance(row.get('command'), str) or not row['command'].strip()):
+                raise EvidenceUnknown('Incomplete native candidate identity')
+            rows.append(row)
+    # The observer is mandatory. An MSYS ancestor may already have exited, as
+    # allowed by the existing identity() contract; it is never fabricated.
+    if requested[0] not in {r['pid'] for r in rows}:
+        raise EvidenceUnknown('Native observer identity missing')
+    return rows
+
+
 def snapshot():
     if os.name == 'nt':
-        # CreationDate is what separates a live process from a later one that merely
-        # reuses its number: Windows documents ProcessId and ParentProcessId as
-        # reusable, so neither is an identity on its own.
-        # Query only carrier-like executables plus this observer and its direct
-        # parent. Even a property-bounded full Win32_Process enumeration can
-        # stall on Windows hosts with a sick/slow process provider; filtering at
-        # the provider keeps observation bounded without hiding relevant peers.
-        candidate_names = ('bash.exe', 'sh.exe', 'claude.exe', 'codex.exe', 'node.exe', 'nodejs.exe')
-        filter_terms = [f"Name='{name}'" for name in candidate_names]
-        filter_terms.extend(f'ProcessId={pid}' for pid in {os.getpid(), os.getppid()} if pid > 0)
-        process_filter = ' OR '.join(filter_terms)
-        command = ('$ErrorActionPreference="Stop"; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); '
-                   f'@(Get-CimInstance Win32_Process -Filter "{process_filter}" '
-                   '-Property ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop | '
-                   'Select-Object ProcessId,ParentProcessId,Name,CommandLine,'
-                   "@{n='Started';e={if ($_.CreationDate) { $_.CreationDate.ToString('o') } else { '' }}}) | ConvertTo-Json -Compress")
-        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
-                                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=25)
+        # The same 25-second total bound, without WMI/PowerShell service waits.
+        # This child only observes process handles and never becomes a carrier.
+        result = subprocess.run([sys.executable, '-B', '-X', 'utf8', __file__,
+                                 'native-snapshot', '.', str(os.getpid()), str(os.getppid())],
+                                capture_output=True, text=True, encoding='utf-8', errors='strict', timeout=25)
         if result.returncode or not result.stdout.strip():
-            raise EvidenceUnknown('Execution-provider process observation unavailable')
+            raise EvidenceUnknown('Native execution-provider observation unavailable')
         rows = json.loads(result.stdout)
-        if isinstance(rows, dict):
-            rows = [rows]
-        return [{'pid': r['ProcessId'], 'ppid': r['ParentProcessId'], 'name': r['Name'],
-                 'command': r.get('CommandLine'), 'started': r.get('Started') or ''} for r in rows]
+        if not isinstance(rows, list) or not rows:
+            raise EvidenceUnknown('Native execution-provider snapshot incomplete')
+        for row in rows:
+            if (not isinstance(row, dict) or not isinstance(row.get('pid'), int)
+                    or not isinstance(row.get('ppid'), int) or not row.get('name')
+                    or not row.get('started') or not isinstance(row.get('command'), str)
+                    or not row['command'].strip()):
+                raise EvidenceUnknown('Native execution-provider returned invalid identity')
+        return rows
     proc = Path('/proc')
     if not proc.exists():
         raise EvidenceUnknown('No supported process observation provider')
@@ -705,7 +848,7 @@ def outage_window(root, mode):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['check', 'occupied', 'permission', 'resume', 'outage-pause',
-                                           'outage-resume', 'identity'])
+                                           'outage-resume', 'identity', 'native-snapshot'])
     parser.add_argument('root', type=Path)
     parser.add_argument('pids', nargs='*', type=int)
     parser.add_argument('--lane', choices=['backend', 'experience'])
@@ -715,6 +858,10 @@ def main():
     args = parser.parse_args()
     try:
         report_lane = args.lane or os.environ.get('STARTRIPS_LANE') or None
+        if args.action == 'native-snapshot':
+            if os.name != 'nt':
+                raise EvidenceUnknown('Native Windows provider requested on another platform')
+            print(json.dumps(native_windows_snapshot(required_pids=args.pids or None))); return 0
         if args.action == 'identity':
             print(identity(args.pids)); return 0
         if args.action == 'permission': result = permission_probe(args.root)

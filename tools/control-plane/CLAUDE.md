@@ -75,6 +75,74 @@ Automation prompts carry roles and this entry point, never current PRs or SHAs.
   root-cause work, never timeout inflation or weakened assertions.
 
 
+## Coherent delivery packages
+
+`rules.one_feature_per_builder_loop=true` remains in force. A canonical feature may be a
+legacy single issue or one registered delivery package whose lead ST is the only executable
+identity. Packages are optional and backward-compatible; missing/drifted package-runtime
+evidence blocks package operations only and must not starve ordinary single-issue work.
+
+The sole ONE stores a package without deleting or cancelling original rows:
+
+- lead row: `delivery_package={schema_version,revision,lane,members,contracts,...}`;
+- every non-lead row: `delivery_lead=<lead ST>`;
+- every member keeps its original `issue`, acceptance, dependencies, human/security gate,
+  snapshots, attempts, evidence and history; registration also freezes exact issue-content
+  observations/material decision ids and per-member acceptance/scope hashes;
+- one identical `delivery_owner` is written to all members only by canonical owner preparation;
+- one identical `delivery_completion` exact-main proof is written to all members only at
+  terminal reconciliation.
+
+Registration is a guarded `lib/delivery_package.py register` transaction. It requires the exact
+package-aware runtime activation receipt, at least two fresh pending/unclaimed members, one
+canonical lane, no owner worktree/branch/open PR, no human gate, complete external dependencies,
+and a stable member/dependency read set. Internal dependency edges are preserved and determine
+`implementation_order`; they do not require separate pre-merge delivery. External dependencies
+remain real and must be terminal with complete package proof when applicable. Duplicate, missing,
+cross-package membership and dependency/collapsed cycles fail closed. Replay of the identical
+registration is idempotent.
+
+Only the lead can be selected, own a worktree/branch/PR, consume a productive lane slot, seal or
+be reviewed. Member rows are never independently claimable. `FEATURE_SKIP`, provider occupancy
+and owner recovery treat the package as the lead execution identity while lifecycle writes update
+all members atomically. A package may share one PR link only when every member maps that exact PR.
+Hot-file/single-writer rules still apply before registration; never package an in-flight or dirty
+member to evade them.
+
+Issue movement after registration is a package scope window, not an ordinary per-row intake
+amend. `intake` leaves member snapshots untouched; the delivery owner/coordinator reads every
+member issue and either acknowledges a non-material window or performs one package `revise`
+transaction. Material revision increments package revision, updates exact per-member contract
+hashes and invalidates prior Source review even if the code SHA is unchanged. Human/security gates
+are never auto-cleared.
+
+`action_plan.py` freezes the exact delivery snapshot and current issue observations. Independent
+Hourly Review records one exact CODE Source receipt for the lead and must supply
+`member_coverage` for every member: each item binds that member's exact `contract_sha256`, PASS
+verdict and evidence for every numbered acceptance criterion. One legal ledger-only final follows;
+its ledger contains the package revision/members and exact delivery contract hash. Package review
+or ledger coverage may not be inferred from shared PR links, closing keywords, review silence or
+a prior scope revision.
+
+Terminal reconciliation requires the one shared PR's merge identity contained in the exact current
+main, fresh exact-main push CI SUCCESS, the package ledger matching the reviewed contract, and
+complete member coverage. Only then does one guarded reconcile transaction set every member
+`passed=true` with the same `delivery_completion` proof, allowing external dependencies to unlock.
+No member is individually passed early.
+
+Runtime rollout is explicit: source changes under `tools/control-plane/` pass exact Source
+`control-plane` CI; `lib/delivery_runtime.py` installs exact verified consumer bytes only at an
+idle reversible boundary under an owned temporary STOP and expected-byte guards. Live old
+consumers/owners are never killed or restarted for activation. Package registration is forbidden
+until `delivery_runtime.py verify` proves the installed consumers exactly match that verified
+Source. Before modifying consumers, activation saves exact predecessor bytes (including the prior
+activation receipt or its absence) under `.agent-artifacts/evaluations/delivery-activation-<id>/`.
+Its own temporary STOP is released only after complete installed-runtime verification or a full
+predecessor readback proof following rollback. An incomplete, failed or unreadable rollback keeps
+that owned STOP and recovery evidence intact for explicit recovery; a missing package receipt alone
+does not make a mixed runtime safe for ordinary single-issue scheduling. Human STOP ownership is
+never replaced or cleared by activation.
+
 ## Source review receipt
 
 The executable next-action reader is `run-loop.sh --plan`, after setting the lane
@@ -95,9 +163,16 @@ CLEAR requires no findings, the full changed-file set and actual review evidence
 The helper verifies live Source and adds `reviewer_role` and `completed_at`.
 Builder/Experience/Backend must never manufacture this receipt. Absence of an
 external comment, a requested review, or zero unresolved threads is not approval.
-A valid one-commit ledger final preserves its reviewed CODE Source. Local activation
-of harness code is not sign/merge approval. Unmapped PRs retain their existing owner;
-Hourly Review records its normal independent PR review without inventing an ST.
+A valid one-commit ledger final preserves its reviewed CODE Source only while the
+accepted feature contract has not been returned to owner repair. If a later explicit
+product/security clarification moves an already sealed feature to `needs_work`, that
+status invalidates direct handoff from the historical sealed CLEAR even when the PR
+head did not move: the original owner must first produce a Source representing the
+current accepted contract, then normal Source CI and independent review apply again.
+Do not delete historical receipts or ledger evidence; they remain history rather than
+a current approval. Local activation of harness code is not sign/merge approval.
+Unmapped PRs retain their existing owner; Hourly Review records its normal independent
+PR review without inventing an ST.
 
 The owner consumes live plans: IMPLEMENT, REPAIR_REVIEW, REPAIR_CONFLICT, REPAIR_CI,
 REPAIR_CI_FAMILY, WAIT_SOURCE_CI, WAIT_SOURCE_REVIEW, SEAL, WAIT_FINAL_CI,

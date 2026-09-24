@@ -43,6 +43,10 @@ jobs:
         run: |
           node scripts/cfaa.mjs impact --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" --event "$GITHUB_EVENT_PATH" --output "$RUNNER_TEMP/cfaa-impact.md"
           cat "$RUNNER_TEMP/cfaa-impact.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Test case-insensitive path guard
+        run: node --test scripts/check-path-case.node-test.mjs
+      - name: Reject tracked paths that collide on case-insensitive filesystems
+        run: node scripts/check-path-case.mjs
       - name: Test ledger tooling
         run: node --test scripts/pr-history.node-test.mjs
       - name: Test ledger-only final fast path
@@ -221,6 +225,10 @@ jobs:
             commands: |
               login-media::QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification
               composer-playback-preview::pnpm qa:composer-playback-preview
+          - name: story-media
+            suites: "|story-media-handoff|"
+            commands: |
+              story-media-handoff::pnpm qa:story-media-handoff
           - name: labels-recovery
             suites: "|city-label-anchoring|recovery-surfaces|"
             commands: |

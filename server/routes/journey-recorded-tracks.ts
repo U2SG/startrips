@@ -6,7 +6,6 @@ import {
   deleteRecordedTrackForAtlas,
   listRecordedTracksForAtlas,
   writeRecordedTrackForAtlas,
-  type RecordedTrackOperation,
 } from "../repositories/journey-recorded-track-repository";
 import { readJsonObject } from "./json-body";
 
@@ -16,28 +15,6 @@ const UUID_PATTERN =
 // #419: precise recorded positions are owner-only. Nothing here may be
 // cached by a shared proxy, and no guest path reads this route.
 export const RECORDED_TRACK_CACHE_CONTROL = "private, no-store, max-age=0";
-
-function serialize(operation: RecordedTrackOperation) {
-  return {
-    journeyId: operation.journeyId,
-    operationKey: operation.operationKey,
-    source: operation.source,
-    provenance: operation.provenance,
-    segments: operation.segments.map((segment) => ({
-      id: segment.id,
-      segmentOrder: segment.segmentOrder,
-      sampleCount: segment.sampleCount,
-      samples: segment.samples.map((sample) => ({
-        id: sample.id,
-        sampleOrder: sample.sampleOrder,
-        latitude: sample.latitude,
-        longitude: sample.longitude,
-        recordedAt: sample.recordedAt?.toISOString() ?? null,
-        accuracyMeters: sample.accuracyMeters,
-      })),
-    })),
-  };
-}
 
 export const journeyRecordedTrackRoutes = new Hono();
 
@@ -106,7 +83,7 @@ journeyRecordedTrackRoutes.post("/:journeyId/imports", async (context) => {
       imported: {
         format: read.format.id,
         replayed: result.replayed,
-        recordedTrack: serialize(result.operation),
+        recordedTrack: result.operation,
       },
     },
     result.replayed ? 200 : 201,
@@ -122,7 +99,7 @@ journeyRecordedTrackRoutes.get("/:journeyId", async (context) => {
   const tracks = await listRecordedTracksForAtlas(atlas.id, journeyId);
   if (!tracks) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
   context.header("Cache-Control", RECORDED_TRACK_CACHE_CONTROL);
-  return context.json({ recordedTracks: tracks.map(serialize) });
+  return context.json({ recordedTracks: tracks });
 });
 
 /**

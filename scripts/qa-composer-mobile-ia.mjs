@@ -45,6 +45,7 @@ const TASKS = [
     capabilities: {
       "journey-dates": 'input[type="date"]',
       "journey-note": ".journey-story-fields textarea",
+      "recorded-track-management": '.journey-recorded-tracks input[type="file"]',
     },
   },
   {
@@ -87,6 +88,57 @@ const PRIMARY_ABSENT = {
   "media-upload": ".journey-media-picker",
 };
 
+function recordedTrackFixture(operationKey) {
+  return {
+    journeyId: "00000000-0000-4000-8000-000000000001",
+    operationKey,
+    source: "imported-file",
+    provenance: "gpx",
+    segments: [{
+      sampleCount: 2,
+      samples: [
+        { recordedAt: "2026-08-11T08:00:00.000Z" },
+        { recordedAt: "2026-08-11T08:05:00.000Z" },
+      ],
+    }],
+  };
+}
+
+async function installRecordedTrackApi(page) {
+  let tracks = [recordedTrackFixture("qa-existing-track")];
+  let importCount = 0;
+  await page.route("**/api/journey-recorded-tracks/**", async (route) => {
+    const request = route.request();
+    const method = request.method();
+    const pathname = new URL(request.url()).pathname;
+    if (method === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ recordedTracks: tracks }),
+      });
+      return;
+    }
+    if (method === "POST" && pathname.endsWith("/imports")) {
+      const imported = recordedTrackFixture(`qa-imported-track-${++importCount}`);
+      tracks = [...tracks, imported];
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ imported: { format: "gpx", replayed: false, recordedTrack: imported } }),
+      });
+      return;
+    }
+    if (method === "DELETE") {
+      const payload = request.postDataJSON();
+      tracks = tracks.filter((track) => track.operationKey !== payload.operationKey);
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+      return;
+    }
+    await route.abort("failed");
+  });
+}
+
 async function openComposer(browser, { width, height }, qaMode = "edit") {
   const context = await browser.newContext({
     viewport: { width, height },
@@ -95,6 +147,7 @@ async function openComposer(browser, { width, height }, qaMode = "edit") {
   const page = await context.newPage();
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  if (qaMode === "edit") await installRecordedTrackApi(page);
   const path = qaMode ? `/?qaState=journey-composer&qaMode=${qaMode}` : "/?qaState=journey-composer";
   await page.goto(new URL(path, baseUrl).toString(), {
     waitUntil: "domcontentloaded",
@@ -111,6 +164,96 @@ const counts = (page, selectors) => page.evaluate(
   ),
   selectors,
 );
+
+async function focusByTab(page, selector, maxTabs = 120) {
+  for (let index = 0; index <= maxTabs; index += 1) {
+    const focused = await page.evaluate((target) => document.activeElement?.matches(target) ?? false, selector);
+    if (focused) return true;
+    await page.keyboard.press("Tab");
+  }
+  return false;
+}
+
+async function exerciseRecordedTrackKeyboard(page, label, { mobileTask = false } = {}) {
+  let entryFocused = !mobileTask;
+  if (mobileTask) {
+    entryFocused = await focusByTab(page, '[data-composer-task-entry="journey-info"]');
+    if (!entryFocused) return { entryFocused, fileFocused: false };
+    await page.keyboard.press("Enter");
+    await page.locator('[data-composer-task="journey-info"]').waitFor({ state: "visible" });
+  }
+
+  await page.waitForFunction(() => {
+    const list = document.querySelector(".journey-recorded-tracks__list");
+    return Boolean(list) && list.getAttribute("aria-busy") !== "true";
+  });
+  const fileSelector = '.journey-recorded-tracks input[type="file"]';
+  const fileFocused = await focusByTab(page, fileSelector);
+  if (!fileFocused) return { entryFocused, fileFocused };
+
+  await page.locator(fileSelector).setInputFiles({
+    name: "keyboard-track.gpx",
+    mimeType: "application/gpx+xml",
+    buffer: Buffer.from('<gpx version="1.1"><trk><trkseg><trkpt lat="1.29" lon="103.85"/></trkseg></trk></gpx>'),
+  });
+  await page.waitForFunction(() => {
+    const button = document.querySelector(".journey-recorded-tracks__import-button");
+    return button instanceof HTMLButtonElement && !button.disabled;
+  });
+  const importFocused = await focusByTab(page, ".journey-recorded-tracks__import-button", 8);
+  if (importFocused) await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelectorAll(".journey-recorded-tracks__list li").length === 2);
+
+  const withdrawFocused = await focusByTab(page, ".journey-recorded-tracks__withdraw");
+  if (withdrawFocused) await page.keyboard.press("Enter");
+  const confirmation = page.locator('.journey-recorded-tracks__confirm[role="alertdialog"]');
+  await confirmation.waitFor({ state: "visible" });
+  const cancelFocused = await page.evaluate(() => (
+    document.activeElement?.textContent?.trim() === "取消"
+    && Boolean(document.activeElement?.closest('.journey-recorded-tracks__confirm[role="alertdialog"]'))
+  ));
+  await page.keyboard.press("Tab");
+  const confirmFocused = await page.evaluate(() => (
+    document.activeElement?.classList.contains("is-destructive")
+    && document.activeElement?.textContent?.trim() === "确认撤回"
+  ));
+  const hitTargets = await page.evaluate(() => {
+    const selectors = {
+      file: '.journey-recorded-tracks input[type="file"]',
+      importButton: ".journey-recorded-tracks__import-button",
+      withdrawButton: ".journey-recorded-tracks__withdraw",
+      cancelButton: '.journey-recorded-tracks__confirm button:not(.is-destructive)',
+      confirmButton: ".journey-recorded-tracks__confirm .is-destructive",
+    };
+    return Object.fromEntries(Object.entries(selectors).map(([name, selector]) => {
+      const element = document.querySelector(selector);
+      const rect = element?.getBoundingClientRect();
+      return [name, rect ? { width: rect.width, height: rect.height } : null];
+    }));
+  });
+  const hitTargetsAtLeast44 = Object.values(hitTargets).every((rect) => rect && rect.height >= 44);
+  if (confirmFocused) await page.keyboard.press("Enter");
+  await confirmation.waitFor({ state: "detached" });
+  await page.waitForFunction(() => document.querySelectorAll(".journey-recorded-tracks__list li").length === 1);
+
+  const result = {
+    label,
+    entryFocused,
+    fileFocused,
+    importFocused,
+    withdrawFocused,
+    cancelFocused,
+    confirmFocused,
+    hitTargets,
+    hitTargetsAtLeast44,
+    remainingTracks: await page.locator(".journey-recorded-tracks__list li").count(),
+  };
+  if (mobileTask) {
+    await page.locator("[data-composer-task-back]").click();
+    await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+  }
+  return result;
+}
 
 const browser = await launchQaBrowser();
 
@@ -199,6 +342,57 @@ try {
         record(`composer-mobile-ia:${viewport.label}:${task.id}:return`, { returned },
           returned.activeEntry === expectedEntry && !returned.menuOpen);
       }
+
+      // #512: the itinerary import controls live inside the location task, and
+      // they are held to the same touch-target contract as every other shared
+      // control here. Measured rather than asserted from the stylesheet, because
+      // a control that collapses under its own layout still fails a thumb.
+      await page.locator(".journey-composer__task-more").click();
+      await page.locator("#journey-composer-more-menu").waitFor({ state: "visible" });
+      await page.locator('[data-composer-task-entry="location"]').click();
+      await page.locator('[data-composer-task="location"]').waitFor({ state: "visible" });
+      const importText = await page.evaluate(() => {
+        const panel = document.querySelector(".journey-itinerary-import");
+        const rects = [...(panel?.querySelectorAll("button, input, select, label.journey-checkbox") ?? [])]
+          .map((node) => {
+            const rect = node.getBoundingClientRect();
+            return {
+              tag: node.tagName.toLowerCase(),
+              label: node.getAttribute("aria-label") ?? node.textContent?.trim().slice(0, 12) ?? "",
+              height: Math.round(rect.height),
+              width: Math.round(rect.width),
+            };
+          });
+        return { present: Boolean(panel), rects };
+      });
+      record(`composer-mobile-ia:${viewport.label}:itinerary-import-targets`, { importText },
+        importText.present
+        && importText.rects.length > 0
+        && importText.rects.every((rect) => rect.height >= 44 && rect.width >= 44));
+
+      // The screenshot entry takes more than one image and orders them, which is
+      // what a plan spread over several long screenshots actually needs.
+      await page.locator('.journey-itinerary-import__modes > button:nth-child(3)').click();
+      const importImage = await page.evaluate(() => {
+        const input = document.querySelector('.journey-itinerary-import__file input[type="file"]');
+        const rects = [...document.querySelectorAll(".journey-itinerary-import button, .journey-itinerary-import input, .journey-itinerary-import select")]
+          .map((node) => {
+            const rect = node.getBoundingClientRect();
+            return { height: Math.round(rect.height), width: Math.round(rect.width) };
+          });
+        return {
+          multiple: input?.hasAttribute("multiple") ?? false,
+          accept: input?.getAttribute("accept") ?? null,
+          rects,
+        };
+      });
+      record(`composer-mobile-ia:${viewport.label}:itinerary-import-images`, { importImage },
+        importImage.multiple
+        && Boolean(importImage.accept?.includes("image/png"))
+        && importImage.rects.every((rect) => rect.height >= 44 && rect.width >= 44));
+
+      await page.locator("[data-composer-task-back]").click();
+      await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
 
       // Acceptance 1 / owner decision: media belongs to a Route Point.
       const firstRow = page.locator(".journey-route-draft > li:not(.is-empty)").first();
@@ -356,6 +550,19 @@ try {
           && assignedFirst === assignedAgain);
       }
 
+      if (viewport.label === "390") {
+        const recordedTrackKeyboard = await exerciseRecordedTrackKeyboard(page, "compact-mobile", { mobileTask: true });
+        record("composer-mobile-ia:390:recorded-track-keyboard", { recordedTrackKeyboard },
+          recordedTrackKeyboard.entryFocused
+          && recordedTrackKeyboard.fileFocused
+          && recordedTrackKeyboard.importFocused
+          && recordedTrackKeyboard.withdrawFocused
+          && recordedTrackKeyboard.cancelFocused
+          && recordedTrackKeyboard.confirmFocused
+          && recordedTrackKeyboard.hitTargetsAtLeast44
+          && recordedTrackKeyboard.remainingTracks === 1);
+      }
+
       record(`composer-mobile-ia:${viewport.label}:no-page-errors`, { pageErrors: run.pageErrors },
         run.pageErrors.length === 0);
     } finally {
@@ -401,6 +608,7 @@ try {
       lights: document.querySelectorAll(".journey-light-colors").length,
       precise: document.querySelectorAll(".journey-precise-location").length,
       picker: document.querySelectorAll(".journey-media-picker").length,
+      recordedTracks: document.querySelectorAll('.journey-recorded-tracks input[type="file"]').length,
     }));
     record("composer-mobile-ia:desktop:inline-architecture", { inline },
       inline.mobileLayout === null
@@ -410,7 +618,18 @@ try {
       && inline.lights === 1
       && inline.precise === 1
       && inline.picker === 1
+      && inline.recordedTracks === 1
       && desktop.pageErrors.length === 0);
+
+    const recordedTrackKeyboard = await exerciseRecordedTrackKeyboard(desktop.page, "desktop");
+    record("composer-mobile-ia:desktop:recorded-track-keyboard", { recordedTrackKeyboard },
+      recordedTrackKeyboard.fileFocused
+      && recordedTrackKeyboard.importFocused
+      && recordedTrackKeyboard.withdrawFocused
+      && recordedTrackKeyboard.cancelFocused
+      && recordedTrackKeyboard.confirmFocused
+      && recordedTrackKeyboard.hitTargetsAtLeast44
+      && recordedTrackKeyboard.remainingTracks === 1);
   } finally {
     await desktop.context.close();
   }

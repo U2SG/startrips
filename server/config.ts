@@ -173,6 +173,76 @@ export function loadServerConfig(
   ).replace(/\/$/, "");
   const locationSearchUserAgent = environment.LOCATION_SEARCH_USER_AGENT?.trim()
     || `Startrips/1.0 (${appOrigin})`;
+  // #350: Sign in with Apple. Apple issues no static client secret — the
+  // "secret" is an ES256 JWT this server signs from a Team id, a Key id and a
+  // downloaded .p8 private key, so all four values are one credential and none
+  // of them ever reaches the browser. They are optional the same way the
+  // storage credential is: a deployment that names none runs no Apple provider
+  // at all rather than a mocked one. Naming some but not all is a deployment
+  // mistake worth failing at startup for, in every environment, because a
+  // half-configured provider would advertise a sign-in that cannot complete.
+  const appleServiceId = environment.APPLE_SERVICE_ID?.trim() || null;
+  const appleTeamId = environment.APPLE_TEAM_ID?.trim() || null;
+  const appleKeyId = environment.APPLE_KEY_ID?.trim() || null;
+  // A .p8 file is PEM text. Passing it through a single environment variable
+  // means its newlines usually arrive as the two characters `\n`, so accept
+  // both forms rather than making every deployment pick the right one.
+  const applePrivateKey = environment.APPLE_PRIVATE_KEY?.trim()
+    .replace(/\\n/g, "\n") || null;
+  // The native app's bundle identifier, accepted as an additional id-token
+  // audience. #350 ships the web flow only, so this stays optional.
+  const appleAppBundleIdentifier =
+    environment.APPLE_APP_BUNDLE_IDENTIFIER?.trim() || null;
+  const appleConfigurationPresent = Boolean(
+    appleServiceId || appleTeamId || appleKeyId || applePrivateKey,
+  );
+  if (appleConfigurationPresent) {
+    const missing = [
+      ["APPLE_SERVICE_ID", appleServiceId],
+      ["APPLE_TEAM_ID", appleTeamId],
+      ["APPLE_KEY_ID", appleKeyId],
+      ["APPLE_PRIVATE_KEY", applePrivateKey],
+    ].filter(([, value]) => !value).map(([name]) => name);
+    if (missing.length > 0) {
+      throw new Error(
+        `${missing.join(", ")} required when Sign in with Apple is configured`,
+      );
+    }
+    if (!/^-----BEGIN PRIVATE KEY-----/.test(applePrivateKey as string)) {
+      throw new Error(
+        "APPLE_PRIVATE_KEY must be the PKCS#8 PEM text of the downloaded .p8 key",
+      );
+    }
+  }
+
+  // #512: the itinerary import providers. Both default to `disabled` and both
+  // say so truthfully when asked to work, exactly as storage and place search
+  // do: pasted-text import keeps working with neither of them configured, and
+  // neither ever invents a reading or a page.
+  const itineraryRecognitionDriver =
+    environment.ITINERARY_RECOGNITION_DRIVER?.trim() || "disabled";
+  const itineraryRecognitionBaseUrl =
+    environment.ITINERARY_RECOGNITION_BASE_URL?.trim() || null;
+  // Never sent to a browser. The recogniser is called from the server only.
+  const itineraryRecognitionApiKey =
+    environment.ITINERARY_RECOGNITION_API_KEY?.trim() || null;
+  // Configuration, not a domain contract: a newer build is a deployment
+  // change, and the value is recorded on every reading it produces.
+  const itineraryRecognitionModel =
+    environment.ITINERARY_RECOGNITION_MODEL?.trim() || "unversioned";
+  const itineraryRecognitionTimeoutMs = Number(
+    environment.ITINERARY_RECOGNITION_TIMEOUT_MS ?? 60_000,
+  );
+  const itinerarySourceFetchDriver =
+    environment.ITINERARY_SOURCE_FETCH_DRIVER?.trim() || "disabled";
+  const itinerarySourceRenderUrl =
+    environment.ITINERARY_SOURCE_RENDER_URL?.trim() || null;
+  const itinerarySourceFetchTimeoutMs = Number(
+    environment.ITINERARY_SOURCE_FETCH_TIMEOUT_MS ?? 20_000,
+  );
+  const itinerarySourceMaxBytes = Number(
+    environment.ITINERARY_SOURCE_MAX_BYTES ?? 4 * 1024 * 1024,
+  );
 
   if (production && (!smtpUrl || !mailFrom)) {
     throw new Error("SMTP_URL and MAIL_FROM are required in production");
@@ -380,6 +450,50 @@ export function loadServerConfig(
   ) {
     throw new Error("S3_KEY_PREFIX must contain normal non-empty path segments");
   }
+  if (
+    itineraryRecognitionDriver !== "disabled"
+    && itineraryRecognitionDriver !== "http-model"
+  ) {
+    throw new Error(
+      `ITINERARY_RECOGNITION_DRIVER "${itineraryRecognitionDriver}" is not installed`,
+    );
+  }
+  if (itineraryRecognitionDriver === "http-model" && !itineraryRecognitionBaseUrl) {
+    throw new Error(
+      "ITINERARY_RECOGNITION_BASE_URL required when ITINERARY_RECOGNITION_DRIVER=http-model",
+    );
+  }
+  if (
+    itinerarySourceFetchDriver !== "disabled"
+    && itinerarySourceFetchDriver !== "http"
+    && itinerarySourceFetchDriver !== "render"
+  ) {
+    throw new Error(
+      `ITINERARY_SOURCE_FETCH_DRIVER "${itinerarySourceFetchDriver}" is not installed`,
+    );
+  }
+  if (itinerarySourceFetchDriver === "render" && !itinerarySourceRenderUrl) {
+    throw new Error(
+      "ITINERARY_SOURCE_RENDER_URL required when ITINERARY_SOURCE_FETCH_DRIVER=render",
+    );
+  }
+  for (
+    const [name, value] of [
+      ["ITINERARY_RECOGNITION_TIMEOUT_MS", itineraryRecognitionTimeoutMs],
+      ["ITINERARY_SOURCE_FETCH_TIMEOUT_MS", itinerarySourceFetchTimeoutMs],
+    ] as const
+  ) {
+    if (!Number.isInteger(value) || value < 1_000 || value > 300_000) {
+      throw new Error(`${name} must be between 1000 and 300000 milliseconds`);
+    }
+  }
+  if (
+    !Number.isInteger(itinerarySourceMaxBytes)
+    || itinerarySourceMaxBytes < 64 * 1024
+    || itinerarySourceMaxBytes > 32 * 1024 * 1024
+  ) {
+    throw new Error("ITINERARY_SOURCE_MAX_BYTES must be between 65536 and 33554432");
+  }
   const parsedLocationSearchBaseUrl = new URL(locationSearchBaseUrl);
   if (
     locationSearchDriver !== "disabled"
@@ -453,6 +567,20 @@ export function loadServerConfig(
     locationSearchDriver,
     locationSearchBaseUrl,
     locationSearchUserAgent,
+    appleServiceId,
+    appleTeamId,
+    appleKeyId,
+    applePrivateKey,
+    appleAppBundleIdentifier,
+    itineraryRecognitionDriver,
+    itineraryRecognitionBaseUrl,
+    itineraryRecognitionApiKey,
+    itineraryRecognitionModel,
+    itineraryRecognitionTimeoutMs,
+    itinerarySourceFetchDriver,
+    itinerarySourceRenderUrl,
+    itinerarySourceFetchTimeoutMs,
+    itinerarySourceMaxBytes,
   } as const;
 }
 

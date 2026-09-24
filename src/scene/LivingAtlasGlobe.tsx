@@ -192,6 +192,7 @@ export type LivingAtlasGlobeProps = {
   onManualCameraInteraction?: () => void;
   onJourneyRouteActivate: (journeyId: string) => void;
   onJourneyRoutePointActivate: (journeyId: string, routePointId: string) => void;
+  onGlobeBlankActivate?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onPickRequest?: () => void;
   showControls?: boolean;
@@ -242,6 +243,7 @@ type AtlasEarthPresentation = Pick<
   | "temporalReveal"
   | "onJourneyRouteActivate"
   | "onJourneyRoutePointActivate"
+  | "onGlobeBlankActivate"
   | "onHomeBaseActivate"
   | "onGlobePointPick"
   | "reduceMotion"
@@ -346,6 +348,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   temporalReveal={atlas?.temporalReveal}
                   onJourneyRouteActivate={atlas?.onJourneyRouteActivate}
                   onJourneyRoutePointActivate={atlas?.onJourneyRoutePointActivate}
+                  onGlobeBlankActivate={atlas?.onGlobeBlankActivate}
                   onHomeBaseActivate={atlas?.onHomeBaseActivate}
                   onGlobePointPick={atlas?.onGlobePointPick}
                   onSemanticZoomSnapshot={atlas?.onSemanticZoomSnapshot}
@@ -399,6 +402,7 @@ export function LivingAtlasGlobe({
   onManualCameraInteraction,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
+  onGlobeBlankActivate,
   onGlobePointPick,
   onPickRequest,
   showControls = true,
@@ -1039,6 +1043,7 @@ export function LivingAtlasGlobe({
       temporalReveal,
       onJourneyRouteActivate,
       onJourneyRoutePointActivate,
+      onGlobeBlankActivate,
       onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined,
       onGlobePointPick,
       onSemanticZoomSnapshot: handleSemanticZoomSnapshot,
@@ -1084,6 +1089,7 @@ export function LivingAtlasGlobe({
     handleManualCameraInteraction,
     onJourneyRouteActivate,
     onJourneyRoutePointActivate,
+    onGlobeBlankActivate,
     onHomeBaseActivate,
     persistentEarth,
     reduceMotion,

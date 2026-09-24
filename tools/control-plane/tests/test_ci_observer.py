@@ -222,6 +222,16 @@ class FingerprintCases(fixture.SyntheticOne):
         self.record(); result = self.record()
         self.assertEqual(1, result['family_occurrences']); self.assertFalse(result['root_cause_required'])
 
+    def test_exact_failure_record_reuses_normalized_evidence_without_refetch(self):
+        first = self.record()
+        failed = self.failed()
+        data = {'run': run(), 'failures': [failed], 'source_green': False}
+        with mock.patch.object(ci.subprocess, 'run', side_effect=AssertionError('must not refetch exact recorded log')) as fetch:
+            second = ci.observe_failures(self.root, 'synthetic/project', data)[0]
+        fetch.assert_not_called()
+        self.assertEqual(first['fingerprint'], second['fingerprint'])
+        self.assertEqual(1, second['family_occurrences'])
+
     def test_failed_older_job_kept_in_new_attempt_is_not_new_failure(self):
         self.record(); result = self.record(run(run_attempt=2), self.failed())
         self.assertEqual(1, result['family_occurrences'])

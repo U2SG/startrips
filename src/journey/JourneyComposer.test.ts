@@ -49,6 +49,8 @@ describe("persistJourneyDraft", () => {
     expect(markup).toContain("03 · TRACE");
     expect(markup).toContain('<details class="journey-precise-location">');
     expect(markup).toContain("保存到星球");
+    expect(markup).toContain("先保存这段 Journey");
+    expect(markup).not.toContain("导入这份 GPX");
   });
 
   it("renders the #375 mobile-primary task surface under the compact query", () => {
@@ -264,6 +266,9 @@ describe("persistJourneyDraft", () => {
     expect(markup).toContain(">Shenzhen</strong>");
     expect(markup).toContain("1 个已有媒体");
     expect(markup).toContain("保存修改");
+    expect(markup).toContain("记录轨迹");
+    expect(markup).toContain("导入这份 GPX");
+    expect(markup).not.toContain("先保存这段 Journey");
   });
 
   it("counts only photos and videos as existing composer media", () => {

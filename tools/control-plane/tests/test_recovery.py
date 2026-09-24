@@ -375,26 +375,20 @@ class ProcessClassificationCases(unittest.TestCase):
             self.assertEqual([], execution.competitors(
                 rows, self.root, 3, lane='experience'))
 
-    def test_windows_snapshot_filters_carriers_and_projects_required_cim_fields(self):
-        completed = subprocess.CompletedProcess([], 0, stdout='[]', stderr='')
+    def test_windows_snapshot_is_bounded_native_read_only_without_cim(self):
+        rows = [process(4321, 1234, 'python.exe', 'python execution.py occupied', 'creation')]
+        completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(rows), stderr='')
         with mock.patch.object(execution.os, 'name', 'nt'), \
                 mock.patch.object(execution.os, 'getpid', return_value=4321), \
                 mock.patch.object(execution.os, 'getppid', return_value=1234), \
                 mock.patch.object(execution.subprocess, 'run', return_value=completed) as run:
-            self.assertEqual([], execution.snapshot())
-        command = run.call_args.args[0][-1]
-        self.assertIn('Get-CimInstance Win32_Process -Filter "', command)
-        for name in ('bash.exe', 'sh.exe', 'claude.exe', 'codex.exe', 'node.exe', 'nodejs.exe'):
-            self.assertIn(f"Name='{name}'", command)
-        self.assertIn('ProcessId=4321', command)
-        self.assertIn('ProcessId=1234', command)
-        self.assertIn(
-            '-Property ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop',
-            command)
-        self.assertNotIn(
-            'Get-CimInstance Win32_Process -Property '
-            'ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop',
-            command)
+            self.assertEqual(rows, execution.snapshot())
+        command = run.call_args.args[0]
+        self.assertEqual(execution.sys.executable, command[0])
+        self.assertEqual(['native-snapshot', '.', '4321', '1234'], command[-4:])
+        self.assertNotIn('powershell.exe', command)
+        self.assertEqual(25, run.call_args.kwargs['timeout'])
+        self.assertNotIn('Get-CimInstance', ' '.join(command))
 
     def test_occupied_reobserves_process_birth_race(self):
         first = self.base + [process(10, 1, 'bash.exe', None)]

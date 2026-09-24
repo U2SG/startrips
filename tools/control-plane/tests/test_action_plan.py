@@ -34,6 +34,20 @@ class ActionCases(unittest.TestCase):
         self.ci.update(state='success', final_green=True)
         self.assertEqual('HANDOFF_REVIEW', self.action(True))
 
+    def test_needs_work_never_inherits_old_sealed_clear_for_handoff(self):
+        self.row['status'] = 'needs_work'
+        self.relation.update(sealed=True, final_sha=fixture.B)
+        self.ci.update(state='success', final_green=True)
+        self.assertEqual('IMPLEMENT', self.action(True))
+
+    def test_needs_work_still_routes_actual_review_or_ci_failures_first(self):
+        self.row['status'] = 'needs_work'
+        self.relation.update(sealed=True, final_sha=fixture.B)
+        self.ci.update(state='success', final_green=True)
+        self.assertEqual('REPAIR_REVIEW', self.action(source_verdict='CHANGES_REQUESTED'))
+        self.ci.update(state='failure', final_green=False)
+        self.assertEqual('REPAIR_CI', self.action(True))
+
     def test_already_handed_off_does_not_seal_again(self):
         self.row['status'] = 'ready_for_eval'; self.relation['sealed'] = True
         self.ci.update(state='success', final_green=True)

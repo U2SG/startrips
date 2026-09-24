@@ -15,7 +15,7 @@ from feature_store import _storage_mutex, StoreConflict
 from github_evidence import api, _repo, EvidenceUnknown
 
 DIMENSIONS = ('lane', 'assertion', 'fixture', 'viewport', 'dpr', 'stage')
-PARSER_VERSION = 5
+PARSER_VERSION = 6
 INFRA = ('failed to resolve action download info', 'service unavailable',
          'failed to download action', 'the runner has lost communication')
 
@@ -209,14 +209,25 @@ def observe_failures(root, repo, ci):
     for job in ci['failures']:
         if job['name'] in {'ledger', 'verify'}:
             continue  # verified pre-ledger state, not a flaky failure
-        result = subprocess.run(['gh', 'api', 'repos/' + repo + '/actions/jobs/' + str(job['id']) + '/logs'],
-                                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=25)
-        if result.returncode or len(result.stdout) > 8 * 1024 * 1024:
-            raise EvidenceUnknown('Failed-job evidence unavailable or too large')
-        record = normalize_failure(job, result.stdout)
-        record.update(repo=repo, run_id=run['id'], attempt=job.get('run_attempt', run['run_attempt']), job_id=job['id'],
-                      sha=run['head_sha'], job_url=job.get('html_url'), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
-        path = history / ('failure-%s-%s-%s-v%s.json' % (run['id'], record['attempt'], job['id'], PARSER_VERSION))
+        attempt = job.get('run_attempt', run['run_attempt'])
+        path = history / ('failure-%s-%s-%s-v%s.json' % (run['id'], attempt, job['id'], PARSER_VERSION))
+        record = None
+        if path.exists():
+            cached = json.loads(path.read_bytes())
+            exact = {
+                'parser_version': PARSER_VERSION, 'repo': repo, 'run_id': run['id'],
+                'attempt': attempt, 'job_id': job['id'], 'sha': run['head_sha'],
+            }
+            if all(cached.get(key) == value for key, value in exact.items()):
+                record = cached
+        if record is None:
+            result = subprocess.run(['gh', 'api', 'repos/' + repo + '/actions/jobs/' + str(job['id']) + '/logs'],
+                                    capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=25)
+            if result.returncode or len(result.stdout) > 8 * 1024 * 1024:
+                raise EvidenceUnknown('Failed-job evidence unavailable or too large')
+            record = normalize_failure(job, result.stdout)
+            record.update(repo=repo, run_id=run['id'], attempt=attempt, job_id=job['id'],
+                          sha=run['head_sha'], job_url=job.get('html_url'), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
         with _storage_mutex(root / 'feature_list.json'):
             old = []
             if history.exists():
