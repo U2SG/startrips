@@ -132,6 +132,8 @@ services:
       target: web
       args:
         VITE_ATLAS_MAP_STYLE_URL: ${ATLAS_MAP_STYLE_URL:-}
+        VITE_ATLAS_PMTILES_URL: ${ATLAS_PMTILES_URL:-}
+        VITE_ATLAS_PMTILES_GLYPHS_URL: ${ATLAS_PMTILES_GLYPHS_URL:-}
     restart: unless-stopped
     environment:
       APP_HOST: ${APP_HOST}
