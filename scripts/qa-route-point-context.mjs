@@ -893,13 +893,15 @@ try {
     && document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 1
   ), null, { timeout: 5_000 });
   const detailPickOutcome = await detailPickPage.evaluate(() => ({
-    draftCoordinates: document.querySelector(".journey-route-draft__coordinates code")?.textContent ?? null,
+    draftLatitude: document.querySelector(".journey-route-draft > li:not(.is-empty)")?.getAttribute("data-route-point-latitude") ?? null,
+    draftLongitude: document.querySelector(".journey-route-draft > li:not(.is-empty)")?.getAttribute("data-route-point-longitude") ?? null,
     contextCount: document.querySelectorAll("[data-route-point-context]").length,
     storyCount: document.querySelectorAll(".journey-story").length,
     pickActive: document.querySelector(".living-atlas")?.classList.contains("is-globe-picking") ?? null,
     diveStage: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") ?? null,
   }));
-  const [draftLatitude, draftLongitude] = (detailPickOutcome.draftCoordinates ?? "").split(",").map(Number);
+  const draftLatitude = Number(detailPickOutcome.draftLatitude);
+  const draftLongitude = Number(detailPickOutcome.draftLongitude);
   record("Detail existing Route Point click completes Composer pick without reopening detail", {
     enteredDetail, existingDetailPoint, pickTarget, detailPickOutcome,
   },
@@ -908,6 +910,7 @@ try {
     && detailPickOutcome.contextCount === 0
     && detailPickOutcome.storyCount === 0
     && detailPickOutcome.pickActive === false
+    && detailPickOutcome.draftLatitude !== null && detailPickOutcome.draftLongitude !== null
     && Number.isFinite(draftLatitude) && Number.isFinite(draftLongitude)
     && Math.abs(draftLatitude - pickTarget.latitude) < 0.2
     && Math.abs(draftLongitude - pickTarget.longitude) < 0.2);
