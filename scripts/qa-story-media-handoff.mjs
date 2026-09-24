@@ -761,7 +761,7 @@ async function nativeControls(page, rootSelector, { timeout = 4_000 } = {}) {
   const deadline = Date.now() + timeout;
   let resolved = await readNativeControls(page, rootSelector);
   while (!playEntry(resolved.controls) && Date.now() < deadline) {
-    await page.waitForTimeout(120);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     resolved = await readNativeControls(page, rootSelector);
   }
   const reach = await page.evaluate(({ selector, points }) => {
@@ -849,7 +849,7 @@ async function seekNativeTimeline(page, rootSelector) {
   let slider = timeline(controls);
   const deadline = Date.now() + 4_000;
   while ((!slider?.reachable || slider.box.right - slider.box.left < 32) && Date.now() < deadline) {
-    await page.waitForTimeout(100);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     controls = await nativeControls(page, rootSelector, { timeout: 500 });
     slider = timeline(controls);
   }
@@ -908,7 +908,7 @@ async function seekNativeTimeline(page, rootSelector) {
   await pointer.down(startX, y);
   for (let step = 1; step <= 8; step += 1) {
     await pointer.move(startX + (endX - startX) * step / 8, y);
-    await page.waitForTimeout(12);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   }
   await pointer.up();
   const reached = await page.waitForFunction(({ selector, duration }) => {
@@ -1035,10 +1035,8 @@ async function photoClickPoint(page, rootSelector, direction) {
  * Real drag across the stage, above any native control chrome, in this page's
  * own modality: a mouse on desktop, a browser touch stream on compact mobile.
  *
- * The moves are paced like a hand rather than emitted in one tight loop: the
- * product derives release velocity from consecutive pointer samples, and a
- * burst with a zero millisecond delta carries no velocity at all. This is
- * gesture fidelity, not a wait inserted to make an assertion pass.
+ * Each move crosses a browser frame so the product receives distinct pointer
+ * samples and can derive release velocity from the real event timestamps.
  */
 async function swipeStage(page, rootSelector, direction) {
   const geometry = await page.evaluate((selector) => {
@@ -1051,7 +1049,7 @@ async function swipeStage(page, rootSelector, direction) {
   await pointer.down(geometry.x, geometry.y);
   for (let step = 1; step <= 10; step += 1) {
     await pointer.move(geometry.x + travel * (step / 10), geometry.y);
-    await page.waitForTimeout(12);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   }
   await pointer.up();
   return { ...geometry, travel, input: pointer.kind };
@@ -1093,7 +1091,7 @@ async function reverseSwipeStage(page, rootSelector, firstDirection) {
   const glide = async (from, to, steps) => {
     for (let step = 1; step <= steps; step += 1) {
       await pointer.move(geometry.x + from + (to - from) * (step / steps), geometry.y);
-      await page.waitForTimeout(12);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     }
   };
   await pointer.down(geometry.x, geometry.y);
@@ -1207,11 +1205,15 @@ async function grabDuringNavigation(page, rootSelector) {
   }, rootSelector);
   const pointer = input(page);
   await pointer.down(geometry.x, geometry.y);
-  // Past the 8px axis lock so the grab really fires, far short of the commit
-  // threshold and slow enough that release velocity cannot commit either.
+  // Past the 8px axis lock so the grab really fires, while 20px remains below
+  // even the 36px minimum flick distance. Two browser frames per move preserve
+  // a deliberate slow grab without a fixed millisecond hold.
   for (let step = 1; step <= 4; step += 1) {
     await pointer.move(geometry.x - step * 5, geometry.y);
-    await page.waitForTimeout(40);
+    await page.evaluate(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
   }
   await pointer.up();
   return { ...geometry, navigatedBy: "ArrowRight", input: pointer.kind };
@@ -1923,17 +1925,25 @@ try {
       // page the gesture started from and calls a late commit a lost one.
       const committed = await waitForSettledAsset(page, latestIntent, STAGE)
         .then(() => null, async () => await stageDiagnostic(page, STAGE));
-      const frames = await stopSamplerFrames(page);
+      // Keep sampling after commit. A one-time owner read misses a transient
+      // flash back to the abandoned page or an uncovered video aperture.
+      const postCommitStart = await page.evaluate(() => ({
+        at: Math.ceil(performance.now()), ticks: window.__qaStage?.ticks ?? null,
+      }));
       const settled = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
         document.querySelector(selector).querySelectorAll("video").length, STAGE);
-      const stable = await page.evaluate(async (selector) => {
-        const read = () => document.querySelector(selector)
-          .querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id");
-        const first = read();
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        return { first, second: read() };
-      }, STAGE);
+      // Thirty delivered browser frames preserve the old post-commit visual
+      // observation window without treating elapsed wall time as evidence.
+      const postCommitObserved = await page.waitForFunction((start) =>
+        start !== null && window.__qaStage?.running
+          && window.__qaStage.ticks - start >= 30,
+      postCommitStart.ticks, { polling: "raf", timeout: 10_000 }).then(() => true, () => false);
+      const stable = { first: settled.id, second: (await currentAsset(page)).id };
+      const frames = await stopSamplerFrames(page);
+      const postCommitFrames = frames.filter((frame) => frame.at > postCommitStart.at);
+      const postCommitContinuity = gradeContinuity(postCommitFrames, { allowedAssets: [latestIntent] });
+      const postCommitWrongOwner = postCommitFrames.filter((frame) => frame.currentId !== latestIntent);
       // Read which decoded neighbour the stage ordered above the current
       // page at each end of the same pointer stream. This is page ordering;
       // the frame sampler below separately checks what the viewport shows.
@@ -1945,12 +1955,15 @@ try {
         claim: "a reversal fired before the first navigation settles retargets within the same gesture and commits the reversal's own target, never the abandoned one, and leaves exactly one settled owner, one live transport and no late write-back",
         startedFrom, abandonedIntent, latestIntent, settled, transports, stable,
         gesture, orderedNeighbors, trace, committed, continuity,
+        postCommitObserved, postCommitTicks: frames.ticks - postCommitStart.ticks,
+        postCommitContinuity, postCommitWrongOwner: postCommitWrongOwner.slice(0, 3),
         sampledFrames: frames.length,
         concurrentLiveVideos: frames.filter((frame) => frame.videoCount > 1).slice(0, 2),
         failed: settled.presentation !== "settled" || !settled.ready
           || settled.id !== latestIntent
           || orderedNeighbors[0] !== abandonedIntent || orderedNeighbors[1] !== latestIntent
           || transports !== 1 || stable.first !== stable.second
+          || !postCommitObserved || postCommitContinuity.failed || postCommitWrongOwner.length > 0
           || continuity.failed || frames.some((frame) => frame.videoCount > 1)
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
@@ -1992,7 +2005,7 @@ try {
         const pages = document.querySelector(".journey-story__media [data-story-media-pages]");
         return pages?.getAttribute("data-media-presentation") === "settled";
       }, undefined, { polling: "raf", timeout: 10_000 }).then(() => true, () => false);
-      await page.waitForTimeout(700);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
       const frames = await stopSamplerFrames(page);
       const afterGrab = await stackRestState(page, STAGE);
       const settled = await currentAsset(page);
