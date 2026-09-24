@@ -407,6 +407,10 @@ export default function DetailedEarthMap({
     } | null = null;
     mapRef.current = map;
     let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
+    let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
+      journeyId: string;
+      routePointId: string;
+    } | null) | null = null;
     if (import.meta.env.DEV && typeof window !== "undefined") {
       const debugWindow = window as Window & {
         __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
@@ -977,6 +981,31 @@ export default function DetailedEarthMap({
         (coordinates) => map.project(coordinates),
       )
     );
+    if (import.meta.env.DEV && typeof window !== "undefined") {
+      const debugWindow = window as Window & {
+        __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
+          journeyId: string;
+          routePointId: string;
+        } | null;
+      };
+      debugJourneyRoutePointHit = (clientX, clientY) => {
+        const rect = host.getBoundingClientRect();
+        const point = { x: clientX - rect.left, y: clientY - rect.top };
+        let routePointHit = projectedJourneyRoutePointHit(point);
+        if (!routePointHit && map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
+          const [journeyHit] = map.queryRenderedFeatures([point.x, point.y], {
+            layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
+          });
+          const journeyId = journeyHit?.properties?.journeyId;
+          const routePointId = journeyHit?.properties?.routePointId;
+          if (typeof journeyId === "string" && typeof routePointId === "string") {
+            routePointHit = { journeyId, routePointId };
+          }
+        }
+        return routePointHit;
+      };
+      debugWindow.__detailedEarthJourneyRoutePointHit = debugJourneyRoutePointHit;
+    }
     const handleJourneyRoutePointClickCapture = (event: MouseEvent) => {
       if (diveOwnerRef.current !== "detail" || !onJourneyRoutePointActivateRef.current) return;
       const rect = host.getBoundingClientRect();
@@ -1056,8 +1085,15 @@ export default function DetailedEarthMap({
         const debugWindow = window as Window & {
           __detailedEarthMapRemovalCount?: number;
           __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
+          __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
+            journeyId: string;
+            routePointId: string;
+          } | null;
         };
         if (debugWindow.__detailedEarthMapProject === debugProject) delete debugWindow.__detailedEarthMapProject;
+        if (debugWindow.__detailedEarthJourneyRoutePointHit === debugJourneyRoutePointHit) {
+          delete debugWindow.__detailedEarthJourneyRoutePointHit;
+        }
         debugWindow.__detailedEarthMapRemovalCount = (debugWindow.__detailedEarthMapRemovalCount ?? 0) + 1;
       }
     };
