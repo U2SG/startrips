@@ -18,7 +18,30 @@ import type { ItineraryRecognition } from "./itineraryImport";
 export type ItineraryImportStage =
   | "source-access"
   | "content-read"
-  | "ai-extraction";
+  | "ai-extraction"
+  | "ai-review";
+
+export type ItineraryLocationReviewPlan = {
+  sourceTitle: string | null;
+  days: Array<{ dayNumber: number; title: string | null; region: string | null }>;
+  entries: Array<{
+    index: number;
+    name: string;
+    aliases: string[];
+    dayNumber: number;
+    role: string;
+    sourceInvalid: boolean;
+    countryCode: string | null;
+    searchArea: string | null;
+    candidates: Array<{ id: string; label: string; context: string; countryCode: string }>;
+  }>;
+};
+
+export type ItineraryLocationReviewDecision = {
+  index: number;
+  candidateId: string | null;
+  correctedQuery: string | null;
+};
 
 export class ItineraryImportError extends Error {
   readonly stage: ItineraryImportStage | null;
@@ -116,6 +139,30 @@ export async function readItineraryFromImage(
   return { ...recognition, sourceKind: "image" };
 }
 
+export async function reviewItineraryLocations(
+  plan: ItineraryLocationReviewPlan,
+  fetcher: typeof fetch = fetch,
+): Promise<ItineraryLocationReviewDecision[]> {
+  const response = await fetcher("/api/itinerary-import/review", {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ plan }),
+  });
+  const payload = await response.json().catch(() => null) as
+    | { decisions?: ItineraryLocationReviewDecision[]; error?: string; message?: string; stage?: ItineraryImportStage }
+    | null;
+  if (!response.ok) {
+    throw new ItineraryImportError(
+      response.status,
+      payload?.error ?? "ITINERARY_REVIEW_FAILED",
+      payload?.message ?? "整份行程复核暂时无法完成。",
+      payload?.stage ?? "ai-review",
+    );
+  }
+  return Array.isArray(payload?.decisions) ? payload.decisions : [];
+}
+
 /**
  * The stage a member is told about. A refusal with no stage is about the
  * request itself, not about any of the three steps, and says so.
@@ -134,6 +181,9 @@ export function itineraryImportStageMessage(error: ItineraryImportError): string
   }
   if (error.stage === "ai-extraction") {
     return `内容已取得，但这次没能识别成行程（${error.code}）。`;
+  }
+  if (error.stage === "ai-review") {
+    return `行程已识别，但整份位置复核暂时无法完成（${error.code}）；仍可检查地图建议位置。`;
   }
   return error.message;
 }

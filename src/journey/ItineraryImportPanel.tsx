@@ -32,7 +32,9 @@ import {
   readItineraryCapabilities,
   readItineraryFromImage,
   readItineraryFromLink,
+  reviewItineraryLocations,
   type ItineraryImportCapabilities,
+  type ItineraryLocationReviewPlan,
 } from "./itineraryImportApi";
 import {
   mergeItinerarySegmentReadings,
@@ -81,9 +83,12 @@ type Props = {
   onApply: (
     imported: readonly ItineraryRoutePointDraft[],
     insertAfterDraftId: string | null,
+    details: { title: string | null; startedOn: string | null; endedOn: string | null },
   ) => void;
   onMessage: (message: string) => void;
   mobileLayout?: boolean;
+  standalone?: boolean;
+  onWorkStateChange?: (state: { busy: boolean; ready: boolean }) => void;
   /** The draft this import would join, so a position can be chosen in it. */
   existingPoints?: readonly { draftId: string; label: string }[];
 };
@@ -143,10 +148,12 @@ export function ItineraryImportPanel({
   onApply,
   onMessage,
   mobileLayout,
+  standalone = false,
+  onWorkStateChange,
   existingPoints = [],
 }: Props) {
   const [mode, setMode] = useState<"text" | "link" | "image">("link");
-  const [expanded, setExpanded] = useState(Boolean(mobileLayout));
+  const [expanded, setExpanded] = useState(Boolean(mobileLayout || standalone));
   const [text, setText] = useState("");
   const [link, setLink] = useState("");
   const [draft, setDraft] = useState<ItineraryImportDraft | null>(null);
@@ -164,6 +171,7 @@ export function ItineraryImportPanel({
   const [lookupProgress, setLookupProgress] = useState<{
     done: number; total: number; unavailable: boolean;
   } | null>(null);
+  const [reviewing, setReviewing] = useState(false);
   const [suggestions, setSuggestions] = useState<Record<string, LocationSearchResult>>({});
   const [manualQuery, setManualQuery] = useState("");
   const lookupGeneration = useRef(0);
@@ -190,7 +198,8 @@ export function ItineraryImportPanel({
   }, [capabilitiesRequested, expanded, mode]);
 
   const lookupAll = useCallback(async (next: ItineraryImportDraft, generation: number) => {
-    const entries = itineraryDraftEntries(next).filter((entry) =>
+    const allEntries = itineraryDraftEntries(next);
+    const entries = allEntries.filter((entry) =>
       entry.flags.includes("unresolved-position")
       && !entry.flags.includes("source-invalid")
       && !entry.flags.includes("truncated")
@@ -198,6 +207,10 @@ export function ItineraryImportPanel({
       && Boolean(entry.searchArea)
       && Boolean(searchableName(entry))
     );
+    const found = new Map<string, LocationSearchResult[]>();
+    const lookupCache = new Map<string, LocationSearchResult[]>();
+    const strictSuggestions: Record<string, LocationSearchResult> = {};
+    let unavailable = false;
     setLookupProgress({ done: 0, total: entries.length, unavailable: false });
     for (const [index, entry] of entries.entries()) {
       if (lookupGeneration.current !== generation) return;
@@ -207,26 +220,125 @@ export function ItineraryImportPanel({
       }
       try {
         const query = searchableName(entry);
-        const { results } = await searchLocations(query, fetch, {
-          aliases: [entry.name, ...entry.aliases].filter((name) => name !== query),
-          searchArea: entry.searchArea,
-          countryCode: entry.countryCode,
-        });
+        const aliases = [entry.name, ...entry.aliases].filter((name) => name !== query);
+        const cacheKey = JSON.stringify([query, aliases, entry.searchArea, entry.countryCode]);
+        let results = lookupCache.get(cacheKey);
+        if (!results) {
+          results = (await searchLocations(query, fetch, {
+            aliases,
+            searchArea: entry.searchArea,
+            countryCode: entry.countryCode,
+          })).results;
+          lookupCache.set(cacheKey, results);
+        }
         if (lookupGeneration.current !== generation) return;
+        found.set(entry.entryId, results);
         const suggestion = itineraryLocationSuggestion(entry, results);
         if (suggestion && !manuallyConfirmed.current.has(entry.entryId)
           && !manuallyEditing.current.has(entry.entryId)) {
-          setSuggestions((current) => ({ ...current, [entry.entryId]: suggestion }));
+          strictSuggestions[entry.entryId] = suggestion;
         }
       } catch {
         if (lookupGeneration.current === generation) {
           setLookupProgress({ done: index, total: entries.length, unavailable: true });
         }
-        return;
+        unavailable = true;
+        break;
       }
       setLookupProgress({ done: index + 1, total: entries.length, unavailable: false });
     }
-  }, []);
+    if (lookupGeneration.current !== generation) return;
+    if (unavailable) {
+      setSuggestions(strictSuggestions);
+      return;
+    }
+
+    setReviewing(true);
+    onMessage("地点已查完，正在结合整份行程核对位置；可以先离开，稍后回来查看。");
+    try {
+      const plan: ItineraryLocationReviewPlan = {
+        sourceTitle: next.sourceTitle,
+        days: next.days.map((day) => ({
+          dayNumber: day.dayNumber,
+          title: day.sourceDayTitle,
+          region: day.regionContext,
+        })),
+        entries: allEntries.map((entry, index) => ({
+          index,
+          name: entry.name,
+          aliases: entry.aliases,
+          dayNumber: entry.dayNumber,
+          role: entry.role,
+          sourceInvalid: entry.flags.includes("source-invalid"),
+          countryCode: entry.countryCode,
+          searchArea: entry.searchArea,
+          candidates: (found.get(entry.entryId) ?? []).map((result) => ({
+            id: result.id,
+            label: result.label,
+            context: result.context,
+            countryCode: result.countryCode,
+          })),
+        })),
+      };
+      const decisions = await reviewItineraryLocations(plan);
+      if (lookupGeneration.current !== generation) return;
+      if (decisions.length !== allEntries.length) {
+        throw new Error("The whole-plan review did not cover every entry");
+      }
+      const reviewed: Array<{ entry: ItineraryEntryDraft; result: LocationSearchResult }> = [];
+      for (const decision of decisions) {
+        const entry = allEntries[decision.index];
+        if (!entry || entry.flags.includes("source-invalid") || entry.flags.includes("truncated")
+          || manuallyConfirmed.current.has(entry.entryId) || manuallyEditing.current.has(entry.entryId)) continue;
+        const chosen = found.get(entry.entryId)?.find((result) => result.id === decision.candidateId);
+        if (chosen && itineraryLocationSuggestion({
+          ...entry,
+          aliases: [...entry.aliases, chosen.label, chosen.labelEnglish ?? "", chosen.labelLocal ?? ""],
+        }, [chosen])) {
+          reviewed.push({ entry, result: chosen });
+          continue;
+        }
+        if (!decision.correctedQuery || !entry.searchArea || !entry.countryCode) continue;
+        try {
+          const { results } = await searchLocations(decision.correctedQuery, fetch, {
+            searchArea: entry.searchArea,
+            countryCode: entry.countryCode,
+          });
+          if (lookupGeneration.current !== generation) return;
+          const correction = itineraryLocationSuggestion({
+            ...entry,
+            aliases: [...entry.aliases, decision.correctedQuery],
+          }, results);
+          if (correction) reviewed.push({ entry, result: correction });
+        } catch {
+          // A correction without a provider-backed result stays unresolved.
+        }
+      }
+      if (lookupGeneration.current !== generation) return;
+      setDraft((current) => current?.jobKey === next.jobKey
+        ? reviewed.reduce((draft, { entry, result }) => resolveItineraryEntryPosition(
+          draft, entry.entryId, {
+            latitude: result.latitude,
+            longitude: result.longitude,
+            alias: result.labelEnglish ?? result.labelLocal ?? result.label,
+          },
+        ), current)
+        : current);
+      setSelected((current) => [...new Set([
+        ...current,
+        ...reviewed.map(({ entry }) => entry.entryId),
+      ])]);
+      setSuggestions({});
+      onMessage(`整份行程已复核，${reviewed.length} 处位置可直接加入；其余条目仍可按需查找。`);
+    } catch {
+      if (lookupGeneration.current === generation) {
+        setSuggestions(strictSuggestions);
+        onMessage("整份位置复核暂时无法完成；已找到的明确位置仍可一次确认。");
+      }
+    } finally {
+      if (lookupGeneration.current === generation) setReviewing(false);
+    }
+  }, [onMessage]);
 
   const receive = useCallback((next: ItineraryImportDraft) => {
     const generation = ++lookupGeneration.current;
@@ -236,6 +348,7 @@ export function ItineraryImportPanel({
     setDraft(next);
     setSelected(defaultItinerarySelection(next));
     setSuggestions({});
+    setReviewing(false);
     setCandidates(null);
     setError(null);
     onMessage(
@@ -468,7 +581,12 @@ export function ItineraryImportPanel({
       setError("还没有可添加的地点：先确认这些条目的位置。");
       return;
     }
-    onApply(imported, insertAfter);
+    const dates = draft.days.map((day) => day.calendarDate).filter((date): date is string => Boolean(date));
+    onApply(imported, insertAfter, {
+      title: draft.sourceTitle,
+      startedOn: dates[0] ?? null,
+      endedOn: dates.at(-1) ?? null,
+    });
   }, [draft, insertAfter, onApply, selected]);
 
   const toggle = useCallback((entryId: string) => {
@@ -483,13 +601,16 @@ export function ItineraryImportPanel({
     ? itineraryDraftToRoutePoints(draft, selected).length
     : 0;
   const suggestionCount = Object.keys(suggestions).length;
-  const lookupBusy = lookupProgress !== null
+  const lookupBusy = reviewing || (lookupProgress !== null
     && !lookupProgress.unavailable
-    && lookupProgress.done < lookupProgress.total;
+    && lookupProgress.done < lookupProgress.total);
+  useEffect(() => {
+    onWorkStateChange?.({ busy: reading || lookupBusy, ready: Boolean(draft) && !reading && !lookupBusy });
+  }, [draft, lookupBusy, onWorkStateChange, reading]);
 
   return (
     <details
-      className="journey-itinerary-import-panel"
+      className={`journey-itinerary-import-panel${standalone ? " is-standalone" : ""}`}
       open={expanded}
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
@@ -644,6 +765,11 @@ export function ItineraryImportPanel({
                   : `正在查找位置 ${lookupProgress.done} / ${lookupProgress.total}；可以继续查看行程。`}
               </p>
             ) : null}
+            {reviewing ? (
+              <p className="journey-itinerary-import__notice" role="status">
+                正在结合整份行程核对搜索结果；可以先离开，稍后回来查看。
+              </p>
+            ) : null}
             {draft.notices.includes("year-unconfirmed") ? (
               <p className="journey-itinerary-import__notice">
                 来源没有写明年份；这些地点可以加入路线，日期暂不填写。
@@ -688,7 +814,7 @@ export function ItineraryImportPanel({
                   </select>
                 </label>
               ) : null}
-              <button type="button" onClick={apply} disabled={willAdd === 0}>
+              <button type="button" onClick={apply} disabled={willAdd === 0 || lookupBusy}>
                 <IconPlus size={17} stroke={1.4} aria-hidden="true" />
                 添加 {willAdd} 个地点到路线
               </button>

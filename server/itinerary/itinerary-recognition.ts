@@ -19,7 +19,8 @@
 export type ItineraryImportStage =
   | "source-access"
   | "content-read"
-  | "ai-extraction";
+  | "ai-extraction"
+  | "ai-review";
 
 /**
  * A refusal that names the stage it happened in.
@@ -302,6 +303,7 @@ export function parseRecognitionCandidates(
 export async function withRecognitionTimeout<T>(
   timeoutMs: number,
   run: (signal: AbortSignal) => Promise<T>,
+  stage: ItineraryImportStage = "ai-extraction",
 ): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -310,7 +312,7 @@ export async function withRecognitionTimeout<T>(
   } catch (error) {
     if (controller.signal.aborted) {
       throw new ItineraryImportStageError(
-        "ai-extraction",
+        stage,
         "ITINERARY_RECOGNITION_TIMEOUT",
         `Itinerary recognition did not answer within ${timeoutMs}ms`,
         504,

@@ -13,7 +13,7 @@ function apiKey() {
   return cachedKey;
 }
 
-const ROLES = ["accommodation", "attraction", "transport", "pure-transit"];
+const ROLES = ["accommodation", "attraction", "transport", "pure-transit", "activity"];
 
 const DAY = {
   type: "object",
@@ -38,7 +38,7 @@ const ENTRY = {
   type: "object",
   additionalProperties: false,
   required: [
-    "sourceEntryId", "dayNumber", "orderInDay", "name", "aliases",
+    "sourceEntryId", "dayNumber", "orderInDay", "name", "aliases", "countryCode", "searchArea",
     "regionContext", "role", "transitEndpoints", "truncated", "sourceInvalid",
   ],
   properties: {
@@ -47,6 +47,8 @@ const ENTRY = {
     orderInDay: { type: "integer", description: "1-based within its day" },
     name: { type: "string", description: "Exactly as printed; never completed" },
     aliases: { type: "array", items: { type: "string" } },
+    countryCode: { type: ["string", "null"] },
+    searchArea: { type: ["string", "null"] },
     regionContext: { type: ["string", "null"] },
     role: { type: "string", enum: ROLES },
     transitEndpoints: {
@@ -104,6 +106,28 @@ const HINTS_SCHEMA = {
   },
 };
 
+const REVIEW_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["contractVersion", "decisions"],
+  properties: {
+    contractVersion: { type: "integer", enum: [1] },
+    decisions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["index", "candidateId", "correctedQuery"],
+        properties: {
+          index: { type: "integer" },
+          candidateId: { type: ["string", "null"] },
+          correctedQuery: { type: ["string", "null"] },
+        },
+      },
+    },
+  },
+};
+
 // Every rule here is an acceptance item on issue #512, not a style preference.
 // A model left to its own judgement deduplicates repeated places, completes
 // truncated names and infers the missing year -- each of which is a specific
@@ -128,7 +152,16 @@ Report, never repair:
 
 Roles: accommodation (where they sleep), attraction (a place visited),
 transport (a named station, airport or terminal), pure-transit (a leg whose
-only content is travelling between two places -- set transitEndpoints).
+only content is travelling between two places -- set transitEndpoints),
+activity (an event or tour title without a stated venue).
+
+In the same reading, add search hints without changing any printed name:
+- aliases: at most two established English/local names of the exact same venue.
+  Use [] if unsure, never a guessed hotel brand or literal translation.
+- countryCode: two-letter ISO country when the itinerary context makes it clear.
+- searchArea: specific English locality, optionally state or province. If a
+  day crosses cities and this entry's locality is unclear, use null.
+These hints are not source facts and never supply coordinates.
 
 Never output coordinates, latitude or longitude. A place is a name and a
 region; where it is on Earth is resolved later by a place search.
@@ -157,6 +190,46 @@ do not copy its origin to its destination.
 nonPlace is true only for an event or tour title with no stated venue. A named
 venue, beach, park, airport, hotel or station is a place. Do not infer
 coordinates. Return only valid JSON matching the supplied schema.`;
+
+const REVIEW_SYSTEM = `Review one complete travel itinerary and the real map-search candidates
+for each of its entries. Compare names in both languages, country, locality,
+neighbouring days and the route's sequence. A fuzzy search result is not proof
+that it is the named place. Repeated visits remain separate entries.
+
+For each input index, choose candidateId ONLY when one supplied candidate is
+clearly the intended place. If the candidates are wrong or absent, provide one
+short, established English or local name as correctedQuery when it could find
+the intended place. If uncertain, return null for both. A correction is a new
+search term, never a coordinate. Never invent an ID or coordinate. Return one
+decision for every input index and valid JSON matching the schema.`;
+
+async function reviewLocations(document, signal) {
+  const response = await fetch(UPSTREAM, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey()}`,
+    },
+    signal,
+    body: JSON.stringify({
+      model: config.model,
+      enable_thinking: false,
+      messages: [
+        { role: "system", content: REVIEW_SYSTEM },
+        { role: "user", content: JSON.stringify(document.plan) },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "itinerary_location_review", strict: true, schema: REVIEW_SCHEMA },
+      },
+    }),
+  });
+  if (!response.ok) throw new Error(`Location review provider answered ${response.status}`);
+  const payload = await response.json();
+  const content = payload.choices?.[0]?.message?.content;
+  if (typeof content !== "string") throw new Error("Location review provider returned no content");
+  return { reading: JSON.parse(content), usage: payload.usage ?? null };
+}
 
 async function enrichLocationHints(reading, signal) {
   const input = {
@@ -241,6 +314,9 @@ function userContent(document) {
 
 export async function recognize({ model, document }, { signal } = {}) {
   const requestSignal = signal ?? AbortSignal.timeout(175_000);
+  if (document.kind === "review-locations") {
+    return reviewLocations(document, requestSignal);
+  }
   const response = await fetch(UPSTREAM, {
     method: "POST",
     headers: {
@@ -283,12 +359,15 @@ export async function recognize({ model, document }, { signal } = {}) {
   // The caller records provenance from its own configuration, so anything the
   // reading claims about its own version is discarded rather than trusted.
   reading.contractVersion = 1;
-  try {
-    await enrichLocationHints(reading, requestSignal);
-  } catch {
-    // The extracted reading remains intact. Missing hints simply leave those
-    // places for manual search; no model suggestion ever becomes a coordinate.
-    console.error("Itinerary location hints were unavailable");
+  const hinted = reading.entries.filter((entry) => entry.countryCode && entry.searchArea).length;
+  if (reading.entries.length > 0 && hinted < reading.entries.length / 2) {
+    try {
+      await enrichLocationHints(reading, requestSignal);
+    } catch {
+      // An incomplete first reading still remains reviewable without a second
+      // provider answer; no missing hint ever becomes a fabricated position.
+      console.error("Itinerary location hints were unavailable");
+    }
   }
   return { reading, usage: payload.usage ?? null };
 }
