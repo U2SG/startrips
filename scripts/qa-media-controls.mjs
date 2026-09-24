@@ -1911,12 +1911,9 @@ try {
     await page.mouse.move(x, y);
     await page.mouse.down();
     await page.mouse.move(x - 130, y, { steps: 8 });
-    await page.mouse.up();
-    await page.waitForFunction(() => document.querySelector(
-      '.journey-story-fullscreen [data-story-media-pages]')?.getAttribute("data-media-presentation") === "settling",
-    null, { polling: "raf" });
-    // Observe before Back so a valid 560ms morph cannot disappear between
-    // Playwright calls. Freeze its middle frame for a composited pixel check.
+    // Observe before release, then dispatch Back from the exact settling RAF.
+    // This prevents a scheduler delay from turning the interruption into a
+    // post-settle close or missing a valid 560ms morph.
     await page.evaluate(() => {
       const selector = '[data-shared-element-clone^="story-fullscreen"]';
       const existing = new Set(document.querySelectorAll(selector));
@@ -1936,8 +1933,20 @@ try {
       probe.observer = new MutationObserver(capture);
       probe.observer.observe(document.body, { childList: true, subtree: true });
       window.__qaStoryBackClone = probe;
+      window.__qaStoryBackTriggered = false;
+      const backOnSettle = () => {
+        const stage = document.querySelector('.journey-story-fullscreen [data-story-media-pages]');
+        if (stage?.getAttribute("data-media-presentation") === "settling") {
+          window.__qaStoryBackTriggered = true;
+          window.history.back();
+          return;
+        }
+        requestAnimationFrame(backOnSettle);
+      };
+      requestAnimationFrame(backOnSettle);
     });
-    await page.evaluate(() => window.history.back());
+    await page.mouse.up();
+    await page.waitForFunction(() => window.__qaStoryBackTriggered, null, { polling: "raf" });
     await overlay.waitFor({ state: "hidden" });
     const returningClone = await page.evaluate(() => {
       const probe = window.__qaStoryBackClone;
