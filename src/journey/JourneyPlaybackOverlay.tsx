@@ -930,7 +930,8 @@ export function JourneyPlaybackOverlay({
 
   // Camera ownership follows playback semantics. Intro/outro frame the whole
   // Journey; travel/stop/media point at one route point. The key guard avoids
-  // reissuing the same point command across stop -> media chapters.
+  // reissuing the same point command across automatic stop -> media chapters.
+  // An explicit chapter choice may reclaim a camera the viewer released.
   const lastCameraTargetKeyRef = useRef<string | null>(null);
   const commitSpatial = useCallback((arrivingFromTravel: boolean) => {
     const currentStopIsPending = Boolean(arrivalGate && journey && arrivalGate.journeyId === journey.id
@@ -953,7 +954,8 @@ export function JourneyPlaybackOverlay({
     explicitCameraIntentRef.current = null;
     const routePointId = target.kind === "point" ? journey.routePoints[target.pointIndex]?.id ?? "" : "";
     const targetKey = `${journey.id}:${playbackCameraTargetKey(target)}:${routePointId}`;
-    if (lastCameraTargetKeyRef.current === targetKey) return;
+    if (lastCameraTargetKeyRef.current === targetKey
+      && !(explicitlySelected && cameraFollowing === false)) return;
     lastCameraTargetKeyRef.current = targetKey;
     onCameraTargetChange(target, explicitlySelected);
   }, [arrivalGate, cameraFlight, cameraFollowing, director.intentRevision, director.step,

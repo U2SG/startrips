@@ -258,6 +258,12 @@ async function recordArrivalProjection(page) {
     const capture = () => {
       if (root.dataset.playbackPhase !== "stop" || root.dataset.playbackStep !== "6"
           || window.__qaPlaybackCameraArrival.length) return;
+      const heading = root.querySelector(".journey-playback__stop h3");
+      const headingRect = heading?.getBoundingClientRect();
+      if (!(heading instanceof HTMLElement) || !headingRect?.width || !headingRect.height) return;
+      const hit = document.elementFromPoint(headingRect.left + headingRect.width / 2,
+        headingRect.top + headingRect.height / 2);
+      if (root.dataset.arrivalGate === "pending" || (hit !== heading && !heading.contains(hit))) return;
       const map = document.querySelector(".detailed-earth-map");
       const rect = map?.getBoundingClientRect();
       const point = window.__detailedEarthMapProject?.(longitude, latitude) ?? null;
@@ -265,7 +271,7 @@ async function recordArrivalProjection(page) {
       window.__qaPlaybackCameraArrival.push({
         following: root.dataset.cameraFollow, mapOwner: map?.dataset.diveOwner ?? null,
         center, point, mapCenter: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null,
-        visible: Boolean(root.querySelector(".journey-playback__stop")),
+        visible: true,
       });
     };
     const observer = new MutationObserver(capture);
@@ -446,6 +452,62 @@ try {
         `.journey-story [data-media-page="current"][data-media-page-id="${asset}"]`)), imageId,
       { timeout: 8_000 });
       reports.push({ mode: "detail", returnAndBack: returned, storyAsset: imageId });
+    } finally { await page.close(); }
+  }
+
+  // A manual chapter choice at the same Route Point reclaims a released Detail
+  // camera; the automatic stop -> media transition above must keep it free.
+  {
+    const { page, errors } = await open();
+    try {
+      await enterDetail(page);
+      await startPlayback(page);
+      await page.waitForFunction(() => {
+        const root = document.querySelector(".journey-playback");
+        return root?.dataset.playbackPhase === "stop" && root.dataset.playbackStep === "3"
+          && root.dataset.arrivalGate !== "pending"
+          && Boolean(root.querySelector(".journey-playback__stop h3"));
+      }, null, { timeout: 40_000 });
+      await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
+      await page.locator(".journey-playback.is-paused").waitFor();
+      const wheelPoint = await stopBlankPoint(page);
+      await page.mouse.move(wheelPoint.x, wheelPoint.y);
+      await page.mouse.wheel(0, -120);
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.cameraFollow === "free",
+        null, { timeout: 8_000 });
+      const beforeDrag = await snapshot(page);
+      await page.mouse.move(wheelPoint.x, wheelPoint.y);
+      await page.mouse.down();
+      await page.mouse.move(wheelPoint.endX, wheelPoint.endY, { steps: 6 });
+      await page.mouse.up();
+      await page.waitForFunction((before) => {
+        const center = document.querySelector(".detailed-earth-map")?.dataset.mapCameraObservation?.split(",").map(Number);
+        return center?.length === 2 && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.01;
+      }, beforeDrag.mapCenter, { timeout: 8_000 });
+      const free = await snapshot(page);
+      assert.equal(free.following, "free");
+      await page.mouse.move(16, 16);
+      await page.locator('.journey-playback__controls button[aria-label="下一个章节"]').click();
+      await page.waitForFunction((revision) => {
+        const root = document.querySelector(".journey-playback");
+        const focus = document.querySelector("[data-qa-route-point-context-focus]");
+        return root?.dataset.playbackStep === "4" && root.dataset.playbackPhase === "media"
+          && root.dataset.cameraFollow === "follow" && Number(focus?.dataset.focusRevision) > revision;
+      }, free.focusRevision, { timeout: 10_000 });
+      await page.waitForFunction(({ longitude, latitude }) => {
+        const map = document.querySelector(".detailed-earth-map");
+        const center = map?.dataset.mapCameraObservation?.split(",").map(Number);
+        const point = window.__detailedEarthMapProject?.(longitude, latitude);
+        const rect = map?.getBoundingClientRect();
+        return center?.length === 2 && Math.hypot(center[0] - longitude, center[1] - latitude) < 0.01
+          && point && rect && Math.hypot(point.x - (rect.left + rect.width / 2),
+            point.y - (rect.top + rect.height / 2)) < 20;
+      }, points[1], { timeout: 10_000 });
+      const returned = await snapshot(page);
+      assert.ok(returned.focusPoint?.includes(`${points[1].latitude},${points[1].longitude}`),
+        `explicit same-point Next focused another location: ${JSON.stringify(returned)}`);
+      assert.deepEqual(errors, []);
+      reports.push({ mode: "detail-explicit-same-point-next", wheelPoint, free, returned });
     } finally { await page.close(); }
   }
 
