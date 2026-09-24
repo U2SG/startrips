@@ -3,6 +3,7 @@ import {
   AttributionControl,
   Map as MapLibreMap,
   NavigationControl,
+  type GeoJSONSource,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { JourneyRoute } from "../journey/types";
@@ -11,6 +12,7 @@ import {
   DETAILED_EARTH_DRAG_PAN_OPTIONS,
   getDetailedEarthRouteFrame,
   getDetailedEarthFocusDuration,
+  pickDetailedEarthJourneyRoutePointHit,
   getEarthDiveHandoffFrame,
   detailedEarthAnchorCorrection,
   solveDetailedEarthHandoffZoom,
@@ -20,6 +22,7 @@ import {
   DETAILED_EARTH_MAX_ZOOM,
   DETAILED_EARTH_MIN_ZOOM,
   DETAILED_EARTH_PITCH_SPEED,
+  type DetailedEarthJourneyOverlay,
   type DetailedEarthLanguage,
   type DetailedEarthFocusFlightProfile,
   DETAILED_EARTH_ROTATE_SPEED,
@@ -58,6 +61,132 @@ const CALIBRATION_ZOOM_EPSILON = 0.0005;
 const CALIBRATION_ANCHOR_EPSILON_PX = 0.05;
 const CALIBRATION_SCALE_ERROR_EPSILON = 0.0005;
 
+const JOURNEY_OVERLAY_SOURCE_ID = "startrips-active-journey";
+const JOURNEY_OVERLAY_ROUTE_LAYER_ID = "startrips-active-journey-route";
+const JOURNEY_OVERLAY_POINT_LAYER_ID = "startrips-active-journey-points";
+const JOURNEY_OVERLAY_LABEL_LAYER_ID = "startrips-active-journey-labels";
+const JOURNEY_OVERLAY_HIT_LAYER_ID = "startrips-active-journey-hit-targets";
+
+function installDetailedEarthJourneyOverlay(
+  map: MapLibreMap,
+  overlay: DetailedEarthJourneyOverlay,
+) {
+  const existingSource = map.getSource(JOURNEY_OVERLAY_SOURCE_ID) as GeoJSONSource | undefined;
+  if (existingSource) {
+    existingSource.setData(overlay.data);
+  } else {
+    map.addSource(JOURNEY_OVERLAY_SOURCE_ID, {
+      type: "geojson",
+      data: overlay.data,
+    });
+  }
+
+  if (!map.getLayer(JOURNEY_OVERLAY_ROUTE_LAYER_ID)) {
+    map.addLayer({
+      id: JOURNEY_OVERLAY_ROUTE_LAYER_ID,
+      type: "line",
+      source: JOURNEY_OVERLAY_SOURCE_ID,
+      filter: ["==", ["get", "featureKind"], "segment"],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": ["get", "color"],
+        "line-width": ["interpolate", ["linear"], ["zoom"], 5.6, 1.35, 10, 2.4, 16, 4.2],
+        "line-opacity": [
+          "match", ["get", "attentionRole"],
+          "narrative-current", 0.94,
+          "selected", 0.88,
+          0.72,
+        ],
+        "line-dasharray": [1.4, 1.2],
+      },
+    });
+  }
+  if (!map.getLayer(JOURNEY_OVERLAY_POINT_LAYER_ID)) {
+    map.addLayer({
+      id: JOURNEY_OVERLAY_POINT_LAYER_ID,
+      type: "circle",
+      source: JOURNEY_OVERLAY_SOURCE_ID,
+      filter: [
+        "all",
+        ["==", ["get", "featureKind"], "route-point"],
+        ["==", ["get", "markerVisible"], true],
+      ],
+      paint: {
+        "circle-color": ["get", "color"],
+        "circle-radius": [
+          "case",
+          ["==", ["get", "attentionRole"], "narrative-current"], 7,
+          ["==", ["get", "attentionRole"], "selected"], 6.4,
+          ["==", ["get", "semanticRole"], "stop"], 5,
+          3.1,
+        ],
+        "circle-opacity": [
+          "case",
+          ["==", ["get", "semanticRole"], "passthrough"], 0.55,
+          0.9,
+        ],
+        "circle-stroke-color": "rgba(9, 14, 18, 0.72)",
+        "circle-stroke-width": [
+          "case",
+          ["==", ["get", "attentionRole"], "ordinary"], 1.2,
+          2,
+        ],
+      },
+    });
+  }
+  const styleSupportsTextLabels = Boolean(map.getStyle().glyphs);
+  if (styleSupportsTextLabels && !map.getLayer(JOURNEY_OVERLAY_LABEL_LAYER_ID)) {
+    map.addLayer({
+      id: JOURNEY_OVERLAY_LABEL_LAYER_ID,
+      type: "symbol",
+      source: JOURNEY_OVERLAY_SOURCE_ID,
+      minzoom: 7,
+      filter: [
+        "all",
+        ["==", ["get", "featureKind"], "route-point"],
+        ["==", ["get", "markerVisible"], true],
+        ["!=", ["get", "label"], ""],
+        [
+          "any",
+          ["==", ["get", "semanticRole"], "stop"],
+          ["!=", ["get", "attentionRole"], "ordinary"],
+        ],
+      ],
+      layout: {
+        "text-field": ["get", "label"],
+        "text-size": 11,
+        "text-offset": [0, 1.2],
+        "text-anchor": "top",
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+      },
+      paint: {
+        "text-color": "rgba(241, 247, 248, 0.92)",
+        "text-halo-color": "rgba(5, 11, 14, 0.86)",
+        "text-halo-width": 1.3,
+      },
+    });
+  }
+  if (!map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
+    map.addLayer({
+      id: JOURNEY_OVERLAY_HIT_LAYER_ID,
+      type: "circle",
+      source: JOURNEY_OVERLAY_SOURCE_ID,
+      filter: [
+        "all",
+        ["==", ["get", "featureKind"], "route-point"],
+        ["==", ["get", "activatable"], true],
+      ],
+      paint: {
+        // Visual marker size and interaction size are deliberately decoupled.
+        // 22px radius gives every disclosed Route Point a 44px pointer target.
+        "circle-radius": 22,
+        "circle-opacity": 0,
+      },
+    });
+  }
+}
+
 type DetailedEarthMapProps = {
   /** Which Dive stage this map is mounted under. */
   diveStage?: EarthDiveStage;
@@ -77,9 +206,12 @@ type DetailedEarthMapProps = {
   particleFrame?: ParticleAnchorFrame | null;
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
+  /** Active authorized Journey projected from the same Route consumed by Particle Earth. */
+  journeyOverlay: DetailedEarthJourneyOverlay;
   focusRevision?: number;
   focusFlightProfile?: DetailedEarthFocusFlightProfile;
   language: DetailedEarthLanguage;
+  onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onOverviewRequest?: () => void;
   /** Latest detail-owned geographic observation for a renderer-to-particle handback. */
@@ -146,9 +278,11 @@ export default function DetailedEarthMap({
   particleFrame = null,
   focusPoint,
   focusRoute,
+  journeyOverlay,
   focusRevision = 0,
   focusFlightProfile,
   language,
+  onJourneyRoutePointActivate,
   onGlobePointPick,
   onOverviewRequest,
   onCameraObservation,
@@ -166,6 +300,9 @@ export default function DetailedEarthMap({
   const languageRef = useRef(language);
   const focusPointRef = useRef(focusPoint);
   const focusRouteRef = useRef(focusRoute);
+  const journeyOverlayRef = useRef(journeyOverlay);
+  const syncJourneyOverlayRef = useRef<(() => void) | null>(null);
+  const onJourneyRoutePointActivateRef = useRef(onJourneyRoutePointActivate);
   const onPickRef = useRef(onGlobePointPick);
   const onOverviewRequestRef = useRef(onOverviewRequest);
   const onCameraObservationRef = useRef(onCameraObservation);
@@ -188,6 +325,8 @@ export default function DetailedEarthMap({
   languageRef.current = language;
   focusPointRef.current = focusPoint;
   focusRouteRef.current = focusRoute;
+  journeyOverlayRef.current = journeyOverlay;
+  onJourneyRoutePointActivateRef.current = onJourneyRoutePointActivate;
   onPickRef.current = onGlobePointPick;
   onOverviewRequestRef.current = onOverviewRequest;
   onCameraObservationRef.current = onCameraObservation;
@@ -236,6 +375,17 @@ export default function DetailedEarthMap({
       fadeDuration: 650,
     });
     let initialLoadSettled = false;
+    // MapLibre's input handlers are the authority for user zoom provenance.
+    // Event.originalEvent is not preserved on every animated zoom frame, and a
+    // resize/focus lifetime can publish zoomend after a real wheel interrupts it.
+    // The handlers keep their own active lifetime through the rendered gesture,
+    // so programmatic jumpTo/flyTo/calibration stay ineligible without a fragile
+    // DOM/event latch.
+    const userZoomHandlerActive = () => (
+      map.scrollZoom.isActive()
+      || map.touchZoomRotate.isActive()
+      || map.keyboard.isActive()
+    );
     let removed = false;
     let revealRevision = 0;
     let fullySettled = false;
@@ -244,6 +394,9 @@ export default function DetailedEarthMap({
     let renderCount = 0;
     let idleCount = 0;
     let resizeCount = 0;
+    let appliedJourneyOverlayRevision: string | null = null;
+    let loadedJourneyOverlayRevision: string | null = null;
+    let paintedJourneyOverlayRevision: string | null = null;
     let pendingRevealCommit: {
       revision: number;
       stage: EarthDiveStage;
@@ -253,6 +406,22 @@ export default function DetailedEarthMap({
       reason: "load" | "stage" | "resize-observer";
     } | null = null;
     mapRef.current = map;
+    let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
+    let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
+      journeyId: string;
+      routePointId: string;
+    } | null) | null = null;
+    if (import.meta.env.DEV && typeof window !== "undefined") {
+      const debugWindow = window as Window & {
+        __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
+      };
+      debugProject = (longitude, latitude) => {
+        const projected = map.project([longitude, latitude]);
+        const rect = host.getBoundingClientRect();
+        return { x: rect.left + projected.x, y: rect.top + projected.y };
+      };
+      debugWindow.__detailedEarthMapProject = debugProject;
+    }
     // Register the one-shot load observation immediately after construction.
     // A tiny inline/QA style can become style-loaded before the rest of this
     // effect has finished wiring calibration/reveal callbacks. Keep the event
@@ -279,6 +448,77 @@ export default function DetailedEarthMap({
       host.dataset.mapReadiness = readiness;
       onReadinessChangeRef.current?.(readiness);
     };
+    const reconcileFullySettled = () => {
+      if (
+        fullySettled
+        || !initialLoadSettled
+        || paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+        || map.isMoving()
+      ) return;
+      // `idle` is an event edge, not durable renderer truth. Installing the
+      // in-memory Journey GeoJSON source can legally make that edge occur before
+      // the current overlay's post-sync paint. Reconcile the same settled
+      // invariant from durable overlay/camera state on render so a painted
+      // Journey cannot remain permanently `visual-ready` merely because the one
+      // `idle` edge was missed. `initialLoadSettled` already proves the style was
+      // usable once; later global style/tile churn is not part of this personal
+      // Journey's readiness. Its exact loaded+painted revision gates above are.
+      fullySettled = true;
+      if (host.dataset.mapPostSyncRenderRevision === host.dataset.mapRevealRevision) {
+        publishReadiness("fully-settled");
+      }
+    };
+    const syncJourneyOverlay = () => {
+      if (removed) return false;
+      const overlay = journeyOverlayRef.current;
+      const source = map.getSource(JOURNEY_OVERLAY_SOURCE_ID);
+      if (source && appliedJourneyOverlayRevision === overlay.revision) return true;
+      // A GeoJSON `setData()` temporarily makes MapLibre report the overall
+      // style as not loaded while that source update is being processed. Once
+      // our source already exists, that is exactly when a rapid Journey switch
+      // still needs to replace its data; treating `isStyleLoaded()` as an
+      // update gate can strand the previous Journey forever. Keep the full-style
+      // barrier only for first install / style-reload recovery, where addSource
+      // and addLayer genuinely require the style to be ready.
+      if (!source && !map.isStyleLoaded()) return false;
+      try {
+        installDetailedEarthJourneyOverlay(map, overlay);
+        appliedJourneyOverlayRevision = overlay.revision;
+        // A new Journey revision owns a new settled lifecycle. Never let an
+        // earlier overlay's fully-settled bit survive a rapid Route/Journey
+        // switch and make the replacement look settled before its own frame.
+        fullySettled = false;
+        // This source is a complete in-memory FeatureCollection, not a tile or
+        // network-backed source. Once addSource/setData returns, the current
+        // Journey revision has been accepted by MapLibre; the later render
+        // below is the paint proof. Waiting for isSourceLoaded/sourcedata here
+        // can deadlock a hidden prewarm surface because a synchronous GeoJSON
+        // update is allowed to miss that lifecycle edge entirely.
+        loadedJourneyOverlayRevision = overlay.revision;
+        paintedJourneyOverlayRevision = null;
+        host.dataset.journeyOverlayReady = "false";
+        host.dataset.journeyOverlayRevision = overlay.revision;
+        host.dataset.journeyOverlayJourneyId = overlay.journeyId ?? "";
+        host.dataset.journeyOverlayPointCount = String(overlay.pointCount);
+        host.dataset.journeyOverlayStopCount = String(overlay.stopCount);
+        host.dataset.journeyOverlayPassthroughCount = String(overlay.passthroughCount);
+        host.dataset.journeyOverlayFeatureCount = String(overlay.data.features.length);
+        host.dataset.journeyOverlaySourceJourneyCount = String(new Set(
+          overlay.data.features.map((feature) => feature.properties.journeyId),
+        ).size);
+        delete host.dataset.journeyOverlayError;
+        map.triggerRepaint();
+        return true;
+      } catch (error) {
+        appliedJourneyOverlayRevision = null;
+        loadedJourneyOverlayRevision = null;
+        paintedJourneyOverlayRevision = null;
+        host.dataset.journeyOverlayReady = "false";
+        host.dataset.journeyOverlayError = error instanceof Error ? error.message : "journey-overlay-error";
+        return false;
+      }
+    };
+    syncJourneyOverlayRef.current = syncJourneyOverlay;
     const publishCameraObservation = () => {
       if (diveOwnerRef.current !== "detail") return;
       const center = map.getCenter();
@@ -321,6 +561,23 @@ export default function DetailedEarthMap({
       host.dataset.handoffScale = measured.pxPerDegreeLat.toFixed(3);
     };
 
+    const synchronizedParticleFrame = { current: null as ParticleAnchorFrame | null };
+    const isNewParticleCalibrationFrame = (next: ParticleAnchorFrame) => {
+      const previous = synchronizedParticleFrame.current;
+      if (!previous) return true;
+      const zoomChanged = next.zoom === undefined || previous.zoom === undefined
+        ? next.zoom !== previous.zoom
+        : Math.abs(next.zoom - previous.zoom) > CALIBRATION_ZOOM_EPSILON;
+      const scaleChanged = previous.pxPerDegreeLat <= 0
+        || Math.abs(next.pxPerDegreeLat / previous.pxPerDegreeLat - 1) > CALIBRATION_SCALE_ERROR_EPSILON;
+      return Math.abs(next.anchor.lat - previous.anchor.lat) > 1e-7
+        || Math.abs(next.anchor.lon - previous.anchor.lon) > 1e-7
+        || Math.hypot(next.screen.x - previous.screen.x, next.screen.y - previous.screen.y)
+          > CALIBRATION_ANCHOR_EPSILON_PX
+        || scaleChanged
+        || zoomChanged;
+    };
+
     /**
      * Solve this map's camera to what the particle Earth is showing.
      *
@@ -338,14 +595,27 @@ export default function DetailedEarthMap({
       const particle = frameOverride ?? particleFrameRef.current;
       const frame = handoffFrame(frameOverride);
       if (!particle || !frame) return;
-      // Particle-owned calibration is an authorized camera intent. A reveal
-      // synchronization armed before this frame may not restore over it.
-      cameraIntentRevisionRef.current += 1;
-      // A NEW particle frame reseeds the geographic center. A retry of the SAME
-      // stable frame must preserve the center correction already accumulated by
-      // previous passes, otherwise every Dive rAF would erase its own progress.
-      if (mode === "sync") map.jumpTo({ center: frame.center });
-      const maxPasses = mode === "retry" ? CALIBRATION_RETRY_PASSES : CALIBRATION_MAX_PASSES;
+      // The particle scene publishes every rendered frame, including identical
+      // resting frames. Only a materially new camera frame is a new intent.
+      // Treating every callback as new would invalidate the pending reveal on
+      // every rAF and permanently starve the blending handoff.
+      const newParticleFrame = mode === "sync" && isNewParticleCalibrationFrame(particle);
+      if (newParticleFrame) {
+        cameraIntentRevisionRef.current += 1;
+        synchronizedParticleFrame.current = {
+          anchor: { ...particle.anchor },
+          screen: { ...particle.screen },
+          pxPerDegreeLat: particle.pxPerDegreeLat,
+          zoom: particle.zoom,
+        };
+        // A NEW particle frame reseeds the geographic center. Repeated copies
+        // of the same stable frame preserve the correction already accumulated
+        // by the fixed-point solver instead of erasing it each render.
+        map.jumpTo({ center: frame.center });
+      }
+      const maxPasses = mode === "retry" || !newParticleFrame
+        ? CALIBRATION_RETRY_PASSES
+        : CALIBRATION_MAX_PASSES;
       for (let pass = 0; pass < maxPasses; pass += 1) {
         const measured = measureAnchorFrame(frameOverride);
         if (!measured) return;
@@ -512,6 +782,42 @@ export default function DetailedEarthMap({
     };
     revealSyncRef.current = syncRevealSurface;
 
+    map.on("style.load", () => {
+      if (removed) return;
+      appliedJourneyOverlayRevision = null;
+      loadedJourneyOverlayRevision = null;
+      paintedJourneyOverlayRevision = null;
+      host.dataset.journeyOverlayReady = "false";
+      applyMapLanguage(map, languageRef.current);
+      if (!initialLoadSettled) {
+        // Do not add the Journey source before the initial style has been
+        // acknowledged. Adding a source from inside the first style.load edge
+        // makes MapLibre's own load/isStyleLoaded barrier include that newly
+        // introduced source, which can strand the hidden prewarm surface at
+        // `mounted`. Settle the already-loaded base style first; that routine
+        // installs this exact Journey revision and still gates visual readiness
+        // on a later source-loaded + painted render.
+        settleInitialLoad?.();
+        return;
+      }
+      const overlayReady = syncJourneyOverlay();
+      if (overlayReady) syncRevealSurface("stage");
+    });
+
+    map.on("sourcedata", (event) => {
+      if (
+        removed
+        || event.sourceId !== JOURNEY_OVERLAY_SOURCE_ID
+        || event.isSourceLoaded !== true
+        || appliedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+      ) return;
+      loadedJourneyOverlayRevision = appliedJourneyOverlayRevision;
+      reconcileFullySettled();
+      // Source completion itself is not enough to reveal. Ask MapLibre for one
+      // later render so the exact loaded revision is proven on the framebuffer.
+      map.triggerRepaint();
+    });
+
     map.on("render", () => {
       renderCount += 1;
       renderEventObserved = true;
@@ -522,10 +828,36 @@ export default function DetailedEarthMap({
       // post-sync render revision.
       if (!initialLoadSettled && map.isStyleLoaded()) settleInitialLoad?.();
 
+      const overlayRevisionAtRenderStart = appliedJourneyOverlayRevision;
+      if (appliedJourneyOverlayRevision !== journeyOverlayRef.current.revision) {
+        syncJourneyOverlay();
+      } else {
+        // GeoJSON source completion can race the sourcedata listener on fast QA
+        // styles. Reconcile MapLibre's current source truth on its render event
+        // instead of requiring that one event edge to have been observed. This
+        // keeps the same loaded-before-painted invariant without timer/retry
+        // liveness or revealing an unready Journey revision.
+        if (
+          loadedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+          && map.getSource(JOURNEY_OVERLAY_SOURCE_ID)
+          && map.isSourceLoaded(JOURNEY_OVERLAY_SOURCE_ID)
+        ) loadedJourneyOverlayRevision = journeyOverlayRef.current.revision;
+        if (
+          overlayRevisionAtRenderStart === journeyOverlayRef.current.revision
+          && loadedJourneyOverlayRevision === journeyOverlayRef.current.revision
+          && paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision
+        ) {
+          paintedJourneyOverlayRevision = journeyOverlayRef.current.revision;
+          host.dataset.journeyOverlayReady = "true";
+          host.dataset.journeyOverlayPaintedRevision = paintedJourneyOverlayRevision;
+        }
+      }
+      reconcileFullySettled();
       const pending = pendingRevealCommit;
       if (
         pending
         && !removed
+        && paintedJourneyOverlayRevision === journeyOverlayRef.current.revision
         && pending.revision === revealRevision
         && canCommitDetailedEarthReveal(renderCount, pending.afterRenderCount)
       ) {
@@ -558,6 +890,11 @@ export default function DetailedEarthMap({
         host.dataset.mapRevealCameraAfter = cameraSignature(cameraAfter);
         publishAnchorFrame();
         publishReadiness(fullySettled ? "fully-settled" : "visual-ready");
+        // The post-sync revision is written on this exact render. Reconcile
+        // durable style/tile/camera truth again after that commit so a map
+        // whose last idle/moveend edge happened before this framebuffer proof
+        // cannot remain stranded at visual-ready with no later event to promote it.
+        reconcileFullySettled();
       }
     });
     map.on("resize", () => {
@@ -566,11 +903,11 @@ export default function DetailedEarthMap({
     });
     map.on("idle", () => {
       idleCount += 1;
-      fullySettled = true;
       host.dataset.mapIdleCount = String(idleCount);
-      if (host.dataset.mapPostSyncRenderRevision === host.dataset.mapRevealRevision) {
-        publishReadiness("fully-settled");
-      }
+      // `idle` is only an edge. Grade the same durable source/frame/style/tile/
+      // camera invariant as render/moveend so an old idle cannot settle a new
+      // Journey revision and a current idle cannot be lost before its paint.
+      reconcileFullySettled();
     });
 
     if (typeof ResizeObserver !== "undefined") {
@@ -595,8 +932,10 @@ export default function DetailedEarthMap({
         : renderEventObserved
           ? "render-bootstrap"
           : "style-loaded-recovery";
-      // Calibrate first, then require a post-sync MapLibre render for the
-      // current real host geometry before this renderer can become visual-ready.
+      // The personal Journey is part of detail readiness, not decoration that
+      // may pop in after the basemap. Install the current authorized revision
+      // before calibrating and arming the post-sync reveal frame.
+      syncJourneyOverlay();
       calibrateToParticle();
       syncRevealSurface("load");
     };
@@ -626,19 +965,99 @@ export default function DetailedEarthMap({
       // `map.resize()` can emit moveend while an explicit flyTo/fitBounds is
       // still easing. Only retire focus-flight ownership when MapLibre itself
       // says that ease has actually completed or been interrupted.
-      if (!map.isMoving()) focusFlightActiveRef.current = false;
+      if (!map.isMoving()) {
+        focusFlightActiveRef.current = false;
+        // The final camera frame can be followed by `moveend` without another
+        // render/idle edge. Reconcile durable style/tile/camera truth here so a
+        // post-sync Journey frame cannot remain stranded at `visual-ready`.
+        reconcileFullySettled();
+      }
     });
 
+    const projectedJourneyRoutePointHit = (point: { x: number; y: number }) => (
+      pickDetailedEarthJourneyRoutePointHit(
+        journeyOverlayRef.current,
+        point,
+        (coordinates) => map.project(coordinates),
+      )
+    );
+    if (import.meta.env.DEV && typeof window !== "undefined") {
+      const debugWindow = window as Window & {
+        __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
+          journeyId: string;
+          routePointId: string;
+        } | null;
+      };
+      debugJourneyRoutePointHit = (clientX, clientY) => {
+        const rect = host.getBoundingClientRect();
+        const point = { x: clientX - rect.left, y: clientY - rect.top };
+        let routePointHit = projectedJourneyRoutePointHit(point);
+        if (!routePointHit && map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
+          const [journeyHit] = map.queryRenderedFeatures([point.x, point.y], {
+            layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
+          });
+          const journeyId = journeyHit?.properties?.journeyId;
+          const routePointId = journeyHit?.properties?.routePointId;
+          if (typeof journeyId === "string" && typeof routePointId === "string") {
+            routePointHit = { journeyId, routePointId };
+          }
+        }
+        return routePointHit;
+      };
+      debugWindow.__detailedEarthJourneyRoutePointHit = debugJourneyRoutePointHit;
+    }
+    const handleJourneyRoutePointClickCapture = (event: MouseEvent) => {
+      if (diveOwnerRef.current !== "detail" || !onJourneyRoutePointActivateRef.current) return;
+      const rect = host.getBoundingClientRect();
+      const routePointHit = projectedJourneyRoutePointHit({
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      });
+      if (!routePointHit) return;
+      // MapLibre is constructed non-interactive for prewarm and its handlers are
+      // enabled only after ownership commits. Keep Route Point activation bound
+      // to the real DOM pointer target instead of depending on MapLibre's
+      // synthesized `click` event surviving that lifecycle transition. Stop the
+      // click before it reaches MapLibre so one pointer action has one owner.
+      event.stopPropagation();
+      onJourneyRoutePointActivateRef.current(routePointHit.journeyId, routePointHit.routePointId);
+    };
+    host.addEventListener("click", handleJourneyRoutePointClickCapture, { capture: true });
+
     map.on("click", (event) => {
+      // The capture listener above owns ordinary Route Point activation. Keep a
+      // MapLibre-layer lookup as a bounded projection/style fallback and retain
+      // this event for explicit map-point picking outside Journey hit targets.
+      let routePointHit = projectedJourneyRoutePointHit(event.point);
+      if (!routePointHit && map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
+        const [journeyHit] = map.queryRenderedFeatures(event.point, {
+          layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
+        });
+        const journeyId = journeyHit?.properties?.journeyId;
+        const routePointId = journeyHit?.properties?.routePointId;
+        if (typeof journeyId === "string" && typeof routePointId === "string") {
+          routePointHit = { journeyId, routePointId };
+        }
+      }
+      if (routePointHit && onJourneyRoutePointActivateRef.current) {
+        onJourneyRoutePointActivateRef.current(routePointHit.journeyId, routePointHit.routePointId);
+        return;
+      }
       if (!onPickRef.current) return;
       onPickRef.current({
         latitude: event.lngLat.lat,
         longitude: event.lngLat.lng,
       });
     });
-    map.on("zoomend", () => {
+    map.on("zoom", () => {
+      // Grade only a zoom currently owned by a real MapLibre input handler. The
+      // handler's active lifetime survives animation frames where originalEvent
+      // is absent and is independent from overlapping resize/focus moveend edges.
+      // Programmatic camera work has no active user handler and cannot release
+      // Detail ownership even if it happens to cross the return threshold.
       if (
-        !initialLoadSettled
+        !userZoomHandlerActive()
+        || !initialLoadSettled
         || diveOwnerRef.current !== "detail"
         || overviewRequestedRef.current
         || !shouldReturnToParticleEarth(map.getZoom())
@@ -657,11 +1076,24 @@ export default function DetailedEarthMap({
       mapRef.current = null;
       calibrateRef.current = null;
       revealSyncRef.current = null;
+      syncJourneyOverlayRef.current = null;
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       focusFlightActiveRef.current = false;
+      host.removeEventListener("click", handleJourneyRoutePointClickCapture, { capture: true });
       map.remove();
       if (import.meta.env.DEV && typeof window !== "undefined") {
-        const debugWindow = window as Window & { __detailedEarthMapRemovalCount?: number };
+        const debugWindow = window as Window & {
+          __detailedEarthMapRemovalCount?: number;
+          __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
+          __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
+            journeyId: string;
+            routePointId: string;
+          } | null;
+        };
+        if (debugWindow.__detailedEarthMapProject === debugProject) delete debugWindow.__detailedEarthMapProject;
+        if (debugWindow.__detailedEarthJourneyRoutePointHit === debugJourneyRoutePointHit) {
+          delete debugWindow.__detailedEarthJourneyRoutePointHit;
+        }
         debugWindow.__detailedEarthMapRemovalCount = (debugWindow.__detailedEarthMapRemovalCount ?? 0) + 1;
       }
     };
@@ -680,6 +1112,11 @@ export default function DetailedEarthMap({
     if (!map?.isStyleLoaded()) return;
     applyMapLanguage(map, language);
   }, [language]);
+
+  useEffect(() => {
+    const overlayReady = syncJourneyOverlayRef.current?.() ?? false;
+    if (overlayReady && diveStage !== "particle") revealSyncRef.current?.("stage");
+  }, [journeyOverlay.revision]);
 
   useEffect(() => {
     const map = mapRef.current;
