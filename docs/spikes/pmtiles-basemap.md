@@ -63,6 +63,13 @@ shipping the generator.
    by MapLibre's local ideograph font, so only the Latin ranges are fetched in
    practice.
 4. **Sprites.** None. The spike style has no icons.
+5. **Same-origin serving, if used.** `deploy/Caddyfile` has no `/basemap/*`
+   route today. The catch-all `try_files {path} /index.html` would answer a
+   missing archive or glyph with index.html and a 200, which shows up as a
+   parse error, not a 404. Add a `handle /basemap/*` block with `root` on a
+   mounted volume and `file_server` (Caddy serves Range requests there) before
+   the catch-all. The Caddyfile sets no Content-Security-Policy today. If one is
+   added later, the archive and glyph origins must be in `connect-src`.
 
 ## Code that would be deleted if adopted
 
@@ -88,12 +95,16 @@ shipping the generator.
   Measure this on the real host.
 - **Labels.** Protomaps has no `name:zh` for many small places, so the label
   falls back to the local `name`. Check that coverage matches what the
-  OpenFreeMap path shows.
+  OpenFreeMap path shows. The local `name` is tried before `name:en` on
+  purpose. This matches the existing OpenMapTiles path; Protomaps' own styles
+  try English first.
 - **Look.** The hand style is not Fiord. Screens tied to the Fiord colors need a
   design pass before adoption.
 
 ## Manual acceptance checklist (after an archive exists)
 
+- [ ] `curl -I <app origin>/basemap/fonts/Noto%20Sans%20Regular/0-255.pbf`
+      returns a protobuf, not index.html.
 - [ ] `curl -I -H "Range: bytes=0-16383" <archive URL>` returns `206` with
       `Content-Range` and an `ETag`.
 - [ ] A cross-origin fetch from `https://${APP_HOST}` with a `Range` header
