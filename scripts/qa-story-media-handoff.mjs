@@ -268,11 +268,6 @@ function installStageSampler() {
     subtree: true, childList: true, attributes: true,
     attributeFilter: ["data-current-media-kind", "data-media-presentation", "data-media-page-ready"],
   });
-  for (const type of ["story-media-grab", "story-media-recover"]) {
-    document.addEventListener(type, (event) => {
-      note({ type, neighborId: event.detail?.neighborId ?? null });
-    }, true);
-  }
   const identify = (node) => {
     if (!(node instanceof Element)) return null;
     const page = node.closest("[data-media-page]");
@@ -943,7 +938,7 @@ async function reverseSwipeStage(page, rootSelector, firstDirection) {
   const reach = Math.min(320, geometry.width * 0.45);
   const offset = (direction) => (direction > 0 ? -1 : 1) * reach;
   const pointer = input(page);
-  const paintedTarget = async () => page.evaluate(async (selector) => {
+  const orderedNeighbor = async () => page.evaluate(async (selector) => {
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
     const current = stage?.querySelector('[data-media-page="current"]');
@@ -964,12 +959,12 @@ async function reverseSwipeStage(page, rootSelector, firstDirection) {
   };
   await pointer.down(geometry.x, geometry.y);
   await glide(0, offset(firstDirection), 8);
-  const firstPaintedTarget = await paintedTarget();
+  const firstOrderedNeighbor = await orderedNeighbor();
   await glide(offset(firstDirection), offset(-firstDirection), 16);
-  const latestPaintedTarget = await paintedTarget();
+  const latestOrderedNeighbor = await orderedNeighbor();
   await pointer.up();
   return { ...geometry, reach, firstDirection, finalDirection: -firstDirection,
-    input: pointer.kind, paintedTargets: [firstPaintedTarget, latestPaintedTarget] };
+    input: pointer.kind, orderedNeighbors: [firstOrderedNeighbor, latestOrderedNeighbor] };
 }
 
 /**
@@ -1728,23 +1723,24 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 500));
         return { first, second: read() };
       }, STAGE);
-      // Read which decoded neighbour was actually raised above the current
-      // page at each end of the same pointer stream. The stage no longer
-      // publishes the former `story-media-grab` control event.
-      const paintedTargets = gesture.paintedTargets.map((entry) => entry?.id);
+      // Read which decoded neighbour the stage ordered above the current
+      // page at each end of the same pointer stream. This is page ordering;
+      // the frame sampler below separately checks what the viewport shows.
+      const orderedNeighbors = gesture.orderedNeighbors.map((entry) => entry?.id);
       const trace = await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-80));
+      const continuity = gradeContinuity(frames, { allowedAssets: [V2, I2, V1] });
       record({
         name: "story-reversal-commits-latest-intent",
         claim: "a reversal fired before the first navigation settles retargets within the same gesture and commits the reversal's own target, never the abandoned one, and leaves exactly one settled owner, one live transport and no late write-back",
         startedFrom, abandonedIntent, latestIntent, settled, transports, stable,
-        gesture, paintedTargets, trace, committed,
+        gesture, orderedNeighbors, trace, committed, continuity,
         sampledFrames: frames.length,
         concurrentLiveVideos: frames.filter((frame) => frame.videoCount > 1).slice(0, 2),
         failed: settled.presentation !== "settled" || !settled.ready
           || settled.id !== latestIntent
-          || paintedTargets[0] !== abandonedIntent || paintedTargets[1] !== latestIntent
+          || orderedNeighbors[0] !== abandonedIntent || orderedNeighbors[1] !== latestIntent
           || transports !== 1 || stable.first !== stable.second
-          || frames.some((frame) => frame.videoCount > 1)
+          || continuity.failed || frames.some((frame) => frame.videoCount > 1)
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {

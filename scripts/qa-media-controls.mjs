@@ -483,17 +483,19 @@ async function exerciseMobileStoryContinuitySwipe(page, touch, direction, expect
       && currentXs.at(-1) < currentXs[0] - 8
     : currentXs.every((value, index) => index === 0 || value >= currentXs[index - 1] - 1)
       && currentXs.at(-1) > currentXs[0] + 8;
-  // While the finger owns the stage, current is both visual and input owner.
-  // During the release spring the destination slot may intentionally rise above
-  // current in z-order, but it must remain pointer-inert until the semantic commit.
-  // Keep those authorities separate so the QA catches a second input owner without
-  // rejecting the stable three-page visual handoff itself.
-  const dragOwnershipStable = dragSamples.every((sample) => {
+  // The current page keeps input ownership while the decoded destination is
+  // raised for the reveal. A raised page must be exactly this swipe's target
+  // and remain pointer-inert until the semantic commit.
+  const targetRaisedDuringDrag = dragSamples.some((sample) => sample.current
+    && sample.pages.some((entry) => entry.id === expectedId && entry.zIndex > sample.current.zIndex));
+  const dragOwnershipStable = targetRaisedDuringDrag && dragSamples.every((sample) => {
     const current = sample.current;
     if (!current || !current.ready || current.pointerEvents !== "auto" || sample.legacyIncomingCount !== 0) return false;
     const neighbors = sample.pages.filter((entry) => entry.role !== "current");
-    return neighbors.every((entry) => entry.pointerEvents === "none" && entry.zIndex < current.zIndex)
-      && (!sample.incoming || sample.incoming.zIndex < current.zIndex);
+    const raised = neighbors.filter((entry) => entry.zIndex > current.zIndex);
+    return neighbors.every((entry) => entry.pointerEvents === "none")
+      && raised.length <= 1 && raised.every((entry) => entry.id === expectedId && entry.ready)
+      && sample.incoming === null;
   });
   const releaseOwnershipStable = releaseSamples.every((sample) => {
     const current = sample.current;
@@ -509,7 +511,8 @@ async function exerciseMobileStoryContinuitySwipe(page, touch, direction, expect
     && settled.pages.filter((entry) => entry.role !== "current")
       .every((entry) => entry.pointerEvents === "none" && entry.zIndex < settled.current.zIndex));
   const noHitch = samples.every((sample) => sample.rafDelayMs < 500);
-  return { samples, settled, followsFinger, dragOwnershipStable, releaseOwnershipStable, ownershipStable,
+  return { samples, settled, followsFinger, targetRaisedDuringDrag,
+    dragOwnershipStable, releaseOwnershipStable, ownershipStable,
     settledOwnershipStable, noHitch,
     failed: !followsFinger || !ownershipStable || !settledOwnershipStable || !noHitch
       || settled.presentation !== "settled" || settled.current?.id !== expectedId || !settled.current.ready
@@ -900,6 +903,7 @@ try {
     const swipeStartX = stageBox.x + stageBox.width * 0.72;
     const swipeY = stageBox.y + stageBox.height * 0.5;
     await mediaGestureStage.evaluate((stage) => {
+      stage.addEventListener("pointerdown", (event) => { stage.dataset.qaPressedPointer = String(event.pointerId); }, true);
       stage.addEventListener("gotpointercapture", (event) => { if (event.target === stage) stage.dataset.qaCapturedPointer = String(event.pointerId); });
       stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage && String(event.pointerId) === stage.dataset.qaCapturedPointer) stage.dataset.qaReleasedPointer = String(event.pointerId); });
     });
@@ -929,8 +933,8 @@ try {
       touchPoints: [{ x: swipeStartX - 30, y: swipeY }],
     });
     const inlineCapturedDuringDrag = await mediaGestureStage.evaluate((stage) => {
-      const pointerId = Number(stage.dataset.qaCapturedPointer);
-      return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
+      const pointerId = Number(stage.dataset.qaPressedPointer);
+      return Boolean(stage.dataset.qaPressedPointer) && stage.hasPointerCapture(pointerId);
     });
     // Once horizontal intent owns the pointer, move outside the inline
     // media stage and release there. Capture must keep routing the terminal
@@ -1371,6 +1375,7 @@ try {
     const fullscreenCloseTouchTarget = fullscreenCloseBox ? Math.min(fullscreenCloseBox.width, fullscreenCloseBox.height) : 0;
     const fullscreenPositionBefore = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
     await fullscreenGestureStage.evaluate((stage) => {
+      stage.addEventListener("pointerdown", (event) => { stage.dataset.qaPressedPointer = String(event.pointerId); }, true);
       stage.addEventListener("gotpointercapture", (event) => { if (event.target === stage) stage.dataset.qaCapturedPointer = String(event.pointerId); });
       stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage && String(event.pointerId) === stage.dataset.qaCapturedPointer) stage.dataset.qaReleasedPointer = String(event.pointerId); });
     });
@@ -1385,8 +1390,8 @@ try {
       touchPoints: [{ x: fullX - 30, y: fullY }],
     });
     const fullscreenCapturedDuringDrag = await fullscreenGestureStage.evaluate((stage) => {
-      const pointerId = Number(stage.dataset.qaCapturedPointer);
-      return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
+      const pointerId = Number(stage.dataset.qaPressedPointer);
+      return Boolean(stage.dataset.qaPressedPointer) && stage.hasPointerCapture(pointerId);
     });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const fullscreenReleasedAfterDrag = await fullscreenGestureStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
@@ -1873,6 +1878,9 @@ try {
     await page.waitForFunction((id) => document.querySelector(
       `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
     ), second, { polling: "raf" });
+    // The mobile Story itself is still entering after its first image is
+    // decoded. Compare composited pixels once that entrance has settled.
+    await storyPicturePoint(page, 1);
     const beforeBack = await inspectStagePaint(page, ".journey-story__media");
     await page.locator(".journey-story__mobile-media-fullscreen").click();
     const overlay = page.locator(".journey-story-fullscreen");
