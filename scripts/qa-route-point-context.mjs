@@ -1,6 +1,7 @@
 // #291 - Route Point activation must reveal one truthful Atlas context surface
 // before Story, without becoming a camera owner or inventing media locations.
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { hasPublishedDiveReveal, nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const journeyId = "qa-context-journey";
@@ -13,6 +14,17 @@ const secondPhotoAssetId = "qa-context-photo-asset-b";
 const thirdPhotoAssetId = "qa-context-photo-asset-c";
 const siblingJourneyId = "qa-context-sibling-journey";
 const siblingPointId = "qa-context-sibling-point";
+const mapStylePattern = /\/api\/mapstyle\?path=styles(?:%2F|\/)fiord(?:$|&)/i;
+const paintedDetailStyle = {
+  version: 8,
+  name: "QA painted detailed-earth style",
+  sources: {},
+  layers: [{
+    id: "qa-paint-surface",
+    type: "background",
+    paint: { "background-color": "#173d43", "background-opacity": 1 },
+  }],
+};
 
 const journey = {
   id: journeyId,
@@ -330,6 +342,7 @@ async function openFocusAtlas({
   journeysPayload = [siblingJourney, journey],
   initialPointId = photoPointId,
   realScene = false,
+  focusMode = true,
 } = {}) {
   const page = await browser.newPage({
     viewport,
@@ -340,6 +353,13 @@ async function openFocusAtlas({
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await stubAtlasApi(page, journeysPayload);
+  if (realScene && !focusMode) {
+    await page.route(mapStylePattern, (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(paintedDetailStyle),
+    }));
+  }
   // #291 grades the Atlas route-point activation/context contract, not scene
   // startup throughput. The earlier real-scene version timed out before ready in
   // CI, so this dedicated flag keeps the existing deterministic QA globe while
@@ -369,8 +389,10 @@ async function openFocusAtlas({
         Number(document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-revision") ?? 0) > before
       ), revisionBeforeSelection, { timeout: 5_000 });
     }
-    await page.locator(".living-atlas__globe-focus").click();
-    await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
+    if (focusMode) {
+      await page.locator(".living-atlas__globe-focus").click();
+      await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
+    }
   } else {
     await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === "on");
   }
@@ -573,6 +595,90 @@ async function dragBlankGlobe(page) {
   return target;
 }
 
+async function detailWheelTarget(page) {
+  const target = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+    if (!(canvas instanceof HTMLCanvasElement)) return null;
+    const rect = canvas.getBoundingClientRect();
+    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    for (let radius = 0; radius <= 200; radius += 20) {
+      for (let arm = 0; arm < 8; arm += 1) {
+        const angle = (arm * Math.PI) / 4;
+        const x = center.x + Math.cos(angle) * radius;
+        const y = center.y + Math.sin(angle) * radius;
+        if (x < 8 || y < 8 || x >= innerWidth - 8 || y >= innerHeight - 8) continue;
+        const hit = document.elementFromPoint(x, y);
+        if (hit === canvas || (hit instanceof Element && hit.closest(".detailed-earth-map"))) return { x, y };
+      }
+    }
+    return null;
+  });
+  if (!target) throw new Error("Detail dive has no pointer-reachable wheel surface");
+  return target;
+}
+
+async function enterRealDetail(page) {
+  for (let step = 0; step < 90; step += 1) {
+    const state = await page.evaluate(() => ({
+      stage: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") ?? null,
+      owner: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive-owner") ?? null,
+      semanticZoom: document.querySelector(".particle-earth-scene")?.getAttribute("data-semantic-zoom") ?? null,
+      localProgress: Number(document.querySelector(".particle-earth-scene")?.getAttribute("data-local-progress")),
+    }));
+    if (state.stage === "detail" && state.owner === "detail") return state;
+    if (state.stage === "blending" && state.localProgress >= 0.999) {
+      await page.waitForFunction(() => (
+        document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") === "detail"
+        && document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive-owner") === "detail"
+      ), null, { timeout: 5_000 });
+      return { ...state, stage: "detail", owner: "detail" };
+    }
+    if (state.stage === "blending" && state.localProgress >= 0.6) {
+      await page.waitForFunction(hasPublishedDiveReveal, null, { timeout: 5_000 });
+    }
+    const requestedDelta = state.semanticZoom === "global" ? -120 : -10;
+    const input = nextDiveFixtureInput(state, requestedDelta, -10);
+    const point = await detailWheelTarget(page);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel(0, input.deltaY);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  }
+  const state = await page.locator(".living-atlas-globe").evaluate((node) => ({
+    stage: node.getAttribute("data-earth-dive"),
+    owner: node.getAttribute("data-earth-dive-owner"),
+    semanticZoom: document.querySelector(".particle-earth-scene")?.getAttribute("data-semantic-zoom"),
+    localProgress: document.querySelector(".particle-earth-scene")?.getAttribute("data-local-progress"),
+    mapReadiness: document.querySelector(".detailed-earth-map")?.getAttribute("data-map-readiness"),
+  }));
+  throw new Error(`real Detail dive did not commit: ${JSON.stringify(state)}`);
+}
+
+async function detailedExistingRoutePointTarget(page, route) {
+  return page.evaluate((candidateRoute) => {
+    for (const point of candidateRoute.routePoints) {
+      const projected = window.__detailedEarthMapProject?.(point.longitude, point.latitude);
+      if (!projected || !Number.isFinite(projected.x) || !Number.isFinite(projected.y)) continue;
+      const samples = [{ x: projected.x, y: projected.y }];
+      for (const radius of [8, 14, 20]) {
+        for (let arm = 0; arm < 8; arm += 1) {
+          const angle = arm * Math.PI / 4;
+          samples.push({ x: projected.x + Math.cos(angle) * radius, y: projected.y + Math.sin(angle) * radius });
+        }
+      }
+      for (const sample of samples) {
+        if (sample.x < 0 || sample.y < 0 || sample.x >= innerWidth || sample.y >= innerHeight) continue;
+        const hitElement = document.elementFromPoint(sample.x, sample.y);
+        const markerHit = window.__detailedEarthJourneyRoutePointHit?.(sample.x, sample.y);
+        if (hitElement instanceof Element && hitElement.closest(".detailed-earth-map")
+          && markerHit?.journeyId === candidateRoute.id && markerHit.routePointId === point.id) {
+          return { ...sample, journeyId: candidateRoute.id, routePointId: point.id, latitude: point.latitude, longitude: point.longitude };
+        }
+      }
+    }
+    return null;
+  }, route);
+}
+
 try {
   // Grade real pointer/keyboard interaction against whichever active-Journey
   // Route Point the current real camera actually exposes. Route Point context
@@ -736,6 +842,77 @@ try {
   record("non-gesture blank globe click closes context", { blankTarget }, true);
   record("real interaction page errors", { pageErrors: interactionRun.pageErrors }, interactionRun.pageErrors.length === 0);
   await interactionPage.close();
+
+  // #515's Detailed Earth owns its own DOM capture and MapLibre click paths.
+  // Once the Composer asks for a globe point, an existing Journey marker must
+  // deliver the coordinate to that request, not reopen Route Point context.
+  const detailPickRun = await openFocusAtlas({
+    realScene: true,
+    focusMode: false,
+    reduceMotion: true,
+    viewport: { width: 1440, height: 1024 },
+    journeysPayload: [siblingJourney, interactionJourney],
+  });
+  const detailPickPage = detailPickRun.page;
+  const enteredDetail = await enterRealDetail(detailPickPage);
+  await detailPickPage.waitForFunction((expectedJourneyId) => {
+    const map = document.querySelector(".detailed-earth-map");
+    return map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === expectedJourneyId;
+  }, journeyId, { timeout: 5_000 });
+  let existingDetailPoint = await detailedExistingRoutePointTarget(detailPickPage, interactionJourney);
+  if (!existingDetailPoint) {
+    // Manual zoom may leave the Journey off-screen. Re-selecting its real rail
+    // card is the product's supported camera focus intent in Detail as well.
+    const focusProbe = detailPickPage.locator("[data-qa-route-point-context-focus]");
+    const previousRevision = Number(await focusProbe.getAttribute("data-focus-revision") ?? 0);
+    await detailPickPage.locator(".living-atlas__journey-rail button", { hasText: interactionJourney.title }).first().click();
+    await detailPickPage.waitForFunction((revision) => (
+      Number(document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-revision") ?? 0) > revision
+    ), previousRevision, { timeout: 5_000 });
+    await detailPickPage.waitForFunction((route) => route.routePoints.some((point) => {
+      const projected = window.__detailedEarthMapProject?.(point.longitude, point.latitude);
+      return projected && projected.x >= 22 && projected.y >= 22
+        && projected.x < innerWidth - 22 && projected.y < innerHeight - 22;
+    }), interactionJourney, { timeout: 5_000 });
+    existingDetailPoint = await detailedExistingRoutePointTarget(detailPickPage, interactionJourney);
+  }
+  if (!existingDetailPoint) throw new Error("Detail Journey Route Point has no pointer-reachable existing-marker sample");
+
+  await detailPickPage.locator(".living-atlas__create").click();
+  await detailPickPage.locator(".journey-composer").waitFor({ state: "visible", timeout: 5_000 });
+  const detailPickTrigger = detailPickPage.getByRole("button", { name: /直接在地球上取点/ });
+  await detailPickTrigger.scrollIntoViewIfNeeded();
+  await detailPickTrigger.click();
+  await detailPickPage.locator('.living-atlas.is-globe-picking .detailed-earth-map[data-point-pick="true"]').waitFor({ state: "visible", timeout: 5_000 });
+  const pickTarget = await detailedExistingRoutePointTarget(detailPickPage, interactionJourney);
+  if (!pickTarget) throw new Error("Detail existing Route Point stopped being pointer-reachable during globe pick");
+  await detailPickPage.mouse.click(pickTarget.x, pickTarget.y);
+  await detailPickPage.waitForFunction(() => (
+    !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
+    && document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 1
+  ), null, { timeout: 5_000 });
+  const detailPickOutcome = await detailPickPage.evaluate(() => ({
+    draftCoordinates: document.querySelector(".journey-route-draft__coordinates code")?.textContent ?? null,
+    contextCount: document.querySelectorAll("[data-route-point-context]").length,
+    storyCount: document.querySelectorAll(".journey-story").length,
+    pickActive: document.querySelector(".living-atlas")?.classList.contains("is-globe-picking") ?? null,
+    diveStage: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") ?? null,
+  }));
+  const [draftLatitude, draftLongitude] = (detailPickOutcome.draftCoordinates ?? "").split(",").map(Number);
+  record("Detail existing Route Point click completes Composer pick without reopening detail", {
+    enteredDetail, existingDetailPoint, pickTarget, detailPickOutcome,
+  },
+    enteredDetail.stage === "detail"
+    && pickTarget.routePointId === existingDetailPoint.routePointId
+    && detailPickOutcome.contextCount === 0
+    && detailPickOutcome.storyCount === 0
+    && detailPickOutcome.pickActive === false
+    && Number.isFinite(draftLatitude) && Number.isFinite(draftLongitude)
+    && Math.abs(draftLatitude - pickTarget.latitude) < 0.2
+    && Math.abs(draftLongitude - pickTarget.longitude) < 0.2);
+  record("real Detail pick page errors", { pageErrors: detailPickRun.pageErrors }, detailPickRun.pageErrors.length === 0);
+  await detailPickPage.close();
 
   // Keep the long-form context/Story/return regression on its deterministic QA
   // scene. The real-scene round above exclusively proves the new product hit

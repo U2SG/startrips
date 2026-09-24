@@ -2825,7 +2825,7 @@ export function LivingAtlasApp({
               if (isMobileV2) selectMobileJourney(id);
               else selectJourney(id);
             }}
-            onJourneyRoutePointActivate={(journeyId, routePointId) => {
+            onJourneyRoutePointActivate={globePickActive ? undefined : (journeyId, routePointId) => {
               if (journeyId === "draft-route-preview") return;
               // #291 review: Route Point context is subordinate to the Atlas'
               // single semantic Journey owner. Visible points on sibling routes
