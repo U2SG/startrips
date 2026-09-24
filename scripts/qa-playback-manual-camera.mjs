@@ -296,13 +296,45 @@ try {
       }, points[0]);
       assert.ok(scaleBeforeWheel && scaleBeforeWheel > 0, "detail map must publish real projection before wheel");
       await page.mouse.move(wheelPoint.x, wheelPoint.y);
+      await page.evaluate(() => {
+        window.__qaPlaybackCameraWheelEvents = [];
+        document.addEventListener("wheel", (event) => {
+          const canvas = document.querySelector(".maplibregl-canvas");
+          window.__qaPlaybackCameraWheelEvents.push({
+            trusted: event.isTrusted, deltaY: event.deltaY, targetIsCanvas: event.target === canvas,
+            target: event.target instanceof Element ? event.target.className : null,
+          });
+        }, { capture: true, once: true });
+      });
       await page.mouse.wheel(0, -120);
-      await page.waitForFunction(({ longitude, latitude, baseline }) => {
-        const a = window.__detailedEarthMapProject?.(longitude, latitude);
-        const b = window.__detailedEarthMapProject?.(longitude + 1, latitude);
-        return document.querySelector(".journey-playback")?.dataset.cameraFollow === "free"
-          && a && b && Math.hypot(a.x - b.x, a.y - b.y) > baseline * 1.05;
-      }, { ...points[0], baseline: scaleBeforeWheel }, { timeout: 8_000 });
+      try {
+        await page.waitForFunction(({ longitude, latitude, baseline }) => {
+          const a = window.__detailedEarthMapProject?.(longitude, latitude);
+          const b = window.__detailedEarthMapProject?.(longitude + 1, latitude);
+          return document.querySelector(".journey-playback")?.dataset.cameraFollow === "free"
+            && a && b && Math.hypot(a.x - b.x, a.y - b.y) > baseline * 1.05;
+        }, { ...points[0], baseline: scaleBeforeWheel }, { timeout: 8_000 });
+      } catch (error) {
+        const wheelDebug = await page.evaluate(({ longitude, latitude, baseline, x, y }) => {
+          const root = document.querySelector(".journey-playback");
+          const map = document.querySelector(".detailed-earth-map");
+          const canvas = document.querySelector(".maplibregl-canvas");
+          const hit = document.elementFromPoint(x, y);
+          const a = window.__detailedEarthMapProject?.(longitude, latitude);
+          const b = window.__detailedEarthMapProject?.(longitude + 1, latitude);
+          const scale = a && b ? Math.hypot(a.x - b.x, a.y - b.y) : null;
+          return {
+            phase: root?.dataset.playbackPhase, step: root?.dataset.playbackStep,
+            following: root?.dataset.cameraFollow, mapOwner: map?.dataset.diveOwner,
+            mapCenter: map?.dataset.mapCameraObservation, mapZoom: map?.dataset.handoffZoom,
+            baseline, scale, scaleRatio: scale === null ? null : scale / baseline,
+            canvasTabIndex: canvas?.tabIndex, hitIsCanvas: hit === canvas,
+            hit: hit instanceof Element ? hit.className : null,
+            wheelEvents: window.__qaPlaybackCameraWheelEvents ?? [],
+          };
+        }, { ...points[0], baseline: scaleBeforeWheel, x: wheelPoint.x, y: wheelPoint.y });
+        throw new Error(`First Detail Map wheel did not release follow and zoom: ${JSON.stringify(wheelDebug)}`, { cause: error });
+      }
       const canvas = page.locator(".maplibregl-canvas");
       assert.equal(await canvas.evaluate((node) => node.tabIndex), 0, "detail map canvas must be keyboard reachable");
       await canvas.focus();
