@@ -311,10 +311,25 @@ async function touchDragParticle(page) {
       const root = document.querySelector(".journey-playback");
       const globe = document.querySelector(".living-atlas-globe");
       const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+      const target = event.target;
+      const cityLabel = target instanceof SVGTextElement && target.classList.contains("particle-earth-city")
+        ? target : null;
+      const routePoint = target instanceof Element ? target.closest(
+        ".particle-earth-route__label[data-journey-route][data-route-point-id], "
+          + ".particle-earth-route__point[data-journey-route][data-route-point-id]",
+      ) : null;
+      const sourceLayer = cityLabel?.closest("svg.particle-earth-city-layer")
+        ?? routePoint?.closest("svg.particle-earth-route-layer") ?? null;
+      const sourceHostMatchesCanvas = canvas instanceof HTMLCanvasElement && Boolean(canvas.parentElement)
+        && sourceLayer?.parentElement === canvas.parentElement;
+      const source = target === canvas ? "canvas"
+        : sourceHostMatchesCanvas && cityLabel ? "city-label"
+          : sourceHostMatchesCanvas && routePoint ? "route-point" : null;
       window.__qaPlaybackCameraTouchDown.push({
-        trusted: event.isTrusted, pointerId: event.pointerId,
+        trusted: event.isTrusted, pointerType: event.pointerType, pointerId: event.pointerId,
         x: event.clientX, y: event.clientY,
-        target: describe(event.target),
+        source, sourceLayer: describe(sourceLayer), sourceHostMatchesCanvas,
+        target: describe(target),
         atPoint: describe(document.elementFromPoint(event.clientX, event.clientY)),
         composedPath: event.composedPath().filter((node) => node instanceof Element).slice(0, 10).map(describe),
         canvas: describe(canvas),
@@ -330,7 +345,8 @@ async function touchDragParticle(page) {
     for (const type of ["pointerdown", "pointermove", "pointerup"]) {
       document.addEventListener(type, (event) => {
         if (event.target instanceof Element && event.target.matches('canvas[data-three-scene="particle-earth"]')) {
-          window.__qaPlaybackCameraTouch.push({ type, pointerType: event.pointerType, trusted: event.isTrusted });
+          window.__qaPlaybackCameraTouch.push({ type, pointerType: event.pointerType,
+            pointerId: event.pointerId, trusted: event.isTrusted });
         }
       }, { capture: true });
     }
@@ -353,13 +369,32 @@ async function touchDragParticle(page) {
     events: window.__qaPlaybackCameraTouch,
     downEvents: window.__qaPlaybackCameraTouchDown,
   }));
-  assert.ok(events.some((event) => event.type === "pointerdown" && event.pointerType === "touch" && event.trusted),
-    `trusted touch did not reach particle canvas: ${JSON.stringify({ point, events, downEvents })}`);
-  assert.ok(events.some((event) => event.type === "pointermove" && event.pointerType === "touch" && event.trusted),
-    `trusted touch move did not reach particle canvas: ${JSON.stringify({ point, events, downEvents })}`);
+  const evidence = { point, events, downEvents };
+  assert.equal(downEvents.length, 1, `expected one touch down: ${JSON.stringify(evidence)}`);
+  const down = downEvents[0];
+  assert.ok(down.trusted && down.pointerType === "touch"
+    && ["canvas", "city-label", "route-point"].includes(down.source),
+  `touch did not start on the renderer canvas or its delegated labels: ${JSON.stringify(evidence)}`);
+  if (down.source !== "canvas") {
+    assert.equal(down.sourceHostMatchesCanvas, true,
+      `delegated touch layer does not belong to the particle canvas: ${JSON.stringify(evidence)}`);
+  }
+  assert.equal(down.mapInteractive, "true", `Playback did not yield map input: ${JSON.stringify(evidence)}`);
+  assert.equal(down.overlayPointerEvents, "none", `Playback overlay intercepted touch: ${JSON.stringify(evidence)}`);
+  if (down.source === "canvas") {
+    assert.ok(events.some((event) => event.type === "pointerdown" && event.pointerId === down.pointerId
+      && event.pointerType === "touch" && event.trusted),
+    `canvas touch down was not observed: ${JSON.stringify(evidence)}`);
+  }
+  assert.ok(events.some((event) => event.type === "pointermove" && event.pointerId === down.pointerId
+    && event.pointerType === "touch" && event.trusted),
+  `trusted touch move did not reach particle canvas: ${JSON.stringify(evidence)}`);
+  assert.ok(events.some((event) => event.type === "pointerup" && event.pointerId === down.pointerId
+    && event.pointerType === "touch" && event.trusted),
+  `trusted touch up did not reach particle canvas: ${JSON.stringify(evidence)}`);
   assert.ok(events.every((event) => event.pointerType === "touch"),
-    `mouse pointer contaminated mobile gesture: ${JSON.stringify({ point, events, downEvents })}`);
-  return { point, events, downEvents };
+    `mouse pointer contaminated mobile gesture: ${JSON.stringify(evidence)}`);
+  return { ...evidence, source: down.source, pointerId: down.pointerId };
 }
 
 async function enterDetail(page) {
