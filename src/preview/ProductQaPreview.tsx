@@ -71,7 +71,7 @@ function LivingAtlasQaGlobe({
             type="button"
             data-qa-route-point-context-activate={point.id}
             data-qa-route-point-index={index}
-            onClick={() => onJourneyRoutePointActivate(route.id, point.id!)}
+            onClick={() => onJourneyRoutePointActivate?.(route.id, point.id!)}
             style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
           >{point.label ?? point.id}</button>
         ) : []
@@ -291,7 +291,7 @@ export function LivingAtlasGlobeChromeQa(props: LivingAtlasGlobeProps) {
             data-qa-route-point-context-activate={routePointContextQa ? point.id : undefined}
             aria-hidden="true"
             tabIndex={-1}
-            onClick={() => props.onJourneyRoutePointActivate(route.id, point.id!)}
+            onClick={() => props.onJourneyRoutePointActivate?.(route.id, point.id!)}
             style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0, pointerEvents: "none" }}
           >{point.label ?? point.id}</button>
         ) : []
