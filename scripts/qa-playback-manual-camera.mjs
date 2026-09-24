@@ -234,6 +234,35 @@ async function touchDragParticle(page) {
   const point = await steeringPoint(page, false);
   await page.evaluate(() => {
     window.__qaPlaybackCameraTouch = [];
+    window.__qaPlaybackCameraTouchDown = [];
+    const describe = (element) => element instanceof Element ? {
+      tag: element.tagName.toLowerCase(),
+      className: element.getAttribute("class") || "",
+      id: element.id || null,
+      threeScene: element.getAttribute("data-three-scene"),
+      routePoint: element.getAttribute("data-route-point-id"),
+    } : null;
+    window.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "touch") return;
+      const root = document.querySelector(".journey-playback");
+      const globe = document.querySelector(".living-atlas-globe");
+      const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+      window.__qaPlaybackCameraTouchDown.push({
+        trusted: event.isTrusted, pointerId: event.pointerId,
+        x: event.clientX, y: event.clientY,
+        target: describe(event.target),
+        atPoint: describe(document.elementFromPoint(event.clientX, event.clientY)),
+        composedPath: event.composedPath().filter((node) => node instanceof Element).slice(0, 10).map(describe),
+        canvas: describe(canvas),
+        canvasPointerEvents: canvas instanceof Element ? getComputedStyle(canvas).pointerEvents : null,
+        phase: root?.dataset.playbackPhase, step: root?.dataset.playbackStep,
+        cameraFollow: root?.dataset.cameraFollow, mapInteractive: root?.dataset.mapInteractive,
+        arrivalGate: root?.dataset.arrivalGate,
+        overlayPointerEvents: root instanceof Element ? getComputedStyle(root).pointerEvents : null,
+        earthDiveOwner: globe?.getAttribute("data-earth-dive-owner"),
+        detailOwner: document.querySelector(".detailed-earth-map")?.getAttribute("data-dive-owner"),
+      });
+    }, { capture: true });
     for (const type of ["pointerdown", "pointermove", "pointerup"]) {
       document.addEventListener(type, (event) => {
         if (event.target instanceof Element && event.target.matches('canvas[data-three-scene="particle-earth"]')) {
@@ -256,14 +285,17 @@ async function touchDragParticle(page) {
   } finally { await cdp.detach(); }
   await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.cameraFollow === "free", null,
     { timeout: 5_000 });
-  const events = await page.evaluate(() => window.__qaPlaybackCameraTouch);
+  const { events, downEvents } = await page.evaluate(() => ({
+    events: window.__qaPlaybackCameraTouch,
+    downEvents: window.__qaPlaybackCameraTouchDown,
+  }));
   assert.ok(events.some((event) => event.type === "pointerdown" && event.pointerType === "touch" && event.trusted),
-    `trusted touch did not reach particle canvas: ${JSON.stringify(events)}`);
+    `trusted touch did not reach particle canvas: ${JSON.stringify({ point, events, downEvents })}`);
   assert.ok(events.some((event) => event.type === "pointermove" && event.pointerType === "touch" && event.trusted),
-    `trusted touch move did not reach particle canvas: ${JSON.stringify(events)}`);
+    `trusted touch move did not reach particle canvas: ${JSON.stringify({ point, events, downEvents })}`);
   assert.ok(events.every((event) => event.pointerType === "touch"),
-    `mouse pointer contaminated mobile gesture: ${JSON.stringify(events)}`);
-  return { point, events };
+    `mouse pointer contaminated mobile gesture: ${JSON.stringify({ point, events, downEvents })}`);
+  return { point, events, downEvents };
 }
 
 async function enterDetail(page) {
