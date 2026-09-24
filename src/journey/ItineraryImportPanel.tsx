@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   IconArrowDown,
   IconArrowUp,
@@ -10,6 +10,10 @@ import {
   IconUpload,
 } from "@tabler/icons-react";
 import { searchLocations } from "./journeyApi";
+import {
+  itineraryLocationQueries,
+  itineraryLocationSuggestion,
+} from "./itineraryLocationLookup";
 import {
   buildItineraryImportDraft,
   defaultItinerarySelection,
@@ -55,6 +59,7 @@ const ROLE_LABELS: Record<string, string> = {
   attraction: "景点",
   transport: "交通",
   "pure-transit": "途经",
+  activity: "活动信息",
 };
 
 const FLAG_LABELS: Record<string, string> = {
@@ -133,7 +138,8 @@ export function ItineraryImportPanel({
   mobileLayout,
   existingPoints = [],
 }: Props) {
-  const [mode, setMode] = useState<"text" | "link" | "image">("text");
+  const [mode, setMode] = useState<"text" | "link" | "image">("link");
+  const [expanded, setExpanded] = useState(Boolean(mobileLayout));
   const [text, setText] = useState("");
   const [link, setLink] = useState("");
   const [draft, setDraft] = useState<ItineraryImportDraft | null>(null);
@@ -147,30 +153,94 @@ export function ItineraryImportPanel({
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<ItineraryImportCapabilities | null>(null);
   const [locating, setLocating] = useState<string | null>(null);
+  const [lookupProgress, setLookupProgress] = useState<{
+    done: number; total: number; unavailable: boolean;
+  } | null>(null);
+  const [suggestions, setSuggestions] = useState<Record<string, LocationSearchResult>>({});
+  const [manualQuery, setManualQuery] = useState("");
+  const lookupGeneration = useRef(0);
+  const manualSearchGeneration = useRef(0);
+  const manuallyConfirmed = useRef(new Set<string>());
+  const manuallyEditing = useRef(new Set<string>());
   const [candidates, setCandidates] = useState<
     { entryId: string; results: LocationSearchResult[] } | null
   >(null);
+  useEffect(() => () => {
+    lookupGeneration.current += 1;
+    manualSearchGeneration.current += 1;
+  }, []);
   // What this deployment supports is asked for when the member chooses an
   // entry point that needs a provider, not when the Composer mounts. Pasting
   // text needs neither adapter, so building a Journey by hand never waits on,
   // or fails because of, a capability nobody asked about.
   useEffect(() => {
-    if (mode === "text") return;
+    if (mode === "text" || !expanded) return;
     const controller = new AbortController();
     readItineraryCapabilities(fetch, controller.signal)
       .then(setCapabilities)
       .catch(() => setCapabilities(null));
     return () => controller.abort();
-  }, [mode]);
+  }, [expanded, mode]);
+
+  const lookupAll = useCallback(async (next: ItineraryImportDraft, generation: number) => {
+    const entries = itineraryDraftEntries(next).filter((entry) =>
+      entry.flags.includes("unresolved-position")
+      && !entry.flags.includes("source-invalid")
+      && !entry.flags.includes("truncated")
+      && entry.countryCode !== null
+      && Boolean(entry.searchArea)
+      && itineraryLocationQueries(entry).some((query) => /^[\x20-\x7e]+$/.test(query))
+    );
+    setLookupProgress({ done: 0, total: entries.length, unavailable: false });
+    const cache = new Map<string, LocationSearchResult[]>();
+    for (const [index, entry] of entries.entries()) {
+      if (lookupGeneration.current !== generation) return;
+      if (manuallyConfirmed.current.has(entry.entryId) || manuallyEditing.current.has(entry.entryId)) {
+        setLookupProgress({ done: index + 1, total: entries.length, unavailable: false });
+        continue;
+      }
+      try {
+        for (const query of itineraryLocationQueries(entry)) {
+          let results = cache.get(query);
+          if (!results) {
+            results = (await searchLocations(query)).results;
+            cache.set(query, results);
+          }
+          if (lookupGeneration.current !== generation) return;
+          const suggestion = itineraryLocationSuggestion(entry, results);
+          if (suggestion && !manuallyConfirmed.current.has(entry.entryId)
+            && !manuallyEditing.current.has(entry.entryId)) {
+            setSuggestions((current) => ({ ...current, [entry.entryId]: suggestion }));
+            break;
+          }
+          // A non-empty result can still be a different place. Try the other
+          // established names before leaving this entry for manual search.
+        }
+      } catch {
+        if (lookupGeneration.current === generation) {
+          setLookupProgress({ done: index, total: entries.length, unavailable: true });
+        }
+        return;
+      }
+      setLookupProgress({ done: index + 1, total: entries.length, unavailable: false });
+    }
+  }, []);
 
   const receive = useCallback((next: ItineraryImportDraft) => {
+    const generation = ++lookupGeneration.current;
+    manualSearchGeneration.current += 1;
+    manuallyConfirmed.current.clear();
+    manuallyEditing.current.clear();
     setDraft(next);
     setSelected(defaultItinerarySelection(next));
+    setSuggestions({});
+    setCandidates(null);
     setError(null);
     onMessage(
-      `已读到 ${next.counts.recognizedEntryCount} 个条目，其中 ${next.counts.pendingConfirmationCount} 个待确认；确认后再添加到路线。`,
+      `已读到 ${next.counts.recognizedEntryCount} 个条目，正在查找地点；匹配完成后可一次确认。`,
     );
-  }, [onMessage]);
+    void lookupAll(next, generation);
+  }, [lookupAll, onMessage]);
 
   const fail = useCallback((cause: unknown) => {
     setError(
@@ -282,26 +352,44 @@ export function ItineraryImportPanel({
     }
   }, [fail, images, receive]);
 
-  const locate = useCallback(async (entry: ItineraryEntryDraft) => {
+  const locate = useCallback(async (entry: ItineraryEntryDraft, query: string) => {
+    const generation = ++manualSearchGeneration.current;
     setLocating(entry.entryId);
-    setCandidates(null);
     try {
-      // The plan's own region narrows the search; the member still chooses.
-      const query = [entry.name, entry.regionContext].filter(Boolean).join(" ");
-      const { results } = await searchLocations(query);
-      setCandidates({ entryId: entry.entryId, results });
-      if (results.length === 0) onMessage("没有找到匹配的位置；可以手动补充坐标。");
+      const { results } = await searchLocations(query.trim());
+      if (manualSearchGeneration.current === generation) {
+        setCandidates({ entryId: entry.entryId, results });
+      }
     } catch {
-      onMessage("位置搜索暂时不可用；可以手动补充坐标。");
+      if (manualSearchGeneration.current === generation) {
+        onMessage("位置搜索暂时不可用，请稍后重试。");
+      }
     } finally {
-      setLocating(null);
+      if (manualSearchGeneration.current === generation) setLocating(null);
     }
   }, [onMessage]);
+
+  const openLocationSearch = useCallback((entry: ItineraryEntryDraft) => {
+    manualSearchGeneration.current += 1;
+    manuallyEditing.current.add(entry.entryId);
+    setLocating(null);
+    setManualQuery(itineraryLocationQueries(entry)[0] ?? entry.name.slice(0, 120));
+    setSuggestions((current) => {
+      const next = { ...current };
+      delete next[entry.entryId];
+      return next;
+    });
+    setCandidates({ entryId: entry.entryId, results: [] });
+  }, []);
 
   const confirmPosition = useCallback((
     entryId: string,
     result: LocationSearchResult,
   ) => {
+    manualSearchGeneration.current += 1;
+    setLocating(null);
+    manuallyConfirmed.current.add(entryId);
+    const entry = draft && itineraryDraftEntries(draft).find((item) => item.entryId === entryId);
     setDraft((current) => {
       if (!current) return current;
       const next = resolveItineraryEntryPosition(current, entryId, {
@@ -311,11 +399,46 @@ export function ItineraryImportPanel({
       });
       return next;
     });
-    setSelected((current) =>
-      current.includes(entryId) ? current : [...current, entryId]
-    );
+    if (entry && !entry.flags.includes("source-invalid")) {
+      setSelected((current) =>
+        current.includes(entryId) ? current : [...current, entryId]
+      );
+    }
+    setSuggestions((current) => {
+      const next = { ...current };
+      delete next[entryId];
+      return next;
+    });
     setCandidates(null);
-  }, []);
+  }, [draft]);
+
+  const confirmSuggestions = useCallback(() => {
+    if (!draft) return;
+    const entries = itineraryDraftEntries(draft);
+    const accepted = entries.filter((entry) =>
+      entry.latitude === null && suggestions[entry.entryId]
+    );
+    accepted.forEach((entry) => manuallyConfirmed.current.add(entry.entryId));
+    setDraft((current) => {
+      if (!current) return current;
+      return accepted.reduce((next, entry) => {
+        const result = suggestions[entry.entryId];
+        return resolveItineraryEntryPosition(next, entry.entryId, {
+          latitude: result.latitude,
+          longitude: result.longitude,
+          alias: result.labelEnglish ?? result.labelLocal ?? result.label,
+        });
+      }, current);
+    });
+    setSelected((current) => [
+      ...new Set([
+        ...current,
+        ...accepted.filter((entry) => !entry.flags.includes("source-invalid"))
+          .map((entry) => entry.entryId),
+      ]),
+    ]);
+    setSuggestions({});
+  }, [draft, suggestions]);
 
   // A point deleted from the draft while this panel was open is no longer a
   // position: the choice falls back to appending rather than to a stale id.
@@ -346,15 +469,20 @@ export function ItineraryImportPanel({
   const willAdd = draft
     ? itineraryDraftToRoutePoints(draft, selected).length
     : 0;
+  const suggestionCount = Object.keys(suggestions).length;
+  const lookupBusy = lookupProgress !== null
+    && !lookupProgress.unavailable
+    && lookupProgress.done < lookupProgress.total;
 
   return (
     <details
       className="journey-itinerary-import-panel"
-      open={mobileLayout || undefined}
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
       <summary>
         <span><IconUpload size={17} stroke={1.35} aria-hidden="true" />导入已有行程</span>
-        <small>链接、截图或粘贴文本</small>
+        <small>粘贴链接、截图或文本，批量添加地点</small>
         <IconChevronDown className="journey-itinerary-import-panel__chevron" size={17} stroke={1.35} aria-hidden="true" />
       </summary>
 
@@ -487,16 +615,67 @@ export function ItineraryImportPanel({
         {draft ? (
           <div className="journey-itinerary-import__review">
             <p className="journey-itinerary-import__counts">
-              来源声称 {draft.counts.sourceReportedPlaceCount ?? "未标注"} 个地点 ·
-              读到 {draft.counts.recognizedEntryCount} 个 ·
-              待确认 {draft.counts.pendingConfirmationCount} 个 ·
-              将新增 {willAdd} 个 Route Point
+              来源标注 {draft.counts.sourceReportedPlaceCount ?? "未标注"} 个地点 ·
+              读到 {draft.counts.recognizedEntryCount} 条内容 ·
+              {draft.counts.pendingConfirmationCount} 处位置待处理 ·
+              {willAdd} 个地点可加入路线
             </p>
+            {lookupProgress && lookupProgress.done < lookupProgress.total ? (
+              <p className="journey-itinerary-import__notice" role="status">
+                {lookupProgress.unavailable
+                  ? "自动查找暂时中断；仍可逐个搜索未匹配地点。"
+                  : `正在查找位置 ${lookupProgress.done} / ${lookupProgress.total}；可以继续查看行程。`}
+              </p>
+            ) : null}
+            {draft.notices.includes("year-unconfirmed") ? (
+              <p className="journey-itinerary-import__notice">
+                来源没有写明年份；这些地点可以加入路线，日期暂不填写。
+              </p>
+            ) : null}
             {draft.notices.includes("source-day-count-mismatch") ? (
               <p className="journey-itinerary-import__notice">
                 来源标题写的天数与实际列出的日期不一致；这里按列出的日期保留。
               </p>
             ) : null}
+            {draft.notices.includes("source-place-count-mismatch") ? (
+              <p className="journey-itinerary-import__notice">
+                来源标注的地点数与读到的内容条数不同；航段和无场馆活动也保留在下方，便于核对。
+              </p>
+            ) : null}
+            {suggestionCount > 0 ? (
+              <p className="journey-itinerary-import__notice">
+                建议位置会显示城市和国家；核对后可一次确认，错位的地点点「更换」。
+              </p>
+            ) : null}
+
+            <div className="journey-itinerary-import__actions">
+              {suggestionCount > 0 ? (
+                <button type="button" onClick={confirmSuggestions} disabled={lookupBusy}>
+                  <IconMapPin size={17} stroke={1.4} aria-hidden="true" />
+                  {lookupBusy ? "正在汇总匹配位置…" : `确认 ${suggestionCount} 处匹配位置`}
+                </button>
+              ) : null}
+              {existingPoints.length > 0 ? (
+                <label className="journey-itinerary-import__position">
+                  <span>加入路线的位置</span>
+                  <select
+                    value={insertAfter ?? ""}
+                    onChange={(event) => setInsertAfterDraftId(event.target.value || null)}
+                  >
+                    <option value="">追加到路线末尾</option>
+                    {existingPoints.map((point, index) => (
+                      <option key={point.draftId} value={point.draftId}>
+                        插入到第 {index + 1} 个「{point.label || "未命名地点"}」之后
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button type="button" onClick={apply} disabled={willAdd === 0}>
+                <IconPlus size={17} stroke={1.4} aria-hidden="true" />
+                添加 {willAdd} 个地点到路线
+              </button>
+            </div>
 
             <ol className="journey-itinerary-import__days">
               {draft.days.map((day) => (
@@ -514,48 +693,82 @@ export function ItineraryImportPanel({
                     <ul>
                       {day.entries.map((entry) => (
                         <li key={entry.entryId}>
-                          <label className="journey-checkbox">
-                            <input
-                              type="checkbox"
-                              checked={selected.includes(entry.entryId)}
-                              disabled={entry.latitude === null}
-                              onChange={() => toggle(entry.entryId)}
-                            />
-                            <span>{entry.name}</span>
-                          </label>
+                          {(entry.role === "pure-transit" && entry.latitude === null)
+                            || entry.role === "activity" ? (
+                            <strong>{entry.name}</strong>
+                          ) : (
+                            <label className="journey-checkbox">
+                              <input
+                                type="checkbox"
+                                checked={selected.includes(entry.entryId)}
+                                disabled={entry.latitude === null}
+                                onChange={() => toggle(entry.entryId)}
+                              />
+                              <span>{entry.name}</span>
+                            </label>
+                          )}
                           <small>
-                            {ROLE_LABELS[entry.role] ?? entry.role}
+                            {entry.role === "pure-transit" && entry.latitude === null
+                              ? "航段记录，无需定位"
+                              : entry.role === "activity"
+                                ? "没有明确场馆，无需定位"
+                                : ROLE_LABELS[entry.role] ?? entry.role}
                             {entry.regionContext ? ` · ${entry.regionContext}` : ""}
                           </small>
-                          {entry.flags.map((flag) => (
+                          {entry.flags.filter((flag) =>
+                            flag !== "year-unconfirmed"
+                            && (flag !== "unresolved-position" || !suggestions[entry.entryId])
+                          ).map((flag) => (
                             <em key={flag} className="journey-itinerary-import__flag">
                               {FLAG_LABELS[flag] ?? flag}
                             </em>
                           ))}
-                          {entry.latitude === null ? (
+                          {suggestions[entry.entryId] ? (
+                            <div className="journey-itinerary-import__suggestion">
+                              <span>建议位置：{suggestions[entry.entryId].label}</span>
+                              <small>{suggestions[entry.entryId].context} · {suggestions[entry.entryId].countryCode}</small>
+                              <button type="button" onClick={() => openLocationSearch(entry)}>更换</button>
+                            </div>
+                          ) : null}
+                          {entry.latitude === null && entry.role !== "pure-transit"
+                            && entry.role !== "activity" && !suggestions[entry.entryId] ? (
                             <button
                               type="button"
-                              onClick={() => void locate(entry)}
+                              onClick={() => openLocationSearch(entry)}
                               disabled={locating === entry.entryId}
                             >
                               <IconMapPin size={15} stroke={1.4} aria-hidden="true" />
-                              {locating === entry.entryId ? "正在查找…" : "确认位置"}
+                              查找位置
                             </button>
                           ) : null}
                           {candidates?.entryId === entry.entryId ? (
-                            <ul className="journey-itinerary-import__candidates">
-                              {candidates.results.map((result) => (
-                                <li key={result.id}>
-                                  <button
-                                    type="button"
-                                    onClick={() => confirmPosition(entry.entryId, result)}
-                                  >
-                                    {result.label}
-                                    <small>{result.context}</small>
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
+                            <form className="journey-itinerary-import__search" onSubmit={(event) => {
+                              event.preventDefault();
+                              void locate(entry, manualQuery);
+                            }}>
+                              <label>
+                                <span>搜索地点（可改用英文名）</span>
+                                <input maxLength={120} value={manualQuery} onChange={(event) => setManualQuery(event.target.value)} />
+                              </label>
+                              <button type="submit" disabled={!manualQuery.trim() || locating === entry.entryId}>
+                                {locating === entry.entryId ? "正在查找…" : "搜索"}
+                              </button>
+                              {candidates.results.length === 0 && locating !== entry.entryId ? (
+                                <small>没有合适结果？试试英文原名或附近城市。</small>
+                              ) : null}
+                              {candidates.results.length > 0 ? (
+                                <ul className="journey-itinerary-import__candidates">
+                                  {candidates.results.map((result) => (
+                                    <li key={result.id}>
+                                      <button type="button" onClick={() => confirmPosition(entry.entryId, result)}>
+                                        <strong>{result.label}</strong>
+                                        <small>{result.context} · {result.countryCode}</small>
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : null}
+                            </form>
                           ) : null}
                         </li>
                       ))}
@@ -565,30 +778,6 @@ export function ItineraryImportPanel({
               ))}
             </ol>
 
-            {existingPoints.length > 0 ? (
-              <label className="journey-itinerary-import__position">
-                <span>插入位置</span>
-                <select
-                  value={insertAfter ?? ""}
-                  onChange={(event) =>
-                    setInsertAfterDraftId(event.target.value || null)}
-                >
-                  <option value="">追加到路线末尾</option>
-                  {existingPoints.map((point, index) => (
-                    <option key={point.draftId} value={point.draftId}>
-                      插入到第 {index + 1} 个「{point.label || "未命名地点"}」之后
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-
-            <button type="button" onClick={apply} disabled={willAdd === 0}>
-              <IconPlus size={16} stroke={1.4} aria-hidden="true" />
-              {insertAfter === null
-                ? `在末尾添加 ${willAdd} 个地点`
-                : `按所选位置插入 ${willAdd} 个地点`}
-            </button>
           </div>
         ) : null}
       </div>

@@ -65,4 +65,38 @@ describe("http-model recogniser", () => {
     expect(body).not.toContain("routePlan");
     expect(body).not.toContain("href");
   });
+
+  it("does not accept a model-inferred year from unrelated page furniture", async () => {
+    const recognizer = createItineraryRecognizer({
+      driver: "http-model",
+      baseUrl: "https://model.example/read",
+      apiKey: null,
+      model: "reader-1",
+      fetcher: async () => new Response(JSON.stringify({
+        ...READING,
+        days: [{ ...READING.days[0], calendarDate: "2025-02-11" }],
+      })),
+    });
+    const reading = await recognizer.recognize({
+      kind: "page",
+      sourceOrigin: "https://example.com",
+      text: "第 1 天 02月11日 上海外滩。2026热门酒店。",
+    }, {});
+    expect(reading.days[0]).toMatchObject({ calendarDate: null, partialDate: "02-11" });
+  });
+
+  it("keeps a year that appears with the exact day in the source", async () => {
+    const recognizer = createItineraryRecognizer({
+      driver: "http-model",
+      baseUrl: "https://model.example/read",
+      apiKey: null,
+      model: "reader-1",
+      fetcher: async () => new Response(JSON.stringify(READING)),
+    });
+    const reading = await recognizer.recognize({
+      kind: "text",
+      text: "第 1 天 2026年3月14日 上海外滩",
+    }, {});
+    expect(reading.days[0].calendarDate).toBe("2026-03-14");
+  });
 });

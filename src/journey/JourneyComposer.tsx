@@ -1966,6 +1966,14 @@ export function JourneyComposer({
                   </nav>
                   {routeHeadingFragment}
                   <div className="journey-composer__route-tools">
+                    <button
+                      className="journey-composer__import-shortcut"
+                      type="button"
+                      onClick={() => enterMobileTask("location")}
+                    >
+                      <IconUpload size={18} stroke={1.4} aria-hidden="true" />
+                      导入已有行程
+                    </button>
                     {routeSearchFragment}
                     {reverseAttributionFragment}
                   </div>
@@ -2003,8 +2011,8 @@ export function JourneyComposer({
                   ) : null}
                   {activeMobileTask === "location" ? (
                     <div className="journey-composer__route-tools">
-                      {globePickFragment}
                       {itineraryImportFragment}
+                      {globePickFragment}
                       {preciseLocationFragment}
                     </div>
                   ) : null}
@@ -2026,13 +2034,13 @@ export function JourneyComposer({
 
                 <section ref={routeScrollRef} className="journey-composer__route" aria-labelledby="journey-route-heading">
                   {routeHeadingFragment}
+                  {itineraryImportFragment}
                   <div className="journey-composer__route-tools">
                     {routeSearchFragment}
                     {globePickFragment}
                     {reverseAttributionFragment}
                   </div>
                   {routeListFragment}
-                  {itineraryImportFragment}
                   {preciseLocationFragment}
                 </section>
               </>

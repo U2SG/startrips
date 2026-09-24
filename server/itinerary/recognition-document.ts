@@ -1,3 +1,5 @@
+import type { ItineraryRecognitionCandidates } from "./itinerary-recognition";
+
 /**
  * #512: what a fetched page is allowed to become before a provider reads it.
  *
@@ -98,4 +100,36 @@ export function pageRecognitionDocument(page: {
     sourceOrigin: sourceOriginForRecognition(page.finalUrl),
     text: minimizeRecognitionText(page.text, page.contentType),
   };
+}
+
+/** A model may guess a year from weekday or surrounding page furniture. */
+export function groundTextItineraryDates(
+  reading: ItineraryRecognitionCandidates,
+  sourceText: string,
+): ItineraryRecognitionCandidates {
+  const days = reading.days.map((day) => {
+    if (!day.calendarDate) return day;
+    const [year, month, date] = day.calendarDate.split("-").map(Number);
+    const yearText = String(year);
+    const monthText = `0?${month}`;
+    const dateText = `0?${date}`;
+    const separators = "(?:\\s*[-/.年月\\s]\\s*)";
+    const ending = "(?:日|号)?";
+    const fullDate = new RegExp(
+      `(?<!\\d)${yearText}${separators}${monthText}${separators}${dateText}${ending}(?!\\d)`,
+    );
+    if (fullDate.test(sourceText)) return day;
+
+    const monthDay = new RegExp(
+      `(?<!\\d)${monthText}\\s*(?:月|[-/.])\\s*${dateText}${ending}(?!\\d)`,
+    );
+    return {
+      ...day,
+      calendarDate: null,
+      partialDate: day.partialDate ?? (monthDay.test(sourceText)
+        ? `${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`
+        : null),
+    };
+  });
+  return { ...reading, days };
 }

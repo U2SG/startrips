@@ -20,6 +20,7 @@ import {
   type ItineraryRecognitionRequest,
   type ItineraryRecognizer,
 } from "./itinerary-recognition";
+import { groundTextItineraryDates } from "./recognition-document";
 
 export class DisabledItineraryRecognizer implements ItineraryRecognizer {
   readonly driver = "disabled";
@@ -85,10 +86,13 @@ export class HttpModelItineraryRecognizer implements ItineraryRecognizer {
       );
     }
     // Whatever comes back is a proposal until this passes.
-    return parseRecognitionCandidates(
+    const reading = parseRecognitionCandidates(
       await response.json(),
       this.recognizerVersion,
     );
+    return request.kind === "image"
+      ? reading
+      : groundTextItineraryDates(reading, request.text);
   }
 }
 

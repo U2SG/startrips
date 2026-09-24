@@ -86,8 +86,12 @@ export type ItineraryRecognitionCandidateEntry = {
   orderInDay: number;
   name: string;
   aliases?: string[];
+  /** A search hint from the source's geographic context, never a coordinate. */
+  countryCode?: string | null;
+  /** A locality hint for checking a provider result, not a claimed source fact. */
+  searchArea?: string | null;
   regionContext?: string | null;
-  role: "accommodation" | "attraction" | "transport" | "pure-transit";
+  role: "accommodation" | "attraction" | "transport" | "pure-transit" | "activity";
   transitEndpoints?: { from: string; to: string } | null;
   truncated?: boolean;
   sourceInvalid?: boolean;
@@ -134,6 +138,7 @@ const ROLES = new Set([
   "attraction",
   "transport",
   "pure-transit",
+  "activity",
 ]);
 
 const MAX_DAYS = 120;
@@ -255,6 +260,14 @@ export function parseRecognitionCandidates(
       aliases: Array.isArray(entry.aliases)
         ? entry.aliases.map((alias) => text(alias, "alias", true) as string)
         : undefined,
+      countryCode: (() => {
+        const code = text(entry.countryCode ?? null, "countryCode", false);
+        if (code !== null && !/^[A-Z]{2}$/.test(code)) {
+          reject("An entry has no usable country code");
+        }
+        return code;
+      })(),
+      searchArea: text(entry.searchArea ?? null, "searchArea", false),
       regionContext: text(entry.regionContext ?? null, "regionContext", false),
       role: entry.role as ItineraryRecognitionCandidateEntry["role"],
       transitEndpoints: endpoints
