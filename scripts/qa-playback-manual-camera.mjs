@@ -122,6 +122,55 @@ async function visibleImage(page, assetId) {
   return result;
 }
 
+async function visibleVideo(page, surfaceSelector, assetId) {
+  try {
+    const handle = await page.waitForFunction(({ surfaceSelector, assetId }) => {
+      const surface = document.querySelector(surfaceSelector);
+      const pages = surface?.querySelector("[data-story-media-pages]");
+      const stage = pages ?? surface?.querySelector(".playback-media-presentation");
+      const video = surfaceSelector === ".journey-playback"
+        ? stage?.querySelector('[data-media-slot][aria-hidden="false"] video')
+        : stage?.querySelector('video[data-shared-media-id]');
+      const bounds = video?.getBoundingClientRect();
+      const hit = bounds && bounds.width > 0 && bounds.height > 0
+        ? document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)
+        : null;
+      const visibleVideos = [...document.querySelectorAll(
+        ".journey-story__media video, .journey-story-fullscreen video, .journey-playback video",
+      )].filter((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const style = getComputedStyle(candidate);
+        return !candidate.hidden && rect.width > 0 && rect.height > 0
+          && style.visibility === "visible" && Number(style.opacity) > 0
+          && document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === candidate;
+      });
+      const state = {
+        surface: surfaceSelector, assetId,
+        currentId: pages?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id")
+          ?? stage?.getAttribute("data-presented-asset") ?? null,
+        presentation: stage?.getAttribute("data-media-presentation") ?? null,
+        videoId: video?.getAttribute("data-shared-media-id")
+          ?? video?.closest("[data-media-asset]")?.getAttribute("data-media-asset") ?? null,
+        readyState: video instanceof HTMLVideoElement ? video.readyState : null,
+        decodedWidth: video instanceof HTMLVideoElement ? video.videoWidth : null,
+        paused: video instanceof HTMLVideoElement ? video.paused : null,
+        hitIsVideo: hit === video, visibleVideoCount: visibleVideos.length,
+        liveClones: document.querySelectorAll('[data-shared-element-clone^="story-fullscreen-"]').length,
+      };
+      window.__qaJointVideoLast = state;
+      return surface && !surface.hidden && state.presentation === "settled"
+        && state.currentId === assetId && state.videoId === assetId
+        && state.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+        && state.decodedWidth > 0 && state.hitIsVideo
+        && state.visibleVideoCount === 1 && state.liveClones === 0 ? state : false;
+    }, { surfaceSelector, assetId }, { polling: "raf", timeout: 15_000 });
+    return await handle.jsonValue();
+  } catch (error) {
+    const last = await page.evaluate(() => window.__qaJointVideoLast ?? null);
+    throw new Error(`Joint video surface did not settle: ${JSON.stringify(last)}`, { cause: error });
+  }
+}
+
 async function steeringPoint(page, detail, requireEnd = true) {
   const point = await page.evaluate(({ expectDetail, requireEnd }) => {
     const canvas = document.querySelector(expectDetail ? ".maplibregl-canvas" : 'canvas[data-three-scene="particle-earth"]');
@@ -459,6 +508,86 @@ async function recordArrivalProjection(page) {
 }
 
 try {
+  // One real Atlas fixture crosses Story video, fullscreen, Full Playback,
+  // and the Playback return. The selected Route Point and one visible video
+  // must survive every ownership change.
+  {
+    const { page, errors } = await open();
+    try {
+      await page.locator(".living-atlas__active-actions button").first().click();
+      await page.locator(".journey-story").waitFor({ state: "visible" });
+      const osaka = page.locator(`.journey-story__route-points button[data-route-point-id="${points[2].id}"]`);
+      await osaka.click();
+      await page.waitForFunction((id) => document.querySelector(
+        `.journey-story__route-points button[data-route-point-id="${id}"]`,
+      )?.getAttribute("aria-pressed") === "true", points[2].id);
+      const initialStory = await visibleVideo(page, ".journey-story__media", videoId);
+      await page.locator(".journey-story__fullscreen-entry").click();
+      await page.locator(".journey-story-fullscreen").waitFor({ state: "visible" });
+      const fullscreen = await visibleVideo(page, ".journey-story-fullscreen", videoId);
+      await page.locator(".journey-story-fullscreen__close").click();
+      await page.locator(".journey-story-fullscreen").waitFor({ state: "hidden" });
+      const inlineReturn = await visibleVideo(page, ".journey-story__media", videoId);
+
+      await page.locator('.journey-story__media-nav button[aria-label="自动播放媒体"]').click();
+      await page.waitForFunction((id) => {
+        const video = document.querySelector(`.journey-story__media video[data-shared-media-id="${id}"]`);
+        return video instanceof HTMLVideoElement && !video.paused;
+      }, videoId);
+      await page.evaluate((id) => {
+        window.__qaJointOldStoryVideo = document.querySelector(
+          `.journey-story__media video[data-shared-media-id="${id}"]`,
+        );
+      }, videoId);
+      await page.locator(".journey-story__close").click();
+      await page.locator(".journey-story").waitFor({ state: "detached" });
+      await page.waitForFunction(() => window.__qaJointOldStoryVideo instanceof HTMLVideoElement
+        && !window.__qaJointOldStoryVideo.isConnected && window.__qaJointOldStoryVideo.paused,
+      null, { timeout: 5_000 });
+      const oldStoryStopped = await page.evaluate(() => ({
+        disconnected: window.__qaJointOldStoryVideo instanceof HTMLVideoElement
+          && !window.__qaJointOldStoryVideo.isConnected,
+        paused: window.__qaJointOldStoryVideo instanceof HTMLVideoElement
+          && window.__qaJointOldStoryVideo.paused,
+      }));
+      assert.ok(oldStoryStopped.disconnected && oldStoryStopped.paused,
+        `old Story video kept playing after leaving Story: ${JSON.stringify(oldStoryStopped)}`);
+
+      await startPlayback(page);
+      await armPauseAtStop(page, 6);
+      await page.locator(".journey-playback__tempo select").selectOption("fast");
+      const osakaStop = await waitForCapturedStop(page, 6);
+      await waitForVisibleStop(page, 6);
+      await page.locator('.journey-playback__controls button[aria-label="下一个章节"]').click();
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "media"
+        && document.querySelector(".journey-playback")?.dataset.playbackStep === "7");
+      const playback = await visibleVideo(page, ".journey-playback", videoId);
+      await page.locator(".journey-playback__close").click();
+      await page.locator(".journey-playback").waitFor({ state: "detached" });
+      await page.locator(".journey-story").waitFor({ state: "visible" });
+      assert.equal(await osaka.getAttribute("aria-pressed"), "true", "Playback returned to another Route Point");
+      const returnedStory = await visibleVideo(page, ".journey-story__media", videoId);
+      const playButton = page.locator('.journey-story__media-nav button[aria-label="自动播放媒体"]');
+      const reachable = await playButton.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return hit === button || button.contains(hit);
+      });
+      assert.ok(reachable, "stale presentation intercepts returned Story play control");
+      const returnTime = await page.locator(`.journey-story__media video[data-shared-media-id="${videoId}"]`)
+        .evaluate((video) => video.currentTime);
+      await playButton.click();
+      await page.waitForFunction(({ id, before }) => {
+        const video = document.querySelector(`.journey-story__media video[data-shared-media-id="${id}"]`);
+        return video instanceof HTMLVideoElement && !video.paused && video.currentTime > before + 0.1;
+      }, { id: videoId, before: returnTime }, { polling: "raf", timeout: 8_000 });
+      assert.deepEqual(errors, []);
+      reports.push({ mode: "story-fullscreen-playback-video-return", routePointId: points[2].id,
+        initialStory, fullscreen, inlineReturn, oldStoryStopped, osakaStop, playback,
+        returnedStory, playControlReachable: reachable });
+    } finally { await page.close(); }
+  }
+
   // Detail map: real keyboard pan and drag claim the camera; the director keeps
   // advancing content, then Return and Back restore the latest explicit location.
   {
