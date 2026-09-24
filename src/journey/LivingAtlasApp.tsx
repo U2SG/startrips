@@ -2406,11 +2406,18 @@ export function LivingAtlasApp({
       openingRoutePointId: storyRoutePointId,
       currentRoutePointIds: currentJourney?.routePoints.map((point) => point.id) ?? [],
     });
-    const observationTarget = source && journeyId && returnRoutePointId
+    // A Route Point can be the current Story observation without having a
+    // presentable media frame. A frame from the previous point must not fly to
+    // the new point merely because it was the last drawable Story source.
+    const sourceMatchesReturnPoint = currentJourney?.media.some((asset) => (
+      asset.id === source?.dataset.sharedMediaId && asset.routePointId === returnRoutePointId
+    )) ?? false;
+    const returnSource = returnRoutePointId && !sourceMatchesReturnPoint ? null : source;
+    const observationTarget = returnSource && journeyId && returnRoutePointId
       ? createPlaceMediaObservationElement({
           journeyId,
           routePointId: returnRoutePointId,
-          mediaSource: source,
+          mediaSource: returnSource,
           compact: isMobileV2,
           paintSource: false,
         })
@@ -2423,7 +2430,9 @@ export function LivingAtlasApp({
       setPlaybackFallbackMessage(null);
     }
     runSharedElementMorph({
-      source,
+      // If no live Route Point aperture can be measured, close directly into
+      // the semantic context instead of morphing its media into a Journey card.
+      source: returnRoutePointId && !observationTarget ? null : returnSource,
       name: observationTarget && journeyId && returnRoutePointId
         ? `place-media-${journeyId}-${returnRoutePointId}-return`
         : `journey-cover-${journeyId ?? "story"}`,
@@ -2434,7 +2443,7 @@ export function LivingAtlasApp({
         setStoryInitialSnapState("in-context");
         setStoryFocusVisibleControlOnOpen(false);
         afterClose?.();
-        if (observationTarget && journeyId && returnRoutePointId) {
+        if (!afterClose && journeyId && returnRoutePointId) {
           revealRoutePointContext(journeyId, returnRoutePointId);
         }
       },
@@ -2703,6 +2712,9 @@ export function LivingAtlasApp({
   }
 
   function startGlobePick(accept: (point: GlobePointPick) => void) {
+    // Globe picking takes the pointer surface from Atlas. A Route Point detail
+    // left open after Story would otherwise cover the pickable canvas on mobile.
+    if (routePointContextSelectionRef.current.intent) closeRoutePointContext(false);
     globePickAccept.current = accept;
     setGlobePickActive(true);
     setView("planet");
@@ -2813,7 +2825,7 @@ export function LivingAtlasApp({
               if (isMobileV2) selectMobileJourney(id);
               else selectJourney(id);
             }}
-            onJourneyRoutePointActivate={(journeyId, routePointId) => {
+            onJourneyRoutePointActivate={globePickActive ? undefined : (journeyId, routePointId) => {
               if (journeyId === "draft-route-preview") return;
               // #291 review: Route Point context is subordinate to the Atlas'
               // single semantic Journey owner. Visible points on sibling routes

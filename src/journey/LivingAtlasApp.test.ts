@@ -986,7 +986,9 @@ describe("Route Point context integration (#291)", () => {
   const appSource = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
 
   it("reveals context from route-point activation without claiming camera or focus revision", () => {
-    const start = appSource.indexOf("onJourneyRoutePointActivate={(journeyId, routePointId) => {");
+    // Picking must remove this callback entirely so Detailed Earth lets the
+    // real click reach MapLibre's coordinate-pick handler.
+    const start = appSource.indexOf("onJourneyRoutePointActivate={globePickActive ? undefined : (journeyId, routePointId) => {");
     const end = appSource.indexOf("onGlobePointPick=", start);
     const handler = appSource.slice(start, end);
 
