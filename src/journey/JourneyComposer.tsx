@@ -237,6 +237,7 @@ function RoutePointPositionEditor({
   const [longitude, setLongitude] = useState(String(point.longitude));
   const [manualLabel, setManualLabel] = useState(point.label);
   const [results, setResults] = useState<LocationSearchResult[]>([]);
+  const [attribution, setAttribution] = useState<LocationSearchResponse["attribution"] | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const revisionRef = useRef(0);
@@ -251,11 +252,13 @@ function RoutePointPositionEditor({
     const revision = ++revisionRef.current;
     setPending(true);
     setResults([]);
+    setAttribution(null);
     setError("");
     try {
       const response = await searchLocations(query);
       if (revisionRef.current !== revision) return;
       setResults(response.results);
+      setAttribution(response.attribution);
       if (response.results.length === 0) setError("没有找到地点；可以试试英文名或直接填写坐标。");
     } catch (cause) {
       if (revisionRef.current !== revision) return;
@@ -291,6 +294,7 @@ function RoutePointPositionEditor({
           revisionRef.current += 1;
           setQuery(event.target.value);
           setResults([]);
+          setAttribution(null);
           setError("");
           setPending(false);
         }} placeholder="中文或英文名称" /></label>
@@ -316,6 +320,11 @@ function RoutePointPositionEditor({
             </li>
           ))}
         </ul>
+      ) : null}
+      {results.length > 0 && attribution ? (
+        <a className="journey-location-attribution" href={attribution.url} target="_blank" rel="noreferrer">
+          地点数据 {attribution.label}
+        </a>
       ) : null}
       <details className="journey-route-draft__position-manual">
         <summary>找不到地点？手动输入坐标</summary>
@@ -1169,6 +1178,11 @@ export function JourneyComposer({
     patch: { latitude: number; longitude: number; label?: string },
   ) {
     if (!routePointsRef.current.some((point) => point.draftId === draftPointId)) return;
+    if (activeReverseGeocodeDraftIdRef.current === draftPointId) {
+      reverseGeocodeRevisionRef.current += 1;
+      activeReverseGeocodeDraftIdRef.current = null;
+      setReverseAttribution(null);
+    }
     setRoutePoints((current) => {
       const next = updateRoutePoint(current, draftPointId, patch);
       routePointsRef.current = next;
