@@ -223,6 +223,114 @@ function toDraftPoint(
   };
 }
 
+function RoutePointPositionEditor({
+  point,
+  onReplace,
+  onClose,
+}: {
+  point: RouteDraftPoint;
+  onReplace: (patch: { latitude: number; longitude: number; label?: string }) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState(point.label);
+  const [latitude, setLatitude] = useState(String(point.latitude));
+  const [longitude, setLongitude] = useState(String(point.longitude));
+  const [manualLabel, setManualLabel] = useState(point.label);
+  const [results, setResults] = useState<LocationSearchResult[]>([]);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const revisionRef = useRef(0);
+  useEffect(() => () => { revisionRef.current += 1; }, []);
+
+  async function search(event: FormEvent) {
+    event.preventDefault();
+    if (query.trim().length < 2) {
+      setError("至少输入两个字符再搜索。");
+      return;
+    }
+    const revision = ++revisionRef.current;
+    setPending(true);
+    setResults([]);
+    setError("");
+    try {
+      const response = await searchLocations(query);
+      if (revisionRef.current !== revision) return;
+      setResults(response.results);
+      if (response.results.length === 0) setError("没有找到地点；可以试试英文名或直接填写坐标。");
+    } catch (cause) {
+      if (revisionRef.current !== revision) return;
+      setError(journeyLocationSearchErrorMessage(cause));
+    } finally {
+      if (revisionRef.current === revision) setPending(false);
+    }
+  }
+
+  function replaceCoordinates() {
+    const nextLatitude = parseCoordinateInput(latitude, -90, 90);
+    const nextLongitude = parseCoordinateInput(longitude, -180, 180);
+    if (nextLatitude === null || nextLongitude === null) {
+      setError("请填写有效的纬度（-90 到 90）和经度（-180 到 180）。");
+      return;
+    }
+    if (point.isStop && !manualLabel.trim()) {
+      setError("停靠点需要一个地点名称。");
+      return;
+    }
+    onReplace({ latitude: nextLatitude, longitude: nextLongitude, label: manualLabel.trim() });
+  }
+
+  return (
+    <div className="journey-route-draft__position-editor" data-route-point-position-editor={point.draftId}>
+      <div className="journey-route-draft__position-heading">
+        <strong>更换这个地点</strong>
+        <button type="button" onClick={onClose}>取消</button>
+      </div>
+      <p>新位置会留在原顺序，已有照片、视频和备注继续属于这个路线点。</p>
+      <form onSubmit={search}>
+        <label><span>搜索新地点</span><input value={query} maxLength={120} onChange={(event) => {
+          revisionRef.current += 1;
+          setQuery(event.target.value);
+          setResults([]);
+          setError("");
+          setPending(false);
+        }} placeholder="中文或英文名称" /></label>
+        <button type="submit" disabled={pending}>{pending ? "搜索中…" : "搜索"}</button>
+      </form>
+      {results.length > 0 ? (
+        <ul className="journey-route-draft__position-results">
+          {results.map((result) => (
+            <li key={result.id}>
+              <button type="button" onClick={() => onReplace({
+                latitude: result.latitude,
+                longitude: result.longitude,
+                label: result.labelLocal && /\p{Script=Han}/u.test(result.labelLocal)
+                  ? result.labelLocal : result.label,
+              })}>
+                <strong>{result.label}</strong>
+                {[result.labelLocal, result.labelEnglish]
+                  .filter((label, index, names) => Boolean(label) && label !== result.label && names.indexOf(label) === index)
+                  .map((label) => <small key={label}>{label}</small>)}
+                <small>{result.context} · {result.countryCode}</small>
+                <span>替换</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <details className="journey-route-draft__position-manual">
+        <summary>找不到地点？手动输入坐标</summary>
+        <div className="journey-route-draft__position-coordinates">
+          <label><span>新地点名称</span><input value={manualLabel} maxLength={120} onChange={(event) => setManualLabel(event.target.value)} /></label>
+          <label><span>纬度</span><input inputMode="decimal" value={latitude} onChange={(event) => setLatitude(event.target.value)} /></label>
+          <label><span>经度</span><input inputMode="decimal" value={longitude} onChange={(event) => setLongitude(event.target.value)} /></label>
+          <button type="button" onClick={replaceCoordinates}>使用这组坐标</button>
+        </div>
+      </details>
+      {error ? <p role="alert">{error}</p> : null}
+    </div>
+  );
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -296,6 +404,7 @@ export function JourneyComposer({
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
   const [mobileMediaDeleteIndex, setMobileMediaDeleteIndex] = useState<number | null>(null);
   const [expandedRoutePointDraftId, setExpandedRoutePointDraftId] = useState<string | null>(null);
+  const [replacingRoutePointDraftId, setReplacingRoutePointDraftId] = useState<string | null>(null);
   const [routePointMenuDraftId, setRoutePointMenuDraftId] = useState<string | null>(null);
   const routePointTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const routePointMenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -529,7 +638,11 @@ export function JourneyComposer({
     if (routePointMenuDraftId && !routePoints.some((point) => point.draftId === routePointMenuDraftId)) {
       setRoutePointMenuDraftId(null);
     }
-  }, [expandedRoutePointDraftId, routePointMenuDraftId, routePoints]);
+    if (replacingRoutePointDraftId && (
+      expandedRoutePointDraftId !== replacingRoutePointDraftId
+      || !routePoints.some((point) => point.draftId === replacingRoutePointDraftId)
+    )) setReplacingRoutePointDraftId(null);
+  }, [expandedRoutePointDraftId, replacingRoutePointDraftId, routePointMenuDraftId, routePoints]);
 
   useEffect(() => {
     if (!routePointMenuDraftId) return;
@@ -877,7 +990,8 @@ export function JourneyComposer({
       if (!composerMountedRef.current) return;
       // The point may have been removed while the lookup was in flight. Never
       // resurrect it or show a result for an interaction that no longer exists.
-      if (!routePointsRef.current.some((candidate) => candidate.draftId === point.draftId)) return;
+      const currentPoint = routePointsRef.current.find((candidate) => candidate.draftId === point.draftId);
+      if (!currentPoint || currentPoint.latitude !== point.latitude || currentPoint.longitude !== point.longitude) return;
 
       const label = response.result?.label;
       if (label) {
@@ -1048,6 +1162,22 @@ export function JourneyComposer({
       if (next) pendingRoutePointScrollDraftIdRef.current = next;
       return next;
     });
+  }
+
+  function replaceDraftPointLocation(
+    draftPointId: string,
+    patch: { latitude: number; longitude: number; label?: string },
+  ) {
+    if (!routePointsRef.current.some((point) => point.draftId === draftPointId)) return;
+    setRoutePoints((current) => {
+      const next = updateRoutePoint(current, draftPointId, patch);
+      routePointsRef.current = next;
+      return next;
+    });
+    pendingRoutePointFocusDraftIdRef.current = draftPointId;
+    pendingRoutePointScrollDraftIdRef.current = draftPointId;
+    setReplacingRoutePointDraftId(null);
+    setMessage("已更换位置，原顺序、备注和媒体归属保留；保存后生效。");
   }
 
   function moveDraftPointRow(draftPointId: string, direction: -1 | 1) {
@@ -1773,6 +1903,24 @@ export function JourneyComposer({
                             <span>规范坐标</span>
                             <code>{point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</code>
                           </div>
+                          <button
+                            type="button"
+                            className="journey-route-draft__replace-trigger"
+                            aria-expanded={replacingRoutePointDraftId === point.draftId}
+                            onClick={() => setReplacingRoutePointDraftId((current) => current === point.draftId ? null : point.draftId)}
+                          >
+                            更换这个地点
+                          </button>
+                          {replacingRoutePointDraftId === point.draftId ? (
+                            <RoutePointPositionEditor
+                              point={point}
+                              onReplace={(patch) => replaceDraftPointLocation(point.draftId, patch)}
+                              onClose={() => {
+                                setReplacingRoutePointDraftId(null);
+                                routePointTriggerRefs.current.get(point.draftId)?.focus({ preventScroll: true });
+                              }}
+                            />
+                          ) : null}
                           <label className="journey-route-draft__note">
                             <span>这一站想记住什么？<small>可选</small></span>
                             <textarea

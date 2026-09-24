@@ -3470,6 +3470,140 @@
   font: 500 10px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
+.journey-route-draft__replace-trigger {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid rgba(122, 244, 237, 0.28);
+  background: rgba(8, 31, 28, 0.36);
+  color: var(--atlas-cyan);
+  text-align: left;
+  cursor: pointer;
+}
+
+.journey-route-draft__position-editor {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 8, 8, 0.52);
+}
+
+.journey-route-draft__position-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.journey-route-draft__position-heading strong {
+  color: var(--atlas-text);
+  font-size: 13px;
+}
+
+.journey-route-draft__position-editor p {
+  margin: 0;
+  color: var(--atlas-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.journey-route-draft__position-editor form,
+.journey-route-draft__position-coordinates {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.journey-route-draft__position-editor label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--atlas-muted);
+  font-size: 10px;
+}
+
+.journey-route-draft__position-editor input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 8, 8, 0.55);
+  color: var(--atlas-text);
+}
+
+.journey-route-draft__position-editor button {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-cyan);
+  cursor: pointer;
+}
+
+.journey-route-draft__position-editor button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.journey-route-draft__position-results {
+  max-height: 280px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.journey-route-draft__position-results li + li { margin-top: 6px; }
+
+.journey-route-draft__position-results button {
+  width: 100%;
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  padding: 9px 12px;
+  text-align: left;
+}
+
+.journey-route-draft__position-results strong,
+.journey-route-draft__position-results small {
+  grid-column: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.journey-route-draft__position-results span {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: center;
+  color: var(--atlas-cyan);
+}
+
+.journey-route-draft__position-manual summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--atlas-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.journey-route-draft__position-coordinates {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.journey-route-draft__position-coordinates label:first-child {
+  grid-column: 1 / -1;
+}
+
+.journey-route-draft__position-coordinates button {
+  grid-column: 1 / -1;
+}
+
 .journey-route-draft__media-association small {
   min-width: 0;
   margin: 0;
