@@ -1643,6 +1643,242 @@ try {
     await storyDesktop.page.close();
   }
 
+  const inspectStagePaint = async (page, surfaceSelector) => {
+    const observation = await page.evaluate((selector) => {
+    const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const current = stage?.querySelector('[data-media-page="current"]');
+    const image = current?.querySelector("img:not([hidden])");
+    if (!(image instanceof HTMLImageElement) || !image.naturalWidth || !image.naturalHeight) return null;
+    const imageBounds = image.getBoundingClientRect();
+    const x = imageBounds.left + imageBounds.width / 2;
+    const y = imageBounds.top + imageBounds.height / 2;
+    const sampleOffsets = [[-.2, -.2], [.2, -.2], [0, 0], [-.2, .2], [.2, .2]];
+    const scale = Math.min(imageBounds.width / image.naturalWidth, imageBounds.height / image.naturalHeight);
+    const apertureWidth = image.naturalWidth * scale;
+    const apertureHeight = image.naturalHeight * scale;
+    const hit = document.elementFromPoint(x, y);
+    const pages = [...stage.querySelectorAll("[data-media-page-id]")].map((node) => {
+      const style = getComputedStyle(node);
+      const picture = node.querySelector("img:not([hidden])");
+      const bounds = node.getBoundingClientRect();
+      let pixelSample = null;
+      let sourcePixels = null;
+      if (picture instanceof HTMLImageElement && picture.complete && picture.naturalWidth) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 4;
+        canvas.height = 4;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(picture, 0, 0, 4, 4);
+        pixelSample = [...context.getImageData(0, 0, 4, 4).data]
+          .filter((_, index) => index % 4 !== 3).join(",");
+        canvas.width = Math.max(1, Math.round(apertureWidth));
+        canvas.height = Math.max(1, Math.round(apertureHeight));
+        context.drawImage(picture, 0, 0, canvas.width, canvas.height);
+        sourcePixels = sampleOffsets.map(([dx, dy]) => {
+          const sx = Math.min(canvas.width - 1, Math.max(0, Math.round((.5 + dx) * canvas.width)));
+          const sy = Math.min(canvas.height - 1, Math.max(0, Math.round((.5 + dy) * canvas.height)));
+          return [...context.getImageData(sx, sy, 1, 1).data].join(",");
+        });
+      }
+      const clip = style.clipPath;
+      return { id: node.dataset.mediaPageId, ready: node.dataset.mediaPageReady === "true",
+        current: node === current, z: Number(style.zIndex), opacity: Number(style.opacity),
+        display: style.display, visibility: style.visibility, transform: style.transform,
+        clip, clips: (clip.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number),
+        bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+        pixelSample, sourcePixels };
+    });
+    const paintPoints = sampleOffsets
+      .map(([dx, dy]) => ({ x: Math.round(x + dx * apertureWidth), y: Math.round(y + dy * apertureHeight) }));
+    return { id: current.dataset.mediaPageId, presentation: stage.dataset.mediaPresentation,
+      pages, hitSurface: hit?.hasAttribute("data-story-hit-surface"),
+      clickTarget: hit?.getAttribute("aria-label") ?? hit?.className ?? null,
+      apertureWidth, apertureHeight, paintPoints,
+      dragX: stage.style.getPropertyValue("--story-drag-x") };
+    }, surfaceSelector);
+    if (!observation) return null;
+    // Sample the composited browser frame as well as each decoded source.
+    // Invisible but pointer-disabled neighbor pages can still cover a photo.
+    const screenshot = await page.screenshot({ animations: "allow" });
+    const screenPixels = await page.evaluate(async ({ png, points }) => {
+      const bitmap = new Image();
+      bitmap.src = `data:image/png;base64,${png}`;
+      await bitmap.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.naturalWidth;
+      canvas.height = bitmap.naturalHeight;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(bitmap, 0, 0);
+      return points.map(({ x, y }) => x >= 0 && y >= 0 && x < canvas.width && y < canvas.height
+        ? [...context.getImageData(x, y, 1, 1).data].join(",") : null);
+    }, { png: screenshot.toString("base64"), points: observation.paintPoints });
+    return { ...observation, screenPixels };
+  };
+  const pixelDistance = (actual, expected) => actual.reduce((sum, pixel, index) => {
+    const seen = pixel.split(",").map(Number);
+    const source = expected[index].split(",").map(Number);
+    return sum + [0, 1, 2].reduce((part, channel) => part + (seen[channel] - source[channel]) ** 2, 0);
+  }, 0);
+  const stagePaintValid = (observation, id, requireHitSurface = false) => {
+    const front = observation?.pages.find((item) => item.current && item.id === id);
+    const others = observation?.pages.filter((item) => item.id !== id && item.ready
+      && item.pixelSample && item.display !== "none" && item.visibility === "visible") ?? [];
+    const validScreen = observation?.screenPixels?.length === 5 && observation.screenPixels.every(Boolean);
+    const foregroundDistance = front?.sourcePixels && validScreen
+      ? pixelDistance(observation.screenPixels, front.sourcePixels) : Infinity;
+    return observation?.id === id && observation.presentation === "settled"
+      && (!requireHitSurface || observation.hitSurface)
+      && observation.apertureWidth > 0 && observation.apertureHeight > 0
+      && validScreen
+      && front?.ready && front.pixelSample && front.opacity > 0.99
+      && front.sourcePixels?.length === 5 && Number.isFinite(foregroundDistance)
+      && front.clips.length > 0 && front.clips.every((part) => Math.abs(part) <= 0.1)
+      && front.bounds.width > 0 && front.bounds.height > 0 && front.transform !== "none"
+      && others.length > 0 && others.some((item) => item.pixelSample !== front.pixelSample)
+      && others.every((item) => item.sourcePixels?.length === 5
+        && foregroundDistance < pixelDistance(observation.screenPixels, item.sourcePixels)
+        && Number.isFinite(item.z) && item.z < front.z
+        && item.bounds.width > 0 && item.bounds.height > 0 && item.transform !== "none"
+        && item.clips.length > 0 && item.clips.every((part) => part >= -0.1));
+  };
+  const frontPixels = (observation) => observation?.pages.find((item) => item.current)?.pixelSample;
+  const screenPixels = (observation) => observation?.screenPixels?.join("|");
+
+  // The stage itself owns a gesture's paint, cancellation and final commit.
+  // Exercise that boundary with distinct real photographs and actual input;
+  // inspect the foreground and hit target after a fast reverse, a drag and a
+  // viewport rotation. A close during a ready handoff must leave no old pose.
+  const stageOwner = await createQaPage("/?qaState=journey-story", (request) =>
+    request.includes("000000000100") ? "/artworks/china-handscroll.jpg"
+      : request.includes("000000000101") ? "/artworks/mughal-akbarnama.jpg"
+        : "/artworks/hokusai-wave.jpg", {
+    mobile: false, reducedMotion: "no-preference",
+  });
+  try {
+    const page = stageOwner.page;
+    const first = "00000000-0000-4000-8000-000000000100";
+    const second = "00000000-0000-4000-8000-000000000101";
+    const third = "00000000-0000-4000-8000-000000000102";
+    await waitForStoryPicture(page, first);
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), second, { polling: "raf" });
+    await page.evaluate(() => {
+      const probe = { running: true, ticks: 0, exposed: [] };
+      window.__qaStoryStageOwner = probe;
+      const sample = () => {
+        if (!probe.running) return;
+        probe.ticks += 1;
+        const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+        const current = stage?.querySelector('[data-media-page="current"]');
+        if (stage?.dataset.mediaPresentation === "settled" && current?.dataset.mediaPageReady === "true") {
+          const clip = getComputedStyle(current).clipPath;
+          const numbers = (clip.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+          if (numbers.some((part) => Math.abs(part) > 0.1)) {
+            probe.exposed.push({ id: current.dataset.mediaPageId, clip });
+          }
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    const inspect = () => inspectStagePaint(page, ".journey-story__media");
+    await page.locator('.journey-story__media [data-media-page="current"] img').focus();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowLeft");
+    await waitForStoryPicture(page, first);
+    const reversed = await inspect();
+    const point = await storyPicturePoint(page, 1);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await page.mouse.move(point.x - 128, point.y, { steps: 8 });
+    await page.mouse.up();
+    await waitForStoryPicture(page, second);
+    const dragged = await inspect();
+    await page.setViewportSize({ width: 900, height: 1200 });
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const rotated = await inspect();
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), third, { polling: "raf" });
+    await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
+    await page.locator(".journey-story-fullscreen").waitFor({ state: "visible" });
+    await waitForStoryPicture(page, second, ".journey-story-fullscreen");
+    await page.locator('.journey-story-fullscreen [data-media-page="current"] img').focus();
+    await page.keyboard.press("ArrowRight");
+    const close = await page.locator(".journey-story-fullscreen__close").boundingBox();
+    if (!close) throw new Error("Fullscreen close control is absent during media handoff");
+    await page.mouse.click(close.x + close.width / 2, close.y + close.height / 2);
+    await page.locator(".journey-story-fullscreen").waitFor({ state: "hidden" });
+    await waitForStoryPicture(page, third);
+    const returned = await inspect();
+    const samples = await page.evaluate(() => {
+      const probe = window.__qaStoryStageOwner;
+      probe.running = false;
+      return { ticks: probe.ticks, exposed: probe.exposed };
+    });
+    const failedStageOwner = !stagePaintValid(reversed, first, true) || !stagePaintValid(dragged, second, true)
+      || !stagePaintValid(rotated, second, true) || !stagePaintValid(returned, third, true)
+      || frontPixels(reversed) === frontPixels(dragged)
+      || frontPixels(reversed) === frontPixels(returned)
+      || frontPixels(dragged) === frontPixels(returned)
+      || frontPixels(rotated) !== frontPixels(dragged)
+      || screenPixels(reversed) === screenPixels(dragged)
+      || screenPixels(dragged) === screenPixels(returned)
+      || samples.ticks === 0 || samples.exposed.length > 0;
+    checks.push({ name: "story-stage-owner-reverse-drag-rotate-close", reversed, dragged,
+      rotated, returned, samples, failed: failedStageOwner });
+    if (failedStageOwner) failed = true;
+  } finally {
+    await stageOwner.page.close();
+  }
+
+  const stageOwnerBack = await createQaPage("/?qaState=journey-story", (request) =>
+    request.includes("000000000100") ? "/artworks/china-handscroll.jpg"
+      : "/artworks/mughal-akbarnama.jpg", {
+    mobile: true, reducedMotion: "no-preference",
+  });
+  try {
+    const page = stageOwnerBack.page;
+    const first = "00000000-0000-4000-8000-000000000100";
+    const second = "00000000-0000-4000-8000-000000000101";
+    await waitForStoryPicture(page, first);
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), second, { polling: "raf" });
+    const beforeBack = await inspectStagePaint(page, ".journey-story__media");
+    await page.locator(".journey-story__mobile-media-fullscreen").click();
+    const overlay = page.locator(".journey-story-fullscreen");
+    await overlay.waitFor({ state: "visible" });
+    await waitForStoryPicture(page, first, ".journey-story-fullscreen");
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story-fullscreen [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), second, { polling: "raf" });
+    const bounds = await page.locator('.journey-story-fullscreen [data-media-page="current"] img').boundingBox();
+    if (!bounds) throw new Error("Fullscreen picture is absent before Back interruption");
+    const x = bounds.x + bounds.width / 2;
+    const y = bounds.y + bounds.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - 130, y, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForFunction(() => document.querySelector(
+      '.journey-story-fullscreen [data-story-media-pages]')?.getAttribute("data-media-presentation") === "settling",
+    null, { polling: "raf" });
+    await page.evaluate(() => window.history.back());
+    await overlay.waitFor({ state: "hidden" });
+    await waitForStoryPicture(page, first);
+    const returned = await inspectStagePaint(page, ".journey-story__media");
+    const backFailed = !stagePaintValid(beforeBack, first) || !stagePaintValid(returned, first)
+      || returned.dragX !== "" || frontPixels(returned) !== frontPixels(beforeBack);
+    checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returned,
+      consoleErrors: stageOwnerBack.consoleErrors, pageErrors: stageOwnerBack.pageErrors,
+      failed: backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0 });
+    if (backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0) failed = true;
+  } finally {
+    await stageOwnerBack.page.close();
+  }
+
   const mixedMediaMobile = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
     instrumentMedia: true,
     mixedMedia: true,
