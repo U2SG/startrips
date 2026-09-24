@@ -9,11 +9,11 @@ import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import type { JourneyMediaAsset, MediaPreviewRead } from "./types";
 import "../styles/story-media-pages.css";
 
-type Read = { status: "ready"; url: string; preview?: MediaPreviewRead } | { status: "loading" } | { status: "error"; message: string };
+type Read = { status: "ready"; url: string; generation?: number; preview?: MediaPreviewRead } | { status: "loading" } | { status: "error"; message: string };
 type VideoElement = ReactElement<VideoHTMLAttributes<HTMLVideoElement> & { ref?: Ref<HTMLVideoElement> }>;
-type Frame = { url: string; state: "waiting" | "ready" | "error"; canvas?: HTMLCanvasElement; message?: string };
+type Frame = { url: string; generation?: number; state: "waiting" | "ready" | "error"; canvas?: HTMLCanvasElement; message?: string };
 type VideoRenewal = {
-  id: string; src: string; time: number; muted: boolean; volume: number; playbackRate: number;
+  id: string; src: string; generation?: number; time: number; muted: boolean; volume: number; playbackRate: number;
   seekIssued: boolean; seekCompleted: boolean;
 };
 export type StoryMediaPagesHandle = { cancelGesture: () => void };
@@ -183,9 +183,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const parentVideoRef = useRef<Ref<HTMLVideoElement> | undefined>(props.video?.props.ref);
   if (props.video) parentVideoRef.current = props.video.props.ref;
   const providedSource = props.video?.props.src;
+  const videoRead = props.videoAssetId ? props.reads[props.videoAssetId] : undefined;
+  const providedGeneration = videoRead?.status === "ready" ? videoRead.generation : undefined;
   // Delay a src change for one layout phase so the old video can be painted
   // into its own page before the same transport starts loading the new source.
-  const [binding, setBinding] = useState({ id: props.videoAssetId, src: providedSource });
+  const [binding, setBinding] = useState({ id: props.videoAssetId, src: providedSource, generation: providedGeneration });
   const bindingRef = useRef(binding);
   bindingRef.current = binding;
   const renewal = useRef<VideoRenewal | null>(null);
@@ -225,7 +227,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const slotSignature = assigned.join("|");
   const readSignature = assigned.map((id) => {
     const read = id ? props.reads[id] : undefined;
-    return `${id}:${read?.status}:${read?.status === "ready" ? read.url : ""}`;
+    return `${id}:${read?.status}:${read?.status === "ready" ? `${read.url}:${read.generation ?? ""}` : ""}`;
   }).join("|");
 
   const rememberLiveFrame = useCallback(() => {
@@ -234,7 +236,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     if (source.id && source.src && frame) {
       pendingFrames.current.get(source.id)?.();
       pendingFrames.current.delete(source.id);
-      frames.current.set(source.id, { url: source.src, state: "ready", canvas: frame });
+      frames.current.set(source.id, { url: source.src, generation: source.generation, state: "ready", canvas: frame });
       updateRevision((value) => value + 1);
     }
   }, []);
@@ -245,8 +247,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     // behind Story's retry action. The next signed read can use both again.
     if (!providedSource && renewal.current?.id === props.currentId
       && props.videoAssetId === props.currentId) return;
-    if (binding.id === props.videoAssetId && binding.src === providedSource) return;
+    if (binding.id === props.videoAssetId && binding.src === providedSource
+      && binding.generation === providedGeneration) return;
     const video = liveVideo.current;
+    const sameUrlGeneration = binding.id === props.videoAssetId
+      && binding.src === providedSource && binding.generation !== providedGeneration;
     const samePresentedVideo = active && binding.id === props.videoAssetId
       && binding.id === props.currentId && binding.src && providedSource;
     if (samePresentedVideo && video) {
@@ -255,11 +260,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       if (!renewal.current || renewal.current.id !== binding.id) {
         rememberLiveFrame();
         renewal.current = {
-          id: binding.id!, src: providedSource!, time: video.currentTime,
+          id: binding.id!, src: providedSource!, generation: providedGeneration, time: video.currentTime,
           muted: video.muted, volume: video.volume, playbackRate: video.playbackRate,
           seekIssued: false, seekCompleted: false,
         };
-      } else renewal.current = { ...renewal.current, src: providedSource!, seekIssued: false, seekCompleted: false };
+      } else renewal.current = { ...renewal.current, src: providedSource!, generation: providedGeneration,
+        seekIssued: false, seekCompleted: false };
     } else {
       renewal.current = null;
       rememberLiveFrame();
@@ -267,8 +273,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     video?.pause();
     setLiveReady(null);
     setFailedLiveSource(null);
-    setBinding({ id: props.videoAssetId, src: providedSource });
-  }, [active, props.currentId, props.videoAssetId, providedSource, binding.id, binding.src, Boolean(props.video), rememberLiveFrame]);
+    setBinding({ id: props.videoAssetId, src: providedSource, generation: providedGeneration });
+    // React does not reload an unchanged src. A successful new signed read
+    // must issue fresh bytes even if its URL compares equal to the old one.
+    if (sameUrlGeneration && providedSource) video?.load();
+  }, [active, props.currentId, props.videoAssetId, providedSource, providedGeneration,
+    binding.id, binding.src, binding.generation, Boolean(props.video), rememberLiveFrame]);
 
   useEffect(() => {
     const wanted = new Set(assigned.filter((id): id is string => Boolean(id)));
@@ -288,25 +298,27 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         if (!(renewal.current?.id === id && existing?.canvas)) frames.current.delete(id);
         continue;
       }
-      if (existing?.url === read.url) continue;
+      if (existing?.url === read.url && existing.generation === read.generation) continue;
       pendingFrames.current.get(id)?.();
       // A URL is a capability, not a new asset. Preserve the last decoded
       // picture until the renewed transport has sought back to that picture.
-      frames.current.set(id, { url: read.url, state: "waiting", canvas: existing?.canvas });
-      if (renewal.current?.id === id && renewal.current.src === read.url) continue;
+      frames.current.set(id, { url: read.url, generation: read.generation, state: "waiting", canvas: existing?.canvas });
+      if (renewal.current?.id === id && renewal.current.src === read.url
+        && renewal.current.generation === read.generation) continue;
       const cancel = prepareVideoFrame(read.url, (canvas) => {
         pendingFrames.current.delete(id);
-        if (frames.current.get(id)?.url !== read.url) return;
+        if (frames.current.get(id)?.url !== read.url
+          || frames.current.get(id)?.generation !== read.generation) return;
         if (frames.current.get(id)?.state === "ready") return;
-        frames.current.set(id, canvas ? { url: read.url, state: "ready", canvas }
-          : { url: read.url, state: "error", message: "视频首帧暂时无法载入，请重试。" });
+        frames.current.set(id, canvas ? { url: read.url, generation: read.generation, state: "ready", canvas }
+          : { url: read.url, generation: read.generation, state: "error", message: "视频首帧暂时无法载入，请重试。" });
         updateRevision((value) => value + 1);
       });
       pendingFrames.current.set(id, cancel);
     }
   }, [slotSignature, readSignature]);
 
-  const liveKey = `${binding.id}:${binding.src}`;
+  const liveKey = `${binding.id}:${binding.src}:${binding.generation ?? ""}`;
   const liveSourceMatches = (element: HTMLVideoElement) => Boolean(binding.id && binding.src
     && element.currentSrc === new URL(binding.src, document.baseURI).href);
   const liveMatches = (element: HTMLVideoElement) => liveSourceMatches(element)
@@ -314,7 +326,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const recordLiveReady = (event?: { type: string }) => {
     if (!liveVideo.current || !liveSourceMatches(liveVideo.current)) return;
     const pending = renewal.current;
-    if (pending && pending.id === binding.id && pending.src === binding.src) {
+    if (pending && pending.id === binding.id && pending.src === binding.src
+      && pending.generation === binding.generation) {
       const video = liveVideo.current;
       video.muted = pending.muted;
       video.volume = pending.volume;
@@ -359,9 +372,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     if (read?.status !== "ready") return false;
     const asset = props.media.find((item) => item.id === id);
     if (asset?.mimeType.startsWith("video/")) {
-      if (renewal.current?.id === id && renewal.current.src === read.url) return false;
+      if (renewal.current?.id === id && renewal.current.src === read.url
+        && renewal.current.generation === read.generation) return false;
       const frame = frames.current.get(id);
-      return (frame?.url === read.url && frame.state === "ready") || (binding.id === id && liveReady === liveKey);
+      return (frame?.url === read.url && frame.generation === read.generation && frame.state === "ready")
+        || (binding.id === id && binding.generation === read.generation && liveReady === liveKey);
     }
     return decodedImages.current.get(id) === read.url;
   };
@@ -446,7 +461,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     // A passive metadata preview may fail on a browser that can play the
     // live source. Only the actual transport can declare that source failed.
     const message = liveFailed ? "视频暂时无法播放，请重试。" : null;
-    const key = `${id}:${read?.status}:${message}`;
+    const key = `${id}:${read?.status}:${read?.status === "ready" ? read.generation ?? "" : ""}:${message}`;
     if (read?.status === "ready" && message && reportKey.current !== key) {
       reportKey.current = key;
       props.onMediaError(id, message, Boolean(renewal.current?.id === id && frames.current.get(id)?.canvas));
@@ -1087,6 +1102,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         ...{
           "data-shared-media-id": videoVisible && binding.id === props.currentId ? binding.id : undefined,
           "data-shared-journey-cover": videoVisible && binding.id === props.currentId && binding.id === props.coverId ? "true" : undefined,
+          "data-story-read-generation": videoVisible ? binding.generation : undefined,
         },
         onLoadedMetadata: recordLiveReady, onLoadedData: recordLiveReady,
         onCanPlay: recordLiveReady, onSeeked: recordLiveReady,

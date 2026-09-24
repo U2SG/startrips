@@ -164,7 +164,7 @@ async function observedPointerTypes(page) {
 async function createStoryPage({
   mobile = false, viewport, reducedMotion = "no-preference",
   readDelays = {}, byteDelays = {}, renewPausedVideo = false,
-  renewalByteFailure = false, renewalReadFailure = false,
+  renewalByteFailure = false, renewalReadFailure = false, renewalSameUrlRetry = false,
 } = {}) {
   const page = await browser.newPage({
     viewport: viewport ?? (mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 }),
@@ -189,6 +189,7 @@ async function createStoryPage({
   const releaseRetryBytes = deferred();
   const readCounts = new Map();
   const initialRead = { issuedAt: null, expiresAt: null };
+  let sameUrlRetryReadServed = false;
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.addInitScript(installStageSampler);
@@ -218,6 +219,7 @@ async function createStoryPage({
           body: JSON.stringify({ error: "READ_TEMPORARILY_UNAVAILABLE", message: "signed read unavailable" }) });
       }
       entry.outcome = "ready";
+      if (renewalSameUrlRetry && count === 3) sameUrlRetryReadServed = true;
     }
     await hold(readDelays[asset] ?? 0);
     const expiresAt = Date.now() + (renewPausedVideo && asset === V1 && count === 1
@@ -226,12 +228,15 @@ async function createStoryPage({
       initialRead.issuedAt = Date.now();
       initialRead.expiresAt = expiresAt;
     }
+    const url = renewPausedVideo && asset === V1
+      ? `${CLIP}?storyRenewal=${renewalSameUrlRetry && count === 3 ? 2 : count}`
+      : ASSET_URLS[asset] ?? WIDE_PHOTO;
+    if (renewPausedVideo && asset === V1 && count > 1) renewalReads.at(-1).url = url;
     return route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        url: renewPausedVideo && asset === V1
-          ? `${CLIP}?storyRenewal=${count}` : ASSET_URLS[asset] ?? WIDE_PHOTO,
+        url,
         expiresAt: new Date(expiresAt).toISOString(),
       }),
     });
@@ -241,10 +246,11 @@ async function createStoryPage({
       return route.continue();
     }
     const token = new URL(route.request().url()).searchParams.get("storyRenewal");
+    const retryBytes = token === "3" || (renewalSameUrlRetry && sameUrlRetryReadServed);
     const entry = { url: route.request().url(), range: route.request().headers().range ?? null,
-      startedAt: Date.now(), releasedAt: null };
+      startedAt: Date.now(), releasedAt: null, attempt: retryBytes ? "retry" : "renewal" };
     renewalBytes.push(entry);
-    if ((renewalByteFailure || renewalReadFailure) && token === "3") {
+    if ((renewalByteFailure || renewalReadFailure) && retryBytes) {
       retryByteStarted.resolve(entry);
       await releaseRetryBytes.promise;
     } else {
@@ -252,7 +258,7 @@ async function createStoryPage({
       await releaseRenewalBytes.promise;
     }
     entry.releasedAt = Date.now();
-    if (renewalByteFailure && token === "2") {
+    if (renewalByteFailure && token === "2" && !retryBytes) {
       entry.outcome = "failed";
       return route.fulfill({ status: 503, contentType: "text/plain", body: "renewed media unavailable" });
     }
@@ -3903,11 +3909,16 @@ try {
     }
   }
 
-  for (const failure of ["read", "bytes"]) {
+  for (const { failure, sameUrl } of [
+    { failure: "read", sameUrl: false },
+    { failure: "bytes", sameUrl: false },
+    { failure: "bytes", sameUrl: true },
+  ]) {
     const session = await createStoryPage({ mobile: false, renewPausedVideo: true,
-      renewalReadFailure: failure === "read", renewalByteFailure: failure === "bytes" });
-    const progress = { failure };
-    const name = `story-paused-video-renewal-${failure}-failure-retry`;
+      renewalReadFailure: failure === "read", renewalByteFailure: failure === "bytes",
+      renewalSameUrlRetry: sameUrl });
+    const progress = { failure, sameUrl };
+    const name = `story-paused-video-renewal-${failure}-${sameUrl ? "same-url-" : ""}failure-retry`;
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
@@ -3927,6 +3938,13 @@ try {
       progress.errorFrame = await heldRenewalFramePixels(page, STAGE,
         { videoHidden: failure === "bytes" });
       progress.noWaitingCoverAtError = await page.locator(`${STAGE} .starlight-media-state.is-waiting`).count() === 0;
+      if (sameUrl) await page.evaluate(() => {
+        const video = document.querySelector('.journey-story__media .story-media-pages__video video');
+        if (!(video instanceof HTMLVideoElement)) throw new Error("no persistent video before same-URL Retry");
+        window.__qaSameUrlRetryVideo = video;
+        window.__qaSameUrlRetryLoadStarts = 0;
+        video.addEventListener("loadstart", () => { window.__qaSameUrlRetryLoadStarts += 1; });
+      });
       progress.retryClick = await clickHandoffButton(page,
         `${STAGE} .journey-story__media-state.is-over-media[role="alert"] button`);
       progress.retryRead = await waitForFixture(session.renewal.retryReadStarted, 5_000, "retry signed read");
@@ -3936,22 +3954,35 @@ try {
       progress.noWaitingCoverDuringRetry = await page.locator(`${STAGE} .starlight-media-state.is-waiting`).count() === 0;
       session.renewal.releaseRetryRead();
       progress.retryBytes = await waitForFixture(session.renewal.retryByteStarted, 5_000, "retry video bytes");
-      await page.waitForFunction(() => {
+      if (sameUrl) {
+        await page.waitForFunction(() => window.__qaSameUrlRetryLoadStarts > 0,
+          undefined, { polling: "raf", timeout: 4_000 });
+        progress.sameUrlTransport = await page.evaluate(() => ({
+          sameNode: document.querySelector('.journey-story__media .story-media-pages__video video')
+            === window.__qaSameUrlRetryVideo,
+          loadStarts: window.__qaSameUrlRetryLoadStarts,
+        }));
+      }
+      await page.waitForFunction((expectedToken) => {
         const stage = document.querySelector('.journey-story__media [data-story-media-pages]');
         const video = stage?.querySelector('.story-media-pages__video video');
         return video instanceof HTMLVideoElement && video.hidden
-          && video.getAttribute('src')?.includes('storyRenewal=3');
-      }, undefined, { polling: "raf", timeout: 4_000 });
+          && video.getAttribute('src')?.includes(`storyRenewal=${expectedToken}`);
+      }, sameUrl ? 2 : 3, { polling: "raf", timeout: 4_000 });
       progress.retryByteFrame = await heldRenewalFramePixels(page, STAGE);
       session.renewal.releaseRetryBytes();
       progress.after = await waitForVideoHandoffState(page, STAGE, V1, true);
       await notice.waitFor({ state: "hidden", timeout: 4_000 });
+      progress.noticeCleared = await notice.count() === 0;
       progress.afterPixels = await pausedVideoScreenPixels(page, STAGE);
       progress.frameIdentity = gradePausedFrameIdentity(progress.beforePixels, progress.afterPixels);
       progress.afterPoint = await presentedVideoPoint(page, STAGE);
+      if (sameUrl) progress.returnHit = await clickReturnedVideo(page);
       progress.unexpectedConsoleErrors = session.consoleErrors.filter((message) => !message.includes("503"));
       record({ name,
-        claim: "a real expired paused video survives either a failed signed-read request or failed renewed bytes; a trusted Retry click leaves its original frame visible through the delayed retry request and bytes, then restores the same native time and hit target",
+        claim: sameUrl
+          ? "a failed renewed video byte request survives a trusted Retry that receives the same signed URL; the same transport reloads real bytes, holds the old frame and time, clears the notice, and receives a real click"
+          : "a real expired paused video survives either a failed signed-read request or failed renewed bytes; a trusted Retry click leaves its original frame visible through the delayed retry request and bytes, then restores the same native time and hit target",
         ...progress, renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
@@ -3964,7 +3995,15 @@ try {
           || (failure === "bytes" && progress.renewalBytes?.outcome !== "failed")
           || progress.retryRead.count !== 3 || progress.retryRead.outcome !== "ready"
           || progress.retryBytes.outcome !== "continued"
-          || !progress.after.src?.includes("storyRenewal=3") || !progress.after.paused
+          || !progress.noticeCleared
+          || (sameUrl
+            ? progress.retryRead.url !== progress.renewalRead.url
+              || progress.retryBytes.url !== progress.renewalBytes.url
+              || progress.after.src !== progress.retryBytes.url
+              || !progress.sameUrlTransport?.sameNode || progress.sameUrlTransport?.loadStarts < 1
+              || progress.returnHit?.failed
+            : !progress.after.src?.includes("storyRenewal=3"))
+          || !progress.after.paused
           || Math.abs(progress.after.time - progress.before.time) > 0.18
           || !progress.afterPoint.hitIsVideo || !progress.afterPoint.controls
           || progress.unexpectedConsoleErrors.length > 0 || session.pageErrors.length > 0,

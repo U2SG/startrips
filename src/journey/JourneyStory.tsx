@@ -542,7 +542,10 @@ export function JourneyStory({
   );
   const selectedRoutePointIdRef = useRef(selectedRoutePointId);
   selectedRoutePointIdRef.current = selectedRoutePointId;
-  const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState>>({});
+  const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState & { generation?: number }>>({});
+  // A re-signed read can carry the same URL (for example two requests in one
+  // signing second). Presentation still needs a new resource generation.
+  const mediaReadGeneration = useRef(0);
   // Browser-side decode readiness, separate from signed-read readiness (#11):
   // a URL being available never implies the image is decoded, so the slideshow
   // holds the current frame until the next one is truly ready.
@@ -706,7 +709,7 @@ export function JourneyStory({
   const [videoHandoffRevision, setVideoHandoffRevision] = useState(0);
   const [stagePlaybackReady, setStagePlaybackReady] = useState<{ inline: string | null; fullscreen: string | null }>({ inline: null, fullscreen: null });
   const [renewalError, setRenewalError] = useState<{
-    id: string; sourceUrl: string; message: string; retrying: boolean;
+    id: string; sourceGeneration: number | undefined; message: string; retrying: boolean;
   } | null>(null);
   const inlinePlaybackReady = useCallback((id: string | null) => {
     setStagePlaybackReady((current) => current.inline === id ? current : { ...current, inline: id });
@@ -719,8 +722,11 @@ export function JourneyStory({
     if (!renewalError || activeStagePlaybackReadyId !== renewalError.id) return;
     const read = mediaReads[renewalError.id];
     const video = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
-    if (read?.status === "ready" && read.url !== renewalError.sourceUrl
+    if (read?.status === "ready" && read.generation !== undefined
+      && read.generation > (renewalError.sourceGeneration ?? -1)
       && video?.dataset.sharedMediaId === renewalError.id
+      && !video.hidden && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !video.seeking
+      && video.dataset.storyReadGeneration === String(read.generation)
       && video.currentSrc === new URL(read.url, document.baseURI).href) setRenewalError(null);
   }, [activeStagePlaybackReadyId, fullscreen, mediaReads, renewalError]);
   useEffect(() => () => {
@@ -2177,6 +2183,7 @@ export function JourneyStory({
       ? current
       : { ...current, [assetId]: { status: "loading" } });
     const issuedAt = Date.now();
+    const generation = ++mediaReadGeneration.current;
     const scope = mediaReadScope.current;
     // Playback can claim the existing resource while this request is in flight.
     // Check again when React applies either completion; the next expiry sweep
@@ -2190,6 +2197,7 @@ export function JourneyStory({
           url: read.url,
           preview: read.preview,
           issuedAt,
+          generation,
           expiresAt: Date.parse(read.expiresAt),
         },
       })),
@@ -2200,8 +2208,8 @@ export function JourneyStory({
           const shownVideo = storyVideoRef.current?.dataset.sharedMediaId === assetId
             || fullscreenVideoRef.current?.dataset.sharedMediaId === assetId;
           if (renewingRead && previousRead?.status === "ready" && shownVideo && !protectedVideoRead(assetId)) {
-            setRenewalError((current) => ({ id: assetId, sourceUrl: current?.id === assetId
-              ? current.sourceUrl : previousRead.url, message, retrying: false }));
+            setRenewalError((current) => ({ id: assetId, sourceGeneration: current?.id === assetId
+              ? current.sourceGeneration : previousRead.generation, message, retrying: false }));
           } else setRenewalError((current) => current?.id === assetId
             ? { ...current, message, retrying: false } : current);
         }
@@ -2226,7 +2234,7 @@ export function JourneyStory({
   const reportStageMediaError = useCallback((assetId: string, message: string, retainedVideoFrame = false) => {
     const currentRead = mediaReadsRef.current[assetId];
     if (retainedVideoFrame && currentRead?.status === "ready") {
-      setRenewalError({ id: assetId, sourceUrl: currentRead.url,
+      setRenewalError({ id: assetId, sourceGeneration: currentRead.generation,
         message, retrying: false });
       return;
     }
