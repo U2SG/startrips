@@ -131,6 +131,10 @@ self-hosted MapLibre style without changing application code. A replacement styl
 must allow browser CORS access from `https://${APP_HOST}` and expose `name:zh` or
 `name:zh-Hans` fields when Chinese labels are required.
 
+`ATLAS_PMTILES_URL` (with `ATLAS_PMTILES_GLYPHS_URL`) is an unverified spike for a
+self-hosted Protomaps PMTiles basemap. It is ignored when `ATLAS_MAP_STYLE_URL` is
+set. Read `docs/spikes/pmtiles-basemap.md` before using it.
+
 ## Private media storage
 
 Media uses the existing multipart API with an `s3` protocol adapter. The browser
