@@ -691,6 +691,40 @@ try {
     && keyboardActivation.routePointId === labelPointId
     && focusReturn.routePointId === labelPointId);
 
+  // The production renderer, rather than the deterministic QA SVG below,
+  // owns selected-marker presentation. Exercise the same A -> no-media B ->
+  // close path through a real marker hit and grade the marker actually returned.
+  await clickRoutePointMarker(interactionPage, journeyId, photoPointId);
+  await interactionPage.locator(`[data-route-point-context][data-route-point-id="${photoPointId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  await interactionPage.waitForFunction(() => document.querySelector("[data-route-point-context-media]")?.getAttribute("data-route-point-context-media") === "ready");
+  await interactionPage.locator(".living-atlas__route-point-context-entry").click();
+  await interactionPage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${photoAssetId}"][data-media-page-ready="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  await interactionPage.locator(`.journey-story button[data-route-point-id="${textPointId}"]`).click();
+  await interactionPage.locator(`.journey-story button[data-route-point-id="${textPointId}"][aria-pressed="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  await interactionPage.locator('.journey-story[data-has-media="false"]').waitFor({ state: "visible", timeout: 5_000 });
+  await interactionPage.locator(".journey-story__close").click();
+  await interactionPage.locator(`[data-route-point-context][data-route-point-id="${textPointId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  const realReturnMarker = interactionPage.locator(`.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${textPointId}"][data-attention-role="selected"]`);
+  await realReturnMarker.waitFor({ state: "visible", timeout: 5_000 });
+  const realReturnMarkerRect = await realReturnMarker.boundingBox();
+  const realReturnState = await interactionPage.evaluate(() => ({
+    contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+    selectedIds: [...document.querySelectorAll('.particle-earth-route__point[data-attention-role="selected"]')]
+      .map((node) => node.getAttribute("data-route-point-id")),
+    activeRoute: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route") ?? null,
+    viewport: { width: innerWidth, height: innerHeight },
+  }));
+  record("real A -> no-media B return highlights B at its visible map position", {
+    realReturnState, realReturnMarkerRect,
+  },
+    realReturnState.contextId === textPointId
+    && realReturnState.selectedIds.includes(textPointId)
+    && !realReturnState.selectedIds.includes(photoPointId)
+    && realReturnState.activeRoute === journeyId
+    && Boolean(realReturnMarkerRect && realReturnMarkerRect.x >= 0 && realReturnMarkerRect.y >= 0
+      && realReturnMarkerRect.x + realReturnMarkerRect.width <= realReturnState.viewport.width
+      && realReturnMarkerRect.y + realReturnMarkerRect.height <= realReturnState.viewport.height));
+
   await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
   await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
   const dragTarget = await dragBlankGlobe(interactionPage);
@@ -862,32 +896,22 @@ try {
   await textReturnPage.locator(".journey-story__close").click();
   const returnedTextContext = textReturnPage.locator(`[data-route-point-context][data-route-point-id="${textPointId}"]`);
   await returnedTextContext.waitFor({ state: "visible", timeout: 5_000 });
-  const returnedTextMarker = textReturnPage.locator(`.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${textPointId}"][data-attention-role="selected"]`);
-  await returnedTextMarker.waitFor({ state: "attached", timeout: 5_000 });
-  const textMarkerRect = await returnedTextMarker.boundingBox();
   const textReturnState = await textReturnPage.evaluate((pointId) => ({
     contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
     contextText: document.querySelector("[data-route-point-context]")?.textContent ?? "",
-    selectedIds: [...document.querySelectorAll('.particle-earth-route__point[data-attention-role="selected"]')]
-      .map((node) => node.getAttribute("data-route-point-id")),
     staleApertures: document.querySelectorAll('[data-place-media-observation], [data-shared-element-clone^="place-media-"]').length,
     markerVisible: document.querySelector(`.particle-earth-route__point[data-route-point-id="${pointId}"]`)?.getBoundingClientRect().width > 0,
   }), textPointId);
-  record("A -> no-media B closes to B's actual map selection and detail", {
-    emptyStoryState, textReturnState, textMarkerRect,
+  record("A -> no-media B closes to B's detail without a stale A aperture", {
+    emptyStoryState, textReturnState,
   },
     emptyStoryState.selected === textPointId
     && emptyStoryState.mediaPageCount === 0
     && emptyStoryState.text.includes("这一站只留下了一句话")
     && textReturnState.contextId === textPointId
     && textReturnState.contextText.includes("九龙海旁")
-    && textReturnState.selectedIds.includes(textPointId)
-    && !textReturnState.selectedIds.includes(photoPointId)
     && textReturnState.staleApertures === 0
-    && textReturnState.markerVisible
-    && Boolean(textMarkerRect && textMarkerRect.x >= 0 && textMarkerRect.y >= 0
-      && textMarkerRect.x + textMarkerRect.width <= 1280
-      && textMarkerRect.y + textMarkerRect.height <= 720));
+    && textReturnState.markerVisible);
   await returnedTextContext.locator(".living-atlas__route-point-context-entry").click();
   await textReturnPage.locator(`.journey-story button[data-route-point-id="${textPointId}"][aria-pressed="true"]`).waitFor({ state: "attached", timeout: 5_000 });
   record("returned B detail reopens the same no-media Story scope", {},
