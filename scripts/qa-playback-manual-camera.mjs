@@ -616,6 +616,10 @@ try {
       await page.locator(".journey-story__fullscreen-entry").click();
       await page.locator(".journey-story-fullscreen").waitFor({ state: "visible" });
       const fullscreen = await visibleVideo(page, ".journey-story-fullscreen", videoId);
+      const fullscreenBox = await page.locator(".journey-story-fullscreen").boundingBox();
+      assert.ok(fullscreenBox, "fullscreen must remain visible before Close");
+      await page.mouse.move(fullscreenBox.x + fullscreenBox.width - 40, fullscreenBox.y + 40);
+      await page.locator(".journey-story-fullscreen__close").waitFor({ state: "visible" });
       await page.locator(".journey-story-fullscreen__close").click();
       await page.locator(".journey-story-fullscreen").waitFor({ state: "hidden" });
       const inlineReturn = await visibleVideo(page, ".journey-story__media", videoId);
