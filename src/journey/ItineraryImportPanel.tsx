@@ -71,6 +71,12 @@ const FLAG_LABELS: Record<string, string> = {
   "possible-repeat-visit": "可能是同一处的再次到访",
 };
 
+function searchableName(entry: ItineraryEntryDraft) {
+  return [entry.name, ...entry.aliases].find((name) =>
+    name.trim().length >= 2 && name.trim().length <= 120
+  ) ?? "";
+}
+
 type Props = {
   onApply: (
     imported: readonly ItineraryRoutePointDraft[],
@@ -190,6 +196,7 @@ export function ItineraryImportPanel({
       && !entry.flags.includes("truncated")
       && entry.countryCode !== null
       && Boolean(entry.searchArea)
+      && Boolean(searchableName(entry))
     );
     setLookupProgress({ done: 0, total: entries.length, unavailable: false });
     for (const [index, entry] of entries.entries()) {
@@ -199,8 +206,9 @@ export function ItineraryImportPanel({
         continue;
       }
       try {
-        const { results } = await searchLocations(entry.name, fetch, {
-          aliases: entry.aliases,
+        const query = searchableName(entry);
+        const { results } = await searchLocations(query, fetch, {
+          aliases: [entry.name, ...entry.aliases].filter((name) => name !== query),
           searchArea: entry.searchArea,
           countryCode: entry.countryCode,
         });
@@ -354,11 +362,12 @@ export function ItineraryImportPanel({
       const knownName = [entry.name, ...entry.aliases].some((name) =>
         name.toLocaleLowerCase() === typedName.toLocaleLowerCase()
       );
+      const area = entry.searchArea ?? entry.regionContext;
       const { results } = await searchLocations(typedName, fetch, knownName ? {
         aliases: [entry.name, ...entry.aliases].filter((name) =>
-          name.toLocaleLowerCase() !== typedName.toLocaleLowerCase()
+          name.length <= 120 && name.toLocaleLowerCase() !== typedName.toLocaleLowerCase()
         ),
-        searchArea: entry.searchArea ?? entry.regionContext,
+        searchArea: area && area.length <= 120 ? area : null,
         countryCode: entry.countryCode,
       } : undefined);
       if (manualSearchGeneration.current === generation) {
@@ -377,7 +386,7 @@ export function ItineraryImportPanel({
     manualSearchGeneration.current += 1;
     manuallyEditing.current.add(entry.entryId);
     setLocating(null);
-    setManualQuery(entry.name.slice(0, 120));
+    setManualQuery(searchableName(entry) || entry.name.slice(0, 120));
     setSuggestions((current) => {
       const next = { ...current };
       delete next[entry.entryId];

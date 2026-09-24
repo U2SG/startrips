@@ -383,7 +383,9 @@ export async function searchLocations(
 ): Promise<LocationSearchResponse> {
   const parameters = [
     `q=${encodeURIComponent(query.trim())}`,
-    ...(hints?.aliases ?? []).slice(0, 3).map((alias) => `alias=${encodeURIComponent(alias.trim())}`),
+    ...(hints?.aliases ?? []).map((alias) => alias.trim())
+      .filter((alias) => alias.length >= 2 && alias.length <= 120)
+      .slice(0, 3).map((alias) => `alias=${encodeURIComponent(alias)}`),
     ...(hints?.searchArea ? [`area=${encodeURIComponent(hints.searchArea.trim())}`] : []),
     ...(hints?.countryCode ? [`country=${encodeURIComponent(hints.countryCode.trim())}`] : []),
   ];
