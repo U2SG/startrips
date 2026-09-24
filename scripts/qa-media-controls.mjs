@@ -1956,6 +1956,9 @@ try {
     await page.waitForFunction((id) => document.querySelector(
       `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
     ), second, { polling: "raf" });
+    await page.locator(".journey-story").evaluate((story) => Promise.all(
+      story.getAnimations({ subtree: false }).map((animation) => animation.finished),
+    ));
     const before = await inspectStagePaint(page, ".journey-story__media");
     await page.evaluate(() => {
       const probe = { running: true, frames: [], clicks: [] };

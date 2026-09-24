@@ -542,7 +542,10 @@ export function JourneyStory({
   );
   const selectedRoutePointIdRef = useRef(selectedRoutePointId);
   selectedRoutePointIdRef.current = selectedRoutePointId;
-  const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState>>({});
+  const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState & { generation?: number }>>({});
+  // A re-signed read can carry the same URL (for example two requests in one
+  // signing second). Presentation still needs a new resource generation.
+  const mediaReadGeneration = useRef(0);
   // Browser-side decode readiness, separate from signed-read readiness (#11):
   // a URL being available never implies the image is decoded, so the slideshow
   // holds the current frame until the next one is truly ready.
@@ -705,6 +708,9 @@ export function JourneyStory({
   const [videoResumeBlocked, setVideoResumeBlocked] = useState<{ id: string; toFullscreen: boolean } | null>(null);
   const [videoHandoffRevision, setVideoHandoffRevision] = useState(0);
   const [stagePlaybackReady, setStagePlaybackReady] = useState<{ inline: string | null; fullscreen: string | null }>({ inline: null, fullscreen: null });
+  const [renewalError, setRenewalError] = useState<{
+    id: string; sourceGeneration: number | undefined; message: string; retrying: boolean;
+  } | null>(null);
   const inlinePlaybackReady = useCallback((id: string | null) => {
     setStagePlaybackReady((current) => current.inline === id ? current : { ...current, inline: id });
   }, []);
@@ -712,6 +718,17 @@ export function JourneyStory({
     setStagePlaybackReady((current) => current.fullscreen === id ? current : { ...current, fullscreen: id });
   }, []);
   const activeStagePlaybackReadyId = fullscreen ? stagePlaybackReady.fullscreen : stagePlaybackReady.inline;
+  useEffect(() => {
+    if (!renewalError || activeStagePlaybackReadyId !== renewalError.id) return;
+    const read = mediaReads[renewalError.id];
+    const video = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
+    if (read?.status === "ready" && read.generation !== undefined
+      && read.generation > (renewalError.sourceGeneration ?? -1)
+      && video?.dataset.sharedMediaId === renewalError.id
+      && !video.hidden && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !video.seeking
+      && video.dataset.storyReadGeneration === String(read.generation)
+      && video.currentSrc === new URL(read.url, document.baseURI).href) setRenewalError(null);
+  }, [activeStagePlaybackReadyId, fullscreen, mediaReads, renewalError]);
   useEffect(() => () => {
     videoHandoffGenerationRef.current += 1;
     const handoff = videoHandoffRef.current;
@@ -1214,6 +1231,9 @@ export function JourneyStory({
   }
 
   function enterFullscreen(autoPlay: boolean) {
+    // A renewed video has a retained picture while its replacement transport
+    // seeks. It cannot be a fullscreen source until that frame is committed.
+    if (shownAsset?.mimeType.startsWith("video/") && stagePlaybackReady.inline !== shownAsset.id) return;
     // A currently displayed video transfers its own native pause/play intent
     // after seeking. Do not start the target at zero and immediately abort it.
     setPlayingFromGesture(autoPlay, "fullscreen", Boolean(storyVideoRef.current?.dataset.sharedMediaId));
@@ -1500,6 +1520,7 @@ export function JourneyStory({
       pendingReads.current.clear();
     }
     setMediaReads({});
+    setRenewalError(null);
     decodeRegistryRef.current.reset();
     setShownAssetId(null);
     setIncomingAssetId(null);
@@ -1796,6 +1817,19 @@ export function JourneyStory({
     : null;
   const protectedPlaybackRead = useRef<string | null>(null);
   protectedPlaybackRead.current = playing && activeAsset?.mimeType.startsWith("video/") ? activeAsset.id : null;
+  const protectedVideoRead = useCallback((assetId: string) => {
+    if (protectedPlaybackRead.current === assetId || videoHandoffRef.current?.id === assetId) return true;
+    // Fullscreen owns the shown video's time until it hands that time back to
+    // inline. Refreshing one hidden stage during that interval would make Back
+    // land on the renewed video's first frame instead of the paused position.
+    if (fullscreenRef.current && !fullscreenRef.current.hidden
+      && fullscreenVideoRef.current?.dataset.sharedMediaId === assetId) return true;
+    // Native controls can play a clip independently of Story autoplay. An
+    // in-flight renewal must not replace that transport or a fullscreen morph.
+    return [storyVideoRef.current, fullscreenVideoRef.current].some((video) =>
+      Boolean(video && video.dataset.sharedMediaId === assetId
+        && (video.seeking || (!video.paused && !video.ended))));
+  }, []);
   const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
   // #14: the journey cover — explicit coverMediaAssetId, else first visual
@@ -2140,42 +2174,54 @@ export function JourneyStory({
     // A warm neighbor becoming current must keep the decoded resource. A new
     // signature changes img.src and restarts an in-flight page handoff.
     const cached = mediaReadsRef.current[assetId];
+    const renewingRead = cached?.status === "ready";
     if (!refresh && cached?.status === "ready"
-      && !shouldRefreshStoryMediaRead(assetId, cached, Date.now(), protectedPlaybackRead.current)) return;
+      && !shouldRefreshStoryMediaRead(assetId, cached, Date.now(), protectedVideoRead(assetId) ? assetId : null)) return;
     if (pendingReads.current.has(assetId)) return;
     pendingReads.current.add(assetId);
     setMediaReads((current) => current[assetId]?.status === "ready"
       ? current
       : { ...current, [assetId]: { status: "loading" } });
     const issuedAt = Date.now();
+    const generation = ++mediaReadGeneration.current;
     const scope = mediaReadScope.current;
     // Playback can claim the existing resource while this request is in flight.
     // Check again when React applies either completion; the next expiry sweep
     // may retry after playback releases it, without resetting a live transport.
     void readMedia(assetId).then(
       (read) => setMediaReads((current) => mediaReadScope.current !== scope
-        || (protectedPlaybackRead.current === assetId && current[assetId]?.status === "ready") ? current : ({
+        || (protectedVideoRead(assetId) && current[assetId]?.status === "ready") ? current : ({
         ...current,
         [assetId]: {
           status: "ready",
           url: read.url,
           preview: read.preview,
           issuedAt,
+          generation,
           expiresAt: Date.parse(read.expiresAt),
         },
       })),
-      (error) => setMediaReads((current) => mediaReadScope.current !== scope
-        || (protectedPlaybackRead.current === assetId && current[assetId]?.status === "ready") ? current : ({
-        ...current,
-        [assetId]: {
-          status: "error",
-          message: error instanceof Error ? error.message : "媒体读取失败",
-        },
-      })),
+      (error) => {
+        const message = error instanceof Error ? error.message : "媒体读取失败";
+        if (mediaReadScope.current === scope) {
+          const previousRead = mediaReadsRef.current[assetId];
+          const shownVideo = storyVideoRef.current?.dataset.sharedMediaId === assetId
+            || fullscreenVideoRef.current?.dataset.sharedMediaId === assetId;
+          if (renewingRead && previousRead?.status === "ready" && shownVideo && !protectedVideoRead(assetId)) {
+            setRenewalError((current) => ({ id: assetId, sourceGeneration: current?.id === assetId
+              ? current.sourceGeneration : previousRead.generation, message, retrying: false }));
+          } else setRenewalError((current) => current?.id === assetId
+            ? { ...current, message, retrying: false } : current);
+        }
+        setMediaReads((current) => mediaReadScope.current !== scope
+          || ((renewingRead || protectedVideoRead(assetId)) && current[assetId]?.status === "ready") ? current : ({
+          ...current, [assetId]: { status: "error", message },
+        }));
+      },
     ).finally(() => {
       if (mediaReadScope.current === scope) pendingReads.current.delete(assetId);
     });
-  }, []);
+  }, [protectedVideoRead]);
 
   // Presentation commits only the latest requested asset after it is ready.
   const settleIncoming = useCallback((assetId: string) => {
@@ -2185,7 +2231,13 @@ export function JourneyStory({
     setIncomingAssetId((current) => current === assetId ? null : current);
   }, []);
 
-  const reportStageMediaError = useCallback((assetId: string, message: string) => {
+  const reportStageMediaError = useCallback((assetId: string, message: string, retainedVideoFrame = false) => {
+    const currentRead = mediaReadsRef.current[assetId];
+    if (retainedVideoFrame && currentRead?.status === "ready") {
+      setRenewalError({ id: assetId, sourceGeneration: currentRead.generation,
+        message, retrying: false });
+      return;
+    }
     setMediaReads((current) => ({ ...current, [assetId]: { status: "error", message } }));
     // Failed targets still own an unavailable interval in Story autoplay.
     if (incomingMediaRef.current === assetId) {
@@ -2337,20 +2389,22 @@ export function JourneyStory({
       // the media resource and can pause/stall an otherwise healthy long clip.
       // Once autoplay releases ownership (pause/end/navigation), the next sweep
       // refreshes it normally before it is reused.
-      const protectedPlaybackAssetId = protectedPlaybackRead.current;
       for (const [assetId, state] of Object.entries(mediaReadsRef.current)) {
-        if (shouldRefreshStoryMediaRead(assetId, state, now, protectedPlaybackAssetId)) {
+        if (shouldRefreshStoryMediaRead(assetId, state, now, protectedVideoRead(assetId) ? assetId : null)) {
           loadMediaRead(assetId, true);
         }
       }
     }, MEDIA_READ_SWEEP_MS);
     return () => window.clearInterval(timer);
-  }, [loadMediaRead]);
+  }, [loadMediaRead, protectedVideoRead]);
 
   const namedStops = useMemo(
     () => journey?.routePoints.filter((point) => point.isStop) ?? [],
     [journey],
   );
+  useEffect(() => {
+    if (renewalError && renewalError.id !== (shownAssetId ?? activeAsset?.id)) setRenewalError(null);
+  }, [renewalError, shownAssetId, activeAsset?.id]);
 
   if (!journey) return null;
   const selectedRoutePoint = selectedRoutePointId
@@ -2380,6 +2434,8 @@ export function JourneyStory({
   const canStepNext = !mutationPending && scopedMedia.length > 1
     && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1);
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
+  const heldRenewalError = renewalError?.id === shownAsset?.id && shownRead?.status === "ready"
+    ? renewalError : null;
   const incoming = incomingAssetId && incomingAssetId !== shownAssetId
     ? scopedMediaIndex.byId.get(incomingAssetId) ?? null
     : null;
@@ -2403,6 +2459,19 @@ export function JourneyStory({
   );
   const mediaStageStatus = (
     <>
+      {heldRenewalError ? (
+        <div className="journey-story__media-state starlight-media-state is-over-media" role="alert">
+          <strong>视频暂时无法更新，当前画面仍可查看</strong>
+          <button type="button" style={{ pointerEvents: "auto" }} disabled={heldRenewalError.retrying} onClick={() => {
+            if (!shownAsset) return;
+            setRenewalError((current) => current?.id === shownAsset.id
+              ? { ...current, retrying: true } : current);
+            loadMediaRead(shownAsset.id, true);
+          }} onKeyDown={(event) => {
+            if (event.key === " " || event.key === "Spacebar") event.stopPropagation();
+          }}>{heldRenewalError.retrying ? "正在重试…" : "重试打开"}</button>
+        </div>
+      ) : null}
       {mediaStageWaiting ? (
         <div className="journey-story__media-state starlight-media-state is-waiting" role="status" aria-live="polite">
           <StartripsJourneyCue state="waiting" size={58} className="starlight-media-state__cue" />
@@ -3689,7 +3758,8 @@ export function JourneyStory({
                   type="button"
                   className="journey-story__fullscreen-entry"
                   label="全屏查看媒体"
-                  disabled={mutationPending}
+                  disabled={mutationPending || Boolean(shownAsset?.mimeType.startsWith("video/")
+                    && stagePlaybackReady.inline !== shownAsset.id)}
                   onClick={() => enterFullscreen(mobileStoryImmersiveKeepsPlaying)}
                 ><IconMaximize size={19} stroke={1.35} aria-hidden="true" /></IconActionButton>
                 {videoNavigationVisible ? <button type="button" data-video-step="previous"
@@ -3748,6 +3818,8 @@ export function JourneyStory({
                     type="button"
                     className={`journey-story__mobile-media-fullscreen${mobileStoryPlayControlVisible ? "" : " is-compact"}`}
                     label="沉浸查看媒体"
+                    disabled={mutationPending || Boolean(shownAsset?.mimeType.startsWith("video/")
+                      && stagePlaybackReady.inline !== shownAsset.id)}
                     {...mediaButtonInput("fullscreen", () => enterFullscreen(mobileStoryImmersiveKeepsPlaying))}
                   >
                     <IconMaximize size={19} stroke={1.5} aria-hidden="true" />
