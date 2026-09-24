@@ -1914,16 +1914,27 @@ try {
     null, { polling: "raf" });
     await page.evaluate(() => window.history.back());
     await overlay.waitFor({ state: "hidden" });
-    await waitForStoryPicture(page, first);
-    const returning = await inspectStagePaint(page, ".journey-story__media");
+    const returningClone = await page.evaluate(() => {
+      const clone = document.querySelector('[data-shared-element-clone^="story-fullscreen"]');
+      if (!(clone instanceof HTMLImageElement)) return null;
+      const style = getComputedStyle(clone);
+      const bounds = clone.getBoundingClientRect();
+      return { name: clone.dataset.sharedElementClone,
+        ready: clone.complete && clone.naturalWidth > 0,
+        visible: style.visibility === "visible" && Number(style.opacity) > 0
+          && bounds.width > 0 && bounds.height > 0 && Number(style.zIndex) > 1_000_000_000 };
+    });
     // The fullscreen shared-element clone owns paint until its exit finishes.
     // Once it releases the picture, the actual image must own the tap again.
     await page.locator('[data-shared-element-clone^="story-fullscreen"]').waitFor({ state: "hidden", timeout: 3_000 });
+    await waitForStoryPicture(page, first);
     const returned = await inspectStagePaint(page, ".journey-story__media");
-    const backFailed = !stagePaintValid(beforeBack, first) || !stagePaintValid(returning, first)
-      || !stagePaintValid(returned, first) || !beforeBack.hitImage || !returned.hitImage
+    const backFailed = !stagePaintValid(beforeBack, first) || !stagePaintValid(returned, first)
+      || returningClone?.name !== `story-fullscreen-${first}`
+      || !returningClone.ready || !returningClone.visible
+      || !beforeBack.hitImage || !returned.hitImage
       || returned.dragX !== "" || frontPixels(returned) !== frontPixels(beforeBack);
-    checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returning, returned,
+    checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returningClone, returned,
       consoleErrors: stageOwnerBack.consoleErrors, pageErrors: stageOwnerBack.pageErrors,
       failed: backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0 });
     if (backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0) failed = true;
