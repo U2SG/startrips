@@ -56,7 +56,9 @@
 .journey-story[data-story-layout="desktop"] .story-media-pages {
   background: transparent;
   --stack-x: clamp(20px, 4%, 56px);
-  --stack-y: clamp(36px, 6%, 60px);
+  /* The 44px media toolbar lives below the picture, including native video
+     controls; keep an 8px gap at the shortest desktop Story height. */
+  --stack-y: clamp(52px, 6%, 60px);
 }
 .journey-story[data-story-layout="desktop"] .journey-story__copy {
   align-self: center;

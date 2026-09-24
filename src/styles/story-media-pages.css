@@ -1,7 +1,5 @@
-/* #489 regression family: a gesture that begins anywhere on this stage must
-   stay the product's. The stage carries pictures and decoration only, so
-   refusing selection here closes the same class the hit surface was hit by
-   without taking selectable prose away from anyone. */
+/* Picture and stack gestures belong to the stage. The live video keeps its
+   native pointer stream for playback and seeking. */
 .story-media-pages {
   position: absolute;
   inset: 0;

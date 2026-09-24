@@ -29,7 +29,6 @@ type MediaDrag = {
   originTransform: string;
   neighborId: string | null;
   tapOpensFullscreen: boolean;
-  preserveNativeVideoCapture: boolean;
   generation: number;
   scopeKey: string;
   settleTakeover: boolean;
@@ -157,6 +156,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const interrupted = useRef(false);
   const drag = useRef<MediaDrag | null>(null);
   const settle = useRef<{ cancel: () => void; finishForTakeover: () => void } | null>(null);
+  const suppressCancelledPointerClick = useRef(false);
   const dragSprings = useRef<SpringElementHandle[]>([]);
   const gestureGeneration = useRef(0);
   const handoffGeneration = useRef(0);
@@ -321,7 +321,18 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     let size = `${element.clientWidth}:${element.clientHeight}`;
     const observer = new ResizeObserver(() => {
       const next = `${element.clientWidth}:${element.clientHeight}`;
-      if (next !== size) { size = next; updateLayoutRevision((value) => value + 1); }
+      if (next !== size) {
+        size = next;
+        // A held pointer and its spring were measured against the old stage.
+        // Invalidate that generation before either can commit after rotation.
+        if (drag.current || settle.current) {
+          // Releasing capture does not prevent the browser from synthesizing a
+          // click at the release target. That click cannot navigate the photo.
+          suppressCancelledPointerClick.current = true;
+          cancelGesture();
+        }
+        updateLayoutRevision((value) => value + 1);
+      }
     });
     observer.observe(element);
     return () => observer.disconnect();
@@ -531,13 +542,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
 
   useImperativeHandle(stageRef, () => ({ cancelGesture }));
 
-  function mediaGestureCanStart(target: EventTarget | null, clientY: number) {
+  function mediaGestureCanStart(target: EventTarget | null) {
     if (!(target instanceof Element)) return false;
-    const video = target.closest("video");
-    if (video instanceof HTMLVideoElement) {
-      const rect = video.getBoundingClientRect();
-      if (clientY >= rect.bottom - Math.min(72, rect.height * 0.25)) return false;
-    }
+    // Native controls are not DOM children with a portable hit region. The
+    // transport owns every pointer that starts on it, including seek drags.
+    if (target.closest(".story-media-pages__video")) return false;
     return !target.closest("button, input, select, textarea, [role='button']:not(img)");
   }
 
@@ -572,7 +581,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   function beginGesture(event: ReactPointerEvent<HTMLDivElement>) {
     latest.current.onGestureConsumed(false);
     if (!event.isPrimary || !latest.current.active || !latest.current.gestureEnabled
-      || latest.current.media.length < 2 || !mediaGestureCanStart(event.target, event.clientY)) return;
+      || latest.current.media.length < 2 || !mediaGestureCanStart(event.target)) return;
     const prior = settle.current;
     if (prior) prior.finishForTakeover();
     const base = pageNodes.current.find((node) => node?.dataset.mediaPage === "current");
@@ -588,8 +597,6 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       originTransform, neighborId: null,
       tapOpensFullscreen: latest.current.mobileLayout && !latest.current.fullscreen
         && event.target instanceof HTMLImageElement,
-      preserveNativeVideoCapture: latest.current.mobileLayout
-        && event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
       generation: ++gestureGeneration.current, scopeKey: latest.current.scopeKey,
       settleTakeover: Boolean(prior),
     };
@@ -616,10 +623,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       root.current?.style.setProperty("--story-live-opacity", getComputedStyle(value.base).opacity);
       grabPages(neighborFor(dx)?.id ?? null);
       setGesturePhase("dragging");
-      if (!value.preserveNativeVideoCapture) {
-        try { event.currentTarget.setPointerCapture(value.pointerId); }
-        catch { /* A cancelled pointer can no longer be captured. */ }
-      }
+      try { event.currentTarget.setPointerCapture(value.pointerId); }
+      catch { /* A cancelled pointer can no longer be captured. */ }
     }
     if (value.axis !== "x") return;
     value.dx = event.clientX - value.startX;
@@ -862,6 +867,9 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     role={videoStageNavigation ? "group" : undefined}
     aria-label={videoStageNavigation ? "视频。左右方向键切换媒体" : undefined}
     aria-keyshortcuts={videoStageNavigation ? "ArrowLeft ArrowRight" : undefined}
+    onPointerDownCapture={(event) => {
+      if (event.isPrimary) suppressCancelledPointerClick.current = false;
+    }}
     onPointerDown={beginGesture}
     onPointerUp={finishPointer}
     onPointerCancel={(event) => { if (drag.current?.pointerId === event.pointerId) settleGesture(false); }}
@@ -879,6 +887,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       step(event.key === "ArrowLeft" ? -1 : 1, true);
     }}
     style={{ "--media-settle-duration": `${MEDIA_STACK_DURATION}ms`, "--media-settle-easing": MEDIA_STACK_EASING } as CSSProperties}
+    onClickCapture={(event) => {
+      if (!suppressCancelledPointerClick.current || event.detail === 0) return;
+      suppressCancelledPointerClick.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }}
     onClick={handleBackdropClick}
     onPointerMove={(event) => {
       updateGesture(event);
@@ -985,7 +999,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     {/* #489 A1: a photograph's stationary click surface must never cover the
         presented video. A clipped strip still left the transport's own picture
         behind a navigation layer, so the video keeps its whole surface and
-        navigates by swipe or the arrow keys the stage advertises instead. */}
+        navigates by the separate buttons or the arrow keys the stage advertises. */}
     {props.onNavigate && active && currentReady && !currentVideo ? <div ref={hitSurface}
       className="story-media-pages__hit-surface" data-story-hit-surface aria-hidden="true"
       draggable={false}

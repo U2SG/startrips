@@ -98,24 +98,39 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
  * #489 changed which input owns the presented picture: a photograph still
  * navigates by its stationary click surface, but the presented video's own
  * surface belongs to its transport, so clicking it plays instead of stepping.
- * A video therefore steps through the navigation the stage advertises -- real
- * arrow-key input on the focusable stage. The assertions are not relaxed; the
- * video click path is asserted positively in scripts/qa-story-media-handoff.mjs.
+ * A video therefore steps through its visible navigation button. Keyboard
+ * navigation and the video's own native input are graded separately in
+ * scripts/qa-story-media-handoff.mjs.
  */
+async function clickStoryVideoStep(page, direction, surfaceSelector = ".journey-story__media") {
+  const step = direction < 0 ? "previous" : "next";
+  const mobile = await page.evaluate(() => navigator.maxTouchPoints > 0);
+  const nav = surfaceSelector === ".journey-story-fullscreen"
+    ? `${surfaceSelector} .journey-story-fullscreen__nav`
+    : mobile ? ".journey-story__mobile-video-nav" : ".journey-story__media-nav";
+  const button = page.locator(`${nav} [data-video-step="${step}"]`);
+  await button.waitFor({ state: "visible", timeout: 3_000 });
+  const hit = await button.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const x = bounds.left + bounds.width / 2;
+    const y = bounds.top + bounds.height / 2;
+    const target = document.elementFromPoint(x, y);
+    return { x, y, targetIsButton: element.contains(target),
+      target: target instanceof Element ? `${target.tagName}.${target.className}` : null };
+  });
+  if (!hit.targetIsButton || !await button.isEnabled()) {
+    throw new Error(`Video step button is covered or disabled: ${JSON.stringify({ step, hit })}`);
+  }
+  if (mobile) await button.tap();
+  else await button.click();
+  return hit;
+}
+
 async function clickStoryPicture(page, direction, surfaceSelector = ".journey-story__media", fixedPoint = null) {
   const presentsVideo = !fixedPoint && await page.evaluate((selector) => document.querySelector(selector)
     ?.querySelector("[data-story-media-pages]")?.getAttribute("data-current-media-kind") === "video", surfaceSelector);
   if (presentsVideo) {
-    const focused = await page.evaluate((selector) => {
-      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
-      if (!pages || pages.tabIndex !== 0 || pages.getAttribute("aria-keyshortcuts") !== "ArrowLeft ArrowRight") {
-        throw new Error("Story video stage does not advertise keyboard navigation");
-      }
-      pages.focus();
-      return document.activeElement === pages;
-    }, surfaceSelector);
-    if (!focused) throw new Error("Story video stage could not take navigation focus");
-    await page.keyboard.press(direction < 0 ? "ArrowLeft" : "ArrowRight");
+    await clickStoryVideoStep(page, direction, surfaceSelector);
     return;
   }
   const point = fixedPoint ?? await storyPicturePoint(page, direction, surfaceSelector);
@@ -1875,6 +1890,115 @@ try {
     await stageOwner.page.close();
   }
 
+  // Rotate while a real pointer still owns an image drag. The resize must
+  // cancel that exact stream before its later pointerup can commit the old
+  // target or leave a clipped foreground behind.
+  const heldResize = await createQaPage("/?qaState=journey-story", (request) =>
+    request.includes("000000000100") ? "/artworks/china-handscroll.jpg"
+      : request.includes("000000000101") ? "/artworks/mughal-akbarnama.jpg"
+        : "/artworks/hokusai-wave.jpg", {
+    mobile: false, reducedMotion: "no-preference",
+  });
+  try {
+    const page = heldResize.page;
+    const first = "00000000-0000-4000-8000-000000000100";
+    const second = "00000000-0000-4000-8000-000000000101";
+    await waitForStoryPicture(page, first);
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), second, { polling: "raf" });
+    const before = await inspectStagePaint(page, ".journey-story__media");
+    await page.evaluate(() => {
+      const probe = { running: true, frames: [], clicks: [] };
+      window.__qaHeldResize = probe;
+      document.addEventListener("click", (event) => {
+        const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+        probe.clicks.push({
+          trusted: event.isTrusted,
+          detail: event.detail,
+          insideStage: Boolean(stage?.contains(event.target)),
+          target: event.target instanceof Element ? `${event.target.tagName}.${event.target.className}` : null,
+        });
+      }, true);
+      const sample = () => {
+        if (!probe.running) return;
+        const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+        const current = stage?.querySelector('[data-media-page="current"]');
+        probe.frames.push({
+          id: current?.getAttribute("data-media-page-id") ?? null,
+          presentation: stage?.getAttribute("data-media-presentation") ?? null,
+        });
+        if (probe.frames.length > 180) probe.frames.shift();
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    const point = await storyPicturePoint(page, 1);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await page.mouse.move(point.x - 180, point.y, { steps: 8 });
+    const held = await page.evaluate(() => {
+      const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+      return {
+        current: stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
+        presentation: stage?.getAttribute("data-media-presentation") ?? null,
+        dragX: stage?.style.getPropertyValue("--story-drag-x") ?? null,
+        nextReady: stage?.querySelector('[data-media-page="next"]')?.getAttribute("data-media-page-ready") === "true",
+      };
+    });
+    await page.setViewportSize({ width: 900, height: 1200 });
+    const canceledBeforeRelease = await page.waitForFunction((id) => {
+      const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+      return stage?.getAttribute("data-media-presentation") === "settled"
+        && stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === id;
+    }, first, { polling: "raf", timeout: 3_000 }).then(() => true, () => false);
+    // Finish over the current photograph. A browser compatibility click from
+    // this held pointer must actually reach the Stage for the suppression
+    // check to mean anything; the document capture probe sees it even when
+    // Story stops propagation before navigation.
+    const releasePoint = await storyPicturePoint(page, 1);
+    await page.mouse.move(releasePoint.x, releasePoint.y);
+    await page.mouse.up();
+    const cancelledClicks = await page.evaluate(() => [...window.__qaHeldResize.clicks]);
+    const afterRelease = await inspectStagePaint(page, ".journey-story__media");
+    // Keep observing past the interrupted spring's lifetime. A late commit
+    // fails even if the first post-release frame still shows the old picture.
+    const frames = await page.evaluate(async () => {
+      for (let tick = 0; tick < 75; tick += 1) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      const probe = window.__qaHeldResize;
+      probe.running = false;
+      return probe.frames;
+    });
+    const afterOldSettle = await inspectStagePaint(page, ".journey-story__media");
+    const freshClickCount = await page.evaluate(() => window.__qaHeldResize.clicks.length);
+    await clickStoryPicture(page, 1);
+    await waitForStoryPicture(page, second);
+    const afterFreshClick = await inspectStagePaint(page, ".journey-story__media");
+    const freshClicks = await page.evaluate((start) => window.__qaHeldResize.clicks.slice(start), freshClickCount);
+    const heldResizeFailed = !stagePaintValid(before, first, true)
+      || held.current !== first || held.presentation !== "dragging"
+      || !held.dragX || held.dragX === "0px" || !held.nextReady
+      || !canceledBeforeRelease
+      || !stagePaintValid(afterRelease, first, true)
+      || !stagePaintValid(afterOldSettle, first, true)
+      || frames.length < 10 || frames.some((frame) => frame.id !== first)
+      || !cancelledClicks.some((click) => click.trusted && click.detail > 0 && click.insideStage)
+      || !freshClicks.some((click) => click.trusted && click.detail > 0 && click.insideStage)
+      || !stagePaintValid(afterFreshClick, second, true)
+      || heldResize.consoleErrors.length > 0 || heldResize.pageErrors.length > 0;
+    checks.push({ name: "story-held-drag-rotate-cancels-old-settle", before, held,
+      canceledBeforeRelease, releasePoint, cancelledClicks, afterRelease, afterOldSettle,
+      freshClicks, afterFreshClick,
+      observedFrames: frames.length, unexpectedOwners: frames.filter((frame) => frame.id !== first).slice(0, 4),
+      consoleErrors: heldResize.consoleErrors, pageErrors: heldResize.pageErrors,
+      failed: heldResizeFailed });
+    if (heldResizeFailed) failed = true;
+  } finally {
+    await heldResize.page.close();
+  }
+
   const stageOwnerBack = await createQaPage("/?qaState=journey-story", (request) =>
     request.includes("000000000100") ? "/artworks/china-handscroll.jpg"
       : "/artworks/mughal-akbarnama.jpg", {
@@ -2104,16 +2228,13 @@ try {
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const fullscreenVideoPointerUps = Number(await fullscreenVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
-    const fullscreenPositionBeforeVideoSwipe = await fullscreenStage.locator(".journey-story-fullscreen__nav span").textContent();
-    const fullscreenSwipePoint = await nativeVideoTouchPoint(fullscreenVideo, "fullscreen-swipe");
-    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenSwipePoint.x, y: fullscreenSwipePoint.y }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenSwipePoint.x - 110, y: fullscreenSwipePoint.y }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await mixedMediaMobile.page.waitForFunction((before) => {
-      const position = document.querySelector(".journey-story-fullscreen__nav span")?.textContent;
-      return Boolean(position && position !== before);
-    }, fullscreenPositionBeforeVideoSwipe, { timeout: 3_000 });
-    const fullscreenVideoSwipeNavigated = true;
+    const fullscreenAfterJitter = await fullscreenStage.locator(storyMediaPagesSelector).evaluate((stage) => ({
+      current: stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id"),
+      presentation: stage.getAttribute("data-media-presentation"),
+    }));
+    const fullscreenVideoButtonHit = await clickStoryVideoStep(mixedMediaMobile.page, 1, ".journey-story-fullscreen");
+    await waitForStoryPicture(mixedMediaMobile.page, "00000000-0000-4000-8000-000000000102", ".journey-story-fullscreen");
+    const fullscreenVideoButtonNavigated = true;
 
     // Return to the video, then exit fullscreen so the inline stage can run
     // the same native-capture contract.
@@ -2151,36 +2272,37 @@ try {
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const inlineVideoPointerUps = Number(await inlineVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
-    const inlineVideoSrcBeforeSwipe = await inlineVideo.getAttribute("src");
-    // This assertion exercises a warm video-to-photo swipe. Returning from
-    // fullscreen may leave the inline neighbor waiting for its own decode.
+    const inlineAfterJitter = await inlineStage.locator(storyMediaPagesSelector).evaluate((stage) => ({
+      current: stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id"),
+      presentation: stage.getAttribute("data-media-presentation"),
+    }));
+    // Returning from fullscreen may leave the inline neighbor waiting for its
+    // own decode. The visible button remains the navigation target on video.
     await inlineStage.locator(storyReadyPageSelector("next")).waitFor({ state: "attached", timeout: 3_000 });
-    const inlineSwipePoint = await nativeVideoTouchPoint(inlineVideo, "inline-swipe");
-    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineSwipePoint.x, y: inlineSwipePoint.y }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineSwipePoint.x - 110, y: inlineSwipePoint.y }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await mixedMediaMobile.page.waitForFunction(({ selector, before }) => {
-      const media = document.querySelector(".journey-story__media")?.querySelector(selector);
-      return Boolean(media && media.getAttribute("src") !== before);
-    }, { selector: storyCurrentMediaSelector, before: inlineVideoSrcBeforeSwipe }, { timeout: 3_000 });
-    const inlineVideoSwipeNavigated = true;
+    const inlineVideoButtonHit = await clickStoryVideoStep(mixedMediaMobile.page, 1);
+    await waitForStoryPicture(mixedMediaMobile.page, "00000000-0000-4000-8000-000000000102");
+    const inlineVideoButtonNavigated = true;
 
     const videoNativeTapFailed = fullscreenVideoStageCapturedOnJitter
       || inlineVideoStageCapturedOnJitter
       || fullscreenVideoPointerUps < 1
       || inlineVideoPointerUps < 1
-      || !fullscreenVideoSwipeNavigated
-      || !inlineVideoSwipeNavigated
+      || fullscreenAfterJitter.current !== "00000000-0000-4000-8000-000000000152"
+      || fullscreenAfterJitter.presentation !== "settled"
+      || inlineAfterJitter.current !== "00000000-0000-4000-8000-000000000152"
+      || inlineAfterJitter.presentation !== "settled"
+      || !fullscreenVideoButtonNavigated || !fullscreenVideoButtonHit.targetIsButton
+      || !inlineVideoButtonNavigated || !inlineVideoButtonHit.targetIsButton
       || mixedMediaMobile.consoleErrors.length > 0
       || mixedMediaMobile.pageErrors.length > 0;
     checks.push({
       name: "story-mobile-video-native-capture-preserved",
       fullscreenVideoStageCapturedOnJitter,
       fullscreenVideoPointerUps,
-      fullscreenVideoSwipeNavigated,
+      fullscreenAfterJitter, fullscreenVideoButtonHit, fullscreenVideoButtonNavigated,
       inlineVideoStageCapturedOnJitter,
       inlineVideoPointerUps,
-      inlineVideoSwipeNavigated,
+      inlineAfterJitter, inlineVideoButtonHit, inlineVideoButtonNavigated,
       nativeTouchPoints,
       consoleErrors: mixedMediaMobile.consoleErrors,
       pageErrors: mixedMediaMobile.pageErrors,

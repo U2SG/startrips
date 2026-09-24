@@ -2107,6 +2107,11 @@ export function JourneyStory({
   const shownAsset = shownAssetId
     ? scopedMediaIndex.byId.get(shownAssetId) ?? null
     : asset;
+  const videoNavigationVisible = Boolean(shownAsset?.mimeType.startsWith("video/") && scopedMedia.length > 1);
+  const canStepPrevious = !mutationPending && scopedMedia.length > 1
+    && (selectedRoutePointId !== null || requestedMediaIndex > 0);
+  const canStepNext = !mutationPending && scopedMedia.length > 1
+    && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1);
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
   const incoming = incomingAssetId && incomingAssetId !== shownAssetId
     ? scopedMediaIndex.byId.get(incomingAssetId) ?? null
@@ -3335,8 +3340,8 @@ export function JourneyStory({
               onGestureTapAfterSettle={openFullscreenAfterStoryGesture}
               onImageClick={mobileLayout ? openImageFullscreenAfterTap : undefined}
               onNavigate={!mobileLayout ? navigateFromPicture : undefined}
-              canNavigatePrevious={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex > 0)}
-              canNavigateNext={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1)}
+              canNavigatePrevious={canStepPrevious}
+              canNavigateNext={canStepNext}
               onBackdropClick={!mobileLayout ? () => { if (!storyMediaGestureConsumedRef.current) requestClose(); } : undefined}
               video={renderStageVideo(false)}
             /> : null}
@@ -3350,6 +3355,9 @@ export function JourneyStory({
                   disabled={mutationPending}
                   onClick={() => enterFullscreen(mobileStoryImmersiveKeepsPlaying)}
                 ><IconMaximize size={19} stroke={1.35} aria-hidden="true" /></IconActionButton>
+                {videoNavigationVisible ? <button type="button" data-video-step="previous"
+                  disabled={!canStepPrevious} onClick={() => navigateMediaStep(-1, selectedRoutePointId !== null)}
+                  aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button> : null}
                 <button
                   type="button"
                   className={playing ? "is-active" : ""}
@@ -3369,12 +3377,25 @@ export function JourneyStory({
                     ? <IconPlayerPause size={17} stroke={1.35} aria-hidden="true" />
                     : <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />}
                 </button>
+                {videoNavigationVisible ? <button type="button" data-video-step="next"
+                  disabled={!canStepNext} onClick={() => navigateMediaStep(1, selectedRoutePointId !== null)}
+                  aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button> : null}
                 </nav>
               </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
             {mobileLayout && !overview && asset ? (
               <div className="journey-story__mobile-media-actions">
+                {videoNavigationVisible && !mobileManageMode && mediaDeleteState === "idle" ? <nav className="journey-story__mobile-video-nav" aria-label="视频媒体导航">
+                  <button type="button" data-video-step="previous" disabled={!canStepPrevious}
+                    onClick={() => navigateMediaStep(-1, selectedRoutePointId !== null)} aria-label="上一个媒体">
+                    <IconArrowLeft size={19} stroke={1.5} aria-hidden="true" />
+                  </button>
+                  <button type="button" data-video-step="next" disabled={!canStepNext}
+                    onClick={() => navigateMediaStep(1, selectedRoutePointId !== null)} aria-label="下一个媒体">
+                    <IconArrowRight size={19} stroke={1.5} aria-hidden="true" />
+                  </button>
+                </nav> : null}
                 {showMobileStoryFullscreenControl({
                   mobileLayout,
                   overview,
@@ -3973,16 +3994,17 @@ export function JourneyStory({
             onGestureExitFullscreen={exitFullscreen}
             onGestureRevealFullscreenControls={revealMobileFullscreenControls}
             onNavigate={!mobileLayout ? navigateFromPicture : undefined}
-            canNavigatePrevious={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex > 0)}
-            canNavigateNext={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1)}
+            canNavigatePrevious={canStepPrevious}
+            canNavigateNext={canStepNext}
             onBackdropClick={!mobileLayout ? () => { if (!storyMediaGestureConsumedRef.current) exitFullscreen(); } : undefined}
             video={renderStageVideo(true)}
           />
           {scopedMedia.length > 1 || !mobileLayout ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
-              {mobileLayout ? <button
+              {mobileLayout || videoNavigationVisible ? <button
                 type="button"
-                disabled={selectedRoutePointId === null && requestedMediaIndex === 0}
+                data-video-step="previous"
+                disabled={!canStepPrevious}
                 onClick={() => navigateMediaStep(-1, selectedRoutePointId !== null)}
                 aria-label="上一个媒体"
               >
@@ -4004,9 +4026,10 @@ export function JourneyStory({
                   : <IconPlayerPlay size={22} stroke={1.35} aria-hidden="true" />}
               </button>
               {mobileLayout ? <span>{assetIndex + 1} / {scopedMedia.length}</span> : null}
-              {mobileLayout ? <button
+              {mobileLayout || videoNavigationVisible ? <button
                 type="button"
-                disabled={selectedRoutePointId === null && requestedMediaIndex === scopedMedia.length - 1}
+                data-video-step="next"
+                disabled={!canStepNext}
                 onClick={() => navigateMediaStep(1, selectedRoutePointId !== null)}
                 aria-label="下一个媒体"
               >
