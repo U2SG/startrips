@@ -2360,6 +2360,16 @@ export function LivingAtlasApp({
           .find((element) => element.dataset.mediaPageId === sharedAssetId
             && element.dataset.mediaPageReady === "true") ?? null;
       },
+      // #489 C/V6: the page that will carry this asset exists in the opening
+      // commit, well before its read/decode publishes readiness. Hand it to the
+      // morph now so the picture cannot paint at its final size and then be
+      // hidden again for the clone to fly in from the trigger's geometry.
+      claimDestination: () => {
+        if (!sharedAssetId) return null;
+        const stage = document.querySelector<HTMLElement>(".journey-story .journey-story__media");
+        return [...stage?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? []]
+          .find((element) => element.dataset.mediaPageId === sharedAssetId) ?? null;
+      },
       // Signed reads/decode settle after the opening commit. Keep the source
       // only while the same asset remains the current Story intent.
       isTargetCurrent: () => {

@@ -137,6 +137,10 @@ function EarthDiveQaPreview() {
   const persistentEarth = usePersistentEarth();
   const qaParams = new URLSearchParams(window.location.search);
   const [focusRevision, setFocusRevision] = useState(0);
+  const [activeRouteIndex, setActiveRouteIndex] = useState(0);
+  const [activatedRoutePoint, setActivatedRoutePoint] = useState("");
+  const shareScope = qaParams.get("qaScope") === "share";
+  const [shareRevoked, setShareRevoked] = useState(false);
   const [earthExperiencePolicy, setEarthExperiencePolicy] = useState<"default" | "particle-only">(
     qaParams.get("qaPolicy") === "particle-only" ? "particle-only" : "default",
   );
@@ -149,12 +153,18 @@ function EarthDiveQaPreview() {
   // has to hold its anchor in both: a focused Route Point publishes a focus
   // point, while a focused Journey is owned by route fitting and publishes no
   // point at all - the branch whose anchor comes from the route frame.
-  const focusRoute = globeQaRoutes[0];
-  const routePoint = focusRoute.points[1];
+  // Share/guest authorization owns the route list before either renderer sees it.
+  // This fixture can revoke that upstream scope while Detail remains mounted so
+  // browser QA proves stale GeoJSON and hit targets are removed at the source.
+  const authorizedRoutes = shareScope
+    ? (shareRevoked ? [] : globeQaRoutes.slice(0, 1))
+    : globeQaRoutes;
+  const focusRoute = authorizedRoutes[activeRouteIndex] ?? authorizedRoutes[0] ?? null;
+  const routePoint = focusRoute?.points[Math.min(1, focusRoute.points.length - 1)] ?? null;
   const routeFocus = qaParams.get("qaFocus") === "route";
   const requestedLat = Number(qaParams.get("qaFocusLat") ?? Number.NaN);
   const requestedLon = Number(qaParams.get("qaFocusLon") ?? Number.NaN);
-  const focusPoint = routeFocus
+  const focusPoint = routeFocus || !routePoint
     ? null
     : {
       lat: Number.isFinite(requestedLat) ? requestedLat : routePoint.lat,
@@ -167,21 +177,63 @@ function EarthDiveQaPreview() {
           focusPoint={focusPoint}
           focusRoute={routeFocus ? focusRoute : null}
           focusRevision={focusRevision}
-          journeyRoutes={globeQaRoutes}
-          activeJourneyRouteId={focusRoute.id}
+          journeyRoutes={authorizedRoutes}
+          activeJourneyRouteId={focusRoute?.id ?? null}
           onJourneyRouteActivate={() => undefined}
-          onJourneyRoutePointActivate={() => undefined}
+          onJourneyRoutePointActivate={(journeyId, routePointId) => {
+            setActivatedRoutePoint(`${journeyId}:${routePointId}`);
+          }}
           earthExperiencePolicy={earthExperiencePolicy}
           reduceMotion={qaReduceMotion}
         />
       </div>
+      {routePoint && focusRoute ? (
+        <output
+          data-qa-earth-dive-route-point
+          data-journey-id={focusRoute.id}
+          data-route-point-id={routePoint.id}
+          data-route-point-lat={routePoint.lat}
+          data-route-point-lon={routePoint.lon}
+          style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+        >{routePoint.label}</output>
+      ) : null}
       <output
-        data-qa-earth-dive-route-point
-        data-route-point-id={routePoint.id}
-        data-route-point-lat={routePoint.lat}
-        data-route-point-lon={routePoint.lon}
+        data-qa-earth-dive-activated-route-point={activatedRoutePoint}
         style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
-      >{routePoint.label}</output>
+      >{activatedRoutePoint}</output>
+      {shareScope ? (
+        <>
+          <output
+            data-qa-earth-dive-scope={shareRevoked ? "revoked" : "authorized"}
+            style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+          >{shareRevoked ? "revoked" : "authorized"}</output>
+          <button
+            type="button"
+            data-qa-earth-dive-scope-revoke
+            onClick={() => {
+              setActivatedRoutePoint("");
+              setShareRevoked(true);
+              setFocusRevision((revision) => revision + 1);
+            }}
+            style={{ position: "absolute", zIndex: 60, bottom: 48, left: 14 }}
+          >QA 撤销共享范围</button>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            data-qa-earth-dive-route-switch="next"
+            onClick={() => { setActiveRouteIndex(1); setFocusRevision((revision) => revision + 1); }}
+            style={{ position: "absolute", zIndex: 60, bottom: 48, left: 14 }}
+          >QA 切换旅程</button>
+          <button
+            type="button"
+            data-qa-earth-dive-route-switch="first"
+            onClick={() => { setActiveRouteIndex(0); setFocusRevision((revision) => revision + 1); }}
+            style={{ position: "absolute", zIndex: 60, bottom: 48, left: 130 }}
+          >QA 返回首旅程</button>
+        </>
+      )}
       <button
         type="button"
         data-qa-earth-dive-refocus
@@ -449,14 +501,55 @@ const storyQaMixedJourney: Journey = {
   } : asset),
 };
 
+// #489 (ST-134). The handoff contract names image<->image, image<->video,
+// video<->video and mixed aspect ratio as four separate classes, so the lane
+// that proves them needs a sequence carrying two differently shaped transports
+// and two adjacent photographs. `mixed-media` keeps its three-asset shape
+// because the existing media-controls lane navigates it by position.
+const STORY_QA_MIXED_VERTICAL_VIDEO_ASSET_ID = "00000000-0000-4000-8000-000000000153";
+const STORY_QA_MIXED_SECOND_PHOTO_ASSET_ID = "00000000-0000-4000-8000-000000000103";
+const storyQaMixedPairJourney: Journey = {
+  ...storyQaJourney,
+  media: [
+    { ...storyQaJourney.media[0], sortOrder: 0 },
+    {
+      ...storyQaJourney.media[1],
+      id: STORY_QA_MIXED_VIDEO_ASSET_ID,
+      storageKey: "qa/story-mixed-video",
+      fileName: "mixed-video.mp4",
+      mimeType: "video/mp4",
+      sortOrder: 1,
+    },
+    {
+      ...storyQaJourney.media[1],
+      id: STORY_QA_MIXED_VERTICAL_VIDEO_ASSET_ID,
+      storageKey: "qa/story-mixed-video-vertical",
+      fileName: "mixed-video-vertical.webm",
+      mimeType: "video/webm",
+      sortOrder: 2,
+    },
+    { ...storyQaJourney.media[2], sortOrder: 3 },
+    {
+      ...storyQaJourney.media[2],
+      id: STORY_QA_MIXED_SECOND_PHOTO_ASSET_ID,
+      storageKey: "qa/story-seed-3",
+      fileName: "seed-3.png",
+      sortOrder: 4,
+    },
+  ],
+};
+
 const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
 
 function JourneyStoryQaPreview() {
   const qaMode = new URLSearchParams(window.location.search).get("qaMode");
   const mixedMediaMode = qaMode === "mixed-media";
+  const mixedMediaPairMode = qaMode === "mixed-media-pair";
   const manyMediaMode = qaMode === "many-media";
   const routeBoundaryMode = qaMode === "route-boundary";
-  const initialJourney = mixedMediaMode
+  const initialJourney = mixedMediaPairMode
+    ? storyQaMixedPairJourney
+    : mixedMediaMode
     ? storyQaMixedJourney
     : routeBoundaryMode
       ? storyQaRouteBoundaryJourney

@@ -5384,7 +5384,13 @@ export function ParticleEarthScene({
           || Math.abs(interactiveRotationY) > 0.001
         )
       );
-      if (activePointers.size === 0 && !reduceMotion && !focusSettledThisFrame && !initialCameraAnchorNow) {
+      if (
+        !cameraHeldByDetail
+        && activePointers.size === 0
+        && !reduceMotion
+        && !focusSettledThisFrame
+        && !initialCameraAnchorNow
+      ) {
         interactiveRotationX = clampGlobeTilt(
           interactiveRotationX + rotationVelocityX * delta,
         );

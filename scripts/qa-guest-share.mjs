@@ -24,6 +24,17 @@ const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 // 43 base64url characters: the shape `generateShareToken()` produces.
 const TOKEN = "qaGuestShareToken0000000000000000000000000A";
 const shareUrl = (fragment = TOKEN) => new URL(`/share#${fragment}`, baseUrl).toString();
+const MAP_STYLE_PATTERN = /\/api\/mapstyle\?path=styles(?:%2F|\/)fiord(?:$|&)/i;
+const QA_DETAIL_STYLE = {
+  version: 8,
+  name: "QA guest detailed-earth style",
+  sources: {},
+  layers: [{
+    id: "qa-guest-detail-surface",
+    type: "background",
+    paint: { "background-color": "#173d43", "background-opacity": 1 },
+  }],
+};
 
 // #194 shared layout contract, copied here on purpose: this lane must fail if
 // the app's own query drifts away from the one the mobile mode is defined by.
@@ -885,39 +896,121 @@ try {
   }
 
   {
-    // Acceptance 6: the grant dies while the page is open. The payload reports
-    // an expiry two seconds out, so the viewer's revalidation fires on a live
-    // session — and the server, which is the authority, has meanwhile revoked
-    // the link.
+    // Acceptance 6 + #338 privacy boundary: enter Detailed Earth through the
+    // REAL shared-view grant, prove the installed MapLibre source contains only
+    // that authorized Journey, then revoke the live grant and prove the source,
+    // map surface and both Route Point hit paths leave with the guest session.
+    const scopedJourney = {
+      ...sharedJourneys[0],
+      // A one-Journey grant is its own closed navigation scope. Carrying the
+      // original nextJourneyId would correctly make SharedAtlasView reject the
+      // payload before the privacy boundary under test can mount.
+      previousJourneyId: null,
+      nextJourneyId: null,
+    };
     const state = {
       journeysStatus: 200,
-      journeys: sharedJourneys,
+      journeys: [scopedJourney],
       expiresAt: new Date(Date.now() + 2_000).toISOString(),
     };
     const { page } = await newGuestPage(context, state);
+    await page.route(MAP_STYLE_PATTERN, (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(QA_DETAIL_STYLE),
+    }));
     await page.goto(shareUrl(), { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas").waitFor({ timeout: 30_000 });
-    // Only revoke once the boot read has actually rendered a granted journey.
+    // Only revoke once the boot read has rendered the exact granted Journey.
     // Flipping earlier could 404 the boot read itself and pass this case for
     // the wrong reason.
     await page.waitForFunction(
       (title) => document.body.innerText.includes(title),
-      sharedJourneys[0].title,
+      scopedJourney.title,
       { timeout: 20_000 },
     );
+    await page.waitForFunction(
+      () => document.querySelector(".particle-earth-scene")?.getAttribute("data-scene-ready") === "true",
+      undefined,
+      { timeout: 30_000 },
+    );
+
+    // Use the product's real accessible Dive command. This is not a QA-only
+    // callback and keeps the guest path on the same ownership ladder as owner
+    // navigation while avoiding synthetic camera state.
+    const diveIntent = page.locator('[data-earth-dive-intent="true"]');
+    await diveIntent.waitFor({ state: "visible", timeout: 10_000 });
+    await diveIntent.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((journeyId) => {
+      const globe = document.querySelector(".living-atlas-globe");
+      const map = document.querySelector(".detailed-earth-map");
+      return globe?.getAttribute("data-earth-dive") === "detail"
+        && map?.getAttribute("data-journey-overlay-ready") === "true"
+        && map.getAttribute("data-journey-overlay-journey-id") === journeyId;
+    }, scopedJourney.id, { timeout: 20_000 });
+
+    const scopedPoint = scopedJourney.routePoints[0];
+    const detailScope = await page.evaluate(({ journeyId, routePointId, lon, lat }) => {
+      const map = document.querySelector(".detailed-earth-map");
+      const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+      return {
+        journeyId: map?.getAttribute("data-journey-overlay-journey-id") ?? null,
+        pointCount: Number(map?.getAttribute("data-journey-overlay-point-count") ?? -1),
+        featureCount: Number(map?.getAttribute("data-journey-overlay-feature-count") ?? -1),
+        sourceJourneyCount: Number(map?.getAttribute("data-journey-overlay-source-journey-count") ?? -1),
+        mapCount: document.querySelectorAll(".detailed-earth-map").length,
+        expectedJourneyId: journeyId,
+        expectedRoutePointId: routePointId,
+        projected,
+        hit: projected
+          ? window.__detailedEarthJourneyRoutePointHit?.(projected.x, projected.y) ?? null
+          : null,
+      };
+    }, {
+      journeyId: scopedJourney.id,
+      routePointId: scopedPoint.id,
+      lon: scopedPoint.longitude,
+      lat: scopedPoint.latitude,
+    });
+    if (
+      detailScope.journeyId !== scopedJourney.id
+      || detailScope.pointCount !== scopedJourney.routePoints.length
+      || detailScope.sourceJourneyCount !== 1
+      || detailScope.mapCount !== 1
+      || detailScope.hit?.journeyId !== scopedJourney.id
+      || detailScope.hit?.routePointId !== scopedPoint.id
+      || detailScope.featureCount <= 0
+    ) {
+      failures.push(`guest Detailed Earth source escaped/missed the authorized scope: ${JSON.stringify(detailScope)}`);
+    }
+
     state.journeysStatus = 404;
     // The viewer re-reads at SHARE_EXPIRY_RECHECK_MIN_MS (15 s) at the
-    // earliest, so this waits well past that floor rather than racing it.
+    // earliest. This existing live-revocation case waits for the authoritative
+    // server transition; it does not poll/retry the map or relax its assertions.
     await page.locator('[data-shared-atlas-state="unavailable"]').waitFor({ timeout: 45_000 });
     const expired = await page.evaluate(() => ({
       text: document.body.innerText,
       atlas: document.querySelectorAll(".living-atlas").length,
+      detailedMaps: document.querySelectorAll(".detailed-earth-map").length,
+      staleRoutePoints: document.querySelectorAll('[data-journey-overlay-journey-id]').length,
+      hitProbeInstalled: typeof window.__detailedEarthJourneyRoutePointHit === "function",
+      projectProbeInstalled: typeof window.__detailedEarthMapProject === "function",
       blank: document.body.innerText.trim().length === 0,
     }));
-    if (!expired.text.includes("这条分享链接已失效") || expired.atlas !== 0 || expired.blank) {
-      failures.push(`mid-session expiry: ${JSON.stringify(expired)}`);
+    if (
+      !expired.text.includes("这条分享链接已失效")
+      || expired.atlas !== 0
+      || expired.detailedMaps !== 0
+      || expired.staleRoutePoints !== 0
+      || expired.hitProbeInstalled
+      || expired.projectProbeInstalled
+      || expired.blank
+    ) {
+      failures.push(`mid-session share revocation retained Detailed Earth authority: ${JSON.stringify(expired)}`);
     }
-    console.log("[qa-guest-share] a grant that dies mid-session ends the viewer with the polished state");
+    console.log(`[qa-guest-share] scoped Detailed Earth source revoked with the grant journey=${detailScope.journeyId} features=${detailScope.featureCount}`);
     await page.close();
   }
 

@@ -2,6 +2,7 @@ import type { OAuth2Tokens } from "better-auth/oauth2";
 import { google, type GoogleOptions } from "better-auth/social-providers";
 import { serverConfig, type ServerConfig } from "../config";
 import { appleSigningCredential } from "./apple-client-secret";
+import { consumeVerifiedIdToken } from "./id-token-consumption";
 import type { VerifiedProviderIdentity } from "./provider-proof";
 
 export const GOOGLE_PROVIDER_ID = "google";
@@ -149,6 +150,48 @@ export function googleSignInOptions(config: ServerConfig = serverConfig): Google
   return {
     ...base,
     disableImplicitSignUp: true,
+    // #528: the same one-time consumption `apple-provider.ts` runs, for the
+    // same reason and on the same single path. The pinned 1.6.23
+    // `api/routes/sign-in.mjs` calls `verifyIdToken` for the direct
+    // `/sign-in/social` `idToken` body and nowhere else reachable here:
+    // `api/routes/callback.mjs` calls only `getUserInfo`, and `/link-social`
+    // is in `STARTRIPS_DISABLED_IDENTITY_PATHS`. So the authorization-code
+    // flow keeps being single-use through its own `code` and `state`, and the
+    // path that has no such protection stops accepting the same still-valid
+    // token twice.
+    //
+    // The adapter's own checks run FIRST, through the base provider built
+    // without this override -- which is also what keeps the pinned adapter
+    // from short-circuiting into this function (it prefers
+    // `options.verifyIdToken` over its own implementation). A token that
+    // fails signature, issuer, audience, age or nonce therefore never reaches
+    // the store, so it cannot occupy the digest a genuine one would need.
+    //
+    // `nonce` is forwarded rather than dropped: the pinned adapter compares it
+    // to the token's own claim whenever a caller supplies one, and swallowing
+    // it here would silently retire that check on the very path this override
+    // exists to harden.
+    async verifyIdToken(token: string, nonce?: string) {
+      let verified = false;
+      try {
+        verified = await baseProvider.verifyIdToken(token, nonce);
+      } catch {
+        verified = false;
+      }
+      if (!verified) return false;
+      const consumed = await consumeVerifiedIdToken({
+        providerId: GOOGLE_PROVIDER_ID,
+        token,
+      });
+      if (!consumed) {
+        // Either a replay or an unusable replay store. Both refuse this token
+        // and nothing else: no session is revoked, no account is marked, and a
+        // freshly issued token for the same subject still signs that subject
+        // in.
+        console.warn("provider_id_token_replayed", { providerId: GOOGLE_PROVIDER_ID });
+      }
+      return consumed;
+    },
     async getUserInfo(tokens) {
       const info = await verifiedUserInfo(baseProvider, tokens);
       const subject = info?.user?.id === undefined ? "" : String(info.user.id);
