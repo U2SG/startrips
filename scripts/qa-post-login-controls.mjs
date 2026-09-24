@@ -2798,6 +2798,10 @@ async function verifyFinalAcceptanceMobileFlow() {
         console.error(`[qa-post-login] final:${viewportLabel}:playback-isolation-state ${JSON.stringify(isolationState)}`);
         throw error;
       }
+      await page.mouse.move(Math.floor(width / 2), Math.floor(height / 2));
+      await page.waitForFunction(() => !(
+        document.querySelector(".journey-playback")?.classList.contains("is-controls-hidden")
+      ), null, { timeout: 2_000 });
       const cinematic = await page.evaluate(() => {
         const atlas = document.querySelector(".living-atlas");
         const auth = document.querySelector(".auth-continuity");
@@ -2816,6 +2820,33 @@ async function verifyFinalAcceptanceMobileFlow() {
             && Number.parseFloat(style.opacity) === 0
             && style.pointerEvents === "none";
         };
+        const hitControl = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const rect = element.getBoundingClientRect();
+          if (rect.width < 24 || rect.height < 24) return false;
+          const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return hit === element || Boolean(hit && element.contains(hit));
+        };
+        const mapInteractive = playback?.getAttribute("data-map-interactive") === "true";
+        const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+        const globeHit = (() => {
+          if (!mapInteractive || !(canvas instanceof HTMLCanvasElement)) return null;
+          const rect = canvas.getBoundingClientRect();
+          for (let radius = 0; radius <= 240; radius += 30) {
+            for (let arm = 0; arm < 8; arm += 1) {
+              const angle = arm * Math.PI / 4;
+              const x = rect.left + rect.width / 2 + Math.cos(angle) * radius;
+              const y = rect.top + rect.height / 2 + Math.sin(angle) * radius;
+              if (x < 8 || y < 8 || x >= innerWidth - 8 || y >= innerHeight - 8) continue;
+              const hit = document.elementFromPoint(x, y);
+              if (hit === canvas || (hit instanceof Element && hit.closest(".detailed-earth-map"))) return true;
+            }
+          }
+          return false;
+        })();
+        const playbackCloseHit = hitControl(playback?.querySelector(".journey-playback__close"));
+        const playbackNavHit = playback?.classList.contains("is-controls-hidden")
+          ? null : hitControl(playback?.querySelector('.journey-playback__controls button[aria-label="下一个章节"]'));
         return {
           atlasPlayback: atlas?.classList.contains("is-playback") ?? false,
           authCinematic: auth?.classList.contains("is-cinematic") ?? false,
@@ -2834,7 +2865,12 @@ async function verifyFinalAcceptanceMobileFlow() {
           activeInert: active instanceof HTMLElement ? active.inert : null,
           activeHidden: hidden(active),
           controlsHidden: hidden(controls),
-          playbackInteractive: playback ? getComputedStyle(playback).pointerEvents !== "none" : false,
+          playbackInteractive: playbackCloseHit && (playbackNavHit !== false)
+            && (mapInteractive ? globeHit === true : playback && getComputedStyle(playback).pointerEvents !== "none"),
+          playbackCloseHit,
+          playbackNavHit,
+          mapInteractive,
+          globeHit,
           soundtrackUsable: playbackAudio instanceof HTMLAudioElement
             && Boolean(playbackAudio.currentSrc || playbackAudio.src)
             && playbackAudio.loop,

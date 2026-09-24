@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
 import {
   AttributionControl,
   Map as MapLibreMap,
@@ -209,9 +209,14 @@ type DetailedEarthMapProps = {
   /** Active authorized Journey projected from the same Route consumed by Particle Earth. */
   journeyOverlay: DetailedEarthJourneyOverlay;
   focusRevision?: number;
+  focusEnabled?: boolean;
+  focusFlightPending?: boolean;
   focusFlightProfile?: DetailedEarthFocusFlightProfile;
+  reduceMotion?: boolean;
   language: DetailedEarthLanguage;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  onManualCameraInteraction?: () => void;
+  onFocusSettled?: (revision: number) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onOverviewRequest?: () => void;
   /** Latest detail-owned geographic observation for a renderer-to-particle handback. */
@@ -255,7 +260,6 @@ function applyDetailedEarthFocus(
       padding: 56,
       maxZoom: 10,
       duration,
-      essential: true,
     });
     return true;
   }
@@ -266,7 +270,6 @@ function applyDetailedEarthFocus(
     center: target,
     zoom: Math.max(map.getZoom(), DETAILED_EARTH_INITIAL_ZOOM),
     duration,
-    essential: true,
   });
   return true;
 }
@@ -280,9 +283,14 @@ export default function DetailedEarthMap({
   focusRoute,
   journeyOverlay,
   focusRevision = 0,
+  focusEnabled = true,
+  focusFlightPending = false,
   focusFlightProfile,
+  reduceMotion = false,
   language,
   onJourneyRoutePointActivate,
+  onManualCameraInteraction,
+  onFocusSettled,
   onGlobePointPick,
   onOverviewRequest,
   onCameraObservation,
@@ -303,6 +311,8 @@ export default function DetailedEarthMap({
   const journeyOverlayRef = useRef(journeyOverlay);
   const syncJourneyOverlayRef = useRef<(() => void) | null>(null);
   const onJourneyRoutePointActivateRef = useRef(onJourneyRoutePointActivate);
+  const onManualCameraInteractionRef = useRef(onManualCameraInteraction);
+  const onFocusSettledRef = useRef(onFocusSettled);
   const onPickRef = useRef(onGlobePointPick);
   const onOverviewRequestRef = useRef(onOverviewRequest);
   const onCameraObservationRef = useRef(onCameraObservation);
@@ -314,6 +324,8 @@ export default function DetailedEarthMap({
   const focusRevisionRef = useRef(focusRevision);
   const cameraIntentRevisionRef = useRef(0);
   const focusFlightActiveRef = useRef(false);
+  const focusFlightRevisionRef = useRef(focusRevision);
+  const detailFocusAppliedRevisionRef = useRef<number | null>(null);
   if (focusRevisionRef.current !== focusRevision) {
     focusRevisionRef.current = focusRevision;
     cameraIntentRevisionRef.current += 1;
@@ -327,6 +339,8 @@ export default function DetailedEarthMap({
   focusRouteRef.current = focusRoute;
   journeyOverlayRef.current = journeyOverlay;
   onJourneyRoutePointActivateRef.current = onJourneyRoutePointActivate;
+  onManualCameraInteractionRef.current = onManualCameraInteraction;
+  onFocusSettledRef.current = onFocusSettled;
   onPickRef.current = onGlobePointPick;
   onOverviewRequestRef.current = onOverviewRequest;
   onCameraObservationRef.current = onCameraObservation;
@@ -407,6 +421,7 @@ export default function DetailedEarthMap({
     } | null = null;
     mapRef.current = map;
     let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
+    let debugScrollZoomActive: (() => boolean) | null = null;
     let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
       journeyId: string;
       routePointId: string;
@@ -414,6 +429,7 @@ export default function DetailedEarthMap({
     if (import.meta.env.DEV && typeof window !== "undefined") {
       const debugWindow = window as Window & {
         __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
+        __detailedEarthMapScrollZoomActive?: () => boolean;
       };
       debugProject = (longitude, latitude) => {
         const projected = map.project([longitude, latitude]);
@@ -421,6 +437,8 @@ export default function DetailedEarthMap({
         return { x: rect.left + projected.x, y: rect.top + projected.y };
       };
       debugWindow.__detailedEarthMapProject = debugProject;
+      debugScrollZoomActive = () => map.scrollZoom.isActive();
+      debugWindow.__detailedEarthMapScrollZoomActive = debugScrollZoomActive;
     }
     // Register the one-shot load observation immediately after construction.
     // A tiny inline/QA style can become style-loaded before the rest of this
@@ -966,13 +984,52 @@ export default function DetailedEarthMap({
       // still easing. Only retire focus-flight ownership when MapLibre itself
       // says that ease has actually completed or been interrupted.
       if (!map.isMoving()) {
+        const completedFocus = focusFlightActiveRef.current;
         focusFlightActiveRef.current = false;
+        if (completedFocus && diveOwnerRef.current === "detail") {
+          onFocusSettledRef.current?.(focusFlightRevisionRef.current);
+        }
         // The final camera frame can be followed by `moveend` without another
         // render/idle edge. Reconcile durable style/tile/camera truth here so a
         // post-sync Journey frame cannot remain stranded at `visual-ready`.
         reconcileFullySettled();
       }
     });
+    let lastManualInput: Event | null = null;
+    const claimManualCamera = (event: { originalEvent?: Event }) => {
+      // MapLibre's keyboard pan begins a move without a drag/zoom/rotate edge.
+      // Programmatic flyTo, fitBounds and resize have no originating input;
+      // those camera events must never transfer ownership to the viewer.
+      if (diveOwnerRef.current !== "detail" || !event.originalEvent
+        || event.originalEvent === lastManualInput) return;
+      lastManualInput = event.originalEvent;
+      if (focusFlightActiveRef.current) {
+        focusFlightActiveRef.current = false;
+        map.stop();
+      }
+      cameraIntentRevisionRef.current += 1;
+      onManualCameraInteractionRef.current?.();
+    };
+    map.on("movestart", claimManualCamera);
+    map.on("dragstart", claimManualCamera);
+    map.on("zoomstart", claimManualCamera);
+    map.on("rotatestart", claimManualCamera);
+    map.on("wheel", (event) => {
+      // The first wheel event can be classified asynchronously by MapLibre,
+      // leaving its later movestart/zoomstart without originalEvent. Claim the
+      // actual gesture before ScrollZoomHandler handles it; a stopped focus
+      // flight cannot reset the wheel zoom that follows in the same event.
+      if (map.scrollZoom.isEnabled() && !event.defaultPrevented
+        && event.originalEvent.deltaY !== 0) claimManualCamera(event);
+    });
+    const claimNativeCameraControl = (event: MouseEvent) => {
+      if (event.target instanceof Element && event.target.closest(
+        ".maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out, .maplibregl-ctrl-compass",
+      )) claimManualCamera({ originalEvent: event });
+    };
+    // NavigationControl calls map.zoomIn/zoomOut/resetNorth without passing the
+    // originating click to camera events. Capture the real button activation.
+    host.addEventListener("click", claimNativeCameraControl, true);
 
     const projectedJourneyRoutePointHit = (point: { x: number; y: number }) => (
       pickDetailedEarthJourneyRoutePointHit(
@@ -1079,18 +1136,23 @@ export default function DetailedEarthMap({
       syncJourneyOverlayRef.current = null;
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       focusFlightActiveRef.current = false;
+      host.removeEventListener("click", claimNativeCameraControl, true);
       host.removeEventListener("click", handleJourneyRoutePointClickCapture, { capture: true });
       map.remove();
       if (import.meta.env.DEV && typeof window !== "undefined") {
         const debugWindow = window as Window & {
           __detailedEarthMapRemovalCount?: number;
           __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
+          __detailedEarthMapScrollZoomActive?: () => boolean;
           __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
             journeyId: string;
             routePointId: string;
           } | null;
         };
         if (debugWindow.__detailedEarthMapProject === debugProject) delete debugWindow.__detailedEarthMapProject;
+        if (debugWindow.__detailedEarthMapScrollZoomActive === debugScrollZoomActive) {
+          delete debugWindow.__detailedEarthMapScrollZoomActive;
+        }
         if (debugWindow.__detailedEarthJourneyRoutePointHit === debugJourneyRoutePointHit) {
           delete debugWindow.__detailedEarthJourneyRoutePointHit;
         }
@@ -1118,27 +1180,41 @@ export default function DetailedEarthMap({
     if (overlayReady && diveStage !== "particle") revealSyncRef.current?.("stage");
   }, [journeyOverlay.revision]);
 
-  useEffect(() => {
+  const focusRouteKey = focusRoute
+    ? `${focusRoute.id}:${focusRoute.points.map((point) => `${point.id ?? ""}:${point.lat}:${point.lon}`).join("|")}`
+    : "";
+  const startDetailFocus = useCallback(() => {
     const map = mapRef.current;
-    if (!map || diveOwnerRef.current !== "detail") return;
-    // During prewarm/blending the particle camera is the only authority and the
-    // hidden detail map follows it exclusively through handoff calibration.
-    // Once detail owns the camera, later *real* focus changes may use the map's
-    // normal fly/fit choreography. The ownership commit itself is calibrated,
-    // not re-focused.
+    if (!map || diveOwnerRef.current !== "detail" || !focusEnabled) return;
     // Starting a replacement flyTo/fitBounds synchronously ends the previous
     // MapLibre flight before arming the replacement. Clear the old ownership
     // first so that previous flight's moveend cannot retire the new flight.
     focusFlightActiveRef.current = false;
     cameraIntentRevisionRef.current += 1;
+    focusFlightRevisionRef.current = focusRevision;
     const focusFlightStarted = applyDetailedEarthFocus(
       map,
-      focusPoint,
-      focusRoute,
-      getDetailedEarthFocusDuration(focusFlightProfile),
+      focusPointRef.current,
+      focusRouteRef.current,
+      reduceMotion ? 0 : getDetailedEarthFocusDuration(focusFlightProfile),
     );
-    focusFlightActiveRef.current = focusFlightStarted;
-  }, [focusFlightProfile, focusPoint, focusRevision, focusRoute]);
+    detailFocusAppliedRevisionRef.current = focusRevision;
+    // A zero-duration Reduced Motion move can finish synchronously before
+    // applyDetailedEarthFocus returns and emits its moveend.
+    focusFlightActiveRef.current = focusFlightStarted && map.isMoving();
+    if (!focusFlightActiveRef.current) onFocusSettledRef.current?.(focusRevision);
+  }, [focusEnabled, focusFlightProfile, focusRevision, reduceMotion]);
+  useEffect(() => {
+    // During prewarm/blending Particle owns camera. A new detail-owned focus
+    // uses normal fly/fit choreography; ownership alone keeps its calibration.
+    startDetailFocus();
+  }, [focusEnabled, focusPoint?.lat, focusPoint?.lon, focusRouteKey, startDetailFocus]);
+  useEffect(() => {
+    // If Detail takes over during an unfinished Playback flight, continue the
+    // same target from the calibrated frame. A settled handoff does not refly.
+    if (diveOwner === "detail" && focusFlightPending
+      && detailFocusAppliedRevisionRef.current !== focusRevision) startDetailFocus();
+  }, [diveOwner, focusFlightPending, focusRevision, startDetailFocus]);
 
   // Per-frame particle following goes through `calibrationHandleRef` in the
   // same publish event. This effect is only a structural fallback for mount /

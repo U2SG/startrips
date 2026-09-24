@@ -1149,6 +1149,16 @@ export function LivingAtlasApp({
     soundtrackRead: null,
     cameraCommand: null,
   });
+  // Playback's content target can advance while the viewer explores the map.
+  // Only a fresh explicit location choice or the return control restores
+  // camera follow; timer, media and renderer readiness cannot do so.
+  const [playbackCameraFollowing, setPlaybackCameraFollowing] = useState(true);
+  const playbackCameraFollowingRef = useRef(true);
+  const playbackCurrentCameraTargetRef = useRef<{
+    journeyId: string;
+    target: PlaybackCameraTarget;
+  } | null>(null);
+  const [playbackCameraSettledRevision, setPlaybackCameraSettledRevision] = useState<number | null>(null);
   const [playbackQuickRecap, setPlaybackQuickRecap] = useState<PreparedQuickRecapPlayback | null>(null);
   const [playbackModeMenuJourneyId, setPlaybackModeMenuJourneyId] = useState<string | null>(null);
   const [playbackPendingMode, setPlaybackPendingMode] = useState<{
@@ -1703,7 +1713,11 @@ export function LivingAtlasApp({
     atlasHomeCameraFreshRef.current = false;
     setHasManualAtlasCameraInteraction(true);
     setInitialHomeCameraIntent(null);
-  }, []);
+    if (playbackActive) {
+      playbackCameraFollowingRef.current = false;
+      setPlaybackCameraFollowing(false);
+    }
+  }, [playbackActive]);
   useEffect(() => {
     if (selectedJourneyIdForHomeCamera !== null || hasManualAtlasCameraInteraction || playbackActive || timeCursor.timelineRevision > 0) {
       atlasHomeCameraFreshRef.current = false;
@@ -2054,6 +2068,10 @@ export function LivingAtlasApp({
       focusRevision,
     ));
     setPlaybackSession((current) => releaseStalePlaybackSession(current, true));
+    playbackCameraFollowingRef.current = true;
+    playbackCurrentCameraTargetRef.current = null;
+    setPlaybackCameraFollowing(true);
+    setPlaybackCameraSettledRevision(null);
     setPlaybackQuickRecap(null);
     setPlaybackPendingMode(null);
     setPlaybackFallbackMessage(null);
@@ -2068,6 +2086,10 @@ export function LivingAtlasApp({
         focusRevision,
       ));
       setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
+      playbackCameraFollowingRef.current = true;
+      playbackCurrentCameraTargetRef.current = null;
+      setPlaybackCameraFollowing(true);
+      setPlaybackCameraSettledRevision(null);
       setPlaybackQuickRecap(null);
       setPlaybackPendingMode(null);
       setPlaybackFallbackMessage(null);
@@ -2545,6 +2567,10 @@ export function LivingAtlasApp({
       soundtrackRead: cachedRead,
       cameraCommand: null,
     });
+    playbackCameraFollowingRef.current = true;
+    playbackCurrentCameraTargetRef.current = null;
+    setPlaybackCameraFollowing(true);
+    setPlaybackCameraSettledRevision(null);
   }
 
   function startPlayback(
@@ -2634,6 +2660,10 @@ export function LivingAtlasApp({
       // previous command keeps camera ownership explicit across playback runs.
       cameraCommand: null,
     });
+    playbackCameraFollowingRef.current = true;
+    playbackCurrentCameraTargetRef.current = null;
+    setPlaybackCameraFollowing(true);
+    setPlaybackCameraSettledRevision(null);
   }
 
   const playbackStepDurationResolver = useCallback((
@@ -2698,6 +2728,10 @@ export function LivingAtlasApp({
       focusRevision,
     ));
     setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
+    playbackCameraFollowingRef.current = true;
+    playbackCurrentCameraTargetRef.current = null;
+    setPlaybackCameraFollowing(true);
+    setPlaybackCameraSettledRevision(null);
     setPlaybackQuickRecap(null);
     setPlaybackPendingMode(null);
     setPlaybackFallbackMessage(null);
@@ -2807,6 +2841,15 @@ export function LivingAtlasApp({
                 focusRevision + initialHomeCameraRevision,
                 playbackReleaseFocusRevision,
               )}
+            focusEnabled={!playbackActive || playbackCameraFollowing}
+            focusFlightPending={playbackActive && playbackCameraFollowing
+              && playbackSession.cameraCommand?.target.kind === "point"
+              && playbackCameraSettledRevision !== playbackSession.cameraCommand?.revision}
+            onFocusSettled={(revision) => {
+              if (playbackActive && revision === playbackSession.cameraCommand?.revision) {
+                setPlaybackCameraSettledRevision(revision);
+              }
+            }}
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
@@ -2846,11 +2889,15 @@ export function LivingAtlasApp({
             earthExperiencePolicy={earthExperiencePolicy}
             globeFocusMode={globeFocusMode}
             onJourneyRouteActivate={(id) => {
+              if (playbackActive) return;
               if (id === "draft-route-preview") return;
               if (isMobileV2) selectMobileJourney(id);
               else selectJourney(id);
             }}
             onJourneyRoutePointActivate={globePickActive ? undefined : (journeyId, routePointId) => {
+              // During Playback, a map marker cannot open Atlas context behind
+              // the chapter surface. Chapter navigation remains the owner.
+              if (playbackActive) return;
               if (journeyId === "draft-route-preview") return;
               // #291 review: Route Point context is subordinate to the Atlas'
               // single semantic Journey owner. Visible points on sibling routes
@@ -3756,15 +3803,44 @@ export function LivingAtlasApp({
           journey={playbackJourney}
           homeNarrativeContext={playbackHomeNarrativeContext}
           onClose={handlePlaybackClose}
-          onCameraTargetChange={(target) => {
-            setPlaybackSession((current) => ({
+          cameraFollowing={playbackCameraFollowing}
+          cameraFlight={playbackSession.cameraCommand ? {
+            target: playbackSession.cameraCommand.target,
+            revision: playbackSession.cameraCommand.revision,
+            settled: lightweightGlobe
+              || playbackCameraSettledRevision === playbackSession.cameraCommand.revision,
+          } : null}
+          onReturnToCurrentLocation={() => {
+            const currentTarget = playbackCurrentCameraTargetRef.current;
+            if (!currentTarget || currentTarget.journeyId !== playbackSession.journeyId) return;
+            playbackCameraFollowingRef.current = true;
+            setPlaybackCameraFollowing(true);
+            setPlaybackSession((current) => current.journeyId === currentTarget.journeyId ? ({
+              ...current,
+              cameraCommand: nextPlaybackCameraCommand(
+                current.cameraCommand,
+                currentTarget.target,
+                Math.max(focusRevision + initialHomeCameraRevision, playbackReleaseFocusRevision),
+              ),
+            }) : current);
+          }}
+          onCameraTargetChange={(target, explicitlySelected) => {
+            const journeyId = playbackSession.journeyId;
+            if (!journeyId) return;
+            playbackCurrentCameraTargetRef.current = { journeyId, target };
+            if (explicitlySelected) {
+              playbackCameraFollowingRef.current = true;
+              setPlaybackCameraFollowing(true);
+            }
+            if (!playbackCameraFollowingRef.current) return;
+            setPlaybackSession((current) => current.journeyId === journeyId ? ({
               ...current,
               cameraCommand: nextPlaybackCameraCommand(
                 current.cameraCommand,
                 target,
                 Math.max(focusRevision + initialHomeCameraRevision, playbackReleaseFocusRevision),
               ),
-            }));
+            }) : current);
           }}
           initialSoundtrackRead={playbackSession.soundtrackRead}
           stepDurationResolver={playbackStepDurationResolver}

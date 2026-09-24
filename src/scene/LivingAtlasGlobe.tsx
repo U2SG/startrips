@@ -163,6 +163,10 @@ export type LivingAtlasGlobeProps = {
   /** One-shot camera orientation seed; never a semantic focus object. */
   initialCameraAnchor?: { lat: number; lon: number } | null;
   focusRevision?: number;
+  /** Whether a chapter target currently owns the camera. */
+  focusEnabled?: boolean;
+  /** An unfinished Playback focus may continue after Detail takes ownership. */
+  focusFlightPending?: boolean;
   focusFlightProfile?: PlaybackTravelChoreography;
   focusColor?: string;
   journeyRoutes: readonly JourneyRoute[];
@@ -190,6 +194,7 @@ export type LivingAtlasGlobeProps = {
   onHomeBaseActivate?: (periodId: string) => void;
   onSemanticZoomChange?: (level: GlobeSemanticZoom) => void;
   onManualCameraInteraction?: () => void;
+  onFocusSettled?: (revision: number) => void;
   onJourneyRouteActivate: (journeyId: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
   onGlobeBlankActivate?: () => void;
@@ -234,6 +239,8 @@ type AtlasEarthPresentation = Pick<
   | "focusRoute"
   | "initialCameraAnchor"
   | "focusRevision"
+  | "focusEnabled"
+  | "focusFlightPending"
   | "focusFlightProfile"
   | "focusColor"
   | "journeyRoutes"
@@ -260,6 +267,7 @@ type AtlasEarthPresentation = Pick<
   homeBasePresence?: readonly HomeBasePresenceDrawable[];
   onHomeBasePresenceFrame?: (frame: readonly ProjectedHomeBasePresence[]) => void;
   onManualCameraInteraction?: () => void;
+  onFocusSettled?: (revision: number) => void;
   zoomIntent?: {
     zoom: number;
     revision: number;
@@ -338,6 +346,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   focusRoute={atlas?.focusRoute}
                   initialCameraAnchor={atlas?.initialCameraAnchor}
                   focusRevision={atlas?.focusRevision}
+                  focusEnabled={atlas?.focusEnabled}
                   focusFlightProfile={atlas?.focusFlightProfile}
                   focusColor={atlas?.focusColor}
                   centerFocusPoint={Boolean(atlas)}
@@ -356,6 +365,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   homeBasePresence={atlas?.homeBasePresence ?? []}
                   onHomeBasePresenceFrame={atlas?.onHomeBasePresenceFrame}
                   onManualCameraInteraction={atlas?.onManualCameraInteraction}
+                  onFocusSettled={atlas?.onFocusSettled}
                   zoomIntent={atlas?.zoomIntent}
                   showArchiveSignals={false}
                   // #252: exactly one subsystem owns the camera on any frame.
@@ -388,6 +398,8 @@ export function LivingAtlasGlobe({
   focusRoute,
   initialCameraAnchor,
   focusRevision,
+  focusEnabled = true,
+  focusFlightPending = false,
   focusFlightProfile,
   focusColor,
   journeyRoutes,
@@ -400,6 +412,7 @@ export function LivingAtlasGlobe({
   onHomeBaseActivate,
   onSemanticZoomChange,
   onManualCameraInteraction,
+  onFocusSettled,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
   onGlobeBlankActivate,
@@ -730,6 +743,15 @@ export function LivingAtlasGlobe({
     scheduleDiveTick();
     onManualCameraInteraction?.();
   }, [onManualCameraInteraction, scheduleDiveTick]);
+  const handleParticleFocusSettled = useCallback((revision: number) => {
+    if (diveRef.current.owner === "particle") onFocusSettled?.(revision);
+  }, [onFocusSettled]);
+  const handleDetailFocusSettled = useCallback((revision: number) => {
+    // Detail only emits after its own rendered owner prop is `detail`. This
+    // also covers a synchronous Reduced Motion settlement before the parent's
+    // passive dive mirror has observed that ownership commit.
+    onFocusSettled?.(revision);
+  }, [onFocusSettled]);
 
   const handleDetailReadiness = useCallback((readiness: DetailReadiness) => {
     if (earthExperiencePolicyRef.current === "particle-only") return;
@@ -1034,6 +1056,8 @@ export function LivingAtlasGlobe({
       focusRoute,
       initialCameraAnchor,
       focusRevision,
+      focusEnabled,
+      focusFlightPending,
       focusFlightProfile,
       focusColor,
       journeyRoutes,
@@ -1051,6 +1075,7 @@ export function LivingAtlasGlobe({
       homeBasePresence: homeBaseLayer,
       onHomeBasePresenceFrame: handleHomeBasePresenceFrame,
       onManualCameraInteraction: handleManualCameraInteraction,
+      onFocusSettled: handleParticleFocusSettled,
       zoomIntent: zoomIntent ?? undefined,
       inputOwner: effectiveDive.owner,
       earthDiveOverlapActive: effectiveDive.stage === "prewarm" || effectiveDive.stage === "blending",
@@ -1075,6 +1100,8 @@ export function LivingAtlasGlobe({
     focusColor,
     focusPoint,
     focusRevision,
+    focusEnabled,
+    focusFlightPending,
     focusFlightProfile,
     focusRoute,
     initialCameraAnchor,
@@ -1087,6 +1114,7 @@ export function LivingAtlasGlobe({
     zoomIntent,
     onGlobePointPick,
     handleManualCameraInteraction,
+    handleParticleFocusSettled,
     onJourneyRouteActivate,
     onJourneyRoutePointActivate,
     onGlobeBlankActivate,
@@ -1148,9 +1176,14 @@ export function LivingAtlasGlobe({
               focusRoute={focusRoute}
               journeyOverlay={detailedEarthJourneyOverlay}
               focusRevision={focusRevision}
+              focusEnabled={focusEnabled}
+              focusFlightPending={focusFlightPending}
               focusFlightProfile={focusFlightProfile}
+              reduceMotion={reduceMotion}
               language={detailLanguage}
               onJourneyRoutePointActivate={onJourneyRoutePointActivate}
+              onManualCameraInteraction={handleManualCameraInteraction}
+              onFocusSettled={handleDetailFocusSettled}
               onGlobePointPick={detailMode ? onGlobePointPick : undefined}
               onOverviewRequest={releaseDive}
               onCameraObservation={handleDetailCameraObservation}

@@ -25,6 +25,28 @@
     rgba(0, 0, 0, 0.05);
 }
 
+/* The globe owns empty travel/arrival space. Playback controls and readable
+   chapter text reclaim only their own hit areas. */
+/* Atlas gives direct children pointer ownership with a three-part selector.
+   This four-part owner must win so the globe receives the empty stage input. */
+.living-atlas.is-playback > .journey-playback[data-map-interactive="true"] {
+  pointer-events: none;
+}
+
+.journey-playback[data-map-interactive="true"] .journey-playback__close,
+.journey-playback[data-map-interactive="true"] .journey-playback__controls,
+.journey-playback[data-map-interactive="true"] .journey-playback__selection-summary,
+.journey-playback[data-map-interactive="true"] .journey-playback__return-location {
+  pointer-events: auto;
+}
+
+.journey-playback[data-map-interactive="true"] .journey-playback__stop :is(p, h3, blockquote) {
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
+  pointer-events: auto;
+}
+
 /* Stop: globe clearly visible, text floats over space. */
 .journey-playback[data-playback-phase="stop"] {
   background:
@@ -367,6 +389,26 @@
   background: rgba(2, 8, 8, 0.8);
   color: #d6e0dd;
   cursor: pointer;
+}
+
+.journey-playback__return-location {
+  position: absolute;
+  z-index: 5;
+  top: 18px;
+  left: 18px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid rgba(118, 198, 188, 0.42);
+  border-radius: 999px;
+  background: rgba(2, 10, 11, 0.86);
+  color: var(--atlas-text);
+  font: 500 12px/1 var(--archive-sans);
+  cursor: pointer;
+}
+
+.journey-playback__return-location:focus-visible {
+  outline: 2px solid var(--atlas-acid);
+  outline-offset: 2px;
 }
 
 .journey-playback__controls {

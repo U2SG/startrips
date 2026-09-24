@@ -10,11 +10,12 @@ export function usePlaybackMapBridge(input: {
   director: JourneyPlaybackDirector;
   root: RefObject<HTMLDivElement | null>;
   reduceMotion: boolean;
-  commitSpatial: () => void;
+  commitSpatial: (arrivingFromTravel: boolean) => void;
 }) {
   const { journey, director, root, reduceMotion, commitSpatial } = input;
   const { stepIndex, steps, intentRevision, getIntentRevision, invalidatePresentation, paused } = director;
   const previous = useRef<{ journey: Journey | null; stepIndex: number; intent: number } | null>(null);
+  const arrivalLatch = useRef<{ journeyId: string; stepIndex: number; intent: number } | null>(null);
   const commitSpatialRef = useRef(commitSpatial);
   commitSpatialRef.current = commitSpatial;
   const mediaRect = useRef<{ stepIndex: number; rect: PlaybackBridgeRect | null } | null>(null);
@@ -24,6 +25,24 @@ export function usePlaybackMapBridge(input: {
       || before.stepIndex + 1 !== stepIndex) return null;
     return playbackMapBridgeBoundary(journey, steps[before.stepIndex], steps[stepIndex]);
   }, [intentRevision, journey, stepIndex, steps]);
+  const naturallyArrivingFromTravel = useMemo(() => {
+    const before = previous.current;
+    if (!journey || !before || before.journey?.id !== journey.id || before.intent !== intentRevision
+      || before.stepIndex + 1 !== stepIndex) return false;
+    const from = steps[before.stepIndex];
+    const to = steps[stepIndex];
+    return from?.kind === "travel" && to?.kind === "stop" && from.to === to.pointIndex;
+  }, [intentRevision, journey, stepIndex, steps]);
+  const arrivingFromTravel = naturallyArrivingFromTravel || Boolean(
+    journey && arrivalLatch.current?.journeyId === journey.id
+      && arrivalLatch.current.stepIndex === stepIndex
+      && arrivalLatch.current.intent === intentRevision,
+  );
+  useLayoutEffect(() => {
+    if (naturallyArrivingFromTravel && journey) {
+      arrivalLatch.current = { journeyId: journey.id, stepIndex, intent: intentRevision };
+    }
+  }, [intentRevision, journey, naturallyArrivingFromTravel, stepIndex]);
   useLayoutEffect(() => {
     previous.current = { journey, stepIndex, intent: intentRevision };
   }, [intentRevision, journey, stepIndex]);
@@ -52,7 +71,7 @@ export function usePlaybackMapBridge(input: {
   }, [boundary, isCurrent, paused, reduceMotion, root]);
   useLayoutEffect(() => {
     let cancelled = false;
-    const commit = () => { if (!cancelled && isCurrent()) commitSpatialRef.current(); };
+    const commit = () => { if (!cancelled && isCurrent()) commitSpatialRef.current(arrivingFromTravel); };
     if (boundary?.direction !== "media-to-map") { commit(); return; }
     const element = root.current?.querySelector<HTMLElement>(
       ".journey-playback__travel, .journey-playback__stop, .journey-playback__outro, .journey-playback__home",
@@ -79,6 +98,6 @@ export function usePlaybackMapBridge(input: {
       element.style.transform = "";
       element.style.opacity = "";
     };
-  }, [boundary, intentRevision, isCurrent, journey, paused, reduceMotion, root, stepIndex]);
-  return { entrance, isCurrent, recordMedia, boundary };
+  }, [arrivingFromTravel, boundary, intentRevision, isCurrent, journey, paused, reduceMotion, root, stepIndex]);
+  return { entrance, isCurrent, recordMedia, boundary, arrivingFromTravel };
 }
