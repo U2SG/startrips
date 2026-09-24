@@ -131,19 +131,38 @@ async function visibleVideo(page, surfaceSelector, assetId) {
       const video = surfaceSelector === ".journey-playback"
         ? stage?.querySelector('[data-media-slot][aria-hidden="false"] video')
         : stage?.querySelector('video[data-shared-media-id]');
+      const effectiveOpacity = (candidate, boundary) => {
+        if (!(candidate instanceof HTMLVideoElement) || !(boundary instanceof Element)) return 0;
+        let opacity = 1;
+        for (let node = candidate; node instanceof Element; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (node.hidden || node.getAttribute("aria-hidden") === "true"
+            || style.display === "none" || style.visibility !== "visible") return 0;
+          opacity *= Number(style.opacity);
+          if (!(opacity > 0)) return 0;
+          if (node === boundary) return opacity;
+        }
+        return 0;
+      };
       const bounds = video?.getBoundingClientRect();
       const hit = bounds && bounds.width > 0 && bounds.height > 0
         ? document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)
         : null;
-      const visibleVideos = [...document.querySelectorAll(
+      const allVideos = [...document.querySelectorAll(
         ".journey-story__media video, .journey-story-fullscreen video, .journey-playback video",
-      )].filter((candidate) => {
+      )];
+      const visibleVideos = allVideos.filter((candidate) => {
         const rect = candidate.getBoundingClientRect();
-        const style = getComputedStyle(candidate);
-        return !candidate.hidden && rect.width > 0 && rect.height > 0
-          && style.visibility === "visible" && Number(style.opacity) > 0
+        const owner = candidate.closest(".journey-story__media, .journey-story-fullscreen, .journey-playback");
+        return rect.width > 0 && rect.height > 0 && effectiveOpacity(candidate, owner) > 0
           && document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === candidate;
       });
+      const otherPlaying = allVideos.filter((candidate) => candidate !== video && !candidate.paused)
+        .map((candidate) => ({
+          assetId: candidate.getAttribute("data-shared-media-id")
+            ?? candidate.closest("[data-media-asset]")?.getAttribute("data-media-asset") ?? null,
+          surface: candidate.closest(".journey-story__media, .journey-story-fullscreen, .journey-playback")?.className ?? null,
+        }));
       const state = {
         surface: surfaceSelector, assetId,
         currentId: pages?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id")
@@ -154,15 +173,17 @@ async function visibleVideo(page, surfaceSelector, assetId) {
         readyState: video instanceof HTMLVideoElement ? video.readyState : null,
         decodedWidth: video instanceof HTMLVideoElement ? video.videoWidth : null,
         paused: video instanceof HTMLVideoElement ? video.paused : null,
-        hitIsVideo: hit === video, visibleVideoCount: visibleVideos.length,
+        effectiveOpacity: effectiveOpacity(video, surface),
+        hitIsVideo: hit === video, visibleVideoCount: visibleVideos.length, otherPlaying,
         liveClones: document.querySelectorAll('[data-shared-element-clone^="story-fullscreen-"]').length,
       };
       window.__qaJointVideoLast = state;
       return surface && !surface.hidden && state.presentation === "settled"
         && state.currentId === assetId && state.videoId === assetId
         && state.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
-        && state.decodedWidth > 0 && state.hitIsVideo
-        && state.visibleVideoCount === 1 && state.liveClones === 0 ? state : false;
+        && state.decodedWidth > 0 && state.effectiveOpacity >= 0.95 && state.hitIsVideo
+        && state.visibleVideoCount === 1 && state.otherPlaying.length === 0
+        && state.liveClones === 0 ? state : false;
     }, { surfaceSelector, assetId }, { polling: "raf", timeout: 15_000 });
     return await handle.jsonValue();
   } catch (error) {
