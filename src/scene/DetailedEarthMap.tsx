@@ -215,6 +215,7 @@ type DetailedEarthMapProps = {
   reduceMotion?: boolean;
   language: DetailedEarthLanguage;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  onGlobeBlankActivate?: () => void;
   onManualCameraInteraction?: () => void;
   onFocusSettled?: (revision: number) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
@@ -289,6 +290,7 @@ export default function DetailedEarthMap({
   reduceMotion = false,
   language,
   onJourneyRoutePointActivate,
+  onGlobeBlankActivate,
   onManualCameraInteraction,
   onFocusSettled,
   onGlobePointPick,
@@ -311,6 +313,7 @@ export default function DetailedEarthMap({
   const journeyOverlayRef = useRef(journeyOverlay);
   const syncJourneyOverlayRef = useRef<(() => void) | null>(null);
   const onJourneyRoutePointActivateRef = useRef(onJourneyRoutePointActivate);
+  const onGlobeBlankActivateRef = useRef(onGlobeBlankActivate);
   const onManualCameraInteractionRef = useRef(onManualCameraInteraction);
   const onFocusSettledRef = useRef(onFocusSettled);
   const onPickRef = useRef(onGlobePointPick);
@@ -339,6 +342,7 @@ export default function DetailedEarthMap({
   focusRouteRef.current = focusRoute;
   journeyOverlayRef.current = journeyOverlay;
   onJourneyRoutePointActivateRef.current = onJourneyRoutePointActivate;
+  onGlobeBlankActivateRef.current = onGlobeBlankActivate;
   onManualCameraInteractionRef.current = onManualCameraInteraction;
   onFocusSettledRef.current = onFocusSettled;
   onPickRef.current = onGlobePointPick;
@@ -1082,9 +1086,10 @@ export default function DetailedEarthMap({
     host.addEventListener("click", handleJourneyRoutePointClickCapture, { capture: true });
 
     map.on("click", (event) => {
+      if (diveOwnerRef.current !== "detail") return;
       // The capture listener above owns ordinary Route Point activation. Keep a
       // MapLibre-layer lookup as a bounded projection/style fallback and retain
-      // this event for explicit map-point picking outside Journey hit targets.
+      // this event for explicit map-point picking before a blank-map dismissal.
       let routePointHit = projectedJourneyRoutePointHit(event.point);
       if (!routePointHit && map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
         const [journeyHit] = map.queryRenderedFeatures(event.point, {
@@ -1100,11 +1105,14 @@ export default function DetailedEarthMap({
         onJourneyRoutePointActivateRef.current(routePointHit.journeyId, routePointHit.routePointId);
         return;
       }
-      if (!onPickRef.current) return;
-      onPickRef.current({
-        latitude: event.lngLat.lat,
-        longitude: event.lngLat.lng,
-      });
+      if (onPickRef.current) {
+        onPickRef.current({
+          latitude: event.lngLat.lat,
+          longitude: event.lngLat.lng,
+        });
+        return;
+      }
+      onGlobeBlankActivateRef.current?.();
     });
     map.on("zoom", () => {
       // Grade only a zoom currently owned by a real MapLibre input handler. The
