@@ -42,6 +42,19 @@ describe("itinerary location lookup", () => {
       .toEqual(["Apple Park"]);
   });
 
+  it("labels an established Chinese hint as a reference for an English source", () => {
+    const place = entry("National Gallery Singapore", ["新加坡国家美术馆"], "SG", "Singapore");
+    const gallery = {
+      ...result("National Gallery Singapore", "US", 1.29),
+      countryCode: "SG", context: "Singapore",
+    };
+    expect(itineraryLocationDisplayNames(place, gallery))
+      .toEqual(["National Gallery Singapore", "中文参考名：新加坡国家美术馆"]);
+    expect(itineraryLocationDisplayNames(place, {
+      ...gallery, countryCode: "MY", context: "Kuala Lumpur, Malaysia",
+    })).toEqual(["National Gallery Singapore"]);
+  });
+
   it("refuses a same-name answer in the wrong country", () => {
     const place = entry("苹果公司总部", ["Apple Park"]);
     expect(itineraryLocationSuggestion(place, [result("Apple Park", "ZA", -26.1)]))

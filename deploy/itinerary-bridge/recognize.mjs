@@ -141,11 +141,11 @@ name exactly so the caller can verify alignment. The hints are not facts about
 the source and are never coordinates.
 
 For a Chinese-named venue, aliases may contain up to two established English
-or local endonyms of that exact venue. Avoid generic translations and guessed
-hotel brands. For an airport, put its full official English name before any
-three-letter airport code. Use a locality-qualified conventional name for a
-generic landmark when one exists. An English-named venue needs no alias. Use
-[] if uncertain.
+or local endonyms of that exact venue. For an English-named venue, aliases may
+contain an established Chinese name when one is commonly used. Avoid literal
+translations and guessed hotel brands. For an airport, put its full official
+English name before any three-letter airport code. Use a locality-qualified
+conventional name for a generic landmark when one exists. Use [] if uncertain.
 
 countryCode is the two-letter ISO code when the itinerary context makes the
 country clear. searchArea is the specific English locality, optionally followed
@@ -204,7 +204,8 @@ async function enrichLocationHints(reading, signal) {
     seen.add(hint.index);
     entry.aliases = Array.isArray(hint.aliases)
       ? hint.aliases.filter((alias) => typeof alias === "string"
-        && alias.length <= 120 && /^[\x20-\x7e]+$/.test(alias)).slice(0, 2)
+        && alias.trim().length >= 2 && alias.length <= 120
+        && /^[\p{L}\p{N}\p{P}\p{Zs}]+$/u.test(alias)).slice(0, 2)
       : [];
     entry.countryCode = typeof hint.countryCode === "string"
       && /^[A-Z]{2}$/.test(hint.countryCode) ? hint.countryCode : null;

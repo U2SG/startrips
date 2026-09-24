@@ -60,9 +60,14 @@ export function itineraryLocationDisplayNames(
   entry: ItineraryEntryDraft,
   result: LocationSearchResult,
 ): string[] {
-  const verifiedSourceName = itineraryLocationSuggestion(entry, [result])
-    ? entry.name : "";
+  const verified = Boolean(itineraryLocationSuggestion(entry, [result]));
+  const verifiedSourceName = verified ? entry.name : "";
   const names = [verifiedSourceName, result.label, result.labelLocal, result.labelEnglish]
     .filter((name): name is string => Boolean(name));
-  return [...new Map(names.map((name) => [nameKey(name), name] as const)).values()];
+  const displayNames = [...new Map(names.map((name) => [nameKey(name), name] as const)).values()];
+  if (verified && !names.some((name) => /\p{Script=Han}/u.test(name))) {
+    const chineseAlias = entry.aliases.find((alias) => /\p{Script=Han}/u.test(alias));
+    if (chineseAlias) displayNames.push(`中文参考名：${chineseAlias}`);
+  }
+  return displayNames;
 }
