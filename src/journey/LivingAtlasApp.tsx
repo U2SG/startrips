@@ -2712,6 +2712,9 @@ export function LivingAtlasApp({
   }
 
   function startGlobePick(accept: (point: GlobePointPick) => void) {
+    // Globe picking takes the pointer surface from Atlas. A Route Point detail
+    // left open after Story would otherwise cover the pickable canvas on mobile.
+    if (routePointContextSelectionRef.current.intent) closeRoutePointContext(false);
     globePickAccept.current = accept;
     setGlobePickActive(true);
     setView("planet");
