@@ -16,6 +16,7 @@ import {
   ItineraryImportStageError,
   ItineraryRecognitionUnavailableError,
   parseRecognitionCandidates,
+  withRecognitionTimeout,
   type ItineraryRecognitionCandidates,
   type ItineraryRecognitionRequest,
   type ItineraryRecognizer,

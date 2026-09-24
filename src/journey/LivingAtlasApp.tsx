@@ -2900,7 +2900,6 @@ export function LivingAtlasApp({
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
             {canCreateJourney ? <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button> : null}
-            {canCreateJourney ? <button type="button" className="living-atlas__import" onClick={openImport}><IconUpload size={17} stroke={1.4} aria-hidden="true" />{importStatus.busy ? "导入处理中" : importStatus.ready ? "查看导入结果" : "导入行程"}</button> : null}
             {shareClient && journeys.length > 0 ? (
               <button type="button" className="living-atlas__share" data-atlas-share-trigger="true" onClick={() => openShareSurface(null)}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享多段旅程</button>
             ) : null}
@@ -2918,6 +2917,7 @@ export function LivingAtlasApp({
               只看地球
             </button>
           </nav>
+          {canCreateJourney ? <button type="button" className="living-atlas__import" onClick={openImport}><IconUpload size={17} stroke={1.4} aria-hidden="true" />{importStatus.busy ? "导入处理中" : importStatus.ready ? "查看导入结果" : "导入已有行程"}</button> : null}
         </header>
       )}
 

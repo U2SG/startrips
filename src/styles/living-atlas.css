@@ -494,7 +494,7 @@
   position: absolute;
   top: 14px;
   left: 50%;
-  width: 590px;
+  width: 460px;
   height: 54px;
   display: flex;
   align-items: center;
@@ -3225,9 +3225,23 @@
   line-height: 1.7;
 }
 
-.living-atlas__header nav .living-atlas__import {
-  padding-inline: 12px;
+.living-atlas__header > .living-atlas__import {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(122, 244, 237, 0.28);
+  border-radius: 999px;
+  background: rgba(2, 15, 16, 0.9);
   color: var(--atlas-cyan);
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .living-atlas__import-backdrop {
