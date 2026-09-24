@@ -32,8 +32,8 @@ const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 // mounts - the thing #252 says must not move - not an arbitrary coordinate.
 // The fixture publishes which one it focused, and the lane checks that the
 // place both renderers are holding is that Route Point's own position.
-const qaUrl = (focus, motion = "animate", policy = "default") => new URL(
-  `/?qaState=earth-dive&qaMotion=${motion}${focus === "route" ? "&qaFocus=route" : ""}${policy === "particle-only" ? "&qaPolicy=particle-only" : ""}`,
+const qaUrl = (focus, motion = "animate", policy = "default", scope = "owner") => new URL(
+  `/?qaState=earth-dive&qaMotion=${motion}${focus === "route" ? "&qaFocus=route" : ""}${policy === "particle-only" ? "&qaPolicy=particle-only" : ""}${scope === "share" ? "&qaScope=share" : ""}`,
   baseUrl,
 ).toString();
 
@@ -132,6 +132,7 @@ async function readRoutePoint(page) {
     if (!marker) return null;
     const scene = document.querySelector(".particle-earth-scene");
     return {
+      journeyId: marker.dataset.journeyId ?? null,
       id: marker.dataset.routePointId ?? null,
       lat: Number(marker.dataset.routePointLat),
       lon: Number(marker.dataset.routePointLon),
@@ -142,7 +143,71 @@ async function readRoutePoint(page) {
   });
 }
 
-/** Which element a real gesture at this point would reach. */
+/** Resolve a pointer-reachable sample inside the Route Point's 44px hit area. */
+async function activateDetailedRoutePoint(page, routePoint) {
+  const target = await page.evaluate(({ lon, lat }) => {
+    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    if (!projected || !Number.isFinite(projected.x) || !Number.isFinite(projected.y)) return null;
+
+    // Floating Atlas chrome can legitimately cover the centre of a rendered
+    // marker. A real user still has the remainder of the 44px hit target, so
+    // probe only inside that same radius and require the sampled point to hit
+    // the Detailed Earth surface before dispatching the real pointer click.
+    // This keeps the QA bound to actual browser hit testing instead of calling
+    // the activation callback or MapLibre event machinery directly.
+    const samples = [{ x: projected.x, y: projected.y }];
+    for (const radius of [8, 14, 20]) {
+      for (let arm = 0; arm < 8; arm += 1) {
+        const angle = (arm * Math.PI) / 4;
+        samples.push({
+          x: projected.x + Math.cos(angle) * radius,
+          y: projected.y + Math.sin(angle) * radius,
+        });
+      }
+    }
+    for (const sample of samples) {
+      if (
+        sample.x < 0 || sample.y < 0
+        || sample.x >= window.innerWidth || sample.y >= window.innerHeight
+      ) continue;
+      const hit = document.elementFromPoint(sample.x, sample.y);
+      if (hit instanceof Element && hit.closest(".detailed-earth-map")) {
+        return {
+          ...sample,
+          projected,
+          hit: { tag: hit.tagName, className: hit.getAttribute("class") },
+        };
+      }
+    }
+    const centreHit = document.elementFromPoint(projected.x, projected.y);
+    return {
+      ...projected,
+      projected,
+      blocked: true,
+      hit: centreHit instanceof Element
+        ? { tag: centreHit.tagName, className: centreHit.getAttribute("class") }
+        : null,
+    };
+  }, routePoint);
+  if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.y)) {
+    throw new Error(`Detailed Earth did not publish a projection for Route Point ${routePoint.id}`);
+  }
+  if (target.blocked) {
+    throw new Error(`Detailed Earth Route Point ${routePoint.id} has no pointer-reachable sample inside its 44px hit area: ${JSON.stringify(target)}`);
+  }
+  await page.mouse.click(target.x, target.y);
+  const expected = `${routePoint.journeyId}:${routePoint.id}`;
+  await page.waitForFunction((value) => (
+    document.querySelector("[data-qa-earth-dive-activated-route-point]")
+      ?.getAttribute("data-qa-earth-dive-activated-route-point") === value
+  ), expected, { timeout: 5_000 });
+  return {
+    target,
+    activated: await page.locator("[data-qa-earth-dive-activated-route-point]")
+      .getAttribute("data-qa-earth-dive-activated-route-point"),
+  };
+}
+
 async function hitTarget(page, point) {
   return page.evaluate(({ x, y }) => {
     const element = document.elementFromPoint(x, y);
@@ -180,6 +245,14 @@ async function readDive(page) {
       interactive: host?.getAttribute("data-interactive") ?? null,
       readiness: map?.getAttribute("data-map-readiness") ?? null,
       mapError: map?.getAttribute("data-map-error") ?? null,
+      journeyOverlayReady: map?.getAttribute("data-journey-overlay-ready") ?? null,
+      journeyOverlayRevision: map?.getAttribute("data-journey-overlay-revision") ?? null,
+      journeyOverlayJourneyId: map?.getAttribute("data-journey-overlay-journey-id") ?? null,
+      journeyOverlayPointCount: Number(map?.getAttribute("data-journey-overlay-point-count") ?? 0),
+      journeyOverlayStopCount: Number(map?.getAttribute("data-journey-overlay-stop-count") ?? 0),
+      journeyOverlayPassthroughCount: Number(map?.getAttribute("data-journey-overlay-passthrough-count") ?? 0),
+      journeyOverlayFeatureCount: Number(map?.getAttribute("data-journey-overlay-feature-count") ?? 0),
+      journeyOverlaySourceJourneyCount: Number(map?.getAttribute("data-journey-overlay-source-journey-count") ?? 0),
       mapLoadCount: Number(map?.getAttribute("data-map-load-count") ?? 0),
       mapLoadSource: map?.getAttribute("data-map-load-source") ?? null,
       mapRenderCount: Number(map?.getAttribute("data-map-render-count") ?? 0),
@@ -608,6 +681,7 @@ async function openDivePage(context, {
   focusShape = "route-point",
   motion = "animate",
   policy = "default",
+  scope = "owner",
 }) {
   const page = await context.newPage();
   const consoleErrors = [];
@@ -637,7 +711,7 @@ async function openDivePage(context, {
         body: JSON.stringify(QA_PAINT_STYLE),
       })
   ));
-  await page.goto(qaUrl(focusShape, motion, policy), { waitUntil: "domcontentloaded" });
+  await page.goto(qaUrl(focusShape, motion, policy, scope), { waitUntil: "domcontentloaded" });
   await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 25_000 });
   await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()), null, { timeout: 25_000 });
   await page.waitForTimeout(300);
@@ -892,6 +966,71 @@ try {
   const detailReveal = await readSpatialReveal(forward.page);
   const firstReveal = await readDive(forward.page);
 
+  // The wheel-driven Dive preserves the geography under the user's pointer, so
+  // the separately selected Route Point may legitimately end up off-screen at
+  // the end of that manual zoom. Re-issue the fixture's existing focus intent
+  // before grading the Route Point hit contract; the handoff continuity above
+  // has already been captured against the untouched wheel-owned camera. Wait on
+  // projection truth rather than adding a timing delay.
+  const routePointOnScreen = await forward.page.evaluate(({ lon, lat }) => {
+    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    return Boolean(
+      projected
+      && Number.isFinite(projected.x)
+      && Number.isFinite(projected.y)
+      && projected.x >= 22
+      && projected.y >= 22
+      && projected.x <= window.innerWidth - 22
+      && projected.y <= window.innerHeight - 22
+    );
+  }, routePoint);
+  if (!routePointOnScreen) {
+    await activateButton(forward.page, forward.page.locator("[data-qa-earth-dive-refocus]"));
+    await forward.page.waitForFunction(({ lon, lat }) => {
+      const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+      return Boolean(
+        projected
+        && Number.isFinite(projected.x)
+        && Number.isFinite(projected.y)
+        && projected.x >= 22
+        && projected.y >= 22
+        && projected.x <= window.innerWidth - 22
+        && projected.y <= window.innerHeight - 22
+      );
+    }, routePoint, { timeout: 5_000 });
+  }
+
+  // The Detailed Earth source is not decorative: its hit target must resolve
+  // through the existing Route Point activation callback, and a rapid Journey
+  // switch must replace the exact same source without rebuilding the map or
+  // leaving the previous Journey's features behind.
+  const routePointActivation = await activateDetailedRoutePoint(forward.page, routePoint);
+  const overlayBeforeSwitch = await readDive(forward.page);
+  await activateButton(forward.page, forward.page.locator('[data-qa-earth-dive-route-switch="next"]'));
+  await forward.page.waitForFunction((previousJourneyId) => {
+    const marker = document.querySelector("[data-qa-earth-dive-route-point]");
+    const map = document.querySelector(".detailed-earth-map");
+    const nextJourneyId = marker?.getAttribute("data-journey-id");
+    return Boolean(
+      nextJourneyId
+      && nextJourneyId !== previousJourneyId
+      && map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === nextJourneyId,
+    );
+  }, routePoint.journeyId, { timeout: 5_000 });
+  const switchedRoutePoint = await readRoutePoint(forward.page);
+  const overlaySwitched = await readDive(forward.page);
+  // Switch back immediately, before the first focus flight has any authority to
+  // become a second source of Journey identity. The overlay revision must return
+  // to the original Route while the same map instance remains mounted.
+  await activateButton(forward.page, forward.page.locator('[data-qa-earth-dive-route-switch="first"]'));
+  await forward.page.waitForFunction((journeyId) => {
+    const map = document.querySelector(".detailed-earth-map");
+    return map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === journeyId;
+  }, routePoint.journeyId, { timeout: 5_000 });
+  const overlayReturned = await readDive(forward.page);
+
   const forwardStages = await stages(forward.page);
 
   // Zoom out again at the SAME point. The map owns the wheel now and its layer
@@ -1109,6 +1248,13 @@ try {
       cameraBefore: firstReveal.revealCameraBefore,
       cameraAfter: firstReveal.revealCameraAfter,
     },
+    journeyOverlay: {
+      activation: routePointActivation,
+      beforeSwitch: overlayBeforeSwitch,
+      switchedRoutePoint,
+      switched: overlaySwitched,
+      returned: overlayReturned,
+    },
     handoff: {
       atBlending: blendingFrames,
       commitAlignment,
@@ -1158,6 +1304,42 @@ try {
     || Math.abs(Number(routePoint?.focusPointLon) - routePoint.lon) > 0.001
   ) {
     ladderFailures.push(`Route Point focus did not publish its point-only coordinates: ${JSON.stringify(routePoint)}`);
+  }
+  for (const [label, sample] of [
+    ["blend", beforeCommit],
+    ["first reveal", firstReveal],
+    ["returned Journey", overlayReturned],
+  ]) {
+    if (
+      sample.journeyOverlayReady !== "true"
+      || sample.journeyOverlayJourneyId !== routePoint.journeyId
+      || sample.journeyOverlayPointCount !== 4
+      || sample.journeyOverlayStopCount !== 3
+      || sample.journeyOverlayPassthroughCount !== 1
+      || sample.journeyOverlayFeatureCount !== 7
+      || sample.journeyOverlaySourceJourneyCount !== 1
+    ) {
+      ladderFailures.push(`${label} did not contain the complete scoped active Journey overlay: ${JSON.stringify(sample)}`);
+    }
+  }
+  if (routePointActivation.activated !== `${routePoint.journeyId}:${routePoint.id}`) {
+    ladderFailures.push(`Detailed Earth Route Point hit did not reuse the existing activation callback: ${JSON.stringify(routePointActivation)}`);
+  }
+  if (
+    !switchedRoutePoint?.journeyId
+    || switchedRoutePoint.journeyId === routePoint.journeyId
+    || overlaySwitched.journeyOverlayReady !== "true"
+    || overlaySwitched.journeyOverlayJourneyId !== switchedRoutePoint.journeyId
+    || overlaySwitched.journeyOverlayPointCount !== 3
+    || overlaySwitched.journeyOverlayStopCount !== 3
+    || overlaySwitched.journeyOverlayPassthroughCount !== 0
+    || overlaySwitched.journeyOverlayFeatureCount !== 5
+    || overlaySwitched.journeyOverlaySourceJourneyCount !== 1
+    || overlaySwitched.mapConstructionCount !== overlayBeforeSwitch.mapConstructionCount
+    || overlayReturned.mapConstructionCount !== overlayBeforeSwitch.mapConstructionCount
+    || overlayReturned.journeyOverlayRevision !== overlayBeforeSwitch.journeyOverlayRevision
+  ) {
+    ladderFailures.push(`rapid Journey replacement left stale/mixed source data or rebuilt Detailed Earth: ${JSON.stringify({ before: overlayBeforeSwitch, switchedRoutePoint, switched: overlaySwitched, returned: overlayReturned })}`);
   }
   if (
     blendingReveal?.mode !== "on"
@@ -1217,6 +1399,144 @@ try {
     ladderFailures.push("the page raised an error during the dive");
   }
   await forward.page.close();
+
+  // -------------------------------------- authorized share scope + revocation
+  // #338's privacy boundary is upstream authorization -> the exact JourneyRoute
+  // list both renderers consume. Keep Detail mounted while that authorized list
+  // is revoked, then prove the already-installed MapLibre source and BOTH hit
+  // paths lose the old Journey rather than merely hiding Atlas DOM.
+  const scopeFailures = [];
+  const scopedRun = await openDivePage(context, { blockStyle: false, scope: "share" });
+  const scopedRoutePoint = await readRoutePoint(scopedRun.page);
+  if (!scopedRoutePoint) throw new Error("authorized share scope published no Route Point");
+  const scopedPoint = await gesturePoint(scopedRun.page);
+  await wheelUntil(
+    scopedRun.page,
+    scopedPoint,
+    APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "authorized share scope never reached local",
+  );
+  await wheelUntil(
+    scopedRun.page,
+    scopedPoint,
+    FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "authorized share scope never reached blending",
+    90, true,
+  );
+  await wheelUntilDetailWithStableRetry(
+    scopedRun.page,
+    scopedPoint,
+    FINE_WHEEL_DELTA,
+    "authorized share scope never committed to Detailed Earth",
+  );
+  await scopedRun.page.waitForFunction((journeyId) => {
+    const map = document.querySelector(".detailed-earth-map");
+    return map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === journeyId;
+  }, scopedRoutePoint.journeyId, { timeout: 5_000 });
+  // The wheel sequence above is deliberately a real manual zoom. As in the
+  // primary handoff round, it may leave the focused Route Point outside the
+  // viewport after Detail owns the camera. Re-issue the existing focus intent
+  // before grading pointer reachability; the handoff itself has already been
+  // graded on the untouched wheel-owned camera.
+  const scopedRoutePointOnScreen = await scopedRun.page.evaluate(({ lon, lat }) => {
+    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    return Boolean(
+      projected
+      && Number.isFinite(projected.x)
+      && Number.isFinite(projected.y)
+      && projected.x >= 22
+      && projected.y >= 22
+      && projected.x <= window.innerWidth - 22
+      && projected.y <= window.innerHeight - 22
+    );
+  }, scopedRoutePoint);
+  if (!scopedRoutePointOnScreen) {
+    await activateButton(scopedRun.page, scopedRun.page.locator("[data-qa-earth-dive-refocus]"));
+    await scopedRun.page.waitForFunction(({ lon, lat }) => {
+      const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+      return Boolean(
+        projected
+        && Number.isFinite(projected.x)
+        && Number.isFinite(projected.y)
+        && projected.x >= 22
+        && projected.y >= 22
+        && projected.x <= window.innerWidth - 22
+        && projected.y <= window.innerHeight - 22
+      );
+    }, scopedRoutePoint, { timeout: 5_000 });
+  }
+  const scopedBefore = await readDive(scopedRun.page);
+  const scopedActivation = await activateDetailedRoutePoint(scopedRun.page, scopedRoutePoint);
+  const scopedHitBefore = await scopedRun.page.evaluate(({ lon, lat }) => {
+    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    if (!projected) return { projected: null, hit: null };
+    return {
+      projected,
+      hit: window.__detailedEarthJourneyRoutePointHit?.(projected.x, projected.y) ?? null,
+    };
+  }, scopedRoutePoint);
+  if (
+    scopedBefore.journeyOverlayJourneyId !== scopedRoutePoint.journeyId
+    || scopedBefore.journeyOverlayPointCount !== 4
+    || scopedBefore.journeyOverlayFeatureCount !== 7
+    || scopedBefore.journeyOverlaySourceJourneyCount !== 1
+    || scopedActivation.activated !== `${scopedRoutePoint.journeyId}:${scopedRoutePoint.id}`
+    || scopedHitBefore.hit?.journeyId !== scopedRoutePoint.journeyId
+    || scopedHitBefore.hit?.routePointId !== scopedRoutePoint.id
+  ) {
+    scopeFailures.push(`authorized share scope did not bind one exact Journey into source/hits: ${JSON.stringify({ before: scopedBefore, activation: scopedActivation, hit: scopedHitBefore })}`);
+  }
+  const scopedConstructionCount = scopedBefore.mapConstructionCount;
+  await activateButton(scopedRun.page, scopedRun.page.locator("[data-qa-earth-dive-scope-revoke]"));
+  await scopedRun.page.waitForFunction(() => {
+    const map = document.querySelector(".detailed-earth-map");
+    const scope = document.querySelector("[data-qa-earth-dive-scope]");
+    return scope?.getAttribute("data-qa-earth-dive-scope") === "revoked"
+      && map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-revision") === "none"
+      && map.getAttribute("data-journey-overlay-journey-id") === ""
+      && map.getAttribute("data-journey-overlay-feature-count") === "0"
+      && map.getAttribute("data-journey-overlay-source-journey-count") === "0";
+  }, null, { timeout: 5_000 });
+  const scopedAfter = await readDive(scopedRun.page);
+  const scopedHitAfter = await scopedRun.page.evaluate((projected) => (
+    projected
+      ? window.__detailedEarthJourneyRoutePointHit?.(projected.x, projected.y) ?? null
+      : null
+  ), scopedHitBefore.projected);
+  const revokedFixtureState = await scopedRun.page.evaluate(() => ({
+    routePointPublished: Boolean(document.querySelector("[data-qa-earth-dive-route-point]")),
+    activated: document.querySelector("[data-qa-earth-dive-activated-route-point]")
+      ?.getAttribute("data-qa-earth-dive-activated-route-point") ?? null,
+    scope: document.querySelector("[data-qa-earth-dive-scope]")
+      ?.getAttribute("data-qa-earth-dive-scope") ?? null,
+  }));
+  if (
+    scopedAfter.mapConstructionCount !== scopedConstructionCount
+    || scopedAfter.journeyOverlayJourneyId !== ""
+    || scopedAfter.journeyOverlayPointCount !== 0
+    || scopedAfter.journeyOverlayFeatureCount !== 0
+    || scopedAfter.journeyOverlaySourceJourneyCount !== 0
+    || scopedHitAfter !== null
+    || revokedFixtureState.routePointPublished
+    || revokedFixtureState.activated !== ""
+    || revokedFixtureState.scope !== "revoked"
+  ) {
+    scopeFailures.push(`share scope revocation left stale Journey source or hit authority: ${JSON.stringify({ before: scopedBefore, after: scopedAfter, staleHit: scopedHitAfter, fixture: revokedFixtureState })}`);
+  }
+  if (scopedRun.pageErrors.length > 0) scopeFailures.push("share scope revocation raised a page error");
+  result.shareScopeRevocation = {
+    authorized: scopedBefore,
+    activation: scopedActivation,
+    hitBefore: scopedHitBefore,
+    revoked: scopedAfter,
+    hitAfter: scopedHitAfter,
+    fixture: revokedFixtureState,
+  };
+  await scopedRun.page.close();
 
   // ---------------------------------------------------------------- round B
   // The same handoff for a focused JOURNEY, which publishes no focus point at
@@ -1543,6 +1863,223 @@ try {
   }
   await blocked.page.close();
 
+  // ------------------------------------------ compact-mobile real Journey Dive
+  // Source-review regression: desktop portrait is not compact mobile. Exercise
+  // the real <=760px product mode with the same Journey overlay and ownership
+  // ladder, including a rapid Journey swap, compact resize, reverse handback,
+  // re-entry, reduced motion and the hard particle-only policy. Keep this
+  // bounded to product-state edges rather than cloning every desktop metric.
+  const compactFailures = [];
+  const compactContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 1,
+    isMobile: true,
+    hasTouch: true,
+  });
+  const compactRun = await openDivePage(compactContext, { blockStyle: false });
+  // The dedicated Earth-Dive fixture mounts the real LivingAtlasGlobe directly,
+  // not LivingAtlasApp, so the product compact-mobile contract is published by
+  // the real ParticleEarthScene rather than by the Atlas shell wrapper.
+  await compactRun.page.locator('.particle-earth-scene[data-mobile-v2="on"]').waitFor({ state: "attached", timeout: 5_000 });
+  const compactPoint = await gesturePoint(compactRun.page);
+  await wheelUntil(
+    compactRun.page, compactPoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "compact-mobile Journey Dive never reached local",
+  );
+  await wheelUntil(
+    compactRun.page, compactPoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "compact-mobile Journey Dive never reached blending",
+    90, true,
+  );
+  await wheelUntilDetailWithStableRetry(
+    compactRun.page, compactPoint, FINE_WHEEL_DELTA,
+    "compact-mobile Journey Dive never committed",
+  );
+  const compactRoutePoint = await readRoutePoint(compactRun.page);
+  const compactFirst = await readDive(compactRun.page);
+  if (
+    compactFirst.journeyOverlayReady !== "true"
+    || compactFirst.journeyOverlayJourneyId !== compactRoutePoint?.journeyId
+    || compactFirst.journeyOverlayPointCount !== 4
+    || compactFirst.journeyOverlayStopCount !== 3
+    || compactFirst.journeyOverlayPassthroughCount !== 1
+    || compactFirst.journeyOverlayFeatureCount !== 7
+    || compactFirst.journeyOverlaySourceJourneyCount !== 1
+  ) {
+    compactFailures.push(`compact-mobile initial Journey overlay was not exact: ${JSON.stringify(compactFirst)}`);
+  }
+  const compactRoutePointOnScreen = await compactRun.page.evaluate(({ lon, lat }) => {
+    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    return Boolean(
+      projected
+      && Number.isFinite(projected.x)
+      && Number.isFinite(projected.y)
+      && projected.x >= 22
+      && projected.y >= 22
+      && projected.x <= window.innerWidth - 22
+      && projected.y <= window.innerHeight - 22
+    );
+  }, compactRoutePoint);
+  if (!compactRoutePointOnScreen) {
+    await activateButton(compactRun.page, compactRun.page.locator("[data-qa-earth-dive-refocus]"));
+    await compactRun.page.waitForFunction(({ lon, lat }) => {
+      const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+      return Boolean(
+        projected
+        && Number.isFinite(projected.x)
+        && Number.isFinite(projected.y)
+        && projected.x >= 22
+        && projected.y >= 22
+        && projected.x <= window.innerWidth - 22
+        && projected.y <= window.innerHeight - 22
+      );
+    }, compactRoutePoint, { timeout: 5_000 });
+  }
+  const compactActivation = await activateDetailedRoutePoint(compactRun.page, compactRoutePoint);
+  await activateButton(compactRun.page, compactRun.page.locator('[data-qa-earth-dive-route-switch="next"]'));
+  await compactRun.page.waitForFunction((previousJourneyId) => {
+    const map = document.querySelector(".detailed-earth-map");
+    const marker = document.querySelector("[data-qa-earth-dive-route-point]");
+    const journeyId = marker?.getAttribute("data-journey-id");
+    return Boolean(
+      journeyId && journeyId !== previousJourneyId
+      && map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === journeyId
+    );
+  }, compactRoutePoint.journeyId, { timeout: 5_000 });
+  const compactSwitched = await readDive(compactRun.page);
+  if (
+    compactSwitched.journeyOverlayPointCount !== 3
+    || compactSwitched.journeyOverlayStopCount !== 3
+    || compactSwitched.journeyOverlayPassthroughCount !== 0
+    || compactSwitched.journeyOverlayFeatureCount !== 5
+    || compactSwitched.journeyOverlaySourceJourneyCount !== 1
+  ) {
+    compactFailures.push(`compact-mobile A->B Journey overlay leaked stale geometry: ${JSON.stringify(compactSwitched)}`);
+  }
+  await activateButton(compactRun.page, compactRun.page.locator('[data-qa-earth-dive-route-switch="first"]'));
+  await compactRun.page.waitForFunction((journeyId) => (
+    document.querySelector(".detailed-earth-map")?.getAttribute("data-journey-overlay-journey-id") === journeyId
+  ), compactRoutePoint.journeyId, { timeout: 5_000 });
+  const compactBeforeResize = await readDive(compactRun.page);
+  await compactRun.page.setViewportSize({ width: 430, height: 740 });
+  // The dedicated Earth-Dive fixture mounts the real LivingAtlasGlobe directly,
+  // not LivingAtlasApp, so the product compact-mobile contract is published by
+  // the real ParticleEarthScene rather than by the Atlas shell wrapper.
+  await compactRun.page.locator('.particle-earth-scene[data-mobile-v2="on"]').waitFor({ state: "attached", timeout: 5_000 });
+  await compactRun.page.waitForFunction((journeyId) => {
+    const map = document.querySelector(".detailed-earth-map");
+    return map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === journeyId;
+  }, compactRoutePoint.journeyId, { timeout: 5_000 });
+  const compactResized = await readDive(compactRun.page);
+  if (
+    compactResized.mapConstructionCount !== compactBeforeResize.mapConstructionCount
+    || compactResized.journeyOverlayPointCount !== 4
+    || compactResized.journeyOverlayPassthroughCount !== 1
+  ) {
+    compactFailures.push(`compact-mobile resize rebuilt or lost Journey scope: ${JSON.stringify({ before: compactBeforeResize, after: compactResized })}`);
+  }
+  const compactRetreatPoint = await gesturePoint(compactRun.page, compactPoint);
+  await wheelUntil(
+    compactRun.page, compactRetreatPoint, RETREAT_WHEEL_DELTA,
+    (state, ladder) => state.owner === "particle"
+      && ladder.lastIndexOf("detail") >= 0
+      && ladder.lastIndexOf("prewarm") > ladder.lastIndexOf("detail"),
+    "compact-mobile detail never handed input back to Particle Earth",
+  );
+  await wheelUntil(
+    compactRun.page, compactRetreatPoint, RETREAT_WHEEL_DELTA,
+    (state) => state.stage === "particle",
+    "compact-mobile reverse handoff never returned to particle",
+  );
+  await compactRun.page.evaluate(() => window.__qaEarthDiveReset());
+  const compactReentryPoint = await gesturePoint(compactRun.page, compactRetreatPoint);
+  await wheelUntil(
+    compactRun.page, compactReentryPoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "compact-mobile re-entry never reached local",
+  );
+  await wheelUntil(
+    compactRun.page, compactReentryPoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "compact-mobile re-entry never reached blending",
+    90, true,
+  );
+  await wheelUntilDetailWithStableRetry(
+    compactRun.page, compactReentryPoint, FINE_WHEEL_DELTA,
+    "compact-mobile re-entry never committed",
+  );
+  const compactReentry = await readDive(compactRun.page);
+  if (
+    compactReentry.journeyOverlayJourneyId !== compactRoutePoint.journeyId
+    || compactReentry.journeyOverlaySourceJourneyCount !== 1
+  ) {
+    compactFailures.push(`compact-mobile re-entry lost the current Journey scope: ${JSON.stringify(compactReentry)}`);
+  }
+  result.compactMobileJourneyDive = {
+    initial: compactFirst,
+    activation: compactActivation,
+    switched: compactSwitched,
+    resized: compactResized,
+    reentry: compactReentry,
+  };
+  if (compactRun.pageErrors.length > 0) compactFailures.push("compact-mobile Journey Dive raised a page error");
+  await compactRun.page.close();
+
+  const compactReduced = await openDivePage(compactContext, { blockStyle: false, motion: "reduce" });
+  const compactReducedPoint = await gesturePoint(compactReduced.page);
+  await wheelUntil(
+    compactReduced.page, compactReducedPoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "compact-mobile reduced-motion Dive never reached local",
+  );
+  await wheelUntil(
+    compactReduced.page, compactReducedPoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "compact-mobile reduced-motion Dive never reached blending",
+    90, true,
+  );
+  await wheelUntilDetailWithStableRetry(
+    compactReduced.page, compactReducedPoint, FINE_WHEEL_DELTA,
+    "compact-mobile reduced-motion Dive never committed",
+  );
+  const compactReducedDetail = await readDive(compactReduced.page);
+  const compactReducedReveal = await readSpatialReveal(compactReduced.page);
+  if (
+    compactReducedDetail.journeyOverlayReady !== "true"
+    || compactReducedDetail.journeyOverlayPointCount !== 4
+    || compactReducedDetail.journeyOverlayPassthroughCount !== 1
+    || compactReducedReveal.mode !== "off"
+  ) {
+    compactFailures.push(`compact-mobile reduced motion lost Journey or reveal semantics: ${JSON.stringify({ detail: compactReducedDetail, reveal: compactReducedReveal })}`);
+  }
+  if (compactReduced.pageErrors.length > 0) compactFailures.push("compact-mobile reduced-motion Dive raised a page error");
+  await compactReduced.page.close();
+
+  const compactParticleOnly = await openDivePage(compactContext, { blockStyle: false, policy: "particle-only" });
+  const compactParticlePoint = await gesturePoint(compactParticleOnly.page);
+  await wheelUntil(
+    compactParticleOnly.page, compactParticlePoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "compact-mobile particle-only Earth never reached local",
+  );
+  const compactParticleHeld = await readDive(compactParticleOnly.page);
+  if (
+    compactParticleHeld.stage !== "particle"
+    || compactParticleHeld.owner !== "particle"
+    || compactParticleHeld.earthPolicy !== "particle-only"
+    || compactParticleHeld.mapConstructionCount !== 0
+  ) {
+    compactFailures.push(`compact-mobile particle-only policy admitted Detail: ${JSON.stringify(compactParticleHeld)}`);
+  }
+  if (compactParticleOnly.pageErrors.length > 0) compactFailures.push("compact-mobile particle-only Earth raised a page error");
+  result.compactMobileParticleOnly = compactParticleHeld;
+  await compactParticleOnly.page.close();
+  await compactContext.close();
+
   // ------------------------------------------------------- 1920 cold reveal
   // #355 was observed at 1920x1080 specifically. Exercise a fresh map instance
   // at that geometry instead of resizing the existing page: a successful run
@@ -1621,11 +2158,13 @@ try {
     ...intermediatePolicyFailures,
     ...policyTransitionFailures,
     ...ladderFailures,
+    ...scopeFailures,
     ...routeFailures,
     ...commandFailures,
     ...reducedCommandFailures,
     ...reducedFailures,
     ...blockedFailures,
+    ...compactFailures,
     ...wideFailures,
   ];
   console.log(JSON.stringify(result, null, 2));

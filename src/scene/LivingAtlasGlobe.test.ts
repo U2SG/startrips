@@ -52,7 +52,10 @@ describe("Semantic Earth Dive renderer ownership", () => {
   it("mounts detail non-interactive and only enables particle hold after detail owns input", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    const particle = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
     expect(globe).toContain('cameraHold={Boolean(atlas) && atlas?.inputOwner === "detail"}');
+    expect(globe).toContain('if (diveRef.current.owner === "detail") return;');
+    expect(particle).toMatch(/!cameraHeldByDetail[\s\S]*?getGlobeIdleRotationDelta/);
     expect(detail).toContain("interactive: false");
     expect(detail).toContain('const owns = diveOwner === "detail";');
     expect(detail).toContain("canvas.tabIndex = 0");
@@ -65,13 +68,40 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(detail).toContain("map.scrollZoom.disable()");
   });
 
+  it("hands user zoom back at the return threshold without accepting programmatic zoom", () => {
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    expect(detail).toMatch(/const userZoomHandlerActive = \(\) => \([\s\S]*?map\.scrollZoom\.isActive\(\)[\s\S]*?map\.touchZoomRotate\.isActive\(\)[\s\S]*?map\.keyboard\.isActive\(\)/);
+    expect(detail).toMatch(/map\.on\("zoom", \(\) => \{[\s\S]*?!userZoomHandlerActive\(\)[\s\S]*?shouldReturnToParticleEarth\(map\.getZoom\(\)\)/);
+    expect(detail).not.toContain("userZoomGestureActive");
+    expect(detail).not.toContain("markUserWheelZoom");
+  });
+
+  it("reconciles fully-settled readiness on the terminal camera edge", () => {
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    expect(detail).toMatch(/map\.on\("moveend", \(\) => \{[\s\S]*?!map\.isMoving\(\)[\s\S]*?reconcileFullySettled\(\)/);
+  });
+
+  it("does not block Journey readiness on unrelated basemap tile churn", () => {
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    const start = detail.indexOf("const reconcileFullySettled = () => {");
+    const end = detail.indexOf("const syncJourneyOverlay = () => {", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const reconcile = detail.slice(start, end);
+    expect(reconcile).toContain("paintedJourneyOverlayRevision !== journeyOverlayRef.current.revision");
+    expect(reconcile).toContain("map.isMoving()");
+    expect(reconcile).not.toContain("map.isStyleLoaded()");
+    expect(reconcile).not.toContain("map.areTilesLoaded()");
+  });
+
   it("keeps per-frame handoff calibration on the imperative publish path", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
     expect(globe).toContain('detailCalibrationRef.current?.(frame, "sync")');
     expect(globe).toContain('detailCalibrationRef.current?.(particleFrameRef.current, "retry")');
     expect(detail).toContain('mode: "sync" | "retry" = "sync"');
-    expect(detail).toContain('if (mode === "sync") map.jumpTo({ center: frame.center })');
+    expect(detail).toContain('const newParticleFrame = mode === "sync" && isNewParticleCalibrationFrame(particle)');
+    expect(detail).toMatch(/if \(newParticleFrame\) \{[\s\S]*?cameraIntentRevisionRef\.current \+= 1;[\s\S]*?map\.jumpTo\(\{ center: frame\.center \}\);/);
     expect(detail).toContain("CALIBRATION_RETRY_PASSES = 2");
     expect(detail).toContain("[diveOwner, diveStage, focusPoint, focusRoute]");
     expect(detail).not.toContain("[diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute, particleFrame]");

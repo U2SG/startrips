@@ -137,6 +137,10 @@ function EarthDiveQaPreview() {
   const persistentEarth = usePersistentEarth();
   const qaParams = new URLSearchParams(window.location.search);
   const [focusRevision, setFocusRevision] = useState(0);
+  const [activeRouteIndex, setActiveRouteIndex] = useState(0);
+  const [activatedRoutePoint, setActivatedRoutePoint] = useState("");
+  const shareScope = qaParams.get("qaScope") === "share";
+  const [shareRevoked, setShareRevoked] = useState(false);
   const [earthExperiencePolicy, setEarthExperiencePolicy] = useState<"default" | "particle-only">(
     qaParams.get("qaPolicy") === "particle-only" ? "particle-only" : "default",
   );
@@ -149,12 +153,18 @@ function EarthDiveQaPreview() {
   // has to hold its anchor in both: a focused Route Point publishes a focus
   // point, while a focused Journey is owned by route fitting and publishes no
   // point at all - the branch whose anchor comes from the route frame.
-  const focusRoute = globeQaRoutes[0];
-  const routePoint = focusRoute.points[1];
+  // Share/guest authorization owns the route list before either renderer sees it.
+  // This fixture can revoke that upstream scope while Detail remains mounted so
+  // browser QA proves stale GeoJSON and hit targets are removed at the source.
+  const authorizedRoutes = shareScope
+    ? (shareRevoked ? [] : globeQaRoutes.slice(0, 1))
+    : globeQaRoutes;
+  const focusRoute = authorizedRoutes[activeRouteIndex] ?? authorizedRoutes[0] ?? null;
+  const routePoint = focusRoute?.points[Math.min(1, focusRoute.points.length - 1)] ?? null;
   const routeFocus = qaParams.get("qaFocus") === "route";
   const requestedLat = Number(qaParams.get("qaFocusLat") ?? Number.NaN);
   const requestedLon = Number(qaParams.get("qaFocusLon") ?? Number.NaN);
-  const focusPoint = routeFocus
+  const focusPoint = routeFocus || !routePoint
     ? null
     : {
       lat: Number.isFinite(requestedLat) ? requestedLat : routePoint.lat,
@@ -167,21 +177,63 @@ function EarthDiveQaPreview() {
           focusPoint={focusPoint}
           focusRoute={routeFocus ? focusRoute : null}
           focusRevision={focusRevision}
-          journeyRoutes={globeQaRoutes}
-          activeJourneyRouteId={focusRoute.id}
+          journeyRoutes={authorizedRoutes}
+          activeJourneyRouteId={focusRoute?.id ?? null}
           onJourneyRouteActivate={() => undefined}
-          onJourneyRoutePointActivate={() => undefined}
+          onJourneyRoutePointActivate={(journeyId, routePointId) => {
+            setActivatedRoutePoint(`${journeyId}:${routePointId}`);
+          }}
           earthExperiencePolicy={earthExperiencePolicy}
           reduceMotion={qaReduceMotion}
         />
       </div>
+      {routePoint && focusRoute ? (
+        <output
+          data-qa-earth-dive-route-point
+          data-journey-id={focusRoute.id}
+          data-route-point-id={routePoint.id}
+          data-route-point-lat={routePoint.lat}
+          data-route-point-lon={routePoint.lon}
+          style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+        >{routePoint.label}</output>
+      ) : null}
       <output
-        data-qa-earth-dive-route-point
-        data-route-point-id={routePoint.id}
-        data-route-point-lat={routePoint.lat}
-        data-route-point-lon={routePoint.lon}
+        data-qa-earth-dive-activated-route-point={activatedRoutePoint}
         style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
-      >{routePoint.label}</output>
+      >{activatedRoutePoint}</output>
+      {shareScope ? (
+        <>
+          <output
+            data-qa-earth-dive-scope={shareRevoked ? "revoked" : "authorized"}
+            style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+          >{shareRevoked ? "revoked" : "authorized"}</output>
+          <button
+            type="button"
+            data-qa-earth-dive-scope-revoke
+            onClick={() => {
+              setActivatedRoutePoint("");
+              setShareRevoked(true);
+              setFocusRevision((revision) => revision + 1);
+            }}
+            style={{ position: "absolute", zIndex: 60, bottom: 48, left: 14 }}
+          >QA 撤销共享范围</button>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            data-qa-earth-dive-route-switch="next"
+            onClick={() => { setActiveRouteIndex(1); setFocusRevision((revision) => revision + 1); }}
+            style={{ position: "absolute", zIndex: 60, bottom: 48, left: 14 }}
+          >QA 切换旅程</button>
+          <button
+            type="button"
+            data-qa-earth-dive-route-switch="first"
+            onClick={() => { setActiveRouteIndex(0); setFocusRevision((revision) => revision + 1); }}
+            style={{ position: "absolute", zIndex: 60, bottom: 48, left: 130 }}
+          >QA 返回首旅程</button>
+        </>
+      )}
       <button
         type="button"
         data-qa-earth-dive-refocus
