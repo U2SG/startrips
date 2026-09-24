@@ -2023,12 +2023,19 @@ export function LivingAtlasApp({
   const narrativeJourneyProgress = narrativeSemanticSelection
     ? timeCursor.reveal.journeyProgress.get(narrativeSemanticSelection.journeyId)
     : undefined;
+  const narrativePointProgress = narrativeSemanticSelection && narrativeSemanticSelection.pointIndex !== null
+    ? timeCursor.reveal.pointProgress.get(
+        `${narrativeSemanticSelection.journeyId}:${narrativeSemanticSelection.pointIndex}`,
+      )
+    : undefined;
   const timelineNarrativeRoutePoint = (isMobileV2 || globeFocusMode)
     && !timeCursor.hasExplicitSelection
     && narrativeSemanticSelection
+    && timeCursor.cursor < 1
     && narrativeJourneyProgress !== undefined
     && narrativeJourneyProgress > 0
-    && narrativeJourneyProgress < 1
+    && narrativePointProgress !== undefined
+    && narrativePointProgress > 0
     ? {
         journeyId: narrativeSemanticSelection.journeyId,
         routePointId: narrativeSemanticSelection.pointIndex !== null

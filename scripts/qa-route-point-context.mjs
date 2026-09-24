@@ -183,7 +183,9 @@ const projectionRoutePoints = [
 const projectionJourney = {
   ...journey,
   title: "洛杉矶到拉斯维加斯再返回",
-  endedOn: "2026-04-07",
+  // Its points span 09:00-14:00 on one day. An open Journey reports whole-route
+  // progress as complete, even while the time cursor is narrating the detour.
+  endedOn: null,
   routePoints: projectionRoutePoints,
   media: [{ ...journey.media[0], routePointId: projectionPointIds.media }],
 };
@@ -976,13 +978,29 @@ try {
   await projectionPage.locator("[data-route-point-context-close]").click();
   await projectionPage.locator("[data-route-point-context]").waitFor({ state: "detached", timeout: 5_000 });
 
-  // Rewind's current point can be a pure route vertex. Seek with the real
-  // slider to between its timestamp and B, then require its native marker hit.
+  // Rewind's current point can be a pure route vertex even on an open same-day
+  // Journey. Seek with the real slider between its 10:00 timestamp and B at
+  // 11:00, then require its native marker hit.
   const projectionTrack = projectionPage.locator(".globe-time-scrubber__track");
   const projectionTrackBox = await projectionTrack.boundingBox();
   if (!projectionTrackBox) throw new Error("projection Journey has no pointer-reachable time axis");
   await projectionPage.mouse.click(
-    projectionTrackBox.x + projectionTrackBox.width * (10.5 / 24),
+    projectionTrackBox.x + projectionTrackBox.width * (9.5 / 14),
+    projectionTrackBox.y + projectionTrackBox.height / 2,
+  );
+  await projectionPage.waitForFunction((ids) => (
+    document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.firstA}"]`)
+      ?.getAttribute("data-attention-role") === "narrative-current"
+    && document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point") === "34.0522,-118.2437"
+    && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
+    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5"
+  ), projectionPointIds);
+  const sameDayA = await sceneFocusSnapshot(projectionPage);
+  record("same-day open Journey scrub begins at A without prematurely exposing the detour", {
+    sameDayA,
+  }, sameDayA.focusPoint === "34.0522,-118.2437");
+  await projectionPage.mouse.click(
+    projectionTrackBox.x + projectionTrackBox.width * (10.5 / 14),
     projectionTrackBox.y + projectionTrackBox.height / 2,
   );
   await projectionPage.waitForFunction((detourId) => (
@@ -1022,7 +1040,7 @@ try {
     })}`, { cause: error });
   }
   const detourActivation = await routePointActivationEvidence(projectionPage);
-  record("rewind publishes the pure detour as its current focus and real marker hit", {
+  record("same-day open Journey rewind publishes the pure detour as current focus and real marker hit", {
     detourFocus, detourBeforeClick, detourClick, detourImmediatelyAfterClick, detourActivation,
   }, detourFocus.focusPoint === "35.5,-116.5"
     && detourActivation.source === "marker"
@@ -1031,7 +1049,7 @@ try {
   await projectionPage.locator("[data-route-point-context-close]").click();
   await projectionPage.locator("[data-route-point-context]").waitFor({ state: "detached", timeout: 5_000 });
   await projectionPage.mouse.click(
-    projectionTrackBox.x + projectionTrackBox.width * (11.5 / 24),
+    projectionTrackBox.x + projectionTrackBox.width * (11.5 / 14),
     projectionTrackBox.y + projectionTrackBox.height / 2,
   );
   await projectionPage.waitForFunction((ids) => (
