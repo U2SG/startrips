@@ -147,6 +147,40 @@ describe("ParticleEarthScene contracts", () => {
       expect(source).toContain(`measure("${id}"`);
     }
   });
+  it("does not gate Route Point semantics on land-visual readiness", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const hookSource = readFileSync(new URL("./useThreeScene.ts", import.meta.url), "utf8");
+    const controllerAssignedIndex = hookSource.indexOf("controllerRef.current = controller;");
+    const revisionPublishedIndex = hookSource.indexOf("setControllerRevision((revision) => revision + 1);");
+    expect(controllerAssignedIndex).toBeGreaterThan(0);
+    expect(revisionPublishedIndex).toBeGreaterThan(controllerAssignedIndex);
+    expect(hookSource).toContain("return { hostRef, controllerRef, controllerRevision }");
+    for (const setter of [
+      "setFocusIntent(",
+      "setJourneyRoutes(",
+      "setSelectedJourneyRoutePoint(",
+      "setNarrativeJourneyRoutePoint(",
+      "setTemporalReveal(",
+    ]) {
+      const setterIndex = source.indexOf(`controllerRef.current?.${setter}`);
+      const effectIndex = source.lastIndexOf("useEffect(() => {", setterIndex);
+      expect(setterIndex).toBeGreaterThan(effectIndex);
+      const effect = source.slice(effectIndex, setterIndex);
+      expect(effect).not.toContain("if (!ready) return;");
+      expect(effect).toContain("if (!controllerRevision) return;");
+    }
+    expect(source).toContain("const { hostRef, controllerRef, controllerRevision } = useThreeScene");
+    expect(source).not.toContain("setControllerReady(true)");
+  });
+
+  it("wakes an idle renderer for Route Point semantic projection changes", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/setJourneyRoutes\([\s\S]*?applyJourneyRoutes\(routes\);[\s\S]*?wakeRenderLoop\(\);/);
+    expect(source).toMatch(/setSelectedJourneyRoutePoint\([\s\S]*?routeProjectionRevision \+= 1;[\s\S]*?wakeRenderLoop\(\);/);
+    expect(source).toMatch(/setNarrativeJourneyRoutePoint\([\s\S]*?routeProjectionRevision \+= 1;[\s\S]*?wakeRenderLoop\(\);/);
+    expect(source).toMatch(/setTemporalReveal\([\s\S]*?syncRouteTemporalReveal\(\);[\s\S]*?wakeRenderLoop\(\);/);
+  });
+
   it("uses one geographic surface anchor for map semantics", () => {
     // #224 already unified place labels, the focus signal and route geometry
     // behind ROUTE_ANCHOR_RADIUS. #196 is the remaining half: that one anchor

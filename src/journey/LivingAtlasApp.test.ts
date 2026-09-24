@@ -163,8 +163,9 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
     expect(nextInitialHomeCameraFocusRevision(0)).toBe(1);
     expect(nextInitialHomeCameraFocusRevision(7)).toBe(8);
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
-    expect(source).toContain("setInitialHomeCameraRevision(nextInitialHomeCameraFocusRevision)");
-    expect(source).toContain("+ initialHomeCameraRevision");
+    expect(source.match(/setInitialHomeCameraRevision\(nextInitialHomeCameraFocusRevision\)/g)).toHaveLength(2);
+    expect(source).toContain("focusRevision + initialHomeCameraRevision");
+    expect(source).not.toMatch(/focusRevision=\{playbackSession\.cameraCommand\?\.revision\s+\?\? \(initialHomeCameraAnchor/);
   });
 
   it("seeds Home camera only for a fresh, unclaimed Atlas with no selected Journey", () => {
@@ -1091,7 +1092,8 @@ describe("Route Point context integration (#291)", () => {
 
   it("releases Route Point context when semantic Journey ownership changes", () => {
     const revealStart = appSource.indexOf("function revealRoutePointContext(journeyId: string, routePointId: string)");
-    const revealBlock = appSource.slice(revealStart, revealStart + 520);
+    const revealEnd = appSource.indexOf("function openCrossPointReading", revealStart);
+    const revealBlock = appSource.slice(revealStart, revealEnd);
     const ownerEffectStart = appSource.indexOf("if (!context || context.journeyId === activeJourneyId) return;");
     const ownerEffectBlock = appSource.slice(ownerEffectStart, ownerEffectStart + 320);
 

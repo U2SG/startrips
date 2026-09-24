@@ -67,12 +67,10 @@ type Props = {
   onGestureRevealFullscreenControls?: () => void;
 };
 
-function containsMediaPoint(element: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement, x: number, y: number) {
+function containsMediaPoint(element: HTMLImageElement | HTMLCanvasElement, x: number, y: number) {
   const rect = element.getBoundingClientRect();
-  const width = element instanceof HTMLImageElement ? element.naturalWidth
-    : element instanceof HTMLVideoElement ? element.videoWidth : element.width;
-  const height = element instanceof HTMLImageElement ? element.naturalHeight
-    : element instanceof HTMLVideoElement ? element.videoHeight : element.height;
+  const width = element instanceof HTMLImageElement ? element.naturalWidth : element.width;
+  const height = element instanceof HTMLImageElement ? element.naturalHeight : element.height;
   if (!width || !height || !rect.width || !rect.height) return false;
   const scale = Math.min(rect.width / width, rect.height / height);
   const left = rect.left + (rect.width - width * scale) / 2;
@@ -341,9 +339,25 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       }
       clipOwners.current[slot] = assigned[slot];
     });
+    // #489 B root cause: the aperture is written imperatively by this effect
+    // and by the handoff springs, so the stack returning to rest is the moment
+    // the aperture has to be reclaimed. `incomingId` and `movingId` decide that
+    // rest condition above but were missing here, so an abandoned handoff --
+    // the flushSync that clears `incomingId` in updateMediaDrag, then the grab
+    // that cancels the springs mid-flight -- left the presented page wearing
+    // the aperture computed for a target that never arrived, and the rear pages
+    // wearing none. Nothing recomputed it until the next navigation happened to
+    // move one of the old dependencies, which is why the recorded exposure
+    // appears mid-handoff and clears itself one navigation later.
   }, [slotSignature, props.currentId, props.incomingId, movingId, revision, liveReady, layoutRevision, gesturePhase]);
   const targetReady = ready(props.incomingId);
   const currentReady = ready(props.currentId);
+  // #489 C/V8: a presentable target is painted in front of the page it
+  // replaces, so it is already the media the viewer last saw. Shared-element
+  // identity has to follow that painted foreground; publishing it from the
+  // settled index instead made a close during a handoff hand the previous
+  // photograph to the return morph while the new one was on screen.
+  const foregroundId = props.incomingId && targetReady ? props.incomingId : props.currentId;
   useLayoutEffect(() => {
     if (!active) return;
     // Physical slots outlive their media. Carry keyboard focus with the
@@ -407,6 +421,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       const isTarget = assetId === id;
       const depth = recovering ? depths[slot]
         : isTarget ? 0 : isCurrent ? (direction > 0 ? 2 : 1) : depths[slot];
+      // #489 B: paint order is published by the render below and nowhere else.
+      // Writing it here too made the DOM diverge from the order React believes
+      // it rendered, and React skips the corrective write whenever its own
+      // value is unchanged -- so a handoff that ended without changing the
+      // presented identity left the stack painted in the abandoned order.
       const front = pageNodes.current[assigned.indexOf(recovering ? props.currentId : id)];
       return [springElementTo(node, { transform: mediaStackRest(depth), opacity: mediaStackOpacity(depth),
         clipInset: mediaStackClip(node, front) },
@@ -788,12 +807,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       props.onNavigate?.(direction, accessibleActivation);
     }
   };
-  const handlePictureClick = (event: MouseEvent<HTMLImageElement | HTMLVideoElement>) => {
+  // #489 A2: only a photograph resolves a click into navigation. The presented
+  // video's own surface belongs to its transport, so this never binds to it and
+  // no longer has to guess where a native control strip begins.
+  const handlePictureClick = (event: MouseEvent<HTMLImageElement>) => {
     if (!active) return;
     const media = event.currentTarget;
-    const rect = media.getBoundingClientRect();
-    if (media instanceof HTMLVideoElement && media.controls
-      && event.clientY >= rect.bottom - Math.min(72, rect.height * .25)) return;
     if (event.detail !== 0 && !containsMediaPoint(media, event.clientX, event.clientY)) return;
     event.stopPropagation();
     if (props.onNavigate) {
@@ -812,22 +831,22 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       return;
     }
     if (!(target instanceof HTMLImageElement || target instanceof HTMLCanvasElement || target instanceof HTMLVideoElement)) return;
-    const rect = target.getBoundingClientRect();
-    // Match Story's native control strip guard. A scrubber or playback control
-    // remains interactive even when the contained picture has space below it.
-    if (target instanceof HTMLVideoElement && target.controls
-      && event.clientY >= rect.bottom - Math.min(72, rect.height * 0.25)) return;
+    // #489 A2: the presented transport owns its whole element, letterbox
+    // included. Closing Story from there would race the browser's own
+    // click-to-play, so the video surface never resolves into a backdrop.
+    if (target instanceof HTMLVideoElement) return;
     if (!containsMediaPoint(target, event.clientX, event.clientY)) props.onBackdropClick();
   };
   const stablePictureContains = (x: number, y: number) => {
     const surface = hitSurface.current;
     if (!surface) return false;
     const rect = surface.getBoundingClientRect();
+    // Only a photograph owns this surface now, so its aperture comes from the
+    // presented image itself rather than from a retained video frame.
     const asset = props.media.find((item) => item.id === props.currentId);
     const image = imageNodes.current[assigned.indexOf(props.currentId)];
-    const frame = props.currentId ? frames.current.get(props.currentId)?.canvas : null;
-    const width = asset?.displayWidth || (currentVideo ? frame?.width : image?.naturalWidth) || 0;
-    const height = asset?.displayHeight || (currentVideo ? frame?.height : image?.naturalHeight) || 0;
+    const width = asset?.displayWidth || image?.naturalWidth || 0;
+    const height = asset?.displayHeight || image?.naturalHeight || 0;
     if (!width || !height) return false;
     const scale = Math.min(rect.width / width, rect.height / height);
     return Math.abs(x - (rect.left + rect.width / 2)) <= width * scale / 2
@@ -836,7 +855,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   useLayoutEffect(() => {
     if (!active || currentVideo || props.incomingId) delete root.current?.dataset.clickDirection;
   }, [active, currentVideo, props.incomingId]);
-  return <div ref={root} className="story-media-pages" data-story-media-pages tabIndex={-1}
+  // A video page has no focusable picture slot; the stage carries navigation.
+  const videoStageNavigation = Boolean(currentVideo && canNavigate);
+  return <div ref={root} className="story-media-pages" data-story-media-pages
+    tabIndex={videoStageNavigation ? 0 : -1}
+    role={videoStageNavigation ? "group" : undefined}
+    aria-label={videoStageNavigation ? "视频。左右方向键切换媒体" : undefined}
+    aria-keyshortcuts={videoStageNavigation ? "ArrowLeft ArrowRight" : undefined}
     onPointerDown={beginGesture}
     onPointerUp={finishPointer}
     onPointerCancel={(event) => { if (drag.current?.pointerId === event.pointerId) settleGesture(false); }}
@@ -866,14 +891,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         return;
       }
       const direction = navigationDirection(hitSurface.current, event.clientX);
-      const bounds = hitSurface.current.getBoundingClientRect();
-      const nativeControls = currentVideo && event.clientY >= bounds.bottom - Math.min(72, bounds.height * .25);
-      event.currentTarget.dataset.clickDirection = nativeControls ? ""
-        : direction < 0 && props.canNavigatePrevious ? "previous"
-          : direction > 0 && props.canNavigateNext ? "next" : "";
+      event.currentTarget.dataset.clickDirection = direction < 0 && props.canNavigatePrevious ? "previous"
+        : direction > 0 && props.canNavigateNext ? "next" : "";
     }}
     onPointerLeave={(event) => { delete event.currentTarget.dataset.clickDirection; }}
     data-click-navigation={props.onNavigate ? "true" : undefined}
+    data-current-media-kind={props.currentId ? (currentVideo ? "video" : "image") : undefined}
     data-media-presentation={gesturePhase ?? (movingId ? "moving" : props.incomingId ? "waiting" : "settled")}>
     {assigned.map((id, slot) => {
       const asset = props.media.find((item) => item.id === id);
@@ -902,6 +925,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           // A physical slot changes owners without remounting. Commit its
           // painted order with that identity, including synchronous reduced-
           // motion handoffs, so a former top page cannot intercept the next tap.
+          // One render writer also accounts for the page held in front during
+          // a gesture before the semantic selection is committed.
           zIndex: gestureFrontId && id === gestureFrontId ? 5
             : gestureFrontId && current ? 2
               : current ? (props.incomingId && targetReady ? 2 : 5)
@@ -924,8 +949,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
             ? `${asset?.fileName ?? "照片"}。左侧上一张，右侧下一张，方向键切换`
             : current && props.onImageClick ? `沉浸查看：${asset?.fileName ?? "照片"}` : undefined}
           aria-keyshortcuts={current && canNavigate ? "ArrowLeft ArrowRight" : undefined}
-          data-shared-media-id={current && !isVideo && pageReady ? id : undefined}
-          data-shared-journey-cover={current && !isVideo && pageReady && id === props.coverId ? "true" : undefined}
+          data-shared-media-id={id !== null && id === foregroundId && !isVideo && pageReady ? id : undefined}
+          data-shared-journey-cover={id !== null && id === foregroundId && !isVideo && pageReady && id === props.coverId ? "true" : undefined}
           onLoad={(event) => {
             const image = event.currentTarget;
             if (!id || !url) return;
@@ -957,9 +982,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined} />
       </div>;
     })}
-    {props.onNavigate && active && currentReady ? <div ref={hitSurface}
+    {/* #489 A1: a photograph's stationary click surface must never cover the
+        presented video. A clipped strip still left the transport's own picture
+        behind a navigation layer, so the video keeps its whole surface and
+        navigates by swipe or the arrow keys the stage advertises instead. */}
+    {props.onNavigate && active && currentReady && !currentVideo ? <div ref={hitSurface}
       className="story-media-pages__hit-surface" data-story-hit-surface aria-hidden="true"
-      style={currentVideo ? { clipPath: "inset(0 0 min(72px, 25%) 0)" } : undefined}
+      draggable={false}
       onClick={(event) => {
         event.stopPropagation();
         if (!stablePictureContains(event.clientX, event.clientY)) { props.onBackdropClick?.(); return; }
@@ -974,7 +1003,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         preload: active && (binding.id === props.currentId || binding.id === props.incomingId) ? "auto" : "metadata",
         hidden: !videoVisible, "aria-hidden": !videoVisible,
         controls: videoVisible && binding.id === props.currentId,
-        onClick: videoVisible && props.onNavigate ? handlePictureClick : videoSource.props.onClick,
+        // #489 A2: the presented transport owns its own clicks. Play/pause,
+        // scrub and the native controls stay reachable; navigation never
+        // intercepts them.
+        onClick: videoSource.props.onClick,
         // Only the presented video is a shared-element target. Priming and
         // adjacent preparation never masquerade as a viewed media asset.
         ...{

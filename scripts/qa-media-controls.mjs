@@ -92,7 +92,32 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
   }, direction);
 }
 
+/**
+ * One navigation step with real user input.
+ *
+ * #489 changed which input owns the presented picture: a photograph still
+ * navigates by its stationary click surface, but the presented video's own
+ * surface belongs to its transport, so clicking it plays instead of stepping.
+ * A video therefore steps through the navigation the stage advertises -- real
+ * arrow-key input on the focusable stage. The assertions are not relaxed; the
+ * video click path is asserted positively in scripts/qa-story-media-handoff.mjs.
+ */
 async function clickStoryPicture(page, direction, surfaceSelector = ".journey-story__media", fixedPoint = null) {
+  const presentsVideo = !fixedPoint && await page.evaluate((selector) => document.querySelector(selector)
+    ?.querySelector("[data-story-media-pages]")?.getAttribute("data-current-media-kind") === "video", surfaceSelector);
+  if (presentsVideo) {
+    const focused = await page.evaluate((selector) => {
+      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      if (!pages || pages.tabIndex !== 0 || pages.getAttribute("aria-keyshortcuts") !== "ArrowLeft ArrowRight") {
+        throw new Error("Story video stage does not advertise keyboard navigation");
+      }
+      pages.focus();
+      return document.activeElement === pages;
+    }, surfaceSelector);
+    if (!focused) throw new Error("Story video stage could not take navigation focus");
+    await page.keyboard.press(direction < 0 ? "ArrowLeft" : "ArrowRight");
+    return;
+  }
   const point = fixedPoint ?? await storyPicturePoint(page, direction, surfaceSelector);
   await page.evaluate(({ point, direction, surfaceSelector }) => {
     if (point.stableBounds) {
@@ -3871,7 +3896,8 @@ try {
     checks.push({ name: "story-desktop-native-video-control-strip", ...inlineNativeControls });
     if (inlineNativeControls.failed) failed = true;
 
-    // Fullscreen has its own explicit control; upper video halves navigate.
+    // Fullscreen has its own explicit control; a presented video steps with
+    // the stage's advertised arrow keys (#489), a photograph with its halves.
     await mixedMedia.page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
     const mixedFullscreen = mixedMedia.page.locator(".journey-story-fullscreen");
     await mixedFullscreen.waitFor({ state: "visible" });

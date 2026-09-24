@@ -1113,12 +1113,23 @@ export function LivingAtlasApp({
     () => emptyRoutePointContextSelection(),
   );
   const routePointContextSelectionRef = useRef(routePointContextSelection);
+  const routePointContextReturnFocusRef = useRef<(
+    Element & { focus: (options?: FocusOptions) => void }
+  ) | null>(null);
   routePointContextSelectionRef.current = routePointContextSelection;
   const clearRoutePointContext = useCallback(() => {
     const next = clearRoutePointContextSelection(routePointContextSelectionRef.current);
     routePointContextSelectionRef.current = next;
     setRoutePointContextSelection(next);
   }, []);
+  const closeRoutePointContext = useCallback((restoreFocus = true) => {
+    const returnFocus = routePointContextReturnFocusRef.current;
+    routePointContextReturnFocusRef.current = null;
+    clearRoutePointContext();
+    if (restoreFocus && returnFocus?.isConnected) {
+      queueMicrotask(() => returnFocus.focus({ preventScroll: true }));
+    }
+  }, [clearRoutePointContext]);
   const [crossPointReadingIntent, setCrossPointReadingIntent] = useState<CrossPointReadingIntent | null>(null);
   const crossPointReadingRevisionRef = useRef(0);
   const closeCrossPointReading = useCallback(() => {
@@ -1679,7 +1690,14 @@ export function LivingAtlasApp({
   useEffect(() => {
     if (selectedJourneyIdForHomeCamera !== null || hasManualAtlasCameraInteraction || playbackActive || timeCursor.timelineRevision > 0) {
       atlasHomeCameraFreshRef.current = false;
-      setInitialHomeCameraIntent(null);
+      if (initialHomeCameraIntent) {
+        // Releasing Home camera ownership is itself a camera-authority edge.
+        // Advance the shared revision before publishing the Journey focus so
+        // the controller cannot consume the selection while Home still masks
+        // focusRoute and then reject the unmasked route as an older revision.
+        setInitialHomeCameraRevision(nextInitialHomeCameraFocusRevision);
+        setInitialHomeCameraIntent(null);
+      }
       return;
     }
     if (!listHomeBasePeriods || !atlasHomeCameraFreshRef.current || initialHomeCameraIntent) return;
@@ -1793,12 +1811,42 @@ export function LivingAtlasApp({
     globeFocusTriggerRef.current?.focus();
   }, [clearRoutePointContext]);
 
+  useEffect(() => {
+    if (
+      !routePointContextSelection.context
+      || !routePointContextSelection.intent
+      || view !== "planet"
+      || storyJourneyId
+      || playbackActive
+      || crossPointReading
+    ) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeRoutePointContext();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    closeRoutePointContext,
+    crossPointReading,
+    playbackActive,
+    routePointContextSelection.context,
+    routePointContextSelection.intent,
+    storyJourneyId,
+    view,
+  ]);
+
   // Esc exits focus mode. The exit control is only visible inside focus mode,
   // so exiting returns focus to the trigger button in the header.
   useEffect(() => {
     if (!globeFocusMode) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (
+        event.key === "Escape"
+        && !event.defaultPrevented
+        && !routePointContextSelectionRef.current.context
+      ) {
         exitGlobeFocus();
       }
     };
@@ -2193,6 +2241,20 @@ export function LivingAtlasApp({
   }
 
   function revealRoutePointContext(journeyId: string, routePointId: string) {
+    const activeElement = document.activeElement;
+    if (
+      activeElement instanceof Element
+      && activeElement !== document.body
+      && typeof (activeElement as Element & { focus?: unknown }).focus === "function"
+      && !activeElement.closest("[data-route-point-context]")
+    ) {
+      // SVG Route Point labels are legal keyboard triggers too. Preserve the
+      // focused Element structurally instead of requiring HTMLElement, or a
+      // keyboard-opened context has no return target and focus falls to body.
+      routePointContextReturnFocusRef.current = activeElement as Element & {
+        focus: (options?: FocusOptions) => void;
+      };
+    }
     if (journeyId !== activeJourneyIdRef.current) {
       clearRoutePointContext();
       return;
@@ -2297,6 +2359,16 @@ export function LivingAtlasApp({
         return [...stage.querySelectorAll<HTMLElement>("[data-media-page-id]")]
           .find((element) => element.dataset.mediaPageId === sharedAssetId
             && element.dataset.mediaPageReady === "true") ?? null;
+      },
+      // #489 C/V6: the page that will carry this asset exists in the opening
+      // commit, well before its read/decode publishes readiness. Hand it to the
+      // morph now so the picture cannot paint at its final size and then be
+      // hidden again for the clone to fly in from the trigger's geometry.
+      claimDestination: () => {
+        if (!sharedAssetId) return null;
+        const stage = document.querySelector<HTMLElement>(".journey-story .journey-story__media");
+        return [...stage?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? []]
+          .find((element) => element.dataset.mediaPageId === sharedAssetId) ?? null;
       },
       // Signed reads/decode settle after the opening commit. Keep the source
       // only while the same asset remains the current Story intent.
@@ -2694,9 +2766,10 @@ export function LivingAtlasApp({
               : initialHomeCameraAnchor ? null : focusRoute}
             initialCameraAnchor={initialHomeCameraAnchor}
             focusRevision={playbackSession.cameraCommand?.revision
-              ?? (initialHomeCameraAnchor
-                ? Math.max(focusRevision, playbackReleaseFocusRevision) + initialHomeCameraRevision
-                : Math.max(focusRevision, playbackReleaseFocusRevision))}
+              ?? Math.max(
+                focusRevision + initialHomeCameraRevision,
+                playbackReleaseFocusRevision,
+              )}
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
@@ -2752,6 +2825,9 @@ export function LivingAtlasApp({
                 return;
               }
               revealRoutePointContext(journeyId, routePointId);
+            }}
+            onGlobeBlankActivate={() => {
+              if (routePointContextSelectionRef.current.context) closeRoutePointContext(false);
             }}
             onGlobePointPick={globePickActive ? completeGlobePick : undefined}
             onPickRequest={() => {
@@ -3326,6 +3402,15 @@ export function LivingAtlasApp({
               <p>ROUTE POINT · {String(context.routePointIndex + 1).padStart(2, "0")}/{String(context.routePointCount).padStart(2, "0")}</p>
               <h2>{context.routePointLabel}</h2>
               <span>{context.journeyTitle}</span>
+              <button
+                type="button"
+                className="living-atlas__route-point-context-close"
+                data-route-point-context-close
+                aria-label="收起地点详情"
+                onClick={() => closeRoutePointContext()}
+              >
+                <IconX size={17} stroke={1.35} aria-hidden="true" />
+              </button>
             </header>
             {visibleSameCoordinateRoutePoints.length > 1 ? (
               <>

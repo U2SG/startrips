@@ -1655,6 +1655,16 @@
   bottom: 72px;
 }
 
+/* #489 acceptance 2, regression family of the rule above: the inline stage
+   already lifts its own bottom chrome clear of a presented transport's native
+   control strip, but the immersive viewer's nav stayed at bottom:22px and sat
+   right on top of it -- the transport's time scrubber hit-tested to this
+   button instead of to the video. The offset clears the stage's own bottom
+   inset plus Chromium's control panel. */
+.journey-story-fullscreen:has([data-story-media-pages] video[data-shared-media-id]) .journey-story-fullscreen__nav {
+  bottom: calc(clamp(28px, 6vh, 60px) + 84px);
+}
+
 .journey-story__media-grid {
   height: 100%;
   margin: 0;
@@ -5032,8 +5042,32 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .living-atlas__route-point-context > header {
+  position: relative;
   display: grid;
   gap: 5px;
+  padding-right: 48px;
+}
+
+.living-atlas__route-point-context-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+}
+
+.living-atlas__route-point-context-close:hover,
+.living-atlas__route-point-context-close:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--atlas-text);
 }
 
 .living-atlas__route-point-context > header p,
@@ -5913,6 +5947,34 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
     height: 47svh;
     min-height: 300px;
+  }
+
+  /* #489 acceptance 2 / #531: on a short (landscape) phone the sheet was 72svh
+     and the media floor 240px, so the presented video's element box ran past
+     the bottom of the screen and Chromium's own control strip -- its time
+     scrubber first -- ended up where no finger could reach it. There is no
+     spare height to give back here, so the sheet takes the room it needs and
+     the media region is sized to what is left above the fold rather than to a
+     floor the viewport cannot honour. 106px is this block's own sticky sheet
+     handle (44px) plus header (62px); the one later rule that changes either --
+     `.living-atlas.is-mobile-v2 .journey-story > header`, 56px + safe area --
+     only makes the header shorter, and its `.journey-story__media` height of
+     54svh is already inside the budget below. `max-height` carries the fit
+     independently of `height`, so a later, more specific height (that one, or
+     a future one) still cannot put the transport's control strip below the
+     fold; `min-height: 0` is what retires the floor that did. */
+  @media (max-height: 480px) {
+    .journey-story {
+      height: min(92svh, 680px);
+      max-height: min(92svh, 680px);
+    }
+
+    .journey-story__media,
+    .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
+      height: calc(92svh - 106px);
+      max-height: calc(92svh - 106px);
+      min-height: 0;
+    }
   }
 
   .journey-story__copy {

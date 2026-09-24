@@ -52,6 +52,22 @@ async function openInitiallyHiddenPage() {
   return { context, page, motion, pageErrors };
 }
 
+async function waitForPaintedFrame(page) {
+  // `data-signature-status` flips during the React commit, so a read taken the
+  // instant it turns "running" can precede the SVG's first painted frame:
+  // `getBBox()` then legitimately reports 0x0 while the very next frame reports
+  // the real geometry (#433, CI family 2a980106d16bb54d, observed on three
+  // unrelated heads). Hand control back only once the browser has completed a
+  // rendering update, so a geometry read observes painted output instead of an
+  // attribute that merely promises it. A paint barrier, not a sleep, a retry or
+  // a loosened threshold.
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  }));
+}
+
 async function readMotion(page) {
   return page.evaluate(() => {
     const root = document.querySelector(".startrips-signature-motion");
@@ -80,6 +96,7 @@ try {
     await continuity.page.waitForFunction(() => (
       document.querySelector(".startrips-signature-motion")?.getAttribute("data-signature-status") === "running"
     ));
+    await waitForPaintedFrame(continuity.page);
     const initial = await readMotion(continuity.page);
     await continuity.page.waitForFunction(() => Number(
       document.querySelector(".startrips-signature-motion")?.getAttribute("data-signature-cycle") ?? "0",

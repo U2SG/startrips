@@ -298,6 +298,21 @@ button {
   vector-effect: non-scaling-stroke;
 }
 
+.particle-earth-route__label[data-route-point-id] {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.particle-earth-route__label-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.particle-earth-route__label .particle-earth-route__leader,
+.particle-earth-route__label text {
+  pointer-events: none;
+}
+
 .particle-earth-route__label text {
   fill: #dceae6;
   stroke: rgba(2, 7, 6, 0.9);
