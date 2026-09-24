@@ -2327,9 +2327,10 @@ function gradePausedFrameIdentity(before, after) {
 }
 
 /** The retained page canvas must actually be the paused frame on screen. */
-async function heldRenewalFramePixels(page, rootSelector, { videoHidden = true } = {}) {
+async function heldRenewalFramePixels(page, rootSelector,
+  { videoHidden = true, compareToHeldFrame = false } = {}) {
   const screenshot = (await page.screenshot()).toString("base64");
-  return await page.evaluate(async ({ selector, png, expectedHidden }) => {
+  return await page.evaluate(async ({ selector, png, expectedHidden, compareHeld }) => {
     const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
     const pageNode = stage?.querySelector('[data-media-page="current"]');
     const canvas = pageNode?.querySelector("canvas");
@@ -2358,12 +2359,17 @@ async function heldRenewalFramePixels(page, rootSelector, { videoHidden = true }
     const visibleContext = visible.getContext("2d", { willReadFrequently: true });
     if (!sourceContext || !visibleContext) return { failed: true, reason: "renewal pixel context unavailable" };
     sourceContext.drawImage(source, 0, 0, 64, 64);
+    const heldPixels = sourceContext.getImageData(0, 0, 64, 64).data;
+    const heldSignal = window.__qaSpatialFrameEvidence(heldPixels, heldPixels);
     const ratioX = image.naturalWidth / innerWidth, ratioY = image.naturalHeight / innerHeight;
     visibleContext.drawImage(image, left * ratioX, top * ratioY, width * ratioX, height * ratioY,
       0, 0, 64, 64);
     const frame = window.__qaSpatialFrameEvidence(reference.pixels,
       sourceContext.getImageData(0, 0, 64, 64).data);
-    const screenReference = new Uint8ClampedArray(reference.pixels);
+    // A native drag can decode later cached frames before the expired Range
+    // fails. In that case the last actually painted frame, rather than the
+    // picture from before the drag, is the continuity reference.
+    const screenReference = new Uint8ClampedArray(compareHeld ? heldPixels : reference.pixels);
     const screenPixels = visibleContext.getImageData(0, 0, 64, 64).data;
     const notice = document.querySelector(`${selector} .journey-story__media-state.is-over-media[role="alert"]`);
     const noticeBox = notice?.getBoundingClientRect();
@@ -2385,18 +2391,20 @@ async function heldRenewalFramePixels(page, rootSelector, { videoHidden = true }
       || quality.visibleCells < Math.ceil(quality.sourceCells * 0.6)
       || quality.energyRatio < 0.5 || quality.energyRatio > 2;
     return {
-      frame, screen, maskedRows, currentId: pageNode?.getAttribute("data-media-page-id") ?? null,
+      frame, screen, heldSignal, maskedRows, currentId: pageNode?.getAttribute("data-media-page-id") ?? null,
       currentReady: pageNode?.getAttribute("data-media-page-ready") ?? null,
       videoHidden: video.hidden, videoSrc: video.getAttribute("src"),
       hitIsSource: hit === source, hitTag: hit instanceof Element ? hit.tagName : null,
       // The canvas bitmap is diagnostic; CSS/compositor treatment determines
       // the frame the viewer actually sees. Keep the screenshot and hit tests
       // as the acceptance signal for a held renewal.
-      failed: wrong(screen) || maskedRows > 24 || hit !== source
+      failed: wrong(screen) || (compareHeld && (heldSignal.sourceCells < 3 || heldSignal.sourceEnergy < 500))
+        || maskedRows > 24 || hit !== source
         || pageNode?.getAttribute("data-media-page-ready") !== (expectedHidden ? "false" : "true")
         || video.hidden !== expectedHidden,
     };
-  }, { selector: rootSelector, png: screenshot, expectedHidden: videoHidden });
+  }, { selector: rootSelector, png: screenshot,
+    expectedHidden: videoHidden, compareHeld: compareToHeldFrame });
 }
 
 /** Screenshot pixels over the active clone must match its decoded canvas. */
@@ -4242,6 +4250,7 @@ try {
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
       progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
       progress.before = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await waitForPresentedVideoHit(page, FULLSCREEN, V1);
       progress.beforePixels = await pausedVideoScreenPixels(page, FULLSCREEN);
       progress.renewalRead = await waitForFixture(session.renewal.readStarted, 28_000,
         "fullscreen renewal before Close");
@@ -4260,6 +4269,7 @@ try {
       progress.inlineHeld = await heldRenewalFramePixels(page, STAGE);
       session.renewal.releaseBytes();
       progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await waitForPresentedVideoHit(page, STAGE, V1);
       progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
       progress.returnedFrame = gradePausedFrameIdentity(progress.beforePixels, progress.returnedPixels);
       progress.returnedPoint = await presentedVideoPoint(page, STAGE);
@@ -4435,7 +4445,8 @@ try {
         "expired old URL Range 403 after native seek");
       const notice = page.locator(`${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"]`);
       await notice.waitFor({ state: "visible", timeout: 8_000 });
-      progress.errorFrame = await heldRenewalFramePixels(page, FULLSCREEN);
+      progress.errorFrame = await heldRenewalFramePixels(page, FULLSCREEN,
+        { compareToHeldFrame: true });
       progress.noWaiting = await page.locator(`${FULLSCREEN} .starlight-media-state.is-waiting`).count() === 0;
       progress.retryClick = await clickHandoffButton(page,
         `${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"] button`);
@@ -4449,11 +4460,17 @@ try {
       session.renewal.releaseBytes();
       progress.after = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
       await notice.waitFor({ state: "hidden", timeout: 4_000 });
+      await waitForPresentedVideoHit(page, FULLSCREEN, V1);
+      // Retry has reached the originally requested later time. Compare its
+      // own decoded picture with the screen, then compare Close with that same
+      // new picture; the pre-seek frame has a different timeline position.
+      await page.evaluate(() => { window.__qaPausedFrameReference = null; });
       progress.afterPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
       progress.afterPoint = await presentedVideoPoint(page, FULLSCREEN);
       progress.close = await clickFullscreenClose(page);
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await waitForPresentedVideoHit(page, STAGE, V1);
       progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
       progress.returnedFrame = gradePausedFrameIdentity(progress.afterPixels, progress.returnedPixels);
       progress.returnedPoint = await presentedVideoPoint(page, STAGE);
