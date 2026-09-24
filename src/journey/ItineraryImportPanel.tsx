@@ -328,7 +328,16 @@ export function ItineraryImportPanel({
             countryCode: entry.countryCode,
           });
           if (lookupGeneration.current !== generation) return;
-          reviewedSearches.current.set(entry.entryId, { query: decision.correctedQuery, results });
+          const previous = reviewedSearches.current.get(entry.entryId);
+          reviewedSearches.current.set(entry.entryId, {
+            query: results.length > 0 ? decision.correctedQuery : previous?.query ?? decision.correctedQuery,
+            results: [
+              ...results,
+              ...(previous?.results ?? []).filter((candidate) =>
+                !results.some((result) => result.id === candidate.id)
+              ),
+            ],
+          });
           const correction = itineraryCorrectedLocationSuggestion(
             entry, decision.correctedQuery, results,
           );
