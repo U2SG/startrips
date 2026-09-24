@@ -122,15 +122,13 @@ async function clickStoryVideoStep(page, direction, surfaceSelector = ".journey-
     throw new Error(`Video step button is covered or disabled: ${JSON.stringify({ step, hit })}`);
   }
   if (mobile) {
-    // A zero-duration tap immediately after a video touch can end without a
-    // browser click. Press the real hit target briefly, with no delay before
-    // this next gesture, so the button receives a human-length touch.
+    // The step commits on pointerup, so the next trusted touch can release
+    // immediately without relying on a browser compatibility click.
     const touch = await page.context().newCDPSession(page);
     try {
       await touch.send("Input.dispatchTouchEvent", {
         type: "touchStart", touchPoints: [{ x: hit.x, y: hit.y, id: 1 }],
       });
-      await new Promise((resolve) => setTimeout(resolve, 64));
       await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     } finally {
       await touch.detach();
