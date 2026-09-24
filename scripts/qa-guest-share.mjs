@@ -900,7 +900,14 @@ try {
     // REAL shared-view grant, prove the installed MapLibre source contains only
     // that authorized Journey, then revoke the live grant and prove the source,
     // map surface and both Route Point hit paths leave with the guest session.
-    const scopedJourney = sharedJourneys[0];
+    const scopedJourney = {
+      ...sharedJourneys[0],
+      // A one-Journey grant is its own closed navigation scope. Carrying the
+      // original nextJourneyId would correctly make SharedAtlasView reject the
+      // payload before the privacy boundary under test can mount.
+      previousJourneyId: null,
+      nextJourneyId: null,
+    };
     const state = {
       journeysStatus: 200,
       journeys: [scopedJourney],

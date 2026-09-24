@@ -1436,6 +1436,38 @@ try {
     return map?.getAttribute("data-journey-overlay-ready") === "true"
       && map.getAttribute("data-journey-overlay-journey-id") === journeyId;
   }, scopedRoutePoint.journeyId, { timeout: 5_000 });
+  // The wheel sequence above is deliberately a real manual zoom. As in the
+  // primary handoff round, it may leave the focused Route Point outside the
+  // viewport after Detail owns the camera. Re-issue the existing focus intent
+  // before grading pointer reachability; the handoff itself has already been
+  // graded on the untouched wheel-owned camera.
+  const scopedRoutePointOnScreen = await scopedRun.page.evaluate(({ lon, lat }) => {
+    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    return Boolean(
+      projected
+      && Number.isFinite(projected.x)
+      && Number.isFinite(projected.y)
+      && projected.x >= 22
+      && projected.y >= 22
+      && projected.x <= window.innerWidth - 22
+      && projected.y <= window.innerHeight - 22
+    );
+  }, scopedRoutePoint);
+  if (!scopedRoutePointOnScreen) {
+    await activateButton(scopedRun.page, scopedRun.page.locator("[data-qa-earth-dive-refocus]"));
+    await scopedRun.page.waitForFunction(({ lon, lat }) => {
+      const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+      return Boolean(
+        projected
+        && Number.isFinite(projected.x)
+        && Number.isFinite(projected.y)
+        && projected.x >= 22
+        && projected.y >= 22
+        && projected.x <= window.innerWidth - 22
+        && projected.y <= window.innerHeight - 22
+      );
+    }, scopedRoutePoint, { timeout: 5_000 });
+  }
   const scopedBefore = await readDive(scopedRun.page);
   const scopedActivation = await activateDetailedRoutePoint(scopedRun.page, scopedRoutePoint);
   const scopedHitBefore = await scopedRun.page.evaluate(({ lon, lat }) => {
