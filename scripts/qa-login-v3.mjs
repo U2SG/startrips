@@ -565,6 +565,7 @@ async function verifyResetPasswordMailLinkHappyPath() {
     oldSession = await createGatewayPage({
       initialAuthenticated: true,
       initialPath: "/?qaState=login-gateway&qaLite=1",
+      multiPage: true,
       waitForAuthCard: false,
     });
     oldSession.page.on("console", (message) => flowConsole.push(message.text()));
