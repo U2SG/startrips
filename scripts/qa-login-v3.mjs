@@ -505,7 +505,12 @@ async function verifyResetPasswordMailLinkHappyPath() {
   const email = `qa-reset-happy-${randomUUID()}@example.test`;
   const originalPassword = "qa-original-password-123";
   const replacementPassword = "qa-replacement-password-456";
-  const authStore = {};
+  const authStore = {
+    user: [],
+    session: [],
+    account: [],
+    verification: [],
+  };
   let verificationMailResolve;
   let resetMailResolve;
   const verificationMailPromise = new Promise((resolve) => { verificationMailResolve = resolve; });
