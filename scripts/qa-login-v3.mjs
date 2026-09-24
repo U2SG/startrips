@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
@@ -494,6 +495,216 @@ async function verifyResetPasswordCancellation() {
   } finally {
     releaseResponse?.();
     await gateway.close();
+  }
+}
+
+async function verifyResetPasswordMailLinkHappyPath() {
+  console.error("[qa-login-v3] reset password synthetic mail happy path");
+  const email = "qa-reset-happy@example.com";
+  const originalPassword = "qa-original-password-123";
+  const replacementPassword = "qa-replacement-password-456";
+  const syntheticToken = `qa-synthetic-mail-reset-${randomUUID()}`;
+  let syntheticMailLink = null;
+  let requestPayloadValid = false;
+  let resetPayloadValid = false;
+  let currentPassword = originalPassword;
+  let oldPasswordRejected = false;
+  let newPasswordAccepted = false;
+  const flowConsole = [];
+  const requestGateway = await createGatewayPage({
+    initialPath: "/?qaState=login-gateway&qaLite=1",
+  });
+  requestGateway.page.on("console", (message) => flowConsole.push(message.text()));
+  let oldSession = null;
+  let resetGateway = null;
+  let loginGateway = null;
+  try {
+    await requestGateway.page.route("**/api/auth/request-password-reset", async (route) => {
+      const body = route.request().postDataJSON() ?? {};
+      const redirect = typeof body.redirectTo === "string" ? new URL(body.redirectTo) : null;
+      requestPayloadValid = body.email === email
+        && redirect?.origin === origin
+        && redirect.pathname === "/reset-password";
+      if (requestPayloadValid && redirect) {
+        redirect.searchParams.set("token", syntheticToken);
+        syntheticMailLink = redirect.toString();
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: true }),
+      });
+    });
+
+    await requestGateway.page.getByRole("button", { name: "忘记密码" }).click();
+    await requestGateway.page.locator('input[type="email"]').fill(email);
+    const requested = requestGateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/request-password-reset"
+    ), { timeout: 4_000 });
+    await requestGateway.page.getByRole("button", { name: "发送重置链接" }).click();
+    const requestResponse = await requested;
+    await requestGateway.page.getByRole("status").waitFor({ state: "visible", timeout: 4_000 });
+
+    const mailUrl = syntheticMailLink ? new URL(syntheticMailLink) : null;
+    const legalMailLink = mailUrl?.origin === origin
+      && mailUrl.pathname === "/reset-password"
+      && mailUrl.searchParams.get("token") === syntheticToken;
+    if (!mailUrl || !legalMailLink) {
+      return {
+        label: "reset-password-synthetic-mail-happy-path",
+        mail: {
+          captured: Boolean(syntheticMailLink),
+          legalTarget: Boolean(legalMailLink),
+          requestAccepted: requestResponse.status() === 200,
+          requestPayloadValid,
+        },
+        failed: true,
+      };
+    }
+
+    oldSession = await createGatewayPage({
+      initialAuthenticated: true,
+      initialPath: "/?qaState=login-gateway&qaLite=1",
+      waitForAuthCard: false,
+    });
+    oldSession.page.on("console", (message) => flowConsole.push(message.text()));
+    await oldSession.page.locator(".auth-continuity.is-released").waitFor({ timeout: 15_000 });
+
+    mailUrl.searchParams.set("qaState", "login-gateway");
+    mailUrl.searchParams.set("qaLite", "1");
+    resetGateway = await createGatewayPage({
+      initialPath: `${mailUrl.pathname}${mailUrl.search}`,
+      waitForAuthCard: false,
+    });
+    resetGateway.page.on("console", (message) => flowConsole.push(message.text()));
+    await resetGateway.page.route("**/api/auth/reset-password", async (route) => {
+      const body = route.request().postDataJSON() ?? {};
+      resetPayloadValid = body.token === syntheticToken
+        && body.newPassword === replacementPassword;
+      if (resetPayloadValid) {
+        currentPassword = replacementPassword;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ status: true }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "INVALID_TOKEN", message: "Invalid token" }),
+      });
+    });
+    await resetGateway.page.locator('input[autocomplete="new-password"]').fill(replacementPassword);
+    const resetResponsePromise = resetGateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/reset-password"
+    ), { timeout: 4_000 });
+    await resetGateway.page.getByRole("button", { name: "更新密码" }).click();
+    const resetResponse = await resetResponsePromise;
+    const resetStatus = resetGateway.page.getByRole("status");
+    await resetStatus.waitFor({ state: "visible", timeout: 4_000 });
+    const resetMessage = await resetStatus.textContent();
+
+    oldSession.loseSession();
+    await broadcastSessionRefresh(oldSession.page, "qa-password-reset-happy-path");
+    await oldSession.page.locator(".auth-continuity.is-login").waitFor({ timeout: 5_000 });
+    const oldSessionRevoked = await oldSession.page.locator(".auth-card--login-v3").isVisible();
+
+    loginGateway = await createGatewayPage({
+      initialPath: "/?qaState=login-gateway&qaLite=1",
+    });
+    loginGateway.page.on("console", (message) => flowConsole.push(message.text()));
+    await loginGateway.page.route("**/api/auth/sign-in/email", async (route) => {
+      const body = route.request().postDataJSON() ?? {};
+      if (body.email !== email || body.password !== currentPassword) {
+        if (body.email === email && body.password === originalPassword) oldPasswordRejected = true;
+        await route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({
+            code: "INVALID_EMAIL_OR_PASSWORD",
+            message: "邮箱或密码不正确",
+          }),
+        });
+        return;
+      }
+      newPasswordAccepted = body.password === replacementPassword;
+      loginGateway.gainSession();
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await loginGateway.page.locator('input[type="email"]').fill(email);
+    await loginGateway.page.locator('input[type="password"]').fill(originalPassword);
+    const oldLoginResponsePromise = loginGateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/sign-in/email"
+    ), { timeout: 4_000 });
+    await loginGateway.page.getByRole("button", { name: "登录", exact: true }).click();
+    const oldLoginResponse = await oldLoginResponsePromise;
+    const oldPasswordAlert = loginGateway.page.getByRole("alert");
+    await oldPasswordAlert.waitFor({ state: "visible", timeout: 4_000 });
+
+    await loginGateway.page.locator('input[type="password"]').fill(replacementPassword);
+    const newLoginResponsePromise = loginGateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/sign-in/email"
+    ), { timeout: 4_000 });
+    await loginGateway.page.getByRole("button", { name: "登录", exact: true }).click();
+    const newLoginResponse = await newLoginResponsePromise;
+    await loginGateway.page.locator(".auth-continuity.is-released").waitFor({ timeout: 15_000 });
+    const releasedAfterNewPassword = await loginGateway.page.locator(".auth-card--login-v3").count() === 0;
+
+    const allErrors = [
+      ...requestGateway.errors,
+      ...(oldSession?.errors ?? []),
+      ...(resetGateway?.errors ?? []),
+      ...(loginGateway?.errors ?? []),
+    ];
+    const unexpectedErrors = allErrors.filter((message) => !message.includes("401"));
+    const tokenLeakDetected = flowConsole.some((message) => message.includes(syntheticToken))
+      || allErrors.some((message) => message.includes(syntheticToken));
+
+    return {
+      label: "reset-password-synthetic-mail-happy-path",
+      mail: {
+        captured: true,
+        legalTarget: true,
+        path: mailUrl.pathname,
+        tokenPresent: mailUrl.searchParams.has("token"),
+        requestAccepted: requestResponse.status() === 200,
+        requestPayloadValid,
+      },
+      reset: {
+        accepted: resetResponse.status() === 200,
+        payloadBoundToMailLink: resetPayloadValid,
+        successVisible: resetMessage?.includes("密码已更新") ?? false,
+      },
+      session: { oldSessionRevoked },
+      signIn: {
+        oldPasswordRejected: oldPasswordRejected && oldLoginResponse.status() === 401,
+        newPasswordAccepted: newPasswordAccepted && newLoginResponse.status() === 200,
+        releasedAfterNewPassword,
+      },
+      tokenLeakDetected,
+      errors: unexpectedErrors,
+      failed: requestResponse.status() !== 200
+        || !requestPayloadValid
+        || resetResponse.status() !== 200
+        || !resetPayloadValid
+        || !resetMessage?.includes("密码已更新")
+        || !oldSessionRevoked
+        || !oldPasswordRejected
+        || oldLoginResponse.status() !== 401
+        || !newPasswordAccepted
+        || newLoginResponse.status() !== 200
+        || !releasedAfterNewPassword
+        || tokenLeakDetected
+        || unexpectedErrors.length > 0,
+    };
+  } finally {
+    await loginGateway?.close();
+    await resetGateway?.close();
+    await oldSession?.close();
+    await requestGateway.close();
   }
 }
 
@@ -1144,6 +1355,9 @@ try {
   const resetPasswordCancellation = await verifyResetPasswordCancellation();
   if (resetPasswordCancellation.failed) failed = true;
   results.push(resetPasswordCancellation);
+  const resetPasswordHappyPath = await verifyResetPasswordMailLinkHappyPath();
+  if (resetPasswordHappyPath.failed) failed = true;
+  results.push(resetPasswordHappyPath);
   const invitationPointers = await verifyAuthenticatedDirectGate(
     "gateway-authenticated-invitation-pointer-ownership",
     "/accept-invitation?id=qa-invitation",
