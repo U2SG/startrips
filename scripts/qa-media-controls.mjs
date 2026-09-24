@@ -1972,6 +1972,11 @@ try {
       return probe.frames;
     });
     const afterOldSettle = await inspectStagePaint(page, ".journey-story__media");
+    if (!stagePaintValid(afterOldSettle, first, true)) {
+      throw new Error(`Cancelled resize gesture changed the picture before a fresh click: ${JSON.stringify({
+        first, cancelledClicks, afterRelease, afterOldSettle, frames: frames.slice(-8),
+      })}`);
+    }
     const freshClickCount = await page.evaluate(() => window.__qaHeldResize.clicks.length);
     await clickStoryPicture(page, 1);
     await waitForStoryPicture(page, second);

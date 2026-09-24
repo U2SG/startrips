@@ -111,7 +111,14 @@ async function touchDriver(page) {
     down: async (x, y) => { await send("touchStart", finger(x, y)); },
     move: async (x, y) => { await send("touchMove", finger(x, y)); },
     up: async () => { await send("touchEnd", []); },
-    click: async (x, y) => { await page.touchscreen.tap(x, y); },
+    click: async (x, y) => {
+      // Chromium's zero-duration touchscreen.tap can omit a compatibility
+      // click immediately after a pan. Keep the next gesture immediate, but
+      // give this real finger press a short hold before release.
+      await send("touchStart", finger(x, y));
+      await new Promise((resolve) => setTimeout(resolve, 64));
+      await send("touchEnd", []);
+    },
   };
 }
 
@@ -881,8 +888,25 @@ async function seekNativeTimeline(page, rootSelector) {
     return { picture, slider, controls: controls.panel, before, hits, failed: true,
       reason: "native timeline path is covered" };
   }
+  // Install this only after the picture tap/hover that reveals Chromium's
+  // controls. Playback can advance currentTime by itself; a seek event from
+  // this exact video during the subsequent pointer drag is direct evidence
+  // that the native timeline, rather than the play surface, handled input.
+  await page.evaluate((selector) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    if (!(video instanceof HTMLVideoElement)) throw new Error("native seek target disappeared");
+    const probe = { video, events: [], startedAt: null };
+    for (const type of ["seeking", "seeked"]) {
+      video.addEventListener(type, (event) => {
+        probe.events.push({ type, trusted: event.isTrusted, time: video.currentTime,
+          duration: video.duration, at: performance.now() });
+      });
+    }
+    window.__qaNativeTimelineSeek = probe;
+  }, rootSelector);
   await startSampler(page, rootSelector);
   const pointer = input(page);
+  await page.evaluate(() => { window.__qaNativeTimelineSeek.startedAt = performance.now(); });
   await pointer.down(startX, y);
   for (let step = 1; step <= 8; step += 1) {
     await pointer.move(startX + (endX - startX) * step / 8, y);
@@ -891,10 +915,20 @@ async function seekNativeTimeline(page, rootSelector) {
   await pointer.up();
   const reached = await page.waitForFunction(({ selector, duration }) => {
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
-    return video instanceof HTMLVideoElement && !video.seeking && video.currentTime >= duration * 0.4;
+    const probe = window.__qaNativeTimelineSeek;
+    return video instanceof HTMLVideoElement && probe?.video === video && !video.seeking
+      && probe.events.some((event) => event.type === "seeking" && event.trusted
+        && event.at >= probe.startedAt)
+      && probe.events.some((event) => event.type === "seeked" && event.trusted
+        && event.at >= probe.startedAt && event.time >= duration * 0.35)
+      && video.currentTime >= duration * 0.4;
   }, { selector: rootSelector, duration: before.duration }, { polling: "raf", timeout: 4_000 })
     .then(() => true, () => false);
   const observation = await stopSampler(page);
+  const seekProbe = await page.evaluate(() => ({
+    startedAt: window.__qaNativeTimelineSeek?.startedAt ?? null,
+    events: window.__qaNativeTimelineSeek?.events ?? [],
+  }));
   const after = await page.evaluate((selector) => {
     const root = document.querySelector(selector);
     const stage = root?.querySelector("[data-story-media-pages]");
@@ -916,11 +950,18 @@ async function seekNativeTimeline(page, rootSelector) {
     (entry.name === "data-media-presentation" && entry.value !== "settled")
     || (entry.name === "data-media-requested" && entry.value !== null)
   ));
+  const nativeSeek = seekProbe.startedAt !== null
+    && seekProbe.events.some((event) => event.type === "seeking" && event.trusted
+      && event.at >= seekProbe.startedAt)
+    && seekProbe.events.some((event) => event.type === "seeked" && event.trusted
+      && event.at >= seekProbe.startedAt && event.time >= before.duration * 0.35);
   return {
-    picture, slider, controls: controls.panel, before, after, hits, input: pointer.kind, reached,
+    picture, slider, controls: controls.panel, before, after, hits, input: pointer.kind,
+    seekProbe, nativeSeek, reached,
     observedFrames: observation.frames.length, ownershipChanges: ownershipChanges.slice(0, 3),
     claims: claims.slice(0, 4), trace: observation.gestures.slice(-24),
-    failed: !reached || !observation.frames.length || ownershipChanges.length > 0 || claims.length > 0
+    failed: !nativeSeek || !reached || !observation.frames.length
+      || ownershipChanges.length > 0 || claims.length > 0
       || before.asset !== after.asset || after.current !== before.asset
       || before.presentation !== "settled" || after.presentation !== "settled" || after.requested !== null
       || before.paused !== after.paused || !Number.isFinite(after.time)

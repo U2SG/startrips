@@ -614,6 +614,9 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
       if (Math.abs(dx) <= Math.abs(dy) * 1.15) { value.axis = "y"; return; }
       value.axis = "x";
+      // The gesture owns this pointer from here through release, including a
+      // compatibility click synthesized after capture is lost on resize.
+      suppressCancelledPointerClick.current = true;
       for (const spring of dragSprings.current) spring.cancel();
       dragSprings.current = [];
       flushSync(() => latest.current.onGestureClaim(value.baseId));
@@ -872,9 +875,15 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     }}
     onPointerDown={beginGesture}
     onPointerUp={finishPointer}
-    onPointerCancel={(event) => { if (drag.current?.pointerId === event.pointerId) settleGesture(false); }}
+    onPointerCancel={(event) => {
+      if (drag.current?.pointerId !== event.pointerId) return;
+      suppressCancelledPointerClick.current = true;
+      settleGesture(false);
+    }}
     onLostPointerCapture={(event) => {
-      if (event.target === event.currentTarget && drag.current?.pointerId === event.pointerId) settleGesture(false);
+      if (event.target !== event.currentTarget || drag.current?.pointerId !== event.pointerId) return;
+      suppressCancelledPointerClick.current = true;
+      settleGesture(false);
     }}
     onDragStart={(event) => event.preventDefault()}
     onKeyDown={(event) => {
