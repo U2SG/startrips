@@ -1889,9 +1889,13 @@ async function clickFullscreenClose(page) {
 
 /** Prove that the paused frame in the screenshot is the decoded video frame. */
 async function pausedVideoScreenPixels(page, rootSelector, diagnosticName = null) {
+  const native = await readNativeControls(page, rootSelector).catch(() => null);
+  const nativeChromeTop = native?.controls
+    .filter((control) => !control.ignored)
+    .reduce((top, control) => Math.min(top, control.box.top), Number.POSITIVE_INFINITY);
   const screenshotBuffer = await page.screenshot();
   const screenshot = screenshotBuffer.toString("base64");
-  const result = await page.evaluate(async ({ selector, png, captureFrame }) => {
+  const result = await page.evaluate(async ({ selector, png, captureFrame, chromeTop }) => {
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
     if (!(video instanceof HTMLVideoElement) || !video.paused || video.readyState < 2) {
       return { failed: true, reason: "no paused decoded video" };
@@ -1957,6 +1961,27 @@ async function pausedVideoScreenPixels(page, rootSelector, diagnosticName = null
     const visiblePixels = screenContext.getImageData(0, 0, 64, 64).data;
     const spatialDirect = window.__qaSpatialFrameEvidence(pixels, visiblePixels);
     const spatialRaster = window.__qaSpatialFrameEvidence(screenExpected, visiblePixels);
+    // Native controls are browser chrome composited over the decoded picture.
+    // Exclude their observed accessibility bounds from both images before
+    // asking whether the unobscured picture is the same frame.
+    const unobscuredSource = new Uint8ClampedArray(pixels);
+    const unobscuredRaster = new Uint8ClampedArray(screenExpected);
+    const unobscuredVisible = new Uint8ClampedArray(visiblePixels);
+    const maskedRows = [];
+    if (Number.isFinite(chromeTop) && chromeTop > top && chromeTop < top + height) {
+      for (let y = 0; y < 64; y += 1) {
+        if (top + height * (y + 0.5) / 64 < chromeTop) continue;
+        maskedRows.push(y);
+        for (let x = 0; x < 64; x += 1) {
+          const at = (y * 64 + x) * 4;
+          for (const image of [unobscuredSource, unobscuredRaster, unobscuredVisible]) {
+            image[at] = 0; image[at + 1] = 0; image[at + 2] = 0;
+          }
+        }
+      }
+    }
+    const unobscuredSpatialDirect = window.__qaSpatialFrameEvidence(unobscuredSource, unobscuredVisible);
+    const unobscuredSpatialRaster = window.__qaSpatialFrameEvidence(unobscuredRaster, unobscuredVisible);
     const visibleCells = new Set();
     for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
       const at = (y * 64 + x) * 4;
@@ -2006,6 +2031,8 @@ async function pausedVideoScreenPixels(page, rootSelector, diagnosticName = null
     const visibleBright = samples.filter((sample) => Math.max(...sample.visible) > 24).length;
     return { meanDelta: Number(meanDelta.toFixed(1)), samples,
       spatialDirect, spatialRaster,
+      unobscuredSpatialDirect, unobscuredSpatialRaster, nativeChromeTop: chromeTop,
+      maskedRows: maskedRows.length,
       decodedFramePng,
       brightPixels: reference.brightPixels, spreadCells: reference.spreadCells,
       retainedCells, visibleBright, retainedRatio: Number(retainedRatio.toFixed(2)),
@@ -2015,7 +2042,8 @@ async function pausedVideoScreenPixels(page, rootSelector, diagnosticName = null
         || retainedCells < Math.ceil(reference.spreadCells * 0.6)
         || samples.some((sample) => !sample.hitIsVideo || sample.offscreen) || meanDelta > 18
         || retainedRatio < 0.75 || signalMeanDelta > 20 };
-  }, { selector: rootSelector, png: screenshot, captureFrame: Boolean(diagnosticName) });
+  }, { selector: rootSelector, png: screenshot, captureFrame: Boolean(diagnosticName),
+    chromeTop: Number.isFinite(nativeChromeTop) ? nativeChromeTop : null });
   if (diagnosticName) {
     await mkdir("artifacts/story-media", { recursive: true });
     await writeFile(`artifacts/story-media/${diagnosticName}-visible.png`, screenshotBuffer);
