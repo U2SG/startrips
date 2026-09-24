@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { betterAuth } from "better-auth";
+import { memoryAdapter } from "better-auth/adapters/memory";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
@@ -389,6 +392,416 @@ async function verifyAuthenticatedDirectGate(label, path, targetSelector) {
     };
   } finally {
     await gateway.close();
+  }
+}
+
+async function verifyResetPasswordCancellation() {
+  console.error("[qa-login-v3] reset password cancellation");
+  const gateway = await createGatewayPage({
+    initialPath: "/reset-password?token=qa-reset-token&qaState=login-gateway&qaLite=1",
+    waitForAuthCard: false,
+  });
+  let releaseResponse;
+  try {
+    let resetRequests = 0;
+    let requestCaptured;
+    const intercepted = new Promise((resolve) => { requestCaptured = resolve; });
+    await gateway.page.route("**/api/auth/reset-password", async (route) => {
+      resetRequests += 1;
+      if (resetRequests === 2) {
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "INVALID_TOKEN", message: "Invalid token" }),
+        });
+        return;
+      }
+      await new Promise((resolve) => {
+        releaseResponse = resolve;
+        requestCaptured();
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: true }),
+      });
+    });
+    await gateway.page.locator('input[autocomplete="new-password"]').fill("qa-new-password-123");
+    const requestStarted = gateway.page.waitForRequest((request) => (
+      new URL(request.url()).pathname === "/api/auth/reset-password"
+    ), { timeout: 4_000 });
+    await gateway.page.getByRole("button", { name: "更新密码" }).click();
+    await requestStarted;
+    await intercepted;
+    const cancel = gateway.page.getByRole("button", { name: "取消等待" });
+    await cancel.waitFor({ state: "visible", timeout: 4_000 });
+    const pending = {
+      busy: await gateway.page.locator(".auth-card").getAttribute("aria-busy"),
+      submitDisabled: await gateway.page.getByRole("button", { name: "请稍候…" }).isDisabled(),
+    };
+    // A real pointer click checks that the recovery control is reachable.
+    await cancel.click();
+    const alert = gateway.page.getByRole("alert");
+    await alert.waitFor({ state: "visible", timeout: 4_000 });
+    const responseReceived = gateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/reset-password"
+    ), { timeout: 4_000 });
+    releaseResponse();
+    await responseReceived;
+    await gateway.page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    const recovered = {
+      busy: await gateway.page.locator(".auth-card").getAttribute("aria-busy"),
+      alert: await alert.textContent(),
+      submitEnabled: await gateway.page.getByRole("button", { name: "更新密码" }).isEnabled(),
+      requestAgainVisible: await gateway.page.getByRole("link", { name: "重新申请重置链接" }).isVisible(),
+      successVisible: await gateway.page.getByRole("status").count() > 0,
+    };
+    const retryResponse = gateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/reset-password" && response.status() === 400
+    ), { timeout: 4_000 });
+    await gateway.page.getByRole("button", { name: "更新密码" }).click();
+    await retryResponse;
+    await gateway.page.waitForFunction(() => (
+      document.querySelector('[role="alert"]')?.textContent?.includes("前一次提交结果仍未确认")
+    ), null, { timeout: 4_000 });
+    const retry = {
+      alert: await alert.textContent(),
+      requestAgainVisible: await gateway.page.getByRole("link", { name: "重新申请重置链接" }).isVisible(),
+      returnLoginVisible: await gateway.page.getByRole("link", { name: "返回登录" }).isVisible(),
+      submitGone: await gateway.page.getByRole("button", { name: "更新密码" }).count() === 0,
+    };
+    const unexpectedErrors = gateway.errors.filter((message) => !message.includes("400 (Bad Request)"));
+    return {
+      label: "reset-password-cancel-late-success-retry-invalid-token",
+      pending,
+      recovered,
+      retry,
+      errors: unexpectedErrors,
+      failed: pending.busy !== "true"
+        || !pending.submitDisabled
+        || recovered.busy !== "false"
+        || !recovered.alert?.includes("无法确认密码是否已更新")
+        || !recovered.submitEnabled
+        || !recovered.requestAgainVisible
+        || recovered.successVisible
+        || resetRequests !== 2
+        || !retry.alert?.includes("前一次提交结果仍未确认")
+        || !retry.alert?.includes("前一次提交的密码尝试登录")
+        || !retry.requestAgainVisible
+        || !retry.returnLoginVisible
+        || !retry.submitGone
+        || unexpectedErrors.length > 0,
+    };
+  } finally {
+    releaseResponse?.();
+    await gateway.close();
+  }
+}
+
+async function verifyResetPasswordMailLinkHappyPath() {
+  console.error("[qa-login-v3] reset password emitted-mail happy path");
+  const email = `qa-reset-happy-${randomUUID()}@example.test`;
+  const originalPassword = "qa-original-password-123";
+  const replacementPassword = "qa-replacement-password-456";
+  const authStore = {
+    user: [],
+    session: [],
+    account: [],
+    verification: [],
+  };
+  let verificationMailResolve;
+  let resetMailResolve;
+  const verificationMailPromise = new Promise((resolve) => { verificationMailResolve = resolve; });
+  const resetMailPromise = new Promise((resolve) => { resetMailResolve = resolve; });
+  const qaAuth = betterAuth({
+    appName: "Startrips QA",
+    baseURL: origin,
+    secret: "qa-only-startrips-reset-secret-with-more-than-thirty-two-bytes",
+    database: memoryAdapter(authStore),
+    trustedOrigins: [origin],
+    advanced: {
+      cookiePrefix: "startrips",
+      useSecureCookies: false,
+    },
+    session: {
+      expiresIn: 60 * 60 * 24 * 7,
+      updateAge: 60 * 60 * 24,
+    },
+    emailVerification: {
+      sendOnSignUp: true,
+      sendOnSignIn: true,
+      expiresIn: 60 * 60,
+      async sendVerificationEmail({ user, url }) {
+        if (user.email === email) verificationMailResolve(url);
+      },
+    },
+    emailAndPassword: {
+      enabled: true,
+      requireEmailVerification: true,
+      minPasswordLength: 10,
+      maxPasswordLength: 128,
+      revokeSessionsOnPasswordReset: true,
+      async sendResetPassword({ user, url }) {
+        if (user.email === email) resetMailResolve(url);
+      },
+    },
+  });
+
+  const authRequest = async (pathOrUrl, { method = "GET", body, cookie } = {}) => {
+    const url = pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")
+      ? pathOrUrl
+      : `${origin}${pathOrUrl}`;
+    const headers = new Headers({ origin });
+    if (body !== undefined) headers.set("content-type", "application/json");
+    if (cookie) headers.set("cookie", cookie);
+    return qaAuth.handler(new Request(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: "manual",
+    }));
+  };
+
+  const awaitMail = async (promise, label) => Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} was not emitted`)), 4_000);
+    }),
+  ]);
+
+  const fulfillFromAuth = async (route) => {
+    const request = route.request();
+    const headers = new Headers(request.headers());
+    headers.set("origin", origin);
+    const response = await qaAuth.handler(new Request(request.url(), {
+      method: request.method(),
+      headers,
+      body: ["GET", "HEAD"].includes(request.method()) ? undefined : request.postData() ?? undefined,
+      redirect: "manual",
+    }));
+    const responseHeaders = {};
+    response.headers.forEach((value, key) => { responseHeaders[key] = value; });
+    await route.fulfill({
+      status: response.status,
+      headers: responseHeaders,
+      body: Buffer.from(await response.arrayBuffer()),
+    });
+  };
+
+  const flowConsole = [];
+  let requestPayloadValid = false;
+  let resetPayloadValid = false;
+  let requestGateway = null;
+  let resetGateway = null;
+  try {
+    const signUp = await authRequest("/api/auth/sign-up/email", {
+      method: "POST",
+      body: { name: "QA Reset Traveler", email, password: originalPassword },
+    });
+    const verificationMailLink = await awaitMail(verificationMailPromise, "verification mail");
+    const verificationUrl = new URL(verificationMailLink);
+    const verificationTargetValid = verificationUrl.origin === origin
+      && verificationUrl.pathname === "/api/auth/verify-email"
+      && verificationUrl.searchParams.has("token");
+    const verified = verificationTargetValid
+      ? await authRequest(verificationMailLink)
+      : null;
+
+    const initialSignIn = await authRequest("/api/auth/sign-in/email", {
+      method: "POST",
+      body: { email, password: originalPassword },
+    });
+    const initialSignInBody = initialSignIn.status === 200 ? await initialSignIn.json() : null;
+    const initialUserId = initialSignInBody?.user?.id ?? null;
+    const setCookie = initialSignIn.headers.get("set-cookie") ?? "";
+    const sessionMatch = setCookie.match(/(?:__Secure-)?startrips\.session_token=[^;,\s]+/);
+    const oldSessionCookie = sessionMatch?.[0] ?? null;
+    const beforeResetSession = oldSessionCookie
+      ? await authRequest("/api/auth/get-session", { cookie: oldSessionCookie })
+      : null;
+    const beforeResetSessionBody = beforeResetSession?.status === 200
+      ? await beforeResetSession.json()
+      : null;
+
+    requestGateway = await createGatewayPage({
+      initialPath: "/?qaState=login-gateway&qaLite=1",
+    });
+    requestGateway.page.on("console", (message) => flowConsole.push(message.text()));
+    await requestGateway.page.route("**/api/auth/request-password-reset", async (route) => {
+      const body = route.request().postDataJSON() ?? {};
+      const redirect = typeof body.redirectTo === "string" ? new URL(body.redirectTo) : null;
+      requestPayloadValid = body.email === email
+        && redirect?.origin === origin
+        && redirect.pathname === "/reset-password";
+      await fulfillFromAuth(route);
+    });
+
+    await requestGateway.page.getByRole("button", { name: "忘记密码" }).click();
+    await requestGateway.page.locator('input[type="email"]').fill(email);
+    const requested = requestGateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/request-password-reset"
+    ), { timeout: 4_000 });
+    await requestGateway.page.getByRole("button", { name: "发送重置链接" }).click();
+    const requestResponse = await requested;
+    await requestGateway.page.getByRole("status").waitFor({ state: "visible", timeout: 4_000 });
+
+    const resetMailLink = await awaitMail(resetMailPromise, "password reset mail");
+    const mailUrl = new URL(resetMailLink);
+    const resetEndpointPrefix = "/api/auth/reset-password/";
+    const encodedResetToken = mailUrl.pathname.startsWith(resetEndpointPrefix)
+      ? mailUrl.pathname.slice(resetEndpointPrefix.length)
+      : "";
+    const resetToken = encodedResetToken ? decodeURIComponent(encodedResetToken) : "";
+    const callbackValue = mailUrl.searchParams.get("callbackURL");
+    const callbackUrl = callbackValue ? new URL(callbackValue, origin) : null;
+    const legalMailLink = mailUrl.origin === origin
+      && mailUrl.pathname.startsWith(resetEndpointPrefix)
+      && Boolean(resetToken)
+      && callbackUrl?.origin === origin
+      && callbackUrl.pathname === "/reset-password";
+    const mailRedirect = legalMailLink && resetToken
+      ? await authRequest(resetMailLink)
+      : null;
+    const redirectValue = mailRedirect?.headers.get("location") ?? "";
+    const redirectUrl = redirectValue ? new URL(redirectValue, origin) : null;
+    const redirectToken = redirectUrl?.searchParams.get("token") ?? "";
+    const legalResetTarget = Boolean(mailRedirect)
+      && mailRedirect.status >= 300
+      && mailRedirect.status < 400
+      && redirectUrl?.origin === origin
+      && redirectUrl.pathname === "/reset-password"
+      && redirectToken === resetToken;
+    if (!legalMailLink || !resetToken || !legalResetTarget || !redirectUrl) {
+      return {
+        label: "reset-password-emitted-mail-happy-path",
+        mail: {
+          captured: Boolean(resetMailLink),
+          legalTarget: legalMailLink,
+          legalRedirect: legalResetTarget,
+          requestAccepted: requestResponse.status() === 200,
+          requestPayloadValid,
+        },
+        setup: {
+          signUpAccepted: signUp.status === 200,
+          verificationTargetValid,
+          verificationAccepted: Boolean(verified && verified.status >= 200 && verified.status < 400),
+        },
+        failed: true,
+      };
+    }
+
+    redirectUrl.searchParams.set("qaState", "login-gateway");
+    redirectUrl.searchParams.set("qaLite", "1");
+    resetGateway = await createGatewayPage({
+      initialPath: `${redirectUrl.pathname}${redirectUrl.search}`,
+      waitForAuthCard: false,
+    });
+    resetGateway.page.on("console", (message) => flowConsole.push(message.text()));
+    await resetGateway.page.route("**/api/auth/reset-password", async (route) => {
+      const body = route.request().postDataJSON() ?? {};
+      resetPayloadValid = body.token === resetToken
+        && body.newPassword === replacementPassword;
+      await fulfillFromAuth(route);
+    });
+    await resetGateway.page.locator('input[autocomplete="new-password"]').fill(replacementPassword);
+    const resetResponsePromise = resetGateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/reset-password"
+    ), { timeout: 4_000 });
+    await resetGateway.page.getByRole("button", { name: "更新密码" }).click();
+    const resetResponse = await resetResponsePromise;
+    const resetStatus = resetGateway.page.getByRole("status");
+    await resetStatus.waitFor({ state: "visible", timeout: 4_000 });
+    const resetMessage = await resetStatus.textContent();
+
+    const afterResetSession = oldSessionCookie
+      ? await authRequest("/api/auth/get-session", { cookie: oldSessionCookie })
+      : null;
+    const afterResetSessionBody = afterResetSession?.status === 200
+      ? await afterResetSession.json()
+      : null;
+    const oldSessionRevoked = Boolean(beforeResetSessionBody?.user?.id)
+      && !afterResetSessionBody?.user?.id;
+
+    const oldPasswordLogin = await authRequest("/api/auth/sign-in/email", {
+      method: "POST",
+      body: { email, password: originalPassword },
+    });
+    const newPasswordLogin = await authRequest("/api/auth/sign-in/email", {
+      method: "POST",
+      body: { email, password: replacementPassword },
+    });
+    const newPasswordBody = newPasswordLogin.status === 200
+      ? await newPasswordLogin.json()
+      : null;
+    const stableUser = Boolean(initialUserId)
+      && newPasswordBody?.user?.id === initialUserId;
+
+    const allErrors = [
+      ...(requestGateway?.errors ?? []),
+      ...(resetGateway?.errors ?? []),
+    ];
+    const unexpectedErrors = allErrors.filter((message) => !message.includes("401"));
+    const tokenLeakDetected = flowConsole.some((message) => message.includes(resetToken))
+      || allErrors.some((message) => message.includes(resetToken));
+
+    return {
+      label: "reset-password-emitted-mail-happy-path",
+      setup: {
+        signUpAccepted: signUp.status === 200,
+        verificationTargetValid,
+        verificationAccepted: Boolean(verified && verified.status >= 200 && verified.status < 400),
+      },
+      mail: {
+        captured: true,
+        legalTarget: true,
+        legalRedirect: true,
+        callbackPath: callbackUrl.pathname,
+        tokenPresent: true,
+        requestAccepted: requestResponse.status() === 200,
+        requestPayloadValid,
+      },
+      reset: {
+        accepted: resetResponse.status() === 200,
+        payloadBoundToEmittedMail: resetPayloadValid,
+        successVisible: resetMessage?.includes("密码已更新") ?? false,
+      },
+      session: {
+        existedBeforeReset: Boolean(beforeResetSessionBody?.user?.id),
+        oldSessionRevoked,
+      },
+      signIn: {
+        oldPasswordRejected: oldPasswordLogin.status !== 200,
+        newPasswordAccepted: newPasswordLogin.status === 200,
+        stableUser,
+      },
+      tokenLeakDetected,
+      errors: unexpectedErrors,
+      failed: signUp.status !== 200
+        || !verificationTargetValid
+        || !verified
+        || verified.status < 200
+        || verified.status >= 400
+        || initialSignIn.status !== 200
+        || !initialUserId
+        || !oldSessionCookie
+        || !beforeResetSessionBody?.user?.id
+        || requestResponse.status() !== 200
+        || !requestPayloadValid
+        || resetResponse.status() !== 200
+        || !resetPayloadValid
+        || !resetMessage?.includes("密码已更新")
+        || !oldSessionRevoked
+        || oldPasswordLogin.status === 200
+        || newPasswordLogin.status !== 200
+        || !stableUser
+        || tokenLeakDetected
+        || unexpectedErrors.length > 0,
+    };
+  } finally {
+    await resetGateway?.close();
+    await requestGateway?.close();
   }
 }
 
@@ -1036,6 +1449,12 @@ try {
   );
   if (resetPasswordPointers.failed) failed = true;
   results.push(resetPasswordPointers);
+  const resetPasswordCancellation = await verifyResetPasswordCancellation();
+  if (resetPasswordCancellation.failed) failed = true;
+  results.push(resetPasswordCancellation);
+  const resetPasswordHappyPath = await verifyResetPasswordMailLinkHappyPath();
+  if (resetPasswordHappyPath.failed) failed = true;
+  results.push(resetPasswordHappyPath);
   const invitationPointers = await verifyAuthenticatedDirectGate(
     "gateway-authenticated-invitation-pointer-ownership",
     "/accept-invitation?id=qa-invitation",

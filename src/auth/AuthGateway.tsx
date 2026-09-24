@@ -3,6 +3,7 @@ import {
   useEffect,
   useContext,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -60,6 +61,7 @@ import {
   useEarthExperiencePreference,
 } from "../journey/EarthExperienceProvider";
 import { authClient } from "./auth-client";
+import { resolvePasswordResetOutcome, type PasswordResetOutcome } from "./passwordResetOutcome";
 
 type OrganizationSummary = {
   id: string;
@@ -257,7 +259,7 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
         });
         if (result.error) throw new Error(result.error.message);
         setMessageTone("success");
-        setMessage("如果这个邮箱已注册，重置链接已经发送。");
+        setMessage("如果这个邮箱已注册，请留意稍后收到的重置邮件。");
         return;
       }
 
@@ -382,53 +384,108 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   );
 }
 
+const RESET_PASSWORD_MESSAGES: Record<Exclude<PasswordResetOutcome, "invalid-link">, string> = {
+  success: "密码已更新，旧登录已失效。请返回登录。",
+  "password-too-short": "新密码太短，请输入至少 10 个字符。",
+  "password-too-long": "新密码太长，请输入不超过 128 个字符。",
+  "connection-lost": "连接中断，无法确认密码是否已更新。请先尝试用新密码登录；若无法登录，可重试或重新申请链接。",
+  unconfirmed: "无法确认密码是否已更新。请先尝试用新密码登录；若无法登录，可重试或重新申请链接。",
+};
+
 function ResetPassword() {
-  const token = new URLSearchParams(window.location.search).get("token") ?? "";
+  const search = new URLSearchParams(window.location.search);
+  const token = search.get("token") ?? "";
   const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
+  const [outcome, setOutcome] = useState<PasswordResetOutcome | null>(null);
+  const [hadUnknownResult, setHadUnknownResult] = useState(false);
   const [pending, setPending] = useState(false);
-  // #346: this page redeems the account surface's set-password link as well as
-  // the sign-in gate's reset link, and the server's single-use lifetime is the
-  // only place either one can be found expired. When it is, the person is
-  // handed back to the surface that can send another — with the marker only,
-  // never the token.
-  const [linkExpired, setLinkExpired] = useState(false);
+  const resetAttempt = useRef(0);
+  const resetPending = useRef(false);
+  const resetInput = useRef<HTMLInputElement>(null);
+  useEffect(() => () => { resetAttempt.current++; }, []);
+
+  // Better Auth answers malformed, expired and already-used links with the
+  // same INVALID_TOKEN code. Only the server knows which happened.
+  const invalidLink = !token || outcome === "invalid-link";
+  const message = !token
+    ? search.get("error") === "INVALID_TOKEN"
+      ? passwordLinkSurfaceText("password-link-expired")
+      : "重置链接缺少必要信息，请重新申请链接。"
+    : outcome === "invalid-link"
+      ? hadUnknownResult
+        ? "这个链接已失效，前一次提交结果仍未确认。请先用前一次提交的密码尝试登录；若无法登录，请重新申请链接。"
+        : passwordLinkSurfaceText("password-link-expired")
+      : outcome ? RESET_PASSWORD_MESSAGES[outcome] : "";
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!token || resetPending.current) return;
+    const attempt = ++resetAttempt.current;
+    resetPending.current = true;
     setPending(true);
-    const result = await authClient.resetPassword({ token, newPassword: password });
-    setPending(false);
-    if (result.error || !result.data) {
-      const code = String(result.error?.code ?? "");
-      const expired = !result.error?.message || code.includes("TOKEN");
-      setLinkExpired(expired);
-      setMessage(expired
-        ? passwordLinkSurfaceText("password-link-expired")
-        : String(result.error?.message));
-      return;
+    setOutcome(null);
+    // A stalled request has an unknown result. Ignore any response after
+    // timeout, cancellation, retry or unmount.
+    const deadline = window.setTimeout(() => {
+      if (resetAttempt.current !== attempt) return;
+      resetAttempt.current++;
+      resetPending.current = false;
+      setPending(false);
+      setHadUnknownResult(true);
+      setOutcome("unconfirmed");
+    }, 15_000);
+    try {
+      const result = await authClient.resetPassword({ token, newPassword: password });
+      if (resetAttempt.current === attempt) {
+        const next = resolvePasswordResetOutcome({
+          kind: "response",
+          data: result.data,
+          error: result.error,
+        });
+        if (next === "unconfirmed") setHadUnknownResult(true);
+        setOutcome(next);
+      }
+    } catch {
+      if (resetAttempt.current === attempt) {
+        setHadUnknownResult(true);
+        setOutcome(resolvePasswordResetOutcome({ kind: "exception" }));
+      }
+    } finally {
+      window.clearTimeout(deadline);
+      if (resetAttempt.current === attempt) {
+        resetPending.current = false;
+        setPending(false);
+      }
     }
-    setLinkExpired(false);
-    setMessage("密码已更新，现在可以返回登录。");
   }
 
   return (
     <main className="auth-gate">
-      <section className="auth-card">
+      <section className="auth-card" aria-busy={pending}>
         <StartripsWordmark size={38} />
         <p className="auth-eyebrow">ACCOUNT RECOVERY</p>
         <h1>设置新密码</h1>
-        {token ? (
+        {!invalidLink && outcome !== "success" ? (
           <form onSubmit={submit}>
             <label>
               <span>新密码</span>
-              <input required minLength={10} maxLength={128} type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} />
+              <input ref={resetInput} required minLength={10} maxLength={128} type="password" autoComplete="new-password" value={password} disabled={pending} onChange={(event) => setPassword(event.target.value)} />
             </label>
             <button className="auth-primary" type="submit" disabled={pending}>{pending ? "请稍候…" : "更新密码"}</button>
+            {pending ? <button className="auth-link" type="button" onClick={() => {
+              resetAttempt.current++;
+              resetPending.current = false;
+              setPending(false);
+              setHadUnknownResult(true);
+              setOutcome("unconfirmed");
+              window.requestAnimationFrame(() => resetInput.current?.focus());
+            }}>取消等待</button> : null}
           </form>
-        ) : <p className="auth-message">重置链接无效或缺少 token。</p>}
-        {message ? <p className="auth-message" role="status">{message}</p> : null}
-        {linkExpired ? <a className="auth-link" href={`/?${EXPIRED_PASSWORD_LINK_QUERY}`}>重新发送设置链接</a> : null}
+        ) : null}
+        {message ? <p className="auth-message" role={outcome === "success" ? "status" : "alert"}>{message}</p> : null}
+        {invalidLink || outcome === "connection-lost" || outcome === "unconfirmed"
+          ? <a className="auth-link" href={`/?${EXPIRED_PASSWORD_LINK_QUERY}`}>重新申请重置链接</a>
+          : null}
         <a className="auth-link" href="/">返回登录</a>
       </section>
     </main>
