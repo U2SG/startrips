@@ -458,6 +458,50 @@ describe("an unconfigured deployment", () => {
 });
 
 describe("a configured deployment", () => {
+  it("reviews the whole route and accepts only IDs from the supplied map candidates", async () => {
+    enableProviders();
+    const plan = {
+      sourceTitle: "Coast trip",
+      days: [{ dayNumber: 1, title: "San Francisco", region: "California" }],
+      entries: [{
+        index: 0, name: "金门大桥", aliases: ["Golden Gate Bridge"],
+        dayNumber: 1, role: "attraction", sourceInvalid: false,
+        countryCode: "US", searchArea: "San Francisco, California",
+        candidates: [{ id: "W:1", label: "Golden Gate Bridge", context: "San Francisco, California, United States", countryCode: "US" }],
+      }],
+    };
+    upstream.mockResolvedValueOnce(new Response(JSON.stringify({
+      contractVersion: 1,
+      decisions: [
+        { index: 0, candidateId: "W:1", correctedQuery: null },
+        { index: 0, candidateId: "W:forged", correctedQuery: "Wrong" },
+      ],
+    })));
+
+    const response = await app.request("/api/itinerary-import/review", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ plan }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      decisions: [{ index: 0, candidateId: "W:1", correctedQuery: null }],
+    });
+    const sent = JSON.parse(String(upstream.mock.calls[0][1]?.body));
+    expect(sent.document).toEqual({ kind: "review-locations", plan });
+  });
+
+  it("rejects an unbounded or malformed location review before calling the model", async () => {
+    enableProviders();
+    const response = await app.request("/api/itinerary-import/review", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ plan: { sourceTitle: null, days: [], entries: [{ index: 0, candidates: [] }] } }),
+    });
+    expect(response.status).toBe(400);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
   it("returns versioned structured candidates and no executable content", async () => {
     enableProviders();
     upstream

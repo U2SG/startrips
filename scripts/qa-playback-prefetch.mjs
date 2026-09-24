@@ -288,6 +288,26 @@ async function readQaTrace(page) {
   }));
 }
 
+async function clickAtReadBoundary(page, ariaLabel) {
+  const selector = `button[aria-label="${ariaLabel}"]`;
+  // Capture the actual click before React advances intent; locator.click may
+  // wait while the previous intent legitimately issues more reads.
+  await page.evaluate((buttonSelector) => {
+    const trace = window.__qaPlaybackPrefetch;
+    trace.clickReadBoundary = null;
+    const captureClick = (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest(buttonSelector)) return;
+      trace.clickReadBoundary = trace.reads.length;
+      document.removeEventListener("click", captureClick, true);
+    };
+    document.addEventListener("click", captureClick, true);
+  }, selector);
+  await page.locator(selector).click();
+  const boundary = await page.evaluate(() => window.__qaPlaybackPrefetch.clickReadBoundary);
+  if (boundary === null) throw new Error(`No click boundary recorded for ${ariaLabel}`);
+  return boundary;
+}
+
 async function playbackIntentState(page) {
   return page.locator(".journey-playback").evaluate((overlay) => ({
     revision: Number(overlay.getAttribute("data-playback-intent") ?? 0),
@@ -758,20 +778,18 @@ try {
     await setTempo(stepRun.page, "fast");
     await waitForRenderedMediaSteps(stepRun.page, WARMUP_MEDIA_STEPS, 60_000);
     const beforeNext = await playbackIntentState(stepRun.page);
-    const traceBeforeNext = await readQaTrace(stepRun.page);
-    await stepRun.page.locator('button[aria-label="下一个章节"]').click();
+    const readsBeforeNext = await clickAtReadBoundary(stepRun.page, "下一个章节");
     const nextIntent = await waitForIntentAdvance(stepRun.page, beforeNext.revision);
     const nextLanded = await waitForRenderedMediaAtIntent(stepRun.page, nextIntent.revision);
     const afterNextTrace = await readQaTrace(stepRun.page);
-    const nextBoundary = revisionBoundaryReads(afterNextTrace, traceBeforeNext.reads.length, nextIntent.revision);
+    const nextBoundary = revisionBoundaryReads(afterNextTrace, readsBeforeNext, nextIntent.revision);
 
     const beforeBack = await playbackIntentState(stepRun.page);
-    const traceBeforeBack = await readQaTrace(stepRun.page);
-    await stepRun.page.locator('button[aria-label="上一个章节"]').click();
+    const readsBeforeBack = await clickAtReadBoundary(stepRun.page, "上一个章节");
     const backIntent = await waitForIntentAdvance(stepRun.page, beforeBack.revision);
     const backLanded = await waitForRenderedMediaAtIntent(stepRun.page, backIntent.revision);
     const afterBackTrace = await readQaTrace(stepRun.page);
-    const backBoundary = revisionBoundaryReads(afterBackTrace, traceBeforeBack.reads.length, backIntent.revision);
+    const backBoundary = revisionBoundaryReads(afterBackTrace, readsBeforeBack, backIntent.revision);
     const measurement = {
       label: "playback-prefetch-next-back-fast",
       nextRevision: nextIntent.revision,

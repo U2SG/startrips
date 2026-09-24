@@ -170,6 +170,12 @@ type JourneyComposerProps = {
   open: boolean;
   journey?: Journey | null;
   initialUnknownCreateAttempt?: UnknownJourneyCreateAttempt | null;
+  initialImport?: {
+    points: readonly RouteDraftPoint[];
+    title: string | null;
+    startedOn: string | null;
+    endedOn: string | null;
+  } | null;
   onClose: (unknownCreateAttempt?: UnknownJourneyCreateAttempt | null) => void;
   onSaved: (
     result: JourneySaveResult,
@@ -349,6 +355,7 @@ export function JourneyComposer({
   open,
   journey,
   initialUnknownCreateAttempt = null,
+  initialImport = null,
   onClose,
   onSaved,
   onGlobePickRequest,
@@ -364,6 +371,7 @@ export function JourneyComposer({
     () => journey
       ? journeyToDraftPoints(journey)
       : recoveryRoutePoints?.map((point) => ({ ...point }))
+        ?? (recoveryInput ? null : initialImport?.points.map((point) => ({ ...point })))
         ?? (recoveryInput?.routePoints ?? []).map((point) => ({
           draftId: draftId(),
           latitude: Number(point.latitude),
@@ -387,11 +395,11 @@ export function JourneyComposer({
     LocationSearchResponse["attribution"]
   >(null);
   const [searchPending, setSearchPending] = useState(false);
-  const [title, setTitle] = useState(journey?.title ?? recoveryInput?.title ?? "");
+  const [title, setTitle] = useState(journey?.title ?? recoveryInput?.title ?? initialImport?.title ?? "");
   const [startedOn, setStartedOn] = useState(
-    () => journey?.startedOn ?? recoveryInput?.startedOn ?? new Date().toISOString().slice(0, 10),
+    () => journey?.startedOn ?? recoveryInput?.startedOn ?? initialImport?.startedOn ?? new Date().toISOString().slice(0, 10),
   );
-  const [endedOn, setEndedOn] = useState(journey?.endedOn ?? recoveryInput?.endedOn ?? "");
+  const [endedOn, setEndedOn] = useState(journey?.endedOn ?? recoveryInput?.endedOn ?? initialImport?.endedOn ?? "");
   const [note, setNote] = useState(journey?.note ?? recoveryInput?.note ?? "");
   const [lightColor, setLightColor] = useState(journey?.lightColor ?? recoveryInput?.lightColor ?? LIGHT_COLORS[0]);
   const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? recoveryInput?.lightEffect ?? null);
@@ -2128,6 +2136,14 @@ export function JourneyComposer({
                   </nav>
                   {routeHeadingFragment}
                   <div className="journey-composer__route-tools">
+                    <button
+                      className="journey-composer__import-shortcut"
+                      type="button"
+                      onClick={() => enterMobileTask("location")}
+                    >
+                      <IconUpload size={18} stroke={1.4} aria-hidden="true" />
+                      导入已有行程
+                    </button>
                     {routeSearchFragment}
                     {reverseAttributionFragment}
                   </div>
@@ -2165,8 +2181,8 @@ export function JourneyComposer({
                   ) : null}
                   {activeMobileTask === "location" ? (
                     <div className="journey-composer__route-tools">
-                      {globePickFragment}
                       {itineraryImportFragment}
+                      {globePickFragment}
                       {preciseLocationFragment}
                     </div>
                   ) : null}
@@ -2193,8 +2209,8 @@ export function JourneyComposer({
                     {globePickFragment}
                     {reverseAttributionFragment}
                   </div>
-                  {routeListFragment}
                   {itineraryImportFragment}
+                  {routeListFragment}
                   {preciseLocationFragment}
                 </section>
               </>
