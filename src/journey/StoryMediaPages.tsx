@@ -16,7 +16,14 @@ type VideoRenewal = {
   id: string; src: string; generation?: number; time: number; muted: boolean; volume: number; playbackRate: number;
   seekIssued: boolean; seekCompleted: boolean;
 };
-export type StoryMediaPagesHandle = { cancelGesture: () => void };
+type RetainedVideo = Pick<VideoRenewal, "id" | "time" | "muted" | "volume" | "playbackRate"> & {
+  frame: HTMLCanvasElement;
+};
+export type StoryMediaPagesHandle = {
+  cancelGesture: () => void;
+  heldVideo: () => RetainedVideo | null;
+  adoptHeldVideo: (video: RetainedVideo) => boolean;
+};
 type MediaDrag = {
   base: HTMLDivElement;
   baseId: string;
@@ -191,6 +198,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const bindingRef = useRef(binding);
   bindingRef.current = binding;
   const renewal = useRef<VideoRenewal | null>(null);
+  const requestedSeek = useRef<{ id: string; src: string; generation?: number; time: number } | null>(null);
   const [liveReady, setLiveReady] = useState<string | null>(null);
   const bindVideo = useCallback((element: HTMLVideoElement | null) => {
     liveVideo.current = element;
@@ -321,10 +329,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const liveKey = `${binding.id}:${binding.src}:${binding.generation ?? ""}`;
   const liveSourceMatches = (element: HTMLVideoElement) => Boolean(binding.id && binding.src
     && element.currentSrc === new URL(binding.src, document.baseURI).href);
-  const liveMatches = (element: HTMLVideoElement) => liveSourceMatches(element)
+  const liveMatches = (element: HTMLVideoElement) => !element.error && liveSourceMatches(element)
     && element.readyState >= 2 && element.videoWidth > 0 && !element.seeking;
   const recordLiveReady = (event?: { type: string }) => {
-    if (!liveVideo.current || !liveSourceMatches(liveVideo.current)) return;
+    if (!liveVideo.current || liveVideo.current.error || !liveSourceMatches(liveVideo.current)) return;
     const pending = renewal.current;
     if (pending && pending.id === binding.id && pending.src === binding.src
       && pending.generation === binding.generation) {
@@ -347,6 +355,33 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     rememberLiveFrame();
     setLiveReady(liveKey);
   };
+  const recordLiveError = () => {
+    const video = liveVideo.current;
+    const source = bindingRef.current;
+    // An expired URL can fail on the next uncached native seek before the
+    // expiry sweep runs. Keep the last decoded picture and the requested seek
+    // time so Retry can renew the read instead of replacing the stage with a
+    // blank unavailable-media panel.
+    if (active && video && source.id === props.currentId && source.src
+      && frames.current.get(source.id)?.canvas && !renewal.current) {
+      const seek = requestedSeek.current;
+      renewal.current = {
+        id: source.id, src: source.src, generation: source.generation,
+        time: seek?.id === source.id && seek.src === source.src
+          && seek.generation === source.generation ? seek.time : video.currentTime,
+        muted: video.muted, volume: video.volume, playbackRate: video.playbackRate,
+        seekIssued: false, seekCompleted: false,
+      };
+    }
+    setLiveReady(null);
+    setFailedLiveSource(liveKey);
+  };
+  useLayoutEffect(() => {
+    // Close can hand a retained fullscreen frame to the inactive inline stage
+    // after its new source has already decoded. In that case no fresh browser
+    // event is guaranteed; prepare the inherited seek when it becomes active.
+    if (active && renewal.current?.id === props.currentId) recordLiveReady();
+  }, [active, props.currentId, binding.id, binding.src, binding.generation, revision]);
   const reportImageError = (image: HTMLImageElement, id: string, url: string) => {
     const read = latest.current.reads[id];
     if (!image.isConnected || image.parentElement?.dataset.mediaPageId !== id
@@ -605,7 +640,32 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     dragSprings.current = [];
   }
 
-  useImperativeHandle(stageRef, () => ({ cancelGesture }));
+  useImperativeHandle(stageRef, () => ({
+    cancelGesture,
+    heldVideo: () => {
+      const held = renewal.current;
+      const frame = held ? frames.current.get(held.id)?.canvas : null;
+      return active && held?.id === props.currentId && frame
+        ? { id: held.id, time: held.time, muted: held.muted, volume: held.volume,
+          playbackRate: held.playbackRate, frame } : null;
+    },
+    adoptHeldVideo: (held) => {
+      const read = latest.current.reads[held.id];
+      if (latest.current.currentId !== held.id || read?.status !== "ready") return false;
+      pendingFrames.current.get(held.id)?.();
+      pendingFrames.current.delete(held.id);
+      liveVideo.current?.pause();
+      frames.current.set(held.id, { url: read.url, generation: read.generation,
+        state: "waiting", canvas: held.frame });
+      renewal.current = { id: held.id, src: read.url, generation: read.generation,
+        time: held.time, muted: held.muted, volume: held.volume,
+        playbackRate: held.playbackRate, seekIssued: false, seekCompleted: false };
+      setLiveReady(null);
+      setFailedLiveSource(null);
+      updateRevision((value) => value + 1);
+      return true;
+    },
+  }));
 
   function mediaGestureCanStart(target: EventTarget | null) {
     if (!(target instanceof Element)) return false;
@@ -867,7 +927,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   }, []);
 
   const videoOffset = binding.id === props.currentId ? 0 : binding.id === props.incomingId ? direction : 2;
-  const videoVisible = active && !movingId && props.videoAssetId === binding.id && liveReady === liveKey
+  const videoVisible = active && !movingId && props.videoAssetId === binding.id
+    && liveReady === liveKey && failedLiveSource !== liveKey
     && binding.id === props.currentId;
   const heldRenewalFrame = renewal.current?.id === props.currentId
     && Boolean(frames.current.get(props.currentId ?? "")?.canvas);
@@ -1105,8 +1166,21 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           "data-story-read-generation": videoVisible ? binding.generation : undefined,
         },
         onLoadedMetadata: recordLiveReady, onLoadedData: recordLiveReady,
-        onCanPlay: recordLiveReady, onSeeked: recordLiveReady,
-        onError: () => setFailedLiveSource(liveKey),
+        onCanPlay: recordLiveReady,
+        onPause: rememberLiveFrame,
+        onSeeking: () => {
+          const video = liveVideo.current;
+          if (!video || !active || binding.id !== props.currentId || !binding.src || renewal.current) return;
+          requestedSeek.current = { id: binding.id, src: binding.src,
+            generation: binding.generation, time: video.currentTime };
+        },
+        onSeeked: (event) => {
+          if (!event.currentTarget.error && event.currentTarget.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            requestedSeek.current = null;
+          }
+          recordLiveReady(event);
+        },
+        onError: recordLiveError,
       }) : null}
     </div>
     {!currentReady && !heldRenewalFrame && !props.incomingId && props.currentId

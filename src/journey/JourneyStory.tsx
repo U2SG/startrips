@@ -960,6 +960,20 @@ export function JourneyStory({
     // Restore the original decoded transport before disposing its intent.
     if (previousHandoff?.toFullscreen !== nextFullscreen
       && previousHandoff?.restoreSource?.()) return;
+    if (!nextFullscreen) {
+      const held = fullscreenStageRef.current?.heldVideo();
+      if (held && inlineStageRef.current?.adoptHeldVideo(held)) {
+        // The source is a decoded canvas while its single video node reloads.
+        // Give that same frame and intended seek to inline in one commit; a
+        // video morph here would have no decoded source transport to claim.
+        ++videoHandoffGenerationRef.current;
+        cancelSharedElementMorph();
+        previousHandoff?.dispose();
+        setVideoResumeBlocked(null);
+        flushSync(() => setFullscreen(false));
+        return;
+      }
+    }
     const generation = ++videoHandoffGenerationRef.current;
     cancelSharedElementMorph();
     previousHandoff?.dispose();
@@ -1029,7 +1043,7 @@ export function JourneyStory({
         overlayHidden: fullscreenRef.current?.hidden,
         stagePresent: stage !== null,
         currentPageId: stage?.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId,
-        stageInterrupted: Boolean(stage?.querySelector('[data-media-incoming="true"], [role="alert"]')),
+        stageInterrupted: Boolean(stage?.querySelector('[data-media-incoming="true"], [data-media-handoff-interrupt="true"]')),
       });
     };
     if (videoHandoff && sourceVideo) videoHandoff.restoreSource = () => {
@@ -1205,7 +1219,7 @@ export function JourneyStory({
           overlayHidden: fullscreenRef.current?.hidden,
           stagePresent: stage !== null,
           currentPageId: stage?.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId,
-          stageInterrupted: Boolean(stage?.querySelector('[data-media-incoming="true"], [role="alert"]')),
+          stageInterrupted: Boolean(stage?.querySelector('[data-media-incoming="true"], [data-media-handoff-interrupt="true"]')),
         });
       },
       onCleanup: videoHandoff ? () => {
@@ -1815,19 +1829,14 @@ export function JourneyStory({
   const autoplayVideoCandidateRead = autoplayVideoCandidate
     ? mediaReads[autoplayVideoCandidate.id]
     : null;
-  const protectedPlaybackRead = useRef<string | null>(null);
-  protectedPlaybackRead.current = playing && activeAsset?.mimeType.startsWith("video/") ? activeAsset.id : null;
   const protectedVideoRead = useCallback((assetId: string) => {
-    if (protectedPlaybackRead.current === assetId || videoHandoffRef.current?.id === assetId) return true;
-    // Fullscreen owns the shown video's time until it hands that time back to
-    // inline. Refreshing one hidden stage during that interval would make Back
-    // land on the renewed video's first frame instead of the paused position.
-    if (fullscreenRef.current && !fullscreenRef.current.hidden
-      && fullscreenVideoRef.current?.dataset.sharedMediaId === assetId) return true;
-    // Native controls can play a clip independently of Story autoplay. An
-    // in-flight renewal must not replace that transport or a fullscreen morph.
+    if (videoHandoffRef.current?.id === assetId) return true;
+    // A settled paused fullscreen video renews in its visible stage. The
+    // media page retains its decoded frame and restores the native seek/time
+    // before the refreshed transport is exposed. Active playback and seeks
+    // still own their current bytes until they finish or fail.
     return [storyVideoRef.current, fullscreenVideoRef.current].some((video) =>
-      Boolean(video && video.dataset.sharedMediaId === assetId
+      Boolean(video && !video.error && video.dataset.sharedMediaId === assetId
         && (video.seeking || (!video.paused && !video.ended))));
   }, []);
   const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
@@ -2483,7 +2492,7 @@ export function JourneyStory({
         </div>
       ) : null}
       {shownAsset && shownRead?.status === "error" ? (
-        <div className="journey-story__media-state starlight-media-state is-error" role="alert">
+        <div className="journey-story__media-state starlight-media-state is-error" role="alert" data-media-handoff-interrupt="true">
           <StartripsJourneyCue state="rest" size={58} className="starlight-media-state__cue" />
           <div className="starlight-media-state__copy">
             <strong>媒体暂时无法打开</strong>
