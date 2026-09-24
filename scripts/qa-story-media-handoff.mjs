@@ -67,6 +67,21 @@ function record(entry) {
   if (entry.failed) failed = true;
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((ready) => { resolve = ready; });
+  return { promise, resolve };
+}
+
+async function waitForFixture(promise, timeoutMs, label) {
+  let timeout;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(`${label} did not occur within ${timeoutMs}ms`)), timeoutMs);
+    })]);
+  } finally { clearTimeout(timeout); }
+}
+
 const browser = await launchQaBrowser();
 
 /**
@@ -148,7 +163,8 @@ async function observedPointerTypes(page) {
  */
 async function createStoryPage({
   mobile = false, viewport, reducedMotion = "no-preference",
-  readDelays = {}, byteDelays = {},
+  readDelays = {}, byteDelays = {}, renewPausedVideo = false,
+  renewalByteFailure = false, renewalReadFailure = false,
 } = {}) {
   const page = await browser.newPage({
     viewport: viewport ?? (mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 }),
@@ -161,6 +177,18 @@ async function createStoryPage({
   const consoleErrors = [];
   const pageErrors = [];
   const mediaDelays = [];
+  const renewalReads = [];
+  const renewalBytes = [];
+  const renewalReadStarted = deferred();
+  const renewalByteStarted = deferred();
+  const retryReadStarted = deferred();
+  const retryByteStarted = deferred();
+  const releaseRenewalRead = deferred();
+  const releaseRenewalBytes = deferred();
+  const releaseRetryRead = deferred();
+  const releaseRetryBytes = deferred();
+  const readCounts = new Map();
+  const initialRead = { issuedAt: null, expiresAt: null };
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.addInitScript(installStageSampler);
@@ -171,15 +199,65 @@ async function createStoryPage({
   await page.route("**/api/uploads/assets/*/read-url", async (route) => {
     const request = route.request().url();
     const asset = Object.keys(ASSET_URLS).find((id) => request.includes(id));
+    const count = (readCounts.get(asset) ?? 0) + 1;
+    readCounts.set(asset, count);
+    if (renewPausedVideo && asset === V1 && count > 1) {
+      const entry = { count, startedAt: Date.now(), releasedAt: null };
+      renewalReads.push(entry);
+      if ((renewalByteFailure || renewalReadFailure) && count === 3) {
+        retryReadStarted.resolve(entry);
+        await releaseRetryRead.promise;
+      } else {
+        renewalReadStarted.resolve(entry);
+        await releaseRenewalRead.promise;
+      }
+      entry.releasedAt = Date.now();
+      if (renewalReadFailure && count === 2) {
+        entry.outcome = "failed";
+        return route.fulfill({ status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: "READ_TEMPORARILY_UNAVAILABLE", message: "signed read unavailable" }) });
+      }
+      entry.outcome = "ready";
+    }
     await hold(readDelays[asset] ?? 0);
+    const expiresAt = Date.now() + (renewPausedVideo && asset === V1 && count === 1
+      ? 5_000 : 900_000);
+    if (renewPausedVideo && asset === V1 && count === 1) {
+      initialRead.issuedAt = Date.now();
+      initialRead.expiresAt = expiresAt;
+    }
     return route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        url: ASSET_URLS[asset] ?? WIDE_PHOTO,
-        expiresAt: new Date(Date.now() + 900_000).toISOString(),
+        url: renewPausedVideo && asset === V1
+          ? `${CLIP}?storyRenewal=${count}` : ASSET_URLS[asset] ?? WIDE_PHOTO,
+        expiresAt: new Date(expiresAt).toISOString(),
       }),
     });
+  });
+  if (renewPausedVideo) await page.route(/\/demo-media\/east-star-orbit\.webm\?storyRenewal=\d+$/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get("storyRenewal") === "1") {
+      return route.continue();
+    }
+    const token = new URL(route.request().url()).searchParams.get("storyRenewal");
+    const entry = { url: route.request().url(), range: route.request().headers().range ?? null,
+      startedAt: Date.now(), releasedAt: null };
+    renewalBytes.push(entry);
+    if ((renewalByteFailure || renewalReadFailure) && token === "3") {
+      retryByteStarted.resolve(entry);
+      await releaseRetryBytes.promise;
+    } else {
+      renewalByteStarted.resolve(entry);
+      await releaseRenewalBytes.promise;
+    }
+    entry.releasedAt = Date.now();
+    if (renewalByteFailure && token === "2") {
+      entry.outcome = "failed";
+      return route.fulfill({ status: 503, contentType: "text/plain", body: "renewed media unavailable" });
+    }
+    entry.outcome = "continued";
+    return route.continue();
   });
   for (const [asset, ms] of Object.entries(byteDelays)) {
     if (!ms) continue;
@@ -194,7 +272,16 @@ async function createStoryPage({
   }
   await page.goto(`${origin}${storyPath}`, { waitUntil: "domcontentloaded" });
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
-  return { page, consoleErrors, pageErrors, mediaDelays };
+  return { page, consoleErrors, pageErrors, mediaDelays,
+    renewal: renewPausedVideo ? {
+      reads: renewalReads, bytes: renewalBytes, initialRead,
+      readStarted: renewalReadStarted.promise, byteStarted: renewalByteStarted.promise,
+      retryReadStarted: retryReadStarted.promise, retryByteStarted: retryByteStarted.promise,
+      releaseRead: () => releaseRenewalRead.resolve(),
+      releaseBytes: () => releaseRenewalBytes.resolve(),
+      releaseRetryRead: () => releaseRetryRead.resolve(),
+      releaseRetryBytes: () => releaseRetryBytes.resolve(),
+    } : null };
 }
 
 /* eslint-disable no-undef -- this function body is serialized into the page. */
@@ -2100,6 +2187,76 @@ function gradePausedFrameIdentity(before, after) {
     || pairs.length < 8 || meanDelta > 12 || after.retainedRatio < 0.75 || after.signalMeanDelta > 20 };
 }
 
+/** The retained page canvas must actually be the paused frame on screen. */
+async function heldRenewalFramePixels(page, rootSelector, { videoHidden = true } = {}) {
+  const screenshot = (await page.screenshot()).toString("base64");
+  return await page.evaluate(async ({ selector, png, expectedHidden }) => {
+    const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const pageNode = stage?.querySelector('[data-media-page="current"]');
+    const canvas = pageNode?.querySelector("canvas");
+    const video = stage?.querySelector(".story-media-pages__video video");
+    const reference = window.__qaPausedFrameReference;
+    const source = expectedHidden ? canvas : video;
+    const sourceWidth = source instanceof HTMLVideoElement ? source.videoWidth : source?.width;
+    const sourceHeight = source instanceof HTMLVideoElement ? source.videoHeight : source?.height;
+    if (!(source instanceof HTMLCanvasElement || source instanceof HTMLVideoElement)
+      || !sourceWidth || !sourceHeight || !(video instanceof HTMLVideoElement) || !reference?.pixels) {
+      return { failed: true, reason: "renewal has no retained decoded frame" };
+    }
+    const image = new Image();
+    image.src = `data:image/png;base64,${png}`;
+    await image.decode();
+    const box = source.getBoundingClientRect();
+    const scale = Math.min(box.width / sourceWidth, box.height / sourceHeight);
+    const width = sourceWidth * scale, height = sourceHeight * scale;
+    const left = box.left + (box.width - width) / 2;
+    const top = box.top + (box.height - height) / 2;
+    const referenceCanvas = document.createElement("canvas");
+    referenceCanvas.width = 64; referenceCanvas.height = 64;
+    const visible = document.createElement("canvas");
+    visible.width = 64; visible.height = 64;
+    const sourceContext = referenceCanvas.getContext("2d", { willReadFrequently: true });
+    const visibleContext = visible.getContext("2d", { willReadFrequently: true });
+    if (!sourceContext || !visibleContext) return { failed: true, reason: "renewal pixel context unavailable" };
+    sourceContext.drawImage(source, 0, 0, 64, 64);
+    const ratioX = image.naturalWidth / innerWidth, ratioY = image.naturalHeight / innerHeight;
+    visibleContext.drawImage(image, left * ratioX, top * ratioY, width * ratioX, height * ratioY,
+      0, 0, 64, 64);
+    const frame = window.__qaSpatialFrameEvidence(reference.pixels,
+      sourceContext.getImageData(0, 0, 64, 64).data);
+    const screenReference = new Uint8ClampedArray(reference.pixels);
+    const screenPixels = visibleContext.getImageData(0, 0, 64, 64).data;
+    const notice = document.querySelector(`${selector} .journey-story__media-state.is-over-media[role="alert"]`);
+    const noticeBox = notice?.getBoundingClientRect();
+    let maskedRows = 0;
+    if (noticeBox) for (let y = 0; y < 64; y += 1) {
+      const sampleY = top + height * (y + 0.5) / 64;
+      if (sampleY < noticeBox.top || sampleY > noticeBox.bottom) continue;
+      maskedRows += 1;
+      for (let x = 0; x < 64; x += 1) {
+        const at = (y * 64 + x) * 4;
+        for (const pixels of [screenReference, screenPixels]) {
+          pixels[at] = 0; pixels[at + 1] = 0; pixels[at + 2] = 0;
+        }
+      }
+    }
+    const screen = window.__qaSpatialFrameEvidence(screenReference, screenPixels);
+    const hit = document.elementFromPoint(left + width / 2, top + height * 0.7);
+    const wrong = (quality) => quality.aligned < 0.8 || quality.margin < 0.08
+      || quality.visibleCells < Math.ceil(quality.sourceCells * 0.6)
+      || quality.energyRatio < 0.5 || quality.energyRatio > 2;
+    return {
+      frame, screen, maskedRows, currentId: pageNode?.getAttribute("data-media-page-id") ?? null,
+      currentReady: pageNode?.getAttribute("data-media-page-ready") ?? null,
+      videoHidden: video.hidden, videoSrc: video.getAttribute("src"),
+      hitIsSource: hit === source, hitTag: hit instanceof Element ? hit.tagName : null,
+      failed: wrong(frame) || wrong(screen) || maskedRows > 24 || hit !== source
+        || pageNode?.getAttribute("data-media-page-ready") !== (expectedHidden ? "false" : "true")
+        || video.hidden !== expectedHidden,
+    };
+  }, { selector: rootSelector, png: screenshot, expectedHidden: videoHidden });
+}
+
 /** Screenshot pixels over the active clone must match its decoded canvas. */
 async function activeCloneScreenPixels(page, assetId, { stationary = false } = {}) {
   await page.waitForFunction(({ expected, still }) => {
@@ -3638,6 +3795,258 @@ try {
         diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
     } finally {
+      await session.page.close();
+    }
+  }
+
+  // A short signed read expires while the viewer is paused at a real native
+  // seek. Hold both the renewal response and its video bytes so the old frame
+  // has to remain on screen until the new source reaches the same media time.
+  {
+    const session = await createStoryPage({ mobile: false, renewPausedVideo: true });
+    const progress = {};
+    const name = "story-paused-video-signed-read-renewal";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.before = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.renewalRead = await waitForFixture(session.renewal.readStarted, 28_000, "signed-read renewal");
+      progress.duringRead = await videoHandoffState(page, STAGE);
+      await startSampler(page, STAGE);
+      session.renewal.releaseRead();
+      progress.renewalBytes = await waitForFixture(session.renewal.byteStarted, 5_000, "renewed video bytes");
+      await page.waitForFunction(() => {
+        const stage = document.querySelector('.journey-story__media [data-story-media-pages]');
+        const video = stage?.querySelector('.story-media-pages__video video');
+        const frame = stage?.querySelector('[data-media-page="current"] canvas');
+        return video instanceof HTMLVideoElement && video.hidden
+          && video.getAttribute('src')?.includes('storyRenewal=2')
+          && frame instanceof HTMLCanvasElement && frame.width > 0 && frame.height > 0;
+      }, undefined, { polling: "raf", timeout: 4_000 });
+      progress.held = await heldRenewalFramePixels(page, STAGE);
+      progress.fullscreenDisabledWhileHeld = await page.locator('.journey-story__fullscreen-entry').isDisabled();
+      session.renewal.releaseBytes();
+      progress.after = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.continuity = gradeContinuity(await stopSamplerFrames(page), { allowedAssets: [V1] });
+      progress.afterPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.renewedFrame = gradePausedFrameIdentity(progress.beforePixels, progress.afterPixels);
+      progress.afterPoint = await presentedVideoPoint(page, STAGE);
+      progress.fullscreenActivation = await clickHandoffButton(page, '.journey-story__fullscreen-entry');
+      progress.fullscreen = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      progress.fullscreenPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
+      progress.fullscreenFrame = gradePausedFrameIdentity(progress.afterPixels, progress.fullscreenPixels);
+      progress.close = await clickFullscreenClose(page);
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
+      progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.returnedFrame = gradePausedFrameIdentity(progress.fullscreenPixels, progress.returnedPixels);
+      progress.returnHit = await clickReturnedVideo(page);
+      const near = (left, right) => Number.isFinite(left) && Number.isFinite(right)
+        && Math.abs(left - right) <= 0.18;
+      record({ name,
+        claim: "a short signed read renews after real native seek and pause; a delayed URL and delayed bytes retain the old composited frame, then the single video seeks to the same time before fullscreen and Close return the same hit target",
+        ...progress, renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.beforePixels.failed || progress.held.failed || progress.continuity.failed
+          || progress.renewedFrame.failed || progress.fullscreenFrame.failed || progress.returnedFrame.failed
+          || progress.renewalRead.count !== 2 || progress.renewalRead.releasedAt === null
+          || progress.renewalBytes.releasedAt === null
+          || progress.duringRead.src !== progress.before.src
+          || !near(progress.duringRead.time, progress.before.time) || !progress.duringRead.paused
+          || progress.held.currentId !== V1 || !progress.held.videoSrc?.includes('storyRenewal=2')
+          || !progress.fullscreenDisabledWhileHeld
+          || progress.after.src === progress.before.src || !progress.after.src?.includes('storyRenewal=2')
+          || !near(progress.after.time, progress.before.time) || !progress.after.paused
+          || progress.after.muted !== progress.before.muted
+          || Math.abs(progress.after.volume - progress.before.volume) > 0.001
+          || Math.abs(progress.after.playbackRate - progress.before.playbackRate) > 0.001
+          || !progress.afterPoint.hitIsVideo || !progress.afterPoint.controls
+          || progress.fullscreen.src !== progress.after.src
+          || !near(progress.fullscreen.time, progress.after.time) || !progress.fullscreen.paused
+          || progress.returned.src !== progress.after.src
+          || !near(progress.returned.time, progress.after.time) || !progress.returned.paused
+          || progress.returnHit.failed
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      session.renewal.releaseRead();
+      session.renewal.releaseBytes();
+      await session.page.close();
+    }
+  }
+
+  for (const failure of ["read", "bytes"]) {
+    const session = await createStoryPage({ mobile: false, renewPausedVideo: true,
+      renewalReadFailure: failure === "read", renewalByteFailure: failure === "bytes" });
+    const progress = { failure };
+    const name = `story-paused-video-renewal-${failure}-failure-retry`;
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.before = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.renewalRead = await waitForFixture(session.renewal.readStarted, 28_000, "failing signed-read renewal");
+      session.renewal.releaseRead();
+      if (failure === "bytes") {
+        progress.renewalBytes = await waitForFixture(session.renewal.byteStarted, 5_000, "failing video bytes");
+        session.renewal.releaseBytes();
+      }
+      const notice = page.locator(`${STAGE} .journey-story__media-state.is-over-media[role="alert"]`);
+      await notice.waitFor({ state: "visible", timeout: 8_000 });
+      progress.errorFrame = await heldRenewalFramePixels(page, STAGE,
+        { videoHidden: failure === "bytes" });
+      progress.noWaitingCoverAtError = await page.locator(`${STAGE} .starlight-media-state.is-waiting`).count() === 0;
+      progress.retryClick = await clickHandoffButton(page,
+        `${STAGE} .journey-story__media-state.is-over-media[role="alert"] button`);
+      progress.retryRead = await waitForFixture(session.renewal.retryReadStarted, 5_000, "retry signed read");
+      progress.retryingLabel = await notice.locator("button").textContent();
+      progress.retryReadFrame = await heldRenewalFramePixels(page, STAGE,
+        { videoHidden: failure === "bytes" });
+      progress.noWaitingCoverDuringRetry = await page.locator(`${STAGE} .starlight-media-state.is-waiting`).count() === 0;
+      session.renewal.releaseRetryRead();
+      progress.retryBytes = await waitForFixture(session.renewal.retryByteStarted, 5_000, "retry video bytes");
+      await page.waitForFunction(() => {
+        const stage = document.querySelector('.journey-story__media [data-story-media-pages]');
+        const video = stage?.querySelector('.story-media-pages__video video');
+        return video instanceof HTMLVideoElement && video.hidden
+          && video.getAttribute('src')?.includes('storyRenewal=3');
+      }, undefined, { polling: "raf", timeout: 4_000 });
+      progress.retryByteFrame = await heldRenewalFramePixels(page, STAGE);
+      session.renewal.releaseRetryBytes();
+      progress.after = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await notice.waitFor({ state: "hidden", timeout: 4_000 });
+      progress.afterPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.frameIdentity = gradePausedFrameIdentity(progress.beforePixels, progress.afterPixels);
+      progress.afterPoint = await presentedVideoPoint(page, STAGE);
+      progress.unexpectedConsoleErrors = session.consoleErrors.filter((message) => !message.includes("503"));
+      record({ name,
+        claim: "a real expired paused video survives either a failed signed-read request or failed renewed bytes; a trusted Retry click leaves its original frame visible through the delayed retry request and bytes, then restores the same native time and hit target",
+        ...progress, renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.beforePixels.failed || progress.errorFrame.failed
+          || progress.retryReadFrame.failed || progress.retryByteFrame.failed
+          || progress.frameIdentity.failed || !progress.noWaitingCoverAtError
+          || !progress.noWaitingCoverDuringRetry || !progress.retryClick.hit.hitButton
+          || progress.retryingLabel?.trim() !== "正在重试…"
+          || progress.renewalRead.outcome !== (failure === "read" ? "failed" : "ready")
+          || (failure === "bytes" && progress.renewalBytes?.outcome !== "failed")
+          || progress.retryRead.count !== 3 || progress.retryRead.outcome !== "ready"
+          || progress.retryBytes.outcome !== "continued"
+          || !progress.after.src?.includes("storyRenewal=3") || !progress.after.paused
+          || Math.abs(progress.after.time - progress.before.time) > 0.18
+          || !progress.afterPoint.hitIsVideo || !progress.afterPoint.controls
+          || progress.unexpectedConsoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      session.renewal.releaseRead();
+      session.renewal.releaseBytes();
+      session.renewal.releaseRetryRead();
+      session.renewal.releaseRetryBytes();
+      await session.page.close();
+    }
+  }
+
+  // Fullscreen owns the paused transport until Close returns its position to
+  // inline. An expired signed read must be renewed by that active inline stage.
+  {
+    const session = await createStoryPage({ mobile: false, renewPausedVideo: true });
+    const progress = {};
+    const name = "story-paused-video-fullscreen-expiry-return-renewal";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.before = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
+      progress.fullscreen = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await page.waitForFunction((issuedAt) => Date.now() >= issuedAt + 25_000,
+        session.renewal.initialRead.issuedAt, { polling: "raf", timeout: 30_000 });
+      progress.fullscreenAfterExpiry = await videoHandoffState(page, FULLSCREEN);
+      progress.fullscreenPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
+      progress.fullscreenFrame = gradePausedFrameIdentity(progress.beforePixels, progress.fullscreenPixels);
+      progress.readsWhileFullscreen = session.renewal.reads.length;
+      progress.close = await clickFullscreenClose(page);
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
+      progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.returnedFrame = gradePausedFrameIdentity(progress.beforePixels, progress.returnedPixels);
+      progress.returnedPoint = await presentedVideoPoint(page, STAGE);
+      progress.renewalRead = await waitForFixture(session.renewal.readStarted, 28_000,
+        "inline renewal after fullscreen Close");
+      progress.duringRead = await videoHandoffState(page, STAGE);
+      session.renewal.releaseRead();
+      progress.renewalBytes = await waitForFixture(session.renewal.byteStarted, 5_000,
+        "inline video bytes after fullscreen Close");
+      await page.waitForFunction(() => {
+        const stage = document.querySelector('.journey-story__media [data-story-media-pages]');
+        const video = stage?.querySelector('.story-media-pages__video video');
+        const frame = stage?.querySelector('[data-media-page="current"] canvas');
+        return video instanceof HTMLVideoElement && video.hidden
+          && video.getAttribute('src')?.includes('storyRenewal=2')
+          && frame instanceof HTMLCanvasElement && frame.width > 0 && frame.height > 0;
+      }, undefined, { polling: "raf", timeout: 4_000 });
+      progress.held = await heldRenewalFramePixels(page, STAGE);
+      session.renewal.releaseBytes();
+      progress.after = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.afterPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.renewedFrame = gradePausedFrameIdentity(progress.beforePixels, progress.afterPixels);
+      progress.returnHit = await clickReturnedVideo(page);
+      const near = (left, right) => Number.isFinite(left) && Number.isFinite(right)
+        && Math.abs(left - right) <= 0.18;
+      record({ name,
+        claim: "fullscreen keeps ownership of an expired paused signed video; Close returns the same frame and native time, then the active inline stage renews with its old frame visible until the new seeked source is decoded and clickable",
+        ...progress, renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.beforePixels.failed || progress.fullscreenFrame.failed
+          || progress.returnedFrame.failed || progress.held.failed || progress.renewedFrame.failed
+          || progress.readsWhileFullscreen !== 0
+          || progress.fullscreenAfterExpiry.src !== progress.before.src
+          || !near(progress.fullscreenAfterExpiry.time, progress.before.time)
+          || !progress.fullscreenAfterExpiry.paused
+          || progress.returned.src !== progress.before.src
+          || !near(progress.returned.time, progress.before.time) || !progress.returned.paused
+          || !progress.returnedPoint.hitIsVideo
+          || progress.renewalRead.count !== 2 || progress.renewalRead.releasedAt === null
+          || progress.renewalBytes.releasedAt === null
+          || progress.duringRead.src !== progress.before.src
+          || !near(progress.duringRead.time, progress.before.time)
+          || !progress.held.videoSrc?.includes("storyRenewal=2")
+          || !progress.after.src?.includes("storyRenewal=2")
+          || !near(progress.after.time, progress.before.time) || !progress.after.paused
+          || progress.after.muted !== progress.before.muted
+          || Math.abs(progress.after.volume - progress.before.volume) > 0.001
+          || Math.abs(progress.after.playbackRate - progress.before.playbackRate) > 0.001
+          || progress.returnHit.failed
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      session.renewal.releaseRead();
+      session.renewal.releaseBytes();
       await session.page.close();
     }
   }
