@@ -588,6 +588,15 @@ function installStageSampler() {
     }
     return nonBlack;
   };
+  const snapshotPixels64 = (video) => {
+    const snapshot = document.createElement("canvas");
+    snapshot.width = video.videoWidth;
+    snapshot.height = video.videoHeight;
+    const context = snapshot.getContext("2d");
+    if (!context) return null;
+    context.drawImage(video, 0, 0);
+    return pixels64(snapshot);
+  };
   const videoFrameRings = new WeakMap();
   window.__qaArmVideoFrameRing = (selector) => {
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
@@ -601,8 +610,10 @@ function installStageSampler() {
       if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
         try {
           const pixels = pixels64(video);
+          const snapshotPixels = snapshotPixels64(video);
           ring.samples.push({ time: video.currentTime, mediaTime: metadata.mediaTime,
-            pixels, nonBlack: signalOf(pixels) });
+            pixels, nonBlack: signalOf(pixels),
+            snapshotPixels, snapshotNonBlack: signalOf(snapshotPixels) });
           if (ring.samples.length > 8) ring.samples.shift();
         } catch { /* The current event capture remains the fallback source. */ }
       }
@@ -626,6 +637,8 @@ function installStageSampler() {
       const pixels = pixels64(video);
       const source = { trigger, wallAt: Date.now(), asset: video.getAttribute("data-shared-media-id"),
         time: video.currentTime, paused: video.paused, pixels, nonBlack: signalOf(pixels) };
+      source.snapshotPixels = snapshotPixels64(video);
+      source.snapshotNonBlack = signalOf(source.snapshotPixels);
       source.nearbyFrames = (videoFrameRings.get(video)?.samples ?? [])
         .filter((frame) => Math.abs(frame.time - source.time) <= 0.3)
         .slice(-4);
@@ -642,6 +655,8 @@ function installStageSampler() {
           if (!settledPixels) return;
           source.settled = { time: video.currentTime, pixels: settledPixels,
             nonBlack: signalOf(settledPixels) };
+          source.settled.snapshotPixels = snapshotPixels64(video);
+          source.settled.snapshotNonBlack = signalOf(source.settled.snapshotPixels);
         } catch { /* The gesture frame remains the only admissible reference. */ }
       };
       queueMicrotask(() => {
@@ -729,9 +744,19 @@ function installStageSampler() {
           || retainedRatio < 0.7 || signalMeanDelta > 35 || meanDelta > 8 };
     };
     const candidates = [compare(source, "click")];
+    if (source.snapshotPixels) candidates.push(compare({
+      ...source, pixels: source.snapshotPixels, nonBlack: source.snapshotNonBlack,
+    }, "click-snapshot"));
     if (!source.paused && source.settled) candidates.push(compare(source.settled, "snapshot"));
+    if (!source.paused && source.settled?.snapshotPixels) candidates.push(compare({
+      ...source.settled, pixels: source.settled.snapshotPixels,
+      nonBlack: source.settled.snapshotNonBlack,
+    }, "settled-snapshot"));
     for (const [index, frame] of (source.nearbyFrames ?? []).entries()) {
       candidates.push(compare(frame, `presented-${index}`));
+      if (frame.snapshotPixels) candidates.push(compare({
+        ...frame, pixels: frame.snapshotPixels, nonBlack: frame.snapshotNonBlack,
+      }, `presented-${index}-snapshot`));
     }
     const matching = candidates.find((entry) => !entry.failed)
       ?? candidates.sort((left, right) => left.signalMeanDelta - right.signalMeanDelta)[0];
@@ -2058,6 +2083,14 @@ async function pausedVideoScreenPixels(page, rootSelector, diagnosticName = null
     const retainedRatio = reference.signal.length ? retained / reference.signal.length : 0;
     const signalMeanDelta = reference.signal.length ? signalDelta / reference.signal.length : 255;
     const visibleBright = samples.filter((sample) => Math.max(...sample.visible) > 24).length;
+    const picture = unobscuredSpatialDirect;
+    // A sparse star can move by one raster cell under compositor scaling.
+    // Compare the visible spatial pattern with the decoded frame and two wrong
+    // arrangements measured from this same frame; also reject a blank or
+    // heavily dimmed screen by its occupied cells and total light.
+    const visibleFrameWrong = picture.aligned < 0.8 || picture.margin < 0.08
+      || picture.visibleCells < Math.ceil(picture.sourceCells * 0.6)
+      || picture.energyRatio < 0.5 || picture.energyRatio > 2;
     return { meanDelta: Number(meanDelta.toFixed(1)), samples,
       spatialDirect, spatialRaster,
       unobscuredSpatialDirect, unobscuredSpatialRaster, nativeChromeTop: chromeTop,
@@ -2066,10 +2099,10 @@ async function pausedVideoScreenPixels(page, rootSelector, diagnosticName = null
       brightPixels: reference.brightPixels, spreadCells: reference.spreadCells,
       retainedCells, visibleBright, retainedRatio: Number(retainedRatio.toFixed(2)),
       signalMeanDelta: Number(signalMeanDelta.toFixed(1)),
+      visibleFrameWrong,
       failed: asset !== reference.asset || reference.brightPixels < 16 || reference.spreadCells < 3
-        || samples.length < 8 || visibleBright < Math.ceil(samples.length * 0.6)
-        || retainedCells < Math.ceil(reference.spreadCells * 0.6)
-        || samples.some((sample) => !sample.hitIsVideo || sample.offscreen) || meanDelta > 18
+        || samples.length < 8 || visibleFrameWrong
+        || samples.some((sample) => !sample.hitIsVideo || sample.offscreen)
         || retainedRatio < 0.75 || signalMeanDelta > 20 };
   }, { selector: rootSelector, png: screenshot, captureFrame: Boolean(diagnosticName),
     chromeTop: Number.isFinite(nativeChromeTop) ? nativeChromeTop : null });
@@ -2236,11 +2269,15 @@ async function activeCloneScreenPixels(page, assetId, { stationary = false } = {
       const visibleBright = samples.filter((sample) =>
         sample.visibleRgb && Math.max(...sample.visibleRgb) > 24).length;
       const meanDelta = samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length;
+      const picture = spatialDirect;
+      const visibleFrameWrong = picture.aligned < 0.8 || picture.margin < 0.08
+        || picture.visibleCells < Math.ceil(picture.sourceCells * 0.6)
+        || picture.energyRatio < 0.25 || picture.energyRatio > 2;
       return { box, samples, retainedCells, visibleBright, meanDelta,
-        spatialDirect, spatialRaster,
+        spatialDirect, spatialRaster, visibleFrameWrong,
         failed: samples.some((sample) => sample.offscreen)
           || retainedCells < Math.ceil(spreadCells * 0.6)
-          || visibleBright < Math.ceil(samples.length * 0.6) || meanDelta > 22 };
+          || visibleBright < Math.ceil(samples.length * 0.6) || visibleFrameWrong };
     };
     // A screenshot can land between rAF samples during a moving morph. Each
     // midpoint remains on the observed path, rather than fitting arbitrary
