@@ -4689,6 +4689,12 @@
   border-color: rgba(122, 244, 237, 0.5);
 }
 
+/* The authored display:grid on the content must not override the browser's
+   closed-details hiding rule when the Composer changes viewport. */
+.journey-itinerary-import-panel:not([open]) > .journey-itinerary-import {
+  display: none;
+}
+
 .journey-precise-location summary,
 .journey-itinerary-import-panel summary {
   min-height: 66px;

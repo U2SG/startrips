@@ -234,7 +234,7 @@ describe("applying a reviewed itinerary draft", () => {
   });
 
   it("treats a pasted flight between endpoints as a leg, not a place", () => {
-    const draft = draftOf("Day 1 · 2026-03-14 · Hong Kong\nflight Hong Kong to Los Angeles\n", "flight-text");
+    const draft = draftOf("Day 1 · 2026-03-14 · Hong Kong\nflight: Hong Kong to Los Angeles\n", "flight-text");
     expect(itineraryDraftEntries(draft)[0].transitEndpoints).toEqual({
       from: "Hong Kong", to: "Los Angeles",
     });
