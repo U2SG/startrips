@@ -542,6 +542,43 @@ function installStageSampler() {
     context.drawImage(source, 0, 0, 64, 64);
     return context.getImageData(0, 0, 64, 64).data;
   };
+  // Compare light across areas rather than single star texels. Rotated and
+  // shifted references are same-signal negative controls for a wrong picture.
+  window.__qaSpatialFrameEvidence = (reference, visible) => {
+    const source = Array(64).fill(0), screen = Array(64).fill(0);
+    for (let y = 4; y < 60; y += 1) for (let x = 4; x < 60; x += 1) {
+      const at = (y * 64 + x) * 4;
+      const cell = Math.floor((y - 4) / 7) * 8 + Math.floor((x - 4) / 7);
+      const light = (pixels) => Math.max(0,
+        (pixels[at] + pixels[at + 1] + pixels[at + 2]) / 3 - 12);
+      source[cell] += light(reference);
+      screen[cell] += light(visible);
+    }
+    const correlation = (left, right) => {
+      const meanLeft = left.reduce((sum, value) => sum + value, 0) / left.length;
+      const meanRight = right.reduce((sum, value) => sum + value, 0) / right.length;
+      let dot = 0, leftNorm = 0, rightNorm = 0;
+      for (let index = 0; index < left.length; index += 1) {
+        const a = left[index] - meanLeft, b = right[index] - meanRight;
+        dot += a * b; leftNorm += a * a; rightNorm += b * b;
+      }
+      return leftNorm > 0 && rightNorm > 0 ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
+    };
+    const rotated = source.map((_, index) => source[(7 - index % 8) * 8 + Math.floor(index / 8)]);
+    const shifted = source.map((_, index) => source[Math.floor(index / 8) * 8 + (index % 8 + 3) % 8]);
+    const aligned = correlation(source, screen);
+    const wrongRotation = correlation(rotated, screen);
+    const wrongShift = correlation(shifted, screen);
+    const sourceEnergy = source.reduce((sum, value) => sum + value, 0);
+    const visibleEnergy = screen.reduce((sum, value) => sum + value, 0);
+    return { aligned: Number(aligned.toFixed(3)), wrongRotation: Number(wrongRotation.toFixed(3)),
+      wrongShift: Number(wrongShift.toFixed(3)),
+      margin: Number((aligned - Math.max(wrongRotation, wrongShift)).toFixed(3)),
+      sourceEnergy: Math.round(sourceEnergy), visibleEnergy: Math.round(visibleEnergy),
+      energyRatio: sourceEnergy ? Number((visibleEnergy / sourceEnergy).toFixed(3)) : 0,
+      sourceCells: source.filter((value) => value > 48).length,
+      visibleCells: screen.filter((value) => value > 48).length };
+  };
   const signalOf = (pixels) => {
     if (!pixels) return 0;
     let nonBlack = 0;
@@ -572,8 +609,7 @@ function installStageSampler() {
       const capturePausedSource = () => {
         if (state.handoffSource !== source || source.paused || !video.paused
           || video.getAttribute("data-shared-media-id") !== source.asset
-          || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
-          || Math.abs(video.currentTime - source.time) > 0.12) return;
+          || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
         try {
           const settledPixels = pixels64(video);
           if (!settledPixels) return;
@@ -1916,6 +1952,8 @@ async function pausedVideoScreenPixels(page, rootSelector) {
     screenContext.drawImage(image, left * screenshotScaleX, top * screenshotScaleY,
       width * screenshotScaleX, height * screenshotScaleY, 0, 0, 64, 64);
     const visiblePixels = screenContext.getImageData(0, 0, 64, 64).data;
+    const spatialDirect = window.__qaSpatialFrameEvidence(pixels, visiblePixels);
+    const spatialRaster = window.__qaSpatialFrameEvidence(screenExpected, visiblePixels);
     const visibleCells = new Set();
     for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
       const at = (y * 64 + x) * 4;
@@ -1964,6 +2002,7 @@ async function pausedVideoScreenPixels(page, rootSelector) {
     const signalMeanDelta = reference.signal.length ? signalDelta / reference.signal.length : 255;
     const visibleBright = samples.filter((sample) => Math.max(...sample.visible) > 24).length;
     return { meanDelta: Number(meanDelta.toFixed(1)), samples,
+      spatialDirect, spatialRaster,
       brightPixels: reference.brightPixels, spreadCells: reference.spreadCells,
       retainedCells, visibleBright, retainedRatio: Number(retainedRatio.toFixed(2)),
       signalMeanDelta: Number(signalMeanDelta.toFixed(1)),
@@ -2086,6 +2125,8 @@ async function activeCloneScreenPixels(page, assetId, { stationary = false } = {
       screenContext.drawImage(image, box.x * screenshotScaleX, box.y * screenshotScaleY,
         box.width * screenshotScaleX, box.height * screenshotScaleY, 0, 0, 64, 64);
       const visiblePixels = screenContext.getImageData(0, 0, 64, 64).data;
+      const spatialDirect = window.__qaSpatialFrameEvidence(pixels, visiblePixels);
+      const spatialRaster = window.__qaSpatialFrameEvidence(expectedPixels, visiblePixels);
       const visibleCells = new Set();
       for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
         const at = (y * 64 + x) * 4;
@@ -2125,6 +2166,7 @@ async function activeCloneScreenPixels(page, assetId, { stationary = false } = {
         sample.visibleRgb && Math.max(...sample.visibleRgb) > 24).length;
       const meanDelta = samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length;
       return { box, samples, retainedCells, visibleBright, meanDelta,
+        spatialDirect, spatialRaster,
         failed: samples.some((sample) => sample.offscreen)
           || retainedCells < Math.ceil(spreadCells * 0.6)
           || visibleBright < Math.ceil(samples.length * 0.6) || meanDelta > 22 };
@@ -2139,9 +2181,15 @@ async function activeCloneScreenPixels(page, assetId, { stationary = false } = {
     });
     const scored = candidateBoxes.map(candidate).sort((left, right) => left.meanDelta - right.meanDelta);
     const matching = scored.find((entry) => !entry.failed) ?? scored[0];
+    const spatialCandidates = [...scored].sort((left, right) =>
+      right.spatialDirect.margin - left.spatialDirect.margin);
     return { candidateBoxes: candidateBoxes.length, brightPixels: bright.length,
       spreadCells, retainedCells: matching.retainedCells, visibleBright: matching.visibleBright,
       meanDelta: Number(matching.meanDelta.toFixed(1)), bestBox: matching.box,
+      spatialDirect: matching.spatialDirect, spatialRaster: matching.spatialRaster,
+      bestSpatial: spatialCandidates[0]
+        ? { box: spatialCandidates[0].box, direct: spatialCandidates[0].spatialDirect,
+          raster: spatialCandidates[0].spatialRaster } : null,
       samples: matching.samples,
       failed: matching.failed };
   }, { expected: assetId, screenshot: png });
