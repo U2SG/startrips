@@ -954,7 +954,7 @@ export function JourneyPlaybackOverlay({
       && cameraFlight.target.pointIndex === target.pointIndex);
     const needsCameraCommand = lastCameraTargetKeyRef.current !== targetKey
       || (explicitlySelected && cameraFollowing === false)
-      || (cameraFollowing !== false && director.step?.kind === "stop" && !matchingFlight);
+      || (cameraFollowing === true && director.step?.kind === "stop" && !matchingFlight);
     const currentGate = arrivalGate?.journeyId === journey.id
       && arrivalGate.stepIndex === director.stepIndex
       && (arrivalGate.intentRevision === director.intentRevision || arrivalGate.released)

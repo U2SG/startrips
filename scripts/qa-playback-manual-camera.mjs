@@ -740,6 +740,12 @@ try {
         }, { ...points[0], baseline: scaleBeforeWheel, x: wheelPoint.x, y: wheelPoint.y });
         throw new Error(`First Detail Map wheel did not release follow and zoom: ${JSON.stringify(wheelDebug)}`, { cause: error });
       }
+      // MapLibre blocks keyboard pan while its scroll-zoom handler still owns
+      // the gesture. Its renderer idle edge releases that native ownership.
+      const idleDuringZoom = Number(await page.locator(".detailed-earth-map")
+        .getAttribute("data-map-idle-count") ?? 0);
+      await page.waitForFunction((before) => Number(document.querySelector(".detailed-earth-map")
+        ?.getAttribute("data-map-idle-count") ?? 0) > before, idleDuringZoom, { timeout: 8_000 });
       const canvas = page.locator(".maplibregl-canvas");
       assert.equal(await canvas.evaluate((node) => node.tabIndex), 0, "detail map canvas must be keyboard reachable");
       await canvas.focus();
