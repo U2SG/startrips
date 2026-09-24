@@ -3314,6 +3314,8 @@ try {
       }));
       await page.setViewportSize({ width: 800, height: 1280 });
       progress.afterResizeViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+      await page.waitForFunction(() => window.__qaVideoResize !== null,
+        undefined, { polling: "raf", timeout: 3_000 });
       progress.resizeEvent = await page.evaluate(() => window.__qaVideoResize);
       await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
         .waitFor({ state: "detached", timeout: 5_000 });
