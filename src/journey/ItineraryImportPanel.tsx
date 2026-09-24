@@ -153,6 +153,7 @@ export function ItineraryImportPanel({
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<ItineraryImportCapabilities | null>(null);
+  const [capabilitiesRequested, setCapabilitiesRequested] = useState(false);
   const [locating, setLocating] = useState<string | null>(null);
   const [lookupProgress, setLookupProgress] = useState<{
     done: number; total: number; unavailable: boolean;
@@ -170,18 +171,17 @@ export function ItineraryImportPanel({
     lookupGeneration.current += 1;
     manualSearchGeneration.current += 1;
   }, []);
-  // What this deployment supports is asked for when the member chooses an
-  // entry point that needs a provider, not when the Composer mounts. Pasting
-  // text needs neither adapter, so building a Journey by hand never waits on,
-  // or fails because of, a capability nobody asked about.
+  // The link tab is initially visible, but that is not a request to contact
+  // either provider. Check capabilities only after the member uses an import
+  // entry point, so simply opening the Composer has no network side effect.
   useEffect(() => {
-    if (mode === "text" || !expanded) return;
+    if (mode === "text" || !expanded || !capabilitiesRequested) return;
     const controller = new AbortController();
     readItineraryCapabilities(fetch, controller.signal)
       .then(setCapabilities)
       .catch(() => setCapabilities(null));
     return () => controller.abort();
-  }, [expanded, mode]);
+  }, [capabilitiesRequested, expanded, mode]);
 
   const lookupAll = useCallback(async (next: ItineraryImportDraft, generation: number) => {
     const entries = itineraryDraftEntries(next).filter((entry) =>
@@ -495,7 +495,10 @@ export function ItineraryImportPanel({
                 key={value}
                 type="button"
                 aria-pressed={mode === value}
-                onClick={() => setMode(value)}
+                onClick={() => {
+                  setMode(value);
+                  if (value !== "text") setCapabilitiesRequested(true);
+                }}
               >
                 {label}
               </button>
@@ -523,6 +526,7 @@ export function ItineraryImportPanel({
             <input
               value={link}
               inputMode="url"
+              onFocus={() => setCapabilitiesRequested(true)}
               onChange={(event) => setLink(event.target.value)}
               placeholder="https://…"
             />
