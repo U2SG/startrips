@@ -11,7 +11,7 @@ import {
 } from "@tabler/icons-react";
 import { searchLocations } from "./journeyApi";
 import {
-  itineraryLocationQueries,
+  itineraryLocationDisplayNames,
   itineraryLocationSuggestion,
 } from "./itineraryLocationLookup";
 import {
@@ -190,10 +190,8 @@ export function ItineraryImportPanel({
       && !entry.flags.includes("truncated")
       && entry.countryCode !== null
       && Boolean(entry.searchArea)
-      && itineraryLocationQueries(entry).some((query) => /^[\x20-\x7e]+$/.test(query))
     );
     setLookupProgress({ done: 0, total: entries.length, unavailable: false });
-    const cache = new Map<string, LocationSearchResult[]>();
     for (const [index, entry] of entries.entries()) {
       if (lookupGeneration.current !== generation) return;
       if (manuallyConfirmed.current.has(entry.entryId) || manuallyEditing.current.has(entry.entryId)) {
@@ -201,21 +199,16 @@ export function ItineraryImportPanel({
         continue;
       }
       try {
-        for (const query of itineraryLocationQueries(entry)) {
-          let results = cache.get(query);
-          if (!results) {
-            results = (await searchLocations(query)).results;
-            cache.set(query, results);
-          }
-          if (lookupGeneration.current !== generation) return;
-          const suggestion = itineraryLocationSuggestion(entry, results);
-          if (suggestion && !manuallyConfirmed.current.has(entry.entryId)
-            && !manuallyEditing.current.has(entry.entryId)) {
-            setSuggestions((current) => ({ ...current, [entry.entryId]: suggestion }));
-            break;
-          }
-          // A non-empty result can still be a different place. Try the other
-          // established names before leaving this entry for manual search.
+        const { results } = await searchLocations(entry.name, fetch, {
+          aliases: entry.aliases,
+          searchArea: entry.searchArea,
+          countryCode: entry.countryCode,
+        });
+        if (lookupGeneration.current !== generation) return;
+        const suggestion = itineraryLocationSuggestion(entry, results);
+        if (suggestion && !manuallyConfirmed.current.has(entry.entryId)
+          && !manuallyEditing.current.has(entry.entryId)) {
+          setSuggestions((current) => ({ ...current, [entry.entryId]: suggestion }));
         }
       } catch {
         if (lookupGeneration.current === generation) {
@@ -357,7 +350,17 @@ export function ItineraryImportPanel({
     const generation = ++manualSearchGeneration.current;
     setLocating(entry.entryId);
     try {
-      const { results } = await searchLocations(query.trim());
+      const typedName = query.trim();
+      const knownName = [entry.name, ...entry.aliases].some((name) =>
+        name.toLocaleLowerCase() === typedName.toLocaleLowerCase()
+      );
+      const { results } = await searchLocations(typedName, fetch, knownName ? {
+        aliases: [entry.name, ...entry.aliases].filter((name) =>
+          name.toLocaleLowerCase() !== typedName.toLocaleLowerCase()
+        ),
+        searchArea: entry.searchArea ?? entry.regionContext,
+        countryCode: entry.countryCode,
+      } : undefined);
       if (manualSearchGeneration.current === generation) {
         setCandidates({ entryId: entry.entryId, results });
       }
@@ -374,7 +377,7 @@ export function ItineraryImportPanel({
     manualSearchGeneration.current += 1;
     manuallyEditing.current.add(entry.entryId);
     setLocating(null);
-    setManualQuery(itineraryLocationQueries(entry)[0] ?? entry.name.slice(0, 120));
+    setManualQuery(entry.name.slice(0, 120));
     setSuggestions((current) => {
       const next = { ...current };
       delete next[entry.entryId];
@@ -730,7 +733,7 @@ export function ItineraryImportPanel({
                           ))}
                           {suggestions[entry.entryId] ? (
                             <div className="journey-itinerary-import__suggestion">
-                              <span>建议位置：{suggestions[entry.entryId].label}</span>
+                              <span>建议位置：{itineraryLocationDisplayNames(entry, suggestions[entry.entryId]).join(" / ")}</span>
                               <small>{suggestions[entry.entryId].context} · {suggestions[entry.entryId].countryCode}</small>
                               <button type="button" onClick={() => openLocationSearch(entry)}>更换</button>
                             </div>
@@ -752,25 +755,29 @@ export function ItineraryImportPanel({
                               void locate(entry, manualQuery);
                             }}>
                               <label>
-                                <span>搜索地点（可改用英文名）</span>
-                                <input maxLength={120} value={manualQuery} onChange={(event) => setManualQuery(event.target.value)} />
+                                <span>搜索地点</span>
+                                <input maxLength={120} value={manualQuery} placeholder="中文或英文名称" onChange={(event) => setManualQuery(event.target.value)} />
                               </label>
                               <button type="submit" disabled={!manualQuery.trim() || locating === entry.entryId}>
                                 {locating === entry.entryId ? "正在查找…" : "搜索"}
                               </button>
                               {candidates.results.length === 0 && locating !== entry.entryId ? (
-                                <small>没有合适结果？试试英文原名或附近城市。</small>
+                                <small>没有合适结果？可加上所在城市再搜索。</small>
                               ) : null}
                               {candidates.results.length > 0 ? (
                                 <ul className="journey-itinerary-import__candidates">
-                                  {candidates.results.map((result) => (
-                                    <li key={result.id}>
-                                      <button type="button" onClick={() => confirmPosition(entry.entryId, result)}>
-                                        <strong>{result.label}</strong>
-                                        <small>{result.context} · {result.countryCode}</small>
-                                      </button>
-                                    </li>
-                                  ))}
+                                  {candidates.results.map((result) => {
+                                    const names = itineraryLocationDisplayNames(entry, result);
+                                    return (
+                                      <li key={result.id}>
+                                        <button type="button" onClick={() => confirmPosition(entry.entryId, result)}>
+                                          <strong>{names[0]}</strong>
+                                          {names.slice(1).map((name) => <small key={name}>{name}</small>)}
+                                          <small>{result.context} · {result.countryCode}</small>
+                                        </button>
+                                      </li>
+                                    );
+                                  })}
                                 </ul>
                               ) : null}
                             </form>

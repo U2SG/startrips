@@ -16,21 +16,6 @@ function contextNamesLocality(context: string, locality: string) {
   });
 }
 
-/** Search the model's proposed endonym first; Photon rarely indexes Chinese POI names. */
-export function itineraryLocationQueries(entry: ItineraryEntryDraft): string[] {
-  const locality = entry.searchArea?.split(",")[0]?.trim()
-    || entry.regionContext?.trim() || "";
-  const endonyms = entry.aliases.filter((alias) => /^[\x20-\x7e]+$/.test(alias));
-  if (/^[\x20-\x7e]+$/.test(entry.name)) endonyms.push(entry.name);
-  const names = [
-    ...(locality ? endonyms.map((name) => `${name} ${locality}`) : []),
-    ...endonyms,
-    ...(locality ? [`${entry.name} ${locality}`] : []),
-    entry.name,
-  ].map((name) => name.trim()).filter((name) => name.length >= 2 && name.length <= 120);
-  return [...new Map<string, string>(names.map((name) => [nameKey(name), name])).values()].slice(0, 4);
-}
-
 /**
  * A proposal can be accepted together with other proposals only when the
  * provider independently agrees on the place name, country and locality. A
@@ -68,4 +53,16 @@ export function itineraryLocationSuggestion(
     || Math.abs(result.longitude - first.longitude) > 0.05
   )) return null;
   return first;
+}
+
+/** Show a source name beside provider names only after the strict match agrees. */
+export function itineraryLocationDisplayNames(
+  entry: ItineraryEntryDraft,
+  result: LocationSearchResult,
+): string[] {
+  const verifiedSourceName = itineraryLocationSuggestion(entry, [result])
+    ? entry.name : "";
+  const names = [verifiedSourceName, result.label, result.labelLocal, result.labelEnglish]
+    .filter((name): name is string => Boolean(name));
+  return [...new Map(names.map((name) => [nameKey(name), name] as const)).values()];
 }

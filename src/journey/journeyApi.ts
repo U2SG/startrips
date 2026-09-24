@@ -379,9 +379,16 @@ export async function setJourneyCover(
 export async function searchLocations(
   query: string,
   fetcher: Fetcher = fetch,
+  hints?: { aliases?: readonly string[]; searchArea?: string | null; countryCode?: string | null },
 ): Promise<LocationSearchResponse> {
+  const parameters = [
+    `q=${encodeURIComponent(query.trim())}`,
+    ...(hints?.aliases ?? []).slice(0, 3).map((alias) => `alias=${encodeURIComponent(alias.trim())}`),
+    ...(hints?.searchArea ? [`area=${encodeURIComponent(hints.searchArea.trim())}`] : []),
+    ...(hints?.countryCode ? [`country=${encodeURIComponent(hints.countryCode.trim())}`] : []),
+  ];
   return requestJson<LocationSearchResponse>(
-    `/api/locations/search?q=${encodeURIComponent(query.trim())}`,
+    `/api/locations/search?${parameters.join("&")}`,
     {},
     fetcher,
   );

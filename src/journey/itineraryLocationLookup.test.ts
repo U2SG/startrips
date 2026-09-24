@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildItineraryImportDraft, itineraryDraftEntries } from "./itineraryImport";
-import { itineraryLocationQueries, itineraryLocationSuggestion } from "./itineraryLocationLookup";
+import { itineraryLocationDisplayNames, itineraryLocationSuggestion } from "./itineraryLocationLookup";
 import type { LocationSearchResult } from "./types";
 
 function entry(
@@ -34,15 +34,12 @@ function result(label: string, countryCode: string, latitude: number): LocationS
 }
 
 describe("itinerary location lookup", () => {
-  it("tries a known English endonym before the Chinese printed name", () => {
-    expect(itineraryLocationQueries(entry("苹果公司总部", ["Apple Park"])))
-      .toEqual(["Apple Park Cupertino", "Apple Park", "苹果公司总部 Cupertino", "苹果公司总部"]);
-  });
-
-  it("keeps the day heading's city in a pasted-text manual search", () => {
-    expect(itineraryLocationQueries({
-      ...entry("人民公园", [], null, null), regionContext: "成都",
-    })).toEqual(["人民公园 成都", "人民公园"]);
+  it("displays the source Chinese name beside a matching provider English name", () => {
+    const place = entry("苹果公司总部", ["Apple Park"]);
+    expect(itineraryLocationDisplayNames(place, result("Apple Park", "US", 37.33)))
+      .toEqual(["苹果公司总部", "Apple Park"]);
+    expect(itineraryLocationDisplayNames(place, result("Apple Park", "ZA", -26.1)))
+      .toEqual(["Apple Park"]);
   });
 
   it("refuses a same-name answer in the wrong country", () => {
