@@ -193,6 +193,7 @@ async function createStoryPage({
   const expiredRanges = [];
   const expiredRangeDenied = deferred();
   const releaseExpiredRanges = deferred();
+  let expiredSeekArmedAt = Number.POSITIVE_INFINITY;
   const initialVideoBytes = expiredRangeFailure
     ? await readFile(new URL("../public/demo-media/east-star-orbit.webm", import.meta.url)) : null;
   let sameUrlRetryReadServed = false;
@@ -257,11 +258,17 @@ async function createStoryPage({
         // Range from the expired old capability before Retry can succeed.
         if (start >= 131_072) {
           const requestedAt = Date.now();
+          if (requestedAt < expiredSeekArmedAt) {
+            // A preload Range that began before the user's seek is not the
+            // failure being tested. Serve it immediately: a held preload
+            // request can prevent the initial paused picture from decoding.
+            const end = Math.min(start + 1_023, initialVideoBytes.length - 1);
+            return route.fulfill({ status: 206, contentType: "video/webm",
+              headers: { "accept-ranges": "bytes", "content-range": `bytes ${start}-${end}/${initialVideoBytes.length}` },
+              body: initialVideoBytes.subarray(start, end + 1) });
+          }
           const seekStartedAt = await releaseExpiredRanges.promise;
           if (requestedAt < seekStartedAt) {
-            // A preload Range that began before the user's seek is not the
-            // failure being tested. Give it only a short slice so the later
-            // native seek still has to request its own uncached bytes.
             const end = Math.min(start + 1_023, initialVideoBytes.length - 1);
             return route.fulfill({ status: 206, contentType: "video/webm",
               headers: { "accept-ranges": "bytes", "content-range": `bytes ${start}-${end}/${initialVideoBytes.length}` },
@@ -316,6 +323,7 @@ async function createStoryPage({
     renewal: renewPausedVideo ? {
       reads: renewalReads, bytes: renewalBytes, initialRead, expiredRanges,
       expiredRangeDenied: expiredRangeDenied.promise,
+      armExpiredSeek: () => { expiredSeekArmedAt = Date.now(); },
       releaseExpiredRanges: (seekStartedAt = Number.POSITIVE_INFINITY) => releaseExpiredRanges.resolve(seekStartedAt),
       readStarted: renewalReadStarted.promise, byteStarted: renewalByteStarted.promise,
       retryReadStarted: retryReadStarted.promise, retryByteStarted: retryByteStarted.promise,
@@ -1397,7 +1405,7 @@ async function seekNativeTimeline(page, rootSelector, { targetFraction = 0.7 } =
 }
 
 /** A real native seek into an uncached portion of an expired signed clip. */
-async function seekExpiredNativeTimeline(page, rootSelector, targetFraction = 0.85) {
+async function seekExpiredNativeTimeline(page, rootSelector, armSeek, targetFraction = 0.85) {
   const picture = await presentedVideoPoint(page, rootSelector);
   if (!picture.hitIsVideo || !picture.controls) return { picture, failed: true, reason: "video target unavailable" };
   await page.mouse.move(picture.x, picture.y);
@@ -1419,18 +1427,32 @@ async function seekExpiredNativeTimeline(page, rootSelector, targetFraction = 0.
     window.__qaExpiredNativeSeek = probe;
   }, rootSelector);
   const width = slider.box.right - slider.box.left;
+  const startX = slider.box.left + width * 0.2;
   const endX = slider.box.left + width * targetFraction;
   const y = slider.y;
   const hits = await page.evaluate(({ points, selector }) => {
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
     return points.map(({ x, y }) => document.elementFromPoint(x, y) === video);
-  }, { selector: rootSelector, points: [{ x: endX, y }] });
+  }, { selector: rootSelector, points: [{ x: startX, y }, { x: endX, y }] });
   if (hits.some((hit) => !hit)) return { picture, before, slider, hits, failed: true,
     reason: "native timeline covered before expired seek" };
+  armSeek();
   await page.evaluate(() => { window.__qaExpiredNativeSeek.startedAt = performance.now(); });
   const pointer = input(page);
-  await pointer.down(endX, y);
+  await pointer.down(startX, y);
+  for (let step = 1; step <= 8; step += 1) {
+    await pointer.move(startX + (endX - startX) * step / 8, y);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  }
   await pointer.up();
+  await page.waitForFunction(({ selector, fraction }) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    const probe = window.__qaExpiredNativeSeek;
+    return video instanceof HTMLVideoElement && probe?.video === video
+      && probe.events.some((event) => event.type === "seeking" && event.trusted
+        && event.at >= probe.startedAt && event.time >= video.duration * (fraction - 0.12));
+  }, { selector: rootSelector, fraction: targetFraction }, { polling: "raf", timeout: 4_000 })
+    .catch(() => null);
   const probe = await page.evaluate(() => ({
     timeOrigin: performance.timeOrigin,
     startedAt: window.__qaExpiredNativeSeek.startedAt,
@@ -1909,6 +1931,19 @@ async function videoHandoffFailureDiagnostic(page) {
     clones: [...document.querySelectorAll('[data-shared-element-clone]')]
       .map((clone) => clone.getAttribute('data-shared-element-clone')),
     historyStack: window.history.state?.__startripsMobileSurfaceStack ?? null,
+    videos: [...document.querySelectorAll('.journey-story__media, .journey-story-fullscreen')]
+      .map((root) => {
+        const video = root.querySelector('.story-media-pages__video video');
+        return { root: root.className, hidden: root.hidden,
+          id: video?.getAttribute('data-shared-media-id') ?? null,
+          src: video?.getAttribute('src') ?? null,
+          currentSrc: video instanceof HTMLVideoElement ? video.currentSrc : null,
+          generation: video?.getAttribute('data-story-read-generation') ?? null,
+          handoffReady: video?.getAttribute('data-video-handoff-ready') ?? null,
+          paused: video instanceof HTMLVideoElement ? video.paused : null,
+          seeking: video instanceof HTMLVideoElement ? video.seeking : null,
+          readyState: video instanceof HTMLVideoElement ? video.readyState : null };
+      }),
   }));
 }
 
@@ -4271,9 +4306,11 @@ try {
       if (failure === "bytes") {
         progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
         progress.entered = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+        await waitForPresentedVideoHit(page, FULLSCREEN, V1);
       }
       progress.renewalRead = await waitForFixture(session.renewal.readStarted, 28_000,
         `fullscreen ${failure} failing signed renewal`);
+      if (failure === "bytes") progress.beforeRelease = await videoHandoffFailureDiagnostic(page);
       session.renewal.releaseRead();
       if (failure === "bytes") {
         progress.renewalBytes = await waitForFixture(session.renewal.byteStarted, 5_000,
@@ -4287,6 +4324,7 @@ try {
         progress.inlineAlertFrame = await heldRenewalFramePixels(page, STAGE, { videoHidden: false });
         progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
         progress.entered = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+        await waitForPresentedVideoHit(page, FULLSCREEN, V1);
       }
       const notice = page.locator(`${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"]`);
       await notice.waitFor({ state: "visible", timeout: 4_000 });
@@ -4328,6 +4366,7 @@ try {
       progress.close = await clickFullscreenClose(page);
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await waitForPresentedVideoHit(page, STAGE, V1);
       progress.returnedPoint = await presentedVideoPoint(page, STAGE);
       progress.unexpectedConsoleErrors = session.consoleErrors.filter((message) => !message.includes("503"));
       const near = (left, right) => Number.isFinite(left) && Number.isFinite(right)
@@ -4382,13 +4421,15 @@ try {
       await waitForSettledAsset(page, I1);
       progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.initialSeek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
       progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
       progress.before = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await waitForPresentedVideoHit(page, FULLSCREEN, V1);
       progress.beforePoint = await presentedVideoPoint(page, FULLSCREEN);
       progress.beforePixels = await pausedVideoScreenPixels(page, FULLSCREEN);
       await page.waitForFunction((expiresAt) => Date.now() >= expiresAt + 100,
         session.renewal.initialRead.expiresAt, { polling: "raf", timeout: 9_000 });
-      progress.seek = await seekExpiredNativeTimeline(page, FULLSCREEN);
+      progress.seek = await seekExpiredNativeTimeline(page, FULLSCREEN, session.renewal.armExpiredSeek);
       session.renewal.releaseExpiredRanges(progress.seek.seekStartedAt ?? Number.POSITIVE_INFINITY);
       progress.oldRange = await waitForFixture(session.renewal.expiredRangeDenied, 8_000,
         "expired old URL Range 403 after native seek");
@@ -4426,7 +4467,7 @@ try {
         ...progress, oldRanges: session.renewal.expiredRanges,
         renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: !progress.toVideo.ok || progress.pause.failed || progress.seek.failed
+        failed: !progress.toVideo.ok || progress.pause.failed || progress.initialSeek.failed || progress.seek.failed
           || progress.beforePixels.failed || progress.errorFrame.failed
           || progress.retryReadFrame.failed || progress.retryByteFrame.failed
           || progress.afterPixels.failed || progress.returnedFrame.failed

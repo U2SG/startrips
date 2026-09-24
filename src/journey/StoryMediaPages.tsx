@@ -362,7 +362,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     // expiry sweep runs. Keep the last decoded picture and the requested seek
     // time so Retry can renew the read instead of replacing the stage with a
     // blank unavailable-media panel.
-    if (active && video && source.id === props.currentId && source.src
+    if (active && video && source.id && source.id === props.currentId && source.src
       && frames.current.get(source.id)?.canvas && !renewal.current) {
       const seek = requestedSeek.current;
       renewal.current = {
@@ -1170,7 +1170,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         onPause: rememberLiveFrame,
         onSeeking: () => {
           const video = liveVideo.current;
-          if (!video || !active || binding.id !== props.currentId || !binding.src || renewal.current) return;
+          if (!video || !active || !binding.id || binding.id !== props.currentId || !binding.src || renewal.current) return;
           requestedSeek.current = { id: binding.id, src: binding.src,
             generation: binding.generation, time: video.currentTime };
         },
