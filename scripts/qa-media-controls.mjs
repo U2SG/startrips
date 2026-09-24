@@ -1675,6 +1675,21 @@ try {
     await storyDesktop.page.close();
   }
 
+  const readScreenPixels = async (page, points) => {
+    const screenshot = await page.screenshot({ animations: "allow" });
+    return page.evaluate(async ({ png, points }) => {
+      const bitmap = new Image();
+      bitmap.src = `data:image/png;base64,${png}`;
+      await bitmap.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.naturalWidth;
+      canvas.height = bitmap.naturalHeight;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(bitmap, 0, 0);
+      return points.map(({ x, y }) => x >= 0 && y >= 0 && x < canvas.width && y < canvas.height
+        ? [...context.getImageData(x, y, 1, 1).data].join(",") : null);
+    }, { png: screenshot.toString("base64"), points });
+  };
   const inspectStagePaint = async (page, surfaceSelector) => {
     const observation = await page.evaluate((selector) => {
     const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
@@ -1732,19 +1747,7 @@ try {
     if (!observation) return null;
     // Sample the composited browser frame as well as each decoded source.
     // Invisible but pointer-disabled neighbor pages can still cover a photo.
-    const screenshot = await page.screenshot({ animations: "allow" });
-    const screenPixels = await page.evaluate(async ({ png, points }) => {
-      const bitmap = new Image();
-      bitmap.src = `data:image/png;base64,${png}`;
-      await bitmap.decode();
-      const canvas = document.createElement("canvas");
-      canvas.width = bitmap.naturalWidth;
-      canvas.height = bitmap.naturalHeight;
-      const context = canvas.getContext("2d", { willReadFrequently: true });
-      context.drawImage(bitmap, 0, 0);
-      return points.map(({ x, y }) => x >= 0 && y >= 0 && x < canvas.width && y < canvas.height
-        ? [...context.getImageData(x, y, 1, 1).data].join(",") : null);
-    }, { png: screenshot.toString("base64"), points: observation.paintPoints });
+    const screenPixels = await readScreenPixels(page, observation.paintPoints);
     return { ...observation, screenPixels };
   };
   const pixelDistance = (actual, expected) => actual.reduce((sum, pixel, index) => {
@@ -1912,29 +1915,71 @@ try {
     await page.waitForFunction(() => document.querySelector(
       '.journey-story-fullscreen [data-story-media-pages]')?.getAttribute("data-media-presentation") === "settling",
     null, { polling: "raf" });
+    // Observe before Back so a valid 560ms morph cannot disappear between
+    // Playwright calls. Freeze its middle frame for a composited pixel check.
+    await page.evaluate(() => {
+      const selector = '[data-shared-element-clone^="story-fullscreen"]';
+      const existing = new Set(document.querySelectorAll(selector));
+      const probe = { clone: null, animation: null, observer: null };
+      const capture = () => {
+        if (probe.clone) return;
+        const clone = [...document.querySelectorAll(selector)].find((node) => !existing.has(node));
+        if (!(clone instanceof HTMLImageElement)) return;
+        probe.clone = clone;
+        probe.animation = clone.getAnimations()[0] ?? null;
+        if (probe.animation) {
+          probe.animation.pause();
+          probe.animation.currentTime = Number(probe.animation.effect?.getTiming().duration ?? 560) * .4;
+        }
+        probe.observer.disconnect();
+      };
+      probe.observer = new MutationObserver(capture);
+      probe.observer.observe(document.body, { childList: true, subtree: true });
+      window.__qaStoryBackClone = probe;
+    });
     await page.evaluate(() => window.history.back());
     await overlay.waitFor({ state: "hidden" });
     const returningClone = await page.evaluate(() => {
-      const clone = document.querySelector('[data-shared-element-clone^="story-fullscreen"]');
+      const probe = window.__qaStoryBackClone;
+      probe.observer.disconnect();
+      const clone = probe.clone;
       if (!(clone instanceof HTMLImageElement)) return null;
       const style = getComputedStyle(clone);
       const bounds = clone.getBoundingClientRect();
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(clone, Math.floor(clone.naturalWidth / 2), Math.floor(clone.naturalHeight / 2),
+        1, 1, 0, 0, 1, 1);
       return { name: clone.dataset.sharedElementClone,
         ready: clone.complete && clone.naturalWidth > 0,
+        animated: probe.animation?.playState === "paused",
         visible: style.visibility === "visible" && Number(style.opacity) > 0
-          && bounds.width > 0 && bounds.height > 0 && Number(style.zIndex) > 1_000_000_000 };
+          && bounds.width > 0 && bounds.height > 0 && Number(style.zIndex) > 1_000_000_000,
+        paintPoint: { x: Math.round(bounds.left + bounds.width / 2), y: Math.round(bounds.top + bounds.height / 2) },
+        sourcePixel: [...context.getImageData(0, 0, 1, 1).data].join(",") };
     });
+    const returningScreenPixel = returningClone
+      ? (await readScreenPixels(page, [returningClone.paintPoint]))[0] : null;
+    await page.evaluate(() => window.__qaStoryBackClone?.animation?.play());
     // The fullscreen shared-element clone owns paint until its exit finishes.
     // Once it releases the picture, the actual image must own the tap again.
     await page.locator('[data-shared-element-clone^="story-fullscreen"]').waitFor({ state: "hidden", timeout: 3_000 });
     await waitForStoryPicture(page, first);
     const returned = await inspectStagePaint(page, ".journey-story__media");
+    const clonePaintDistance = returningClone?.sourcePixel && returningScreenPixel
+      ? pixelDistance([returningScreenPixel], [returningClone.sourcePixel]) : Infinity;
+    const cloneBlackDistance = returningClone?.sourcePixel
+      ? pixelDistance(["0,0,0,255"], [returningClone.sourcePixel]) : 0;
     const backFailed = !stagePaintValid(beforeBack, first) || !stagePaintValid(returned, first)
       || returningClone?.name !== `story-fullscreen-${first}`
-      || !returningClone.ready || !returningClone.visible
+      || !returningClone.ready || !returningClone.animated || !returningClone.visible
+      || !returningScreenPixel || cloneBlackDistance <= 0 || clonePaintDistance >= cloneBlackDistance / 2
       || !beforeBack.hitImage || !returned.hitImage
       || returned.dragX !== "" || frontPixels(returned) !== frontPixels(beforeBack);
-    checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returningClone, returned,
+    checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returningClone,
+      returningScreenPixel, clonePaintDistance, cloneBlackDistance, returned,
       consoleErrors: stageOwnerBack.consoleErrors, pageErrors: stageOwnerBack.pageErrors,
       failed: backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0 });
     if (backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0) failed = true;
