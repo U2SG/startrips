@@ -421,6 +421,7 @@ export default function DetailedEarthMap({
     } | null = null;
     mapRef.current = map;
     let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
+    let debugScrollZoomActive: (() => boolean) | null = null;
     let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
       journeyId: string;
       routePointId: string;
@@ -428,6 +429,7 @@ export default function DetailedEarthMap({
     if (import.meta.env.DEV && typeof window !== "undefined") {
       const debugWindow = window as Window & {
         __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
+        __detailedEarthMapScrollZoomActive?: () => boolean;
       };
       debugProject = (longitude, latitude) => {
         const projected = map.project([longitude, latitude]);
@@ -435,6 +437,8 @@ export default function DetailedEarthMap({
         return { x: rect.left + projected.x, y: rect.top + projected.y };
       };
       debugWindow.__detailedEarthMapProject = debugProject;
+      debugScrollZoomActive = () => map.scrollZoom.isActive();
+      debugWindow.__detailedEarthMapScrollZoomActive = debugScrollZoomActive;
     }
     // Register the one-shot load observation immediately after construction.
     // A tiny inline/QA style can become style-loaded before the rest of this
@@ -1139,12 +1143,16 @@ export default function DetailedEarthMap({
         const debugWindow = window as Window & {
           __detailedEarthMapRemovalCount?: number;
           __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
+          __detailedEarthMapScrollZoomActive?: () => boolean;
           __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
             journeyId: string;
             routePointId: string;
           } | null;
         };
         if (debugWindow.__detailedEarthMapProject === debugProject) delete debugWindow.__detailedEarthMapProject;
+        if (debugWindow.__detailedEarthMapScrollZoomActive === debugScrollZoomActive) {
+          delete debugWindow.__detailedEarthMapScrollZoomActive;
+        }
         if (debugWindow.__detailedEarthJourneyRoutePointHit === debugJourneyRoutePointHit) {
           delete debugWindow.__detailedEarthJourneyRoutePointHit;
         }
