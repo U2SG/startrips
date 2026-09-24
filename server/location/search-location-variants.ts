@@ -30,7 +30,9 @@ function searchNames(query: string, aliases: readonly string[]) {
   ).values()].sort((left, right) => {
     const leftAscii = /^[\x20-\x7e]+$/.test(left);
     const rightAscii = /^[\x20-\x7e]+$/.test(right);
-    return Number(rightAscii) - Number(leftAscii) || key(left).localeCompare(key(right));
+    return Number(rightAscii) - Number(leftAscii)
+      || right.length - left.length
+      || key(left).localeCompare(key(right));
   });
 }
 
