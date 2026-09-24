@@ -1158,6 +1158,10 @@ export function LivingAtlasApp({
     journeyId: string;
     target: PlaybackCameraTarget;
   } | null>(null);
+  const [playbackNarrativeTarget, setPlaybackNarrativeTarget] = useState<{
+    journeyId: string;
+    pointIndex: number;
+  } | null>(null);
   const [playbackCameraSettledRevision, setPlaybackCameraSettledRevision] = useState<number | null>(null);
   const [playbackQuickRecap, setPlaybackQuickRecap] = useState<PreparedQuickRecapPlayback | null>(null);
   const [playbackModeMenuJourneyId, setPlaybackModeMenuJourneyId] = useState<string | null>(null);
@@ -2015,18 +2019,23 @@ export function LivingAtlasApp({
     unknownCreateSemanticOwnership.fallbackJourneyId,
   );
   const mobileJourney = focusPresentation.journey;
-  const mobilePoint = focusPresentation.point;
-  const focusPoint = focusPresentation.focusPoint;
   const narrativeSemanticSelection = unknownCreateSemanticOwnership.selection;
   const narrativeJourneyProgress = narrativeSemanticSelection
     ? timeCursor.reveal.journeyProgress.get(narrativeSemanticSelection.journeyId)
     : undefined;
-  const narrativeJourneyRoutePoint = (isMobileV2 || globeFocusMode)
+  const narrativePointProgress = narrativeSemanticSelection && narrativeSemanticSelection.pointIndex !== null
+    ? timeCursor.reveal.pointProgress.get(
+        `${narrativeSemanticSelection.journeyId}:${narrativeSemanticSelection.pointIndex}`,
+      )
+    : undefined;
+  const timelineNarrativeRoutePoint = (isMobileV2 || globeFocusMode)
     && !timeCursor.hasExplicitSelection
     && narrativeSemanticSelection
+    && timeCursor.cursor < 1
     && narrativeJourneyProgress !== undefined
     && narrativeJourneyProgress > 0
-    && narrativeJourneyProgress < 1
+    && narrativePointProgress !== undefined
+    && narrativePointProgress > 0
     ? {
         journeyId: narrativeSemanticSelection.journeyId,
         routePointId: narrativeSemanticSelection.pointIndex !== null
@@ -2036,6 +2045,25 @@ export function LivingAtlasApp({
         pointIndex: narrativeSemanticSelection.pointIndex,
       }
     : null;
+  const currentPlaybackNarrativeTarget = playbackActive
+    && playbackNarrativeTarget?.journeyId === playbackSession.journeyId
+    ? playbackNarrativeTarget
+    : null;
+  const playbackNarrativePoint = currentPlaybackNarrativeTarget
+    ? playbackJourney?.routePoints[currentPlaybackNarrativeTarget.pointIndex] ?? null
+    : null;
+  const playbackNarrativeRoutePoint = currentPlaybackNarrativeTarget && playbackNarrativePoint
+    ? {
+        journeyId: currentPlaybackNarrativeTarget.journeyId,
+        routePointId: playbackNarrativePoint.id,
+        pointIndex: currentPlaybackNarrativeTarget.pointIndex,
+      }
+    : null;
+  // Playback's logical chapter and its camera-follow command are independent.
+  // The current narrative owner alone promotes a geometry-only point to the map.
+  const narrativeJourneyRoutePoint = playbackActive
+    ? playbackNarrativeRoutePoint
+    : timelineNarrativeRoutePoint;
   const selectedJourneyRoutePoint = routePointContextSelection.context
     ? {
         journeyId: routePointContextSelection.context.journeyId,
@@ -2051,9 +2079,60 @@ export function LivingAtlasApp({
           pointIndex: timeCursor.selection.pointIndex,
         }
       : null;
-  const focusRoute = focusPresentation.point
-    ? null
-    : routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null;
+  // #514: a sparse overview is a reading projection of the authorized Journey.
+  // Keep every canonical Route Point in `routes` for the line, Story and Playback.
+  // Normally a non-stop without note or owned media loses its map marker.
+  const overviewRoutePointIds = useMemo(() => {
+    const visible = new Set<string>();
+    for (const journey of journeys) {
+      const mediaPointIds = new Set(journey.media.map((asset) => asset.routePointId));
+      let visibleCount = 0;
+      for (const point of journey.routePoints) {
+        if (point.isStop || point.note?.trim() || mediaPointIds.has(point.id)) {
+          visible.add(point.id);
+          visibleCount += 1;
+        }
+      }
+      // An old geometry-only Journey still needs a real entry anchor. Reuse
+      // its own endpoints; this creates no city, Stop or new route fact.
+      if (visibleCount === 0 && journey.routePoints.length > 0) {
+        visible.add(journey.routePoints[0].id);
+        visible.add(journey.routePoints[journey.routePoints.length - 1].id);
+      }
+    }
+    // Composer and draft Playback still expose every editable point. Their
+    // route geometry and point identity are independent of saved Journey data.
+    if (effectiveDraftRoute) {
+      effectiveDraftRoute.points.forEach((point, index) => {
+        visible.add(point.id ?? `${effectiveDraftRoute.id}:${index}`);
+      });
+    }
+    return visible;
+  }, [journeys, effectiveDraftRoute]);
+  const visibleRoutePointIds = useMemo(() => {
+    // A context or a point currently narrated by rewind may originate outside
+    // the sparse overview. Keep only that exact point while it owns attention.
+    const selectedId = selectedJourneyRoutePoint?.routePointId;
+    const narrativeId = narrativeJourneyRoutePoint?.routePointId;
+    if ((!selectedId || overviewRoutePointIds.has(selectedId))
+      && (!narrativeId || overviewRoutePointIds.has(narrativeId))) return overviewRoutePointIds;
+    const visible = new Set(overviewRoutePointIds);
+    if (selectedId) visible.add(selectedId);
+    if (narrativeId) visible.add(narrativeId);
+    return visible;
+  }, [overviewRoutePointIds, selectedJourneyRoutePoint?.routePointId, narrativeJourneyRoutePoint?.routePointId]);
+  // At the completed overview, the timeline's last reached point can be a
+  // geometry-only non-stop. Frame the Journey route instead of an absent pin.
+  const focusPointHiddenByOverview = Boolean(
+    !timeCursor.hasExplicitSelection
+    && focusPresentation.point
+    && !visibleRoutePointIds.has(focusPresentation.point.id),
+  );
+  const mobilePoint = focusPointHiddenByOverview ? null : focusPresentation.point;
+  const focusPoint = focusPointHiddenByOverview ? null : focusPresentation.focusPoint;
+  const focusRoute = focusPointHiddenByOverview || !focusPresentation.point
+    ? routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null
+    : null;
   const initialHomeCameraAnchor = initialHomeCameraIntent
     && selectedJourneyIdForHomeCamera === null
     && !hasManualAtlasCameraInteraction
@@ -2070,6 +2149,7 @@ export function LivingAtlasApp({
     setPlaybackSession((current) => releaseStalePlaybackSession(current, true));
     playbackCameraFollowingRef.current = true;
     playbackCurrentCameraTargetRef.current = null;
+    setPlaybackNarrativeTarget(null);
     setPlaybackCameraFollowing(true);
     setPlaybackCameraSettledRevision(null);
     setPlaybackQuickRecap(null);
@@ -2088,6 +2168,7 @@ export function LivingAtlasApp({
       setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
       playbackCameraFollowingRef.current = true;
       playbackCurrentCameraTargetRef.current = null;
+      setPlaybackNarrativeTarget(null);
       setPlaybackCameraFollowing(true);
       setPlaybackCameraSettledRevision(null);
       setPlaybackQuickRecap(null);
@@ -2569,6 +2650,7 @@ export function LivingAtlasApp({
     });
     playbackCameraFollowingRef.current = true;
     playbackCurrentCameraTargetRef.current = null;
+    setPlaybackNarrativeTarget(null);
     setPlaybackCameraFollowing(true);
     setPlaybackCameraSettledRevision(null);
   }
@@ -2662,6 +2744,7 @@ export function LivingAtlasApp({
     });
     playbackCameraFollowingRef.current = true;
     playbackCurrentCameraTargetRef.current = null;
+    setPlaybackNarrativeTarget(null);
     setPlaybackCameraFollowing(true);
     setPlaybackCameraSettledRevision(null);
   }
@@ -2730,6 +2813,7 @@ export function LivingAtlasApp({
     setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
     playbackCameraFollowingRef.current = true;
     playbackCurrentCameraTargetRef.current = null;
+    setPlaybackNarrativeTarget(null);
     setPlaybackCameraFollowing(true);
     setPlaybackCameraSettledRevision(null);
     setPlaybackQuickRecap(null);
@@ -2853,6 +2937,7 @@ export function LivingAtlasApp({
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
+            visibleRoutePointIds={visibleRoutePointIds}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
             selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}
             narrativeJourneyRoutePoint={draftRoute ? null : narrativeJourneyRoutePoint}
@@ -3828,6 +3913,12 @@ export function LivingAtlasApp({
             const journeyId = playbackSession.journeyId;
             if (!journeyId) return;
             playbackCurrentCameraTargetRef.current = { journeyId, target };
+            setPlaybackNarrativeTarget((current) => {
+              if (target.kind !== "point") return null;
+              return current?.journeyId === journeyId && current.pointIndex === target.pointIndex
+                ? current
+                : { journeyId, pointIndex: target.pointIndex };
+            });
             if (explicitlySelected) {
               playbackCameraFollowingRef.current = true;
               setPlaybackCameraFollowing(true);

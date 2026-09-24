@@ -170,6 +170,8 @@ export type LivingAtlasGlobeProps = {
   focusFlightProfile?: PlaybackTravelChoreography;
   focusColor?: string;
   journeyRoutes: readonly JourneyRoute[];
+  /** Marker disclosure only; route geometry always uses all Journey Route Points. */
+  visibleRoutePointIds?: ReadonlySet<string>;
   activeJourneyRouteId?: string | null;
   selectedJourneyRoutePoint?: {
     journeyId: string;
@@ -244,6 +246,7 @@ type AtlasEarthPresentation = Pick<
   | "focusFlightProfile"
   | "focusColor"
   | "journeyRoutes"
+  | "visibleRoutePointIds"
   | "activeJourneyRouteId"
   | "selectedJourneyRoutePoint"
   | "narrativeJourneyRoutePoint"
@@ -351,6 +354,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   focusColor={atlas?.focusColor}
                   centerFocusPoint={Boolean(atlas)}
                   journeyRoutes={atlas?.journeyRoutes ?? []}
+                  visibleRoutePointIds={atlas?.visibleRoutePointIds}
                   activeJourneyRouteId={atlas?.activeJourneyRouteId}
                   selectedJourneyRoutePoint={atlas?.selectedJourneyRoutePoint}
                   narrativeJourneyRoutePoint={atlas?.narrativeJourneyRoutePoint}
@@ -403,6 +407,7 @@ export function LivingAtlasGlobe({
   focusFlightProfile,
   focusColor,
   journeyRoutes,
+  visibleRoutePointIds,
   activeJourneyRouteId,
   selectedJourneyRoutePoint,
   narrativeJourneyRoutePoint,
@@ -453,11 +458,13 @@ export function LivingAtlasGlobe({
     selection: selectedJourneyRoutePoint,
     narrativeSelection: narrativeJourneyRoutePoint,
     temporalReveal,
+    visibleRoutePointIds,
   }), [
     detailedEarthRoute,
     narrativeJourneyRoutePoint,
     selectedJourneyRoutePoint,
     temporalReveal,
+    visibleRoutePointIds,
   ]);
   const homeBaseElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const homeBaseFramesRef = useRef(new Map<string, ProjectedHomeBasePresence>());
@@ -1061,6 +1068,7 @@ export function LivingAtlasGlobe({
       focusFlightProfile,
       focusColor,
       journeyRoutes,
+      visibleRoutePointIds,
       activeJourneyRouteId,
       selectedJourneyRoutePoint,
       narrativeJourneyRoutePoint,
@@ -1111,6 +1119,7 @@ export function LivingAtlasGlobe({
     homeBaseInteractive,
     homeBaseLayer,
     journeyRoutes,
+    visibleRoutePointIds,
     zoomIntent,
     onGlobePointPick,
     handleManualCameraInteraction,

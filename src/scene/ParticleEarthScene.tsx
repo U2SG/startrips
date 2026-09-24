@@ -1229,6 +1229,8 @@ interface ParticleEarthSceneProps {
   centerFocusPoint?: boolean;
   onFocusPointActivate?: () => void;
   journeyRoutes?: readonly JourneyRoute[];
+  /** #514: marker/hit disclosure; omitted by non-Atlas callers to keep their full route presentation. */
+  visibleRoutePointIds?: ReadonlySet<string>;
   activeJourneyRouteId?: string | null;
   selectedJourneyRoutePoint?: RoutePointSelection;
   narrativeJourneyRoutePoint?: RoutePointSelection;
@@ -1639,6 +1641,7 @@ export function ParticleEarthScene({
   centerFocusPoint = false,
   onFocusPointActivate,
   journeyRoutes = [],
+  visibleRoutePointIds,
   activeJourneyRouteId,
   selectedJourneyRoutePoint,
   narrativeJourneyRoutePoint,
@@ -1678,6 +1681,7 @@ export function ParticleEarthScene({
   const latestCenterFocusPoint = useRef(centerFocusPoint);
   const latestOnFocusPointActivate = useRef(onFocusPointActivate);
   const latestJourneyRoutes = useRef(journeyRoutes);
+  const latestVisibleRoutePointIds = useRef(visibleRoutePointIds);
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestSelectedJourneyRoutePoint = useRef(selectedJourneyRoutePoint);
   const latestNarrativeJourneyRoutePoint = useRef(narrativeJourneyRoutePoint);
@@ -1712,6 +1716,7 @@ export function ParticleEarthScene({
   latestCenterFocusPoint.current = centerFocusPoint;
   latestOnFocusPointActivate.current = onFocusPointActivate;
   latestJourneyRoutes.current = journeyRoutes;
+  latestVisibleRoutePointIds.current = visibleRoutePointIds;
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestSelectedJourneyRoutePoint.current = selectedJourneyRoutePoint;
   latestNarrativeJourneyRoutePoint.current = narrativeJourneyRoutePoint;
@@ -2451,6 +2456,7 @@ export function ParticleEarthScene({
       corePath: SVGPathElement;
       leaderPath: SVGPathElement;
       fadeGradient: SVGLinearGradientElement;
+      routePointCount: number;
       labelCandidateIndexes: readonly number[];
       points: Array<{
         element: SVGCircleElement;
@@ -2475,6 +2481,7 @@ export function ParticleEarthScene({
     // the controller runs. Only these renderer-owned snapshots prove what the
     // current geometry and active presentation have actually applied.
     let appliedJourneyRoutes: readonly JourneyRoute[] | undefined;
+    let appliedVisibleRoutePointIds: ReadonlySet<string> | undefined;
     let appliedActiveJourneyRouteId: string | null | undefined;
     let journeyRouteBuilds = 0;
     let journeyRouteBuildMs = 0;
@@ -2538,7 +2545,7 @@ export function ParticleEarthScene({
               entry.routeId,
               point.routePointId,
               point.routePointIndex,
-              routeLabelPositionRole(point.routePointIndex, entry.points.length),
+              routeLabelPositionRole(point.routePointIndex, entry.routePointCount),
             );
             point.label.element.style.display = "none";
             entry.group.insertBefore(point.label.element, entry.legs[0]?.path ?? null);
@@ -2600,7 +2607,7 @@ export function ParticleEarthScene({
             entry.routeId,
             point.routePointId,
             point.routePointIndex,
-            routeLabelPositionRole(point.routePointIndex, entry.points.length),
+            routeLabelPositionRole(point.routePointIndex, entry.routePointCount),
           );
           point.label.element.style.display = "none";
           entry.group.appendChild(point.label.element);
@@ -2740,8 +2747,14 @@ export function ParticleEarthScene({
     const applyJourneyRoutes = (routes: readonly JourneyRoute[]) => {
       const buildStartedAt = performance.now();
       const visibleRoutes = selectRenderableJourneyRoutes(routes);
+      const pointIsVisible = (route: JourneyRoute, pointIndex: number) => (
+        latestVisibleRoutePointIds.current === undefined
+        || latestVisibleRoutePointIds.current.has(
+          route.points[pointIndex].id ?? `${route.id}:${pointIndex}`,
+        )
+      );
       const pointCount = visibleRoutes.reduce(
-        (total, route) => total + route.points.length,
+        (total, route) => total + route.points.filter((_, index) => pointIsVisible(route, index)).length,
         0,
       );
       // #242 review: the vertices each route needs to pass through every one of
@@ -2848,9 +2861,9 @@ export function ParticleEarthScene({
         const vectorPoints: RouteVectorEntry["points"] = [];
 
         route.points.forEach((point, routePointIndex) => {
-          // #193: the canonical Route Point anchor. The marker, the point
-          // sprite, the label and both ends of the route line all read it,
-          // so nothing can drift away from the line at high zoom.
+          // Only the marker, label and raycast node are projected here. The
+          // route line below still samples the complete canonical point order.
+          if (!pointIsVisible(route, routePointIndex)) return;
           const position = routePointAnchor(point.lat, point.lon);
           position.toArray(
             pointPositions,
@@ -2972,10 +2985,11 @@ export function ParticleEarthScene({
           corePath,
           leaderPath,
           fadeGradient,
+          routePointCount: route.points.length,
           labelCandidateIndexes: selectRouteLabelPointIndexes(
             route.points,
             MAX_ROUTE_LABEL_CANDIDATES,
-          ),
+          ).filter((index) => pointIsVisible(route, index)),
           points: vectorPoints,
         });
       });
@@ -3001,6 +3015,7 @@ export function ParticleEarthScene({
       // must receive the current reveal even when its React effect will not run.
       syncRouteTemporalReveal();
       appliedJourneyRoutes = routes;
+      appliedVisibleRoutePointIds = latestVisibleRoutePointIds.current;
       appliedActiveJourneyRouteId = latestActiveJourneyRouteId.current;
       journeyRouteBuilds += 1;
       journeyRouteBuildMs += performance.now() - buildStartedAt;
@@ -6098,14 +6113,17 @@ export function ParticleEarthScene({
       setJourneyRoutes(
         routes: readonly JourneyRoute[],
         activeRouteId: string | null | undefined,
+        visiblePointIds?: ReadonlySet<string>,
       ) {
         const routesChanged = appliedJourneyRoutes !== routes;
+        const visibilityChanged = appliedVisibleRoutePointIds !== visiblePointIds;
         const activeRouteChanged = appliedActiveJourneyRouteId !== activeRouteId;
-        if (!routesChanged && !activeRouteChanged) return;
+        if (!routesChanged && !visibilityChanged && !activeRouteChanged) return;
+        latestVisibleRoutePointIds.current = visiblePointIds;
         latestActiveJourneyRouteId.current = activeRouteId;
         syncParticleDimming(routes, activeRouteId);
-        if (routesChanged) {
-          syncVisitedImprint(routes);
+        if (routesChanged || visibilityChanged) {
+          if (routesChanged) syncVisitedImprint(routes);
           applyJourneyRoutes(routes);
         } else {
           syncActiveJourneyRoute();
@@ -6260,8 +6278,8 @@ export function ParticleEarthScene({
 
   useEffect(() => {
     if (!controllerRevision) return;
-    controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
-  }, [activeJourneyRouteId, controllerRevision, controllerRef, journeyRoutes]);
+    controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId, visibleRoutePointIds);
+  }, [activeJourneyRouteId, controllerRevision, controllerRef, journeyRoutes, visibleRoutePointIds]);
 
   useEffect(() => {
     if (!controllerRevision) return;
