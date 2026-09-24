@@ -1812,6 +1812,16 @@ try {
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
+      // V2 is prefetched as soon as V1 becomes current, so arm this before
+      // entering V1 rather than missing the delayed response in flight.
+      let v2ResponseReceived = false;
+      const v2ReadResponse = page.waitForResponse((response) =>
+        response.url().includes(`/api/uploads/assets/${V2}/read-url`), { timeout: 8_000 })
+        .then(async (response) => {
+          v2ResponseReceived = true;
+          return { status: response.status(), body: await response.json() };
+        })
+        .catch((error) => ({ error: String(error) }));
       await navigateByGesture(page, STAGE, 1, V1);
       // Root cause of a claim that used to pass without ever being exercised:
       // this window was driven by two swipes, but a gesture toward a neighbour
@@ -1850,42 +1860,60 @@ try {
           ?.getAttribute("data-media-requested") ?? null;
         const current = document.querySelector(selector)?.querySelector("[data-story-media-pages]")
           ?.querySelector('[data-media-page="current"]');
+        const target = [...(document.querySelector(selector)
+          ?.querySelectorAll("[data-media-page-id]") ?? [])]
+          .find((node) => node.getAttribute("data-media-page-id") === expected);
         return requested === expected
           && current?.getAttribute("data-media-page-id") === owner
           && current?.getAttribute("data-media-page-ready") === "true"
-          ? { requested, heldBy: current.getAttribute("data-media-page-id") }
+          && target && target.getAttribute("data-media-page-ready") !== "true"
+          ? { requested, heldBy: current.getAttribute("data-media-page-id"), targetReady: false }
           : null;
       }, { selector: STAGE, expected: V2, owner: V1 }, { polling: "raf", timeout: 2_000 })
         .then((handle) => handle.jsonValue(), () => null);
       await page.keyboard.press("ArrowLeft");
+      const responseBeforeReversal = v2ResponseReceived;
       await waitForSettledAsset(page, V1);
       const afterReversal = await currentAsset(page);
-      // Outlive the held read, then look again: this window exists to catch a
-      // late completion, so it has to still be recording when the read lands.
-      const lateWindow = [];
-      for (let tick = 0; tick < 6; tick += 1) {
-        await page.waitForTimeout(500);
-        lateWindow.push({ at: (tick + 1) * 500, ...await currentAsset(page) });
-      }
+      // The route response, then the neighbour's ready page, prove that the
+      // delayed signed read finished and React consumed it. Keep the sampler
+      // running through both and for eight subsequent browser frames.
+      const readResponse = await v2ReadResponse;
+      const readProcessed = readResponse.status === 200 && readResponse.body?.url === VERTICAL_CLIP
+        ? await page.waitForFunction(({ selector, assetId }) => {
+          const page = [...document.querySelectorAll(`${selector} [data-media-page-id]`)]
+            .find((node) => node.getAttribute("data-media-page-id") === assetId);
+          return page?.getAttribute("data-media-page-ready") === "true"
+            ? { id: assetId, layer: page.getAttribute("data-media-layer") } : null;
+        }, { selector: STAGE, assetId: V2 }, { polling: "raf", timeout: 5_000 })
+          .then((handle) => handle.jsonValue(), () => null) : null;
+      const postReadStart = await page.evaluate(() => window.__qaStage?.ticks ?? null);
+      const postReadObserved = await page.waitForFunction((start) =>
+        start !== null && window.__qaStage?.running
+          && window.__qaStage.ticks - start >= 8,
+      postReadStart, { polling: "raf", timeout: 5_000 }).then(() => true, () => false);
       const frames = await stopSamplerFrames(page);
       const afterLateRead = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
         document.querySelector(selector).querySelectorAll("video").length, STAGE);
-      // A neighbour that peeks during the drag is the stack's own grammar, so
-      // the whole sequence is allowed here; what this window forbids is the
-      // committed owner moving, or the stage going bare, once the late read
-      // finally lands.
-      const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
+      const continuity = gradeContinuity(frames, { allowedAssets: [V1] });
+      const wrongOwnerFrames = frames.filter((frame) => frame.currentId !== V1);
       record({
         name: "story-late-read-never-takes-the-stage",
         claim: "an arrow-key step really does leave a request for a cold neighbour pending while the readable previous page still owns the stage, the opposite key cancels that request and keeps the visible page, and the read URL that resolves afterwards neither moves the committed owner at any point across the window nor leaves the aperture uncovered",
         abandonedIntent: V2, expectedOwner: V1,
-        readDelays: { [V2]: 2_500 }, stageRole, pending, lateWindow,
+        readDelays: { [V2]: 2_500 }, stageRole, pending,
+        readResponse, readProcessed, postReadObserved, responseBeforeReversal,
+        postReadTicks: frames.ticks - postReadStart,
+        wrongOwnerFrames: wrongOwnerFrames.slice(0, 3),
         afterReversal, afterLateRead, transports, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: continuity.failed
           || !stageRole.focused || !pending
-          || lateWindow.some((sample) => sample.id !== V1)
+          || responseBeforeReversal
+          || readResponse.status !== 200 || readResponse.body?.url !== VERTICAL_CLIP
+          || !readProcessed || !postReadObserved || frames.unmeasurable > 0
+          || wrongOwnerFrames.length > 0
           || afterReversal.id !== V1 || afterLateRead.id !== V1
           || afterLateRead.presentation !== "settled" || transports !== 1
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
@@ -1929,6 +1957,7 @@ try {
       // flash back to the abandoned page or an uncovered video aperture.
       const postCommitStart = await page.evaluate(() => ({
         at: Math.ceil(performance.now()), ticks: window.__qaStage?.ticks ?? null,
+        unmeasurable: window.__qaStage?.unmeasurable ?? null,
       }));
       const settled = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
@@ -1944,6 +1973,7 @@ try {
       const postCommitFrames = frames.filter((frame) => frame.at > postCommitStart.at);
       const postCommitContinuity = gradeContinuity(postCommitFrames, { allowedAssets: [latestIntent] });
       const postCommitWrongOwner = postCommitFrames.filter((frame) => frame.currentId !== latestIntent);
+      const postCommitUnmeasurable = frames.unmeasurable - postCommitStart.unmeasurable;
       // Read which decoded neighbour the stage ordered above the current
       // page at each end of the same pointer stream. This is page ordering;
       // the frame sampler below separately checks what the viewport shows.
@@ -1957,6 +1987,7 @@ try {
         gesture, orderedNeighbors, trace, committed, continuity,
         postCommitObserved, postCommitTicks: frames.ticks - postCommitStart.ticks,
         postCommitContinuity, postCommitWrongOwner: postCommitWrongOwner.slice(0, 3),
+        postCommitUnmeasurable,
         sampledFrames: frames.length,
         concurrentLiveVideos: frames.filter((frame) => frame.videoCount > 1).slice(0, 2),
         failed: settled.presentation !== "settled" || !settled.ready
@@ -1964,6 +1995,7 @@ try {
           || orderedNeighbors[0] !== abandonedIntent || orderedNeighbors[1] !== latestIntent
           || transports !== 1 || stable.first !== stable.second
           || !postCommitObserved || postCommitContinuity.failed || postCommitWrongOwner.length > 0
+          || postCommitStart.unmeasurable === null || postCommitUnmeasurable !== 0
           || continuity.failed || frames.some((frame) => frame.videoCount > 1)
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
