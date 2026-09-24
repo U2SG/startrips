@@ -1257,8 +1257,12 @@ describe("Story fullscreen shared-element wiring (#459)", () => {
     expect(presentFullscreen).toContain("runSharedElementMorph({");
     expect(presentFullscreen).toContain("isTargetCurrent: () =>");
     expect(presentFullscreen).toContain("storyFullscreenTargetIsCurrent({");
-    expect(presentFullscreen).toContain('keepTargetInteractive: source?.tagName === "VIDEO"');
+    expect(presentFullscreen).toContain("claimSource: sourceVideo");
+    expect(presentFullscreen).toContain("const sourceVideo = source instanceof HTMLVideoElement ? source : null;");
+    expect(presentFullscreen).toContain("previousHandoff?.restoreSource?.()");
+    expect(presentFullscreen).toContain("videoHandoff.restoreSource?.()");
+    expect(presentFullscreen).not.toContain("reportStageMediaError");
+    expect(presentFullscreen).not.toContain("keepTargetInteractive");
     expect(presentFullscreen).not.toMatch(/if \(mobileLayout\)[\s\S]{0,160}setFullscreen/);
-    expect(presentFullscreen).not.toContain("source instanceof HTMLVideoElement");
   });
 });

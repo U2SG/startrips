@@ -247,6 +247,44 @@ async function readStoryFullscreenMorphProbe(page) {
   }));
 }
 
+async function waitForStoryVideoHandoff(page, surfaceSelector, mediaId, nativeControlHit = false) {
+  try {
+    const handle = await page.waitForFunction(({ surfaceSelector, mediaId, nativeControlHit }) => {
+      const surface = document.querySelector(surfaceSelector);
+      const pages = surface?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      const video = pages?.querySelector('video[data-shared-media-id]');
+      const bounds = video?.getBoundingClientRect();
+      const x = bounds ? bounds.left + (nativeControlHit ? 28 : bounds.width / 2) : 0;
+      const y = bounds ? bounds.top + (nativeControlHit ? bounds.height - 24 : bounds.height / 2) : 0;
+      const hit = bounds && bounds.width > 0 && bounds.height > 0 ? document.elementFromPoint(x, y) : null;
+      const state = {
+        surfaceSelector, mediaId, nativeControlHit,
+        presentation: pages?.getAttribute("data-media-presentation") ?? null,
+        currentId: current?.getAttribute("data-media-page-id") ?? null,
+        currentReady: current?.getAttribute("data-media-page-ready") ?? null,
+        videoId: video?.getAttribute("data-shared-media-id") ?? null,
+        readyState: video instanceof HTMLVideoElement ? video.readyState : null,
+        decodedWidth: video instanceof HTMLVideoElement ? video.videoWidth : null,
+        videoHidden: video instanceof HTMLVideoElement ? video.hidden : null,
+        videoVisible: video instanceof HTMLVideoElement && getComputedStyle(video).visibility === "visible",
+        hitTag: hit?.tagName ?? null, hitIsVideo: hit === video,
+        liveClones: document.querySelectorAll('[data-shared-element-clone^="story-fullscreen-"]').length,
+      };
+      window.__qaStoryVideoHandoffLast = state;
+      return surface && !surface.hidden && state.presentation === "settled"
+        && state.currentId === mediaId && state.currentReady === "true"
+        && state.videoId === mediaId && state.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+        && state.decodedWidth > 0 && !state.videoHidden && state.videoVisible
+        && state.hitIsVideo && state.liveClones === 0 ? state : false;
+    }, { surfaceSelector, mediaId, nativeControlHit }, { polling: "raf", timeout: 9_500 });
+    return await handle.jsonValue();
+  } catch (error) {
+    const state = await page.evaluate(() => window.__qaStoryVideoHandoffLast ?? null);
+    throw new Error(`Story video handoff did not display its decoded target: ${JSON.stringify(state)}`, { cause: error });
+  }
+}
+
 async function stopStoryFullscreenMorphProbe(page) {
   await page.evaluate(() => {
     window.__qaStoryFullscreenMorphObserver?.disconnect();
@@ -2610,12 +2648,14 @@ try {
       const entryProbe = await readStoryFullscreenMorphProbe(videoMorph.page);
       const entryClone = entryProbe.morphs.find((candidate) => candidate.name === `story-fullscreen-${mediaId}`);
       const entryLiveVideos = await videoMorph.page.locator("video[data-shared-media-id]").count();
+      const entrySettled = await waitForStoryVideoHandoff(videoMorph.page, ".journey-story-fullscreen", mediaId);
 
       await videoMorph.page.keyboard.press("Escape");
       await overlay.waitFor({ state: "hidden", timeout: 5_000 });
       const returnProbe = await readStoryFullscreenMorphProbe(videoMorph.page);
       const matchingMorphs = returnProbe.morphs.filter((candidate) => candidate.name === `story-fullscreen-${mediaId}`);
       const returnClone = matchingMorphs.at(-1);
+      const returnSettled = await waitForStoryVideoHandoff(videoMorph.page, ".journey-story__media", mediaId);
       const returnLiveVideos = await videoMorph.page.locator("video[data-shared-media-id]").count();
       const focusReturned = await entry.evaluate((button) => document.activeElement === button);
       await stopStoryFullscreenMorphProbe(videoMorph.page);
@@ -2627,7 +2667,8 @@ try {
         || entryLiveVideos !== 1 || returnLiveVideos !== 1 || !focusReturned
         || videoMorph.consoleErrors.length > 0 || videoMorph.pageErrors.length > 0;
       checks.push({ name: `story-fullscreen-shared-element-${surface.label}`, mediaId,
-        entryClone, returnClone, morphCount: matchingMorphs.length, entryLiveVideos, returnLiveVideos,
+        entryClone, entrySettled, returnClone, returnSettled,
+        morphCount: matchingMorphs.length, entryLiveVideos, returnLiveVideos,
         focusReturned, consoleErrors: videoMorph.consoleErrors, pageErrors: videoMorph.pageErrors,
         failed: videoMorphFailed });
       if (videoMorphFailed) failed = true;
@@ -4138,7 +4179,7 @@ try {
     await mixedMedia.page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
     const mixedFullscreen = mixedMedia.page.locator(".journey-story-fullscreen");
     await mixedFullscreen.waitFor({ state: "visible" });
-    await waitForStoryPicture(mixedMedia.page, "00000000-0000-4000-8000-000000000152", ".journey-story-fullscreen");
+    await waitForStoryVideoHandoff(mixedMedia.page, ".journey-story-fullscreen", "00000000-0000-4000-8000-000000000152", true);
     const fullscreenVideo = mixedFullscreen.locator("video[data-shared-media-id]").first();
     const fullscreenVideoControls = await fullscreenVideo.evaluate((video) => {
       window.__qaStoryFullscreenVideoNode = video;

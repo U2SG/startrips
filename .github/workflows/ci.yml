@@ -320,6 +320,14 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
           node scripts/browser-qa-shard.mjs
+      - name: Upload story media frame evidence
+        if: ${{ always() && steps.final-plan.outputs.ledger_only_final != 'true' && matrix.name == 'story-media' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: story-media-frames-${{ github.run_attempt }}
+          path: artifacts/story-media/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload coastline refinement review
         if: ${{ always() && steps.final-plan.outputs.ledger_only_final != 'true' && contains(matrix.suites, '|city-label-anchoring|') }}
         uses: actions/upload-artifact@v7.0.1

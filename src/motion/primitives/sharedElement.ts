@@ -98,14 +98,26 @@ export type SharedElementMorphOptions = {
   source: HTMLElement | null;
   resolveTarget: () => HTMLElement | null;
   update: () => void;
+  /** Called after the destination is committed, before it can paint. */
+  afterUpdate?: () => void;
   name: string;
   durationMs?: number;
+  /** A signed video read/seek can take longer than the geometry animation. */
+  readinessTimeoutMs?: number;
+  /** Keep a decoded snapshot while an asynchronous media target seeks even
+   * when the viewer requests reduced motion. No geometry animation runs. */
+  holdSnapshotForReducedMotion?: boolean;
+  /** The destination's picture bounds before it is decoded. Used only by the
+   * reduced-motion snapshot so it can fill the new stage while waiting. */
+  resolvePendingTargetBounds?: () => DOMRect | null;
   /** Keep the source while an asynchronous target is loading, only for as
    * long as the caller's original destination is still the current intent. */
   isTargetCurrent?: () => boolean;
   /** Presentation-only geometry may be created for a handoff. Tie its lifetime
    * to this morph owner rather than introducing a second cleanup timer. */
   onCleanup?: () => void;
+  /** Other pixels representing the source frame must leave with the source. */
+  claimSource?: () => HTMLElement | readonly HTMLElement[] | null;
   /**
    * #489 C/V6: the destination that is not presentable YET. `update()` reveals
    * the destination surface, and its picture starts painting the moment the
@@ -118,14 +130,14 @@ export type SharedElementMorphOptions = {
    * purpose: the claim suppresses painting without making `canPresent` reject
    * it, so the morph still lands on it.
    */
-  claimDestination?: () => HTMLElement | null;
-  /** Keep the resolved destination live for hit-testing while the pointer-events-none
-   * clone owns visual continuity. Video fullscreen uses this so native controls
-   * become authoritative as soon as fullscreen state commits. */
-  keepTargetInteractive?: boolean;
+  claimDestination?: () => HTMLElement | readonly HTMLElement[] | null;
 };
 
 let cancelActiveMorph: (() => void) | null = null;
+
+export function cancelSharedElementMorph(): void {
+  cancelActiveMorph?.();
+}
 
 /**
  * #18 complete shared-element primitive.
@@ -162,13 +174,17 @@ export function runSharedElementMorph({
   source,
   resolveTarget,
   update,
+  afterUpdate,
   name,
   durationMs = 560,
+  readinessTimeoutMs = durationMs,
+  holdSnapshotForReducedMotion = false,
+  resolvePendingTargetBounds,
   isTargetCurrent,
   onCleanup,
+  claimSource,
   claimDestination,
-  keepTargetInteractive = false,
-}: SharedElementMorphOptions): void {
+}: SharedElementMorphOptions): () => void {
   // A rail-to-card snapshot may still be above the document when Story opens.
   // End that snapshot before the media clone takes ownership of the handoff.
   skipActiveCardTransition();
@@ -182,22 +198,27 @@ export function runSharedElementMorph({
     onCleanup?.();
   };
   const updateWithoutMorph = () => {
-    try { update(); } finally { cleanupExternal(); }
+    try {
+      if (afterUpdate) flushSync(update);
+      else update();
+      afterUpdate?.();
+    } finally { cleanupExternal(); }
   };
-  if (!source || typeof document === "undefined" || prefersReducedMotion()) {
+  const reducedMotion = prefersReducedMotion();
+  if (!source || typeof document === "undefined" || (reducedMotion && !holdSnapshotForReducedMotion)) {
     updateWithoutMorph();
-    return;
+    return () => undefined;
   }
   const sourceRect = mediaRect(source);
   if (!canPresent(source, sourceRect) || typeof source.cloneNode !== "function") {
     updateWithoutMorph();
-    return;
+    return () => undefined;
   }
 
   const clone = snapshotSource(source);
   if (!clone) {
     updateWithoutMorph();
-    return;
+    return () => undefined;
   }
   // A clone must never resolve as the destination or enter keyboard focus.
   for (const node of [clone, ...clone.querySelectorAll<HTMLElement>("*")]) {
@@ -238,37 +259,61 @@ export function runSharedElementMorph({
   source.style.visibility = "hidden";
   let target: HTMLElement | null = null;
   let previousTargetVisibility = "";
-  let claimed: HTMLElement | null = null;
-  let previousClaimedOpacity = "";
+  const claimed = new Map<HTMLElement, { opacity: string; pageId: string | undefined }>();
   let animation: Animation | null = null;
   let observer: MutationObserver | null = null;
   let readinessTimer = 0;
   let stopMotionPreference: () => void = () => undefined;
   let settled = false;
+  const claimNodes = (nodes: HTMLElement | readonly HTMLElement[] | null | undefined) => {
+    for (const element of nodes ? (nodes instanceof HTMLElement ? [nodes] : nodes) : []) {
+      if (!element.isConnected) continue;
+      if (!claimed.has(element)) claimed.set(element, {
+        opacity: element.style.opacity, pageId: element.dataset.mediaPageId,
+      });
+      if (element.style.opacity !== "0") element.style.opacity = "0";
+    }
+  };
+  claimNodes(claimSource?.());
   const releaseClaim = () => {
-    if (!claimed) return;
-    claimed.style.opacity = previousClaimedOpacity;
-    claimed = null;
+    for (const [element, original] of claimed) {
+      if (element.dataset.mediaPageId === original.pageId) element.style.opacity = original.opacity;
+      else element.style.removeProperty("opacity");
+    }
+    claimed.clear();
   };
   /** Own the destination before it can paint, not after it already has. */
   const claimPendingDestination = () => {
-    if (settled || target || claimed || !claimDestination) return;
-    const pending = claimDestination();
-    if (!pending?.isConnected) return;
-    claimed = pending;
-    previousClaimedOpacity = pending.style.opacity;
-    pending.style.opacity = "0";
+    if (settled || !claimDestination) return;
+    claimNodes(claimDestination());
+  };
+  const positionReducedSnapshot = () => {
+    if (!reducedMotion || !resolvePendingTargetBounds) return;
+    const bounds = resolvePendingTargetBounds();
+    if (!bounds || !hasRenderableRect(bounds)) return;
+    const scale = Math.min(bounds.width / sourceRect.width, bounds.height / sourceRect.height);
+    const width = sourceRect.width * scale;
+    const height = sourceRect.height * scale;
+    const cssPx = (value: number) => `${Math.round(value * 100) / 100}px`;
+    const geometry = {
+      left: cssPx(bounds.left + (bounds.width - width) / 2),
+      top: cssPx(bounds.top + (bounds.height - height) / 2),
+      width: cssPx(width), height: cssPx(height),
+    };
+    for (const key of ["left", "top", "width", "height"] as const) {
+      if (clone.style[key] !== geometry[key]) clone.style[key] = geometry[key];
+    }
   };
   const cleanup = () => {
     if (settled) return;
     settled = true;
-    releaseClaim();
     window.clearTimeout(readinessTimer);
     observer?.disconnect();
     stopMotionPreference();
     animation?.cancel();
     if (source.style.visibility === "hidden") source.style.visibility = previousSourceVisibility;
     if (target?.style.visibility === "hidden") target.style.visibility = previousTargetVisibility;
+    releaseClaim();
     clone.remove();
     window.removeEventListener("resize", cleanup);
     window.removeEventListener("orientationchange", cleanup);
@@ -294,6 +339,8 @@ export function runSharedElementMorph({
       cleanup();
       return;
     }
+    claimNodes(claimSource?.());
+    claimPendingDestination();
     const candidate = resolveTarget();
     if (target) {
       if (candidate !== target || !target.isConnected) cleanup();
@@ -302,20 +349,19 @@ export function runSharedElementMorph({
     const targetRect = candidate ? mediaRect(candidate) : null;
     if (!candidate || !targetRect || !canPresent(candidate, targetRect)) {
       if (!isTargetCurrent) cleanup();
-      else claimPendingDestination();
+      else {
+        claimPendingDestination();
+        positionReducedSnapshot();
+      }
       return;
     }
     target = candidate;
-    // The claim was only a stand-in for this element. Hand ownership over
-    // rather than leaving two suppressed nodes behind.
-    releaseClaim();
     window.clearTimeout(readinessTimer);
     previousTargetVisibility = target.style.visibility;
-    // Images keep the clone as the sole visible owner until animation cleanup.
-    // A live video destination stays present and hit-testable underneath the
-    // pointer-events-none canvas snapshot so native controls become authoritative
-    // as soon as fullscreen state commits, without creating a second transport.
-    if (!keepTargetInteractive) target.style.visibility = "hidden";
+    // The claimed page and the target stay visually suppressed until the clone
+    // finishes. A live video must not paint or accept native input under it.
+    target.style.visibility = "hidden";
+    if (reducedMotion) { cleanup(); return; }
     if (typeof clone.animate !== "function") {
       cleanup();
       return;
@@ -342,24 +388,25 @@ export function runSharedElementMorph({
   document.addEventListener("scroll", onScroll, true);
   document.addEventListener("visibilitychange", onVisibilityChange);
   stopMotionPreference = onMotionPreferenceChange((reduced) => { if (reduced) cleanup(); });
-  // A stalled signed read/decode must reveal the Story's normal loading UI.
-  // Allow one content-transition duration to find a ready destination, then
-  // release the clone and its observer without changing the pending media read.
-  readinessTimer = window.setTimeout(cleanup, durationMs);
+  // Waiting for a destination is bounded. Video callers can allow seek/decode
+  // longer than the geometry motion and publish a recoverable error first.
+  readinessTimer = window.setTimeout(cleanup, readinessTimeoutMs);
   try {
     flushSync(update);
-    if (settled) return;
+    if (settled) return cleanup;
     // Synchronous, before the browser can paint the commit that just revealed
     // the destination surface.
     claimPendingDestination();
+    afterUpdate?.();
     observer = new MutationObserver(advance);
     observer.observe(document.body, { childList: true, subtree: true, attributes: true,
-      attributeFilter: ["data-shared-media-id", "data-media-page-id", "data-media-page-ready", "data-media-incoming", "role", "hidden", "aria-hidden", "src", "style", "class"] });
+      attributeFilter: ["data-shared-media-id", "data-media-page-id", "data-media-page-ready", "data-media-incoming", "data-video-handoff-ready", "role", "hidden", "aria-hidden", "src", "style", "class"] });
     advance();
   } catch (error) {
     cleanup();
     throw error;
   }
+  return cleanup;
 }
 
 function snapshotSource(source: HTMLElement): HTMLElement | null {
