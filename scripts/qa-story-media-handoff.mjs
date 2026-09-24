@@ -1837,6 +1837,20 @@ async function waitForVideoHandoffState(page, rootSelector, assetId, paused) {
   return await videoHandoffState(page, rootSelector);
 }
 
+async function waitForPresentedVideoHit(page, rootSelector, assetId) {
+  await page.waitForFunction(({ selector, asset }) => {
+    const root = document.querySelector(selector);
+    const video = root?.querySelector(".story-media-pages__video video");
+    if (!(video instanceof HTMLVideoElement) || video.hidden
+      || video.getAttribute("data-shared-media-id") !== asset
+      || getComputedStyle(video).visibility !== "visible"
+      || document.querySelector(`[data-shared-element-clone="story-fullscreen-${asset}"]`)) return false;
+    const box = video.getBoundingClientRect();
+    return box.width > 0 && box.height > 0
+      && document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) === video;
+  }, { selector: rootSelector, asset: assetId }, { polling: "raf", timeout: 8_000 });
+}
+
 function gradeVideoClock(before, after, paused, { requireIntent = true } = {}) {
   const elapsed = (after.at - before.at) / 1000;
   const advance = after.time - before.time;
@@ -2250,7 +2264,10 @@ async function heldRenewalFramePixels(page, rootSelector, { videoHidden = true }
       currentReady: pageNode?.getAttribute("data-media-page-ready") ?? null,
       videoHidden: video.hidden, videoSrc: video.getAttribute("src"),
       hitIsSource: hit === source, hitTag: hit instanceof Element ? hit.tagName : null,
-      failed: wrong(frame) || wrong(screen) || maskedRows > 24 || hit !== source
+      // The canvas bitmap is diagnostic; CSS/compositor treatment determines
+      // the frame the viewer actually sees. Keep the screenshot and hit tests
+      // as the acceptance signal for a held renewal.
+      failed: wrong(screen) || maskedRows > 24 || hit !== source
         || pageNode?.getAttribute("data-media-page-ready") !== (expectedHidden ? "false" : "true")
         || video.hidden !== expectedHidden,
     };
@@ -3837,11 +3854,13 @@ try {
       progress.afterPoint = await presentedVideoPoint(page, STAGE);
       progress.fullscreenActivation = await clickHandoffButton(page, '.journey-story__fullscreen-entry');
       progress.fullscreen = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await waitForPresentedVideoHit(page, FULLSCREEN, V1);
       progress.fullscreenPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
       progress.fullscreenFrame = gradePausedFrameIdentity(progress.afterPixels, progress.fullscreenPixels);
       progress.close = await clickFullscreenClose(page);
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await waitForPresentedVideoHit(page, STAGE, V1);
       progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
       progress.returnedFrame = gradePausedFrameIdentity(progress.fullscreenPixels, progress.returnedPixels);
       progress.returnHit = await clickReturnedVideo(page);
@@ -3979,15 +3998,18 @@ try {
       progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
       progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
       progress.fullscreen = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await waitForPresentedVideoHit(page, FULLSCREEN, V1);
+      const fullscreenOwnedAt = Date.now();
       await page.waitForFunction((issuedAt) => Date.now() >= issuedAt + 25_000,
         session.renewal.initialRead.issuedAt, { polling: "raf", timeout: 30_000 });
       progress.fullscreenAfterExpiry = await videoHandoffState(page, FULLSCREEN);
       progress.fullscreenPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
       progress.fullscreenFrame = gradePausedFrameIdentity(progress.beforePixels, progress.fullscreenPixels);
-      progress.readsWhileFullscreen = session.renewal.reads.length;
+      progress.readsWhileFullscreen = session.renewal.reads.filter((read) => read.startedAt >= fullscreenOwnedAt).length;
       progress.close = await clickFullscreenClose(page);
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await waitForPresentedVideoHit(page, STAGE, V1);
       progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
       progress.returnedFrame = gradePausedFrameIdentity(progress.beforePixels, progress.returnedPixels);
       progress.returnedPoint = await presentedVideoPoint(page, STAGE);

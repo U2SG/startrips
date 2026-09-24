@@ -2168,6 +2168,7 @@ export function JourneyStory({
     // A warm neighbor becoming current must keep the decoded resource. A new
     // signature changes img.src and restarts an in-flight page handoff.
     const cached = mediaReadsRef.current[assetId];
+    const renewingRead = cached?.status === "ready";
     if (!refresh && cached?.status === "ready"
       && !shouldRefreshStoryMediaRead(assetId, cached, Date.now(), protectedVideoRead(assetId) ? assetId : null)) return;
     if (pendingReads.current.has(assetId)) return;
@@ -2198,14 +2199,14 @@ export function JourneyStory({
           const previousRead = mediaReadsRef.current[assetId];
           const shownVideo = storyVideoRef.current?.dataset.sharedMediaId === assetId
             || fullscreenVideoRef.current?.dataset.sharedMediaId === assetId;
-          if (refresh && previousRead?.status === "ready" && shownVideo && !protectedVideoRead(assetId)) {
+          if (renewingRead && previousRead?.status === "ready" && shownVideo && !protectedVideoRead(assetId)) {
             setRenewalError((current) => ({ id: assetId, sourceUrl: current?.id === assetId
               ? current.sourceUrl : previousRead.url, message, retrying: false }));
           } else setRenewalError((current) => current?.id === assetId
             ? { ...current, message, retrying: false } : current);
         }
         setMediaReads((current) => mediaReadScope.current !== scope
-          || ((refresh || protectedVideoRead(assetId)) && current[assetId]?.status === "ready") ? current : ({
+          || ((renewingRead || protectedVideoRead(assetId)) && current[assetId]?.status === "ready") ? current : ({
           ...current, [assetId]: { status: "error", message },
         }));
       },
