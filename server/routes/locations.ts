@@ -3,6 +3,7 @@ import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
 import { createLocationSearch } from "../location/create-location-search";
 import type { LocationSearch } from "../location/location-search";
+import { searchLocationVariants } from "../location/search-location-variants";
 
 const MIN_QUERY_LENGTH = 2;
 const MAX_QUERY_LENGTH = 120;
@@ -41,10 +42,28 @@ export function createLocationRoutes(
       );
     }
 
-    const results = await locationSearch.search(query, {
-      limit: RESULT_LIMIT,
-      signal: context.req.raw.signal,
-    });
+    const aliases = context.req.queries("alias") ?? [];
+    const searchArea = context.req.query("area")?.trim() ?? "";
+    const countryCode = context.req.query("country")?.trim().toUpperCase() ?? "";
+    if (aliases.length > 3
+      || aliases.some((alias) => alias.trim().length < MIN_QUERY_LENGTH
+        || alias.trim().length > MAX_QUERY_LENGTH)
+      || searchArea.length > MAX_QUERY_LENGTH
+      || (countryCode !== "" && !/^[A-Z]{2}$/.test(countryCode))) {
+      return context.json({
+        error: "INVALID_LOCATION_HINTS",
+        message: "Location aliases, area or country are invalid",
+      }, 400);
+    }
+
+    const options = { limit: RESULT_LIMIT, signal: context.req.raw.signal };
+    const results = aliases.length || searchArea
+      ? await searchLocationVariants(locationSearch, query, options, {
+        aliases,
+        searchArea,
+        countryCode,
+      })
+      : await locationSearch.search(query, options);
     return context.json({ results, attribution: locationSearch.attribution });
   });
 
