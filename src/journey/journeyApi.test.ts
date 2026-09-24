@@ -431,5 +431,15 @@ describe("journeyApi", () => {
       "/api/locations/search?q=National%20Gallery%20Singapore",
       expect.objectContaining({ credentials: "include" }),
     );
+
+    await searchLocations("新加坡国家美术馆", fetcher, {
+      aliases: ["National Gallery Singapore"],
+      searchArea: "Singapore",
+      countryCode: "SG",
+    });
+    expect(fetcher).toHaveBeenLastCalledWith(
+      "/api/locations/search?q=%E6%96%B0%E5%8A%A0%E5%9D%A1%E5%9B%BD%E5%AE%B6%E7%BE%8E%E6%9C%AF%E9%A6%86&alias=National%20Gallery%20Singapore&area=Singapore&country=SG",
+      expect.objectContaining({ credentials: "include" }),
+    );
   });
 });

@@ -98,24 +98,50 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
  * #489 changed which input owns the presented picture: a photograph still
  * navigates by its stationary click surface, but the presented video's own
  * surface belongs to its transport, so clicking it plays instead of stepping.
- * A video therefore steps through the navigation the stage advertises -- real
- * arrow-key input on the focusable stage. The assertions are not relaxed; the
- * video click path is asserted positively in scripts/qa-story-media-handoff.mjs.
+ * A video therefore steps through its visible navigation button. Keyboard
+ * navigation and the video's own native input are graded separately in
+ * scripts/qa-story-media-handoff.mjs.
  */
+async function clickStoryVideoStep(page, direction, surfaceSelector = ".journey-story__media") {
+  const step = direction < 0 ? "previous" : "next";
+  const mobile = await page.evaluate(() => navigator.maxTouchPoints > 0);
+  const nav = surfaceSelector === ".journey-story-fullscreen"
+    ? `${surfaceSelector} .journey-story-fullscreen__nav`
+    : mobile ? ".journey-story__mobile-video-nav" : ".journey-story__media-nav";
+  const button = page.locator(`${nav} [data-video-step="${step}"]`);
+  await button.waitFor({ state: "visible", timeout: 3_000 });
+  const hit = await button.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const x = bounds.left + bounds.width / 2;
+    const y = bounds.top + bounds.height / 2;
+    const target = document.elementFromPoint(x, y);
+    return { x, y, targetIsButton: element.contains(target),
+      target: target instanceof Element ? `${target.tagName}.${target.className}` : null };
+  });
+  if (!hit.targetIsButton || !await button.isEnabled()) {
+    throw new Error(`Video step button is covered or disabled: ${JSON.stringify({ step, hit })}`);
+  }
+  if (mobile) {
+    // The step commits on pointerup, so the next trusted touch can release
+    // immediately without relying on a browser compatibility click.
+    const touch = await page.context().newCDPSession(page);
+    try {
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchStart", touchPoints: [{ x: hit.x, y: hit.y, id: 1 }],
+      });
+      await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } finally {
+      await touch.detach();
+    }
+  } else await button.click();
+  return hit;
+}
+
 async function clickStoryPicture(page, direction, surfaceSelector = ".journey-story__media", fixedPoint = null) {
   const presentsVideo = !fixedPoint && await page.evaluate((selector) => document.querySelector(selector)
     ?.querySelector("[data-story-media-pages]")?.getAttribute("data-current-media-kind") === "video", surfaceSelector);
   if (presentsVideo) {
-    const focused = await page.evaluate((selector) => {
-      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
-      if (!pages || pages.tabIndex !== 0 || pages.getAttribute("aria-keyshortcuts") !== "ArrowLeft ArrowRight") {
-        throw new Error("Story video stage does not advertise keyboard navigation");
-      }
-      pages.focus();
-      return document.activeElement === pages;
-    }, surfaceSelector);
-    if (!focused) throw new Error("Story video stage could not take navigation focus");
-    await page.keyboard.press(direction < 0 ? "ArrowLeft" : "ArrowRight");
+    await clickStoryVideoStep(page, direction, surfaceSelector);
     return;
   }
   const point = fixedPoint ?? await storyPicturePoint(page, direction, surfaceSelector);
@@ -483,17 +509,19 @@ async function exerciseMobileStoryContinuitySwipe(page, touch, direction, expect
       && currentXs.at(-1) < currentXs[0] - 8
     : currentXs.every((value, index) => index === 0 || value >= currentXs[index - 1] - 1)
       && currentXs.at(-1) > currentXs[0] + 8;
-  // While the finger owns the stage, current is both visual and input owner.
-  // During the release spring the destination slot may intentionally rise above
-  // current in z-order, but it must remain pointer-inert until the semantic commit.
-  // Keep those authorities separate so the QA catches a second input owner without
-  // rejecting the stable three-page visual handoff itself.
-  const dragOwnershipStable = dragSamples.every((sample) => {
+  // The current page keeps input ownership while the decoded destination is
+  // raised for the reveal. A raised page must be exactly this swipe's target
+  // and remain pointer-inert until the semantic commit.
+  const targetRaisedDuringDrag = dragSamples.some((sample) => sample.current
+    && sample.pages.some((entry) => entry.id === expectedId && entry.zIndex > sample.current.zIndex));
+  const dragOwnershipStable = targetRaisedDuringDrag && dragSamples.every((sample) => {
     const current = sample.current;
     if (!current || !current.ready || current.pointerEvents !== "auto" || sample.legacyIncomingCount !== 0) return false;
     const neighbors = sample.pages.filter((entry) => entry.role !== "current");
-    return neighbors.every((entry) => entry.pointerEvents === "none" && entry.zIndex < current.zIndex)
-      && (!sample.incoming || sample.incoming.zIndex < current.zIndex);
+    const raised = neighbors.filter((entry) => entry.zIndex > current.zIndex);
+    return neighbors.every((entry) => entry.pointerEvents === "none")
+      && raised.length <= 1 && raised.every((entry) => entry.id === expectedId && entry.ready)
+      && sample.incoming === null;
   });
   const releaseOwnershipStable = releaseSamples.every((sample) => {
     const current = sample.current;
@@ -509,7 +537,8 @@ async function exerciseMobileStoryContinuitySwipe(page, touch, direction, expect
     && settled.pages.filter((entry) => entry.role !== "current")
       .every((entry) => entry.pointerEvents === "none" && entry.zIndex < settled.current.zIndex));
   const noHitch = samples.every((sample) => sample.rafDelayMs < 500);
-  return { samples, settled, followsFinger, dragOwnershipStable, releaseOwnershipStable, ownershipStable,
+  return { samples, settled, followsFinger, targetRaisedDuringDrag,
+    dragOwnershipStable, releaseOwnershipStable, ownershipStable,
     settledOwnershipStable, noHitch,
     failed: !followsFinger || !ownershipStable || !settledOwnershipStable || !noHitch
       || settled.presentation !== "settled" || settled.current?.id !== expectedId || !settled.current.ready
@@ -888,6 +917,7 @@ try {
     record("story-media", await scanButtons(story.page, ".journey-story"));
 
     const mediaStage = story.page.locator(".journey-story__media");
+    const mediaGestureStage = mediaStage.locator(storyMediaPagesSelector);
     const touch = await story.page.context().newCDPSession(story.page);
     const settledMedia = story.page.locator(storyCurrentMediaSelector).first();
     const firstMediaLabel = await settledMedia.getAttribute("alt");
@@ -898,8 +928,9 @@ try {
     if (!stageBox) throw new Error("mobile story media stage has no bounds");
     const swipeStartX = stageBox.x + stageBox.width * 0.72;
     const swipeY = stageBox.y + stageBox.height * 0.5;
-    await mediaStage.evaluate((stage) => {
-      stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
+    await mediaGestureStage.evaluate((stage) => {
+      stage.addEventListener("pointerdown", (event) => { stage.dataset.qaPressedPointer = String(event.pointerId); }, true);
+      stage.addEventListener("gotpointercapture", (event) => { if (event.target === stage) stage.dataset.qaCapturedPointer = String(event.pointerId); });
       stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage && String(event.pointerId) === stage.dataset.qaCapturedPointer) stage.dataset.qaReleasedPointer = String(event.pointerId); });
     });
     // At the first asset, a large outward drag has no neighbor. It must spring
@@ -927,19 +958,19 @@ try {
       type: "touchMove",
       touchPoints: [{ x: swipeStartX - 30, y: swipeY }],
     });
-    const inlineCapturedDuringDrag = await mediaStage.evaluate((stage) => {
-      const pointerId = Number(stage.dataset.qaCapturedPointer);
-      return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
+    const inlineCapturedDuringDrag = await mediaGestureStage.evaluate((stage) => {
+      const pointerId = Number(stage.dataset.qaPressedPointer);
+      return Boolean(stage.dataset.qaPressedPointer) && stage.hasPointerCapture(pointerId);
     });
     // Once horizontal intent owns the pointer, move outside the inline
     // media stage and release there. Capture must keep routing the terminal
-    // event back to the stage so the gesture cannot strand its transform.
+    // event back to the gesture stage so it cannot strand its transform.
     await touch.send("Input.dispatchTouchEvent", {
       type: "touchMove",
       touchPoints: [{ x: swipeStartX - 30, y: 10 }],
     });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    const inlineReleasedAfterDrag = await mediaStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
+    const inlineReleasedAfterDrag = await mediaGestureStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
     // The 30px horizontal move above intentionally crosses the 8px intent
     // lock but stays below the 48px navigation threshold. Because pointer
     // capture retargets the eventual click to the stage, the component must
@@ -992,7 +1023,7 @@ try {
     }, { selector: storyCurrentMediaSelector, expected: firstMediaLabel }, { timeout: 3_000 });
     const inlineVelocityReverseReturned = true;
 
-    await mediaStage.dispatchEvent("pointerdown", {
+    await mediaGestureStage.dispatchEvent("pointerdown", {
       pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
@@ -1000,7 +1031,7 @@ try {
       clientY: swipeY,
       bubbles: true,
     });
-    await mediaStage.dispatchEvent("pointermove", {
+    await mediaGestureStage.dispatchEvent("pointermove", {
       pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
@@ -1008,7 +1039,7 @@ try {
       clientY: swipeY,
       bubbles: true,
     });
-    await mediaStage.dispatchEvent("pointerup", {
+    await mediaGestureStage.dispatchEvent("pointerup", {
       pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
@@ -1357,19 +1388,21 @@ try {
 
     await settledMedia.click();
     const fullscreen = story.page.locator(".journey-story-fullscreen");
+    const fullscreenGestureStage = fullscreen.locator(storyMediaPagesSelector);
     await fullscreen.waitFor({ state: "visible" });
     const fullscreenInitiallyImmersive = await fullscreen.evaluate((root) => root.classList.contains("is-controls-hidden"));
     const fullscreenBox = await fullscreen.boundingBox();
     if (!fullscreenBox) throw new Error("mobile fullscreen has no bounds");
     const fullX = fullscreenBox.x + fullscreenBox.width * 0.5;
     const fullY = fullscreenBox.y + fullscreenBox.height * 0.45;
-    await fullscreen.dispatchEvent("pointerdown", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
-    await fullscreen.dispatchEvent("pointerup", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     const fullscreenCloseBox = await fullscreen.locator(".journey-story-fullscreen__close").boundingBox();
     const fullscreenCloseTouchTarget = fullscreenCloseBox ? Math.min(fullscreenCloseBox.width, fullscreenCloseBox.height) : 0;
     const fullscreenPositionBefore = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
-    await fullscreen.evaluate((stage) => {
-      stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
+    await fullscreenGestureStage.evaluate((stage) => {
+      stage.addEventListener("pointerdown", (event) => { stage.dataset.qaPressedPointer = String(event.pointerId); }, true);
+      stage.addEventListener("gotpointercapture", (event) => { if (event.target === stage) stage.dataset.qaCapturedPointer = String(event.pointerId); });
       stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage && String(event.pointerId) === stage.dataset.qaCapturedPointer) stage.dataset.qaReleasedPointer = String(event.pointerId); });
     });
     await touch.send("Input.dispatchTouchEvent", {
@@ -1382,15 +1415,15 @@ try {
       type: "touchMove",
       touchPoints: [{ x: fullX - 30, y: fullY }],
     });
-    const fullscreenCapturedDuringDrag = await fullscreen.evaluate((stage) => {
-      const pointerId = Number(stage.dataset.qaCapturedPointer);
-      return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
+    const fullscreenCapturedDuringDrag = await fullscreenGestureStage.evaluate((stage) => {
+      const pointerId = Number(stage.dataset.qaPressedPointer);
+      return Boolean(stage.dataset.qaPressedPointer) && stage.hasPointerCapture(pointerId);
     });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    const fullscreenReleasedAfterDrag = await fullscreen.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
-    await fullscreen.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
-    await fullscreen.dispatchEvent("pointermove", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
-    await fullscreen.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
+    const fullscreenReleasedAfterDrag = await fullscreenGestureStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointermove", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
     await story.page.waitForFunction((before) => {
       const position = document.querySelector(".journey-story-fullscreen__nav span")?.textContent;
       return Boolean(position && position !== before);
@@ -1411,8 +1444,8 @@ try {
         || !fullscreenCapturedDuringDrag
         || !fullscreenReleasedAfterDrag,
     });
-    await fullscreen.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
-    await fullscreen.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });
     await fullscreen.waitFor({ state: "hidden" });
 
     await settledMedia.click();
@@ -1668,6 +1701,441 @@ try {
     await storyDesktop.page.close();
   }
 
+  const readScreenPixels = async (page, points) => {
+    const screenshot = await page.screenshot({ animations: "allow" });
+    return page.evaluate(async ({ png, points }) => {
+      const bitmap = new Image();
+      bitmap.src = `data:image/png;base64,${png}`;
+      await bitmap.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.naturalWidth;
+      canvas.height = bitmap.naturalHeight;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(bitmap, 0, 0);
+      return points.map(({ x, y }) => x >= 0 && y >= 0 && x < canvas.width && y < canvas.height
+        ? [...context.getImageData(x, y, 1, 1).data].join(",") : null);
+    }, { png: screenshot.toString("base64"), points });
+  };
+  const inspectStagePaint = async (page, surfaceSelector) => {
+    const observation = await page.evaluate((selector) => {
+    const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const current = stage?.querySelector('[data-media-page="current"]');
+    const image = current?.querySelector("img:not([hidden])");
+    if (!(image instanceof HTMLImageElement) || !image.naturalWidth || !image.naturalHeight) return null;
+    const imageBounds = image.getBoundingClientRect();
+    const x = imageBounds.left + imageBounds.width / 2;
+    const y = imageBounds.top + imageBounds.height / 2;
+    const sampleOffsets = [[-.2, -.2], [.2, -.2], [0, 0], [-.2, .2], [.2, .2]];
+    const scale = Math.min(imageBounds.width / image.naturalWidth, imageBounds.height / image.naturalHeight);
+    const apertureWidth = image.naturalWidth * scale;
+    const apertureHeight = image.naturalHeight * scale;
+    const hit = document.elementFromPoint(x, y);
+    const pages = [...stage.querySelectorAll("[data-media-page-id]")].map((node) => {
+      const style = getComputedStyle(node);
+      const picture = node.querySelector("img:not([hidden])");
+      const bounds = node.getBoundingClientRect();
+      let pixelSample = null;
+      let sourcePixels = null;
+      if (picture instanceof HTMLImageElement && picture.complete && picture.naturalWidth) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 4;
+        canvas.height = 4;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(picture, 0, 0, 4, 4);
+        pixelSample = [...context.getImageData(0, 0, 4, 4).data]
+          .filter((_, index) => index % 4 !== 3).join(",");
+        canvas.width = Math.max(1, Math.round(apertureWidth));
+        canvas.height = Math.max(1, Math.round(apertureHeight));
+        context.drawImage(picture, 0, 0, canvas.width, canvas.height);
+        sourcePixels = sampleOffsets.map(([dx, dy]) => {
+          const sx = Math.min(canvas.width - 1, Math.max(0, Math.round((.5 + dx) * canvas.width)));
+          const sy = Math.min(canvas.height - 1, Math.max(0, Math.round((.5 + dy) * canvas.height)));
+          return [...context.getImageData(sx, sy, 1, 1).data].join(",");
+        });
+      }
+      const clip = style.clipPath;
+      return { id: node.dataset.mediaPageId, ready: node.dataset.mediaPageReady === "true",
+        current: node === current, z: Number(style.zIndex), opacity: Number(style.opacity),
+        display: style.display, visibility: style.visibility, transform: style.transform,
+        clip, clips: (clip.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number),
+        bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+        pixelSample, sourcePixels };
+    });
+    const paintPoints = sampleOffsets
+      .map(([dx, dy]) => ({ x: Math.round(x + dx * apertureWidth), y: Math.round(y + dy * apertureHeight) }));
+    return { id: current.dataset.mediaPageId, presentation: stage.dataset.mediaPresentation,
+      pages, hitSurface: hit?.hasAttribute("data-story-hit-surface"),
+      hitImage: hit === image && image.getAttribute("role") === "button",
+      clickTarget: hit?.getAttribute("aria-label") ?? hit?.className ?? null,
+      apertureWidth, apertureHeight, paintPoints,
+      dragX: stage.style.getPropertyValue("--story-drag-x") };
+    }, surfaceSelector);
+    if (!observation) return null;
+    // Sample the composited browser frame as well as each decoded source.
+    // Invisible but pointer-disabled neighbor pages can still cover a photo.
+    const screenPixels = await readScreenPixels(page, observation.paintPoints);
+    return { ...observation, screenPixels };
+  };
+  const pixelDistance = (actual, expected) => actual.reduce((sum, pixel, index) => {
+    const seen = pixel.split(",").map(Number);
+    const source = expected[index].split(",").map(Number);
+    return sum + [0, 1, 2].reduce((part, channel) => part + (seen[channel] - source[channel]) ** 2, 0);
+  }, 0);
+  const stagePaintValid = (observation, id, requireHitSurface = false) => {
+    const front = observation?.pages.find((item) => item.current && item.id === id);
+    const others = observation?.pages.filter((item) => item.id !== id && item.ready
+      && item.pixelSample && item.display !== "none" && item.visibility === "visible") ?? [];
+    const validScreen = observation?.screenPixels?.length === 5 && observation.screenPixels.every(Boolean);
+    const foregroundDistance = front?.sourcePixels && validScreen
+      ? pixelDistance(observation.screenPixels, front.sourcePixels) : Infinity;
+    // A uniformly dark frame can still be closer to the expected photo than
+    // to every neighboring photo. Require the composited pixels to be much
+    // closer to this photo than an unpainted black stage would be.
+    const blackDistance = front?.sourcePixels?.length === 5
+      ? pixelDistance(Array(5).fill("0,0,0,255"), front.sourcePixels) : 0;
+    return observation?.id === id && observation.presentation === "settled"
+      && (!requireHitSurface || observation.hitSurface)
+      && observation.apertureWidth > 0 && observation.apertureHeight > 0
+      && validScreen
+      && front?.ready && front.pixelSample && front.opacity > 0.99
+      && front.sourcePixels?.length === 5 && Number.isFinite(foregroundDistance)
+      && blackDistance > 0 && foregroundDistance < blackDistance / 2
+      && front.clips.length > 0 && front.clips.every((part) => Math.abs(part) <= 0.1)
+      && front.bounds.width > 0 && front.bounds.height > 0 && front.transform !== "none"
+      && others.length > 0 && others.some((item) => item.pixelSample !== front.pixelSample)
+      && others.every((item) => item.sourcePixels?.length === 5
+        && foregroundDistance < pixelDistance(observation.screenPixels, item.sourcePixels)
+        && Number.isFinite(item.z) && item.z < front.z
+        && item.bounds.width > 0 && item.bounds.height > 0 && item.transform !== "none"
+        && item.clips.length > 0 && item.clips.every((part) => part >= -0.1));
+  };
+  const frontPixels = (observation) => observation?.pages.find((item) => item.current)?.pixelSample;
+  const screenPixels = (observation) => observation?.screenPixels?.join("|");
+
+  // The stage itself owns a gesture's paint, cancellation and final commit.
+  // Exercise that boundary with distinct real photographs and actual input;
+  // inspect the foreground and hit target after a fast reverse, a drag and a
+  // viewport rotation. A close during a ready handoff must leave no old pose.
+  const stageOwner = await createQaPage("/?qaState=journey-story", (request) =>
+    request.includes("000000000100") ? "/artworks/china-handscroll.jpg"
+      : request.includes("000000000101") ? "/artworks/mughal-akbarnama.jpg"
+        : "/artworks/hokusai-wave.jpg", {
+    mobile: false, reducedMotion: "no-preference",
+  });
+  try {
+    const page = stageOwner.page;
+    const first = "00000000-0000-4000-8000-000000000100";
+    const second = "00000000-0000-4000-8000-000000000101";
+    const third = "00000000-0000-4000-8000-000000000102";
+    await waitForStoryPicture(page, first);
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), second, { polling: "raf" });
+    await page.evaluate(() => {
+      const probe = { running: true, ticks: 0, exposed: [] };
+      window.__qaStoryStageOwner = probe;
+      const sample = () => {
+        if (!probe.running) return;
+        probe.ticks += 1;
+        const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+        const current = stage?.querySelector('[data-media-page="current"]');
+        if (stage?.dataset.mediaPresentation === "settled" && current?.dataset.mediaPageReady === "true") {
+          const clip = getComputedStyle(current).clipPath;
+          const numbers = (clip.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+          if (numbers.some((part) => Math.abs(part) > 0.1)) {
+            probe.exposed.push({ id: current.dataset.mediaPageId, clip });
+          }
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    const inspect = () => inspectStagePaint(page, ".journey-story__media");
+    await page.locator('.journey-story__media [data-media-page="current"] img').focus();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowLeft");
+    await waitForStoryPicture(page, first);
+    const reversed = await inspect();
+    const point = await storyPicturePoint(page, 1);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await page.mouse.move(point.x - 128, point.y, { steps: 8 });
+    await page.mouse.up();
+    await waitForStoryPicture(page, second);
+    const dragged = await inspect();
+    await page.setViewportSize({ width: 900, height: 1200 });
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const rotated = await inspect();
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), third, { polling: "raf" });
+    await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
+    await page.locator(".journey-story-fullscreen").waitFor({ state: "visible" });
+    await waitForStoryPicture(page, second, ".journey-story-fullscreen");
+    await page.locator('.journey-story-fullscreen [data-media-page="current"] img').focus();
+    await page.keyboard.press("ArrowRight");
+    const close = await page.locator(".journey-story-fullscreen__close").boundingBox();
+    if (!close) throw new Error("Fullscreen close control is absent during media handoff");
+    await page.mouse.click(close.x + close.width / 2, close.y + close.height / 2);
+    await page.locator(".journey-story-fullscreen").waitFor({ state: "hidden" });
+    await waitForStoryPicture(page, third);
+    const returned = await inspect();
+    const samples = await page.evaluate(() => {
+      const probe = window.__qaStoryStageOwner;
+      probe.running = false;
+      return { ticks: probe.ticks, exposed: probe.exposed };
+    });
+    const failedStageOwner = !stagePaintValid(reversed, first, true) || !stagePaintValid(dragged, second, true)
+      || !stagePaintValid(rotated, second, true) || !stagePaintValid(returned, third, true)
+      || frontPixels(reversed) === frontPixels(dragged)
+      || frontPixels(reversed) === frontPixels(returned)
+      || frontPixels(dragged) === frontPixels(returned)
+      || frontPixels(rotated) !== frontPixels(dragged)
+      || screenPixels(reversed) === screenPixels(dragged)
+      || screenPixels(dragged) === screenPixels(returned)
+      || samples.ticks === 0 || samples.exposed.length > 0;
+    checks.push({ name: "story-stage-owner-reverse-drag-rotate-close", reversed, dragged,
+      rotated, returned, samples, failed: failedStageOwner });
+    if (failedStageOwner) failed = true;
+  } finally {
+    await stageOwner.page.close();
+  }
+
+  // Rotate while a real pointer still owns an image drag. The resize must
+  // cancel that exact stream before its later pointerup can commit the old
+  // target or leave a clipped foreground behind.
+  const heldResize = await createQaPage("/?qaState=journey-story", (request) =>
+    request.includes("000000000100") ? "/artworks/china-handscroll.jpg"
+      : request.includes("000000000101") ? "/artworks/mughal-akbarnama.jpg"
+        : "/artworks/hokusai-wave.jpg", {
+    mobile: false, reducedMotion: "no-preference",
+  });
+  try {
+    const page = heldResize.page;
+    const first = "00000000-0000-4000-8000-000000000100";
+    const second = "00000000-0000-4000-8000-000000000101";
+    await waitForStoryPicture(page, first);
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), second, { polling: "raf" });
+    const before = await inspectStagePaint(page, ".journey-story__media");
+    await page.evaluate(() => {
+      const probe = { running: true, frames: [], clicks: [] };
+      window.__qaHeldResize = probe;
+      document.addEventListener("click", (event) => {
+        const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+        probe.clicks.push({
+          trusted: event.isTrusted,
+          detail: event.detail,
+          insideStage: Boolean(stage?.contains(event.target)),
+          target: event.target instanceof Element ? `${event.target.tagName}.${event.target.className}` : null,
+        });
+      }, true);
+      const sample = () => {
+        if (!probe.running) return;
+        const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+        const current = stage?.querySelector('[data-media-page="current"]');
+        probe.frames.push({
+          id: current?.getAttribute("data-media-page-id") ?? null,
+          presentation: stage?.getAttribute("data-media-presentation") ?? null,
+        });
+        if (probe.frames.length > 180) probe.frames.shift();
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    const point = await storyPicturePoint(page, 1);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await page.mouse.move(point.x - 180, point.y, { steps: 8 });
+    const held = await page.evaluate(() => {
+      const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+      return {
+        current: stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
+        presentation: stage?.getAttribute("data-media-presentation") ?? null,
+        dragX: stage?.style.getPropertyValue("--story-drag-x") ?? null,
+        nextReady: stage?.querySelector('[data-media-page="next"]')?.getAttribute("data-media-page-ready") === "true",
+      };
+    });
+    await page.setViewportSize({ width: 900, height: 1200 });
+    const canceledBeforeRelease = await page.waitForFunction((id) => {
+      const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+      return stage?.getAttribute("data-media-presentation") === "settled"
+        && stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === id;
+    }, first, { polling: "raf", timeout: 3_000 }).then(() => true, () => false);
+    // Finish over the current photograph. A browser compatibility click from
+    // this held pointer must actually reach the Stage for the suppression
+    // check to mean anything; the document capture probe sees it even when
+    // Story stops propagation before navigation.
+    const releasePoint = await storyPicturePoint(page, 1);
+    await page.mouse.move(releasePoint.x, releasePoint.y);
+    await page.mouse.up();
+    const cancelledClicks = await page.evaluate(() => [...window.__qaHeldResize.clicks]);
+    const afterRelease = await inspectStagePaint(page, ".journey-story__media");
+    // Keep observing past the interrupted spring's lifetime. A late commit
+    // fails even if the first post-release frame still shows the old picture.
+    const frames = await page.evaluate(async () => {
+      for (let tick = 0; tick < 75; tick += 1) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      const probe = window.__qaHeldResize;
+      probe.running = false;
+      return probe.frames;
+    });
+    const afterOldSettle = await inspectStagePaint(page, ".journey-story__media");
+    if (!stagePaintValid(afterOldSettle, first, true)) {
+      throw new Error(`Cancelled resize gesture changed the picture before a fresh click: ${JSON.stringify({
+        first, cancelledClicks, afterRelease, afterOldSettle, frames: frames.slice(-8),
+      })}`);
+    }
+    const freshClickCount = await page.evaluate(() => window.__qaHeldResize.clicks.length);
+    await clickStoryPicture(page, 1);
+    await waitForStoryPicture(page, second);
+    const afterFreshClick = await inspectStagePaint(page, ".journey-story__media");
+    const freshClicks = await page.evaluate((start) => window.__qaHeldResize.clicks.slice(start), freshClickCount);
+    const heldResizeFailed = !stagePaintValid(before, first, true)
+      || held.current !== first || held.presentation !== "dragging"
+      || !held.dragX || held.dragX === "0px" || !held.nextReady
+      || !canceledBeforeRelease
+      || !stagePaintValid(afterRelease, first, true)
+      || !stagePaintValid(afterOldSettle, first, true)
+      || frames.length < 10 || frames.some((frame) => frame.id !== first)
+      || !cancelledClicks.some((click) => click.trusted && click.detail > 0 && click.insideStage)
+      || !freshClicks.some((click) => click.trusted && click.detail > 0 && click.insideStage)
+      || !stagePaintValid(afterFreshClick, second, true)
+      || heldResize.consoleErrors.length > 0 || heldResize.pageErrors.length > 0;
+    checks.push({ name: "story-held-drag-rotate-cancels-old-settle", before, held,
+      canceledBeforeRelease, releasePoint, cancelledClicks, afterRelease, afterOldSettle,
+      freshClicks, afterFreshClick,
+      observedFrames: frames.length, unexpectedOwners: frames.filter((frame) => frame.id !== first).slice(0, 4),
+      consoleErrors: heldResize.consoleErrors, pageErrors: heldResize.pageErrors,
+      failed: heldResizeFailed });
+    if (heldResizeFailed) failed = true;
+  } finally {
+    await heldResize.page.close();
+  }
+
+  const stageOwnerBack = await createQaPage("/?qaState=journey-story", (request) =>
+    request.includes("000000000100") ? "/artworks/china-handscroll.jpg"
+      : "/artworks/mughal-akbarnama.jpg", {
+    mobile: true, reducedMotion: "no-preference",
+  });
+  try {
+    const page = stageOwnerBack.page;
+    const first = "00000000-0000-4000-8000-000000000100";
+    const second = "00000000-0000-4000-8000-000000000101";
+    await waitForStoryPicture(page, first);
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), second, { polling: "raf" });
+    // The first image can decode while the mobile Story itself is still
+    // fading in. Inspect pixels after that finite entrance owns a full frame.
+    await page.waitForFunction(() => {
+      const story = document.querySelector(".journey-story");
+      return story && Number(getComputedStyle(story).opacity) > .99
+        && !story.getAnimations().some((animation) => animation.animationName === "atlasViewIn"
+          && animation.playState === "running");
+    }, null, { polling: "raf", timeout: 3_000 });
+    const beforeBack = await inspectStagePaint(page, ".journey-story__media");
+    await page.locator(".journey-story__mobile-media-fullscreen").click();
+    const overlay = page.locator(".journey-story-fullscreen");
+    await overlay.waitFor({ state: "visible" });
+    await waitForStoryPicture(page, first, ".journey-story-fullscreen");
+    await page.waitForFunction((id) => document.querySelector(
+      `.journey-story-fullscreen [data-media-page-id="${id}"][data-media-page-ready="true"]`,
+    ), second, { polling: "raf" });
+    const bounds = await page.locator('.journey-story-fullscreen [data-media-page="current"] img').boundingBox();
+    if (!bounds) throw new Error("Fullscreen picture is absent before Back interruption");
+    const x = bounds.x + bounds.width / 2;
+    const y = bounds.y + bounds.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - 130, y, { steps: 8 });
+    // Observe before release, then dispatch Back from the exact settling RAF.
+    // This prevents a scheduler delay from turning the interruption into a
+    // post-settle close or missing a valid 560ms morph.
+    await page.evaluate(() => {
+      const selector = '[data-shared-element-clone^="story-fullscreen"]';
+      const existing = new Set(document.querySelectorAll(selector));
+      const probe = { clone: null, animation: null, observer: null };
+      const capture = () => {
+        if (probe.clone) return;
+        const clone = [...document.querySelectorAll(selector)].find((node) => !existing.has(node));
+        if (!(clone instanceof HTMLImageElement)) return;
+        probe.clone = clone;
+        probe.animation = clone.getAnimations()[0] ?? null;
+        if (probe.animation) {
+          probe.animation.pause();
+          probe.animation.currentTime = Number(probe.animation.effect?.getTiming().duration ?? 560) * .4;
+        }
+        probe.observer.disconnect();
+      };
+      probe.observer = new MutationObserver(capture);
+      probe.observer.observe(document.body, { childList: true, subtree: true });
+      window.__qaStoryBackClone = probe;
+      window.__qaStoryBackTriggered = false;
+      const backOnSettle = () => {
+        const stage = document.querySelector('.journey-story-fullscreen [data-story-media-pages]');
+        if (stage?.getAttribute("data-media-presentation") === "settling") {
+          window.__qaStoryBackTriggered = true;
+          window.history.back();
+          return;
+        }
+        requestAnimationFrame(backOnSettle);
+      };
+      requestAnimationFrame(backOnSettle);
+    });
+    await page.mouse.up();
+    await page.waitForFunction(() => window.__qaStoryBackTriggered, null, { polling: "raf" });
+    await overlay.waitFor({ state: "hidden" });
+    const returningClone = await page.evaluate(() => {
+      const probe = window.__qaStoryBackClone;
+      probe.observer.disconnect();
+      const clone = probe.clone;
+      if (!(clone instanceof HTMLImageElement)) return null;
+      const style = getComputedStyle(clone);
+      const bounds = clone.getBoundingClientRect();
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(clone, Math.floor(clone.naturalWidth / 2), Math.floor(clone.naturalHeight / 2),
+        1, 1, 0, 0, 1, 1);
+      return { name: clone.dataset.sharedElementClone,
+        ready: clone.complete && clone.naturalWidth > 0,
+        animated: probe.animation?.playState === "paused",
+        visible: style.visibility === "visible" && Number(style.opacity) > 0
+          && bounds.width > 0 && bounds.height > 0 && Number(style.zIndex) > 1_000_000_000,
+        paintPoint: { x: Math.round(bounds.left + bounds.width / 2), y: Math.round(bounds.top + bounds.height / 2) },
+        sourcePixel: [...context.getImageData(0, 0, 1, 1).data].join(",") };
+    });
+    const returningScreenPixel = returningClone
+      ? (await readScreenPixels(page, [returningClone.paintPoint]))[0] : null;
+    await page.evaluate(() => window.__qaStoryBackClone?.animation?.play());
+    // The fullscreen shared-element clone owns paint until its exit finishes.
+    // Once it releases the picture, the actual image must own the tap again.
+    await page.locator('[data-shared-element-clone^="story-fullscreen"]').waitFor({ state: "hidden", timeout: 3_000 });
+    await waitForStoryPicture(page, first);
+    const returned = await inspectStagePaint(page, ".journey-story__media");
+    const clonePaintDistance = returningClone?.sourcePixel && returningScreenPixel
+      ? pixelDistance([returningScreenPixel], [returningClone.sourcePixel]) : Infinity;
+    const cloneBlackDistance = returningClone?.sourcePixel
+      ? pixelDistance(["0,0,0,255"], [returningClone.sourcePixel]) : 0;
+    const backFailed = !stagePaintValid(beforeBack, first) || !stagePaintValid(returned, first)
+      || returningClone?.name !== `story-fullscreen-${first}`
+      || !returningClone.ready || !returningClone.animated || !returningClone.visible
+      || !returningScreenPixel || cloneBlackDistance <= 0 || clonePaintDistance >= cloneBlackDistance / 2
+      || !beforeBack.hitImage || !returned.hitImage
+      || returned.dragX !== "" || frontPixels(returned) !== frontPixels(beforeBack);
+    checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returningClone,
+      returningScreenPixel, clonePaintDistance, cloneBlackDistance, returned,
+      consoleErrors: stageOwnerBack.consoleErrors, pageErrors: stageOwnerBack.pageErrors,
+      failed: backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0 });
+    if (backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0) failed = true;
+  } finally {
+    await stageOwnerBack.page.close();
+  }
+
   const mixedMediaMobile = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
     instrumentMedia: true,
     mixedMedia: true,
@@ -1716,12 +2184,13 @@ try {
   try {
     await mixedMediaMobile.page.evaluate(() => {
       window.__qaNativeVideoTouches = [];
-      for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "gotpointercapture", "lostpointercapture"]) {
+      for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "gotpointercapture", "lostpointercapture", "click"]) {
         document.addEventListener(type, (event) => {
           const target = event.target;
           if (!(target instanceof Element)) return;
           const stage = target.closest(".journey-story__media, .journey-story-fullscreen");
           window.__qaNativeVideoTouches.push({ type, time: event.timeStamp, pointerId: event.pointerId,
+            trusted: event.isTrusted, detail: event.detail,
             target: `${target.tagName}.${target.className}`, x: event.clientX, y: event.clientY,
             stage: stage?.className ?? null,
             asset: stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") });
@@ -1731,27 +2200,29 @@ try {
     });
     await mixedMediaMobile.page.locator(".journey-story").waitFor({ state: "visible" });
     const inlineStage = mixedMediaMobile.page.locator(".journey-story__media");
+    const inlineGestureStage = inlineStage.locator(storyMediaPagesSelector);
     const initialImage = inlineStage.locator(storyCurrentImageSelector).first();
     await initialImage.waitFor({ state: "visible" });
     await initialImage.click();
 
     const fullscreenStage = mixedMediaMobile.page.locator(".journey-story-fullscreen");
+    const fullscreenGestureStage = fullscreenStage.locator(storyMediaPagesSelector);
     await fullscreenStage.waitFor({ state: "visible" });
     const fullscreenBox = await fullscreenStage.boundingBox();
     if (!fullscreenBox) throw new Error("mobile mixed-media fullscreen has no bounds");
     const fullStartX = fullscreenBox.x + fullscreenBox.width * 0.72;
     const fullSwipeY = fullscreenBox.y + fullscreenBox.height * 0.42;
     // Land on the video deterministically before exercising real touch. This
-    // setup gesture targets the stage directly; the assertions below use CDP
+    // setup gesture targets the gesture stage directly; the assertions below use CDP
     // touch so the browser gives the <video> its normal implicit capture.
-    await fullscreenStage.dispatchEvent("pointerdown", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
-    await fullscreenStage.dispatchEvent("pointermove", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
-    await fullscreenStage.dispatchEvent("pointerup", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointermove", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
 
     const fullscreenVideo = fullscreenStage.locator("video[data-shared-media-id]");
     await fullscreenVideo.waitFor({ state: "visible", timeout: 3_000 });
     const touch = await mixedMediaMobile.page.context().newCDPSession(mixedMediaMobile.page);
-    await fullscreenStage.evaluate((stage) => {
+    await fullscreenGestureStage.evaluate((stage) => {
       stage.dataset.qaVideoStageCapture = "";
       stage.addEventListener("gotpointercapture", (event) => {
         if (event.target === stage) stage.dataset.qaVideoStageCapture = String(event.pointerId);
@@ -1770,26 +2241,23 @@ try {
     const fullscreenVideoY = fullscreenVideoPoint.y;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenVideoX, y: fullscreenVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenVideoX + 30, y: fullscreenVideoY }] });
-    const fullscreenVideoStageCapturedOnJitter = await fullscreenStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
+    const fullscreenVideoStageCapturedOnJitter = await fullscreenGestureStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const fullscreenVideoPointerUps = Number(await fullscreenVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
-    const fullscreenPositionBeforeVideoSwipe = await fullscreenStage.locator(".journey-story-fullscreen__nav span").textContent();
-    const fullscreenSwipePoint = await nativeVideoTouchPoint(fullscreenVideo, "fullscreen-swipe");
-    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenSwipePoint.x, y: fullscreenSwipePoint.y }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenSwipePoint.x - 110, y: fullscreenSwipePoint.y }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await mixedMediaMobile.page.waitForFunction((before) => {
-      const position = document.querySelector(".journey-story-fullscreen__nav span")?.textContent;
-      return Boolean(position && position !== before);
-    }, fullscreenPositionBeforeVideoSwipe, { timeout: 3_000 });
-    const fullscreenVideoSwipeNavigated = true;
+    const fullscreenAfterJitter = await fullscreenStage.locator(storyMediaPagesSelector).evaluate((stage) => ({
+      current: stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id"),
+      presentation: stage.getAttribute("data-media-presentation"),
+    }));
+    const fullscreenVideoButtonHit = await clickStoryVideoStep(mixedMediaMobile.page, 1, ".journey-story-fullscreen");
+    await waitForStoryPicture(mixedMediaMobile.page, "00000000-0000-4000-8000-000000000102", ".journey-story-fullscreen");
+    const fullscreenVideoButtonNavigated = true;
 
     // Return to the video, then exit fullscreen so the inline stage can run
     // the same native-capture contract.
-    await fullscreenStage.dispatchEvent("pointerdown", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
-    await fullscreenStage.dispatchEvent("pointermove", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
-    await fullscreenStage.dispatchEvent("pointerup", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerdown", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointermove", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenGestureStage.dispatchEvent("pointerup", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
     await fullscreenVideo.waitFor({ state: "visible", timeout: 3_000 });
     await mixedMediaMobile.page.keyboard.press("Escape");
     // The fullscreen stage stays mounted but hidden so its exact <video> node
@@ -1798,7 +2266,7 @@ try {
 
     const inlineVideo = inlineStage.locator(storyCurrentVideoSelector);
     await inlineVideo.waitFor({ state: "visible", timeout: 3_000 });
-    await inlineStage.evaluate((stage) => {
+    await inlineGestureStage.evaluate((stage) => {
       stage.dataset.qaVideoStageCapture = "";
       stage.addEventListener("gotpointercapture", (event) => {
         if (event.target === stage) stage.dataset.qaVideoStageCapture = String(event.pointerId);
@@ -1817,40 +2285,41 @@ try {
     const inlineVideoY = inlineVideoPoint.y;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineVideoX, y: inlineVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineVideoX + 30, y: inlineVideoY }] });
-    const inlineVideoStageCapturedOnJitter = await inlineStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
+    const inlineVideoStageCapturedOnJitter = await inlineGestureStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const inlineVideoPointerUps = Number(await inlineVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
-    const inlineVideoSrcBeforeSwipe = await inlineVideo.getAttribute("src");
-    // This assertion exercises a warm video-to-photo swipe. Returning from
-    // fullscreen may leave the inline neighbor waiting for its own decode.
+    const inlineAfterJitter = await inlineStage.locator(storyMediaPagesSelector).evaluate((stage) => ({
+      current: stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id"),
+      presentation: stage.getAttribute("data-media-presentation"),
+    }));
+    // Returning from fullscreen may leave the inline neighbor waiting for its
+    // own decode. The visible button remains the navigation target on video.
     await inlineStage.locator(storyReadyPageSelector("next")).waitFor({ state: "attached", timeout: 3_000 });
-    const inlineSwipePoint = await nativeVideoTouchPoint(inlineVideo, "inline-swipe");
-    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineSwipePoint.x, y: inlineSwipePoint.y }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineSwipePoint.x - 110, y: inlineSwipePoint.y }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await mixedMediaMobile.page.waitForFunction(({ selector, before }) => {
-      const media = document.querySelector(".journey-story__media")?.querySelector(selector);
-      return Boolean(media && media.getAttribute("src") !== before);
-    }, { selector: storyCurrentMediaSelector, before: inlineVideoSrcBeforeSwipe }, { timeout: 3_000 });
-    const inlineVideoSwipeNavigated = true;
+    const inlineVideoButtonHit = await clickStoryVideoStep(mixedMediaMobile.page, 1);
+    await waitForStoryPicture(mixedMediaMobile.page, "00000000-0000-4000-8000-000000000102");
+    const inlineVideoButtonNavigated = true;
 
     const videoNativeTapFailed = fullscreenVideoStageCapturedOnJitter
       || inlineVideoStageCapturedOnJitter
       || fullscreenVideoPointerUps < 1
       || inlineVideoPointerUps < 1
-      || !fullscreenVideoSwipeNavigated
-      || !inlineVideoSwipeNavigated
+      || fullscreenAfterJitter.current !== "00000000-0000-4000-8000-000000000152"
+      || fullscreenAfterJitter.presentation !== "settled"
+      || inlineAfterJitter.current !== "00000000-0000-4000-8000-000000000152"
+      || inlineAfterJitter.presentation !== "settled"
+      || !fullscreenVideoButtonNavigated || !fullscreenVideoButtonHit.targetIsButton
+      || !inlineVideoButtonNavigated || !inlineVideoButtonHit.targetIsButton
       || mixedMediaMobile.consoleErrors.length > 0
       || mixedMediaMobile.pageErrors.length > 0;
     checks.push({
       name: "story-mobile-video-native-capture-preserved",
       fullscreenVideoStageCapturedOnJitter,
       fullscreenVideoPointerUps,
-      fullscreenVideoSwipeNavigated,
+      fullscreenAfterJitter, fullscreenVideoButtonHit, fullscreenVideoButtonNavigated,
       inlineVideoStageCapturedOnJitter,
       inlineVideoPointerUps,
-      inlineVideoSwipeNavigated,
+      inlineAfterJitter, inlineVideoButtonHit, inlineVideoButtonNavigated,
       nativeTouchPoints,
       consoleErrors: mixedMediaMobile.consoleErrors,
       pageErrors: mixedMediaMobile.pageErrors,
@@ -2113,15 +2582,16 @@ try {
     });
     try {
       const stage = videoMorph.page.locator(".journey-story__media");
+      const gestureStage = stage.locator(storyMediaPagesSelector);
       await stage.locator(storyCurrentImageSelector).first().waitFor({ state: "visible", timeout: 5_000 });
       if (surface.mobile) {
         const stageBox = await stage.boundingBox();
         if (!stageBox) throw new Error(`${surface.label} Story stage has no bounds`);
         const x = stageBox.x + stageBox.width * 0.72;
         const y = stageBox.y + stageBox.height * 0.5;
-        await stage.dispatchEvent("pointerdown", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x, clientY: y, bubbles: true });
-        await stage.dispatchEvent("pointermove", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
-        await stage.dispatchEvent("pointerup", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
+        await gestureStage.dispatchEvent("pointerdown", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x, clientY: y, bubbles: true });
+        await gestureStage.dispatchEvent("pointermove", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
+        await gestureStage.dispatchEvent("pointerup", { pointerId: 921, pointerType: "touch", isPrimary: true, clientX: x - 110, clientY: y, bubbles: true });
       } else {
         await clickStoryPicture(videoMorph.page, 1);
       }
@@ -2377,6 +2847,7 @@ try {
   try {
     await videoAutoplay.page.locator(".journey-story").waitFor({ state: "visible" });
     const videoStage = videoAutoplay.page.locator(".journey-story__media");
+    const videoGestureStage = videoStage.locator(storyMediaPagesSelector);
     const firstImage = videoStage.locator(storyCurrentImageSelector).first();
     await firstImage.waitFor({ state: "visible" });
     const videoStageBox = await videoStage.boundingBox();
@@ -2384,9 +2855,9 @@ try {
     const videoSwipeX = videoStageBox.x + videoStageBox.width * 0.72;
     const videoSwipeY = videoStageBox.y + videoStageBox.height * 0.5;
     // One committed swipe lands on the video asset at index 1.
-    await videoStage.dispatchEvent("pointerdown", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX, clientY: videoSwipeY, bubbles: true });
-    await videoStage.dispatchEvent("pointermove", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
-    await videoStage.dispatchEvent("pointerup", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
+    await videoGestureStage.dispatchEvent("pointerdown", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX, clientY: videoSwipeY, bubbles: true });
+    await videoGestureStage.dispatchEvent("pointermove", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
+    await videoGestureStage.dispatchEvent("pointerup", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
     const settledVideo = videoStage.locator(storyCurrentVideoSelector);
     await settledVideo.waitFor({ state: "visible", timeout: 5_000 });
 
@@ -2552,14 +3023,15 @@ try {
   try {
     await videoImmersive.page.locator(".journey-story").waitFor({ state: "visible" });
     const stage = videoImmersive.page.locator(".journey-story__media");
+    const gestureStage = stage.locator(storyMediaPagesSelector);
     await stage.locator(storyCurrentImageSelector).first().waitFor({ state: "visible" });
     const stageBox = await stage.boundingBox();
     if (!stageBox) throw new Error("mixed-media story stage has no bounds");
     const swipeX = stageBox.x + stageBox.width * 0.72;
     const swipeY = stageBox.y + stageBox.height * 0.5;
-    await stage.dispatchEvent("pointerdown", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX, clientY: swipeY, bubbles: true });
-    await stage.dispatchEvent("pointermove", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
-    await stage.dispatchEvent("pointerup", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
+    await gestureStage.dispatchEvent("pointerdown", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX, clientY: swipeY, bubbles: true });
+    await gestureStage.dispatchEvent("pointermove", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
+    await gestureStage.dispatchEvent("pointerup", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
     await stage.locator(storyCurrentVideoSelector).waitFor({ state: "visible", timeout: 5_000 });
     const currentIsVideo = await videoImmersive.page.evaluate((selector) => (
       document.querySelector(selector)?.tagName === "VIDEO"
@@ -2653,6 +3125,7 @@ try {
     });
     try {
       const stage = mobileContinuity.page.locator(".journey-story__media");
+      const gestureStage = stage.locator(storyMediaPagesSelector);
       await stage.waitFor({ state: "visible" });
       const base = stage.locator(storyCurrentMediaSelector).first();
       await base.waitFor({ state: "visible", timeout: 3_000 });
@@ -2682,7 +3155,7 @@ try {
       if (!box) throw new Error(`mobile continuity ${label}: stage has no bounds`);
       const startX = box.x + box.width * 0.72;
       const y = box.y + box.height * 0.5;
-      await stage.dispatchEvent("pointerdown", {
+      await gestureStage.dispatchEvent("pointerdown", {
         pointerId: 41,
         pointerType: "touch",
         isPrimary: true,
@@ -2692,7 +3165,7 @@ try {
       });
       // See the earlier comment: the live-drag gesture needs a pointermove
       // to resolve a neighbor and commit at all.
-      await stage.dispatchEvent("pointermove", {
+      await gestureStage.dispatchEvent("pointermove", {
         pointerId: 41,
         pointerType: "touch",
         isPrimary: true,
@@ -2732,7 +3205,7 @@ try {
           legacyIncomingCount: root.querySelectorAll(".journey-story__media-incoming").length,
         };
       }, { pagesSelector: storyMediaPagesSelector });
-      await stage.dispatchEvent("pointerup", {
+      await gestureStage.dispatchEvent("pointerup", {
         pointerId: 41,
         pointerType: "touch",
         isPrimary: true,

@@ -34,14 +34,15 @@ export type ItinerarySourceKind = "link" | "image" | "text";
 
 /**
  * What an entry is doing in the plan. `pure-transit` is a position the plan
- * passes through without stopping; it still shapes the Route, so it becomes a
- * non-Stop Route Point rather than being dropped.
+ * passes through without stopping. Its endpoints shape the Route; a flight
+ * number itself is not a place to geocode.
  */
 export type ItineraryEntryRole =
   | "accommodation"
   | "attraction"
   | "transport"
-  | "pure-transit";
+  | "pure-transit"
+  | "activity";
 
 /**
  * A readable fact about one entry that the member has to resolve. Every flag
@@ -79,6 +80,9 @@ export type ItineraryRecognitionEntry = {
   name: string;
   /** Confirmable aliases only; an alias never replaces `name`. */
   aliases?: string[];
+  /** Search hint only; the geocoder must still supply the actual position. */
+  countryCode?: string | null;
+  searchArea?: string | null;
   /** The region heading this entry was listed under, if the source had one. */
   regionContext?: string | null;
   role: ItineraryEntryRole;
@@ -123,6 +127,8 @@ export type ItineraryEntryDraft = {
   orderInDay: number;
   name: string;
   aliases: string[];
+  countryCode: string | null;
+  searchArea: string | null;
   regionContext: string | null;
   role: ItineraryEntryRole;
   transitEndpoints: { from: string; to: string } | null;
@@ -194,12 +200,25 @@ function stableEntryId(
 }
 
 /**
- * A transport leg and a pure pass-through shape the Route without claiming a
- * visit, so neither becomes a Stop. Everything else the member listed is
- * somewhere they meant to be.
+ * Transport and pure pass-through positions shape a Route without becoming
+ * Stops. A venue-free activity is source context, not a Route Point.
  */
 function isStopRole(role: ItineraryEntryRole) {
-  return role !== "pure-transit" && role !== "transport";
+  return role !== "pure-transit" && role !== "transport" && role !== "activity";
+}
+
+function isNonPlaceRole(role: ItineraryEntryRole) {
+  return role === "activity";
+}
+
+/** An endpoint-only leg is travel between places, not a separate waypoint. */
+export function isEndpointOnlyLeg(entry: ItineraryRecognitionEntry) {
+  return (entry.role === "pure-transit" || entry.role === "transport")
+    && entry.transitEndpoints != null && !hasPosition(entry);
+}
+
+function needsEntryConfirmation(flags: readonly ItineraryEntryFlag[]) {
+  return flags.some((flag) => flag !== "possible-repeat-visit" && flag !== "year-unconfirmed");
 }
 
 function hasPosition(entry: ItineraryRecognitionEntry) {
@@ -262,7 +281,7 @@ export function resolveItineraryEntryPosition(
           ? [...entry.aliases, position.alias]
           : entry.aliases,
         flags,
-        needsConfirmation: flags.some((flag) => flag !== "possible-repeat-visit"),
+        needsConfirmation: needsEntryConfirmation(flags),
       };
     }),
   }));
@@ -303,7 +322,9 @@ export function buildItineraryImportDraft(
     const flags: ItineraryEntryFlag[] = [];
     if (entry.sourceInvalid) flags.push("source-invalid");
     if (entry.truncated) flags.push("truncated");
-    if (!hasPosition(entry)) flags.push("unresolved-position");
+    if (!isEndpointOnlyLeg(entry) && !isNonPlaceRole(entry.role) && !hasPosition(entry)) {
+      flags.push("unresolved-position");
+    }
 
     // The same printed name seen before — adjacent or not — is a hint and
     // nothing more. Both visits survive; only the member decides they are one.
@@ -319,6 +340,8 @@ export function buildItineraryImportDraft(
       orderInDay: entry.orderInDay,
       name: entry.name,
       aliases: entry.aliases ? [...entry.aliases] : [],
+      countryCode: entry.countryCode ?? null,
+      searchArea: entry.searchArea ?? null,
       regionContext: entry.regionContext ?? null,
       role: entry.role,
       transitEndpoints: entry.transitEndpoints ?? null,
@@ -327,7 +350,7 @@ export function buildItineraryImportDraft(
       flags,
       // A repeat hint alone is not a question: the plan really does list it
       // twice, and importing both is the correct default.
-      needsConfirmation: flags.some((flag) => flag !== "possible-repeat-visit"),
+      needsConfirmation: needsEntryConfirmation(flags),
       suggestedMergeWithEntryId: earlier,
     };
   });
@@ -344,7 +367,7 @@ export function buildItineraryImportDraft(
           : {
             ...entry,
             flags: [...entry.flags, "year-unconfirmed" as const],
-            needsConfirmation: true,
+            needsConfirmation: entry.needsConfirmation,
           }
       ));
     if (entries.length === 0) notices.push("empty-day-preserved");
@@ -430,6 +453,8 @@ export function defaultItinerarySelection(
     .filter((entry) => (
       !entry.flags.includes("source-invalid")
       && !entry.flags.includes("unresolved-position")
+      && !isEndpointOnlyLeg(entry)
+      && !isNonPlaceRole(entry.role)
     ))
     .map((entry) => entry.entryId);
 }
@@ -450,6 +475,7 @@ export function itineraryDraftToRoutePoints(
   return draft.days.flatMap((day) =>
     day.entries
       .filter((entry) => selected.has(entry.entryId))
+      .filter((entry) => !isNonPlaceRole(entry.role))
       .filter((entry) => entry.latitude !== null && entry.longitude !== null)
       .map((entry) => ({
         entryId: entry.entryId,

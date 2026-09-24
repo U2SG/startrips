@@ -25,7 +25,11 @@
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
-import { createItineraryRecognizer } from "../itinerary/create-itinerary-recognition";
+import {
+  createItineraryRecognizer,
+  reviewItineraryLocations,
+  type ItineraryLocationReviewPlan,
+} from "../itinerary/create-itinerary-recognition";
 import {
   ItineraryImportStageError,
   withRecognitionTimeout,
@@ -45,6 +49,43 @@ const MAX_TEXT_LENGTH = 200_000;
 const MAX_IMAGE_BASE64_LENGTH = 400_000;
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
+function reviewText(value: unknown, limit: number): value is string {
+  return typeof value === "string" && value.length <= limit;
+}
+
+function reviewPlan(value: unknown): ItineraryLocationReviewPlan | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const plan = value as Record<string, unknown>;
+  if (plan.sourceTitle !== null && !reviewText(plan.sourceTitle, 300)) return null;
+  if (!Array.isArray(plan.days) || plan.days.length > 120
+    || !Array.isArray(plan.entries) || plan.entries.length > 120) return null;
+  const days = plan.days as Array<Record<string, unknown>>;
+  const entries = plan.entries as Array<Record<string, unknown>>;
+  if (days.some((day) => !day || !Number.isInteger(day.dayNumber)
+    || (day.title !== null && !reviewText(day.title, 300))
+    || (day.region !== null && !reviewText(day.region, 300)))) return null;
+  const seen = new Set<number>();
+  if (entries.some((entry) => {
+    if (!entry || !Number.isInteger(entry.index)
+      || (entry.index as number) < 0 || seen.has(entry.index as number)
+      || !reviewText(entry.name, 300) || !Number.isInteger(entry.dayNumber)
+      || !reviewText(entry.role, 30) || typeof entry.sourceInvalid !== "boolean"
+      || !Array.isArray(entry.aliases) || entry.aliases.length > 3
+      || entry.aliases.some((alias) => !reviewText(alias, 120))
+      || (entry.countryCode !== null && !reviewText(entry.countryCode, 2))
+      || (entry.searchArea !== null && !reviewText(entry.searchArea, 120))
+      || !Array.isArray(entry.candidates) || entry.candidates.length > 8) return true;
+    seen.add(entry.index as number);
+    return (entry.candidates as Array<Record<string, unknown>>).some((candidate) =>
+      !candidate || !reviewText(candidate.id, 100)
+      || !reviewText(candidate.label, 300)
+      || !reviewText(candidate.context, 500)
+      || !reviewText(candidate.countryCode, 2)
+    );
+  })) return null;
+  return value as ItineraryLocationReviewPlan;
+}
+
 // #512: an imported plan is never cached by a shared proxy, and the reading is
 // owner-only for exactly the reason the recorded-track route is.
 export const ITINERARY_IMPORT_CACHE_CONTROL = "private, no-store, max-age=0";
@@ -62,6 +103,25 @@ export type ItineraryImportDependencies = {
 export const itineraryImportDependencies: ItineraryImportDependencies = {};
 
 export const itineraryImportRoutes = new Hono();
+
+itineraryImportRoutes.post("/review", async (context) => {
+  await requireAtlasAccess(context.req.raw, "update");
+  context.header("Cache-Control", ITINERARY_IMPORT_CACHE_CONTROL);
+  const body = await readJsonObject(() => context.req.json());
+  const plan = reviewPlan(body?.plan);
+  if (!plan) return context.json({ error: "INVALID_IMPORT_REVIEW" }, 400);
+  if (serverConfig.itineraryRecognitionDriver !== "http-model") {
+    throw new ItineraryImportStageError("ai-review", "ITINERARY_REVIEW_UNAVAILABLE", "Location review is not configured", 503);
+  }
+  const decisions = await reviewItineraryLocations(plan, {
+    baseUrl: serverConfig.itineraryRecognitionBaseUrl ?? "",
+    apiKey: serverConfig.itineraryRecognitionApiKey,
+    model: serverConfig.itineraryRecognitionModel,
+    timeoutMs: serverConfig.itineraryRecognitionTimeoutMs,
+    fetcher: itineraryImportDependencies.fetcher,
+  });
+  return context.json({ decisions });
+});
 
 itineraryImportRoutes.get("/capabilities", async (context) => {
   await requireAtlasAccess(context.req.raw, "read");

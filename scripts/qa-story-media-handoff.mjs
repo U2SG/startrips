@@ -77,14 +77,10 @@ const browser = await launchQaBrowser();
  *   - `JourneyStory.handleStorySheetPointerDown` returns early for
  *     `pointerType === "mouse"`, so the compact story sheet's own gesture never
  *     runs under a mouse;
- *   - `beginMediaDrag` deliberately does NOT call `setPointerCapture` when the
- *     gesture started over a video on compact mobile (`preserveNativeVideoCapture`),
- *     because the UA's implicit touch capture already owns the stream and taking
- *     it would take the native transport's controls with it. Under a mouse there
- *     is no implicit capture, so the drag only holds together incidentally;
- *   - `pointercancel` effectively never fires for a mouse, leaving
- *     `handleStoryMediaPointerCancel` / `handleStoryMediaLostPointerCapture`
- *     unexercised.
+ *   - the video owns all pointer streams starting on its picture or controls;
+ *     Story navigation from video uses the separate visible step buttons;
+ *   - `pointercancel` effectively never fires for a mouse, leaving the stage's
+ *     cancellation and capture-loss paths unexercised.
  *
  * So every compact-mobile profile below drives real browser touch input. The
  * points go through CDP `Input.dispatchTouchEvent` -- the same browser-level
@@ -115,7 +111,12 @@ async function touchDriver(page) {
     down: async (x, y) => { await send("touchStart", finger(x, y)); },
     move: async (x, y) => { await send("touchMove", finger(x, y)); },
     up: async () => { await send("touchEnd", []); },
-    click: async (x, y) => { await page.touchscreen.tap(x, y); },
+    click: async (x, y) => {
+      // The step commits on pointerup, so this trusted touch can release
+      // immediately without relying on a browser compatibility click.
+      await send("touchStart", finger(x, y));
+      await send("touchEnd", []);
+    },
   };
 }
 
@@ -266,13 +267,8 @@ function installStageSampler() {
   // instrumentation.
   }).observe(document, {
     subtree: true, childList: true, attributes: true,
-    attributeFilter: ["data-current-media-kind", "data-media-presentation", "data-media-page-ready"],
+    attributeFilter: ["data-current-media-kind", "data-media-presentation", "data-media-page-ready", "data-media-requested"],
   });
-  for (const type of ["story-media-grab", "story-media-recover"]) {
-    document.addEventListener(type, (event) => {
-      note({ type, neighborId: event.detail?.neighborId ?? null });
-    }, true);
-  }
   const identify = (node) => {
     if (!(node instanceof Element)) return null;
     const page = node.closest("[data-media-page]");
@@ -765,7 +761,7 @@ async function nativeControls(page, rootSelector, { timeout = 4_000 } = {}) {
   const deadline = Date.now() + timeout;
   let resolved = await readNativeControls(page, rootSelector);
   while (!playEntry(resolved.controls) && Date.now() < deadline) {
-    await page.waitForTimeout(120);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     resolved = await readNativeControls(page, rootSelector);
   }
   const reach = await page.evaluate(({ selector, points }) => {
@@ -811,7 +807,8 @@ async function readNativeControls(page, rootSelector) {
     if (!Array.isArray(quad)) continue;
     const [left, top, , , right, bottom] = quad;
     resolved.push({
-      name, role, x: (left + right) / 2, y: (top + bottom) / 2,
+      name, role, ignored: Boolean(node.ignored),
+      x: (left + right) / 2, y: (top + bottom) / 2,
       box: { left: Math.round(left), top: Math.round(top), right: Math.round(right), bottom: Math.round(bottom) },
     });
   }
@@ -820,7 +817,8 @@ async function readNativeControls(page, rootSelector) {
 
 /** The play entry a viewer's finger aims at; named "pause" once it is running. */
 function playEntry(controls) {
-  return controls.find((control) => control.role === "button" && /^(play|pause)$/i.test(control.name)) ?? null;
+  return controls.find((control) => control.role === "button" && !control.ignored
+    && /^(play|pause)$/i.test(control.name)) ?? null;
 }
 
 /** Controls the viewer cannot get to: off screen, or something else in front. */
@@ -832,6 +830,142 @@ function unreachableControls(controls) {
 /** The top of the real control chrome, so a picture point can stay above it. */
 function controlChromeTop(controls) {
   return controls.length ? Math.min(...controls.map((control) => control.box.top)) : null;
+}
+
+/** Drag Chromium's own timeline thumb using this page's actual input device. */
+async function seekNativeTimeline(page, rootSelector) {
+  const picture = await presentedVideoPoint(page, rootSelector);
+  if (!picture.hitIsVideo || !picture.controls) {
+    return { picture, failed: true, reason: "native video picture is covered or controls are disabled" };
+  }
+  // Native chrome can fade after idle. Hover on desktop or tap the actual
+  // video on touch, then wait for its accessible timeline to be exposed.
+  if (input(page).kind === "mouse") await page.mouse.move(picture.x, picture.y);
+  else await input(page).click(picture.x, picture.y);
+  const timeline = (entries) => entries.filter((entry) => entry.role === "slider"
+    && !entry.ignored && !/volume/i.test(entry.name))
+    .sort((left, right) => (right.box.right - right.box.left) - (left.box.right - left.box.left))[0] ?? null;
+  let controls = await nativeControls(page, rootSelector);
+  let slider = timeline(controls);
+  const deadline = Date.now() + 4_000;
+  while ((!slider?.reachable || slider.box.right - slider.box.left < 32) && Date.now() < deadline) {
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    controls = await nativeControls(page, rootSelector, { timeout: 500 });
+    slider = timeline(controls);
+  }
+  const before = await page.evaluate((selector) => {
+    const root = document.querySelector(selector);
+    const stage = root?.querySelector("[data-story-media-pages]");
+    const video = stage?.querySelector(".story-media-pages__video video");
+    return {
+      asset: video?.getAttribute("data-shared-media-id") ?? null,
+      time: video instanceof HTMLVideoElement ? video.currentTime : null,
+      duration: video instanceof HTMLVideoElement ? video.duration : null,
+      paused: video instanceof HTMLVideoElement ? video.paused : null,
+      presentation: stage?.getAttribute("data-media-presentation") ?? null,
+    };
+  }, rootSelector);
+  if (!slider || !slider.reachable || slider.box.right - slider.box.left < 32
+    || !Number.isFinite(before.duration) || before.duration <= 1) {
+    return { picture, slider, controls: controls.panel, before, failed: true,
+      reason: "no visible reachable native timeline or finite media duration" };
+  }
+  const y = slider.y;
+  const width = slider.box.right - slider.box.left;
+  const startX = slider.box.left + width * 0.2;
+  const endX = slider.box.left + width * 0.7;
+  const hits = await page.evaluate(({ selector, points }) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    return points.map(({ x, y }) => {
+      const target = document.elementFromPoint(x, y);
+      return { x, y, isVideo: target === video,
+        tag: target instanceof Element ? target.tagName : null };
+    });
+  }, { selector: rootSelector, points: [{ x: startX, y }, { x: endX, y }] });
+  if (hits.some((hit) => !hit.isVideo)) {
+    return { picture, slider, controls: controls.panel, before, hits, failed: true,
+      reason: "native timeline path is covered" };
+  }
+  // Install this only after the picture tap/hover that reveals Chromium's
+  // controls. Playback can advance currentTime by itself; a seek event from
+  // this exact video during the subsequent pointer drag is direct evidence
+  // that the native timeline, rather than the play surface, handled input.
+  await page.evaluate((selector) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    if (!(video instanceof HTMLVideoElement)) throw new Error("native seek target disappeared");
+    const probe = { video, events: [], startedAt: null };
+    for (const type of ["seeking", "seeked"]) {
+      video.addEventListener(type, (event) => {
+        probe.events.push({ type, trusted: event.isTrusted, time: video.currentTime,
+          duration: video.duration, at: performance.now() });
+      });
+    }
+    window.__qaNativeTimelineSeek = probe;
+  }, rootSelector);
+  await startSampler(page, rootSelector);
+  const pointer = input(page);
+  await page.evaluate(() => { window.__qaNativeTimelineSeek.startedAt = performance.now(); });
+  await pointer.down(startX, y);
+  for (let step = 1; step <= 8; step += 1) {
+    await pointer.move(startX + (endX - startX) * step / 8, y);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  }
+  await pointer.up();
+  const reached = await page.waitForFunction(({ selector, duration }) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    const probe = window.__qaNativeTimelineSeek;
+    return video instanceof HTMLVideoElement && probe?.video === video && !video.seeking
+      && probe.events.some((event) => event.type === "seeking" && event.trusted
+        && event.at >= probe.startedAt)
+      && probe.events.some((event) => event.type === "seeked" && event.trusted
+        && event.at >= probe.startedAt && event.time >= duration * 0.35)
+      && video.currentTime >= duration * 0.4;
+  }, { selector: rootSelector, duration: before.duration }, { polling: "raf", timeout: 4_000 })
+    .then(() => true, () => false);
+  const observation = await stopSampler(page);
+  const seekProbe = await page.evaluate(() => ({
+    startedAt: window.__qaNativeTimelineSeek?.startedAt ?? null,
+    events: window.__qaNativeTimelineSeek?.events ?? [],
+  }));
+  const after = await page.evaluate((selector) => {
+    const root = document.querySelector(selector);
+    const stage = root?.querySelector("[data-story-media-pages]");
+    const video = stage?.querySelector(".story-media-pages__video video");
+    const current = stage?.querySelector('[data-media-page="current"]');
+    return {
+      asset: video?.getAttribute("data-shared-media-id") ?? null,
+      current: current?.getAttribute("data-media-page-id") ?? null,
+      time: video instanceof HTMLVideoElement ? video.currentTime : null,
+      duration: video instanceof HTMLVideoElement ? video.duration : null,
+      paused: video instanceof HTMLVideoElement ? video.paused : null,
+      presentation: stage?.getAttribute("data-media-presentation") ?? null,
+      requested: document.querySelector("[data-media-requested]")?.getAttribute("data-media-requested") ?? null,
+    };
+  }, rootSelector);
+  const ownershipChanges = observation.frames.filter((frame) => frame.currentId !== before.asset
+    || frame.presentation !== "settled");
+  const claims = observation.gestures.filter((entry) => entry.type === "stage-attribute" && (
+    (entry.name === "data-media-presentation" && entry.value !== "settled")
+    || (entry.name === "data-media-requested" && entry.value !== null)
+  ));
+  const nativeSeek = seekProbe.startedAt !== null
+    && seekProbe.events.some((event) => event.type === "seeking" && event.trusted
+      && event.at >= seekProbe.startedAt)
+    && seekProbe.events.some((event) => event.type === "seeked" && event.trusted
+      && event.at >= seekProbe.startedAt && event.time >= before.duration * 0.35);
+  return {
+    picture, slider, controls: controls.panel, before, after, hits, input: pointer.kind,
+    seekProbe, nativeSeek, reached,
+    observedFrames: observation.frames.length, ownershipChanges: ownershipChanges.slice(0, 3),
+    claims: claims.slice(0, 4), trace: observation.gestures.slice(-24),
+    failed: !nativeSeek || !reached || !observation.frames.length
+      || ownershipChanges.length > 0 || claims.length > 0
+      || before.asset !== after.asset || after.current !== before.asset
+      || before.presentation !== "settled" || after.presentation !== "settled" || after.requested !== null
+      || before.paused !== after.paused || !Number.isFinite(after.time)
+      || after.time - before.time < Math.max(0.3, before.duration * 0.25)
+      || after.time < before.duration * 0.35 || after.time > before.duration * 0.95,
+  };
 }
 
 /** Real transport observation: the element's own clock, sampled repeatedly. */
@@ -901,10 +1035,8 @@ async function photoClickPoint(page, rootSelector, direction) {
  * Real drag across the stage, above any native control chrome, in this page's
  * own modality: a mouse on desktop, a browser touch stream on compact mobile.
  *
- * The moves are paced like a hand rather than emitted in one tight loop: the
- * product derives release velocity from consecutive pointer samples, and a
- * burst with a zero millisecond delta carries no velocity at all. This is
- * gesture fidelity, not a wait inserted to make an assertion pass.
+ * Each move crosses a browser frame so the product receives distinct pointer
+ * samples and can derive release velocity from the real event timestamps.
  */
 async function swipeStage(page, rootSelector, direction) {
   const geometry = await page.evaluate((selector) => {
@@ -917,7 +1049,7 @@ async function swipeStage(page, rootSelector, direction) {
   await pointer.down(geometry.x, geometry.y);
   for (let step = 1; step <= 10; step += 1) {
     await pointer.move(geometry.x + travel * (step / 10), geometry.y);
-    await page.waitForTimeout(12);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   }
   await pointer.up();
   return { ...geometry, travel, input: pointer.kind };
@@ -931,7 +1063,7 @@ async function swipeStage(page, rootSelector, direction) {
  * first navigation settles". Two separate swipes cannot: `swipeStage` ends in
  * `mouse.up()`, so the first navigation has already committed and the second
  * gesture addresses a stack that has already moved. Within one stream
- * `updateMediaDrag` reselects the neighbour every time `dx` changes, so the
+ * the stage reselects the neighbour every time `dx` changes, so the
  * committed target must be the neighbour in the FINAL direction.
  */
 async function reverseSwipeStage(page, rootSelector, firstDirection) {
@@ -943,17 +1075,33 @@ async function reverseSwipeStage(page, rootSelector, firstDirection) {
   const reach = Math.min(320, geometry.width * 0.45);
   const offset = (direction) => (direction > 0 ? -1 : 1) * reach;
   const pointer = input(page);
+  const orderedNeighbor = async () => page.evaluate(async (selector) => {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const current = stage?.querySelector('[data-media-page="current"]');
+    if (!stage || !current) return null;
+    const currentZ = Number(getComputedStyle(current).zIndex);
+    const neighbor = [...stage.querySelectorAll("[data-media-page-id]")]
+      .filter((node) => node !== current && node.getAttribute("data-media-page-ready") === "true")
+      .sort((left, right) => Number(getComputedStyle(right).zIndex) - Number(getComputedStyle(left).zIndex))[0];
+    const z = neighbor ? Number(getComputedStyle(neighbor).zIndex) : -Infinity;
+    return z > currentZ && stage.getAttribute("data-media-presentation") === "dragging"
+      ? { id: neighbor.getAttribute("data-media-page-id"), z, currentZ } : null;
+  }, rootSelector);
   const glide = async (from, to, steps) => {
     for (let step = 1; step <= steps; step += 1) {
       await pointer.move(geometry.x + from + (to - from) * (step / steps), geometry.y);
-      await page.waitForTimeout(12);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     }
   };
   await pointer.down(geometry.x, geometry.y);
   await glide(0, offset(firstDirection), 8);
+  const firstOrderedNeighbor = await orderedNeighbor();
   await glide(offset(firstDirection), offset(-firstDirection), 16);
+  const latestOrderedNeighbor = await orderedNeighbor();
   await pointer.up();
-  return { ...geometry, reach, firstDirection, finalDirection: -firstDirection, input: pointer.kind };
+  return { ...geometry, reach, firstDirection, finalDirection: -firstDirection,
+    input: pointer.kind, orderedNeighbors: [firstOrderedNeighbor, latestOrderedNeighbor] };
 }
 
 /**
@@ -1032,11 +1180,9 @@ function gradeRestState(state, expectedFrontId, tolerance = 0.75) {
 }
 
 /**
- * The recorded sequence that leaves the stack's imperative presentation state
- * without an owner: commit a program navigation so its springs are running,
- * then take the stack with a finger. `updateMediaDrag` clears `incomingId`
- * inside a `flushSync` and the grab that follows cancels those springs
- * mid-flight, so the handoff ends without the presented identity ever changing.
+ * Commit a program navigation so its springs are running, then take the stack
+ * with a pointer. The grab cancels that presentation mid-flight; the current
+ * picture must regain its own aperture even though its identity never changed.
  */
 async function grabDuringNavigation(page, rootSelector) {
   // The arrow key the presented picture advertises, not a click half: a click
@@ -1059,11 +1205,15 @@ async function grabDuringNavigation(page, rootSelector) {
   }, rootSelector);
   const pointer = input(page);
   await pointer.down(geometry.x, geometry.y);
-  // Past the 8px axis lock so the grab really fires, far short of the commit
-  // threshold and slow enough that release velocity cannot commit either.
+  // Past the 8px axis lock so the grab really fires, while 20px remains below
+  // even the 36px minimum flick distance. Two browser frames per move preserve
+  // a deliberate slow grab without a fixed millisecond hold.
   for (let step = 1; step <= 4; step += 1) {
     await pointer.move(geometry.x - step * 5, geometry.y);
-    await page.waitForTimeout(40);
+    await page.evaluate(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
   }
   await pointer.up();
   return { ...geometry, navigatedBy: "ArrowRight", input: pointer.kind };
@@ -1141,14 +1291,59 @@ async function navigateByGesture(page, rootSelector, direction, expectedId) {
   const atRelease = await pageReadiness(page, rootSelector);
   try {
     await waitForSettledAsset(page, expectedId, rootSelector);
-    return { ok: true, gesture, expectedId, atRelease };
+    return { ok: true, gesture, input: gesture.input, method: "image swipe", expectedId, atRelease };
   } catch {
     return {
-      ok: false, gesture, expectedId, atRelease,
+      ok: false, gesture, input: gesture.input, method: "image swipe", expectedId, atRelease,
       diagnostic: await stageDiagnostic(page, rootSelector),
       trace: await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-60)),
     };
   }
+}
+
+/** Video has no page-drag owner. Its separate step button must itself be hit. */
+async function navigateByVideoButton(page, rootSelector, direction, expectedId) {
+  const step = direction < 0 ? "previous" : "next";
+  const selector = rootSelector === FULLSCREEN
+    ? `${FULLSCREEN} .journey-story-fullscreen__nav [data-video-step="${step}"]`
+    : input(page).kind === "touch"
+      ? `.journey-story__mobile-video-nav [data-video-step="${step}"]`
+      : `.journey-story__media-nav [data-video-step="${step}"]`;
+  const button = page.locator(selector);
+  const count = await button.count();
+  const visible = count === 1 && await button.isVisible();
+  const enabled = visible && await button.isEnabled();
+  const box = visible ? await button.boundingBox() : null;
+  const hit = box ? await page.evaluate(({ selector: query, x, y }) => {
+    const target = document.querySelector(query);
+    const at = document.elementFromPoint(x, y);
+    return { button: Boolean(target), hitButton: Boolean(target?.contains(at)),
+      hitTag: at instanceof Element ? at.tagName : null,
+      hitClass: at instanceof Element ? String(at.className).slice(0, 60) : null };
+  }, { selector, x: box.x + box.width / 2, y: box.y + box.height / 2 }) : null;
+  const control = { selector, count, visible, enabled, box, hit, input: input(page).kind };
+  if (!enabled || !box || !hit?.hitButton) return {
+    ok: false, button: control, method: "video button", input: input(page).kind,
+    expectedId, diagnostic: await stageDiagnostic(page, rootSelector),
+  };
+  await input(page).click(box.x + box.width / 2, box.y + box.height / 2);
+  const atRelease = await pageReadiness(page, rootSelector);
+  try {
+    await waitForSettledAsset(page, expectedId, rootSelector);
+    return { ok: true, button: control, method: "video button", input: input(page).kind,
+      expectedId, atRelease };
+  } catch {
+    return { ok: false, button: control, method: "video button", input: input(page).kind,
+      expectedId, atRelease, diagnostic: await stageDiagnostic(page, rootSelector),
+      trace: await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-60)) };
+  }
+}
+
+async function navigateByPresentedInput(page, rootSelector, direction, expectedId) {
+  const before = await currentAsset(page, rootSelector);
+  return before.kind === "video"
+    ? navigateByVideoButton(page, rootSelector, direction, expectedId)
+    : navigateByGesture(page, rootSelector, direction, expectedId);
 }
 
 try {
@@ -1227,8 +1422,8 @@ try {
   }
 
   // ---------------------------------------------------------------------
-  // A (continued). Navigating away from a video still works, by the inputs
-  // the stage advertises, and a swipe's compatibility click does not repeat it.
+  // A (continued). Video navigation uses the visible step controls; its
+  // native picture and controls keep their own pointer input.
   // ---------------------------------------------------------------------
   {
     const session = await createStoryPage({ mobile: false });
@@ -1240,13 +1435,13 @@ try {
 
       await startSampler(page, STAGE);
       // V1 -> V2 is the video<->video class: one transport, two sources.
-      const offVideo = await navigateByGesture(page, STAGE, 1, V2);
-      const swipeFrames = await stopSamplerFrames(page);
-      const afterVideoSwipe = await currentAsset(page);
-      const playbackAfterSwipe = await samplePlayback(page, STAGE, { samples: 2, everyMs: 120 });
+      const offVideo = await navigateByVideoButton(page, STAGE, 1, V2);
+      const buttonFrames = await stopSamplerFrames(page);
+      const afterVideoStep = await currentAsset(page);
+      const playbackAfterStep = await samplePlayback(page, STAGE, { samples: 2, everyMs: 120 });
 
       // Back onto the first video, then advertise-driven keyboard navigation.
-      const backToVideo = await navigateByGesture(page, STAGE, -1, V1);
+      const backToVideo = await navigateByVideoButton(page, STAGE, -1, V1);
       const stageRole = await page.evaluate((selector) => {
         const pages = document.querySelector(selector).querySelector("[data-story-media-pages]");
         pages.focus();
@@ -1262,14 +1457,14 @@ try {
 
       record({
         name: "story-video-navigation-preserved",
-        claim: "a swipe over the video lands exactly one step away -- onto the second, differently shaped video -- without starting playback, so its compatibility click did not add a second step, and the stage's advertised arrow keys still navigate",
+        claim: "the visible video step button reaches the second, differently shaped video exactly once without starting playback, the previous button returns, and the stage's advertised arrow keys still navigate",
         toVideo, offVideo, backToVideo,
-        afterFirstSwipe, afterVideoSwipe, playbackAfterSwipe, stageRole, keyboardSettled, afterKeyboard,
-        handoff: gradeContinuity(swipeFrames, { allowedAssets: [V1, V2] }),
+        afterFirstSwipe, afterVideoStep, playbackAfterStep, stageRole, keyboardSettled, afterKeyboard,
+        handoff: gradeContinuity(buttonFrames, { allowedAssets: [V1, V2] }),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !toVideo.ok || !offVideo.ok || !backToVideo.ok || !keyboardSettled
-          || afterFirstSwipe.id !== V1 || afterVideoSwipe.id !== V2
-          || playbackAfterSwipe.paused !== true
+          || afterFirstSwipe.id !== V1 || afterVideoStep.id !== V2
+          || playbackAfterStep.paused !== true
           || stageRole.tabIndex !== 0 || !stageRole.focused
           || stageRole.keyshortcuts !== "ArrowLeft ArrowRight"
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
@@ -1394,6 +1589,37 @@ try {
     }
   }
 
+  // Chromium's native timeline owns horizontal pointer input on the video.
+  // Its seek must move the real playback clock without claiming a Story drag
+  // or changing the presented media, in both mouse and touch modalities.
+  for (const profile of [
+    { label: "desktop-inline", mobile: false, fullscreen: false },
+    { label: "desktop-fullscreen", mobile: false, fullscreen: true },
+    { label: "phone-portrait-inline", mobile: true, fullscreen: false },
+  ]) {
+    const session = await createStoryPage({ mobile: profile.mobile });
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      const toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      if (profile.fullscreen) {
+        await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
+        await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
+        await waitForSettledAsset(page, V1, FULLSCREEN);
+      }
+      const root = profile.fullscreen ? FULLSCREEN : STAGE;
+      const seek = await seekNativeTimeline(page, root);
+      record({
+        name: `story-native-video-timeline-seek-${profile.label}`,
+        claim: "a real browser mouse or touch drag of Chromium's own visible timeline seeks the transport while its asset, stage presentation and request owner stay fixed; no Story media drag claims the pointer",
+        toVideo, seek, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !toVideo.ok || seek.failed || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } finally {
+      await session.page.close();
+    }
+  }
+
   // ---------------------------------------------------------------------
   // B. Handoff continuity across the whole mixed sequence, both motion modes
   // and the viewports the report covers. The compact-mobile rows are driven by
@@ -1420,7 +1646,7 @@ try {
       // in both directions on this viewport and motion mode.
       const route = [[V1, 1], [V2, 1], [I2, 1], [I3, 1], [I2, -1], [V2, -1], [V1, -1], [I1, -1]];
       for (const [target, direction] of route) {
-        const step = await navigateByGesture(page, STAGE, direction, target);
+        const step = await navigateByPresentedInput(page, STAGE, direction, target);
         steps.push(step);
         if (!step.ok) break;
         visited.push(target);
@@ -1434,10 +1660,10 @@ try {
       const pointerTypes = await observedPointerTypes(page);
       const wrongModality = pointerTypes.some((type) => type !== expectedInput)
         || !pointerTypes.includes(expectedInput)
-        || steps.some((step) => step.gesture?.input !== expectedInput);
+        || steps.some((step) => step.input !== expectedInput);
       record({
         name: `story-handoff-continuity-${profile.label}`,
-        claim: "sampled on every DOM mutation and on every animation frame the chain delivers, the stage points inside the presented aperture always show an asset the navigation currently owns, never an uncovered aperture, never the waiting indicator, and never a second live transport -- with every gesture on a compact-mobile row delivered as real browser touch and every desktop gesture as a real mouse",
+        claim: "sampled on every DOM mutation and on every animation frame the chain delivers, image swipes and visible video step buttons keep an owned picture inside the aperture, never an uncovered aperture, never the waiting indicator, and never a second live transport -- with real browser touch on compact mobile and real mouse input on desktop",
         viewport: profile.viewport, reducedMotion: profile.reducedMotion, visited, stuck,
         expectedInput, pointerTypes, wrongModality,
         ...continuity,
@@ -1470,11 +1696,11 @@ try {
       const steps = [];
       const resisted = [];
       for (const [target, direction] of [[V1, 1], [V2, 1], [I2, 1], [I3, 1]]) {
-        let step = await navigateByGesture(page, STAGE, direction, target);
-        if (!step.ok && step.atRelease?.ready?.[target] === false) {
+        let step = await navigateByPresentedInput(page, STAGE, direction, target);
+        if (!step.ok && step.method === "image swipe" && step.atRelease?.ready?.[target] === false) {
           // The stack's own contract for direct manipulation: "a cold neighbor
           // resists and returns to rest; its eventual decode never navigates by
-          // itself" (JourneyStory.settleMediaDrag). Under held-back bytes that
+          // itself" (StoryMediaPages.settleGesture). Under held-back bytes that
           // resistance is the expected outcome, not a stuck navigation -- so it
           // is graded as such: the page the stack already owned must still be
           // settled and readable, nothing may be left requested, and the SAME
@@ -1483,7 +1709,7 @@ try {
           const held = await currentAsset(page, STAGE);
           const requested = await stageDiagnostic(page, STAGE);
           await waitForReadablePage(page, STAGE, target);
-          const retry = await navigateByGesture(page, STAGE, direction, target);
+          const retry = await navigateByPresentedInput(page, STAGE, direction, target);
           resisted.push({
             target, atRelease: step.atRelease, held, requested: requested.requested,
             keptItsPage: held.id !== target && held.ready && held.presentation === "settled",
@@ -1501,7 +1727,7 @@ try {
         !entry.keptItsPage || !entry.committedOnRetry || entry.requested !== null);
       record({
         name: "story-handoff-continuity-delayed-readiness",
-        claim: "with the media bytes and one read URL deliberately held back, every handoff still keeps a legitimate drawable inside the aperture, never shows the waiting indicator while a page owns the stage, and never spawns a second transport; a neighbour that is still cold at release resists, keeps the page the stack already owned, leaves nothing requested, and commits on the same gesture once it is readable",
+        claim: "with media bytes and one read URL deliberately held back, image swipes and video step buttons keep a legitimate drawable inside the aperture, never show the waiting indicator while a page owns the stage, and never spawn a second transport; an image swipe toward a cold neighbour resists and commits on retry once readable",
         delays: { bytes: { [I2]: 1_200, [V2]: 900 }, read: { [I3]: 900 } },
         stuck, resisted, mishandledResistance, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
@@ -1586,6 +1812,16 @@ try {
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
+      // V2 is prefetched as soon as V1 becomes current, so arm this before
+      // entering V1 rather than missing the delayed response in flight.
+      let v2ResponseReceived = false;
+      const v2ReadResponse = page.waitForResponse((response) =>
+        response.url().includes(`/api/uploads/assets/${V2}/read-url`), { timeout: 8_000 })
+        .then(async (response) => {
+          v2ResponseReceived = true;
+          return { status: response.status(), body: await response.json() };
+        })
+        .catch((error) => ({ error: String(error) }));
       await navigateByGesture(page, STAGE, 1, V1);
       // Root cause of a claim that used to pass without ever being exercised:
       // this window was driven by two swipes, but a gesture toward a neighbour
@@ -1624,42 +1860,60 @@ try {
           ?.getAttribute("data-media-requested") ?? null;
         const current = document.querySelector(selector)?.querySelector("[data-story-media-pages]")
           ?.querySelector('[data-media-page="current"]');
+        const target = [...(document.querySelector(selector)
+          ?.querySelectorAll("[data-media-page-id]") ?? [])]
+          .find((node) => node.getAttribute("data-media-page-id") === expected);
         return requested === expected
           && current?.getAttribute("data-media-page-id") === owner
           && current?.getAttribute("data-media-page-ready") === "true"
-          ? { requested, heldBy: current.getAttribute("data-media-page-id") }
+          && target && target.getAttribute("data-media-page-ready") !== "true"
+          ? { requested, heldBy: current.getAttribute("data-media-page-id"), targetReady: false }
           : null;
       }, { selector: STAGE, expected: V2, owner: V1 }, { polling: "raf", timeout: 2_000 })
         .then((handle) => handle.jsonValue(), () => null);
       await page.keyboard.press("ArrowLeft");
+      const responseBeforeReversal = v2ResponseReceived;
       await waitForSettledAsset(page, V1);
       const afterReversal = await currentAsset(page);
-      // Outlive the held read, then look again: this window exists to catch a
-      // late completion, so it has to still be recording when the read lands.
-      const lateWindow = [];
-      for (let tick = 0; tick < 6; tick += 1) {
-        await page.waitForTimeout(500);
-        lateWindow.push({ at: (tick + 1) * 500, ...await currentAsset(page) });
-      }
+      // The route response, then the neighbour's ready page, prove that the
+      // delayed signed read finished and React consumed it. Keep the sampler
+      // running through both and for eight subsequent browser frames.
+      const readResponse = await v2ReadResponse;
+      const readProcessed = readResponse.status === 200 && readResponse.body?.url === VERTICAL_CLIP
+        ? await page.waitForFunction(({ selector, assetId }) => {
+          const page = [...document.querySelectorAll(`${selector} [data-media-page-id]`)]
+            .find((node) => node.getAttribute("data-media-page-id") === assetId);
+          return page?.getAttribute("data-media-page-ready") === "true"
+            ? { id: assetId, layer: page.getAttribute("data-media-layer") } : null;
+        }, { selector: STAGE, assetId: V2 }, { polling: "raf", timeout: 5_000 })
+          .then((handle) => handle.jsonValue(), () => null) : null;
+      const postReadStart = await page.evaluate(() => window.__qaStage?.ticks ?? null);
+      const postReadObserved = await page.waitForFunction((start) =>
+        start !== null && window.__qaStage?.running
+          && window.__qaStage.ticks - start >= 8,
+      postReadStart, { polling: "raf", timeout: 5_000 }).then(() => true, () => false);
       const frames = await stopSamplerFrames(page);
       const afterLateRead = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
         document.querySelector(selector).querySelectorAll("video").length, STAGE);
-      // A neighbour that peeks during the drag is the stack's own grammar, so
-      // the whole sequence is allowed here; what this window forbids is the
-      // committed owner moving, or the stage going bare, once the late read
-      // finally lands.
-      const continuity = gradeContinuity(frames, { allowedAssets: SEQUENCE });
+      const continuity = gradeContinuity(frames, { allowedAssets: [V1] });
+      const wrongOwnerFrames = frames.filter((frame) => frame.currentId !== V1);
       record({
         name: "story-late-read-never-takes-the-stage",
         claim: "an arrow-key step really does leave a request for a cold neighbour pending while the readable previous page still owns the stage, the opposite key cancels that request and keeps the visible page, and the read URL that resolves afterwards neither moves the committed owner at any point across the window nor leaves the aperture uncovered",
         abandonedIntent: V2, expectedOwner: V1,
-        readDelays: { [V2]: 2_500 }, stageRole, pending, lateWindow,
+        readDelays: { [V2]: 2_500 }, stageRole, pending,
+        readResponse, readProcessed, postReadObserved, responseBeforeReversal,
+        postReadTicks: frames.ticks - postReadStart,
+        wrongOwnerFrames: wrongOwnerFrames.slice(0, 3),
         afterReversal, afterLateRead, transports, ...continuity,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: continuity.failed
           || !stageRole.focused || !pending
-          || lateWindow.some((sample) => sample.id !== V1)
+          || responseBeforeReversal
+          || readResponse.status !== 200 || readResponse.body?.url !== VERTICAL_CLIP
+          || !readProcessed || !postReadObserved || frames.unmeasurable > 0
+          || wrongOwnerFrames.length > 0
           || afterReversal.id !== V1 || afterLateRead.id !== V1
           || afterLateRead.presentation !== "settled" || transports !== 1
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
@@ -1678,18 +1932,16 @@ try {
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
-      // Start from the middle of the sequence on purpose. From the first asset
-      // a reverse swipe has no previous neighbour, so the first intent wins by
-      // default and the check could pass while a stale completion decided the
-      // outcome. Here both directions address a real, different asset, so the
-      // latest intent is a named target rather than "either is legitimate".
+      // Start from the middle photograph so both directions address a real,
+      // different asset. Video pointer input belongs to native controls.
       await navigateByGesture(page, STAGE, 1, V1);
-      await navigateByGesture(page, STAGE, 1, V2);
+      await navigateByVideoButton(page, STAGE, 1, V2);
+      await navigateByVideoButton(page, STAGE, 1, I2);
       const startedFrom = await currentAsset(page);
-      const abandonedIntent = I2;
-      const latestIntent = V1;
+      const abandonedIntent = I3;
+      const latestIntent = V2;
       await startSampler(page, STAGE);
-      // One stream: past the threshold toward I2, then back past it toward V1
+      // One stream: past the threshold toward I3, then back past it toward V2
       // without lifting, so the reversal really is pre-commit.
       const gesture = await reverseSwipeStage(page, STAGE, 1);
       // Wait on the committed ID, not on `data-media-presentation`. A drag
@@ -1701,36 +1953,50 @@ try {
       // page the gesture started from and calls a late commit a lost one.
       const committed = await waitForSettledAsset(page, latestIntent, STAGE)
         .then(() => null, async () => await stageDiagnostic(page, STAGE));
-      const frames = await stopSamplerFrames(page);
+      // Keep sampling after commit. A one-time owner read misses a transient
+      // flash back to the abandoned page or an uncovered video aperture.
+      const postCommitStart = await page.evaluate(() => ({
+        at: Math.ceil(performance.now()), ticks: window.__qaStage?.ticks ?? null,
+        unmeasurable: window.__qaStage?.unmeasurable ?? null,
+      }));
       const settled = await currentAsset(page);
       const transports = await page.evaluate((selector) =>
         document.querySelector(selector).querySelectorAll("video").length, STAGE);
-      const stable = await page.evaluate(async (selector) => {
-        const read = () => document.querySelector(selector)
-          .querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id");
-        const first = read();
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        return { first, second: read() };
-      }, STAGE);
-      // The neighbours the product itself announced during the stream. The
-      // first must be the abandoned target and the last the reversal's own, so
-      // the retarget is read from the product rather than assumed.
-      const grabs = (await page.evaluate(() => (window.__qaStage?.gestures ?? [])))
-        .filter((entry) => entry.type === "story-media-grab")
-        .map((entry) => entry.neighborId);
+      // Thirty delivered browser frames preserve the old post-commit visual
+      // observation window without treating elapsed wall time as evidence.
+      const postCommitObserved = await page.waitForFunction((start) =>
+        start !== null && window.__qaStage?.running
+          && window.__qaStage.ticks - start >= 30,
+      postCommitStart.ticks, { polling: "raf", timeout: 10_000 }).then(() => true, () => false);
+      const stable = { first: settled.id, second: (await currentAsset(page)).id };
+      const frames = await stopSamplerFrames(page);
+      const postCommitFrames = frames.filter((frame) => frame.at > postCommitStart.at);
+      const postCommitContinuity = gradeContinuity(postCommitFrames, { allowedAssets: [latestIntent] });
+      const postCommitWrongOwner = postCommitFrames.filter((frame) => frame.currentId !== latestIntent);
+      const postCommitUnmeasurable = frames.unmeasurable - postCommitStart.unmeasurable;
+      // Read which decoded neighbour the stage ordered above the current
+      // page at each end of the same pointer stream. This is page ordering;
+      // the frame sampler below separately checks what the viewport shows.
+      const orderedNeighbors = gesture.orderedNeighbors.map((entry) => entry?.id);
       const trace = await page.evaluate(() => (window.__qaStage?.gestures ?? []).slice(-80));
+      const continuity = gradeContinuity(frames, { allowedAssets: [I2, I3, V2] });
       record({
         name: "story-reversal-commits-latest-intent",
         claim: "a reversal fired before the first navigation settles retargets within the same gesture and commits the reversal's own target, never the abandoned one, and leaves exactly one settled owner, one live transport and no late write-back",
         startedFrom, abandonedIntent, latestIntent, settled, transports, stable,
-        gesture, grabs: [...new Set(grabs)], trace, committed,
+        gesture, orderedNeighbors, trace, committed, continuity,
+        postCommitObserved, postCommitTicks: frames.ticks - postCommitStart.ticks,
+        postCommitContinuity, postCommitWrongOwner: postCommitWrongOwner.slice(0, 3),
+        postCommitUnmeasurable,
         sampledFrames: frames.length,
         concurrentLiveVideos: frames.filter((frame) => frame.videoCount > 1).slice(0, 2),
         failed: settled.presentation !== "settled" || !settled.ready
           || settled.id !== latestIntent
-          || grabs[0] !== abandonedIntent || grabs.at(-1) !== latestIntent
+          || orderedNeighbors[0] !== abandonedIntent || orderedNeighbors[1] !== latestIntent
           || transports !== 1 || stable.first !== stable.second
-          || frames.some((frame) => frame.videoCount > 1)
+          || !postCommitObserved || postCommitContinuity.failed || postCommitWrongOwner.length > 0
+          || postCommitStart.unmeasurable === null || postCommitUnmeasurable !== 0
+          || continuity.failed || frames.some((frame) => frame.videoCount > 1)
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
@@ -1740,13 +2006,9 @@ try {
 
   // ---------------------------------------------------------------------
   // B (continued). An abandoned handoff hands the stack's presentation back.
-  // This is the #489 B root cause, not a sampled window: a navigation's
-  // springs are running when the finger takes the stack, `updateMediaDrag`
-  // clears `incomingId` inside a flushSync, and the grab cancels those springs
-  // mid-flight. The presented identity never changes, so nothing re-derived
-  // the aperture the abandoned target had been written into -- the presented
-  // photograph stayed clipped into a picture that never arrived, and the rear
-  // pages kept an aperture that was no longer anyone's.
+  // A navigation's springs are running when the pointer takes the stack and
+  // cancels them mid-flight. The presented identity may remain unchanged, so
+  // the canceled target's aperture must be reclaimed explicitly.
   // ---------------------------------------------------------------------
   {
     const session = await createStoryPage({ mobile: false });
@@ -1759,7 +2021,7 @@ try {
       // recording shows.
       const steps = [];
       for (const expected of [V1, V2, I2]) {
-        steps.push(await navigateByGesture(page, STAGE, 1, expected));
+        steps.push(await navigateByPresentedInput(page, STAGE, 1, expected));
       }
       // The abandoned handoff only exists when the request really becomes an
       // in-flight one: a cold target stays a pending request, the stack never
@@ -1775,12 +2037,10 @@ try {
         const pages = document.querySelector(".journey-story__media [data-story-media-pages]");
         return pages?.getAttribute("data-media-presentation") === "settled";
       }, undefined, { polling: "raf", timeout: 10_000 }).then(() => true, () => false);
-      await page.waitForTimeout(700);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
       const frames = await stopSamplerFrames(page);
       const afterGrab = await stackRestState(page, STAGE);
       const settled = await currentAsset(page);
-      const grabs = (await page.evaluate(() => (window.__qaStage?.gestures ?? [])))
-        .filter((entry) => entry.type === "story-media-grab" || entry.type === "story-media-recover");
       const rest = gradeRestState(afterGrab, I2);
       // The recorded phenomenon itself: the presented page carrying an aperture
       // it was written into for a target that never arrived, while the stack
@@ -1795,7 +2055,7 @@ try {
       record({
         name: "story-abandoned-handoff-reclaims-presentation",
         claim: "a navigation abandoned by the finger that grabs the stack leaves the presented page unclipped and painted above every retained page, with the retained pages back inside the presented picture's aperture, and never leaves a residual aperture cutting the presented photograph away",
-        presented: I2, steps, gesture, grabs: grabs.map((entry) => entry.type),
+        presented: I2, steps, gesture,
         // Proof the replay exercised an in-flight handoff rather than a cold
         // pending request: the stack must have declared the target readable
         // before the arrow key, and must have moved the presented page's
@@ -1831,8 +2091,8 @@ try {
       const half = await photoClickPoint(page, STAGE, 1);
       await input(page).click(half.x, half.y);
       await waitForSettledAsset(page, V1);
-      const toSecondVideo = await navigateByGesture(page, STAGE, 1, V2);
-      const toLastVisible = await navigateByGesture(page, STAGE, 1, I2);
+      const toSecondVideo = await navigateByVideoButton(page, STAGE, 1, V2);
+      const toLastVisible = await navigateByVideoButton(page, STAGE, 1, I2);
       const lastVisible = await currentAsset(page);
 
       // Both windows observe the immersive surface, opened and closed. It

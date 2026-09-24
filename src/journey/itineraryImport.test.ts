@@ -201,6 +201,66 @@ describe("applying a reviewed itinerary draft", () => {
     expect(imported.point.isStop).toBe(false);
   });
 
+  it("keeps a flight leg without trying to geocode its flight number", () => {
+    const draft = buildItineraryImportDraft({
+      contractVersion: 1,
+      sourceKind: "link",
+      recognizerVersion: "reader-test",
+      sourceTitle: null,
+      sourceReportedDayCount: 1,
+      sourceReportedPlaceCount: 1,
+      days: [{ dayNumber: 1, sourceDayTitle: "02月11日", calendarDate: null, partialDate: "02-11" }],
+      entries: [{
+        sourceEntryId: null, dayNumber: 1, orderInDay: 1, name: "UA821",
+        role: "pure-transit", transitEndpoints: { from: "香港国际机场", to: "洛杉矶国际机场" },
+      }],
+    }, "flight-test");
+    expect(draft.counts.pendingConfirmationCount).toBe(0);
+    expect(defaultItinerarySelection(draft)).toEqual([]);
+    expect(itineraryDraftToRoutePoints(draft, [itineraryDraftEntries(draft)[0].entryId]))
+      .toEqual([]);
+  });
+
+  it("keeps a named pass-through place pending until its position is resolved", () => {
+    const draft = draftOf("Day 1 · 2026-03-14 · Chengdu\n途经 剑门关\n", "waypoint");
+    const [waypoint] = itineraryDraftEntries(draft);
+    expect(waypoint.flags).toContain("unresolved-position");
+    const positioned = resolveItineraryEntryPosition(draft, waypoint.entryId, {
+      latitude: 32.13, longitude: 105.59,
+    });
+    const [imported] = itineraryDraftToRoutePoints(positioned, defaultItinerarySelection(positioned));
+    expect(imported.point.isStop).toBe(false);
+    expect(imported.role).toBe("pure-transit");
+  });
+
+  it("treats a pasted flight between endpoints as a leg, not a place", () => {
+    const draft = draftOf("Day 1 · 2026-03-14 · Hong Kong\nflight: Hong Kong to Los Angeles\n", "flight-text");
+    expect(itineraryDraftEntries(draft)[0].transitEndpoints).toEqual({
+      from: "Hong Kong", to: "Los Angeles",
+    });
+    expect(draft.counts.pendingConfirmationCount).toBe(0);
+    expect(defaultItinerarySelection(draft)).toEqual([]);
+  });
+
+  it("keeps a venue-free concert in the reading without turning it into a place", () => {
+    const draft = buildItineraryImportDraft({
+      contractVersion: 1,
+      sourceKind: "link",
+      recognizerVersion: "reader-test",
+      sourceTitle: null,
+      sourceReportedDayCount: 1,
+      sourceReportedPlaceCount: 1,
+      days: [{ dayNumber: 1, sourceDayTitle: null, calendarDate: null, partialDate: null }],
+      entries: [{
+        sourceEntryId: null, dayNumber: 1, orderInDay: 1,
+        name: "巡演演出（未列出场馆）", role: "activity",
+      }],
+    }, "event-test");
+    expect(itineraryDraftEntries(draft)).toHaveLength(1);
+    expect(draft.counts.pendingConfirmationCount).toBe(0);
+    expect(defaultItinerarySelection(draft)).toEqual([]);
+  });
+
   it("imports an entry only once its position is confirmed", () => {
     const draft = draftOf(CHINESE_ITINERARY, "zh");
     const unresolved = itineraryDraftEntries(draft)

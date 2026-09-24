@@ -1850,8 +1850,7 @@
   z-index: 3;
   right: 16px;
   bottom: 16px;
-  display: grid;
-  grid-template-columns: 40px 40px auto 40px;
+  display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px;
@@ -3225,6 +3224,148 @@
   line-height: 1.7;
 }
 
+.living-atlas__header > .living-atlas__import {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(122, 244, 237, 0.28);
+  border-radius: 999px;
+  background: rgba(2, 15, 16, 0.9);
+  color: var(--atlas-cyan);
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.living-atlas__import-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 239;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(1, 8, 9, 0.8);
+}
+
+.living-atlas__import-dialog {
+  width: min(940px, 100%);
+  max-height: min(900px, 92dvh);
+  overflow-y: auto;
+  padding: clamp(18px, 4vw, 32px);
+  border: 1px solid var(--atlas-line);
+  background: #071111;
+  color: var(--atlas-text);
+}
+
+.living-atlas__import-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.living-atlas__import-dialog > header h2 {
+  margin: 0;
+  font: 400 clamp(22px, 4vw, 32px)/1.25 var(--archive-serif);
+}
+
+.living-atlas__import-dialog > header p {
+  margin: 8px 0 0;
+  color: var(--atlas-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.living-atlas__import-dialog > header button {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-text);
+  cursor: pointer;
+}
+
+.journey-itinerary-import-panel.is-standalone {
+  margin: 16px 0 0;
+  border: 0;
+}
+
+.journey-itinerary-import-panel.is-standalone > summary {
+  display: none;
+}
+
+.journey-itinerary-import__actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(122, 244, 237, 0.24);
+  background: var(--atlas-panel-soft);
+}
+
+.journey-itinerary-import__actions > button,
+.journey-composer__import-shortcut {
+  min-height: var(--mobile-control-hit-size, 44px);
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--atlas-acid);
+  background: var(--atlas-acid);
+  color: #071512;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.journey-itinerary-import__actions > button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.journey-itinerary-import__actions > .journey-itinerary-import__position {
+  flex: 1 1 220px;
+}
+
+.journey-itinerary-import__suggestion,
+.journey-itinerary-import__search {
+  flex: 1 0 100%;
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(122, 244, 237, 0.2);
+  color: #dcece8;
+  font-size: 12px;
+}
+
+.journey-itinerary-import__suggestion > small,
+.journey-itinerary-import__search > small {
+  color: #a4bbb4;
+  font-size: 12px;
+}
+
+.journey-itinerary-import__suggestion > button,
+.journey-itinerary-import__search > button {
+  min-height: var(--mobile-control-hit-size, 44px);
+  justify-self: start;
+}
+
+.journey-itinerary-import__search > label input {
+  min-height: var(--mobile-control-hit-size, 44px);
+}
+
 .journey-itinerary-import__days {
   margin: 0;
   padding: 0;
@@ -3293,8 +3434,9 @@
 
 .journey-itinerary-import__candidates button {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
   width: 100%;
   min-height: 44px;
   padding: 0 12px;
@@ -3307,7 +3449,8 @@
 }
 
 .journey-itinerary-import__candidates button > small {
-  color: #536963;
+  color: #a4bbb4;
+  font-size: 12px;
 }
 
 .journey-coordinate-fields {
@@ -4602,6 +4745,32 @@
   border-bottom: 1px solid rgba(122, 244, 237, 0.16);
 }
 
+.journey-composer__route > .journey-itinerary-import-panel {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0 24px;
+  background: var(--atlas-panel-soft);
+}
+
+.journey-composer__route > .journey-composer__section-heading {
+  grid-column: 1 / -1;
+}
+
+.journey-composer__import-shortcut {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.journey-itinerary-import-panel {
+  border-color: rgba(122, 244, 237, 0.5);
+}
+
+/* The authored display:grid on the content must not override the browser's
+   closed-details hiding rule when the Composer changes viewport. */
+.journey-itinerary-import-panel:not([open]) > .journey-itinerary-import {
+  display: none;
+}
+
 .journey-precise-location summary,
 .journey-itinerary-import-panel summary {
   min-height: 66px;
@@ -4628,8 +4797,24 @@
   font-size: 13px;
 }
 
-.journey-precise-location summary > small,
+.journey-itinerary-import-panel summary {
+  padding: 0 14px;
+  border-left: 3px solid var(--atlas-acid);
+  background: rgba(122, 244, 237, 0.07);
+}
+
+.journey-itinerary-import-panel summary > span {
+  color: #dcece8;
+  font-size: 15px;
+  font-weight: 600;
+}
+
 .journey-itinerary-import-panel summary > small {
+  color: #a4bbb4;
+  font-size: 12px;
+}
+
+.journey-precise-location summary > small {
   color: #536963;
   font-size: 11px;
 }
@@ -6025,8 +6210,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     grid-column: 1 / -1;
   }
 
-  /* Mobile Story is gesture-first: horizontal swipes replace persistent
-     previous/next controls, while management lives behind one quiet entry. */
+  /* Mobile Story keeps image swipes; a presented video uses explicit
+     navigation so its native controls own every gesture on the transport. */
   .journey-story__media[data-mobile-layout="true"] {
     touch-action: pan-y;
   }
@@ -6036,6 +6221,39 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     z-index: 8;
     inset: 0;
     pointer-events: none;
+  }
+
+  .journey-story__mobile-video-nav {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    display: flex;
+    gap: 8px;
+    pointer-events: auto;
+  }
+
+  .journey-story__mobile-video-nav button {
+    width: var(--mobile-control-hit-size, 44px);
+    height: var(--mobile-control-hit-size, 44px);
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid rgba(118, 227, 211, 0.18);
+    border-radius: var(--mobile-control-radius, 999px);
+    background: rgba(2, 10, 11, 0.46);
+    color: rgba(224, 242, 235, 0.82);
+    backdrop-filter: blur(12px);
+    cursor: pointer;
+  }
+
+  .journey-story__mobile-video-nav button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .journey-story__mobile-video-nav button:is(:hover, :focus-visible):not(:disabled) {
+    border-color: rgba(118, 227, 211, 0.56);
+    color: #eef7f3;
   }
 
   .journey-story__mobile-media-menu-trigger,

@@ -16,10 +16,91 @@ import {
   ItineraryImportStageError,
   ItineraryRecognitionUnavailableError,
   parseRecognitionCandidates,
+  withRecognitionTimeout,
   type ItineraryRecognitionCandidates,
   type ItineraryRecognitionRequest,
   type ItineraryRecognizer,
 } from "./itinerary-recognition";
+import { groundTextItineraryDates } from "./recognition-document";
+
+export type ItineraryLocationReviewPlan = {
+  sourceTitle: string | null;
+  days: Array<{ dayNumber: number; title: string | null; region: string | null }>;
+  entries: Array<{
+    index: number;
+    name: string;
+    aliases: string[];
+    dayNumber: number;
+    role: string;
+    sourceInvalid: boolean;
+    countryCode: string | null;
+    searchArea: string | null;
+    candidates: Array<{ id: string; label: string; context: string; countryCode: string }>;
+  }>;
+};
+
+export type ItineraryLocationReviewDecision = {
+  index: number;
+  candidateId: string | null;
+  correctedQuery: string | null;
+};
+
+/** The model can pick a supplied provider ID or suggest another query, never a coordinate. */
+export async function reviewItineraryLocations(
+  plan: ItineraryLocationReviewPlan,
+  options: HttpModelOptions & { timeoutMs: number },
+): Promise<ItineraryLocationReviewDecision[]> {
+  if (!options.baseUrl) throw new ItineraryRecognitionUnavailableError();
+  return withRecognitionTimeout(options.timeoutMs, async (signal) => {
+    let response: Response;
+    try {
+      response = await (options.fetcher ?? fetch)(options.baseUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model: options.model,
+          contractVersion: 1,
+          document: { kind: "review-locations", plan },
+        }),
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw new ItineraryImportStageError("ai-review", "ITINERARY_REVIEW_UNREACHABLE", "The location review provider could not be reached");
+    }
+    if (!response.ok) {
+      throw new ItineraryImportStageError("ai-review", "ITINERARY_REVIEW_FAILED", `The location review provider answered ${response.status}`);
+    }
+    const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+    if (payload?.contractVersion !== 1 || !Array.isArray(payload.decisions)) {
+      throw new ItineraryImportStageError("ai-review", "ITINERARY_REVIEW_MALFORMED", "The location review response was invalid");
+    }
+    const decisions: ItineraryLocationReviewDecision[] = [];
+    const seen = new Set<number>();
+    for (const raw of payload.decisions) {
+      if (!raw || typeof raw !== "object") continue;
+      const decision = raw as Record<string, unknown>;
+      const index = decision.index;
+      if (typeof index !== "number" || !Number.isInteger(index) || seen.has(index)) continue;
+      const entry = plan.entries.find((candidate) => candidate.index === index);
+      if (!entry) continue;
+      seen.add(index);
+      const candidateId = typeof decision.candidateId === "string"
+        && entry.candidates.some((candidate) => candidate.id === decision.candidateId)
+          ? decision.candidateId : null;
+      const correctedQuery = typeof decision.correctedQuery === "string"
+        && decision.correctedQuery.trim().length >= 2
+        && decision.correctedQuery.length <= 120
+        && !/[\r\n\x00-\x1f]/.test(decision.correctedQuery)
+          ? decision.correctedQuery.trim() : null;
+      decisions.push({ index, candidateId, correctedQuery });
+    }
+    return decisions;
+  }, "ai-review");
+}
 
 export class DisabledItineraryRecognizer implements ItineraryRecognizer {
   readonly driver = "disabled";
@@ -85,10 +166,13 @@ export class HttpModelItineraryRecognizer implements ItineraryRecognizer {
       );
     }
     // Whatever comes back is a proposal until this passes.
-    return parseRecognitionCandidates(
+    const reading = parseRecognitionCandidates(
       await response.json(),
       this.recognizerVersion,
     );
+    return request.kind === "image"
+      ? reading
+      : groundTextItineraryDates(reading, request.text);
   }
 }
 
