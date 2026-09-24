@@ -658,7 +658,7 @@ export function JourneyStory({
   const videoStepTouchRef = useRef<{
     pointerId: number; direction: -1 | 1; x: number; y: number; moved: boolean;
   } | null>(null);
-  const videoStepTouchClickAtRef = useRef(0);
+  const videoStepTouchClickRef = useRef<{ at: number; direction: -1 | 1 } | null>(null);
   const inlineStageRef = useRef<StoryMediaPagesHandle>(null);
   const fullscreenStageRef = useRef<StoryMediaPagesHandle>(null);
   const [mobileManageMode, setMobileManageMode] = useState(false);
@@ -2655,7 +2655,7 @@ export function JourneyStory({
       onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
         if (event.pointerType !== "touch" || !event.isPrimary) {
           videoStepTouchRef.current = null;
-          videoStepTouchClickAtRef.current = 0;
+          videoStepTouchClickRef.current = null;
           return;
         }
         videoStepTouchRef.current = {
@@ -2680,12 +2680,14 @@ export function JourneyStory({
         // A fast swipe followed by a touch button press can deliver pointerup
         // without a browser click. Complete that one touch here, and consume
         // its optional compatibility click below.
-        videoStepTouchClickAtRef.current = performance.now();
-        if (!touch.moved && inside) navigate();
+        videoStepTouchClickRef.current = { at: performance.now(), direction };
+        if (!touch.moved && inside && !event.currentTarget.disabled) navigate();
       },
       onClick: (event: MouseEvent<HTMLButtonElement>) => {
-        if (event.detail > 0 && videoStepTouchClickAtRef.current > 0
-          && performance.now() - videoStepTouchClickAtRef.current < 1_000) {
+        const touchClick = videoStepTouchClickRef.current;
+        if (event.detail > 0 && touchClick !== null && touchClick.direction === direction
+          && performance.now() - touchClick.at < 1_000) {
+          videoStepTouchClickRef.current = null;
           event.preventDefault();
           return;
         }
