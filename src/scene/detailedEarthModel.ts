@@ -1,4 +1,11 @@
+import type { FeatureCollection, Geometry, GeoJsonProperties } from "geojson";
 import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
+import type { JourneyRoute } from "../journey/types";
+import {
+  resolveRoutePointPresentation,
+  type RoutePointSelection,
+  type RouteTemporalReveal,
+} from "./routePresentation";
 import type { EarthDiveStage } from "./earthDive";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
 
@@ -48,8 +55,260 @@ export type DetailedEarthRouteFrame = {
   pointCount: number;
 };
 
+export type DetailedEarthJourneyOverlayProperties = GeoJsonProperties & {
+  featureKind: "segment" | "route-point";
+  journeyId: string;
+  color: string;
+  provenance: "user-shaped";
+  attentionRole: "ordinary" | "selected" | "narrative-current";
+  semanticRole?: "stop" | "passthrough";
+  routePointId?: string;
+  routePointOrder?: number;
+  label?: string;
+  markerVisible?: boolean;
+  activatable?: boolean;
+  fromRoutePointId?: string;
+  toRoutePointId?: string;
+};
+
+export type DetailedEarthJourneyOverlay = {
+  journeyId: string | null;
+  revision: string;
+  pointCount: number;
+  stopCount: number;
+  passthroughCount: number;
+  data: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>;
+};
+
+export type DetailedEarthJourneyRoutePointHit = {
+  journeyId: string;
+  routePointId: string;
+};
+
+/**
+ * Resolve a pointer against the current authorized Journey overlay using the
+ * map's own projection. The interaction radius is independent from the visible
+ * marker radius, so a tiny passthrough marker still has a touch-safe target.
+ * Hidden summary markers are not activatable because their source properties
+ * carry `activatable: false`.
+ */
+export function pickDetailedEarthJourneyRoutePointHit(
+  overlay: DetailedEarthJourneyOverlay,
+  point: { x: number; y: number },
+  project: (coordinates: [number, number]) => { x: number; y: number },
+  radiusPx = 22,
+): DetailedEarthJourneyRoutePointHit | null {
+  if (
+    !Number.isFinite(point.x)
+    || !Number.isFinite(point.y)
+    || !Number.isFinite(radiusPx)
+    || radiusPx <= 0
+  ) return null;
+
+  const radiusSquared = radiusPx * radiusPx;
+  let best: (DetailedEarthJourneyRoutePointHit & { distanceSquared: number }) | null = null;
+  for (const feature of overlay.data.features) {
+    if (
+      feature.properties.featureKind !== "route-point"
+      || feature.properties.activatable !== true
+      || feature.geometry.type !== "Point"
+    ) continue;
+    const [longitude, latitude] = feature.geometry.coordinates;
+    const routePointId = feature.properties.routePointId;
+    const journeyId = feature.properties.journeyId;
+    if (
+      typeof routePointId !== "string"
+      || typeof journeyId !== "string"
+      || !Number.isFinite(longitude)
+      || !Number.isFinite(latitude)
+    ) continue;
+    const projected = project([longitude, latitude]);
+    if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) continue;
+    const distanceSquared = ((projected.x - point.x) ** 2) + ((projected.y - point.y) ** 2);
+    if (distanceSquared > radiusSquared || (best && distanceSquared >= best.distanceSquared)) continue;
+    best = { journeyId, routePointId, distanceSquared };
+  }
+  return best ? { journeyId: best.journeyId, routePointId: best.routePointId } : null;
+}
+
+function overlayRevision(seed: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 function normalizeLongitude(longitude: number) {
   return ((((longitude + 180) % 360) + 360) % 360) - 180;
+}
+
+function strongestAttentionRole(
+  left: "ordinary" | "selected" | "narrative-current",
+  right: "ordinary" | "selected" | "narrative-current",
+) {
+  if (left === "narrative-current" || right === "narrative-current") return "narrative-current" as const;
+  if (left === "selected" || right === "selected") return "selected" as const;
+  return "ordinary" as const;
+}
+
+/**
+ * Project the active Journey into one bounded GeoJSON source for Detailed
+ * Earth. This is deliberately a projection of the SAME JourneyRoute consumed
+ * by the particle renderer: point order, Stop semantics and user-shaped sparse
+ * relations are not reconstructed from the basemap and are never road-snapped.
+ */
+export function buildDetailedEarthJourneyOverlay({
+  route,
+  selection,
+  narrativeSelection,
+  temporalReveal,
+  visibleRoutePointIds,
+}: {
+  route: JourneyRoute | null | undefined;
+  selection?: RoutePointSelection;
+  narrativeSelection?: RoutePointSelection;
+  temporalReveal?: RouteTemporalReveal;
+  /**
+   * Optional #514 display projection. It controls only marker/label/hit-area
+   * disclosure; canonical points remain in the authoritative route geometry.
+   */
+  visibleRoutePointIds?: ReadonlySet<string>;
+}): DetailedEarthJourneyOverlay {
+  const emptyData: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties> = {
+    type: "FeatureCollection",
+    features: [],
+  };
+  if (!route) {
+    return {
+      journeyId: null,
+      revision: "none",
+      pointCount: 0,
+      stopCount: 0,
+      passthroughCount: 0,
+      data: emptyData,
+    };
+  }
+
+  const records = route.points.map((point, pointIndex) => {
+    const presentation = resolveRoutePointPresentation({
+      routeId: route.id,
+      routePointId: point.id,
+      pointIndex,
+      isStop: point.isStop,
+      selection,
+      narrativeSelection,
+      temporalReveal,
+    });
+    const routePointId = point.id ?? `${route.id}:${pointIndex}`;
+    return {
+      point,
+      pointIndex,
+      routePointId,
+      presentation,
+      markerVisible: visibleRoutePointIds === undefined || visibleRoutePointIds.has(routePointId),
+      valid: Number.isFinite(point.lat) && Number.isFinite(point.lon),
+    };
+  });
+  const features: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>["features"] = [];
+
+  for (const record of records) {
+    if (!record.valid || !record.presentation.temporalVisible) continue;
+    const routePointId = record.routePointId;
+    features.push({
+      type: "Feature",
+      id: routePointId,
+      geometry: {
+        type: "Point",
+        coordinates: [record.point.lon, record.point.lat],
+      },
+      properties: {
+        featureKind: "route-point",
+        journeyId: route.id,
+        color: route.color,
+        provenance: "user-shaped",
+        semanticRole: record.presentation.semanticRole,
+        attentionRole: record.presentation.attentionRole,
+        routePointId,
+        routePointOrder: record.pointIndex,
+        label: record.point.label ?? "",
+        markerVisible: record.markerVisible,
+        activatable: Boolean(record.point.id) && record.markerVisible,
+      },
+    });
+  }
+
+  for (let index = 1; index < records.length; index += 1) {
+    const previous = records[index - 1];
+    const current = records[index];
+    if (
+      !previous.valid
+      || !current.valid
+      || !previous.presentation.temporalVisible
+      || !current.presentation.temporalVisible
+    ) continue;
+    const fromLongitude = previous.point.lon;
+    let toLongitude = current.point.lon;
+    while (toLongitude - fromLongitude > 180) toLongitude -= 360;
+    while (toLongitude - fromLongitude < -180) toLongitude += 360;
+    features.push({
+      type: "Feature",
+      id: `${route.id}:segment:${index - 1}`,
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [fromLongitude, previous.point.lat],
+          [toLongitude, current.point.lat],
+        ],
+      },
+      properties: {
+        featureKind: "segment",
+        journeyId: route.id,
+        color: route.color,
+        provenance: "user-shaped",
+        attentionRole: strongestAttentionRole(
+          previous.presentation.attentionRole,
+          current.presentation.attentionRole,
+        ),
+        fromRoutePointId: previous.point.id ?? `${route.id}:${index - 1}`,
+        toRoutePointId: current.point.id ?? `${route.id}:${index}`,
+      },
+    });
+  }
+
+  const visibleRecords = records.filter((record) => record.valid && record.presentation.temporalVisible);
+  const revisionSeed = JSON.stringify({
+    id: route.id,
+    color: route.color,
+    lightEffect: route.lightEffect ?? null,
+    points: records.map(({ point, pointIndex, presentation, valid }) => ({
+      id: point.id ?? null,
+      pointIndex,
+      lat: point.lat,
+      lon: point.lon,
+      isStop: point.isStop,
+      label: point.label ?? "",
+      valid,
+      attentionRole: presentation.attentionRole,
+      // Detailed Earth currently consumes the temporal reveal as a visibility
+      // boundary, not as a continuous opacity/progress animation. Keep source
+      // revisions discrete so a running timeline does not turn every frame into
+      // a new GeoJSON setData/repaint cycle while preserving the exact moment a
+      // Route Point enters or leaves the authorized visible overlay.
+      temporalVisible: presentation.temporalVisible,
+      markerVisible: visibleRoutePointIds === undefined
+        || visibleRoutePointIds.has(point.id ?? `${route.id}:${pointIndex}`),
+    })),
+  });
+  return {
+    journeyId: route.id,
+    revision: `${route.id}:${overlayRevision(revisionSeed)}`,
+    pointCount: visibleRecords.length,
+    stopCount: visibleRecords.filter((record) => record.presentation.semanticRole === "stop").length,
+    passthroughCount: visibleRecords.filter((record) => record.presentation.semanticRole === "passthrough").length,
+    data: { type: "FeatureCollection", features },
+  };
 }
 
 /**

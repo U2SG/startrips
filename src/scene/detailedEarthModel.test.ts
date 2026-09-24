@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { JourneyRoute } from "../journey/types";
 import {
   AMAP_RASTER_STYLE,
   DETAILED_EARTH_FALLBACK_CENTER,
+  buildDetailedEarthJourneyOverlay,
   DETAILED_EARTH_HANDOFF_SEED_ZOOM,
   clampDetailedEarthZoom,
   detailedEarthAnchorCorrection,
@@ -26,6 +28,7 @@ import {
   clampDetailedEarthPitch,
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
+  pickDetailedEarthJourneyRoutePointHit,
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
@@ -108,6 +111,176 @@ describe("detailedEarthModel", () => {
     expect(DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD).toBeGreaterThan(0.1);
     expect(DETAILED_EARTH_DRAG_PAN_OPTIONS.linearity).toBeLessThan(0.3);
     expect(DETAILED_EARTH_DRAG_PAN_OPTIONS.maxSpeed).toBeLessThan(1_400);
+  });
+});
+
+
+describe("detailed-earth Journey overlay", () => {
+  const route: JourneyRoute = {
+    id: "journey-overlay",
+    color: "#77c8c2",
+    points: [
+      { id: "point-a", lat: 22.54, lon: 114.05, isStop: true, label: "A" },
+      { id: "point-b", lat: 22.56, lon: 114.08, isStop: false, label: "via" },
+      { id: "point-c", lat: 22.59, lon: 114.12, isStop: true, label: "C" },
+    ],
+  };
+
+  it("projects the authoritative point order and direct sparse relations without road snapping", () => {
+    const overlay = buildDetailedEarthJourneyOverlay({ route });
+    expect(overlay.journeyId).toBe(route.id);
+    expect(overlay.pointCount).toBe(3);
+    expect(overlay.stopCount).toBe(2);
+    expect(overlay.passthroughCount).toBe(1);
+    const points = overlay.data.features.filter((feature) => feature.properties.featureKind === "route-point");
+    expect(points.map((feature) => [
+      feature.properties.routePointId,
+      feature.properties.routePointOrder,
+      feature.properties.semanticRole,
+    ])).toEqual([
+      ["point-a", 0, "stop"],
+      ["point-b", 1, "passthrough"],
+      ["point-c", 2, "stop"],
+    ]);
+    const segments = overlay.data.features.filter((feature) => feature.properties.featureKind === "segment");
+    expect(segments).toHaveLength(2);
+    expect(segments.every((feature) => feature.properties.provenance === "user-shaped")).toBe(true);
+    const firstSegment = segments[0];
+    expect(firstSegment.geometry.type).toBe("LineString");
+    if (firstSegment.geometry.type !== "LineString") throw new Error("expected line geometry");
+    expect(firstSegment.geometry.coordinates).toEqual([
+      [route.points[0].lon, route.points[0].lat],
+      [route.points[1].lon, route.points[1].lat],
+    ]);
+  });
+
+  it("reuses shared selected/narrative Route Point semantics and temporal reveal", () => {
+    const overlay = buildDetailedEarthJourneyOverlay({
+      route,
+      selection: { journeyId: route.id, routePointId: "point-a", pointIndex: 0 },
+      narrativeSelection: { journeyId: route.id, routePointId: "point-b", pointIndex: 1 },
+      temporalReveal: {
+        journeys: new Map([[route.id, 1]]),
+        points: new Map([
+          [`${route.id}:0`, 1],
+          [`${route.id}:1`, 0.5],
+          [`${route.id}:2`, 0],
+        ]),
+      },
+    });
+    const byId = new Map(
+      overlay.data.features
+        .filter((feature) => feature.properties.featureKind === "route-point")
+        .map((feature) => [feature.properties.routePointId, feature.properties]),
+    );
+    expect(byId.get("point-a")?.attentionRole).toBe("selected");
+    expect(byId.get("point-b")?.attentionRole).toBe("narrative-current");
+    expect(byId.has("point-c")).toBe(false);
+    expect(overlay.pointCount).toBe(2);
+    expect(overlay.data.features.filter((feature) => feature.properties.featureKind === "segment")).toHaveLength(1);
+  });
+
+  it("keeps the overlay revision stable across continuous visible reveal progress", () => {
+    const buildAt = (progress: number) => buildDetailedEarthJourneyOverlay({
+      route,
+      temporalReveal: {
+        journeys: new Map([[route.id, 1]]),
+        points: new Map([
+          [`${route.id}:0`, 1],
+          [`${route.id}:1`, progress],
+          [`${route.id}:2`, 0],
+        ]),
+      },
+    });
+    const earlyVisible = buildAt(0.2);
+    const laterVisible = buildAt(0.8);
+    const hidden = buildAt(0);
+
+    expect(laterVisible.revision).toBe(earlyVisible.revision);
+    expect(laterVisible.data).toEqual(earlyVisible.data);
+    expect(hidden.revision).not.toBe(earlyVisible.revision);
+    expect(hidden.pointCount).toBe(1);
+  });
+
+  it("keeps hidden local-detail points in canonical route geometry while removing their marker hit targets", () => {
+    const baseline = buildDetailedEarthJourneyOverlay({ route });
+    const scoped = buildDetailedEarthJourneyOverlay({
+      route,
+      visibleRoutePointIds: new Set(["point-a", "point-c"]),
+    });
+    const points = new Map(
+      scoped.data.features
+        .filter((feature) => feature.properties.featureKind === "route-point")
+        .map((feature) => [feature.properties.routePointId, feature.properties]),
+    );
+    expect(points.get("point-a")).toMatchObject({ markerVisible: true, activatable: true });
+    expect(points.get("point-b")).toMatchObject({ markerVisible: false, activatable: false });
+    expect(points.get("point-c")).toMatchObject({ markerVisible: true, activatable: true });
+    const segments = scoped.data.features.filter((feature) => feature.properties.featureKind === "segment");
+    expect(segments).toHaveLength(2);
+    expect(segments.map((feature) => [
+      feature.properties.fromRoutePointId,
+      feature.properties.toRoutePointId,
+    ])).toEqual([
+      ["point-a", "point-b"],
+      ["point-b", "point-c"],
+    ]);
+    expect(scoped.revision).not.toBe(baseline.revision);
+  });
+
+  it("keeps a projection-driven 44px hit area independent from marker size, overlap order and disclosure", () => {
+    const overlay = buildDetailedEarthJourneyOverlay({ route });
+    const project = ([longitude, latitude]: [number, number]) => ({
+      x: longitude * 1_000,
+      y: latitude * 1_000,
+    });
+    const pointA = project([route.points[0].lon, route.points[0].lat]);
+    const pointB = project([route.points[1].lon, route.points[1].lat]);
+    expect(pickDetailedEarthJourneyRoutePointHit(
+      overlay,
+      { x: pointB.x + 20, y: pointB.y },
+      project,
+    )).toEqual({ journeyId: route.id, routePointId: "point-b" });
+    // A and B's 22px interaction radii overlap here. Feature/render order must
+    // not let A steal a click that is geometrically closer to B.
+    expect(pickDetailedEarthJourneyRoutePointHit(
+      overlay,
+      { x: pointA.x + 18, y: pointA.y + 12 },
+      project,
+    )).toEqual({ journeyId: route.id, routePointId: "point-b" });
+    expect(pickDetailedEarthJourneyRoutePointHit(
+      overlay,
+      { x: pointB.x + 23, y: pointB.y },
+      project,
+    )).toBeNull();
+
+    const scoped = buildDetailedEarthJourneyOverlay({
+      route,
+      visibleRoutePointIds: new Set(["point-a", "point-c"]),
+    });
+    expect(pickDetailedEarthJourneyRoutePointHit(scoped, pointB, project)).toBeNull();
+  });
+
+  it("changes revision when order or Stop semantics change and clears cleanly with no active Journey", () => {
+    const baseline = buildDetailedEarthJourneyOverlay({ route });
+    const reordered = buildDetailedEarthJourneyOverlay({
+      route: { ...route, points: [route.points[0], route.points[2], route.points[1]] },
+    });
+    const toggled = buildDetailedEarthJourneyOverlay({
+      route: {
+        ...route,
+        points: route.points.map((point, index) => index === 1 ? { ...point, isStop: true } : point),
+      },
+    });
+    expect(reordered.revision).not.toBe(baseline.revision);
+    expect(toggled.revision).not.toBe(baseline.revision);
+    expect(toggled.stopCount).toBe(3);
+    expect(buildDetailedEarthJourneyOverlay({ route: null })).toMatchObject({
+      journeyId: null,
+      revision: "none",
+      pointCount: 0,
+      data: { features: [] },
+    });
   });
 });
 

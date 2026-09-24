@@ -24,7 +24,11 @@ import {
   type HomeBasePresenceDrawable,
   type ProjectedHomeBasePresence,
 } from "./homeBasePresenceLayer";
-import type { DetailedEarthLanguage, ParticleAnchorFrame } from "./detailedEarthModel";
+import {
+  buildDetailedEarthJourneyOverlay,
+  type DetailedEarthLanguage,
+  type ParticleAnchorFrame,
+} from "./detailedEarthModel";
 import {
   INITIAL_EARTH_DIVE_STATE,
   resolveEarthDive,
@@ -426,6 +430,22 @@ export function LivingAtlasGlobe({
   const gestureHintVisible = globeGestureHintVisible(gestureHint);
   const modeNoteVisible = globeModeNoteVisible(gestureHint, { globeFocusMode, compactMobileLayout });
   const homeBaseLayer = useMemo(() => resolveLivingAtlasHomeBaseLayer(homeBasePresence), [homeBasePresence]);
+  const detailedEarthRoute = useMemo(() => (
+    journeyRoutes.find((route) => route.id === activeJourneyRouteId)
+      ?? focusRoute
+      ?? null
+  ), [activeJourneyRouteId, focusRoute, journeyRoutes]);
+  const detailedEarthJourneyOverlay = useMemo(() => buildDetailedEarthJourneyOverlay({
+    route: detailedEarthRoute,
+    selection: selectedJourneyRoutePoint,
+    narrativeSelection: narrativeJourneyRoutePoint,
+    temporalReveal,
+  }), [
+    detailedEarthRoute,
+    narrativeJourneyRoutePoint,
+    selectedJourneyRoutePoint,
+    temporalReveal,
+  ]);
   const homeBaseElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const homeBaseFramesRef = useRef(new Map<string, ProjectedHomeBasePresence>());
   const applyHomeBaseFrame = useCallback((
@@ -681,6 +701,11 @@ export function LivingAtlasGlobe({
 
   const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame | null) => {
     particleFrameRef.current = frame;
+    // Once Detailed Earth owns the camera, Particle Earth is no longer a
+    // handoff input. Keep the last frame for a later release, but do not let
+    // background particle frames wake the otherwise-idle Dive scheduler or
+    // push stale particle geometry back into the detail renderer.
+    if (diveRef.current.owner === "detail") return;
     scheduleDiveTick();
     if (frame && diveRef.current.owner === "particle") {
       // Keep the hidden/blending detail camera on the exact frame that was
@@ -1121,9 +1146,11 @@ export function LivingAtlasGlobe({
               particleFrame={particleFrame}
               focusPoint={focusPoint}
               focusRoute={focusRoute}
+              journeyOverlay={detailedEarthJourneyOverlay}
               focusRevision={focusRevision}
               focusFlightProfile={focusFlightProfile}
               language={detailLanguage}
+              onJourneyRoutePointActivate={onJourneyRoutePointActivate}
               onGlobePointPick={detailMode ? onGlobePointPick : undefined}
               onOverviewRequest={releaseDive}
               onCameraObservation={handleDetailCameraObservation}
