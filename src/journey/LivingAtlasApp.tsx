@@ -9,6 +9,7 @@ import {
   IconRoute,
   IconShare,
   IconTimeline,
+  IconUpload,
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
@@ -30,7 +31,8 @@ import {
 import type { CoverRevealImagePair } from "../reveal/coverRevealFlow";
 import { LivingAtlasGlobe, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
 import { JourneyComposer } from "./JourneyComposer";
-import type { GlobePointPick } from "./routeDraft";
+import { ItineraryImportPanel } from "./ItineraryImportPanel";
+import type { GlobePointPick, RouteDraftPoint } from "./routeDraft";
 import {
   draftPlaybackPreviewOwnerKey,
   draftPlaybackPreviewStillOwnsComposer,
@@ -1182,6 +1184,17 @@ export function LivingAtlasApp({
     : playbackSourceJourney;
   const playbackActive = playbackOwnership.active || draftPlaybackOwnsSession;
   const [composerOpen, setComposerOpen] = useState(false);
+  const [importMounted, setImportMounted] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importSession, setImportSession] = useState(0);
+  const [importStatus, setImportStatus] = useState({ busy: false, ready: false });
+  const importDialogRef = useModalFocus<HTMLElement>(() => setImportOpen(false), importOpen);
+  const [initialImport, setInitialImport] = useState<{
+    points: RouteDraftPoint[];
+    title: string | null;
+    startedOn: string | null;
+    endedOn: string | null;
+  } | null>(null);
   const [pendingUnknownCreateAttempt, setPendingUnknownCreateAttempt] = useState<UnknownJourneyCreateAttempt | null>(null);
   const [unknownCreateObservationOwnership, setUnknownCreateObservationOwnership] = useState<UnknownCreateObservationOwnership | null>(null);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
@@ -1190,6 +1203,10 @@ export function LivingAtlasApp({
   const [undoJourney, setUndoJourney] = useState<Journey | null>(null);
   const showNotice = useCallback((message: string) => {
     setNotice((current) => nextAtlasNotice(current, message));
+  }, []);
+  const updateImportStatus = useCallback((state: { busy: boolean; ready: boolean }) => {
+    setImportStatus((current) => current.busy === state.busy && current.ready === state.ready
+      ? current : state);
   }, []);
   const clearNotice = useCallback(() => setNotice(null), []);
   const handleStoryObservationChange = useCallback((observation: StoryLogicalObservation | null) => {
@@ -2188,12 +2205,20 @@ export function LivingAtlasApp({
 
   function openCreateComposer() {
     if (!canCreateJourney) return;
+    setInitialImport(null);
     setEditingJourneyId(null);
     setComposerOpen(true);
   }
 
+  function openImport() {
+    if (!canCreateJourney) return;
+    setImportMounted(true);
+    setImportOpen(true);
+  }
+
   function editJourney(journeyId: string) {
     if (!canEditJourney) return;
+    setInitialImport(null);
     timeCursor.selectJourney(journeyId);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
@@ -2843,6 +2868,7 @@ export function LivingAtlasApp({
             }}
             onGlobePointPick={globePickActive ? completeGlobePick : undefined}
             onPickRequest={() => {
+              setInitialImport(null);
               setEditingJourneyId(null);
               setComposerOpen(true);
             }}
@@ -2858,6 +2884,7 @@ export function LivingAtlasApp({
           <nav aria-label="移动端旅程操作">
             {canManageAtlas ? <MobileAccountActionSlot /> : null}
             {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
+            {canCreateJourney ? <button type="button" onClick={openImport} aria-label={importStatus.busy ? "查看正在处理的行程导入" : "导入已有行程"}><IconUpload size={18} stroke={1.4} aria-hidden="true" /></button> : null}
             {shareClient && journeys.length > 0 ? (
               <button type="button" data-atlas-share-trigger="true" disabled={storyJourneyId !== null} onClick={() => openShareSurface(null)} aria-label="分享多段旅程"><IconShare size={18} stroke={1.4} aria-hidden="true" /></button>
             ) : null}
@@ -2890,6 +2917,7 @@ export function LivingAtlasApp({
               只看地球
             </button>
           </nav>
+          {canCreateJourney ? <button type="button" className="living-atlas__import" onClick={openImport}><IconUpload size={17} stroke={1.4} aria-hidden="true" />{importStatus.busy ? "导入处理中" : importStatus.ready ? "查看导入结果" : "导入已有行程"}</button> : null}
         </header>
       )}
 
@@ -3595,6 +3623,36 @@ export function LivingAtlasApp({
       {/* #21: the rewind time axis, only in globe focus mode. */}
       {globeFocusMode ? <GlobeTimeScrubber {...timeCursor} /> : null}
 
+      {/* Keep the import workspace mounted while closed so reading and whole-plan
+          review can finish as the member continues using the Atlas. */}
+      {canCreateJourney && importMounted ? (
+        <div className="living-atlas__import-backdrop" style={{ display: importOpen ? undefined : "none" }} aria-hidden={importOpen ? undefined : true}>
+          <section ref={importDialogRef} className="living-atlas__import-dialog" role="dialog" aria-modal="true" aria-labelledby="living-atlas-import-title" tabIndex={-1}>
+            <header>
+              <div>
+                <h2 id="living-atlas-import-title">导入已有行程</h2>
+                <p>读完后统一核对地点；处理中可以先关闭窗口，稍后回来查看。</p>
+              </div>
+              <button type="button" onClick={() => setImportOpen(false)} aria-label="关闭行程导入"><IconX size={20} stroke={1.4} aria-hidden="true" /></button>
+            </header>
+            <ItineraryImportPanel
+              key={importSession}
+              standalone
+              mobileLayout={isMobileV2}
+              onMessage={showNotice}
+              onWorkStateChange={updateImportStatus}
+              onApply={(imported, _insertAfter, details) => {
+                setInitialImport({ points: imported.map(({ point }) => ({ ...point })), ...details });
+                setImportOpen(false);
+                setImportSession((current) => current + 1);
+                setEditingJourneyId(null);
+                setComposerOpen(true);
+              }}
+            />
+          </section>
+        </div>
+      ) : null}
+
       {/* The composer is the only mutation-capable component in this tree.
           Shared mode never renders it, so its state, its handlers and the
           upload client it builds do not exist there. */}
@@ -3604,6 +3662,7 @@ export function LivingAtlasApp({
           open
           journey={editingJourney}
           initialUnknownCreateAttempt={editingJourney ? null : pendingUnknownCreateAttempt}
+          initialImport={editingJourney ? null : initialImport}
           onClose={(unknownCreateAttempt) => {
             cancelGlobePick();
             setDraftRoute(null);
@@ -3624,6 +3683,7 @@ export function LivingAtlasApp({
                 closeComposer: () => {
                   setEditingJourneyId(null);
                   setComposerOpen(false);
+                  setInitialImport(null);
                 },
                 refreshAtlas: () => load(
                   true,
@@ -3634,6 +3694,7 @@ export function LivingAtlasApp({
             }
             setEditingJourneyId(null);
             setComposerOpen(false);
+            setInitialImport(null);
           }}
           onSaved={handleSaved}
           onGlobePickRequest={startGlobePick}

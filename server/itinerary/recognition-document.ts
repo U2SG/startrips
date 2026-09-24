@@ -1,3 +1,5 @@
+import type { ItineraryRecognitionCandidates } from "./itinerary-recognition";
+
 /**
  * #512: what a fetched page is allowed to become before a provider reads it.
  *
@@ -98,4 +100,52 @@ export function pageRecognitionDocument(page: {
     sourceOrigin: sourceOriginForRecognition(page.finalUrl),
     text: minimizeRecognitionText(page.text, page.contentType),
   };
+}
+
+/** A model may guess a year from weekday or surrounding page furniture. */
+export function groundTextItineraryDates(
+  reading: ItineraryRecognitionCandidates,
+  sourceText: string,
+): ItineraryRecognitionCandidates {
+  const months = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+  ];
+  const englishFullDates = new Set<string>();
+  const englishMonthDays = new Set<string>();
+  for (const match of sourceText.matchAll(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:\s*,\s*(\d{4}))?(?!\d)/g)) {
+    const month = months.findIndex((name) => name.startsWith(match[1].toLowerCase())) + 1;
+    const date = Number(match[2]);
+    if (!month || date < 1 || date > 31) continue;
+    const monthDay = `${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
+    englishMonthDays.add(monthDay);
+    if (match[3]) englishFullDates.add(`${match[3]}-${monthDay}`);
+  }
+  const days = reading.days.map((day) => {
+    if (!day.calendarDate) return day;
+    const [year, month, date] = day.calendarDate.split("-").map(Number);
+    const yearText = String(year);
+    const monthText = `0?${month}`;
+    const dateText = `0?${date}`;
+    const separators = "(?:\\s*[-/.年月\\s]\\s*)";
+    const ending = "(?:日|号)?";
+    const fullDate = new RegExp(
+      `(?<!\\d)${yearText}${separators}${monthText}${separators}${dateText}${ending}(?!\\d)`,
+    );
+    if (fullDate.test(sourceText) || englishFullDates.has(day.calendarDate)) return day;
+
+    const monthDay = new RegExp(
+      `(?<!\\d)${monthText}\\s*(?:月|[-/.])\\s*${dateText}${ending}(?!\\d)`,
+    );
+    return {
+      ...day,
+      calendarDate: null,
+      partialDate: day.partialDate ?? (monthDay.test(sourceText) || englishMonthDays.has(
+        `${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`,
+      )
+        ? `${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`
+        : null),
+    };
+  });
+  return { ...reading, days };
 }
