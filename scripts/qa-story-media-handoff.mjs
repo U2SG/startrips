@@ -112,11 +112,9 @@ async function touchDriver(page) {
     move: async (x, y) => { await send("touchMove", finger(x, y)); },
     up: async () => { await send("touchEnd", []); },
     click: async (x, y) => {
-      // Chromium's zero-duration touchscreen.tap can omit a compatibility
-      // click immediately after a pan. Keep the next gesture immediate, but
-      // give this real finger press a short hold before release.
+      // The step commits on pointerup, so this trusted touch can release
+      // immediately without relying on a browser compatibility click.
       await send("touchStart", finger(x, y));
-      await new Promise((resolve) => setTimeout(resolve, 64));
       await send("touchEnd", []);
     },
   };
