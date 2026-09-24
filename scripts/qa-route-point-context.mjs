@@ -157,6 +157,43 @@ const interactionJourney = {
   })),
 };
 
+// #514 first slice: the repeated A is a second record, while the pure detour
+// remains route geometry without becoming an overview destination. A non-stop
+// with a note or media is still a readable record.
+const projectionPointIds = {
+  firstA: "qa-projection-a-first",
+  detour: "qa-projection-detour",
+  b: "qa-projection-b",
+  note: "qa-projection-note",
+  media: "qa-projection-media",
+  returnA: "qa-projection-a-return",
+};
+const projectionRoutePoints = [
+  [projectionPointIds.firstA, 34.0522, -118.2437, "洛杉矶 · 去程", true, ""],
+  [projectionPointIds.detour, 35.5, -116.5, "绕行转折", false, ""],
+  [projectionPointIds.b, 36.1699, -115.1398, "拉斯维加斯", true, ""],
+  [projectionPointIds.note, 34.065, -118.22, "途中的文字", false, "这段途经留下了一句话。"],
+  [projectionPointIds.media, 34.057, -118.233, "途中的照片", false, ""],
+  [projectionPointIds.returnA, 34.0522, -118.2437, "洛杉矶 · 返程", true, ""],
+].map(([id, latitude, longitude, label, isStop, note], sortOrder) => ({
+  id, journeyId, sortOrder, latitude, longitude, label, isStop, note,
+  occurredAt: `2026-04-06T${String(9 + sortOrder).padStart(2, "0")}:00:00.000Z`,
+  createdAt: "2026-04-06T00:00:00.000Z",
+}));
+const projectionJourney = {
+  ...journey,
+  title: "洛杉矶到拉斯维加斯再返回",
+  routePoints: projectionRoutePoints,
+  media: [{ ...journey.media[0], routePointId: projectionPointIds.media }],
+};
+const geometryOnlyJourney = {
+  ...projectionJourney,
+  title: "只有路线形状的旧旅程",
+  coverMediaAssetId: null,
+  routePoints: projectionRoutePoints.map((point) => ({ ...point, isStop: false, note: "" })),
+  media: [],
+};
+
 const sameCoordinateJourneyId = "qa-same-coordinate-journey";
 const same02Id = "qa-same-coordinate-02";
 const same07Id = "qa-same-coordinate-07";
@@ -862,6 +899,150 @@ try {
   record("non-gesture blank globe click closes context", { blankTarget }, true);
   record("real interaction page errors", { pageErrors: interactionRun.pageErrors }, interactionRun.pageErrors.length === 0);
   await interactionPage.close();
+
+  const projectionRun = await openFocusAtlas({
+    realScene: true,
+    reduceMotion: true,
+    journeysPayload: [projectionJourney],
+    initialPointId: projectionPointIds.firstA,
+  });
+  const projectionPage = projectionRun.page;
+  await projectionPage.waitForFunction(() => (
+    document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5"
+  ));
+  const projectionBefore = await projectionPage.evaluate((ids) => {
+    const route = document.querySelector(`.particle-earth-route[data-journey-route="${ids.journey}"]`);
+    return {
+      markerIds: [...(route?.querySelectorAll(".particle-earth-route__point[data-route-point-id]") ?? [])]
+        .map((node) => node.getAttribute("data-route-point-id")),
+      labelIds: [...(route?.querySelectorAll(".particle-earth-route__label[data-route-point-id]") ?? [])]
+        .map((node) => node.getAttribute("data-route-point-id")),
+      legCount: route?.querySelectorAll(".particle-earth-route__leg").length ?? 0,
+      raycastPointCount: document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count"),
+    };
+  }, { ...projectionPointIds, journey: journeyId });
+  record("A -> B -> A keeps every route leg while pure detour has no Particle marker, label or raycast slot", {
+    projectionBefore,
+  },
+    projectionBefore.legCount === projectionRoutePoints.length - 1
+    && projectionBefore.raycastPointCount === "5"
+    && projectionBefore.markerIds.join(",") === [
+      projectionPointIds.firstA, projectionPointIds.b, projectionPointIds.note,
+      projectionPointIds.media, projectionPointIds.returnA,
+    ].join(",")
+    && !projectionBefore.labelIds.includes(projectionPointIds.detour));
+
+  // An explicit context may select a pure detour from a non-marker route entry.
+  // Its temporary marker exists only while that exact context remains open.
+  await activateRoutePointId(projectionPage, projectionPointIds.detour);
+  await projectionPage.locator(`[data-route-point-context][data-route-point-id="${projectionPointIds.detour}"]`)
+    .waitFor({ state: "visible", timeout: 5_000 });
+  const selectedDetour = projectionPage.locator(
+    `.particle-earth-route__point[data-route-point-id="${projectionPointIds.detour}"][data-attention-role="selected"]`,
+  );
+  await selectedDetour.waitFor({ state: "attached", timeout: 5_000 });
+  record("explicitly selected pure detour keeps its exact identity", {},
+    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "6");
+  await projectionPage.locator("[data-route-point-context-close]").click();
+  await selectedDetour.waitFor({ state: "detached", timeout: 5_000 });
+  record("closing detour removes its marker and hit slot again", {},
+    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "5");
+
+  await activateRoutePointId(projectionPage, projectionPointIds.media);
+  await projectionPage.locator(`[data-route-point-context][data-route-point-id="${projectionPointIds.media}"]`)
+    .waitFor({ state: "visible", timeout: 5_000 });
+  await projectionPage.locator(".living-atlas__route-point-context-entry").click();
+  await projectionPage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${photoAssetId}"][data-media-page-ready="true"]`)
+    .waitFor({ state: "attached", timeout: 5_000 });
+  const storyPointIds = await projectionPage.locator(".journey-story").evaluate((node) => (
+    [...node.querySelectorAll("button[data-route-point-id]")]
+      .map((button) => button.getAttribute("data-route-point-id"))
+  ));
+  record("overview projection preserves full Story point order and media-only non-stop content", {
+    storyPointIds,
+  }, storyPointIds.join(",") === projectionRoutePoints.map((point) => point.id).join(","));
+  record("projection page errors", { pageErrors: projectionRun.pageErrors }, projectionRun.pageErrors.length === 0);
+  await projectionPage.close();
+
+  const projectionDetailRun = await openFocusAtlas({
+    realScene: true,
+    focusMode: false,
+    reduceMotion: true,
+    viewport: { width: 1440, height: 1024 },
+    journeysPayload: [projectionJourney],
+    initialPointId: projectionPointIds.firstA,
+  });
+  const projectionDetailPage = projectionDetailRun.page;
+  await enterRealDetail(projectionDetailPage);
+  await projectionDetailPage.waitForFunction((expectedJourneyId) => {
+    const map = document.querySelector(".detailed-earth-map");
+    return map?.getAttribute("data-journey-overlay-ready") === "true"
+      && map.getAttribute("data-journey-overlay-journey-id") === expectedJourneyId;
+  }, journeyId, { timeout: 10_000 });
+  const projectionDetailState = await projectionDetailPage.evaluate((fixture) => {
+    const map = document.querySelector(".detailed-earth-map");
+    const hitAt = (pointId) => {
+      const point = fixture.routePoints.find((candidate) => candidate.id === pointId);
+      const projected = point && window.__detailedEarthMapProject?.(point.longitude, point.latitude);
+      return projected
+        ? window.__detailedEarthJourneyRoutePointHit?.(projected.x, projected.y) ?? null
+        : null;
+    };
+    return {
+      owner: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive-owner"),
+      pointCount: map?.getAttribute("data-journey-overlay-point-count"),
+      featureCount: map?.getAttribute("data-journey-overlay-feature-count"),
+      hiddenHit: hitAt(fixture.detourId),
+      noteHit: hitAt(fixture.noteId),
+      mediaHit: hitAt(fixture.mediaId),
+    };
+  }, {
+    routePoints: projectionRoutePoints,
+    detourId: projectionPointIds.detour,
+    noteId: projectionPointIds.note,
+    mediaId: projectionPointIds.media,
+  });
+  record("Detail keeps all route legs, hides pure detour hit and retains contentful non-stop hits", {
+    projectionDetailState,
+  },
+    projectionDetailState.owner === "detail"
+    && projectionDetailState.pointCount === "6"
+    && projectionDetailState.featureCount === "11"
+    && projectionDetailState.hiddenHit === null
+    && projectionDetailState.noteHit?.routePointId === projectionPointIds.note
+    && projectionDetailState.mediaHit?.routePointId === projectionPointIds.media);
+  record("projection Detail page errors", { pageErrors: projectionDetailRun.pageErrors },
+    projectionDetailRun.pageErrors.length === 0);
+  await projectionDetailPage.close();
+
+  const geometryOnlyRun = await openFocusAtlas({
+    realScene: true,
+    reduceMotion: true,
+    journeysPayload: [geometryOnlyJourney],
+    initialPointId: projectionPointIds.firstA,
+  });
+  const geometryOnlyPage = geometryOnlyRun.page;
+  await geometryOnlyPage.waitForFunction(() => (
+    document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "2"
+  ));
+  const geometryOnlyState = await geometryOnlyPage.evaluate((targetJourneyId) => {
+    const route = document.querySelector(`.particle-earth-route[data-journey-route="${targetJourneyId}"]`);
+    return {
+      markerIds: [...(route?.querySelectorAll(".particle-earth-route__point[data-route-point-id]") ?? [])]
+        .map((node) => node.getAttribute("data-route-point-id")),
+      legCount: route?.querySelectorAll(".particle-earth-route__leg").length ?? 0,
+    };
+  }, journeyId);
+  record("geometry-only old Journey retains canonical endpoint anchors and every route leg", {
+    geometryOnlyState,
+  },
+    geometryOnlyState.markerIds.join(",") === [
+      projectionPointIds.firstA, projectionPointIds.returnA,
+    ].join(",")
+    && geometryOnlyState.legCount === geometryOnlyJourney.routePoints.length - 1);
+  record("geometry-only page errors", { pageErrors: geometryOnlyRun.pageErrors },
+    geometryOnlyRun.pageErrors.length === 0);
+  await geometryOnlyPage.close();
 
   // #515's Detailed Earth owns its own DOM capture and MapLibre click paths.
   // Once the Composer asks for a globe point, an existing Journey marker must

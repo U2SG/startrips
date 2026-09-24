@@ -2051,6 +2051,44 @@ export function LivingAtlasApp({
           pointIndex: timeCursor.selection.pointIndex,
         }
       : null;
+  // #514: a sparse overview is a reading projection of the authorized Journey.
+  // Keep every canonical Route Point in `routes` for the line, Story and Playback.
+  // Normally a non-stop without note or owned media loses its map marker.
+  const overviewRoutePointIds = useMemo(() => {
+    const visible = new Set<string>();
+    for (const journey of journeys) {
+      const mediaPointIds = new Set(journey.media.map((asset) => asset.routePointId));
+      let visibleCount = 0;
+      for (const point of journey.routePoints) {
+        if (point.isStop || point.note?.trim() || mediaPointIds.has(point.id)) {
+          visible.add(point.id);
+          visibleCount += 1;
+        }
+      }
+      // An old geometry-only Journey still needs a real entry anchor. Reuse
+      // its own endpoints; this creates no city, Stop or new route fact.
+      if (visibleCount === 0 && journey.routePoints.length > 0) {
+        visible.add(journey.routePoints[0].id);
+        visible.add(journey.routePoints[journey.routePoints.length - 1].id);
+      }
+    }
+    // Composer and draft Playback still expose every editable point. Their
+    // route geometry and point identity are independent of saved Journey data.
+    if (effectiveDraftRoute) {
+      effectiveDraftRoute.points.forEach((point, index) => {
+        visible.add(point.id ?? `${effectiveDraftRoute.id}:${index}`);
+      });
+    }
+    return visible;
+  }, [journeys, effectiveDraftRoute]);
+  const visibleRoutePointIds = useMemo(() => {
+    // An explicit context/selection may originate outside an overview marker
+    // (for example the timeline). Keep it until close without rebuilding the
+    // route layer for ordinary selections that were already visible.
+    const selectedId = selectedJourneyRoutePoint?.routePointId;
+    if (!selectedId || overviewRoutePointIds.has(selectedId)) return overviewRoutePointIds;
+    return new Set([...overviewRoutePointIds, selectedId]);
+  }, [overviewRoutePointIds, selectedJourneyRoutePoint?.routePointId]);
   const focusRoute = focusPresentation.point
     ? null
     : routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null;
@@ -2853,6 +2891,7 @@ export function LivingAtlasApp({
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
+            visibleRoutePointIds={visibleRoutePointIds}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
             selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}
             narrativeJourneyRoutePoint={draftRoute ? null : narrativeJourneyRoutePoint}
