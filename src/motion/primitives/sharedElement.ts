@@ -104,6 +104,12 @@ export type SharedElementMorphOptions = {
   durationMs?: number;
   /** A signed video read/seek can take longer than the geometry animation. */
   readinessTimeoutMs?: number;
+  /** Keep a decoded snapshot while an asynchronous media target seeks even
+   * when the viewer requests reduced motion. No geometry animation runs. */
+  holdSnapshotForReducedMotion?: boolean;
+  /** The destination's picture bounds before it is decoded. Used only by the
+   * reduced-motion snapshot so it can fill the new stage while waiting. */
+  resolvePendingTargetBounds?: () => DOMRect | null;
   /** Keep the source while an asynchronous target is loading, only for as
    * long as the caller's original destination is still the current intent. */
   isTargetCurrent?: () => boolean;
@@ -172,6 +178,8 @@ export function runSharedElementMorph({
   name,
   durationMs = 560,
   readinessTimeoutMs = durationMs,
+  holdSnapshotForReducedMotion = false,
+  resolvePendingTargetBounds,
   isTargetCurrent,
   onCleanup,
   claimSource,
@@ -196,7 +204,8 @@ export function runSharedElementMorph({
       afterUpdate?.();
     } finally { cleanupExternal(); }
   };
-  if (!source || typeof document === "undefined" || prefersReducedMotion()) {
+  const reducedMotion = prefersReducedMotion();
+  if (!source || typeof document === "undefined" || (reducedMotion && !holdSnapshotForReducedMotion)) {
     updateWithoutMorph();
     return () => undefined;
   }
@@ -278,6 +287,23 @@ export function runSharedElementMorph({
     if (settled || !claimDestination) return;
     claimNodes(claimDestination());
   };
+  const positionReducedSnapshot = () => {
+    if (!reducedMotion || !resolvePendingTargetBounds) return;
+    const bounds = resolvePendingTargetBounds();
+    if (!bounds || !hasRenderableRect(bounds)) return;
+    const scale = Math.min(bounds.width / sourceRect.width, bounds.height / sourceRect.height);
+    const width = sourceRect.width * scale;
+    const height = sourceRect.height * scale;
+    const cssPx = (value: number) => `${Math.round(value * 100) / 100}px`;
+    const geometry = {
+      left: cssPx(bounds.left + (bounds.width - width) / 2),
+      top: cssPx(bounds.top + (bounds.height - height) / 2),
+      width: cssPx(width), height: cssPx(height),
+    };
+    for (const key of ["left", "top", "width", "height"] as const) {
+      if (clone.style[key] !== geometry[key]) clone.style[key] = geometry[key];
+    }
+  };
   const cleanup = () => {
     if (settled) return;
     settled = true;
@@ -323,7 +349,10 @@ export function runSharedElementMorph({
     const targetRect = candidate ? mediaRect(candidate) : null;
     if (!candidate || !targetRect || !canPresent(candidate, targetRect)) {
       if (!isTargetCurrent) cleanup();
-      else claimPendingDestination();
+      else {
+        claimPendingDestination();
+        positionReducedSnapshot();
+      }
       return;
     }
     target = candidate;
@@ -332,6 +361,7 @@ export function runSharedElementMorph({
     // The claimed page and the target stay visually suppressed until the clone
     // finishes. A live video must not paint or accept native input under it.
     target.style.visibility = "hidden";
+    if (reducedMotion) { cleanup(); return; }
     if (typeof clone.animate !== "function") {
       cleanup();
       return;

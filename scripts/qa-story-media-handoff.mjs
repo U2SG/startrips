@@ -113,10 +113,9 @@ async function touchDriver(page) {
     up: async () => { await send("touchEnd", []); },
     click: async (x, y) => {
       // Chromium's zero-duration touchscreen.tap can omit a compatibility
-      // click immediately after a pan. Keep the next gesture immediate, but
-      // give this real finger press a short hold before release.
+      // click immediately after a pan. Keep this trusted press and release
+      // immediate, so the test exercises that actual input cadence.
       await send("touchStart", finger(x, y));
-      await new Promise((resolve) => setTimeout(resolve, 64));
       await send("touchEnd", []);
     },
   };
@@ -590,15 +589,36 @@ function installStageSampler() {
         nonBlack };
     }
     let total = 0;
+    let retained = 0;
+    let signalDelta = 0;
     for (let index = 0; index < pixels.length; index += 4) {
       total += Math.abs(pixels[index] - source.pixels[index]);
       total += Math.abs(pixels[index + 1] - source.pixels[index + 1]);
       total += Math.abs(pixels[index + 2] - source.pixels[index + 2]);
+      if (Math.max(source.pixels[index], source.pixels[index + 1], source.pixels[index + 2]) <= 24) continue;
+      const x = (index / 4) % 64, y = Math.floor(index / (64 * 4));
+      let closest = 255;
+      for (let dy = -2; dy <= 2; dy += 1) for (let dx = -2; dx <= 2; dx += 1) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= 64 || ny >= 64) continue;
+        const at = (ny * 64 + nx) * 4;
+        if (Math.max(pixels[at], pixels[at + 1], pixels[at + 2]) <= 24) continue;
+        const delta = (Math.abs(pixels[at] - source.pixels[index])
+          + Math.abs(pixels[at + 1] - source.pixels[index + 1])
+          + Math.abs(pixels[at + 2] - source.pixels[index + 2])) / 3;
+        closest = Math.min(closest, delta);
+      }
+      if (closest <= 45) retained += 1;
+      signalDelta += closest;
     }
     const meanDelta = total / (64 * 64 * 3);
+    const retainedRatio = source.nonBlack ? retained / source.nonBlack : 0;
+    const signalMeanDelta = source.nonBlack ? signalDelta / source.nonBlack : 255;
     return { trigger: source.trigger, sourceTime: source.time, nonBlack,
       sourceNonBlack: source.nonBlack, meanDelta: Number(meanDelta.toFixed(2)),
-      failed: source.nonBlack < 8 || nonBlack < 8 || meanDelta > 8 };
+      retainedRatio: Number(retainedRatio.toFixed(2)), signalMeanDelta: Number(signalMeanDelta.toFixed(1)),
+      failed: source.nonBlack < 16 || nonBlack < source.nonBlack * 0.6
+        || retainedRatio < 0.7 || signalMeanDelta > 35 || meanDelta > 8 };
   };
   function sampleRoot(selector, morphs, peers) {
     const root = document.querySelector(selector);
@@ -1135,7 +1155,7 @@ async function seekNativeTimeline(page, rootSelector, { targetFraction = 0.7 } =
       || before.paused !== after.paused || !Number.isFinite(after.time)
       || after.time - before.time < Math.max(0.3, before.duration * Math.min(0.25, targetFraction - 0.3))
       || after.time < before.duration * (targetFraction - 0.1)
-      || after.time > before.duration * (targetFraction < 0.6 ? targetFraction + 0.12 : 0.95),
+      || after.time > before.duration * Math.min(0.95, targetFraction + 0.2),
   };
 }
 
@@ -1716,9 +1736,39 @@ async function startStoryVideoPlayback(page, mobile) {
   const selector = mobile ? ".journey-story__mobile-media-play" : ".journey-story__media-nav [aria-pressed]";
   const button = page.locator(selector);
   const before = await button.getAttribute("aria-pressed");
-  const activation = before !== "true" ? await clickHandoffButton(page, selector) : null;
-  const after = await waitForVideoHandoffState(page, STAGE, V1, false);
-  return { before, after, activation, pressed: await button.getAttribute("aria-pressed") };
+  await page.evaluate(() => {
+    const video = document.querySelector('.journey-story__media .story-media-pages__video video');
+    const probe = { events: [] };
+    window.__qaPlaybackStart = probe;
+    if (!(video instanceof HTMLVideoElement)) return;
+    for (const type of ["play", "playing", "pause", "ended", "error", "waiting", "stalled"]) {
+      video.addEventListener(type, (event) => {
+        if (probe.events.length < 24) probe.events.push({ type, trusted: event.isTrusted,
+          at: performance.now(), time: video.currentTime, readyState: video.readyState });
+      });
+    }
+  });
+  let activation = null;
+  try {
+    activation = before !== "true" ? await clickHandoffButton(page, selector) : null;
+    const after = await waitForVideoHandoffState(page, STAGE, V1, false);
+    return { before, after, activation, pressed: await button.getAttribute("aria-pressed"), failed: false };
+  } catch (error) {
+    const diagnostic = await page.evaluate((query) => {
+      const video = document.querySelector('.journey-story__media .story-media-pages__video video');
+      const control = document.querySelector(query);
+      return { events: window.__qaPlaybackStart?.events ?? [],
+        pressed: control?.getAttribute("aria-pressed") ?? null,
+        disabled: control instanceof HTMLButtonElement ? control.disabled : null,
+        video: video instanceof HTMLVideoElement ? {
+          time: video.currentTime, duration: video.duration, paused: video.paused,
+          ended: video.ended, readyState: video.readyState, networkState: video.networkState,
+          errorCode: video.error?.code ?? null,
+        } : null };
+    }, selector);
+    return { before, activation, pressed: await button.getAttribute("aria-pressed"), failed: true,
+      reason: error instanceof Error ? error.message : String(error), diagnostic };
+  }
 }
 
 async function clickHandoffButton(page, selector) {
@@ -1752,37 +1802,80 @@ async function pausedVideoScreenPixels(page, rootSelector) {
     const screen = document.createElement("canvas");
     screen.width = image.naturalWidth; screen.height = image.naturalHeight;
     const screenContext = screen.getContext("2d", { willReadFrequently: true });
-    const source = document.createElement("canvas");
-    source.width = video.videoWidth; source.height = video.videoHeight;
-    const sourceContext = source.getContext("2d", { willReadFrequently: true });
-    if (!screenContext || !sourceContext) return { failed: true, reason: "canvas context unavailable" };
+    const frame = document.createElement("canvas");
+    frame.width = 64; frame.height = 64;
+    const frameContext = frame.getContext("2d", { willReadFrequently: true });
+    if (!screenContext || !frameContext) return { failed: true, reason: "canvas context unavailable" };
     screenContext.drawImage(image, 0, 0);
-    sourceContext.drawImage(video, 0, 0);
+    frameContext.drawImage(video, 0, 0, 64, 64);
+    const pixels = frameContext.getImageData(0, 0, 64, 64).data;
+    const asset = video.getAttribute("data-shared-media-id");
+    let reference = window.__qaPausedFrameReference;
+    if (!reference) {
+      const signal = [];
+      const spread = Array(16).fill(null);
+      for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
+        const at = (y * 64 + x) * 4;
+        const strength = Math.max(pixels[at], pixels[at + 1], pixels[at + 2]);
+        if (strength <= 24) continue;
+        const point = { x, y, strength, at };
+        signal.push(point);
+        const cell = Math.floor(y / 16) * 4 + Math.floor(x / 16);
+        if (!spread[cell] || strength > spread[cell].strength) spread[cell] = point;
+      }
+      signal.sort((left, right) => right.strength - left.strength);
+      const points = spread.filter(Boolean).sort((left, right) => right.strength - left.strength).slice(0, 12);
+      for (const point of signal) {
+        if (points.length >= 12) break;
+        if (!points.some((selected) => selected.at === point.at)) points.push(point);
+      }
+      reference = { asset, pixels: new Uint8ClampedArray(pixels), signal: signal.map((point) => point.at),
+        brightPixels: signal.length, spreadCells: spread.filter(Boolean).length, points };
+      window.__qaPausedFrameReference = reference;
+    }
     const box = video.getBoundingClientRect();
     const scale = Math.min(box.width / video.videoWidth, box.height / video.videoHeight);
     const width = video.videoWidth * scale, height = video.videoHeight * scale;
     const left = box.left + (box.width - width) / 2, top = box.top + (box.height - height) / 2;
-    const samples = [];
-    for (const fy of [0.3, 0.45, 0.6]) for (const fx of [0.3, 0.5, 0.7]) {
+    const samples = reference.points.map(({ x: px, y: py, at }) => {
+      const fx = (px + 0.5) / 64, fy = (py + 0.5) / 64;
       const x = left + width * fx, y = top + height * fy;
       const hit = document.elementFromPoint(x, y);
       const sx = Math.round(x * image.naturalWidth / innerWidth);
       const sy = Math.round(y * image.naturalHeight / innerHeight);
-      const px = Math.round(video.videoWidth * fx), py = Math.round(video.videoHeight * fy);
-      const visible = [...screenContext.getImageData(sx, sy, 1, 1).data].slice(0, 3);
-      const decoded = [...sourceContext.getImageData(px, py, 1, 1).data].slice(0, 3);
+      const offscreen = sx < 0 || sy < 0 || sx >= image.naturalWidth || sy >= image.naturalHeight;
+      const visible = offscreen ? [0, 0, 0] : [...screenContext.getImageData(sx, sy, 1, 1).data].slice(0, 3);
+      const decoded = [pixels[at], pixels[at + 1], pixels[at + 2]];
       const delta = visible.reduce((sum, channel, index) => sum + Math.abs(channel - decoded[index]), 0) / 3;
-      samples.push({ fx, fy, hitIsVideo: hit === video, visible, decoded, delta: Number(delta.toFixed(1)) });
-    }
+      return { fx, fy, hitIsVideo: hit === video, offscreen, visible, decoded,
+        delta: Number(delta.toFixed(1)) };
+    });
     const meanDelta = samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length;
+    let retained = 0, signalDelta = 0;
+    for (const at of reference.signal) {
+      const expected = reference.pixels;
+      if (Math.max(pixels[at], pixels[at + 1], pixels[at + 2]) > 24) retained += 1;
+      signalDelta += (Math.abs(pixels[at] - expected[at])
+        + Math.abs(pixels[at + 1] - expected[at + 1])
+        + Math.abs(pixels[at + 2] - expected[at + 2])) / 3;
+    }
+    const retainedRatio = reference.signal.length ? retained / reference.signal.length : 0;
+    const signalMeanDelta = reference.signal.length ? signalDelta / reference.signal.length : 255;
+    const visibleBright = samples.filter((sample) => Math.max(...sample.visible) > 24).length;
     return { meanDelta: Number(meanDelta.toFixed(1)), samples,
-      failed: samples.some((sample) => !sample.hitIsVideo) || meanDelta > 18 };
+      brightPixels: reference.brightPixels, spreadCells: reference.spreadCells,
+      visibleBright, retainedRatio: Number(retainedRatio.toFixed(2)),
+      signalMeanDelta: Number(signalMeanDelta.toFixed(1)),
+      failed: asset !== reference.asset || reference.brightPixels < 16 || reference.spreadCells < 3
+        || samples.length < 8 || visibleBright < Math.ceil(samples.length * 0.6)
+        || samples.some((sample) => !sample.hitIsVideo || sample.offscreen) || meanDelta > 18
+        || retainedRatio < 0.75 || signalMeanDelta > 20 };
   }, { selector: rootSelector, png: screenshot });
 }
 
 function gradePausedFrameIdentity(before, after) {
-  if (before.samples?.length !== 9 || after.samples?.length !== 9) {
-    return { failed: true, reason: "missing nine-point decoded frame samples" };
+  if (!before.samples || before.samples.length < 8 || after.samples?.length !== before.samples.length) {
+    return { failed: true, reason: "missing signal-bearing decoded frame samples" };
   }
   const pairs = before.samples.map((sample, index) => ({
     at: [sample.fx, sample.fy],
@@ -1791,20 +1884,22 @@ function gradePausedFrameIdentity(before, after) {
   }));
   const meanDelta = pairs.length
     ? pairs.reduce((sum, pair) => sum + pair.delta, 0) / pairs.length : null;
-  return { meanDelta, pairs, failed: pairs.length !== 9 || meanDelta > 12 };
+  return { meanDelta, pairs, failed: before.failed || after.failed
+    || pairs.length < 8 || meanDelta > 12 || after.retainedRatio < 0.75 || after.signalMeanDelta > 20 };
 }
 
-/** Screenshot pixels over the moving clone must match its decoded canvas. */
-async function activeCloneScreenPixels(page, assetId) {
-  await page.waitForFunction((expected) => {
+/** Screenshot pixels over the active clone must match its decoded canvas. */
+async function activeCloneScreenPixels(page, assetId, { stationary = false } = {}) {
+  await page.waitForFunction(({ expected, still }) => {
     const clones = [...document.querySelectorAll('[data-shared-element-clone]')];
     if (clones.length !== 1 || clones[0].getAttribute('data-shared-element-clone') !== `story-fullscreen-${expected}`) return false;
+    if (still) return true;
     const animation = clones[0].getAnimations().find((entry) => entry.effect?.target === clones[0]);
     const duration = animation?.effect?.getTiming().duration;
     const progress = typeof duration === 'number' && duration > 0 && typeof animation.currentTime === 'number'
       ? animation.currentTime / duration : 0;
     return progress >= 0.25 && progress <= 0.65;
-  }, assetId, { polling: "raf", timeout: 9_000 });
+  }, { expected: assetId, still: stationary }, { polling: "raf", timeout: 9_000 });
   await page.evaluate((expected) => {
     const name = `story-fullscreen-${expected}`;
     const boxes = [];
@@ -1822,7 +1917,8 @@ async function activeCloneScreenPixels(page, assetId) {
     sample();
   }, assetId);
   const png = (await page.screenshot()).toString("base64");
-  return await page.evaluate(async ({ expected, screenshot }) => {
+  const capturedAt = Date.now();
+  const screenPixels = await page.evaluate(async ({ expected, screenshot }) => {
     const probe = window.__qaCloneScreen;
     probe.running = false;
     const clones = [...document.querySelectorAll('[data-shared-element-clone]')];
@@ -1849,16 +1945,29 @@ async function activeCloneScreenPixels(page, assetId) {
     frameContext.drawImage(clone, 0, 0, 64, 64);
     const pixels = frameContext.getImageData(0, 0, 64, 64).data;
     const bright = [];
-    for (let y = 4; y < 64; y += 7) for (let x = 4; x < 64; x += 7) {
+    const spread = Array(16).fill(null);
+    for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
       const at = (y * 64 + x) * 4;
       const strength = Math.max(pixels[at], pixels[at + 1], pixels[at + 2]);
-      if (strength > 24) bright.push({ x, y, strength });
+      if (strength <= 24) continue;
+      const point = { x, y, strength };
+      bright.push(point);
+      const cell = Math.floor(y / 16) * 4 + Math.floor(x / 16);
+      if (!spread[cell] || strength > spread[cell].strength) spread[cell] = point;
     }
     bright.sort((left, right) => right.strength - left.strength);
-    const points = bright.slice(0, 12);
-    if (points.length < 4 || !probe.boxes.length) {
+    const points = spread.filter(Boolean).sort((left, right) => right.strength - left.strength).slice(0, 12);
+    if (points.length < 8) {
+      for (const point of bright) {
+        if (points.some((selected) => selected.x === point.x && selected.y === point.y)) continue;
+        points.push(point);
+        if (points.length === 12) break;
+      }
+    }
+    const spreadCells = spread.filter(Boolean).length;
+    if (bright.length < 16 || spreadCells < 3 || points.length < 8 || !probe.boxes.length) {
       return { failed: true, reason: "clone has too little visible image signal or no geometry samples",
-        brightCells: bright.length, boxes: probe.boxes.length };
+        brightPixels: bright.length, spreadCells, boxes: probe.boxes.length };
     }
     const candidate = (box) => {
       const samples = points.map(({ x, y, strength }) => {
@@ -1877,11 +1986,16 @@ async function activeCloneScreenPixels(page, assetId) {
       return { box, samples, meanDelta: samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length };
     };
     const matching = probe.boxes.map(candidate).sort((left, right) => left.meanDelta - right.meanDelta)[0];
-    return { candidateBoxes: probe.boxes.length, brightCells: bright.length,
+    const visibleBright = matching.samples.filter((sample) =>
+      sample.visibleRgb && Math.max(...sample.visibleRgb) > 24).length;
+    return { candidateBoxes: probe.boxes.length, brightPixels: bright.length,
+      spreadCells, visibleBright,
       meanDelta: Number(matching.meanDelta.toFixed(1)), bestBox: matching.box,
       samples: matching.samples,
-      failed: matching.samples.some((sample) => sample.offscreen) || matching.meanDelta > 22 };
+      failed: matching.samples.some((sample) => sample.offscreen)
+        || visibleBright < Math.ceil(matching.samples.length * 0.6) || matching.meanDelta > 22 };
   }, { expected: assetId, screenshot: png });
+  return { ...screenPixels, capturedAt };
 }
 
 /** A compositor callback after handoff proves the playing destination presented a real frame. */
@@ -2183,6 +2297,16 @@ try {
         await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
         await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
         await waitForSettledAsset(page, V1, FULLSCREEN);
+        // Presentation can be settled while the clone still owns the picture
+        // and intentionally locks the destination's native input.
+        await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+          .waitFor({ state: "detached", timeout: 5_000 });
+        await page.waitForFunction((selector) => {
+          const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+          return video instanceof HTMLVideoElement
+            && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+            && getComputedStyle(video).pointerEvents !== "none";
+        }, FULLSCREEN, { polling: "raf", timeout: 5_000 });
       }
       const root = profile.fullscreen ? FULLSCREEN : STAGE;
       const seek = await seekNativeTimeline(page, root);
@@ -2702,19 +2826,19 @@ try {
 
       await startSampler(page, [STAGE, FULLSCREEN]);
       await page.locator(".journey-story__fullscreen-entry").click();
-      await page.waitForFunction(() => Boolean(document.querySelector(
-        '[data-shared-element-clone^="story-fullscreen-"]')),
-      undefined, { polling: "raf", timeout: 3_000 });
-      progress.entryCloneObserved = true;
-      await page.evaluate(() => {
-        window.addEventListener("resize", () => {
-          window.__qaResizeDuringVideoMorph = Boolean(document.querySelector(
-            '[data-shared-element-clone^="story-fullscreen-"]'));
-        }, { once: true });
-      });
+      await page.waitForFunction((asset) => {
+        const clone = document.querySelector(`[data-shared-element-clone="story-fullscreen-${asset}"]`);
+        const target = document.querySelector('.journey-story-fullscreen .story-media-pages__video video');
+        return clone && target?.getAttribute('data-video-handoff-ready') === asset;
+      }, V1, { polling: "raf", timeout: 3_000 });
+      progress.readyBeforeResize = await page.evaluate(() => ({
+        width: innerWidth, height: innerHeight,
+        clone: document.querySelector('[data-shared-element-clone]')?.getAttribute('data-shared-element-clone') ?? null,
+        targetReady: document.querySelector('.journey-story-fullscreen .story-media-pages__video video')
+          ?.getAttribute('data-video-handoff-ready') ?? null,
+      }));
       await page.setViewportSize({ width: 800, height: 1280 });
       progress.resizeDuringMorph = await page.evaluate(() => ({
-        cloneAtResize: window.__qaResizeDuringVideoMorph === true,
         width: innerWidth, height: innerHeight,
       }));
       await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
@@ -2742,10 +2866,12 @@ try {
       progress.returnHit = await clickReturnedVideo(page);
       record({
         name: "story-video-fullscreen-paused-rotation-roundtrip",
-        claim: "a real 43% native seek and paused desktop video retain asset, time, intent and visible decoded pixels through fullscreen entry interrupted by resize and real Close; the canvas clone alone paints during either morph and the returned video receives a real click",
+        claim: "a real 43% native seek and paused desktop video retain asset, time, intent and visible decoded pixels through fullscreen entry interrupted by resize and real Close; the sampled entry and exit frames keep one picture owner and the returned video receives a real click",
         ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
-          || !progress.resizeDuringMorph.cloneAtResize
+          || progress.readyBeforeResize.clone !== `story-fullscreen-${V1}`
+          || progress.readyBeforeResize.targetReady !== V1
+          || progress.readyBeforeResize.width <= progress.readyBeforeResize.height
           || progress.resizeDuringMorph.width >= progress.resizeDuringMorph.height
           || progress.inlinePixels.failed || progress.fullscreenPixels.failed || progress.returnPixels.failed
           || progress.entryFrameIdentity.failed || progress.exitFrameIdentity.failed
@@ -2756,6 +2882,177 @@ try {
     } catch (error) {
       record({ name: "story-video-fullscreen-paused-rotation-roundtrip", ...progress,
         error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // Reduced motion skips travel, but a slow decoder still needs a visible
+  // snapshot until the sought fullscreen frame is genuinely ready.
+  {
+    const session = await createStoryPage({ mobile: false, reducedMotion: "reduce" });
+    const progress = {};
+    const name = "story-video-fullscreen-paused-reduced-motion-roundtrip";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.before = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 3_000);
+      await startSampler(page, [STAGE, FULLSCREEN]);
+      progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
+      await page.waitForFunction(() => {
+        const clone = document.querySelector('[data-shared-element-clone^="story-fullscreen-"]');
+        const target = document.querySelector('.journey-story-fullscreen .story-media-pages__video video');
+        return clone && target instanceof HTMLVideoElement
+          && target.readyState < HTMLMediaElement.HAVE_CURRENT_DATA;
+      }, undefined, { polling: "raf", timeout: 3_000 });
+      progress.delayedRequest = session.mediaDelays.find((request) =>
+        request.startedAt >= progress.delayedTarget.initiatedAt) ?? null;
+      progress.waiting = await page.evaluate(() => ({
+        clone: document.querySelector('[data-shared-element-clone]')?.getAttribute('data-shared-element-clone') ?? null,
+        targetReadyState: document.querySelector('.journey-story-fullscreen .story-media-pages__video video')?.readyState ?? null,
+      }));
+      progress.waiting.requestReleasedAt = progress.delayedRequest?.releasedAt ?? null;
+      progress.entryScreen = await activeCloneScreenPixels(page, V1, { stationary: true });
+      await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+        .waitFor({ state: "detached", timeout: 5_000 });
+      progress.entry = gradeVideoFullscreenFrames(await stopSamplerFrames(page), V1);
+      progress.fullscreen = await videoHandoffState(page, FULLSCREEN);
+      progress.fullscreenPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
+      progress.entryFrameIdentity = gradePausedFrameIdentity(progress.beforePixels, progress.fullscreenPixels);
+      progress.entryClock = gradeVideoClock(progress.before, progress.fullscreen, true);
+      progress.fullscreenPoint = await presentedVideoPoint(page, FULLSCREEN);
+      await startSampler(page, [STAGE, FULLSCREEN]);
+      await page.locator(`${FULLSCREEN} .journey-story-fullscreen__close`).click();
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
+      progress.after = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.exit = gradeVideoFullscreenFrames(await stopSamplerFrames(page), V1, { requireClone: false });
+      progress.afterPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.exitFrameIdentity = gradePausedFrameIdentity(progress.fullscreenPixels, progress.afterPixels);
+      progress.exitClock = gradeVideoClock(progress.fullscreen, progress.after, true);
+      progress.returnHit = await clickReturnedVideo(page);
+      record({ name,
+        claim: "with reduced motion, a real nonzero native seek keeps its paused V1 frame visibly composited by the sole snapshot while fullscreen decoding waits, then preserves that frame, clock and native video hit target through fullscreen and Close",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.beforePixels.failed || progress.delayedTarget.failed
+          || progress.waiting.clone !== `story-fullscreen-${V1}`
+          || progress.waiting.targetReadyState === null || progress.waiting.targetReadyState >= 2
+          || progress.waiting.requestReleasedAt !== null
+          || !progress.delayedRequest || progress.delayedRequest.outcome !== "continued"
+          || progress.delayedRequest.releasedAt === null
+          || progress.entryScreen.capturedAt >= progress.delayedRequest.releasedAt
+          || progress.entryScreen.failed || progress.entry.failed
+          || progress.fullscreenPixels.failed || progress.entryFrameIdentity.failed
+          || progress.entryClock.failed || !progress.fullscreenPoint.hitIsVideo
+          || progress.exit.failed || progress.afterPixels.failed || progress.exitFrameIdentity.failed
+          || progress.exitClock.failed || progress.returnHit.failed
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // Resize while the hidden fullscreen decoder is genuinely stalled. The
+  // snapshot may be discarded by the resize handler, so its already decoded
+  // inline source must own the picture before delayed bytes can arrive.
+  {
+    const session = await createStoryPage({ mobile: false });
+    const progress = {};
+    const name = "story-video-fullscreen-paused-rotation-slow-decode";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.before = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 2_500);
+      await startSampler(page, [STAGE, FULLSCREEN]);
+      progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
+      await page.waitForFunction(() => {
+        const clone = document.querySelector('[data-shared-element-clone^="story-fullscreen-"]');
+        const target = document.querySelector('.journey-story-fullscreen .story-media-pages__video video');
+        return clone && target instanceof HTMLVideoElement
+          && target.readyState < HTMLMediaElement.HAVE_CURRENT_DATA;
+      }, undefined, { polling: "raf", timeout: 3_000 });
+      progress.delayedRequest = session.mediaDelays.find((request) =>
+        request.startedAt >= progress.delayedTarget.initiatedAt) ?? null;
+      await page.evaluate(() => {
+        window.__qaVideoResize = null;
+        window.addEventListener("resize", () => {
+          window.__qaVideoResize = {
+            wallAt: Date.now(),
+            clone: document.querySelector('[data-shared-element-clone]')?.getAttribute('data-shared-element-clone') ?? null,
+            targetReadyState: document.querySelector('.journey-story-fullscreen .story-media-pages__video video')?.readyState ?? null,
+          };
+        }, { capture: true, once: true });
+      });
+      progress.atResize = await page.evaluate(() => ({
+        width: innerWidth, height: innerHeight,
+        clone: document.querySelector('[data-shared-element-clone]')?.getAttribute('data-shared-element-clone') ?? null,
+        targetReadyState: document.querySelector('.journey-story-fullscreen .story-media-pages__video video')?.readyState ?? null,
+      }));
+      await page.setViewportSize({ width: 800, height: 1280 });
+      progress.afterResizeViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+      progress.resizeEvent = await page.evaluate(() => window.__qaVideoResize);
+      await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+        .waitFor({ state: "detached", timeout: 5_000 });
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 5_000 });
+      progress.after = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.coverage = gradeVideoFullscreenFrames(await stopSamplerFrames(page), V1);
+      progress.afterPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.frameIdentity = gradePausedFrameIdentity(progress.beforePixels, progress.afterPixels);
+      progress.clock = gradeVideoClock(progress.before, progress.after, true);
+      progress.returnPoint = await presentedVideoPoint(page, STAGE);
+      const deadline = Date.now() + 3_000;
+      while (!progress.delayedRequest?.outcome && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      progress.afterLateRelease = await videoHandoffState(page, STAGE);
+      progress.afterLatePixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.lateFrameIdentity = gradePausedFrameIdentity(progress.beforePixels, progress.afterLatePixels);
+      progress.lateClock = gradeVideoClock(progress.before, progress.afterLateRelease, true);
+      progress.fullscreenHiddenAfterLateRelease = await page.locator(FULLSCREEN).isHidden();
+      progress.returnHit = await clickReturnedVideo(page);
+      record({ name,
+        claim: "rotating while the fullscreen target is still undecoded returns to the same paused seeked V1 frame with continuous coverage and native hit target; late decoder bytes do not reopen or replace it",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.beforePixels.failed || progress.delayedTarget.failed
+          || progress.atResize.width <= progress.atResize.height
+          || progress.atResize.clone !== `story-fullscreen-${V1}`
+          || progress.atResize.targetReadyState === null || progress.atResize.targetReadyState >= 2
+          || progress.resizeEvent?.clone !== `story-fullscreen-${V1}`
+          || progress.resizeEvent?.targetReadyState === null || progress.resizeEvent?.targetReadyState >= 2
+          || progress.afterResizeViewport.width >= progress.afterResizeViewport.height
+          || progress.coverage.failed || progress.afterPixels.failed || progress.frameIdentity.failed
+          || progress.clock.failed || !progress.returnPoint.hitIsVideo || !progress.returnPoint.controls
+          || !progress.delayedRequest || progress.delayedRequest.releasedAt === null
+          || progress.delayedRequest.startedAt > progress.resizeEvent?.wallAt
+          || progress.delayedRequest.releasedAt <= progress.resizeEvent?.wallAt
+          || progress.delayedRequest.outcome !== "continued"
+          || progress.afterLateRelease.id !== V1 || progress.afterLateRelease.asset !== V1
+          || progress.afterLateRelease.src !== progress.before.src
+          || progress.afterLatePixels.failed || progress.lateFrameIdentity.failed || progress.lateClock.failed
+          || !progress.fullscreenHiddenAfterLateRelease || progress.returnHit.failed
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
         diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
     } finally {
@@ -2775,10 +3072,23 @@ try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
       progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
-      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.08 });
+      progress.remainingAfterSeek = progress.seek.after?.duration - progress.seek.after?.time;
+      if (progress.seek.failed || !Number.isFinite(progress.remainingAfterSeek)
+        || progress.remainingAfterSeek < 4) {
+        throw new Error(`playing handoff needs a real early seek with four seconds left: ${JSON.stringify({
+          failed: progress.seek.failed, remaining: progress.remainingAfterSeek,
+          time: progress.seek.after?.time, duration: progress.seek.after?.duration,
+        })}`);
+      }
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
       progress.play = await startStoryVideoPlayback(page, true);
+      if (progress.play.failed) throw new Error(`source playback did not start: ${progress.play.reason}`);
       progress.inlineBefore = await videoHandoffState(page, STAGE);
+      progress.remainingAtHandoff = progress.inlineBefore.duration - progress.inlineBefore.time;
+      if (!Number.isFinite(progress.remainingAtHandoff) || progress.remainingAtHandoff < 3.5) {
+        throw new Error(`playing source lacks time for fullscreen roundtrip: ${progress.remainingAtHandoff}`);
+      }
       if (rapidReverse) progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 650);
       await startSampler(page, [STAGE, FULLSCREEN]);
       progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__mobile-media-fullscreen");
@@ -2850,9 +3160,10 @@ try {
         name,
         claim: rapidReverse
           ? "a held fullscreen decoder is still unready under the active clone when real Browser Back fires; the original seeked video, native settings and playing clock recover with no stale paint"
-          : "a real 43% native seek retains the same playing video, native settings and clock through mobile fullscreen and Browser Back; clone pixels match the composited picture and the returned transport receives a real touch",
+          : "a real early native seek with four seconds remaining retains the same playing video, native settings and clock through mobile fullscreen and Browser Back; clone pixels match the composited picture and the returned transport receives a real touch",
         ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.remainingAfterSeek < 4 || progress.remainingAtHandoff < 3.5 || progress.play.failed
           || progress.play.pressed !== "true" || progress.inlineBefore.paused
           || progress.entry?.failed || progress.entryClock?.failed || progress.fullscreenFrame?.failed
           || (rapidReverse && (progress.delayedTarget.failed || progress.handoffClickedAt === null
@@ -2878,7 +3189,7 @@ try {
   }
 
   // A target that remains unready past the handoff deadline must not poison
-  // the already readable asset. Observe recovery before the held bytes arrive.
+  // the already readable paused frame. Observe recovery before the held bytes arrive.
   {
     const session = await createStoryPage({ mobile: true });
     const progress = {};
@@ -2889,8 +3200,8 @@ try {
       progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
       progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
-      progress.play = await startStoryVideoPlayback(page, true);
-      progress.before = await videoHandoffState(page, STAGE);
+      progress.before = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
       progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 9_500);
       await startSampler(page, [STAGE, FULLSCREEN]);
       progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__mobile-media-fullscreen");
@@ -2929,6 +3240,10 @@ try {
         };
       }, { inline: STAGE, fullscreen: FULLSCREEN });
       const activeRoot = progress.resource.fullscreenVisible ? FULLSCREEN : STAGE;
+      progress.recovered = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.recoveredPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.recoveredFrame = gradePausedFrameIdentity(progress.beforePixels, progress.recoveredPixels);
+      progress.recoveryClock = gradeVideoClock(progress.before, progress.recovered, true);
       progress.activePoint = await presentedVideoPoint(page, activeRoot).catch((error) => ({
         error: error instanceof Error ? error.message : String(error), hitIsVideo: false,
       }));
@@ -2947,12 +3262,12 @@ try {
           }
         }
         progress.afterActivation = state;
-        progress.timeoutClock = gradeVideoClock(progress.before, state, false, { requireIntent: false });
+        progress.resumedFromSeek = state.time >= progress.recovered.time - 0.18;
         progress.playback = await samplePlayback(page, activeRoot, { samples: 2, everyMs: 180 });
         progress.assetAfterActivation = await currentAsset(page, activeRoot);
       }
       const deadline = Date.now() + 2_000;
-      while (progress.delayedRequest?.releasedAt === null && Date.now() < deadline) {
+      while (!progress.delayedRequest?.outcome && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
       progress.afterLateRelease = await page.evaluate(async ({ inline, fullscreen }) => {
@@ -2961,16 +3276,19 @@ try {
         const fullRoot = document.querySelector(fullscreen);
         return {
           sourceSrc: sourceRoot?.querySelector(".story-media-pages__video video")?.getAttribute("src") ?? null,
+          sourceAsset: sourceRoot?.querySelector(".story-media-pages__video video")?.getAttribute("data-shared-media-id") ?? null,
           sourceId: sourceRoot?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
           fullscreenVisible: Boolean(fullRoot && !fullRoot.hidden && getComputedStyle(fullRoot).display !== "none"),
           errorCount: document.querySelectorAll(".journey-story__media-state.is-error").length,
         };
       }, { inline: STAGE, fullscreen: FULLSCREEN });
       record({ name,
-        claim: "when the hidden destination remains undecoded past eight seconds, the original V1 read URL and current page survive without an error state; the viewer returns to the source or gets a genuinely usable Play target before delayed bytes are released",
+        claim: "when the hidden destination remains undecoded past eight seconds, the same paused seeked V1 frame, URL and native controls recover on the inline stage before delayed bytes arrive; Play then advances from that frame without an error state",
         ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
-          || progress.play.pressed !== "true" || progress.delayedTarget.failed || !progress.clickedAt
+          || progress.beforePixels.failed || progress.recoveredPixels.failed
+          || progress.recoveredFrame.failed || progress.recoveryClock.failed
+          || progress.delayedTarget.failed || !progress.clickedAt
           || progress.recoveredAt - progress.clickedAt < 8_000
           || !progress.delayedRequest || progress.delayedRequest.releasedAt <= progress.recoveredAt
           || !progress.resource.targetReadProbe
@@ -2980,14 +3298,17 @@ try {
           || progress.resource.sourceId !== V1 || !progress.resource.sourcePageReady
           || !progress.resource.sourceSrc?.endsWith(CLIP)
           || progress.resource.errorText.length > 0
+          || progress.resource.fullscreenVisible
           || !progress.activePoint.hitIsVideo || !progress.resource.activeReady
           || !progress.resource.activeControls
           || progress.afterActivation?.paused !== false
-          || progress.timeoutClock?.failed !== false
+          || !progress.resumedFromSeek
           || !progress.playback?.advanced || !progress.playback?.monotonic
           || progress.assetAfterActivation?.id !== V1
           || progress.afterLateRelease.sourceId !== V1
+          || progress.afterLateRelease.sourceAsset !== V1
           || progress.afterLateRelease.sourceSrc !== progress.resource.sourceSrc
+          || progress.delayedRequest.outcome !== "continued"
           || progress.afterLateRelease.fullscreenVisible !== progress.resource.fullscreenVisible
           || progress.afterLateRelease.errorCount !== 0
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,

@@ -700,7 +700,6 @@ export function JourneyStory({
     restoreSource?: () => boolean;
     dispose: (preservePlayback?: boolean) => void;
   } | null>(null);
-  const [videoHandoffWaiting, setVideoHandoffWaiting] = useState<{ id: string; toFullscreen: boolean } | null>(null);
   const [videoResumeBlocked, setVideoResumeBlocked] = useState<{ id: string; toFullscreen: boolean } | null>(null);
   const [videoHandoffRevision, setVideoHandoffRevision] = useState(0);
   const [stagePlaybackReady, setStagePlaybackReady] = useState<{ inline: string | null; fullscreen: string | null }>({ inline: null, fullscreen: null });
@@ -945,7 +944,6 @@ export function JourneyStory({
     const generation = ++videoHandoffGenerationRef.current;
     cancelSharedElementMorph();
     previousHandoff?.dispose();
-    setVideoHandoffWaiting(null);
     setVideoResumeBlocked(null);
     const inlineStage = () => dialogRef.current?.querySelector<HTMLElement>(".journey-story__media") ?? null;
     const sourceRoot = nextFullscreen ? inlineStage() : fullscreenRef.current;
@@ -957,7 +955,7 @@ export function JourneyStory({
       ? nextFullscreen ? fullscreenVideoRef.current : storyVideoRef.current
       : null;
     const sourceUrl = sourceVideo?.currentSrc || sourceVideo?.src;
-    const inherited = previousHandoff?.id === mediaId && previousHandoff.src === sourceUrl
+    const inherited = previousHandoff && previousHandoff.id === mediaId && previousHandoff.src === sourceUrl
       ? previousHandoff : null;
     const handoffTime = inherited?.time ?? sourceVideo?.currentTime ?? 0;
     // Native pause/play belongs to the transport, independent of Story autoplay.
@@ -976,7 +974,6 @@ export function JourneyStory({
     let positionPrepared = false;
     let seekTarget: HTMLVideoElement | null = null;
     let timeout = 0;
-    const retainedVisuals: Array<[HTMLElement, string]> = [];
     const removeVideoListeners = () => {
       if (!seekTarget) return;
       for (const event of ["loadedmetadata", "loadeddata", "canplay", "seeked", "timeupdate", "error"] as const) {
@@ -999,8 +996,6 @@ export function JourneyStory({
             seekTarget.playbackRate = preservePlayback ? playbackRate : (targetAudio?.playbackRate ?? playbackRate);
             seekTarget.muted = preservePlayback ? muted : (targetAudio?.muted ?? muted);
           }
-          for (const [node, opacity] of retainedVisuals) node.style.opacity = opacity;
-          retainedVisuals.length = 0;
           if (videoHandoffRef.current === videoHandoff) videoHandoffRef.current = null;
         },
       } : null;
@@ -1036,7 +1031,6 @@ export function JourneyStory({
       videoHandoffGenerationRef.current += 1;
       videoHandoff.cancelMorph?.();
       videoHandoff.dispose();
-      setVideoHandoffWaiting(null);
       if (!sourceCurrent) return false;
       setVideoResumeBlocked(null);
       sourceVideo.muted = videoHandoff.muted;
@@ -1078,7 +1072,6 @@ export function JourneyStory({
     const finishVideoHandoff = () => {
       if (!videoHandoff || !seekTarget || !ready || !morphDone || !handoffCurrent()) return;
       videoHandoff.dispose(true);
-      setVideoHandoffWaiting(null);
       if (shouldPlay && seekTarget.paused) {
         const video = seekTarget;
         void video.play().catch(() => reportResumeBlocked(video));
@@ -1156,6 +1149,10 @@ export function JourneyStory({
         }
       } : undefined,
       readinessTimeoutMs: videoHandoff ? 8_500 : undefined,
+      holdSnapshotForReducedMotion: Boolean(videoHandoff),
+      resolvePendingTargetBounds: videoHandoff
+        ? () => targetRoot()?.querySelector<HTMLElement>(".story-media-pages__video")?.getBoundingClientRect() ?? null
+        : undefined,
       resolveTarget: () => mediaId
         ? [...targetRoot()?.querySelectorAll<HTMLElement>("[data-shared-media-id]") ?? []]
           .find((node) => node.dataset.sharedMediaId === mediaId && (!videoHandoff || ready)) ?? null
@@ -1196,16 +1193,10 @@ export function JourneyStory({
         morphDone = true;
         if (!handoffCurrent()) { videoHandoff.dispose(); return; }
         if (ready) { finishVideoHandoff(); return; }
-        // Rotation or a slow decoder can end geometry ownership first. Hide
-        // both the target transport and its preview until seek completes.
-        const page = [...targetRoot()?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? []]
-          .find((node) => node.dataset.mediaPageId === videoHandoff.id);
-        for (const node of [page, page?.querySelector<HTMLElement>("canvas"), seekTarget]) {
-          if (!node) continue;
-          retainedVisuals.push([node, node.style.opacity]);
-          node.style.opacity = "0";
-        }
-        setVideoHandoffWaiting({ id: videoHandoff.id, toFullscreen: nextFullscreen });
+        // Resize, blur, or a pending decoder can end geometry ownership before
+        // the destination has a frame. The clone is gone at this point, so
+        // return to the still-decoded source instead of exposing an empty stage.
+        videoHandoff.restoreSource?.();
       } : undefined,
     });
     if (videoHandoffRef.current === videoHandoff && videoHandoff) videoHandoff.cancelMorph = cancelMorph;
@@ -1788,7 +1779,6 @@ export function JourneyStory({
       && new URL(read.url, document.baseURI).href === handoff.src) return;
     handoff.cancelMorph?.();
     handoff.dispose();
-    setVideoHandoffWaiting(null);
   }, [activeAsset?.id, fullscreen, incomingAssetId, journeyId, mediaReads, selectedRoutePointId, shownAssetId]);
   if (incomingAssetId === null && pendingTargetRef.current === null) {
     requestedMediaRef.current = activeAsset?.id ?? null;
@@ -2379,8 +2369,9 @@ export function JourneyStory({
   const shownAsset = shownAssetId
     ? scopedMediaIndex.byId.get(shownAssetId) ?? null
     : asset;
-  const videoNeedsResume = videoResumeBlocked?.id === shownAsset?.id
-    && videoResumeBlocked.toFullscreen === fullscreen;
+  const videoNeedsResume = Boolean(videoResumeBlocked
+    && videoResumeBlocked.id === shownAsset?.id
+    && videoResumeBlocked.toFullscreen === fullscreen);
   const videoNavigationVisible = Boolean(shownAsset?.mimeType.startsWith("video/") && scopedMedia.length > 1);
   const canStepPrevious = !mutationPending && scopedMedia.length > 1
     && (selectedRoutePointId !== null || requestedMediaIndex > 0);
@@ -2400,25 +2391,22 @@ export function JourneyStory({
   // "loading flash" the issue forbids, so the cue belongs to a stage no page
   // owns yet (cold open, or a shown asset whose own read is still loading).
   const stageOwnedByPage = shownRead?.status === "ready";
-  const videoTransferWaiting = videoHandoffWaiting?.id === shownAsset?.id
-    && videoHandoffWaiting.toFullscreen === fullscreen;
-  const mediaStageWaiting = videoTransferWaiting || (!stageOwnedByPage && Boolean(
+  const mediaStageWaiting = !stageOwnedByPage && Boolean(
     (shownAsset && (!shownRead || shownRead.status === "loading"))
     || (
       pendingTarget
       && pendingTarget.id !== shownAsset?.id
       && pendingTargetRead?.status !== "error"
     ),
-  ));
+  );
   const mediaStageStatus = (
     <>
       {mediaStageWaiting ? (
-        <div className="journey-story__media-state starlight-media-state is-waiting" role="status" aria-live="polite"
-          style={videoTransferWaiting ? { background: "#030808" } : undefined}>
+        <div className="journey-story__media-state starlight-media-state is-waiting" role="status" aria-live="polite">
           <StartripsJourneyCue state="waiting" size={58} className="starlight-media-state__cue" />
           <div className="starlight-media-state__copy" aria-label="正在载入媒体">
-            <strong className={!mobileLayout && !videoTransferWaiting ? "story-visually-hidden" : undefined}>
-              {videoTransferWaiting ? "正在同步视频画面…" : pendingTarget ? "正在打开所选媒体…" : "正在打开媒体…"}
+            <strong className={!mobileLayout ? "story-visually-hidden" : undefined}>
+              {pendingTarget ? "正在打开所选媒体…" : "正在打开媒体…"}
             </strong>
           </div>
         </div>
