@@ -1,0 +1,419 @@
+// #339 / ST-118. Grade the real Atlas globe and Full Playback together in GitHub CI.
+import assert from "node:assert/strict";
+import { launchQaBrowser } from "./qa-browser.mjs";
+import { nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
+
+const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
+const journeyId = "qa-playback-camera-journey";
+const imageId = "qa-playback-camera-image";
+const videoId = "qa-playback-camera-video";
+const points = [
+  { id: "qa-camera-hong-kong", latitude: 22.2855, longitude: 114.1577, label: "香港" },
+  { id: "qa-camera-seoul", latitude: 37.5665, longitude: 126.9780, label: "首尔" },
+  { id: "qa-camera-osaka", latitude: 34.6937, longitude: 135.5023, label: "大阪" },
+];
+const journey = {
+  id: journeyId, atlasId: "qa-atlas", title: "镜头与旅程的交接", startedOn: "2026-04-06",
+  endedOn: null, note: "", lightColor: "#77c8c2", lightEffect: null,
+  coverMediaAssetId: null, revision: 1, createdByUserId: "qa-user",
+  createdAt: "2026-04-06T00:00:00.000Z", updatedAt: "2026-04-06T00:00:00.000Z",
+  routePoints: points.map((point, index) => ({
+    ...point, journeyId, sortOrder: index, isStop: true, occurredAt: null, note: null,
+    createdAt: `2026-04-0${index + 6}T00:00:00.000Z`,
+  })),
+  media: [
+    { id: imageId, routePointId: points[1].id, fileName: "seoul.svg", mimeType: "image/svg+xml" },
+    { id: videoId, routePointId: points[2].id, fileName: "osaka.webm", mimeType: "video/webm" },
+  ].map((asset, index) => ({
+    ...asset, journeyId, storageDriver: "qa", storageKey: asset.id, bytes: 128,
+    sortOrder: index, uploadedByUserId: "qa-user", createdAt: "2026-04-07T00:00:00.000Z",
+  })),
+};
+const mapStyle = {
+  version: 8, name: "QA visible detail surface", sources: {},
+  layers: [{ id: "qa-map-background", type: "background", paint: { "background-color": "#173d43" } }],
+};
+const mapStylePattern = /\/api\/mapstyle\?path=styles(?:%2F|\/)fiord(?:$|&)/i;
+const imageUrl = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='60'%3E%3Crect width='80' height='60' fill='%2367b5a7'/%3E%3C/svg%3E";
+const browser = await launchQaBrowser({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+const reports = [];
+
+async function open({ mobile = false, reduced = false, holdImage = false } = {}) {
+  const page = await browser.newPage({
+    // Start through the real desktop Playback chooser, then cross the compact
+    // boundary on this same page; the mobile sheet has no Playback action.
+    viewport: { width: 1280, height: 800 },
+    isMobile: mobile, hasTouch: mobile, reducedMotion: reduced ? "reduce" : "no-preference",
+  });
+  const errors = [];
+  let markImageRequested = () => undefined;
+  let releaseImage = () => undefined;
+  let imageRequested = Promise.resolve();
+  let imageGate = Promise.resolve();
+  if (holdImage) {
+    imageRequested = new Promise((resolve) => { markImageRequested = resolve; });
+    imageGate = new Promise((resolve) => { releaseImage = resolve; });
+  }
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("**/api/auth/get-session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "null" }));
+  await page.route("**/api/journeys", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ journeys: [journey] }),
+  }));
+  await page.route(mapStylePattern, (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify(mapStyle),
+  }));
+  await page.route("**/api/uploads/assets/*/read-url", async (route) => {
+    const isImage = route.request().url().includes(imageId);
+    if (isImage && holdImage) {
+      markImageRequested();
+      await imageGate;
+    }
+    await route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({
+        url: route.request().url().includes(videoId) ? `${origin}/demo-media/east-star-orbit.webm` : imageUrl,
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    });
+  });
+  await page.goto(`${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaRealRoutePointScene=1&qaRoutePointContext=1`,
+    { waitUntil: "domcontentloaded" });
+  await page.locator(".living-atlas").waitFor({ state: "visible", timeout: 20_000 });
+  await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 25_000 });
+  await page.locator(".living-atlas__active-play").waitFor({ state: "visible" });
+  await page.locator(".living-atlas__journey-rail button", { hasText: journey.title }).first().click();
+  return { page, errors, imageRequested, releaseImage };
+}
+
+function snapshot(page) {
+  return page.evaluate(() => {
+    const root = document.querySelector(".journey-playback");
+    const map = document.querySelector(".detailed-earth-map");
+    const focus = document.querySelector("[data-qa-route-point-context-focus]");
+    const particle = window.__particleEarthDebug?.();
+    const center = map?.dataset.mapCameraObservation?.split(",").map(Number) ?? [];
+    return {
+      step: Number(root?.dataset.playbackStep), phase: root?.dataset.playbackPhase ?? null,
+      following: root?.dataset.cameraFollow ?? null, mapInteractive: root?.dataset.mapInteractive ?? null,
+      mapOwner: map?.dataset.diveOwner ?? null, mapCenter: center,
+      mapZoom: Number(map?.dataset.handoffZoom ?? NaN),
+      focusRevision: Number(focus?.dataset.focusRevision ?? NaN),
+      focusPoint: focus?.dataset.focusPoint ?? null,
+      rotationX: particle?.rotationX ?? null, rotationY: particle?.rotationY ?? null,
+      manualFocusOwner: particle?.manualFocusOwner ?? null,
+      presented: root?.querySelector("[data-presented-asset]")?.getAttribute("data-presented-asset") ?? null,
+    };
+  });
+}
+
+async function visibleImage(page, assetId) {
+  const result = await page.evaluate((id) => {
+    const stage = document.querySelector(`[data-presented-asset="${id}"]`);
+    const image = stage?.querySelector('[data-media-asset][aria-hidden="false"] img');
+    const rect = image?.getBoundingClientRect();
+    const samples = rect ? [0.3, 0.5, 0.7].flatMap((fx) => [0.3, 0.5, 0.7].map((fy) => {
+      const hit = document.elementFromPoint(rect.left + rect.width * fx, rect.top + rect.height * fy);
+      return Boolean(hit && stage.contains(hit));
+    })) : [];
+    return { loaded: image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
+      width: rect?.width ?? 0, height: rect?.height ?? 0, visibleHits: samples.filter(Boolean).length };
+  }, assetId);
+  assert.ok(result.loaded && result.width > 40 && result.height > 40 && result.visibleHits >= 1,
+    `presented image is not visibly reachable: ${JSON.stringify(result)}`);
+  return result;
+}
+
+async function steeringPoint(page, detail, requireEnd = true) {
+  const point = await page.evaluate(({ expectDetail, requireEnd }) => {
+    const canvas = document.querySelector(expectDetail ? ".maplibregl-canvas" : 'canvas[data-three-scene="particle-earth"]');
+    if (!(canvas instanceof HTMLCanvasElement)) return null;
+    const rect = canvas.getBoundingClientRect();
+    for (const offsetY of [0, -70, 70, -130, 130]) for (const offsetX of [0, -70, 70, -140, 140]) {
+      const x = Math.round(rect.left + rect.width / 2 + offsetX);
+      const y = Math.round(rect.top + rect.height / 2 + offsetY);
+      const endX = x + (x < innerWidth / 2 ? 90 : -90);
+      const endY = y + (y < innerHeight / 2 ? 35 : -35);
+      if ([x, endX].some((value) => value < 8 || value > innerWidth - 8)
+          || [y, endY].some((value) => value < 8 || value > innerHeight - 8)) continue;
+      const hit = document.elementFromPoint(x, y);
+      const endHit = document.elementFromPoint(endX, endY);
+      const owns = (element) => element === canvas;
+      if (owns(hit) && (!requireEnd || owns(endHit))) return { x, y, endX, endY, hit: hit?.className ?? "" };
+    }
+    return null;
+  }, { expectDetail: detail, requireEnd });
+  assert.ok(point, `no real ${detail ? "detail map" : "particle globe"} hit target in Playback`);
+  return point;
+}
+
+async function dragSurface(page, detail) {
+  const point = await steeringPoint(page, detail);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.endX, point.endY, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.cameraFollow === "free", null,
+    { timeout: 5_000 });
+  return point;
+}
+
+async function touchDragParticle(page) {
+  const point = await steeringPoint(page, false);
+  await page.evaluate(() => {
+    window.__qaPlaybackCameraTouch = [];
+    for (const type of ["pointerdown", "pointermove", "pointerup"]) {
+      document.addEventListener(type, (event) => {
+        if (event.target instanceof Element && event.target.matches('canvas[data-three-scene="particle-earth"]')) {
+          window.__qaPlaybackCameraTouch.push({ type, pointerType: event.pointerType, trusted: event.isTrusted });
+        }
+      }, { capture: true });
+    }
+  });
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y }] });
+    for (let step = 1; step <= 6; step += 1) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{
+        x: point.x + (point.endX - point.x) * step / 6,
+        y: point.y + (point.endY - point.y) * step / 6,
+      }] });
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  } finally { await cdp.detach(); }
+  await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.cameraFollow === "free", null,
+    { timeout: 5_000 });
+  const events = await page.evaluate(() => window.__qaPlaybackCameraTouch);
+  assert.ok(events.some((event) => event.type === "pointerdown" && event.pointerType === "touch" && event.trusted),
+    `trusted touch did not reach particle canvas: ${JSON.stringify(events)}`);
+  assert.ok(events.some((event) => event.type === "pointermove" && event.pointerType === "touch" && event.trusted),
+    `trusted touch move did not reach particle canvas: ${JSON.stringify(events)}`);
+  assert.ok(events.every((event) => event.pointerType === "touch"),
+    `mouse pointer contaminated mobile gesture: ${JSON.stringify(events)}`);
+  return { point, events };
+}
+
+async function enterDetail(page) {
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    const state = await page.evaluate(() => ({
+      stage: document.querySelector(".living-atlas-globe")?.dataset.earthDive ?? null,
+      owner: document.querySelector(".living-atlas-globe")?.dataset.earthDiveOwner ?? null,
+      semanticZoom: document.querySelector(".particle-earth-scene")?.dataset.semanticZoom ?? null,
+      localProgress: Number(document.querySelector(".particle-earth-scene")?.dataset.localProgress),
+    }));
+    if (state.stage === "detail" && state.owner === "detail") return;
+    if (state.stage === "blending" && state.localProgress >= 0.999) {
+      await page.waitForFunction(() => document.querySelector(".living-atlas-globe")?.dataset.earthDiveOwner === "detail",
+        null, { timeout: 10_000 });
+      return;
+    }
+    const point = await steeringPoint(page, state.owner === "detail", false);
+    const input = nextDiveFixtureInput(state, state.semanticZoom === "global" ? -120 : -10, -10);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel(0, input.deltaY);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  }
+  throw new Error(`real Detail dive did not commit: ${JSON.stringify(await snapshot(page))}`);
+}
+
+async function startPlayback(page) {
+  const play = page.locator(".living-atlas__active-play");
+  await play.click();
+  const menu = page.locator('.living-atlas__playback-mode-menu [data-playback-mode-option="full"]');
+  await menu.waitFor({ state: "visible" });
+  await menu.click();
+  if (await page.locator(".journey-playback").count() === 0) {
+    await page.waitForFunction(() => {
+      const button = document.querySelector(".living-atlas__active-play");
+      return button instanceof HTMLButtonElement && !button.disabled;
+    });
+    await play.click();
+  }
+  await page.locator('.journey-playback[data-playback-mode="full"]').waitFor({ state: "visible" });
+  await page.locator(".journey-playback__tempo select").selectOption("immersive");
+}
+
+async function recordArrivalProjection(page) {
+  await page.evaluate(({ longitude, latitude }) => {
+    const root = document.querySelector(".journey-playback");
+    if (!root) throw new Error("Playback root missing before arrival recording");
+    window.__qaPlaybackCameraArrival = [];
+    const capture = () => {
+      if (root.dataset.playbackPhase !== "stop" || root.dataset.playbackStep !== "6"
+          || window.__qaPlaybackCameraArrival.length) return;
+      const map = document.querySelector(".detailed-earth-map");
+      const rect = map?.getBoundingClientRect();
+      const point = window.__detailedEarthMapProject?.(longitude, latitude) ?? null;
+      const center = map?.dataset.mapCameraObservation?.split(",").map(Number) ?? [];
+      window.__qaPlaybackCameraArrival.push({
+        following: root.dataset.cameraFollow, mapOwner: map?.dataset.diveOwner ?? null,
+        center, point, mapCenter: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null,
+        visible: Boolean(root.querySelector(".journey-playback__stop")),
+      });
+    };
+    const observer = new MutationObserver(capture);
+    observer.observe(root, { attributes: true, childList: true, subtree: true });
+    capture();
+  }, points[2]);
+}
+
+try {
+  // Detail map: real keyboard pan and drag claim the camera; the director keeps
+  // advancing content, then Return and Back restore the latest explicit location.
+  {
+    const { page, errors } = await open();
+    try {
+      await enterDetail(page);
+      await startPlayback(page);
+      await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.mapCameraObservation?.split(",").length === 2,
+        null, { timeout: 10_000 });
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "stop"
+        && document.querySelector(".journey-playback")?.dataset.playbackStep === "1", null, { timeout: 40_000 });
+      await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
+      await page.locator(".journey-playback.is-paused").waitFor();
+      const wheelPoint = await steeringPoint(page, true, false);
+      const scaleBeforeWheel = await page.evaluate(({ longitude, latitude }) => {
+        const a = window.__detailedEarthMapProject?.(longitude, latitude);
+        const b = window.__detailedEarthMapProject?.(longitude + 1, latitude);
+        return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : null;
+      }, points[0]);
+      assert.ok(scaleBeforeWheel && scaleBeforeWheel > 0, "detail map must publish real projection before wheel");
+      await page.mouse.move(wheelPoint.x, wheelPoint.y);
+      await page.mouse.wheel(0, -120);
+      await page.waitForFunction(({ longitude, latitude, baseline }) => {
+        const a = window.__detailedEarthMapProject?.(longitude, latitude);
+        const b = window.__detailedEarthMapProject?.(longitude + 1, latitude);
+        return document.querySelector(".journey-playback")?.dataset.cameraFollow === "free"
+          && a && b && Math.hypot(a.x - b.x, a.y - b.y) > baseline * 1.05;
+      }, { ...points[0], baseline: scaleBeforeWheel }, { timeout: 8_000 });
+      const canvas = page.locator(".maplibregl-canvas");
+      assert.equal(await canvas.evaluate((node) => node.tabIndex), 0, "detail map canvas must be keyboard reachable");
+      await canvas.focus();
+      assert.ok(await canvas.evaluate((node) => document.activeElement === node), "detail map canvas did not take focus");
+      const beforeKey = await snapshot(page);
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction((before) => {
+        const root = document.querySelector(".journey-playback");
+        const center = document.querySelector(".detailed-earth-map")?.dataset.mapCameraObservation?.split(",").map(Number);
+        return root?.dataset.cameraFollow === "free" && center?.length === 2
+          && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.0001;
+      }, beforeKey.mapCenter, { timeout: 8_000 });
+      assert.equal(await page.locator(".journey-playback").getAttribute("aria-modal"), "false");
+      await page.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "travel"
+        && document.querySelector(".journey-playback")?.dataset.playbackStep === "2", null, { timeout: 40_000 });
+      const beforeDrag = await snapshot(page);
+      const drag = await dragSurface(page, true);
+      await page.waitForFunction((before) => {
+        const center = document.querySelector(".detailed-earth-map")?.dataset.mapCameraObservation?.split(",").map(Number);
+        return center?.length === 2 && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.0001;
+      }, beforeDrag.mapCenter, { timeout: 8_000 });
+      const free = await snapshot(page);
+      await page.waitForFunction((asset) => document.querySelector(`[data-presented-asset="${asset}"]`)
+        ?.getAttribute("data-media-presentation") === "settled", imageId, { timeout: 60_000 });
+      const media = await snapshot(page);
+      assert.equal(media.following, "free", "media presentation cannot retake the camera");
+      assert.equal(media.focusRevision, free.focusRevision, "automatic chapter advance cannot issue focus commands");
+      const image = await visibleImage(page, imageId);
+      assert.deepEqual(errors, []);
+      reports.push({ mode: "detail", input: "wheel, keyboard and drag", drag, free, media, image });
+      await page.locator(".journey-playback__return-location").click();
+      await page.waitForFunction((revision) => document.querySelector(".journey-playback")?.dataset.cameraFollow === "follow"
+        && Number(document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-revision")) > revision,
+      free.focusRevision, { timeout: 5_000 });
+      const returned = await snapshot(page);
+      assert.ok(returned.focusPoint?.includes(`${points[1].latitude},${points[1].longitude}`),
+        `Return should focus current Route Point: ${JSON.stringify(returned)}`);
+      await page.waitForFunction(({ latitude, longitude }) => {
+        const map = document.querySelector(".detailed-earth-map");
+        const center = map?.dataset.mapCameraObservation?.split(",").map(Number);
+        const point = window.__detailedEarthMapProject?.(longitude, latitude);
+        const rect = map?.getBoundingClientRect();
+        return center?.length === 2 && Math.hypot(center[0] - longitude, center[1] - latitude) < 0.01
+          && point && rect && Math.hypot(point.x - (rect.left + rect.width / 2),
+            point.y - (rect.top + rect.height / 2)) < 20;
+      }, points[1], { timeout: 10_000 });
+      await recordArrivalProjection(page);
+      await page.locator(".journey-playback__tempo select").selectOption("fast");
+      await page.waitForFunction(() => window.__qaPlaybackCameraArrival?.length > 0,
+        null, { timeout: 60_000 });
+      await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
+      const arrival = await page.evaluate(() => window.__qaPlaybackCameraArrival[0]);
+      assert.equal(arrival.following, "follow");
+      assert.equal(arrival.mapOwner, "detail");
+      assert.ok(arrival.visible && arrival.point && arrival.mapCenter,
+        `arrival must have a projected destination: ${JSON.stringify(arrival)}`);
+      assert.ok(Math.hypot(arrival.center[0] - points[2].longitude,
+        arrival.center[1] - points[2].latitude) < 0.05,
+      `fast long-haul arrival preceded camera settlement: ${JSON.stringify(arrival)}`);
+      assert.ok(Math.hypot(arrival.point.x - arrival.mapCenter.x,
+        arrival.point.y - arrival.mapCenter.y) < 30,
+      `fast long-haul arrival projected away from destination: ${JSON.stringify(arrival)}`);
+      reports.push({ mode: "detail-fast-long-haul", arrival });
+      await page.locator('.journey-playback__controls button[aria-label="上一个章节"]').click();
+      await page.waitForFunction((asset) => document.querySelector(".journey-playback")?.dataset.playbackStep === "4"
+        && document.querySelector(`[data-presented-asset="${asset}"]`)?.getAttribute("data-media-presentation") === "settled"
+        && document.querySelector(".journey-playback")?.dataset.playbackPresentationHold === "none",
+      imageId, { timeout: 15_000 });
+      await page.locator('.journey-playback__close').click();
+      await page.locator(".journey-playback").waitFor({ state: "detached" });
+      await page.waitForFunction((asset) => Boolean(document.querySelector(
+        `.journey-story [data-media-page="current"][data-media-page-id="${asset}"]`)), imageId,
+      { timeout: 8_000 });
+      reports.push({ mode: "detail", returnAndBack: returned, storyAsset: imageId });
+    } finally { await page.close(); }
+  }
+
+  // Reduced Motion on a phone starts with the particle renderer. Its trusted
+  // gesture must still release follow and expose a reachable 44px Return target.
+  {
+    const { page, errors, imageRequested, releaseImage } = await open({ mobile: true, reduced: true, holdImage: true });
+    try {
+      await startPlayback(page);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForFunction(() => document.querySelector(".living-atlas")?.dataset.mobileV2 === "on");
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "travel"
+        && document.querySelector(".journey-playback")?.dataset.playbackStep === "2", null, { timeout: 40_000 });
+      const before = await snapshot(page);
+      const drag = await touchDragParticle(page);
+      await page.waitForFunction((previous) => {
+        const current = window.__particleEarthDebug?.();
+        return current?.manualFocusOwner && Math.hypot(current.rotationX - previous.rotationX,
+          current.rotationY - previous.rotationY) > 0.001;
+      }, before, { timeout: 5_000 });
+      const free = await snapshot(page);
+      let deadline;
+      try {
+        await Promise.race([
+          imageRequested,
+          new Promise((_resolve, reject) => {
+            deadline = setTimeout(() => reject(new Error("image read was never requested")), 30_000);
+          }),
+        ]);
+      } finally { clearTimeout(deadline); }
+      assert.equal((await snapshot(page)).following, "free", "slow media read cannot recapture the camera");
+      releaseImage();
+      await page.waitForFunction((asset) => document.querySelector(`[data-presented-asset="${asset}"]`)
+        ?.getAttribute("data-media-presentation") === "settled", imageId, { timeout: 60_000 });
+      const media = await snapshot(page);
+      assert.equal(media.following, "free");
+      assert.equal(media.focusRevision, free.focusRevision);
+      const image = await visibleImage(page, imageId);
+      const returnButton = page.locator(".journey-playback__return-location");
+      const target = await returnButton.evaluate((button) => {
+        const box = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2,
+          width: box.width, height: box.height, hit: hit === button || button.contains(hit) };
+      });
+      assert.ok(target.width >= 44 && target.height >= 44 && target.hit, `mobile Return target: ${JSON.stringify(target)}`);
+      await page.touchscreen.tap(target.x, target.y);
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.cameraFollow === "follow");
+      assert.deepEqual(errors, []);
+      reports.push({ mode: "particle-mobile-reduced", drag, free, media, image, returnTarget: target });
+    } finally { releaseImage(); await page.close(); }
+  }
+} finally {
+  await browser.close();
+}
+console.log(JSON.stringify({ lane: "qa-playback-manual-camera", reports }, null, 2));

@@ -1222,6 +1222,8 @@ interface ParticleEarthSceneProps {
   /** Orientation-only seed; it does not create a focus signal or route owner. */
   initialCameraAnchor?: { lat: number; lon: number } | null;
   focusRevision?: number;
+  /** Playback may retain the chapter while the viewer owns the camera. */
+  focusEnabled?: boolean;
   focusFlightProfile?: PlaybackTravelChoreography;
   focusColor?: string;
   centerFocusPoint?: boolean;
@@ -1267,6 +1269,8 @@ interface ParticleEarthSceneProps {
   onHomeBasePresenceFrame?: (frame: readonly ProjectedHomeBasePresence[]) => void;
   /** First real wheel/drag/touch camera claim; programmatic focus never calls this. */
   onManualCameraInteraction?: () => void;
+  /** The active focus revision reached its rendered geographic target. */
+  onFocusSettled?: (revision: number) => void;
   /**
    * #252: a camera hand-back. When a detail owner relinquishes the Semantic
    * Earth Dive it asks the particle camera to stand where the zoom authority
@@ -1629,6 +1633,7 @@ export function ParticleEarthScene({
   focusRoute,
   initialCameraAnchor,
   focusRevision = 0,
+  focusEnabled = true,
   focusFlightProfile,
   focusColor,
   centerFocusPoint = false,
@@ -1650,6 +1655,7 @@ export function ParticleEarthScene({
   homeBasePresence = [],
   onHomeBasePresenceFrame,
   onManualCameraInteraction,
+  onFocusSettled,
   zoomIntent,
   onGlobePointPick,
   dragToRotate = false,
@@ -1686,6 +1692,7 @@ export function ParticleEarthScene({
   const latestHomeBasePresence = useRef(homeBasePresence);
   const latestOnHomeBasePresenceFrame = useRef(onHomeBasePresenceFrame);
   const latestOnManualCameraInteraction = useRef(onManualCameraInteraction);
+  const latestOnFocusSettled = useRef(onFocusSettled);
   const latestZoomIntent = useRef(zoomIntent);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
@@ -1719,6 +1726,7 @@ export function ParticleEarthScene({
   latestHomeBasePresence.current = homeBasePresence;
   latestOnHomeBasePresenceFrame.current = onHomeBasePresenceFrame;
   latestOnManualCameraInteraction.current = onManualCameraInteraction;
+  latestOnFocusSettled.current = onFocusSettled;
   latestZoomIntent.current = zoomIntent;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
@@ -5268,6 +5276,7 @@ export function ParticleEarthScene({
       const interpolate = (value: number, next: number) =>
         snap ? next : damp(value, next, delta, focusFlightActive ? flightSpeed : 5.5);
       let focusSettledThisFrame = false;
+      let focusSettledRevisionThisFrame: number | null = null;
       for (const material of particleDimmingMaterials) {
         material.uniforms.uActiveDimStrength.value = interpolate(
           material.uniforms.uActiveDimStrength.value,
@@ -5310,6 +5319,7 @@ export function ParticleEarthScene({
             target.y,
           );
           focusSettledThisFrame = true;
+          focusSettledRevisionThisFrame = activeFocusRevision;
           pointFocusSettling = false;
           if (import.meta.env.DEV) {
             host.dataset.focusSettleCount = String(
@@ -5345,6 +5355,7 @@ export function ParticleEarthScene({
             target.y,
           );
           focusSettledThisFrame = true;
+          focusSettledRevisionThisFrame = activeFocusRevision;
           routeFocusSettling = false;
           if (import.meta.env.DEV) {
             host.dataset.focusSettleCount = String(
@@ -5865,6 +5876,9 @@ export function ParticleEarthScene({
       }
 
       renderer.render(scene, camera);
+      if (focusSettledRevisionThisFrame !== null) {
+        latestOnFocusSettled.current?.(focusSettledRevisionThisFrame);
+      }
       // Publish only AFTER draw so each material's onBeforeRender has written
       // the actual shader uPixelRatio used for this frame.
       publishAttentionLayerMeasurements();
@@ -6223,10 +6237,11 @@ export function ParticleEarthScene({
     // Route/focus semantics are controller-ready, not land-visual-ready.
     // Async journey data and focus-mode transitions must reach the controller
     // before the expensive land rebuild finishes so Route Points can project.
+    if (!focusEnabled) return;
     controllerRef.current?.setFocusIntent(
       resolveGlobeFocusIntent(focusPoint, focusRoute, focusRevision),
     );
-  }, [controllerRevision, controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, focusRoute]);
+  }, [controllerRevision, controllerRef, focusEnabled, focusPoint?.lat, focusPoint?.lon, focusRevision, focusRoute]);
 
   useEffect(() => {
     if (!controllerRevision) return;

@@ -91,6 +91,13 @@ import type { PlaybackReturnReason } from "./playbackReturn";
 
 const VIDEO_STALL_WATCHDOG_MS = 4_000;
 
+type PlaybackArrivalGate = {
+  journeyId: string;
+  routePointId: string;
+  stepIndex: number;
+  cameraRevision: number;
+};
+
 function quickRecapSelectionReasonLabel(reason: AutoEditSelectionReason) {
   switch (reason) {
     case "all-media": return "完整媒体顺序";
@@ -122,6 +129,9 @@ export function JourneyPlaybackOverlay({
   journey,
   onClose,
   onCameraTargetChange,
+  cameraFollowing,
+  cameraFlight,
+  onReturnToCurrentLocation,
   initialSoundtrackRead,
   reduceMotion,
   stepDurationResolver,
@@ -136,7 +146,10 @@ export function JourneyPlaybackOverlay({
 }: {
   journey: Journey | null;
   onClose: (handoff: { reason: PlaybackReturnReason; position: CommittedPlaybackPosition | null }) => void;
-  onCameraTargetChange: (target: PlaybackCameraTarget) => void;
+  onCameraTargetChange: (target: PlaybackCameraTarget, explicitlySelected: boolean) => void;
+  cameraFollowing?: boolean;
+  cameraFlight?: { target: PlaybackCameraTarget; revision: number; settled: boolean } | null;
+  onReturnToCurrentLocation?: () => void;
   // Review P1: a prefetched soundtrack signed read, so the first play() can
   // run inside the click gesture (browser user-activation policy).
   initialSoundtrackRead?: { url: string } | null;
@@ -177,13 +190,32 @@ export function JourneyPlaybackOverlay({
   // cannot masquerade as something the viewer already reached.
   const committedPositionRef = useRef<CommittedPlaybackPosition | null>(null);
   const committedJourneyIdRef = useRef<string | null>(null);
-  // Every existing reader only asks whether playback is waiting at all. The
-  // reason exists so the decode hold #197 is about can be told apart from a
-  // video beat that simply owns its own completion.
-  const hold = holdReason !== "none" || presentationPending;
+  // Keep one director clock. Its stop budget waits for a real arrival commit,
+  // just as a media beat waits for its own presentation, without a second timer.
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
+  const [arrivalGate, setArrivalGate] = useState<PlaybackArrivalGate | null>(null);
+  const arrivalHolding = Boolean(arrivalGate && cameraFollowing !== false
+    && cameraFlight?.revision === arrivalGate.cameraRevision && !cameraFlight.settled);
+  const hold = holdReason !== "none" || presentationPending || arrivalHolding;
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver, homeNarrativeContext);
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
+  const mapInteractive = playbackMode === "full"
+    && (director.step?.kind === "travel" || director.step?.kind === "stop");
+  const mapInteractiveRef = useRef(mapInteractive);
+  mapInteractiveRef.current = mapInteractive;
+  const explicitCameraIntentRef = useRef<number | null>(null);
+  const nextByViewer = useCallback(() => {
+    setArrivalGate(null);
+    explicitCameraIntentRef.current = next();
+  }, [next]);
+  const backByViewer = useCallback(() => {
+    setArrivalGate(null);
+    explicitCameraIntentRef.current = back();
+  }, [back]);
+  const seekByViewer = useCallback((target: number) => {
+    setArrivalGate(null);
+    explicitCameraIntentRef.current = seek(target);
+  }, [seek]);
   const globeCoverState = playbackGlobeCoverState(director.step?.kind ?? null, presentationPending);
   useEffect(() => {
     onGlobeCoverChange?.(globeCoverState);
@@ -900,19 +932,66 @@ export function JourneyPlaybackOverlay({
   // Journey; travel/stop/media point at one route point. The key guard avoids
   // reissuing the same point command across stop -> media chapters.
   const lastCameraTargetKeyRef = useRef<string | null>(null);
-  const commitSpatial = useCallback(() => {
-    if (journey && director.step && director.step.kind !== "media") {
+  const commitSpatial = useCallback((arrivingFromTravel: boolean) => {
+    const currentStopIsPending = Boolean(arrivalGate && journey && arrivalGate.journeyId === journey.id
+      && arrivalGate.stepIndex === director.stepIndex
+      && director.step?.kind === "stop"
+      && journey.routePoints[director.step.pointIndex]?.id === arrivalGate.routePointId);
+    const deferArrival = (arrivingFromTravel || currentStopIsPending) && playbackMode === "full"
+      && cameraFollowing !== false && director.step?.kind === "stop"
+      && cameraFlight?.target.kind === "point"
+      && cameraFlight.target.pointIndex === director.step.pointIndex
+      && (!arrivalGate || cameraFlight.revision === arrivalGate.cameraRevision)
+      && !cameraFlight.settled;
+    if (journey && director.step && director.step.kind !== "media"
+      && director.step.kind !== "travel" && !deferArrival) {
       committedPositionRef.current = committedPlaybackPosition(journey, director.step);
     }
     const target = playbackCameraTargetForStep(director.step, journey);
     if (!target || !journey) return;
-    const targetKey = `${journey.id}:${playbackCameraTargetKey(target)}`;
+    const explicitlySelected = explicitCameraIntentRef.current === director.intentRevision;
+    explicitCameraIntentRef.current = null;
+    const routePointId = target.kind === "point" ? journey.routePoints[target.pointIndex]?.id ?? "" : "";
+    const targetKey = `${journey.id}:${playbackCameraTargetKey(target)}:${routePointId}`;
     if (lastCameraTargetKeyRef.current === targetKey) return;
     lastCameraTargetKeyRef.current = targetKey;
-    onCameraTargetChange(target);
-  }, [director.step, journey, onCameraTargetChange]);
+    onCameraTargetChange(target, explicitlySelected);
+  }, [arrivalGate, cameraFlight, cameraFollowing, director.intentRevision, director.step,
+    director.stepIndex, journey, onCameraTargetChange, playbackMode]);
   const mapBridge = usePlaybackMapBridge({ journey, director, root: overlayRef,
     reduceMotion: audioReactiveReducedMotion, commitSpatial });
+  const arrivalGateMatchesCurrent = Boolean(arrivalGate && journey && journey.id === arrivalGate.journeyId
+    && director.step?.kind === "stop" && director.stepIndex === arrivalGate.stepIndex
+    && journey.routePoints[director.step.pointIndex]?.id === arrivalGate.routePointId);
+  const arrivalPresentationPending = arrivalGateMatchesCurrent && arrivalHolding;
+  useLayoutEffect(() => {
+    if (!mapBridge.arrivingFromTravel || playbackMode !== "full" || !journey
+      || director.step?.kind !== "stop" || cameraFlight?.target.kind !== "point"
+      || cameraFlight.target.pointIndex !== director.step.pointIndex) return;
+    const routePointId = journey.routePoints[director.step.pointIndex]?.id;
+    if (!routePointId) return;
+    const nextGate: PlaybackArrivalGate = {
+      journeyId: journey.id,
+      routePointId,
+      stepIndex: director.stepIndex,
+      cameraRevision: cameraFlight.revision,
+    };
+    setArrivalGate((current) => current?.journeyId === nextGate.journeyId
+      && current.routePointId === nextGate.routePointId
+      && current.stepIndex === nextGate.stepIndex
+      && current.cameraRevision === nextGate.cameraRevision ? current : nextGate);
+  }, [cameraFlight?.revision, cameraFlight?.target, director.step, director.stepIndex,
+    journey, mapBridge.arrivingFromTravel, playbackMode]);
+  useLayoutEffect(() => {
+    if (!arrivalGate) return;
+    if (!arrivalGateMatchesCurrent) {
+      setArrivalGate(null);
+      return;
+    }
+    if (!arrivalPresentationPending && journey && director.step?.kind === "stop") {
+      committedPositionRef.current = committedPlaybackPosition(journey, director.step);
+    }
+  }, [arrivalGate, arrivalGateMatchesCurrent, arrivalPresentationPending, director.step, journey]);
   const handlePresentationCommit = useCallback((presentedAssetId: string) => {
     if (!journey || !mapBridge.isCurrent()) return;
     committedPositionRef.current = commitPresentedPlaybackPosition(
@@ -929,14 +1008,15 @@ export function JourneyPlaybackOverlay({
         requestClose();
         return;
       }
+      if (event.target instanceof Element && event.target.closest(".detailed-earth-map")) return;
       if (
         event.target instanceof HTMLInputElement
         || event.target instanceof HTMLSelectElement
         || event.target instanceof HTMLTextAreaElement
         || event.target instanceof HTMLButtonElement
       ) return;
-      if (event.key === "ArrowRight") next();
-      else if (event.key === "ArrowLeft") back();
+      if (event.key === "ArrowRight") nextByViewer();
+      else if (event.key === "ArrowLeft") backByViewer();
       else if (event.key === " ") {
         event.preventDefault();
         togglePlayback();
@@ -944,21 +1024,34 @@ export function JourneyPlaybackOverlay({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [director.completed, director.isPlaying, paused, togglePlayback, next, back, requestClose]);
+  }, [director.completed, director.isPlaying, paused, togglePlayback, nextByViewer, backByViewer, requestClose]);
 
-  // Review P2: keep Tab focus inside the playback overlay.
+  // The map joins the Playback focus loop only while a visible travel or stop
+  // chapter gives it pointer ownership. Its native keyboard pan/zoom remains
+  // available without making the rest of the Atlas interactive.
   useEffect(() => {
     const root = overlayRef.current;
     if (!root) return;
     const previousFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    const focusable = () => [...root.querySelectorAll<HTMLElement>(
-      'summary, button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    )].filter((element) => (
-      element.getClientRects().length > 0
-      && getComputedStyle(element).visibility !== "hidden"
-    ));
+    const focusable = () => {
+      const mapHost = mapInteractiveRef.current
+        ? document.querySelector<HTMLElement>('.detailed-earth-map[data-dive-owner="detail"]')
+        : null;
+      return [
+        ...(mapHost ? mapHost.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) : []),
+        ...root.querySelectorAll<HTMLElement>(
+          'summary, button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ].filter((element) => (
+        element.tabIndex >= 0
+        && element.getClientRects().length > 0
+        && getComputedStyle(element).visibility !== "hidden"
+      ));
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
       const candidates = focusable();
@@ -966,10 +1059,10 @@ export function JourneyPlaybackOverlay({
       const first = candidates[0];
       const last = candidates[candidates.length - 1];
       const current = document.activeElement;
-      if (event.shiftKey && (current === first || !root.contains(current))) {
+      if (event.shiftKey && (current === first || !candidates.includes(current as HTMLElement))) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && (current === last || !root.contains(current))) {
+      } else if (!event.shiftKey && (current === last || !candidates.includes(current as HTMLElement))) {
         event.preventDefault();
         first.focus();
       }
@@ -982,6 +1075,13 @@ export function JourneyPlaybackOverlay({
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, []);
+  useLayoutEffect(() => {
+    if (mapInteractive) return;
+    if (document.activeElement instanceof Element
+      && document.activeElement.closest(".detailed-earth-map")) {
+      overlayRef.current?.querySelector<HTMLButtonElement>(".journey-playback__close")?.focus();
+    }
+  }, [mapInteractive]);
 
   // Review P1: a video beat is owned by the element, not by the wall-clock
   // budget - `playbackMediaWaitPolicy` holds the director until `ended`, so the
@@ -1168,12 +1268,17 @@ export function JourneyPlaybackOverlay({
       ref={overlayRef}
       className={`journey-playback${paused ? " is-paused" : ""}${controlsHidden ? " is-controls-hidden" : ""}`}
       role="dialog"
-      aria-modal="true"
+      aria-modal={mapInteractive ? "false" : "true"}
       aria-label="播放旅程"
+      data-map-interactive={mapInteractive ? "true" : "false"}
+      data-camera-follow={cameraFollowing === false ? "free" : "follow"}
       // #194: Playback follows the one product-level compact-mobile contract
       // instead of a breakpoint of its own; journey-playback.css keys off this.
       data-mobile-v2={compactMobileLayoutMarker(compactMobileLayout)}
       data-playback-phase={step?.kind ?? "idle"}
+      data-arrival-gate={arrivalPresentationPending ? "pending"
+        : arrivalGateMatchesCurrent ? cameraFollowing === false ? "free" : "settled" : "none"}
+      data-arrival-camera-revision={arrivalGateMatchesCurrent ? arrivalGate?.cameraRevision : undefined}
       data-playback-mode={playbackMode}
       data-playback-step={director.stepIndex}
       data-playback-steps={director.steps.length}
@@ -1226,20 +1331,20 @@ export function JourneyPlaybackOverlay({
           </>
         ) : null}
 
-        {step?.kind === "travel" && activePoint ? (
+        {(step?.kind === "travel" || arrivalPresentationPending) && activePoint ? (
           <div className="journey-playback__travel">
             <div className="journey-playback__travel-cue" aria-hidden="true">
               <StartripsJourneyCue state="travel" size={54} />
             </div>
             <p>正在前往</p>
-            <h3>{activePoint.label || `途径点 ${step.to + 1}`}</h3>
+            <h3>{activePoint.label || `途径点 ${step?.kind === "travel" ? step.to + 1 : (chapterPointIndex ?? 0) + 1}`}</h3>
             <div className="journey-playback__route-hint" aria-hidden="true">
               <span />
             </div>
           </div>
         ) : null}
 
-        {chapterPointIndex !== null && activePoint ? (
+        {chapterPointIndex !== null && activePoint && !arrivalPresentationPending ? (
           <div
             className={`journey-playback__chapter journey-playback__chapter--${chapterDensity}`}
             data-chapter-beat={step?.kind}
@@ -1494,8 +1599,17 @@ export function JourneyPlaybackOverlay({
       <button className="journey-playback__close" type="button" onClick={requestClose} aria-label="退出播放">
         <IconX size={22} stroke={1.35} aria-hidden="true" />
       </button>
+      {cameraFollowing === false && onReturnToCurrentLocation ? (
+        <button
+          className="journey-playback__return-location"
+          type="button"
+          onClick={onReturnToCurrentLocation}
+        >
+          回到当前地点
+        </button>
+      ) : null}
       <nav className="journey-playback__controls" aria-label="播放控制">
-        <button type="button" onClick={back} aria-label="上一个章节"><IconChevronLeft size={20} stroke={1.35} aria-hidden="true" /></button>
+        <button type="button" onClick={backByViewer} aria-label="上一个章节"><IconChevronLeft size={20} stroke={1.35} aria-hidden="true" /></button>
         <button
           type="button"
           className={paused ? "is-active" : ""}
@@ -1507,7 +1621,7 @@ export function JourneyPlaybackOverlay({
             ? <IconPlayerPlay size={20} stroke={1.35} aria-hidden="true" />
             : <IconPlayerPause size={20} stroke={1.35} aria-hidden="true" />}
         </button>
-        <button type="button" onClick={next} aria-label="下一个章节"><IconChevronRight size={20} stroke={1.35} aria-hidden="true" /></button>
+        <button type="button" onClick={nextByViewer} aria-label="下一个章节"><IconChevronRight size={20} stroke={1.35} aria-hidden="true" /></button>
         <label className="journey-playback__tempo">
           <select
             value={tempo}
@@ -1563,7 +1677,7 @@ export function JourneyPlaybackOverlay({
                   : 0;
               if (direction === 0 || !plan) return;
               event.preventDefault();
-              seek(nextMeaningfulStepIndex(plan, director.stepIndex, direction));
+              seekByViewer(nextMeaningfulStepIndex(plan, director.stepIndex, direction));
             }}
             onChange={(event) => {
               if (!plan) return;
@@ -1572,7 +1686,7 @@ export function JourneyPlaybackOverlay({
                 Number(event.currentTarget.value) / PROGRESS_SCRUB_STEPS,
               );
               const segment = playbackSegmentAtElapsed(plan, elapsedMs);
-              if (segment) seek(segment.stepIndex);
+              if (segment) seekByViewer(segment.stepIndex);
             }}
           />
         </div>

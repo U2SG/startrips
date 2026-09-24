@@ -229,6 +229,10 @@ jobs:
             suites: "|story-media-handoff|"
             commands: |
               story-media-handoff::pnpm qa:story-media-handoff
+          - name: playback-camera
+            suites: "|playback-manual-camera|"
+            commands: |
+              playback-manual-camera::pnpm qa:playback-manual-camera
           - name: labels-recovery
             suites: "|city-label-anchoring|recovery-surfaces|"
             commands: |
