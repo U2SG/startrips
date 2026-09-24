@@ -106,6 +106,19 @@ export type SharedElementMorphOptions = {
   /** Presentation-only geometry may be created for a handoff. Tie its lifetime
    * to this morph owner rather than introducing a second cleanup timer. */
   onCleanup?: () => void;
+  /**
+   * #489 C/V6: the destination that is not presentable YET. `update()` reveals
+   * the destination surface, and its picture starts painting the moment the
+   * browser decodes it - which is before the readiness attribute that lets
+   * `resolveTarget` claim it. The recorded reveal-then-hide-then-smaller-reopen
+   * is exactly that window: the final picture painted at its final geometry,
+   * then this primitive hid it and flew a clone in from the source. Returning
+   * the destination's own element here lets the morph own it from the update
+   * onwards, so it never paints ahead of the handoff. Kept resolvable on
+   * purpose: the claim suppresses painting without making `canPresent` reject
+   * it, so the morph still lands on it.
+   */
+  claimDestination?: () => HTMLElement | null;
   /** Keep the resolved destination live for hit-testing while the pointer-events-none
    * clone owns visual continuity. Video fullscreen uses this so native controls
    * become authoritative as soon as fullscreen state commits. */
@@ -153,6 +166,7 @@ export function runSharedElementMorph({
   durationMs = 560,
   isTargetCurrent,
   onCleanup,
+  claimDestination,
   keepTargetInteractive = false,
 }: SharedElementMorphOptions): void {
   // A rail-to-card snapshot may still be above the document when Story opens.
@@ -224,14 +238,31 @@ export function runSharedElementMorph({
   source.style.visibility = "hidden";
   let target: HTMLElement | null = null;
   let previousTargetVisibility = "";
+  let claimed: HTMLElement | null = null;
+  let previousClaimedOpacity = "";
   let animation: Animation | null = null;
   let observer: MutationObserver | null = null;
   let readinessTimer = 0;
   let stopMotionPreference: () => void = () => undefined;
   let settled = false;
+  const releaseClaim = () => {
+    if (!claimed) return;
+    claimed.style.opacity = previousClaimedOpacity;
+    claimed = null;
+  };
+  /** Own the destination before it can paint, not after it already has. */
+  const claimPendingDestination = () => {
+    if (settled || target || claimed || !claimDestination) return;
+    const pending = claimDestination();
+    if (!pending?.isConnected) return;
+    claimed = pending;
+    previousClaimedOpacity = pending.style.opacity;
+    pending.style.opacity = "0";
+  };
   const cleanup = () => {
     if (settled) return;
     settled = true;
+    releaseClaim();
     window.clearTimeout(readinessTimer);
     observer?.disconnect();
     stopMotionPreference();
@@ -271,9 +302,13 @@ export function runSharedElementMorph({
     const targetRect = candidate ? mediaRect(candidate) : null;
     if (!candidate || !targetRect || !canPresent(candidate, targetRect)) {
       if (!isTargetCurrent) cleanup();
+      else claimPendingDestination();
       return;
     }
     target = candidate;
+    // The claim was only a stand-in for this element. Hand ownership over
+    // rather than leaving two suppressed nodes behind.
+    releaseClaim();
     window.clearTimeout(readinessTimer);
     previousTargetVisibility = target.style.visibility;
     // Images keep the clone as the sole visible owner until animation cleanup.
@@ -314,6 +349,9 @@ export function runSharedElementMorph({
   try {
     flushSync(update);
     if (settled) return;
+    // Synchronous, before the browser can paint the commit that just revealed
+    // the destination surface.
+    claimPendingDestination();
     observer = new MutationObserver(advance);
     observer.observe(document.body, { childList: true, subtree: true, attributes: true,
       attributeFilter: ["data-shared-media-id", "data-media-page-id", "data-media-page-ready", "data-media-incoming", "role", "hidden", "aria-hidden", "src", "style", "class"] });
