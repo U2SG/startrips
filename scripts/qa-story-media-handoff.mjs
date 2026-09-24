@@ -161,6 +161,7 @@ async function createStoryPage({
   inputDrivers.set(page, mobile ? await touchDriver(page) : mouseDriver(page));
   const consoleErrors = [];
   const pageErrors = [];
+  const mediaDelays = [];
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.addInitScript(installStageSampler);
@@ -184,13 +185,17 @@ async function createStoryPage({
   for (const [asset, ms] of Object.entries(byteDelays)) {
     if (!ms) continue;
     await page.route(`**${ASSET_URLS[asset]}`, async (route) => {
+      const delayed = { asset, startedAt: Date.now(), releasedAt: null, delayMs: ms,
+        range: route.request().headers().range ?? null };
+      mediaDelays.push(delayed);
       await hold(ms);
+      delayed.releasedAt = Date.now();
       return route.continue();
     });
   }
   await page.goto(`${origin}${storyPath}`, { waitUntil: "domcontentloaded" });
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
-  return { page, consoleErrors, pageErrors };
+  return { page, consoleErrors, pageErrors, mediaDelays };
 }
 
 /* eslint-disable no-undef -- this function body is serialized into the page. */
@@ -451,6 +456,150 @@ function installStageSampler() {
         .map((animation) => animation.effect.pseudoElement), ...clones].slice(0, 6);
     } catch { return clones.slice(0, 6); }
   };
+  // Video and its captured representative frame are separate paint sources.
+  // A DOM hit test misses opacity on an ancestor (and the pointer-transparent
+  // morph clone), so record their effective visibility across BOTH stages.
+  const visualState = (node) => {
+    if (!(node instanceof HTMLElement)) return { painted: false, reason: "absent" };
+    const box = node.getBoundingClientRect();
+    const intersect = (left, right) => ({
+      left: Math.max(left.left, right.left), top: Math.max(left.top, right.top),
+      right: Math.min(left.right, right.right), bottom: Math.min(left.bottom, right.bottom),
+    });
+    const intrinsic = node instanceof HTMLVideoElement ? [node.videoWidth, node.videoHeight]
+      : node instanceof HTMLCanvasElement ? [node.width, node.height] : [0, 0];
+    const fit = getComputedStyle(node).objectFit;
+    const scale = intrinsic[0] && intrinsic[1] && (fit === "contain" || fit === "scale-down")
+      ? Math.min(box.width / intrinsic[0], box.height / intrinsic[1], fit === "scale-down" ? 1 : Infinity) : 0;
+    const picture = scale > 0 ? {
+      left: box.left + (box.width - intrinsic[0] * scale) / 2,
+      top: box.top + (box.height - intrinsic[1] * scale) / 2,
+      right: box.right - (box.width - intrinsic[0] * scale) / 2,
+      bottom: box.bottom - (box.height - intrinsic[1] * scale) / 2,
+    } : box;
+    let visible = intersect(picture, { left: 0, top: 0, right: innerWidth, bottom: innerHeight });
+    let opacity = 1;
+    let reason = box.width > 0 && box.height > 0 ? null : "zero-box";
+    for (let ancestor = node; ancestor && ancestor instanceof HTMLElement; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor);
+      opacity *= Number(style.opacity);
+      if (ancestor.hidden || style.display === "none" || style.visibility !== "visible") {
+        reason = `hidden:${ancestor.className || ancestor.tagName}`;
+        break;
+      }
+      const bounds = ancestor.getBoundingClientRect();
+      if (ancestor !== node && /^(hidden|clip|scroll|auto)$/.test(style.overflowX)) {
+        visible = intersect(visible, bounds);
+      }
+      if (ancestor !== node && /^(hidden|clip|scroll|auto)$/.test(style.overflowY)) {
+        visible = intersect(visible, bounds);
+      }
+      if (style.clipPath !== "none") {
+        const inset = /^inset\(([^)]*)\)/.exec(style.clipPath);
+        const sides = inset?.[1].split(" round ")[0].match(/-?\d*\.?\d+(?:e[-+]?\d+)?(?:%|px)/gi) ?? [];
+        if (!inset || !sides.length) { reason = "unmeasurable-clip"; break; }
+        const [top, right = top, bottom = top, left = right] = sides;
+        const amount = (value, size) => value.endsWith("%")
+          ? Number.parseFloat(value) * size / 100 : Number.parseFloat(value);
+        visible = intersect(visible, {
+          left: bounds.left + amount(left, bounds.width),
+          top: bounds.top + amount(top, bounds.height),
+          right: bounds.right - amount(right, bounds.width),
+          bottom: bounds.bottom - amount(bottom, bounds.height),
+        });
+      }
+    }
+    if (!reason && opacity <= 0.01) reason = "zero-opacity";
+    if (!reason && (visible.right - visible.left <= 1 || visible.bottom - visible.top <= 1)) {
+      reason = "offscreen-or-fully-clipped";
+    }
+    return { painted: !reason, reason, opacity: Number(opacity.toFixed(3)),
+      box: { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) },
+      visibleBox: { x: Math.round(visible.left), y: Math.round(visible.top),
+        w: Math.round(Math.max(0, visible.right - visible.left)),
+        h: Math.round(Math.max(0, visible.bottom - visible.top)) } };
+  };
+  const videoVisuals = (root, current) => {
+    const video = root?.querySelector(".story-media-pages__video video");
+    const frame = current?.querySelector("canvas:not([hidden])");
+    return {
+      video: { ...visualState(video), asset: video?.getAttribute("data-shared-media-id") ?? null,
+        ready: video instanceof HTMLVideoElement && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+          && video.videoWidth > 0 && video.videoHeight > 0,
+        paused: video instanceof HTMLVideoElement ? video.paused : null },
+      frame: { ...visualState(frame), asset: current?.getAttribute("data-media-page-id") ?? null,
+        ready: frame instanceof HTMLCanvasElement && frame.width > 0 && frame.height > 0 },
+    };
+  };
+  // Capture the source on the trusted entry/Close click, before React's click
+  // handler snapshots and pauses it. Back is captured before the registered
+  // surface listener performs the reverse handoff. The 64x64 pixels stay in
+  // page memory; each sampled clone records only the comparison and signal.
+  const pixels64 = (source) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64; canvas.height = 64;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
+    context.drawImage(source, 0, 0, 64, 64);
+    return context.getImageData(0, 0, 64, 64).data;
+  };
+  const signalOf = (pixels) => {
+    if (!pixels) return 0;
+    let nonBlack = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (Math.max(pixels[index], pixels[index + 1], pixels[index + 2]) > 24) nonBlack += 1;
+    }
+    return nonBlack;
+  };
+  const captureSource = (selector, trigger) => {
+    if (!state.running) return;
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    if (!(video instanceof HTMLVideoElement) || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      state.handoffSource = { trigger, wallAt: Date.now(), error: "source has no decoded frame" };
+      return;
+    }
+    try {
+      const pixels = pixels64(video);
+      state.handoffSource = { trigger, wallAt: Date.now(), asset: video.getAttribute("data-shared-media-id"),
+        time: video.currentTime, pixels, nonBlack: signalOf(pixels) };
+    } catch (error) {
+      state.handoffSource = { trigger, wallAt: Date.now(), error: String(error) };
+    }
+  };
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest(".journey-story__fullscreen-entry, .journey-story__mobile-media-fullscreen")) {
+      captureSource(".journey-story__media", "entry-click");
+    } else if (target.closest(".journey-story-fullscreen__close")) {
+      captureSource(".journey-story-fullscreen", "close-click");
+    }
+  }, true);
+  window.addEventListener("popstate", () => captureSource(".journey-story-fullscreen", "browser-back"), true);
+  const cloneFrameIdentity = (clone, asset) => {
+    if (!(clone instanceof HTMLCanvasElement)) return { failed: true, reason: "video clone is not a canvas" };
+    let pixels;
+    try { pixels = pixels64(clone); } catch (error) {
+      return { failed: true, reason: `clone canvas unreadable: ${String(error)}` };
+    }
+    const source = state.handoffSource;
+    const nonBlack = signalOf(pixels);
+    if (!pixels || !source?.pixels || source.asset !== asset) {
+      return { failed: true, reason: "source frame missing or different asset",
+        source: source ? { trigger: source.trigger, asset: source.asset, error: source.error } : null,
+        nonBlack };
+    }
+    let total = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      total += Math.abs(pixels[index] - source.pixels[index]);
+      total += Math.abs(pixels[index + 1] - source.pixels[index + 1]);
+      total += Math.abs(pixels[index + 2] - source.pixels[index + 2]);
+    }
+    const meanDelta = total / (64 * 64 * 3);
+    return { trigger: source.trigger, sourceTime: source.time, nonBlack,
+      sourceNonBlack: source.nonBlack, meanDelta: Number(meanDelta.toFixed(2)),
+      failed: source.nonBlack < 8 || nonBlack < 8 || meanDelta > 8 };
+  };
   function sampleRoot(selector, morphs, peers) {
     const root = document.querySelector(selector);
     const pages = root?.querySelector("[data-story-media-pages]");
@@ -521,6 +670,7 @@ function installStageSampler() {
       currentReady: current?.getAttribute("data-media-page-ready") === "true",
       videoCount: videos.length,
       videoOwner: videos.map((video) => video.getAttribute("data-shared-media-id")),
+      videoVisuals: videoVisuals(root, current),
       morphs,
     };
   }
@@ -534,7 +684,23 @@ function installStageSampler() {
       .filter((entry) => entry.node);
     const observed = state.roots.map((selector) => sampleRoot(selector, morphs, peers)).filter(Boolean);
     if (!observed.length) { state.unmeasurable += 1; return; }
-    if (observed.length === 1) { state.frames.push(observed[0]); return; }
+    const clones = [...document.querySelectorAll("[data-shared-element-clone]")].map((node) => {
+      const name = node.getAttribute("data-shared-element-clone") ?? "";
+      const visual = visualState(node);
+      const asset = name.startsWith("story-fullscreen-") ? name.slice("story-fullscreen-".length) : null;
+      return { name, asset, ...visual,
+        frame: visual.painted && asset ? cloneFrameIdentity(node, asset) : null };
+    });
+    const activeClones = clones.filter((entry) => entry.painted);
+    const videoClone = activeClones.find((entry) => entry.asset) ?? { painted: false, asset: null };
+    const surfaces = observed.map((entry) => ({
+      root: entry.root, currentId: entry.currentId, uncovered: entry.uncovered,
+      videoCount: entry.videoCount, videoVisuals: entry.videoVisuals,
+    }));
+    if (observed.length === 1) {
+      state.frames.push({ ...observed[0], surfaces, clones, activeClones: activeClones.length, videoClone });
+      return;
+    }
     // One logical frame per tick: the surface presenting the picture owns it,
     // and a stage that is present but drawing nothing is the weaker claim.
     // A surface that only reports coverage because a peer is painted over it
@@ -543,10 +709,7 @@ function installStageSampler() {
     const owner = observed.find((entry) => entry.uncovered === 0 && entry.centre && entry.currentId)
       ?? observed.find((entry) => entry.uncovered === 0 && entry.currentId)
       ?? observed.find((entry) => entry.currentId) ?? observed[0];
-    state.frames.push({ ...owner, surfaces: observed.map((entry) => ({
-      root: entry.root, currentId: entry.currentId, uncovered: entry.uncovered,
-      videoCount: entry.videoCount,
-    })) });
+    state.frames.push({ ...owner, surfaces, clones, activeClones: activeClones.length, videoClone });
   }
   // Each window owns its own chain, retired by generation. A chain started at
   // document-start is not reliably carried into the committed document, and a
@@ -556,6 +719,7 @@ function installStageSampler() {
     state.frames = [];
     state.gestures = [];
     state.unmeasurable = 0;
+    state.handoffSource = null;
     state.running = true;
     state.generation = (state.generation ?? 0) + 1;
     const generation = state.generation;
@@ -570,7 +734,10 @@ function installStageSampler() {
   };
   window.__qaStageStop = () => {
     state.running = false;
-    return { frames: state.frames, gestures: state.gestures, unmeasurable: state.unmeasurable, ticks: state.ticks };
+    const source = state.handoffSource;
+    return { frames: state.frames, gestures: state.gestures, unmeasurable: state.unmeasurable,
+      ticks: state.ticks, source: source ? { trigger: source.trigger, wallAt: source.wallAt, asset: source.asset,
+        time: source.time, nonBlack: source.nonBlack, error: source.error } : null };
   };
 }
 /* eslint-enable no-undef */
@@ -584,9 +751,10 @@ async function stopSampler(page) {
 }
 
 async function stopSamplerFrames(page) {
-  const { frames, unmeasurable, ticks } = await stopSampler(page);
+  const { frames, unmeasurable, ticks, source } = await stopSampler(page);
   frames.unmeasurable = unmeasurable;
   frames.ticks = ticks;
+  frames.source = source;
   return frames;
 }
 
@@ -835,7 +1003,7 @@ function controlChromeTop(controls) {
 }
 
 /** Drag Chromium's own timeline thumb using this page's actual input device. */
-async function seekNativeTimeline(page, rootSelector) {
+async function seekNativeTimeline(page, rootSelector, { targetFraction = 0.7 } = {}) {
   const picture = await presentedVideoPoint(page, rootSelector);
   if (!picture.hitIsVideo || !picture.controls) {
     return { picture, failed: true, reason: "native video picture is covered or controls are disabled" };
@@ -875,7 +1043,7 @@ async function seekNativeTimeline(page, rootSelector) {
   const y = slider.y;
   const width = slider.box.right - slider.box.left;
   const startX = slider.box.left + width * 0.2;
-  const endX = slider.box.left + width * 0.7;
+  const endX = slider.box.left + width * targetFraction;
   const hits = await page.evaluate(({ selector, points }) => {
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
     return points.map(({ x, y }) => {
@@ -913,16 +1081,16 @@ async function seekNativeTimeline(page, rootSelector) {
     await page.waitForTimeout(12);
   }
   await pointer.up();
-  const reached = await page.waitForFunction(({ selector, duration }) => {
+  const reached = await page.waitForFunction(({ selector, duration, target }) => {
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
     const probe = window.__qaNativeTimelineSeek;
     return video instanceof HTMLVideoElement && probe?.video === video && !video.seeking
       && probe.events.some((event) => event.type === "seeking" && event.trusted
         && event.at >= probe.startedAt)
       && probe.events.some((event) => event.type === "seeked" && event.trusted
-        && event.at >= probe.startedAt && event.time >= duration * 0.35)
-      && video.currentTime >= duration * 0.4;
-  }, { selector: rootSelector, duration: before.duration }, { polling: "raf", timeout: 4_000 })
+        && event.at >= probe.startedAt && event.time >= duration * (target - 0.1))
+      && video.currentTime >= duration * (target - 0.08);
+  }, { selector: rootSelector, duration: before.duration, target: targetFraction }, { polling: "raf", timeout: 4_000 })
     .then(() => true, () => false);
   const observation = await stopSampler(page);
   const seekProbe = await page.evaluate(() => ({
@@ -954,9 +1122,9 @@ async function seekNativeTimeline(page, rootSelector) {
     && seekProbe.events.some((event) => event.type === "seeking" && event.trusted
       && event.at >= seekProbe.startedAt)
     && seekProbe.events.some((event) => event.type === "seeked" && event.trusted
-      && event.at >= seekProbe.startedAt && event.time >= before.duration * 0.35);
+      && event.at >= seekProbe.startedAt && event.time >= before.duration * (targetFraction - 0.1));
   return {
-    picture, slider, controls: controls.panel, before, after, hits, input: pointer.kind,
+    picture, slider, controls: controls.panel, before, after, hits, input: pointer.kind, targetFraction,
     seekProbe, nativeSeek, reached,
     observedFrames: observation.frames.length, ownershipChanges: ownershipChanges.slice(0, 3),
     claims: claims.slice(0, 4), trace: observation.gestures.slice(-24),
@@ -965,8 +1133,9 @@ async function seekNativeTimeline(page, rootSelector) {
       || before.asset !== after.asset || after.current !== before.asset
       || before.presentation !== "settled" || after.presentation !== "settled" || after.requested !== null
       || before.paused !== after.paused || !Number.isFinite(after.time)
-      || after.time - before.time < Math.max(0.3, before.duration * 0.25)
-      || after.time < before.duration * 0.35 || after.time > before.duration * 0.95,
+      || after.time - before.time < Math.max(0.3, before.duration * Math.min(0.25, targetFraction - 0.3))
+      || after.time < before.duration * (targetFraction - 0.1)
+      || after.time > before.duration * (targetFraction < 0.6 ? targetFraction + 0.12 : 0.95),
   };
 }
 
@@ -1344,6 +1513,414 @@ async function navigateByPresentedInput(page, rootSelector, direction, expectedI
   return before.kind === "video"
     ? navigateByVideoButton(page, rootSelector, direction, expectedId)
     : navigateByGesture(page, rootSelector, direction, expectedId);
+}
+
+/** Every transition frame must have one picture owner; the snapshot alone owns a morph. */
+function gradeVideoFullscreenFrames(frames, assetId, { requireClone = true } = {}) {
+  const cloneFrames = frames.filter((frame) => frame.videoClone?.painted);
+  const wrongClone = cloneFrames.filter((frame) => frame.videoClone.asset !== assetId
+    || frame.activeClones !== 1 || frame.clones?.length !== 1);
+  const extraOrUnpaintedClone = frames.filter((frame) => (frame.clones?.length ?? 0) > 1
+    || ((frame.clones?.length ?? 0) === 1 && frame.activeClones !== 1));
+  const badCloneFrame = cloneFrames.filter((frame) => frame.videoClone.frame?.failed !== false);
+  const doublePaint = cloneFrames.flatMap((frame) => (frame.surfaces ?? [])
+    .flatMap((surface) => ["video", "frame"].filter((kind) => surface.videoVisuals?.[kind]?.painted)
+      .map((kind) => ({ at: frame.at, root: surface.root, kind,
+        visual: surface.videoVisuals[kind], clone: frame.videoClone }))));
+  const stalePaint = frames.flatMap((frame) => (frame.surfaces ?? [])
+    .flatMap((surface) => ["video", "frame"].filter((kind) =>
+      surface.videoVisuals?.[kind]?.painted && surface.videoVisuals[kind].asset !== assetId)
+      .map((kind) => ({ at: frame.at, root: surface.root, kind,
+        visual: surface.videoVisuals[kind] }))));
+  const concurrentPlayback = frames.filter((frame) => (frame.surfaces ?? [])
+    .filter((surface) => surface.videoVisuals?.video?.paused === false).length > 1);
+  const uncovered = frames.filter((frame) => !frame.videoClone?.painted
+    && !(frame.surfaces ?? []).some((surface) => {
+      const visual = surface.videoVisuals;
+      return (visual?.video?.painted && visual.video.ready && visual.video.asset === assetId)
+        || (visual?.frame?.painted && visual.frame.ready && visual.frame.asset === assetId);
+    }));
+  return {
+    sampledFrames: frames.length, ticks: frames.ticks ?? null,
+    unmeasurableFrames: frames.unmeasurable ?? null,
+    sourceFrame: frames.source ?? null,
+    cloneFrames: cloneFrames.length,
+    wrongClone: wrongClone.slice(0, 3).map((frame) => ({ at: frame.at, clone: frame.videoClone })),
+    extraOrUnpaintedClone: extraOrUnpaintedClone.slice(0, 3)
+      .map((frame) => ({ at: frame.at, clones: frame.clones })),
+    badCloneFrame: badCloneFrame.slice(0, 3)
+      .map((frame) => ({ at: frame.at, clone: frame.videoClone })),
+    doublePaint: doublePaint.slice(0, 3),
+    stalePaint: stalePaint.slice(0, 3),
+    concurrentPlayback: concurrentPlayback.slice(0, 3).map((frame) => ({ at: frame.at, surfaces: frame.surfaces })),
+    uncovered: uncovered.slice(0, 3).map((frame) => ({
+      at: frame.at, clone: frame.videoClone, surfaces: frame.surfaces,
+    })),
+    failed: frames.length === 0 || !(frames.ticks > 0) || (frames.unmeasurable ?? 0) > 0
+      || (requireClone && cloneFrames.length === 0)
+      || wrongClone.length > 0 || extraOrUnpaintedClone.length > 0 || badCloneFrame.length > 0
+      || doublePaint.length > 0 || stalePaint.length > 0
+      || concurrentPlayback.length > 0 || uncovered.length > 0,
+  };
+}
+
+async function videoHandoffState(page, rootSelector) {
+  return await page.evaluate((selector) => {
+    const root = document.querySelector(selector);
+    const stage = root?.querySelector("[data-story-media-pages]");
+    const video = root?.querySelector(".story-media-pages__video video");
+    const current = stage?.querySelector('[data-media-page="current"]');
+    const quality = video instanceof HTMLVideoElement ? video.getVideoPlaybackQuality?.() : null;
+    const intent = selector.includes("fullscreen")
+      ? root?.querySelector('.journey-story-fullscreen__nav [aria-pressed]')
+      : document.querySelector('.journey-story__mobile-media-play, .journey-story__media-nav [aria-pressed]');
+    return {
+      at: performance.now(), visible: Boolean(root && !root.hidden && getComputedStyle(root).display !== "none"),
+      id: current?.getAttribute("data-media-page-id") ?? null,
+      presentation: stage?.getAttribute("data-media-presentation") ?? null,
+      asset: video?.getAttribute("data-shared-media-id") ?? null,
+      src: video instanceof HTMLVideoElement ? video.currentSrc : null,
+      time: video instanceof HTMLVideoElement ? video.currentTime : null,
+      duration: video instanceof HTMLVideoElement ? video.duration : null,
+      paused: video instanceof HTMLVideoElement ? video.paused : null,
+      muted: video instanceof HTMLVideoElement ? video.muted : null,
+      volume: video instanceof HTMLVideoElement ? video.volume : null,
+      playbackRate: video instanceof HTMLVideoElement ? video.playbackRate : null,
+      readyState: video instanceof HTMLVideoElement ? video.readyState : null,
+      dimensions: video instanceof HTMLVideoElement ? [video.videoWidth, video.videoHeight] : null,
+      presentedFrames: quality?.totalVideoFrames ?? null,
+      intentPressed: intent?.getAttribute("aria-pressed") ?? null,
+    };
+  }, rootSelector);
+}
+
+async function videoHandoffFailureDiagnostic(page) {
+  return await page.evaluate(() => ({
+    inline: document.querySelector('.journey-story__media [data-story-media-pages]')?.outerHTML.slice(0, 900) ?? null,
+    fullscreen: document.querySelector('.journey-story-fullscreen [data-story-media-pages]')?.outerHTML.slice(0, 900) ?? null,
+    fullscreenVisible: Boolean(document.querySelector('.journey-story-fullscreen:not([hidden])')),
+    clones: [...document.querySelectorAll('[data-shared-element-clone]')]
+      .map((clone) => clone.getAttribute('data-shared-element-clone')),
+    historyStack: window.history.state?.__startripsMobileSurfaceStack ?? null,
+  }));
+}
+
+async function waitForVideoHandoffState(page, rootSelector, assetId, paused) {
+  await page.waitForFunction(({ selector, asset, expectedPaused }) => {
+    const root = document.querySelector(selector);
+    const stage = root?.querySelector("[data-story-media-pages]");
+    const video = root?.querySelector(".story-media-pages__video video");
+    return root && !root.hidden && getComputedStyle(root).display !== "none"
+      && stage?.getAttribute("data-media-presentation") === "settled"
+      && stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === asset
+      && video instanceof HTMLVideoElement && video.getAttribute("data-shared-media-id") === asset
+      && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      && video.videoWidth > 0 && video.videoHeight > 0 && video.paused === expectedPaused;
+  }, { selector: rootSelector, asset: assetId, expectedPaused: paused }, { polling: "raf", timeout: 8_000 });
+  return await videoHandoffState(page, rootSelector);
+}
+
+function gradeVideoClock(before, after, paused, { requireIntent = true } = {}) {
+  const elapsed = (after.at - before.at) / 1000;
+  const advance = after.time - before.time;
+  // The picture intentionally freezes while the clone flies. Playing resumes
+  // at the destination; it may advance after cleanup, but must never jump
+  // backward or outrun the elapsed wall time. rVFC and repeated clock samples
+  // below independently prove that the transport actually resumed.
+  const tolerance = paused ? 0.18 : 0.25;
+  return {
+    elapsed, advance, tolerance,
+    failed: before.id !== V1 || after.id !== V1 || before.asset !== V1 || after.asset !== V1
+      || before.src !== after.src || !before.src?.endsWith(CLIP)
+      || before.presentation !== "settled" || after.presentation !== "settled"
+      || before.paused !== paused || after.paused !== paused
+      || before.muted !== after.muted || Math.abs(before.volume - after.volume) > 0.001
+      || Math.abs(before.playbackRate - after.playbackRate) > 0.001
+      || (requireIntent && (before.intentPressed !== (paused ? "false" : "true")
+        || after.intentPressed !== (paused ? "false" : "true")))
+      || !Number.isFinite(before.time) || !Number.isFinite(after.time)
+      || (paused ? Math.abs(advance) > tolerance
+        : advance < -0.18 || advance > elapsed + tolerance),
+  };
+}
+
+/** Reload only the hidden destination under a held media response. */
+async function prepareDelayedFullscreenTarget(page, session, delayMs) {
+  const cdp = await cdpFor(page);
+  await cdp.send("Network.enable");
+  await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
+  await page.route(`**${CLIP}`, async (route) => {
+    const delayed = { asset: V1, startedAt: Date.now(), releasedAt: null, delayMs,
+      range: route.request().headers().range ?? null };
+    session.mediaDelays.push(delayed);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    delayed.releasedAt = Date.now();
+    try { await route.continue(); delayed.outcome = "continued"; }
+    catch (error) { delayed.outcome = `cancelled:${String(error).slice(0, 100)}`; }
+  });
+  const initiatedAt = Date.now();
+  const target = await page.evaluate(({ inline, fullscreen }) => {
+    const source = document.querySelector(inline)?.querySelector(".story-media-pages__video video");
+    const destination = document.querySelector(fullscreen)?.querySelector(".story-media-pages__video video");
+    if (!(source instanceof HTMLVideoElement) || !(destination instanceof HTMLVideoElement)
+      || !source.currentSrc || (destination.currentSrc || destination.src) !== source.currentSrc) {
+      return { failed: true, reason: "hidden destination is not bound to the inline source" };
+    }
+    const before = { readyState: destination.readyState, currentSrc: destination.currentSrc };
+    // Fixture operation on the hidden persistent destination only. User input
+    // still owns seek, fullscreen and Back; no play/currentTime/state setter.
+    destination.load();
+    const readProbe = { readyAt: null, events: [] };
+    for (const type of ["loadeddata", "canplay", "error"]) {
+      destination.addEventListener(type, () => {
+        readProbe.events.push({ type, at: Date.now(), readyState: destination.readyState });
+        if (destination.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && readProbe.readyAt === null) {
+          readProbe.readyAt = Date.now();
+        }
+      });
+    }
+    window.__qaTargetReadProbe = readProbe;
+    return { before, after: { readyState: destination.readyState, currentSrc: destination.currentSrc },
+      failed: destination.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA };
+  }, { inline: STAGE, fullscreen: FULLSCREEN });
+  const deadline = Date.now() + 2_000;
+  let request = session.mediaDelays.find((entry) => entry.startedAt >= initiatedAt) ?? null;
+  while (!request && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    request = session.mediaDelays.find((entry) => entry.startedAt >= initiatedAt) ?? null;
+  }
+  return { initiatedAt, target, requestStartedAt: request?.startedAt ?? null,
+    failed: target.failed || !request };
+}
+
+/** Native seek can reveal/play a touch video; restore paused intent through its own control. */
+async function pauseNativeVideoIfNeeded(page, rootSelector) {
+  let state = await videoHandoffState(page, rootSelector);
+  if (state.paused) return { before: state, after: state, clicked: false };
+  const picture = await presentedVideoPoint(page, rootSelector);
+  if (input(page).kind === "mouse") await page.mouse.move(picture.x, picture.y);
+  else await input(page).click(picture.x, picture.y);
+  state = await videoHandoffState(page, rootSelector);
+  if (state.paused) return { before: state, after: state, clicked: false };
+  const controls = await nativeControls(page, rootSelector);
+  const pause = playEntry(controls);
+  if (!pause?.reachable || pause.name.toLowerCase() !== "pause") {
+    return { before: state, controls: controls.panel, pause, failed: true };
+  }
+  await input(page).click(pause.x, pause.y);
+  const after = await waitForVideoHandoffState(page, rootSelector, V1, true);
+  return { before: state, after, clicked: true, pause };
+}
+
+async function startStoryVideoPlayback(page, mobile) {
+  const selector = mobile ? ".journey-story__mobile-media-play" : ".journey-story__media-nav [aria-pressed]";
+  const button = page.locator(selector);
+  const before = await button.getAttribute("aria-pressed");
+  const activation = before !== "true" ? await clickHandoffButton(page, selector) : null;
+  const after = await waitForVideoHandoffState(page, STAGE, V1, false);
+  return { before, after, activation, pressed: await button.getAttribute("aria-pressed") };
+}
+
+async function clickHandoffButton(page, selector) {
+  const button = page.locator(selector);
+  const box = await button.boundingBox();
+  if (!box || !await button.isEnabled()) throw new Error(`handoff button unavailable: ${selector}`);
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  const hit = await page.evaluate(({ query, x: atX, y: atY }) => {
+    const button = document.querySelector(query);
+    const target = document.elementFromPoint(atX, atY);
+    return { hitButton: Boolean(button?.contains(target)),
+      tag: target instanceof Element ? target.tagName : null,
+      className: target instanceof Element ? String(target.className).slice(0, 80) : null };
+  }, { query: selector, x, y });
+  if (!hit.hitButton) throw new Error(`handoff button covered: ${selector}: ${JSON.stringify(hit)}`);
+  await input(page).click(x, y);
+  return { selector, input: input(page).kind, hit };
+}
+
+/** Prove that the paused frame in the screenshot is the decoded video frame. */
+async function pausedVideoScreenPixels(page, rootSelector) {
+  const screenshot = (await page.screenshot()).toString("base64");
+  return await page.evaluate(async ({ selector, png }) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    if (!(video instanceof HTMLVideoElement) || !video.paused || video.readyState < 2) {
+      return { failed: true, reason: "no paused decoded video" };
+    }
+    const image = new Image();
+    image.src = `data:image/png;base64,${png}`;
+    await image.decode();
+    const screen = document.createElement("canvas");
+    screen.width = image.naturalWidth; screen.height = image.naturalHeight;
+    const screenContext = screen.getContext("2d", { willReadFrequently: true });
+    const source = document.createElement("canvas");
+    source.width = video.videoWidth; source.height = video.videoHeight;
+    const sourceContext = source.getContext("2d", { willReadFrequently: true });
+    if (!screenContext || !sourceContext) return { failed: true, reason: "canvas context unavailable" };
+    screenContext.drawImage(image, 0, 0);
+    sourceContext.drawImage(video, 0, 0);
+    const box = video.getBoundingClientRect();
+    const scale = Math.min(box.width / video.videoWidth, box.height / video.videoHeight);
+    const width = video.videoWidth * scale, height = video.videoHeight * scale;
+    const left = box.left + (box.width - width) / 2, top = box.top + (box.height - height) / 2;
+    const samples = [];
+    for (const fy of [0.3, 0.45, 0.6]) for (const fx of [0.3, 0.5, 0.7]) {
+      const x = left + width * fx, y = top + height * fy;
+      const hit = document.elementFromPoint(x, y);
+      const sx = Math.round(x * image.naturalWidth / innerWidth);
+      const sy = Math.round(y * image.naturalHeight / innerHeight);
+      const px = Math.round(video.videoWidth * fx), py = Math.round(video.videoHeight * fy);
+      const visible = [...screenContext.getImageData(sx, sy, 1, 1).data].slice(0, 3);
+      const decoded = [...sourceContext.getImageData(px, py, 1, 1).data].slice(0, 3);
+      const delta = visible.reduce((sum, channel, index) => sum + Math.abs(channel - decoded[index]), 0) / 3;
+      samples.push({ fx, fy, hitIsVideo: hit === video, visible, decoded, delta: Number(delta.toFixed(1)) });
+    }
+    const meanDelta = samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length;
+    return { meanDelta: Number(meanDelta.toFixed(1)), samples,
+      failed: samples.some((sample) => !sample.hitIsVideo) || meanDelta > 18 };
+  }, { selector: rootSelector, png: screenshot });
+}
+
+function gradePausedFrameIdentity(before, after) {
+  if (before.samples?.length !== 9 || after.samples?.length !== 9) {
+    return { failed: true, reason: "missing nine-point decoded frame samples" };
+  }
+  const pairs = before.samples.map((sample, index) => ({
+    at: [sample.fx, sample.fy],
+    delta: sample.decoded.reduce((sum, channel, component) =>
+      sum + Math.abs(channel - after.samples[index].decoded[component]), 0) / 3,
+  }));
+  const meanDelta = pairs.length
+    ? pairs.reduce((sum, pair) => sum + pair.delta, 0) / pairs.length : null;
+  return { meanDelta, pairs, failed: pairs.length !== 9 || meanDelta > 12 };
+}
+
+/** Screenshot pixels over the moving clone must match its decoded canvas. */
+async function activeCloneScreenPixels(page, assetId) {
+  await page.waitForFunction((expected) => {
+    const clones = [...document.querySelectorAll('[data-shared-element-clone]')];
+    if (clones.length !== 1 || clones[0].getAttribute('data-shared-element-clone') !== `story-fullscreen-${expected}`) return false;
+    const animation = clones[0].getAnimations().find((entry) => entry.effect?.target === clones[0]);
+    const duration = animation?.effect?.getTiming().duration;
+    const progress = typeof duration === 'number' && duration > 0 && typeof animation.currentTime === 'number'
+      ? animation.currentTime / duration : 0;
+    return progress >= 0.25 && progress <= 0.65;
+  }, assetId, { polling: "raf", timeout: 9_000 });
+  await page.evaluate((expected) => {
+    const name = `story-fullscreen-${expected}`;
+    const boxes = [];
+    const probe = { name, boxes, running: true };
+    window.__qaCloneScreen = probe;
+    const sample = () => {
+      if (!probe.running) return;
+      const clone = document.querySelector(`[data-shared-element-clone="${name}"]`);
+      if (clone) {
+        const box = clone.getBoundingClientRect();
+        boxes.push({ at: performance.now(), x: box.x, y: box.y, width: box.width, height: box.height });
+      }
+      requestAnimationFrame(sample);
+    };
+    sample();
+  }, assetId);
+  const png = (await page.screenshot()).toString("base64");
+  return await page.evaluate(async ({ expected, screenshot }) => {
+    const probe = window.__qaCloneScreen;
+    probe.running = false;
+    const clones = [...document.querySelectorAll('[data-shared-element-clone]')];
+    const clone = clones[0];
+    if (clones.length !== 1 || clone?.getAttribute('data-shared-element-clone') !== `story-fullscreen-${expected}`
+      || !(clone instanceof HTMLCanvasElement)) {
+      return { failed: true, reason: "clone disappeared or another clone appeared during screenshot",
+        clones: clones.map((node) => node.getAttribute('data-shared-element-clone')), boxes: probe.boxes.length };
+    }
+    const lastBox = clone.getBoundingClientRect();
+    probe.boxes.push({ at: performance.now(), x: lastBox.x, y: lastBox.y,
+      width: lastBox.width, height: lastBox.height });
+    const image = new Image();
+    image.src = `data:image/png;base64,${screenshot}`;
+    await image.decode();
+    const screen = document.createElement("canvas");
+    screen.width = image.naturalWidth; screen.height = image.naturalHeight;
+    const screenContext = screen.getContext("2d", { willReadFrequently: true });
+    const frame = document.createElement("canvas");
+    frame.width = 64; frame.height = 64;
+    const frameContext = frame.getContext("2d", { willReadFrequently: true });
+    if (!screenContext || !frameContext) return { failed: true, reason: "canvas context unavailable" };
+    screenContext.drawImage(image, 0, 0);
+    frameContext.drawImage(clone, 0, 0, 64, 64);
+    const pixels = frameContext.getImageData(0, 0, 64, 64).data;
+    const bright = [];
+    for (let y = 4; y < 64; y += 7) for (let x = 4; x < 64; x += 7) {
+      const at = (y * 64 + x) * 4;
+      const strength = Math.max(pixels[at], pixels[at + 1], pixels[at + 2]);
+      if (strength > 24) bright.push({ x, y, strength });
+    }
+    bright.sort((left, right) => right.strength - left.strength);
+    const points = bright.slice(0, 12);
+    if (points.length < 4 || !probe.boxes.length) {
+      return { failed: true, reason: "clone has too little visible image signal or no geometry samples",
+        brightCells: bright.length, boxes: probe.boxes.length };
+    }
+    const candidate = (box) => {
+      const samples = points.map(({ x, y, strength }) => {
+        const sx = Math.round((box.x + box.width * (x + 0.5) / 64) * image.naturalWidth / innerWidth);
+        const sy = Math.round((box.y + box.height * (y + 0.5) / 64) * image.naturalHeight / innerHeight);
+        if (sx < 0 || sy < 0 || sx >= image.naturalWidth || sy >= image.naturalHeight) {
+          return { x, y, strength, offscreen: true, delta: 255 };
+        }
+        const visible = screenContext.getImageData(sx, sy, 1, 1).data;
+        const offset = (y * 64 + x) * 4;
+        const expectedRgb = [pixels[offset], pixels[offset + 1], pixels[offset + 2]];
+        const delta = expectedRgb.reduce((sum, channel, index) => sum + Math.abs(channel - visible[index]), 0) / 3;
+        return { x, y, strength, expectedRgb, visibleRgb: [...visible].slice(0, 3),
+          delta: Number(delta.toFixed(1)) };
+      });
+      return { box, samples, meanDelta: samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length };
+    };
+    const matching = probe.boxes.map(candidate).sort((left, right) => left.meanDelta - right.meanDelta)[0];
+    return { candidateBoxes: probe.boxes.length, brightCells: bright.length,
+      meanDelta: Number(matching.meanDelta.toFixed(1)), bestBox: matching.box,
+      samples: matching.samples,
+      failed: matching.samples.some((sample) => sample.offscreen) || matching.meanDelta > 22 };
+  }, { expected: assetId, screenshot: png });
+}
+
+/** A compositor callback after handoff proves the playing destination presented a real frame. */
+async function awaitPresentedVideoFrame(page, rootSelector) {
+  return await page.evaluate((selector) => new Promise((resolve) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    if (!(video instanceof HTMLVideoElement) || !video.requestVideoFrameCallback) {
+      resolve({ failed: true, reason: "no video frame callback" }); return;
+    }
+    const timeout = window.setTimeout(() => resolve({ failed: true, reason: "no presented frame within 2s" }), 2_000);
+    video.requestVideoFrameCallback((at, frame) => {
+      window.clearTimeout(timeout);
+      resolve({ at, mediaTime: frame.mediaTime, presentedFrames: frame.presentedFrames,
+        currentTime: video.currentTime, paused: video.paused, readyState: video.readyState,
+        failed: video.paused || frame.presentedFrames < 1 || Math.abs(video.currentTime - frame.mediaTime) > 0.25 });
+    });
+  }), rootSelector);
+}
+
+/** The return input must actually reach the video, not a stale fullscreen layer. */
+async function clickReturnedVideo(page) {
+  const point = await presentedVideoPoint(page, STAGE);
+  const expectedPointerType = input(page).kind;
+  await page.evaluate(() => {
+    window.__qaReturnHit = [];
+    document.addEventListener("pointerdown", (event) => {
+      window.__qaReturnHit.push({ trusted: event.isTrusted, pointerType: event.pointerType,
+        target: event.target instanceof HTMLVideoElement ? "video" : event.target?.tagName ?? null,
+        asset: event.target instanceof HTMLVideoElement ? event.target.getAttribute("data-shared-media-id") : null });
+    }, { capture: true, once: true });
+  });
+  await input(page).click(point.x, point.y);
+  const events = await page.evaluate(() => window.__qaReturnHit);
+  const after = await currentAsset(page, STAGE);
+  return { point, events, after, expectedPointerType,
+    failed: !point.hitIsVideo || events.length !== 1 || !events[0].trusted
+      || events[0].pointerType !== expectedPointerType
+      || events[0].target !== "video" || events[0].asset !== V1
+      || after.id !== V1 || after.presentation !== "settled" };
 }
 
 try {
@@ -2103,6 +2680,322 @@ try {
           || entryExposure.length > 0 || exitExposure.length > 0
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // #489 video fullscreen handoff: the same seeked frame and transport intent
+  // survive both directions. Resize interrupts the entry morph while the
+  // snapshot owns the paused picture; real Close returns to the inline video.
+  {
+    const session = await createStoryPage({ mobile: false });
+    const progress = {};
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.inlineBefore = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.inlinePixels = await pausedVideoScreenPixels(page, STAGE);
+
+      await startSampler(page, [STAGE, FULLSCREEN]);
+      await page.locator(".journey-story__fullscreen-entry").click();
+      await page.waitForFunction(() => Boolean(document.querySelector(
+        '[data-shared-element-clone^="story-fullscreen-"]')),
+      undefined, { polling: "raf", timeout: 3_000 });
+      progress.entryCloneObserved = true;
+      await page.evaluate(() => {
+        window.addEventListener("resize", () => {
+          window.__qaResizeDuringVideoMorph = Boolean(document.querySelector(
+            '[data-shared-element-clone^="story-fullscreen-"]'));
+        }, { once: true });
+      });
+      await page.setViewportSize({ width: 800, height: 1280 });
+      progress.resizeDuringMorph = await page.evaluate(() => ({
+        cloneAtResize: window.__qaResizeDuringVideoMorph === true,
+        width: innerWidth, height: innerHeight,
+      }));
+      await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
+      await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+        .waitFor({ state: "detached", timeout: 5_000 });
+      progress.entry = gradeVideoFullscreenFrames(await stopSamplerFrames(page), V1);
+      progress.fullscreen = await videoHandoffState(page, FULLSCREEN);
+      progress.fullscreenPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
+
+      await startSampler(page, [STAGE, FULLSCREEN]);
+      await page.locator(`${FULLSCREEN} .journey-story-fullscreen__close`).click();
+      progress.exitScreen = await activeCloneScreenPixels(page, V1);
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
+      await waitForVideoHandoffState(page, STAGE, V1, true);
+      await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+        .waitFor({ state: "detached", timeout: 5_000 });
+      progress.exit = gradeVideoFullscreenFrames(await stopSamplerFrames(page), V1);
+      progress.inlineAfter = await videoHandoffState(page, STAGE);
+      progress.returnPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.entryFrameIdentity = gradePausedFrameIdentity(progress.inlinePixels, progress.fullscreenPixels);
+      progress.exitFrameIdentity = gradePausedFrameIdentity(progress.fullscreenPixels, progress.returnPixels);
+      progress.entryClock = gradeVideoClock(progress.inlineBefore, progress.fullscreen, true);
+      progress.exitClock = gradeVideoClock(progress.fullscreen, progress.inlineAfter, true);
+      progress.returnHit = await clickReturnedVideo(page);
+      record({
+        name: "story-video-fullscreen-paused-rotation-roundtrip",
+        claim: "a real 43% native seek and paused desktop video retain asset, time, intent and visible decoded pixels through fullscreen entry interrupted by resize and real Close; the canvas clone alone paints during either morph and the returned video receives a real click",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || !progress.resizeDuringMorph.cloneAtResize
+          || progress.resizeDuringMorph.width >= progress.resizeDuringMorph.height
+          || progress.inlinePixels.failed || progress.fullscreenPixels.failed || progress.returnPixels.failed
+          || progress.entryFrameIdentity.failed || progress.exitFrameIdentity.failed
+          || progress.exitScreen.failed
+          || progress.entry.failed || progress.exit.failed || progress.entryClock.failed || progress.exitClock.failed
+          || progress.returnHit.failed || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name: "story-video-fullscreen-paused-rotation-roundtrip", ...progress,
+        error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // Normal playing handoff and a delayed destination reversed while it still
+  // lacks a decoded frame. Both use actual mobile touch and Browser Back.
+  for (const rapidReverse of [false, true]) {
+    const session = await createStoryPage({ mobile: true });
+    const progress = { rapidReverse };
+    const name = rapidReverse
+      ? "story-video-fullscreen-playing-slow-decode-rapid-back"
+      : "story-video-fullscreen-playing-roundtrip-back";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.play = await startStoryVideoPlayback(page, true);
+      progress.inlineBefore = await videoHandoffState(page, STAGE);
+      if (rapidReverse) progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 650);
+      await startSampler(page, [STAGE, FULLSCREEN]);
+      progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__mobile-media-fullscreen");
+      progress.handoffClickedAt = await page.evaluate(() => window.__qaStage?.handoffSource?.wallAt ?? null);
+      await page.waitForFunction(() => {
+        const stack = window.history.state?.__startripsMobileSurfaceStack;
+        return Array.isArray(stack) && stack.at(-1)?.startsWith("story-media-surface:");
+      }, undefined, { polling: "raf", timeout: 3_000 });
+      if (rapidReverse) {
+        await page.waitForFunction(() => Boolean(document.querySelector(
+          '[data-shared-element-clone^="story-fullscreen-"]'))
+          && (document.querySelector('.journey-story-fullscreen .story-media-pages__video video')?.readyState ?? 4) < 2,
+        undefined, { polling: "raf", timeout: 3_000 });
+        progress.entryCloneObserved = true;
+      } else {
+        progress.entryScreen = await activeCloneScreenPixels(page, V1);
+        await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
+        await waitForVideoHandoffState(page, FULLSCREEN, V1, false);
+        await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+          .waitFor({ state: "detached", timeout: 5_000 });
+        const entryFrames = await stopSamplerFrames(page);
+        progress.entry = gradeVideoFullscreenFrames(entryFrames, V1);
+        progress.fullscreen = await videoHandoffState(page, FULLSCREEN);
+        progress.entryClock = gradeVideoClock(progress.inlineBefore, progress.fullscreen, false);
+        progress.fullscreenPoint = await presentedVideoPoint(page, FULLSCREEN);
+        progress.fullscreenFrame = await awaitPresentedVideoFrame(page, FULLSCREEN);
+        progress.fullscreenPlayback = await samplePlayback(page, FULLSCREEN, { samples: 2, everyMs: 180 });
+        await startSampler(page, [STAGE, FULLSCREEN]);
+      }
+      // Same-document browser history traversal exercises the real mobile Back
+      // contract; dispatching a popstate event would bypass that ownership.
+      progress.back = await page.evaluate((mustStillBeUnready) => {
+        const cloneAtBack = Boolean(document.querySelector('[data-shared-element-clone^="story-fullscreen-"]'));
+        const targetReadyState = document.querySelector('.journey-story-fullscreen .story-media-pages__video video')?.readyState ?? null;
+        const stack = window.history.state?.__startripsMobileSurfaceStack ?? null;
+        const at = Date.now();
+        if (mustStillBeUnready && (!cloneAtBack || targetReadyState === null || targetReadyState >= 2)) {
+          return { triggered: false, cloneAtBack, targetReadyState, stack, at };
+        }
+        window.history.back();
+        return { triggered: true, cloneAtBack, targetReadyState, stack, at };
+      }, rapidReverse);
+      if (!progress.back.triggered) throw new Error(`Back missed the unready clone: ${JSON.stringify(progress.back)}`);
+      if (!rapidReverse) progress.exitScreen = await activeCloneScreenPixels(page, V1);
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
+      await waitForVideoHandoffState(page, STAGE, V1, false);
+      await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+        .waitFor({ state: "detached", timeout: 5_000 });
+      const exitFrames = await stopSamplerFrames(page);
+      progress.exit = gradeVideoFullscreenFrames(exitFrames, V1);
+      if (rapidReverse) {
+        progress.targetUnreadyWithClone = exitFrames.filter((frame) => frame.videoClone?.painted
+          && frame.surfaces?.some((surface) => surface.root === FULLSCREEN
+            && !surface.videoVisuals?.video?.ready)).length;
+        const deadline = Date.now() + 2_000;
+        let delayed = session.mediaDelays.find((request) => request.startedAt >= progress.delayedTarget.initiatedAt);
+        while (delayed && delayed.releasedAt === null && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        progress.delayedRequest = delayed ?? null;
+      }
+      progress.inlineAfter = await videoHandoffState(page, STAGE);
+      progress.exitClock = gradeVideoClock(rapidReverse ? progress.inlineBefore : progress.fullscreen,
+        progress.inlineAfter, false);
+      progress.inlineFrame = await awaitPresentedVideoFrame(page, STAGE);
+      progress.inlinePlayback = await samplePlayback(page, STAGE, { samples: 2, everyMs: 180 });
+      progress.returnHit = await clickReturnedVideo(page);
+      record({
+        name,
+        claim: rapidReverse
+          ? "a held fullscreen decoder is still unready under the active clone when real Browser Back fires; the original seeked video, native settings and playing clock recover with no stale paint"
+          : "a real 43% native seek retains the same playing video, native settings and clock through mobile fullscreen and Browser Back; clone pixels match the composited picture and the returned transport receives a real touch",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.play.pressed !== "true" || progress.inlineBefore.paused
+          || progress.entry?.failed || progress.entryClock?.failed || progress.fullscreenFrame?.failed
+          || (rapidReverse && (progress.delayedTarget.failed || progress.handoffClickedAt === null
+            || !progress.delayedRequest || progress.delayedRequest.startedAt > progress.back.at
+            || progress.delayedRequest.releasedAt <= progress.handoffClickedAt
+            || progress.delayedRequest.releasedAt <= progress.back.at
+            || progress.targetUnreadyWithClone === 0))
+          || progress.entryScreen?.failed || progress.exitScreen?.failed
+          || (progress.fullscreenPoint && !progress.fullscreenPoint.hitIsVideo)
+          || (rapidReverse && !progress.back.cloneAtBack)
+          || (progress.fullscreenPlayback && (!progress.fullscreenPlayback.advanced || !progress.fullscreenPlayback.monotonic))
+          || progress.exit.failed || progress.exitClock.failed || progress.inlineFrame.failed
+          || !progress.inlinePlayback.advanced || !progress.inlinePlayback.monotonic
+          || progress.returnHit.failed || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // A target that remains unready past the handoff deadline must not poison
+  // the already readable asset. Observe recovery before the held bytes arrive.
+  {
+    const session = await createStoryPage({ mobile: true });
+    const progress = {};
+    const name = "story-video-fullscreen-decode-timeout-preserves-source";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.play = await startStoryVideoPlayback(page, true);
+      progress.before = await videoHandoffState(page, STAGE);
+      progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 9_500);
+      await startSampler(page, [STAGE, FULLSCREEN]);
+      progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__mobile-media-fullscreen");
+      progress.clickedAt = await page.evaluate(() => window.__qaStage?.handoffSource?.wallAt ?? null);
+      await page.waitForFunction((clickedAt) => {
+        if (!clickedAt || Date.now() - clickedAt < 8_000) return false;
+        return !document.querySelector('[data-shared-element-clone^="story-fullscreen-"]');
+      }, progress.clickedAt, { polling: "raf", timeout: 11_000 });
+      progress.recoveredAt = Date.now();
+      const frames = await stopSamplerFrames(page);
+      progress.continuity = gradeVideoFullscreenFrames(frames, V1);
+      progress.delayedRequest = session.mediaDelays.find((request) =>
+        request.startedAt >= progress.delayedTarget.initiatedAt) ?? null;
+      progress.resource = await page.evaluate(({ inline, fullscreen }) => {
+        const inlineRoot = document.querySelector(inline);
+        const fullRoot = document.querySelector(fullscreen);
+        const source = inlineRoot?.querySelector(".story-media-pages__video video");
+        const sourcePage = inlineRoot?.querySelector('[data-media-page="current"]');
+        const activeRoot = fullRoot && !fullRoot.hidden && getComputedStyle(fullRoot).display !== "none"
+          ? fullRoot : inlineRoot;
+        const activeVideo = activeRoot?.querySelector(".story-media-pages__video video");
+        return {
+          inlineVisible: Boolean(inlineRoot && getComputedStyle(inlineRoot).display !== "none"),
+          fullscreenVisible: activeRoot === fullRoot,
+          sourceSrc: source?.getAttribute("src") ?? null,
+          sourceCurrentSrc: source instanceof HTMLVideoElement ? source.currentSrc : null,
+          sourceReady: source instanceof HTMLVideoElement && source.readyState >= 2,
+          sourcePageReady: sourcePage?.getAttribute("data-media-page-ready") === "true",
+          sourceId: sourcePage?.getAttribute("data-media-page-id") ?? null,
+          activeReady: activeVideo instanceof HTMLVideoElement && activeVideo.readyState >= 2,
+          activeControls: activeVideo instanceof HTMLVideoElement && activeVideo.controls,
+          errorText: [...document.querySelectorAll(".journey-story__media-state.is-error")]
+            .map((node) => node.textContent?.trim().slice(0, 160)),
+          cloneCount: document.querySelectorAll("[data-shared-element-clone]").length,
+          targetReadProbe: window.__qaTargetReadProbe ?? null,
+        };
+      }, { inline: STAGE, fullscreen: FULLSCREEN });
+      const activeRoot = progress.resource.fullscreenVisible ? FULLSCREEN : STAGE;
+      progress.activePoint = await presentedVideoPoint(page, activeRoot).catch((error) => ({
+        error: error instanceof Error ? error.message : String(error), hitIsVideo: false,
+      }));
+      if (progress.activePoint.hitIsVideo && progress.resource.activeReady) {
+        // The recovery path must offer a usable transport. A first touch may
+        // reveal Chromium controls or start playback; otherwise tap Play.
+        await input(page).click(progress.activePoint.x, progress.activePoint.y);
+        let state = await videoHandoffState(page, activeRoot);
+        if (state.paused) {
+          const controls = await nativeControls(page, activeRoot);
+          const play = playEntry(controls);
+          progress.playControl = play ?? { error: "native Play unavailable", panel: controls.panel };
+          if (play?.reachable && play.name.toLowerCase() === "play") {
+            await input(page).click(play.x, play.y);
+            state = await videoHandoffState(page, activeRoot);
+          }
+        }
+        progress.afterActivation = state;
+        progress.timeoutClock = gradeVideoClock(progress.before, state, false, { requireIntent: false });
+        progress.playback = await samplePlayback(page, activeRoot, { samples: 2, everyMs: 180 });
+        progress.assetAfterActivation = await currentAsset(page, activeRoot);
+      }
+      const deadline = Date.now() + 2_000;
+      while (progress.delayedRequest?.releasedAt === null && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      progress.afterLateRelease = await page.evaluate(async ({ inline, fullscreen }) => {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const sourceRoot = document.querySelector(inline);
+        const fullRoot = document.querySelector(fullscreen);
+        return {
+          sourceSrc: sourceRoot?.querySelector(".story-media-pages__video video")?.getAttribute("src") ?? null,
+          sourceId: sourceRoot?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
+          fullscreenVisible: Boolean(fullRoot && !fullRoot.hidden && getComputedStyle(fullRoot).display !== "none"),
+          errorCount: document.querySelectorAll(".journey-story__media-state.is-error").length,
+        };
+      }, { inline: STAGE, fullscreen: FULLSCREEN });
+      record({ name,
+        claim: "when the hidden destination remains undecoded past eight seconds, the original V1 read URL and current page survive without an error state; the viewer returns to the source or gets a genuinely usable Play target before delayed bytes are released",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.play.pressed !== "true" || progress.delayedTarget.failed || !progress.clickedAt
+          || progress.recoveredAt - progress.clickedAt < 8_000
+          || !progress.delayedRequest || progress.delayedRequest.releasedAt <= progress.recoveredAt
+          || !progress.resource.targetReadProbe
+          || (progress.resource.targetReadProbe.readyAt !== null
+            && progress.resource.targetReadProbe?.readyAt <= progress.clickedAt + 8_000)
+          || progress.continuity.failed || progress.resource.cloneCount !== 0
+          || progress.resource.sourceId !== V1 || !progress.resource.sourcePageReady
+          || !progress.resource.sourceSrc?.endsWith(CLIP)
+          || progress.resource.errorText.length > 0
+          || !progress.activePoint.hitIsVideo || !progress.resource.activeReady
+          || !progress.resource.activeControls
+          || progress.afterActivation?.paused !== false
+          || progress.timeoutClock?.failed !== false
+          || !progress.playback?.advanced || !progress.playback?.monotonic
+          || progress.assetAfterActivation?.id !== V1
+          || progress.afterLateRelease.sourceId !== V1
+          || progress.afterLateRelease.sourceSrc !== progress.resource.sourceSrc
+          || progress.afterLateRelease.fullscreenVisible !== progress.resource.fullscreenVisible
+          || progress.afterLateRelease.errorCount !== 0
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
     } finally {
       await session.page.close();
     }

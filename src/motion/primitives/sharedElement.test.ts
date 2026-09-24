@@ -65,14 +65,14 @@ describe("runSharedElementMorph (#18)", () => {
     expect(claim).toBeLessThan(observer);
     // Opacity, not visibility: `canPresent` rejects a hidden destination, so
     // hiding it here would keep the morph from ever landing on it.
-    expect(primitive).toContain('pending.style.opacity = "0";');
-    expect(primitive).not.toContain('pending.style.visibility = "hidden";');
+    expect(primitive).toContain('element.style.opacity = "0";');
+    expect(primitive).not.toContain('element.style.visibility = "hidden";');
   });
 
-  it("keeps an opted-in live destination interactive under the visual clone (#459)", () => {
+  it("keeps the destination video hidden until the clone releases it (#489)", () => {
     const primitive = readFileSync(new URL("./sharedElement.ts", import.meta.url), "utf8");
-    expect(primitive).toContain("keepTargetInteractive = false");
-    expect(primitive).toContain('if (!keepTargetInteractive) target.style.visibility = "hidden";');
+    expect(primitive).toContain('target.style.visibility = "hidden";');
+    expect(primitive).not.toContain("keepTargetInteractive");
   });
 
 });
