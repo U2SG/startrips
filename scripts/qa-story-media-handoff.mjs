@@ -588,6 +588,29 @@ function installStageSampler() {
     }
     return nonBlack;
   };
+  const videoFrameRings = new WeakMap();
+  window.__qaArmVideoFrameRing = (selector) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    if (!(video instanceof HTMLVideoElement) || typeof video.requestVideoFrameCallback !== "function") {
+      return { armed: false, reason: "presented video frame callbacks unavailable" };
+    }
+    const ring = { samples: [] };
+    videoFrameRings.set(video, ring);
+    const observe = (_at, metadata) => {
+      if (!video.isConnected || videoFrameRings.get(video) !== ring) return;
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        try {
+          const pixels = pixels64(video);
+          ring.samples.push({ time: video.currentTime, mediaTime: metadata.mediaTime,
+            pixels, nonBlack: signalOf(pixels) });
+          if (ring.samples.length > 8) ring.samples.shift();
+        } catch { /* The current event capture remains the fallback source. */ }
+      }
+      if (!video.paused) video.requestVideoFrameCallback(observe);
+    };
+    video.requestVideoFrameCallback(observe);
+    return { armed: true };
+  };
   const captureSource = (selector, trigger) => {
     if (!state.running) return;
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
@@ -603,6 +626,9 @@ function installStageSampler() {
       const pixels = pixels64(video);
       const source = { trigger, wallAt: Date.now(), asset: video.getAttribute("data-shared-media-id"),
         time: video.currentTime, paused: video.paused, pixels, nonBlack: signalOf(pixels) };
+      source.nearbyFrames = (videoFrameRings.get(video)?.samples ?? [])
+        .filter((frame) => Math.abs(frame.time - source.time) <= 0.3)
+        .slice(-4);
       state.handoffSource = source;
       // The capture listener runs before React takes the snapshot and pauses a
       // playing video. A decoded frame can advance during that gesture. Read
@@ -704,6 +730,9 @@ function installStageSampler() {
     };
     const candidates = [compare(source, "click")];
     if (!source.paused && source.settled) candidates.push(compare(source.settled, "snapshot"));
+    for (const [index, frame] of (source.nearbyFrames ?? []).entries()) {
+      candidates.push(compare(frame, `presented-${index}`));
+    }
     const matching = candidates.find((entry) => !entry.failed)
       ?? candidates.sort((left, right) => left.signalMeanDelta - right.signalMeanDelta)[0];
     return { trigger: source.trigger, sourceTime: source.time, pausedAtClick: source.paused,
@@ -3324,6 +3353,8 @@ try {
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
       progress.play = await startStoryVideoPlayback(page, true);
       if (progress.play.failed) throw new Error(`source playback did not start: ${progress.play.reason}`);
+      progress.entryFrameRing = await page.evaluate((selector) =>
+        window.__qaArmVideoFrameRing(selector), STAGE);
       progress.inlineBefore = await videoHandoffState(page, STAGE);
       progress.remainingAtHandoff = progress.inlineBefore.duration - progress.inlineBefore.time;
       if (!Number.isFinite(progress.remainingAtHandoff) || progress.remainingAtHandoff < 3.5) {
@@ -3356,6 +3387,8 @@ try {
         progress.fullscreenPoint = await presentedVideoPoint(page, FULLSCREEN);
         progress.fullscreenFrame = await awaitPresentedVideoFrame(page, FULLSCREEN);
         progress.fullscreenPlayback = await samplePlayback(page, FULLSCREEN, { samples: 2, everyMs: 180 });
+        progress.exitFrameRing = await page.evaluate((selector) =>
+          window.__qaArmVideoFrameRing(selector), FULLSCREEN);
         await startSampler(page, [STAGE, FULLSCREEN]);
       }
       // Same-document browser history traversal exercises the real mobile Back
