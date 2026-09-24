@@ -21,6 +21,7 @@
  * each graded window reports its tick count so the two sources stay separable.
  */
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { mkdir, writeFile } from "node:fs/promises";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const storyPath = "/?qaState=journey-story&qaMode=mixed-media-pair";
@@ -1887,9 +1888,10 @@ async function clickFullscreenClose(page) {
 }
 
 /** Prove that the paused frame in the screenshot is the decoded video frame. */
-async function pausedVideoScreenPixels(page, rootSelector) {
-  const screenshot = (await page.screenshot()).toString("base64");
-  return await page.evaluate(async ({ selector, png }) => {
+async function pausedVideoScreenPixels(page, rootSelector, diagnosticName = null) {
+  const screenshotBuffer = await page.screenshot();
+  const screenshot = screenshotBuffer.toString("base64");
+  const result = await page.evaluate(async ({ selector, png, captureFrame }) => {
     const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
     if (!(video instanceof HTMLVideoElement) || !video.paused || video.readyState < 2) {
       return { failed: true, reason: "no paused decoded video" };
@@ -1906,6 +1908,7 @@ async function pausedVideoScreenPixels(page, rootSelector) {
     if (!screenContext || !frameContext) return { failed: true, reason: "canvas context unavailable" };
     frameContext.drawImage(video, 0, 0, 64, 64);
     const pixels = frameContext.getImageData(0, 0, 64, 64).data;
+    const decodedFramePng = captureFrame ? frame.toDataURL("image/png").split(",")[1] : null;
     const asset = video.getAttribute("data-shared-media-id");
     let reference = window.__qaPausedFrameReference;
     if (!reference) {
@@ -2003,6 +2006,7 @@ async function pausedVideoScreenPixels(page, rootSelector) {
     const visibleBright = samples.filter((sample) => Math.max(...sample.visible) > 24).length;
     return { meanDelta: Number(meanDelta.toFixed(1)), samples,
       spatialDirect, spatialRaster,
+      decodedFramePng,
       brightPixels: reference.brightPixels, spreadCells: reference.spreadCells,
       retainedCells, visibleBright, retainedRatio: Number(retainedRatio.toFixed(2)),
       signalMeanDelta: Number(signalMeanDelta.toFixed(1)),
@@ -2011,7 +2015,17 @@ async function pausedVideoScreenPixels(page, rootSelector) {
         || retainedCells < Math.ceil(reference.spreadCells * 0.6)
         || samples.some((sample) => !sample.hitIsVideo || sample.offscreen) || meanDelta > 18
         || retainedRatio < 0.75 || signalMeanDelta > 20 };
-  }, { selector: rootSelector, png: screenshot });
+  }, { selector: rootSelector, png: screenshot, captureFrame: Boolean(diagnosticName) });
+  if (diagnosticName) {
+    await mkdir("artifacts/story-media", { recursive: true });
+    await writeFile(`artifacts/story-media/${diagnosticName}-visible.png`, screenshotBuffer);
+    if (result.decodedFramePng) {
+      await writeFile(`artifacts/story-media/${diagnosticName}-decoded.png`,
+        Buffer.from(result.decodedFramePng, "base64"));
+    }
+  }
+  delete result.decodedFramePng;
+  return result;
 }
 
 function gradePausedFrameIdentity(before, after) {
@@ -3399,7 +3413,8 @@ try {
       progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
       progress.before = await waitForVideoHandoffState(page, STAGE, V1, true);
-      progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.beforeControls = await readNativeControls(page, STAGE);
+      progress.beforePixels = await pausedVideoScreenPixels(page, STAGE, "decode-timeout-before");
       progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 9_500);
       await startSampler(page, [STAGE, FULLSCREEN]);
       progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__mobile-media-fullscreen");
@@ -3439,7 +3454,8 @@ try {
       }, { inline: STAGE, fullscreen: FULLSCREEN });
       const activeRoot = progress.resource.fullscreenVisible ? FULLSCREEN : STAGE;
       progress.recovered = await waitForVideoHandoffState(page, STAGE, V1, true);
-      progress.recoveredPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.recoveredControls = await readNativeControls(page, STAGE);
+      progress.recoveredPixels = await pausedVideoScreenPixels(page, STAGE, "decode-timeout-recovered");
       progress.recoveredFrame = gradePausedFrameIdentity(progress.beforePixels, progress.recoveredPixels);
       progress.recoveryClock = gradeVideoClock(progress.before, progress.recovered, true);
       progress.activePoint = await presentedVideoPoint(page, activeRoot).catch((error) => ({
