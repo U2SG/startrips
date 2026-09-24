@@ -2015,13 +2015,25 @@ export function LivingAtlasApp({
     unknownCreateSemanticOwnership.fallbackJourneyId,
   );
   const mobileJourney = focusPresentation.journey;
-  const mobilePoint = focusPresentation.point;
-  const focusPoint = focusPresentation.focusPoint;
   const narrativeSemanticSelection = unknownCreateSemanticOwnership.selection;
   const narrativeJourneyProgress = narrativeSemanticSelection
     ? timeCursor.reveal.journeyProgress.get(narrativeSemanticSelection.journeyId)
     : undefined;
-  const narrativeJourneyRoutePoint = (isMobileV2 || globeFocusMode)
+  const playbackPointTarget = playbackActive && playbackCameraFollowing
+    && playbackSession.cameraCommand?.target.kind === "point"
+    ? playbackSession.cameraCommand.target
+    : null;
+  const playbackNarrativePoint = playbackPointTarget
+    ? playbackJourney?.routePoints[playbackPointTarget.pointIndex] ?? null
+    : null;
+  const playbackNarrativeRoutePoint = playbackPointTarget && playbackNarrativePoint && playbackSession.journeyId
+    ? {
+        journeyId: playbackSession.journeyId,
+        routePointId: playbackNarrativePoint.id,
+        pointIndex: playbackPointTarget.pointIndex,
+      }
+    : null;
+  const timelineNarrativeRoutePoint = (isMobileV2 || globeFocusMode)
     && !timeCursor.hasExplicitSelection
     && narrativeSemanticSelection
     && narrativeJourneyProgress !== undefined
@@ -2036,6 +2048,11 @@ export function LivingAtlasApp({
         pointIndex: narrativeSemanticSelection.pointIndex,
       }
     : null;
+  // Playback's chapter command and Globe Rewind have independent clocks. The
+  // current owner alone may promote a geometry-only point into the map layer.
+  const narrativeJourneyRoutePoint = playbackActive
+    ? playbackNarrativeRoutePoint
+    : timelineNarrativeRoutePoint;
   const selectedJourneyRoutePoint = routePointContextSelection.context
     ? {
         journeyId: routePointContextSelection.context.journeyId,
@@ -2082,16 +2099,29 @@ export function LivingAtlasApp({
     return visible;
   }, [journeys, effectiveDraftRoute]);
   const visibleRoutePointIds = useMemo(() => {
-    // An explicit context/selection may originate outside an overview marker
-    // (for example the timeline). Keep it until close without rebuilding the
-    // route layer for ordinary selections that were already visible.
+    // A context or a point currently narrated by rewind may originate outside
+    // the sparse overview. Keep only that exact point while it owns attention.
     const selectedId = selectedJourneyRoutePoint?.routePointId;
-    if (!selectedId || overviewRoutePointIds.has(selectedId)) return overviewRoutePointIds;
-    return new Set([...overviewRoutePointIds, selectedId]);
-  }, [overviewRoutePointIds, selectedJourneyRoutePoint?.routePointId]);
-  const focusRoute = focusPresentation.point
-    ? null
-    : routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null;
+    const narrativeId = narrativeJourneyRoutePoint?.routePointId;
+    if ((!selectedId || overviewRoutePointIds.has(selectedId))
+      && (!narrativeId || overviewRoutePointIds.has(narrativeId))) return overviewRoutePointIds;
+    const visible = new Set(overviewRoutePointIds);
+    if (selectedId) visible.add(selectedId);
+    if (narrativeId) visible.add(narrativeId);
+    return visible;
+  }, [overviewRoutePointIds, selectedJourneyRoutePoint?.routePointId, narrativeJourneyRoutePoint?.routePointId]);
+  // At the completed overview, the timeline's last reached point can be a
+  // geometry-only non-stop. Frame the Journey route instead of an absent pin.
+  const focusPointHiddenByOverview = Boolean(
+    !timeCursor.hasExplicitSelection
+    && focusPresentation.point
+    && !visibleRoutePointIds.has(focusPresentation.point.id),
+  );
+  const mobilePoint = focusPointHiddenByOverview ? null : focusPresentation.point;
+  const focusPoint = focusPointHiddenByOverview ? null : focusPresentation.focusPoint;
+  const focusRoute = focusPointHiddenByOverview || !focusPresentation.point
+    ? routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null
+    : null;
   const initialHomeCameraAnchor = initialHomeCameraIntent
     && selectedJourneyIdForHomeCamera === null
     && !hasManualAtlasCameraInteraction
