@@ -841,6 +841,60 @@ try {
   record("cross-point page errors", { pageErrors: crossRun.pageErrors }, crossRun.pageErrors.length === 0);
   await crossPage.close();
 
+  // A Story scope with no media still owns the latest Route Point observation.
+  // Closing it cannot fall back to A merely because B has no shared media
+  // element to fly back to the map.
+  const textReturnRun = await openFocusAtlas();
+  const textReturnPage = textReturnRun.page;
+  await activateRoutePoint(textReturnPage, 0);
+  await textReturnPage.locator(`[data-route-point-context][data-route-point-id="${photoPointId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  await textReturnPage.waitForFunction(() => document.querySelector("[data-route-point-context-media]")?.getAttribute("data-route-point-context-media") === "ready");
+  await textReturnPage.locator(".living-atlas__route-point-context-entry").click();
+  await textReturnPage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${photoAssetId}"][data-media-page-ready="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  await textReturnPage.locator(`.journey-story button[data-route-point-id="${textPointId}"]`).click();
+  await textReturnPage.locator(`.journey-story button[data-route-point-id="${textPointId}"][aria-pressed="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  await textReturnPage.locator('.journey-story[data-has-media="false"]').waitFor({ state: "visible", timeout: 5_000 });
+  const emptyStoryState = await textReturnPage.locator(".journey-story").evaluate((node) => ({
+    selected: node.querySelector('button[data-route-point-id][aria-pressed="true"]')?.getAttribute("data-route-point-id") ?? null,
+    mediaPageCount: node.querySelectorAll('.journey-story__media [data-media-page-id]').length,
+    text: node.textContent ?? "",
+  }));
+  await textReturnPage.locator(".journey-story__close").click();
+  const returnedTextContext = textReturnPage.locator(`[data-route-point-context][data-route-point-id="${textPointId}"]`);
+  await returnedTextContext.waitFor({ state: "visible", timeout: 5_000 });
+  const returnedTextMarker = textReturnPage.locator(`.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${textPointId}"][data-attention-role="selected"]`);
+  await returnedTextMarker.waitFor({ state: "attached", timeout: 5_000 });
+  const textMarkerRect = await returnedTextMarker.boundingBox();
+  const textReturnState = await textReturnPage.evaluate((pointId) => ({
+    contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+    contextText: document.querySelector("[data-route-point-context]")?.textContent ?? "",
+    selectedIds: [...document.querySelectorAll('.particle-earth-route__point[data-attention-role="selected"]')]
+      .map((node) => node.getAttribute("data-route-point-id")),
+    staleApertures: document.querySelectorAll('[data-place-media-observation], [data-shared-element-clone^="place-media-"]').length,
+    markerVisible: document.querySelector(`.particle-earth-route__point[data-route-point-id="${pointId}"]`)?.getBoundingClientRect().width > 0,
+  }), textPointId);
+  record("A -> no-media B closes to B's actual map selection and detail", {
+    emptyStoryState, textReturnState, textMarkerRect,
+  },
+    emptyStoryState.selected === textPointId
+    && emptyStoryState.mediaPageCount === 0
+    && emptyStoryState.text.includes("这一站只留下了一句话")
+    && textReturnState.contextId === textPointId
+    && textReturnState.contextText.includes("九龙海旁")
+    && textReturnState.selectedIds.includes(textPointId)
+    && !textReturnState.selectedIds.includes(photoPointId)
+    && textReturnState.staleApertures === 0
+    && textReturnState.markerVisible
+    && Boolean(textMarkerRect && textMarkerRect.x >= 0 && textMarkerRect.y >= 0
+      && textMarkerRect.x + textMarkerRect.width <= 1280
+      && textMarkerRect.y + textMarkerRect.height <= 720));
+  await returnedTextContext.locator(".living-atlas__route-point-context-entry").click();
+  await textReturnPage.locator(`.journey-story button[data-route-point-id="${textPointId}"][aria-pressed="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  record("returned B detail reopens the same no-media Story scope", {},
+    await textReturnPage.locator('.journey-story[data-has-media="false"]').count() === 1);
+  record("no-media return page errors", { pageErrors: textReturnRun.pageErrors }, textReturnRun.pageErrors.length === 0);
+  await textReturnPage.close();
+
   // #377 / ST-081: two distinct Route Point records may share one exact
   // canonical coordinate inside the CURRENT authorized Journey. Switching the
   // content owner must preserve Atlas/camera ownership and the route-order
