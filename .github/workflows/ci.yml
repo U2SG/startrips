@@ -229,10 +229,6 @@ jobs:
             suites: "|story-media-handoff|"
             commands: |
               story-media-handoff::pnpm qa:story-media-handoff
-          - name: playback-camera
-            suites: "|playback-manual-camera|"
-            commands: |
-              playback-manual-camera::pnpm qa:playback-manual-camera
           - name: labels-recovery
             suites: "|city-label-anchoring|recovery-surfaces|"
             commands: |
@@ -246,10 +242,11 @@ jobs:
               owner-share::pnpm qa:owner-share
               playback-map-bridge::pnpm qa:playback-map-bridge
           - name: playback-brand
-            suites: "|playback-prefetch|playback-continuity|final-acceptance|brand-signature-motion|"
+            suites: "|playback-prefetch|playback-continuity|playback-manual-camera|final-acceptance|brand-signature-motion|"
             commands: |
               playback-prefetch::pnpm qa:playback-prefetch
               playback-continuity::pnpm qa:playback-continuity
+              playback-manual-camera::pnpm qa:playback-manual-camera
               final-acceptance::pnpm qa:final-acceptance
               brand-signature-motion::pnpm qa:brand-signature-motion
           - name: shell-composer

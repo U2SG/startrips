@@ -1,7 +1,6 @@
 // #339 / ST-118. Grade the real Atlas globe and Full Playback together in GitHub CI.
 import assert from "node:assert/strict";
 import { launchQaBrowser } from "./qa-browser.mjs";
-import { nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const journeyId = "qa-playback-camera-journey";
@@ -142,7 +141,34 @@ async function steeringPoint(page, detail, requireEnd = true) {
     }
     return null;
   }, { expectDetail: detail, requireEnd });
-  assert.ok(point, `no real ${detail ? "detail map" : "particle globe"} hit target in Playback`);
+  assert.ok(point, `no real ${detail ? "detail map" : "particle globe"} hit target at the current surface`);
+  return point;
+}
+
+async function stopBlankPoint(page) {
+  const point = await page.evaluate(() => {
+    const stop = document.querySelector(".journey-playback__stop");
+    const canvas = document.querySelector(".maplibregl-canvas");
+    if (!(stop instanceof HTMLElement) || !(canvas instanceof HTMLCanvasElement)) return null;
+    const rect = stop.getBoundingClientRect();
+    const stageHeight = document.querySelector(".journey-playback__stage")?.getBoundingClientRect().height ?? 0;
+    const chapterDensity = document.querySelector(".journey-playback")?.dataset.playbackChapterDensity ?? null;
+    for (const fy of [0.3, 0.6, 0.8]) for (const fx of [0.16, 0.84, 0.25, 0.75]) {
+      const x = Math.round(rect.left + rect.width * fx);
+      const y = Math.round(rect.top + rect.height * fy);
+      const endX = x + (fx < 0.5 ? 60 : -60);
+      const endY = y + (fy < 0.5 ? 18 : -18);
+      if (x < 8 || y < 8 || endX < 8 || endY < 8
+          || x >= innerWidth - 8 || y >= innerHeight - 8
+          || endX >= innerWidth - 8 || endY >= innerHeight - 8) continue;
+      if (document.elementFromPoint(x, y) === canvas && document.elementFromPoint(endX, endY) === canvas) {
+        return { x, y, endX, endY, stageHeight, chapterDensity,
+          stopRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+      }
+    }
+    return null;
+  });
+  assert.ok(point, "Stop caption's visible blank area must pass real pointer input to Detail Map");
   return point;
 }
 
@@ -194,26 +220,17 @@ async function touchDragParticle(page) {
 }
 
 async function enterDetail(page) {
-  for (let attempt = 0; attempt < 90; attempt += 1) {
-    const state = await page.evaluate(() => ({
-      stage: document.querySelector(".living-atlas-globe")?.dataset.earthDive ?? null,
-      owner: document.querySelector(".living-atlas-globe")?.dataset.earthDiveOwner ?? null,
-      semanticZoom: document.querySelector(".particle-earth-scene")?.dataset.semanticZoom ?? null,
-      localProgress: Number(document.querySelector(".particle-earth-scene")?.dataset.localProgress),
-    }));
-    if (state.stage === "detail" && state.owner === "detail") return;
-    if (state.stage === "blending" && state.localProgress >= 0.999) {
-      await page.waitForFunction(() => document.querySelector(".living-atlas-globe")?.dataset.earthDiveOwner === "detail",
-        null, { timeout: 10_000 });
-      return;
-    }
-    const point = await steeringPoint(page, state.owner === "detail", false);
-    const input = nextDiveFixtureInput(state, state.semanticZoom === "global" ? -120 : -10, -10);
-    await page.mouse.move(point.x, point.y);
-    await page.mouse.wheel(0, input.deltaY);
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  }
-  throw new Error(`real Detail dive did not commit: ${JSON.stringify(await snapshot(page))}`);
+  // Ordinary Atlas exposes the semantic Dive control while its background
+  // particle canvas does not own pointer input. Use that user entry, then grade
+  // real map wheel/drag/keyboard input after Full Playback gives it ownership.
+  const intent = page.locator('[data-earth-dive-intent="true"]');
+  assert.equal(await intent.count(), 1, "one semantic Dive control");
+  await intent.focus();
+  assert.ok(await intent.evaluate((button) => document.activeElement === button), "Dive control is keyboard reachable");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector(".living-atlas-globe")?.dataset.earthDive === "detail"
+    && document.querySelector(".living-atlas-globe")?.dataset.earthDiveOwner === "detail",
+  null, { timeout: 25_000 });
 }
 
 async function startPlayback(page) {
@@ -271,7 +288,7 @@ try {
         && document.querySelector(".journey-playback")?.dataset.playbackStep === "1", null, { timeout: 40_000 });
       await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
       await page.locator(".journey-playback.is-paused").waitFor();
-      const wheelPoint = await steeringPoint(page, true, false);
+      const wheelPoint = await stopBlankPoint(page);
       const scaleBeforeWheel = await page.evaluate(({ longitude, latitude }) => {
         const a = window.__detailedEarthMapProject?.(longitude, latitude);
         const b = window.__detailedEarthMapProject?.(longitude + 1, latitude);
@@ -299,6 +316,17 @@ try {
           && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.0001;
       }, beforeKey.mapCenter, { timeout: 8_000 });
       assert.equal(await page.locator(".journey-playback").getAttribute("aria-modal"), "false");
+      const beforeStopDrag = await snapshot(page);
+      await page.mouse.move(wheelPoint.x, wheelPoint.y);
+      await page.mouse.down();
+      await page.mouse.move(wheelPoint.endX, wheelPoint.endY, { steps: 6 });
+      await page.mouse.up();
+      await page.waitForFunction((before) => {
+        const root = document.querySelector(".journey-playback");
+        const center = document.querySelector(".detailed-earth-map")?.dataset.mapCameraObservation?.split(",").map(Number);
+        return root?.dataset.playbackPhase === "stop" && root.dataset.cameraFollow === "free"
+          && center?.length === 2 && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.0001;
+      }, beforeStopDrag.mapCenter, { timeout: 8_000 });
       await page.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
       await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "travel"
         && document.querySelector(".journey-playback")?.dataset.playbackStep === "2", null, { timeout: 40_000 });
@@ -309,6 +337,30 @@ try {
         return center?.length === 2 && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.0001;
       }, beforeDrag.mapCenter, { timeout: 8_000 });
       const free = await snapshot(page);
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "stop"
+        && document.querySelector(".journey-playback")?.dataset.playbackStep === "3", null, { timeout: 40_000 });
+      await page.mouse.move(16, 16);
+      await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
+      await page.locator(".journey-playback.is-paused").waitFor();
+      const populatedStop = await stopBlankPoint(page);
+      assert.equal(populatedStop.chapterDensity, "single", "Seoul image chapter must use populated stop layout");
+      assert.ok(populatedStop.stageHeight > 0
+        && populatedStop.stopRect.height / populatedStop.stageHeight > 0.3
+        && populatedStop.stopRect.height / populatedStop.stageHeight < 0.42,
+      `populated stop must occupy the 36% stage row: ${JSON.stringify(populatedStop)}`);
+      const beforePopulatedDrag = await snapshot(page);
+      await page.mouse.move(populatedStop.x, populatedStop.y);
+      await page.mouse.down();
+      await page.mouse.move(populatedStop.endX, populatedStop.endY, { steps: 6 });
+      await page.mouse.up();
+      await page.waitForFunction((before) => {
+        const root = document.querySelector(".journey-playback");
+        const center = document.querySelector(".detailed-earth-map")?.dataset.mapCameraObservation?.split(",").map(Number);
+        return root?.dataset.playbackPhase === "stop" && root.dataset.playbackStep === "3"
+          && root.dataset.cameraFollow === "free" && center?.length === 2
+          && Math.hypot(center[0] - before[0], center[1] - before[1]) > 0.0001;
+      }, beforePopulatedDrag.mapCenter, { timeout: 8_000 });
+      await page.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
       await page.waitForFunction((asset) => document.querySelector(`[data-presented-asset="${asset}"]`)
         ?.getAttribute("data-media-presentation") === "settled", imageId, { timeout: 60_000 });
       const media = await snapshot(page);
@@ -316,7 +368,8 @@ try {
       assert.equal(media.focusRevision, free.focusRevision, "automatic chapter advance cannot issue focus commands");
       const image = await visibleImage(page, imageId);
       assert.deepEqual(errors, []);
-      reports.push({ mode: "detail", input: "wheel, keyboard and drag", drag, free, media, image });
+      reports.push({ mode: "detail", input: "stop blank wheel and drag, keyboard, travel drag",
+        stopBlank: wheelPoint, populatedStop, drag, free, media, image });
       await page.locator(".journey-playback__return-location").click();
       await page.waitForFunction((revision) => document.querySelector(".journey-playback")?.dataset.cameraFollow === "follow"
         && Number(document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-revision")) > revision,

@@ -347,7 +347,6 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   initialCameraAnchor={atlas?.initialCameraAnchor}
                   focusRevision={atlas?.focusRevision}
                   focusEnabled={atlas?.focusEnabled}
-                  focusFlightPending={atlas?.focusFlightPending}
                   focusFlightProfile={atlas?.focusFlightProfile}
                   focusColor={atlas?.focusColor}
                   centerFocusPoint={Boolean(atlas)}

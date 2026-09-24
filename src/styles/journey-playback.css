@@ -36,8 +36,14 @@
 .journey-playback[data-map-interactive="true"] .journey-playback__close,
 .journey-playback[data-map-interactive="true"] .journey-playback__controls,
 .journey-playback[data-map-interactive="true"] .journey-playback__selection-summary,
-.journey-playback[data-map-interactive="true"] .journey-playback__stop,
 .journey-playback[data-map-interactive="true"] .journey-playback__return-location {
+  pointer-events: auto;
+}
+
+.journey-playback[data-map-interactive="true"] .journey-playback__stop :is(p, h3, blockquote) {
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
   pointer-events: auto;
 }
 
