@@ -679,6 +679,26 @@ async function detailedExistingRoutePointTarget(page, route) {
   }, route);
 }
 
+async function findBlankDetailPoint(page, drag = false) {
+  const target = await page.evaluate((forDrag) => {
+    const canvas = document.querySelector(".detailed-earth-map canvas.maplibregl-canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) return null;
+    const rect = canvas.getBoundingClientRect();
+    for (let y = rect.top + 72; y < rect.bottom - 72; y += 48) {
+      for (let x = rect.left + 72; x < rect.right - 72; x += 48) {
+        const samples = forDrag ? [{ x, y }, { x: x + 36, y: y + 18 }] : [{ x, y }];
+        if (samples.every((sample) => document.elementFromPoint(sample.x, sample.y) === canvas
+          && !window.__detailedEarthJourneyRoutePointHit?.(sample.x, sample.y))) {
+          return { x, y };
+        }
+      }
+    }
+    return null;
+  }, drag);
+  if (!target) throw new Error("Detail map has no pointer-reachable blank canvas point");
+  return target;
+}
+
 try {
   // Grade real pointer/keyboard interaction against whichever active-Journey
   // Route Point the current real camera actually exposes. Route Point context
@@ -879,6 +899,51 @@ try {
   }
   if (!existingDetailPoint) throw new Error("Detail Journey Route Point has no pointer-reachable existing-marker sample");
 
+  await detailPickPage.mouse.click(existingDetailPoint.x, existingDetailPoint.y);
+  const detailContext = detailPickPage.locator("[data-route-point-context]");
+  await detailContext.waitFor({ state: "visible", timeout: 5_000 });
+  const detailOpenState = await detailPickPage.evaluate(() => ({
+    routePointId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+    activeRoute: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route") ?? null,
+    overlayJourneyId: document.querySelector(".detailed-earth-map")?.getAttribute("data-journey-overlay-journey-id") ?? null,
+    owner: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive-owner") ?? null,
+  }));
+  record("native Detail marker opens the matching Route Point context", { existingDetailPoint, detailOpenState },
+    detailOpenState.routePointId === existingDetailPoint.routePointId
+    && detailOpenState.activeRoute === journeyId
+    && detailOpenState.overlayJourneyId === journeyId
+    && detailOpenState.owner === "detail");
+
+  const detailDragTarget = await findBlankDetailPoint(detailPickPage, true);
+  await detailPickPage.mouse.move(detailDragTarget.x, detailDragTarget.y);
+  await detailPickPage.mouse.down();
+  await detailPickPage.mouse.move(detailDragTarget.x + 36, detailDragTarget.y + 18, { steps: 4 });
+  await detailPickPage.mouse.up();
+  const detailAfterDrag = await detailPickPage.evaluate(() => ({
+    routePointId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+    activeRoute: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route") ?? null,
+    owner: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive-owner") ?? null,
+  }));
+  record("native Detail drag keeps the selected context and Journey owner", { detailDragTarget, detailAfterDrag },
+    detailAfterDrag.routePointId === existingDetailPoint.routePointId
+    && detailAfterDrag.activeRoute === journeyId
+    && detailAfterDrag.owner === "detail");
+
+  const detailBlankTarget = await findBlankDetailPoint(detailPickPage);
+  await detailPickPage.mouse.click(detailBlankTarget.x, detailBlankTarget.y);
+  await detailContext.waitFor({ state: "detached", timeout: 5_000 });
+  const detailAfterBlank = await detailPickPage.evaluate(() => ({
+    contextCount: document.querySelectorAll("[data-route-point-context]").length,
+    activeRoute: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route") ?? null,
+    overlayJourneyId: document.querySelector(".detailed-earth-map")?.getAttribute("data-journey-overlay-journey-id") ?? null,
+    owner: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive-owner") ?? null,
+  }));
+  record("native Detail blank click closes only context", { detailBlankTarget, detailAfterBlank },
+    detailAfterBlank.contextCount === 0
+    && detailAfterBlank.activeRoute === journeyId
+    && detailAfterBlank.overlayJourneyId === journeyId
+    && detailAfterBlank.owner === "detail");
+
   await detailPickPage.locator(".living-atlas__create").click();
   await detailPickPage.locator(".journey-composer").waitFor({ state: "visible", timeout: 5_000 });
   const detailPickTrigger = detailPickPage.getByRole("button", { name: /直接在地球上取点/ });
@@ -906,7 +971,8 @@ try {
     enteredDetail, existingDetailPoint, pickTarget, detailPickOutcome,
   },
     enteredDetail.stage === "detail"
-    && pickTarget.routePointId === existingDetailPoint.routePointId
+    && pickTarget.journeyId === journeyId
+    && interactionJourney.routePoints.some((point) => point.id === pickTarget.routePointId)
     && detailPickOutcome.contextCount === 0
     && detailPickOutcome.storyCount === 0
     && detailPickOutcome.pickActive === false

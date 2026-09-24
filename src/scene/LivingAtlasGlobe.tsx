@@ -1182,6 +1182,7 @@ export function LivingAtlasGlobe({
               reduceMotion={reduceMotion}
               language={detailLanguage}
               onJourneyRoutePointActivate={onJourneyRoutePointActivate}
+              onGlobeBlankActivate={onGlobeBlankActivate}
               onManualCameraInteraction={handleManualCameraInteraction}
               onFocusSettled={handleDetailFocusSettled}
               onGlobePointPick={detailMode ? onGlobePointPick : undefined}
