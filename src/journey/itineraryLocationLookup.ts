@@ -55,6 +55,39 @@ export function itineraryLocationSuggestion(
   return first;
 }
 
+/** A whole-plan review may identify an exact named place whose map record only
+ * carries a neighbouring town or a county. Accept that choice within the
+ * stated state only when the provider itself uses a distinctive known name. */
+export function itineraryReviewedPlaceSuggestion(
+  entry: ItineraryEntryDraft,
+  chosen: LocationSearchResult,
+  results: readonly LocationSearchResult[],
+): LocationSearchResult | null {
+  const statePart = entry.searchArea?.split(",")[1]?.trim() ?? "";
+  const state = nameKey(statePart);
+  if (!entry.countryCode || !state || /[/;]/.test(statePart)
+    || entry.flags.includes("source-invalid") || entry.flags.includes("truncated")) return null;
+  const names = new Set([entry.name, ...entry.aliases]
+    .map(nameKey).filter((name) => name.split(" ").length >= 3));
+  if (names.size === 0) return null;
+  if (chosen.countryCode !== entry.countryCode
+    || !contextNamesLocality(chosen.context, state)
+    || ![chosen.label, chosen.labelEnglish, chosen.labelLocal]
+      .some((label) => label && names.has(nameKey(label)))) return null;
+  const matches = results.filter((result) =>
+    result.countryCode === entry.countryCode
+    && contextNamesLocality(result.context, state)
+    && [result.label, result.labelEnglish, result.labelLocal]
+      .some((label) => label && names.has(nameKey(label)))
+  );
+  if (!matches.some((result) => result.id === chosen.id)) return null;
+  if (matches.some((result) =>
+    Math.abs(result.latitude - chosen.latitude) > 0.05
+    || Math.abs(result.longitude - chosen.longitude) > 0.05
+  )) return null;
+  return chosen;
+}
+
 /** A model-corrected, distinctive name may identify a rural POI whose map data
  * records only county and state. Require one exact provider name in the stated
  * state and country; generic or duplicate names still need a member's choice. */

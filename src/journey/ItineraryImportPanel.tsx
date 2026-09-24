@@ -14,6 +14,7 @@ import {
   itineraryCorrectedLocationSuggestion,
   itineraryLocationDisplayNames,
   itineraryLocationSuggestion,
+  itineraryReviewedPlaceSuggestion,
 } from "./itineraryLocationLookup";
 import {
   buildItineraryImportDraft,
@@ -179,6 +180,7 @@ export function ItineraryImportPanel({
   const manualSearchGeneration = useRef(0);
   const manuallyConfirmed = useRef(new Set<string>());
   const manuallyEditing = useRef(new Set<string>());
+  const reviewedSearches = useRef(new Map<string, { query: string; results: LocationSearchResult[] }>());
   const [candidates, setCandidates] = useState<
     { entryId: string; results: LocationSearchResult[] } | null
   >(null);
@@ -243,6 +245,10 @@ export function ItineraryImportPanel({
         }
         if (lookupGeneration.current !== generation) return;
         found.set(entry.entryId, results);
+        reviewedSearches.current.set(entry.entryId, {
+          query: englishAlias && results.length > 0 ? englishAlias : query,
+          results,
+        });
         const suggestion = itineraryLocationSuggestion(entry, results);
         if (suggestion && !manuallyConfirmed.current.has(entry.entryId)
           && !manuallyEditing.current.has(entry.entryId)) {
@@ -301,10 +307,17 @@ export function ItineraryImportPanel({
         if (!entry || entry.flags.includes("source-invalid") || entry.flags.includes("truncated")
           || manuallyConfirmed.current.has(entry.entryId) || manuallyEditing.current.has(entry.entryId)) continue;
         const chosen = found.get(entry.entryId)?.find((result) => result.id === decision.candidateId);
-        if (chosen && itineraryLocationSuggestion({
+        if (chosen) {
+          const results = found.get(entry.entryId) ?? [];
+          reviewedSearches.current.set(entry.entryId, {
+            query: reviewedSearches.current.get(entry.entryId)?.query ?? searchableName(entry),
+            results: [chosen, ...results.filter((result) => result.id !== chosen.id)],
+          });
+        }
+        if (chosen && (itineraryLocationSuggestion({
           ...entry,
           aliases: [...entry.aliases, chosen.label, chosen.labelEnglish ?? "", chosen.labelLocal ?? ""],
-        }, [chosen])) {
+        }, [chosen]) || itineraryReviewedPlaceSuggestion(entry, chosen, found.get(entry.entryId) ?? []))) {
           reviewed.push({ entry, result: chosen });
           continue;
         }
@@ -315,6 +328,16 @@ export function ItineraryImportPanel({
             countryCode: entry.countryCode,
           });
           if (lookupGeneration.current !== generation) return;
+          const previous = reviewedSearches.current.get(entry.entryId);
+          reviewedSearches.current.set(entry.entryId, {
+            query: results.length > 0 ? decision.correctedQuery : previous?.query ?? decision.correctedQuery,
+            results: [
+              ...results,
+              ...(previous?.results ?? []).filter((candidate) =>
+                !results.some((result) => result.id === candidate.id)
+              ),
+            ],
+          });
           const correction = itineraryCorrectedLocationSuggestion(
             entry, decision.correctedQuery, results,
           );
@@ -354,6 +377,7 @@ export function ItineraryImportPanel({
     manualSearchGeneration.current += 1;
     manuallyConfirmed.current.clear();
     manuallyEditing.current.clear();
+    reviewedSearches.current.clear();
     setDraft(next);
     setSelected(defaultItinerarySelection(next));
     setSuggestions({});
@@ -508,13 +532,14 @@ export function ItineraryImportPanel({
     manualSearchGeneration.current += 1;
     manuallyEditing.current.add(entry.entryId);
     setLocating(null);
-    setManualQuery(searchableName(entry) || entry.name.slice(0, 120));
+    const prepared = reviewedSearches.current.get(entry.entryId);
+    setManualQuery(prepared?.query || searchableName(entry) || entry.name.slice(0, 120));
     setSuggestions((current) => {
       const next = { ...current };
       delete next[entry.entryId];
       return next;
     });
-    setCandidates({ entryId: entry.entryId, results: [] });
+    setCandidates({ entryId: entry.entryId, results: prepared?.results ?? [] });
   }, []);
 
   const confirmPosition = useCallback((

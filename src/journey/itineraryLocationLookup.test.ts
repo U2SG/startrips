@@ -4,6 +4,7 @@ import {
   itineraryCorrectedLocationSuggestion,
   itineraryLocationDisplayNames,
   itineraryLocationSuggestion,
+  itineraryReviewedPlaceSuggestion,
 } from "./itineraryLocationLookup";
 import type { LocationSearchResult } from "./types";
 
@@ -125,5 +126,41 @@ describe("itinerary location lookup", () => {
     ])).toBeNull();
     expect(itineraryCorrectedLocationSuggestion(rookery, "Vista Point", [vista]))
       .toBeNull();
+  });
+
+  it("accepts a whole-plan choice with an exact known name in the right state", () => {
+    const place = entry("七彩石", ["Seven Magic Mountains"], "US", "Jean, Nevada");
+    const selected = {
+      ...result("Seven Magic Mountains", "US", 35.837),
+      context: "Sloan, Clark, Nevada, United States",
+    };
+    expect(itineraryLocationSuggestion(place, [selected])).toBeNull();
+    expect(itineraryReviewedPlaceSuggestion(place, selected, [selected])).toEqual(selected);
+  });
+
+  it("keeps a wrong-state or distant same-name choice for manual review", () => {
+    const place = entry("七彩石", ["Seven Magic Mountains"], "US", "Jean, Nevada");
+    const selected = {
+      ...result("Seven Magic Mountains", "US", 35.837),
+      context: "Sloan, Clark, Nevada, United States",
+    };
+    expect(itineraryReviewedPlaceSuggestion(place, {
+      ...selected, context: "Sloan, California, United States",
+    }, [selected])).toBeNull();
+    expect(itineraryReviewedPlaceSuggestion(place, selected, [
+      selected, { ...selected, id: "distant", latitude: 36.2 },
+    ])).toBeNull();
+    expect(itineraryReviewedPlaceSuggestion(place, selected, [{
+      ...selected, label: "Seven Magic Mountain Viewpoint",
+    }])).toBeNull();
+  });
+
+  it("does not waive city checks for generic two-word names", () => {
+    const place = entry("联合广场", ["Union Square"], "US", "San Francisco, California");
+    const selected = {
+      ...result("Union Square", "US", 34.0),
+      context: "Los Angeles, California, United States",
+    };
+    expect(itineraryReviewedPlaceSuggestion(place, selected, [selected])).toBeNull();
   });
 });
