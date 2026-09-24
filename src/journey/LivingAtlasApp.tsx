@@ -1158,6 +1158,10 @@ export function LivingAtlasApp({
     journeyId: string;
     target: PlaybackCameraTarget;
   } | null>(null);
+  const [playbackNarrativeTarget, setPlaybackNarrativeTarget] = useState<{
+    journeyId: string;
+    pointIndex: number;
+  } | null>(null);
   const [playbackCameraSettledRevision, setPlaybackCameraSettledRevision] = useState<number | null>(null);
   const [playbackQuickRecap, setPlaybackQuickRecap] = useState<PreparedQuickRecapPlayback | null>(null);
   const [playbackModeMenuJourneyId, setPlaybackModeMenuJourneyId] = useState<string | null>(null);
@@ -2019,20 +2023,6 @@ export function LivingAtlasApp({
   const narrativeJourneyProgress = narrativeSemanticSelection
     ? timeCursor.reveal.journeyProgress.get(narrativeSemanticSelection.journeyId)
     : undefined;
-  const playbackPointTarget = playbackActive && playbackCameraFollowing
-    && playbackSession.cameraCommand?.target.kind === "point"
-    ? playbackSession.cameraCommand.target
-    : null;
-  const playbackNarrativePoint = playbackPointTarget
-    ? playbackJourney?.routePoints[playbackPointTarget.pointIndex] ?? null
-    : null;
-  const playbackNarrativeRoutePoint = playbackPointTarget && playbackNarrativePoint && playbackSession.journeyId
-    ? {
-        journeyId: playbackSession.journeyId,
-        routePointId: playbackNarrativePoint.id,
-        pointIndex: playbackPointTarget.pointIndex,
-      }
-    : null;
   const timelineNarrativeRoutePoint = (isMobileV2 || globeFocusMode)
     && !timeCursor.hasExplicitSelection
     && narrativeSemanticSelection
@@ -2048,8 +2038,22 @@ export function LivingAtlasApp({
         pointIndex: narrativeSemanticSelection.pointIndex,
       }
     : null;
-  // Playback's chapter command and Globe Rewind have independent clocks. The
-  // current owner alone may promote a geometry-only point into the map layer.
+  const currentPlaybackNarrativeTarget = playbackActive
+    && playbackNarrativeTarget?.journeyId === playbackSession.journeyId
+    ? playbackNarrativeTarget
+    : null;
+  const playbackNarrativePoint = currentPlaybackNarrativeTarget
+    ? playbackJourney?.routePoints[currentPlaybackNarrativeTarget.pointIndex] ?? null
+    : null;
+  const playbackNarrativeRoutePoint = currentPlaybackNarrativeTarget && playbackNarrativePoint
+    ? {
+        journeyId: currentPlaybackNarrativeTarget.journeyId,
+        routePointId: playbackNarrativePoint.id,
+        pointIndex: currentPlaybackNarrativeTarget.pointIndex,
+      }
+    : null;
+  // Playback's logical chapter and its camera-follow command are independent.
+  // The current narrative owner alone promotes a geometry-only point to the map.
   const narrativeJourneyRoutePoint = playbackActive
     ? playbackNarrativeRoutePoint
     : timelineNarrativeRoutePoint;
@@ -2138,6 +2142,7 @@ export function LivingAtlasApp({
     setPlaybackSession((current) => releaseStalePlaybackSession(current, true));
     playbackCameraFollowingRef.current = true;
     playbackCurrentCameraTargetRef.current = null;
+    setPlaybackNarrativeTarget(null);
     setPlaybackCameraFollowing(true);
     setPlaybackCameraSettledRevision(null);
     setPlaybackQuickRecap(null);
@@ -2156,6 +2161,7 @@ export function LivingAtlasApp({
       setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
       playbackCameraFollowingRef.current = true;
       playbackCurrentCameraTargetRef.current = null;
+      setPlaybackNarrativeTarget(null);
       setPlaybackCameraFollowing(true);
       setPlaybackCameraSettledRevision(null);
       setPlaybackQuickRecap(null);
@@ -2637,6 +2643,7 @@ export function LivingAtlasApp({
     });
     playbackCameraFollowingRef.current = true;
     playbackCurrentCameraTargetRef.current = null;
+    setPlaybackNarrativeTarget(null);
     setPlaybackCameraFollowing(true);
     setPlaybackCameraSettledRevision(null);
   }
@@ -2730,6 +2737,7 @@ export function LivingAtlasApp({
     });
     playbackCameraFollowingRef.current = true;
     playbackCurrentCameraTargetRef.current = null;
+    setPlaybackNarrativeTarget(null);
     setPlaybackCameraFollowing(true);
     setPlaybackCameraSettledRevision(null);
   }
@@ -2798,6 +2806,7 @@ export function LivingAtlasApp({
     setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
     playbackCameraFollowingRef.current = true;
     playbackCurrentCameraTargetRef.current = null;
+    setPlaybackNarrativeTarget(null);
     setPlaybackCameraFollowing(true);
     setPlaybackCameraSettledRevision(null);
     setPlaybackQuickRecap(null);
@@ -3897,6 +3906,12 @@ export function LivingAtlasApp({
             const journeyId = playbackSession.journeyId;
             if (!journeyId) return;
             playbackCurrentCameraTargetRef.current = { journeyId, target };
+            setPlaybackNarrativeTarget((current) => {
+              if (target.kind !== "point") return null;
+              return current?.journeyId === journeyId && current.pointIndex === target.pointIndex
+                ? current
+                : { journeyId, pointIndex: target.pointIndex };
+            });
             if (explicitlySelected) {
               playbackCameraFollowingRef.current = true;
               setPlaybackCameraFollowing(true);

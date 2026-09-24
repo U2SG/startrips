@@ -562,6 +562,29 @@ async function clickRoutePointMarker(page, routeId, pointId) {
   return { box, target };
 }
 
+async function routeMarkerClickState(page, pointId, target) {
+  return page.evaluate(({ pointId, target }) => {
+    const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${pointId}"]`);
+    const scene = document.querySelector(".particle-earth-scene");
+    const markerRect = marker?.getBoundingClientRect();
+    const hit = document.elementFromPoint(target.x, target.y);
+    return {
+      contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+      activationId: scene?.getAttribute("data-route-point-activation-id") ?? null,
+      activationSource: scene?.getAttribute("data-route-point-activation-source") ?? null,
+      activationEventTarget: scene?.getAttribute("data-route-point-activation-event-target") ?? null,
+      hitElement: hit instanceof Element ? `${hit.tagName.toLowerCase()}.${[...hit.classList].join(".")}` : null,
+      markerRect: markerRect ? [markerRect.left, markerRect.top, markerRect.width, markerRect.height] : null,
+      temporalVisible: marker?.getAttribute("data-temporal-visible") ?? null,
+      focusRevision: scene?.getAttribute("data-focus-revision") ?? null,
+      focusSettleCount: scene?.getAttribute("data-focus-settle-count") ?? null,
+      routePointCount: scene?.getAttribute("data-journey-route-point-count") ?? null,
+      projectionReady: window.__particleEarthDebug?.().journeyRouteProjectionReady ?? null,
+      scrubberValue: document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") ?? null,
+    };
+  }, { pointId, target });
+}
+
 async function clickRoutePointLabel(page, routeId, pointId) {
   const label = page.locator(`.particle-earth-route__label[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
   await label.waitFor({ state: "visible", timeout: 5_000 });
@@ -968,13 +991,39 @@ try {
     && document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point") === "35.5,-116.5"
     && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "6"
   ), projectionPointIds.detour);
+  // The narrative owner updates before the camera arrives. Click only once
+  // the renderer has drawn the target at its settled, pointer-hit position.
+  await projectionPage.waitForFunction(() => {
+    const scene = document.querySelector(".particle-earth-scene");
+    const focus = document.querySelector("[data-qa-route-point-context-focus]");
+    return scene?.getAttribute("data-focus-revision") === focus?.getAttribute("data-focus-revision")
+      && scene?.getAttribute("data-focus-target-lat") === "35.5"
+      && scene?.getAttribute("data-focus-target-lon") === "-116.5"
+      && Number(scene?.getAttribute("data-focus-settle-count") ?? 0) > 0
+      && window.__particleEarthDebug?.().journeyRouteProjectionReady === true;
+  });
   const detourFocus = await sceneFocusSnapshot(projectionPage);
+  const detourMarker = projectionPage.locator(`.particle-earth-route__point[data-route-point-id="${projectionPointIds.detour}"]`);
+  const detourMarkerBox = await detourMarker.boundingBox();
+  if (!detourMarkerBox) throw new Error("settled detour has no marker geometry");
+  const detourBeforeClick = await routeMarkerClickState(projectionPage, projectionPointIds.detour, {
+    x: detourMarkerBox.x + detourMarkerBox.width / 2,
+    y: detourMarkerBox.y + detourMarkerBox.height / 2,
+  });
   const detourClick = await clickRoutePointMarker(projectionPage, journeyId, projectionPointIds.detour);
-  await projectionPage.locator(`[data-route-point-context][data-route-point-id="${projectionPointIds.detour}"]`)
-    .waitFor({ state: "visible", timeout: 5_000 });
+  const detourImmediatelyAfterClick = await routeMarkerClickState(projectionPage, projectionPointIds.detour, detourClick.target);
+  try {
+    await projectionPage.locator(`[data-route-point-context][data-route-point-id="${projectionPointIds.detour}"]`)
+      .waitFor({ state: "visible", timeout: 5_000 });
+  } catch (error) {
+    const detourAfterFailedClick = await routeMarkerClickState(projectionPage, projectionPointIds.detour, detourClick.target);
+    throw new Error(`settled detour marker did not open its context: ${JSON.stringify({
+      detourFocus, detourBeforeClick, detourClick, detourImmediatelyAfterClick, detourAfterFailedClick,
+    })}`, { cause: error });
+  }
   const detourActivation = await routePointActivationEvidence(projectionPage);
   record("rewind publishes the pure detour as its current focus and real marker hit", {
-    detourFocus, detourClick, detourActivation,
+    detourFocus, detourBeforeClick, detourClick, detourImmediatelyAfterClick, detourActivation,
   }, detourFocus.focusPoint === "35.5,-116.5"
     && detourActivation.source === "marker"
     && detourActivation.journeyId === journeyId
@@ -1087,6 +1136,52 @@ try {
     && playbackDetourState.chapter === "1"
     && playbackDetourState.camera === "35.5,-116.5"
     && playbackDetourState.contextCount === 0);
+  const followedDetourFocus = await sceneFocusSnapshot(projectionPage);
+  const playbackDrag = await findBlankGlobePoint(projectionPage);
+  const playbackDragEnd = await projectionPage.evaluate(({ x, y }) => {
+    const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+    if (!(canvas instanceof HTMLCanvasElement)) return null;
+    for (const [dx, dy] of [[90, 35], [-90, 35], [90, -35], [-90, -35]]) {
+      if (document.elementFromPoint(x + dx, y + dy) === canvas) return { x: x + dx, y: y + dy };
+    }
+    return null;
+  }, playbackDrag);
+  if (!playbackDragEnd) throw new Error("Playback has no native canvas drag path");
+  await projectionPage.mouse.move(playbackDrag.x, playbackDrag.y);
+  await projectionPage.mouse.down();
+  await projectionPage.mouse.move(playbackDragEnd.x, playbackDragEnd.y, { steps: 6 });
+  await projectionPage.mouse.up();
+  await projectionPage.waitForFunction((detourId) => {
+    const playback = document.querySelector(".journey-playback");
+    const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${detourId}"]`);
+    return playback?.getAttribute("data-camera-follow") === "free"
+      && playback.getAttribute("data-playback-step") === "3"
+      && playback.getAttribute("data-map-interactive") === "true"
+      && marker?.getAttribute("data-attention-role") === "narrative-current"
+      && marker.getBoundingClientRect().width > 0;
+  }, projectionPointIds.detour);
+  const freeDetourFocus = await sceneFocusSnapshot(projectionPage);
+  record("native map drag frees only the camera while pure-detour chapter and marker remain", {
+    playbackDrag, playbackDragEnd, followedDetourFocus, freeDetourFocus,
+  }, freeDetourFocus.focusRevision === followedDetourFocus.focusRevision
+    && await projectionPlayback.getAttribute("data-camera-follow") === "free"
+    && await projectionPlayback.locator('.journey-playback__chapter[data-chapter-point="1"]').count() === 1);
+  await projectionPage.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
+  await projectionPage.waitForFunction((ids) => {
+    const playback = document.querySelector(".journey-playback");
+    const b = document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.b}"]`);
+    return playback?.getAttribute("data-camera-follow") === "free"
+      && playback.getAttribute("data-playback-step") === "4"
+      && playback.getAttribute("data-playback-phase") === "travel"
+      && b?.getAttribute("data-attention-role") === "narrative-current"
+      && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
+      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5";
+  }, projectionPointIds);
+  const freeAdvanceFocus = await sceneFocusSnapshot(projectionPage);
+  record("automatic Playback advance changes the narrated point without recapturing free camera", {
+    freeAdvanceFocus,
+  }, freeAdvanceFocus.focusRevision === followedDetourFocus.focusRevision
+    && await projectionPlayback.getAttribute("data-camera-follow") === "free");
   await projectionPage.locator(".journey-playback__close").click();
   record("projection page errors", { pageErrors: projectionRun.pageErrors }, projectionRun.pageErrors.length === 0);
   await projectionPage.close();
@@ -1190,6 +1285,29 @@ try {
   }, projectedDetailOpen.routePointId === projectionPointIds.b
     && projectedDetailOpen.journeyId === journeyId
     && projectedDetailOpen.owner === "detail");
+  await projectionDetailPage.locator("[data-route-point-context-close]").click();
+  await projectionDetailPage.locator("[data-route-point-context]").waitFor({ state: "detached", timeout: 5_000 });
+  const hiddenDetourClick = await projectionDetailPage.evaluate((point) => {
+    const projected = window.__detailedEarthMapProject?.(point.longitude, point.latitude);
+    if (!projected) return null;
+    const hit = document.elementFromPoint(projected.x, projected.y);
+    return hit instanceof Element && hit.closest(".detailed-earth-map")
+      && !window.__detailedEarthJourneyRoutePointHit?.(projected.x, projected.y)
+      ? { x: projected.x, y: projected.y }
+      : null;
+  }, projectionRoutePoints[1]);
+  if (!hiddenDetourClick) throw new Error("pure detour has no pointer-reachable Detail map coordinate");
+  await projectionDetailPage.mouse.click(hiddenDetourClick.x, hiddenDetourClick.y);
+  const hiddenDetourAfterClick = await projectionDetailPage.evaluate(() => ({
+    contextCount: document.querySelectorAll("[data-route-point-context]").length,
+    owner: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive-owner"),
+    activeRoute: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route"),
+  }));
+  record("native Detail click on the pure detour stays blank without changing Journey owner", {
+    hiddenDetourClick, hiddenDetourAfterClick,
+  }, hiddenDetourAfterClick.contextCount === 0
+    && hiddenDetourAfterClick.owner === "detail"
+    && hiddenDetourAfterClick.activeRoute === journeyId);
   record("projection Detail page errors", { pageErrors: projectionDetailRun.pageErrors },
     projectionDetailRun.pageErrors.length === 0);
   await projectionDetailPage.close();
