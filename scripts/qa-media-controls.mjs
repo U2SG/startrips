@@ -1724,6 +1724,7 @@ try {
       .map(([dx, dy]) => ({ x: Math.round(x + dx * apertureWidth), y: Math.round(y + dy * apertureHeight) }));
     return { id: current.dataset.mediaPageId, presentation: stage.dataset.mediaPresentation,
       pages, hitSurface: hit?.hasAttribute("data-story-hit-surface"),
+      hitImage: hit === image && image.getAttribute("role") === "button",
       clickTarget: hit?.getAttribute("aria-label") ?? hit?.className ?? null,
       apertureWidth, apertureHeight, paintPoints,
       dragX: stage.style.getPropertyValue("--story-drag-x") };
@@ -1914,10 +1915,15 @@ try {
     await page.evaluate(() => window.history.back());
     await overlay.waitFor({ state: "hidden" });
     await waitForStoryPicture(page, first);
+    const returning = await inspectStagePaint(page, ".journey-story__media");
+    // The fullscreen shared-element clone owns paint until its exit finishes.
+    // Once it releases the picture, the actual image must own the tap again.
+    await page.locator('[data-shared-element-clone^="story-fullscreen"]').waitFor({ state: "hidden", timeout: 3_000 });
     const returned = await inspectStagePaint(page, ".journey-story__media");
-    const backFailed = !stagePaintValid(beforeBack, first) || !stagePaintValid(returned, first)
+    const backFailed = !stagePaintValid(beforeBack, first) || !stagePaintValid(returning, first)
+      || !stagePaintValid(returned, first) || !beforeBack.hitImage || !returned.hitImage
       || returned.dragX !== "" || frontPixels(returned) !== frontPixels(beforeBack);
-    checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returned,
+    checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returning, returned,
       consoleErrors: stageOwnerBack.consoleErrors, pageErrors: stageOwnerBack.pageErrors,
       failed: backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0 });
     if (backFailed || stageOwnerBack.consoleErrors.length > 0 || stageOwnerBack.pageErrors.length > 0) failed = true;
