@@ -221,6 +221,27 @@ describe("applying a reviewed itinerary draft", () => {
       .toEqual([]);
   });
 
+  it("keeps a named pass-through place pending until its position is resolved", () => {
+    const draft = draftOf("Day 1 · 2026-03-14 · Chengdu\n途经 剑门关\n", "waypoint");
+    const [waypoint] = itineraryDraftEntries(draft);
+    expect(waypoint.flags).toContain("unresolved-position");
+    const positioned = resolveItineraryEntryPosition(draft, waypoint.entryId, {
+      latitude: 32.13, longitude: 105.59,
+    });
+    const [imported] = itineraryDraftToRoutePoints(positioned, defaultItinerarySelection(positioned));
+    expect(imported.point.isStop).toBe(false);
+    expect(imported.role).toBe("pure-transit");
+  });
+
+  it("treats a pasted flight between endpoints as a leg, not a place", () => {
+    const draft = draftOf("Day 1 · 2026-03-14 · Hong Kong\nflight Hong Kong to Los Angeles\n", "flight-text");
+    expect(itineraryDraftEntries(draft)[0].transitEndpoints).toEqual({
+      from: "Hong Kong", to: "Los Angeles",
+    });
+    expect(draft.counts.pendingConfirmationCount).toBe(0);
+    expect(defaultItinerarySelection(draft)).toEqual([]);
+  });
+
   it("keeps a venue-free concert in the reading without turning it into a place", () => {
     const draft = buildItineraryImportDraft({
       contractVersion: 1,

@@ -211,6 +211,12 @@ function isNonPlaceRole(role: ItineraryEntryRole) {
   return role === "activity";
 }
 
+/** An endpoint-only leg is travel between places, not a separate waypoint. */
+export function isEndpointOnlyLeg(entry: ItineraryRecognitionEntry) {
+  return (entry.role === "pure-transit" || entry.role === "transport")
+    && entry.transitEndpoints != null && !hasPosition(entry);
+}
+
 function needsEntryConfirmation(flags: readonly ItineraryEntryFlag[]) {
   return flags.some((flag) => flag !== "possible-repeat-visit" && flag !== "year-unconfirmed");
 }
@@ -316,7 +322,7 @@ export function buildItineraryImportDraft(
     const flags: ItineraryEntryFlag[] = [];
     if (entry.sourceInvalid) flags.push("source-invalid");
     if (entry.truncated) flags.push("truncated");
-    if (entry.role !== "pure-transit" && !isNonPlaceRole(entry.role) && !hasPosition(entry)) {
+    if (!isEndpointOnlyLeg(entry) && !isNonPlaceRole(entry.role) && !hasPosition(entry)) {
       flags.push("unresolved-position");
     }
 
@@ -447,7 +453,7 @@ export function defaultItinerarySelection(
     .filter((entry) => (
       !entry.flags.includes("source-invalid")
       && !entry.flags.includes("unresolved-position")
-      && (entry.role !== "pure-transit" || entry.latitude !== null)
+      && !isEndpointOnlyLeg(entry)
       && !isNonPlaceRole(entry.role)
     ))
     .map((entry) => entry.entryId);

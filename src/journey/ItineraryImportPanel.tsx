@@ -17,6 +17,7 @@ import {
 import {
   buildItineraryImportDraft,
   defaultItinerarySelection,
+  isEndpointOnlyLeg,
   itineraryDraftEntries,
   itineraryDraftToRoutePoints,
   itineraryImportJobKey,
@@ -693,7 +694,7 @@ export function ItineraryImportPanel({
                     <ul>
                       {day.entries.map((entry) => (
                         <li key={entry.entryId}>
-                          {(entry.role === "pure-transit" && entry.latitude === null)
+                          {isEndpointOnlyLeg(entry)
                             || entry.role === "activity" ? (
                             <strong>{entry.name}</strong>
                           ) : (
@@ -708,7 +709,7 @@ export function ItineraryImportPanel({
                             </label>
                           )}
                           <small>
-                            {entry.role === "pure-transit" && entry.latitude === null
+                            {isEndpointOnlyLeg(entry)
                               ? "航段记录，无需定位"
                               : entry.role === "activity"
                                 ? "没有明确场馆，无需定位"
@@ -730,7 +731,7 @@ export function ItineraryImportPanel({
                               <button type="button" onClick={() => openLocationSearch(entry)}>更换</button>
                             </div>
                           ) : null}
-                          {entry.latitude === null && entry.role !== "pure-transit"
+                          {entry.latitude === null && !isEndpointOnlyLeg(entry)
                             && entry.role !== "activity" && !suggestions[entry.entryId] ? (
                             <button
                               type="button"

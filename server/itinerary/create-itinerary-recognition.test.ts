@@ -99,4 +99,23 @@ describe("http-model recogniser", () => {
     }, {});
     expect(reading.days[0].calendarDate).toBe("2026-03-14");
   });
+
+  it("grounds English full dates and retains English month/day without a source year", async () => {
+    const recognizer = createItineraryRecognizer({
+      driver: "http-model",
+      baseUrl: "https://model.example/read",
+      apiKey: null,
+      model: "reader-1",
+      fetcher: async () => new Response(JSON.stringify(READING)),
+    });
+    const dated = await recognizer.recognize({
+      kind: "text", text: "Day 1 · March 14, 2026 · Singapore",
+    }, {});
+    expect(dated.days[0].calendarDate).toBe("2026-03-14");
+
+    const undated = await recognizer.recognize({
+      kind: "text", text: "Day 1 · Mar. 14 · Singapore; 2025 hotel ranking",
+    }, {});
+    expect(undated.days[0]).toMatchObject({ calendarDate: null, partialDate: "03-14" });
+  });
 });

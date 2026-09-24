@@ -2034,12 +2034,12 @@ export function JourneyComposer({
 
                 <section ref={routeScrollRef} className="journey-composer__route" aria-labelledby="journey-route-heading">
                   {routeHeadingFragment}
-                  {itineraryImportFragment}
                   <div className="journey-composer__route-tools">
                     {routeSearchFragment}
                     {globePickFragment}
                     {reverseAttributionFragment}
                   </div>
+                  {itineraryImportFragment}
                   {routeListFragment}
                   {preciseLocationFragment}
                 </section>

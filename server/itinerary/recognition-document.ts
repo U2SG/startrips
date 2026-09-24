@@ -107,6 +107,20 @@ export function groundTextItineraryDates(
   reading: ItineraryRecognitionCandidates,
   sourceText: string,
 ): ItineraryRecognitionCandidates {
+  const months = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+  ];
+  const englishFullDates = new Set<string>();
+  const englishMonthDays = new Set<string>();
+  for (const match of sourceText.matchAll(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:\s*,\s*(\d{4}))?(?!\d)/g)) {
+    const month = months.findIndex((name) => name.startsWith(match[1].toLowerCase())) + 1;
+    const date = Number(match[2]);
+    if (!month || date < 1 || date > 31) continue;
+    const monthDay = `${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
+    englishMonthDays.add(monthDay);
+    if (match[3]) englishFullDates.add(`${match[3]}-${monthDay}`);
+  }
   const days = reading.days.map((day) => {
     if (!day.calendarDate) return day;
     const [year, month, date] = day.calendarDate.split("-").map(Number);
@@ -118,7 +132,7 @@ export function groundTextItineraryDates(
     const fullDate = new RegExp(
       `(?<!\\d)${yearText}${separators}${monthText}${separators}${dateText}${ending}(?!\\d)`,
     );
-    if (fullDate.test(sourceText)) return day;
+    if (fullDate.test(sourceText) || englishFullDates.has(day.calendarDate)) return day;
 
     const monthDay = new RegExp(
       `(?<!\\d)${monthText}\\s*(?:月|[-/.])\\s*${dateText}${ending}(?!\\d)`,
@@ -126,7 +140,9 @@ export function groundTextItineraryDates(
     return {
       ...day,
       calendarDate: null,
-      partialDate: day.partialDate ?? (monthDay.test(sourceText)
+      partialDate: day.partialDate ?? (monthDay.test(sourceText) || englishMonthDays.has(
+        `${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`,
+      )
         ? `${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`
         : null),
     };

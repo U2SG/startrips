@@ -36,7 +36,13 @@ function result(label: string, countryCode: string, latitude: number): LocationS
 describe("itinerary location lookup", () => {
   it("tries a known English endonym before the Chinese printed name", () => {
     expect(itineraryLocationQueries(entry("苹果公司总部", ["Apple Park"])))
-      .toEqual(["Apple Park Cupertino", "Apple Park", "苹果公司总部"]);
+      .toEqual(["Apple Park Cupertino", "Apple Park", "苹果公司总部 Cupertino", "苹果公司总部"]);
+  });
+
+  it("keeps the day heading's city in a pasted-text manual search", () => {
+    expect(itineraryLocationQueries({
+      ...entry("人民公园", [], null, null), regionContext: "成都",
+    })).toEqual(["人民公园 成都", "人民公园"]);
   });
 
   it("refuses a same-name answer in the wrong country", () => {
