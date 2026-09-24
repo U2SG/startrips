@@ -711,6 +711,8 @@ try {
           });
         }, { capture: true, once: true });
       });
+      const idleBeforeWheel = Number(await page.locator(".detailed-earth-map")
+        .getAttribute("data-map-idle-count") ?? 0);
       await page.mouse.wheel(0, -120);
       try {
         await page.waitForFunction(({ longitude, latitude, baseline }) => {
@@ -742,10 +744,16 @@ try {
       }
       // MapLibre blocks keyboard pan while its scroll-zoom handler still owns
       // the gesture. Its renderer idle edge releases that native ownership.
-      const idleDuringZoom = Number(await page.locator(".detailed-earth-map")
-        .getAttribute("data-map-idle-count") ?? 0);
-      await page.waitForFunction((before) => Number(document.querySelector(".detailed-earth-map")
-        ?.getAttribute("data-map-idle-count") ?? 0) > before, idleDuringZoom, { timeout: 8_000 });
+      try {
+        await page.waitForFunction((before) => Number(document.querySelector(".detailed-earth-map")
+          ?.getAttribute("data-map-idle-count") ?? 0) > before, idleBeforeWheel, { timeout: 8_000 });
+      } catch (error) {
+        const state = await page.locator(".detailed-earth-map").evaluate((map) => ({
+          idleCount: map.dataset.mapIdleCount, center: map.dataset.mapCameraObservation,
+          readiness: map.dataset.mapReadiness, owner: map.dataset.diveOwner,
+        }));
+        throw new Error(`Detail Map never released wheel ownership: ${JSON.stringify({ idleBeforeWheel, state })}`, { cause: error });
+      }
       const canvas = page.locator(".maplibregl-canvas");
       assert.equal(await canvas.evaluate((node) => node.tabIndex), 0, "detail map canvas must be keyboard reachable");
       await canvas.focus();
