@@ -510,7 +510,7 @@ export async function completeIdentityLink(values: {
  * Until now `completeIdentityLink` was the only writer of
  * `account_identity_ownerships`, so every non-credential account row had one
  * by construction. A native Google sign-up creates the account row through
- * Better Auth's adapter instead, and `accountIdentityUsable` would then read
+ * Better Auth's adapter instead, and `accountIdentityLoginUsable` would then read
  * the method the person just signed in with as unusable. This records the
  * identity Better Auth already verified for exactly that row.
  *
@@ -554,7 +554,7 @@ export async function recordProviderSignInOwnership(values: {
     // Better Auth only creates the account once. The provider's verification
     // claim is not a constant, though: a first callback carrying an unverified
     // or absent email persists `providerEmailVerified: false`, which
-    // `accountIdentityUsable` reads as an unusable method, and without this
+    // `accountIdentityLoginUsable` reads as an unusable method, and without this
     // refresh a later verified callback could never lift it. The refresh is
     // scoped to this same user AND this same account row, so a subject that
     // already belongs to somebody else is left untouched rather than

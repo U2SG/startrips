@@ -142,7 +142,7 @@ type IdTokenAdapter<Info> = {
  * the same string -- and `api/routes/callback.mjs` calls just `getUserInfo()`
  * after the code exchange. Everything Startrips then persists comes from those
  * claims: the subject an ownership row is keyed by, and the verified-email flag
- * `accountIdentityUsable` reads. So both entries -- the native sign-in wrapper
+ * `accountIdentityLoginUsable` reads. So both entries -- the native sign-in wrapper
  * below and the explicit bind adapter further down -- run the verification
  * half first and refuse the callback when it fails, per #349's requirement
  * that issuer/audience/subject be validated by the pinned library. The pinned
@@ -253,7 +253,7 @@ export function googleSignInOptions(config: ServerConfig = serverConfig): Google
           subject,
           email,
           // An unverified or absent provider email must never present as a
-          // verified one: `accountIdentityUsable` reads this flag directly.
+          // verified one: `accountIdentityLoginUsable` reads this flag directly.
           emailVerified: Boolean(info.user.emailVerified) && email !== null,
         });
       }

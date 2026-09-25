@@ -98,7 +98,7 @@ once the credential works again.
 
 To stop offering Apple entirely, clear all five variables and restart. Read the
 consequence before doing it: `apple` leaves `usableProviderIds`, so every Apple
-`account` row stops satisfying `accountIdentityUsable`, and an account whose
+`account` row stops satisfying `accountIdentityLoginUsable`, and an account whose
 only identity is Apple — the normal shape of one created by Apple sign-up —
 has no way in at all. The same holds for the narrower case above while a
 revoked key is in place.

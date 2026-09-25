@@ -171,7 +171,7 @@ export function appleSignInOptions(
           subject,
           email,
           // An unverified or absent provider email must never present as a
-          // verified one: `accountIdentityUsable` reads this flag directly.
+          // verified one: `accountIdentityLoginUsable` reads this flag directly.
           // A Hide My Email relay address is verified BY Apple, so it arrives
           // true here; what must never happen is it matching an existing
           // account by address, which the disabled implicit-linking policy in
