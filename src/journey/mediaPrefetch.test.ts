@@ -4,6 +4,7 @@ import {
   decodeImageUrl,
   mediaPrefetchUrlsForRead,
   prefetchWindowFor,
+  storyWarmWindow,
 } from "./mediaPrefetch";
 
 describe("same-asset preview prefetch (#264)", () => {
@@ -23,6 +24,57 @@ describe("same-asset preview prefetch (#264)", () => {
       "https://media.example/original",
     ]);
     expect(mediaPrefetchUrlsForRead("asset-a", "asset-b", read)).toEqual([]);
+  });
+});
+
+describe("storyWarmWindow (#489 ST-159)", () => {
+  const base = { length: 12, wrap: false, autoplay: false } as const;
+
+  it("reads 3 ahead and 2 behind the requested intent, nearest-ahead first", () => {
+    expect(storyWarmWindow({ ...base, shownIndex: 4, requestedIndex: 4, direction: 1 })).toEqual({
+      reads: [4, 5, 3, 6, 2, 7],
+      decode: [4, 5, 3],
+    });
+  });
+
+  it("follows the latest requested media, keeping the shown one warm", () => {
+    const window = storyWarmWindow({ ...base, shownIndex: 4, requestedIndex: 6, direction: 1 });
+    expect(window.reads).toEqual([6, 7, 5, 8, 4, 9]);
+    expect(window.decode).toEqual([6, 7, 5, 4]);
+  });
+
+  it("biases toward the last direction and evicts the old lead on reversal", () => {
+    const forward = storyWarmWindow({ ...base, shownIndex: 6, requestedIndex: 6, direction: 1 });
+    const reversed = storyWarmWindow({ ...base, shownIndex: 6, requestedIndex: 6, direction: -1 });
+    expect(reversed.reads).toEqual([6, 5, 7, 4, 8, 3]);
+    expect(forward.reads).toContain(9);
+    expect(reversed.reads).not.toContain(9);
+  });
+
+  it("stays bounded: at most 7 reads and 4 decodes on a long Journey", () => {
+    for (let requested = 0; requested < 100; requested += 1) {
+      const window = storyWarmWindow({ length: 100, wrap: false, autoplay: false,
+        shownIndex: Math.max(0, requested - 5), requestedIndex: requested, direction: 1 });
+      expect(window.reads.length).toBeLessThanOrEqual(7);
+      expect(window.decode.length).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it("clamps at a Journey edge and wraps inside a Route Point scope", () => {
+    expect(storyWarmWindow({ ...base, shownIndex: 11, requestedIndex: 11, direction: 1 }).reads)
+      .toEqual([11, 10, 9]);
+    expect(storyWarmWindow({ length: 5, wrap: true, autoplay: false,
+      shownIndex: 4, requestedIndex: 4, direction: 1 }).reads).toEqual([4, 0, 3, 1, 2]);
+  });
+
+  it("looks forward during autoplay whatever the last manual direction was", () => {
+    expect(storyWarmWindow({ ...base, autoplay: true, shownIndex: 2, requestedIndex: 2, direction: -1 }).reads)
+      .toEqual([2, 3, 1, 4, 0, 5]);
+  });
+
+  it("has nothing to warm without a valid requested media", () => {
+    expect(storyWarmWindow({ ...base, shownIndex: 0, requestedIndex: -1, direction: 1 }))
+      .toEqual({ reads: [], decode: [] });
   });
 });
 

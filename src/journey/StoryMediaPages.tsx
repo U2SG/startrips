@@ -70,6 +70,9 @@ type Props = {
   onGestureTapAfterSettle?: () => void;
   onGestureExitFullscreen?: () => void;
   onGestureRevealFullscreenControls?: () => void;
+  /** #489: the decode tier of Story's warm window. A video here keeps a
+   *  representative frame ready before it is given a physical page. */
+  warmIds?: readonly string[];
 };
 
 /** See `videoGestureCanStart`: the band a presented transport's native controls occupy. */
@@ -234,6 +237,16 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     const read = id ? props.reads[id] : undefined;
     return `${id}:${read?.status}:${read?.status === "ready" ? `${read.url}:${read.generation ?? ""}` : ""}`;
   }).join("|");
+  const warmFrameIds = (props.warmIds ?? []).filter((id) => !assigned.includes(id));
+  const warmSignature = warmFrameIds.map((id) => {
+    const read = props.reads[id];
+    return `${id}:${read?.status}:${read?.status === "ready" ? `${read.url}:${read.generation ?? ""}` : ""}`;
+  }).join("|");
+  // What each physical <img> last finished painting. A reassigned slot keeps
+  // drawing its previous asset until the new source decodes, so a page whose
+  // image still shows another asset is hidden rather than exposing that old
+  // neighbour under the new identity (#489 section 5).
+  const paintedImages = useRef<Array<string | null>>([null, null, null]);
 
   const rememberLiveFrame = useCallback(() => {
     const source = bindingRef.current;
@@ -286,12 +299,15 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     binding.id, binding.src, binding.generation, Boolean(props.video), rememberLiveFrame]);
 
   useEffect(() => {
-    const wanted = new Set(assigned.filter((id): id is string => Boolean(id)));
+    const slotted = new Set(assigned.filter((id): id is string => Boolean(id)));
+    // Representative frames cover the pages and the warm decode tier; decoded
+    // <img> marks belong to a physical page and leave with it.
+    const wanted = new Set([...slotted, ...warmFrameIds]);
     for (const [id, cancel] of pendingFrames.current) {
       if (!wanted.has(id)) { cancel(); pendingFrames.current.delete(id); }
     }
     for (const id of frames.current.keys()) if (!wanted.has(id)) frames.current.delete(id);
-    for (const id of decodedImages.current.keys()) if (!wanted.has(id)) decodedImages.current.delete(id);
+    for (const id of decodedImages.current.keys()) if (!slotted.has(id)) decodedImages.current.delete(id);
     for (const id of wanted) {
       const asset = latest.current.media.find((item) => item.id === id);
       const read = latest.current.reads[id];
@@ -321,7 +337,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       });
       pendingFrames.current.set(id, cancel);
     }
-  }, [slotSignature, readSignature]);
+  }, [slotSignature, readSignature, warmSignature]);
 
   const liveKey = `${binding.id}:${binding.src}:${binding.generation ?? ""}`;
   const liveSourceMatches = (element: HTMLVideoElement) => Boolean(binding.id && binding.src
@@ -1065,7 +1081,9 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           pointerEvents: current ? "auto" : "none",
         } as CSSProperties}>
         <img ref={(element) => { imageNodes.current[slot] = element; }}
-          src={!isVideo ? url : undefined} hidden={isVideo || !url} alt={current ? asset?.fileName ?? "" : ""}
+          src={!isVideo ? url : undefined}
+          hidden={isVideo || !url || (!pageReady && paintedImages.current[slot] !== id)}
+          alt={current ? asset?.fileName ?? "" : ""}
           draggable={false} decoding="async"
           role={current && (canNavigate || props.onImageClick) ? "button" : undefined}
           tabIndex={current && pageReady && (canNavigate || props.onImageClick) ? 0 : -1}
@@ -1081,6 +1099,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
             const mark = () => {
               if (!image.isConnected || image.getAttribute("src") !== url || !image.naturalWidth) return;
               decodedImages.current.set(id, url);
+              paintedImages.current[slot] = id;
               updateRevision((value) => value + 1);
             };
             if (typeof image.decode === "function") void image.decode().then(mark, () => reportImageError(image, id, url));

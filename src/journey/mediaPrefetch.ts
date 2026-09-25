@@ -52,6 +52,64 @@ export function prefetchWindowFor(
   return { next, previous };
 }
 
+/**
+ * #489 (ST-159): the bounded, tiered warm set for Story browsing. Physical
+ * presentation stays three pages; this decides what is prepared behind them.
+ *
+ *   reads   -- signed read URLs, the widest and cheapest tier: the requested
+ *              media plus STORY_WARM_READS_AHEAD (3) steps ahead of it in the
+ *              latest navigation direction and STORY_WARM_READS_BEHIND (2)
+ *              behind, plus whatever is still shown. At most 7 assets.
+ *   decode  -- a decoded image or a representative video frame, narrower: the
+ *              shown and requested media and one step on either side of the
+ *              requested one. At most 4 assets.
+ *   live    -- not a tier here. Only the current or pending video owns the one
+ *              live transport StoryMediaPages keeps; a warm video is metadata
+ *              plus one still frame.
+ *
+ * The window is anchored on the latest requested intent, not on the settled
+ * media, so A -> B -> C starts warming beyond C before B has landed. It is a
+ * pure function of its inputs: reversing direction, changing scope or closing
+ * the Story releases everything outside the new sets on the next pass.
+ * Autoplay always looks forward.
+ */
+export const STORY_WARM_READS_AHEAD = 3;
+export const STORY_WARM_READS_BEHIND = 2;
+
+export type StoryWarmWindow = {
+  /** Indices whose signed read should be ready, nearest-ahead first. */
+  reads: number[];
+  /** Indices whose picture should be decoded or have a representative frame. */
+  decode: number[];
+};
+
+export function storyWarmWindow({ shownIndex, requestedIndex, length, direction, wrap, autoplay }: {
+  shownIndex: number;
+  requestedIndex: number;
+  length: number;
+  direction: -1 | 1;
+  wrap: boolean;
+  autoplay: boolean;
+}): StoryWarmWindow {
+  if (length < 1 || requestedIndex < 0 || requestedIndex >= length) return { reads: [], decode: [] };
+  const forward = autoplay ? 1 : direction;
+  const step = (offset: number) => {
+    const raw = requestedIndex + offset * forward;
+    if (wrap) return ((raw % length) + length) % length;
+    return raw >= 0 && raw < length ? raw : null;
+  };
+  const shown = shownIndex >= 0 && shownIndex < length ? shownIndex : null;
+  const collect = (offsets: number[], extra: number | null) => [...new Set([
+    ...offsets.map(step), extra,
+  ].filter((index): index is number => index !== null))];
+  const readOffsets = [0];
+  for (let offset = 1; offset <= Math.max(STORY_WARM_READS_AHEAD, STORY_WARM_READS_BEHIND); offset += 1) {
+    if (offset <= STORY_WARM_READS_AHEAD) readOffsets.push(offset);
+    if (offset <= STORY_WARM_READS_BEHIND) readOffsets.push(-offset);
+  }
+  return { reads: collect(readOffsets, shown), decode: collect([0, 1, -1], shown) };
+}
+
 /** Browser-side readiness of one media asset's image element. */
 export type DecodedReadiness =
   | { status: "pending" }

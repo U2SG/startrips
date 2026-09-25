@@ -85,7 +85,7 @@ import { cancelSharedElementMorph, runSharedElementMorph } from "../motion/primi
 import {
   createDecodeRegistry,
   decodeImageUrl,
-  prefetchWindowFor,
+  storyWarmWindow,
 } from "./mediaPrefetch";
 import { createSoundtrackSampler } from "../motion/audioSampler";
 import {
@@ -2276,62 +2276,54 @@ export function JourneyStory({
     );
   }, [shownAssetId, activeAsset?.id, scopedMedia, scopedMediaIndex, selectedRoutePointId]);
 
-  // #11: prepare adjacent slideshow media while the active one is on screen.
-  // The window is next 1 + previous 1 for manual browsing, next 2 for
-  // autoplay. Only images are decoded ahead; videos stay at preload metadata.
+  // #489 (ST-159): one bounded, tiered warm window behind the three physical
+  // pages -- reads widest, decoded pictures narrower, one live transport --
+  // anchored on the latest requested media so rapid browsing warms ahead of
+  // an intent that has not landed yet. Tier sizes live in `storyWarmWindow`.
+  // The visible stack neighbours stay in both tiers because they are painted.
+  const shownMediaIndex = shownAssetId === null ? -1 : scopedMediaIndex.indexById.get(shownAssetId) ?? -1;
+  const warmWindow = storyWarmWindow({
+    shownIndex: shownMediaIndex >= 0 ? shownMediaIndex : assetIndex,
+    requestedIndex: scopedMedia.length > 0 ? requestedMediaIndex : -1,
+    length: scopedMedia.length,
+    direction: mediaNavigationDirection.current,
+    wrap: selectedRoutePointId !== null,
+    autoplay: playing,
+  });
+  const warmIdsFor = (indices: readonly number[]) => [...new Set([...indices, ...stackNeighborIndices]
+    .map((index) => scopedMedia[index]?.id)
+    .filter((id): id is string => id !== undefined))];
+  const warmReadIds = warmIdsFor(warmWindow.reads);
+  const warmDecodeIds = warmIdsFor(warmWindow.decode);
+  const warmReadKey = warmReadIds.join("|");
+  const warmDecodeKey = warmDecodeIds.join("|");
   useEffect(() => {
-    if (!activeAsset || scopedMedia.length < 2) return;
-    const activeIndex = scopedMediaIndex.indexById.get(activeAsset.id) ?? -1;
-    if (activeIndex < 0) return;
-    const windowFor = prefetchWindowFor(activeIndex, scopedMedia.length, playing);
-    const target = new Set(
-      [...windowFor.next, ...windowFor.previous, ...stackNeighborIndices]
-        .map((index) => scopedMedia[index])
-        .filter((asset): asset is JourneyMediaAsset => asset !== undefined),
-    );
-    for (const candidate of target) {
-      // Request the signed read (cached; no duplicate requests).
-      loadMediaRead(candidate.id);
-    }
-    // Release decoded refs outside the window so hundreds of images are not
-    // all kept in memory for one open dialog.
-    const keep = new Set<string>([activeAsset.id, ...[...target].map((asset) => asset.id)]);
-    for (const index of windowFor.next) keep.add(scopedMedia[index]?.id ?? "");
-    for (const index of windowFor.previous) keep.add(scopedMedia[index]?.id ?? "");
+    // Signed reads are cached per dialog; this only requests missing ones.
+    for (const assetId of warmReadIds) loadMediaRead(assetId);
+    // Decoded pictures are the memory that matters. Anything that left the
+    // decode tier -- by distance, a reversed direction or a scope change --
+    // is released on this pass, so eviction is a function of the window.
+    const keep = new Set<string>(warmDecodeIds);
+    if (activeAsset) keep.add(activeAsset.id);
     for (const [assetId, state] of Object.entries(mediaReadsRef.current)) {
       if (state.status === "ready" && !keep.has(assetId)) {
         decodeRegistryRef.current.release(assetId);
       }
     }
-  }, [activeAsset?.id, scopedMedia, scopedMediaIndex, playing, loadMediaRead, stackNeighborIndices]);
+  }, [warmReadKey, warmDecodeKey, activeAsset?.id, loadMediaRead]);
 
-  // #11: start the browser decode for any image whose signed read became
-  // ready inside the prefetch window (or is the current frame). Runs whenever
-  // reads settle, so an async read completion starts the decode automatically.
+  // Start the browser decode for every image in the decode tier as soon as
+  // its signed read lands, so a requested neighbour is decoded behind the
+  // picture that still owns the stage.
   useEffect(() => {
-    const windowTargets = new Set<string>([activeAsset?.id ?? "", ...stackNeighborIndices.map((index) => scopedMedia[index].id)]);
-    if (activeAsset && scopedMedia.length >= 2) {
-      const activeIndex = scopedMediaIndex.indexById.get(activeAsset.id) ?? -1;
-      if (activeIndex >= 0) {
-        const windowFor = prefetchWindowFor(activeIndex, scopedMedia.length, playing);
-        for (const index of [...windowFor.next, ...windowFor.previous]) {
-          const candidate = scopedMedia[index];
-          if (candidate) windowTargets.add(candidate.id);
-        }
+    for (const assetId of new Set([...warmDecodeIds, activeAsset?.id ?? ""])) {
+      const state = mediaReads[assetId];
+      if (state?.status !== "ready") continue;
+      if (scopedMediaIndex.byId.get(assetId)?.mimeType.startsWith("image/")) {
+        decodeRegistryRef.current.ensure(assetId, state.url);
       }
     }
-    for (const [assetId, state] of Object.entries(mediaReads)) {
-      if (
-        state.status === "ready"
-        && windowTargets.has(assetId)
-      ) {
-        const asset = scopedMediaIndex.byId.get(assetId);
-        if (asset?.mimeType.startsWith("image/")) {
-          decodeRegistryRef.current.ensure(assetId, state.url);
-        }
-      }
-    }
-  }, [mediaReads, activeAsset?.id, scopedMedia, scopedMediaIndex, playing, stackNeighborIndices]);
+  }, [mediaReads, warmDecodeKey, activeAsset?.id, scopedMediaIndex]);
 
   // Initial selection has no prior page to preserve.
   useEffect(() => {
@@ -2606,6 +2598,10 @@ export function JourneyStory({
   function commitStoryMediaGesture(targetId: string) {
     const index = scopedMediaIndex.indexById.get(targetId);
     if (index === undefined) return;
+    // A swipe is the latest navigation direction for the warm window too.
+    const from = storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById);
+    mediaNavigationDirection.current = storyMediaNeighborIndex(from, scopedMedia.length, 1,
+      selectedRoutePointId !== null) === index ? 1 : -1;
     requestedMediaRef.current = targetId;
     setPendingMediaTarget(null);
     setIncomingAssetId(null);
@@ -3738,6 +3734,7 @@ export function JourneyStory({
               incomingId={incoming?.id ?? null}
               direction={mediaNavigationDirection.current}
               reads={mediaReads}
+              warmIds={warmDecodeIds}
               wrap={selectedRoutePointId !== null}
               videoAssetId={storyStageVideoAsset?.id ?? null}
               onSettled={settleIncoming}
@@ -4397,6 +4394,7 @@ export function JourneyStory({
             incomingId={incoming?.id ?? null}
             direction={mediaNavigationDirection.current}
             reads={mediaReads}
+            warmIds={warmDecodeIds}
             wrap={selectedRoutePointId !== null}
             videoAssetId={storyStageVideoAsset?.id ?? null}
             onSettled={settleIncoming}
