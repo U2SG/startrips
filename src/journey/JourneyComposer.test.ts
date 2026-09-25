@@ -478,7 +478,7 @@ describe("persistJourneyDraft", () => {
 });
 
 describe("place search Journey context", () => {
-  it("biases the composer search towards the last Route Point of the current draft only", () => {
+  it("biases every composer search towards the last Route Point of the current draft", () => {
     // #546: node-only suite, so the wiring is asserted on the source. The
     // helper itself (last point, none for an empty Route) is unit-tested in
     // routeDraft.test.ts.
@@ -486,7 +486,14 @@ describe("place search Journey context", () => {
     expect(composer).toMatch(
       /searchLocations\(query, fetch, \{\s*focus: routeDraftSearchFocus\(routePointsRef\.current\),\s*\}\)/,
     );
-    expect(composer.match(/routeDraftSearchFocus\(/g)).toHaveLength(1);
+    // Replacing a Route Point's place is Journey editing too: same focus rule.
+    expect(composer).toMatch(
+      /searchFocus=\{\(\) => routeDraftSearchFocus\(routePointsRef\.current\)\}/,
+    );
+    expect(composer).toMatch(/searchLocations\(query, fetch, \{ focus: searchFocus\(\) \}\)/);
+    // Both composer searches carry a focus; none is left focus-free.
+    expect(composer.match(/await searchLocations\(/g)).toHaveLength(2);
+    expect(composer.match(/await searchLocations\(query, fetch, \{\s*focus: /g)).toHaveLength(2);
 
     // Itinerary import stays focus-free until it has a confirmed Route Point.
     const itineraryImport = readFileSync(new URL("./ItineraryImportPanel.tsx", import.meta.url), "utf8");
