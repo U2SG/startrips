@@ -111,7 +111,7 @@ async function checkDegradedProductControls(failure) {
     body: JSON.stringify({ journeys: degradedControlJourneys }),
   }));
   await page.goto(
-    `${origin}/?qaState=atlas-gateway&qaMode=globe-chrome&qaLite=1&qaParticleEarthFailure=${failure}`,
+    `${origin}/?qaState=atlas-gateway&qaMode=globe-chrome&qaParticleEarthFailure=${failure}`,
     { waitUntil: "domcontentloaded" },
   );
   await page.waitForFunction(() => (
