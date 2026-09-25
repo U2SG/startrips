@@ -1759,25 +1759,31 @@ async function pageClock(page) {
 
 /**
  * #530: a real swipe released past the commit threshold, then interrupted while
- * its settle is still running. `interrupt` runs only after the stage itself
- * reports `settling`, so the interruption provably lands inside the settle
- * rather than racing it, and the stage state each interruption event saw is
- * recorded by listeners installed before the gesture.
+ * its settle is still running. The interruption is armed in the page before the
+ * finger lifts and fires from the first animation frame on which the stage
+ * reports `settling` with the starting picture still current, through the
+ * same window event the product listens to. CI renders slowly enough that a
+ * round trip back to this script can outlast the whole settle, so the
+ * interruption is never scheduled from here.
  */
-async function swipeThenInterruptSettle(page, rootSelector, direction, interrupt) {
-  await page.evaluate((selector) => {
-    const stage = () => document.querySelector(selector)?.querySelector("[data-story-media-pages]");
-    const seen = [];
-    window.__qaSettleInterrupts = seen;
-    for (const [target, type] of [[window, "resize"], [window, "blur"], [document, "visibilitychange"]]) {
-      // Capture on the event's own target runs before the product's listener.
-      target.addEventListener(type, () => seen.push({
-        type, at: Math.round(performance.now()),
-        presentation: stage()?.getAttribute("data-media-presentation") ?? null,
-        current: stage()?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
-      }), { capture: true });
-    }
-  }, rootSelector);
+async function swipeThenInterruptSettle(page, rootSelector, direction, eventType) {
+  await page.evaluate(({ selector, type }) => {
+    const probe = { fired: null, frames: 0 };
+    window.__qaSettleInterrupt = probe;
+    const watch = () => {
+      const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const presentation = stage?.getAttribute("data-media-presentation") ?? null;
+      const current = stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null;
+      probe.frames += 1;
+      if (presentation === "settling") {
+        probe.fired = { type, at: Math.round(performance.now()), presentation, current };
+        window.dispatchEvent(type === "blur" ? new FocusEvent("blur") : new Event(type));
+        return;
+      }
+      if (probe.frames < 600) requestAnimationFrame(watch);
+    };
+    probe.start = () => requestAnimationFrame(watch);
+  }, { selector: rootSelector, type: eventType });
   const geometry = await page.evaluate((selector) => {
     const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
     const bounds = pages.getBoundingClientRect();
@@ -1791,13 +1797,12 @@ async function swipeThenInterruptSettle(page, rootSelector, direction, interrupt
     await pointer.move(geometry.x + travel * (step / 10), geometry.y);
     await nextFrame(page);
   }
+  // Armed only now, so no frame of the drag itself can trigger it.
+  await page.evaluate(() => window.__qaSettleInterrupt.start());
   await pointer.up();
-  const settling = await page.waitForFunction((selector) => document.querySelector(selector)
-    ?.querySelector("[data-story-media-pages]")?.getAttribute("data-media-presentation") === "settling",
-  rootSelector, { polling: "raf", timeout: 2_000 }).then(() => true, () => false);
-  const interruption = settling ? await interrupt() : null;
-  const seen = await page.evaluate(() => window.__qaSettleInterrupts ?? []);
-  return { geometry, travel, input: pointer.kind, since, settling, interruption, seen };
+  const interrupted = await page.waitForFunction(() => window.__qaSettleInterrupt?.fired ?? null,
+    undefined, { polling: "raf", timeout: 3_000 }).then((handle) => handle.jsonValue(), () => null);
+  return { geometry, travel, input: pointer.kind, since, eventType, interrupted };
 }
 
 /**
@@ -3002,27 +3007,15 @@ try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
       await waitForReadablePage(page, STAGE, V1);
-      const run = await swipeThenInterruptSettle(page, STAGE, 1, variant === "resize"
-        ? async () => {
-          await page.setViewportSize({ width: 1180, height: 800 });
-          const observed = await page.waitForFunction(() => (window.__qaSettleInterrupts ?? [])
-            .some((entry) => entry.type === "resize"), undefined, { polling: "raf", timeout: 2_000 })
-            .then(() => true, () => false);
-          return { kind: "viewport resize", viewport: { width: 1180, height: 800 }, observed };
-        }
-        : async () => await page.evaluate(() => {
-          window.dispatchEvent(new FocusEvent("blur"));
-          return { kind: "window blur" };
-        }));
-      const interrupted = run.seen.find((entry) => entry.type === variant) ?? null;
+      const run = await swipeThenInterruptSettle(page, STAGE, 1, variant);
       const committed = await waitForSettledAsset(page, V1).then(() => true, () => false);
       const settled = committed ? await currentAsset(page) : await stageDiagnostic(page, STAGE);
       const cancels = (await gestureTraceSince(page, run.since)).filter((entry) => entry.type === "pointercancel");
       record({ name,
-        claim: "a real swipe released past the commit threshold and interrupted while the stage still reports settling lands on the target the release chose, rather than discarding that navigation and springing back",
-        run, interrupted, committed, settled, cancels,
+        claim: "a real swipe released past the commit threshold and interrupted by a window " + variant + " on a frame where the stage still reports settling with the starting picture current lands on the target the release chose, rather than discarding that navigation and springing back",
+        run, committed, settled, cancels,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: !run.settling || interrupted?.presentation !== "settling" || interrupted?.current !== I1
+        failed: run.interrupted?.presentation !== "settling" || run.interrupted?.current !== I1
           || !committed || settled.id !== V1 || cancels.length > 0
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
