@@ -46,6 +46,7 @@ import {
   clampGlobeTilt,
   journeyConnectorAnchor,
   createRetryableParticleResourceLoader,
+  createParticleEarthRenderer,
   getJourneyRouteVisualState,
   getGlobeIdleAlignmentRotation,
   getGlobeIdleRotationDelta,
@@ -82,6 +83,26 @@ import {
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
+  it("degrades renderer construction failures without escaping the scene effect", () => {
+    const rendererFactory = vi.fn(() => {
+      throw new Error("context unavailable");
+    });
+    expect(createParticleEarthRenderer(rendererFactory, () => true)).toBeNull();
+    expect(rendererFactory).toHaveBeenCalledOnce();
+
+    const hookSource = readFileSync(new URL("./useThreeScene.ts", import.meta.url), "utf8");
+    expect(hookSource).toContain("try {");
+    expect(hookSource).toContain("controller = factoryRef.current(host);");
+    expect(hookSource).toContain("createErrorRef.current?.(error, host);");
+
+    const sceneSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(sceneSource).toContain("const renderer = createParticleEarthRenderer();");
+    expect(sceneSource).toContain('host.dataset.particleEarthBackend = "unavailable"');
+    expect(sceneSource).toContain('renderer.domElement.addEventListener("webglcontextlost", onWebGlContextLost)');
+    expect(sceneSource).toContain('renderer.domElement.removeEventListener("webglcontextlost", onWebGlContextLost)');
+    expect(sceneSource).toContain("if (disposed) return;");
+  });
+
   it("publishes attention-layer optical measurements from the shader DPR uniform", () => {
     const dpr1 = resolveAttentionLayerMeasurement({
       id: "personal-focus-signal",

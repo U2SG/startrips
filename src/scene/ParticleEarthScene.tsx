@@ -181,6 +181,47 @@ import {
   type VisitedImprintField,
 } from "./visitedImprint";
 
+export type ParticleEarthBackend = "webgl2" | "unavailable";
+
+function particleEarthQaFailureMode(mode: "no-webgl" | "renderer-throw") {
+  if (!import.meta.env.DEV || typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("qaParticleEarthFailure") === mode;
+}
+
+export function canCreateParticleEarthWebGlContext() {
+  if (particleEarthQaFailureMode("no-webgl")) return false;
+  if (typeof document === "undefined") return false;
+  try {
+    const probe = document.createElement("canvas");
+    const gl = probe.getContext("webgl2");
+    const available = Boolean(gl);
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    return available;
+  } catch {
+    return false;
+  }
+}
+
+export function createParticleEarthRenderer(
+  rendererFactory: () => WebGLRenderer = () => new WebGLRenderer({
+    alpha: true,
+    antialias: false,
+    powerPreference: "low-power",
+    premultipliedAlpha: false,
+  }),
+  capabilityProbe: () => boolean = canCreateParticleEarthWebGlContext,
+): WebGLRenderer | null {
+  if (!capabilityProbe()) return null;
+  try {
+    if (particleEarthQaFailureMode("renderer-throw")) {
+      throw new Error("Forced Particle Earth renderer construction failure");
+    }
+    return rendererFactory();
+  } catch {
+    return null;
+  }
+}
+
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
@@ -1251,6 +1292,7 @@ interface ParticleEarthSceneProps {
   /** Static signal coordinates supplied by the legacy or QA scene owner. */
   archivePoints?: Parameters<typeof buildArtworkPointPositions>[0];
   onReady?: () => void;
+  onBackendChange?: (backend: ParticleEarthBackend) => void;
   /**
    * #252: the scene owns the camera, so it is the only place that can report
    * where the semantic-zoom authority currently stands. It publishes that
@@ -1653,6 +1695,7 @@ export function ParticleEarthScene({
   showArchiveSignals = true,
   archivePoints = EMPTY_ARCHIVE_POINTS,
   onReady,
+  onBackendChange,
   onSemanticZoomSnapshot,
   onParticleAnchorFrame,
   homeBasePresence = [],
@@ -1691,6 +1734,7 @@ export function ParticleEarthScene({
   const latestOnHomeBaseActivate = useRef(onHomeBaseActivate);
   const latestTemporalReveal = useRef(temporalReveal);
   const latestOnReady = useRef(onReady);
+  const latestOnBackendChange = useRef(onBackendChange);
   const latestOnSemanticZoomSnapshot = useRef(onSemanticZoomSnapshot);
   const latestOnParticleAnchorFrame = useRef(onParticleAnchorFrame);
   const latestHomeBasePresence = useRef(homeBasePresence);
@@ -1726,6 +1770,7 @@ export function ParticleEarthScene({
   latestOnHomeBaseActivate.current = onHomeBaseActivate;
   latestTemporalReveal.current = temporalReveal;
   latestOnReady.current = onReady;
+  latestOnBackendChange.current = onBackendChange;
   latestOnSemanticZoomSnapshot.current = onSemanticZoomSnapshot;
   latestOnParticleAnchorFrame.current = onParticleAnchorFrame;
   latestHomeBasePresence.current = homeBasePresence;
@@ -1812,12 +1857,8 @@ export function ParticleEarthScene({
       host.dataset.focusViewportCenterX = center.x.toFixed(1);
       host.dataset.focusViewportCenterY = center.y.toFixed(1);
     };
-    const renderer = new WebGLRenderer({
-      alpha: true,
-      antialias: false,
-      powerPreference: "low-power",
-      premultipliedAlpha: false,
-    });
+    const renderer = createParticleEarthRenderer();
+    if (!renderer) throw new Error("Particle Earth WebGL renderer unavailable");
     const applyRendererBudget = () => {
       resolvedRenderBudget = resolveRenderBudget({
         viewportWidth: targetSize.x,
@@ -5972,6 +6013,69 @@ export function ParticleEarthScene({
     applyJourneyRoutes(latestJourneyRoutes.current);
     updateRenderLoopVisibility();
 
+    const onWebGlContextLost = (event: Event) => {
+      event.preventDefault();
+      host.dataset.particleEarthBackend = "unavailable";
+      latestOnBackendChange.current?.("unavailable");
+      setReady(false);
+      dispose();
+    };
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      refinementBuildGuard.dispose();
+      cancelAnimationFrame(animationFrame);
+      animationFrame = 0;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", resize);
+      cityVectorLayer.removeEventListener("pointerdown", onCityLayerPointerDown);
+      cityVectorLayer.removeEventListener("pointermove", onCityLayerPointerMove);
+      cityVectorLayer.removeEventListener("pointerup", onCityLayerPointerUp);
+      cityVectorLayer.removeEventListener("pointercancel", onCityLayerPointerCancel);
+      cityVectorLayer.removeEventListener("wheel", onCityLayerWheel);
+      routeVectorLayer.removeEventListener("pointerdown", onRouteLayerPointerDown);
+      routeVectorLayer.removeEventListener("pointermove", onRouteLayerPointerMove);
+      routeVectorLayer.removeEventListener("pointerup", onRouteLayerPointerUp);
+      routeVectorLayer.removeEventListener("pointercancel", onRouteLayerPointerCancel);
+      routeVectorLayer.removeEventListener("wheel", onRouteLayerWheel);
+      routeVectorLayer.removeEventListener("keydown", onRouteLayerKeyDown);
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointermove", onPointerMove);
+      renderer.domElement.removeEventListener("pointerup", onPointerUp);
+      renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
+      renderer.domElement.removeEventListener("lostpointercapture", onLostPointerCapture);
+      renderer.domElement.removeEventListener("webglcontextlost", onWebGlContextLost);
+      window.removeEventListener("pointerup", onRejectedPointerLifecycleEnd);
+      window.removeEventListener("pointercancel", onRejectedPointerLifecycleEnd);
+      renderer.domElement.removeEventListener("wheel", onWheel);
+      reliefTexture?.dispose();
+      reliefMaterial.dispose();
+      visitedImprintTexture.dispose();
+      texture.dispose();
+      disposeRefinementLayer(departingRefinementLayer);
+      departingRefinementLayer = null;
+      disposeRefinementLayer(activeRefinementLayer);
+      activeRefinementLayer = null;
+      coastlineRefinementBuildGuard.dispose();
+      refinementCache.clear();
+      coastlineRefinementCache.clear();
+      coastlineLocalChunkCache.clear();
+      if (particles) globe.remove(particles);
+      if (particleGeometry) particleGeometry.dispose();
+      particleMaterial.dispose();
+      disposeSceneGraph(scene);
+      renderer.dispose();
+      renderer.forceContextLoss();
+      routeVectorLayer.remove();
+      cityVectorLayer.remove();
+      renderer.domElement.remove();
+      Reflect.deleteProperty(debugWindow, "__particleEarthDebug");
+    };
+    renderer.domElement.addEventListener("webglcontextlost", onWebGlContextLost);
+    host.dataset.particleEarthBackend = "webgl2";
+    latestOnBackendChange.current?.("webgl2");
+
     return {
       setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"]) {
         latestInitialCameraAnchor.current = anchor;
@@ -6178,56 +6282,12 @@ export function ParticleEarthScene({
         // an unrelated pointer/camera event to wake the renderer.
         wakeRenderLoop();
       },
-      dispose() {
-        disposed = true;
-        refinementBuildGuard.dispose();
-        cancelAnimationFrame(animationFrame);
-        document.removeEventListener("visibilitychange", onVisibilityChange);
-        resizeObserver.disconnect();
-        window.removeEventListener("resize", resize);
-        cityVectorLayer.removeEventListener("pointerdown", onCityLayerPointerDown);
-        cityVectorLayer.removeEventListener("pointermove", onCityLayerPointerMove);
-        cityVectorLayer.removeEventListener("pointerup", onCityLayerPointerUp);
-        cityVectorLayer.removeEventListener("pointercancel", onCityLayerPointerCancel);
-        cityVectorLayer.removeEventListener("wheel", onCityLayerWheel);
-        routeVectorLayer.removeEventListener("pointerdown", onRouteLayerPointerDown);
-        routeVectorLayer.removeEventListener("pointermove", onRouteLayerPointerMove);
-        routeVectorLayer.removeEventListener("pointerup", onRouteLayerPointerUp);
-        routeVectorLayer.removeEventListener("pointercancel", onRouteLayerPointerCancel);
-        routeVectorLayer.removeEventListener("wheel", onRouteLayerWheel);
-        routeVectorLayer.removeEventListener("keydown", onRouteLayerKeyDown);
-        renderer.domElement.removeEventListener("pointerdown", onPointerDown);
-        renderer.domElement.removeEventListener("pointermove", onPointerMove);
-        renderer.domElement.removeEventListener("pointerup", onPointerUp);
-        renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
-        renderer.domElement.removeEventListener("lostpointercapture", onLostPointerCapture);
-        window.removeEventListener("pointerup", onRejectedPointerLifecycleEnd);
-        window.removeEventListener("pointercancel", onRejectedPointerLifecycleEnd);
-        renderer.domElement.removeEventListener("wheel", onWheel);
-        reliefTexture?.dispose();
-        reliefMaterial.dispose();
-        visitedImprintTexture.dispose();
-        texture.dispose();
-        disposeRefinementLayer(departingRefinementLayer);
-        departingRefinementLayer = null;
-        disposeRefinementLayer(activeRefinementLayer);
-        activeRefinementLayer = null;
-        coastlineRefinementBuildGuard.dispose();
-        refinementCache.clear();
-        coastlineRefinementCache.clear();
-        coastlineLocalChunkCache.clear();
-        if (particles) globe.remove(particles);
-        if (particleGeometry) particleGeometry.dispose();
-        particleMaterial.dispose();
-        disposeSceneGraph(scene);
-        renderer.dispose();
-        renderer.forceContextLoss();
-        routeVectorLayer.remove();
-        cityVectorLayer.remove();
-        renderer.domElement.remove();
-        Reflect.deleteProperty(debugWindow, "__particleEarthDebug");
-      },
+      dispose,
     };
+  }, (_error, host) => {
+    host.dataset.particleEarthBackend = "unavailable";
+    setReady(false);
+    latestOnBackendChange.current?.("unavailable");
   });
 
   useEffect(() => {

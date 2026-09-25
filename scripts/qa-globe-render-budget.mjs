@@ -29,6 +29,87 @@ async function openFixture({ width, height, dpr, routeOptics = false }) {
   return { context, page, errors };
 }
 
+async function checkParticleBackendDegradation() {
+  for (const failure of ["no-webgl", "renderer-throw"]) {
+    for (const motion of ["animate", "reduce"]) {
+      const context = await browser.newContext({ viewport: { width: 932, height: 620 }, deviceScaleFactor: 1 });
+      const page = await context.newPage();
+      const errors = [];
+      const consoleErrors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+      });
+      await page.goto(
+        `${origin}/?qaState=earth-dive&qaMotion=${motion}&qaParticleEarthFailure=${failure}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await page.waitForFunction(() => (
+        document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend") === "unavailable"
+      ));
+      const beforeJourneyId = await page.locator("[data-qa-earth-dive-route-point]").getAttribute("data-journey-id");
+      await page.locator('[data-qa-earth-dive-route-switch="next"]').click();
+      await page.waitForFunction((before) => (
+        document.querySelector("[data-qa-earth-dive-route-point]")?.getAttribute("data-journey-id") !== before
+      ), beforeJourneyId);
+      const snapshot = await page.evaluate(() => {
+        const host = document.querySelector("[data-persistent-earth-host]");
+        return {
+          backend: host?.getAttribute("data-particle-earth-backend"),
+          canvases: host?.querySelectorAll("canvas").length ?? -1,
+          routeSwitchPresent: Boolean(document.querySelector('[data-qa-earth-dive-route-switch="next"]')),
+          refocusPresent: Boolean(document.querySelector("[data-qa-earth-dive-refocus]")),
+        };
+      });
+      const webglCreationErrors = consoleErrors.filter((message) => (
+        /WebGLRenderer|Could not create a WebGL context|WebGL context.*could not/i.test(message)
+      ));
+      record(`backend:${failure}:${motion}`, {
+        snapshot,
+        errors,
+        consoleErrors: webglCreationErrors,
+      }, snapshot.backend === "unavailable"
+        && snapshot.canvases === 0
+        && snapshot.routeSwitchPresent
+        && snapshot.refocusPresent
+        && errors.length === 0
+        && webglCreationErrors.length === 0);
+      await context.close();
+    }
+  }
+
+  const context = await browser.newContext({ viewport: { width: 932, height: 620 }, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${origin}/?qaState=earth-dive&qaMotion=animate`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => (
+    document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend") === "webgl2"
+  ));
+  const beforeJourneyId = await page.locator("[data-qa-earth-dive-route-point]").getAttribute("data-journey-id");
+  await page.locator(".particle-earth-scene canvas").evaluate((canvas) => {
+    canvas.dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
+  });
+  await page.waitForFunction(() => (
+    document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend") === "unavailable"
+  ));
+  await page.locator('[data-qa-earth-dive-route-switch="next"]').click();
+  await page.waitForFunction((before) => (
+    document.querySelector("[data-qa-earth-dive-route-point]")?.getAttribute("data-journey-id") !== before
+  ), beforeJourneyId);
+  const lost = await page.evaluate(() => {
+    const host = document.querySelector("[data-persistent-earth-host]");
+    return {
+      backend: host?.getAttribute("data-particle-earth-backend"),
+      canvases: host?.querySelectorAll("canvas").length ?? -1,
+    };
+  });
+  record("backend:runtime-context-loss", { lost, errors }, lost.backend === "unavailable"
+    && lost.canvases === 0
+    && errors.length === 0);
+  await context.close();
+}
+
 async function checkRouteReuse() {
   const run = await openFixture({ width: 1280, height: 900, dpr: 1, routeOptics: true });
   const { page } = run;
@@ -173,6 +254,7 @@ async function captureImprintStage(stage) {
 }
 
 try {
+  await checkParticleBackendDegradation();
   await checkRouteReuse();
   for (const fixture of [
     { key: "dpr-1", width: 430, height: 932, dpr: 1 },
