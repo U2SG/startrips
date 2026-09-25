@@ -1829,8 +1829,12 @@ export function JourneyStory({
   const autoplayVideoCandidateRead = autoplayVideoCandidate
     ? mediaReads[autoplayVideoCandidate.id]
     : null;
+  const protectedPlaybackRead = useRef<string | null>(null);
+  protectedPlaybackRead.current = playing && activeAsset?.mimeType.startsWith("video/") ? activeAsset.id : null;
   const protectedVideoRead = useCallback((assetId: string) => {
-    if (videoHandoffRef.current?.id === assetId) return true;
+    // Story autoplay owns its video step even before the element reports
+    // playback; only a viewer-paused clip takes the held-frame renewal path.
+    if (protectedPlaybackRead.current === assetId || videoHandoffRef.current?.id === assetId) return true;
     // A settled paused fullscreen video renews in its visible stage. The
     // media page retains its decoded frame and restores the native seek/time
     // before the refreshed transport is exposed. Active playback and seeks

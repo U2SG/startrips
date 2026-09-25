@@ -2327,6 +2327,52 @@ function gradePausedFrameIdentity(before, after) {
     || pairs.length < 8 || meanDelta > 12 || after.retainedRatio < 0.75 || after.signalMeanDelta > 20 };
 }
 
+/**
+ * Record the picture on screen while the expired Range is still withheld, i.e.
+ * the last frame the viewer saw before the failure. Later held-frame checks
+ * must show this same picture.
+ */
+async function capturePreErrorScreen(page, rootSelector) {
+  const native = await readNativeControls(page, rootSelector).catch(() => null);
+  const chromeTop = native?.controls
+    .filter((control) => !control.ignored)
+    .reduce((top, control) => Math.min(top, control.box.top), Number.POSITIVE_INFINITY);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const screenshot = (await page.screenshot()).toString("base64");
+  return await page.evaluate(async ({ selector, png, controlsTop }) => {
+    window.__qaPreErrorScreen = null;
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    const alert = document.querySelector(`${selector} .journey-story__media-state.is-over-media[role="alert"]`);
+    if (!(video instanceof HTMLVideoElement) || video.hidden || !video.videoWidth || !video.videoHeight) {
+      return { failed: true, reason: "no presented video before the Range failure" };
+    }
+    const image = new Image();
+    image.src = `data:image/png;base64,${png}`;
+    await image.decode();
+    const box = video.getBoundingClientRect();
+    const scale = Math.min(box.width / video.videoWidth, box.height / video.videoHeight);
+    const width = video.videoWidth * scale, height = video.videoHeight * scale;
+    const left = box.left + (box.width - width) / 2;
+    const top = box.top + (box.height - height) / 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = 64; canvas.height = 64;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return { failed: true, reason: "pre-error screen context unavailable" };
+    const ratioX = image.naturalWidth / innerWidth, ratioY = image.naturalHeight / innerHeight;
+    context.drawImage(image, left * ratioX, top * ratioY, width * ratioX, height * ratioY, 0, 0, 64, 64);
+    const pixels = new Uint8ClampedArray(context.getImageData(0, 0, 64, 64).data);
+    const chromeRows = [];
+    if (Number.isFinite(controlsTop)) for (let y = 0; y < 64; y += 1) {
+      if (top + height * (y + 0.5) / 64 >= controlsTop) chromeRows.push(y);
+    }
+    const signal = window.__qaSpatialFrameEvidence(pixels, pixels);
+    window.__qaPreErrorScreen = { pixels, chromeRows };
+    return { signal, chromeRows: chromeRows.length, seeking: video.seeking, alertShown: Boolean(alert),
+      failed: Boolean(alert) || Boolean(video.error) || signal.sourceCells < 3 || signal.sourceEnergy < 500 || chromeRows.length > 24 };
+  }, { selector: rootSelector, png: screenshot,
+    controlsTop: Number.isFinite(chromeTop) ? chromeTop : null });
+}
+
 /** The retained page canvas must actually be the paused frame on screen. */
 async function heldRenewalFramePixels(page, rootSelector,
   { videoHidden = true, heldFrame = null } = {}) {
@@ -2370,15 +2416,10 @@ async function heldRenewalFramePixels(page, rootSelector,
       sourceContext.getImageData(0, 0, 64, 64).data);
     // A native drag can decode later cached frames before the expired Range
     // fails. In that case the last actually painted frame, rather than the
-    // picture from before the drag, is the continuity reference. "anchor"
-    // records that painted frame; "match" requires later steps to still hold
-    // the same bitmap, so Retry cannot swap in another frame unnoticed.
-    let heldAnchor = null;
-    if (heldMode === "anchor") window.__qaHeldFrameAnchor = new Uint8ClampedArray(heldPixels);
-    if (heldMode === "match") {
-      if (!window.__qaHeldFrameAnchor) return { failed: true, reason: "no anchored held frame" };
-      heldAnchor = window.__qaSpatialFrameEvidence(window.__qaHeldFrameAnchor, heldPixels);
-    }
+    // picture from before the drag, is the continuity reference: "match"
+    // compares this screen with the screen captured before the Range 403.
+    const preError = heldMode === "match" ? window.__qaPreErrorScreen : null;
+    if (heldMode === "match" && !preError?.pixels) return { failed: true, reason: "no pre-error screen anchor" };
     const screenReference = new Uint8ClampedArray(compareHeld ? heldPixels : reference.pixels);
     const screenPixels = visibleContext.getImageData(0, 0, 64, 64).data;
     const notice = document.querySelector(`${selector} .journey-story__media-state.is-over-media[role="alert"]`);
@@ -2401,12 +2442,30 @@ async function heldRenewalFramePixels(page, rootSelector,
     // Against a held bitmap, compare all light so sampling cannot hide or
     // invent the picture; the video reference keeps the floored comparison.
     const screen = window.__qaSpatialFrameEvidence(screenReference, screenPixels, compareHeld ? 0 : 12);
+    // Both sides are screenshots sampled the same way, so the floored light
+    // applies. Rows under the current notice or the pre-error native controls
+    // are removed from both.
+    let preErrorScreen = null;
+    if (preError) {
+      const before = new Uint8ClampedArray(preError.pixels), after = new Uint8ClampedArray(screenPixels);
+      for (let y = 0; y < 64; y += 1) {
+        const sampleY = top + height * (y + 0.5) / 64;
+        const covered = (noticeBox && sampleY >= noticeBox.top && sampleY <= noticeBox.bottom)
+          || preError.chromeRows.includes(y);
+        if (!covered) continue;
+        for (let x = 0; x < 64; x += 1) {
+          const at = (y * 64 + x) * 4;
+          for (const pixels of [before, after]) { pixels[at] = 0; pixels[at + 1] = 0; pixels[at + 2] = 0; }
+        }
+      }
+      preErrorScreen = window.__qaSpatialFrameEvidence(before, after);
+    }
     const hit = document.elementFromPoint(left + width / 2, top + height * 0.7);
     const wrong = (quality) => quality.aligned < 0.8 || quality.margin < 0.08
       || quality.visibleCells < Math.ceil(quality.sourceCells * 0.6)
       || quality.energyRatio < 0.5 || quality.energyRatio > 2;
     return {
-      frame, screen, heldSignal, heldAnchor, maskedRows, currentId: pageNode?.getAttribute("data-media-page-id") ?? null,
+      frame, screen, heldSignal, preErrorScreen, maskedRows, currentId: pageNode?.getAttribute("data-media-page-id") ?? null,
       currentReady: pageNode?.getAttribute("data-media-page-ready") ?? null,
       videoHidden: video.hidden, videoSrc: video.getAttribute("src"),
       hitIsSource: hit === source, hitTag: hit instanceof Element ? hit.tagName : null,
@@ -2414,7 +2473,7 @@ async function heldRenewalFramePixels(page, rootSelector,
       // the frame the viewer actually sees. Keep the screenshot and hit tests
       // as the acceptance signal for a held renewal.
       failed: wrong(screen) || (compareHeld && (heldSignal.sourceCells < 3 || heldSignal.sourceEnergy < 500))
-        || (heldAnchor !== null && wrong(heldAnchor))
+        || (preErrorScreen !== null && wrong(preErrorScreen))
         || maskedRows > 24 || hit !== source
         || pageNode?.getAttribute("data-media-page-ready") !== (expectedHidden ? "false" : "true")
         || video.hidden !== expectedHidden,
@@ -4456,13 +4515,14 @@ try {
       await page.waitForFunction((expiresAt) => Date.now() >= expiresAt + 100,
         session.renewal.initialRead.expiresAt, { polling: "raf", timeout: 9_000 });
       progress.seek = await seekExpiredNativeTimeline(page, FULLSCREEN, session.renewal.armExpiredSeek);
+      progress.preErrorScreen = await capturePreErrorScreen(page, FULLSCREEN);
       session.renewal.releaseExpiredRanges(progress.seek.seekStartedAt ?? Number.POSITIVE_INFINITY);
       progress.oldRange = await waitForFixture(session.renewal.expiredRangeDenied, 8_000,
         "expired old URL Range 403 after native seek");
       const notice = page.locator(`${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"]`);
       await notice.waitFor({ state: "visible", timeout: 8_000 });
       progress.errorFrame = await heldRenewalFramePixels(page, FULLSCREEN,
-        { heldFrame: "anchor" });
+        { heldFrame: "match" });
       progress.noWaiting = await page.locator(`${FULLSCREEN} .starlight-media-state.is-waiting`).count() === 0;
       progress.retryClick = await clickHandoffButton(page,
         `${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"] button`);
@@ -4503,7 +4563,8 @@ try {
         renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.toVideo.ok || progress.pause.failed || progress.initialSeek.failed || progress.seek.failed
-          || progress.beforePixels.failed || progress.errorFrame.failed
+          || progress.beforePixels.failed || progress.preErrorScreen.failed
+          || progress.errorFrame.failed
           || progress.retryReadFrame.failed || progress.retryByteFrame.failed
           || progress.afterPixels.failed || progress.returnedFrame.failed
           || !progress.beforePoint.hitIsVideo || !progress.noWaiting
