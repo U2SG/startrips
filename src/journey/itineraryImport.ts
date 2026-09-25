@@ -591,4 +591,7 @@ export const IMPORTED_ROUTE_POINT_FIELDS: ReadonlyArray<keyof RoutePointInput> =
   "isStop",
   "occurredAt",
   "note",
+  "regionContext",
+  "placeRole",
+  "overviewVisibility",
 ];
