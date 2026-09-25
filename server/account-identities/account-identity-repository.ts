@@ -1,11 +1,15 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gt, sql } from "drizzle-orm";
 import {
   accountIdentityActions,
   accountIdentityAudit,
   accountIdentityOwnerships,
 } from "../db/app-schema";
-import { account as authAccount, user as authUser } from "../db/auth-schema";
+import {
+  account as authAccount,
+  session as authSession,
+  user as authUser,
+} from "../db/auth-schema";
 import { db } from "../db/client";
 import {
   buildIdentityMethods,
@@ -646,6 +650,34 @@ export async function listAccountIdentityMethods(
     state.user.emailVerified,
     usableProviderIds,
   );
+}
+
+/**
+ * #504: whether one Better Auth session is still live for its user, read from
+ * the session table rather than from a cookie.
+ *
+ * Apple's `form_post` bind return is a cross-site POST, and the Better Auth
+ * session cookie is `SameSite=Lax`, so that request carries no session cookie
+ * at all. The bind callback asks this instead: a person who signed out while
+ * Apple had the tab has no row left, so the callback still stops before the
+ * exchange. `/link/complete` re-checks the proof against the real cookie
+ * session regardless.
+ */
+export async function identitySessionIsCurrent(
+  userId: string,
+  sessionId: string,
+  now = new Date(),
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: authSession.id })
+    .from(authSession)
+    .where(and(
+      eq(authSession.id, sessionId),
+      eq(authSession.userId, userId),
+      gt(authSession.expiresAt, now),
+    ))
+    .limit(1);
+  return Boolean(row);
 }
 
 export async function unlinkAccountIdentity(values: {

@@ -153,7 +153,13 @@ function jsonResponse(body: unknown, status = 200): Response {
  * the stub: an expectation thrown from `fetch` would surface as a generic
  * `invalid_code` redirect instead of a readable failure.
  */
-type TokenRequest = { clientId: string | null; clientSecret: string | null };
+type TokenRequest = {
+  code: string | null;
+  clientId: string | null;
+  clientSecret: string | null;
+  /** #504: Apple is sent no PKCE challenge, so it must be sent no verifier. */
+  codeVerifier: string | null;
+};
 
 const tokenRequests: TokenRequest[] = [];
 
@@ -172,8 +178,10 @@ beforeAll(() => {
     if (url.startsWith(`${APPLE_ISSUER}/auth/token`)) {
       const body = new URLSearchParams(String(init?.body ?? ""));
       tokenRequests.push({
+        code: body.get("code"),
         clientId: body.get("client_id"),
         clientSecret: body.get("client_secret"),
+        codeVerifier: body.get("code_verifier"),
       });
       const authorization = pendingAuthorizations.get(body.get("code") ?? "");
       if (!authorization) return jsonResponse({ error: "invalid_grant" }, 400);
@@ -1008,7 +1016,7 @@ describe("Apple identity is a subject, not an email", () => {
     expect(await userCountForEmail(relay)).toBe(1);
   });
 
-  it("offers apple as a sign-in provider but not yet as a bindable one", async () => {
+  it("offers apple as a sign-in provider and as a bindable one", async () => {
     const email = `apple-surface-${RUN}@example.test`;
     const password = "test-only-password-350";
     const signUp = await app.request(`${AUTH_BASE}/sign-up/email`, {
@@ -1049,12 +1057,246 @@ describe("Apple identity is a subject, not an email", () => {
     expect(providers.status).toBe(200);
     const offered = await providers.json() as { signInProviders: string[] };
     expect(offered.signInProviders).toEqual([APPLE_PROVIDER_ID]);
-    // Binding an Apple identity to an EXISTING account is a different round
-    // trip, and Apple's `response_mode=form_post` return cannot carry the
-    // SameSite=Lax bind cookie to the GET callback the shared flow exposes.
-    // `availableLinkProviders` drives a generic bind button, so it must stay
-    // empty rather than render a control that can only fail.
+    // #504: binding an Apple identity to an EXISTING account is a different
+    // round trip, and it now receives Apple's `form_post` return -- see
+    // "explicit Apple bind" below -- so the generic bind button may offer it.
     const body = await response.json() as { availableLinkProviders: string[] };
-    expect(body.availableLinkProviders).toEqual([]);
+    expect(body.availableLinkProviders).toEqual([APPLE_PROVIDER_ID]);
+  });
+});
+
+/**
+ * #504 (ST-140): binding an Apple subject to an EXISTING account through the
+ * shared authorize/callback round trip, against the same fake Apple.
+ *
+ * What makes these cases honest is the cookie jar on the callback. Apple
+ * returns with `response_mode=form_post`, a cross-site POST from
+ * `appleid.apple.com`, and a browser sends only `SameSite=None` cookies on
+ * that request. So the jar the callback receives is built from exactly the
+ * `Set-Cookie` headers that say `SameSite=None` -- the bind cookie -- and never
+ * the Better Auth session cookie, which is `Lax`. A test that forwarded every
+ * cookie would pass against a callback no real browser could complete.
+ */
+describe("explicit Apple bind", () => {
+  const PASSWORD = "test-only-password-504";
+  const BIND_CALLBACK = `${TEST_ORIGIN}/api/account-identities/providers/apple/callback`;
+
+  function crossSiteJar(...responses: Response[]): string {
+    return responses
+      .flatMap((response) => response.headers.getSetCookie?.() ?? [])
+      .filter((entry) => /;\s*samesite=none(?:;|$)/i.test(entry))
+      .map((entry) => entry.split(";")[0])
+      .filter((pair) => !pair.endsWith("="))
+      .join("; ");
+  }
+
+  function fragmentOf(location: string): URLSearchParams {
+    return new URLSearchParams(location.slice(location.indexOf("#") + 1));
+  }
+
+  async function postJson(path: string, body: unknown, cookie: string) {
+    return await app.request(`${TEST_ORIGIN}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: TEST_ORIGIN, cookie },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** A signed-in password account, with the response that set its session. */
+  async function signedInAccount() {
+    const email = `apple-bind-${RUN}-${randomUUID().slice(0, 8)}@example.test`;
+    const signUp = await app.request(`${AUTH_BASE}/sign-up/email`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: TEST_ORIGIN },
+      body: JSON.stringify({ name: "Apple bind", email, password: PASSWORD }),
+    });
+    expect(signUp.status).toBe(200);
+    const verificationToken = await createEmailVerificationToken(
+      serverConfig.authSecret,
+      email,
+    );
+    const verify = await app.request(
+      `${AUTH_BASE}/verify-email?token=${encodeURIComponent(verificationToken)}`,
+      { headers: { origin: TEST_ORIGIN } },
+    );
+    expect(verify.status).toBe(200);
+    const signIn = await app.request(`${AUTH_BASE}/sign-in/email`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: TEST_ORIGIN },
+      body: JSON.stringify({ email, password: PASSWORD }),
+    });
+    expect(signIn.status).toBe(200);
+    const cookie = signIn.headers
+      .get("set-cookie")
+      ?.match(/(?:__Secure-)?startrips\.session_token=[^;,\s]+/)?.[0] ?? "";
+    expect(cookie).toBeTruthy();
+    const [user] = await db
+      .select({ id: authUser.id })
+      .from(authUser)
+      .where(eq(authUser.email, email));
+    return { email, userId: user!.id, cookie, signIn };
+  }
+
+  /** Reverify, open an apple link intent and start the provider round trip. */
+  async function authorizeAppleBind(account: Awaited<ReturnType<typeof signedInAccount>>) {
+    const reverify = await postJson(
+      "/api/account-identities/reverify/password",
+      { password: PASSWORD },
+      account.cookie,
+    );
+    expect(reverify.status).toBe(200);
+    const { reverificationToken } = await reverify.json() as { reverificationToken: string };
+    const intentResponse = await postJson(
+      "/api/account-identities/link-intents",
+      { providerId: APPLE_PROVIDER_ID, reverificationToken },
+      account.cookie,
+    );
+    expect(intentResponse.status).toBe(200);
+    const intent = await intentResponse.json() as { actionId: string; intentToken: string };
+    const authorize = await postJson(
+      "/api/account-identities/providers/apple/authorize",
+      { actionId: intent.actionId, returnPath: "/account" },
+      account.cookie,
+    );
+    expect(authorize.status).toBe(200);
+    const { authorizationUrl } = await authorize.json() as { authorizationUrl: string };
+    const url = new URL(authorizationUrl);
+    expect(url.origin + url.pathname).toBe(`${APPLE_ISSUER}/auth/authorize`);
+    expect(url.searchParams.get("client_id")).toBe(APPLE_SERVICE_ID);
+    expect(url.searchParams.get("response_mode")).toBe("form_post");
+    expect(url.searchParams.get("redirect_uri")).toBe(BIND_CALLBACK);
+    // The per-provider PKCE opt-out: Apple is asked for no challenge.
+    expect(url.searchParams.get("code_challenge")).toBeNull();
+    expect(url.searchParams.get("code_challenge_method")).toBeNull();
+    const bindCookie = (authorize.headers.getSetCookie?.() ?? [])
+      .find((entry) => entry.startsWith("startrips.identity_bind="));
+    expect(bindCookie).toBeTruthy();
+    expect(bindCookie).toMatch(/;\s*SameSite=None(?:;|$)/i);
+    expect(bindCookie).toMatch(/;\s*Secure(?:;|$)/i);
+    expect(bindCookie).toMatch(/;\s*HttpOnly(?:;|$)/i);
+    const jar = crossSiteJar(account.signIn, authorize);
+    // The session cookie is Lax, so the simulated cross-site POST omits it.
+    expect(jar).not.toMatch(/session_token/);
+    expect(jar).toMatch(/^startrips\.identity_bind=/);
+    return { intent, state: url.searchParams.get("state") as string, jar };
+  }
+
+  /** Apple's `form_post` return: a cross-site urlencoded POST. */
+  async function formPostCallback(jar: string, fields: Record<string, string>) {
+    return await app.request(BIND_CALLBACK, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        origin: APPLE_ISSUER,
+        ...(jar ? { cookie: jar } : {}),
+      },
+      body: new URLSearchParams(fields).toString(),
+      redirect: "manual",
+    });
+  }
+
+  it("binds an Apple subject through authorize, the form_post callback and link/complete", async () => {
+    const account = await signedInAccount();
+    const { intent, state, jar } = await authorizeAppleBind(account);
+    const subject = `apple-subject-bind-${RUN}-${randomUUID().slice(0, 8)}`;
+    const code = `apple-bind-code-${randomUUID()}`;
+    pendingAuthorizations.set(code, {
+      idToken: appleIdToken({ subject, email: account.email, emailVerified: true }),
+    });
+    const callback = await formPostCallback(jar, {
+      state,
+      code,
+      // Apple posts an id_token of its own alongside the code. It is never
+      // believed: this one names another subject, and the bound subject below
+      // is the one the exchanged, verified token names.
+      id_token: appleIdToken({ subject: `apple-subject-forged-${RUN}` }),
+      user: JSON.stringify({ name: { firstName: "Apple", lastName: "Bind" } }),
+    });
+    expect(callback.status).toBe(303);
+    const location = callback.headers.get("location") ?? "";
+    expect(location.startsWith(`${serverConfig.appOrigin}/account#`)).toBe(true);
+    const fragment = fragmentOf(location);
+    expect(fragment.get("identityLink")).toBe("proof");
+    const providerProof = fragment.get("identityLinkProof") ?? "";
+    expect(providerProof).toBeTruthy();
+    // The shared exchange sent no code_verifier to Apple.
+    const exchange = tokenRequests.find((request) => request.code === code);
+    expect(exchange).toBeTruthy();
+    expect(exchange?.codeVerifier).toBeNull();
+    // One round trip, one cookie: the callback cleared it with the same
+    // attributes it was issued with, so a browser honours the clearing on
+    // that cross-site response.
+    const cleared = (callback.headers.getSetCookie?.() ?? [])
+      .find((entry) => entry.startsWith("startrips.identity_bind="));
+    expect(cleared).toMatch(/^startrips\.identity_bind=;/);
+    expect(cleared).toMatch(/;\s*SameSite=None(?:;|$)/i);
+    expect(cleared).toMatch(/;\s*Secure(?:;|$)/i);
+
+    // Back on the app origin, the real session spends the proof.
+    const completed = await postJson("/api/account-identities/link/complete", {
+      intentToken: intent.intentToken,
+      providerProof,
+    }, account.cookie);
+    expect(completed.status).toBe(200);
+    expect(await completed.json()).toMatchObject({ status: true, linked: true });
+    const accounts = await usersFor(subject);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].id).toBe(account.userId);
+    expect(await usersFor(`apple-subject-forged-${RUN}`)).toHaveLength(0);
+    const [ownership] = await db
+      .select({ userId: accountIdentityOwnerships.userId })
+      .from(accountIdentityOwnerships)
+      .where(and(
+        eq(accountIdentityOwnerships.providerId, APPLE_PROVIDER_ID),
+        eq(accountIdentityOwnerships.providerSubject, subject),
+      ));
+    expect(ownership?.userId).toBe(account.userId);
+
+    // A resent form_post finds the round trip spent.
+    const replay = await formPostCallback("", { state, code });
+    expect(replay.status).toBe(403);
+    expect(await replay.json()).toMatchObject({ error: "IDENTITY_BIND_STATE_INVALID" });
+  });
+
+  it("stops before the exchange when the bound session ended while Apple had the tab", async () => {
+    const account = await signedInAccount();
+    const { state, jar } = await authorizeAppleBind(account);
+    await db.delete(authSession).where(eq(authSession.userId, account.userId));
+    const code = `apple-bind-code-${randomUUID()}`;
+    pendingAuthorizations.set(code, {
+      idToken: appleIdToken({ subject: `apple-subject-ended-${RUN}`, email: account.email }),
+    });
+    const callback = await formPostCallback(jar, { state, code });
+    expect(callback.status).toBe(303);
+    const fragment = fragmentOf(callback.headers.get("location") ?? "");
+    expect(fragment.get("identityLink")).toBe("error");
+    expect(fragment.get("identityLinkError")).toBe("IDENTITY_ACTION_SESSION_CHANGED");
+    expect(tokenRequests.some((request) => request.code === code)).toBe(false);
+  });
+
+  it("reports Apple's cancelled authorization and a mismatched state without exchanging", async () => {
+    const account = await signedInAccount();
+    const cancelled = await authorizeAppleBind(account);
+    const cancel = await formPostCallback(cancelled.jar, {
+      state: cancelled.state,
+      error: "user_cancelled_authorize",
+    });
+    expect(cancel.status).toBe(303);
+    expect(fragmentOf(cancel.headers.get("location") ?? "").get("identityLinkError"))
+      .toBe("IDENTITY_PROVIDER_REFUSED");
+
+    const mismatched = await authorizeAppleBind(account);
+    const code = `apple-bind-code-${randomUUID()}`;
+    pendingAuthorizations.set(code, {
+      idToken: appleIdToken({ subject: `apple-subject-mismatch-${RUN}`, email: account.email }),
+    });
+    const wrongState = await formPostCallback(mismatched.jar, {
+      state: "st140-not-the-issued-state",
+      code,
+    });
+    expect(wrongState.status).toBe(303);
+    expect(fragmentOf(wrongState.headers.get("location") ?? "").get("identityLinkError"))
+      .toBe("IDENTITY_BIND_STATE_INVALID");
+    expect(tokenRequests.some((request) => request.code === code)).toBe(false);
   });
 });

@@ -57,6 +57,15 @@ describe("identity bind state", () => {
     expect(readIdentityBindState(SECRET, token, NOW)).toBeNull();
   });
 
+  // #504: a provider that opts out of PKCE records an explicit null, which
+  // the callback then checks against that provider's policy.
+  it("round-trips an explicit null verifier and refuses an absent one", () => {
+    const token = issueIdentityBindState(SECRET, bind({ providerId: "apple", codeVerifier: null }), NOW);
+    expect(readIdentityBindState(SECRET, token, NOW)?.codeVerifier).toBeNull();
+    const absent = issueIdentityBindState(SECRET, bind({ codeVerifier: undefined }), NOW);
+    expect(readIdentityBindState(SECRET, absent, NOW)).toBeNull();
+  });
+
   it("refuses a code verifier outside the PKCE length range", () => {
     const short = issueIdentityBindState(SECRET, bind({ codeVerifier: "v".repeat(42) }), NOW);
     expect(readIdentityBindState(SECRET, short, NOW)).toBeNull();
