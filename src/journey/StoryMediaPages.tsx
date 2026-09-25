@@ -72,6 +72,9 @@ type Props = {
   onGestureRevealFullscreenControls?: () => void;
 };
 
+/** See `videoGestureCanStart`: the band a presented transport's native controls occupy. */
+const NATIVE_VIDEO_CONTROL_BAND_PX = 84;
+
 function containsMediaPoint(element: HTMLImageElement | HTMLCanvasElement, x: number, y: number) {
   const rect = element.getBoundingClientRect();
   const width = element instanceof HTMLImageElement ? element.naturalWidth : element.width;
@@ -617,10 +620,23 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
 
   function mediaGestureCanStart(target: EventTarget | null) {
     if (!(target instanceof Element)) return false;
-    // Native controls are not DOM children with a portable hit region. The
-    // transport owns every pointer that starts on it, including seek drags.
-    if (target.closest(".story-media-pages__video")) return false;
     return !target.closest("button, input, select, textarea, [role='button']:not(img)");
+  }
+
+  // A swipe may start on the presented video's picture, so a video page can be
+  // browsed and a phone can swipe down out of fullscreen from it. A pointer is
+  // never taken by position alone: nothing is claimed until the stream locks an
+  // axis, a click never navigates (#489 A2), and the native control band --
+  // timeline, play, volume, overflow -- keeps every stream that starts in it.
+  // Chromium's control boxes live in a closed user-agent shadow tree, so the
+  // band is the height the Story chrome already clears for them
+  // (living-atlas.css: inline nav at 72px, fullscreen nav at 84px).
+  function videoGestureCanStart(event: ReactPointerEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (!(target instanceof Element) || !target.closest(".story-media-pages__video")) return true;
+    if (!(target instanceof HTMLVideoElement)) return false;
+    if (!target.controls) return true;
+    return event.clientY < target.getBoundingClientRect().bottom - NATIVE_VIDEO_CONTROL_BAND_PX;
   }
 
   function neighborFor(dx: number) {
@@ -654,7 +670,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   function beginGesture(event: ReactPointerEvent<HTMLDivElement>) {
     latest.current.onGestureConsumed(false);
     if (!event.isPrimary || !latest.current.active || !latest.current.gestureEnabled
-      || latest.current.media.length < 2 || !mediaGestureCanStart(event.target)) return;
+      || latest.current.media.length < 2 || !mediaGestureCanStart(event.target)
+      || !videoGestureCanStart(event)) return;
     const prior = settle.current;
     if (prior) prior.finishForTakeover();
     const base = pageNodes.current.find((node) => node?.dataset.mediaPage === "current");
