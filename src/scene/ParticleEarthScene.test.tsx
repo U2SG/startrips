@@ -101,6 +101,17 @@ describe("ParticleEarthScene contracts", () => {
     expect(sceneSource).toContain('renderer.domElement.addEventListener("webglcontextlost", onWebGlContextLost)');
     expect(sceneSource).toContain('renderer.domElement.removeEventListener("webglcontextlost", onWebGlContextLost)');
     expect(sceneSource).toContain("if (disposed) return;");
+
+    const rendererGuard = sceneSource.indexOf('if (!renderer) throw new Error("Particle Earth WebGL renderer unavailable")');
+    expect(rendererGuard).toBeGreaterThan(-1);
+    expect(sceneSource.indexOf("host.appendChild(renderer.domElement)")).toBeGreaterThan(rendererGuard);
+    expect(sceneSource.indexOf("new ResizeObserver(resize)")).toBeGreaterThan(rendererGuard);
+    expect(sceneSource.indexOf("requestAnimationFrame(render)")).toBeGreaterThan(rendererGuard);
+    expect(sceneSource.indexOf('renderer.domElement.addEventListener("pointerdown", onPointerDown)')).toBeGreaterThan(rendererGuard);
+
+    const factoryCall = hookSource.indexOf("controller = factoryRef.current(host);");
+    expect(hookSource.indexOf("return;", factoryCall)).toBeGreaterThan(factoryCall);
+    expect(hookSource.indexOf("}, []);", factoryCall)).toBeGreaterThan(factoryCall);
   });
 
   it("publishes attention-layer optical measurements from the shader DPR uniform", () => {
