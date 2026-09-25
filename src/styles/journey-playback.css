@@ -345,7 +345,6 @@
 
 .journey-playback__stop .journey-playback__stop-cue {
   max-height: 56px;
-  overflow: hidden;
 }
 
 .journey-playback__stop.is-receded {
@@ -368,6 +367,7 @@
   .journey-playback__stop.is-receded .journey-playback__stop-cue {
     min-height: 0;
     max-height: 0;
+    overflow: hidden;
     opacity: 0;
   }
 }

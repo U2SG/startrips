@@ -688,15 +688,20 @@ for (const viewport of VIEWPORTS) {
         // visible pixels stay inside the incoming aperture, and it is already
         // invisible when the stage removes it.
         const swap = frames.filter((frame) => frame.step === SECOND);
+        const settled = swap.filter((frame) => frame.presentation === "settled"
+          && frame.presented === "st109-p2-m1" && frame.requested === "st109-p2-m1").at(-1) ?? null;
+        const front = settled?.slots.find((slot) => slot.asset === "st109-p2-m1" && slot.front) ?? null;
+        // The incoming picture starts one stack depth back; the aperture the
+        // departing clip targets is where it settles.
+        const incomingAperture = front?.visible ?? null;
         let worstExposure = 0;
         // Only frames where the swap has begun: before that the landscape is
         // still the front picture and the portrait waits behind it.
         for (const frame of swap.filter((candidate) => candidate.presentation === "moving")) {
           const outgoing = frame.slots.find((slot) => slot.asset === "st109-p2-m0");
-          const incoming = frame.slots.find((slot) => slot.asset === "st109-p2-m1");
-          if (!outgoing?.visible || !incoming?.visible || !(outgoing.opacity > 0.01)) continue;
-          const outside = area(outgoing.visible) - overlap(outgoing.visible, incoming.visible);
-          worstExposure = Math.max(worstExposure, outgoing.opacity * outside / area(incoming.visible));
+          if (!outgoing?.visible || !incomingAperture || !(outgoing.opacity > 0.01)) continue;
+          const outside = area(outgoing.visible) - overlap(outgoing.visible, incomingAperture);
+          worstExposure = Math.max(worstExposure, outgoing.opacity * outside / area(incomingAperture));
         }
         const removal = swap.findIndex((frame, index) => index > 0
           && swap[index - 1].slots.some((slot) => slot.asset === "st109-p2-m0")
@@ -709,14 +714,11 @@ for (const viewport of VIEWPORTS) {
           removalFrame: removal, opacityBeforeRemoval,
           // Reduced Motion cuts at the handoff by design; with motion the
           // departing picture must already be invisible when it is dropped.
-          failed: swap.length === 0 || (!reduceMotion
+          failed: swap.length === 0 || !incomingAperture || (!reduceMotion
             && (worstExposure > MAX_DEPARTING_EXPOSURE || removal < 0 || opacityBeforeRemoval > 0.05)),
         });
 
         // Q3: the settled portrait owns the stage and clears the transport.
-        const settled = swap.filter((frame) => frame.presentation === "settled"
-          && frame.presented === "st109-p2-m1" && frame.requested === "st109-p2-m1").at(-1) ?? null;
-        const front = settled?.slots.find((slot) => slot.asset === "st109-p2-m1" && slot.front) ?? null;
         const apertureShare = front ? front.aperture.height / viewport.height : 0;
         const pictureBottom = front?.visible ? front.visible.top + front.visible.height : null;
         const controlsTop = settled?.controls?.top ?? null;
