@@ -2280,7 +2280,7 @@ export function JourneyStory({
   // pages -- reads widest, decoded pictures narrower, one live transport --
   // anchored on the latest requested media so rapid browsing warms ahead of
   // an intent that has not landed yet. Tier sizes live in `storyWarmWindow`.
-  // The visible stack neighbours stay in both tiers because they are painted.
+  // The painted stack neighbours count inside the same tier caps.
   const shownMediaIndex = shownAssetId === null ? -1 : scopedMediaIndex.indexById.get(shownAssetId) ?? -1;
   const warmWindow = storyWarmWindow({
     shownIndex: shownMediaIndex >= 0 ? shownMediaIndex : assetIndex,
@@ -2289,10 +2289,11 @@ export function JourneyStory({
     direction: mediaNavigationDirection.current,
     wrap: selectedRoutePointId !== null,
     autoplay: playing,
+    pinned: stackNeighborIndices,
   });
-  const warmIdsFor = (indices: readonly number[]) => [...new Set([...indices, ...stackNeighborIndices]
+  const warmIdsFor = (indices: readonly number[]) => indices
     .map((index) => scopedMedia[index]?.id)
-    .filter((id): id is string => id !== undefined))];
+    .filter((id): id is string => id !== undefined);
   const warmReadIds = warmIdsFor(warmWindow.reads);
   const warmDecodeIds = warmIdsFor(warmWindow.decode);
   const warmReadKey = warmReadIds.join("|");
@@ -3734,7 +3735,7 @@ export function JourneyStory({
               incomingId={incoming?.id ?? null}
               direction={mediaNavigationDirection.current}
               reads={mediaReads}
-              warmIds={warmDecodeIds}
+              warmIds={fullscreen ? undefined : warmDecodeIds}
               wrap={selectedRoutePointId !== null}
               videoAssetId={storyStageVideoAsset?.id ?? null}
               onSettled={settleIncoming}
@@ -4394,7 +4395,7 @@ export function JourneyStory({
             incomingId={incoming?.id ?? null}
             direction={mediaNavigationDirection.current}
             reads={mediaReads}
-            warmIds={warmDecodeIds}
+            warmIds={fullscreen ? warmDecodeIds : undefined}
             wrap={selectedRoutePointId !== null}
             videoAssetId={storyStageVideoAsset?.id ?? null}
             onSettled={settleIncoming}

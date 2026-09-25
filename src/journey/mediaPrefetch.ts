@@ -59,10 +59,12 @@ export function prefetchWindowFor(
  *   reads   -- signed read URLs, the widest and cheapest tier: the requested
  *              media plus STORY_WARM_READS_AHEAD (3) steps ahead of it in the
  *              latest navigation direction and STORY_WARM_READS_BEHIND (2)
- *              behind, plus whatever is still shown. At most 7 assets.
+ *              behind, plus the shown media and its painted stack neighbours,
+ *              capped at STORY_WARM_READ_LIMIT (7) assets.
  *   decode  -- a decoded image or a representative video frame, narrower: the
- *              shown and requested media and one step on either side of the
- *              requested one. At most 4 assets.
+ *              requested and shown media, one step on either side of the
+ *              requested one and the painted neighbours, capped at
+ *              STORY_WARM_DECODE_LIMIT (4) assets.
  *   live    -- not a tier here. Only the current or pending video owns the one
  *              live transport StoryMediaPages keeps; a warm video is metadata
  *              plus one still frame.
@@ -75,21 +77,31 @@ export function prefetchWindowFor(
  */
 export const STORY_WARM_READS_AHEAD = 3;
 export const STORY_WARM_READS_BEHIND = 2;
+/** Hard caps for each tier, including the shown media and its painted neighbours. */
+export const STORY_WARM_READ_LIMIT = 7;
+export const STORY_WARM_DECODE_LIMIT = 4;
 
 export type StoryWarmWindow = {
-  /** Indices whose signed read should be ready, nearest-ahead first. */
+  /** Indices whose signed read should be ready, highest priority first. */
   reads: number[];
   /** Indices whose picture should be decoded or have a representative frame. */
   decode: number[];
 };
 
-export function storyWarmWindow({ shownIndex, requestedIndex, length, direction, wrap, autoplay }: {
+/**
+ * `pinned` is what the stack paints behind the shown page. It shares the tier
+ * budget instead of being appended after it: when rapid browsing moves the
+ * requested intent away from the shown page, the farthest steps behind the
+ * intent go first, then the farthest ahead, so a tier never exceeds its cap.
+ */
+export function storyWarmWindow({ shownIndex, requestedIndex, length, direction, wrap, autoplay, pinned = [] }: {
   shownIndex: number;
   requestedIndex: number;
   length: number;
   direction: -1 | 1;
   wrap: boolean;
   autoplay: boolean;
+  pinned?: readonly number[];
 }): StoryWarmWindow {
   if (length < 1 || requestedIndex < 0 || requestedIndex >= length) return { reads: [], decode: [] };
   const forward = autoplay ? 1 : direction;
@@ -98,16 +110,19 @@ export function storyWarmWindow({ shownIndex, requestedIndex, length, direction,
     if (wrap) return ((raw % length) + length) % length;
     return raw >= 0 && raw < length ? raw : null;
   };
-  const shown = shownIndex >= 0 && shownIndex < length ? shownIndex : null;
-  const collect = (offsets: number[], extra: number | null) => [...new Set([
-    ...offsets.map(step), extra,
-  ].filter((index): index is number => index !== null))];
-  const readOffsets = [0];
-  for (let offset = 1; offset <= Math.max(STORY_WARM_READS_AHEAD, STORY_WARM_READS_BEHIND); offset += 1) {
-    if (offset <= STORY_WARM_READS_AHEAD) readOffsets.push(offset);
-    if (offset <= STORY_WARM_READS_BEHIND) readOffsets.push(-offset);
-  }
-  return { reads: collect(readOffsets, shown), decode: collect([0, 1, -1], shown) };
+  const valid = (index: number | null): index is number => index !== null && index >= 0 && index < length;
+  const shown = valid(shownIndex) ? shownIndex : null;
+  const painted = pinned.filter(valid);
+  const take = (candidates: Array<number | null>, limit: number) =>
+    [...new Set(candidates.filter(valid))].slice(0, limit);
+  // Ahead of the intent outranks behind it beyond the first step each way.
+  const readOffsets = [1, -1];
+  for (let offset = 2; offset <= STORY_WARM_READS_AHEAD; offset += 1) readOffsets.push(offset);
+  for (let offset = 2; offset <= STORY_WARM_READS_BEHIND; offset += 1) readOffsets.push(-offset);
+  return {
+    reads: take([step(0), shown, ...painted, ...readOffsets.map(step)], STORY_WARM_READ_LIMIT),
+    decode: take([step(0), shown, step(1), ...painted, step(-1)], STORY_WARM_DECODE_LIMIT),
+  };
 }
 
 /** Browser-side readiness of one media asset's image element. */
