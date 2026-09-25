@@ -855,10 +855,13 @@ try {
         "an automatic Stop with a free camera must not wait for camera arrival");
       const populatedStop = await stopBlankPoint(page);
       assert.equal(populatedStop.chapterDensity, "single", "Seoul image chapter must use populated stop layout");
-      assert.ok(populatedStop.stageHeight > 0
-        && populatedStop.stopRect.height / populatedStop.stageHeight > 0.3
-        && populatedStop.stopRect.height / populatedStop.stageHeight < 0.42,
-      `populated stop must occupy the 36% stage row: ${JSON.stringify(populatedStop)}`);
+      // #126 R2 Q3: a populated chapter's caption is content-sized in the top
+      // row (capped at 34% of the stage), not a fixed 36% band and not the
+      // centred single-item layout of an empty chapter.
+      assert.ok(populatedStop.stageHeight > 0 && populatedStop.stopRect.height > 0
+        && populatedStop.stopRect.height <= populatedStop.stageHeight * 0.34 + 1
+        && populatedStop.stopRect.y < populatedStop.stageHeight * 0.2,
+      `populated stop must sit in the content-sized caption row: ${JSON.stringify(populatedStop)}`);
       const beforePopulatedDrag = await snapshot(page);
       await page.mouse.move(populatedStop.x, populatedStop.y);
       await page.mouse.down();

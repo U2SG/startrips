@@ -325,7 +325,9 @@
 .journey-playback[data-playback-chapter-density="few"] .journey-playback__stop,
 .journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop {
   min-height: 0;
-  max-height: 100%;
+  /* A length, not 100%, so the media beat can fold it continuously. The row's
+     fit-content(34%) cap still bounds it. */
+  max-height: 34vh;
   align-self: stretch;
   box-sizing: border-box;
   overflow-y: auto;
@@ -354,9 +356,24 @@
 /* Q3: receding releases real layout space instead of only scaling the
    caption. The arrival cue folds away over one UI beat, starting from its
    full height, so the media row grows continuously from the opening still's
-   geometry. Reduced Motion keeps the arrival layout, so that seam never
-   resizes the picture in one step. */
+   geometry. Reduced Motion keeps one layout across the seam (see below), so
+   it never resizes the picture in one step. */
 @media (prefers-reduced-motion: no-preference) {
+  .journey-playback__stop {
+    transition:
+      opacity var(--motion-ui, 260ms) var(--motion-ease-in-out-spatial, ease),
+      transform var(--motion-ui, 260ms) var(--motion-ease-in-out-spatial, ease),
+      max-height var(--motion-ui, 260ms) var(--motion-ease-in-out-spatial, ease);
+  }
+
+  /* A long note keeps scrolling inside a compact caption band while its media
+     plays, instead of holding the arrival's reading height against the media. */
+  .journey-playback[data-playback-chapter-density="single"] .journey-playback__stop.is-receded,
+  .journey-playback[data-playback-chapter-density="few"] .journey-playback__stop.is-receded,
+  .journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop.is-receded {
+    max-height: min(9rem, 34vh);
+  }
+
   .journey-playback__stop .journey-playback__stop-cue {
     transition:
       min-height var(--motion-ui, 260ms) var(--motion-ease-in-out-spatial, ease),
@@ -628,6 +645,14 @@
      caption and the same media region mount in the same chapter order. */
   .journey-playback__stop {
     transition: none;
+  }
+
+  /* Reduced Motion uses the compact caption band in both beats, so a long
+     note never compresses the media and the seam never resizes it. */
+  .journey-playback[data-playback-chapter-density="single"] .journey-playback__stop,
+  .journey-playback[data-playback-chapter-density="few"] .journey-playback__stop,
+  .journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop {
+    max-height: min(9rem, 34vh);
   }
 
   .journey-playback__route-hint span,

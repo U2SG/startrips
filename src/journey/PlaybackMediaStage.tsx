@@ -215,10 +215,12 @@ export function PlaybackMediaStage(props: Props) {
     if (!ready || failed || presented || stage.requested === null) return;
     const requested = stage.requested;
     let cancelled = false;
+    let committed = false;
     const stillCurrent = () => !cancelled && requestKeyRef.current === requestKey
       && latest.current.isIntentCurrent?.() !== false;
     const commit = () => {
       if (!stillCurrent()) return;
+      committed = true;
       setStage((current) => {
         if (current.intent !== props.intent || current.requested !== requested) return current;
         const nextSlots: Stage["slots"] = [null, null];
@@ -266,15 +268,16 @@ export function PlaybackMediaStage(props: Props) {
     }
     from.style.zIndex = "2";
     to.style.zIndex = "4";
-    // Q2: the departing picture recedes INSIDE the incoming picture's aperture
-    // and settles invisible, so neither its letterbox side panels nor a
-    // one-frame removal is ever visible. The sequence peeks stay the only stack.
-    // The clip is written before motion (the spring's inset contract), so the
-    // side panels leave in the very frame the incoming picture takes the front.
+    // Q2: the departing picture stays in place, cropped to the incoming
+    // picture's settled aperture, and fades out under it. Because it does not
+    // move, that crop is a fixed frame: none of its letterbox side panels can
+    // show, and commit() drops a slot that is already invisible. The clip is
+    // written before motion (the spring's inset contract). The sequence peeks
+    // stay the only stack.
     const [clipY, clipX] = incomingApertureClip(from, to);
     from.style.clipPath = `inset(${clipY}% ${clipX}%)`;
     const outgoing = springElementTo(from, {
-      transform: mediaStackRest(1), opacity: 0, clipInset: [clipY, clipX],
+      transform: mediaStackRest(0), opacity: 0, clipInset: [clipY, clipX],
     }, { owner: stage.slots[shown]?.asset.id });
     const incoming = springElementTo(to, { transform: mediaStackRest(0), opacity: 1 },
       { owner: props.asset.id });
@@ -283,9 +286,17 @@ export function PlaybackMediaStage(props: Props) {
       cancelled = true;
       outgoing.cancel();
       incoming.cancel();
-      // An interrupted swap leaves the departing picture as the shown one; it
-      // must never stay cropped to an aperture that is no longer coming.
+      if (committed) return;
+      // An interrupted swap leaves the departing picture as the shown one.
+      // Settle both layers deterministically instead of freezing the frame the
+      // cancel landed on: the shown picture fully restored in front and
+      // uncropped, the abandoned incoming slot back at its waiting depth.
+      from.style.transform = mediaStackRest(0);
+      from.style.opacity = "1";
       from.style.clipPath = "";
+      to.style.transform = mediaStackRest(1);
+      to.style.opacity = "";
+      to.style.zIndex = "1";
     };
   }, [failed, presented, props.asset.id, props.entersFromOpening, props.intent, props.mapEntrance, props.paused, props.reduceMotion, ready, requestKey, stage.requested, stage.shown]);
 

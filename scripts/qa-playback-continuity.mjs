@@ -91,7 +91,7 @@ function record(name, detail) {
   if (detail.failed) failed = true;
 }
 
-async function open({ viewport, reduceMotion = true, readUrl = null }) {
+async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null }) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
@@ -162,15 +162,19 @@ async function open({ viewport, reduceMotion = true, readUrl = null }) {
     contentType: "application/json",
     body: "null",
   }));
-  await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      url: readUrl?.(route.request().url())
-        ?? (route.request().url().includes("st109-p4-m2") ? tinyVideo : onePixelGif),
-      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-    }),
-  }));
+  await page.route("**/api/uploads/assets/*/read-url", async (route) => {
+    // A held read keeps that asset loading until the caller releases it.
+    await holdRead?.(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        url: readUrl?.(route.request().url())
+          ?? (route.request().url().includes("st109-p4-m2") ? tinyVideo : onePixelGif),
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    });
+  });
 
   const query = new URLSearchParams({
     qaState: "journey-playback",
@@ -547,6 +551,8 @@ for (const viewport of VIEWPORTS) {
     + `<rect width='${width}' height='${height}' fill='#67b5a7'/></svg>`,
   )}`;
   const SEAM_MEDIA = {
+    // Point 1 carries the fixture's long note (ProductQaPreview.tsx).
+    "st109-p1-m0": aspectSvg(900, 1600),
     "st109-p2-m0": aspectSvg(1600, 900),
     "st109-p2-m1": aspectSvg(900, 1600),
     "st109-p2-m2": aspectSvg(1600, 900),
@@ -558,13 +564,16 @@ for (const viewport of VIEWPORTS) {
   const FIRST = stepOf(2, 0);
   const SECOND = stepOf(2, 1);
   const LAST = stepOf(2, 2);
+  const LONG_NOTE = stepOf(1, 0);
   const SEAM_VIEWPORTS = [
     { label: "desktop-1920", width: 1920, height: 1080 },
     { label: "compact-390", width: 390, height: 844, isMobile: true, hasTouch: true },
   ];
   const HANDOFF_TOLERANCE_PX = 3;
   const MIN_APERTURE_SHARE = 0.6;
-  const MAX_DEPARTING_EXPOSURE = 0.12;
+  // The departing picture is cropped to the incoming aperture and does not
+  // move, so anything beyond sub-pixel rounding is old content on screen.
+  const MAX_DEPARTING_EXPOSURE = 0.005;
 
   const armSeamRecorder = (page) => page.evaluate(() => {
     const trace = { frames: [], stopped: false };
@@ -593,9 +602,12 @@ for (const viewport of VIEWPORTS) {
       const openingImage = opening?.querySelector("img");
       const presentation = root.querySelector(".playback-media-presentation");
       const slots = [...(presentation?.querySelectorAll("[data-media-slot][data-media-asset]") ?? [])].map((slot) => {
-        const media = slot.querySelector("img, video");
-        const width = media instanceof HTMLImageElement ? media.naturalWidth : media?.videoWidth;
-        const height = media instanceof HTMLImageElement ? media.naturalHeight : media?.videoHeight;
+        // A departing video is retained as a painted canvas frame.
+        const media = slot.querySelector("img, video, canvas");
+        const width = media instanceof HTMLImageElement ? media.naturalWidth
+          : media instanceof HTMLVideoElement ? media.videoWidth : media?.width;
+        const height = media instanceof HTMLImageElement ? media.naturalHeight
+          : media instanceof HTMLVideoElement ? media.videoHeight : media?.height;
         const style = getComputedStyle(slot);
         const box = slot.getBoundingClientRect();
         const inset = style.clipPath.match(/^inset\(([-+\d.e]+)%(?:\s+([-+\d.e]+)%)?\)$/i);
@@ -622,6 +634,11 @@ for (const viewport of VIEWPORTS) {
         presentation: presentation?.getAttribute("data-media-presentation") ?? null,
         slots,
         controls: rect(root.querySelector(".journey-playback__controls")?.getBoundingClientRect()),
+        caption: (() => {
+          const caption = root.querySelector(".journey-playback__stop");
+          return caption ? { ...rect(caption.getBoundingClientRect()),
+            scrollHeight: caption.scrollHeight, clientHeight: caption.clientHeight } : null;
+        })(),
       });
     };
     const tick = () => {
@@ -727,6 +744,20 @@ for (const viewport of VIEWPORTS) {
           failed: !front || apertureShare < MIN_APERTURE_SHARE
             || pictureBottom === null || controlsTop === null || pictureBottom > controlsTop + 0.5,
         });
+        // Q3 with a long note: the note scrolls inside its own band and the
+        // settled media still owns the stage above the transport.
+        const longNote = frames.filter((frame) => frame.step === LONG_NOTE && frame.presentation === "settled"
+          && frame.presented === "st109-p1-m0").at(-1) ?? null;
+        const longFront = longNote?.slots.find((slot) => slot.asset === "st109-p1-m0" && slot.front) ?? null;
+        const longShare = longFront ? longFront.aperture.height / viewport.height : 0;
+        const longBottom = longFront?.visible ? longFront.visible.top + longFront.visible.height : null;
+        record(`${label}:long-note-scrolls-while-media-owns-stage`, {
+          apertureShare: longShare, minShare: MIN_APERTURE_SHARE, caption: longNote?.caption ?? null,
+          pictureBottom: longBottom, controlsTop: longNote?.controls?.top ?? null,
+          failed: !longFront || longShare < MIN_APERTURE_SHARE || !longNote.caption
+            || longNote.caption.scrollHeight <= longNote.caption.clientHeight
+            || longBottom === null || longBottom > (longNote.controls?.top ?? -Infinity) + 0.5,
+        });
         record(`${label}:seam-clean`, {
           consoleErrors: run.consoleErrors,
           pageErrors: run.pageErrors,
@@ -736,6 +767,86 @@ for (const viewport of VIEWPORTS) {
         await run.page.close();
       }
     }
+  }
+}
+
+// ── Q2 interruption: a newer media request lands mid-swap while it still loads
+{
+  const aspectSvg = (width, height) => `data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'>`
+    + `<rect width='${width}' height='${height}' fill='#67b5a7'/></svg>`,
+  )}`;
+  const media = {
+    "st109-p2-m0": aspectSvg(1600, 900),
+    "st109-p2-m1": aspectSvg(900, 1600),
+    "st109-p2-m2": aspectSvg(1600, 900),
+  };
+  let releaseHeld = () => undefined;
+  const held = new Promise((resolve) => { releaseHeld = resolve; });
+  const stepOf = (pointIndex, mediaIndex) => STEPS.findIndex((candidate) => (
+    candidate.kind === "media" && candidate.pointIndex === pointIndex && candidate.mediaIndex === mediaIndex
+  ));
+  const SECOND = stepOf(2, 1);
+  const LAST = stepOf(2, 2);
+  const run = await open({
+    viewport: { label: "desktop-1920", width: 1920, height: 1080 },
+    reduceMotion: false,
+    readUrl: (url) => Object.entries(media).find(([id]) => url.includes(id))?.[1] ?? null,
+    holdRead: (url) => (url.includes("st109-p2-m2") ? held : undefined),
+  });
+  try {
+    // Request the next media from inside the swap's own moving frame.
+    await run.page.evaluate((second) => {
+      window.__qaInterrupt = { fired: false };
+      const observer = new MutationObserver(() => {
+        const root = document.querySelector(".journey-playback");
+        const stage = root?.querySelector(".playback-media-presentation");
+        if (window.__qaInterrupt.fired || Number(root?.dataset.playbackStep) !== second
+          || stage?.getAttribute("data-media-presentation") !== "moving") return;
+        window.__qaInterrupt.fired = true;
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+        observer.disconnect();
+      });
+      observer.observe(document, { attributes: true, childList: true, subtree: true });
+    }, SECOND);
+    await run.page.locator(".journey-playback__tempo select").selectOption("fast");
+    await run.page.waitForFunction((last) => window.__qaInterrupt?.fired
+      && Number(document.querySelector(".journey-playback")?.dataset.playbackStep) === last,
+    LAST, { timeout: 60_000 });
+    // Two painted frames while the newer media is still loading.
+    const interrupted = await run.page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const slots = [...document.querySelectorAll(".playback-media-presentation [data-media-slot][data-media-asset]")]
+          .map((slot) => {
+            const style = getComputedStyle(slot);
+            return { asset: slot.getAttribute("data-media-asset"), front: slot.getAttribute("aria-hidden") === "false",
+              opacity: Number(style.opacity), clipPath: style.clipPath, transform: style.transform };
+          });
+        resolve({ slots, presentation: document.querySelector(".playback-media-presentation")
+          ?.getAttribute("data-media-presentation") ?? null });
+      }));
+    }));
+    const shown = interrupted.slots.find((slot) => slot.front) ?? null;
+    const halfway = interrupted.slots.filter((slot) => slot.opacity > 0.01 && slot.opacity < 0.99);
+    record("desktop-1920:motion:interrupted-swap-settles-deterministically", {
+      ...interrupted,
+      failed: !shown || shown.opacity < 0.99 || (shown.clipPath !== "none" && !/^inset\(0(%|px)?\)$/.test(shown.clipPath))
+        || halfway.length > 0,
+    });
+    releaseHeld();
+    await run.page.waitForFunction(() => {
+      const stage = document.querySelector(".playback-media-presentation");
+      return stage?.getAttribute("data-media-presentation") === "settled"
+        && stage.getAttribute("data-presented-asset") === "st109-p2-m2";
+    }, null, { timeout: 30_000 });
+    record("desktop-1920:motion:interrupted-swap-clean", {
+      consoleErrors: run.consoleErrors,
+      pageErrors: run.pageErrors,
+      failed: run.consoleErrors.length > 0 || run.pageErrors.length > 0,
+    });
+  } finally {
+    releaseHeld();
+    await run.page.close();
   }
 }
 
