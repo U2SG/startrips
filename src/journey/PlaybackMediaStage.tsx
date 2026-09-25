@@ -12,7 +12,7 @@ import {
   type VideoHTMLAttributes,
 } from "react";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
-import { mediaStackOpacity, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
+import { mediaStackApertureClip, mediaStackOpacity, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { springElementTo } from "../motion/springElement";
 import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import type { PlaybackMapBridge } from "./playbackMapBridge";
@@ -83,6 +83,14 @@ function RetainedVideoFrame({ frame }: { frame: HTMLCanvasElement }) {
     canvas.getContext("2d")?.drawImage(frame, 0, 0);
   }, [frame]);
   return <canvas ref={draw} aria-hidden="true" />;
+}
+
+/** The incoming picture's aperture inside a slot-sized box (Q2). */
+function incomingApertureClip(outgoing: HTMLElement, incoming: HTMLElement): [number, number] {
+  const media = incoming.querySelector("img, video");
+  if (media instanceof HTMLImageElement) return mediaStackApertureClip(outgoing, media.naturalWidth, media.naturalHeight);
+  if (media instanceof HTMLVideoElement) return mediaStackApertureClip(outgoing, media.videoWidth, media.videoHeight);
+  return [0, 0];
 }
 
 /** Two fixed presentation slots; the director remains the only time owner. */
@@ -181,6 +189,16 @@ export function PlaybackMediaStage(props: Props) {
     if (canDraw) setReadyKey(requestKey);
   }, [isVideo, matches, nativeRevision, props.imageReady, props.videoPositionReady, requestKey, stage.requested]);
 
+  // Only two slot nodes alternate. A slot that last departed still carries the
+  // clip and opacity its exit spring wrote; a newly requested asset starts clean.
+  useLayoutEffect(() => {
+    const index = stage.requested;
+    const element = index === null || index === stage.shown ? null : slots.current[index];
+    if (!element) return;
+    element.style.clipPath = "";
+    element.style.opacity = "";
+  }, [stage.requested, stage.shown, stage.slots]);
+
   useLayoutEffect(() => {
     props.onPendingChange(pending);
   }, [pending, props.onPendingChange]);
@@ -241,14 +259,19 @@ export function PlaybackMediaStage(props: Props) {
     setMovingKey(requestKey);
     if (shown === requested || stage.slots[shown]?.asset.id === props.asset.id) {
       to.style.zIndex = "4";
-      const recovery = springElementTo(to, { transform: mediaStackRest(0), opacity: 1 }, { owner: props.asset.id });
+      const recovery = springElementTo(to, { transform: mediaStackRest(0), opacity: 1, clipInset: [0, 0] },
+        { owner: props.asset.id });
       void recovery.finished.then(commit, () => undefined);
       return () => { cancelled = true; recovery.cancel(); };
     }
     from.style.zIndex = "2";
     to.style.zIndex = "4";
-    const outgoing = springElementTo(from, { transform: mediaStackRest(1), opacity: mediaStackOpacity(1) },
-      { owner: stage.slots[shown]?.asset.id });
+    // Q2: the departing picture recedes INSIDE the incoming picture's aperture
+    // and settles invisible, so neither its letterbox side panels nor a
+    // one-frame removal is ever visible. The sequence peeks stay the only stack.
+    const outgoing = springElementTo(from, {
+      transform: mediaStackRest(1), opacity: 0, clipInset: incomingApertureClip(from, to),
+    }, { owner: stage.slots[shown]?.asset.id });
     const incoming = springElementTo(to, { transform: mediaStackRest(0), opacity: 1 },
       { owner: props.asset.id });
     void Promise.all([outgoing.finished, incoming.finished]).then(commit, () => undefined);
