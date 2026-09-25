@@ -37,6 +37,8 @@ type MediaDrag = {
   scopeKey: string;
   settleTakeover: boolean;
 };
+/** `cancelGesture` as the stage implements it: `true` lets a landed settle commit (#530). */
+export type StoryMediaGestureCancel = (commitDecided?: boolean) => void;
 type Props = {
   scopeKey: string;
   media: readonly JourneyMediaAsset[];
@@ -159,7 +161,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const clipOwners = useRef<Array<string | null>>([null, null, null]);
   const interrupted = useRef(false);
   const drag = useRef<MediaDrag | null>(null);
-  const settle = useRef<{ cancel: () => void; finishForTakeover: () => void } | null>(null);
+  const settle = useRef<{ cancel: (commitDecided?: boolean) => void; finishForTakeover: () => void } | null>(null);
   const suppressCancelledPointerClick = useRef(false);
   const dragSprings = useRef<SpringElementHandle[]>([]);
   const gestureGeneration = useRef(0);
@@ -394,7 +396,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           // Releasing capture does not prevent the browser from synthesizing a
           // click at the release target. That click cannot navigate the photo.
           suppressCancelledPointerClick.current = true;
-          cancelGesture();
+          cancelGesture(true);
         }
         updateLayoutRevision((value) => value + 1);
       }
@@ -593,11 +595,17 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     }
   }
 
-  function cancelGesture() {
-    ++gestureGeneration.current;
+  // #530: `commitDecided` is for an interruption from outside the gesture
+  // (resize, blur, fullscreen, editing). A settle whose release already landed
+  // on a presentable target commits before it is finished; a spring-back, a
+  // held drag, and every lifecycle caller (unmount, scope or identity change)
+  // stay cleanup-only. The settle is resolved before the generation moves so
+  // its commit is still judged against the gesture that decided it.
+  function cancelGesture(commitDecided = false) {
     const pending = settle.current;
     settle.current = null;
-    pending?.cancel();
+    pending?.cancel(commitDecided);
+    ++gestureGeneration.current;
     const held = drag.current;
     drag.current = null;
     if (held) clearDragPresentation(held);
@@ -789,32 +797,41 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       dragSprings.current = [];
       complete();
     };
+    const finishForTakeover = () => {
+      if (!pending) return;
+      allowTapAfterSettle = false;
+      // A new pointer claims the painted pixels. Commit the identity first,
+      // then restore the measured pose on still-owned physical slots.
+      const painted = pageNodes.current.flatMap((node) => node?.dataset.mediaPageId
+        ? [{ node, id: node.dataset.mediaPageId, transform: getComputedStyle(node).transform,
+          opacity: getComputedStyle(node).opacity, clipPath: getComputedStyle(node).clipPath }] : []);
+      for (const spring of springs) spring.cancel();
+      finish();
+      for (const { node, id, transform, opacity, clipPath } of painted) {
+        if (node.dataset.mediaPageId !== id) continue;
+        node.style.transform = transform;
+        node.style.opacity = opacity;
+        node.style.clipPath = clipPath;
+      }
+    };
     settle.current = {
-      cancel: () => {
+      cancel: (commitDecided = false) => {
         if (!pending) return;
+        if (commitDecided && readyToLand) {
+          // #530: the release already chose this target. Commit it exactly as
+          // a takeover would, then let the stage spring the committed stack
+          // from its painted pose to rest; no later pointer will own it.
+          finishForTakeover();
+          recoverPages();
+          return;
+        }
         pending = false;
         settle.current = null;
         for (const spring of springs) spring.cancel();
         dragSprings.current = [];
         clearDragPresentation(value);
       },
-      finishForTakeover: () => {
-        if (!pending) return;
-        allowTapAfterSettle = false;
-        // A new pointer claims the painted pixels. Commit the identity first,
-        // then restore the measured pose on still-owned physical slots.
-        const painted = pageNodes.current.flatMap((node) => node?.dataset.mediaPageId
-          ? [{ node, id: node.dataset.mediaPageId, transform: getComputedStyle(node).transform,
-            opacity: getComputedStyle(node).opacity, clipPath: getComputedStyle(node).clipPath }] : []);
-        for (const spring of springs) spring.cancel();
-        finish();
-        for (const { node, id, transform, opacity, clipPath } of painted) {
-          if (node.dataset.mediaPageId !== id) continue;
-          node.style.transform = transform;
-          node.style.opacity = opacity;
-          node.style.clipPath = clipPath;
-        }
-      },
+      finishForTakeover,
     };
     void Promise.all(springs.map((spring) => spring.finished)).then(finish, () => undefined);
   }

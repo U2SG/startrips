@@ -67,7 +67,7 @@ import {
 import { IconActionButton } from "../components/IconActionButton";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import { StoryMediaRail } from "./StoryMediaRail";
-import { StoryMediaPages, type StoryMediaPagesHandle } from "./StoryMediaPages";
+import { StoryMediaPages, type StoryMediaGestureCancel, type StoryMediaPagesHandle } from "./StoryMediaPages";
 import { StoryMediaOrganizer } from "./StoryMediaOrganizer";
 import { StoryNotesEditor, type StoryNotesSaveState } from "./StoryNotesEditor";
 import { CoverRevealRequest } from "./CoverRevealRequest";
@@ -953,8 +953,9 @@ export function JourneyStory({
 
   function presentFullscreen(nextFullscreen: boolean) {
     // The departing stage releases pointer capture and its paint before the
-    // other surface becomes active. Story keeps the fullscreen intent.
-    cancelPendingMediaDragSettle();
+    // other surface becomes active. Story keeps the fullscreen intent, and a
+    // swipe that already landed keeps its navigation (#530).
+    cancelPendingMediaDragSettle(true);
     const previousHandoff = videoHandoffRef.current;
     // An immediate Back may find no settled video identity on the slow target.
     // Restore the original decoded transport before disposing its intent.
@@ -1538,7 +1539,10 @@ export function JourneyStory({
   }, [initialAssetId, initialSnapState, journeyId, routePointId]);
 
   useEffect(() => {
-    const cancel = () => cancelPendingMediaDragSettle();
+    // #530: rotation, app switch and window blur interrupt the settle, not the
+    // decision it carries. The effect's own cleanup is a lifecycle path and
+    // stays cleanup-only.
+    const cancel = () => cancelPendingMediaDragSettle(true);
     window.addEventListener("resize", cancel);
     window.addEventListener("blur", cancel);
     document.addEventListener("visibilitychange", cancel);
@@ -1546,7 +1550,7 @@ export function JourneyStory({
       window.removeEventListener("resize", cancel);
       window.removeEventListener("blur", cancel);
       document.removeEventListener("visibilitychange", cancel);
-      cancel();
+      cancelPendingMediaDragSettle();
     };
   }, [fullscreen, mobileLayout, overview]);
 
@@ -2581,9 +2585,12 @@ export function JourneyStory({
     event.preventDefault();
   }
 
-  function cancelPendingMediaDragSettle() {
-    inlineStageRef.current?.cancelGesture();
-    fullscreenStageRef.current?.cancelGesture();
+  function cancelPendingMediaDragSettle(commitDecided = false) {
+    // Only a user-facing interruption may commit a landed swipe (#530); every
+    // other caller is about to replace the selection or tear the stage down.
+    for (const stage of [inlineStageRef.current, fullscreenStageRef.current]) {
+      (stage?.cancelGesture as StoryMediaGestureCancel | undefined)?.(commitDecided);
+    }
     setMediaGestureHolding(false);
   }
 
@@ -3529,7 +3536,7 @@ export function JourneyStory({
       notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
       return;
     }
-    cancelPendingMediaDragSettle();
+    cancelPendingMediaDragSettle(true);
     setPlaying(false);
     setOverview(!desktopEditing && scopedMedia.length > 0);
     setDesktopEditing((value) => !value);
