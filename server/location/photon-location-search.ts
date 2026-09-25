@@ -316,9 +316,10 @@ export class PhotonLocationSearch implements LocationSearch {
   /**
    * The fallback runs behind the primary answer and only for a query that
    * answer did not name, so a confident local query such as `深圳` never pays
-   * for it. Hits that name the query lead; the primary answer keeps its order
-   * behind them and the fallback's other hits come last, so neither provider's
-   * places are reordered into a claim neither made. A failed fallback leaves a
+   * for it. Only fallback hits that name the query are admitted, ahead of the
+   * primary answer in its own order: a fuzzy fallback hit is not evidence of
+   * the place asked for, so without a named hit the primary answer — possibly
+   * empty — is returned exactly as the provider gave it. A failed fallback leaves a
    * non-empty primary answer standing, but an empty one is reported as
    * unavailable rather than as "no such place".
    */
@@ -339,14 +340,11 @@ export class PhotonLocationSearch implements LocationSearch {
         ? cause
         : new LocationSearchUnavailableError("Location search fallback request failed");
     }
-    const named = (result: LocationSearchResult) =>
-      names.some((name) => namesQuery(result, name));
+    const named = fallbackResults.filter((result) =>
+      names.some((name) => namesQuery(result, name)));
+    if (named.length === 0) return results;
     const output: LocationSearchResult[] = [];
-    for (const result of [
-      ...fallbackResults.filter(named),
-      ...results,
-      ...fallbackResults.filter((result) => !named(result)),
-    ]) {
+    for (const result of [...named, ...results]) {
       if (!output.some((kept) => samePlace(kept, result))) output.push(result);
     }
     return output.slice(0, options.limit);

@@ -148,6 +148,33 @@ describe("Photon with a bounded Nominatim fallback (#547)", () => {
     expect(withEmptyFallback.map((result) => result.id)).toEqual(["W:77"]);
   });
 
+  it("does not admit a fallback hit that does not name the query", async () => {
+    // Nominatim answers, but only with a place whose names are not the query:
+    // that is a fuzzy match, not the landmark, and must not surface a coordinate.
+    const unrelatedPlace = {
+      osm_type: "node",
+      osm_id: 991,
+      display_name: "大本钟咖啡, 朝阳区, 北京市, 中国",
+      lat: "39.9219",
+      lon: "116.4432",
+      namedetails: { name: "大本钟咖啡" },
+      address: { country_code: "cn" },
+    };
+
+    const nominatim = nominatimFetcher([unrelatedPlace]);
+    const empty = searchWith(photonFetcher([]), nominatim);
+    await expect(empty.search("大本钟", { limit: 8 })).resolves.toEqual([]);
+    expect(nominatim).toHaveBeenCalledOnce();
+
+    const withoutFallback = await searchWith(photonFetcher([UNRELATED_STREET]), null)
+      .search("大本钟", { limit: 8 });
+    const withFuzzyFallback = await searchWith(
+      photonFetcher([UNRELATED_STREET]),
+      nominatimFetcher([unrelatedPlace]),
+    ).search("大本钟", { limit: 8 });
+    expect(withFuzzyFallback).toEqual(withoutFallback);
+  });
+
   it("degrades a fallback failure through the unavailable error", async () => {
     const failing = () => vi.fn(async () => {
       throw new TypeError("fetch failed");
