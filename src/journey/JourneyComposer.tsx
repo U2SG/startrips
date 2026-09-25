@@ -75,6 +75,7 @@ import {
   matchRouteDraftPoints,
   moveRoutePoint,
   removeRoutePoint,
+  routeDraftSearchFocus,
   routeDraftToInput,
   suggestPointLabel,
   toggleRouteStop,
@@ -931,7 +932,10 @@ export function JourneyComposer({
     setSearchPending(true);
     setMessage("");
     try {
-      const response = await searchLocations(query);
+      // #546: bias towards the last Route Point of the current draft.
+      const response = await searchLocations(query, fetch, {
+        focus: routeDraftSearchFocus(routePointsRef.current),
+      });
       if (!composerMountedRef.current || searchRevisionRef.current !== revision) return;
       setSearchResults(response.results);
       setSearchAttribution(response.attribution);
