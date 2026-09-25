@@ -147,10 +147,28 @@ describe("playback return handoff", () => {
     })).toBeNull();
   });
 
-  it("keeps completion at Atlas with the same Journey selected", () => {
+  it("returns a completed run to the last media it presented (V8)", () => {
+    expect(resolvePlaybackReturn({
+      entry: { ...entry, routePointId: "point-d", assetId: "asset-d" },
+      committedPosition: { journeyId: journey.id, routePointId: "point-a", assetId: "asset-a" },
+      reason: "completed",
+      currentIntentRevision: 7,
+      journeys: [journey],
+    })).toEqual({
+      surface: "story",
+      reason: "completed",
+      fallbackReason: "none",
+      journeyId: journey.id,
+      routePointId: "point-a",
+      assetId: "asset-a",
+      storySnapState: "expanded",
+    });
+  });
+
+  it("keeps a completed run that presented no media at Atlas with the same Journey selected", () => {
     expect(resolvePlaybackReturn({
       entry,
-      committedPosition: { journeyId: journey.id, routePointId: "point-d", assetId: "asset-d" },
+      committedPosition: { journeyId: journey.id, routePointId: null, assetId: null },
       reason: "completed",
       currentIntentRevision: 7,
       journeys: [journey],

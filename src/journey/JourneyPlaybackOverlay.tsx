@@ -35,8 +35,8 @@ import {
   type PlaybackStepDurationResolver,
 } from "./useJourneyPlaybackDirector";
 import {
+  commitNarrativePlaybackPosition,
   commitPresentedPlaybackPosition,
-  committedPlaybackPosition,
   playbackCameraTargetForStep,
   playbackCameraTargetKey,
   playbackMediaForPoint,
@@ -978,7 +978,9 @@ export function JourneyPlaybackOverlay({
     }
     if (director.step && director.step.kind !== "media"
       && director.step.kind !== "travel" && !deferArrival) {
-      committedPositionRef.current = committedPlaybackPosition(journey, director.step);
+      committedPositionRef.current = commitNarrativePlaybackPosition(
+        committedPositionRef.current, journey, director.step,
+      );
     }
     if (needsCameraCommand) {
       lastCameraTargetKeyRef.current = targetKey;
@@ -1002,7 +1004,9 @@ export function JourneyPlaybackOverlay({
       return;
     }
     if (!arrivalPresentationPending && journey && director.step?.kind === "stop") {
-      committedPositionRef.current = committedPlaybackPosition(journey, director.step);
+      committedPositionRef.current = commitNarrativePlaybackPosition(
+        committedPositionRef.current, journey, director.step,
+      );
       if (!arrivalGate.released) setArrivalGate({ ...arrivalGate, released: true });
     }
   }, [arrivalGate, arrivalGateMatchesCurrent, arrivalPresentationPending, director.step, journey]);

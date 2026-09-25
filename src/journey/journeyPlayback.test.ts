@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPlaybackSteps,
+  commitNarrativePlaybackPosition,
   commitPresentedPlaybackPosition,
   committedPlaybackPosition,
   initialPlaybackState,
@@ -17,6 +18,7 @@ import {
   playbackMediaWaitPolicy,
   phaseForStep,
   routePointChapterDensity,
+  type PlaybackStep,
 } from "./journeyPlayback";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
@@ -564,6 +566,35 @@ describe("committedPlaybackPosition (#245)", () => {
       routePointId: null,
       assetId: null,
     });
+  });
+});
+
+describe("commitNarrativePlaybackPosition (V8)", () => {
+  it("keeps the last presented media across intro, outro, home, travel and Stop beats", () => {
+    const steps = buildPlaybackSteps(journey);
+    const presented = committedPlaybackPosition(
+      journey, steps.find((step) => step.kind === "media" && step.pointIndex === 1),
+    );
+    const laterStop = steps.find((step) => step.kind === "stop" && step.pointIndex === 0);
+    const home = { kind: "home" as const, homeBaseId: "home-a", latitude: 1, longitude: 2, anchor: { x: 0, y: 0, z: 1 } };
+    const beats: Array<PlaybackStep | undefined> = [{ kind: "intro" }, { kind: "outro" },
+      { kind: "home-prelude", cameraTarget: home }, { kind: "home-epilogue", cameraTarget: home },
+      { kind: "travel", to: 0 }, laterStop];
+    for (const step of beats) {
+      expect(commitNarrativePlaybackPosition(presented, journey, step)).toBe(presented);
+    }
+  });
+
+  it("commits the beat's own place until media has been presented", () => {
+    const stop = buildPlaybackSteps(journey).find((step) => step.kind === "stop" && step.pointIndex === 1);
+    expect(commitNarrativePlaybackPosition(null, journey, stop)).toEqual({
+      journeyId: journey.id,
+      routePointId: "point-1",
+      assetId: null,
+    });
+    expect(commitNarrativePlaybackPosition(
+      { journeyId: "another-journey", routePointId: "x", assetId: "y" }, journey, { kind: "intro" },
+    )).toEqual({ journeyId: journey.id, routePointId: null, assetId: null });
   });
 });
 

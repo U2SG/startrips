@@ -348,6 +348,21 @@ export function commitPresentedPlaybackPosition(
   return next.assetId === presentedAssetId ? next : previous;
 }
 
+/**
+ * V8: a non-media beat (intro, outro, home, travel or a Stop that has not
+ * presented its own media) commits its logical place only until this Playback
+ * session has presented media. After that the last presented asset remains
+ * the narrative return target; only a newer presented asset replaces it.
+ */
+export function commitNarrativePlaybackPosition(
+  previous: CommittedPlaybackPosition | null,
+  journey: Journey,
+  committedStep: PlaybackStep | undefined,
+): CommittedPlaybackPosition {
+  if (previous?.journeyId === journey.id && previous.assetId !== null) return previous;
+  return committedPlaybackPosition(journey, committedStep);
+}
+
 export type PlaybackControl =
   | { type: "advance" }
   | { type: "next" }
