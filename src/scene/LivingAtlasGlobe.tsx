@@ -1250,15 +1250,17 @@ export function LivingAtlasGlobe({
         />
       ) : null}
 
-      {modeNoteVisible && (
-        effectiveDive.stage === "prewarm"
-        || effectiveDive.stage === "blending"
-        || detailMode
-      ) ? (
+      {/* #308: one resolver owns gesture-note discoverability. Focus mode keeps
+          #253's transient onboarding; ordinary desktop keeps one quiet gesture
+          line even though renderer-mode chrome is gone; compact mobile stays
+          uncluttered and relies on its native pinch gesture. */}
+      {modeNoteVisible ? (
         <div className="living-atlas-globe__mode-note" aria-hidden="true">
           {effectiveDive.stage === "prewarm" || effectiveDive.stage === "blending"
             ? "VECTOR MAP PREPARING"
-            : "DRAG TO EXPLORE / ZOOM OUT TO RETURN"}
+            : detailMode
+              ? "DRAG TO EXPLORE / ZOOM OUT TO RETURN"
+              : "SCROLL TO ZOOM / DRAG TO ROTATE"}
         </div>
       ) : null}
     </section>

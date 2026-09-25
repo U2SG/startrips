@@ -507,8 +507,8 @@ try {
       await enterFocus(page);
       const focused = await readComposition(page);
 
-      // Particle-mode gesture copy is intentionally absent; wheel behavior
-      // remains the interaction contract rather than permanent instructional chrome.
+      // The hint is armed on entry; the first wheel input retires it, and it
+      // does not come back for this visit.
       const hintArmed = focused.modeNoteCount;
       await page.mouse.move(viewport.width / 2, viewport.height / 2);
       await page.mouse.wheel(0, -240);
@@ -528,7 +528,9 @@ try {
         || ordinary.modeCount !== 0
         || ordinary.diveIntentCount !== 1
         || ordinary.legacyModeCopy
-        || ordinary.modeNoteCount !== 0
+        // Owner review on PR 257: #253 owns the focus-mode composition, so the
+        // ordinary surface keeps the permanent guidance it has always shown.
+        || ordinary.modeNoteCount !== 1
         || !selection.changed
         || focused.focusMarker !== "on"
         || focused.controlsCount !== 0
@@ -551,15 +553,16 @@ try {
         || !exit.parentClass?.includes("living-atlas")
         || exit.parentClass.includes("header")
         || !exit.focused
-        || hintArmed !== 0
+        || hintArmed !== 1
         || hintAfterGesture !== 0
         || returned.focusMarker !== "off"
         || returned.controlsCount !== 1
         || returned.modeCount !== 0
         || returned.diveIntentCount !== 1
         || returned.legacyModeCopy
-        // Returning to the ordinary particle surface keeps gesture copy absent.
-        || returned.modeNoteCount !== 0
+        // Retiring the hint inside focus mode does not consume the ordinary
+        // surface's own line: returning restores the full ordinary chrome.
+        || returned.modeNoteCount !== 1
         || returned.activeRailJourney !== selection.selectedTitle
         || returned.historyLength !== historyBefore
         || pageErrors.length > 0;
@@ -645,7 +648,8 @@ try {
     }
   }
 
-  // 3. Reduced motion reaches the same end states with particle gesture copy absent.
+  // 3. Reduced motion reaches the same end states, and the hint retires on the
+  //    dwell alone - no wheel, no drag, no `transitionend` in the path.
   {
     const viewport = VIEWPORTS[0];
     const { page, pageErrors } = await openAtlas(viewport, { reducedMotion: "reduce" });
@@ -658,7 +662,8 @@ try {
         document.querySelectorAll(".living-atlas-globe__mode-note").length === 0
       ), null, { timeout: HINT_DWELL_MS + 6_000 });
       const hintAfterDwell = await countHint(page);
-      // A second visit also keeps particle gesture copy absent.
+      // A second visit arms a fresh hint; the retired one never re-appears in
+      // the visit that dismissed it.
       await page.locator(".living-atlas__globe-focus-exit").click();
       await waitForExitedFocus(page);
       await enterFocus(page);
@@ -681,12 +686,12 @@ try {
         pageErrors,
         failed: focused.focusMarker !== "on"
           || focused.controlsCount !== 0
-          || hintArmed !== 0
+          || hintArmed !== 1
           || hintAfterDwell !== 0
-          || rearmed !== 0
+          || rearmed !== 1
           || returned.focusMarker !== "off"
           || returned.controlsCount !== 1
-          || returned.modeNoteCount !== 0
+          || returned.modeNoteCount !== 1
           || returned.historyLength !== historyBefore
           || pageErrors.length > 0,
       });
@@ -931,7 +936,7 @@ try {
           || returned.focusMarker !== "off"
           || returned.controlsCount !== 1
           || returned.modeCount !== 0
-          || returned.modeNoteCount !== 0
+          || returned.modeNoteCount !== 1
           || pageErrors.length > 0,
       });
     } finally {
