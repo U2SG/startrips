@@ -102,5 +102,6 @@ export const locationRoutes = createLocationRoutes(
     driver: serverConfig.locationSearchDriver,
     baseUrl: serverConfig.locationSearchBaseUrl,
     userAgent: serverConfig.locationSearchUserAgent,
+    fallbackBaseUrl: serverConfig.locationSearchFallbackBaseUrl,
   }),
 );
