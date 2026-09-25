@@ -406,11 +406,57 @@ export function cityPointCoordinates(city: Pick<CityPoint, "latitude" | "longitu
   return city ? { latitude: city.latitude, longitude: city.longitude } : null;
 }
 
-type JourneyPointPointerTarget = {
+export type JourneyPointPointerTarget = {
   journeyId: string;
   routePointId?: string;
   routePointIndex: number;
 };
+
+export const JOURNEY_ROUTE_POINT_POINTER_RADIUS_PX = 22;
+
+export function selectJourneyRoutePointScreenTarget(
+  candidates: readonly {
+    target: JourneyPointPointerTarget;
+    x: number;
+    y: number;
+  }[],
+  clientX: number,
+  clientY: number,
+  radiusPx = JOURNEY_ROUTE_POINT_POINTER_RADIUS_PX,
+): JourneyPointPointerTarget | null {
+  if (
+    !Number.isFinite(clientX)
+    || !Number.isFinite(clientY)
+    || !Number.isFinite(radiusPx)
+    || radiusPx <= 0
+  ) return null;
+
+  const radiusSquared = radiusPx * radiusPx;
+  let best: {
+    target: JourneyPointPointerTarget;
+    distanceSquared: number;
+  } | null = null;
+
+  for (const candidate of candidates) {
+    if (!Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) continue;
+    const deltaX = clientX - candidate.x;
+    const deltaY = clientY - candidate.y;
+    const distanceSquared = deltaX * deltaX + deltaY * deltaY;
+    if (distanceSquared > radiusSquared) continue;
+    if (
+      !best
+      || distanceSquared < best.distanceSquared - 1e-6
+      || (
+        Math.abs(distanceSquared - best.distanceSquared) <= 1e-6
+        && candidate.target.routePointIndex < best.target.routePointIndex
+      )
+    ) {
+      best = { target: candidate.target, distanceSquared };
+    }
+  }
+
+  return best?.target ?? null;
+}
 
 export function journeyRoutePointTargetEligible(
   target: JourneyPointPointerTarget | null | undefined,
@@ -3774,6 +3820,36 @@ export function ParticleEarthScene({
         ? null
         : journeyPointTargets[intersection.index] ?? null;
     };
+    const journeyScreenTargetFromPointer = (
+      clientX: number,
+      clientY: number,
+    ): JourneyPointPointerTarget | null => {
+      const routePointActivationEnabled = Boolean(latestOnJourneyRoutePointActivate.current);
+      const candidates = [...routeVectorLayer.querySelectorAll<SVGCircleElement>(
+        ".particle-earth-route__point[data-journey-route][data-route-point-id][data-route-point-index]",
+      )].flatMap((marker) => {
+        if (marker.style.display === "none") return [];
+        const journeyId = marker.dataset.journeyRoute;
+        const routePointId = marker.dataset.routePointId;
+        const routePointIndex = Number(marker.dataset.routePointIndex);
+        if (!journeyId || !routePointId || !Number.isInteger(routePointIndex)) return [];
+        const target: JourneyPointPointerTarget = { journeyId, routePointId, routePointIndex };
+        if (!journeyRoutePointTargetEligible(
+          target,
+          latestActiveJourneyRouteId.current,
+          routePointActivationEnabled,
+          latestTemporalReveal.current,
+        )) return [];
+        const rect = marker.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return [];
+        return [{
+          target,
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        }];
+      });
+      return selectJourneyRoutePointScreenTarget(candidates, clientX, clientY);
+    };
     const homeBaseTargetFromPointer = (clientX: number, clientY: number): string | null => {
       if (!latestOnHomeBaseActivate.current || publishedHomeBasePresenceFrame.length === 0) return null;
       return selectHomeBasePointerTarget(
@@ -3875,7 +3951,14 @@ export function ParticleEarthScene({
           );
           return;
         }
-        const target = journeyTargetFromPreparedRay();
+        // Visual Route Point markers are CSS-pixel UI, so their pointer target
+        // must stay CSS-pixel-stable too. Prefer the same projected marker
+        // centres the user sees, with a 44px target, and keep the Three.js
+        // raycast as a fallback for route-level interaction. A world-space
+        // Points threshold changes apparent size with camera scale and made
+        // visible markers intermittently miss at the exact visual centre.
+        const target = journeyScreenTargetFromPointer(event.clientX, event.clientY)
+          ?? journeyTargetFromPreparedRay();
         if (target?.routePointId && latestOnJourneyRoutePointActivate.current) {
           const routePointTarget = { journeyId: target.journeyId, routePointId: target.routePointId };
           publishRoutePointActivationEvidence(event, routePointTarget, "marker");
@@ -4063,37 +4146,17 @@ export function ParticleEarthScene({
       return journeyId && routePointId ? { journeyId, routePointId } : null;
     };
     const routeLabelTargetFromPointer = (event: PointerEvent): RouteLayerPointerTarget | null => {
-      // A visible marker owns its own visual center even when a neighbouring
-      // 44px label hit box overlaps that pixel. Resolve that stable geographic
-      // identity first; otherwise the transparent label rectangle can steal a
-      // marker click and open a different Route Point context.
-      const markerCandidates = [...routeVectorLayer.querySelectorAll<SVGCircleElement>(
-        ".particle-earth-route__point[data-journey-route][data-route-point-id]",
-      )]
-        .filter((marker) => marker.style.display !== "none")
-        .map((marker) => {
-          const journeyId = marker.dataset.journeyRoute;
-          const routePointId = marker.dataset.routePointId;
-          if (!journeyId || !routePointId) return null;
-          const rect = marker.getBoundingClientRect();
-          if (
-            event.clientX < rect.left || event.clientX > rect.right
-            || event.clientY < rect.top || event.clientY > rect.bottom
-          ) return null;
-          const centerX = rect.left + rect.width / 2;
-          const centerY = rect.top + rect.height / 2;
-          return {
-            journeyId,
-            routePointId,
-            source: "marker" as const,
-            distance: Math.hypot(event.clientX - centerX, event.clientY - centerY),
-          };
-        })
-        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
-        .sort((left, right) => left.distance - right.distance);
-      if (markerCandidates[0]) {
-        const { journeyId, routePointId, source } = markerCandidates[0];
-        return { journeyId, routePointId, source };
+      // Marker and label interaction share the same 44px screen-space Route
+      // Point target. If a transparent label box overlaps that target, the
+      // geographic marker keeps ownership of the pointer just as it does when
+      // the event lands directly on the WebGL canvas.
+      const markerTarget = journeyScreenTargetFromPointer(event.clientX, event.clientY);
+      if (markerTarget?.routePointId) {
+        return {
+          journeyId: markerTarget.journeyId,
+          routePointId: markerTarget.routePointId,
+          source: "marker",
+        };
       }
 
       const candidates = [...routeVectorLayer.querySelectorAll<SVGGElement>(

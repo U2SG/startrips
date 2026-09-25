@@ -640,9 +640,10 @@ async function clickRoutePointLabel(page, routeId, pointId) {
       .map((marker) => marker.getBoundingClientRect());
     for (let y = rect.top + 4; y <= rect.bottom - 4; y += 4) {
       for (let x = rect.left + 4; x <= rect.right - 4; x += 4) {
-        if (markerRects.some((marker) => (
-          x >= marker.left && x <= marker.right && y >= marker.top && y <= marker.bottom
-        ))) continue;
+        if (markerRects.some((marker) => Math.hypot(
+          x - (marker.left + marker.width / 2),
+          y - (marker.top + marker.height / 2),
+        ) <= 22)) continue;
         const hitElement = document.elementFromPoint(x, y);
         if (hitElement?.closest(".particle-earth-route__label") === node) return { x, y };
       }
