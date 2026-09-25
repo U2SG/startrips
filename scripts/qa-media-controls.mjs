@@ -2056,9 +2056,13 @@ try {
     await heldResize.page.close();
   }
 
+  // Three distinct photographs: Back now returns the second one (#530), and
+  // its paint is graded against every other ready page, so its neighbour
+  // must not share its pixels.
   const stageOwnerBack = await createQaPage("/?qaState=journey-story", (request) =>
     request.includes("000000000100") ? "/artworks/china-handscroll.jpg"
-      : "/artworks/mughal-akbarnama.jpg", {
+      : request.includes("000000000102") ? "/artworks/hokusai-wave.jpg"
+        : "/artworks/mughal-akbarnama.jpg", {
     mobile: true, reducedMotion: "no-preference",
   });
   try {
