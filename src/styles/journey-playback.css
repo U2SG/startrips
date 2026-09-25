@@ -321,13 +321,8 @@
   overscroll-behavior: contain;
 }
 
-/* The arrival beat's opening still: the same asset the media beat is about to
-   own, already decoded, so the seam has no blank frame to enter from. */
-.journey-playback__chapter-opening {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
+/* The arrival beat's opening still shares the media aperture; its geometry
+   lives beside the stage slots in playback-media-presentation.css. */
 
 /* The caption recedes while its own media owns the frame. It never unmounts —
    that is what keeps a populated chapter reading as one continuous beat. */

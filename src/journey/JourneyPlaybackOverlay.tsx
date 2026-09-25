@@ -1013,6 +1013,20 @@ export function JourneyPlaybackOverlay({
     );
     mapBridge.recordMedia();
   }, [director.step, journey, mapBridge.isCurrent, mapBridge.recordMedia]);
+  // Q1: remember which asset the arrival actually painted as its opening
+  // still. The very next media beat of that asset enters from that frame
+  // instead of from a stacked or offset slot. Held until the step changes.
+  const openingHandoffRef = useRef<{ journeyId: string; stepIndex: number; assetId: string } | null>(null);
+  useLayoutEffect(() => {
+    const held = openingHandoffRef.current;
+    if (director.step?.kind === "media" && held?.stepIndex === director.stepIndex - 1) return;
+    const assetId = director.step?.kind === "stop"
+      ? overlayRef.current?.querySelector<HTMLElement>("[data-opening-asset]")?.dataset.openingAsset
+      : undefined;
+    openingHandoffRef.current = journey && assetId
+      ? { journeyId: journey.id, stepIndex: director.stepIndex, assetId }
+      : null;
+  });
 
   // Keyboard: arrows step, space pauses, Esc exits.
   useEffect(() => {
@@ -1264,6 +1278,11 @@ export function JourneyPlaybackOverlay({
       ? decodeRegistryRef.current.readiness(chapterOpeningAsset.id)
       : undefined,
   );
+  const openingHandoff = openingHandoffRef.current;
+  const entersFromOpening = step?.kind === "media" && step.mediaIndex === 0 && Boolean(activeMedia)
+    && openingHandoff?.journeyId === journey.id
+    && openingHandoff.stepIndex === director.stepIndex - 1
+    && openingHandoff.assetId === activeMedia?.id;
   // Where the beat that is playing starts on the plan: a full remaining budget
   // means nothing of it has been consumed yet.
   const beatStartFraction = playbackProgressFraction(plan, director.stepIndex, 1, 1);
@@ -1383,15 +1402,24 @@ export function JourneyPlaybackOverlay({
               <div className="journey-playback__chapter-media">
                 {/* The arrival already waits for this asset to decode, so the
                     media beat enters from the frame it is about to own rather
-                    than from a blank one. */}
-                {step?.kind === "stop" && chapterOpeningUrl ? (
-                  <img
-                    className="journey-playback__chapter-opening"
-                    src={chapterOpeningUrl}
-                    alt=""
+                    than from a blank one. It sits in the SAME aperture
+                    geometry as the stage's first slot, so the handoff keeps
+                    the picture's rendered rect. */}
+                {step?.kind === "stop" && chapterOpeningUrl && chapterOpeningAsset ? (
+                  <div
+                    className="journey-playback__chapter-aperture"
+                    data-opening-asset={chapterOpeningAsset.id}
                     aria-hidden="true"
-                    draggable={false}
-                  />
+                  >
+                    <div className="journey-playback__chapter-aperture-frame">
+                      <img
+                        className="journey-playback__chapter-opening"
+                        src={chapterOpeningUrl}
+                        alt=""
+                        draggable={false}
+                      />
+                    </div>
+                  </div>
                 ) : null}
 
         {step?.kind === "media" && activeMedia ? (
@@ -1401,6 +1429,7 @@ export function JourneyPlaybackOverlay({
             preview={activeRead?.status === "ready" ? activeRead.preview : undefined}
             intent={`${journey.id}:${playbackStepIdentity(journey, step)}:${director.stepIndex}:${director.intentRevision}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`}
             mapEntrance={mapBridge.entrance}
+            entersFromOpening={entersFromOpening}
             isIntentCurrent={mapBridge.isCurrent}
             sequencePeeks={sequencePeeks}
             stepIndex={director.stepIndex}

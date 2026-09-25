@@ -50,6 +50,9 @@ type Props = {
   mapEntrance?: (element: HTMLElement) => PlaybackMapBridge | null;
   isIntentCurrent?: () => boolean;
   sequencePeeks?: readonly SequencePeek[];
+  /** The previous arrival painted this asset as its opening still in the same
+   * aperture, so the first slot must enter from that exact frame. */
+  entersFromOpening?: boolean;
 };
 
 // Keep the departing video frame in its physical slot without keeping a second
@@ -214,8 +217,12 @@ export function PlaybackMediaStage(props: Props) {
     // media. In particular a video never gains another live transport here.
     const bridge = shown === null && to ? props.mapEntrance?.(to) : null;
     if (bridge?.spatial && to) {
-      to.style.transform = bridge.from.transform;
-      to.style.opacity = String(bridge.from.opacity);
+      // Q1: the opening still already shows this picture at rest in this
+      // aperture. Keep the seam's settle (and its interruption window), but
+      // start it from that frame instead of an offset, smaller copy.
+      const from = props.entersFromOpening ? bridge.to : bridge.from;
+      to.style.transform = from.transform;
+      to.style.opacity = String(from.opacity);
       to.style.zIndex = "4";
       setMovingKey(requestKey);
       const motion = springElementTo(to, bridge.to, { owner: props.intent });
@@ -246,7 +253,7 @@ export function PlaybackMediaStage(props: Props) {
       { owner: props.asset.id });
     void Promise.all([outgoing.finished, incoming.finished]).then(commit, () => undefined);
     return () => { cancelled = true; outgoing.cancel(); incoming.cancel(); };
-  }, [failed, presented, props.asset.id, props.intent, props.mapEntrance, props.paused, props.reduceMotion, ready, requestKey, stage.requested, stage.shown]);
+  }, [failed, presented, props.asset.id, props.entersFromOpening, props.intent, props.mapEntrance, props.paused, props.reduceMotion, ready, requestKey, stage.requested, stage.shown]);
 
   const unavailable = () => {
     setFailedKey(requestKey);
@@ -272,6 +279,9 @@ export function PlaybackMediaStage(props: Props) {
   }, []);
 
   const hasFrame = stage.shown !== null;
+  // The opening still is the same picture in the same aperture, so a wait over
+  // it is a wait over media, not over an empty stage.
+  const framed = hasFrame || Boolean(props.entersFromOpening);
   const waiting = !failed && ((pending && !moving) || props.buffering);
   return (
     <div className="journey-playback__media playback-media-presentation"
@@ -326,7 +336,10 @@ export function PlaybackMediaStage(props: Props) {
             data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
             aria-hidden={stage.shown !== index}
             style={{
-              transform: mediaStackRest(stage.shown === index ? 0 : 1),
+              // The first media entering from its opening still rests in front
+              // from its first frame; any other pending slot waits one depth back.
+              transform: mediaStackRest(stage.shown === index
+                || (stage.shown === null && props.entersFromOpening) ? 0 : 1),
               zIndex: stage.shown === index ? 2 : 1,
               backgroundImage: layer?.kind === "preview" ? `url(${JSON.stringify(layer.url)})` : undefined,
               backgroundSize: "contain",
@@ -360,9 +373,9 @@ export function PlaybackMediaStage(props: Props) {
           <div className="starlight-media-state__copy"><strong>媒体暂时无法打开</strong><span>将继续播放下一段。</span></div>
         </div>
       ) : waiting ? (
-        <div className={`journey-playback__media-state starlight-media-state is-waiting${hasFrame ? " is-over-media" : ""}`} role="status" aria-live="polite">
-          {!hasFrame ? <StartripsJourneyCue state="waiting" size={60} className="starlight-media-state__cue" /> : null}
-          <div className="starlight-media-state__copy"><strong>{props.buffering ? "正在缓冲视频…" : "正在打开媒体…"}</strong>{!hasFrame ? <span>准备好后继续播放。</span> : null}</div>
+        <div className={`journey-playback__media-state starlight-media-state is-waiting${framed ? " is-over-media" : ""}`} role="status" aria-live="polite">
+          {!framed ? <StartripsJourneyCue state="waiting" size={60} className="starlight-media-state__cue" /> : null}
+          <div className="starlight-media-state__copy"><strong>{props.buffering ? "正在缓冲视频…" : "正在打开媒体…"}</strong>{!framed ? <span>准备好后继续播放。</span> : null}</div>
         </div>
       ) : null}
     </div>
