@@ -2301,7 +2301,7 @@ export function JourneyStory({
   useEffect(() => {
     // Signed reads are cached per dialog; this only requests missing ones.
     for (const assetId of warmReadIds) loadMediaRead(assetId);
-    // Decoded pictures are the memory that matters. Anything that left the
+    // Decoded pictures are the budget that matters. Anything that left the
     // decode tier -- by distance, a reversed direction or a scope change --
     // is released on this pass, so eviction is a function of the window.
     const keep = new Set<string>(warmDecodeIds);

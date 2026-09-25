@@ -21,37 +21,6 @@ export function mediaPrefetchUrlsForRead(
   return mediaPreviewPrefetchUrls(assetId, readAssetId, read);
 }
 
-export type PrefetchWindow = {
-  /** Indices to prefetch ahead of the active index. */
-  next: number[];
-  /** Indices to prefetch behind the active index. */
-  previous: number[];
-};
-
-/**
- * Which adjacent media indices to prepare for the active index.
- *
- * Manual browsing needs next 1 + previous 1; autoplay is allowed to run ahead
- * by two so a slow network cannot catch it mid-slide.
- */
-export function prefetchWindowFor(
-  activeIndex: number,
-  length: number,
-  autoplay: boolean,
-): PrefetchWindow {
-  if (length < 2) return { next: [], previous: [] };
-  const ahead = autoplay ? 2 : 1;
-  const next: number[] = [];
-  const previous: number[] = [];
-  for (let step = 1; step <= ahead; step += 1) {
-    const forward = activeIndex + step;
-    if (forward < length) next.push(forward);
-  }
-  const backward = activeIndex - 1;
-  if (backward >= 0) previous.push(backward);
-  return { next, previous };
-}
-
 /**
  * #489 (ST-159): the bounded, tiered warm set for Story browsing. Physical
  * presentation stays three pages; this decides what is prepared behind them.
@@ -171,12 +140,19 @@ export function createDecodeRegistry(
 
     const readiness: DecodedReadiness = { status: "pending" };
     state.set(assetId, readiness);
+    // A decode that settles after `release`/`reset` (or after a newer ensure)
+    // no longer owns the entry. Writing it back would re-admit an asset the
+    // warm window already evicted, so only the request that is still the
+    // registered pending entry may record its outcome.
+    const owns = () => state.get(assetId) === readiness;
     void decodeImage(url).then(
       () => {
+        if (!owns()) return;
         state.set(assetId, { status: "decoded" });
         notifySettled();
       },
       (error: unknown) => {
+        if (!owns()) return;
         state.set(assetId, {
           status: "error",
           message: error instanceof Error ? error.message : "图片解码失败",

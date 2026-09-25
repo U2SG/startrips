@@ -75,9 +75,6 @@ type Props = {
   warmIds?: readonly string[];
 };
 
-/** See `videoGestureCanStart`: the band a presented transport's native controls occupy. */
-const NATIVE_VIDEO_CONTROL_BAND_PX = 84;
-
 function containsMediaPoint(element: HTMLImageElement | HTMLCanvasElement, x: number, y: number) {
   const rect = element.getBoundingClientRect();
   const width = element instanceof HTMLImageElement ? element.naturalWidth : element.width;
@@ -645,14 +642,16 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   // axis, a click never navigates (#489 A2), and the native control band --
   // timeline, play, volume, overflow -- keeps every stream that starts in it.
   // Chromium's control boxes live in a closed user-agent shadow tree, so the
-  // band is the height the Story chrome already clears for them
-  // (living-atlas.css: inline nav at 72px, fullscreen nav at 84px).
+  // band is the one `--story-video-control-band` token the fullscreen nav
+  // also clears (tokens.css). Without a readable token the whole video stays
+  // with its transport rather than guessing.
   function videoGestureCanStart(event: ReactPointerEvent<HTMLDivElement>) {
     const target = event.target;
     if (!(target instanceof Element) || !target.closest(".story-media-pages__video")) return true;
     if (!(target instanceof HTMLVideoElement)) return false;
     if (!target.controls) return true;
-    return event.clientY < target.getBoundingClientRect().bottom - NATIVE_VIDEO_CONTROL_BAND_PX;
+    const band = Number.parseFloat(getComputedStyle(target).getPropertyValue("--story-video-control-band"));
+    return Number.isFinite(band) && event.clientY < target.getBoundingClientRect().bottom - band;
   }
 
   function neighborFor(dx: number) {

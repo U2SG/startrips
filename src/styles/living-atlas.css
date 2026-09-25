@@ -1668,7 +1668,7 @@
    button instead of to the video. The offset clears the stage's own bottom
    inset plus Chromium's control panel. */
 .journey-story-fullscreen:has([data-story-media-pages] video[data-shared-media-id]) .journey-story-fullscreen__nav {
-  bottom: calc(clamp(28px, 6vh, 60px) + 84px);
+  bottom: calc(clamp(28px, 6vh, 60px) + var(--story-video-control-band));
 }
 
 .journey-story__media-grid {

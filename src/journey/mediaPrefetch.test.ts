@@ -3,7 +3,6 @@ import {
   createDecodeRegistry,
   decodeImageUrl,
   mediaPrefetchUrlsForRead,
-  prefetchWindowFor,
   STORY_WARM_DECODE_LIMIT,
   STORY_WARM_READ_LIMIT,
   storyWarmWindow,
@@ -88,38 +87,6 @@ describe("storyWarmWindow (#489 ST-159)", () => {
   it("has nothing to warm without a valid requested media", () => {
     expect(storyWarmWindow({ ...base, shownIndex: 0, requestedIndex: -1, direction: 1 }))
       .toEqual({ reads: [], decode: [] });
-  });
-});
-
-describe("prefetchWindowFor (#11)", () => {
-  it("returns next 1 + previous 1 for manual browsing", () => {
-    expect(prefetchWindowFor(2, 5, false)).toEqual({
-      next: [3],
-      previous: [1],
-    });
-  });
-
-  it("returns next 2 for autoplay", () => {
-    expect(prefetchWindowFor(2, 6, true)).toEqual({
-      next: [3, 4],
-      previous: [1],
-    });
-  });
-
-  it("clamps at both ends of the list", () => {
-    expect(prefetchWindowFor(0, 4, false)).toEqual({
-      next: [1],
-      previous: [],
-    });
-    expect(prefetchWindowFor(3, 4, true)).toEqual({
-      next: [],
-      previous: [2],
-    });
-  });
-
-  it("returns empty windows for a single item", () => {
-    expect(prefetchWindowFor(0, 1, false)).toEqual({ next: [], previous: [] });
-    expect(prefetchWindowFor(0, 1, true)).toEqual({ next: [], previous: [] });
   });
 });
 
@@ -239,5 +206,49 @@ describe("decodeImageUrl (#11)", () => {
     } finally {
       (globalThis as { Image: unknown }).Image = originalImage;
     }
+  });
+});
+
+describe("decode registry eviction (#489 ST-159)", () => {
+  it("does not re-admit an asset whose decode settles after it was released or reset", async () => {
+    const pending: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+    const registry = createDecodeRegistry(() => new Promise<void>((resolve, reject) => {
+      pending.push({ resolve, reject });
+    }));
+    const settled = vi.fn();
+    registry.onSettle(settled);
+
+    registry.ensure("released", "https://media.example/a");
+    registry.release("released");
+    registry.ensure("reset", "https://media.example/b");
+    registry.reset();
+    registry.ensure("failed", "https://media.example/c");
+    registry.release("failed");
+    pending[0].resolve();
+    pending[1].resolve();
+    pending[2].reject(new Error("late"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(registry.readiness("released")).toBeUndefined();
+    expect(registry.readiness("reset")).toBeUndefined();
+    expect(registry.readiness("failed")).toBeUndefined();
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it("lets only the newest request for a re-ensured asset record its outcome", async () => {
+    const pending: Array<() => void> = [];
+    const registry = createDecodeRegistry(() => new Promise<void>((resolve) => { pending.push(resolve); }));
+    registry.ensure("asset", "https://media.example/old");
+    registry.release("asset");
+    registry.ensure("asset", "https://media.example/new");
+    pending[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(registry.readiness("asset")).toEqual({ status: "pending" });
+    pending[1]();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(registry.isDecoded("asset")).toBe(true);
   });
 });
