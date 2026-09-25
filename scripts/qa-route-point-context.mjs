@@ -482,7 +482,7 @@ async function openFocusAtlas({
     // A marker must be genuinely projected and visible before the pointer round
     // starts; if route projection never becomes usable this still fails closed.
     const realRoutePoint = page.locator(
-      `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+      `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id][data-temporal-visible="true"]:visible`,
     ).first();
     try {
       await realRoutePoint.waitFor({ state: "visible", timeout: 20_000 });
@@ -844,7 +844,7 @@ try {
   // production Three.js/SVG interaction path and binds every assertion to the
   // stable Route Point identity exposed by that hit target.
   const visibleMarker = interactionPage.locator(
-    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id][data-temporal-visible="true"]:visible`,
   ).first();
   await visibleMarker.waitFor({ state: "visible", timeout: 5_000 });
   const markerPointId = await visibleMarker.getAttribute("data-route-point-id");
