@@ -907,10 +907,20 @@ try {
     closeBox && closeBox.width >= 44 && closeBox.height >= 44
   ));
 
-  // Labels have their own declutter/culling policy, so grade whichever stable
-  // active-Journey label is actually visible rather than assuming it belongs to
-  // the marker chosen above. Identity must survive that independent hit surface.
-  const visibleLabels = interactionPage.locator(
+  // A marker activation may legitimately leave the real globe in a different
+  // visual composition after its context closes. Label hit-testing is an
+  // independent #508 contract, so grade it from a fresh real-scene composition
+  // rather than requiring the marker-selected composition to expose another
+  // unobscured label. This still uses the production SVG pointer path: no
+  // camera steering, force-click, retry, or direct reveal helper.
+  const labelRun = await openFocusAtlas({
+    realScene: true,
+    reduceMotion: true,
+    journeysPayload: [siblingJourney, interactionJourney],
+  });
+  const labelPage = labelRun.page;
+  const labelContext = labelPage.locator("[data-route-point-context]");
+  const visibleLabels = labelPage.locator(
     `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
   );
   await visibleLabels.first().waitFor({ state: "visible", timeout: 5_000 });
@@ -920,7 +930,7 @@ try {
     const candidatePointId = await visibleLabels.nth(index).getAttribute("data-route-point-id");
     if (!candidatePointId) continue;
     try {
-      labelClick = await clickRoutePointLabel(interactionPage, journeyId, candidatePointId);
+      labelClick = await clickRoutePointLabel(labelPage, journeyId, candidatePointId);
       labelPointId = candidatePointId;
       break;
     } catch (error) {
@@ -930,29 +940,30 @@ try {
   if (!labelPointId || !labelClick) {
     throw new Error("active Journey has no visible Route Point label with a real label-owned hit pixel");
   }
-  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
-  const labelActivation = await routePointActivationEvidence(interactionPage);
+  await labelContext.waitFor({ state: "visible", timeout: 5_000 });
+  const labelActivation = await routePointActivationEvidence(labelPage);
   record("actual label hit preserves stable Route Point identity", { labelPointId, labelClick, labelActivation },
     labelActivation.source === "label"
     && labelActivation.journeyId === journeyId
     && labelActivation.routePointId === labelPointId);
-  const focusModeBeforeEscape = await interactionPage.locator(".living-atlas").getAttribute("data-globe-focus");
-  await interactionPage.keyboard.press("Escape");
-  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
-  const focusModeAfterEscape = await interactionPage.locator(".living-atlas").getAttribute("data-globe-focus");
+  const focusModeBeforeEscape = await labelPage.locator(".living-atlas").getAttribute("data-globe-focus");
+  await labelPage.keyboard.press("Escape");
+  await labelContext.waitFor({ state: "detached", timeout: 5_000 });
+  const focusModeAfterEscape = await labelPage.locator(".living-atlas").getAttribute("data-globe-focus");
   record("Escape closes context without exiting globe focus", { focusModeBeforeEscape, focusModeAfterEscape },
     focusModeBeforeEscape === focusModeAfterEscape);
 
-  const labelTrigger = interactionPage.locator(
+  const labelTrigger = labelPage.locator(
     `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id="${labelPointId}"]`,
   );
   await labelTrigger.focus();
   await labelTrigger.press("Enter");
-  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
-  const keyboardActivation = await routePointActivationEvidence(interactionPage);
-  await interactionCloseButton.click();
-  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
-  const focusReturn = await interactionPage.evaluate(() => ({
+  await labelContext.waitFor({ state: "visible", timeout: 5_000 });
+  const keyboardActivation = await routePointActivationEvidence(labelPage);
+  const labelCloseButton = labelContext.locator("[data-route-point-context-close]");
+  await labelCloseButton.click();
+  await labelContext.waitFor({ state: "detached", timeout: 5_000 });
+  const focusReturn = await labelPage.evaluate(() => ({
     tag: document.activeElement?.tagName.toLowerCase() ?? null,
     routePointId: document.activeElement?.getAttribute("data-route-point-id") ?? null,
   }));
@@ -960,6 +971,8 @@ try {
     keyboardActivation.source === "keyboard-label"
     && keyboardActivation.routePointId === labelPointId
     && focusReturn.routePointId === labelPointId);
+  record("real label interaction page errors", { pageErrors: labelRun.pageErrors }, labelRun.pageErrors.length === 0);
+  await labelPage.close();
 
   // The production renderer, rather than the deterministic QA SVG below,
   // owns selected-marker presentation. Exercise the same A -> no-media B ->
