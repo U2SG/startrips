@@ -486,6 +486,18 @@ async function openFocusAtlas({
     ).first();
     try {
       await realRoutePoint.waitFor({ state: "visible", timeout: 20_000 });
+      // A visible SVG bead can be published one frame before the selected
+      // Journey camera has actually reached its final composition. Grading a
+      // pointer against that moving projection made the same click land at a
+      // stale screen coordinate under slower CI rendering. Wait on the
+      // renderer's own arrival/projection identities, not elapsed time.
+      await page.waitForFunction(() => {
+        const scene = document.querySelector(".particle-earth-scene");
+        const focus = document.querySelector("[data-qa-route-point-context-focus]");
+        return scene?.getAttribute("data-focus-revision") === focus?.getAttribute("data-focus-revision")
+          && Number(scene?.getAttribute("data-focus-settle-count") ?? 0) > 0
+          && window.__particleEarthDebug?.().journeyRouteProjectionReady === true;
+      }, null, { timeout: 20_000 });
     } catch (error) {
       const diagnostics = await page.evaluate((targetJourneyId) => {
         const scene = document.querySelector(".particle-earth-scene");
@@ -870,10 +882,15 @@ try {
           id: marker.getAttribute("data-route-point-id"),
           insideCanvas: x >= canvasRect.left && x <= canvasRect.right
             && y >= canvasRect.top && y <= canvasRect.bottom,
+          canvasOwnsPixel: document.elementFromPoint(x, y) === canvas,
           distance: Math.hypot(x - canvasX, y - canvasY),
         };
       })
-      .filter((candidate) => candidate.id && candidate.insideCanvas)
+      // This round specifically grades the canvas-owned marker path (the
+      // assertion below requires eventTarget=canvas). A geometrically visible
+      // SVG bead may sit under a label/card hit surface, so visibility alone is
+      // not proof that its centre is a canvas pointer target.
+      .filter((candidate) => candidate.id && candidate.insideCanvas && candidate.canvasOwnsPixel)
       .sort((left, right) => left.distance - right.distance)[0]?.id ?? null;
   });
   if (!markerPointId) throw new Error("visible active-Journey Route Point marker has no stable in-canvas id");
