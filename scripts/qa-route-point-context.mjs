@@ -843,12 +843,39 @@ try {
   // record must be visible. This remains an actual pointer hit through the
   // production Three.js/SVG interaction path and binds every assertion to the
   // stable Route Point identity exposed by that hit target.
-  const visibleMarker = interactionPage.locator(
+  const visibleMarkers = interactionPage.locator(
     `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id][data-temporal-visible="true"]:visible`,
-  ).first();
-  await visibleMarker.waitFor({ state: "visible", timeout: 5_000 });
-  const markerPointId = await visibleMarker.getAttribute("data-route-point-id");
-  if (!markerPointId) throw new Error("visible active-Journey Route Point marker has no stable id");
+  );
+  await visibleMarkers.first().waitFor({ state: "visible", timeout: 5_000 });
+  // The old round clicked route-order `first()`. At the edge of a framed
+  // Journey that SVG bead can still be visually present while its independent
+  // spherical point hit area is tangent to the pointer ray. That made this QA
+  // intermittently grade projection ordering instead of the actual hit
+  // contract. Pick exactly one already-visible marker nearest the real canvas
+  // centre: no retries, camera steering or force-click, and the pointer still
+  // travels through the production canvas raycast path.
+  const markerPointId = await visibleMarkers.evaluateAll((markers) => {
+    const canvas = document.querySelector(".particle-earth-scene canvas");
+    const canvasRect = canvas?.getBoundingClientRect();
+    if (!canvasRect) return null;
+    const canvasX = canvasRect.left + canvasRect.width / 2;
+    const canvasY = canvasRect.top + canvasRect.height / 2;
+    return markers
+      .map((marker) => {
+        const rect = marker.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        return {
+          id: marker.getAttribute("data-route-point-id"),
+          insideCanvas: x >= canvasRect.left && x <= canvasRect.right
+            && y >= canvasRect.top && y <= canvasRect.bottom,
+          distance: Math.hypot(x - canvasX, y - canvasY),
+        };
+      })
+      .filter((candidate) => candidate.id && candidate.insideCanvas)
+      .sort((left, right) => left.distance - right.distance)[0]?.id ?? null;
+  });
+  if (!markerPointId) throw new Error("visible active-Journey Route Point marker has no stable in-canvas id");
   const markerClick = await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
   const interactionContext = interactionPage.locator("[data-route-point-context]");
   await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
