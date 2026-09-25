@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackClip, mediaStackOpacity, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
 import { springElementTo, springTransformVelocity, type SpringElementHandle } from "../motion/springElement";
-import { MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
+import { MEDIA_SWIPE_DISTANCE_PX, MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import type { JourneyMediaAsset, MediaPreviewRead } from "./types";
@@ -36,6 +36,8 @@ type MediaDrag = {
   generation: number;
   scopeKey: string;
   settleTakeover: boolean;
+  /** Pixels the stream travels before it locks an axis (see `videoGestureCanStart`). */
+  axisLock: number;
 };
 /** `cancelGesture` as the stage implements it: `true` lets a landed settle commit (#530). */
 export type StoryMediaGestureCancel = (commitDecided?: boolean) => void;
@@ -704,6 +706,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         && event.target instanceof HTMLImageElement,
       generation: ++gestureGeneration.current, scopeKey: latest.current.scopeKey,
       settleTakeover: Boolean(prior),
+      // On a video picture a small wobble belongs to the transport: its taps,
+      // pointerup and control reveal stay native. Only travel that is already
+      // a swipe by distance lets the stage claim the stream.
+      axisLock: event.target instanceof HTMLVideoElement ? MEDIA_SWIPE_DISTANCE_PX : 8,
     };
     drag.current = value;
     if (prior) setGesturePhase("dragging");
@@ -716,7 +722,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     if (value.axis === null) {
       const dx = event.clientX - value.startX;
       const dy = event.clientY - value.startY;
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dx) < value.axisLock && Math.abs(dy) < value.axisLock) return;
       if (Math.abs(dx) <= Math.abs(dy) * 1.15) { value.axis = "y"; return; }
       value.axis = "x";
       // The gesture owns this pointer from here through release, including a
