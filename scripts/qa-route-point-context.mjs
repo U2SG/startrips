@@ -1039,7 +1039,7 @@ try {
   record("viewport resize does not disclose stay children", { afterResize },
     afterResize.hotelMarkers === 0 && afterResize.detailGroups === 0);
 
-  const openStayDetail = stayContext.locator(`[data-stay-detail-open]`);
+  const openStayDetail = stayContext.locator(`button[data-stay-detail-open]`);
   await openStayDetail.focus();
   await openStayDetail.press("Enter");
   await stayPage.locator(`.particle-earth-route__point[data-route-point-id="${staySummaryPointIds.hotel}"]`)
@@ -1080,7 +1080,7 @@ try {
     detailOpen: node.getAttribute("data-stay-detail-open"),
     childGroups: node.querySelectorAll("[data-stay-detail]").length,
   }));
-  await compactSummary.locator("[data-stay-detail-open]").click();
+  await compactSummary.locator("button[data-stay-detail-open]").click();
   const compactAfter = await compactSummary.evaluate((node) => ({
     detailOpen: node.getAttribute("data-stay-detail-open"),
     childIds: [...node.querySelectorAll("[data-stay-route-point]")]
