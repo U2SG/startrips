@@ -39,21 +39,24 @@ The rule is provider-generic. Apple is not special-cased.
 
 | Caller | Dimension | Why |
 | --- | --- | --- |
-| `buildIdentityMethods()` → `usable` and `canUnlink` | login | The list reports which identities can sign in. |
-| `hasUsableLoginAfterRemoval()` — the #345 unlink guard | login | The guard promises that a remaining method can still sign the person in. A provider left behind counts because it can authenticate, never because its email looks like a recovery route. |
+| `buildIdentityMethods()` → `usable` | login | The list reports which identities can sign in. |
+| `hasProtectedAccessAfterRemoval()` — the #345 unlink guard, and `buildIdentityMethods()` → `canUnlink` | login and recovery | After the removal a login-usable identity must remain AND the Account must keep a reachable recovery channel (`accountRecoveryChannelReachable()`). A provider left behind counts toward the login; it never counts toward recovery. `canUnlink` reads the same predicate, so the list never offers an unlink the server refuses. |
 | Any future flow that mails a provider address, or tells the person they can recover through it | recovery | Such a flow must not rely on a stale provider claim. |
 
-No current UI or API field promises that a provider email is reachable. The
-password panel (`src/auth/accountPassword.ts`) offers a set-password link only
-to the Account's own verified address.
+The Account's recovery channel is its own verified address. The password
+reset and #445 enrollment links mail it whether or not a credential row
+exists. No current UI or API field promises that a provider email is
+reachable.
 
-## What the guard does not promise
+## What the guard refuses
 
-The unlink guard keeps a login method, not a recovery channel. An account that
-holds only provider identities can unlink down to one of them. It then depends
-on that provider alone, exactly as an account created by provider sign-up
-always has (`docs/architecture/apple-sign-in.md`). Refusing such an unlink
-would be a new product rule, and #486 did not decide one.
+An Account whose own address is not verified has no recovery channel, however
+many provider identities it holds. The guard then refuses to unlink any
+provider identity, because the one left behind could still sign in but a
+stale or revoked provider address would be the only way back. The refusal
+keeps the existing `IDENTITY_LAST_USABLE_LOGIN` code. While the Account's
+address is verified, an Account holding only provider identities can still
+unlink down to one of them.
 
 ## Residual
 

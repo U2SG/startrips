@@ -14,7 +14,7 @@ import { db } from "../db/client";
 import {
   buildIdentityMethods,
   CREDENTIAL_PROVIDER_ID,
-  hasUsableLoginAfterRemoval,
+  hasProtectedAccessAfterRemoval,
   type AccountIdentityAccount,
   type AccountIdentityMethod,
   type AccountIdentityOwnership,
@@ -742,7 +742,7 @@ export async function unlinkAccountIdentity(values: {
       // belongs to the later provider rollout, so fail closed for now.
       return { refusal: "IDENTITY_CREDENTIAL_UNLINK_UNAVAILABLE" as const };
     }
-    if (!hasUsableLoginAfterRemoval(
+    if (!hasProtectedAccessAfterRemoval(
       target.id,
       state.accounts,
       state.ownerships,

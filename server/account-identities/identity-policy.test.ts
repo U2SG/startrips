@@ -3,7 +3,7 @@ import {
   accountIdentityLoginUsable,
   accountIdentityRecoveryChannel,
   buildIdentityMethods,
-  hasUsableLoginAfterRemoval,
+  hasProtectedAccessAfterRemoval,
   redactIdentityEmail,
   safeReturnPath,
   validProviderId,
@@ -38,8 +38,8 @@ describe("account identity policy", () => {
 
   it("protects the last usable method rather than the last raw account row", () => {
     const incompleteProvider = [{ ...ownerships[0]!, providerEmailVerified: false }];
-    expect(hasUsableLoginAfterRemoval("credential", accounts, incompleteProvider, true, new Set(["google"]))).toBe(false);
-    expect(hasUsableLoginAfterRemoval("credential", accounts, ownerships, true, new Set(["google"]))).toBe(true);
+    expect(hasProtectedAccessAfterRemoval("credential", accounts, incompleteProvider, true, new Set(["google"]))).toBe(false);
+    expect(hasProtectedAccessAfterRemoval("credential", accounts, ownerships, true, new Set(["google"]))).toBe(true);
   });
 
   describe("#486 login usability versus recovery reachability", () => {
@@ -78,15 +78,30 @@ describe("account identity policy", () => {
       expect(accountIdentityRecoveryChannel(accounts[0]!, false)).toBe(false);
     });
 
-    it("guards unlink on the remaining login, not on provider email reachability", () => {
+    describe("unlink guard", () => {
       const providerOnly = [appleAccount, { ...appleAccount, id: "google", providerId: "google", accountId: "google-subject" }];
       const both = [staleProvider, { ...staleProvider, accountRecordId: "google", providerId: "google", providerSubject: "google-subject" }];
       const configured = new Set(["apple", "google"]);
-      expect(hasUsableLoginAfterRemoval("google", providerOnly, both, false, configured)).toBe(true);
-      expect(hasUsableLoginAfterRemoval("google", providerOnly, both, false, new Set(["google"]))).toBe(false);
-      expect(buildIdentityMethods(providerOnly, both, "owner@example.test", false, configured)
-        .map((method) => [method.id, method.usable, method.canUnlink]))
-        .toEqual([["apple", true, true], ["google", true, true]]);
+
+      it("refuses an unlink whose only remaining safety net is a stale provider email", () => {
+        // Apple still signs the person in, so the login dimension alone would
+        // allow it; nothing proves its relay address still receives mail.
+        expect(hasProtectedAccessAfterRemoval("google", providerOnly, both, false, configured)).toBe(false);
+        expect(buildIdentityMethods(providerOnly, both, "owner@example.test", false, configured)
+          .map((method) => [method.id, method.usable, method.canUnlink]))
+          .toEqual([["apple", true, false], ["google", true, false]]);
+      });
+
+      it("allows it while the Account's own verified address remains the recovery channel", () => {
+        expect(hasProtectedAccessAfterRemoval("google", providerOnly, both, true, configured)).toBe(true);
+        expect(buildIdentityMethods(providerOnly, both, "owner@example.test", true, configured)
+          .map((method) => [method.id, method.usable, method.canUnlink]))
+          .toEqual([["apple", true, true], ["google", true, true]]);
+      });
+
+      it("still requires a remaining login however reachable the Account address is", () => {
+        expect(hasProtectedAccessAfterRemoval("google", providerOnly, both, true, new Set(["google"]))).toBe(false);
+      });
     });
   });
 

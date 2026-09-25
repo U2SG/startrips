@@ -87,7 +87,7 @@ created by a first-time Apple authorization has exactly one: Apple. Social
 sign-up writes a provider `account` row and its ownership row and no
 `credential` row, and `password-enrollment.ts` is an explicit, re-verified
 action the owner has to take later. #345's guarantee is
-`hasUsableLoginAfterRemoval` — it refuses to UNLINK a last usable method; it
+`hasProtectedAccessAfterRemoval` — it refuses to UNLINK a last usable method (and, since #486, one that would leave no reachable recovery channel); it
 never manufactures a fallback for an account that only ever had one.
 
 `server/tests/account-identity-apple.integration.test.ts` asserts exactly this

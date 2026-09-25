@@ -114,6 +114,22 @@ export function accountIdentityRecoveryChannel(
   return account.providerId === CREDENTIAL_PROVIDER_ID && userEmailVerified;
 }
 
+/**
+ * #486 (option B): whether the Account keeps a currently reachable recovery
+ * channel. That channel is the Account's own verified address: the password
+ * reset and #445 enrollment links mail it whether or not a credential row
+ * exists. Provider identities are consulted only through
+ * `accountIdentityRecoveryChannel`, which never accepts a bind-time provider
+ * email claim, so a stale or revoked provider address cannot stand in for it.
+ */
+export function accountRecoveryChannelReachable(
+  accounts: readonly AccountIdentityAccount[],
+  userEmailVerified: boolean,
+): boolean {
+  return userEmailVerified
+    || accounts.some((account) => accountIdentityRecoveryChannel(account, userEmailVerified));
+}
+
 export function buildIdentityMethods(
   accounts: readonly AccountIdentityAccount[],
   ownerships: readonly AccountIdentityOwnership[],
@@ -122,14 +138,8 @@ export function buildIdentityMethods(
   usableProviderIds: ReadonlySet<string>,
 ): AccountIdentityMethod[] {
   const ownershipByAccount = new Map(ownerships.map((entry) => [entry.accountRecordId, entry]));
-  const usableByAccount = new Map(accounts.map((account) => [
-    account.id,
-    accountIdentityLoginUsable(account, ownershipByAccount.get(account.id), userEmailVerified, usableProviderIds),
-  ]));
-  const usableCount = [...usableByAccount.values()].filter(Boolean).length;
   return accounts.map((account) => {
     const ownership = ownershipByAccount.get(account.id);
-    const usable = usableByAccount.get(account.id) === true;
     const password = account.providerId === CREDENTIAL_PROVIDER_ID;
     return {
       id: account.id,
@@ -137,23 +147,30 @@ export function buildIdentityMethods(
       providerId: account.providerId,
       emailHint: redactIdentityEmail(password ? userEmail : ownership?.providerEmail),
       verified: password ? userEmailVerified : Boolean(ownership?.providerEmailVerified && ownership?.verifiedAt),
-      usable,
+      usable: accountIdentityLoginUsable(account, ownership, userEmailVerified, usableProviderIds),
       // ST-067 has one fresh-authorization mechanism today: password
       // re-verification. Keep that credential identity until a provider-based
       // re-verification contract exists; otherwise a provider-only account
       // could still sign in but could never manage identities again.
-      canUnlink: !password && usableCount - (usable ? 1 : 0) >= 1,
+      canUnlink: !password && hasProtectedAccessAfterRemoval(
+        account.id,
+        accounts,
+        ownerships,
+        userEmailVerified,
+        usableProviderIds,
+      ),
     };
   });
 }
 
 /**
- * The #345 unlink guard. Its promise is a remaining LOGIN method, and it reads
- * only that dimension: a provider left behind counts because it can still
- * authenticate, never because its bind-time email looks like a way to recover
- * the account (#486).
+ * The #345 unlink guard, on both #486 dimensions. After the removal the
+ * Account must still hold a login-usable identity AND a reachable recovery
+ * channel. A provider left behind counts toward the login because it can
+ * still authenticate; it never counts toward recovery, because its bind-time
+ * email is no evidence that mail still arrives there.
  */
-export function hasUsableLoginAfterRemoval(
+export function hasProtectedAccessAfterRemoval(
   targetAccountId: string,
   accounts: readonly AccountIdentityAccount[],
   ownerships: readonly AccountIdentityOwnership[],
@@ -161,10 +178,11 @@ export function hasUsableLoginAfterRemoval(
   usableProviderIds: ReadonlySet<string>,
 ): boolean {
   const ownershipByAccount = new Map(ownerships.map((entry) => [entry.accountRecordId, entry]));
-  return accounts.some((account) => account.id !== targetAccountId && accountIdentityLoginUsable(
+  const remaining = accounts.filter((account) => account.id !== targetAccountId);
+  return remaining.some((account) => accountIdentityLoginUsable(
     account,
     ownershipByAccount.get(account.id),
     userEmailVerified,
     usableProviderIds,
-  ));
+  )) && accountRecoveryChannelReachable(remaining, userEmailVerified);
 }
