@@ -11,6 +11,14 @@ import { isLightEffectId } from "./lightEffects";
 export const MAX_JOURNEY_FILE_BYTES = 2_000_000_000;
 export const MAX_JOURNEY_SOUNDTRACK_BYTES = 100 * 1024 * 1024;
 export const MAX_ROUTE_POINTS = 64;
+export const ROUTE_POINT_PLACE_ROLES = new Set([
+  "accommodation",
+  "attraction",
+  "transport",
+  "pure-transit",
+  "activity",
+]);
+export const ROUTE_POINT_OVERVIEW_VISIBILITIES = new Set(["auto", "main", "detail"]);
 
 export const ACCEPTED_JOURNEY_MEDIA_TYPES = new Set([
   "image/avif",
@@ -78,7 +86,147 @@ export function mergeJourney(
   ]);
 }
 
-export function toJourneyRoutes(journeys: readonly Journey[]): JourneyRoute[] {
+export type JourneyStaySummary = {
+  /** Derived identity only; never persisted as a second place/stay record. */
+  id: string;
+  journeyId: string;
+  regionContext: string | null;
+  label: string;
+  anchorRoutePointId: string;
+  routePointIds: string[];
+  mediaAssetIds: string[];
+  startRouteIndex: number;
+  endRouteIndex: number;
+  overviewVisible: boolean;
+};
+
+export type JourneyStayProjectionOptions = {
+  /** Filter authorization/time visibility before aggregation. */
+  includedRoutePointIds?: ReadonlySet<string>;
+  includedMediaAssetIds?: ReadonlySet<string>;
+};
+
+const MAX_DERIVED_STAY_GAP_KM = 120;
+const EARTH_RADIUS_KM = 6371;
+
+function radians(value: number) {
+  return value * Math.PI / 180;
+}
+
+function routePointDistanceKm(
+  left: Pick<Journey["routePoints"][number], "latitude" | "longitude">,
+  right: Pick<Journey["routePoints"][number], "latitude" | "longitude">,
+) {
+  const latitudeDelta = radians(right.latitude - left.latitude);
+  const longitudeDelta = radians(right.longitude - left.longitude);
+  const latitudeA = radians(left.latitude);
+  const latitudeB = radians(right.latitude);
+  const a = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(latitudeA) * Math.cos(latitudeB) * Math.sin(longitudeDelta / 2) ** 2;
+  const bounded = Math.max(0, Math.min(1, a));
+  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(bounded), Math.sqrt(1 - bounded));
+}
+
+function normalizedRegionContext(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.normalize("NFKC").toLowerCase() : null;
+}
+
+function routePointCanRepresentStay(point: Journey["routePoints"][number]) {
+  if (!point.isStop) return false;
+  return point.placeRole !== "transport" && point.placeRole !== "pure-transit";
+}
+
+function chooseStayAnchor(points: readonly Journey["routePoints"][number][]) {
+  const overviewCandidates = points.filter((point) => point.overviewVisibility !== "detail");
+  const candidates = overviewCandidates.length > 0 ? overviewCandidates : points;
+  return candidates.find((point) => point.overviewVisibility === "main")
+    ?? candidates.find((point) => point.placeRole !== "accommodation")
+    ?? candidates[0];
+}
+
+/**
+ * #514 mainline projection. This derives consecutive city/region stays from
+ * canonical Route Points without inventing city-center nodes or mutating the
+ * route. Unknown regions stay independent. Repeated same-name regions farther
+ * than a metro-scale bound also stay independent, so a label alone cannot
+ * collapse distinct places. Explicit region corrections re-segment naturally.
+ */
+export function deriveJourneyStaySummaries(
+  journey: Pick<Journey, "id" | "routePoints" | "media">,
+  options: JourneyStayProjectionOptions = {},
+): JourneyStaySummary[] {
+  const candidates = journey.routePoints
+    .map((point, routeIndex) => ({ point, routeIndex }))
+    .filter(({ point }) => routePointCanRepresentStay(point))
+    .filter(({ point }) => !options.includedRoutePointIds || options.includedRoutePointIds.has(point.id));
+
+  const groups: Array<{
+    regionKey: string;
+    regionContext: string | null;
+    rows: typeof candidates;
+  }> = [];
+  for (const row of candidates) {
+    const regionKey = normalizedRegionContext(row.point.regionContext);
+    const previous = groups.at(-1);
+    const previousPoint = previous?.rows.at(-1)?.point;
+    const mayJoinPrevious = Boolean(
+      regionKey
+      && previous
+      && previous.regionKey === regionKey
+      && previousPoint
+      && routePointDistanceKm(previousPoint, row.point) <= MAX_DERIVED_STAY_GAP_KM,
+    );
+    if (mayJoinPrevious && previous) {
+      previous.rows.push(row);
+      continue;
+    }
+    groups.push({
+      regionKey: regionKey ?? `route-point:${row.point.id}`,
+      regionContext: row.point.regionContext?.trim() || null,
+      rows: [row],
+    });
+  }
+
+  // Assign media in one pass after grouping. This preserves canonical media
+  // order while keeping aggregation O(route points + media) rather than
+  // rescanning every asset for every stay on media-heavy Journeys.
+  const groupIndexByRoutePointId = new Map<string, number>();
+  groups.forEach((group, groupIndex) => {
+    group.rows.forEach(({ point }) => groupIndexByRoutePointId.set(point.id, groupIndex));
+  });
+  const mediaIdsByGroup = groups.map(() => [] as string[]);
+  for (const asset of journey.media) {
+    if (asset.routePointId === null) continue;
+    if (options.includedMediaAssetIds && !options.includedMediaAssetIds.has(asset.id)) continue;
+    const groupIndex = groupIndexByRoutePointId.get(asset.routePointId);
+    if (groupIndex === undefined) continue;
+    mediaIdsByGroup[groupIndex]?.push(asset.id);
+  }
+
+  return groups.map((group, groupIndex) => {
+    const points = group.rows.map(({ point }) => point);
+    const anchor = chooseStayAnchor(points);
+    const routePointIds = points.map((point) => point.id);
+    return {
+      id: `stay:${journey.id}:${group.rows[0].point.id}`,
+      journeyId: journey.id,
+      regionContext: group.regionContext,
+      label: group.regionContext ?? anchor.label,
+      anchorRoutePointId: anchor.id,
+      routePointIds,
+      mediaAssetIds: mediaIdsByGroup[groupIndex] ?? [],
+      startRouteIndex: group.rows[0].routeIndex,
+      endRouteIndex: group.rows[group.rows.length - 1].routeIndex,
+      overviewVisible: points.some((point) => point.overviewVisibility !== "detail"),
+    };
+  });
+}
+
+export function toJourneyRoutes(
+  journeys: readonly Journey[],
+  overviewLabels: ReadonlyMap<string, string> = new Map(),
+): JourneyRoute[] {
   return journeys.map((journey) => ({
     id: journey.id,
     color: journey.lightColor,
@@ -89,6 +237,7 @@ export function toJourneyRoutes(journeys: readonly Journey[]): JourneyRoute[] {
       lon: point.longitude,
       isStop: point.isStop,
       label: point.label,
+      ...(overviewLabels.has(point.id) ? { overviewLabel: overviewLabels.get(point.id) } : {}),
     })),
   }));
 }
@@ -135,6 +284,19 @@ export function validateJourneyInput(input: JourneyInput): ValidationResult {
     // a hard server cap (2000); keep the client check in sync with the UX.
     if (point.note !== undefined && point.note !== null && point.note.length > 500) {
       errors.push(`路线点 ${index + 1} 的笔记不能超过 500 个字符`);
+    }
+    if (point.regionContext !== undefined && point.regionContext !== null && point.regionContext.length > 120) {
+      errors.push(`路线点 ${index + 1} 的停留区域不能超过 120 个字符`);
+    }
+    if (point.placeRole !== undefined && point.placeRole !== null && !ROUTE_POINT_PLACE_ROLES.has(point.placeRole)) {
+      errors.push(`路线点 ${index + 1} 的地点类型无效`);
+    }
+    if (
+      point.overviewVisibility !== undefined
+      && point.overviewVisibility !== null
+      && !ROUTE_POINT_OVERVIEW_VISIBILITIES.has(point.overviewVisibility)
+    ) {
+      errors.push(`路线点 ${index + 1} 的概览显示设置无效`);
     }
     if (point.occurredAt !== null) {
       const timestamp = new Date(point.occurredAt);

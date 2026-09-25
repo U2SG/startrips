@@ -489,6 +489,12 @@ export function itineraryDraftToRoutePoints(
           isStop: isStopRole(entry.role),
           occurredAt: day.yearConfirmed ? day.calendarDate : null,
           note: null,
+          // #514: preserve source-backed stay/role evidence on the canonical
+          // Route Point draft. These hints affect presentation only; they do
+          // not create a city node or change Stop/route identity.
+          regionContext: entry.regionContext ?? day.regionContext,
+          placeRole: entry.role,
+          overviewVisibility: null,
         },
       })),
   );

@@ -204,6 +204,39 @@ const geometryOnlyJourney = {
   media: [],
 };
 
+// #514 final acceptance: one semantic stay can contain several canonical Route
+// Points, but ordinary Atlas overview exposes only one real anchor. The child
+// records become hit/marker/detail surfaces only after an explicit stay-detail
+// intent; route geometry, media identity and Journey playback remain canonical.
+const staySummaryPointIds = {
+  hotel: "qa-stay-chengdu-hotel",
+  museum: "qa-stay-chengdu-museum",
+  transit: "qa-stay-chengdu-transit",
+  chongqing: "qa-stay-chongqing",
+};
+const staySummaryRoutePoints = [
+  { id: staySummaryPointIds.hotel, latitude: 30.657, longitude: 104.066, label: "成都住处", isStop: true, regionContext: "成都", placeRole: "accommodation" },
+  { id: staySummaryPointIds.museum, latitude: 30.663, longitude: 104.075, label: "成都博物馆", isStop: true, regionContext: "成都", placeRole: "attraction" },
+  { id: staySummaryPointIds.transit, latitude: 30.69, longitude: 104.11, label: "途中转折", isStop: false, regionContext: "成都", placeRole: "pure-transit" },
+  { id: staySummaryPointIds.chongqing, latitude: 29.563, longitude: 106.551, label: "重庆", isStop: true, regionContext: "重庆", placeRole: "attraction" },
+].map((point, sortOrder) => ({
+  ...point,
+  journeyId,
+  sortOrder,
+  note: "",
+  occurredAt: `2026-04-07T${String(9 + sortOrder).padStart(2, "0")}:00:00.000Z`,
+  createdAt: "2026-04-07T00:00:00.000Z",
+}));
+const staySummaryJourney = {
+  ...journey,
+  title: "成都与重庆",
+  routePoints: staySummaryRoutePoints,
+  media: [
+    { ...journey.media[0], id: photoAssetId, routePointId: staySummaryPointIds.museum, sortOrder: 0 },
+    { ...journey.media[1], id: secondPhotoAssetId, routePointId: staySummaryPointIds.hotel, sortOrder: 1 },
+  ],
+};
+
 const sameCoordinateJourneyId = "qa-same-coordinate-journey";
 const same02Id = "qa-same-coordinate-02";
 const same07Id = "qa-same-coordinate-07";
@@ -933,6 +966,120 @@ try {
   record("non-gesture blank globe click closes context", { blankTarget }, true);
   record("real interaction page errors", { pageErrors: interactionRun.pageErrors }, interactionRun.pageErrors.length === 0);
   await interactionPage.close();
+
+  // #514: grade the final stay-summary disclosure contract on the real Particle
+  // Earth. Resize and ordinary context opening keep child points unmounted;
+  // only the explicit stay-detail control may disclose them. Escape backs out
+  // of that detail layer while leaving the selected stay summary open.
+  const stayRun = await openFocusAtlas({
+    realScene: true,
+    focusMode: false,
+    reduceMotion: true,
+    journeysPayload: [staySummaryJourney],
+    initialPointId: staySummaryPointIds.museum,
+  });
+  const stayPage = stayRun.page;
+  await stayPage.waitForFunction((ids) => {
+    const route = document.querySelector(`[data-journey-route="${ids.journey}"]`);
+    const markerIds = [...(route?.querySelectorAll(".particle-earth-route__point[data-route-point-id]") ?? [])]
+      .map((marker) => marker.getAttribute("data-route-point-id"));
+    return markerIds.length === 2
+      && markerIds.includes(ids.museum)
+      && markerIds.includes(ids.chongqing)
+      && !markerIds.includes(ids.hotel)
+      && !markerIds.includes(ids.transit);
+  }, { ...staySummaryPointIds, journey: journeyId });
+  const stayOverviewBefore = await stayPage.evaluate((ids) => ({
+    markerIds: [...document.querySelectorAll(`[data-journey-route="${ids.journey}"] .particle-earth-route__point[data-route-point-id]`)]
+      .map((marker) => marker.getAttribute("data-route-point-id")),
+    routeLegCount: document.querySelectorAll(`[data-journey-route="${ids.journey}"] .particle-earth-route__leg`).length,
+    raycastPointCount: document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count"),
+  }), { ...staySummaryPointIds, journey: journeyId });
+  record("stay overview keeps one Chengdu summary anchor while preserving full route geometry", { stayOverviewBefore },
+    stayOverviewBefore.markerIds.join(",") === [staySummaryPointIds.museum, staySummaryPointIds.chongqing].join(",")
+    && stayOverviewBefore.routeLegCount === staySummaryRoutePoints.length - 1
+    && stayOverviewBefore.raycastPointCount === "2");
+
+  await clickRoutePointMarker(stayPage, journeyId, staySummaryPointIds.museum);
+  const stayContext = stayPage.locator(`[data-route-point-context][data-route-point-id="${staySummaryPointIds.museum}"]`);
+  await stayContext.waitFor({ state: "visible", timeout: 5_000 });
+  const staySummarySurface = stayContext.locator("[data-stay-summary]");
+  await staySummarySurface.waitFor({ state: "visible", timeout: 5_000 });
+  let staySummaryState = await staySummarySurface.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    childGroupCount: node.querySelectorAll("[data-stay-detail]").length,
+    text: node.textContent ?? "",
+  }));
+  record("opening the stay summary does not implicitly mount child detail", { staySummaryState },
+    staySummaryState.detailOpen === "false"
+    && staySummaryState.childGroupCount === 0
+    && staySummaryState.text.includes("成都")
+    && staySummaryState.text.includes("2 个地点")
+    && staySummaryState.text.includes("2 项影像"));
+
+  await stayPage.setViewportSize({ width: 1281, height: 720 });
+  await stayPage.setViewportSize({ width: 1280, height: 720 });
+  const afterResize = await stayPage.evaluate((hotelId) => ({
+    hotelMarkers: document.querySelectorAll(`.particle-earth-route__point[data-route-point-id="${hotelId}"]`).length,
+    detailGroups: document.querySelectorAll("[data-stay-detail]").length,
+  }), staySummaryPointIds.hotel);
+  record("viewport resize does not disclose stay children", { afterResize },
+    afterResize.hotelMarkers === 0 && afterResize.detailGroups === 0);
+
+  const openStayDetail = stayContext.locator(`[data-stay-detail-open]`);
+  await openStayDetail.focus();
+  await openStayDetail.press("Enter");
+  await stayPage.locator(`.particle-earth-route__point[data-route-point-id="${staySummaryPointIds.hotel}"]`)
+    .waitFor({ state: "attached", timeout: 5_000 });
+  const explicitStayDetail = await staySummarySurface.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    childIds: [...node.querySelectorAll("[data-stay-route-point]")]
+      .map((button) => button.getAttribute("data-stay-route-point")),
+  }));
+  record("keyboard activation explicitly opens only the selected stay children", { explicitStayDetail },
+    explicitStayDetail.detailOpen === "true"
+    && explicitStayDetail.childIds.join(",") === [staySummaryPointIds.hotel, staySummaryPointIds.museum].join(","));
+
+  await stayPage.keyboard.press("Escape");
+  await stayPage.locator(`.particle-earth-route__point[data-route-point-id="${staySummaryPointIds.hotel}"]`)
+    .waitFor({ state: "detached", timeout: 5_000 });
+  staySummaryState = await staySummarySurface.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    contextAttached: Boolean(node.closest("[data-route-point-context]")),
+  }));
+  record("Escape closes stay detail before Route Point context", { staySummaryState },
+    staySummaryState.detailOpen === "false" && staySummaryState.contextAttached);
+  record("stay-summary reduced-motion page errors", { pageErrors: stayRun.pageErrors }, stayRun.pageErrors.length === 0);
+  await stayPage.close();
+
+  const compactStayRun = await openFocusAtlas({
+    compact: true,
+    reduceMotion: true,
+    journeysPayload: [staySummaryJourney],
+    initialPointId: staySummaryPointIds.museum,
+  });
+  const compactStayPage = compactStayRun.page;
+  await activateRoutePointId(compactStayPage, staySummaryPointIds.museum);
+  const compactStayContext = compactStayPage.locator(`[data-route-point-context][data-route-point-id="${staySummaryPointIds.museum}"]`);
+  await compactStayContext.waitFor({ state: "visible", timeout: 5_000 });
+  const compactSummary = compactStayContext.locator("[data-stay-summary]");
+  const compactBefore = await compactSummary.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    childGroups: node.querySelectorAll("[data-stay-detail]").length,
+  }));
+  await compactSummary.locator("[data-stay-detail-open]").click();
+  const compactAfter = await compactSummary.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    childIds: [...node.querySelectorAll("[data-stay-route-point]")]
+      .map((button) => button.getAttribute("data-stay-route-point")),
+  }));
+  record("compact mobile keeps stay detail explicitly gated", { compactBefore, compactAfter },
+    compactBefore.detailOpen === "false"
+    && compactBefore.childGroups === 0
+    && compactAfter.detailOpen === "true"
+    && compactAfter.childIds.join(",") === [staySummaryPointIds.hotel, staySummaryPointIds.museum].join(","));
+  record("compact stay-summary page errors", { pageErrors: compactStayRun.pageErrors }, compactStayRun.pageErrors.length === 0);
+  await compactStayPage.close();
 
   const projectionRun = await openFocusAtlas({
     realScene: true,

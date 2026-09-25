@@ -97,6 +97,9 @@ export function routeDraftToInput(
   return points.map(({ draftId: _draftId, ...point }) => ({
     ...point,
     label: point.label.trim(),
+    regionContext: point.regionContext === undefined
+      ? undefined
+      : point.regionContext?.trim() || null,
   }));
 }
 
@@ -121,6 +124,11 @@ export function journeyToDraftPoints(journey: Journey): RouteDraftPoint[] {
     // #10: echo the existing note back so a whole-list replace never clears
     // it; absent notes stay absent.
     note: point.note ?? null,
+    // #514 presentation evidence follows the stable Route Point through the
+    // same draft/save path; absent legacy values remain absent.
+    regionContext: point.regionContext ?? null,
+    placeRole: point.placeRole ?? null,
+    overviewVisibility: point.overviewVisibility ?? null,
   }));
 }
 

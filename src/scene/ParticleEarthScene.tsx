@@ -2911,7 +2911,8 @@ export function ParticleEarthScene({
           element.dataset.temporalVisible = presentation.temporalVisible ? "true" : "false";
           element.setAttribute("r", String(routePointMarkerRadiusPx(presentation)));
           group.appendChild(element);
-          const labelText = point.label?.trim() ? point.label : undefined;
+          const overviewLabel = point.overviewLabel ?? point.label;
+          const labelText = overviewLabel?.trim() ? overviewLabel : undefined;
           vectorPoints.push({
             element,
             position,

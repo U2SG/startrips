@@ -1943,6 +1943,29 @@ export function JourneyComposer({
                               }}
                             />
                           ) : null}
+                          <label>
+                            <span>停留城市 / 区域<small>可选 · 用于主地图归并</small></span>
+                            <input
+                              maxLength={120}
+                              value={point.regionContext ?? ""}
+                              placeholder="例如：成都、乌兰布统"
+                              onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { regionContext: event.target.value }))}
+                            />
+                          </label>
+                          <label>
+                            <span>主地图显示<small>可选</small></span>
+                            <select
+                              value={point.overviewVisibility ?? "auto"}
+                              onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, {
+                                overviewVisibility: event.target.value as "auto" | "main" | "detail",
+                              }))}
+                            >
+                              <option value="auto">自动</option>
+                              <option value="main">优先作为停留锚点</option>
+                              <option value="detail">只在停留详情显示</option>
+                            </select>
+                          </label>
+                          {point.placeRole ? <small>导入类型 · {point.placeRole === "accommodation" ? "住宿" : point.placeRole === "attraction" ? "地点" : point.placeRole === "transport" ? "交通" : point.placeRole === "pure-transit" ? "途经" : "活动"}</small> : null}
                           <label className="journey-route-draft__note">
                             <span>这一站想记住什么？<small>可选</small></span>
                             <textarea

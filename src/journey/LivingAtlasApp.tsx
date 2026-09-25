@@ -121,6 +121,7 @@ import {
   type CrossPointReadingIntent,
 } from "./crossPointReading";
 import {
+  deriveJourneyStaySummaries,
   journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
@@ -1114,6 +1115,10 @@ export function LivingAtlasApp({
   const [routePointContextSelection, setRoutePointContextSelection] = useState(
     () => emptyRoutePointContextSelection(),
   );
+  // #514: opening a Route Point context selects the stay summary only. The
+  // child Route Points become visible only after a separate, explicit detail
+  // intent so zoom/focus/context resolution can never disclose them by itself.
+  const [activeStayDetailId, setActiveStayDetailId] = useState<string | null>(null);
   const routePointContextSelectionRef = useRef(routePointContextSelection);
   const routePointContextReturnFocusRef = useRef<(
     Element & { focus: (options?: FocusOptions) => void }
@@ -1123,6 +1128,7 @@ export function LivingAtlasApp({
     const next = clearRoutePointContextSelection(routePointContextSelectionRef.current);
     routePointContextSelectionRef.current = next;
     setRoutePointContextSelection(next);
+    setActiveStayDetailId(null);
   }, []);
   const closeRoutePointContext = useCallback((restoreFocus = true) => {
     const returnFocus = routePointContextReturnFocusRef.current;
@@ -1858,11 +1864,18 @@ export function LivingAtlasApp({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      // #514: stay detail is one explicitly-entered layer inside the existing
+      // Route Point surface. Escape backs out of only that layer first.
+      if (activeStayDetailId !== null) {
+        setActiveStayDetailId(null);
+        return;
+      }
       closeRoutePointContext();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
+    activeStayDetailId,
     closeRoutePointContext,
     crossPointReading,
     playbackActive,
@@ -2006,13 +2019,39 @@ export function LivingAtlasApp({
 
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
   const effectiveDraftRoute = draftPlaybackOwnsSession ? draftPlaybackPreview!.route : draftRoute;
+  // #514: derived stay summaries are presentation only. Canonical Journey and
+  // Route Point identity stay untouched, while a stable real Route Point acts
+  // as each summary's overview anchor.
+  const staySummariesByJourney = useMemo(() => new Map(
+    journeys.map((journey) => {
+      const includedRoutePointIds = routePointContextTemporalReveal
+        ? new Set(journey.routePoints.flatMap((point, routePointIndex) => (
+            routePointContextTemporallyVisible(
+              journey.id,
+              routePointIndex,
+              routePointContextTemporalReveal,
+            ) ? [point.id] : []
+          )))
+        : undefined;
+      return [journey.id, deriveJourneyStaySummaries(journey, { includedRoutePointIds })] as const;
+    }),
+  ), [journeys, routePointContextTemporalReveal]);
+  const stayOverviewLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const summaries of staySummariesByJourney.values()) {
+      for (const summary of summaries) {
+        if (summary.overviewVisible) labels.set(summary.anchorRoutePointId, summary.label);
+      }
+    }
+    return labels;
+  }, [staySummariesByJourney]);
   const routes = useMemo(() => {
-    const savedRoutes = toJourneyRoutes(journeys);
+    const savedRoutes = toJourneyRoutes(journeys, stayOverviewLabels);
     if (!effectiveDraftRoute) return savedRoutes;
     return savedRoutes.some((route) => route.id === effectiveDraftRoute.id)
       ? savedRoutes.map((route) => route.id === effectiveDraftRoute.id ? effectiveDraftRoute : route)
       : [...savedRoutes, effectiveDraftRoute];
-  }, [effectiveDraftRoute, journeys]);
+  }, [effectiveDraftRoute, journeys, stayOverviewLabels]);
   const focusPresentation = resolveMobilePlaybackPresentation(
     journeys,
     unknownCreateSemanticOwnership.selection,
@@ -2079,23 +2118,29 @@ export function LivingAtlasApp({
           pointIndex: timeCursor.selection.pointIndex,
         }
       : null;
-  // #514: a sparse overview is a reading projection of the authorized Journey.
-  // Keep every canonical Route Point in `routes` for the line, Story and Playback.
-  // Normally a non-stop without note or owned media loses its map marker.
+  // #514: ordinary Atlas overview shows one real Route Point anchor per
+  // derived stay. The full route remains in `routes`; transit/non-stop points
+  // never become destination markers merely because they carry content.
+  const selectedStaySummary = routePointContextSelection.context
+    ? staySummariesByJourney.get(routePointContextSelection.context.journeyId)
+      ?.find((summary) => summary.routePointIds.includes(routePointContextSelection.context!.routePointId)) ?? null
+    : null;
+  const activeStaySummary = selectedStaySummary?.id === activeStayDetailId
+    ? selectedStaySummary
+    : null;
   const overviewRoutePointIds = useMemo(() => {
     const visible = new Set<string>();
     for (const journey of journeys) {
-      const mediaPointIds = new Set(journey.media.map((asset) => asset.routePointId));
+      const summaries = staySummariesByJourney.get(journey.id) ?? [];
       let visibleCount = 0;
-      for (const point of journey.routePoints) {
-        if (point.isStop || point.note?.trim() || mediaPointIds.has(point.id)) {
-          visible.add(point.id);
-          visibleCount += 1;
-        }
+      for (const summary of summaries) {
+        if (!summary.overviewVisible) continue;
+        visible.add(summary.anchorRoutePointId);
+        visibleCount += 1;
       }
       // An old geometry-only Journey still needs a real entry anchor. Reuse
       // its own endpoints; this creates no city, Stop or new route fact.
-      if (visibleCount === 0 && journey.routePoints.length > 0) {
+      if (summaries.length === 0 && visibleCount === 0 && journey.routePoints.length > 0) {
         visible.add(journey.routePoints[0].id);
         visible.add(journey.routePoints[journey.routePoints.length - 1].id);
       }
@@ -2108,19 +2153,23 @@ export function LivingAtlasApp({
       });
     }
     return visible;
-  }, [journeys, effectiveDraftRoute]);
+  }, [journeys, effectiveDraftRoute, staySummariesByJourney]);
   const visibleRoutePointIds = useMemo(() => {
-    // A context or a point currently narrated by rewind may originate outside
-    // the sparse overview. Keep only that exact point while it owns attention.
+    // Explicit detail intent expands only the selected stay. A narrated point
+    // may still surface itself temporarily, but zoom/camera alone never does.
     const selectedId = selectedJourneyRoutePoint?.routePointId;
     const narrativeId = narrativeJourneyRoutePoint?.routePointId;
-    if ((!selectedId || overviewRoutePointIds.has(selectedId))
-      && (!narrativeId || overviewRoutePointIds.has(narrativeId))) return overviewRoutePointIds;
+    const detailIds = activeStaySummary?.routePointIds ?? [];
+    const needsCopy = detailIds.some((id) => !overviewRoutePointIds.has(id))
+      || Boolean(selectedId && !overviewRoutePointIds.has(selectedId))
+      || Boolean(narrativeId && !overviewRoutePointIds.has(narrativeId));
+    if (!needsCopy) return overviewRoutePointIds;
     const visible = new Set(overviewRoutePointIds);
+    detailIds.forEach((id) => visible.add(id));
     if (selectedId) visible.add(selectedId);
     if (narrativeId) visible.add(narrativeId);
     return visible;
-  }, [overviewRoutePointIds, selectedJourneyRoutePoint?.routePointId, narrativeJourneyRoutePoint?.routePointId]);
+  }, [activeStaySummary, overviewRoutePointIds, selectedJourneyRoutePoint?.routePointId, narrativeJourneyRoutePoint?.routePointId]);
   // At the completed overview, the timeline's last reached point can be a
   // geometry-only non-stop. Frame the Journey route instead of an absent pin.
   const focusPointHiddenByOverview = Boolean(
@@ -2388,6 +2437,11 @@ export function LivingAtlasApp({
       return;
     }
     clearHomeBaseContext();
+    const targetStayId = staySummariesByJourney.get(journeyId)
+      ?.find((summary) => summary.routePointIds.includes(routePointId))?.id ?? null;
+    if (activeStayDetailId !== null && activeStayDetailId !== targetStayId) {
+      setActiveStayDetailId(null);
+    }
     const requested = requestRoutePointContextSelection(
       routePointContextSelectionRef.current,
       journeyId,
@@ -3526,6 +3580,25 @@ export function LivingAtlasApp({
         const intent = routePointContextSelection.intent;
         const contextJourney = journeys.find((candidate) => candidate.id === context.journeyId) ?? null;
         if (!contextJourney || context.journeyId !== activeJourneyId) return null;
+        const staySummary = selectedStaySummary?.journeyId === context.journeyId ? selectedStaySummary : null;
+        const stayDetailOpen = staySummary?.id === activeStayDetailId;
+        const visibleStayRoutePoints = staySummary
+          ? staySummary.routePointIds.flatMap((routePointId) => {
+              const routePointIndex = contextJourney.routePoints.findIndex((point) => point.id === routePointId);
+              if (routePointIndex < 0 || !routePointContextTemporallyVisible(
+                context.journeyId,
+                routePointIndex,
+                routePointContextTemporalReveal,
+              )) return [];
+              return [{ point: contextJourney.routePoints[routePointIndex], routePointIndex }];
+            })
+          : [];
+        const visibleStayRoutePointIds = new Set(visibleStayRoutePoints.map(({ point }) => point.id));
+        const visibleStayMediaCount = staySummary
+          ? contextJourney.media.filter((asset) => (
+              asset.routePointId !== null && visibleStayRoutePointIds.has(asset.routePointId)
+            )).length
+          : 0;
         if (!routePointContextTemporallyVisible(
           context.journeyId,
           context.routePointIndex,
@@ -3584,6 +3657,50 @@ export function LivingAtlasApp({
                 <IconX size={17} stroke={1.35} aria-hidden="true" />
               </button>
             </header>
+            {staySummary && (staySummary.regionContext || visibleStayRoutePoints.length > 1) ? (
+              <section
+                className="living-atlas__route-point-context-switcher is-stay-summary"
+                data-stay-summary={staySummary.id}
+                data-stay-detail-open={stayDetailOpen ? "true" : "false"}
+                aria-label={`${staySummary.label} 停留摘要`}
+              >
+                <p>{staySummary.label} · {visibleStayRoutePoints.length} 个地点 · {visibleStayMediaCount} 项影像</p>
+                {!stayDetailOpen ? (
+                  <button
+                    type="button"
+                    data-stay-detail-open={staySummary.id}
+                    onClick={() => setActiveStayDetailId(staySummary.id)}
+                  >
+                    查看这里的详情
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      data-stay-detail-close={staySummary.id}
+                      onClick={() => setActiveStayDetailId(null)}
+                    >
+                      返回旅程概览
+                    </button>
+                    <div role="group" aria-label="这一停留的路线点" data-stay-detail={staySummary.id}>
+                      {visibleStayRoutePoints.map(({ point, routePointIndex }) => (
+                        <button
+                          key={point.id}
+                          type="button"
+                          data-stay-route-point={point.id}
+                          aria-pressed={point.id === context.routePointId}
+                          onClick={() => revealRoutePointContext(context.journeyId, point.id)}
+                        >
+                          <span>{String(routePointIndex + 1).padStart(2, "0")}</span>
+                          <strong>{point.label}</strong>
+                          <small>{point.placeRole === "accommodation" ? "住宿" : "停靠点"}</small>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </section>
+            ) : null}
             {visibleSameCoordinateRoutePoints.length > 1 ? (
               <>
                 <section

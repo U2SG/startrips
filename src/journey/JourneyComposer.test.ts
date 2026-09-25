@@ -9,7 +9,7 @@ import {
 } from "./JourneyComposer";
 import { uploadJourneyMedia } from "./journeyMediaUpload";
 import { COMPACT_MOBILE_MEDIA_QUERY } from "./mobileLayout";
-import { journeyToDraftPoints, type RouteDraftPoint } from "./routeDraft";
+import { journeyToDraftPoints, routeDraftToInput, type RouteDraftPoint } from "./routeDraft";
 import type { Journey, JourneyInput } from "./types";
 
 const input: JourneyInput = {
@@ -239,19 +239,32 @@ describe("persistJourneyDraft", () => {
         label: "Shenzhen",
         isStop: true,
         occurredAt: null,
+        regionContext: "Shenzhen",
+        placeRole: "accommodation",
+        overviewVisibility: "main",
         createdAt: "2026-04-16T00:00:00.000Z",
       }],
       media: [{ id: "media-1" }],
     } as Journey;
 
-    expect(journeyToDraftPoints(existing)).toEqual([expect.objectContaining({
+    const draft = journeyToDraftPoints(existing);
+    expect(draft).toEqual([expect.objectContaining({
       draftId: "saved-route-point-1",
       id: "route-point-1",
       latitude: 22.543096,
       longitude: 114.057865,
       label: "Shenzhen",
       isStop: true,
+      regionContext: "Shenzhen",
+      placeRole: "accommodation",
+      overviewVisibility: "main",
     })]);
+    expect(routeDraftToInput(draft)[0]).toMatchObject({
+      id: "route-point-1",
+      regionContext: "Shenzhen",
+      placeRole: "accommodation",
+      overviewVisibility: "main",
+    });
 
     const markup = renderToStaticMarkup(createElement(JourneyComposer, {
       open: true,

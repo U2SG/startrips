@@ -176,6 +176,12 @@ export const journeyRoutePoints = pgTable(
     // #10: a short personal note for this route point. Plain text, nullable;
     // empty strings are stored as null. Kept simple for future journaling.
     note: text("note"),
+    // #514: optional presentation evidence/correction carried by the same
+    // canonical Route Point. These columns never create a second place model
+    // and never change route geometry or Stop identity.
+    regionContext: text("region_context"),
+    placeRole: text("place_role"),
+    overviewVisibility: text("overview_visibility"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

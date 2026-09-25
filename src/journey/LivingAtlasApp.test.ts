@@ -1177,6 +1177,27 @@ describe("Route Point context integration (#291)", () => {
     expect(rule).toContain("overflow-y: auto;");
     expect(rule).toContain("overscroll-behavior: contain;");
   });
+
+  it("keeps stay children behind a separate explicit detail intent (#514)", () => {
+    const projectionStart = appSource.indexOf("const selectedStaySummary = routePointContextSelection.context");
+    const projection = appSource.slice(projectionStart, projectionStart + 2600);
+    const surfaceStart = appSource.indexOf('data-stay-summary={staySummary.id}');
+    const surface = appSource.slice(surfaceStart - 500, surfaceStart + 2600);
+    const escapeStart = appSource.indexOf("// #514: stay detail is one explicitly-entered layer");
+    const escape = appSource.slice(escapeStart, escapeStart + 520);
+
+    expect(projectionStart).toBeGreaterThan(0);
+    expect(projection).toContain("selectedStaySummary?.id === activeStayDetailId");
+    expect(projection).toContain("const detailIds = activeStaySummary?.routePointIds ?? []");
+    expect(surfaceStart).toBeGreaterThan(0);
+    expect(surface).toContain('data-stay-detail-open={staySummary.id}');
+    expect(surface).toContain('onClick={() => setActiveStayDetailId(staySummary.id)}');
+    expect(surface).toContain('data-stay-detail-close={staySummary.id}');
+    expect(surface).toContain('onClick={() => setActiveStayDetailId(null)}');
+    expect(escapeStart).toBeGreaterThan(0);
+    expect(escape).toContain("if (activeStayDetailId !== null)");
+    expect(escape).toContain("setActiveStayDetailId(null)");
+  });
 });
 
 describe("Quick Recap over-budget choice (ST-011)", () => {
