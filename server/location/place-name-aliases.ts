@@ -86,7 +86,39 @@ const TRANSLITERATION_VARIANTS: Readonly<Record<string, string>> = {
   "大阪": "大坂",
 };
 
+/**
+ * Residual spelling variants of one name, keyed by the form a reader types and
+ * valued by the form the provider indexes (#547). A foreign POI is indexed
+ * under its local name, and a simplified-Chinese reader writes the Japanese
+ * kanji of that name in its simplified form (`鸭川` for `鴨川`), which the
+ * provider does not match. Whole names only, never a per-character fold: a
+ * character table would rewrite Taiwan and Hong Kong names that are indexed in
+ * traditional form, which is exactly the kind of broad heuristic that changes
+ * which place a query means. This carries no coordinates — the provider still
+ * decides whether, and where, the name exists.
+ */
+const NAME_VARIANTS: Readonly<Record<string, string>> = {
+  "鸭川": "鴨川",
+  "岚山": "嵐山",
+  "伏见稻荷大社": "伏見稲荷大社",
+};
+
+/** The payload spells these names the way readers type them. */
+const TYPED_NAME_VARIANTS: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(NAME_VARIANTS).map(([typed, indexed]) => [indexed, typed]),
+);
+
 const MIN_PLACE_NAME_LENGTH = 2;
+
+/** Whether a query is written entirely in Han characters. */
+export function isHanQuery(query: string): boolean {
+  return HAN_QUERY.test(query);
+}
+
+/** The indexed spelling of a query when it is a known residual variant. */
+export function resolveNameVariant(query: string): string {
+  return NAME_VARIANTS[query] ?? query;
+}
 
 type PayloadEntry = { n?: unknown; z?: unknown };
 
@@ -190,7 +222,10 @@ export function createPlaceNameAliasResolver(
   };
 
   const lookup = (names: Map<string, string>, name: string) => (
-    names.get(name) ?? names.get(TRANSLITERATION_VARIANTS[name] ?? "") ?? ""
+    names.get(name)
+    ?? names.get(TRANSLITERATION_VARIANTS[name] ?? "")
+    ?? names.get(TYPED_NAME_VARIANTS[name] ?? "")
+    ?? ""
   );
 
   return async (query: string) => {

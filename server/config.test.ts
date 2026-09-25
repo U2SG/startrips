@@ -359,3 +359,22 @@ describe("Apple sign-in configuration", () => {
       .not.toThrow();
   });
 });
+
+describe("location search fallback configuration", () => {
+  it("names no fallback unless a deployment configures one", () => {
+    expect(loadServerConfig(productionEnvironment).locationSearchFallbackBaseUrl).toBeNull();
+    expect(loadServerConfig({
+      ...productionEnvironment,
+      LOCATION_SEARCH_FALLBACK_BASE_URL: "https://nominatim.startrips.example/",
+    }).locationSearchFallbackBaseUrl).toBe("https://nominatim.startrips.example");
+  });
+
+  it("requires HTTPS for the fallback in production", () => {
+    expect(() => loadServerConfig({
+      ...productionEnvironment,
+      LOCATION_SEARCH_DRIVER: "photon",
+      LOCATION_SEARCH_BASE_URL: "https://photon.startrips.example",
+      LOCATION_SEARCH_FALLBACK_BASE_URL: "http://nominatim.startrips.example",
+    })).toThrow("LOCATION_SEARCH_FALLBACK_BASE_URL must use HTTPS in production");
+  });
+});
