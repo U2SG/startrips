@@ -4133,6 +4133,11 @@ export function ParticleEarthScene({
       source: "marker" | "label";
     };
     const routeLabelPointerTargets = new Map<number, RouteLayerPointerTarget>();
+    // Canvas Route Point taps bind the identity at pointer-down, just like SVG
+    // labels do. The projected globe can continue composing between down/up;
+    // recomputing identity only on pointer-up lets a valid visible marker move
+    // out of the hit radius before the same contact resolves.
+    const routeCanvasPointerTargets = new Map<number, RouteLayerPointerTarget>();
     const cityPickFromEventTarget = (target: EventTarget | null) => {
       if (!(target instanceof SVGTextElement) || !target.classList.contains("particle-earth-city")) return null;
       const entry = cityLabelPool.find((candidate) => candidate.element === target) ?? null;
@@ -4200,6 +4205,18 @@ export function ParticleEarthScene({
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      if (event.currentTarget === renderer.domElement) {
+        const routePointTarget = journeyScreenTargetFromPointer(event.clientX, event.clientY);
+        if (routePointTarget?.routePointId) {
+          routeCanvasPointerTargets.set(event.pointerId, {
+            journeyId: routePointTarget.journeyId,
+            routePointId: routePointTarget.routePointId,
+            source: "marker",
+          });
+        } else {
+          routeCanvasPointerTargets.delete(event.pointerId);
+        }
+      }
       if (
         !latestDragToRotate.current
         || (event.pointerType === "mouse" && event.button !== 0)
@@ -4371,9 +4388,13 @@ export function ParticleEarthScene({
       explicitRouteTarget: RouteLayerPointerTarget | null = null,
     ) => {
       const cityPick = explicitGlobePick ?? cityPointerPicks.get(event.pointerId) ?? null;
-      const routeTarget = explicitRouteTarget ?? routeLabelPointerTargets.get(event.pointerId) ?? null;
+      const routeTarget = explicitRouteTarget
+        ?? routeLabelPointerTargets.get(event.pointerId)
+        ?? routeCanvasPointerTargets.get(event.pointerId)
+        ?? null;
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
+      routeCanvasPointerTargets.delete(event.pointerId);
       if (activePointers.has(event.pointerId)) {
         finishPointer(event, isPrimaryPointerActivation(event), cityPick, routeTarget);
         return;
@@ -4392,17 +4413,20 @@ export function ParticleEarthScene({
     const onPointerCancel = (event: PointerEvent) => {
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
+      routeCanvasPointerTargets.delete(event.pointerId);
       if (rejectedPointerIds.delete(event.pointerId)) return;
       finishPointer(event, false);
     };
     const onRejectedPointerLifecycleEnd = (event: PointerEvent) => {
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
+      routeCanvasPointerTargets.delete(event.pointerId);
       rejectedPointerIds.delete(event.pointerId);
     };
     const onLostPointerCapture = (event: PointerEvent) => {
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
+      routeCanvasPointerTargets.delete(event.pointerId);
       rejectedPointerIds.delete(event.pointerId);
       if (!activePointers.has(event.pointerId)) return;
       activePointers.delete(event.pointerId);
