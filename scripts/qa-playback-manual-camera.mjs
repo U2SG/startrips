@@ -683,6 +683,62 @@ try {
     } finally { await page.close(); }
   }
 
+  // #489 V8: the Playback return target is the last media the run presented.
+  // The Osaka video is neither the Atlas entry (no Story observation) nor the
+  // whole-Journey fallback (its first media is the Seoul image), so landing on
+  // it after later intro/outro beats, and after a finished run, proves the
+  // return commit log kept the observation instead of the entry.
+  for (const ending of ["exit-after-outro-and-intro", "completed"]) {
+    const { page, errors } = await open();
+    try {
+      await startPlayback(page);
+      await page.locator(".journey-playback__tempo select").selectOption("fast");
+      await page.waitForFunction((id) => {
+        const stage = document.querySelector(".journey-playback .playback-media-presentation");
+        return stage?.getAttribute("data-presented-asset") === id
+          && stage.getAttribute("data-media-presentation") === "settled";
+      }, videoId, { timeout: 60_000 });
+      if (ending === "completed") {
+        await page.locator('.journey-playback__controls button[aria-label="重新播放"]')
+          .waitFor({ state: "attached", timeout: 60_000 });
+      } else {
+        await page.locator('.journey-playback__controls button[aria-label="暂停播放"]')
+          .evaluate((button) => button.click());
+        await page.locator(".journey-playback.is-paused").waitFor();
+        const scrub = (toEnd) => page.locator('.journey-playback__progress input[type="range"]')
+          .evaluate((input, end) => {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")
+              .set.call(input, end ? input.max : input.min);
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          }, toEnd);
+        await scrub(true);
+        await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "outro");
+        await scrub(false);
+        await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "intro");
+      }
+      await page.keyboard.press("Escape");
+      await page.locator(".journey-playback").waitFor({ state: "detached" });
+      await page.locator(".journey-story").waitFor({ state: "visible" });
+      const returned = await page.waitForFunction(({ id, pointId }) => {
+        const current = document.querySelector('.journey-story [data-media-page="current"]')
+          ?.getAttribute("data-media-page-id") ?? null;
+        const pressed = document.querySelector(
+          `.journey-story__route-points button[data-route-point-id="${pointId}"]`,
+        )?.getAttribute("aria-pressed") ?? null;
+        window.__qaPlaybackReturnLast = { current, pressed };
+        return current === id && pressed === "true" ? { current, pressed } : false;
+      }, { id: videoId, pointId: points[2].id }, { timeout: 10_000 })
+        .then((handle) => handle.jsonValue())
+        .catch(async (error) => {
+          const last = await page.evaluate(() => window.__qaPlaybackReturnLast ?? null);
+          throw new Error(`Playback ${ending} did not return to the last presented media: ${JSON.stringify(last)}`,
+            { cause: error });
+        });
+      assert.deepEqual(errors, []);
+      reports.push({ mode: `playback-return-last-presented:${ending}`, returned });
+    } finally { await page.close(); }
+  }
+
   // Detail map: real keyboard pan and drag claim the camera; the director keeps
   // advancing content, then Return and Back restore the latest explicit location.
   {

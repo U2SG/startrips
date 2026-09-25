@@ -16,7 +16,11 @@
 //      destination, a populated chapter's arrival is not, and every media beat
 //      stays reachable in canonical order;
 //   4. 4-9 sequence chapters expose bounded peeks without a second video;
-//   5. all of it on desktop, portrait phone AND phone landscape.
+//   5. all of it on desktop, portrait phone AND phone landscape;
+//   6. #126 R2 Q1-Q3: the opening still and the first media keep one painted
+//      rect, a departing picture never shows outside the incoming aperture or
+//      vanishes in one frame, and settled media owns the stage above the
+//      transport at 1920x1080 and 390x844.
 //
 // It tunes nothing: the density grammar and the beat order are the product
 // decision, and this only grades the shipped ones.
@@ -87,7 +91,7 @@ function record(name, detail) {
   if (detail.failed) failed = true;
 }
 
-async function open({ viewport, reduceMotion = true }) {
+async function open({ viewport, reduceMotion = true, readUrl = null }) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
@@ -162,7 +166,8 @@ async function open({ viewport, reduceMotion = true }) {
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({
-      url: route.request().url().includes("st109-p4-m2") ? tinyVideo : onePixelGif,
+      url: readUrl?.(route.request().url())
+        ?? (route.request().url().includes("st109-p4-m2") ? tinyVideo : onePixelGif),
       expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     }),
   }));
@@ -526,6 +531,209 @@ for (const viewport of VIEWPORTS) {
     });
   } finally {
     await run.page.close();
+  }
+}
+
+// ── #126 R2 Q1-Q3: the seam geometry a viewer actually sees ─────────────────
+//
+// Point 2 is a `few` chapter served as landscape -> portrait -> landscape, so
+// the arrival's opening still hands off to a landscape picture and the first
+// media swap is a mixed-aspect one. An in-page recorder samples every frame
+// from before the seam, so the handoff frame and the removal frame are graded
+// as painted rather than inferred from settled attributes.
+{
+  const aspectSvg = (width, height) => `data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'>`
+    + `<rect width='${width}' height='${height}' fill='#67b5a7'/></svg>`,
+  )}`;
+  const SEAM_MEDIA = {
+    "st109-p2-m0": aspectSvg(1600, 900),
+    "st109-p2-m1": aspectSvg(900, 1600),
+    "st109-p2-m2": aspectSvg(1600, 900),
+  };
+  const readUrl = (url) => Object.entries(SEAM_MEDIA).find(([id]) => url.includes(id))?.[1] ?? null;
+  const stepOf = (pointIndex, mediaIndex) => STEPS.findIndex((candidate) => (
+    candidate.kind === "media" && candidate.pointIndex === pointIndex && candidate.mediaIndex === mediaIndex
+  ));
+  const FIRST = stepOf(2, 0);
+  const SECOND = stepOf(2, 1);
+  const LAST = stepOf(2, 2);
+  const SEAM_VIEWPORTS = [
+    { label: "desktop-1920", width: 1920, height: 1080 },
+    { label: "compact-390", width: 390, height: 844, isMobile: true, hasTouch: true },
+  ];
+  const HANDOFF_TOLERANCE_PX = 3;
+  const MIN_APERTURE_SHARE = 0.6;
+  const MAX_DEPARTING_EXPOSURE = 0.12;
+
+  const armSeamRecorder = (page) => page.evaluate(() => {
+    const trace = { frames: [], stopped: false };
+    window.__qaSeam = trace;
+    const rect = (value) => value && { left: value.left, top: value.top, width: value.width, height: value.height };
+    // The painted picture: contain-fit of the natural size inside the element.
+    const content = (element, width, height) => {
+      const box = element?.getBoundingClientRect();
+      if (!box || !width || !height || !box.width || !box.height) return null;
+      const scale = Math.min(box.width / width, box.height / height);
+      return { left: box.left + (box.width - width * scale) / 2, top: box.top + (box.height - height * scale) / 2,
+        width: width * scale, height: height * scale };
+    };
+    const intersect = (a, b) => {
+      if (!a || !b) return a ?? null;
+      const left = Math.max(a.left, b.left);
+      const top = Math.max(a.top, b.top);
+      const right = Math.min(a.left + a.width, b.left + b.width);
+      const bottom = Math.min(a.top + a.height, b.top + b.height);
+      return right > left && bottom > top ? { left, top, width: right - left, height: bottom - top } : null;
+    };
+    const sample = () => {
+      const root = document.querySelector(".journey-playback");
+      if (!root) return;
+      const opening = root.querySelector("[data-opening-asset]");
+      const openingImage = opening?.querySelector("img");
+      const presentation = root.querySelector(".playback-media-presentation");
+      const slots = [...(presentation?.querySelectorAll("[data-media-slot][data-media-asset]") ?? [])].map((slot) => {
+        const media = slot.querySelector("img, video");
+        const width = media instanceof HTMLImageElement ? media.naturalWidth : media?.videoWidth;
+        const height = media instanceof HTMLImageElement ? media.naturalHeight : media?.videoHeight;
+        const style = getComputedStyle(slot);
+        const box = slot.getBoundingClientRect();
+        const inset = style.clipPath.match(/^inset\(([-+\d.e]+)%(?:\s+([-+\d.e]+)%)?\)$/i);
+        const vertical = Number(inset?.[1] ?? 0) / 100;
+        const horizontal = Number(inset?.[2] ?? inset?.[1] ?? 0) / 100;
+        const clip = { left: box.left + box.width * horizontal, top: box.top + box.height * vertical,
+          width: box.width * (1 - 2 * horizontal), height: box.height * (1 - 2 * vertical) };
+        return {
+          asset: slot.getAttribute("data-media-asset"),
+          front: slot.getAttribute("aria-hidden") === "false",
+          opacity: style.display === "none" ? 0 : Number(style.opacity),
+          aperture: rect(box),
+          visible: intersect(content(media, width, height), clip),
+        };
+      });
+      trace.frames.push({
+        at: performance.now(),
+        step: Number(root.dataset.playbackStep),
+        phase: root.dataset.playbackPhase,
+        openingAsset: opening?.getAttribute("data-opening-asset") ?? null,
+        opening: openingImage ? content(openingImage, openingImage.naturalWidth, openingImage.naturalHeight) : null,
+        requested: presentation?.getAttribute("data-requested-asset") ?? null,
+        presented: presentation?.getAttribute("data-presented-asset") ?? null,
+        presentation: presentation?.getAttribute("data-media-presentation") ?? null,
+        slots,
+        controls: rect(root.querySelector(".journey-playback__controls")?.getBoundingClientRect()),
+      });
+    };
+    const tick = () => {
+      if (trace.stopped) return;
+      sample();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+
+  const area = (value) => (value ? value.width * value.height : 0);
+  const overlap = (a, b) => {
+    if (!a || !b) return 0;
+    const width = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+    const height = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+    return width > 0 && height > 0 ? width * height : 0;
+  };
+
+  for (const viewport of SEAM_VIEWPORTS) {
+    for (const reduceMotion of [false, true]) {
+      const label = `${viewport.label}:${reduceMotion ? "reduced" : "motion"}`;
+      const run = await open({ viewport, reduceMotion, readUrl });
+      try {
+        await armSeamRecorder(run.page);
+        await run.page.locator(".journey-playback__tempo select").selectOption("fast");
+        await run.page.waitForFunction((last) => {
+          const root = document.querySelector(".journey-playback");
+          const presentation = root?.querySelector(".playback-media-presentation");
+          return Number(root?.dataset.playbackStep) === last
+            && presentation?.getAttribute("data-media-presentation") === "settled"
+            && presentation.getAttribute("data-presented-asset") === "st109-p2-m2";
+        }, LAST, { timeout: 60_000 });
+        const frames = await run.page.evaluate(() => {
+          window.__qaSeam.stopped = true;
+          return window.__qaSeam.frames;
+        });
+
+        // Q1: the last painted opening frame and the first painted media frame
+        // of the same asset share one rect.
+        const openingFrames = frames.filter((frame) => (
+          frame.step === FIRST - 1 && frame.openingAsset === "st109-p2-m0" && frame.opening
+        ));
+        const lastOpening = openingFrames.at(-1)?.opening ?? null;
+        const lastOpeningIndex = frames.lastIndexOf(openingFrames.at(-1));
+        const firstMediaIndex = frames.findIndex((frame) => frame.step === FIRST && frame.slots.some((slot) => (
+          slot.asset === "st109-p2-m0" && slot.opacity > 0.01 && slot.visible
+        )));
+        const firstMedia = firstMediaIndex < 0 ? null
+          : frames[firstMediaIndex].slots.find((slot) => slot.asset === "st109-p2-m0")?.visible ?? null;
+        // Frames in between painted neither the opening nor the media: a blank seam.
+        const blankSeamFrames = lastOpeningIndex >= 0 && firstMediaIndex > lastOpeningIndex
+          ? firstMediaIndex - lastOpeningIndex - 1 : null;
+        const handoffDelta = lastOpening && firstMedia ? Math.max(
+          Math.abs(lastOpening.left - firstMedia.left), Math.abs(lastOpening.top - firstMedia.top),
+          Math.abs(lastOpening.width - firstMedia.width), Math.abs(lastOpening.height - firstMedia.height),
+        ) : null;
+        record(`${label}:opening-to-first-media-rect-continuity`, {
+          openingFrames: openingFrames.length, lastOpening, firstMedia, handoffDelta, blankSeamFrames,
+          tolerancePx: HANDOFF_TOLERANCE_PX,
+          failed: handoffDelta === null || handoffDelta > HANDOFF_TOLERANCE_PX || blankSeamFrames !== 0,
+        });
+
+        // Q2: while the landscape picture departs behind the portrait one, its
+        // visible pixels stay inside the incoming aperture, and it is already
+        // invisible when the stage removes it.
+        const swap = frames.filter((frame) => frame.step === SECOND);
+        let worstExposure = 0;
+        // Only frames where the swap has begun: before that the landscape is
+        // still the front picture and the portrait waits behind it.
+        for (const frame of swap.filter((candidate) => candidate.presentation === "moving")) {
+          const outgoing = frame.slots.find((slot) => slot.asset === "st109-p2-m0");
+          const incoming = frame.slots.find((slot) => slot.asset === "st109-p2-m1");
+          if (!outgoing?.visible || !incoming?.visible || !(outgoing.opacity > 0.01)) continue;
+          const outside = area(outgoing.visible) - overlap(outgoing.visible, incoming.visible);
+          worstExposure = Math.max(worstExposure, outgoing.opacity * outside / area(incoming.visible));
+        }
+        const removal = swap.findIndex((frame, index) => index > 0
+          && swap[index - 1].slots.some((slot) => slot.asset === "st109-p2-m0")
+          && !frame.slots.some((slot) => slot.asset === "st109-p2-m0"));
+        const beforeRemoval = removal > 0
+          ? swap[removal - 1].slots.find((slot) => slot.asset === "st109-p2-m0") : null;
+        const opacityBeforeRemoval = beforeRemoval?.visible ? beforeRemoval.opacity : 0;
+        record(`${label}:mixed-aspect-departure-stays-in-aperture`, {
+          swapFrames: swap.length, worstExposure, maxExposure: MAX_DEPARTING_EXPOSURE,
+          removalFrame: removal, opacityBeforeRemoval,
+          // Reduced Motion cuts at the handoff by design; with motion the
+          // departing picture must already be invisible when it is dropped.
+          failed: swap.length === 0 || (!reduceMotion
+            && (worstExposure > MAX_DEPARTING_EXPOSURE || removal < 0 || opacityBeforeRemoval > 0.05)),
+        });
+
+        // Q3: the settled portrait owns the stage and clears the transport.
+        const settled = swap.filter((frame) => frame.presentation === "settled"
+          && frame.presented === "st109-p2-m1" && frame.requested === "st109-p2-m1").at(-1) ?? null;
+        const front = settled?.slots.find((slot) => slot.asset === "st109-p2-m1" && slot.front) ?? null;
+        const apertureShare = front ? front.aperture.height / viewport.height : 0;
+        const pictureBottom = front?.visible ? front.visible.top + front.visible.height : null;
+        const controlsTop = settled?.controls?.top ?? null;
+        record(`${label}:settled-media-owns-stage-above-transport`, {
+          apertureShare, minShare: MIN_APERTURE_SHARE, pictureBottom, controlsTop,
+          failed: !front || apertureShare < MIN_APERTURE_SHARE
+            || pictureBottom === null || controlsTop === null || pictureBottom > controlsTop + 0.5,
+        });
+        record(`${label}:seam-clean`, {
+          consoleErrors: run.consoleErrors,
+          pageErrors: run.pageErrors,
+          failed: run.consoleErrors.length > 0 || run.pageErrors.length > 0,
+        });
+      } finally {
+        await run.page.close();
+      }
+    }
   }
 }
 
