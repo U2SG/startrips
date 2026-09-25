@@ -34,6 +34,14 @@
 .story-media-pages__page[data-media-incoming="true"] { z-index: 4; }
 .story-media-pages__page[data-media-page="current"] { z-index: 5; }
 .story-media-pages > .starlight-media-state { z-index: 7; }
+/* A transport that goes live promptly never shows its notice. */
+.story-media-pages__transport-state {
+  animation: story-media-transport-state-in var(--motion-ui) var(--motion-ease-out) var(--motion-content) both;
+}
+@keyframes story-media-transport-state-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .story-media-pages__page > :is(img, canvas),
 .story-media-pages__video > video {
   position: absolute;

@@ -1150,5 +1150,17 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         <div className="starlight-media-state__copy"><strong>正在准备画面…</strong></div>
       </div>
     ) : null}
+    {/* A first-frame canvas makes a video page presentable, not playable. Until
+        its one transport is live the page keeps that retained picture, and this
+        quiet notice -- never a cover over it -- says why it has no controls. */}
+    {active && currentVideo && currentReady && !heldRenewalFrame && !props.incomingId
+      && !movingId && gesturePhase === null && props.videoAssetId === props.currentId
+      && !(binding.id === props.currentId && liveReady === liveKey)
+      && failedLiveSource !== liveKey ? (
+      <div className="starlight-media-state is-over-media story-media-pages__transport-state"
+        role="status" data-story-transport-pending={props.currentId ?? undefined}>
+        <div className="starlight-media-state__copy"><strong>正在准备画面…</strong></div>
+      </div>
+    ) : null}
   </div>;
 });
