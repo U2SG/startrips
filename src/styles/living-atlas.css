@@ -1514,6 +1514,12 @@
   /* Let the mobile drag-to-navigate gesture own horizontal panning; keep
      vertical scroll/pull-to-refresh untouched. */
   touch-action: pan-y;
+  /* #522: a swipe that starts on this surface must not become a native text
+     selection or drag-and-drop, which Chromium answers with pointercancel.
+     Status copy that is real text opts back in below. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 /* Mobile swipe drag (live finger-follow, see JourneyStory.tsx): while a
@@ -1941,6 +1947,8 @@
   color: var(--atlas-muted);
   font-size: 10px;
   letter-spacing: 0.05em;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .journey-story__move-undo {
@@ -1971,6 +1979,10 @@
   display: grid;
   place-items: center;
   touch-action: none;
+  /* #522: same refusal as the inline stage; its blank edges start gestures. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
   /* #7: immersive — a deep gradient derived from the media, not a flat black
      box; the media itself stays the focal point. */
   background:

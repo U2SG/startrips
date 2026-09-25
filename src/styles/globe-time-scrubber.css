@@ -64,6 +64,10 @@
   align-items: center;
   cursor: pointer;
   touch-action: none;
+  /* #522: a scrub is never a text selection or a native drag source. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .globe-time-scrubber__track:focus-visible {
