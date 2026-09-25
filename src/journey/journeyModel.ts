@@ -137,6 +137,30 @@ function routePointCanRepresentStay(point: Journey["routePoints"][number]) {
   return point.placeRole !== "transport" && point.placeRole !== "pure-transit";
 }
 
+export function journeyOverviewRoutePointIds(
+  journey: Pick<Journey, "routePoints">,
+  summaries: readonly JourneyStaySummary[],
+): string[] {
+  const overviewIds = summaries
+    .filter((summary) => summary.overviewVisible)
+    .map((summary) => summary.anchorRoutePointId);
+  // A filtered projection with no currently visible stay must stay empty.
+  // Falling back to route endpoints here would leak future/unauthorized Stops
+  // back onto the overview and make an apparently visible marker unclickable.
+  if (
+    overviewIds.length > 0
+    || journey.routePoints.some(routePointCanRepresentStay)
+    || journey.routePoints.length === 0
+  ) {
+    return overviewIds;
+  }
+  // True geometry-only legacy Journeys still need stable entry anchors without
+  // inventing a city/stay record. Reuse their canonical endpoints only.
+  const firstId = journey.routePoints[0].id;
+  const lastId = journey.routePoints[journey.routePoints.length - 1].id;
+  return firstId === lastId ? [firstId] : [firstId, lastId];
+}
+
 function chooseStayAnchor(points: readonly Journey["routePoints"][number][]) {
   const overviewCandidates = points.filter((point) => point.overviewVisibility !== "detail");
   const candidates = overviewCandidates.length > 0 ? overviewCandidates : points;

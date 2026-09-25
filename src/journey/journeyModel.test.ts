@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyScopeReorder,
   deriveJourneyStaySummaries,
+  journeyOverviewRoutePointIds,
   groupJourneysByYear,
   isSoundtrackAsset,
   isVisualMediaAsset,
@@ -136,6 +137,8 @@ describe("journeyModel", () => {
     expect(deriveJourneyStaySummaries(trip).at(-1)?.overviewVisible).toBe(false);
     expect(deriveJourneyStaySummaries(trip, { includedRoutePointIds: new Set(["unknown-b", "same-name-a"]) })
       .map((summary) => summary.routePointIds)).toEqual([["unknown-b"], ["same-name-a"]]);
+    const noVisibleStays = deriveJourneyStaySummaries(trip, { includedRoutePointIds: new Set() });
+    expect(journeyOverviewRoutePointIds(trip, noVisibleStays)).toEqual([]);
   });
 
   it("keeps the full route/provenance matrix intact while deriving stays (#514)", () => {

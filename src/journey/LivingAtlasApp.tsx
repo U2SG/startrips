@@ -122,6 +122,7 @@ import {
 } from "./crossPointReading";
 import {
   deriveJourneyStaySummaries,
+  journeyOverviewRoutePointIds,
   journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
@@ -2132,18 +2133,9 @@ export function LivingAtlasApp({
     const visible = new Set<string>();
     for (const journey of journeys) {
       const summaries = staySummariesByJourney.get(journey.id) ?? [];
-      let visibleCount = 0;
-      for (const summary of summaries) {
-        if (!summary.overviewVisible) continue;
-        visible.add(summary.anchorRoutePointId);
-        visibleCount += 1;
-      }
-      // An old geometry-only Journey still needs a real entry anchor. Reuse
-      // its own endpoints; this creates no city, Stop or new route fact.
-      if (summaries.length === 0 && visibleCount === 0 && journey.routePoints.length > 0) {
-        visible.add(journey.routePoints[0].id);
-        visible.add(journey.routePoints[journey.routePoints.length - 1].id);
-      }
+      journeyOverviewRoutePointIds(journey, summaries).forEach((routePointId) => {
+        visible.add(routePointId);
+      });
     }
     // Composer and draft Playback still expose every editable point. Their
     // route geometry and point identity are independent of saved Journey data.
