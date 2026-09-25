@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { auth } from "../auth";
 import { serverConfig } from "../config";
@@ -8,6 +8,7 @@ import {
   completeIdentityLink,
   createIdentityLinkIntent,
   createPasswordReverificationGrant,
+  identitySessionIsCurrent,
   listAccountIdentityMethods,
   recordIdentityRefusal,
   unlinkAccountIdentity,
@@ -53,6 +54,31 @@ export type AccountIdentityRouteOptions = {
 const IDENTITY_BIND_RESULT_PARAM = "identityLink";
 const IDENTITY_BIND_PROOF_PARAM = "identityLinkProof";
 const IDENTITY_BIND_ERROR_PARAM = "identityLinkError";
+
+/**
+ * #504: the one set of attributes the bind cookie is issued AND cleared with.
+ *
+ * `SameSite=None` because Apple returns with `response_mode=form_post`, a
+ * cross-site POST on which a browser sends no `Lax` cookie; the owner took
+ * this on #504 for Google's GET return as well rather than splitting the
+ * cookie per provider. `None` is only honoured with `Secure`, so `secure` is
+ * unconditional: browsers treat `http://127.0.0.1` as a secure context for
+ * this, and every other `APP_ORIGIN` is HTTPS. The deletion carries the same
+ * attributes so a browser accepts it on that cross-site response too.
+ */
+const IDENTITY_BIND_COOKIE_ATTRIBUTES = {
+  path: IDENTITY_BIND_COOKIE_PATH,
+  httpOnly: true,
+  sameSite: "None",
+  secure: true,
+} as const;
+
+/** What a provider hands back, from the query of a GET or the body of a form_post. */
+type BindCallbackParams = {
+  state: string | null;
+  code: string | null;
+  error: string | null;
+};
 
 function sameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
@@ -112,9 +138,8 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
   // deployment configured -- the same fact the button itself would reveal.
   //
   // #350: this is the SIGN-IN set, so it reads `usableProviderIds`. It read
-  // `linkableProviderIds` while Google made the two identical; Apple is a
-  // provider this server can sign in with but cannot yet receive a bind
-  // callback from, and a sign-in button is exactly what it should still offer.
+  // `linkableProviderIds` while Google made the two identical; the two are
+  // separate questions even when #504 makes them agree again.
   routes.get("/providers", (context) => context.json({
     signInProviders: [...usableProviderIds].filter(validProviderId).sort(),
   }));
@@ -272,11 +297,12 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
       return context.json({ error: "IDENTITY_PROVIDER_NOT_CONFIGURED" }, 403);
     }
     const state = randomBytes(32).toString("base64url");
-    // 86 characters, inside RFC 7636's 43..128 range.
-    const codeVerifier = randomBytes(64).toString("base64url");
+    // 86 characters, inside RFC 7636's 43..128 range. #504: only for a
+    // provider that takes PKCE -- see `IdentityBindProvider.pkce`.
+    const codeVerifier = provider.pkce ? randomBytes(64).toString("base64url") : null;
     const authorizationUrl = await provider.createAuthorizationURL({
       state,
-      codeVerifier,
+      codeVerifier: codeVerifier ?? undefined,
       redirectURI: identityBindRedirectUri(providerId),
     });
     setCookie(context, IDENTITY_BIND_COOKIE, issueIdentityBindState(proofSecret, {
@@ -288,12 +314,7 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
       codeVerifier,
       returnPath,
     }), {
-      path: IDENTITY_BIND_COOKIE_PATH,
-      httpOnly: true,
-      // The return from the provider is a top-level GET navigation, which
-      // Lax allows and Strict would drop.
-      sameSite: "Lax",
-      secure: serverConfig.production,
+      ...IDENTITY_BIND_COOKIE_ATTRIBUTES,
       maxAge: IDENTITY_BIND_STATE_MAX_AGE_MS / 1000,
     });
     return context.json({ authorizationUrl: authorizationUrl.toString() });
@@ -303,17 +324,30 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
   // redirect to the app path the cookie recorded, so a person who cancelled,
   // was refused, or came back to a different account lands somewhere that can
   // explain it rather than on a raw JSON error.
-  routes.get("/providers/:providerId/callback", async (context) => {
-    const providerId = context.req.param("providerId");
+  //
+  // #504: one core behind two methods. Google returns with a GET carrying the
+  // parameters in the query; Apple returns with `response_mode=form_post`, a
+  // cross-site POST carrying them in the body. There is no `sameOrigin` gate
+  // on either: the Origin of that POST is Apple's. What authenticates the
+  // return is the signed, single-use bind cookie plus a `state` only that
+  // cookie and the provider's authorization URL ever held.
+  async function finishBindCallback(
+    context: Context,
+    providerId: string,
+    params: BindCallbackParams,
+    formPost: boolean,
+  ) {
     const cookie = getCookie(context, IDENTITY_BIND_COOKIE);
     // One authorization round trip, one cookie. Clearing it before anything
     // else is what makes a duplicate callback -- a refresh, a resent redirect
     // -- land on a spent flow instead of a second exchange.
-    deleteCookie(context, IDENTITY_BIND_COOKIE, { path: IDENTITY_BIND_COOKIE_PATH });
+    deleteCookie(context, IDENTITY_BIND_COOKIE, IDENTITY_BIND_COOKIE_ATTRIBUTES);
     const bind = cookie ? readIdentityBindState(proofSecret, cookie) : null;
     if (!bind || bind.providerId !== providerId) {
       return context.json({ error: "IDENTITY_BIND_STATE_INVALID" }, 403);
     }
+    // 303 turns the browser's follow-up to a form_post into a GET of the app.
+    const redirectStatus = formPost ? 303 : 302;
     const fail = async (code: string) => {
       await recordIdentityRefusal({
         userId: bind.userId,
@@ -325,33 +359,50 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
       return context.redirect(bindReturn(bind.returnPath, {
         [IDENTITY_BIND_RESULT_PARAM]: "error",
         [IDENTITY_BIND_ERROR_PARAM]: code,
-      }), 302);
+      }), redirectStatus);
     };
-    const session = await requireSession(context.req.raw);
-    if (!session) return await fail("UNAUTHORIZED");
     // The person signed out, or signed in as somebody else, while the provider
     // had the tab. The proof this callback could mint would belong to a
     // session that no longer exists, so stop before the exchange.
-    if (session.user.id !== bind.userId || session.session.id !== bind.sessionId) {
+    //
+    // #504: a cross-site form_post carries no Better Auth session cookie --
+    // that cookie is `SameSite=Lax` -- so there the signed cookie's session is
+    // checked against the session table instead. A session cookie that IS
+    // present is still compared, on either method.
+    const session = await requireSession(context.req.raw);
+    if (session) {
+      if (session.user.id !== bind.userId || session.session.id !== bind.sessionId) {
+        return await fail("IDENTITY_ACTION_SESSION_CHANGED");
+      }
+    } else if (!formPost) {
+      return await fail("UNAUTHORIZED");
+    } else if (!(await identitySessionIsCurrent(bind.userId, bind.sessionId))) {
       return await fail("IDENTITY_ACTION_SESSION_CHANGED");
     }
-    if (context.req.query("state") !== bind.state) {
+    if (params.state !== bind.state) {
       return await fail("IDENTITY_BIND_STATE_INVALID");
     }
     // The provider's own error is attacker-influenced text; it selects one of
-    // our codes and is never reflected.
-    if (context.req.query("error")) return await fail("IDENTITY_PROVIDER_REFUSED");
-    const code = context.req.query("code");
+    // our codes and is never reflected. Apple's cancel is
+    // `user_cancelled_authorize`; it lands here like Google's `access_denied`.
+    if (params.error) return await fail("IDENTITY_PROVIDER_REFUSED");
+    const code = params.code;
     if (!code) return await fail("IDENTITY_PROVIDER_REFUSED");
     const provider = linkableProviderIds.has(providerId) ? createBindProvider(providerId) : null;
     if (!provider) return await fail("IDENTITY_PROVIDER_NOT_CONFIGURED");
+    // The signed cookie records whether a verifier was minted; it has to agree
+    // with the provider's PKCE policy, so a flow started under one policy can
+    // never be exchanged under the other.
+    if (provider.pkce !== (bind.codeVerifier !== null)) {
+      return await fail("IDENTITY_BIND_STATE_INVALID");
+    }
     let subject = "";
     let email: string | null = null;
     let emailVerified = false;
     try {
       const tokens = await provider.validateAuthorizationCode({
         code,
-        codeVerifier: bind.codeVerifier,
+        codeVerifier: bind.codeVerifier ?? undefined,
         redirectURI: identityBindRedirectUri(providerId),
       });
       const info = tokens ? await provider.getUserInfo(tokens) : null;
@@ -376,7 +427,32 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
     return context.redirect(bindReturn(bind.returnPath, {
       [IDENTITY_BIND_RESULT_PARAM]: "proof",
       [IDENTITY_BIND_PROOF_PARAM]: providerProof,
-    }), 302);
+    }), redirectStatus);
+  }
+
+  routes.get("/providers/:providerId/callback", (context) =>
+    finishBindCallback(context, context.req.param("providerId"), {
+      state: context.req.query("state") || null,
+      code: context.req.query("code") || null,
+      error: context.req.query("error") || null,
+    }, false));
+
+  // #504: Apple's `form_post` return. Only `state`, `code` and `error` are
+  // read. The body's `id_token` is never believed -- the identity comes from
+  // the token this server exchanges the code for and then verifies -- and its
+  // first-authorization `user` JSON is not identity material.
+  routes.post("/providers/:providerId/callback", async (context) => {
+    let body: Record<string, unknown> = {};
+    try {
+      body = await context.req.parseBody();
+    } catch {
+      body = {};
+    }
+    return await finishBindCallback(context, context.req.param("providerId"), {
+      state: stringField(body, "state"),
+      code: stringField(body, "code"),
+      error: stringField(body, "error"),
+    }, true);
   });
 
   routes.delete("/:accountRecordId", async (context) => {
@@ -411,18 +487,16 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
   return routes;
 }
 
-// #349/#350: the explicitly configured provider ids this deployment has, empty
-// whenever it names no social credential at all.
+// #349/#350/#504: the explicitly configured provider ids this deployment has,
+// empty whenever it names no social credential at all.
 //
-// The two sets were the same one while Google was the only provider, and they
-// are no longer. A provider Startrips accepts as a usable login is one it can
-// complete a sign-in with; a provider somebody can BIND additionally needs the
-// #349 authorize/callback round trip, which assumes a same-site GET return.
-// Apple returns with `response_mode=form_post`, so it is a usable login and is
-// not yet bindable -- `bindableSocialProviderIds` carries the reasoning. This
-// is the truthful degradation: `availableLinkProviders` drives a generic bind
-// button in `src/auth/AuthGateway.tsx`, so advertising apple here would render
-// a control that can only fail.
+// A provider Startrips accepts as a usable login is one it can complete a
+// sign-in with; a provider somebody can BIND additionally needs the
+// authorize/callback round trip above. #504 taught that round trip Apple's
+// `form_post` return, so today the two sets agree -- but they stay two sets,
+// because `availableLinkProviders` drives a generic bind button in
+// `src/auth/AuthGateway.tsx`, and a provider added to sign-in before its bind
+// path exists must not render a control that can only fail.
 export const accountIdentityRoutes = createAccountIdentityRoutes({
   usableProviderIds: configuredSocialProviderIds(),
   linkableProviderIds: bindableSocialProviderIds(),

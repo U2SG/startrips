@@ -329,6 +329,14 @@ async function authorizeBind(cookie: string, actionId: string, returnPath = "/ac
   // Minimal scopes: identity only, nothing that reaches Drive or Photos.
   expect((authorize.searchParams.get("scope") ?? "").split(" ").sort())
     .toEqual(["email", "openid", "profile"]);
+  // #504: the bind cookie is `SameSite=None; Secure` for every provider, so
+  // Apple's cross-site form_post can carry it; this GET return keeps working
+  // with it, which every bind case below exercises.
+  const issued = response.headers
+    .getSetCookie()
+    .find((entry) => entry.startsWith("startrips.identity_bind="));
+  expect(issued).toMatch(/;\s*SameSite=None(?:;|$)/i);
+  expect(issued).toMatch(/;\s*Secure(?:;|$)/i);
   return { response, state: authorize.searchParams.get("state") ?? "", bindCookie: bindCookieFrom(response) };
 }
 

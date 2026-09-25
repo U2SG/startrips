@@ -18,17 +18,26 @@ handled here rather than left as operational folklore.
 | `APPLE_PRIVATE_KEY` | The PKCS#8 PEM text of the downloaded `.p8` file, newlines written `\n` | Downloaded once, at key creation |
 | `APPLE_APP_BUNDLE_IDENTIFIER` | Optional. A native app bundle id accepted as an additional id-token audience | Apple Developer → Identifiers → App IDs |
 
-The return URL registered with Apple is
-`<APP_ORIGIN>/api/auth/callback/apple`. It must be HTTPS, which `config.ts`
-already requires of `APP_ORIGIN` in production. Apple posts the callback as
-`form_post`; Better Auth handles that shape itself.
+The Service identifier needs **two** registered Return URLs, because sign-in
+and explicit binding are different flows that return to different handlers:
+
+| Flow | Return URL |
+| --- | --- |
+| Sign in / sign up | `<APP_ORIGIN>/api/auth/callback/apple` |
+| Bind to an existing Account (#504) | `<APP_ORIGIN>/api/account-identities/providers/apple/callback` |
+
+Both must be HTTPS, which `config.ts` already requires of `APP_ORIGIN` in
+production; Apple accepts no `http://127.0.0.1` Return URL, so a real Apple
+round trip needs an HTTPS origin even in development. Apple posts both
+callbacks as `form_post`. Better Auth handles that shape itself for sign-in;
+the bind route handles it as described under *Explicit binding* below.
 
 `server/config.ts` refuses a partially named credential at startup in every
 environment. Naming none is a supported state: `server/auth.ts` then registers
 no Apple provider at all, `/api/auth/sign-in/social` reports an unknown
 provider, `/api/auth/callback/apple` reports `oauth_provider_not_found`, and
-`/api/account-identities` advertises no bindable provider. There is no mock and
-no partial mode.
+`/api/account-identities` advertises neither a sign-in nor a bindable Apple
+provider. There is no mock and no partial mode.
 
 ## The client secret is minted, never stored
 
@@ -120,29 +129,52 @@ The only way to attach an Apple identity to an existing account is the ST-067
 pipeline — `createIdentityLinkIntent` → `verifyProviderIdentityProof` →
 `completeIdentityLink` — driven by the signed-in owner after re-verification.
 
-That pipeline is not yet reachable for Apple, and the reason is Apple's return
-mode rather than a missing proof issuer. #349 shipped the shared callback
-contract this feature was sequenced behind — `issueVerifiedProviderIdentityProof`
-and the `/providers/:providerId/authorize` → `/providers/:providerId/callback`
-round trip — but that round trip assumes the provider hands the browser back
-with a same-site GET. Apple's authorization uses `response_mode=form_post`, so
-it returns a cross-site POST, and three things in the shared flow assume
-otherwise:
+## Explicit binding
 
-- the callback route is a `GET` and reads `state`/`code` from the query string;
-- `IDENTITY_BIND_COOKIE` is `SameSite=Lax`, which a browser does not send on a
-  cross-site POST at all, so the flow could not even recover its own state;
-- the pinned `apple` adapter's `createAuthorizationURL` never forwards
-  `codeVerifier`, so no PKCE challenge is sent, while the shared token exchange
-  sends `code_verifier` whenever one is present.
+Issue #504. The pipeline above is reachable for Apple through the same
+`/providers/:providerId/authorize` → `/providers/:providerId/callback` round
+trip #349 built for Google, so `bindableSocialProviderIds` includes `apple`
+whenever the full credential is configured and `availableLinkProviders`
+offers it. Apple's authorization uses `response_mode=form_post`, so it hands
+the browser back with a **cross-site POST** rather than a same-site GET, and
+three decisions make the shared flow receive it:
 
-`availableLinkProviders` drives a generic bind button in
-`src/auth/AuthGateway.tsx`, so Startrips does **not** advertise `apple` as
-bindable: `bindableSocialProviderIds` deliberately omits it while
-`configuredSocialProviderIds` includes it. An operator should expect Apple
-sign-in and returning sign-in to work, and explicit binding of an Apple subject
-to an existing account to be unavailable and unoffered rather than offered and
-broken. Issue #504 tracks building that path.
+- **The callback accepts a POST.** `server/routes/account-identities.ts`
+  serves the callback path for both methods through one core: a GET reads
+  `state`/`code`/`error` from the query, a POST reads them from the
+  urlencoded body and answers `303`. The body's own `id_token` and `user`
+  fields are ignored; the identity is the one in the token this server
+  exchanges the code for and then verifies. There is no same-origin gate on
+  that POST, since its Origin is Apple's: the signed single-use bind cookie
+  and a `state` only that cookie and the authorization URL ever held are
+  what authenticate it.
+- **`IDENTITY_BIND_COOKIE` is `SameSite=None; Secure`.** A browser sends no
+  `Lax` cookie on a cross-site POST, so under `Lax` the flow could not recover
+  its own state. The owner decided on #504 to change the one shared cookie
+  rather than split it per provider, so Google's GET bind return carries a
+  `None` cookie too. The cookie is still signed, HttpOnly, scoped to
+  `/api/account-identities`, ten minutes long and cleared — with the same
+  attributes — on the first callback, so what `None` widens is only when the
+  browser presents it, never who can read or author it. `Secure` is
+  unconditional; browsers treat `http://127.0.0.1` as a secure context for
+  it, and every other `APP_ORIGIN` is HTTPS. The Better Auth session cookie
+  stays `Lax`, so the form_post carries no session: the callback checks the
+  session the signed cookie names against the session table instead, and
+  stops before the exchange when it has ended. `/link/complete`, a same-origin
+  request, still compares the proof with the real cookie session.
+- **PKCE is a per-provider opt-out.** `IdentityBindProvider.pkce` is `true`
+  for Google and `false` for Apple. The pinned `apple` adapter never sends a
+  `code_challenge`, and the shared token exchange writes `code_verifier`
+  whenever it is handed one, so for Apple the authorize route mints no
+  verifier, the signed cookie records `null`, and the exchange sends none. The
+  callback refuses a cookie whose verifier disagrees with the provider's
+  policy. Apple's code is bound instead by `state` and by the client-secret
+  assertion only this server can mint.
+
+Apple releases the email only on the first authorization for an app, so a
+bind by an Apple ID that has already authorized this Service may carry no
+email. The proof then records the subject with no verified email, exactly
+what Apple asserted.
 
 ## A returning authorization carries only the subject
 
@@ -242,6 +274,12 @@ verification not spending the token, the record surviving the request that
 wrote it, and pruning that removes only closed windows. The replay store's own
 failure behaviour is covered by
 `server/account-identities/id-token-consumption.test.ts`.
+
+The explicit Apple bind is covered end to end in the same file: authorize →
+a form_post callback whose cookie jar holds only the `SameSite=None` cookies a
+cross-site POST would carry → `link/complete`, with no PKCE challenge or
+verifier sent to Apple, an ignored body `id_token`, a refused resend, an ended
+session and a cancelled or mismatched return.
 
 They do **not** prove an approved Service identifier, a registered return URL, a
 live Apple key, or a real Web authorization and bind. That evidence is an

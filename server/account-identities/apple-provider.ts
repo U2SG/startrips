@@ -1,17 +1,14 @@
 import { and, eq } from "drizzle-orm";
-import type { OAuth2Tokens } from "better-auth/oauth2";
 import { apple, type AppleOptions } from "better-auth/social-providers";
 import { serverConfig, type ServerConfig } from "../config";
 import { db } from "../db/client";
 import { account as authAccount, user as authUser } from "../db/auth-schema";
-import {
-  appleSigningCredential,
-  createAppleClientSecretSource,
-} from "./apple-client-secret";
 import { consumeVerifiedIdToken } from "./id-token-consumption";
 import {
   APPLE_PROVIDER_ID,
+  appleBaseOptions,
   rememberVerifiedProviderIdentity,
+  verifiedUserInfo,
 } from "./social-providers";
 
 export { APPLE_PROVIDER_ID };
@@ -33,67 +30,11 @@ export { APPLE_PROVIDER_ID };
  *
  * Scopes are left at the adapter's defaults (`email`, `name`). Apple sends the
  * name only on the very first authorization and only as a form field, so
- * widening scopes here would buy nothing the identity contract uses.
+ * widening scopes here would buy nothing the identity contract uses. The
+ * options themselves (`appleBaseOptions`) and the verifying half
+ * (`verifiedUserInfo`) live in `social-providers.ts`, which the #504 bind
+ * adapter shares.
  */
-function appleBaseOptions(config: ServerConfig): AppleOptions | null {
-  const credential = appleSigningCredential(config);
-  if (!credential) return null;
-  const secrets = createAppleClientSecretSource(credential);
-  // The audience an id token is checked against. The Service id is the web
-  // client; the bundle identifier is listed alongside it only when a
-  // deployment names one, so an unconfigured native app can never widen what
-  // this server accepts.
-  const audience = config.appleAppBundleIdentifier
-    ? [credential.serviceId, config.appleAppBundleIdentifier]
-    : [credential.serviceId];
-  return {
-    clientId: credential.serviceId,
-    audience,
-    // A getter, not a value. The pinned adapter reads `options.clientSecret`
-    // at the moment it builds the token request (see
-    // `oauth2/validate-authorization-code`), and neither the adapter nor
-    // `createAuthContext` copies the options object, so every exchange gets a
-    // secret minted against the current clock. A field assigned once at
-    // startup would instead expire while the process kept running -- exactly
-    // the failure #350 asks to be designed out rather than documented around.
-    get clientSecret() {
-      return secrets.current();
-    },
-  };
-}
-
-type AppleAdapter = ReturnType<typeof apple>;
-
-/**
- * The adapter's ID-token claims, but only once the adapter has verified them.
- *
- * Everything Startrips then persists comes from those claims: the subject an
- * ownership row is keyed by, and the verified-email flag
- * `accountIdentityUsable` reads.
- */
-async function verifiedUserInfo(adapter: AppleAdapter, tokens: OAuth2Tokens) {
-  const idToken = tokens.idToken;
-  if (!idToken || typeof adapter.verifyIdToken !== "function") return null;
-  let verified = false;
-  try {
-    // No nonce: the pinned adapter's `createAuthorizationURL` does not send
-    // one, so there is none to bind the token back to. `verifyIdToken` still
-    // checks issuer, audience and token age, and it compares a nonce whenever
-    // one IS supplied -- which is what the fake-provider suite exercises.
-    verified = await adapter.verifyIdToken(idToken, undefined);
-  } catch {
-    verified = false;
-  }
-  if (!verified) {
-    // The token is itself a bearer credential, so only the provider it
-    // belonged to is safe to record.
-    console.error("provider_id_token_verification_failed", {
-      providerId: APPLE_PROVIDER_ID,
-    });
-    return null;
-  }
-  return await adapter.getUserInfo(tokens);
-}
 
 /**
  * #350: the account this Apple subject is ALREADY bound to, if any.
@@ -202,7 +143,7 @@ export function appleSignInOptions(
       return consumed;
     },
     async getUserInfo(tokens) {
-      const info = await verifiedUserInfo(baseProvider, tokens);
+      const info = await verifiedUserInfo(baseProvider, APPLE_PROVIDER_ID, tokens);
       const subject = info?.user?.id === undefined ? "" : String(info.user.id);
       if (info && subject && (info.user.email ?? null) === null) {
         // A returning authorization that carried no email. Recover the bound
