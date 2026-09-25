@@ -1877,8 +1877,33 @@ async function transportState(page, rootSelector) {
         opacity: Number(getComputedStyle(notice).opacity),
       } : null,
       coveringWait: Boolean(stage?.querySelector(":scope > .starlight-media-state.is-waiting")),
+      // Every <video> in the document, not only this stage's: the inactive
+      // surface keeps its one persistent transport as a handoff destination.
+      pageVideos: [...document.querySelectorAll("video")].map((node) => ({
+        surface: node.closest(".journey-story-fullscreen") ? "immersive" : "inline",
+        active: Boolean(node.closest(selector)),
+        asset: node.getAttribute("data-shared-media-id"),
+        hasSource: Boolean(node.currentSrc || node.getAttribute("src")),
+        preload: node.preload, paused: node.paused, hidden: node.hidden,
+      })),
     };
   }, rootSelector);
+}
+
+/**
+ * The page-wide transport bound: at most one persistent <video> per Story
+ * surface, at most one of them playing, and the inactive surface's node --
+ * the fullscreen handoff destination -- paused, hidden and metadata-only.
+ */
+function gradePageVideos(videos) {
+  const inactive = videos.filter((video) => !video.active);
+  const offending = inactive.filter((video) => video.hasSource
+    && (video.preload !== "metadata" || !video.paused || !video.hidden));
+  return {
+    videos, offending,
+    failed: videos.length > 2 || videos.filter((video) => !video.paused).length > 1
+      || videos.filter((video) => video.active).length > 1 || offending.length > 0,
+  };
 }
 
 // Eight synthetic photographs (the preview's `many-media` Journey). Each read
@@ -3127,6 +3152,61 @@ try {
   }
 
   // ---------------------------------------------------------------------
+  // A (engine). On a phone the immersive video can be left the way a photo
+  // can: a real touch swipe down that starts on the presented video's picture,
+  // above its native control band, exits fullscreen and returns the same video
+  // to the inline stage.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: true, viewport: { width: 390, height: 844 } });
+    const name = "story-video-picture-swipe-down-exits-fullscreen-phone-portrait";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      const toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      const inlineLive = await waitForPresentedLiveVideo(page, STAGE, V1);
+      const entry = page.locator(".journey-story__mobile-media-fullscreen");
+      await entry.click();
+      await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
+      await waitForSettledAsset(page, V1, FULLSCREEN);
+      await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+        .waitFor({ state: "detached", timeout: 5_000 });
+      const fullscreenLive = await waitForPresentedLiveVideo(page, FULLSCREEN, V1);
+      const chromeTop = controlChromeTop(await nativeControls(page, FULLSCREEN));
+      const start = await presentedVideoPoint(page, FULLSCREEN, { fraction: 0.3, controlsTop: chromeTop });
+      const since = await pageClock(page);
+      const pointer = input(page);
+      await pointer.down(start.x, start.y);
+      for (let step = 1; step <= 10; step += 1) {
+        await pointer.move(start.x, start.y + 180 * (step / 10));
+        await nextFrame(page);
+      }
+      await pointer.up();
+      const exited = await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 5_000 })
+        .then(() => true, () => false);
+      const trace = await gestureTraceSince(page, since);
+      const down = trace.find((entry) => entry.type === "pointerdown") ?? null;
+      const returned = exited ? await waitForSettledAsset(page, V1).then(() => true, () => false) : false;
+      const after = await currentAsset(page);
+      record({ name,
+        claim: "on a phone, a real touch swipe down that starts on the immersive video's picture above its native control band exits fullscreen and returns the same video, settled, to the inline stage",
+        toVideo, inlineLive, fullscreenLive, start, down, exited, returned, after,
+        cancels: trace.filter((entry) => entry.type === "pointercancel"),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !toVideo.ok || !inlineLive || !fullscreenLive || !start.hitIsVideo
+          || down?.tag !== "VIDEO" || down.pointerType !== "touch" || !exited || !returned || after.id !== V1
+          || trace.some((entry) => entry.type === "pointercancel")
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // A (engine). A first frame is presentable, not playable. With V2's live
   // transport deliberately held back after its representative frame exists,
   // the settled V2 page keeps that frame, has no controls, and says so with
@@ -3158,14 +3238,16 @@ try {
         return Boolean(notice) && Number(getComputedStyle(notice).opacity) >= 0.99;
       }, { selector: STAGE, expected: V2 }, { polling: "raf", timeout: 3_000 }).then(() => true, () => false);
       const pending = await transportState(page, STAGE);
+      const pendingVideos = gradePageVideos(pending.pageVideos);
       const heldRequests = gate.held.map(({ range, at }) => ({ range, at }));
       gate.holding = false;
       for (const entry of gate.held) entry.release.resolve();
       const live = await waitForPresentedLiveVideo(page, STAGE, V2);
       const after = await transportState(page, STAGE);
+      const afterVideos = gradePageVideos(after.pageVideos);
       record({ name,
-        claim: "while the current video's representative frame is shown and its one transport is not live, the page keeps that frame, exposes no controls, and shows the role=status preparing notice rather than a waiting cover; the live transport then replaces both",
-        toVideo, toSecond, heldRequests, noticeShown, pending, live, after,
+        claim: "while the current video's representative frame is shown and its one transport is not live, the page keeps that frame, exposes no controls, and shows the role=status preparing notice rather than a waiting cover; the live transport then replaces both; across the whole page there is at most one persistent video per surface, at most one playing, and the inactive surface's node stays paused, hidden and metadata-only",
+        toVideo, toSecond, heldRequests, noticeShown, pending, live, after, pendingVideos, afterVideos,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !toVideo.ok || !toSecond.ok || heldRequests.length === 0 || !noticeShown
           || pending.current !== V2 || !pending.currentReady || pending.presentation !== "settled"
@@ -3173,6 +3255,7 @@ try {
           || pending.notice?.asset !== V2 || pending.notice.role !== "status"
           || !pending.notice.text.includes("正在准备画面") || pending.coveringWait
           || !live || after.notice !== null || after.videoHidden !== false || after.videoControls !== true
+          || pendingVideos.failed || afterVideos.failed
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } catch (error) {
