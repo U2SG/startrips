@@ -62,9 +62,11 @@ const IDENTITY_BIND_ERROR_PARAM = "identityLinkError";
  * cross-site POST on which a browser sends no `Lax` cookie; the owner took
  * this on #504 for Google's GET return as well rather than splitting the
  * cookie per provider. `None` is only honoured with `Secure`, so `secure` is
- * unconditional: browsers treat `http://127.0.0.1` as a secure context for
- * this, and every other `APP_ORIGIN` is HTTPS. The deletion carries the same
- * attributes so a browser accepts it on that cross-site response too.
+ * unconditional: every deployed `APP_ORIGIN` is HTTPS, and Chromium and
+ * Firefox treat `http://127.0.0.1` as a secure context for it in development
+ * (Safari may not, so a local Safari session can lose the bind cookie). The
+ * deletion carries the same attributes so a browser accepts it on that
+ * cross-site response too.
  */
 const IDENTITY_BIND_COOKIE_ATTRIBUTES = {
   path: IDENTITY_BIND_COOKIE_PATH,

@@ -156,8 +156,10 @@ three decisions make the shared flow receive it:
   `/api/account-identities`, ten minutes long and cleared — with the same
   attributes — on the first callback, so what `None` widens is only when the
   browser presents it, never who can read or author it. `Secure` is
-  unconditional; browsers treat `http://127.0.0.1` as a secure context for
-  it, and every other `APP_ORIGIN` is HTTPS. The Better Auth session cookie
+  unconditional: every deployed `APP_ORIGIN` is HTTPS, and Chromium and
+  Firefox treat `http://127.0.0.1` as a secure context for it in local
+  development; Safari may not, so a local Safari session can lose the bind
+  cookie. The Better Auth session cookie
   stays `Lax`, so the form_post carries no session: the callback checks the
   session the signed cookie names against the session table instead, and
   stops before the exchange when it has ended. `/link/complete`, a same-origin
