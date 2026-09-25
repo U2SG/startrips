@@ -163,6 +163,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const pageNodes = useRef<Array<HTMLDivElement | null>>([null, null, null]);
   const imageNodes = useRef<Array<HTMLImageElement | null>>([null, null, null]);
   const slotIds = useRef<Array<string | null>>([null, null, null]);
+  // The last presentable incoming page, painted in front of `current` while
+  // its handoff runs. A newer request that is not presentable yet must not
+  // take that page's slot or send the stack back to `current`.
+  const frontIncoming = useRef<{ id: string; currentId: string | null } | null>(null);
   const clipOwners = useRef<Array<string | null>>([null, null, null]);
   const interrupted = useRef(false);
   const drag = useRef<MediaDrag | null>(null);
@@ -218,8 +222,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const direction = props.direction ?? (props.incomingId === previousId ? -1
     : props.incomingId === nextId ? 1
       : props.media.findIndex((asset) => asset.id === props.incomingId) < index ? -1 : 1);
+  const held = frontIncoming.current;
+  const heldFrontId = held && props.incomingId && held.id !== props.incomingId
+    && held.currentId === props.currentId && props.media.some((asset) => asset.id === held.id) ? held.id : null;
   const neighbors = props.incomingId
-    ? [props.currentId, props.incomingId, direction > 0 ? previousId : nextId]
+    ? [props.currentId, props.incomingId, heldFrontId ?? (direction > 0 ? previousId : nextId)]
     : [props.currentId, previousId ?? at(2), nextId];
   const desired = [...new Set(neighbors
     .filter((id): id is string => id !== null))].slice(0, 3);
@@ -447,6 +454,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     // appears mid-handoff and clears itself one navigation later.
   }, [slotSignature, props.currentId, props.incomingId, movingId, revision, liveReady, layoutRevision, gesturePhase]);
   const targetReady = ready(props.incomingId);
+  // B stays the painted front until the newer target C is presentable.
+  const holdingFront = Boolean(heldFrontId && !targetReady);
+  useLayoutEffect(() => {
+    if (props.incomingId && targetReady) frontIncoming.current = { id: props.incomingId, currentId: props.currentId };
+    else if (!props.incomingId || frontIncoming.current?.currentId !== props.currentId) frontIncoming.current = null;
+  }, [props.incomingId, props.currentId, targetReady]);
   const currentReady = ready(props.currentId);
   // #489 C/V8: a presentable target is painted in front of the page it
   // replaces, so it is already the media the viewer last saw. Shared-element
@@ -496,6 +509,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     let completed = false;
     const recovering = !id || !targetReady;
     if (!active || (recovering && !interrupted.current)) { setMovingId(null); return; }
+    if (holdingFront) {
+      // Freeze the interrupted handoff where it is painted: B keeps the front
+      // and its pose, and the next run springs from it once C is presentable.
+      setMovingId(id);
+      return () => { interrupted.current = true; };
+    }
     const finish = () => {
       if (cancelled || generation !== handoffGeneration.current || !latest.current.active
         || latest.current.incomingId !== id || latest.current.currentId !== props.currentId) return;
@@ -537,7 +556,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       // that state, including another reversal during recovery.
       interrupted.current = !completed;
     };
-  }, [active, props.currentId, props.incomingId, targetReady, direction, rememberLiveFrame, recoveryRevision, layoutRevision]);
+  }, [active, props.currentId, props.incomingId, targetReady, holdingFront, direction, rememberLiveFrame, recoveryRevision, layoutRevision]);
 
   function grabPages(neighborId: string | null) {
     ++handoffGeneration.current;
@@ -1074,8 +1093,9 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           // a gesture before the semantic selection is committed.
           zIndex: gestureFrontId && id === gestureFrontId ? 5
             : gestureFrontId && current ? 2
-              : current ? (props.incomingId && targetReady ? 2 : 5)
-                : id !== null && id === props.incomingId && targetReady ? 4 : 3 - depths[slot],
+              : current ? (props.incomingId && (targetReady || holdingFront) ? 2 : 5)
+                : id !== null && id === props.incomingId && targetReady ? 4
+                  : holdingFront && id === heldFrontId ? 4 : 3 - depths[slot],
           transform: mediaStackRest(depths[slot]),
           opacity: mediaStackOpacity(depths[slot]),
           // Same-asset layer authority keeps the preview under this physical

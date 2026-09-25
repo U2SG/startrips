@@ -3302,6 +3302,20 @@ try {
       const pacedStart = await stopSamplerFrames(page);
       await startSampler(page, STAGE);
       await clickTo(2, false);
+      // Make the burst abandon a handoff that is really on screen: the second
+      // photograph already paints the stage centre while the first is still
+      // the committed page. Only then is the third one requested.
+      progress.burstSecondPainted = await page.waitForFunction(({ selector, painted, committed }) => {
+        const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const box = stage?.getBoundingClientRect();
+        if (!box) return false;
+        const hit = document.elementsFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+          .find((node) => node instanceof HTMLImageElement && !node.hidden);
+        const current = stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id");
+        return hit?.closest("[data-media-page]")?.getAttribute("data-media-page-id") === painted
+          && (current === committed || current === painted);
+      }, { selector: STAGE, painted: MANY_MEDIA[2], committed: MANY_MEDIA[1] }, { polling: "raf", timeout: 3_000 })
+        .then(() => true, () => false);
       await clickTo(3, false);
       progress.burstWarmedAhead = await waitForReadRequests(page, story, [MANY_MEDIA[6]], 2_000);
       progress.burstStateWhenWarmed = await currentAsset(page);
@@ -3313,21 +3327,22 @@ try {
       progress.paint = await stopPaintIdentityProbe(page);
       progress.steps = steps;
       progress.paced = gradeContinuity([...pacedStart, ...pacedEnd], { allowedAssets: MANY_MEDIA });
-      // A burst abandons an in-flight handoff, so the committed picture may
-      // legitimately return to the front while the newest request decodes.
-      // Everything else about the window is graded exactly as above.
+      // A burst abandons an in-flight handoff. The abandoned target keeps the
+      // front until the newest one is presentable, so the committed picture
+      // never returns: the foreground runs strictly 1 -> 2 -> 3.
       const burstGrade = gradeContinuity(burst, { allowedAssets: MANY_MEDIA });
-      progress.burst = { ...burstGrade, failed: burstGrade.sampledFrames === 0 || burstGrade.blankStage.length > 0
-        || burstGrade.staleAperture.length > 0 || burstGrade.waitingWhileOwned.length > 0
-        || burstGrade.stageWaitingWhileOwned.length > 0 || burstGrade.concurrentLiveVideos.length > 0 };
+      const burstOrder = MANY_MEDIA.slice(1, 4);
+      progress.burst = { ...burstGrade, expectedSequence: burstOrder,
+        failed: burstGrade.failed || burstGrade.foregroundReversals.length > 0
+          || JSON.stringify(burstGrade.foregroundSequence) !== JSON.stringify(burstOrder) };
       const warmMisses = steps.filter((step) => !step.readRequestedBeforeClick);
       record({ name,
-        claim: "browsing eight synthetic photographs forward, the warm window holds reads three ahead at rest and none beyond, every paced step starts on a read requested before its click, a two-click burst requests the read three beyond its latest intent before that intent lands, and no sampled frame shows a blank aperture, a waiting cover or a page painting another asset, with at most three pages",
+        claim: "browsing eight synthetic photographs forward, the warm window holds reads three ahead at rest and none beyond, every paced step starts on a read requested before its click, a two-click burst requests the read three beyond its latest intent before that intent lands and moves the foreground strictly 1 -> 2 -> 3 with no return of the committed picture, and no sampled frame shows a blank aperture, a waiting cover or a page painting another asset, with at most three pages",
         ...progress, warmMisses,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.initialWarm || progress.beyondWindowAtRest.length > 0
           || steps.some((step) => !step.requested || step.settled === false) || warmMisses.length > 0
-          || !progress.burstWarmedAhead
+          || !progress.burstWarmedAhead || !progress.burstSecondPainted
           || (progress.burstStateWhenWarmed.id === MANY_MEDIA[3] && progress.burstStateWhenWarmed.presentation === "settled")
           || !progress.burstSettled || progress.paced.failed || progress.burst.failed
           || progress.paint.frames === 0 || progress.paint.mismatches.length > 0
