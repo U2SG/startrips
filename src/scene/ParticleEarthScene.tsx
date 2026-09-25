@@ -4213,7 +4213,6 @@ export function ParticleEarthScene({
       }
       rejectedPointerIds.delete(event.pointerId);
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-      claimManualInteraction();
       renderer.domElement.setPointerCapture?.(event.pointerId);
       if (activePointers.size === 1) {
         beginRotationFrom(
@@ -4222,6 +4221,11 @@ export function ParticleEarthScene({
           event.timeStamp,
         );
       } else if (activePointers.size === 2) {
+        // A second contact is the first unambiguous direct-manipulation signal.
+        // A single pointer-down may still be a Route Point/Home/city tap, so it
+        // must not cancel semantic camera ownership before pointer-up resolves
+        // that activation target.
+        claimManualInteraction();
         gestureConsumed = true;
         dragStarted = true;
         dragPointerId = null;
@@ -4269,6 +4273,11 @@ export function ParticleEarthScene({
       dragLastTime = event.timeStamp;
       dragTravel += Math.hypot(deltaX, deltaY);
       if (!dragStarted && isGlobeDrag(dragTravel)) {
+        // Claim manual camera ownership only after this contact is actually a
+        // drag. Claiming on pointer-down raced tap activation against the focus
+        // owner and could move/cancel the projected Route Point before the same
+        // pointer reached pointer-up.
+        claimManualInteraction();
         dragStarted = true;
         gestureConsumed = true;
         host.dataset.dragging = "true";
