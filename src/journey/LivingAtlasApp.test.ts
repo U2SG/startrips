@@ -2019,7 +2019,15 @@ describe("ST-065 Home Base context ownership", () => {
   it("keeps the Home context subordinate to Story, Playback, Route Point and timeline intent", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
     expect(source).toContain("clearHomeBaseContext();\n    clearRoutePointContext();\n    timeCursor.selectJourney(journeyId)");
-    expect(source).toContain("clearHomeBaseContext();\n    const requested = requestRoutePointContextSelection(");
+    const routePointContextStart = source.indexOf("function revealRoutePointContext(");
+    const routePointContextEnd = source.indexOf("function openCrossPointReading(", routePointContextStart);
+    const routePointContextSource = source.slice(routePointContextStart, routePointContextEnd);
+    const homeContextRelease = routePointContextSource.indexOf("clearHomeBaseContext();");
+    const routePointRequest = routePointContextSource.indexOf("const requested = requestRoutePointContextSelection(");
+    expect(routePointContextStart).toBeGreaterThan(0);
+    expect(routePointContextEnd).toBeGreaterThan(routePointContextStart);
+    expect(homeContextRelease).toBeGreaterThanOrEqual(0);
+    expect(routePointRequest).toBeGreaterThan(homeContextRelease);
     expect(source).toContain("clearHomeBaseContext();\n    const journey = journeys.find((candidate) => candidate.id === journeyId)");
     expect(source).toContain("Opening Playback controls is already a newer presentation");
     expect(source).toContain("clearHomeBaseContext();\n                if (playbackPendingMode?.journeyId === activeJourney.id)");

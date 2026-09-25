@@ -883,13 +883,26 @@ try {
   // Labels have their own declutter/culling policy, so grade whichever stable
   // active-Journey label is actually visible rather than assuming it belongs to
   // the marker chosen above. Identity must survive that independent hit surface.
-  const visibleLabel = interactionPage.locator(
+  const visibleLabels = interactionPage.locator(
     `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
-  ).first();
-  await visibleLabel.waitFor({ state: "visible", timeout: 5_000 });
-  const labelPointId = await visibleLabel.getAttribute("data-route-point-id");
-  if (!labelPointId) throw new Error("visible active-Journey Route Point label has no stable id");
-  const labelClick = await clickRoutePointLabel(interactionPage, journeyId, labelPointId);
+  );
+  await visibleLabels.first().waitFor({ state: "visible", timeout: 5_000 });
+  let labelPointId = null;
+  let labelClick = null;
+  for (let index = 0; index < await visibleLabels.count(); index += 1) {
+    const candidatePointId = await visibleLabels.nth(index).getAttribute("data-route-point-id");
+    if (!candidatePointId) continue;
+    try {
+      labelClick = await clickRoutePointLabel(interactionPage, journeyId, candidatePointId);
+      labelPointId = candidatePointId;
+      break;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("no unambiguous label-owned hit pixel")) throw error;
+    }
+  }
+  if (!labelPointId || !labelClick) {
+    throw new Error("active Journey has no visible Route Point label with a real label-owned hit pixel");
+  }
   await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
   const labelActivation = await routePointActivationEvidence(interactionPage);
   record("actual label hit preserves stable Route Point identity", { labelPointId, labelClick, labelActivation },

@@ -1914,6 +1914,7 @@ export function JourneyComposer({
                           <label>
                             <span>地点名称</span>
                             <input
+                              data-route-point-label-input={point.draftId}
                               aria-label={`${displayLabel} 名称`}
                               maxLength={120}
                               placeholder="地点名称（可精确到建筑或景点）"
