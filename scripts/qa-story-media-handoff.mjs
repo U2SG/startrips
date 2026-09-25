@@ -681,13 +681,14 @@ function installStageSampler() {
   };
   // Compare light across areas rather than single star texels. Rotated and
   // shifted references are same-signal negative controls for a wrong picture.
-  window.__qaSpatialFrameEvidence = (reference, visible) => {
+  // The floor drops near-black noise; a zero floor compares all light.
+  window.__qaSpatialFrameEvidence = (reference, visible, floor = 12) => {
     const source = Array(64).fill(0), screen = Array(64).fill(0);
     for (let y = 4; y < 60; y += 1) for (let x = 4; x < 60; x += 1) {
       const at = (y * 64 + x) * 4;
       const cell = Math.floor((y - 4) / 7) * 8 + Math.floor((x - 4) / 7);
       const light = (pixels) => Math.max(0,
-        (pixels[at] + pixels[at + 1] + pixels[at + 2]) / 3 - 12);
+        (pixels[at] + pixels[at + 1] + pixels[at + 2]) / 3 - floor);
       source[cell] += light(reference);
       screen[cell] += light(visible);
     }
@@ -2328,9 +2329,10 @@ function gradePausedFrameIdentity(before, after) {
 
 /** The retained page canvas must actually be the paused frame on screen. */
 async function heldRenewalFramePixels(page, rootSelector,
-  { videoHidden = true, compareToHeldFrame = false } = {}) {
+  { videoHidden = true, heldFrame = null } = {}) {
   const screenshot = (await page.screenshot()).toString("base64");
-  return await page.evaluate(async ({ selector, png, expectedHidden, compareHeld }) => {
+  return await page.evaluate(async ({ selector, png, expectedHidden, heldMode }) => {
+    const compareHeld = heldMode !== null;
     const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
     const pageNode = stage?.querySelector('[data-media-page="current"]');
     const canvas = pageNode?.querySelector("canvas");
@@ -2368,7 +2370,15 @@ async function heldRenewalFramePixels(page, rootSelector,
       sourceContext.getImageData(0, 0, 64, 64).data);
     // A native drag can decode later cached frames before the expired Range
     // fails. In that case the last actually painted frame, rather than the
-    // picture from before the drag, is the continuity reference.
+    // picture from before the drag, is the continuity reference. "anchor"
+    // records that painted frame; "match" requires later steps to still hold
+    // the same bitmap, so Retry cannot swap in another frame unnoticed.
+    let heldAnchor = null;
+    if (heldMode === "anchor") window.__qaHeldFrameAnchor = new Uint8ClampedArray(heldPixels);
+    if (heldMode === "match") {
+      if (!window.__qaHeldFrameAnchor) return { failed: true, reason: "no anchored held frame" };
+      heldAnchor = window.__qaSpatialFrameEvidence(window.__qaHeldFrameAnchor, heldPixels);
+    }
     const screenReference = new Uint8ClampedArray(compareHeld ? heldPixels : reference.pixels);
     const screenPixels = visibleContext.getImageData(0, 0, 64, 64).data;
     const notice = document.querySelector(`${selector} .journey-story__media-state.is-over-media[role="alert"]`);
@@ -2385,13 +2395,18 @@ async function heldRenewalFramePixels(page, rootSelector,
         }
       }
     }
-    const screen = window.__qaSpatialFrameEvidence(screenReference, screenPixels);
+    // Floored light from a canvas bitmap (at most 960 px) is not comparable
+    // with floored light from a screenshot: the same paused frame measures
+    // about 2.4x brighter sampled from the held canvas than from its video.
+    // Against a held bitmap, compare all light so sampling cannot hide or
+    // invent the picture; the video reference keeps the floored comparison.
+    const screen = window.__qaSpatialFrameEvidence(screenReference, screenPixels, compareHeld ? 0 : 12);
     const hit = document.elementFromPoint(left + width / 2, top + height * 0.7);
     const wrong = (quality) => quality.aligned < 0.8 || quality.margin < 0.08
       || quality.visibleCells < Math.ceil(quality.sourceCells * 0.6)
       || quality.energyRatio < 0.5 || quality.energyRatio > 2;
     return {
-      frame, screen, heldSignal, maskedRows, currentId: pageNode?.getAttribute("data-media-page-id") ?? null,
+      frame, screen, heldSignal, heldAnchor, maskedRows, currentId: pageNode?.getAttribute("data-media-page-id") ?? null,
       currentReady: pageNode?.getAttribute("data-media-page-ready") ?? null,
       videoHidden: video.hidden, videoSrc: video.getAttribute("src"),
       hitIsSource: hit === source, hitTag: hit instanceof Element ? hit.tagName : null,
@@ -2399,12 +2414,13 @@ async function heldRenewalFramePixels(page, rootSelector,
       // the frame the viewer actually sees. Keep the screenshot and hit tests
       // as the acceptance signal for a held renewal.
       failed: wrong(screen) || (compareHeld && (heldSignal.sourceCells < 3 || heldSignal.sourceEnergy < 500))
+        || (heldAnchor !== null && wrong(heldAnchor))
         || maskedRows > 24 || hit !== source
         || pageNode?.getAttribute("data-media-page-ready") !== (expectedHidden ? "false" : "true")
         || video.hidden !== expectedHidden,
     };
   }, { selector: rootSelector, png: screenshot,
-    expectedHidden: videoHidden, compareHeld: compareToHeldFrame });
+    expectedHidden: videoHidden, heldMode: heldFrame });
 }
 
 /** Screenshot pixels over the active clone must match its decoded canvas. */
@@ -4446,17 +4462,19 @@ try {
       const notice = page.locator(`${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"]`);
       await notice.waitFor({ state: "visible", timeout: 8_000 });
       progress.errorFrame = await heldRenewalFramePixels(page, FULLSCREEN,
-        { compareToHeldFrame: true });
+        { heldFrame: "anchor" });
       progress.noWaiting = await page.locator(`${FULLSCREEN} .starlight-media-state.is-waiting`).count() === 0;
       progress.retryClick = await clickHandoffButton(page,
         `${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"] button`);
       progress.retryRead = await waitForFixture(session.renewal.readStarted, 5_000,
         "expired range retry signed read");
-      progress.retryReadFrame = await heldRenewalFramePixels(page, FULLSCREEN);
+      progress.retryReadFrame = await heldRenewalFramePixels(page, FULLSCREEN,
+        { heldFrame: "match" });
       session.renewal.releaseRead();
       progress.retryBytes = await waitForFixture(session.renewal.byteStarted, 5_000,
         "expired range retry video bytes");
-      progress.retryByteFrame = await heldRenewalFramePixels(page, FULLSCREEN);
+      progress.retryByteFrame = await heldRenewalFramePixels(page, FULLSCREEN,
+        { heldFrame: "match" });
       session.renewal.releaseBytes();
       progress.after = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
       await notice.waitFor({ state: "hidden", timeout: 4_000 });
