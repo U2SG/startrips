@@ -339,7 +339,7 @@ async function userRow(userId: string) {
   return row;
 }
 
-/** The ST-067 ownership row `accountIdentityUsable` reads, for one Apple subject. */
+/** The ST-067 ownership row `accountIdentityLoginUsable` reads, for one Apple subject. */
 async function ownershipFor(subject: string) {
   const [row] = await db
     .select({

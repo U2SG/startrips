@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  accountIdentityUsable,
+  accountIdentityLoginUsable,
+  accountIdentityRecoveryChannel,
   buildIdentityMethods,
-  hasUsableLoginAfterRemoval,
+  hasProtectedAccessAfterRemoval,
   redactIdentityEmail,
   safeReturnPath,
   validProviderId,
@@ -26,19 +27,82 @@ const ownerships: AccountIdentityOwnership[] = [{
 
 describe("account identity policy", () => {
   it("counts only actually usable password/provider methods", () => {
-    expect(accountIdentityUsable(accounts[0]!, undefined, true, new Set())).toBe(true);
-    expect(accountIdentityUsable({ ...accounts[0]!, password: null }, undefined, true, new Set())).toBe(false);
-    expect(accountIdentityUsable(accounts[0]!, undefined, false, new Set())).toBe(false);
-    expect(accountIdentityUsable(accounts[1]!, ownerships[0], true, new Set(["google"]))).toBe(true);
-    expect(accountIdentityUsable(accounts[1]!, ownerships[0], true, new Set())).toBe(false);
-    expect(accountIdentityUsable(accounts[1]!, { ...ownerships[0]!, providerEmailVerified: false }, true, new Set(["google"]))).toBe(false);
-    expect(accountIdentityUsable(accounts[1]!, { ...ownerships[0]!, providerEmail: null }, true, new Set(["google"]))).toBe(false);
+    expect(accountIdentityLoginUsable(accounts[0]!, undefined, true, new Set())).toBe(true);
+    expect(accountIdentityLoginUsable({ ...accounts[0]!, password: null }, undefined, true, new Set())).toBe(false);
+    expect(accountIdentityLoginUsable(accounts[0]!, undefined, false, new Set())).toBe(false);
+    expect(accountIdentityLoginUsable(accounts[1]!, ownerships[0], true, new Set(["google"]))).toBe(true);
+    expect(accountIdentityLoginUsable(accounts[1]!, ownerships[0], true, new Set())).toBe(false);
+    expect(accountIdentityLoginUsable(accounts[1]!, { ...ownerships[0]!, providerEmailVerified: false }, true, new Set(["google"]))).toBe(false);
+    expect(accountIdentityLoginUsable(accounts[1]!, { ...ownerships[0]!, providerEmail: null }, true, new Set(["google"]))).toBe(false);
   });
 
   it("protects the last usable method rather than the last raw account row", () => {
     const incompleteProvider = [{ ...ownerships[0]!, providerEmailVerified: false }];
-    expect(hasUsableLoginAfterRemoval("credential", accounts, incompleteProvider, true, new Set(["google"]))).toBe(false);
-    expect(hasUsableLoginAfterRemoval("credential", accounts, ownerships, true, new Set(["google"]))).toBe(true);
+    expect(hasProtectedAccessAfterRemoval("credential", accounts, incompleteProvider, true, new Set(["google"]))).toBe(false);
+    expect(hasProtectedAccessAfterRemoval("credential", accounts, ownerships, true, new Set(["google"]))).toBe(true);
+  });
+
+  describe("#486 login usability versus recovery reachability", () => {
+    // A bind-time claim years old, on a relay-shaped address whose delivery
+    // may have been revoked since -- nothing in the row says it still arrives.
+    const staleProvider: AccountIdentityOwnership = {
+      accountRecordId: "apple",
+      providerId: "apple",
+      providerSubject: "apple-subject",
+      providerEmail: "relay-user@privaterelay.appleid.com",
+      providerEmailVerified: true,
+      verifiedAt: new Date("2021-01-01T00:00:00Z"),
+    };
+    const appleAccount: AccountIdentityAccount = {
+      id: "apple",
+      providerId: "apple",
+      accountId: "apple-subject",
+      password: null,
+    };
+    const providers = new Set(["apple"]);
+
+    it("keeps a provider login usable however old its email verification is", () => {
+      expect(accountIdentityLoginUsable(appleAccount, staleProvider, false, providers)).toBe(true);
+    });
+
+    it("never treats a bind-time provider email claim as a reachable recovery channel", () => {
+      expect(accountIdentityRecoveryChannel(appleAccount, true)).toBe(false);
+      expect(accountIdentityRecoveryChannel(accounts[1]!, true)).toBe(false);
+      // The two dimensions diverge on the same row.
+      expect(accountIdentityLoginUsable(appleAccount, staleProvider, true, providers))
+        .not.toBe(accountIdentityRecoveryChannel(appleAccount, true));
+    });
+
+    it("reads the Account's own verified address as the credential recovery channel", () => {
+      expect(accountIdentityRecoveryChannel(accounts[0]!, true)).toBe(true);
+      expect(accountIdentityRecoveryChannel(accounts[0]!, false)).toBe(false);
+    });
+
+    describe("unlink guard", () => {
+      const providerOnly = [appleAccount, { ...appleAccount, id: "google", providerId: "google", accountId: "google-subject" }];
+      const both = [staleProvider, { ...staleProvider, accountRecordId: "google", providerId: "google", providerSubject: "google-subject" }];
+      const configured = new Set(["apple", "google"]);
+
+      it("refuses an unlink whose only remaining safety net is a stale provider email", () => {
+        // Apple still signs the person in, so the login dimension alone would
+        // allow it; nothing proves its relay address still receives mail.
+        expect(hasProtectedAccessAfterRemoval("google", providerOnly, both, false, configured)).toBe(false);
+        expect(buildIdentityMethods(providerOnly, both, "owner@example.test", false, configured)
+          .map((method) => [method.id, method.usable, method.canUnlink]))
+          .toEqual([["apple", true, false], ["google", true, false]]);
+      });
+
+      it("allows it while the Account's own verified address remains the recovery channel", () => {
+        expect(hasProtectedAccessAfterRemoval("google", providerOnly, both, true, configured)).toBe(true);
+        expect(buildIdentityMethods(providerOnly, both, "owner@example.test", true, configured)
+          .map((method) => [method.id, method.usable, method.canUnlink]))
+          .toEqual([["apple", true, true], ["google", true, true]]);
+      });
+
+      it("still requires a remaining login however reachable the Account address is", () => {
+        expect(hasProtectedAccessAfterRemoval("google", providerOnly, both, true, new Set(["google"]))).toBe(false);
+      });
+    });
   });
 
   it("returns redacted method metadata only and derives canUnlink from usability", () => {

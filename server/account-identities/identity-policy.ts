@@ -64,7 +64,17 @@ export function redactIdentityEmail(email: string | null | undefined): string | 
   return `${visible}${local.length > visible.length ? "…" : ""}@${domain}`;
 }
 
-export function accountIdentityUsable(
+/**
+ * #486 (option B, 2026-09-25): whether this identity can still sign the person
+ * in. A provider identity qualifies while its bound subject matches, the
+ * provider is configured, and the provider's last authorization carried a
+ * verified email. There is deliberately no age bound on `verifiedAt`: an old
+ * verification does not stop the provider from authenticating the subject.
+ *
+ * This is NOT a statement that the provider email is still reachable; ask
+ * `accountIdentityRecoveryChannel` for that.
+ */
+export function accountIdentityLoginUsable(
   account: AccountIdentityAccount,
   ownership: AccountIdentityOwnership | undefined,
   userEmailVerified: boolean,
@@ -84,6 +94,42 @@ export function accountIdentityUsable(
   );
 }
 
+/**
+ * #486 (option B, 2026-09-25): whether this identity is a currently reachable
+ * recovery channel, i.e. somewhere Startrips can send mail and expect it to
+ * arrive.
+ *
+ * A provider's `providerEmail` / `providerEmailVerified` / `verifiedAt` is the
+ * claim the provider made when it last authorized the subject. Nothing tells
+ * Startrips when that address stops resolving afterwards (a revoked relay, a
+ * closed mailbox), and the row holds no later delivery evidence, so a provider
+ * identity is never a recovery channel on that claim alone -- even while it
+ * remains a valid login. The credential identity's channel is the Account's
+ * own verified address, which the password send-link/reset flow already mails.
+ */
+export function accountIdentityRecoveryChannel(
+  account: AccountIdentityAccount,
+  userEmailVerified: boolean,
+): boolean {
+  return account.providerId === CREDENTIAL_PROVIDER_ID && userEmailVerified;
+}
+
+/**
+ * #486 (option B): whether the Account keeps a currently reachable recovery
+ * channel. That channel is the Account's own verified address: the password
+ * reset and #445 enrollment links mail it whether or not a credential row
+ * exists. Provider identities are consulted only through
+ * `accountIdentityRecoveryChannel`, which never accepts a bind-time provider
+ * email claim, so a stale or revoked provider address cannot stand in for it.
+ */
+export function accountRecoveryChannelReachable(
+  accounts: readonly AccountIdentityAccount[],
+  userEmailVerified: boolean,
+): boolean {
+  return userEmailVerified
+    || accounts.some((account) => accountIdentityRecoveryChannel(account, userEmailVerified));
+}
+
 export function buildIdentityMethods(
   accounts: readonly AccountIdentityAccount[],
   ownerships: readonly AccountIdentityOwnership[],
@@ -92,14 +138,8 @@ export function buildIdentityMethods(
   usableProviderIds: ReadonlySet<string>,
 ): AccountIdentityMethod[] {
   const ownershipByAccount = new Map(ownerships.map((entry) => [entry.accountRecordId, entry]));
-  const usableByAccount = new Map(accounts.map((account) => [
-    account.id,
-    accountIdentityUsable(account, ownershipByAccount.get(account.id), userEmailVerified, usableProviderIds),
-  ]));
-  const usableCount = [...usableByAccount.values()].filter(Boolean).length;
   return accounts.map((account) => {
     const ownership = ownershipByAccount.get(account.id);
-    const usable = usableByAccount.get(account.id) === true;
     const password = account.providerId === CREDENTIAL_PROVIDER_ID;
     return {
       id: account.id,
@@ -107,17 +147,30 @@ export function buildIdentityMethods(
       providerId: account.providerId,
       emailHint: redactIdentityEmail(password ? userEmail : ownership?.providerEmail),
       verified: password ? userEmailVerified : Boolean(ownership?.providerEmailVerified && ownership?.verifiedAt),
-      usable,
+      usable: accountIdentityLoginUsable(account, ownership, userEmailVerified, usableProviderIds),
       // ST-067 has one fresh-authorization mechanism today: password
       // re-verification. Keep that credential identity until a provider-based
       // re-verification contract exists; otherwise a provider-only account
       // could still sign in but could never manage identities again.
-      canUnlink: !password && usableCount - (usable ? 1 : 0) >= 1,
+      canUnlink: !password && hasProtectedAccessAfterRemoval(
+        account.id,
+        accounts,
+        ownerships,
+        userEmailVerified,
+        usableProviderIds,
+      ),
     };
   });
 }
 
-export function hasUsableLoginAfterRemoval(
+/**
+ * The #345 unlink guard, on both #486 dimensions. After the removal the
+ * Account must still hold a login-usable identity AND a reachable recovery
+ * channel. A provider left behind counts toward the login because it can
+ * still authenticate; it never counts toward recovery, because its bind-time
+ * email is no evidence that mail still arrives there.
+ */
+export function hasProtectedAccessAfterRemoval(
   targetAccountId: string,
   accounts: readonly AccountIdentityAccount[],
   ownerships: readonly AccountIdentityOwnership[],
@@ -125,10 +178,11 @@ export function hasUsableLoginAfterRemoval(
   usableProviderIds: ReadonlySet<string>,
 ): boolean {
   const ownershipByAccount = new Map(ownerships.map((entry) => [entry.accountRecordId, entry]));
-  return accounts.some((account) => account.id !== targetAccountId && accountIdentityUsable(
+  const remaining = accounts.filter((account) => account.id !== targetAccountId);
+  return remaining.some((account) => accountIdentityLoginUsable(
     account,
     ownershipByAccount.get(account.id),
     userEmailVerified,
     usableProviderIds,
-  ));
+  )) && accountRecoveryChannelReachable(remaining, userEmailVerified);
 }
