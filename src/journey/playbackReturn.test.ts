@@ -182,6 +182,21 @@ describe("playback return handoff", () => {
     });
   });
 
+  it("returns a manual exit to a later committed Route Point instead of the entry media", () => {
+    expect(resolvePlaybackReturn({
+      entry,
+      committedPosition: { journeyId: journey.id, routePointId: "point-a", assetId: null },
+      reason: "exited",
+      currentIntentRevision: 7,
+      journeys: [journey],
+    })).toMatchObject({
+      surface: "story",
+      routePointId: "point-a",
+      assetId: null,
+      fallbackReason: "none",
+    });
+  });
+
   it("keeps a completed run that presented no media at Atlas with the same Journey selected", () => {
     expect(resolvePlaybackReturn({
       entry,

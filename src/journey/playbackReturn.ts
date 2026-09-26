@@ -24,7 +24,7 @@ export type PlaybackEntry = PlaybackLogicalPosition & {
 export type PlaybackReturnResolution =
   | {
       surface: "story";
-      reason: PlaybackReturnReason;
+      reason: "exited";
       fallbackReason: Exclude<PlaybackReturnFallbackReason, "journey-unavailable">;
       journeyId: string;
       routePointId: string | null;
@@ -94,8 +94,6 @@ export function resolvePlaybackReturn({
     };
   }
 
-  // Natural completion returns to the whole Journey. A manual exit may return
-  // to the last media this Playback session actually presented.
   if (reason === "completed") {
     return {
       surface: "atlas",
@@ -108,9 +106,7 @@ export function resolvePlaybackReturn({
     };
   }
 
-  const observedMedia = committedPosition?.journeyId === journey.id && committedPosition.assetId !== null
-    ? committedPosition : null;
-  const target = observedMedia ?? specificCommittedPosition(entry, committedPosition);
+  const target = specificCommittedPosition(entry, committedPosition);
   if (target.assetId !== null) {
     const asset = journey.media.find((candidate) => candidate.id === target.assetId) ?? null;
     if (asset) {
@@ -121,7 +117,7 @@ export function resolvePlaybackReturn({
       ) {
         return {
           surface: "story",
-          reason,
+          reason: "exited",
           fallbackReason: "route-point-unavailable",
           journeyId: journey.id,
           routePointId: null,
@@ -131,7 +127,7 @@ export function resolvePlaybackReturn({
       }
       return {
         surface: "story",
-        reason,
+        reason: "exited",
         fallbackReason: "none",
         journeyId: journey.id,
         routePointId: currentRoutePointId,
@@ -146,7 +142,7 @@ export function resolvePlaybackReturn({
     ) {
       return {
         surface: "story",
-        reason,
+        reason: "exited",
         fallbackReason: "asset-unavailable",
         journeyId: journey.id,
         routePointId: target.routePointId,
@@ -160,7 +156,7 @@ export function resolvePlaybackReturn({
     if (journey.routePoints.some((point) => point.id === target.routePointId)) {
       return {
         surface: "story",
-        reason,
+        reason: "exited",
         fallbackReason: target.assetId === null ? "none" : "asset-unavailable",
         journeyId: journey.id,
         routePointId: target.routePointId,
@@ -170,7 +166,7 @@ export function resolvePlaybackReturn({
     }
     return {
       surface: "story",
-      reason,
+      reason: "exited",
       fallbackReason: "route-point-unavailable",
       journeyId: journey.id,
       routePointId: null,
@@ -181,7 +177,7 @@ export function resolvePlaybackReturn({
 
   return {
     surface: "story",
-    reason,
+    reason: "exited",
     fallbackReason: target.assetId === null ? "none" : "asset-unavailable",
     journeyId: journey.id,
     routePointId: null,

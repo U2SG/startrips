@@ -683,9 +683,9 @@ try {
     } finally { await page.close(); }
   }
 
-  // #245: manual exit returns to the last presented media, while natural
-  // completion returns to the whole Journey even after presenting media.
-  for (const ending of ["exit-after-outro-and-intro", "completed"]) {
+  // #245: manual exit returns to the committed media, while natural completion
+  // returns to the whole Journey even after presenting media.
+  for (const ending of ["manual-exit-on-media", "completed"]) {
     const { page, errors } = await open();
     try {
       await startPlayback(page);
@@ -702,16 +702,6 @@ try {
         await page.locator('.journey-playback__controls button[aria-label="暂停播放"]')
           .evaluate((button) => button.click());
         await page.locator(".journey-playback.is-paused").waitFor();
-        const scrub = (toEnd) => page.locator('.journey-playback__progress input[type="range"]')
-          .evaluate((input, end) => {
-            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")
-              .set.call(input, end ? input.max : input.min);
-            input.dispatchEvent(new Event("input", { bubbles: true }));
-          }, toEnd);
-        await scrub(true);
-        await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "outro");
-        await scrub(false);
-        await page.waitForFunction(() => document.querySelector(".journey-playback")?.dataset.playbackPhase === "intro");
       }
       await page.keyboard.press("Escape");
       await page.locator(".journey-playback").waitFor({ state: "detached" });
