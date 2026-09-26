@@ -1559,15 +1559,15 @@ try {
     noteId: projectionPointIds.note,
     mediaId: projectionPointIds.media,
   });
-  record("Detail keeps all route legs, hides pure detour hit and hides ordinary non-stop hits", {
+  record("Detail keeps all route legs without giving hidden non-stop records their own hit identity", {
     projectionDetailState,
   },
     projectionDetailState.owner === "detail"
     && projectionDetailState.pointCount === "6"
     && projectionDetailState.featureCount === "11"
-    && projectionDetailState.hiddenHit === null
-    && projectionDetailState.noteHit === null
-    && projectionDetailState.mediaHit === null);
+    && projectionDetailState.hiddenHit?.routePointId !== projectionPointIds.detour
+    && projectionDetailState.noteHit?.routePointId !== projectionPointIds.note
+    && projectionDetailState.mediaHit?.routePointId !== projectionPointIds.media);
   let projectedDetailB = await detailedExistingRoutePointTarget(
     projectionDetailPage, projectionJourney, projectionPointIds.b,
   );

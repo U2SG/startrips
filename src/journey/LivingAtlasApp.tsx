@@ -1153,6 +1153,12 @@ export function LivingAtlasApp({
         && rect.height > 0;
     };
     const restoreCurrentTrigger = () => {
+      // The close button can dispatch while the context is still mounted and
+      // the scene is still publishing the selected-label layout. Do not let an
+      // early scene mutation consume the restore attempt: focusing that
+      // pre-close label can be undone when arbitration applies the ordinary
+      // layout and replaces the SVG node.
+      if (document.querySelector("[data-route-point-context]")) return false;
       const replacement = returnFocus.journeyId && returnFocus.routePointId
         ? [...document.querySelectorAll<SVGGElement>(
           ".particle-earth-route__label[data-journey-route][data-route-point-id]",
