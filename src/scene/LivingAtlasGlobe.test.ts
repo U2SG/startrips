@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { LivingAtlasGlobe, LivingAtlasGlobeControls, PersistentEarthProvider, resolveLivingAtlasHomeBaseLayer } from "./LivingAtlasGlobe";
+import { LivingAtlasGlobe, LivingAtlasGlobeControls, PersistentEarthProvider, particleAnchorFramesEqual, resolveLivingAtlasHomeBaseLayer } from "./LivingAtlasGlobe";
 import { getRouteFocusPhase } from "./ParticleEarthScene";
 import type { HomeBasePeriod } from "../journey/homeBase";
 import { resolveHomeBasePresence } from "../journey/homeBasePresence";
@@ -54,6 +54,37 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(globe).toContain('data-particle-earth-backend={particleEarthBackend}');
     expect(globe).toContain('onBackendChange={setParticleEarthBackend}');
     expect(globe).toContain('useState<ParticleEarthBackend | "pending">("pending")');
+  });
+
+  it("does not re-arm the Dive scheduler for an unchanged published particle frame", () => {
+    const frame = {
+      anchor: { lat: 31.2, lon: 121.5 },
+      screen: { x: 720, y: 512 },
+      pxPerDegreeLat: 10.4,
+      zoom: 4.2,
+    };
+    expect(particleAnchorFramesEqual(frame, {
+      anchor: { ...frame.anchor },
+      screen: { ...frame.screen },
+      pxPerDegreeLat: frame.pxPerDegreeLat,
+      zoom: frame.zoom,
+    })).toBe(true);
+    expect(particleAnchorFramesEqual(frame, {
+      ...frame,
+      screen: { ...frame.screen, x: frame.screen.x + 1 },
+    })).toBe(false);
+    expect(particleAnchorFramesEqual(frame, null)).toBe(false);
+
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const start = globe.indexOf("const handleParticleAnchorFrame =");
+    const end = globe.indexOf("const handleHomeBasePresenceFrame =", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const handler = globe.slice(start, end);
+    const dedup = handler.indexOf("if (particleAnchorFramesEqual(previousFrame, frame)) return;");
+    const wake = handler.indexOf("scheduleDiveTick();");
+    expect(dedup).toBeGreaterThanOrEqual(0);
+    expect(wake).toBeGreaterThan(dedup);
   });
 
   it("mounts detail non-interactive and only enables particle hold after detail owns input", () => {

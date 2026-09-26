@@ -305,19 +305,13 @@ async function measureIdleDiveScheduler(page, expectedStage) {
         && layer?.dataset.earthDiveSpatialReveal === "off";
     }
     const scene = document.querySelector(".particle-earth-scene");
-    const frame = scene?.dataset.sceneFrameRevision;
-    const inputs = JSON.stringify(probe.inputs);
-    if (frame && frame !== warmup.frame) {
-      // The particle publisher filters sub-pixel interpolation. Wait for the
-      // actual Dive inputs to settle, not for unrelated raw DOM digits to stop.
-      // Scheduler activity never resets this input-stability counter.
-      warmup.stableFrames = inputs === warmup.inputs ? warmup.stableFrames + 1 : 0;
-      warmup.frame = frame;
-      warmup.inputs = inputs;
-    }
+    // Focus settlement is the published semantic boundary. Do not require
+    // interpolating screen-space floats to become byte-identical first: the
+    // durable check below watches this scheduler's tickCount across twelve
+    // real animation frames and still fails if any new input wakes it.
     return globe.dataset.earthDiveOwner === "particle"
       && Number(scene?.dataset.focusSettleCount ?? 0) > 0
-      && warmup.stableFrames >= 12 && !probe.pending;
+      && !probe.pending;
   }, { stage: expectedStage, frame: null, inputs: null, stableFrames: 0 }, { timeout: 10_000 }).catch(async (error) => {
     throw new Error(`idle ${expectedStage} inputs never settled: ${JSON.stringify({
       before: warmupInputsBefore, after: await captureInputs(),

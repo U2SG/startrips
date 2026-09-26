@@ -73,6 +73,20 @@ function readDetailedEarthScreenFrame(layer: HTMLElement | null): EarthDiveScree
   return { screen: { x, y }, pxPerDegreeLat: scale };
 }
 
+export function particleAnchorFramesEqual(
+  previous: ParticleAnchorFrame | null,
+  next: ParticleAnchorFrame | null,
+) {
+  if (previous === next) return true;
+  if (!previous || !next) return false;
+  return previous.anchor.lat === next.anchor.lat
+    && previous.anchor.lon === next.anchor.lon
+    && previous.screen.x === next.screen.x
+    && previous.screen.y === next.screen.y
+    && previous.pxPerDegreeLat === next.pxPerDegreeLat
+    && previous.zoom === next.zoom;
+}
+
 type LivingAtlasGlobeControlsProps = {
   diveStage: EarthDiveStage;
   detailLanguage: DetailedEarthLanguage;
@@ -723,12 +737,17 @@ export function LivingAtlasGlobe({
   }, [onSemanticZoomChange, scheduleDiveTick, syncDetailSpatialReveal]);
 
   const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame | null) => {
+    const previousFrame = particleFrameRef.current;
     particleFrameRef.current = frame;
     // Once Detailed Earth owns the camera, Particle Earth is no longer a
     // handoff input. Keep the last frame for a later release, but do not let
     // background particle frames wake the otherwise-idle Dive scheduler or
     // push stale particle geometry back into the detail renderer.
     if (diveRef.current.owner === "detail") return;
+    // ParticleEarthScene already bounds publication to meaningful screen/scale
+    // changes. A duplicate publication carries no new resolver input, so it
+    // must not re-arm the otherwise-idle Dive rAF.
+    if (particleAnchorFramesEqual(previousFrame, frame)) return;
     scheduleDiveTick();
     if (frame && diveRef.current.owner === "particle") {
       // Keep the hidden/blending detail camera on the exact frame that was
