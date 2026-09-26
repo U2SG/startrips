@@ -293,8 +293,12 @@ button {
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 0.85;
-  opacity: 0.58;
+  /* Annotation tethers must not read as another geographic route segment.
+     The small dotted hairline stays visible enough to bind text to its Route
+     Point while remaining optically distinct from the solid route core. */
+  stroke-width: 0.7;
+  stroke-dasharray: 1 2.4;
+  opacity: 0.42;
   vector-effect: non-scaling-stroke;
 }
 

@@ -3538,13 +3538,20 @@ export function ParticleEarthScene({
             }
             if (!placement) return;
 
+            // Keep the annotation tether visually separate from the geographic
+            // route. A five-pixel gap outside the Route Point prevents the
+            // label leader from looking like a branch of the solid route while
+            // its direction still makes the point-to-label association clear.
+            const leaderGapAxis = 5 / Math.SQRT2;
+            const leaderStartX = x + placement.horizontal * leaderGapAxis;
+            const leaderStartY = y + placement.vertical * leaderGapAxis;
             const elbowX = x + placement.horizontal * 10;
             const elbowY = y + placement.vertical * 10;
             const leaderEndX = placement.textX - placement.horizontal * 5;
             const leaderEndY = placement.textY - 4;
             label.leader.setAttribute(
               "d",
-              `M${x.toFixed(1)} ${y.toFixed(1)}`
+              `M${leaderStartX.toFixed(1)} ${leaderStartY.toFixed(1)}`
                 + `L${elbowX.toFixed(1)} ${elbowY.toFixed(1)}`
                 + `L${leaderEndX.toFixed(1)} ${leaderEndY.toFixed(1)}`,
             );
