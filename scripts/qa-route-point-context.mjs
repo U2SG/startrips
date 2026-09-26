@@ -1002,11 +1002,26 @@ try {
   record("Escape closes context without exiting globe focus", { focusModeBeforeEscape, focusModeAfterEscape },
     focusModeBeforeEscape === focusModeAfterEscape);
 
-  const labelTrigger = labelPage.locator(
-    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id="${labelPointId}"]`,
-  );
-  await labelTrigger.focus();
-  await labelTrigger.press("Enter");
+  // Closing a selected Route Point is allowed to re-run label arbitration. A
+  // label that owned the prior pointer hit can therefore become decluttered and
+  // no longer be a legal keyboard trigger. Grade keyboard activation from the
+  // current visible label surface instead of programmatically pressing a stale,
+  // hidden SVG node; the assertion still requires one real focusable label to
+  // open context and receive focus back after close.
+  const keyboardLabel = labelPage.locator(
+    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+  ).first();
+  await keyboardLabel.waitFor({ state: "visible", timeout: 5_000 });
+  const keyboardPointId = await keyboardLabel.getAttribute("data-route-point-id");
+  if (!keyboardPointId) throw new Error("visible keyboard Route Point label has no stable id");
+  await keyboardLabel.focus();
+  const focusedKeyboardPointId = await labelPage.evaluate(() => (
+    document.activeElement?.getAttribute("data-route-point-id") ?? null
+  ));
+  if (focusedKeyboardPointId !== keyboardPointId) {
+    throw new Error(`visible Route Point label did not receive keyboard focus: ${keyboardPointId}`);
+  }
+  await keyboardLabel.press("Enter");
   await labelContext.waitFor({ state: "visible", timeout: 5_000 });
   const keyboardActivation = await routePointActivationEvidence(labelPage);
   const labelCloseButton = labelContext.locator("[data-route-point-context-close]");
@@ -1016,10 +1031,12 @@ try {
     tag: document.activeElement?.tagName.toLowerCase() ?? null,
     routePointId: document.activeElement?.getAttribute("data-route-point-id") ?? null,
   }));
-  record("keyboard label opens context and close restores the same legal trigger", { keyboardActivation, focusReturn },
+  record("keyboard label opens context and close restores the same legal trigger", {
+    keyboardPointId, keyboardActivation, focusReturn,
+  },
     keyboardActivation.source === "keyboard-label"
-    && keyboardActivation.routePointId === labelPointId
-    && focusReturn.routePointId === labelPointId);
+    && keyboardActivation.routePointId === keyboardPointId
+    && focusReturn.routePointId === keyboardPointId);
   record("real label interaction page errors", { pageErrors: labelRun.pageErrors }, labelRun.pageErrors.length === 0);
   await labelPage.close();
 
