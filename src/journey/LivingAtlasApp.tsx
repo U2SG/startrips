@@ -2081,10 +2081,19 @@ export function LivingAtlasApp({
   // Route Point identity stay untouched, while a stable real Route Point acts
   // as each summary's overview anchor.
   const staySummariesByJourney = useMemo(() => new Map(
-    journeys.map((journey) => (
-      [journey.id, deriveJourneyStaySummaries(journey)] as const
-    )),
-  ), [journeys]);
+    journeys.map((journey) => {
+      const includedRoutePointIds = routePointContextTemporalReveal
+        ? new Set(journey.routePoints.flatMap((point, routePointIndex) => (
+            routePointContextTemporallyVisible(
+              journey.id,
+              routePointIndex,
+              routePointContextTemporalReveal,
+            ) ? [point.id] : []
+          )))
+        : undefined;
+      return [journey.id, deriveJourneyStaySummaries(journey, { includedRoutePointIds })] as const;
+    }),
+  ), [journeys, routePointContextTemporalReveal]);
   const stayOverviewLabels = useMemo(() => {
     const labels = new Map<string, string>();
     for (const summaries of staySummariesByJourney.values()) {
@@ -2168,9 +2177,9 @@ export function LivingAtlasApp({
         }
       : null;
   // #514: ordinary Atlas overview shows one real Route Point anchor per
-  // derived stay. The full route remains in `routes`; a geometry-only detour
-  // stays line geometry, while an authored non-stop with a note or owned media
-  // remains a real readable record instead of disappearing into that geometry.
+  // derived stay. The full route remains in `routes`; non-stop records retain
+  // their canonical content and Playback identity without becoming ordinary
+  // overview destinations.
   const selectedStaySummary = routePointContextSelection.context
     ? staySummariesByJourney.get(routePointContextSelection.context.journeyId)
       ?.find((summary) => summary.routePointIds.includes(routePointContextSelection.context!.routePointId)) ?? null
@@ -2185,17 +2194,6 @@ export function LivingAtlasApp({
       journeyOverviewRoutePointIds(journey, summaries).forEach((routePointId) => {
         visible.add(routePointId);
       });
-      const mediaRoutePointIds = new Set(
-        journey.media
-          .map((asset) => asset.routePointId)
-          .filter((routePointId): routePointId is string => routePointId !== null),
-      );
-      for (const point of journey.routePoints) {
-        if (point.isStop || point.overviewVisibility === "detail") continue;
-        if (point.note?.trim() || mediaRoutePointIds.has(point.id)) {
-          visible.add(point.id);
-        }
-      }
     }
     // Composer and draft Playback still expose every editable point. Their
     // route geometry and point identity are independent of saved Journey data.

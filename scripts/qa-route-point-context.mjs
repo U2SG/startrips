@@ -1240,7 +1240,7 @@ try {
   });
   const projectionPage = projectionRun.page;
   await projectionPage.waitForFunction(() => (
-    document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5"
+    document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "3"
   ));
   const projectionBefore = await projectionPage.evaluate((ids) => {
     const route = document.querySelector(`.particle-earth-route[data-journey-route="${ids.journey}"]`);
@@ -1253,16 +1253,20 @@ try {
       raycastPointCount: document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count"),
     };
   }, { ...projectionPointIds, journey: journeyId });
-  record("A -> B -> A keeps every route leg while pure detour has no Particle marker, label or raycast slot", {
+  record("overview stays sparse while canonical route and hidden non-stop content remain intact", {
     projectionBefore,
   },
     projectionBefore.legCount === projectionRoutePoints.length - 1
-    && projectionBefore.raycastPointCount === "5"
+    && projectionBefore.raycastPointCount === "3"
     && projectionBefore.markerIds.join(",") === [
-      projectionPointIds.firstA, projectionPointIds.b, projectionPointIds.note,
-      projectionPointIds.media, projectionPointIds.returnA,
+      projectionPointIds.firstA, projectionPointIds.b, projectionPointIds.returnA,
     ].join(",")
-    && !projectionBefore.labelIds.includes(projectionPointIds.detour));
+    && !projectionBefore.markerIds.includes(projectionPointIds.detour)
+    && !projectionBefore.markerIds.includes(projectionPointIds.note)
+    && !projectionBefore.markerIds.includes(projectionPointIds.media)
+    && !projectionBefore.labelIds.includes(projectionPointIds.detour)
+    && !projectionBefore.labelIds.includes(projectionPointIds.note)
+    && !projectionBefore.labelIds.includes(projectionPointIds.media));
 
   const projectedBClick = await clickRoutePointMarker(projectionPage, journeyId, projectionPointIds.b);
   await projectionPage.locator(`[data-route-point-context][data-route-point-id="${projectionPointIds.b}"]`)
@@ -1291,7 +1295,7 @@ try {
       ?.getAttribute("data-attention-role") === "narrative-current"
     && document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point") === "34.0522,-118.2437"
     && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
-    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5"
+    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "1"
   ), projectionPointIds);
   const sameDayA = await sceneFocusSnapshot(projectionPage);
   record("same-day open Journey scrub begins at A without prematurely exposing the detour", {
@@ -1305,7 +1309,7 @@ try {
     document.querySelector(`.particle-earth-route__point[data-route-point-id="${detourId}"]`)
       ?.getAttribute("data-attention-role") === "narrative-current"
     && document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point") === "35.5,-116.5"
-    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "6"
+    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "2"
   ), projectionPointIds.detour);
   // The narrative owner updates before the camera arrives. Click only once
   // the renderer has drawn the target at its settled, pointer-hit position.
@@ -1355,7 +1359,7 @@ try {
       ?.getAttribute("data-attention-role") === "narrative-current"
     && document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point") === "36.1699,-115.1398"
     && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
-    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5"
+    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "2"
   ), projectionPointIds);
   const afterDetourFocus = await projectionPage.evaluate((ids) => ({
     focusPoint: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point"),
@@ -1366,7 +1370,7 @@ try {
     afterDetourFocus,
   }, afterDetourFocus.focusPoint === "36.1699,-115.1398"
     && afterDetourFocus.detourMarkerCount === 0
-    && afterDetourFocus.raycastPointCount === "5");
+    && afterDetourFocus.raycastPointCount === "2");
   await projectionTrack.focus();
   await projectionTrack.press("End");
   await projectionPage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")
@@ -1382,11 +1386,11 @@ try {
   );
   await selectedDetour.waitFor({ state: "attached", timeout: 5_000 });
   record("explicitly selected pure detour keeps its exact identity", {},
-    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "6");
+    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "4");
   await projectionPage.locator("[data-route-point-context-close]").click();
   await selectedDetour.waitFor({ state: "detached", timeout: 5_000 });
   record("closing detour removes its marker and hit slot again", {},
-    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "5");
+    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "3");
 
   await activateRoutePointId(projectionPage, projectionPointIds.media);
   await projectionPage.locator(`[data-route-point-context][data-route-point-id="${projectionPointIds.media}"]`)
@@ -1438,7 +1442,7 @@ try {
       && document.querySelector('.journey-playback__chapter[data-chapter-point="1"]')
       && marker?.getAttribute("data-attention-role") === "narrative-current"
       && marker.getBoundingClientRect().width > 0
-      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "6";
+      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "4";
   }, projectionPointIds.detour);
   const playbackDetourState = await projectionPage.evaluate(() => ({
     step: document.querySelector(".journey-playback")?.getAttribute("data-playback-step"),
@@ -1491,7 +1495,7 @@ try {
       && playback.getAttribute("data-playback-phase") === "travel"
       && b?.getAttribute("data-attention-role") === "narrative-current"
       && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
-      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5";
+      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "3";
   }, projectionPointIds);
   const freeAdvanceFocus = await sceneFocusSnapshot(projectionPage);
   record("automatic Playback advance changes the narrated point without recapturing free camera", {
