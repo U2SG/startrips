@@ -451,7 +451,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const holdingFront = Boolean(heldFrontId && !targetReady);
   const presentedId = holdingFront ? heldFrontId : props.currentId;
   const presentedVideo = props.media.find((asset) => asset.id === presentedId)?.mimeType.startsWith("video/");
+  const presentedIdRef = useRef(presentedId);
+  presentedIdRef.current = presentedId;
   const wasActive = useRef(active);
+  const claimingPresentedBase = useRef<string | null>(null);
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
@@ -640,7 +643,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   function gestureIsCurrent(value: MediaDrag) {
     return value.generation === gestureGeneration.current
       && latest.current.active && latest.current.scopeKey === value.scopeKey
-      && latest.current.currentId === value.baseId
+      && (latest.current.currentId === value.baseId || presentedIdRef.current === value.baseId)
       && value.base.isConnected && value.base.dataset.mediaPageId === value.baseId;
   }
 
@@ -755,10 +758,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     return Number.isFinite(band) && event.clientY < target.getBoundingClientRect().bottom - band;
   }
 
-  function neighborFor(dx: number) {
+  function neighborFor(dx: number, baseId: string) {
     if (dx === 0) return null;
-    const { media, currentId, wrap } = latest.current;
-    const index = media.findIndex((item) => item.id === currentId);
+    const { media, wrap } = latest.current;
+    const index = media.findIndex((item) => item.id === baseId);
     if (index < 0 || media.length < 2) return null;
     const next = index + (dx < 0 ? 1 : -1);
     const target = wrap ? (next + media.length) % media.length : next;
@@ -790,7 +793,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       || !videoGestureCanStart(event)) return;
     const prior = settle.current;
     if (prior) prior.finishForTakeover();
-    const base = pageNodes.current.find((node) => node?.dataset.mediaPage === "current");
+    const base = pageNodes.current.find((node) => node?.dataset.mediaPresented === "true");
     const baseId = base?.dataset.mediaPageId;
     if (!base || !baseId) return;
     const originTransform = getComputedStyle(base).transform;
@@ -829,12 +832,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       suppressCancelledPointerClick.current = true;
       for (const spring of dragSprings.current) spring.cancel();
       dragSprings.current = [];
+      if (value.baseId !== latest.current.currentId) claimingPresentedBase.current = value.baseId;
       flushSync(() => latest.current.onGestureClaim(value.baseId));
       if (!gestureIsCurrent(value)) return;
       value.originTransform = getComputedStyle(value.base).transform;
       root.current?.style.setProperty("--story-live-transform", value.originTransform);
       root.current?.style.setProperty("--story-live-opacity", getComputedStyle(value.base).opacity);
-      grabPages(neighborFor(dx)?.id ?? null);
+      grabPages(neighborFor(dx, value.baseId)?.id ?? null);
       setGesturePhase("dragging");
       try { event.currentTarget.setPointerCapture(value.pointerId); }
       catch { /* A cancelled pointer can no longer be captured. */ }
@@ -847,7 +851,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       value.lastX = event.clientX;
       value.lastTime = event.timeStamp;
     }
-    const neighbor = neighborFor(value.dx);
+    const neighbor = neighborFor(value.dx, value.baseId);
     const peek = peekFor(neighbor?.id ?? null);
     if (value.neighborId !== (neighbor?.id ?? null) || value.peek !== peek) {
       value.neighborId = neighbor?.id ?? null;
@@ -1002,7 +1006,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     gestureScope.current = props.scopeKey;
   }, [active, props.scopeKey]);
   useLayoutEffect(() => {
-    if (gestureCurrentId.current !== props.currentId && (drag.current || settle.current)) cancelGesture();
+    if (gestureCurrentId.current !== props.currentId && (drag.current || settle.current)) {
+      // Claiming an already painted B makes it the semantic owner inside the
+      // same pointer stream. Other identity changes still cancel that stream.
+      if (claimingPresentedBase.current === props.currentId && drag.current?.baseId === props.currentId) {
+        claimingPresentedBase.current = null;
+      } else cancelGesture();
+    }
     gestureCurrentId.current = props.currentId;
   }, [props.currentId]);
   useLayoutEffect(() => () => {
@@ -1033,8 +1043,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     return x < rect.left + rect.width / 2 ? -1 : 1;
   };
   const step = (direction: -1 | 1, accessibleActivation = false) => {
-    if (direction < 0 ? props.canNavigatePrevious : props.canNavigateNext) {
-      props.onNavigate?.(direction, accessibleActivation);
+    if (holdingFront && presentedId) flushSync(() => latest.current.onGestureClaim(presentedId));
+    const current = latest.current;
+    if (direction < 0 ? current.canNavigatePrevious : current.canNavigateNext) {
+      current.onNavigate?.(direction, accessibleActivation);
     }
   };
   // #489 A2: only a photograph resolves a click into navigation. The presented

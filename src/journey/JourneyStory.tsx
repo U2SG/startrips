@@ -1043,7 +1043,7 @@ export function JourneyStory({
         nextFullscreen,
         overlayHidden: fullscreenRef.current?.hidden,
         stagePresent: stage !== null,
-        currentPageId: stage?.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId,
+        currentPageId: stage?.querySelector<HTMLElement>('[data-media-presented="true"]')?.dataset.mediaPageId,
         stageInterrupted: Boolean(stage?.querySelector('[data-media-incoming="true"], [data-media-handoff-interrupt="true"]')),
       });
     };
@@ -1219,7 +1219,7 @@ export function JourneyStory({
           nextFullscreen,
           overlayHidden: fullscreenRef.current?.hidden,
           stagePresent: stage !== null,
-          currentPageId: stage?.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId,
+          currentPageId: stage?.querySelector<HTMLElement>('[data-media-presented="true"]')?.dataset.mediaPageId,
           stageInterrupted: Boolean(stage?.querySelector('[data-media-incoming="true"], [data-media-handoff-interrupt="true"]')),
         });
       },
@@ -2607,6 +2607,7 @@ export function JourneyStory({
     setPendingMediaTarget(null);
     requestedMediaRef.current = currentId;
     setAssetIndex(storyAssetIndexForId(scopedMedia, currentId, assetIndex, scopedMediaIndex.indexById));
+    setShownAssetId(currentId);
   }
 
   function commitStoryMediaGesture(targetId: string) {

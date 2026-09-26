@@ -3595,8 +3595,10 @@ try {
       await waitForSettledAsset(page, MANY_MEDIA[0]);
       await clickNextPhoto(page);
       await waitForSettledAsset(page, committed);
-      await clickNextPhoto(page);
-      progress.painted = await page.waitForFunction(({ selector, id, owner }) => {
+      const nextPoint = await photoClickPoint(page, STAGE, 1);
+      // Arm the frame observer before the real click. Waiting to install it
+      // afterward can miss the short B-over-A interval altogether.
+      const paintedSignal = page.waitForFunction(({ selector, id, owner }) => {
         const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
         const box = stage?.getBoundingClientRect();
         if (!box) return false;
@@ -3606,7 +3608,9 @@ try {
           && stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === owner;
       }, { selector: STAGE, id: painted, owner: committed }, { polling: "raf", timeout: 3_000 })
         .then(() => true, () => false);
-      await clickNextPhoto(page);
+      await input(page).click(nextPoint.x, nextPoint.y);
+      progress.painted = await paintedSignal;
+      await input(page).click(nextPoint.x, nextPoint.y);
       progress.requested = await waitForRequestedMedia(page, pending);
       const heldState = async (selector) => page.evaluate(({ selector, committed, painted, pending }) => {
         const root = document.querySelector(selector);
@@ -3631,6 +3635,9 @@ try {
           frontFocus: document.activeElement === image,
           frontPointer: style?.pointerEvents,
           nextReady: next?.getAttribute("data-media-page-ready"),
+          transform: style?.transform,
+          opacity: style?.opacity,
+          clipPath: front?.style.clipPath,
           poseRest: Boolean(matrix && Math.abs(matrix.m11 - 1) < 0.001
             && Math.abs(matrix.m22 - 1) < 0.001 && Math.abs(matrix.m33 - 1) < 0.001
             && Math.abs(matrix.m41) < 0.5 && Math.abs(matrix.m42) < 0.5
@@ -3649,7 +3656,13 @@ try {
         null, { polling: "raf", timeout: 4_000 });
       progress.returned = await heldState(STAGE);
       progress.readHeld = story.reads.some((entry) => entry.id === pending && entry.servedAt === null);
+      await startSampler(page, STAGE);
+      progress.swipe = await swipeStage(page, STAGE, 1);
+      const swipeFrames = await stopSamplerFrames(page);
+      progress.swipeContinuity = gradeContinuity(swipeFrames, { allowedAssets: [painted] });
+      progress.afterSwipe = await heldState(STAGE);
       story.release(pending);
+      await clickNextPhoto(page);
       progress.settled = await waitForSettledAsset(page, pending).then(() => true, () => false);
       const semantic = (state) => state.visible && state.committed === committed
         && state.presented === painted && state.shared === painted
@@ -3657,12 +3670,14 @@ try {
         && state.oldTabIndex === -1 && state.frontTabIndex === 0
         && state.frontPointer === "auto" && state.nextReady === "false";
       record({ name,
-        claim: "while C's signed read is withheld after B paints over committed A, B remains the visible, focusable, accessible page in both inline and fullscreen stages, and each newly active stage gives B an unclipped front pose before C settles",
+        claim: "while C's signed read is withheld after B paints over committed A, B remains the visible, focusable, accessible page in both inline and fullscreen stages; each newly active stage gives B an unclipped front pose, and a swipe from B never returns to A before C can settle",
         ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.painted || !progress.requested || !progress.readHeld || !progress.settled
           || !semantic(progress.inline) || !progress.inline.frontFocus
           || !semantic(progress.fullscreen) || !progress.fullscreen.poseRest
           || !semantic(progress.returned) || !progress.returned.poseRest
+          || progress.swipeContinuity.failed || progress.afterSwipe.committed !== painted
+          || progress.afterSwipe.presented !== painted
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } catch (error) {
