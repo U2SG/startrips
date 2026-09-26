@@ -3402,6 +3402,7 @@ export function ParticleEarthScene({
         const projectedMarkers = new Map<number, ProjectedRoutePoint>();
         const labelCandidates = new Map<number, {
           label: RouteVectorLabel;
+          marker: SVGCircleElement;
           x: number;
           y: number;
         }>();
@@ -3435,6 +3436,7 @@ export function ParticleEarthScene({
             // arbitration, and never travels back into a coordinate.
             labelCandidates.set(routePointIndex, {
               label,
+              marker: element,
               x: routeProjectedPoint.x,
               y: routeProjectedPoint.y,
             });
@@ -3468,7 +3470,7 @@ export function ParticleEarthScene({
           compactMobileLayout: currentCompactMobileLayout,
         })
           .map((pointIndex) => labelCandidates.get(pointIndex)!)
-          .forEach(({ label, x, y }) => {
+          .forEach(({ label, marker, x, y }) => {
             if (
               visibleLabelCount >= labelLimit
               || x < 0
@@ -3539,10 +3541,18 @@ export function ParticleEarthScene({
             if (!placement) return;
 
             // Keep the annotation tether visually separate from the geographic
-            // route. A five-pixel gap outside the Route Point prevents the
-            // label leader from looking like a branch of the solid route while
-            // its direction still makes the point-to-label association clear.
-            const leaderGapAxis = 5 / Math.SQRT2;
+            // route. The five-pixel gap is edge-to-edge: account for the
+            // rendered marker radius/stroke and the leader's round stroke cap,
+            // rather than measuring from the marker centre.
+            const markerRadius = Number.parseFloat(marker.getAttribute("r") ?? "");
+            const markerStrokeWidth = Number.parseFloat(getComputedStyle(marker).strokeWidth);
+            const leaderStrokeWidth = Number.parseFloat(getComputedStyle(label.leader).strokeWidth);
+            const leaderStartDistance =
+              (Number.isFinite(markerRadius) ? markerRadius : 0)
+              + (Number.isFinite(markerStrokeWidth) ? markerStrokeWidth / 2 : 0)
+              + 5
+              + (Number.isFinite(leaderStrokeWidth) ? leaderStrokeWidth / 2 : 0);
+            const leaderGapAxis = leaderStartDistance / Math.SQRT2;
             const leaderStartX = x + placement.horizontal * leaderGapAxis;
             const leaderStartY = y + placement.vertical * leaderGapAxis;
             const elbowX = x + placement.horizontal * 10;

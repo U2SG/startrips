@@ -401,15 +401,29 @@ async function measureWhiskerLayers(page, routeIdentifier) {
         const startX = Number(start?.[1]);
         const startY = Number(start?.[2]);
         const style = getComputedStyle(leader);
+        const markerStyle = marker ? getComputedStyle(marker) : null;
+        const markerRadius = Number(marker?.getAttribute("r"));
+        const markerStrokeWidth = markerStyle ? Number.parseFloat(markerStyle.strokeWidth) : Number.NaN;
+        const strokeWidth = Number.parseFloat(style.strokeWidth);
+        const centerGapPx = Number.isFinite(startX) && Number.isFinite(startY)
+          && Number.isFinite(anchorX) && Number.isFinite(anchorY)
+          ? Math.hypot(startX - anchorX, startY - anchorY)
+          : Number.NaN;
+        const edgeGapPx = Number.isFinite(centerGapPx)
+          && Number.isFinite(markerRadius)
+          && Number.isFinite(markerStrokeWidth)
+          && Number.isFinite(strokeWidth)
+          ? centerGapPx - markerRadius - markerStrokeWidth / 2 - strokeWidth / 2
+          : Number.NaN;
         return {
           pointIndex,
           path: d,
           lengthPx: leader.getTotalLength(),
-          anchorGapPx: Number.isFinite(startX) && Number.isFinite(startY)
-            && Number.isFinite(anchorX) && Number.isFinite(anchorY)
-            ? Math.hypot(startX - anchorX, startY - anchorY)
-            : Number.NaN,
-          strokeWidth: Number.parseFloat(style.strokeWidth),
+          centerGapPx,
+          edgeGapPx,
+          markerRadius,
+          markerStrokeWidth,
+          strokeWidth,
           opacity: Number.parseFloat(style.opacity),
           dashArray: style.strokeDasharray,
         };
@@ -905,7 +919,7 @@ try {
   }
   for (const leader of layerEvidence.labelLeaders) {
     if (!(leader.lengthPx > 0)) failures.push(`Route Point ${leader.pointIndex}: label leader has no visible annotation length`);
-    if (!(leader.anchorGapPx >= 4.5)) failures.push(`Route Point ${leader.pointIndex}: label leader still touches the route anchor (${leader.anchorGapPx}px gap)`);
+    if (!(leader.edgeGapPx >= 4.5)) failures.push(`Route Point ${leader.pointIndex}: label leader edge gap ${leader.edgeGapPx}px is below the 5px target`);
     if (!(leader.strokeWidth <= 0.75)) failures.push(`Route Point ${leader.pointIndex}: label leader width ${leader.strokeWidth}px still competes with the route core`);
     if (!(leader.opacity <= 0.45)) failures.push(`Route Point ${leader.pointIndex}: label leader opacity ${leader.opacity} still competes with the route core`);
     if (!leader.dashArray || leader.dashArray === "none") failures.push(`Route Point ${leader.pointIndex}: label leader is still a solid route-like stroke`);
