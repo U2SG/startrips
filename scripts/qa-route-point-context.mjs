@@ -896,7 +896,27 @@ try {
   if (!markerPointId) throw new Error("visible active-Journey Route Point marker has no stable in-canvas id");
   const markerClick = await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
   const interactionContext = interactionPage.locator("[data-route-point-context]");
-  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  try {
+    await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  } catch (error) {
+    // Preserve the exact failing pointer round instead of retrying or steering
+    // the camera. Existing scene evidence tells us whether the real canvas
+    // contact reached product activation or was lost earlier in the pointer
+    // lifecycle, which is the distinction needed to fix this recurring family.
+    const clickState = await routeMarkerClickState(
+      interactionPage,
+      markerPointId,
+      markerClick.target,
+    );
+    throw new Error(
+      `real Route Point marker activation did not reveal context: ${JSON.stringify({
+        markerPointId,
+        markerClick,
+        clickState,
+      })}`,
+      { cause: error },
+    );
+  }
   const selectedMarker = interactionPage.locator(
     `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${markerPointId}"][data-attention-role="selected"]`,
   );
