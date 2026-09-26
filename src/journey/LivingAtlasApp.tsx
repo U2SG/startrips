@@ -1121,9 +1121,12 @@ export function LivingAtlasApp({
   // intent so zoom/focus/context resolution can never disclose them by itself.
   const [activeStayDetailId, setActiveStayDetailId] = useState<string | null>(null);
   const routePointContextSelectionRef = useRef(routePointContextSelection);
-  const routePointContextReturnFocusRef = useRef<(
-    Element & { focus: (options?: FocusOptions) => void }
-  ) | null>(null);
+  type RoutePointContextReturnFocus = {
+    element: Element & { focus: (options?: FocusOptions) => void };
+    journeyId: string | null;
+    routePointId: string | null;
+  };
+  const routePointContextReturnFocusRef = useRef<RoutePointContextReturnFocus | null>(null);
   routePointContextSelectionRef.current = routePointContextSelection;
   const clearRoutePointContext = useCallback(() => {
     const next = clearRoutePointContextSelection(routePointContextSelectionRef.current);
@@ -1135,9 +1138,34 @@ export function LivingAtlasApp({
     const returnFocus = routePointContextReturnFocusRef.current;
     routePointContextReturnFocusRef.current = null;
     clearRoutePointContext();
-    if (restoreFocus && returnFocus?.isConnected) {
-      queueMicrotask(() => returnFocus.focus({ preventScroll: true }));
-    }
+    if (!restoreFocus || !returnFocus) return;
+    // Route label arbitration may replace the focused SVG <g> when selection
+    // clears. Restore focus by stable Journey/Route Point identity on the next
+    // render frame instead of relying on the original DOM node surviving.
+    window.requestAnimationFrame(() => {
+      const isVisibleFocusTarget = (candidate: Element) => {
+        if (!candidate.isConnected) return false;
+        const style = getComputedStyle(candidate);
+        const rect = candidate.getBoundingClientRect();
+        return style.display !== "none"
+          && style.visibility !== "hidden"
+          && rect.width > 0
+          && rect.height > 0;
+      };
+      const direct = isVisibleFocusTarget(returnFocus.element)
+        ? returnFocus.element
+        : null;
+      const replacement = !direct && returnFocus.journeyId && returnFocus.routePointId
+        ? [...document.querySelectorAll<SVGGElement>(
+          ".particle-earth-route__label[data-journey-route][data-route-point-id]",
+        )].find((candidate) => (
+          candidate.dataset.journeyRoute === returnFocus.journeyId
+          && candidate.dataset.routePointId === returnFocus.routePointId
+          && isVisibleFocusTarget(candidate)
+        )) ?? null
+        : null;
+      (direct ?? replacement)?.focus({ preventScroll: true });
+    });
   }, [clearRoutePointContext]);
   const [crossPointReadingIntent, setCrossPointReadingIntent] = useState<CrossPointReadingIntent | null>(null);
   const crossPointReadingRevisionRef = useRef(0);
@@ -2417,11 +2445,18 @@ export function LivingAtlasApp({
       && typeof (activeElement as Element & { focus?: unknown }).focus === "function"
       && !activeElement.closest("[data-route-point-context]")
     ) {
-      // SVG Route Point labels are legal keyboard triggers too. Preserve the
-      // focused Element structurally instead of requiring HTMLElement, or a
-      // keyboard-opened context has no return target and focus falls to body.
-      routePointContextReturnFocusRef.current = activeElement as Element & {
-        focus: (options?: FocusOptions) => void;
+      // SVG Route Point labels are legal keyboard triggers too. Preserve both
+      // the current node and its stable identity because scene arbitration may
+      // replace that node while the context is open.
+      const routeLabel = activeElement.closest<SVGGElement>(
+        ".particle-earth-route__label[data-journey-route][data-route-point-id]",
+      );
+      routePointContextReturnFocusRef.current = {
+        element: activeElement as Element & {
+          focus: (options?: FocusOptions) => void;
+        },
+        journeyId: routeLabel?.dataset.journeyRoute ?? null,
+        routePointId: routeLabel?.dataset.routePointId ?? null,
       };
     }
     if (journeyId !== activeJourneyIdRef.current) {

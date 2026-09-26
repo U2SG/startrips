@@ -416,7 +416,7 @@ async function stubAtlasApi(page, journeysPayload = [siblingJourney, journey]) {
 }
 
 async function openFocusAtlas({
-  viewport = { width: 1280, height: 720 },
+  viewport = null,
   compact = false,
   reduceMotion = false,
   journeysPayload = [siblingJourney, journey],
@@ -424,8 +424,14 @@ async function openFocusAtlas({
   realScene = false,
   focusMode = true,
 } = {}) {
+  // Mobile device emulation changes input semantics, not the CSS viewport.
+  // Give compact fixtures a real phone-sized layout unless the caller already
+  // supplied an explicit viewport, so product breakpoint and QA intent agree.
+  const resolvedViewport = viewport ?? (compact
+    ? { width: 390, height: 844 }
+    : { width: 1280, height: 720 });
   const page = await browser.newPage({
-    viewport,
+    viewport: resolvedViewport,
     isMobile: compact,
     hasTouch: compact,
     reducedMotion: reduceMotion ? "reduce" : "no-preference",
