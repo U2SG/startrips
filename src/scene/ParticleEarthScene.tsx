@@ -4207,6 +4207,17 @@ export function ParticleEarthScene({
     const onPointerDown = (event: PointerEvent) => {
       if (event.currentTarget === renderer.domElement) {
         const routePointTarget = journeyScreenTargetFromPointer(event.clientX, event.clientY);
+        host.dataset.routePointPointerDownId = routePointTarget?.routePointId ?? "";
+        host.dataset.routePointPointerDownCallback = latestOnJourneyRoutePointActivate.current ? "true" : "false";
+        host.dataset.routePointPointerDownActiveRoute = latestActiveJourneyRouteId.current ?? "";
+        delete host.dataset.routePointPointerFinishWasGesture;
+        delete host.dataset.routePointPointerFinishAllowActivation;
+        delete host.dataset.routePointPointerUpId;
+        delete host.dataset.routePointPointerUpTracked;
+        delete host.dataset.routePointPointerUpPrimary;
+        delete host.dataset.routePointPointerUpCallback;
+        delete host.dataset.routePointPointerUpGlobePick;
+        delete host.dataset.routePointPointerLostCapture;
         if (routePointTarget?.routePointId) {
           routeCanvasPointerTargets.set(event.pointerId, {
             journeyId: routePointTarget.journeyId,
@@ -4346,6 +4357,8 @@ export function ParticleEarthScene({
     ) => {
       if (!activePointers.has(event.pointerId)) return;
       const wasGesture = gestureConsumed || dragStarted || activePointers.size > 1;
+      host.dataset.routePointPointerFinishWasGesture = wasGesture ? "true" : "false";
+      host.dataset.routePointPointerFinishAllowActivation = allowActivation ? "true" : "false";
       activePointers.delete(event.pointerId);
       if (renderer.domElement.hasPointerCapture?.(event.pointerId)) {
         renderer.domElement.releasePointerCapture?.(event.pointerId);
@@ -4392,6 +4405,11 @@ export function ParticleEarthScene({
         ?? routeLabelPointerTargets.get(event.pointerId)
         ?? routeCanvasPointerTargets.get(event.pointerId)
         ?? null;
+      host.dataset.routePointPointerUpId = routeTarget?.routePointId ?? "";
+      host.dataset.routePointPointerUpTracked = activePointers.has(event.pointerId) ? "true" : "false";
+      host.dataset.routePointPointerUpPrimary = isPrimaryPointerActivation(event) ? "true" : "false";
+      host.dataset.routePointPointerUpCallback = latestOnJourneyRoutePointActivate.current ? "true" : "false";
+      host.dataset.routePointPointerUpGlobePick = latestOnGlobePointPick.current ? "true" : "false";
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
       routeCanvasPointerTargets.delete(event.pointerId);
@@ -4424,6 +4442,9 @@ export function ParticleEarthScene({
       rejectedPointerIds.delete(event.pointerId);
     };
     const onLostPointerCapture = (event: PointerEvent) => {
+      host.dataset.routePointPointerLostCapture = activePointers.has(event.pointerId)
+        ? "pending-contact"
+        : "after-contact";
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
       routeCanvasPointerTargets.delete(event.pointerId);

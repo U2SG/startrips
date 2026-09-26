@@ -628,6 +628,17 @@ async function routeMarkerClickState(page, pointId, target) {
       routePointCount: scene?.getAttribute("data-journey-route-point-count") ?? null,
       projectionReady: window.__particleEarthDebug?.().journeyRouteProjectionReady ?? null,
       scrubberValue: document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") ?? null,
+      pointerDownId: scene?.getAttribute("data-route-point-pointer-down-id") ?? null,
+      pointerDownCallback: scene?.getAttribute("data-route-point-pointer-down-callback") ?? null,
+      pointerDownActiveRoute: scene?.getAttribute("data-route-point-pointer-down-active-route") ?? null,
+      pointerUpId: scene?.getAttribute("data-route-point-pointer-up-id") ?? null,
+      pointerUpTracked: scene?.getAttribute("data-route-point-pointer-up-tracked") ?? null,
+      pointerUpPrimary: scene?.getAttribute("data-route-point-pointer-up-primary") ?? null,
+      pointerUpCallback: scene?.getAttribute("data-route-point-pointer-up-callback") ?? null,
+      pointerUpGlobePick: scene?.getAttribute("data-route-point-pointer-up-globe-pick") ?? null,
+      finishWasGesture: scene?.getAttribute("data-route-point-pointer-finish-was-gesture") ?? null,
+      finishAllowActivation: scene?.getAttribute("data-route-point-pointer-finish-allow-activation") ?? null,
+      lostPointerCapture: scene?.getAttribute("data-route-point-pointer-lost-capture") ?? null,
     };
   }, { pointId, target });
 }
