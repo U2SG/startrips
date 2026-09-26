@@ -371,6 +371,87 @@ async function measureAnchorPassage(page, routeIdentifier) {
 }
 
 /**
+ * #478/ST-144: record the four visually similar stroke layers separately.
+ * The label leader is an annotation tether; travel leader/core/legs are route
+ * geometry. Keeping this evidence separate prevents another label whisker from
+ * being misdiagnosed as a spline regression.
+ */
+async function measureWhiskerLayers(page, routeIdentifier) {
+  return page.evaluate((identifier) => {
+    const group = document.querySelector(`[data-journey-route="${identifier}"]`);
+    if (!group) return { error: "whisker route group not rendered" };
+    const core = group.querySelector(".particle-earth-route__core");
+    const travelLeader = group.querySelector(".particle-earth-route__travel-leader");
+    const legs = [...group.querySelectorAll(".particle-earth-route__leg")];
+    if (!core || !travelLeader || legs.length === 0) {
+      return { error: "route core/travel-leader/legs were not all rendered" };
+    }
+
+    const labelLeaders = [...group.querySelectorAll(".particle-earth-route__label .particle-earth-route__leader")]
+      .filter((leader) => leader.closest(".particle-earth-route__label")?.style.display !== "none")
+      .map((leader) => {
+        const label = leader.closest(".particle-earth-route__label");
+        const pointIndex = Number(label?.getAttribute("data-route-point-index"));
+        const marker = [...group.querySelectorAll(".particle-earth-route__point")]
+          .find((candidate) => Number(candidate.getAttribute("data-route-point-index")) === pointIndex);
+        const d = leader.getAttribute("d") ?? "";
+        const start = d.match(/^M(-?[\d.]+) (-?[\d.]+)/);
+        const anchorX = Number(marker?.getAttribute("data-anchor-x"));
+        const anchorY = Number(marker?.getAttribute("data-anchor-y"));
+        const startX = Number(start?.[1]);
+        const startY = Number(start?.[2]);
+        const style = getComputedStyle(leader);
+        const markerStyle = marker ? getComputedStyle(marker) : null;
+        const markerRadius = Number(marker?.getAttribute("r"));
+        const markerStrokeWidth = markerStyle ? Number.parseFloat(markerStyle.strokeWidth) : Number.NaN;
+        const strokeWidth = Number.parseFloat(style.strokeWidth);
+        const centerGapPx = Number.isFinite(startX) && Number.isFinite(startY)
+          && Number.isFinite(anchorX) && Number.isFinite(anchorY)
+          ? Math.hypot(startX - anchorX, startY - anchorY)
+          : Number.NaN;
+        const edgeGapPx = Number.isFinite(centerGapPx)
+          && Number.isFinite(markerRadius)
+          && Number.isFinite(markerStrokeWidth)
+          && Number.isFinite(strokeWidth)
+          ? centerGapPx - markerRadius - markerStrokeWidth / 2 - strokeWidth / 2
+          : Number.NaN;
+        return {
+          pointIndex,
+          path: d,
+          lengthPx: leader.getTotalLength(),
+          centerGapPx,
+          edgeGapPx,
+          markerRadius,
+          markerStrokeWidth,
+          strokeWidth,
+          opacity: Number.parseFloat(style.opacity),
+          dashArray: style.strokeDasharray,
+        };
+      });
+
+    const corePath = core.getAttribute("d") ?? "";
+    const travelPath = travelLeader.getAttribute("d") ?? "";
+    return {
+      labelLeaders,
+      travelLeader: {
+        path: travelPath,
+        lengthPx: travelLeader.getTotalLength(),
+        opacity: Number.parseFloat(getComputedStyle(travelLeader).opacity),
+        sharesCoreGeometry: travelPath === corePath,
+      },
+      core: {
+        path: corePath,
+        lengthPx: core.getTotalLength(),
+      },
+      legs: legs.map((leg) => ({
+        path: leg.getAttribute("d") ?? "",
+        lengthPx: leg.getTotalLength(),
+      })),
+    };
+  }, routeIdentifier);
+}
+
+/**
  * Read the rendered SVG and measure, per Route Point, the distance from the
  * marker anchor to the end of the route line that should meet it. Marker
  * anchors are cross-checked against the drawn graphic wherever the graphic
@@ -525,6 +606,33 @@ async function measureRouteOptics(page, routeIdentifier) {
       anchorX: Number(node.getAttribute("data-anchor-x")),
       anchorY: Number(node.getAttribute("data-anchor-y")),
     }));
+    const labelLeaders = [...group.querySelectorAll(".particle-earth-route__label .particle-earth-route__leader")]
+      .filter((node) => node.closest(".particle-earth-route__label")?.style.display !== "none");
+    const labelLeaderStyle = labelLeaders[0] ? getComputedStyle(labelLeaders[0]) : null;
+    const labelLeaderEdgeGaps = labelLeaders.map((leader) => {
+      const label = leader.closest(".particle-earth-route__label");
+      const pointIndex = Number(label?.getAttribute("data-route-point-index"));
+      const marker = [...group.querySelectorAll(".particle-earth-route__point")]
+        .find((candidate) => Number(candidate.getAttribute("data-route-point-index")) === pointIndex);
+      const start = (leader.getAttribute("d") ?? "").match(/^M(-?[\d.]+) (-?[\d.]+)/);
+      const anchorX = Number(marker?.getAttribute("data-anchor-x"));
+      const anchorY = Number(marker?.getAttribute("data-anchor-y"));
+      const startX = Number(start?.[1]);
+      const startY = Number(start?.[2]);
+      const markerRadius = Number(marker?.getAttribute("r"));
+      const markerStrokeWidth = marker ? Number.parseFloat(getComputedStyle(marker).strokeWidth) : Number.NaN;
+      const leaderStrokeWidth = Number.parseFloat(getComputedStyle(leader).strokeWidth);
+      const centerGapPx = Number.isFinite(startX) && Number.isFinite(startY)
+        && Number.isFinite(anchorX) && Number.isFinite(anchorY)
+        ? Math.hypot(startX - anchorX, startY - anchorY)
+        : Number.NaN;
+      return Number.isFinite(centerGapPx)
+        && Number.isFinite(markerRadius)
+        && Number.isFinite(markerStrokeWidth)
+        && Number.isFinite(leaderStrokeWidth)
+        ? centerGapPx - markerRadius - markerStrokeWidth / 2 - leaderStrokeWidth / 2
+        : Number.NaN;
+    });
     return {
       devicePixelRatio: window.devicePixelRatio,
       compact: document.querySelector(".particle-earth-scene")?.getAttribute("data-mobile-v2") ?? null,
@@ -534,6 +642,11 @@ async function measureRouteOptics(page, routeIdentifier) {
       coreWidth: readWidth(".particle-earth-route__core"),
       glowWidth: readWidth(".particle-earth-route__glow"),
       leaderOpacity: Number.parseFloat(getComputedStyle(group.querySelector(".particle-earth-route__travel-leader")).opacity),
+      labelLeaderCount: labelLeaders.length,
+      labelLeaderWidth: labelLeaderStyle ? Number.parseFloat(labelLeaderStyle.strokeWidth) : Number.NaN,
+      labelLeaderOpacity: labelLeaderStyle ? Number.parseFloat(labelLeaderStyle.opacity) : Number.NaN,
+      labelLeaderDashArray: labelLeaderStyle?.strokeDasharray ?? null,
+      labelLeaderEdgeGaps,
       points,
     };
   }, routeIdentifier);
@@ -727,6 +840,14 @@ try {
     if (!near(playing.coreWidth, 1.2) || !near(playing.glowWidth, 3)) failures.push(`DPR ${sample.dpr}: narrative optical weight is outside the bounded target`);
     if (playing.narrativeRouteIds.join(",") !== routeId || rewound.narrativeRouteIds.join(",") !== routeId) failures.push(`DPR ${sample.dpr}: overlapping temporal ranges created more than one narrative-current Journey`);
     if (!rewoundCurrent || rewoundCurrent.attentionRole !== "narrative-current") failures.push(`DPR ${sample.dpr}: rewind did not move narrative-current to the last visible point`);
+    for (const [stateName, state] of [["browse-1x", browse1], ["browse-3x", browse3], ["playing", playing], ["rewound", rewound]]) {
+      if (state.labelLeaderCount === 0) continue;
+      if (!(state.labelLeaderWidth <= 0.75)) failures.push(`DPR ${sample.dpr} ${stateName}: label leader is too route-like at ${state.labelLeaderWidth}px`);
+      if (!(state.labelLeaderOpacity <= 0.45)) failures.push(`DPR ${sample.dpr} ${stateName}: label leader opacity ${state.labelLeaderOpacity} is too close to route emphasis`);
+      if (!state.labelLeaderDashArray || state.labelLeaderDashArray === "none") failures.push(`DPR ${sample.dpr} ${stateName}: label leader remained a solid route-like stroke`);
+      if (state.labelLeaderEdgeGaps.some((gap) => !Number.isFinite(gap) || gap < 4.5)) failures.push(`DPR ${sample.dpr} ${stateName}: label leader edge gap fell below the 5px target (${state.labelLeaderEdgeGaps.join(",")}px)`);
+    }
+    if (browse1.labelLeaderCount === 0 && browse3.labelLeaderCount === 0) failures.push(`DPR ${sample.dpr}: no visible label leader remained to associate Route Point text at overview/near framing`);
     if (sample.reducedMotion && playing.leaderOpacity !== 0) failures.push(`DPR ${sample.dpr}: reduced motion left the travelling leader visible`);
   }
   if (failures.length > 0) throw new Error(`[qa-route-anchoring] ${failures.join("; ")}`);
@@ -788,11 +909,38 @@ try {
     document.querySelector(`[data-journey-route="${identifier}"] .particle-earth-route__leg`),
   ), whiskerRouteId, { timeout: 30_000 });
   await page.waitForTimeout(400);
+  // Keep this geometry fixture in its original inactive-Journey framing. The
+  // active-Journey optics cases above grade visible label-leader styling across
+  // zoom/DPR/mobile/reduced-motion; selecting this route here would change the
+  // camera/focus contract and invalidate the existing anchor-passage baseline.
   await setZoom(page, 2);
   await waitForRenderedFrame(page);
   const anchorPassage = await measureAnchorPassage(page, whiskerRouteId);
   if (anchorPassage.error) throw new Error(`[qa-route-anchoring] ${anchorPassage.error}`);
+  const layerEvidence = await measureWhiskerLayers(page, whiskerRouteId);
+  if (layerEvidence.error) throw new Error(`[qa-route-anchoring] ${layerEvidence.error}`);
+  const independentCoreLegDefect = anchorPassage.measurements.some((measurement) => (
+    measurement.incomingCrossPx > ANCHOR_HALF_PLANE_TOLERANCE_PX
+    || measurement.outgoingCrossPx > ANCHOR_HALF_PLANE_TOLERANCE_PX
+  ));
   console.log("[qa-route-anchoring] southwest-whisker", JSON.stringify(anchorPassage));
+  console.log("[qa-route-anchoring] southwest-whisker-layers", JSON.stringify({
+    ...layerEvidence,
+    independentCoreLegDefect,
+  }));
+  // Inactive Journeys intentionally publish no visible label leaders. That is
+  // itself useful layer evidence here; visible leader optics are graded in the
+  // active-Journey cases above without disturbing this geometry fixture.
+  if (!layerEvidence.travelLeader.sharesCoreGeometry) {
+    failures.push("travel leader no longer shares the canonical route core geometry");
+  }
+  for (const leader of layerEvidence.labelLeaders) {
+    if (!(leader.lengthPx > 0)) failures.push(`Route Point ${leader.pointIndex}: label leader has no visible annotation length`);
+    if (!(leader.edgeGapPx >= 4.5)) failures.push(`Route Point ${leader.pointIndex}: label leader edge gap ${leader.edgeGapPx}px is below the 5px target`);
+    if (!(leader.strokeWidth <= 0.75)) failures.push(`Route Point ${leader.pointIndex}: label leader width ${leader.strokeWidth}px still competes with the route core`);
+    if (!(leader.opacity <= 0.45)) failures.push(`Route Point ${leader.pointIndex}: label leader opacity ${leader.opacity} still competes with the route core`);
+    if (!leader.dashArray || leader.dashArray === "none") failures.push(`Route Point ${leader.pointIndex}: label leader is still a solid route-like stroke`);
+  }
   if (anchorPassage.measurements.length !== 3) {
     failures.push(`southwest whisker fixture measured ${anchorPassage.measurements.length}/3 interior Route Points`);
   }
