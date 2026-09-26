@@ -442,4 +442,22 @@ describe("journeyApi", () => {
       expect.objectContaining({ credentials: "include" }),
     );
   });
+
+  it("sends a Journey-context focus as lat and lon only when one is given", async () => {
+    const fetcher = vi.fn(async () => Response.json({ results: [], attribution: null })) as unknown as typeof fetch;
+
+    await searchLocations("Central Park", fetcher, {
+      focus: { latitude: 40.7128, longitude: -74.006 },
+    });
+    expect(fetcher).toHaveBeenLastCalledWith(
+      "/api/locations/search?q=Central%20Park&lat=40.7128&lon=-74.006",
+      expect.objectContaining({ credentials: "include" }),
+    );
+
+    await searchLocations("Central Park", fetcher, { focus: null });
+    expect(fetcher).toHaveBeenLastCalledWith(
+      "/api/locations/search?q=Central%20Park",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
 });

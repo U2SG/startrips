@@ -75,6 +75,7 @@ import {
   matchRouteDraftPoints,
   moveRoutePoint,
   removeRoutePoint,
+  routeDraftSearchFocus,
   routeDraftToInput,
   suggestPointLabel,
   toggleRouteStop,
@@ -231,10 +232,13 @@ function toDraftPoint(
 
 function RoutePointPositionEditor({
   point,
+  searchFocus,
   onReplace,
   onClose,
 }: {
   point: RouteDraftPoint;
+  /** #546: the current draft's Journey context, read when the search starts. */
+  searchFocus: () => GlobePointPick | null;
   onReplace: (patch: { latitude: number; longitude: number; label?: string }) => void;
   onClose: () => void;
 }) {
@@ -261,7 +265,7 @@ function RoutePointPositionEditor({
     setAttribution(null);
     setError("");
     try {
-      const response = await searchLocations(query);
+      const response = await searchLocations(query, fetch, { focus: searchFocus() });
       if (revisionRef.current !== revision) return;
       setResults(response.results);
       setAttribution(response.attribution);
@@ -931,7 +935,10 @@ export function JourneyComposer({
     setSearchPending(true);
     setMessage("");
     try {
-      const response = await searchLocations(query);
+      // #546: bias towards the last Route Point of the current draft.
+      const response = await searchLocations(query, fetch, {
+        focus: routeDraftSearchFocus(routePointsRef.current),
+      });
       if (!composerMountedRef.current || searchRevisionRef.current !== revision) return;
       setSearchResults(response.results);
       setSearchAttribution(response.attribution);
@@ -1936,6 +1943,7 @@ export function JourneyComposer({
                           {replacingRoutePointDraftId === point.draftId ? (
                             <RoutePointPositionEditor
                               point={point}
+                              searchFocus={() => routeDraftSearchFocus(routePointsRef.current)}
                               onReplace={(patch) => replaceDraftPointLocation(point.draftId, patch)}
                               onClose={() => {
                                 setReplacingRoutePointDraftId(null);

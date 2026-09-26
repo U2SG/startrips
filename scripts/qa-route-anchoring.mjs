@@ -571,9 +571,13 @@ async function runRouteOpticsCase({ dpr, viewport, reducedMotion = false, mobile
       const group = document.querySelector(`[data-journey-route="${identifier}"]`);
       const future = group?.querySelector('[data-route-point-id="qa-p-18"]');
       const core = group?.querySelector(".particle-earth-route__core");
+      // Every future point fades independently, so wait for all of them
+      // (e.g. the ordinary qa-p-19), not only the selected qa-p-18.
+      const hidden = [...(group?.querySelectorAll('.particle-earth-route__point[data-temporal-visible="false"]') ?? [])];
       return group?.getAttribute("data-attention-role") === "narrative-current"
         && future?.getAttribute("data-temporal-reveal") === "0.000"
         && Number.parseFloat(getComputedStyle(future).opacity) === 0
+        && hidden.every((point) => Number.parseFloat(getComputedStyle(point).opacity) === 0)
         && Number.parseFloat(getComputedStyle(core).strokeWidth) >= 1.19;
     }, routeId);
     await waitForRenderedFrame(opticsPage);
