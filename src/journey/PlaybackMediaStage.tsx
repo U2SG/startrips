@@ -12,7 +12,7 @@ import {
   type VideoHTMLAttributes,
 } from "react";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
-import { mediaStackOpacity, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
+import { mediaStackApertureClip, mediaStackOpacity, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { springElementTo } from "../motion/springElement";
 import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import type { PlaybackMapBridge } from "./playbackMapBridge";
@@ -50,6 +50,9 @@ type Props = {
   mapEntrance?: (element: HTMLElement) => PlaybackMapBridge | null;
   isIntentCurrent?: () => boolean;
   sequencePeeks?: readonly SequencePeek[];
+  /** The previous arrival painted this asset as its opening still in the same
+   * aperture, so the first slot must enter from that exact frame. */
+  entersFromOpening?: boolean;
 };
 
 // Keep the departing video frame in its physical slot without keeping a second
@@ -80,6 +83,14 @@ function RetainedVideoFrame({ frame }: { frame: HTMLCanvasElement }) {
     canvas.getContext("2d")?.drawImage(frame, 0, 0);
   }, [frame]);
   return <canvas ref={draw} aria-hidden="true" />;
+}
+
+/** The incoming picture's aperture inside a slot-sized box (Q2). */
+function incomingApertureClip(outgoing: HTMLElement, incoming: HTMLElement): [number, number] {
+  const media = incoming.querySelector("img, video");
+  if (media instanceof HTMLImageElement) return mediaStackApertureClip(outgoing, media.naturalWidth, media.naturalHeight);
+  if (media instanceof HTMLVideoElement) return mediaStackApertureClip(outgoing, media.videoWidth, media.videoHeight);
+  return [0, 0];
 }
 
 /** Two fixed presentation slots; the director remains the only time owner. */
@@ -178,6 +189,16 @@ export function PlaybackMediaStage(props: Props) {
     if (canDraw) setReadyKey(requestKey);
   }, [isVideo, matches, nativeRevision, props.imageReady, props.videoPositionReady, requestKey, stage.requested]);
 
+  // Only two slot nodes alternate. A slot that last departed still carries the
+  // clip and opacity its exit spring wrote; a newly requested asset starts clean.
+  useLayoutEffect(() => {
+    const index = stage.requested;
+    const element = index === null || index === stage.shown ? null : slots.current[index];
+    if (!element) return;
+    element.style.clipPath = "";
+    element.style.opacity = "";
+  }, [stage.requested, stage.shown, stage.slots]);
+
   useLayoutEffect(() => {
     props.onPendingChange(pending);
   }, [pending, props.onPendingChange]);
@@ -194,10 +215,12 @@ export function PlaybackMediaStage(props: Props) {
     if (!ready || failed || presented || stage.requested === null) return;
     const requested = stage.requested;
     let cancelled = false;
+    let committed = false;
     const stillCurrent = () => !cancelled && requestKeyRef.current === requestKey
       && latest.current.isIntentCurrent?.() !== false;
     const commit = () => {
       if (!stillCurrent()) return;
+      committed = true;
       setStage((current) => {
         if (current.intent !== props.intent || current.requested !== requested) return current;
         const nextSlots: Stage["slots"] = [null, null];
@@ -214,8 +237,12 @@ export function PlaybackMediaStage(props: Props) {
     // media. In particular a video never gains another live transport here.
     const bridge = shown === null && to ? props.mapEntrance?.(to) : null;
     if (bridge?.spatial && to) {
-      to.style.transform = bridge.from.transform;
-      to.style.opacity = String(bridge.from.opacity);
+      // Q1: the opening still already shows this picture at rest in this
+      // aperture. Keep the seam's settle (and its interruption window), but
+      // start it from that frame instead of an offset, smaller copy.
+      const from = props.entersFromOpening ? bridge.to : bridge.from;
+      to.style.transform = from.transform;
+      to.style.opacity = String(from.opacity);
       to.style.zIndex = "4";
       setMovingKey(requestKey);
       const motion = springElementTo(to, bridge.to, { owner: props.intent });
@@ -234,19 +261,44 @@ export function PlaybackMediaStage(props: Props) {
     setMovingKey(requestKey);
     if (shown === requested || stage.slots[shown]?.asset.id === props.asset.id) {
       to.style.zIndex = "4";
-      const recovery = springElementTo(to, { transform: mediaStackRest(0), opacity: 1 }, { owner: props.asset.id });
+      const recovery = springElementTo(to, { transform: mediaStackRest(0), opacity: 1, clipInset: [0, 0] },
+        { owner: props.asset.id });
       void recovery.finished.then(commit, () => undefined);
       return () => { cancelled = true; recovery.cancel(); };
     }
     from.style.zIndex = "2";
     to.style.zIndex = "4";
-    const outgoing = springElementTo(from, { transform: mediaStackRest(1), opacity: mediaStackOpacity(1) },
-      { owner: stage.slots[shown]?.asset.id });
+    // Q2: the departing picture stays in place, cropped to the incoming
+    // picture's settled aperture, and fades out under it. Because it does not
+    // move, that crop is a fixed frame: none of its letterbox side panels can
+    // show, and commit() drops a slot that is already invisible. The clip is
+    // written before motion (the spring's inset contract). The sequence peeks
+    // stay the only stack.
+    const [clipY, clipX] = incomingApertureClip(from, to);
+    from.style.clipPath = `inset(${clipY}% ${clipX}%)`;
+    const outgoing = springElementTo(from, {
+      transform: mediaStackRest(0), opacity: 0, clipInset: [clipY, clipX],
+    }, { owner: stage.slots[shown]?.asset.id });
     const incoming = springElementTo(to, { transform: mediaStackRest(0), opacity: 1 },
       { owner: props.asset.id });
     void Promise.all([outgoing.finished, incoming.finished]).then(commit, () => undefined);
-    return () => { cancelled = true; outgoing.cancel(); incoming.cancel(); };
-  }, [failed, presented, props.asset.id, props.intent, props.mapEntrance, props.paused, props.reduceMotion, ready, requestKey, stage.requested, stage.shown]);
+    return () => {
+      cancelled = true;
+      outgoing.cancel();
+      incoming.cancel();
+      if (committed) return;
+      // An interrupted swap leaves the departing picture as the shown one.
+      // Settle both layers deterministically instead of freezing the frame the
+      // cancel landed on: the shown picture fully restored in front and
+      // uncropped, the abandoned incoming slot back at its waiting depth.
+      from.style.transform = mediaStackRest(0);
+      from.style.opacity = "1";
+      from.style.clipPath = "";
+      to.style.transform = mediaStackRest(1);
+      to.style.opacity = "";
+      to.style.zIndex = "1";
+    };
+  }, [failed, presented, props.asset.id, props.entersFromOpening, props.intent, props.mapEntrance, props.paused, props.reduceMotion, ready, requestKey, stage.requested, stage.shown]);
 
   const unavailable = () => {
     setFailedKey(requestKey);
@@ -272,6 +324,9 @@ export function PlaybackMediaStage(props: Props) {
   }, []);
 
   const hasFrame = stage.shown !== null;
+  // The opening still is the same picture in the same aperture, so a wait over
+  // it is a wait over media, not over an empty stage.
+  const framed = hasFrame || Boolean(props.entersFromOpening);
   const waiting = !failed && ((pending && !moving) || props.buffering);
   return (
     <div className="journey-playback__media playback-media-presentation"
@@ -326,7 +381,10 @@ export function PlaybackMediaStage(props: Props) {
             data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
             aria-hidden={stage.shown !== index}
             style={{
-              transform: mediaStackRest(stage.shown === index ? 0 : 1),
+              // The first media entering from its opening still rests in front
+              // from its first frame; any other pending slot waits one depth back.
+              transform: mediaStackRest(stage.shown === index
+                || (stage.shown === null && props.entersFromOpening) ? 0 : 1),
               zIndex: stage.shown === index ? 2 : 1,
               backgroundImage: layer?.kind === "preview" ? `url(${JSON.stringify(layer.url)})` : undefined,
               backgroundSize: "contain",
@@ -360,9 +418,9 @@ export function PlaybackMediaStage(props: Props) {
           <div className="starlight-media-state__copy"><strong>媒体暂时无法打开</strong><span>将继续播放下一段。</span></div>
         </div>
       ) : waiting ? (
-        <div className={`journey-playback__media-state starlight-media-state is-waiting${hasFrame ? " is-over-media" : ""}`} role="status" aria-live="polite">
-          {!hasFrame ? <StartripsJourneyCue state="waiting" size={60} className="starlight-media-state__cue" /> : null}
-          <div className="starlight-media-state__copy"><strong>{props.buffering ? "正在缓冲视频…" : "正在打开媒体…"}</strong>{!hasFrame ? <span>准备好后继续播放。</span> : null}</div>
+        <div className={`journey-playback__media-state starlight-media-state is-waiting${framed ? " is-over-media" : ""}`} role="status" aria-live="polite">
+          {!framed ? <StartripsJourneyCue state="waiting" size={60} className="starlight-media-state__cue" /> : null}
+          <div className="starlight-media-state__copy"><strong>{props.buffering ? "正在缓冲视频…" : "正在打开媒体…"}</strong>{!framed ? <span>准备好后继续播放。</span> : null}</div>
         </div>
       ) : null}
     </div>

@@ -16,7 +16,11 @@
 //      destination, a populated chapter's arrival is not, and every media beat
 //      stays reachable in canonical order;
 //   4. 4-9 sequence chapters expose bounded peeks without a second video;
-//   5. all of it on desktop, portrait phone AND phone landscape.
+//   5. all of it on desktop, portrait phone AND phone landscape;
+//   6. #126 R2 Q1-Q3: the opening still and the first media keep one painted
+//      rect, a departing picture never shows outside the incoming aperture or
+//      vanishes in one frame, and settled media owns the stage above the
+//      transport at 1920x1080 and 390x844.
 //
 // It tunes nothing: the density grammar and the beat order are the product
 // decision, and this only grades the shipped ones.
@@ -87,7 +91,7 @@ function record(name, detail) {
   if (detail.failed) failed = true;
 }
 
-async function open({ viewport, reduceMotion = true }) {
+async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null }) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
@@ -158,14 +162,19 @@ async function open({ viewport, reduceMotion = true }) {
     contentType: "application/json",
     body: "null",
   }));
-  await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      url: route.request().url().includes("st109-p4-m2") ? tinyVideo : onePixelGif,
-      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-    }),
-  }));
+  await page.route("**/api/uploads/assets/*/read-url", async (route) => {
+    // A held read keeps that asset loading until the caller releases it.
+    await holdRead?.(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        url: readUrl?.(route.request().url())
+          ?? (route.request().url().includes("st109-p4-m2") ? tinyVideo : onePixelGif),
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    });
+  });
 
   const query = new URLSearchParams({
     qaState: "journey-playback",
@@ -525,6 +534,318 @@ for (const viewport of VIEWPORTS) {
       failed: JSON.stringify(unique) !== JSON.stringify(EXPECTED_MEANINGFUL),
     });
   } finally {
+    await run.page.close();
+  }
+}
+
+// ── #126 R2 Q1-Q3: the seam geometry a viewer actually sees ─────────────────
+//
+// Point 2 is a `few` chapter served as landscape -> portrait -> landscape, so
+// the arrival's opening still hands off to a landscape picture and the first
+// media swap is a mixed-aspect one. An in-page recorder samples every frame
+// from before the seam, so the handoff frame and the removal frame are graded
+// as painted rather than inferred from settled attributes.
+{
+  const aspectSvg = (width, height) => `data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'>`
+    + `<rect width='${width}' height='${height}' fill='#67b5a7'/></svg>`,
+  )}`;
+  const SEAM_MEDIA = {
+    // Point 1 carries the fixture's long note (ProductQaPreview.tsx).
+    "st109-p1-m0": aspectSvg(900, 1600),
+    "st109-p2-m0": aspectSvg(1600, 900),
+    "st109-p2-m1": aspectSvg(900, 1600),
+    "st109-p2-m2": aspectSvg(1600, 900),
+  };
+  const readUrl = (url) => Object.entries(SEAM_MEDIA).find(([id]) => url.includes(id))?.[1] ?? null;
+  const stepOf = (pointIndex, mediaIndex) => STEPS.findIndex((candidate) => (
+    candidate.kind === "media" && candidate.pointIndex === pointIndex && candidate.mediaIndex === mediaIndex
+  ));
+  const FIRST = stepOf(2, 0);
+  const SECOND = stepOf(2, 1);
+  const LAST = stepOf(2, 2);
+  const LONG_NOTE = stepOf(1, 0);
+  const SEAM_VIEWPORTS = [
+    { label: "desktop-1920", width: 1920, height: 1080 },
+    { label: "compact-390", width: 390, height: 844, isMobile: true, hasTouch: true },
+  ];
+  const HANDOFF_TOLERANCE_PX = 3;
+  const MIN_APERTURE_SHARE = 0.6;
+  // The departing picture is cropped to the incoming aperture and does not
+  // move, so anything beyond sub-pixel rounding is old content on screen.
+  const MAX_DEPARTING_EXPOSURE = 0.005;
+
+  const armSeamRecorder = (page) => page.evaluate(() => {
+    const trace = { frames: [], stopped: false };
+    window.__qaSeam = trace;
+    const rect = (value) => value && { left: value.left, top: value.top, width: value.width, height: value.height };
+    // The painted picture: contain-fit of the natural size inside the element.
+    const content = (element, width, height) => {
+      const box = element?.getBoundingClientRect();
+      if (!box || !width || !height || !box.width || !box.height) return null;
+      const scale = Math.min(box.width / width, box.height / height);
+      return { left: box.left + (box.width - width * scale) / 2, top: box.top + (box.height - height * scale) / 2,
+        width: width * scale, height: height * scale };
+    };
+    const intersect = (a, b) => {
+      if (!a || !b) return a ?? null;
+      const left = Math.max(a.left, b.left);
+      const top = Math.max(a.top, b.top);
+      const right = Math.min(a.left + a.width, b.left + b.width);
+      const bottom = Math.min(a.top + a.height, b.top + b.height);
+      return right > left && bottom > top ? { left, top, width: right - left, height: bottom - top } : null;
+    };
+    const sample = () => {
+      const root = document.querySelector(".journey-playback");
+      if (!root) return;
+      const opening = root.querySelector("[data-opening-asset]");
+      const openingImage = opening?.querySelector("img");
+      const presentation = root.querySelector(".playback-media-presentation");
+      const slots = [...(presentation?.querySelectorAll("[data-media-slot][data-media-asset]") ?? [])].map((slot) => {
+        // A departing video is retained as a painted canvas frame.
+        const media = slot.querySelector("img, video, canvas");
+        const width = media instanceof HTMLImageElement ? media.naturalWidth
+          : media instanceof HTMLVideoElement ? media.videoWidth : media?.width;
+        const height = media instanceof HTMLImageElement ? media.naturalHeight
+          : media instanceof HTMLVideoElement ? media.videoHeight : media?.height;
+        const style = getComputedStyle(slot);
+        const box = slot.getBoundingClientRect();
+        const inset = style.clipPath.match(/^inset\(([-+\d.e]+)%(?:\s+([-+\d.e]+)%)?\)$/i);
+        const vertical = Number(inset?.[1] ?? 0) / 100;
+        const horizontal = Number(inset?.[2] ?? inset?.[1] ?? 0) / 100;
+        const clip = { left: box.left + box.width * horizontal, top: box.top + box.height * vertical,
+          width: box.width * (1 - 2 * horizontal), height: box.height * (1 - 2 * vertical) };
+        return {
+          asset: slot.getAttribute("data-media-asset"),
+          front: slot.getAttribute("aria-hidden") === "false",
+          opacity: style.display === "none" ? 0 : Number(style.opacity),
+          aperture: rect(box),
+          visible: intersect(content(media, width, height), clip),
+        };
+      });
+      trace.frames.push({
+        at: performance.now(),
+        step: Number(root.dataset.playbackStep),
+        phase: root.dataset.playbackPhase,
+        openingAsset: opening?.getAttribute("data-opening-asset") ?? null,
+        opening: openingImage ? content(openingImage, openingImage.naturalWidth, openingImage.naturalHeight) : null,
+        requested: presentation?.getAttribute("data-requested-asset") ?? null,
+        presented: presentation?.getAttribute("data-presented-asset") ?? null,
+        presentation: presentation?.getAttribute("data-media-presentation") ?? null,
+        slots,
+        controls: rect(root.querySelector(".journey-playback__controls")?.getBoundingClientRect()),
+        caption: (() => {
+          const caption = root.querySelector(".journey-playback__stop");
+          return caption ? { ...rect(caption.getBoundingClientRect()),
+            scrollHeight: caption.scrollHeight, clientHeight: caption.clientHeight } : null;
+        })(),
+      });
+    };
+    const tick = () => {
+      if (trace.stopped) return;
+      sample();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+
+  const area = (value) => (value ? value.width * value.height : 0);
+  const overlap = (a, b) => {
+    if (!a || !b) return 0;
+    const width = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+    const height = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+    return width > 0 && height > 0 ? width * height : 0;
+  };
+
+  for (const viewport of SEAM_VIEWPORTS) {
+    for (const reduceMotion of [false, true]) {
+      const label = `${viewport.label}:${reduceMotion ? "reduced" : "motion"}`;
+      const run = await open({ viewport, reduceMotion, readUrl });
+      try {
+        await armSeamRecorder(run.page);
+        await run.page.locator(".journey-playback__tempo select").selectOption("fast");
+        await run.page.waitForFunction((last) => {
+          const root = document.querySelector(".journey-playback");
+          const presentation = root?.querySelector(".playback-media-presentation");
+          return Number(root?.dataset.playbackStep) === last
+            && presentation?.getAttribute("data-media-presentation") === "settled"
+            && presentation.getAttribute("data-presented-asset") === "st109-p2-m2";
+        }, LAST, { timeout: 60_000 });
+        const frames = await run.page.evaluate(() => {
+          window.__qaSeam.stopped = true;
+          return window.__qaSeam.frames;
+        });
+
+        // Q1: the last painted opening frame and the first painted media frame
+        // of the same asset share one rect.
+        const openingFrames = frames.filter((frame) => (
+          frame.step === FIRST - 1 && frame.openingAsset === "st109-p2-m0" && frame.opening
+        ));
+        const lastOpening = openingFrames.at(-1)?.opening ?? null;
+        const lastOpeningIndex = frames.lastIndexOf(openingFrames.at(-1));
+        const firstMediaIndex = frames.findIndex((frame) => frame.step === FIRST && frame.slots.some((slot) => (
+          slot.asset === "st109-p2-m0" && slot.opacity > 0.01 && slot.visible
+        )));
+        const firstMedia = firstMediaIndex < 0 ? null
+          : frames[firstMediaIndex].slots.find((slot) => slot.asset === "st109-p2-m0")?.visible ?? null;
+        // Frames in between painted neither the opening nor the media: a blank seam.
+        const blankSeamFrames = lastOpeningIndex >= 0 && firstMediaIndex > lastOpeningIndex
+          ? firstMediaIndex - lastOpeningIndex - 1 : null;
+        const handoffDelta = lastOpening && firstMedia ? Math.max(
+          Math.abs(lastOpening.left - firstMedia.left), Math.abs(lastOpening.top - firstMedia.top),
+          Math.abs(lastOpening.width - firstMedia.width), Math.abs(lastOpening.height - firstMedia.height),
+        ) : null;
+        record(`${label}:opening-to-first-media-rect-continuity`, {
+          openingFrames: openingFrames.length, lastOpening, firstMedia, handoffDelta, blankSeamFrames,
+          tolerancePx: HANDOFF_TOLERANCE_PX,
+          failed: handoffDelta === null || handoffDelta > HANDOFF_TOLERANCE_PX || blankSeamFrames !== 0,
+        });
+
+        // Q2: while the landscape picture departs behind the portrait one, its
+        // visible pixels stay inside the incoming aperture, and it is already
+        // invisible when the stage removes it.
+        const swap = frames.filter((frame) => frame.step === SECOND);
+        const settled = swap.filter((frame) => frame.presentation === "settled"
+          && frame.presented === "st109-p2-m1" && frame.requested === "st109-p2-m1").at(-1) ?? null;
+        const front = settled?.slots.find((slot) => slot.asset === "st109-p2-m1" && slot.front) ?? null;
+        // The incoming picture starts one stack depth back; the aperture the
+        // departing clip targets is where it settles.
+        const incomingAperture = front?.visible ?? null;
+        let worstExposure = 0;
+        // Only frames where the swap has begun: before that the landscape is
+        // still the front picture and the portrait waits behind it.
+        for (const frame of swap.filter((candidate) => candidate.presentation === "moving")) {
+          const outgoing = frame.slots.find((slot) => slot.asset === "st109-p2-m0");
+          if (!outgoing?.visible || !incomingAperture || !(outgoing.opacity > 0.01)) continue;
+          const outside = area(outgoing.visible) - overlap(outgoing.visible, incomingAperture);
+          worstExposure = Math.max(worstExposure, outgoing.opacity * outside / area(incomingAperture));
+        }
+        const removal = swap.findIndex((frame, index) => index > 0
+          && swap[index - 1].slots.some((slot) => slot.asset === "st109-p2-m0")
+          && !frame.slots.some((slot) => slot.asset === "st109-p2-m0"));
+        const beforeRemoval = removal > 0
+          ? swap[removal - 1].slots.find((slot) => slot.asset === "st109-p2-m0") : null;
+        const opacityBeforeRemoval = beforeRemoval?.visible ? beforeRemoval.opacity : 0;
+        record(`${label}:mixed-aspect-departure-stays-in-aperture`, {
+          swapFrames: swap.length, worstExposure, maxExposure: MAX_DEPARTING_EXPOSURE,
+          removalFrame: removal, opacityBeforeRemoval,
+          // Reduced Motion cuts at the handoff by design; with motion the
+          // departing picture must already be invisible when it is dropped.
+          failed: swap.length === 0 || !incomingAperture || (!reduceMotion
+            && (worstExposure > MAX_DEPARTING_EXPOSURE || removal < 0 || opacityBeforeRemoval > 0.05)),
+        });
+
+        // Q3: the settled portrait owns the stage and clears the transport.
+        const apertureShare = front ? front.aperture.height / viewport.height : 0;
+        const pictureBottom = front?.visible ? front.visible.top + front.visible.height : null;
+        const controlsTop = settled?.controls?.top ?? null;
+        record(`${label}:settled-media-owns-stage-above-transport`, {
+          apertureShare, minShare: MIN_APERTURE_SHARE, pictureBottom, controlsTop,
+          failed: !front || apertureShare < MIN_APERTURE_SHARE
+            || pictureBottom === null || controlsTop === null || pictureBottom > controlsTop + 0.5,
+        });
+        // Q3 with a long note: the note scrolls inside its own band and the
+        // settled media still owns the stage above the transport.
+        const longNote = frames.filter((frame) => frame.step === LONG_NOTE && frame.presentation === "settled"
+          && frame.presented === "st109-p1-m0").at(-1) ?? null;
+        const longFront = longNote?.slots.find((slot) => slot.asset === "st109-p1-m0" && slot.front) ?? null;
+        const longShare = longFront ? longFront.aperture.height / viewport.height : 0;
+        const longBottom = longFront?.visible ? longFront.visible.top + longFront.visible.height : null;
+        record(`${label}:long-note-scrolls-while-media-owns-stage`, {
+          apertureShare: longShare, minShare: MIN_APERTURE_SHARE, caption: longNote?.caption ?? null,
+          pictureBottom: longBottom, controlsTop: longNote?.controls?.top ?? null,
+          failed: !longFront || longShare < MIN_APERTURE_SHARE || !longNote.caption
+            || longNote.caption.scrollHeight <= longNote.caption.clientHeight
+            || longBottom === null || longBottom > (longNote.controls?.top ?? -Infinity) + 0.5,
+        });
+        record(`${label}:seam-clean`, {
+          consoleErrors: run.consoleErrors,
+          pageErrors: run.pageErrors,
+          failed: run.consoleErrors.length > 0 || run.pageErrors.length > 0,
+        });
+      } finally {
+        await run.page.close();
+      }
+    }
+  }
+}
+
+// ── Q2 interruption: a newer media request lands mid-swap while it still loads
+{
+  const aspectSvg = (width, height) => `data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}'>`
+    + `<rect width='${width}' height='${height}' fill='#67b5a7'/></svg>`,
+  )}`;
+  const media = {
+    "st109-p2-m0": aspectSvg(1600, 900),
+    "st109-p2-m1": aspectSvg(900, 1600),
+    "st109-p2-m2": aspectSvg(1600, 900),
+  };
+  let releaseHeld = () => undefined;
+  const held = new Promise((resolve) => { releaseHeld = resolve; });
+  const stepOf = (pointIndex, mediaIndex) => STEPS.findIndex((candidate) => (
+    candidate.kind === "media" && candidate.pointIndex === pointIndex && candidate.mediaIndex === mediaIndex
+  ));
+  const SECOND = stepOf(2, 1);
+  const LAST = stepOf(2, 2);
+  const run = await open({
+    viewport: { label: "desktop-1920", width: 1920, height: 1080 },
+    reduceMotion: false,
+    readUrl: (url) => Object.entries(media).find(([id]) => url.includes(id))?.[1] ?? null,
+    holdRead: (url) => (url.includes("st109-p2-m2") ? held : undefined),
+  });
+  try {
+    // Request the next media from inside the swap's own moving frame.
+    await run.page.evaluate((second) => {
+      window.__qaInterrupt = { fired: false };
+      const observer = new MutationObserver(() => {
+        const root = document.querySelector(".journey-playback");
+        const stage = root?.querySelector(".playback-media-presentation");
+        if (window.__qaInterrupt.fired || Number(root?.dataset.playbackStep) !== second
+          || stage?.getAttribute("data-media-presentation") !== "moving") return;
+        window.__qaInterrupt.fired = true;
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+        observer.disconnect();
+      });
+      observer.observe(document, { attributes: true, childList: true, subtree: true });
+    }, SECOND);
+    await run.page.locator(".journey-playback__tempo select").selectOption("fast");
+    await run.page.waitForFunction((last) => window.__qaInterrupt?.fired
+      && Number(document.querySelector(".journey-playback")?.dataset.playbackStep) === last,
+    LAST, { timeout: 60_000 });
+    // Two painted frames while the newer media is still loading.
+    const interrupted = await run.page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const slots = [...document.querySelectorAll(".playback-media-presentation [data-media-slot][data-media-asset]")]
+          .map((slot) => {
+            const style = getComputedStyle(slot);
+            return { asset: slot.getAttribute("data-media-asset"), front: slot.getAttribute("aria-hidden") === "false",
+              opacity: Number(style.opacity), clipPath: style.clipPath, transform: style.transform };
+          });
+        resolve({ slots, presentation: document.querySelector(".playback-media-presentation")
+          ?.getAttribute("data-media-presentation") ?? null });
+      }));
+    }));
+    const shown = interrupted.slots.find((slot) => slot.front) ?? null;
+    const halfway = interrupted.slots.filter((slot) => slot.opacity > 0.01 && slot.opacity < 0.99);
+    record("desktop-1920:motion:interrupted-swap-settles-deterministically", {
+      ...interrupted,
+      failed: !shown || shown.opacity < 0.99 || (shown.clipPath !== "none" && !/^inset\(0(%|px)?\)$/.test(shown.clipPath))
+        || halfway.length > 0,
+    });
+    releaseHeld();
+    await run.page.waitForFunction(() => {
+      const stage = document.querySelector(".playback-media-presentation");
+      return stage?.getAttribute("data-media-presentation") === "settled"
+        && stage.getAttribute("data-presented-asset") === "st109-p2-m2";
+    }, null, { timeout: 30_000 });
+    record("desktop-1920:motion:interrupted-swap-clean", {
+      consoleErrors: run.consoleErrors,
+      pageErrors: run.pageErrors,
+      failed: run.consoleErrors.length > 0 || run.pageErrors.length > 0,
+    });
+  } finally {
+    releaseHeld();
     await run.page.close();
   }
 }
