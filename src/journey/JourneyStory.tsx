@@ -536,6 +536,9 @@ export function JourneyStory({
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
   const initialMediaSelection = storyInitialMediaSelection(journey, routePointId, initialAssetId);
+  // The compositor can hold B in front while A is still the committed index
+  // and C waits for a read. Close/Back must return from B's observation.
+  const foregroundMediaIdRef = useRef<string | null>(initialMediaSelection.assetId);
   const [assetIndex, setAssetIndex] = useState(initialMediaSelection.assetIndex);
   const [selectedRoutePointId, setSelectedRoutePointId] = useState<string | null>(
     initialMediaSelection.routePointId,
@@ -1854,12 +1857,21 @@ export function JourneyStory({
   // image; it is independent of slideshow order.
   const cover = journey ? journeyCover(journey) : null;
 
+  const reportForegroundMedia = useCallback((id: string | null) => {
+    foregroundMediaIdRef.current = id;
+    if (!journey) return;
+    onObservationChange?.(storyLogicalObservation(
+      journey, selectedRoutePointId, id, mobileLayout, mobileStoryExpanded,
+    ));
+  }, [journey, selectedRoutePointId, mobileLayout, mobileStoryExpanded, onObservationChange]);
   useEffect(() => {
     if (!journey) return;
+    const foregroundId = foregroundMediaIdRef.current;
     onObservationChange?.(storyLogicalObservation(
       journey,
       selectedRoutePointId,
-      shownAssetId ?? activeAsset?.id ?? null,
+      foregroundId && scopedMediaIndex.byId.has(foregroundId)
+        ? foregroundId : shownAssetId ?? activeAsset?.id ?? null,
       mobileLayout,
       mobileStoryExpanded,
     ));
@@ -1869,6 +1881,7 @@ export function JourneyStory({
     mobileLayout,
     mobileStoryExpanded,
     onObservationChange,
+    scopedMediaIndex,
     selectedRoutePointId,
     shownAssetId,
   ]);
@@ -3762,6 +3775,7 @@ export function JourneyStory({
               onGestureCommit={commitStoryMediaGesture}
               onGesturePrepare={prepareStoryMediaGestureTarget}
               onGestureTapAfterSettle={openFullscreenAfterStoryGesture}
+              onForegroundChange={reportForegroundMedia}
               onImageClick={mobileLayout ? openImageFullscreenAfterTap : undefined}
               onNavigate={!mobileLayout ? navigateFromPicture : undefined}
               canNavigatePrevious={canStepPrevious}
@@ -4424,6 +4438,7 @@ export function JourneyStory({
             onGesturePrepare={prepareStoryMediaGestureTarget}
             onGestureExitFullscreen={exitFullscreen}
             onGestureRevealFullscreenControls={revealMobileFullscreenControls}
+            onForegroundChange={reportForegroundMedia}
             onNavigate={!mobileLayout ? navigateFromPicture : undefined}
             canNavigatePrevious={canStepPrevious}
             canNavigateNext={canStepNext}

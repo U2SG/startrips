@@ -3807,6 +3807,52 @@ try {
     }
   }
 
+  // The held page is the last visible observation even while a newer read is
+  // pending. Closing here must not hand Atlas the older committed asset.
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-held-page-close-observes-foreground";
+    const progress = {};
+    const committed = MANY_MEDIA[1];
+    const painted = MANY_MEDIA[2];
+    const pending = MANY_MEDIA[3];
+    let story = null;
+    try {
+      const { page } = session;
+      story = await openManyMediaStory(session, { gates: [pending] });
+      await waitForSettledAsset(page, MANY_MEDIA[0]);
+      await clickNextPhoto(page);
+      await waitForSettledAsset(page, committed);
+      const point = await photoClickPoint(page, STAGE, 1);
+      await page.mouse.dblclick(point.x, point.y, { delay: 0 });
+      progress.requested = await waitForRequestedMedia(page, pending);
+      progress.held = await page.waitForFunction(({ selector, oldId, frontId }) => {
+        const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        return stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === oldId
+          && stage.querySelector('[data-media-presented="true"]')?.getAttribute("data-media-page-id") === frontId;
+      }, { selector: STAGE, oldId: committed, frontId: painted }, { polling: "raf", timeout: 3_000 })
+        .then(() => true, () => false);
+      progress.beforeClose = await page.locator(".living-atlas").getAttribute("data-qa-story-observation-asset");
+      progress.readHeld = story.reads.some((entry) => entry.id === pending && entry.servedAt === null);
+      await page.getByRole("button", { name: "退出旅程故事" }).click();
+      await page.locator(".journey-story").waitFor({ state: "detached", timeout: 3_000 });
+      progress.afterClose = await page.locator(".living-atlas").getAttribute("data-qa-story-observation-asset");
+      record({ name,
+        claim: "Close during a B-front/C-pending handoff reports B, the painted foreground, rather than committed A",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.requested || !progress.held || !progress.readHeld
+          || progress.beforeClose !== painted || progress.afterClose !== painted
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      story?.release(pending);
+      await session.page.close();
+    }
+  }
+
   // ---------------------------------------------------------------------
   // A (engine). #489 ST-159 hold, not flash: the read of the requested
   // photograph is held back until this script releases it. The presented

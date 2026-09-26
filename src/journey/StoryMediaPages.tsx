@@ -80,6 +80,8 @@ type Props = {
   onGestureTapAfterSettle?: () => void;
   onGestureExitFullscreen?: () => void;
   onGestureRevealFullscreenControls?: () => void;
+  /** The painted owner used for Story's logical return observation. */
+  onForegroundChange?: (id: string | null) => void;
   /** #489: the decode tier of Story's warm window. A video here keeps a
    *  representative frame ready before it is given a physical page. */
   warmIds?: readonly string[];
@@ -527,6 +529,9 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   // photograph to the return morph while the new one was on screen.
   const foregroundId = props.incomingId && targetReady ? props.incomingId
     : holdingFront ? heldFrontId : props.currentId;
+  useLayoutEffect(() => {
+    if (active) props.onForegroundChange?.(foregroundId);
+  }, [active, foregroundId, props.onForegroundChange]);
   useLayoutEffect(() => {
     if (!active) return;
     // Physical slots outlive their media. Carry keyboard focus with the
