@@ -3068,6 +3068,62 @@ async function clickReturnedVideo(page) {
 }
 
 try {
+  // A held video's representative frame is a canvas. A DOM clone of that
+  // canvas has an empty drawing buffer, so the shared-element handoff must
+  // snapshot its pixels before hiding the source.
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-canvas-shared-element-snapshot";
+    try {
+      const evidence = await session.page.evaluate(async () => {
+        const { runSharedElementMorph } = await import("/src/motion/primitives/sharedElement.ts");
+        const source = document.createElement("canvas");
+        source.width = 120;
+        source.height = 80;
+        Object.assign(source.style, {
+          position: "fixed", left: "40px", top: "30px", width: "200px", height: "120px",
+          objectFit: "contain", zIndex: "1000",
+        });
+        const context = source.getContext("2d");
+        if (!context) return { failed: true, reason: "source context unavailable" };
+        context.fillStyle = "rgb(230, 40, 20)";
+        context.fillRect(0, 0, 60, 80);
+        context.fillStyle = "rgb(20, 70, 220)";
+        context.fillRect(60, 0, 60, 80);
+        document.body.appendChild(source);
+        const cancel = runSharedElementMorph({ source, resolveTarget: () => null,
+          update: () => undefined, name: "qa-canvas-bitmap", readinessTimeoutMs: 1_000 });
+        try {
+          const clone = document.querySelector('[data-shared-element-clone="qa-canvas-bitmap"]');
+          const pixels = clone instanceof HTMLCanvasElement
+            ? clone.getContext("2d")?.getImageData(0, 0, clone.width, clone.height) : null;
+          const sample = (x) => pixels
+            ? [...pixels.data.slice((40 * clone.width + x) * 4, (40 * clone.width + x) * 4 + 4)] : null;
+          const bounds = clone?.getBoundingClientRect();
+          return { cloneIsCanvas: clone instanceof HTMLCanvasElement,
+            dimensions: clone instanceof HTMLCanvasElement ? [clone.width, clone.height] : null,
+            left: sample(30), right: sample(90),
+            bounds: bounds ? { x: bounds.x, width: bounds.width } : null };
+        } finally {
+          cancel();
+          source.remove();
+        }
+      });
+      record({ name, claim: "a canvas media source hands its painted bitmap and contained picture bounds to the shared-element clone",
+        ...evidence, failed: !evidence.cloneIsCanvas
+          || evidence.dimensions?.[0] !== 120 || evidence.dimensions?.[1] !== 80
+          || evidence.left?.[0] !== 230 || evidence.left?.[1] !== 40
+          || evidence.right?.[1] !== 70 || evidence.right?.[2] !== 220
+          || Math.abs((evidence.bounds?.x ?? 0) - 50) > 1
+          || Math.abs((evidence.bounds?.width ?? 0) - 180) > 1
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0 });
+    } catch (error) {
+      record({ name, error: error instanceof Error ? error.message : String(error), failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
   // ---------------------------------------------------------------------
   // A. Real input on the presented video reaches its own transport.
   // ---------------------------------------------------------------------

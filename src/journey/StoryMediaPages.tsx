@@ -1246,7 +1246,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
             else props.onImageClick?.(true);
           } : undefined} />
         <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined}
-          sharedId={isVideo && id === foregroundId && pageReady ? id : undefined} />
+          sharedId={isVideo && id !== null && id === foregroundId && pageReady
+            && (!videoVisible || id !== props.currentId) ? id : undefined} />
       </div>;
     })}
     {/* #489 A1: a photograph's stationary click surface must never cover the
