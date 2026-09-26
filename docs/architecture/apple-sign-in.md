@@ -87,7 +87,7 @@ created by a first-time Apple authorization has exactly one: Apple. Social
 sign-up writes a provider `account` row and its ownership row and no
 `credential` row, and `password-enrollment.ts` is an explicit, re-verified
 action the owner has to take later. #345's guarantee is
-`hasUsableLoginAfterRemoval` — it refuses to UNLINK a last usable method; it
+`hasProtectedAccessAfterRemoval` — it refuses to UNLINK a last usable method (and, since #486, one that would leave no reachable recovery channel); it
 never manufactures a fallback for an account that only ever had one.
 
 `server/tests/account-identity-apple.integration.test.ts` asserts exactly this
@@ -98,7 +98,7 @@ once the credential works again.
 
 To stop offering Apple entirely, clear all five variables and restart. Read the
 consequence before doing it: `apple` leaves `usableProviderIds`, so every Apple
-`account` row stops satisfying `accountIdentityUsable`, and an account whose
+`account` row stops satisfying `accountIdentityLoginUsable`, and an account whose
 only identity is Apple — the normal shape of one created by Apple sign-up —
 has no way in at all. The same holds for the narrower case above while a
 revoked key is in place.

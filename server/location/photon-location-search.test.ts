@@ -610,4 +610,64 @@ describe("PhotonLocationSearch", () => {
 
     await expect(search.reverse(0, 0, {})).resolves.toBeNull();
   });
+
+  it("forwards a rounded focus as lat/lon, leaves a focus-free request unchanged and caches per focus", async () => {
+    const fetchMock = vi.fn(async () => Response.json({
+      features: [{
+        geometry: { coordinates: [121.657, 31.144] },
+        properties: { osm_type: "W", osm_id: 1, name: "Disneyland", countrycode: "CN" },
+      }],
+    }));
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await search.search("Disneyland", { limit: 8 });
+    await search.search("Disneyland", { limit: 8, focus: { latitude: 31.23041, longitude: 121.47372 } });
+    // Rounds to the same ~1 km cell as the previous focus: served from cache.
+    await search.search("Disneyland", { limit: 8, focus: { latitude: 31.2311, longitude: 121.4749 } });
+    await search.search("Disneyland", { limit: 8, focus: { latitude: 35.6762, longitude: 139.6503 } });
+    // The focus-free answer is still its own entry, never a biased one.
+    await search.search("Disneyland", { limit: 8 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const urls = fetchMock.mock.calls.map((call) => String((call as unknown as [URL])[0]));
+    expect(urls).toEqual([
+      "https://photon.example.test/api/?q=Disneyland&limit=8",
+      "https://photon.example.test/api/?q=Disneyland&limit=8&lat=31.23&lon=121.47",
+      "https://photon.example.test/api/?q=Disneyland&limit=8&lat=35.68&lon=139.65",
+    ]);
+  });
+
+  it("carries the focus into the English round trip and keys that trip by focus too", async () => {
+    const fetchMock = vi.fn(async () => Response.json({
+      features: [{
+        geometry: { coordinates: [114.0413, 22.3129] },
+        properties: { osm_type: "W", osm_id: 2, name: "迪士尼", countrycode: "HK" },
+      }],
+    }));
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+      placeNameAliases: async () => "Disneyland",
+    });
+
+    await search.search("迪士尼", { limit: 8 });
+    await search.search("迪士尼", { limit: 8, focus: { latitude: 22.3193, longitude: 114.1694 } });
+    await search.search("迪士尼", { limit: 8, focus: { latitude: 22.3193, longitude: 114.1694 } });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const urls = fetchMock.mock.calls.map((call) => String((call as unknown as [URL])[0]));
+    expect(urls).toEqual([
+      "https://photon.example.test/api/?q=%E8%BF%AA%E5%A3%AB%E5%B0%BC&limit=8",
+      "https://photon.example.test/api/?q=Disneyland&limit=8&lang=en",
+      "https://photon.example.test/api/?q=%E8%BF%AA%E5%A3%AB%E5%B0%BC&limit=8&lat=22.32&lon=114.17",
+      "https://photon.example.test/api/?q=Disneyland&limit=8&lang=en&lat=22.32&lon=114.17",
+    ]);
+  });
 });

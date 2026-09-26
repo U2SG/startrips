@@ -1,6 +1,8 @@
 import {
   fetchLocationSearch,
+  locationSearchFocusKey,
   LocationSearchUnavailableError,
+  roundLocationSearchFocus,
   throwIfLocationSearchAborted,
   waitForLocationSearchDelay,
   type LocationSearch,
@@ -248,12 +250,24 @@ export class PhotonLocationSearch implements LocationSearch {
   ): Promise<LocationSearchResult[]> {
     const typedQuery = query.trim().replace(/\s+/g, " ");
     const normalizedQuery = resolveNameVariant(typedQuery);
+    // #546: Photon's own location bias. It reorders by distance to lat/lon
+    // but never drops far-away matches, and both round trips carry it so they
+    // rank against the same Journey context.
+    const focus = roundLocationSearchFocus(options.focus);
+    const focusKey = locationSearchFocusKey(focus);
+    const withFocus = (url: URL) => {
+      if (focus) {
+        url.searchParams.set("lat", String(focus.latitude));
+        url.searchParams.set("lon", String(focus.longitude));
+      }
+      return url;
+    };
     const primaryUrl = new URL("api/", this.baseUrl);
     primaryUrl.searchParams.set("q", normalizedQuery);
     primaryUrl.searchParams.set("limit", String(options.limit));
     return this.requestFeatures(
-      primaryUrl,
-      `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}`,
+      withFocus(primaryUrl),
+      `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}${focusKey}`,
       { limit: options.limit, signal: options.signal },
     ).then(async (primaryResults) => {
       // The English request is queued behind the primary one — a full
@@ -285,8 +299,8 @@ export class PhotonLocationSearch implements LocationSearch {
       let englishResults: LocationSearchResult[] | null;
       try {
         englishResults = await this.requestFeatures(
-          englishUrl,
-          `search:${englishQuery.toLocaleLowerCase()}::${options.limit}::lang=en`,
+          withFocus(englishUrl),
+          `search:${englishQuery.toLocaleLowerCase()}::${options.limit}::lang=en${focusKey}`,
           { limit: options.limit, signal: options.signal },
         );
       } catch {
