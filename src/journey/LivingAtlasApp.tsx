@@ -1139,6 +1139,10 @@ export function LivingAtlasApp({
   }, []);
   const closeRoutePointContext = useCallback((restoreFocus = true) => {
     const returnFocus = routePointContextReturnFocusRef.current;
+    const sceneAtClose = document.querySelector(".particle-earth-scene");
+    const contextAtClose = document.querySelector("[data-route-point-context]");
+    const contextParentAtClose = contextAtClose?.parentElement ?? null;
+    const layoutFrameAtClose = sceneAtClose?.getAttribute("data-place-label-layout-frame") ?? null;
     routePointContextReturnFocusRef.current = null;
     clearRoutePointContext();
     if (!restoreFocus || !returnFocus) return;
@@ -1154,11 +1158,19 @@ export function LivingAtlasApp({
     };
     const restoreCurrentTrigger = () => {
       // The close button can dispatch while the context is still mounted and
-      // the scene is still publishing the selected-label layout. Do not let an
-      // early scene mutation consume the restore attempt: focusing that
-      // pre-close label can be undone when arbitration applies the ordinary
-      // layout and replaces the SVG node.
+      // the scene is still publishing the selected-label layout. Route-label
+      // focus is legal only after both boundaries have advanced: React removed
+      // the context and Particle Earth published a post-close label layout.
       if (document.querySelector("[data-route-point-context]")) return false;
+      if (
+        returnFocus.journeyId
+        && returnFocus.routePointId
+        && sceneAtClose
+        && layoutFrameAtClose !== null
+        && sceneAtClose.getAttribute("data-place-label-layout-frame") === layoutFrameAtClose
+      ) {
+        return false;
+      }
       const replacement = returnFocus.journeyId && returnFocus.routePointId
         ? [...document.querySelectorAll<SVGGElement>(
           ".particle-earth-route__label[data-journey-route][data-route-point-id]",
@@ -1184,8 +1196,7 @@ export function LivingAtlasApp({
       restoreCurrentTrigger();
       return;
     }
-    const scene = document.querySelector(".particle-earth-scene");
-    if (!scene) return;
+    if (!sceneAtClose) return;
     const observer = new MutationObserver(() => {
       if (!restoreCurrentTrigger()) return;
       observer.disconnect();
@@ -1194,10 +1205,20 @@ export function LivingAtlasApp({
       }
     });
     routePointContextFocusObserverRef.current = observer;
-    observer.observe(scene, {
+    observer.observe(sceneAtClose, {
       attributes: true,
       attributeFilter: ["data-place-label-layout-frame"],
     });
+    if (contextParentAtClose) {
+      observer.observe(contextParentAtClose, { childList: true, subtree: true });
+    }
+    // Cover the legal case where React committed synchronously before observer
+    // registration and Particle Earth already published the corresponding
+    // post-close layout frame. This is an evidence check, not a timed retry.
+    if (restoreCurrentTrigger()) {
+      observer.disconnect();
+      routePointContextFocusObserverRef.current = null;
+    }
   }, [clearRoutePointContext]);
   useEffect(() => () => {
     routePointContextFocusObserverRef.current?.disconnect();
