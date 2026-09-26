@@ -605,12 +605,12 @@ async function routePointActivationEvidence(page) {
   }));
 }
 
-async function clickRoutePointMarker(page, routeId, pointId) {
+async function clickRoutePointMarker(page, routeId, pointId, targetOverride = null) {
   const marker = page.locator(`.particle-earth-route__point[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
   await marker.waitFor({ state: "visible", timeout: 5_000 });
   const box = await marker.boundingBox();
   if (!box) throw new Error(`Route Point ${pointId} has no projected marker geometry`);
-  const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const target = targetOverride ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   await page.mouse.click(target.x, target.y);
   return { box, target };
 }
@@ -884,34 +884,60 @@ try {
   // contract. Pick exactly one already-visible marker nearest the real canvas
   // centre: no retries, camera steering or force-click, and the pointer still
   // travels through the production canvas raycast path.
-  const markerPointId = await visibleMarkers.evaluateAll((markers) => {
+  const markerHit = await visibleMarkers.evaluateAll((markers) => {
     const canvas = document.querySelector(".particle-earth-scene canvas");
-    const canvasRect = canvas?.getBoundingClientRect();
-    if (!canvasRect) return null;
+    if (!(canvas instanceof HTMLCanvasElement)) return null;
+    const canvasRect = canvas.getBoundingClientRect();
     const canvasX = canvasRect.left + canvasRect.width / 2;
     const canvasY = canvasRect.top + canvasRect.height / 2;
-    return markers
-      .map((marker) => {
-        const rect = marker.getBoundingClientRect();
-        const x = rect.left + rect.width / 2;
-        const y = rect.top + rect.height / 2;
-        return {
-          id: marker.getAttribute("data-route-point-id"),
-          insideCanvas: x >= canvasRect.left && x <= canvasRect.right
-            && y >= canvasRect.top && y <= canvasRect.bottom,
-          canvasOwnsPixel: document.elementFromPoint(x, y) === canvas,
-          distance: Math.hypot(x - canvasX, y - canvasY),
-        };
-      })
-      // This round specifically grades the canvas-owned marker path (the
-      // assertion below requires eventTarget=canvas). A geometrically visible
-      // SVG bead may sit under a label/card hit surface, so visibility alone is
-      // not proof that its centre is a canvas pointer target.
-      .filter((candidate) => candidate.id && candidate.insideCanvas && candidate.canvasOwnsPixel)
-      .sort((left, right) => left.distance - right.distance)[0]?.id ?? null;
+    const candidates = markers.flatMap((marker) => {
+      const id = marker.getAttribute("data-route-point-id");
+      const routePointIndex = Number(marker.getAttribute("data-route-point-index"));
+      const rect = marker.getBoundingClientRect();
+      if (!id || !Number.isInteger(routePointIndex) || rect.width <= 0 || rect.height <= 0) return [];
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      if (x < canvasRect.left || x > canvasRect.right || y < canvasRect.top || y > canvasRect.bottom) return [];
+      return [{ id, routePointIndex, x, y, distance: Math.hypot(x - canvasX, y - canvasY) }];
+    });
+    // Labels may legitimately cover a bead's exact centre while part of the
+    // product's 22px marker hit neighbourhood remains reachable on the canvas.
+    // Find one real canvas-owned pixel whose nearest eligible marker is the
+    // same stable Route Point. This mirrors the production screen-target
+    // arbitration instead of assuming the visual centre must own the DOM hit.
+    const offsets = [{ x: 0, y: 0 }];
+    for (const radius of [4, 8, 12, 16, 20]) {
+      for (let step = 0; step < 16; step += 1) {
+        const angle = (Math.PI * 2 * step) / 16;
+        offsets.push({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+      }
+    }
+    for (const marker of [...candidates].sort((left, right) => left.distance - right.distance)) {
+      for (const offset of offsets) {
+        const x = marker.x + offset.x;
+        const y = marker.y + offset.y;
+        if (x < canvasRect.left || x > canvasRect.right || y < canvasRect.top || y > canvasRect.bottom) continue;
+        if (document.elementFromPoint(x, y) !== canvas) continue;
+        const nearest = candidates
+          .map((candidate) => ({
+            candidate,
+            distance: Math.hypot(x - candidate.x, y - candidate.y),
+          }))
+          .filter(({ distance }) => distance <= 22)
+          .sort((left, right) => (
+            left.distance - right.distance
+            || left.candidate.routePointIndex - right.candidate.routePointIndex
+          ))[0]?.candidate ?? null;
+        if (nearest?.id === marker.id) {
+          return { id: marker.id, target: { x, y } };
+        }
+      }
+    }
+    return null;
   });
-  if (!markerPointId) throw new Error("visible active-Journey Route Point marker has no stable in-canvas id");
-  const markerClick = await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
+  if (!markerHit) throw new Error("visible active-Journey Route Point marker has no unambiguous canvas-owned hit pixel");
+  const markerPointId = markerHit.id;
+  const markerClick = await clickRoutePointMarker(interactionPage, journeyId, markerPointId, markerHit.target);
   const interactionContext = interactionPage.locator("[data-route-point-context]");
   try {
     await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
