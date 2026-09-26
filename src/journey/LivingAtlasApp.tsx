@@ -1178,8 +1178,8 @@ export function LivingAtlasApp({
       restoreCurrentTrigger();
       return;
     }
-    const routeLayer = document.querySelector(".particle-earth-route-layer");
-    if (!routeLayer) return;
+    const scene = document.querySelector(".particle-earth-scene");
+    if (!scene) return;
     const observer = new MutationObserver(() => {
       if (!restoreCurrentTrigger()) return;
       observer.disconnect();
@@ -1188,11 +1188,9 @@ export function LivingAtlasApp({
       }
     });
     routePointContextFocusObserverRef.current = observer;
-    observer.observe(routeLayer, {
-      subtree: true,
-      childList: true,
+    observer.observe(scene, {
       attributes: true,
-      attributeFilter: ["style", "tabindex"],
+      attributeFilter: ["data-place-label-layout-frame"],
     });
   }, [clearRoutePointContext]);
   useEffect(() => () => {
@@ -2083,19 +2081,10 @@ export function LivingAtlasApp({
   // Route Point identity stay untouched, while a stable real Route Point acts
   // as each summary's overview anchor.
   const staySummariesByJourney = useMemo(() => new Map(
-    journeys.map((journey) => {
-      const includedRoutePointIds = routePointContextTemporalReveal
-        ? new Set(journey.routePoints.flatMap((point, routePointIndex) => (
-            routePointContextTemporallyVisible(
-              journey.id,
-              routePointIndex,
-              routePointContextTemporalReveal,
-            ) ? [point.id] : []
-          )))
-        : undefined;
-      return [journey.id, deriveJourneyStaySummaries(journey, { includedRoutePointIds })] as const;
-    }),
-  ), [journeys, routePointContextTemporalReveal]);
+    journeys.map((journey) => (
+      [journey.id, deriveJourneyStaySummaries(journey)] as const
+    )),
+  ), [journeys]);
   const stayOverviewLabels = useMemo(() => {
     const labels = new Map<string, string>();
     for (const summaries of staySummariesByJourney.values()) {
