@@ -94,7 +94,7 @@ function OrganizerTile({ asset, index, props, busy, moving, register }: {
 }) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const selected = props.selectedIds.has(asset.id);
-  const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
+  const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging, isOver } = useSortable({
     id: asset.id, disabled: props.disabled || busy, data: { kind: "media", routePointId: asset.routePointId },
   });
   useThumbnailRead(buttonRef, asset, props.reads[asset.id], props.onRequestRead);
@@ -103,6 +103,7 @@ function OrganizerTile({ asset, index, props, busy, moving, register }: {
     register(asset.id, node);
   }, [asset.id, register]);
   return <li ref={setNodeRef} className={`story-media-organizer__item${isDragging ? " is-dragging" : ""}`}
+    data-media-tile-id={asset.id} data-drag-over={isOver ? "true" : undefined}
     style={{ transform: CSS.Transform.toString(transform), transition }}>
     <button ref={setButton} type="button" className={`story-media-organizer__tile${selected ? " is-selected" : ""}`}
       disabled={moving || (!props.selecting && (props.disabled || busy))} data-media-tile-index={index}
