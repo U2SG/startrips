@@ -3577,6 +3577,104 @@ try {
   }
 
   // ---------------------------------------------------------------------
+  // A painted handoff survives a cold next read across both Story surfaces.
+  // The newly active stage must put the retained page at the front and expose
+  // that same page to focus and assistive technology until the read lands.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-held-page-fullscreen-semantics";
+    const progress = {};
+    let story = null;
+    try {
+      const { page } = session;
+      const committed = MANY_MEDIA[1];
+      const painted = MANY_MEDIA[2];
+      const pending = MANY_MEDIA[3];
+      story = await openManyMediaStory(session, { gates: [pending] });
+      await waitForSettledAsset(page, MANY_MEDIA[0]);
+      await clickNextPhoto(page);
+      await waitForSettledAsset(page, committed);
+      await clickNextPhoto(page);
+      progress.painted = await page.waitForFunction(({ selector, id, owner }) => {
+        const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const box = stage?.getBoundingClientRect();
+        if (!box) return false;
+        const front = document.elementsFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+          .find((node) => node instanceof HTMLImageElement && !node.hidden);
+        return front?.closest("[data-media-page]")?.getAttribute("data-media-page-id") === id
+          && stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === owner;
+      }, { selector: STAGE, id: painted, owner: committed }, { polling: "raf", timeout: 3_000 })
+        .then(() => true, () => false);
+      await clickNextPhoto(page);
+      progress.requested = await waitForRequestedMedia(page, pending);
+      const heldState = async (selector) => page.evaluate(({ selector, committed, painted, pending }) => {
+        const root = document.querySelector(selector);
+        const stage = root?.querySelector("[data-story-media-pages]");
+        const pages = [...(stage?.querySelectorAll("[data-media-page-id]") ?? [])];
+        const pageFor = (id) => pages.find((node) => node.getAttribute("data-media-page-id") === id);
+        const front = pageFor(painted);
+        const old = pageFor(committed);
+        const next = pageFor(pending);
+        const image = front?.querySelector("img");
+        const style = front ? getComputedStyle(front) : null;
+        const matrix = style ? new DOMMatrixReadOnly(style.transform) : null;
+        return {
+          visible: Boolean(root && !root.hidden && getComputedStyle(root).display !== "none"),
+          committed: stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id"),
+          presented: stage?.querySelector('[data-media-presented="true"]')?.getAttribute("data-media-page-id"),
+          shared: front?.querySelector("[data-shared-media-id]")?.getAttribute("data-shared-media-id"),
+          oldHidden: old?.getAttribute("aria-hidden"),
+          frontHidden: front?.getAttribute("aria-hidden"),
+          oldTabIndex: old?.querySelector("img")?.tabIndex,
+          frontTabIndex: image?.tabIndex,
+          frontFocus: document.activeElement === image,
+          frontPointer: style?.pointerEvents,
+          nextReady: next?.getAttribute("data-media-page-ready"),
+          poseRest: Boolean(matrix && Math.abs(matrix.m11 - 1) < 0.001
+            && Math.abs(matrix.m22 - 1) < 0.001 && Math.abs(matrix.m33 - 1) < 0.001
+            && Math.abs(matrix.m41) < 0.5 && Math.abs(matrix.m42) < 0.5
+            && Math.abs(matrix.m43) < 0.5 && Number(style.opacity) > 0.999
+            && front.style.clipPath === "inset(0% 0%)"),
+        };
+      }, { selector, committed, painted, pending });
+      progress.inline = await heldState(STAGE);
+      await page.locator(".journey-story__fullscreen-entry").click();
+      await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 4_000 });
+      await page.waitForFunction(() => !document.querySelector('[data-shared-element-clone^="story-fullscreen-"]'),
+        null, { polling: "raf", timeout: 4_000 });
+      progress.fullscreen = await heldState(FULLSCREEN);
+      await page.locator(".journey-story-fullscreen__close").click();
+      await page.waitForFunction(() => !document.querySelector('[data-shared-element-clone^="story-fullscreen-"]'),
+        null, { polling: "raf", timeout: 4_000 });
+      progress.returned = await heldState(STAGE);
+      progress.readHeld = story.reads.some((entry) => entry.id === pending && entry.servedAt === null);
+      story.release(pending);
+      progress.settled = await waitForSettledAsset(page, pending).then(() => true, () => false);
+      const semantic = (state) => state.visible && state.committed === committed
+        && state.presented === painted && state.shared === painted
+        && state.oldHidden === "true" && state.frontHidden === "false"
+        && state.oldTabIndex === -1 && state.frontTabIndex === 0
+        && state.frontPointer === "auto" && state.nextReady === "false";
+      record({ name,
+        claim: "while C's signed read is withheld after B paints over committed A, B remains the visible, focusable, accessible page in both inline and fullscreen stages, and each newly active stage gives B an unclipped front pose before C settles",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.painted || !progress.requested || !progress.readHeld || !progress.settled
+          || !semantic(progress.inline) || !progress.inline.frontFocus
+          || !semantic(progress.fullscreen) || !progress.fullscreen.poseRest
+          || !semantic(progress.returned) || !progress.returned.poseRest
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      story?.release(MANY_MEDIA[3]);
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // A (engine). #489 ST-159 hold, not flash: the read of the requested
   // photograph is held back until this script releases it. The presented
   // picture stays the settled foreground for that whole window, the target
