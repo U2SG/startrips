@@ -2941,6 +2941,10 @@ export function ParticleEarthScene({
           // Visible Route Point optics are SVG/CSS-pixel beads. Pointer hit
           // testing remains the independent Three.js point layer below; this
           // marker never grows its geographic anchor or hit geometry.
+          // A freshly rebuilt SVG circle defaults to cx=0/cy=0. Keep it out of
+          // paint and hit discovery until the projection pass publishes its real
+          // screen coordinate and routePointIndex below.
+          element.style.display = "none";
           element.dataset.journeyRoute = route.id;
           if (point.id) element.dataset.routePointId = point.id;
           const presentation = resolveRoutePointPresentation({
