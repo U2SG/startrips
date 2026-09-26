@@ -609,6 +609,30 @@ async function measureRouteOptics(page, routeIdentifier) {
     const labelLeaders = [...group.querySelectorAll(".particle-earth-route__label .particle-earth-route__leader")]
       .filter((node) => node.closest(".particle-earth-route__label")?.style.display !== "none");
     const labelLeaderStyle = labelLeaders[0] ? getComputedStyle(labelLeaders[0]) : null;
+    const labelLeaderEdgeGaps = labelLeaders.map((leader) => {
+      const label = leader.closest(".particle-earth-route__label");
+      const pointIndex = Number(label?.getAttribute("data-route-point-index"));
+      const marker = [...group.querySelectorAll(".particle-earth-route__point")]
+        .find((candidate) => Number(candidate.getAttribute("data-route-point-index")) === pointIndex);
+      const start = (leader.getAttribute("d") ?? "").match(/^M(-?[\d.]+) (-?[\d.]+)/);
+      const anchorX = Number(marker?.getAttribute("data-anchor-x"));
+      const anchorY = Number(marker?.getAttribute("data-anchor-y"));
+      const startX = Number(start?.[1]);
+      const startY = Number(start?.[2]);
+      const markerRadius = Number(marker?.getAttribute("r"));
+      const markerStrokeWidth = marker ? Number.parseFloat(getComputedStyle(marker).strokeWidth) : Number.NaN;
+      const leaderStrokeWidth = Number.parseFloat(getComputedStyle(leader).strokeWidth);
+      const centerGapPx = Number.isFinite(startX) && Number.isFinite(startY)
+        && Number.isFinite(anchorX) && Number.isFinite(anchorY)
+        ? Math.hypot(startX - anchorX, startY - anchorY)
+        : Number.NaN;
+      return Number.isFinite(centerGapPx)
+        && Number.isFinite(markerRadius)
+        && Number.isFinite(markerStrokeWidth)
+        && Number.isFinite(leaderStrokeWidth)
+        ? centerGapPx - markerRadius - markerStrokeWidth / 2 - leaderStrokeWidth / 2
+        : Number.NaN;
+    });
     return {
       devicePixelRatio: window.devicePixelRatio,
       compact: document.querySelector(".particle-earth-scene")?.getAttribute("data-mobile-v2") ?? null,
@@ -622,6 +646,7 @@ async function measureRouteOptics(page, routeIdentifier) {
       labelLeaderWidth: labelLeaderStyle ? Number.parseFloat(labelLeaderStyle.strokeWidth) : Number.NaN,
       labelLeaderOpacity: labelLeaderStyle ? Number.parseFloat(labelLeaderStyle.opacity) : Number.NaN,
       labelLeaderDashArray: labelLeaderStyle?.strokeDasharray ?? null,
+      labelLeaderEdgeGaps,
       points,
     };
   }, routeIdentifier);
@@ -820,6 +845,7 @@ try {
       if (!(state.labelLeaderWidth <= 0.75)) failures.push(`DPR ${sample.dpr} ${stateName}: label leader is too route-like at ${state.labelLeaderWidth}px`);
       if (!(state.labelLeaderOpacity <= 0.45)) failures.push(`DPR ${sample.dpr} ${stateName}: label leader opacity ${state.labelLeaderOpacity} is too close to route emphasis`);
       if (!state.labelLeaderDashArray || state.labelLeaderDashArray === "none") failures.push(`DPR ${sample.dpr} ${stateName}: label leader remained a solid route-like stroke`);
+      if (state.labelLeaderEdgeGaps.some((gap) => !Number.isFinite(gap) || gap < 4.5)) failures.push(`DPR ${sample.dpr} ${stateName}: label leader edge gap fell below the 5px target (${state.labelLeaderEdgeGaps.join(",")}px)`);
     }
     if (browse1.labelLeaderCount === 0 || browse3.labelLeaderCount === 0) failures.push(`DPR ${sample.dpr}: no visible label leader remained to associate Route Point text at overview/near framing`);
     if (sample.reducedMotion && playing.leaderOpacity !== 0) failures.push(`DPR ${sample.dpr}: reduced motion left the travelling leader visible`);
