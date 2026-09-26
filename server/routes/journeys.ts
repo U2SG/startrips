@@ -16,6 +16,15 @@ import { readJsonObject } from "./json-body";
 
 const MAX_ROUTE_POINTS = 64;
 const MAX_ROUTE_POINT_NOTE_LENGTH = 2000;
+const MAX_ROUTE_POINT_REGION_CONTEXT_LENGTH = 120;
+const ROUTE_POINT_PLACE_ROLES = new Set([
+  "accommodation",
+  "attraction",
+  "transport",
+  "pure-transit",
+  "activity",
+]);
+const ROUTE_POINT_OVERVIEW_VISIBILITIES = new Set(["auto", "main", "detail"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LIGHT_EFFECT_IDS = new Set(["rainbow", "aurora", "sunset", "nebula"]);
 export const JOURNEY_CACHE_CONTROL = "private, no-store, max-age=0";
@@ -118,6 +127,28 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
             ? point.note
             : null
           : "invalid";
+    const regionContext = point.regionContext === undefined
+      ? undefined
+      : point.regionContext === null || point.regionContext === ""
+        ? null
+        : typeof point.regionContext === "string"
+          ? point.regionContext.trim() || null
+          : "invalid";
+    const placeRole = point.placeRole === undefined
+      ? undefined
+      : point.placeRole === null || point.placeRole === ""
+        ? null
+        : typeof point.placeRole === "string" && ROUTE_POINT_PLACE_ROLES.has(point.placeRole)
+          ? point.placeRole
+          : "invalid";
+    const overviewVisibility = point.overviewVisibility === undefined
+      ? undefined
+      : point.overviewVisibility === null || point.overviewVisibility === ""
+        ? null
+        : typeof point.overviewVisibility === "string"
+          && ROUTE_POINT_OVERVIEW_VISIBILITIES.has(point.overviewVisibility)
+          ? point.overviewVisibility
+          : "invalid";
     if (
       id === null
       || latitude === null
@@ -127,6 +158,12 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
       || (occurredAt !== null && Number.isNaN(occurredAt.valueOf()))
       || note === "invalid"
       || (note !== undefined && note !== null && note.length > MAX_ROUTE_POINT_NOTE_LENGTH)
+      || regionContext === "invalid"
+      || (regionContext !== undefined
+        && regionContext !== null
+        && regionContext.length > MAX_ROUTE_POINT_REGION_CONTEXT_LENGTH)
+      || placeRole === "invalid"
+      || overviewVisibility === "invalid"
     ) {
       return null;
     }
@@ -135,7 +172,18 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
       if (previousOccurredAt && canonical < previousOccurredAt) return null;
       previousOccurredAt = canonical;
     }
-    routePoints.push({ id, latitude, longitude, label, isStop, occurredAt, note });
+    routePoints.push({
+      id,
+      latitude,
+      longitude,
+      label,
+      isStop,
+      occurredAt,
+      note,
+      regionContext,
+      placeRole,
+      overviewVisibility,
+    });
   }
 
   const persistedIds = routePoints.flatMap((point) => point.id ? [point.id] : []);

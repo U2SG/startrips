@@ -1177,6 +1177,27 @@ describe("Route Point context integration (#291)", () => {
     expect(rule).toContain("overflow-y: auto;");
     expect(rule).toContain("overscroll-behavior: contain;");
   });
+
+  it("keeps stay children behind a separate explicit detail intent (#514)", () => {
+    const projectionStart = appSource.indexOf("const selectedStaySummary = routePointContextSelection.context");
+    const projection = appSource.slice(projectionStart, projectionStart + 2600);
+    const surfaceStart = appSource.indexOf('data-stay-summary={staySummary.id}');
+    const surface = appSource.slice(surfaceStart - 500, surfaceStart + 2600);
+    const escapeStart = appSource.indexOf("// #514: stay detail is one explicitly-entered layer");
+    const escape = appSource.slice(escapeStart, escapeStart + 520);
+
+    expect(projectionStart).toBeGreaterThan(0);
+    expect(projection).toContain("selectedStaySummary?.id === activeStayDetailId");
+    expect(projection).toContain("const detailIds = activeStaySummary?.routePointIds ?? []");
+    expect(surfaceStart).toBeGreaterThan(0);
+    expect(surface).toContain('data-stay-detail-open={staySummary.id}');
+    expect(surface).toContain('onClick={() => setActiveStayDetailId(staySummary.id)}');
+    expect(surface).toContain('data-stay-detail-close={staySummary.id}');
+    expect(surface).toContain('onClick={() => setActiveStayDetailId(null)}');
+    expect(escapeStart).toBeGreaterThan(0);
+    expect(escape).toContain("if (activeStayDetailId !== null)");
+    expect(escape).toContain("setActiveStayDetailId(null)");
+  });
 });
 
 describe("Quick Recap over-budget choice (ST-011)", () => {
@@ -1998,7 +2019,15 @@ describe("ST-065 Home Base context ownership", () => {
   it("keeps the Home context subordinate to Story, Playback, Route Point and timeline intent", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
     expect(source).toContain("clearHomeBaseContext();\n    clearRoutePointContext();\n    timeCursor.selectJourney(journeyId)");
-    expect(source).toContain("clearHomeBaseContext();\n    const requested = requestRoutePointContextSelection(");
+    const routePointContextStart = source.indexOf("function revealRoutePointContext(");
+    const routePointContextEnd = source.indexOf("function openCrossPointReading(", routePointContextStart);
+    const routePointContextSource = source.slice(routePointContextStart, routePointContextEnd);
+    const homeContextRelease = routePointContextSource.indexOf("clearHomeBaseContext();");
+    const routePointRequest = routePointContextSource.indexOf("const requested = requestRoutePointContextSelection(");
+    expect(routePointContextStart).toBeGreaterThan(0);
+    expect(routePointContextEnd).toBeGreaterThan(routePointContextStart);
+    expect(homeContextRelease).toBeGreaterThanOrEqual(0);
+    expect(routePointRequest).toBeGreaterThan(homeContextRelease);
     expect(source).toContain("clearHomeBaseContext();\n    const journey = journeys.find((candidate) => candidate.id === journeyId)");
     expect(source).toContain("Opening Playback controls is already a newer presentation");
     expect(source).toContain("clearHomeBaseContext();\n                if (playbackPendingMode?.journeyId === activeJourney.id)");

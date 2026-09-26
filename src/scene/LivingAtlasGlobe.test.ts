@@ -301,6 +301,28 @@ describe("ST-065 Home / Route Point pointer ownership", () => {
     expect(home).toBeGreaterThan(journey);
   });
 
+  it("keeps a tap under semantic camera ownership until it becomes a real gesture", () => {
+    const particleSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const pointerDownStart = particleSource.indexOf("const onPointerDown = (event: PointerEvent) => {");
+    const pointerMoveStart = particleSource.indexOf("const onPointerMove = (event: PointerEvent) => {", pointerDownStart);
+    const pointerDown = particleSource.slice(pointerDownStart, pointerMoveStart);
+    const pinchStart = pointerDown.indexOf("} else if (activePointers.size === 2) {");
+    expect(pointerDownStart).toBeGreaterThanOrEqual(0);
+    expect(pointerMoveStart).toBeGreaterThan(pointerDownStart);
+    expect(pinchStart).toBeGreaterThanOrEqual(0);
+    expect(pointerDown.slice(0, pinchStart)).not.toContain("claimManualInteraction();");
+    expect(pointerDown.slice(pinchStart)).toContain("claimManualInteraction();");
+
+    const pointerUpStart = particleSource.indexOf("const onPointerUp = (", pointerMoveStart);
+    const pointerMove = particleSource.slice(pointerMoveStart, pointerUpStart);
+    const dragThreshold = pointerMove.indexOf("if (!dragStarted && isGlobeDrag(dragTravel)) {");
+    const dragClaim = pointerMove.indexOf("claimManualInteraction();", dragThreshold);
+    const dragStarted = pointerMove.indexOf("dragStarted = true;", dragThreshold);
+    expect(dragThreshold).toBeGreaterThanOrEqual(0);
+    expect(dragClaim).toBeGreaterThan(dragThreshold);
+    expect(dragStarted).toBeGreaterThan(dragClaim);
+  });
+
   it("routes city-label contacts through that same renderer pointer authority", () => {
     const particleSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
     expect(particleSource).not.toContain('entry.element.addEventListener("pointerup"');

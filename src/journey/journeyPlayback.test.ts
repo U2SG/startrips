@@ -18,6 +18,7 @@ import {
   phaseForStep,
   routePointChapterDensity,
 } from "./journeyPlayback";
+import { deriveJourneyStaySummaries } from "./journeyModel";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -289,6 +290,38 @@ describe("buildPlaybackSteps (#19)", () => {
     const steps = buildPlaybackSteps(silent);
     expect(steps.filter((step) => step.kind === "stop")).toHaveLength(2);
     expect(steps.some((step) => step.kind === "media")).toBe(false);
+  });
+
+  it("keeps every canonical Route Point and media chapter when the overview groups a stay (#514)", () => {
+    const grouped: Journey = {
+      ...journey,
+      routePoints: [
+        { ...point("point-0", 30.66, 104.06), regionContext: "Chengdu", placeRole: "accommodation" },
+        { ...point("point-1", 30.67, 104.07), isStop: false, regionContext: "Chengdu", placeRole: "pure-transit" },
+        { ...point("point-2", 30.68, 104.08), regionContext: "Chengdu", placeRole: "attraction" },
+      ],
+      media: [
+        media("stay-hotel", "point-0", "image/jpeg", 0),
+        media("stay-detour", "point-1", "image/jpeg", 1),
+        media("stay-place", "point-2", "video/mp4", 2),
+      ],
+    };
+    const routeBefore = structuredClone(grouped.routePoints);
+    const mediaBefore = [...grouped.media];
+
+    expect(deriveJourneyStaySummaries(grouped).map((summary) => summary.routePointIds)).toEqual([
+      ["point-0", "point-2"],
+    ]);
+
+    const steps = buildPlaybackSteps(grouped);
+    expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 1, 2]);
+    expect(steps.flatMap((step) => step.kind === "travel" ? [step.to] : [])).toEqual([1, 2]);
+    expect(playbackMediaForPoint(grouped, 0).map((asset) => asset.id)).toEqual(["stay-hotel"]);
+    expect(playbackMediaForPoint(grouped, 1).map((asset) => asset.id)).toEqual(["stay-detour"]);
+    expect(playbackMediaForPoint(grouped, 2).map((asset) => asset.id)).toEqual(["stay-place"]);
+    expect(grouped.routePoints).toEqual(routeBefore);
+    expect(grouped.media).toEqual(mediaBefore);
+    expect(grouped.media).toEqual(expect.arrayContaining(mediaBefore));
   });
 });
 

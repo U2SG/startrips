@@ -172,9 +172,27 @@ describe("journeyApi", () => {
   });
 
   it("updates a tenant-scoped journey with PATCH", async () => {
-    const journey = { id: "journey-1", ...input, routePoints: [], media: [] };
+    const updateInput = {
+      ...input,
+      revision: 3,
+      routePoints: [{
+        ...input.routePoints[0],
+        id: "11111111-1111-4111-8111-111111111111",
+        regionContext: "Singapore",
+        placeRole: "accommodation" as const,
+        overviewVisibility: "main" as const,
+      }],
+    };
+    const journey = {
+      id: "journey-1",
+      ...updateInput,
+      revision: 4,
+      routePoints: updateInput.routePoints.map((point, sortOrder) => ({
+        ...point, journeyId: "journey-1", sortOrder, createdAt: "2026-08-11T00:00:00.000Z",
+      })),
+      media: [],
+    };
     const fetcher = vi.fn(async () => Response.json({ journey })) as unknown as typeof fetch;
-    const updateInput = { ...input, revision: 3 };
 
     await expect(updateJourney("journey-1", updateInput, fetcher)).resolves.toEqual(journey);
     expect(fetcher).toHaveBeenCalledWith(

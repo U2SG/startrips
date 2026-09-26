@@ -184,25 +184,15 @@ describe("home base history beside recorded travel", () => {
       .toBe(shenzhen!.id);
     expect(resolveHomeBaseForDate(history, "2027-01-01")?.id).toBe(tokyo!.id);
 
-    // And no route point carries a home base value: the columns simply do not
-    // exist, which is what makes the resolution above the only mechanism.
+    // And no route point carries a Home Base value: unrelated Route Point
+    // presentation fields may evolve, but Home Base resolution remains entirely
+    // outside the route record.
     const [point] = await db
       .select()
       .from(journeyRoutePoints)
       .where(eq(journeyRoutePoints.journeyId, journeyA))
       .limit(1);
-    expect(Object.keys(point).sort()).toEqual([
-      "createdAt",
-      "id",
-      "isStop",
-      "journeyId",
-      "label",
-      "latitude",
-      "longitude",
-      "note",
-      "occurredAt",
-      "sortOrder",
-    ]);
+    expect(Object.keys(point).filter((field) => field.toLowerCase().includes("home"))).toEqual([]);
   });
 });
 

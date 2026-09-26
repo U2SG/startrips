@@ -421,6 +421,9 @@ describe("applying a reviewed itinerary draft", () => {
       "isStop",
       "occurredAt",
       "note",
+      "regionContext",
+      "placeRole",
+      "overviewVisibility",
     ]);
     expect(imported.every((item) => item.point.occurredAt === null
       || /^\d{4}-\d{2}-\d{2}$/.test(item.point.occurredAt))).toBe(true);
@@ -433,16 +436,10 @@ describe("applying a reviewed itinerary draft", () => {
       defaultItinerarySelection(draft),
     );
     for (const point of routeDraftToInput(imported.map((item) => item.point))) {
-      expect(Object.keys(point).sort()).toEqual([
-        "isStop",
-        "label",
-        "latitude",
-        "longitude",
-        "note",
-        "occurredAt",
-      ]);
+      expect(Object.keys(point).sort()).toEqual([...IMPORTED_ROUTE_POINT_FIELDS].sort());
     }
-    // The reading context #514 wants survives beside the point, not inside it.
+    // The richer import-reading context remains beside the Route Point, while
+    // #514 persists only the bounded presentation fields needed after refresh.
     expect(imported.every((item) => item.regionContext !== null)).toBe(true);
   });
 });

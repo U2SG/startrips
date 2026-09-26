@@ -1366,7 +1366,7 @@ async function verifyComposerGlobeRoundTrip() {
       await lastRoutePoint.locator(".journey-route-draft__summary").click();
       // #375 added a contextual media upload to the expanded record, so the name
       // field is addressed explicitly rather than as "the only input".
-      const lastInput = lastRoutePoint.locator('.journey-route-draft__expanded input:not([type="checkbox"]):not([type="file"])');
+      const lastInput = lastRoutePoint.locator('.journey-route-draft__expanded [data-route-point-label-input]');
       const beforeManual = await lastInput.inputValue();
       const manualLabel = `手动地点-${mode}`;
       await lastInput.fill(manualLabel);

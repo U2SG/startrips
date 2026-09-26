@@ -204,6 +204,39 @@ const geometryOnlyJourney = {
   media: [],
 };
 
+// #514 final acceptance: one semantic stay can contain several canonical Route
+// Points, but ordinary Atlas overview exposes only one real anchor. The child
+// records become hit/marker/detail surfaces only after an explicit stay-detail
+// intent; route geometry, media identity and Journey playback remain canonical.
+const staySummaryPointIds = {
+  hotel: "qa-stay-chengdu-hotel",
+  museum: "qa-stay-chengdu-museum",
+  transit: "qa-stay-chengdu-transit",
+  chongqing: "qa-stay-chongqing",
+};
+const staySummaryRoutePoints = [
+  { id: staySummaryPointIds.hotel, latitude: 30.657, longitude: 104.066, label: "成都住处", isStop: true, regionContext: "成都", placeRole: "accommodation" },
+  { id: staySummaryPointIds.museum, latitude: 30.663, longitude: 104.075, label: "成都博物馆", isStop: true, regionContext: "成都", placeRole: "attraction" },
+  { id: staySummaryPointIds.transit, latitude: 30.69, longitude: 104.11, label: "途中转折", isStop: false, regionContext: "成都", placeRole: "pure-transit" },
+  { id: staySummaryPointIds.chongqing, latitude: 29.563, longitude: 106.551, label: "重庆", isStop: true, regionContext: "重庆", placeRole: "attraction" },
+].map((point, sortOrder) => ({
+  ...point,
+  journeyId,
+  sortOrder,
+  note: "",
+  occurredAt: `2026-04-07T${String(9 + sortOrder).padStart(2, "0")}:00:00.000Z`,
+  createdAt: "2026-04-07T00:00:00.000Z",
+}));
+const staySummaryJourney = {
+  ...journey,
+  title: "成都与重庆",
+  routePoints: staySummaryRoutePoints,
+  media: [
+    { ...journey.media[0], id: photoAssetId, routePointId: staySummaryPointIds.museum, sortOrder: 0 },
+    { ...journey.media[1], id: secondPhotoAssetId, routePointId: staySummaryPointIds.hotel, sortOrder: 1 },
+  ],
+};
+
 const sameCoordinateJourneyId = "qa-same-coordinate-journey";
 const same02Id = "qa-same-coordinate-02";
 const same07Id = "qa-same-coordinate-07";
@@ -383,7 +416,7 @@ async function stubAtlasApi(page, journeysPayload = [siblingJourney, journey]) {
 }
 
 async function openFocusAtlas({
-  viewport = { width: 1280, height: 720 },
+  viewport = null,
   compact = false,
   reduceMotion = false,
   journeysPayload = [siblingJourney, journey],
@@ -391,8 +424,14 @@ async function openFocusAtlas({
   realScene = false,
   focusMode = true,
 } = {}) {
+  // Mobile device emulation changes input semantics, not the CSS viewport.
+  // Give compact fixtures a real phone-sized layout unless the caller already
+  // supplied an explicit viewport, so product breakpoint and QA intent agree.
+  const resolvedViewport = viewport ?? (compact
+    ? { width: 390, height: 844 }
+    : { width: 1280, height: 720 });
   const page = await browser.newPage({
-    viewport,
+    viewport: resolvedViewport,
     isMobile: compact,
     hasTouch: compact,
     reducedMotion: reduceMotion ? "reduce" : "no-preference",
@@ -449,10 +488,22 @@ async function openFocusAtlas({
     // A marker must be genuinely projected and visible before the pointer round
     // starts; if route projection never becomes usable this still fails closed.
     const realRoutePoint = page.locator(
-      `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+      `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id][data-temporal-visible="true"]:visible`,
     ).first();
     try {
       await realRoutePoint.waitFor({ state: "visible", timeout: 20_000 });
+      // A visible SVG bead can be published one frame before the selected
+      // Journey camera has actually reached its final composition. Grading a
+      // pointer against that moving projection made the same click land at a
+      // stale screen coordinate under slower CI rendering. Wait on the
+      // renderer's own arrival/projection identities, not elapsed time.
+      await page.waitForFunction(() => {
+        const scene = document.querySelector(".particle-earth-scene");
+        const focus = document.querySelector("[data-qa-route-point-context-focus]");
+        return scene?.getAttribute("data-focus-revision") === focus?.getAttribute("data-focus-revision")
+          && Number(scene?.getAttribute("data-focus-settle-count") ?? 0) > 0
+          && window.__particleEarthDebug?.().journeyRouteProjectionReady === true;
+      }, null, { timeout: 20_000 });
     } catch (error) {
       const diagnostics = await page.evaluate((targetJourneyId) => {
         const scene = document.querySelector(".particle-earth-scene");
@@ -554,12 +605,12 @@ async function routePointActivationEvidence(page) {
   }));
 }
 
-async function clickRoutePointMarker(page, routeId, pointId) {
+async function clickRoutePointMarker(page, routeId, pointId, targetOverride = null) {
   const marker = page.locator(`.particle-earth-route__point[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
   await marker.waitFor({ state: "visible", timeout: 5_000 });
   const box = await marker.boundingBox();
   if (!box) throw new Error(`Route Point ${pointId} has no projected marker geometry`);
-  const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const target = targetOverride ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   await page.mouse.click(target.x, target.y);
   return { box, target };
 }
@@ -583,6 +634,17 @@ async function routeMarkerClickState(page, pointId, target) {
       routePointCount: scene?.getAttribute("data-journey-route-point-count") ?? null,
       projectionReady: window.__particleEarthDebug?.().journeyRouteProjectionReady ?? null,
       scrubberValue: document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") ?? null,
+      pointerDownId: scene?.getAttribute("data-route-point-pointer-down-id") ?? null,
+      pointerDownCallback: scene?.getAttribute("data-route-point-pointer-down-callback") ?? null,
+      pointerDownActiveRoute: scene?.getAttribute("data-route-point-pointer-down-active-route") ?? null,
+      pointerUpId: scene?.getAttribute("data-route-point-pointer-up-id") ?? null,
+      pointerUpTracked: scene?.getAttribute("data-route-point-pointer-up-tracked") ?? null,
+      pointerUpPrimary: scene?.getAttribute("data-route-point-pointer-up-primary") ?? null,
+      pointerUpCallback: scene?.getAttribute("data-route-point-pointer-up-callback") ?? null,
+      pointerUpGlobePick: scene?.getAttribute("data-route-point-pointer-up-globe-pick") ?? null,
+      finishWasGesture: scene?.getAttribute("data-route-point-pointer-finish-was-gesture") ?? null,
+      finishAllowActivation: scene?.getAttribute("data-route-point-pointer-finish-allow-activation") ?? null,
+      lostPointerCapture: scene?.getAttribute("data-route-point-pointer-lost-capture") ?? null,
     };
   }, { pointId, target });
 }
@@ -607,9 +669,10 @@ async function clickRoutePointLabel(page, routeId, pointId) {
       .map((marker) => marker.getBoundingClientRect());
     for (let y = rect.top + 4; y <= rect.bottom - 4; y += 4) {
       for (let x = rect.left + 4; x <= rect.right - 4; x += 4) {
-        if (markerRects.some((marker) => (
-          x >= marker.left && x <= marker.right && y >= marker.top && y <= marker.bottom
-        ))) continue;
+        if (markerRects.some((marker) => Math.hypot(
+          x - (marker.left + marker.width / 2),
+          y - (marker.top + marker.height / 2),
+        ) <= 22)) continue;
         const hitElement = document.elementFromPoint(x, y);
         if (hitElement?.closest(".particle-earth-route__label") === node) return { x, y };
       }
@@ -810,15 +873,93 @@ try {
   // record must be visible. This remains an actual pointer hit through the
   // production Three.js/SVG interaction path and binds every assertion to the
   // stable Route Point identity exposed by that hit target.
-  const visibleMarker = interactionPage.locator(
-    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
-  ).first();
-  await visibleMarker.waitFor({ state: "visible", timeout: 5_000 });
-  const markerPointId = await visibleMarker.getAttribute("data-route-point-id");
-  if (!markerPointId) throw new Error("visible active-Journey Route Point marker has no stable id");
-  const markerClick = await clickRoutePointMarker(interactionPage, journeyId, markerPointId);
+  const visibleMarkers = interactionPage.locator(
+    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id][data-temporal-visible="true"]:visible`,
+  );
+  await visibleMarkers.first().waitFor({ state: "visible", timeout: 5_000 });
+  // The old round clicked route-order `first()`. At the edge of a framed
+  // Journey that SVG bead can still be visually present while its independent
+  // spherical point hit area is tangent to the pointer ray. That made this QA
+  // intermittently grade projection ordering instead of the actual hit
+  // contract. Pick exactly one already-visible marker nearest the real canvas
+  // centre: no retries, camera steering or force-click, and the pointer still
+  // travels through the production canvas raycast path.
+  const markerHit = await visibleMarkers.evaluateAll((markers) => {
+    const canvas = document.querySelector(".particle-earth-scene canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) return null;
+    const canvasRect = canvas.getBoundingClientRect();
+    const canvasX = canvasRect.left + canvasRect.width / 2;
+    const canvasY = canvasRect.top + canvasRect.height / 2;
+    const candidates = markers.flatMap((marker) => {
+      const id = marker.getAttribute("data-route-point-id");
+      const routePointIndex = Number(marker.getAttribute("data-route-point-index"));
+      const rect = marker.getBoundingClientRect();
+      if (!id || !Number.isInteger(routePointIndex) || rect.width <= 0 || rect.height <= 0) return [];
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      if (x < canvasRect.left || x > canvasRect.right || y < canvasRect.top || y > canvasRect.bottom) return [];
+      return [{ id, routePointIndex, x, y, distance: Math.hypot(x - canvasX, y - canvasY) }];
+    });
+    // Labels may legitimately cover a bead's exact centre while part of the
+    // product's 22px marker hit neighbourhood remains reachable on the canvas.
+    // Find one real canvas-owned pixel whose nearest eligible marker is the
+    // same stable Route Point. This mirrors the production screen-target
+    // arbitration instead of assuming the visual centre must own the DOM hit.
+    const offsets = [{ x: 0, y: 0 }];
+    for (const radius of [4, 8, 12, 16, 20]) {
+      for (let step = 0; step < 16; step += 1) {
+        const angle = (Math.PI * 2 * step) / 16;
+        offsets.push({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+      }
+    }
+    for (const marker of [...candidates].sort((left, right) => left.distance - right.distance)) {
+      for (const offset of offsets) {
+        const x = marker.x + offset.x;
+        const y = marker.y + offset.y;
+        if (x < canvasRect.left || x > canvasRect.right || y < canvasRect.top || y > canvasRect.bottom) continue;
+        if (document.elementFromPoint(x, y) !== canvas) continue;
+        const nearest = candidates
+          .map((candidate) => ({
+            candidate,
+            distance: Math.hypot(x - candidate.x, y - candidate.y),
+          }))
+          .filter(({ distance }) => distance <= 22)
+          .sort((left, right) => (
+            left.distance - right.distance
+            || left.candidate.routePointIndex - right.candidate.routePointIndex
+          ))[0]?.candidate ?? null;
+        if (nearest?.id === marker.id) {
+          return { id: marker.id, target: { x, y } };
+        }
+      }
+    }
+    return null;
+  });
+  if (!markerHit) throw new Error("visible active-Journey Route Point marker has no unambiguous canvas-owned hit pixel");
+  const markerPointId = markerHit.id;
+  const markerClick = await clickRoutePointMarker(interactionPage, journeyId, markerPointId, markerHit.target);
   const interactionContext = interactionPage.locator("[data-route-point-context]");
-  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  try {
+    await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
+  } catch (error) {
+    // Preserve the exact failing pointer round instead of retrying or steering
+    // the camera. Existing scene evidence tells us whether the real canvas
+    // contact reached product activation or was lost earlier in the pointer
+    // lifecycle, which is the distinction needed to fix this recurring family.
+    const clickState = await routeMarkerClickState(
+      interactionPage,
+      markerPointId,
+      markerClick.target,
+    );
+    throw new Error(
+      `real Route Point marker activation did not reveal context: ${JSON.stringify({
+        markerPointId,
+        markerClick,
+        clickState,
+      })}`,
+      { cause: error },
+    );
+  }
   const selectedMarker = interactionPage.locator(
     `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${markerPointId}"][data-attention-role="selected"]`,
   );
@@ -847,46 +988,89 @@ try {
     closeBox && closeBox.width >= 44 && closeBox.height >= 44
   ));
 
-  // Labels have their own declutter/culling policy, so grade whichever stable
-  // active-Journey label is actually visible rather than assuming it belongs to
-  // the marker chosen above. Identity must survive that independent hit surface.
-  const visibleLabel = interactionPage.locator(
+  // A marker activation may legitimately leave the real globe in a different
+  // visual composition after its context closes. Label hit-testing is an
+  // independent #508 contract, so grade it from a fresh real-scene composition
+  // rather than requiring the marker-selected composition to expose another
+  // unobscured label. This still uses the production SVG pointer path: no
+  // camera steering, force-click, retry, or direct reveal helper.
+  const labelRun = await openFocusAtlas({
+    realScene: true,
+    reduceMotion: true,
+    journeysPayload: [siblingJourney, interactionJourney],
+  });
+  const labelPage = labelRun.page;
+  const labelContext = labelPage.locator("[data-route-point-context]");
+  const visibleLabels = labelPage.locator(
     `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
-  ).first();
-  await visibleLabel.waitFor({ state: "visible", timeout: 5_000 });
-  const labelPointId = await visibleLabel.getAttribute("data-route-point-id");
-  if (!labelPointId) throw new Error("visible active-Journey Route Point label has no stable id");
-  const labelClick = await clickRoutePointLabel(interactionPage, journeyId, labelPointId);
-  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
-  const labelActivation = await routePointActivationEvidence(interactionPage);
+  );
+  await visibleLabels.first().waitFor({ state: "visible", timeout: 5_000 });
+  let labelPointId = null;
+  let labelClick = null;
+  for (let index = 0; index < await visibleLabels.count(); index += 1) {
+    const candidatePointId = await visibleLabels.nth(index).getAttribute("data-route-point-id");
+    if (!candidatePointId) continue;
+    try {
+      labelClick = await clickRoutePointLabel(labelPage, journeyId, candidatePointId);
+      labelPointId = candidatePointId;
+      break;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("no unambiguous label-owned hit pixel")) throw error;
+    }
+  }
+  if (!labelPointId || !labelClick) {
+    throw new Error("active Journey has no visible Route Point label with a real label-owned hit pixel");
+  }
+  await labelContext.waitFor({ state: "visible", timeout: 5_000 });
+  const labelActivation = await routePointActivationEvidence(labelPage);
   record("actual label hit preserves stable Route Point identity", { labelPointId, labelClick, labelActivation },
     labelActivation.source === "label"
     && labelActivation.journeyId === journeyId
     && labelActivation.routePointId === labelPointId);
-  const focusModeBeforeEscape = await interactionPage.locator(".living-atlas").getAttribute("data-globe-focus");
-  await interactionPage.keyboard.press("Escape");
-  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
-  const focusModeAfterEscape = await interactionPage.locator(".living-atlas").getAttribute("data-globe-focus");
+  const focusModeBeforeEscape = await labelPage.locator(".living-atlas").getAttribute("data-globe-focus");
+  await labelPage.keyboard.press("Escape");
+  await labelContext.waitFor({ state: "detached", timeout: 5_000 });
+  const focusModeAfterEscape = await labelPage.locator(".living-atlas").getAttribute("data-globe-focus");
   record("Escape closes context without exiting globe focus", { focusModeBeforeEscape, focusModeAfterEscape },
     focusModeBeforeEscape === focusModeAfterEscape);
 
-  const labelTrigger = interactionPage.locator(
-    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id="${labelPointId}"]`,
-  );
-  await labelTrigger.focus();
-  await labelTrigger.press("Enter");
-  await interactionContext.waitFor({ state: "visible", timeout: 5_000 });
-  const keyboardActivation = await routePointActivationEvidence(interactionPage);
-  await interactionCloseButton.click();
-  await interactionContext.waitFor({ state: "detached", timeout: 5_000 });
-  const focusReturn = await interactionPage.evaluate(() => ({
+  // Closing a selected Route Point is allowed to re-run label arbitration. A
+  // label that owned the prior pointer hit can therefore become decluttered and
+  // no longer be a legal keyboard trigger. Grade keyboard activation from the
+  // current visible label surface instead of programmatically pressing a stale,
+  // hidden SVG node; the assertion still requires one real focusable label to
+  // open context and receive focus back after close.
+  const keyboardLabel = labelPage.locator(
+    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+  ).first();
+  await keyboardLabel.waitFor({ state: "visible", timeout: 5_000 });
+  const keyboardPointId = await keyboardLabel.getAttribute("data-route-point-id");
+  if (!keyboardPointId) throw new Error("visible keyboard Route Point label has no stable id");
+  await keyboardLabel.focus();
+  const focusedKeyboardPointId = await labelPage.evaluate(() => (
+    document.activeElement?.getAttribute("data-route-point-id") ?? null
+  ));
+  if (focusedKeyboardPointId !== keyboardPointId) {
+    throw new Error(`visible Route Point label did not receive keyboard focus: ${keyboardPointId}`);
+  }
+  await keyboardLabel.press("Enter");
+  await labelContext.waitFor({ state: "visible", timeout: 5_000 });
+  const keyboardActivation = await routePointActivationEvidence(labelPage);
+  const labelCloseButton = labelContext.locator("[data-route-point-context-close]");
+  await labelCloseButton.click();
+  await labelContext.waitFor({ state: "detached", timeout: 5_000 });
+  const focusReturn = await labelPage.evaluate(() => ({
     tag: document.activeElement?.tagName.toLowerCase() ?? null,
     routePointId: document.activeElement?.getAttribute("data-route-point-id") ?? null,
   }));
-  record("keyboard label opens context and close restores the same legal trigger", { keyboardActivation, focusReturn },
+  record("keyboard label opens context and close restores the same legal trigger", {
+    keyboardPointId, keyboardActivation, focusReturn,
+  },
     keyboardActivation.source === "keyboard-label"
-    && keyboardActivation.routePointId === labelPointId
-    && focusReturn.routePointId === labelPointId);
+    && keyboardActivation.routePointId === keyboardPointId
+    && focusReturn.routePointId === keyboardPointId);
+  record("real label interaction page errors", { pageErrors: labelRun.pageErrors }, labelRun.pageErrors.length === 0);
+  await labelPage.close();
 
   // The production renderer, rather than the deterministic QA SVG below,
   // owns selected-marker presentation. Exercise the same A -> no-media B ->
@@ -934,6 +1118,120 @@ try {
   record("real interaction page errors", { pageErrors: interactionRun.pageErrors }, interactionRun.pageErrors.length === 0);
   await interactionPage.close();
 
+  // #514: grade the final stay-summary disclosure contract on the real Particle
+  // Earth. Resize and ordinary context opening keep child points unmounted;
+  // only the explicit stay-detail control may disclose them. Escape backs out
+  // of that detail layer while leaving the selected stay summary open.
+  const stayRun = await openFocusAtlas({
+    realScene: true,
+    focusMode: false,
+    reduceMotion: true,
+    journeysPayload: [staySummaryJourney],
+    initialPointId: staySummaryPointIds.museum,
+  });
+  const stayPage = stayRun.page;
+  await stayPage.waitForFunction((ids) => {
+    const route = document.querySelector(`[data-journey-route="${ids.journey}"]`);
+    const markerIds = [...(route?.querySelectorAll(".particle-earth-route__point[data-route-point-id]") ?? [])]
+      .map((marker) => marker.getAttribute("data-route-point-id"));
+    return markerIds.length === 2
+      && markerIds.includes(ids.museum)
+      && markerIds.includes(ids.chongqing)
+      && !markerIds.includes(ids.hotel)
+      && !markerIds.includes(ids.transit);
+  }, { ...staySummaryPointIds, journey: journeyId });
+  const stayOverviewBefore = await stayPage.evaluate((ids) => ({
+    markerIds: [...document.querySelectorAll(`[data-journey-route="${ids.journey}"] .particle-earth-route__point[data-route-point-id]`)]
+      .map((marker) => marker.getAttribute("data-route-point-id")),
+    routeLegCount: document.querySelectorAll(`[data-journey-route="${ids.journey}"] .particle-earth-route__leg`).length,
+    raycastPointCount: document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count"),
+  }), { ...staySummaryPointIds, journey: journeyId });
+  record("stay overview keeps one Chengdu summary anchor while preserving full route geometry", { stayOverviewBefore },
+    stayOverviewBefore.markerIds.join(",") === [staySummaryPointIds.museum, staySummaryPointIds.chongqing].join(",")
+    && stayOverviewBefore.routeLegCount === staySummaryRoutePoints.length - 1
+    && stayOverviewBefore.raycastPointCount === "2");
+
+  await clickRoutePointMarker(stayPage, journeyId, staySummaryPointIds.museum);
+  const stayContext = stayPage.locator(`[data-route-point-context][data-route-point-id="${staySummaryPointIds.museum}"]`);
+  await stayContext.waitFor({ state: "visible", timeout: 5_000 });
+  const staySummarySurface = stayContext.locator("[data-stay-summary]");
+  await staySummarySurface.waitFor({ state: "visible", timeout: 5_000 });
+  let staySummaryState = await staySummarySurface.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    childGroupCount: node.querySelectorAll("[data-stay-detail]").length,
+    text: node.textContent ?? "",
+  }));
+  record("opening the stay summary does not implicitly mount child detail", { staySummaryState },
+    staySummaryState.detailOpen === "false"
+    && staySummaryState.childGroupCount === 0
+    && staySummaryState.text.includes("成都")
+    && staySummaryState.text.includes("2 个地点")
+    && staySummaryState.text.includes("2 项影像"));
+
+  await stayPage.setViewportSize({ width: 1281, height: 720 });
+  await stayPage.setViewportSize({ width: 1280, height: 720 });
+  const afterResize = await stayPage.evaluate((hotelId) => ({
+    hotelMarkers: document.querySelectorAll(`.particle-earth-route__point[data-route-point-id="${hotelId}"]`).length,
+    detailGroups: document.querySelectorAll("[data-stay-detail]").length,
+  }), staySummaryPointIds.hotel);
+  record("viewport resize does not disclose stay children", { afterResize },
+    afterResize.hotelMarkers === 0 && afterResize.detailGroups === 0);
+
+  const openStayDetail = stayContext.locator(`button[data-stay-detail-open]`);
+  await openStayDetail.focus();
+  await openStayDetail.press("Enter");
+  await stayPage.locator(`.particle-earth-route__point[data-route-point-id="${staySummaryPointIds.hotel}"]`)
+    .waitFor({ state: "attached", timeout: 5_000 });
+  const explicitStayDetail = await staySummarySurface.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    childIds: [...node.querySelectorAll("[data-stay-route-point]")]
+      .map((button) => button.getAttribute("data-stay-route-point")),
+  }));
+  record("keyboard activation explicitly opens only the selected stay children", { explicitStayDetail },
+    explicitStayDetail.detailOpen === "true"
+    && explicitStayDetail.childIds.join(",") === [staySummaryPointIds.hotel, staySummaryPointIds.museum].join(","));
+
+  await stayPage.keyboard.press("Escape");
+  await stayPage.locator(`.particle-earth-route__point[data-route-point-id="${staySummaryPointIds.hotel}"]`)
+    .waitFor({ state: "detached", timeout: 5_000 });
+  staySummaryState = await staySummarySurface.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    contextAttached: Boolean(node.closest("[data-route-point-context]")),
+  }));
+  record("Escape closes stay detail before Route Point context", { staySummaryState },
+    staySummaryState.detailOpen === "false" && staySummaryState.contextAttached);
+  record("stay-summary reduced-motion page errors", { pageErrors: stayRun.pageErrors }, stayRun.pageErrors.length === 0);
+  await stayPage.close();
+
+  const compactStayRun = await openFocusAtlas({
+    compact: true,
+    reduceMotion: true,
+    journeysPayload: [staySummaryJourney],
+    initialPointId: staySummaryPointIds.museum,
+  });
+  const compactStayPage = compactStayRun.page;
+  await activateRoutePointId(compactStayPage, staySummaryPointIds.museum);
+  const compactStayContext = compactStayPage.locator(`[data-route-point-context][data-route-point-id="${staySummaryPointIds.museum}"]`);
+  await compactStayContext.waitFor({ state: "visible", timeout: 5_000 });
+  const compactSummary = compactStayContext.locator("[data-stay-summary]");
+  const compactBefore = await compactSummary.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    childGroups: node.querySelectorAll("[data-stay-detail]").length,
+  }));
+  await compactSummary.locator("button[data-stay-detail-open]").click();
+  const compactAfter = await compactSummary.evaluate((node) => ({
+    detailOpen: node.getAttribute("data-stay-detail-open"),
+    childIds: [...node.querySelectorAll("[data-stay-route-point]")]
+      .map((button) => button.getAttribute("data-stay-route-point")),
+  }));
+  record("compact mobile keeps stay detail explicitly gated", { compactBefore, compactAfter },
+    compactBefore.detailOpen === "false"
+    && compactBefore.childGroups === 0
+    && compactAfter.detailOpen === "true"
+    && compactAfter.childIds.join(",") === [staySummaryPointIds.hotel, staySummaryPointIds.museum].join(","));
+  record("compact stay-summary page errors", { pageErrors: compactStayRun.pageErrors }, compactStayRun.pageErrors.length === 0);
+  await compactStayPage.close();
+
   const projectionRun = await openFocusAtlas({
     realScene: true,
     reduceMotion: true,
@@ -942,7 +1240,7 @@ try {
   });
   const projectionPage = projectionRun.page;
   await projectionPage.waitForFunction(() => (
-    document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5"
+    document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "3"
   ));
   const projectionBefore = await projectionPage.evaluate((ids) => {
     const route = document.querySelector(`.particle-earth-route[data-journey-route="${ids.journey}"]`);
@@ -955,16 +1253,20 @@ try {
       raycastPointCount: document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count"),
     };
   }, { ...projectionPointIds, journey: journeyId });
-  record("A -> B -> A keeps every route leg while pure detour has no Particle marker, label or raycast slot", {
+  record("overview stays sparse while canonical route and hidden non-stop content remain intact", {
     projectionBefore,
   },
     projectionBefore.legCount === projectionRoutePoints.length - 1
-    && projectionBefore.raycastPointCount === "5"
+    && projectionBefore.raycastPointCount === "3"
     && projectionBefore.markerIds.join(",") === [
-      projectionPointIds.firstA, projectionPointIds.b, projectionPointIds.note,
-      projectionPointIds.media, projectionPointIds.returnA,
+      projectionPointIds.firstA, projectionPointIds.b, projectionPointIds.returnA,
     ].join(",")
-    && !projectionBefore.labelIds.includes(projectionPointIds.detour));
+    && !projectionBefore.markerIds.includes(projectionPointIds.detour)
+    && !projectionBefore.markerIds.includes(projectionPointIds.note)
+    && !projectionBefore.markerIds.includes(projectionPointIds.media)
+    && !projectionBefore.labelIds.includes(projectionPointIds.detour)
+    && !projectionBefore.labelIds.includes(projectionPointIds.note)
+    && !projectionBefore.labelIds.includes(projectionPointIds.media));
 
   const projectedBClick = await clickRoutePointMarker(projectionPage, journeyId, projectionPointIds.b);
   await projectionPage.locator(`[data-route-point-context][data-route-point-id="${projectionPointIds.b}"]`)
@@ -993,7 +1295,7 @@ try {
       ?.getAttribute("data-attention-role") === "narrative-current"
     && document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point") === "34.0522,-118.2437"
     && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
-    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5"
+    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "1"
   ), projectionPointIds);
   const sameDayA = await sceneFocusSnapshot(projectionPage);
   record("same-day open Journey scrub begins at A without prematurely exposing the detour", {
@@ -1007,7 +1309,7 @@ try {
     document.querySelector(`.particle-earth-route__point[data-route-point-id="${detourId}"]`)
       ?.getAttribute("data-attention-role") === "narrative-current"
     && document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point") === "35.5,-116.5"
-    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "6"
+    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "2"
   ), projectionPointIds.detour);
   // The narrative owner updates before the camera arrives. Click only once
   // the renderer has drawn the target at its settled, pointer-hit position.
@@ -1057,7 +1359,7 @@ try {
       ?.getAttribute("data-attention-role") === "narrative-current"
     && document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point") === "36.1699,-115.1398"
     && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
-    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5"
+    && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "2"
   ), projectionPointIds);
   const afterDetourFocus = await projectionPage.evaluate((ids) => ({
     focusPoint: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point"),
@@ -1068,7 +1370,7 @@ try {
     afterDetourFocus,
   }, afterDetourFocus.focusPoint === "36.1699,-115.1398"
     && afterDetourFocus.detourMarkerCount === 0
-    && afterDetourFocus.raycastPointCount === "5");
+    && afterDetourFocus.raycastPointCount === "2");
   await projectionTrack.focus();
   await projectionTrack.press("End");
   await projectionPage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")
@@ -1084,11 +1386,11 @@ try {
   );
   await selectedDetour.waitFor({ state: "attached", timeout: 5_000 });
   record("explicitly selected pure detour keeps its exact identity", {},
-    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "6");
+    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "4");
   await projectionPage.locator("[data-route-point-context-close]").click();
   await selectedDetour.waitFor({ state: "detached", timeout: 5_000 });
   record("closing detour removes its marker and hit slot again", {},
-    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "5");
+    await projectionPage.locator(".particle-earth-scene").getAttribute("data-journey-route-point-count") === "3");
 
   await activateRoutePointId(projectionPage, projectionPointIds.media);
   await projectionPage.locator(`[data-route-point-context][data-route-point-id="${projectionPointIds.media}"]`)
@@ -1140,7 +1442,7 @@ try {
       && document.querySelector('.journey-playback__chapter[data-chapter-point="1"]')
       && marker?.getAttribute("data-attention-role") === "narrative-current"
       && marker.getBoundingClientRect().width > 0
-      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "6";
+      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "4";
   }, projectionPointIds.detour);
   const playbackDetourState = await projectionPage.evaluate(() => ({
     step: document.querySelector(".journey-playback")?.getAttribute("data-playback-step"),
@@ -1193,7 +1495,7 @@ try {
       && playback.getAttribute("data-playback-phase") === "travel"
       && b?.getAttribute("data-attention-role") === "narrative-current"
       && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
-      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "5";
+      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "3";
   }, projectionPointIds);
   const freeAdvanceFocus = await sceneFocusSnapshot(projectionPage);
   record("automatic Playback advance changes the narrated point without recapturing free camera", {
@@ -1257,15 +1559,15 @@ try {
     noteId: projectionPointIds.note,
     mediaId: projectionPointIds.media,
   });
-  record("Detail keeps all route legs, hides pure detour hit and retains contentful non-stop hits", {
+  record("Detail keeps all route legs without giving hidden non-stop records their own hit identity", {
     projectionDetailState,
   },
     projectionDetailState.owner === "detail"
     && projectionDetailState.pointCount === "6"
     && projectionDetailState.featureCount === "11"
-    && projectionDetailState.hiddenHit === null
-    && projectionDetailState.noteHit?.routePointId === projectionPointIds.note
-    && projectionDetailState.mediaHit?.routePointId === projectionPointIds.media);
+    && projectionDetailState.hiddenHit?.routePointId !== projectionPointIds.detour
+    && projectionDetailState.noteHit?.routePointId !== projectionPointIds.note
+    && projectionDetailState.mediaHit?.routePointId !== projectionPointIds.media);
   let projectedDetailB = await detailedExistingRoutePointTarget(
     projectionDetailPage, projectionJourney, projectionPointIds.b,
   );
