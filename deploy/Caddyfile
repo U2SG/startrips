@@ -23,6 +23,14 @@
 		header Cache-Control "public, max-age=31536000, immutable"
 	}
 
+	# Deployment-owned immutable PMTiles archives and glyphs.
+	# Keep this ahead of the SPA fallback so missing files stay non-200.
+	handle /basemap/* {
+		root * /srv
+		file_server
+		header Cache-Control "public, max-age=31536000, immutable"
+	}
+
 	@atlasStatic path /earth/* /fonts/*
 	handle @atlasStatic {
 		root * /srv

@@ -1,8 +1,10 @@
 # Spike: optional self-hosted PMTiles basemap
 
-Status: spike, not for merge. Discussion #539, section 4. The code has not been
-checked against a real PMTiles archive. Only the pure style and label functions
-have unit tests.
+Status: optional candidate path for #549. The code path is intended to land
+without replacing the current OpenFreeMap default, but it has not yet been
+validated against the deployment-owned Guangdong + Hong Kong + Macau archive.
+Production cutover and old-proxy removal remain forbidden until the deployed
+acceptance matrix below passes.
 
 ## Why
 
@@ -63,13 +65,13 @@ shipping the generator.
    by MapLibre's local ideograph font, so only the Latin ranges are fetched in
    practice.
 4. **Sprites.** None. The spike style has no icons.
-5. **Same-origin serving, if used.** `deploy/Caddyfile` has no `/basemap/*`
-   route today. The catch-all `try_files {path} /index.html` would answer a
-   missing archive or glyph with index.html and a 200, which shows up as a
-   parse error, not a 404. Add a `handle /basemap/*` block with `root` on a
-   mounted volume and `file_server` (Caddy serves Range requests there) before
-   the catch-all. The Caddyfile sets no Content-Security-Policy today. If one is
-   added later, the archive and glyph origins must be in `connect-src`.
+5. **Same-origin serving.** `deploy/Caddyfile` now has a dedicated
+   `handle /basemap/*` block before the SPA fallback, and the web service mounts
+   `ATLAS_BASEMAP_DIR` read-only at `/srv/basemap`. Caddy's file server handles
+   byte ranges and missing archive/glyph paths remain real non-200 responses
+   instead of falling through to `index.html`. The Caddyfile sets no
+   Content-Security-Policy today. If one is added later, the archive and glyph
+   origins must be in `connect-src`.
 
 ## Code that would be deleted if adopted
 

@@ -156,6 +156,7 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+      - ${ATLAS_BASEMAP_DIR:-./basemap}:/srv/basemap:ro
     mem_limit: 256m
     logging: *default-logging
     networks:

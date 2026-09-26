@@ -6,8 +6,11 @@ import { Protocol } from "pmtiles";
 // Protocol instance keeps the archive header/directory cache shared.
 let registered = false;
 
-export function ensurePmtilesProtocol() {
-  if (registered) return;
+export function ensurePmtilesProtocol(
+  configuredUrl = import.meta.env.VITE_ATLAS_PMTILES_URL?.trim() || "",
+) {
+  if (!configuredUrl || registered) return false;
   addProtocol("pmtiles", new Protocol().tile);
   registered = true;
+  return true;
 }
