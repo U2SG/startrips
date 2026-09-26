@@ -1127,8 +1127,11 @@ export function LivingAtlasApp({
     routePointId: string | null;
   };
   const routePointContextReturnFocusRef = useRef<RoutePointContextReturnFocus | null>(null);
+  const routePointContextFocusObserverRef = useRef<MutationObserver | null>(null);
   routePointContextSelectionRef.current = routePointContextSelection;
   const clearRoutePointContext = useCallback(() => {
+    routePointContextFocusObserverRef.current?.disconnect();
+    routePointContextFocusObserverRef.current = null;
     const next = clearRoutePointContextSelection(routePointContextSelectionRef.current);
     routePointContextSelectionRef.current = next;
     setRoutePointContextSelection(next);
@@ -1139,23 +1142,18 @@ export function LivingAtlasApp({
     routePointContextReturnFocusRef.current = null;
     clearRoutePointContext();
     if (!restoreFocus || !returnFocus) return;
-    // Route label arbitration may replace the focused SVG <g> when selection
-    // clears. Restore focus by stable Journey/Route Point identity on the next
-    // render frame instead of relying on the original DOM node surviving.
-    window.requestAnimationFrame(() => {
-      const isVisibleFocusTarget = (candidate: Element) => {
-        if (!candidate.isConnected) return false;
-        const style = getComputedStyle(candidate);
-        const rect = candidate.getBoundingClientRect();
-        return style.display !== "none"
-          && style.visibility !== "hidden"
-          && rect.width > 0
-          && rect.height > 0;
-      };
-      const direct = isVisibleFocusTarget(returnFocus.element)
-        ? returnFocus.element
-        : null;
-      const replacement = !direct && returnFocus.journeyId && returnFocus.routePointId
+
+    const isVisibleFocusTarget = (candidate: Element) => {
+      if (!candidate.isConnected) return false;
+      const style = getComputedStyle(candidate);
+      const rect = candidate.getBoundingClientRect();
+      return style.display !== "none"
+        && style.visibility !== "hidden"
+        && rect.width > 0
+        && rect.height > 0;
+    };
+    const restoreCurrentTrigger = () => {
+      const replacement = returnFocus.journeyId && returnFocus.routePointId
         ? [...document.querySelectorAll<SVGGElement>(
           ".particle-earth-route__label[data-journey-route][data-route-point-id]",
         )].find((candidate) => (
@@ -1164,9 +1162,42 @@ export function LivingAtlasApp({
           && isVisibleFocusTarget(candidate)
         )) ?? null
         : null;
-      (direct ?? replacement)?.focus({ preventScroll: true });
+      const target = replacement ?? (
+        isVisibleFocusTarget(returnFocus.element) ? returnFocus.element : null
+      );
+      if (!target) return false;
+      target.focus({ preventScroll: true });
+      return document.activeElement === target;
+    };
+
+    // Non-route controls can restore immediately. Route labels cannot: React
+    // still has to commit the context close, then the scene re-runs label
+    // arbitration. Focusing the pre-commit node only makes focus fall back to
+    // body when that node is removed a moment later.
+    if (!returnFocus.journeyId || !returnFocus.routePointId) {
+      restoreCurrentTrigger();
+      return;
+    }
+    const routeLayer = document.querySelector(".particle-earth-route-layer");
+    if (!routeLayer) return;
+    const observer = new MutationObserver(() => {
+      if (!restoreCurrentTrigger()) return;
+      observer.disconnect();
+      if (routePointContextFocusObserverRef.current === observer) {
+        routePointContextFocusObserverRef.current = null;
+      }
+    });
+    routePointContextFocusObserverRef.current = observer;
+    observer.observe(routeLayer, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["style", "tabindex"],
     });
   }, [clearRoutePointContext]);
+  useEffect(() => () => {
+    routePointContextFocusObserverRef.current?.disconnect();
+  }, []);
   const [crossPointReadingIntent, setCrossPointReadingIntent] = useState<CrossPointReadingIntent | null>(null);
   const crossPointReadingRevisionRef = useRef(0);
   const closeCrossPointReading = useCallback(() => {
@@ -2148,8 +2179,9 @@ export function LivingAtlasApp({
         }
       : null;
   // #514: ordinary Atlas overview shows one real Route Point anchor per
-  // derived stay. The full route remains in `routes`; transit/non-stop points
-  // never become destination markers merely because they carry content.
+  // derived stay. The full route remains in `routes`; a geometry-only detour
+  // stays line geometry, while an authored non-stop with a note or owned media
+  // remains a real readable record instead of disappearing into that geometry.
   const selectedStaySummary = routePointContextSelection.context
     ? staySummariesByJourney.get(routePointContextSelection.context.journeyId)
       ?.find((summary) => summary.routePointIds.includes(routePointContextSelection.context!.routePointId)) ?? null
@@ -2164,6 +2196,17 @@ export function LivingAtlasApp({
       journeyOverviewRoutePointIds(journey, summaries).forEach((routePointId) => {
         visible.add(routePointId);
       });
+      const mediaRoutePointIds = new Set(
+        journey.media
+          .map((asset) => asset.routePointId)
+          .filter((routePointId): routePointId is string => routePointId !== null),
+      );
+      for (const point of journey.routePoints) {
+        if (point.isStop || point.overviewVisibility === "detail") continue;
+        if (point.note?.trim() || mediaRoutePointIds.has(point.id)) {
+          visible.add(point.id);
+        }
+      }
     }
     // Composer and draft Playback still expose every editable point. Their
     // route geometry and point identity are independent of saved Journey data.

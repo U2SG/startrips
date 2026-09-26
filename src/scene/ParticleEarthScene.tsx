@@ -3353,11 +3353,14 @@ export function ParticleEarthScene({
         !projectionChanged
         && renderedRouteProjectionRevision === routeProjectionRevision
       ) {
-        // #432: skipping the pass is the SETTLED state, not a missing one -
-        // the placement already on screen is the placement this projection
-        // produces. A reader waiting for layout has to be able to tell that
-        // apart from a pass that has not happened yet, so it is published
-        // rather than left to a timeout to guess.
+        // #432: skipping route/label layout is the SETTLED state, but the
+        // coastline read-back still belongs to this exact camera frame. Refresh
+        // only that shared projection evidence so a prior behind-silhouette
+        // sample cannot leave the settled frame with no map anchor.
+        camera.updateMatrixWorld();
+        globe.updateWorldMatrix(true, false);
+        updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
+        publishCoastlineAnchor();
         publishPlaceLabelLayout("settled");
         return;
       }
