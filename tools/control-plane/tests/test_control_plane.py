@@ -485,6 +485,35 @@ class StateTests(SyntheticOne):
         self.assertEqual(('needs_work', False), (row['status'], row['passes']))
         self.assertEqual(1, sleep.call_count); review.assert_not_called()
 
+    def test_mergeability_reread_dispatches_merged_lifecycle(self):
+        self.write(feature(status='ready_to_merge', passes=True, pr_links=['https://github.com/' + REPO + '/pull/1']))
+        reads = [{'state': 'open', 'mergeable': None},
+                 {'state': 'closed', 'merged': True, 'mergeable': None}]
+        proof = {'merge_sha': A, 'main_sha': B, 'main_ci': 1}
+        with mock.patch.object(state, 'api', side_effect=reads) as api:
+            with mock.patch.object(state.time, 'sleep') as sleep, mock.patch.object(state, 'merge_proof', return_value=proof) as merged, mock.patch.object(state, 'review_backlog') as review:
+                self.assertEqual(0, state.reconcile(self.path, REPO, 'main'))
+        row = store.load_document(self.path)['features'][0]
+        self.assertEqual(('passed', True), (row['status'], row['passes']))
+        self.assertEqual(2, api.call_count)
+        sleep.assert_called_once_with(2)
+        merged.assert_called_once_with(REPO, 1, 'main')
+        review.assert_not_called()
+
+    def test_mergeability_reread_dispatches_closed_lifecycle(self):
+        self.write(feature(status='ready_to_merge', passes=True, pr_links=['https://github.com/' + REPO + '/pull/1']))
+        reads = [{'state': 'open', 'mergeable': None},
+                 {'state': 'closed', 'merged': False, 'mergeable': None}]
+        with mock.patch.object(state, 'api', side_effect=reads) as api:
+            with mock.patch.object(state.time, 'sleep') as sleep, mock.patch.object(state, 'review_backlog') as review, mock.patch.object(state, 'merge_proof') as merged:
+                self.assertEqual(0, state.reconcile(self.path, REPO, 'main'))
+        row = store.load_document(self.path)['features'][0]
+        self.assertEqual(('needs_work', False), (row['status'], row['passes']))
+        self.assertEqual(2, api.call_count)
+        sleep.assert_called_once_with(2)
+        review.assert_not_called()
+        merged.assert_not_called()
+
     def test_persistently_null_mergeability_waits_without_clearing_or_writing(self):
         self.write(feature(status='ready_to_merge', passes=True, pr_links=['https://github.com/' + REPO + '/pull/1']))
         before = self.path.read_bytes()

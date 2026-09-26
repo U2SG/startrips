@@ -152,9 +152,9 @@ MERGEABILITY_REREAD_DELAYS_S = (2, 4, 8)
 
 
 def settled_mergeability(repo, number, pr):
-    """Re-read a PR whose mergeability GitHub has not computed yet (null)."""
+    """Re-read until mergeability settles or the PR leaves the open lifecycle."""
     for delay in MERGEABILITY_REREAD_DELAYS_S:
-        if pr.get('mergeable') is not None:
+        if pr.get('merged') or pr.get('state') != 'open' or pr.get('mergeable') is not None:
             break
         time.sleep(delay)
         pr = api('repos/' + repo + '/pulls/' + str(number))
@@ -192,6 +192,9 @@ def reconcile(path, repo, base):
             number = int(match.group(1))
             pr = api('repos/' + repo + '/pulls/' + str(number))
             package = package_snapshot(doc, fid)
+            handed_off = any(row.get('status') in {'ready_for_eval', 'ready_to_merge'} for row in rows)
+            if handed_off and pr.get('state') == 'open' and not pr.get('merged') and pr.get('mergeable') is None:
+                pr = settled_mergeability(repo, number, pr)
             if pr.get('merged'):
                 package_token = unit_token(doc, fid) if package else None
                 current_issues = None
@@ -224,9 +227,6 @@ def reconcile(path, repo, base):
                                               message='PR closed without merging; preserve existing delivery-unit owner for disposition.')
                     print(fid + ': ' + json.dumps(result))
             elif pr.get('state') == 'open':
-                handed_off = any(row.get('status') in {'ready_for_eval', 'ready_to_merge'} for row in rows)
-                if handed_off and pr.get('mergeable') is None:
-                    pr = settled_mergeability(repo, number, pr)
                 if handed_off and pr.get('mergeable') is None:
                     # GitHub recomputes mergeability lazily after its base moves, and
                     # answers null until then. Null is not "no conflict": a sibling
