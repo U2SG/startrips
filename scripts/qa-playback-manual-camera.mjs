@@ -683,11 +683,8 @@ try {
     } finally { await page.close(); }
   }
 
-  // #489 V8: the Playback return target is the last media the run presented.
-  // The Osaka video is neither the Atlas entry (no Story observation) nor the
-  // whole-Journey fallback (its first media is the Seoul image), so landing on
-  // it after later intro/outro beats, and after a finished run, proves the
-  // return commit log kept the observation instead of the entry.
+  // #245: manual exit returns to the last presented media, while natural
+  // completion returns to the whole Journey even after presenting media.
   for (const ending of ["exit-after-outro-and-intro", "completed"]) {
     const { page, errors } = await open();
     try {
@@ -718,24 +715,36 @@ try {
       }
       await page.keyboard.press("Escape");
       await page.locator(".journey-playback").waitFor({ state: "detached" });
-      await page.locator(".journey-story").waitFor({ state: "visible" });
-      const returned = await page.waitForFunction(({ id, pointId }) => {
-        const current = document.querySelector('.journey-story [data-media-page="current"]')
-          ?.getAttribute("data-media-page-id") ?? null;
-        const pressed = document.querySelector(
-          `.journey-story__route-points button[data-route-point-id="${pointId}"]`,
-        )?.getAttribute("aria-pressed") ?? null;
-        window.__qaPlaybackReturnLast = { current, pressed };
-        return current === id && pressed === "true" ? { current, pressed } : false;
-      }, { id: videoId, pointId: points[2].id }, { timeout: 10_000 })
-        .then((handle) => handle.jsonValue())
-        .catch(async (error) => {
-          const last = await page.evaluate(() => window.__qaPlaybackReturnLast ?? null);
-          throw new Error(`Playback ${ending} did not return to the last presented media: ${JSON.stringify(last)}`,
-            { cause: error });
-        });
+      let returned;
+      if (ending === "completed") {
+        await page.locator(".journey-story").waitFor({ state: "detached" });
+        returned = await page.waitForFunction((title) => {
+          const selected = Array.from(document.querySelectorAll(".living-atlas__journey-rail button"))
+            .find((button) => button.textContent?.includes(title));
+          const active = document.querySelector(".living-atlas__active");
+          return selected?.getAttribute("aria-current") === "true" && active && !active.inert
+            ? { surface: "atlas", selectedJourney: title } : false;
+        }, journey.title, { timeout: 10_000 }).then((handle) => handle.jsonValue());
+      } else {
+        await page.locator(".journey-story").waitFor({ state: "visible" });
+        returned = await page.waitForFunction(({ id, pointId }) => {
+          const current = document.querySelector('.journey-story [data-media-page="current"]')
+            ?.getAttribute("data-media-page-id") ?? null;
+          const pressed = document.querySelector(
+            `.journey-story__route-points button[data-route-point-id="${pointId}"]`,
+          )?.getAttribute("aria-pressed") ?? null;
+          window.__qaPlaybackReturnLast = { current, pressed };
+          return current === id && pressed === "true" ? { current, pressed } : false;
+        }, { id: videoId, pointId: points[2].id }, { timeout: 10_000 })
+          .then((handle) => handle.jsonValue())
+          .catch(async (error) => {
+            const last = await page.evaluate(() => window.__qaPlaybackReturnLast ?? null);
+            throw new Error(`Playback ${ending} did not return to the last presented media: ${JSON.stringify(last)}`,
+              { cause: error });
+          });
+      }
       assert.deepEqual(errors, []);
-      reports.push({ mode: `playback-return-last-presented:${ending}`, returned });
+      reports.push({ mode: `playback-return:${ending}`, returned });
     } finally { await page.close(); }
   }
 

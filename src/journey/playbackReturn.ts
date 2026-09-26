@@ -94,12 +94,9 @@ export function resolvePlaybackReturn({
     };
   }
 
-  // V8: media this Playback session actually presented is the viewer's last
-  // observation, so even a finished run returns to it. A run that presented
-  // no media still ends on Atlas with the Journey selected.
-  const observedMedia = committedPosition?.journeyId === journey.id && committedPosition.assetId !== null
-    ? committedPosition : null;
-  if (reason === "completed" && !observedMedia) {
+  // Natural completion returns to the whole Journey. A manual exit may return
+  // to the last media this Playback session actually presented.
+  if (reason === "completed") {
     return {
       surface: "atlas",
       reason: "completed",
@@ -111,6 +108,8 @@ export function resolvePlaybackReturn({
     };
   }
 
+  const observedMedia = committedPosition?.journeyId === journey.id && committedPosition.assetId !== null
+    ? committedPosition : null;
   const target = observedMedia ?? specificCommittedPosition(entry, committedPosition);
   if (target.assetId !== null) {
     const asset = journey.media.find((candidate) => candidate.id === target.assetId) ?? null;

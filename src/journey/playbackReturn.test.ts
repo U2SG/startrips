@@ -147,21 +147,38 @@ describe("playback return handoff", () => {
     })).toBeNull();
   });
 
-  it("returns a completed run to the last media it presented (V8)", () => {
+  it("returns a manual exit to the last presented media but natural completion to Journey context", () => {
+    const committedPosition = { journeyId: journey.id, routePointId: "point-a", assetId: "asset-a" };
     expect(resolvePlaybackReturn({
-      entry: { ...entry, routePointId: "point-d", assetId: "asset-d" },
-      committedPosition: { journeyId: journey.id, routePointId: "point-a", assetId: "asset-a" },
-      reason: "completed",
+      entry,
+      committedPosition,
+      reason: "exited",
       currentIntentRevision: 7,
       journeys: [journey],
     })).toEqual({
       surface: "story",
-      reason: "completed",
+      reason: "exited",
       fallbackReason: "none",
       journeyId: journey.id,
       routePointId: "point-a",
       assetId: "asset-a",
       storySnapState: "expanded",
+    });
+
+    expect(resolvePlaybackReturn({
+      entry,
+      committedPosition,
+      reason: "completed",
+      currentIntentRevision: 7,
+      journeys: [journey],
+    })).toEqual({
+      surface: "atlas",
+      reason: "completed",
+      fallbackReason: "none",
+      journeyId: journey.id,
+      routePointId: null,
+      assetId: null,
+      storySnapState: "closed",
     });
   });
 
