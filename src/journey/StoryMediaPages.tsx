@@ -1154,7 +1154,17 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       event.currentTarget.dataset.clickDirection = direction < 0 && props.canNavigatePrevious ? "previous"
         : direction > 0 && props.canNavigateNext ? "next" : "";
     }}
-    onPointerLeave={(event) => { delete event.currentTarget.dataset.clickDirection; }}
+    onPointerLeave={(event) => {
+      delete event.currentTarget.dataset.clickDirection;
+      // Before axis lock the native video still owns the pointer, so this
+      // stage has no capture and cannot receive an outside pointerup. Release
+      // the Story hold when that stream leaves its boundary.
+      if (drag.current?.pointerId === event.pointerId
+        && !event.currentTarget.hasPointerCapture(event.pointerId)) {
+        suppressCancelledPointerClick.current = true;
+        cancelGesture();
+      }
+    }}
     data-click-navigation={props.onNavigate ? "true" : undefined}
     data-current-media-kind={presentedId ? (presentedVideo ? "video" : "image") : undefined}
     data-media-presentation={gesturePhase ?? (movingId ? "moving" : props.incomingId ? "waiting" : "settled")}>

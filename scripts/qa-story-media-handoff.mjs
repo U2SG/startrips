@@ -3092,7 +3092,8 @@ try {
         context.fillRect(60, 0, 60, 80);
         document.body.appendChild(source);
         const cancel = runSharedElementMorph({ source, resolveTarget: () => null,
-          update: () => undefined, name: "qa-canvas-bitmap", readinessTimeoutMs: 1_000 });
+          isTargetCurrent: () => true, update: () => undefined,
+          name: "qa-canvas-bitmap", readinessTimeoutMs: 1_000 });
         try {
           const clone = document.querySelector('[data-shared-element-clone="qa-canvas-bitmap"]');
           const pixels = clone instanceof HTMLCanvasElement
@@ -3403,6 +3404,64 @@ try {
       });
     } catch (error) {
       record({ name, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // A mouse release outside the stage cannot reach its pointerup handler
+  // before horizontal lock. Autoplay after that release must still advance;
+  // otherwise the abandoned gesture kept Story's holding state set.
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-video-prelock-exit-releases-hold";
+    const progress = {};
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.88 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.edge = await page.evaluate((selector) => {
+        const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const video = stage?.querySelector(".story-media-pages__video video");
+        if (!(video instanceof HTMLVideoElement)) return null;
+        const stageBox = stage.getBoundingClientRect();
+        const videoBox = video.getBoundingClientRect();
+        const x = videoBox.left + videoBox.width / 2;
+        const y = videoBox.top + 3;
+        const outsideY = stageBox.top - 3;
+        return { x, y, outsideY, travel: y - outsideY,
+          hitIsVideo: document.elementFromPoint(x, y) === video };
+      }, STAGE);
+      if (!progress.edge?.hitIsVideo || progress.edge.travel >= 72) {
+        throw new Error(`no pre-lock video exit point: ${JSON.stringify(progress.edge)}`);
+      }
+      const since = await pageClock(page);
+      await page.mouse.move(progress.edge.x, progress.edge.y);
+      await page.mouse.down();
+      await page.mouse.move(progress.edge.x, progress.edge.outsideY);
+      await page.mouse.up();
+      progress.trace = await gestureTraceSince(page, since);
+      progress.afterLeave = await currentAsset(page);
+      await page.locator(".journey-story").getByRole("button", { name: "自动播放媒体", exact: true }).click();
+      progress.advanced = await waitForSettledAsset(page, V2).then(() => true, () => false);
+      progress.afterAutoplay = await currentAsset(page);
+      const down = progress.trace.find((entry) => entry.type === "pointerdown");
+      const up = progress.trace.find((entry) => entry.type === "pointerup");
+      record({ name,
+        claim: "a real mouse stream starting on the video picture and leaving before axis lock releases its Story hold, so autoplay advances after the native video ends",
+        ...progress, down, up, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || down?.tag !== "VIDEO" || down.pointerType !== "mouse" || !up || up.tag === "VIDEO"
+          || progress.afterLeave.id !== V1 || progress.afterLeave.presentation !== "settled"
+          || !progress.advanced || progress.afterAutoplay.id !== V2
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
     } finally {
       await session.page.close();
