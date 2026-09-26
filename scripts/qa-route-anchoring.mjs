@@ -869,6 +869,19 @@ try {
     document.querySelector(`[data-journey-route="${identifier}"] .particle-earth-route__leg`),
   ), whiskerRouteId, { timeout: 30_000 });
   await page.waitForTimeout(400);
+  // Label leaders exist only for the active Journey in the product renderer.
+  // Enter that real QA state before grading the annotation layer; the old
+  // fixture left every Journey inactive and therefore asserted on a layer the
+  // product correctly had not made visible.
+  await page.locator(`[data-qa-route="${whiskerRouteId}"]`).click();
+  await page.waitForFunction((identifier) => (
+    document.querySelector(`[data-journey-route="${identifier}"]`)?.classList.contains("is-active") === true
+  ), whiskerRouteId, { timeout: 5_000 });
+  await page.waitForFunction((identifier) => (
+    [...document.querySelectorAll(
+      `[data-journey-route="${identifier}"] .particle-earth-route__label .particle-earth-route__leader`,
+    )].some((leader) => leader.closest(".particle-earth-route__label")?.style.display !== "none")
+  ), whiskerRouteId, { timeout: 5_000 });
   await setZoom(page, 2);
   await waitForRenderedFrame(page);
   const anchorPassage = await measureAnchorPassage(page, whiskerRouteId);
