@@ -51,7 +51,7 @@ import {
   initialGlobeGestureHintState,
   resolveGlobeGestureHint,
 } from "./globeGestureHint";
-import { ParticleEarthScene } from "./ParticleEarthScene";
+import { ParticleEarthScene, type ParticleEarthBackend } from "./ParticleEarthScene";
 import { GLOBE_MODE_CONFIG } from "./globeMode";
 import {
   GLOBE_SEMANTIC_ZOOM_CEILING,
@@ -298,6 +298,7 @@ export function usePersistentEarth() {
 
 export function PersistentEarthProvider({ children }: { children: ReactNode }) {
   const [stage, setStage] = useState<PersistentEarthStage>("idle");
+  const [particleEarthBackend, setParticleEarthBackend] = useState<ParticleEarthBackend | "pending">("pending");
   // #194: the scene owner reads the one shared compact-mobile contract and
   // hands the answer down, so the globe overlays can never disagree with the
   // Atlas shell about whether the viewport is in compact mobile mode.
@@ -335,6 +336,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
           data-persistent-earth-host="true"
           data-stage={stage}
           data-interactive={interactive ? "true" : "false"}
+          data-particle-earth-backend={particleEarthBackend}
           aria-hidden="true"
         >
           <div className="persistent-earth-host__viewport">
@@ -361,6 +363,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   temporalReveal={atlas?.temporalReveal}
                   onJourneyRouteActivate={atlas?.onJourneyRouteActivate}
                   onJourneyRoutePointActivate={atlas?.onJourneyRoutePointActivate}
+                  onBackendChange={setParticleEarthBackend}
                   onGlobeBlankActivate={atlas?.onGlobeBlankActivate}
                   onHomeBaseActivate={atlas?.onHomeBaseActivate}
                   onGlobePointPick={atlas?.onGlobePointPick}

@@ -18,6 +18,141 @@ function record(name, data, condition) {
   if (!condition) failed = true;
 }
 
+const degradedControlJourneys = [
+  {
+    id: "qa-degraded-a",
+    atlasId: "qa-atlas",
+    title: "QA DEGRADED COAST",
+    startedOn: "2026-09-01",
+    endedOn: null,
+    note: "Particle Earth failure must not strand the journey.",
+    lightColor: "#77c8c2",
+    lightEffect: null,
+    coverMediaAssetId: null,
+    revision: 1,
+    createdByUserId: "qa-user",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    routePoints: [{
+      id: "qa-degraded-point-a", journeyId: "qa-degraded-a", sortOrder: 0,
+      latitude: 22.5431, longitude: 114.0579, label: "Shenzhen", isStop: true,
+      occurredAt: null, note: null, createdAt: "2026-09-01T00:00:00.000Z",
+    }],
+    media: [],
+  },
+  {
+    id: "qa-degraded-b",
+    atlasId: "qa-atlas",
+    title: "QA DEGRADED HARBOR",
+    startedOn: "2026-09-02",
+    endedOn: null,
+    note: "User controls remain the recovery path.",
+    lightColor: "#e8a87c",
+    lightEffect: null,
+    coverMediaAssetId: null,
+    revision: 1,
+    createdByUserId: "qa-user",
+    createdAt: "2026-09-02T00:00:00.000Z",
+    updatedAt: "2026-09-02T00:00:00.000Z",
+    routePoints: [{
+      id: "qa-degraded-point-b", journeyId: "qa-degraded-b", sortOrder: 0,
+      latitude: 22.2819, longitude: 114.1589, label: "Hong Kong", isStop: true,
+      occurredAt: null, note: null, createdAt: "2026-09-02T00:00:00.000Z",
+    }],
+    media: [],
+  },
+];
+
+async function checkDegradedProductControls(failure) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  const errors = [];
+  const consoleErrors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  const session = {
+    session: {
+      id: "qa-session", userId: "qa-user", token: "test",
+      expiresAt: "2027-01-01T00:00:00.000Z", createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z", activeOrganizationId: "qa-org",
+    },
+    user: {
+      id: "qa-user", name: "QA Traveler", email: "qa@example.com", emailVerified: true,
+      createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-01T00:00:00.000Z",
+    },
+  };
+  await page.route("**/api/auth/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith("/get-session")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(session) });
+      return;
+    }
+    if (pathname.endsWith("/organization/list")) {
+      await route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify([{ id: "qa-org", name: "QA Atlas", slug: "qa-atlas" }]),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await page.route("**/api/account-preferences/earth-experience", (route) => route.fulfill({
+    status: 200, contentType: "application/json",
+    body: JSON.stringify({ earthExperience: "default", revision: 0, updatedAt: null }),
+  }));
+  await page.route("**/api/atlases/current", (route) => route.fulfill({
+    status: 200, contentType: "application/json",
+    body: JSON.stringify({ atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "QA" }, role: "owner" }),
+  }));
+  await page.route("**/api/journeys", (route) => route.fulfill({
+    status: 200, contentType: "application/json",
+    body: JSON.stringify({ journeys: degradedControlJourneys }),
+  }));
+  await page.goto(
+    `${origin}/?qaState=atlas-gateway&qaMode=globe-chrome&qaParticleEarthFailure=${failure}`,
+    { waitUntil: "domcontentloaded" },
+  );
+  await page.waitForFunction(() => (
+    document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend") === "unavailable"
+  ), null, { timeout: 20_000 });
+
+  const account = page.locator(".account-dock__tab");
+  await account.waitFor({ state: "visible", timeout: 20_000 });
+  await account.click();
+  await page.waitForFunction(() => document.querySelector(".account-dock__tab")?.getAttribute("aria-expanded") === "true");
+  await account.click();
+
+  const railButtons = page.locator(".living-atlas__journey-rail li button");
+  await railButtons.nth(1).click();
+  await page.waitForFunction((title) => (
+    document.querySelector(".living-atlas__journey-rail button.is-active strong")?.textContent?.includes(title)
+  ), degradedControlJourneys[1].title);
+  await page.getByRole("button", { name: `打开旅程：${degradedControlJourneys[1].title}` }).click();
+  await page.locator(".journey-story").waitFor({ state: "visible", timeout: 10_000 });
+
+  const snapshot = await page.evaluate(() => ({
+    backend: document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend"),
+    canvases: document.querySelector("[data-persistent-earth-host]")?.querySelectorAll('canvas[data-three-scene="particle-earth"]').length ?? -1,
+    railVisible: Boolean(document.querySelector(".living-atlas__journey-rail")),
+    storyVisible: Boolean(document.querySelector(".journey-story")),
+    accountVisible: Boolean(document.querySelector(".account-dock__tab")),
+  }));
+  const webglCreationErrors = consoleErrors.filter((message) => (
+    /WebGLRenderer|Could not create a WebGL context|WebGL context.*could not/i.test(message)
+  ));
+  record(`backend-controls:${failure}`, { snapshot, errors, consoleErrors: webglCreationErrors },
+    snapshot.backend === "unavailable"
+      && snapshot.canvases === 0
+      && snapshot.railVisible
+      && snapshot.storyVisible
+      && snapshot.accountVisible
+      && errors.length === 0
+      && webglCreationErrors.length === 0);
+  await context.close();
+}
+
 async function openFixture({ width, height, dpr, routeOptics = false }) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: dpr });
   const page = await context.newPage();
@@ -27,6 +162,88 @@ async function openFixture({ width, height, dpr, routeOptics = false }) {
   await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()));
   await page.waitForFunction(() => window.__particleEarthDebug?.().drawingBufferPixels > 0);
   return { context, page, errors };
+}
+
+async function checkParticleBackendDegradation() {
+  for (const failure of ["no-webgl", "renderer-throw"]) {
+    for (const motion of ["animate", "reduce"]) {
+      const context = await browser.newContext({ viewport: { width: 932, height: 620 }, deviceScaleFactor: 1 });
+      const page = await context.newPage();
+      const errors = [];
+      const consoleErrors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+      });
+      await page.goto(
+        `${origin}/?qaState=earth-dive&qaMotion=${motion}&qaParticleEarthFailure=${failure}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await page.waitForFunction(() => (
+        document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend") === "unavailable"
+      ));
+      const beforeJourneyId = await page.locator("[data-qa-earth-dive-route-point]").getAttribute("data-journey-id");
+      await page.locator('[data-qa-earth-dive-route-switch="next"]').click();
+      await page.waitForFunction((before) => (
+        document.querySelector("[data-qa-earth-dive-route-point]")?.getAttribute("data-journey-id") !== before
+      ), beforeJourneyId);
+      const snapshot = await page.evaluate(() => {
+        const host = document.querySelector("[data-persistent-earth-host]");
+        return {
+          backend: host?.getAttribute("data-particle-earth-backend"),
+          canvases: host?.querySelectorAll("canvas").length ?? -1,
+          routeSwitchPresent: Boolean(document.querySelector('[data-qa-earth-dive-route-switch="next"]')),
+          refocusPresent: Boolean(document.querySelector("[data-qa-earth-dive-refocus]")),
+        };
+      });
+      const webglCreationErrors = consoleErrors.filter((message) => (
+        /WebGLRenderer|Could not create a WebGL context|WebGL context.*could not/i.test(message)
+      ));
+      record(`backend:${failure}:${motion}`, {
+        snapshot,
+        errors,
+        consoleErrors: webglCreationErrors,
+      }, snapshot.backend === "unavailable"
+        && snapshot.canvases === 0
+        && snapshot.routeSwitchPresent
+        && snapshot.refocusPresent
+        && errors.length === 0
+        && webglCreationErrors.length === 0);
+      await context.close();
+    }
+    await checkDegradedProductControls(failure);
+  }
+
+  const context = await browser.newContext({ viewport: { width: 932, height: 620 }, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${origin}/?qaState=earth-dive&qaMotion=animate`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => (
+    document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend") === "webgl2"
+  ));
+  const beforeJourneyId = await page.locator("[data-qa-earth-dive-route-point]").getAttribute("data-journey-id");
+  await page.locator(".particle-earth-scene canvas").evaluate((canvas) => {
+    canvas.dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
+  });
+  await page.waitForFunction(() => (
+    document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend") === "unavailable"
+  ));
+  await page.locator('[data-qa-earth-dive-route-switch="next"]').click();
+  await page.waitForFunction((before) => (
+    document.querySelector("[data-qa-earth-dive-route-point]")?.getAttribute("data-journey-id") !== before
+  ), beforeJourneyId);
+  const lost = await page.evaluate(() => {
+    const host = document.querySelector("[data-persistent-earth-host]");
+    return {
+      backend: host?.getAttribute("data-particle-earth-backend"),
+      canvases: host?.querySelectorAll("canvas").length ?? -1,
+    };
+  });
+  record("backend:runtime-context-loss", { lost, errors }, lost.backend === "unavailable"
+    && lost.canvases === 0
+    && errors.length === 0);
+  await context.close();
 }
 
 async function checkRouteReuse() {
@@ -173,6 +390,7 @@ async function captureImprintStage(stage) {
 }
 
 try {
+  await checkParticleBackendDegradation();
   await checkRouteReuse();
   for (const fixture of [
     { key: "dpr-1", width: 430, height: 932, dpr: 1 },

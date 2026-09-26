@@ -49,6 +49,13 @@ describe("LivingAtlasGlobe ambience", () => {
 
 
 describe("Semantic Earth Dive renderer ownership", () => {
+  it("publishes Particle Earth backend degradation on the persistent host", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    expect(globe).toContain('data-particle-earth-backend={particleEarthBackend}');
+    expect(globe).toContain('onBackendChange={setParticleEarthBackend}');
+    expect(globe).toContain('useState<ParticleEarthBackend | "pending">("pending")');
+  });
+
   it("mounts detail non-interactive and only enables particle hold after detail owns input", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
