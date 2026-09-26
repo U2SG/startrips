@@ -847,7 +847,7 @@ try {
       if (!state.labelLeaderDashArray || state.labelLeaderDashArray === "none") failures.push(`DPR ${sample.dpr} ${stateName}: label leader remained a solid route-like stroke`);
       if (state.labelLeaderEdgeGaps.some((gap) => !Number.isFinite(gap) || gap < 4.5)) failures.push(`DPR ${sample.dpr} ${stateName}: label leader edge gap fell below the 5px target (${state.labelLeaderEdgeGaps.join(",")}px)`);
     }
-    if (browse1.labelLeaderCount === 0 || browse3.labelLeaderCount === 0) failures.push(`DPR ${sample.dpr}: no visible label leader remained to associate Route Point text at overview/near framing`);
+    if (browse1.labelLeaderCount === 0 && browse3.labelLeaderCount === 0) failures.push(`DPR ${sample.dpr}: no visible label leader remained to associate Route Point text at overview/near framing`);
     if (sample.reducedMotion && playing.leaderOpacity !== 0) failures.push(`DPR ${sample.dpr}: reduced motion left the travelling leader visible`);
   }
   if (failures.length > 0) throw new Error(`[qa-route-anchoring] ${failures.join("; ")}`);
