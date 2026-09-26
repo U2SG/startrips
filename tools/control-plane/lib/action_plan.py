@@ -104,6 +104,10 @@ def derive(row, pr=None, relation=None, review=None, ci=None, source_verdict='MI
         return 'WAIT_EVIDENCE'
     if review['unresolved'] or review['changes_requested']:
         return 'REPAIR_REVIEW'
+    if pr.get('mergeable') is None:
+        # GitHub answers null until it has recomputed mergeability; that is
+        # missing evidence, never "no conflict".
+        return 'WAIT_EVIDENCE'
     if pr.get('mergeable') is False:
         return 'REPAIR_CONFLICT'
     if source_verdict == 'CHANGES_REQUESTED':

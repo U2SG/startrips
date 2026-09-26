@@ -451,14 +451,14 @@ class StateTests(SyntheticOne):
     def test_resolved_review_does_not_demote_or_write(self):
         self.candidate()
         before = self.path.read_bytes()
-        with mock.patch.object(state, 'api', return_value={'state': 'open', 'head': {'sha': A}}), mock.patch.object(state, 'review_backlog', return_value={'head_sha': A, 'unresolved': 0, 'changes_requested': 0}):
+        with mock.patch.object(state, 'api', return_value={'state': 'open', 'mergeable': True, 'head': {'sha': A}}), mock.patch.object(state, 'review_backlog', return_value={'head_sha': A, 'unresolved': 0, 'changes_requested': 0}):
             self.assertEqual(0, state.reconcile(self.path, REPO, 'main'))
         self.assertEqual(before, self.path.read_bytes())
 
     def test_unknown_review_preserves_state(self):
         self.candidate()
         before = self.path.read_bytes()
-        with mock.patch.object(state, 'api', return_value={'state': 'open', 'head': {'sha': A}}), mock.patch.object(state, 'review_backlog', side_effect=gh.EvidenceUnknown('offline')):
+        with mock.patch.object(state, 'api', return_value={'state': 'open', 'mergeable': True, 'head': {'sha': A}}), mock.patch.object(state, 'review_backlog', side_effect=gh.EvidenceUnknown('offline')):
             self.assertEqual(6, state.reconcile(self.path, REPO, 'main'))
         self.assertEqual(before, self.path.read_bytes())
 
@@ -475,9 +475,58 @@ class StateTests(SyntheticOne):
             self.assertEqual(0, state.reconcile(self.path, REPO, 'main'))
         self.assertEqual('passed', store.load_document(self.path)['features'][0]['status'])
 
+    def test_unsettled_mergeability_is_reread_until_conflict_is_visible(self):
+        self.write(feature(status='ready_to_merge', passes=True, pr_links=['https://github.com/' + REPO + '/pull/1']))
+        reads = [{'state': 'open', 'mergeable': None, 'mergeable_state': 'unknown', 'head': {'sha': A}},
+                 {'state': 'open', 'mergeable': False, 'mergeable_state': 'dirty', 'head': {'sha': A}}]
+        with mock.patch.object(state, 'api', side_effect=reads), mock.patch.object(state.time, 'sleep') as sleep,                 mock.patch.object(state, 'review_backlog') as review:
+            self.assertEqual(0, state.reconcile(self.path, REPO, 'main'))
+        row = store.load_document(self.path)['features'][0]
+        self.assertEqual(('needs_work', False), (row['status'], row['passes']))
+        self.assertEqual(1, sleep.call_count); review.assert_not_called()
+
+    def test_mergeability_reread_dispatches_merged_lifecycle(self):
+        self.write(feature(status='ready_to_merge', passes=True, pr_links=['https://github.com/' + REPO + '/pull/1']))
+        reads = [{'state': 'open', 'mergeable': None},
+                 {'state': 'closed', 'merged': True, 'mergeable': None}]
+        proof = {'merge_sha': A, 'main_sha': B, 'main_ci': 1}
+        with mock.patch.object(state, 'api', side_effect=reads) as api:
+            with mock.patch.object(state.time, 'sleep') as sleep, mock.patch.object(state, 'merge_proof', return_value=proof) as merged, mock.patch.object(state, 'review_backlog') as review:
+                self.assertEqual(0, state.reconcile(self.path, REPO, 'main'))
+        row = store.load_document(self.path)['features'][0]
+        self.assertEqual(('passed', True), (row['status'], row['passes']))
+        self.assertEqual(2, api.call_count)
+        sleep.assert_called_once_with(2)
+        merged.assert_called_once_with(REPO, 1, 'main')
+        review.assert_not_called()
+
+    def test_mergeability_reread_dispatches_closed_lifecycle(self):
+        self.write(feature(status='ready_to_merge', passes=True, pr_links=['https://github.com/' + REPO + '/pull/1']))
+        reads = [{'state': 'open', 'mergeable': None},
+                 {'state': 'closed', 'merged': False, 'mergeable': None}]
+        with mock.patch.object(state, 'api', side_effect=reads) as api:
+            with mock.patch.object(state.time, 'sleep') as sleep, mock.patch.object(state, 'review_backlog') as review, mock.patch.object(state, 'merge_proof') as merged:
+                self.assertEqual(0, state.reconcile(self.path, REPO, 'main'))
+        row = store.load_document(self.path)['features'][0]
+        self.assertEqual(('needs_work', False), (row['status'], row['passes']))
+        self.assertEqual(2, api.call_count)
+        sleep.assert_called_once_with(2)
+        review.assert_not_called()
+        merged.assert_not_called()
+
+    def test_persistently_null_mergeability_waits_without_clearing_or_writing(self):
+        self.write(feature(status='ready_to_merge', passes=True, pr_links=['https://github.com/' + REPO + '/pull/1']))
+        before = self.path.read_bytes()
+        pending = {'state': 'open', 'mergeable': None, 'mergeable_state': 'unknown', 'head': {'sha': A}}
+        with mock.patch.object(state, 'api', return_value=pending) as api, mock.patch.object(state.time, 'sleep'),                 mock.patch.object(state, 'review_backlog') as review:
+            self.assertEqual(0, state.reconcile(self.path, REPO, 'main'))
+        self.assertEqual(before, self.path.read_bytes())
+        self.assertEqual(1 + len(state.MERGEABILITY_REREAD_DELAYS_S), api.call_count)
+        review.assert_not_called()
+
     def test_review_finding_does_not_charge_implementation_attempt(self):
         self.candidate()
-        with mock.patch.object(state, 'api', return_value={'state': 'open', 'head': {'sha': A}}), mock.patch.object(state, 'review_backlog', return_value={'head_sha': A, 'unresolved': 1, 'changes_requested': 0}):
+        with mock.patch.object(state, 'api', return_value={'state': 'open', 'mergeable': True, 'head': {'sha': A}}), mock.patch.object(state, 'review_backlog', return_value={'head_sha': A, 'unresolved': 1, 'changes_requested': 0}):
             self.assertEqual(0, state.reconcile(self.path, REPO, 'main'))
         row = store.load_document(self.path)['features'][0]
         self.assertEqual(('needs_work', 0), (row['status'], row['attempts']))
