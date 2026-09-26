@@ -960,9 +960,15 @@ try {
     // is briefly absent while each refresh is in flight. Wait for the stage to
     // be gone AND a fresh read to be on screen before grading the final state.
     await page.waitForFunction(
-      () => document.querySelector(".living-atlas__active-media-reveal") === null
-        && document.querySelector(".living-atlas__active-media img") !== null,
-      undefined,
+      (expected) => {
+        const original = document.querySelector(
+          '.living-atlas__active-media img:not([data-cover-reveal-image])',
+        );
+        return document.querySelector(".living-atlas__active-media-reveal") === null
+          && original instanceof HTMLImageElement && original.src === expected
+          && original.complete && original.naturalWidth > 0;
+      },
+      ORIGINAL_URL_RESIGNED,
       { timeout: 40_000 },
     );
     const settled = await coverState(page);

@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackClip, mediaStackOpacity, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
 import { springElementTo, springTransformVelocity, type SpringElementHandle } from "../motion/springElement";
-import { MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
+import { MEDIA_SWIPE_DISTANCE_PX, MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import type { JourneyMediaAsset, MediaPreviewRead } from "./types";
@@ -43,12 +43,17 @@ type MediaDrag = {
   generation: number;
   scopeKey: string;
   settleTakeover: boolean;
+  /** Pixels the stream travels before it locks an axis (see `videoGestureCanStart`). */
+  axisLock: number;
 };
+/** `cancelGesture` as the stage implements it: `true` lets a landed settle commit (#530). */
+export type StoryMediaGestureCancel = (commitDecided?: boolean) => void;
 type Props = {
   scopeKey: string;
   media: readonly JourneyMediaAsset[];
   currentId: string | null;
   incomingId: string | null;
+  pendingId: string | null;
   coverId?: string | null;
   direction?: -1 | 1;
   reads: Record<string, Read>;
@@ -75,6 +80,11 @@ type Props = {
   onGestureTapAfterSettle?: () => void;
   onGestureExitFullscreen?: () => void;
   onGestureRevealFullscreenControls?: () => void;
+  /** The painted owner used for Story's logical return observation. */
+  onForegroundChange?: (id: string | null) => void;
+  /** #489: the decode tier of Story's warm window. A video here keeps a
+   *  representative frame ready before it is given a physical page. */
+  warmIds?: readonly string[];
 };
 
 function containsMediaPoint(element: HTMLImageElement | HTMLCanvasElement, x: number, y: number) {
@@ -144,14 +154,15 @@ function prepareVideoFrame(url: string, done: (frame: HTMLCanvasElement | null) 
   return () => { if (!closed) { closed = true; release(); } };
 }
 
-function FrameCanvas({ frame }: { frame: HTMLCanvasElement | undefined }) {
+function FrameCanvas({ frame, sharedId }: { frame: HTMLCanvasElement | undefined; sharedId?: string }) {
   const paint = useCallback((canvas: HTMLCanvasElement | null) => {
     if (!canvas || !frame) return;
     canvas.width = frame.width;
     canvas.height = frame.height;
     canvas.getContext("2d")?.drawImage(frame, 0, 0);
   }, [frame]);
-  return <canvas ref={paint} hidden={!frame} aria-hidden="true" />;
+  return <canvas ref={paint} hidden={!frame} aria-hidden="true"
+    data-shared-media-id={frame ? sharedId : undefined} />;
 }
 
 /** Three fixed pages and one persistent, gesture-authorized video transport. */
@@ -163,10 +174,14 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const pageNodes = useRef<Array<HTMLDivElement | null>>([null, null, null]);
   const imageNodes = useRef<Array<HTMLImageElement | null>>([null, null, null]);
   const slotIds = useRef<Array<string | null>>([null, null, null]);
+  // The last presentable incoming page, painted in front of `current` while
+  // its handoff runs. A newer request that is not presentable yet must not
+  // take that page's slot or send the stack back to `current`.
+  const frontIncoming = useRef<{ id: string; currentId: string | null } | null>(null);
   const clipOwners = useRef<Array<string | null>>([null, null, null]);
   const interrupted = useRef(false);
   const drag = useRef<MediaDrag | null>(null);
-  const settle = useRef<{ cancel: () => void; finishForTakeover: () => void } | null>(null);
+  const settle = useRef<{ cancel: (commitDecided?: boolean) => void; finishForTakeover: () => void } | null>(null);
   const suppressCancelledPointerClick = useRef(false);
   const dragSprings = useRef<SpringElementHandle[]>([]);
   const gestureGeneration = useRef(0);
@@ -219,8 +234,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const direction = props.direction ?? (props.incomingId === previousId ? -1
     : props.incomingId === nextId ? 1
       : props.media.findIndex((asset) => asset.id === props.incomingId) < index ? -1 : 1);
+  const held = frontIncoming.current;
+  const requestedId = props.incomingId ?? props.pendingId;
+  const heldFrontId = held && requestedId && held.id !== requestedId
+    && held.currentId === props.currentId && props.media.some((asset) => asset.id === held.id) ? held.id : null;
   const neighbors = props.incomingId
-    ? [props.currentId, props.incomingId, direction > 0 ? previousId : nextId]
+    ? [props.currentId, props.incomingId, heldFrontId ?? (direction > 0 ? previousId : nextId)]
+    : heldFrontId ? [props.currentId, props.pendingId, heldFrontId]
     : [props.currentId, previousId ?? at(2), nextId];
   const desired = [...new Set(neighbors
     .filter((id): id is string => id !== null))].slice(0, 3);
@@ -237,6 +257,16 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     const read = id ? props.reads[id] : undefined;
     return `${id}:${read?.status}:${read?.status === "ready" ? `${read.url}:${read.generation ?? ""}` : ""}`;
   }).join("|");
+  const warmFrameIds = (props.warmIds ?? []).filter((id) => !assigned.includes(id));
+  const warmSignature = warmFrameIds.map((id) => {
+    const read = props.reads[id];
+    return `${id}:${read?.status}:${read?.status === "ready" ? `${read.url}:${read.generation ?? ""}` : ""}`;
+  }).join("|");
+  // What each physical <img> last finished painting. A reassigned slot keeps
+  // drawing its previous asset until the new source decodes, so a page whose
+  // image still shows another asset is hidden rather than exposing that old
+  // neighbour under the new identity (#489 section 5).
+  const paintedImages = useRef<Array<string | null>>([null, null, null]);
 
   const rememberLiveFrame = useCallback(() => {
     const source = bindingRef.current;
@@ -289,12 +319,15 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     binding.id, binding.src, binding.generation, Boolean(props.video), rememberLiveFrame]);
 
   useEffect(() => {
-    const wanted = new Set(assigned.filter((id): id is string => Boolean(id)));
+    const slotted = new Set(assigned.filter((id): id is string => Boolean(id)));
+    // Representative frames cover the pages and the warm decode tier; decoded
+    // <img> marks belong to a physical page and leave with it.
+    const wanted = new Set([...slotted, ...warmFrameIds]);
     for (const [id, cancel] of pendingFrames.current) {
       if (!wanted.has(id)) { cancel(); pendingFrames.current.delete(id); }
     }
     for (const id of frames.current.keys()) if (!wanted.has(id)) frames.current.delete(id);
-    for (const id of decodedImages.current.keys()) if (!wanted.has(id)) decodedImages.current.delete(id);
+    for (const id of decodedImages.current.keys()) if (!slotted.has(id)) decodedImages.current.delete(id);
     for (const id of wanted) {
       const asset = latest.current.media.find((item) => item.id === id);
       const read = latest.current.reads[id];
@@ -324,7 +357,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       });
       pendingFrames.current.set(id, cancel);
     }
-  }, [slotSignature, readSignature]);
+  }, [slotSignature, readSignature, warmSignature]);
 
   const liveKey = `${binding.id}:${binding.src}:${binding.generation ?? ""}`;
   const liveSourceMatches = (element: HTMLVideoElement) => Boolean(binding.id && binding.src
@@ -415,6 +448,17 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     }
     return decodedImages.current.get(id) === read.url;
   };
+  const targetReady = ready(props.incomingId);
+  // The pending read can clear incomingId before its replacement is decoded.
+  // Keep the last painted incoming page while that newer request is pending.
+  const holdingFront = Boolean(heldFrontId && !targetReady);
+  const presentedId = holdingFront ? heldFrontId : props.currentId;
+  const presentedAsset = props.media.find((asset) => asset.id === presentedId);
+  const presentedVideo = presentedAsset?.mimeType.startsWith("video/");
+  const presentedIdRef = useRef(presentedId);
+  presentedIdRef.current = presentedId;
+  const wasActive = useRef(active);
+  const claimingPresentedBase = useRef<string | null>(null);
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
@@ -429,7 +473,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           // Releasing capture does not prevent the browser from synthesizing a
           // click at the release target. That click cannot navigate the photo.
           suppressCancelledPointerClick.current = true;
-          cancelGesture();
+          cancelGesture(true);
         }
         updateLayoutRevision((value) => value + 1);
       }
@@ -444,7 +488,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       // Retained pages keep their painted aperture when their semantic role
       // changes. Only a recycled owner or an idle layout needs initialization.
       if (clipOwners.current[slot] !== assigned[slot]
-        || (!props.incomingId && !movingId && !interrupted.current && gesturePhase === null)) {
+        || (!props.incomingId && !holdingFront && !movingId && !interrupted.current && gesturePhase === null)) {
         const [y, x] = mediaStackClip(node, front);
         node.style.clipPath = `inset(${y}% ${x}%)`;
       }
@@ -460,25 +504,44 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     // wearing none. Nothing recomputed it until the next navigation happened to
     // move one of the old dependencies, which is why the recorded exposure
     // appears mid-handoff and clears itself one navigation later.
-  }, [slotSignature, props.currentId, props.incomingId, movingId, revision, liveReady, layoutRevision, gesturePhase]);
-  const targetReady = ready(props.incomingId);
+  }, [slotSignature, props.currentId, props.incomingId, holdingFront, movingId, revision, liveReady, layoutRevision, gesturePhase]);
+  useLayoutEffect(() => {
+    const activated = active && !wasActive.current;
+    wasActive.current = active;
+    if (!activated || !holdingFront) return;
+    // The inactive stage retained B's identity but never ran A -> B's spring.
+    // Give B the front pose before the fullscreen clone releases its paint.
+    const node = pageNodes.current[assigned.indexOf(heldFrontId)];
+    if (!node) return;
+    node.style.transform = mediaStackRest(0);
+    node.style.opacity = String(mediaStackOpacity(0));
+    node.style.clipPath = "inset(0% 0%)";
+  }, [active, holdingFront, heldFrontId, slotSignature]);
+  useLayoutEffect(() => {
+    if (props.incomingId && targetReady) frontIncoming.current = { id: props.incomingId, currentId: props.currentId };
+    else if ((!props.incomingId && !props.pendingId) || frontIncoming.current?.currentId !== props.currentId) frontIncoming.current = null;
+  }, [props.incomingId, props.pendingId, props.currentId, targetReady]);
   const currentReady = ready(props.currentId);
   // #489 C/V8: a presentable target is painted in front of the page it
   // replaces, so it is already the media the viewer last saw. Shared-element
   // identity has to follow that painted foreground; publishing it from the
   // settled index instead made a close during a handoff hand the previous
   // photograph to the return morph while the new one was on screen.
-  const foregroundId = props.incomingId && targetReady ? props.incomingId : props.currentId;
+  const foregroundId = props.incomingId && targetReady ? props.incomingId
+    : holdingFront ? heldFrontId : props.currentId;
+  useLayoutEffect(() => {
+    if (active) props.onForegroundChange?.(foregroundId);
+  }, [active, foregroundId, props.onForegroundChange]);
   useLayoutEffect(() => {
     if (!active) return;
     // Physical slots outlive their media. Carry keyboard focus with the
     // presented image before its old slot becomes an inaccessible neighbor.
     const focused = document.activeElement;
     if (focused === root.current || imageNodes.current.some((image) => image === focused)) {
-      const image = imageNodes.current[assigned.indexOf(props.currentId)];
+      const image = imageNodes.current[assigned.indexOf(presentedId)];
       (image && !image.hidden ? image : root.current)?.focus({ preventScroll: true });
     }
-  }, [active, props.currentId]);
+  }, [active, presentedId]);
   const currentVideo = props.media.find((asset) => asset.id === props.currentId)?.mimeType.startsWith("video/");
   const playbackReady = currentReady && !props.incomingId && !movingId
     && (!currentVideo || (binding.id === props.currentId && liveReady === liveKey));
@@ -510,7 +573,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     let cancelled = false;
     let completed = false;
     const recovering = !id || !targetReady;
-    if (!active || (recovering && !interrupted.current)) { setMovingId(null); return; }
+    if (!active || (recovering && !interrupted.current && !holdingFront)) { setMovingId(null); return; }
+    if (holdingFront) {
+      // Freeze the interrupted handoff where it is painted: B keeps the front
+      // and its pose, and the next run springs from it once C is presentable.
+      setMovingId(id ?? heldFrontId);
+      return () => { interrupted.current = true; };
+    }
     const finish = () => {
       if (cancelled || generation !== handoffGeneration.current || !latest.current.active
         || latest.current.incomingId !== id || latest.current.currentId !== props.currentId) return;
@@ -552,7 +621,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       // that state, including another reversal during recovery.
       interrupted.current = !completed;
     };
-  }, [active, props.currentId, props.incomingId, targetReady, direction, rememberLiveFrame, recoveryRevision, layoutRevision]);
+  }, [active, props.currentId, props.incomingId, targetReady, holdingFront, direction, rememberLiveFrame, recoveryRevision, layoutRevision]);
 
   function grabPages(neighborId: string | null) {
     ++handoffGeneration.current;
@@ -581,7 +650,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   function gestureIsCurrent(value: MediaDrag) {
     return value.generation === gestureGeneration.current
       && latest.current.active && latest.current.scopeKey === value.scopeKey
-      && latest.current.currentId === value.baseId
+      && (latest.current.currentId === value.baseId || presentedIdRef.current === value.baseId)
       && value.base.isConnected && value.base.dataset.mediaPageId === value.baseId;
   }
 
@@ -628,11 +697,17 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     }
   }
 
-  function cancelGesture() {
-    ++gestureGeneration.current;
+  // #530: `commitDecided` is for an interruption from outside the gesture
+  // (resize, blur, fullscreen, editing). A settle whose release already landed
+  // on a presentable target commits before it is finished; a spring-back, a
+  // held drag, and every lifecycle caller (unmount, scope or identity change)
+  // stay cleanup-only. The settle is resolved before the generation moves so
+  // its commit is still judged against the gesture that decided it.
+  function cancelGesture(commitDecided = false) {
     const pending = settle.current;
     settle.current = null;
-    pending?.cancel();
+    pending?.cancel(commitDecided);
+    ++gestureGeneration.current;
     const held = drag.current;
     drag.current = null;
     if (held) clearDragPresentation(held);
@@ -669,16 +744,31 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
 
   function mediaGestureCanStart(target: EventTarget | null) {
     if (!(target instanceof Element)) return false;
-    // Native controls are not DOM children with a portable hit region. The
-    // transport owns every pointer that starts on it, including seek drags.
-    if (target.closest(".story-media-pages__video")) return false;
     return !target.closest("button, input, select, textarea, [role='button']:not(img)");
   }
 
-  function neighborFor(dx: number) {
+  // A swipe may start on the presented video's picture, so a video page can be
+  // browsed and a phone can swipe down out of fullscreen from it. A pointer is
+  // never taken by position alone: nothing is claimed until the stream locks an
+  // axis, a click never navigates (#489 A2), and the native control band --
+  // timeline, play, volume, overflow -- keeps every stream that starts in it.
+  // Chromium's control boxes live in a closed user-agent shadow tree, so the
+  // band is the one `--story-video-control-band` token the fullscreen nav
+  // also clears (tokens.css). Without a readable token the whole video stays
+  // with its transport rather than guessing.
+  function videoGestureCanStart(event: ReactPointerEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (!(target instanceof Element) || !target.closest(".story-media-pages__video")) return true;
+    if (!(target instanceof HTMLVideoElement)) return false;
+    if (!target.controls) return true;
+    const band = Number.parseFloat(getComputedStyle(target).getPropertyValue("--story-video-control-band"));
+    return Number.isFinite(band) && event.clientY < target.getBoundingClientRect().bottom - band;
+  }
+
+  function neighborFor(dx: number, baseId: string) {
     if (dx === 0) return null;
-    const { media, currentId, wrap } = latest.current;
-    const index = media.findIndex((item) => item.id === currentId);
+    const { media, wrap } = latest.current;
+    const index = media.findIndex((item) => item.id === baseId);
     if (index < 0 || media.length < 2) return null;
     const next = index + (dx < 0 ? 1 : -1);
     const target = wrap ? (next + media.length) % media.length : next;
@@ -706,10 +796,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   function beginGesture(event: ReactPointerEvent<HTMLDivElement>) {
     latest.current.onGestureConsumed(false);
     if (!event.isPrimary || !latest.current.active || !latest.current.gestureEnabled
-      || latest.current.media.length < 2 || !mediaGestureCanStart(event.target)) return;
+      || latest.current.media.length < 2 || !mediaGestureCanStart(event.target)
+      || !videoGestureCanStart(event)) return;
     const prior = settle.current;
     if (prior) prior.finishForTakeover();
-    const base = pageNodes.current.find((node) => node?.dataset.mediaPage === "current");
+    const base = pageNodes.current.find((node) => node?.dataset.mediaPresented === "true");
     const baseId = base?.dataset.mediaPageId;
     if (!base || !baseId) return;
     const originTransform = getComputedStyle(base).transform;
@@ -724,6 +815,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         && event.target instanceof HTMLImageElement,
       generation: ++gestureGeneration.current, scopeKey: latest.current.scopeKey,
       settleTakeover: Boolean(prior),
+      // On a video picture a small wobble belongs to the transport: its taps,
+      // pointerup and control reveal stay native. Only travel that is already
+      // a swipe by distance lets the stage claim the stream.
+      axisLock: event.target instanceof HTMLVideoElement ? MEDIA_SWIPE_DISTANCE_PX : 8,
     };
     drag.current = value;
     if (prior) setGesturePhase("dragging");
@@ -736,7 +831,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     if (value.axis === null) {
       const dx = event.clientX - value.startX;
       const dy = event.clientY - value.startY;
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dx) < value.axisLock && Math.abs(dy) < value.axisLock) return;
       if (Math.abs(dx) <= Math.abs(dy) * 1.15) { value.axis = "y"; return; }
       value.axis = "x";
       // The gesture owns this pointer from here through release, including a
@@ -744,12 +839,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       suppressCancelledPointerClick.current = true;
       for (const spring of dragSprings.current) spring.cancel();
       dragSprings.current = [];
+      if (value.baseId !== latest.current.currentId) claimingPresentedBase.current = value.baseId;
       flushSync(() => latest.current.onGestureClaim(value.baseId));
       if (!gestureIsCurrent(value)) return;
       value.originTransform = getComputedStyle(value.base).transform;
       root.current?.style.setProperty("--story-live-transform", value.originTransform);
       root.current?.style.setProperty("--story-live-opacity", getComputedStyle(value.base).opacity);
-      grabPages(neighborFor(dx)?.id ?? null);
+      grabPages(neighborFor(dx, value.baseId)?.id ?? null);
       setGesturePhase("dragging");
       try { event.currentTarget.setPointerCapture(value.pointerId); }
       catch { /* A cancelled pointer can no longer be captured. */ }
@@ -762,7 +858,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       value.lastX = event.clientX;
       value.lastTime = event.timeStamp;
     }
-    const neighbor = neighborFor(value.dx);
+    const neighbor = neighborFor(value.dx, value.baseId);
     const peek = peekFor(neighbor?.id ?? null);
     if (value.neighborId !== (neighbor?.id ?? null) || value.peek !== peek) {
       value.neighborId = neighbor?.id ?? null;
@@ -849,32 +945,41 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       dragSprings.current = [];
       complete();
     };
+    const finishForTakeover = () => {
+      if (!pending) return;
+      allowTapAfterSettle = false;
+      // A new pointer claims the painted pixels. Commit the identity first,
+      // then restore the measured pose on still-owned physical slots.
+      const painted = pageNodes.current.flatMap((node) => node?.dataset.mediaPageId
+        ? [{ node, id: node.dataset.mediaPageId, transform: getComputedStyle(node).transform,
+          opacity: getComputedStyle(node).opacity, clipPath: getComputedStyle(node).clipPath }] : []);
+      for (const spring of springs) spring.cancel();
+      finish();
+      for (const { node, id, transform, opacity, clipPath } of painted) {
+        if (node.dataset.mediaPageId !== id) continue;
+        node.style.transform = transform;
+        node.style.opacity = opacity;
+        node.style.clipPath = clipPath;
+      }
+    };
     settle.current = {
-      cancel: () => {
+      cancel: (commitDecided = false) => {
         if (!pending) return;
+        if (commitDecided && readyToLand) {
+          // #530: the release already chose this target. Commit it exactly as
+          // a takeover would, then let the stage spring the committed stack
+          // from its painted pose to rest; no later pointer will own it.
+          finishForTakeover();
+          recoverPages();
+          return;
+        }
         pending = false;
         settle.current = null;
         for (const spring of springs) spring.cancel();
         dragSprings.current = [];
         clearDragPresentation(value);
       },
-      finishForTakeover: () => {
-        if (!pending) return;
-        allowTapAfterSettle = false;
-        // A new pointer claims the painted pixels. Commit the identity first,
-        // then restore the measured pose on still-owned physical slots.
-        const painted = pageNodes.current.flatMap((node) => node?.dataset.mediaPageId
-          ? [{ node, id: node.dataset.mediaPageId, transform: getComputedStyle(node).transform,
-            opacity: getComputedStyle(node).opacity, clipPath: getComputedStyle(node).clipPath }] : []);
-        for (const spring of springs) spring.cancel();
-        finish();
-        for (const { node, id, transform, opacity, clipPath } of painted) {
-          if (node.dataset.mediaPageId !== id) continue;
-          node.style.transform = transform;
-          node.style.opacity = opacity;
-          node.style.clipPath = clipPath;
-        }
-      },
+      finishForTakeover,
     };
     void Promise.all(springs.map((spring) => spring.finished)).then(finish, () => undefined);
   }
@@ -908,7 +1013,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     gestureScope.current = props.scopeKey;
   }, [active, props.scopeKey]);
   useLayoutEffect(() => {
-    if (gestureCurrentId.current !== props.currentId && (drag.current || settle.current)) cancelGesture();
+    if (gestureCurrentId.current !== props.currentId && (drag.current || settle.current)) {
+      // Claiming an already painted B makes it the semantic owner inside the
+      // same pointer stream. Other identity changes still cancel that stream.
+      if (claimingPresentedBase.current === props.currentId && drag.current?.baseId === props.currentId) {
+        claimingPresentedBase.current = null;
+      } else cancelGesture();
+    }
     gestureCurrentId.current = props.currentId;
   }, [props.currentId]);
   useLayoutEffect(() => () => {
@@ -938,9 +1049,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     const rect = element.getBoundingClientRect();
     return x < rect.left + rect.width / 2 ? -1 : 1;
   };
-  const step = (direction: -1 | 1, accessibleActivation = false) => {
-    if (direction < 0 ? props.canNavigatePrevious : props.canNavigateNext) {
-      props.onNavigate?.(direction, accessibleActivation);
+  const step = (direction: -1 | 1 | null, accessibleActivation = false) => {
+    if (holdingFront && presentedId) flushSync(() => latest.current.onGestureClaim(presentedId));
+    const current = latest.current;
+    const resolvedDirection = direction ?? (current.canNavigateNext ? 1 : -1);
+    if (resolvedDirection < 0 ? current.canNavigatePrevious : current.canNavigateNext) {
+      current.onNavigate?.(resolvedDirection, accessibleActivation);
     }
   };
   // #489 A2: only a photograph resolves a click into navigation. The presented
@@ -953,7 +1067,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     event.stopPropagation();
     if (props.onNavigate) {
       event.preventDefault();
-      step(event.detail === 0 ? (props.canNavigateNext ? 1 : -1) : navigationDirection(media, event.clientX), event.detail === 0);
+      step(event.detail === 0 ? null : navigationDirection(media, event.clientX), event.detail === 0);
     } else {
       props.onImageClick?.(event.detail === 0);
     }
@@ -979,8 +1093,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     const rect = surface.getBoundingClientRect();
     // Only a photograph owns this surface now, so its aperture comes from the
     // presented image itself rather than from a retained video frame.
-    const asset = props.media.find((item) => item.id === props.currentId);
-    const image = imageNodes.current[assigned.indexOf(props.currentId)];
+    const asset = props.media.find((item) => item.id === presentedId);
+    const image = imageNodes.current[assigned.indexOf(presentedId)];
     const width = asset?.displayWidth || image?.naturalWidth || 0;
     const height = asset?.displayHeight || image?.naturalHeight || 0;
     if (!width || !height) return false;
@@ -989,14 +1103,14 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       && Math.abs(y - (rect.top + rect.height / 2)) <= height * scale / 2;
   };
   useLayoutEffect(() => {
-    if (!active || currentVideo || props.incomingId) delete root.current?.dataset.clickDirection;
-  }, [active, currentVideo, props.incomingId]);
+    if (!active || presentedVideo || props.incomingId) delete root.current?.dataset.clickDirection;
+  }, [active, presentedVideo, props.incomingId]);
   // A video page has no focusable picture slot; the stage carries navigation.
-  const videoStageNavigation = Boolean(currentVideo && canNavigate);
+  const videoStageNavigation = Boolean(presentedVideo && canNavigate);
   return <div ref={root} className="story-media-pages" data-story-media-pages
     tabIndex={videoStageNavigation ? 0 : -1}
     role={videoStageNavigation ? "group" : undefined}
-    aria-label={videoStageNavigation ? "视频。左右方向键切换媒体" : undefined}
+    aria-label={videoStageNavigation ? `${presentedAsset?.fileName ?? "视频"}。左右方向键切换媒体` : undefined}
     aria-keyshortcuts={videoStageNavigation ? "ArrowLeft ArrowRight" : undefined}
     onPointerDownCapture={(event) => {
       if (event.isPrimary) suppressCancelledPointerClick.current = false;
@@ -1033,7 +1147,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     onClick={handleBackdropClick}
     onPointerMove={(event) => {
       updateGesture(event);
-      if (currentVideo || props.incomingId || !props.onNavigate) {
+      if (presentedVideo || props.incomingId || !props.onNavigate) {
         delete event.currentTarget.dataset.clickDirection;
         return;
       }
@@ -1045,15 +1159,26 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       event.currentTarget.dataset.clickDirection = direction < 0 && props.canNavigatePrevious ? "previous"
         : direction > 0 && props.canNavigateNext ? "next" : "";
     }}
-    onPointerLeave={(event) => { delete event.currentTarget.dataset.clickDirection; }}
+    onPointerLeave={(event) => {
+      delete event.currentTarget.dataset.clickDirection;
+      // Before axis lock the native video still owns the pointer, so this
+      // stage has no capture and cannot receive an outside pointerup. Release
+      // the Story hold when that stream leaves its boundary.
+      if (drag.current?.pointerId === event.pointerId
+        && !event.currentTarget.hasPointerCapture(event.pointerId)) {
+        suppressCancelledPointerClick.current = true;
+        cancelGesture();
+      }
+    }}
     data-click-navigation={props.onNavigate ? "true" : undefined}
-    data-current-media-kind={props.currentId ? (currentVideo ? "video" : "image") : undefined}
+    data-current-media-kind={presentedId ? (presentedVideo ? "video" : "image") : undefined}
     data-media-presentation={gesturePhase ?? (movingId ? "moving" : props.incomingId ? "waiting" : "settled")}>
     {assigned.map((id, slot) => {
       const asset = props.media.find((item) => item.id === id);
       const read = id ? props.reads[id] : undefined;
       const isVideo = asset?.mimeType.startsWith("video/");
       const current = id !== null && id === props.currentId;
+      const presented = id !== null && id === presentedId;
       const url = read?.status === "ready" ? read.url : undefined;
       const pageReady = ready(id);
       const layer = id && read?.status === "ready" ? mediaPreviewLayer({
@@ -1071,7 +1196,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}
         data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
         data-media-incoming={id !== null && id === props.incomingId ? "true" : undefined}
-        aria-hidden={!current} style={{
+        data-media-presented={presented ? "true" : undefined}
+        aria-hidden={!presented} style={{
           "--page-offset": offsets[slot], "--stack-depth": depths[slot],
           // A physical slot changes owners without remounting. Commit its
           // painted order with that identity, including synchronous reduced-
@@ -1080,8 +1206,9 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           // a gesture before the semantic selection is committed.
           zIndex: gestureFrontId && id === gestureFrontId ? 5
             : gestureFrontId && current ? 2
-              : current ? (props.incomingId && targetReady ? 2 : 5)
-                : id !== null && id === props.incomingId && targetReady ? 4 : 3 - depths[slot],
+              : current ? (props.incomingId && (targetReady || holdingFront) ? 2 : 5)
+                : id !== null && id === props.incomingId && targetReady ? 4
+                  : holdingFront && id === heldFrontId ? 4 : 3 - depths[slot],
           transform: mediaStackRest(depths[slot]),
           opacity: mediaStackOpacity(depths[slot]),
           // Same-asset layer authority keeps the preview under this physical
@@ -1089,17 +1216,19 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           backgroundImage: layer?.kind === "preview"
             ? `url(${JSON.stringify(layer.url)})` : undefined,
           backgroundSize: "contain", backgroundPosition: "center", backgroundRepeat: "no-repeat",
-          pointerEvents: current ? "auto" : "none",
+          pointerEvents: presented ? "auto" : "none",
         } as CSSProperties}>
         <img ref={(element) => { imageNodes.current[slot] = element; }}
-          src={!isVideo ? url : undefined} hidden={isVideo || !url} alt={current ? asset?.fileName ?? "" : ""}
+          src={!isVideo ? url : undefined}
+          hidden={isVideo || !url || (!pageReady && paintedImages.current[slot] !== id)}
+          alt={presented ? asset?.fileName ?? "" : ""}
           draggable={false} decoding="async"
-          role={current && (canNavigate || props.onImageClick) ? "button" : undefined}
-          tabIndex={current && pageReady && (canNavigate || props.onImageClick) ? 0 : -1}
-          aria-label={current && canNavigate
+          role={presented && (canNavigate || props.onImageClick) ? "button" : undefined}
+          tabIndex={presented && pageReady && (canNavigate || props.onImageClick) ? 0 : -1}
+          aria-label={presented && canNavigate
             ? `${asset?.fileName ?? "照片"}。左侧上一张，右侧下一张，方向键切换`
-            : current && props.onImageClick ? `沉浸查看：${asset?.fileName ?? "照片"}` : undefined}
-          aria-keyshortcuts={current && canNavigate ? "ArrowLeft ArrowRight" : undefined}
+            : presented && props.onImageClick ? `沉浸查看：${asset?.fileName ?? "照片"}` : undefined}
+          aria-keyshortcuts={presented && canNavigate ? "ArrowLeft ArrowRight" : undefined}
           data-shared-media-id={id !== null && id === foregroundId && !isVideo && pageReady ? id : undefined}
           data-shared-journey-cover={id !== null && id === foregroundId && !isVideo && pageReady && id === props.coverId ? "true" : undefined}
           onLoad={(event) => {
@@ -1108,6 +1237,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
             const mark = () => {
               if (!image.isConnected || image.getAttribute("src") !== url || !image.naturalWidth) return;
               decodedImages.current.set(id, url);
+              paintedImages.current[slot] = id;
               updateRevision((value) => value + 1);
             };
             if (typeof image.decode === "function") void image.decode().then(mark, () => reportImageError(image, id, url));
@@ -1116,8 +1246,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           onError={(event) => {
             if (id && url) reportImageError(event.currentTarget, id, url);
           }}
-          onClick={current && (props.onNavigate || props.onImageClick) ? handlePictureClick : undefined}
-          onKeyDown={current && (props.onNavigate || props.onImageClick) ? (event) => {
+          onClick={presented && (props.onNavigate || props.onImageClick) ? handlePictureClick : undefined}
+          onKeyDown={presented && (props.onNavigate || props.onImageClick) ? (event) => {
             if (props.onNavigate && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
               event.preventDefault();
               event.stopPropagation();
@@ -1127,23 +1257,25 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
             event.stopPropagation();
-            if (props.onNavigate) step(props.canNavigateNext ? 1 : -1, true);
+            if (props.onNavigate) step(null, true);
             else props.onImageClick?.(true);
           } : undefined} />
-        <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined} />
+        <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined}
+          sharedId={isVideo && id !== null && id === foregroundId && pageReady
+            && (!videoVisible || id !== props.currentId) ? id : undefined} />
       </div>;
     })}
     {/* #489 A1: a photograph's stationary click surface must never cover the
         presented video. A clipped strip still left the transport's own picture
         behind a navigation layer, so the video keeps its whole surface and
         navigates by the separate buttons or the arrow keys the stage advertises. */}
-    {props.onNavigate && active && currentReady && !currentVideo ? <div ref={hitSurface}
+    {props.onNavigate && active && ready(presentedId) && !presentedVideo ? <div ref={hitSurface}
       className="story-media-pages__hit-surface" data-story-hit-surface aria-hidden="true"
       draggable={false}
       onClick={(event) => {
         event.stopPropagation();
         if (!stablePictureContains(event.clientX, event.clientY)) { props.onBackdropClick?.(); return; }
-        const image = imageNodes.current[assigned.indexOf(props.currentId)];
+        const image = imageNodes.current[assigned.indexOf(presentedId)];
         (image && !image.hidden ? image : root.current)?.focus({ preventScroll: true });
         step(navigationDirection(event.currentTarget, event.clientX));
       }} /> : null}
@@ -1187,6 +1319,18 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       && props.reads[props.currentId]?.status === "ready" ? (
       <div className="starlight-media-state is-waiting" role="status">
         <StartripsJourneyCue state="waiting" size={48} />
+        <div className="starlight-media-state__copy"><strong>正在准备画面…</strong></div>
+      </div>
+    ) : null}
+    {/* A first-frame canvas makes a video page presentable, not playable. Until
+        its one transport is live the page keeps that retained picture, and this
+        quiet notice -- never a cover over it -- says why it has no controls. */}
+    {active && currentVideo && currentReady && !heldRenewalFrame && !props.incomingId
+      && !movingId && gesturePhase === null && props.videoAssetId === props.currentId
+      && !(binding.id === props.currentId && liveReady === liveKey)
+      && failedLiveSource !== liveKey ? (
+      <div className="starlight-media-state is-over-media story-media-pages__transport-state"
+        role="status" data-story-transport-pending={props.currentId ?? undefined}>
         <div className="starlight-media-state__copy"><strong>正在准备画面…</strong></div>
       </div>
     ) : null}

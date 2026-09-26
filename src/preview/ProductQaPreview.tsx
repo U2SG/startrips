@@ -563,12 +563,14 @@ function JourneyStoryQaPreview() {
   } : storyQaJourney;
   const [open, setOpen] = useState(true);
   const [journeys, setJourneys] = useState<Journey[]>([initialJourney]);
+  const [observation, setObservation] = useState<{ assetId: string | null; routePointId: string | null } | null>(null);
   // The preview synthesizes the asset a real API would return, so it needs to
   // be told which kind the next completed upload represents.
   const [nextMediaIsSoundtrack, setNextMediaIsSoundtrack] = useState(false);
 
   return (
-    <main className="living-atlas">
+    <main className="living-atlas" data-qa-story-observation-asset={observation?.assetId ?? undefined}
+      data-qa-story-observation-route-point={observation?.routePointId ?? undefined}>
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       <button type="button" data-qa-story-reopen onClick={() => setOpen(true)}>重新打开旅程</button>
       <button type="button" data-qa-story-next-audio onClick={() => setNextMediaIsSoundtrack(true)}>下一个上传是配乐</button>
@@ -576,6 +578,10 @@ function JourneyStoryQaPreview() {
         <JourneyStory
           journeys={journeys}
           journeyId={initialJourney.id}
+          onObservationChange={(next) => setObservation((current) => {
+            if (current?.assetId === next?.assetId && current?.routePointId === next?.routePointId) return current;
+            return next ? { assetId: next.assetId, routePointId: next.routePointId } : null;
+          })}
           onClose={() => setOpen(false)}
           onNavigate={() => undefined}
           onEdit={() => undefined}

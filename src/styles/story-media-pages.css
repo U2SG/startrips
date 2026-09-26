@@ -34,6 +34,14 @@
 .story-media-pages__page[data-media-incoming="true"] { z-index: 4; }
 .story-media-pages__page[data-media-page="current"] { z-index: 5; }
 .story-media-pages > .starlight-media-state { z-index: 7; }
+/* Shown the moment the transport is not live; the fade never delays it. */
+.story-media-pages__transport-state {
+  animation: story-media-transport-state-in var(--motion-instant) var(--motion-ease-out);
+}
+@keyframes story-media-transport-state-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .story-media-pages__page > :is(img, canvas),
 .story-media-pages__video > video {
   position: absolute;
@@ -93,6 +101,7 @@
   .story-media-pages * { transition: none !important; }
   .story-media-pages__page,
   .story-media-pages__video { will-change: auto; }
+  .story-media-pages__transport-state { animation: none; }
   .story-media-pages.is-drag-settling .story-media-pages__video,
   .story-media-pages .journey-story__media-drag-settle { transition: none; }
 }

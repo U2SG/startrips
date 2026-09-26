@@ -16,6 +16,9 @@
   --archive-log-height: 76px;
   --archive-serif: Georgia, "Songti SC", "STSong", serif;
   --archive-sans: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* Height of a presented video's native control band. Story chrome clears it
+     and the media stage never starts a gesture inside it. */
+  --story-video-control-band: 84px;
   /* Shared motion language tokens. Keep in sync with src/motion/tokens.ts. */
   --motion-instant: 120ms;
   --motion-ui: 260ms;
