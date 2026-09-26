@@ -3746,6 +3746,7 @@ export function JourneyStory({
               currentId={shownAsset?.id ?? null}
               coverId={cover?.id ?? null}
               incomingId={incoming?.id ?? null}
+              pendingId={pendingMediaId}
               direction={mediaNavigationDirection.current}
               reads={mediaReads}
               warmIds={fullscreen ? undefined : warmDecodeIds}
@@ -4406,6 +4407,7 @@ export function JourneyStory({
             currentId={shownAsset?.id ?? null}
             coverId={cover?.id ?? null}
             incomingId={incoming?.id ?? null}
+            pendingId={pendingMediaId}
             direction={mediaNavigationDirection.current}
             reads={mediaReads}
             warmIds={fullscreen ? warmDecodeIds : undefined}

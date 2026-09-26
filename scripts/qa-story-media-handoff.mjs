@@ -3482,9 +3482,12 @@ try {
     const session = await createStoryPage({ mobile: false });
     const name = "story-rapid-forward-browse-warm-window";
     const progress = {};
+    let story = null;
     try {
       const { page } = session;
-      const story = await openManyMediaStory(session);
+      // C is requested by the warm window but its read stays cold until the
+      // sampler has observed B holding the front through the pending interval.
+      story = await openManyMediaStory(session, { gates: [MANY_MEDIA[3]] });
       await waitForSettledAsset(page, MANY_MEDIA[0]);
       progress.initialWarm = await waitForReadRequests(page, story, MANY_MEDIA.slice(1, 4));
       progress.beyondWindowAtRest = story.reads.filter((entry) => entry.index >= 4).map((entry) => entry.index);
@@ -3518,9 +3521,14 @@ try {
           && (current === committed || current === painted);
       }, { selector: STAGE, painted: MANY_MEDIA[2], committed: MANY_MEDIA[1] }, { polling: "raf", timeout: 3_000 })
         .then(() => true, () => false);
+      const coldClickAt = await pageClock(page);
       await clickTo(3, false);
       progress.burstWarmedAhead = await waitForReadRequests(page, story, [MANY_MEDIA[6]], 2_000);
       progress.burstStateWhenWarmed = await currentAsset(page);
+      for (let frame = 0; frame < 30; frame += 1) await nextFrame(page);
+      progress.burstReadStillHeld = story.reads.some((entry) => entry.id === MANY_MEDIA[3] && entry.servedAt === null);
+      const burstReleaseAt = await pageClock(page);
+      story.release(MANY_MEDIA[3]);
       progress.burstSettled = await waitForSettledAsset(page, MANY_MEDIA[3]).then(() => true, () => false);
       const burst = await stopSamplerFrames(page);
       await startSampler(page, STAGE);
@@ -3534,17 +3542,25 @@ try {
       // never returns: the foreground runs strictly 1 -> 2 -> 3.
       const burstGrade = gradeContinuity(burst, { allowedAssets: MANY_MEDIA });
       const burstOrder = MANY_MEDIA.slice(1, 4);
+      const pendingPaintFrames = burst.filter((frame) => frame.at >= coldClickAt && frame.at < burstReleaseAt);
+      progress.burstPendingPaint = {
+        frames: pendingPaintFrames.length,
+        foregrounds: [...new Set(pendingPaintFrames.map((frame) => frame.centre?.asset ?? null))],
+        failed: pendingPaintFrames.length < 20
+          || pendingPaintFrames.some((frame) => frame.centre?.asset !== MANY_MEDIA[2]),
+      };
       progress.burst = { ...burstGrade, expectedSequence: burstOrder,
         failed: burstGrade.failed || burstGrade.foregroundReversals.length > 0
           || JSON.stringify(burstGrade.foregroundSequence) !== JSON.stringify(burstOrder) };
       const warmMisses = steps.filter((step) => !step.readRequestedBeforeClick);
       record({ name,
-        claim: "browsing eight synthetic photographs forward, the warm window holds reads three ahead at rest and none beyond, every paced step starts on a read requested before its click, a two-click burst requests the read three beyond its latest intent before that intent lands and moves the foreground strictly 1 -> 2 -> 3 with no return of the committed picture, and no sampled frame shows a blank aperture, a waiting cover or a page painting another asset, with at most three pages",
+        claim: "browsing eight synthetic photographs forward, the warm window holds reads three ahead at rest and none beyond, every paced step starts on a read requested before its click, a two-click burst holds the third picture's read while the second stays painted in front, requests the read three beyond its latest intent, then moves the foreground strictly 1 -> 2 -> 3 with no return of the committed picture; no sampled frame shows a blank aperture, a waiting cover or a page painting another asset, with at most three pages",
         ...progress, warmMisses,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.initialWarm || progress.beyondWindowAtRest.length > 0
           || steps.some((step) => !step.requested || step.settled === false) || warmMisses.length > 0
           || !progress.burstWarmedAhead || !progress.burstSecondPainted
+          || !progress.burstReadStillHeld || progress.burstPendingPaint.failed
           || (progress.burstStateWhenWarmed.id === MANY_MEDIA[3] && progress.burstStateWhenWarmed.presentation === "settled")
           || !progress.burstSettled || progress.paced.failed || progress.burst.failed
           || progress.paint.frames === 0 || progress.paint.mismatches.length > 0
@@ -3555,6 +3571,7 @@ try {
       record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
     } finally {
+      story?.release(MANY_MEDIA[3]);
       await session.page.close();
     }
   }

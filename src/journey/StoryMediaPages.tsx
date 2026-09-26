@@ -53,6 +53,7 @@ type Props = {
   media: readonly JourneyMediaAsset[];
   currentId: string | null;
   incomingId: string | null;
+  pendingId: string | null;
   coverId?: string | null;
   direction?: -1 | 1;
   reads: Record<string, Read>;
@@ -231,10 +232,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     : props.incomingId === nextId ? 1
       : props.media.findIndex((asset) => asset.id === props.incomingId) < index ? -1 : 1);
   const held = frontIncoming.current;
-  const heldFrontId = held && props.incomingId && held.id !== props.incomingId
+  const requestedId = props.incomingId ?? props.pendingId;
+  const heldFrontId = held && requestedId && held.id !== requestedId
     && held.currentId === props.currentId && props.media.some((asset) => asset.id === held.id) ? held.id : null;
   const neighbors = props.incomingId
     ? [props.currentId, props.incomingId, heldFrontId ?? (direction > 0 ? previousId : nextId)]
+    : heldFrontId ? [props.currentId, props.pendingId, heldFrontId]
     : [props.currentId, previousId ?? at(2), nextId];
   const desired = [...new Set(neighbors
     .filter((id): id is string => id !== null))].slice(0, 3);
@@ -442,6 +445,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     }
     return decodedImages.current.get(id) === read.url;
   };
+  const targetReady = ready(props.incomingId);
+  // The pending read can clear incomingId before its replacement is decoded.
+  // Keep the last painted incoming page while that newer request is pending.
+  const holdingFront = Boolean(heldFrontId && !targetReady);
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
@@ -471,7 +478,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       // Retained pages keep their painted aperture when their semantic role
       // changes. Only a recycled owner or an idle layout needs initialization.
       if (clipOwners.current[slot] !== assigned[slot]
-        || (!props.incomingId && !movingId && !interrupted.current && gesturePhase === null)) {
+        || (!props.incomingId && !holdingFront && !movingId && !interrupted.current && gesturePhase === null)) {
         const [y, x] = mediaStackClip(node, front);
         node.style.clipPath = `inset(${y}% ${x}%)`;
       }
@@ -487,21 +494,19 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     // wearing none. Nothing recomputed it until the next navigation happened to
     // move one of the old dependencies, which is why the recorded exposure
     // appears mid-handoff and clears itself one navigation later.
-  }, [slotSignature, props.currentId, props.incomingId, movingId, revision, liveReady, layoutRevision, gesturePhase]);
-  const targetReady = ready(props.incomingId);
-  // B stays the painted front until the newer target C is presentable.
-  const holdingFront = Boolean(heldFrontId && !targetReady);
+  }, [slotSignature, props.currentId, props.incomingId, holdingFront, movingId, revision, liveReady, layoutRevision, gesturePhase]);
   useLayoutEffect(() => {
     if (props.incomingId && targetReady) frontIncoming.current = { id: props.incomingId, currentId: props.currentId };
-    else if (!props.incomingId || frontIncoming.current?.currentId !== props.currentId) frontIncoming.current = null;
-  }, [props.incomingId, props.currentId, targetReady]);
+    else if ((!props.incomingId && !props.pendingId) || frontIncoming.current?.currentId !== props.currentId) frontIncoming.current = null;
+  }, [props.incomingId, props.pendingId, props.currentId, targetReady]);
   const currentReady = ready(props.currentId);
   // #489 C/V8: a presentable target is painted in front of the page it
   // replaces, so it is already the media the viewer last saw. Shared-element
   // identity has to follow that painted foreground; publishing it from the
   // settled index instead made a close during a handoff hand the previous
   // photograph to the return morph while the new one was on screen.
-  const foregroundId = props.incomingId && targetReady ? props.incomingId : props.currentId;
+  const foregroundId = props.incomingId && targetReady ? props.incomingId
+    : holdingFront ? heldFrontId : props.currentId;
   useLayoutEffect(() => {
     if (!active) return;
     // Physical slots outlive their media. Carry keyboard focus with the
@@ -543,11 +548,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     let cancelled = false;
     let completed = false;
     const recovering = !id || !targetReady;
-    if (!active || (recovering && !interrupted.current)) { setMovingId(null); return; }
+    if (!active || (recovering && !interrupted.current && !holdingFront)) { setMovingId(null); return; }
     if (holdingFront) {
       // Freeze the interrupted handoff where it is painted: B keeps the front
       // and its pose, and the next run springs from it once C is presentable.
-      setMovingId(id);
+      setMovingId(id ?? heldFrontId);
       return () => { interrupted.current = true; };
     }
     const finish = () => {
