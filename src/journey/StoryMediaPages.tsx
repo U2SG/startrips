@@ -152,14 +152,15 @@ function prepareVideoFrame(url: string, done: (frame: HTMLCanvasElement | null) 
   return () => { if (!closed) { closed = true; release(); } };
 }
 
-function FrameCanvas({ frame }: { frame: HTMLCanvasElement | undefined }) {
+function FrameCanvas({ frame, sharedId }: { frame: HTMLCanvasElement | undefined; sharedId?: string }) {
   const paint = useCallback((canvas: HTMLCanvasElement | null) => {
     if (!canvas || !frame) return;
     canvas.width = frame.width;
     canvas.height = frame.height;
     canvas.getContext("2d")?.drawImage(frame, 0, 0);
   }, [frame]);
-  return <canvas ref={paint} hidden={!frame} aria-hidden="true" />;
+  return <canvas ref={paint} hidden={!frame} aria-hidden="true"
+    data-shared-media-id={frame ? sharedId : undefined} />;
 }
 
 /** Three fixed pages and one persistent, gesture-authorized video transport. */
@@ -450,7 +451,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   // Keep the last painted incoming page while that newer request is pending.
   const holdingFront = Boolean(heldFrontId && !targetReady);
   const presentedId = holdingFront ? heldFrontId : props.currentId;
-  const presentedVideo = props.media.find((asset) => asset.id === presentedId)?.mimeType.startsWith("video/");
+  const presentedAsset = props.media.find((asset) => asset.id === presentedId);
+  const presentedVideo = presentedAsset?.mimeType.startsWith("video/");
   const presentedIdRef = useRef(presentedId);
   presentedIdRef.current = presentedId;
   const wasActive = useRef(active);
@@ -1042,11 +1044,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     const rect = element.getBoundingClientRect();
     return x < rect.left + rect.width / 2 ? -1 : 1;
   };
-  const step = (direction: -1 | 1, accessibleActivation = false) => {
+  const step = (direction: -1 | 1 | null, accessibleActivation = false) => {
     if (holdingFront && presentedId) flushSync(() => latest.current.onGestureClaim(presentedId));
     const current = latest.current;
-    if (direction < 0 ? current.canNavigatePrevious : current.canNavigateNext) {
-      current.onNavigate?.(direction, accessibleActivation);
+    const resolvedDirection = direction ?? (current.canNavigateNext ? 1 : -1);
+    if (resolvedDirection < 0 ? current.canNavigatePrevious : current.canNavigateNext) {
+      current.onNavigate?.(resolvedDirection, accessibleActivation);
     }
   };
   // #489 A2: only a photograph resolves a click into navigation. The presented
@@ -1059,7 +1062,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     event.stopPropagation();
     if (props.onNavigate) {
       event.preventDefault();
-      step(event.detail === 0 ? (props.canNavigateNext ? 1 : -1) : navigationDirection(media, event.clientX), event.detail === 0);
+      step(event.detail === 0 ? null : navigationDirection(media, event.clientX), event.detail === 0);
     } else {
       props.onImageClick?.(event.detail === 0);
     }
@@ -1102,7 +1105,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   return <div ref={root} className="story-media-pages" data-story-media-pages
     tabIndex={videoStageNavigation ? 0 : -1}
     role={videoStageNavigation ? "group" : undefined}
-    aria-label={videoStageNavigation ? "视频。左右方向键切换媒体" : undefined}
+    aria-label={videoStageNavigation ? `${presentedAsset?.fileName ?? "视频"}。左右方向键切换媒体` : undefined}
     aria-keyshortcuts={videoStageNavigation ? "ArrowLeft ArrowRight" : undefined}
     onPointerDownCapture={(event) => {
       if (event.isPrimary) suppressCancelledPointerClick.current = false;
@@ -1239,10 +1242,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
             event.stopPropagation();
-            if (props.onNavigate) step(props.canNavigateNext ? 1 : -1, true);
+            if (props.onNavigate) step(null, true);
             else props.onImageClick?.(true);
           } : undefined} />
-        <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined} />
+        <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined}
+          sharedId={isVideo && id === foregroundId && pageReady ? id : undefined} />
       </div>;
     })}
     {/* #489 A1: a photograph's stationary click surface must never cover the

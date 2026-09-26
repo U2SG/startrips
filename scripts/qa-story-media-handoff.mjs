@@ -3596,22 +3596,25 @@ try {
       await clickNextPhoto(page);
       await waitForSettledAsset(page, committed);
       const nextPoint = await photoClickPoint(page, STAGE, 1);
-      // Arm the frame observer before the real click. Waiting to install it
-      // afterward can miss the short B-over-A interval altogether.
-      const paintedSignal = page.waitForFunction(({ selector, id, owner }) => {
+      // Two trusted clicks in one browser burst request B and then cold C
+      // before B's spring can commit. A wait between clicks let B settle and
+      // never constructed the held-front state this case must grade.
+      await page.mouse.dblclick(nextPoint.x, nextPoint.y, { delay: 0 });
+      progress.requested = await waitForRequestedMedia(page, pending);
+      progress.painted = await page.waitForFunction(({ selector, id, owner, pending }) => {
         const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
         const box = stage?.getBoundingClientRect();
         if (!box) return false;
         const front = document.elementsFromPoint(box.left + box.width / 2, box.top + box.height / 2)
           .find((node) => node instanceof HTMLImageElement && !node.hidden);
         return front?.closest("[data-media-page]")?.getAttribute("data-media-page-id") === id
-          && stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === owner;
-      }, { selector: STAGE, id: painted, owner: committed }, { polling: "raf", timeout: 3_000 })
+          && stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === owner
+          && stage.querySelector('[data-media-presented="true"]')?.getAttribute("data-media-page-id") === id
+          && [...stage.querySelectorAll("[data-media-page-id]")]
+            .find((node) => node.getAttribute("data-media-page-id") === pending)
+            ?.getAttribute("data-media-page-ready") === "false";
+      }, { selector: STAGE, id: painted, owner: committed, pending }, { polling: "raf", timeout: 3_000 })
         .then(() => true, () => false);
-      await input(page).click(nextPoint.x, nextPoint.y);
-      progress.painted = await paintedSignal;
-      await input(page).click(nextPoint.x, nextPoint.y);
-      progress.requested = await waitForRequestedMedia(page, pending);
       const heldState = async (selector) => page.evaluate(({ selector, committed, painted, pending }) => {
         const root = document.querySelector(selector);
         const stage = root?.querySelector("[data-story-media-pages]");
@@ -3642,7 +3645,7 @@ try {
             && Math.abs(matrix.m22 - 1) < 0.001 && Math.abs(matrix.m33 - 1) < 0.001
             && Math.abs(matrix.m41) < 0.5 && Math.abs(matrix.m42) < 0.5
             && Math.abs(matrix.m43) < 0.5 && Number(style.opacity) > 0.999
-            && front.style.clipPath === "inset(0% 0%)"),
+            && ["inset(0%)", "inset(0% 0%)"].includes(front.style.clipPath)),
         };
       }, { selector, committed, painted, pending });
       progress.inline = await heldState(STAGE);
