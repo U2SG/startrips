@@ -5709,6 +5709,10 @@ try {
       const { page } = session;
       await waitForSettledAsset(page, I2);
       await page.locator(".journey-story__point-note").waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const copy = document.querySelector('.journey-story__copy');
+        return copy && copy.getAnimations().every((animation) => animation.playState === 'finished');
+      }, null, { polling: 'raf', timeout: 3_000 });
       progress.initial = await page.evaluate(() => {
         const story = document.querySelector('.journey-story[data-story-layout="desktop"]');
         const rail = story?.querySelector('header .journey-story__route-points');
@@ -5749,6 +5753,7 @@ try {
           activeVisible: activeRect.left >= railRect.left - 2 && activeRect.right <= railRect.right + 2,
           noteText: note.textContent,
           noteTop: noteRect.top,
+          copyScrollTop: copy.scrollTop,
           noteVisible: noteRect.top >= 0 && noteRect.bottom <= innerHeight,
           currentPointLabel: copy.querySelector('.journey-story__current-point')?.textContent ?? null,
           pageTopInset: pageRect.top - stageRect.top,
@@ -5811,9 +5816,37 @@ try {
         focusedAll: document.activeElement === document.querySelector('header .journey-story__route-points button'),
         scrollLeft: document.querySelector('header .journey-story__route-points')?.scrollLeft ?? null,
       }));
+      await rail.locator('[data-route-point-id="00000000-0000-4000-8000-000000000303"]').click();
+      await waitForSettledAsset(page, I1);
+      await page.locator(".journey-story__point-note").filter({ hasText: "海风转凉" })
+        .waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const copy = document.querySelector('.journey-story__copy');
+        return copy && copy.getAnimations().every((animation) => animation.playState === 'finished');
+      }, null, { polling: 'raf', timeout: 3_000 });
+      progress.switched = await page.evaluate(() => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
+        const railRect = rail?.getBoundingClientRect();
+        const activeRect = active?.getBoundingClientRect();
+        const copy = document.querySelector('.journey-story__copy');
+        const note = copy?.querySelector('.journey-story__point-note');
+        const noteRect = note?.getBoundingClientRect();
+        return {
+          activeRoutePointId: active?.getAttribute('data-route-point-id') ?? null,
+          activeVisible: Boolean(railRect && activeRect && activeRect.left >= railRect.left - 2
+            && activeRect.right <= railRect.right + 2),
+          currentPointLabel: document.querySelector('.journey-story__current-point')?.textContent ?? null,
+          noteText: note?.textContent ?? null,
+          noteTop: noteRect?.top ?? null,
+          noteVisible: Boolean(noteRect && noteRect.top >= 0 && noteRect.bottom <= innerHeight),
+          copyScrollTop: copy?.scrollTop ?? null,
+        };
+      });
       progress.tabEnter = { visited: [], activated: 0 };
       const chapterButtons = rail.locator('button');
       const chapterButtonCount = await chapterButtons.count();
+      await chapterButtons.first().focus();
       for (let index = 0; index < chapterButtonCount; index += 1) {
         const button = chapterButtons.nth(index);
         await page.waitForFunction((buttonIndex) => {
@@ -5833,25 +5866,6 @@ try {
         progress.tabEnter.activated += 1;
         if (index + 1 < chapterButtonCount) await page.keyboard.press('Tab');
       }
-      await rail.locator('[data-route-point-id="00000000-0000-4000-8000-000000000303"]').click();
-      await waitForSettledAsset(page, I1);
-      await page.locator(".journey-story__point-note").filter({ hasText: "海风转凉" })
-        .waitFor({ state: "visible" });
-      progress.switched = await page.evaluate(() => {
-        const rail = document.querySelector('header .journey-story__route-points');
-        const active = rail?.querySelector('button.is-active[data-route-point-id]');
-        const railRect = rail?.getBoundingClientRect();
-        const activeRect = active?.getBoundingClientRect();
-        const note = document.querySelector('.journey-story__copy .journey-story__point-note');
-        return {
-          activeRoutePointId: active?.getAttribute('data-route-point-id') ?? null,
-          activeVisible: Boolean(railRect && activeRect && activeRect.left >= railRect.left - 2
-            && activeRect.right <= railRect.right + 2),
-          currentPointLabel: document.querySelector('.journey-story__current-point')?.textContent ?? null,
-          noteText: note?.textContent ?? null,
-          noteTop: note?.getBoundingClientRect().top ?? null,
-        };
-      });
       record({ name,
         claim: "at 1920x1080 twenty Route Points stay on one bounded keyboard-reachable rail above a materially larger uncropped portrait, while the current note remains in the initial viewport and changing chapter updates context without a layout jump",
         ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
@@ -5882,7 +5896,7 @@ try {
           || new Set(progress.tabEnter.visited).size !== 21
           || progress.switched.activeRoutePointId !== "00000000-0000-4000-8000-000000000303"
           || !progress.switched.activeVisible || !progress.switched.currentPointLabel?.includes("04")
-          || !progress.switched.noteText?.includes("海风转凉")
+          || !progress.switched.noteText?.includes("海风转凉") || !progress.switched.noteVisible
           || !Number.isFinite(progress.switched.noteTop)
           || Math.abs(progress.switched.noteTop - progress.initial.noteTop) > 16
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
