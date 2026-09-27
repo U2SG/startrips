@@ -177,6 +177,7 @@ const projectionRoutePoints = [
   [projectionPointIds.returnA, 34.0522, -118.2437, "洛杉矶 · 返程", true, ""],
 ].map(([id, latitude, longitude, label, isStop, note], sortOrder) => ({
   id, journeyId, sortOrder, latitude, longitude, label, isStop, note,
+  placeRole: id === projectionPointIds.media ? "pure-transit" : undefined,
   occurredAt: `2026-04-06T${String(9 + sortOrder).padStart(2, "0")}:00:00.000Z`,
   createdAt: "2026-04-06T00:00:00.000Z",
 }));
@@ -1448,9 +1449,9 @@ try {
   const projectionPlayback = projectionPage.locator('.journey-playback[data-playback-mode="full"]');
   await projectionPlayback.waitFor({ state: "visible", timeout: 5_000 });
   const projectedFullSteps = Number(await projectionPlayback.getAttribute("data-playback-steps"));
-  record("Full Playback retains every route point and the owned media chapter", {
+  record("Full Playback retains every route point and the pure-transit media beat", {
     projectedFullSteps,
-  }, projectedFullSteps === 2 * projectionRoutePoints.length + 2);
+  }, projectedFullSteps === 2 * projectionRoutePoints.length + 1);
   const pausePlayback = projectionPage.locator('.journey-playback__controls button[aria-label="暂停播放"]');
   if (await pausePlayback.count()) await pausePlayback.click();
   const playbackProgress = projectionPage.locator('.journey-playback__progress input[type="range"]');
@@ -1532,6 +1533,47 @@ try {
     freeAdvanceFocus,
   }, freeAdvanceFocus.focusRevision === followedDetourFocus.focusRevision
     && await projectionPlayback.getAttribute("data-camera-follow") === "free");
+
+  // #514: the media-only non-stop record is explicitly pure transit. It must
+  // remain reachable in Full Playback, but the renderer must not wrap that
+  // asset in STOP/arrival chapter semantics.
+  await projectionPage.locator('.journey-playback__controls button[aria-label="暂停播放"]').click();
+  const nextChapter = projectionPage.locator('.journey-playback__controls button[aria-label="下一个章节"]');
+  for (const expectedStep of ["5", "7", "9"]) {
+    await nextChapter.click();
+    await projectionPage.waitForFunction((stepIndex) => (
+      document.querySelector(".journey-playback")?.getAttribute("data-playback-step") === stepIndex
+    ), expectedStep);
+  }
+  await projectionPage.waitForFunction(({ pointIndex, assetId }) => {
+    const playback = document.querySelector(".journey-playback");
+    const transit = document.querySelector(".journey-playback__transit-media");
+    const media = document.querySelector(".journey-playback__media");
+    return playback?.getAttribute("data-playback-phase") === "media"
+      && playback.getAttribute("data-playback-transit-media") === "true"
+      && transit?.getAttribute("data-transit-media-point") === pointIndex
+      && document.querySelectorAll(".journey-playback__chapter").length === 0
+      && document.querySelectorAll(".journey-playback__stop").length === 0
+      && media?.getAttribute("data-requested-asset") === assetId;
+  }, { pointIndex: "4", assetId: photoAssetId });
+  const pureTransitMediaState = await projectionPage.evaluate(() => ({
+    step: document.querySelector(".journey-playback")?.getAttribute("data-playback-step"),
+    phase: document.querySelector(".journey-playback")?.getAttribute("data-playback-phase"),
+    transitMedia: document.querySelector(".journey-playback")?.getAttribute("data-playback-transit-media"),
+    transitPoint: document.querySelector(".journey-playback__transit-media")?.getAttribute("data-transit-media-point"),
+    chapterCount: document.querySelectorAll(".journey-playback__chapter").length,
+    stopCount: document.querySelectorAll(".journey-playback__stop").length,
+    requestedAsset: document.querySelector(".journey-playback__media")?.getAttribute("data-requested-asset"),
+  }));
+  record("pure-transit historical media plays without STOP or arrival chapter semantics", {
+    pureTransitMediaState,
+  }, pureTransitMediaState.step === "9"
+    && pureTransitMediaState.phase === "media"
+    && pureTransitMediaState.transitMedia === "true"
+    && pureTransitMediaState.transitPoint === "4"
+    && pureTransitMediaState.chapterCount === 0
+    && pureTransitMediaState.stopCount === 0
+    && pureTransitMediaState.requestedAsset === photoAssetId);
   await projectionPage.locator(".journey-playback__close").click();
   record("projection page errors", { pageErrors: projectionRun.pageErrors }, projectionRun.pageErrors.length === 0);
   await projectionPage.close();
