@@ -83,11 +83,13 @@ export function particleAnchorFramesEqual(
 ) {
   if (previous === next) return true;
   if (!previous || !next) return false;
-  const zoomMatches = previous.zoom === next.zoom
+  const previousZoom = previous.zoom;
+  const nextZoom = next.zoom;
+  const zoomMatches = previousZoom === nextZoom
     || (
-      previous.zoom !== undefined
-      && next.zoom !== undefined
-      && Math.abs(previous.zoom - next.zoom) <= PARTICLE_ANCHOR_ZOOM_SETTLE
+      previousZoom !== undefined
+      && nextZoom !== undefined
+      && Math.abs(previousZoom - nextZoom) <= PARTICLE_ANCHOR_ZOOM_SETTLE
     );
   return previous.anchor.lat === next.anchor.lat
     && previous.anchor.lon === next.anchor.lon
