@@ -5595,7 +5595,8 @@ try {
       await waitForSettledAsset(page, I1);
       progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
-      progress.initialSeek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      // Keep the first painted frame as the hold. A warmup seek would load the
+      // later bytes that this expired-capability scenario needs to leave uncached.
       progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
       progress.before = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
       await waitForPresentedVideoHit(page, FULLSCREEN, V1);
@@ -5652,7 +5653,7 @@ try {
         oldRanges: session.renewal.expiredRanges,
         renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: !progress.toVideo.ok || progress.pause.failed || progress.initialSeek.failed || progress.seek.failed
+        failed: !progress.toVideo.ok || progress.pause.failed || progress.seek.failed
           || progress.beforePixels.failed || progress.preErrorScreen.failed
           || progress.errorFrame.failed
           || progress.retryReadFrame.failed || progress.retryByteFrame.failed
@@ -5668,6 +5669,7 @@ try {
           || !progress.retryBytes.url.includes("storyRenewal=2")
           || !progress.after.src?.includes("storyRenewal=2")
           || !near(progress.after.time, progress.intendedTime) || !progress.after.paused
+          || !(progress.before.time < progress.intendedTime - 1)
           || !progress.afterPoint.hitIsVideo || !progress.afterPoint.controls
           || !near(progress.returned.time, progress.after.time) || !progress.returned.paused
           || !progress.returnedPoint.hitIsVideo || progress.returned.src !== progress.after.src
