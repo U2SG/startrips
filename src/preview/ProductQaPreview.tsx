@@ -438,6 +438,8 @@ const storyQaDesktopChapterJourney: Journey = {
   ],
 };
 
+const storyQaDesktopChapterNoMediaJourney: Journey = { ...storyQaDesktopChapterJourney, media: [] };
+
 const composerRoutePointsQaJourney: Journey = {
   ...storyQaJourney,
   title: "Composer Route Point QA",
@@ -564,8 +566,11 @@ function JourneyStoryQaPreview() {
   const mixedMediaPairMode = qaMode === "mixed-media-pair";
   const manyMediaMode = qaMode === "many-media";
   const desktopChapterMode = qaMode === "desktop-chapter-rail";
+  const desktopChapterNoMediaMode = qaMode === "desktop-chapter-rail-no-media";
   const routeBoundaryMode = qaMode === "route-boundary";
-  const initialJourney = desktopChapterMode
+  const initialJourney = desktopChapterNoMediaMode
+    ? storyQaDesktopChapterNoMediaJourney
+    : desktopChapterMode
     ? storyQaDesktopChapterJourney
     : mixedMediaPairMode
     ? storyQaMixedPairJourney

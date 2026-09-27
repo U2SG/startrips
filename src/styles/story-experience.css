@@ -69,12 +69,15 @@
 .journey-story[data-story-layout="desktop"] :is(
   .story-media-pages__page[data-media-page="current"],
   .story-media-pages__page[data-media-incoming="true"],
-  .story-media-pages__video,
   .story-media-pages__hit-surface
 ) {
-  /* Only neighbouring cards pay the decorative inset. The current picture
-     and live transport keep a small lane for Story's own 44px controls. */
+  /* Only neighbouring cards pay the decorative inset. The presented picture
+     keeps a small lane for Story's own 44px controls. */
   inset: 0 0 48px;
+}
+.journey-story[data-story-layout="desktop"] .story-media-pages__video {
+  /* Native video keeps a stage edge for Story navigation outside its controls. */
+  inset: 0 var(--stack-x) 48px;
 }
 .journey-story[data-story-layout="desktop"] .journey-story__copy {
   align-self: stretch;
@@ -101,7 +104,7 @@
   overflow-wrap: anywhere;
   text-wrap: balance;
 }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points {
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points {
   flex-wrap: nowrap;
   gap: clamp(12px, 1.2vw, 20px);
   margin: 20px 0 0;
@@ -111,8 +114,8 @@
   overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points::-webkit-scrollbar { display: none; }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points button {
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points::-webkit-scrollbar { display: none; }
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points button {
   display: inline-flex;
   flex: 0 0 auto;
   min-height: 44px;
@@ -123,14 +126,14 @@
   color: var(--startrips-muted);
   cursor: pointer;
 }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points button::after { content: none; }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points strong {
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points button::after { content: none; }
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points strong {
   font: 400 12px/1.6 var(--archive-sans);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points button:is(.is-active, .is-chapter-active) {
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points button:is(.is-active, .is-chapter-active) {
   color: var(--startrips-starlight);
   text-decoration: underline;
   text-underline-offset: 7px;

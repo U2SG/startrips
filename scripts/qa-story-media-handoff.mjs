@@ -1650,8 +1650,9 @@ async function stackRestState(page, rootSelector) {
       const [top, right = top, bottom = top, left = right] = sides;
       return [top, right, bottom, left];
     };
-    // The same fit the product computes for a rear page: the front picture's
-    // aperture expressed as a percentage inset of the page box.
+    // Compute the presented picture's aperture independently. The current
+    // desktop page can be larger than its decorative neighbours, so each rear
+    // inset must be graded against that rear page's own box.
     const media = front?.querySelector("img:not([hidden]), canvas:not([hidden])") ?? null;
     const natural = media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight]
       : media instanceof HTMLCanvasElement ? [media.width, media.height] : [0, 0];
@@ -1665,8 +1666,15 @@ async function stackRestState(page, rootSelector) {
       frontId: front?.getAttribute("data-media-page-id") ?? null,
       frontNatural: natural,
       expectedRear: expectedRear.map((value) => Number(value.toFixed(2))),
+      frontApertureSize: fit > 0 ? [natural[0] * fit, natural[1] * fit] : null,
       pages: slots.map((slot) => {
         const [top, right, bottom, left] = insets(slot);
+        const rearFit = natural[0] && natural[1] && slot.clientWidth && slot.clientHeight
+          ? Math.min(slot.clientWidth / natural[0], slot.clientHeight / natural[1]) : 0;
+        const expectedInset = rearFit > 0
+          ? [(1 - natural[1] * rearFit / slot.clientHeight) * 50,
+            (1 - natural[0] * rearFit / slot.clientWidth) * 50]
+          : [0, 0];
         return {
           id: slot.getAttribute("data-media-page-id"),
           role: slot.getAttribute("data-media-page"),
@@ -1674,6 +1682,9 @@ async function stackRestState(page, rootSelector) {
           zIndex: Number(getComputedStyle(slot).zIndex) || 0,
           clip: getComputedStyle(slot).clipPath.slice(0, 48),
           inset: [top, right, bottom, left].map((value) => Number(value.toFixed(2))),
+          expectedInset: expectedInset.map((value) => Number(value.toFixed(2))),
+          visibleSize: [slot.clientWidth * (1 - (left + right) / 100),
+            slot.clientHeight * (1 - (top + bottom) / 100)],
         };
       }),
     };
@@ -1691,8 +1702,11 @@ function gradeRestState(state, expectedFrontId, tolerance = 0.75) {
   const rear = state.pages.filter((slot) => slot.role !== "current");
   const frontResidue = front ? Math.max(...front.inset) : Number.POSITIVE_INFINITY;
   const misclipped = rear.filter((slot) =>
-    Math.abs(slot.inset[0] - state.expectedRear[0]) > tolerance
-    || Math.abs(slot.inset[1] - state.expectedRear[1]) > tolerance);
+    Math.abs(slot.inset[0] - slot.expectedInset[0]) > tolerance
+    || Math.abs(slot.inset[1] - slot.expectedInset[1]) > tolerance
+    || Boolean(state.frontApertureSize && (
+      slot.visibleSize[0] > state.frontApertureSize[0] + 2
+      || slot.visibleSize[1] > state.frontApertureSize[1] + 2)));
   const occluding = rear.filter((slot) => front && slot.zIndex >= front.zIndex);
   return {
     front, rear, frontResidue, expectedRear: state.expectedRear,
@@ -5727,6 +5741,7 @@ try {
           railInHeader: rail.parentElement?.tagName === 'HEADER',
           copyContainsRail: copy.contains(rail),
           railOverflows: rail.scrollWidth > rail.clientWidth + 16,
+          railWidth: rail.clientWidth,
           railScrollLeft: rail.scrollLeft,
           railRowSpread: Math.max(...buttons.map((button) => button.getBoundingClientRect().top))
             - Math.min(...buttons.map((button) => button.getBoundingClientRect().top)),
@@ -5752,15 +5767,30 @@ try {
       });
       await mkdir("artifacts/story-media", { recursive: true });
       await page.screenshot({ path: "artifacts/story-media/desktop-chapter-rail.png" });
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.waitForFunction(() => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        const active = rail?.querySelector('button.is-chapter-active');
+        if (!rail || !active) return false;
+        const railBounds = rail.getBoundingClientRect();
+        const activeBounds = active.getBoundingClientRect();
+        return activeBounds.left >= railBounds.left - 2 && activeBounds.right <= railBounds.right + 2;
+      }, null, { polling: 'raf', timeout: 3_000 });
+      progress.resized = await page.evaluate(() => ({
+        width: innerWidth,
+        railWidth: document.querySelector('header .journey-story__route-points')?.clientWidth ?? 0,
+      }));
+      await page.setViewportSize({ width: 1920, height: 1080 });
       const rail = page.locator("header .journey-story__route-points");
       const railBox = await rail.boundingBox();
       if (!railBox) throw new Error("desktop chapter rail lost its hit box");
+      progress.beforeWheelScrollLeft = await rail.evaluate((element) => element.scrollLeft);
       await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + railBox.height / 2);
       await page.mouse.wheel(0, -240);
       await page.waitForFunction((before) => {
         const rail = document.querySelector('header .journey-story__route-points');
         return rail && rail.scrollLeft < before - 5;
-      }, progress.initial.railScrollLeft, { polling: "raf", timeout: 3_000 });
+      }, progress.beforeWheelScrollLeft, { polling: "raf", timeout: 3_000 });
       progress.wheelScrollLeft = await rail.evaluate((element) => element.scrollLeft);
       await rail.locator("button").first().focus();
       await page.keyboard.press("End");
@@ -5786,13 +5816,14 @@ try {
       const chapterButtonCount = await chapterButtons.count();
       for (let index = 0; index < chapterButtonCount; index += 1) {
         const button = chapterButtons.nth(index);
-        const focused = await button.evaluate((element) => {
-          const railBounds = element.parentElement.getBoundingClientRect();
-          const bounds = element.getBoundingClientRect();
-          return document.activeElement === element
-            && bounds.left >= railBounds.left - 2 && bounds.right <= railBounds.right + 2;
-        });
-        if (!focused) throw new Error(`Route Point ${index} was not keyboard-visible in the rail`);
+        await page.waitForFunction((buttonIndex) => {
+          const rail = document.querySelector('header .journey-story__route-points');
+          const focused = rail?.querySelectorAll('button')[buttonIndex];
+          if (!rail || !focused || document.activeElement !== focused) return false;
+          const railBounds = rail.getBoundingClientRect();
+          const bounds = focused.getBoundingClientRect();
+          return bounds.left >= railBounds.left - 2 && bounds.right <= railBounds.right + 2;
+        }, index, { polling: 'raf', timeout: 3_000 });
         progress.tabEnter.visited.push(await button.getAttribute('data-route-point-id') ?? 'all');
         await page.keyboard.press('Enter');
         await page.waitForFunction((buttonIndex) => {
@@ -5841,8 +5872,10 @@ try {
           || !Number.isFinite(progress.initial.paintedHeight) || progress.initial.paintedHeight < 875
           || progress.initial.paintedHeight < progress.initial.priorPaintedHeight + 40
           || progress.initial.pictureFit !== "contain"
+          || progress.resized.width !== 1280
+          || progress.resized.railWidth >= progress.initial.railWidth - 200
           || progress.end.id !== "00000000-0000-4000-8000-000000000319"
-          || progress.wheelScrollLeft >= progress.initial.railScrollLeft - 5
+          || progress.wheelScrollLeft >= progress.beforeWheelScrollLeft - 5
           || !progress.end.visible || progress.end.scrollLeft <= 0
           || !progress.home.focusedAll || progress.home.scrollLeft > 2
           || progress.tabEnter.visited.length !== 21 || progress.tabEnter.activated !== 21
@@ -5852,6 +5885,73 @@ try {
           || !progress.switched.noteText?.includes("海风转凉")
           || !Number.isFinite(progress.switched.noteTop)
           || Math.abs(progress.switched.noteTop - progress.initial.noteTop) > 16
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+  {
+    const name = "story-desktop-chapter-rail-no-media-fallback";
+    const session = await createStoryPage({
+      viewport: { width: 1920, height: 1080 },
+      path: "/?qaState=journey-story&qaMode=desktop-chapter-rail-no-media",
+    });
+    const progress = {};
+    try {
+      const { page } = session;
+      const rail = page.locator('.journey-story__copy .journey-story__route-points');
+      await rail.waitFor({ state: 'visible' });
+      progress.initial = await rail.evaluate((element) => ({
+        routePointCount: element.querySelectorAll('button').length - 1,
+        headerHasRail: Boolean(document.querySelector('header .journey-story__route-points')),
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+        overflowX: getComputedStyle(element).overflowX,
+        scrollbarWidth: getComputedStyle(element).scrollbarWidth,
+      }));
+      await mkdir("artifacts/story-media", { recursive: true });
+      await page.screenshot({ path: "artifacts/story-media/desktop-chapter-rail-no-media.png" });
+      const railBox = await rail.boundingBox();
+      if (!railBox) throw new Error('no-media chapter rail lost its hit box');
+      await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + railBox.height / 2);
+      await page.mouse.wheel(0, 240);
+      await page.waitForFunction(() => (
+        (document.querySelector('.journey-story__copy .journey-story__route-points')?.scrollLeft ?? 0) > 5
+      ), null, { polling: 'raf', timeout: 3_000 });
+      progress.wheelScrollLeft = await rail.evaluate((element) => element.scrollLeft);
+      await rail.locator('button').last().focus();
+      await page.waitForFunction(() => {
+        const rail = document.querySelector('.journey-story__copy .journey-story__route-points');
+        const last = rail?.querySelector('button:last-child');
+        if (!rail || !last || document.activeElement !== last) return false;
+        const railBounds = rail.getBoundingClientRect();
+        const lastBounds = last.getBoundingClientRect();
+        return lastBounds.left >= railBounds.left - 2 && lastBounds.right <= railBounds.right + 2;
+      }, null, { polling: 'raf', timeout: 3_000 });
+      progress.lastVisible = await rail.evaluate((element) => {
+        const last = element.querySelector('button:last-child');
+        const railBounds = element.getBoundingClientRect();
+        const lastBounds = last?.getBoundingClientRect();
+        return Boolean(lastBounds && lastBounds.left >= railBounds.left - 2
+          && lastBounds.right <= railBounds.right + 2);
+      });
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => (
+        document.querySelector('.journey-story__copy .journey-story__route-points button:last-child')
+          ?.getAttribute('aria-pressed') === 'true'
+      ), null, { polling: 'raf', timeout: 3_000 });
+      progress.lastActivated = await rail.locator('button').last().getAttribute('aria-pressed') === 'true';
+      record({ name,
+        claim: "a desktop Journey with no visual media keeps its Route Points in a scrollable copy-column fallback with visible scrollbar, wheel access and keyboard activation",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: progress.initial.routePointCount !== 20 || progress.initial.headerHasRail
+          || progress.initial.scrollWidth <= progress.initial.clientWidth + 16
+          || progress.initial.overflowX !== 'auto' || progress.initial.scrollbarWidth === 'none'
+          || progress.wheelScrollLeft <= 5 || !progress.lastVisible || !progress.lastActivated
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } catch (error) {

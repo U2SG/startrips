@@ -40,7 +40,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import type { DragEndEvent } from "@dnd-kit/core";
@@ -2436,16 +2436,34 @@ export function JourneyStory({
     if (mobileLayout) return;
     const rail = desktopChapterRailRef.current;
     if (!rail) return;
-    const buttons = [...rail.querySelectorAll<HTMLButtonElement>("button")];
-    const target = chapterRailTargetId
-      ? buttons.find((button) => button.dataset.routePointId === chapterRailTargetId)
-      : buttons[0];
-    if (!target) return;
-    const railBounds = rail.getBoundingClientRect();
-    const targetBounds = target.getBoundingClientRect();
-    if (targetBounds.left < railBounds.left) rail.scrollLeft += targetBounds.left - railBounds.left;
-    else if (targetBounds.right > railBounds.right) rail.scrollLeft += targetBounds.right - railBounds.right;
-  }, [chapterRailTargetId, journey?.id, mobileLayout]);
+    const keepCurrentChapterVisible = () => {
+      const buttons = [...rail.querySelectorAll<HTMLButtonElement>("button")];
+      const target = chapterRailTargetId
+        ? buttons.find((button) => button.dataset.routePointId === chapterRailTargetId)
+        : buttons[0];
+      if (!target) return;
+      const railBounds = rail.getBoundingClientRect();
+      const targetBounds = target.getBoundingClientRect();
+      if (targetBounds.left < railBounds.left) rail.scrollLeft += targetBounds.left - railBounds.left;
+      else if (targetBounds.right > railBounds.right) rail.scrollLeft += targetBounds.right - railBounds.right;
+    };
+    keepCurrentChapterVisible();
+    const observer = new ResizeObserver(keepCurrentChapterVisible);
+    observer.observe(rail);
+    const scrollOnWheel = (event: WheelEvent) => {
+      if (rail.scrollWidth <= rail.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      const next = Math.max(0, Math.min(rail.scrollWidth - rail.clientWidth, rail.scrollLeft + event.deltaY));
+      if (next === rail.scrollLeft) return;
+      rail.scrollLeft = next;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    rail.addEventListener("wheel", scrollOnWheel, { passive: false });
+    return () => {
+      observer.disconnect();
+      rail.removeEventListener("wheel", scrollOnWheel);
+    };
+  }, [chapterRailTargetId, journey?.id, mobileLayout, visualMedia.length]);
 
   if (!journey) return null;
   const selectedRoutePoint = selectedRoutePointId
@@ -2614,22 +2632,12 @@ export function JourneyStory({
     if (event.target === event.currentTarget) requestClose();
   }
 
-  function scrollCopyFromMedia(event: WheelEvent<HTMLElement>) {
+  function scrollCopyFromMedia(event: ReactWheelEvent<HTMLElement>) {
     if ((event.target as Element).closest(".journey-story__copy, .journey-story__route-points")) return;
     const copy = copyRef.current;
     if (!copy || copy.scrollHeight <= copy.clientHeight) return;
     copy.scrollTop += event.deltaY;
     event.preventDefault();
-  }
-
-  function scrollChapterRail(event: WheelEvent<HTMLElement>) {
-    const rail = event.currentTarget;
-    if (rail.scrollWidth <= rail.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-    const next = Math.max(0, Math.min(rail.scrollWidth - rail.clientWidth, rail.scrollLeft + event.deltaY));
-    if (next === rail.scrollLeft) return;
-    rail.scrollLeft = next;
-    event.preventDefault();
-    event.stopPropagation();
   }
 
   function focusChapterRailButton(event: ReactKeyboardEvent<HTMLElement>) {
@@ -3621,11 +3629,18 @@ export function JourneyStory({
   const showSoundtrack = Boolean(soundtrack || (manageMedia && mediaEditing));
   const routePointNavigation = (
     <nav
-      ref={showDesktopChapterRail ? desktopChapterRailRef : undefined}
+      ref={!mobileLayout ? desktopChapterRailRef : undefined}
       className="journey-story__route-points"
       aria-label="选择旅程途径点"
-      onWheel={showDesktopChapterRail ? scrollChapterRail : undefined}
-      onKeyDown={showDesktopChapterRail ? focusChapterRailButton : undefined}
+      onKeyDown={!mobileLayout ? focusChapterRailButton : undefined}
+      onFocusCapture={!mobileLayout ? (event) => {
+        if (!(event.target instanceof HTMLButtonElement)) return;
+        const rail = event.currentTarget;
+        const railBounds = rail.getBoundingClientRect();
+        const buttonBounds = event.target.getBoundingClientRect();
+        if (buttonBounds.left < railBounds.left) rail.scrollLeft += buttonBounds.left - railBounds.left;
+        else if (buttonBounds.right > railBounds.right) rail.scrollLeft += buttonBounds.right - railBounds.right;
+      } : undefined}
     >
       <button
         type="button"
