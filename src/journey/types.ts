@@ -112,6 +112,13 @@ export type JourneyYearGroup = {
   journeys: Journey[];
 };
 
+export type RouteProvenanceTier =
+  | "recorded-track"
+  | "user-confirmed-route"
+  | "user-shaped-route"
+  | "suggested-route"
+  | "sparse-relation";
+
 export type JourneyRoute = {
   id: string;
   color: string;
@@ -123,6 +130,21 @@ export type JourneyRoute = {
     isStop: boolean;
     label?: string;
   }>;
+  /**
+   * Optional evidence tier for each point-to-point leg. The index is the
+   * source point index. Geometry alone never supplies or upgrades this value.
+   */
+  segmentProvenance?: readonly RouteProvenanceTier[];
+  /** Owner-private recorded evidence. Each server segment stays independent so
+   * gaps are never bridged by presentation code. */
+  recordedTrackSegments?: readonly {
+    id: string;
+    points: readonly {
+      lat: number;
+      lon: number;
+      recordedAt?: string | null;
+    }[];
+  }[];
 };
 
 export type LocationSearchResult = {

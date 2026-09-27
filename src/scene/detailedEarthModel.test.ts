@@ -144,13 +144,68 @@ describe("detailed-earth Journey overlay", () => {
     ]);
     const segments = overlay.data.features.filter((feature) => feature.properties.featureKind === "segment");
     expect(segments).toHaveLength(2);
-    expect(segments.every((feature) => feature.properties.provenance === "user-shaped")).toBe(true);
+    expect(segments.every((feature) => feature.properties.provenance === "user-shaped-route")).toBe(true);
     const firstSegment = segments[0];
     expect(firstSegment.geometry.type).toBe("LineString");
     if (firstSegment.geometry.type !== "LineString") throw new Error("expected line geometry");
     expect(firstSegment.geometry.coordinates).toEqual([
       [route.points[0].lon, route.points[0].lat],
       [route.points[1].lon, route.points[1].lat],
+    ]);
+  });
+
+  it("keeps all provenance tiers explicit and recorded segments independent from sparse relations", () => {
+    const truthRoute: JourneyRoute = {
+      id: "truth-route",
+      color: "#88d8ca",
+      points: [
+        { id: "p0", lat: 1, lon: 1, isStop: true },
+        { id: "p1", lat: 2, lon: 2, isStop: true },
+        { id: "p2", lat: 3, lon: 3, isStop: true },
+        { id: "p3", lat: 4, lon: 4, isStop: true },
+        { id: "p4", lat: 5, lon: 5, isStop: true },
+        { id: "p5", lat: 6, lon: 6, isStop: true },
+      ],
+      segmentProvenance: [
+        "recorded-track",
+        "user-confirmed-route",
+        "user-shaped-route",
+        "suggested-route",
+        "sparse-relation",
+      ],
+      recordedTrackSegments: [
+        {
+          id: "recorded-a",
+          points: [
+            { lat: 1.1, lon: 1.1 },
+            { lat: 1.2, lon: 1.3 },
+          ],
+        },
+        {
+          id: "recorded-b",
+          points: [
+            { lat: 4.1, lon: 4.1 },
+            { lat: 4.2, lon: 4.4 },
+          ],
+        },
+      ],
+    };
+
+    const overlay = buildDetailedEarthJourneyOverlay({ route: truthRoute });
+    const segments = overlay.data.features.filter((feature) => feature.properties.featureKind === "segment");
+    expect(segments.slice(0, 5).map((feature) => feature.properties.provenance)).toEqual([
+      "recorded-track",
+      "user-confirmed-route",
+      "user-shaped-route",
+      "suggested-route",
+      "sparse-relation",
+    ]);
+    const recorded = segments.filter((feature) => String(feature.id).includes(":recorded:"));
+    expect(recorded).toHaveLength(2);
+    expect(recorded.every((feature) => feature.properties.provenance === "recorded-track")).toBe(true);
+    expect(recorded.map((feature) => feature.id)).toEqual([
+      "truth-route:recorded:recorded-a",
+      "truth-route:recorded:recorded-b",
     ]);
   });
 

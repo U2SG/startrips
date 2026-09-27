@@ -4,6 +4,7 @@ import type {
   JourneyMediaAsset,
   JourneyRoute,
   JourneyYearGroup,
+  RouteProvenanceTier,
 } from "./types";
 import { isPersistedCalendarDate } from "./calendarDate";
 import { isLightEffectId } from "./lightEffects";
@@ -11,6 +12,88 @@ import { isLightEffectId } from "./lightEffects";
 export const MAX_JOURNEY_FILE_BYTES = 2_000_000_000;
 export const MAX_JOURNEY_SOUNDTRACK_BYTES = 100 * 1024 * 1024;
 export const MAX_ROUTE_POINTS = 64;
+
+export const ROUTE_PROVENANCE_TIERS = [
+  "recorded-track",
+  "user-confirmed-route",
+  "user-shaped-route",
+  "suggested-route",
+  "sparse-relation",
+] as const satisfies readonly RouteProvenanceTier[];
+
+export type RouteProvenanceEvidence = {
+  recordedTrack?: boolean;
+  userConfirmed?: boolean;
+  userShaped?: boolean;
+  suggested?: boolean;
+  /** Geometry is presentation data, never historical evidence by itself. */
+  geometryPresent?: boolean;
+};
+
+/**
+ * Resolve the factual tier only from provenance evidence. geometryPresent is
+ * deliberately ignored: routing output cannot promote itself into history.
+ */
+export function resolveRouteProvenance(
+  evidence: RouteProvenanceEvidence,
+): RouteProvenanceTier {
+  if (evidence.recordedTrack) return "recorded-track";
+  if (evidence.userConfirmed) return "user-confirmed-route";
+  if (evidence.userShaped) return "user-shaped-route";
+  if (evidence.suggested) return "suggested-route";
+  return "sparse-relation";
+}
+
+export function canClaimActualRoute(provenance: RouteProvenanceTier) {
+  return provenance === "recorded-track" || provenance === "user-confirmed-route";
+}
+
+export type RouteSuggestionFallback = "user-shaped-route" | "sparse-relation";
+export type RouteSuggestionDecision = "confirm" | "none-of-these";
+
+/**
+ * A routing candidate is only a suggestion until a deliberate confirmation.
+ * Rejecting/forgetting it restores the evidence tier that existed before the
+ * suggestion; merely having generated geometry can never upgrade that tier.
+ */
+export function resolveSuggestedRouteDecision(
+  decision: RouteSuggestionDecision,
+  fallback: RouteSuggestionFallback,
+): RouteProvenanceTier {
+  return decision === "confirm" ? "user-confirmed-route" : fallback;
+}
+
+/** Guard any user-facing distance/speed/street claim about the actual path. */
+export function factualRouteText(
+  provenance: RouteProvenanceTier,
+  text: string,
+): string | null {
+  return canClaimActualRoute(provenance) ? text : null;
+}
+
+export function resolveJourneyRouteSegmentProvenance(
+  route: Pick<JourneyRoute, "points" | "segmentProvenance">,
+  segmentIndex: number,
+): RouteProvenanceTier {
+  const declared = route.segmentProvenance?.[segmentIndex];
+  if (declared) return declared;
+  const left = route.points[segmentIndex];
+  const right = route.points[segmentIndex + 1];
+  return resolveRouteProvenance({
+    userShaped: Boolean(left && right && (!left.isStop || !right.isStop)),
+  });
+}
+
+export function summarizeJourneyRouteProvenance(
+  route: Pick<JourneyRoute, "points" | "segmentProvenance">,
+): RouteProvenanceTier | "mixed" {
+  const segmentCount = Math.max(0, route.points.length - 1);
+  if (segmentCount === 0) return "sparse-relation";
+  const tiers = new Set(Array.from({ length: segmentCount }, (_, index) => (
+    resolveJourneyRouteSegmentProvenance(route, index)
+  )));
+  return tiers.size === 1 ? [...tiers][0] : "mixed";
+}
 
 export const ACCEPTED_JOURNEY_MEDIA_TYPES = new Set([
   "image/avif",

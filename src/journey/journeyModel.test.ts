@@ -7,6 +7,12 @@ import {
   journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
+  factualRouteText,
+  resolveJourneyRouteSegmentProvenance,
+  resolveRouteProvenance,
+  resolveSuggestedRouteDecision,
+  summarizeJourneyRouteProvenance,
+  canClaimActualRoute,
   sortJourneysChronologically,
   stripMediaExtension,
   toJourneyRoutes,
@@ -64,6 +70,64 @@ describe("journeyModel", () => {
     ]);
     expect(journeys.map((item) => item.id)).toEqual(["later", "first"]);
     expect(groupJourneysByYear(journeys).map((group) => group.year)).toEqual([2024, 2026]);
+  });
+
+  it("keeps geometry separate from route truth and resolves the five provenance tiers", () => {
+    expect(resolveRouteProvenance({ geometryPresent: true })).toBe("sparse-relation");
+    expect(resolveRouteProvenance({ suggested: true, geometryPresent: true })).toBe("suggested-route");
+    expect(resolveRouteProvenance({ userShaped: true, suggested: true })).toBe("user-shaped-route");
+    expect(resolveRouteProvenance({ userConfirmed: true, userShaped: true })).toBe("user-confirmed-route");
+    expect(resolveRouteProvenance({ recordedTrack: true, userConfirmed: true })).toBe("recorded-track");
+    expect(canClaimActualRoute("recorded-track")).toBe(true);
+    expect(canClaimActualRoute("user-confirmed-route")).toBe(true);
+    expect(canClaimActualRoute("user-shaped-route")).toBe(false);
+    expect(canClaimActualRoute("suggested-route")).toBe(false);
+    expect(canClaimActualRoute("sparse-relation")).toBe(false);
+  });
+
+  it("treats non-stop Route Points as shaping facts without upgrading stop-to-stop relations", () => {
+    const sparse = {
+      points: [
+        { lat: 1, lon: 1, isStop: true },
+        { lat: 2, lon: 2, isStop: true },
+      ],
+    };
+    const shaped = {
+      points: [
+        { lat: 1, lon: 1, isStop: true },
+        { lat: 1.5, lon: 1.5, isStop: false },
+        { lat: 2, lon: 2, isStop: true },
+      ],
+    };
+    expect(resolveJourneyRouteSegmentProvenance(sparse, 0)).toBe("sparse-relation");
+    expect(resolveJourneyRouteSegmentProvenance(shaped, 0)).toBe("user-shaped-route");
+    expect(resolveJourneyRouteSegmentProvenance(shaped, 1)).toBe("user-shaped-route");
+    expect(resolveJourneyRouteSegmentProvenance({
+      ...sparse,
+      segmentProvenance: ["suggested-route"],
+    }, 0)).toBe("suggested-route");
+    expect(summarizeJourneyRouteProvenance({
+      ...shaped,
+      segmentProvenance: ["recorded-track", "suggested-route"],
+    })).toBe("mixed");
+  });
+
+  it("requires an explicit confirmation before suggestion geometry can become factual", () => {
+    expect(resolveSuggestedRouteDecision("confirm", "sparse-relation"))
+      .toBe("user-confirmed-route");
+    expect(resolveSuggestedRouteDecision("none-of-these", "sparse-relation"))
+      .toBe("sparse-relation");
+    expect(resolveSuggestedRouteDecision("none-of-these", "user-shaped-route"))
+      .toBe("user-shaped-route");
+  });
+
+  it("suppresses factual distance, speed and street copy below confirmed provenance", () => {
+    const claim = "12.4 km · 48 km/h · Main Street";
+    expect(factualRouteText("recorded-track", claim)).toBe(claim);
+    expect(factualRouteText("user-confirmed-route", claim)).toBe(claim);
+    expect(factualRouteText("user-shaped-route", claim)).toBeNull();
+    expect(factualRouteText("suggested-route", claim)).toBeNull();
+    expect(factualRouteText("sparse-relation", claim)).toBeNull();
   });
 
   it("preserves place labels in the globe route projection", () => {

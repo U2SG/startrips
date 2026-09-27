@@ -44,7 +44,11 @@ import {
 } from "./cityLabels";
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import { compactMobileLayoutMarker } from "../journey/mobileLayout";
-import type { JourneyRoute } from "../journey/types";
+import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
+import {
+  resolveJourneyRouteSegmentProvenance,
+  summarizeJourneyRouteProvenance,
+} from "../journey/journeyModel";
 import type { HomeBasePresenceDrawable, ProjectedHomeBasePresence } from "./homeBasePresenceLayer";
 import {
   buildArtworkPointPositions,
@@ -225,7 +229,48 @@ export function createParticleEarthRenderer(
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
+export const MAX_RENDERED_RECORDED_TRACK_POINTS = 2048;
 const EMPTY_ARCHIVE_POINTS: Parameters<typeof buildArtworkPointPositions>[0] = [];
+
+function uniformlyBoundRecordedPoints<T>(points: readonly T[], limit: number) {
+  if (points.length <= limit) return [...points];
+  if (limit <= 1) return points.length === 0 ? [] : [points[0]];
+  return Array.from({ length: limit }, (_, index) => (
+    points[Math.round((index * (points.length - 1)) / (limit - 1))]
+  ));
+}
+
+export function buildRecordedTrackOverviewSamples(
+  segments: NonNullable<JourneyRoute["recordedTrackSegments"]>,
+  maxPoints = MAX_RENDERED_RECORDED_TRACK_POINTS,
+): Array<{ id: string; samples: RouteArcSamples }> {
+  const validSegments = segments
+    .map((segment) => ({
+      ...segment,
+      points: segment.points.filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon)),
+    }))
+    .filter((segment) => segment.points.length >= 2);
+  if (maxPoints < 2 || validSegments.length === 0) return [];
+  const segmentLimit = Math.min(validSegments.length, Math.floor(maxPoints / 2));
+  const chosenSegments = uniformlyBoundRecordedPoints(validSegments, segmentLimit);
+  let remainingPoints = maxPoints;
+  return chosenSegments.map((segment, index) => {
+    const remainingSegments = chosenSegments.length - index;
+    const limit = Math.max(2, Math.floor(remainingPoints / remainingSegments));
+    const points = uniformlyBoundRecordedPoints(segment.points, limit);
+    remainingPoints -= points.length;
+    const directions = new Float32Array(points.length * 3);
+    const lifts = new Float32Array(points.length);
+    points.forEach((point, pointIndex) => {
+      const direction = latLonToVector3(point.lat, point.lon, 1);
+      const offset = pointIndex * 3;
+      directions[offset] = direction.x;
+      directions[offset + 1] = direction.y;
+      directions[offset + 2] = direction.z;
+    });
+    return { id: segment.id, samples: { directions, lifts } };
+  });
+}
 
 export type AttentionParticleLayerId =
   | "base-particle-surface"
@@ -2492,6 +2537,11 @@ export function ParticleEarthScene({
         path: SVGPathElement;
         toPointIndex: number;
         samples: RouteArcSamples;
+        provenance: RouteProvenanceTier;
+      }>;
+      recordedTracks: Array<{
+        path: SVGPathElement;
+        samples: RouteArcSamples;
       }>;
       glowPath: SVGPathElement;
       corePath: SVGPathElement;
@@ -2832,10 +2882,12 @@ export function ParticleEarthScene({
         group.classList.add(
           "particle-earth-route",
           "is-style-quiet-core",
+          "has-provenance-legs",
         );
         group.style.color = route.color;
         group.dataset.journeyRoute = route.id;
         group.dataset.lightEffect = route.lightEffect ?? "none";
+        group.dataset.routeProvenance = summarizeJourneyRouteProvenance(route);
         const glowPath = document.createElementNS(
           "http://www.w3.org/2000/svg",
           "path",
@@ -3006,14 +3058,31 @@ export function ParticleEarthScene({
             "http://www.w3.org/2000/svg",
             "path",
           );
+          const provenance = resolveJourneyRouteSegmentProvenance(route, legIndex);
           path.classList.add("particle-earth-route__leg");
+          path.dataset.routeProvenance = provenance;
           path.setAttribute("stroke", gradientReference);
           path.setAttribute("fill", "none");
           path.setAttribute("stroke-linecap", "round");
           path.setAttribute("stroke-linejoin", "round");
           path.setAttribute("pathLength", "1");
           group.appendChild(path);
-          return { path, toPointIndex: legIndex + 1, samples: leg };
+          return { path, toPointIndex: legIndex + 1, samples: leg, provenance };
+        });
+        const recordedTracks = buildRecordedTrackOverviewSamples(route.recordedTrackSegments ?? []).map((track) => {
+          const path = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "path",
+          );
+          path.classList.add("particle-earth-route__recorded-track");
+          path.dataset.routeProvenance = "recorded-track";
+          path.dataset.recordedTrackSegment = track.id;
+          path.setAttribute("stroke", route.color);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke-linecap", "round");
+          path.setAttribute("stroke-linejoin", "round");
+          group.appendChild(path);
+          return { path, samples: track.samples };
         });
         routeVectorLayer.appendChild(group);
         routeVectorEntries.push({
@@ -3022,6 +3091,7 @@ export function ParticleEarthScene({
           group,
           samples: routeSamples,
           legs,
+          recordedTracks,
           glowPath,
           corePath,
           leaderPath,
@@ -3398,6 +3468,14 @@ export function ParticleEarthScene({
             projectedLegEnds.push([leg.toPointIndex - 1, legPath.start]);
           }
           if (legPath.end) projectedLegEnds.push([leg.toPointIndex, legPath.end]);
+        }
+        for (const track of entry.recordedTracks) {
+          const trackPath = buildProjectedRoutePath(
+            track.samples,
+            projectRoutePoint,
+            { radius: ROUTE_ANCHOR_RADIUS, liftScale: 0 },
+          );
+          track.path.setAttribute("d", trackPath.d);
         }
         const projectedMarkers = new Map<number, ProjectedRoutePoint>();
         const labelCandidates = new Map<number, {

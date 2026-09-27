@@ -54,6 +54,7 @@ import {
   type HomeBaseInferenceResult,
 } from "./homeBaseInference";
 import { JourneyApiError } from "./journeyApi";
+import { readJourneyRecordedTrackGeometry } from "./journeyRecordedTracksApi";
 import {
   homeBaseConfirmationDraft,
   homeBaseConfirmationRequest,
@@ -1081,6 +1082,9 @@ export function LivingAtlasApp({
   const shareClient = capabilities.canShareAtlas ? mutations : null;
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
+  const [recordedTrackSegments, setRecordedTrackSegments] = useState<
+    NonNullable<JourneyRoute["recordedTrackSegments"]>
+  >([]);
   const journeysRef = useRef(journeys);
   journeysRef.current = journeys;
   const [homeBasePeriods, setHomeBasePeriods] = useState<HomeBasePeriod[]>([]);
@@ -1970,6 +1974,27 @@ export function LivingAtlasApp({
   }, [notice, undoJourney, clearNotice]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
+  useEffect(() => {
+    setRecordedTrackSegments([]);
+    if (!activeJourney) return undefined;
+    const controller = new AbortController();
+    void readJourneyRecordedTrackGeometry(activeJourney.id, { signal: controller.signal })
+      .then((operations) => {
+        if (controller.signal.aborted) return;
+        setRecordedTrackSegments(operations.flatMap((operation) => (
+          operation.segments
+            .filter((segment) => segment.points.length >= 2)
+            .map((segment) => ({
+              id: `${operation.operationKey}:${segment.id}`,
+              points: segment.points,
+            }))
+        )));
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setRecordedTrackSegments([]);
+      });
+    return () => controller.abort();
+  }, [activeJourney?.id]);
   const activeJourneyQuickRecapPlanningFingerprint = useMemo(
     () => quickRecapPlanningContentFingerprint(activeJourney),
     [activeJourney],
@@ -2007,12 +2032,16 @@ export function LivingAtlasApp({
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
   const effectiveDraftRoute = draftPlaybackOwnsSession ? draftPlaybackPreview!.route : draftRoute;
   const routes = useMemo(() => {
-    const savedRoutes = toJourneyRoutes(journeys);
+    const savedRoutes = toJourneyRoutes(journeys).map((route) => (
+      route.id === activeJourney?.id && recordedTrackSegments.length > 0
+        ? { ...route, recordedTrackSegments }
+        : route
+    ));
     if (!effectiveDraftRoute) return savedRoutes;
     return savedRoutes.some((route) => route.id === effectiveDraftRoute.id)
       ? savedRoutes.map((route) => route.id === effectiveDraftRoute.id ? effectiveDraftRoute : route)
       : [...savedRoutes, effectiveDraftRoute];
-  }, [effectiveDraftRoute, journeys]);
+  }, [activeJourney?.id, effectiveDraftRoute, journeys, recordedTrackSegments]);
   const focusPresentation = resolveMobilePlaybackPresentation(
     journeys,
     unknownCreateSemanticOwnership.selection,

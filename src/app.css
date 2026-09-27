@@ -223,6 +223,31 @@ button {
   pointer-events: none;
 }
 
+/* Provenance is a truth signal, not decoration. At rest each canonical leg
+   replaces the flattened whole-route core so confidence remains visible. */
+.particle-earth-route.has-provenance-legs:not([data-temporal-reveal]) .particle-earth-route__glow,
+.particle-earth-route.has-provenance-legs:not([data-temporal-reveal]) .particle-earth-route__core {
+  opacity: 0;
+}
+
+.particle-earth-route.has-provenance-legs:not([data-temporal-reveal]) .particle-earth-route__leg {
+  stroke-dashoffset: 0;
+}
+
+.particle-earth-route__leg[data-route-provenance="recorded-track"] { stroke-width: 1.35px; opacity: 0.98; }
+.particle-earth-route__leg[data-route-provenance="user-confirmed-route"] { stroke-width: 1.2px; opacity: 0.9; }
+.particle-earth-route__leg[data-route-provenance="user-shaped-route"] { stroke-width: 1px; opacity: 0.76; }
+.particle-earth-route__leg[data-route-provenance="suggested-route"] { stroke-width: 0.85px; opacity: 0.55; }
+.particle-earth-route__leg[data-route-provenance="sparse-relation"] { stroke-width: 0.7px; opacity: 0.36; }
+
+.particle-earth-route__recorded-track {
+  fill: none;
+  stroke-width: 1.35px;
+  opacity: 0.98;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
 .particle-earth-route.is-style-quiet-core[data-temporal-reveal] .particle-earth-route__glow,
 .particle-earth-route.is-style-quiet-core[data-temporal-reveal] .particle-earth-route__core {
   opacity: 0;

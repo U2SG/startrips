@@ -32,6 +32,7 @@ import {
   MAX_RENDERED_ROUTE_LABELS,
   MAX_RENDERED_ROUTE_LINE_VERTICES,
   MAX_RENDERED_ROUTE_POINTS,
+  MAX_RENDERED_RECORDED_TRACK_POINTS,
   MAX_ROUTE_LABEL_CANDIDATES,
   resolveRouteLabelLimit,
   resolveRouteLabelSafeArea,
@@ -40,6 +41,7 @@ import {
   buildJourneyConnectorPath,
   advanceGlobeIdleReleasePhase,
   buildProjectedRoutePath,
+  buildRecordedTrackOverviewSamples,
   collectJourneyDimDirections,
   focusSignalAnchor,
   focusViewportCenter,
@@ -83,6 +85,38 @@ import {
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
+  it("bounds recorded-track overview geometry without joining independent gaps", () => {
+    const dense = Array.from({ length: MAX_RENDERED_RECORDED_TRACK_POINTS + 500 }, (_, index) => ({
+      lat: 20 + index / 10_000,
+      lon: 110 + index / 10_000,
+    }));
+    const tracks = buildRecordedTrackOverviewSamples([
+      { id: "a", points: dense },
+      { id: "b", points: [{ lat: 30, lon: 120 }, { lat: 31, lon: 121 }] },
+    ]);
+    expect(tracks.map((track) => track.id)).toEqual(["a", "b"]);
+    const pointCounts = tracks.map((track) => track.samples.lifts.length);
+    expect(pointCounts.every((count) => count >= 2)).toBe(true);
+    expect(pointCounts.reduce((sum, count) => sum + count, 0))
+      .toBeLessThanOrEqual(MAX_RENDERED_RECORDED_TRACK_POINTS);
+  });
+
+  it("keeps all five provenance tiers visible in the particle route treatment", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    for (const tier of [
+      "recorded-track",
+      "user-confirmed-route",
+      "user-shaped-route",
+      "suggested-route",
+      "sparse-relation",
+    ]) {
+      expect(source).toContain("routeProvenance");
+      expect(css).toContain(`data-route-provenance="${tier}"`);
+    }
+    expect(source).toContain("particle-earth-route__recorded-track");
+  });
+
   it("degrades renderer construction failures without escaping the scene effect", () => {
     const rendererFactory = vi.fn(() => {
       throw new Error("context unavailable");

@@ -1,6 +1,7 @@
 import type { FeatureCollection, Geometry, GeoJsonProperties } from "geojson";
 import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
-import type { JourneyRoute } from "../journey/types";
+import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
+import { resolveJourneyRouteSegmentProvenance } from "../journey/journeyModel";
 import {
   resolveRoutePointPresentation,
   type RoutePointSelection,
@@ -60,7 +61,7 @@ export type DetailedEarthJourneyOverlayProperties = GeoJsonProperties & {
   featureKind: "segment" | "route-point";
   journeyId: string;
   color: string;
-  provenance: "user-shaped";
+  provenance: RouteProvenanceTier;
   attentionRole: "ordinary" | "selected" | "narrative-current";
   semanticRole?: "stop" | "passthrough";
   routePointId?: string;
@@ -228,7 +229,7 @@ export function buildDetailedEarthJourneyOverlay({
         featureKind: "route-point",
         journeyId: route.id,
         color: route.color,
-        provenance: "user-shaped",
+        provenance: "sparse-relation",
         semanticRole: record.presentation.semanticRole,
         attentionRole: record.presentation.attentionRole,
         routePointId,
@@ -267,7 +268,7 @@ export function buildDetailedEarthJourneyOverlay({
         featureKind: "segment",
         journeyId: route.id,
         color: route.color,
-        provenance: "user-shaped",
+        provenance: resolveJourneyRouteSegmentProvenance(route, index - 1),
         attentionRole: strongestAttentionRole(
           previous.presentation.attentionRole,
           current.presentation.attentionRole,
@@ -278,11 +279,48 @@ export function buildDetailedEarthJourneyOverlay({
     });
   }
 
+  for (const segment of route.recordedTrackSegments ?? []) {
+    const coordinates: Array<[number, number]> = [];
+    let previousLongitude: number | null = null;
+    for (const point of segment.points) {
+      if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
+      let longitude = point.lon;
+      if (previousLongitude !== null) {
+        while (longitude - previousLongitude > 180) longitude -= 360;
+        while (longitude - previousLongitude < -180) longitude += 360;
+      }
+      coordinates.push([longitude, point.lat]);
+      previousLongitude = longitude;
+    }
+    if (coordinates.length < 2) continue;
+    features.push({
+      type: "Feature",
+      id: `${route.id}:recorded:${segment.id}`,
+      geometry: { type: "LineString", coordinates },
+      properties: {
+        featureKind: "segment",
+        journeyId: route.id,
+        color: route.color,
+        provenance: "recorded-track",
+        attentionRole: "ordinary",
+      },
+    });
+  }
+
   const visibleRecords = records.filter((record) => record.valid && record.presentation.temporalVisible);
   const revisionSeed = JSON.stringify({
     id: route.id,
     color: route.color,
     lightEffect: route.lightEffect ?? null,
+    segmentProvenance: Array.from({ length: Math.max(0, route.points.length - 1) }, (_, index) => (
+      resolveJourneyRouteSegmentProvenance(route, index)
+    )),
+    recordedTrackSegments: (route.recordedTrackSegments ?? []).map((segment) => ({
+      id: segment.id,
+      pointCount: segment.points.length,
+      first: segment.points[0] ?? null,
+      last: segment.points.at(-1) ?? null,
+    })),
     points: records.map(({ point, pointIndex, presentation, valid }) => ({
       id: point.id ?? null,
       pointIndex,
