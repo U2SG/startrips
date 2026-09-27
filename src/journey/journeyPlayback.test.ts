@@ -292,7 +292,7 @@ describe("buildPlaybackSteps (#19)", () => {
     expect(steps.some((step) => step.kind === "media")).toBe(false);
   });
 
-  it("keeps every canonical Route Point and media chapter when the overview groups a stay (#514)", () => {
+  it("keeps route shape and historical media without promoting pure transit to a stop (#514)", () => {
     const grouped: Journey = {
       ...journey,
       routePoints: [
@@ -316,7 +316,7 @@ describe("buildPlaybackSteps (#19)", () => {
     const steps = buildPlaybackSteps(grouped);
     expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 2]);
     expect(steps.flatMap((step) => step.kind === "travel" ? [step.to] : [])).toEqual([1, 2]);
-    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([0, 2]);
+    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([0, 1, 2]);
     expect(playbackMediaForPoint(grouped, 0).map((asset) => asset.id)).toEqual(["stay-hotel"]);
     expect(playbackMediaForPoint(grouped, 1).map((asset) => asset.id)).toEqual(["stay-detour"]);
     expect(storyMediaForScope(grouped, "point-1").map((asset) => asset.id)).toEqual(["stay-detour"]);

@@ -244,10 +244,15 @@ export function buildPlaybackSteps(
     const media = byOwner.get(routePoint.id) ?? [];
     if (pointIndex > 0) steps.push({ kind: "travel", to: pointIndex });
     // #514: pure transit shapes the canonical route but is not an arrival.
-    // Keep its note/media addressable through the explicit Route Point/Story
-    // surfaces without promoting the pass-through into an independent Playback
-    // stop or media chapter.
-    if (routePoint.placeRole === "pure-transit") continue;
+    // Existing note/media remain addressable, and Full Playback still presents
+    // every historical media asset at this canonical route position. Those media
+    // are content beats only: the pass-through never gains an arrival/stay step.
+    if (routePoint.placeRole === "pure-transit") {
+      for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
+        steps.push({ kind: "media", pointIndex, mediaIndex });
+      }
+      continue;
+    }
     steps.push({ kind: "stop", pointIndex, media });
     for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
       steps.push({ kind: "media", pointIndex, mediaIndex });
