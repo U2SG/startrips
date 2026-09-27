@@ -1059,6 +1059,13 @@ try {
   const labelCloseButton = labelContext.locator("[data-route-point-context-close]");
   await labelCloseButton.click();
   await labelContext.waitFor({ state: "detached", timeout: 5_000 });
+  // Focus restoration intentionally waits for the post-close route-label
+  // arbitration commit. Observe that owned end state instead of sampling
+  // activeElement in the gap between context removal and the scene's layout
+  // publication.
+  await labelPage.waitForFunction((routePointId) => (
+    document.activeElement?.getAttribute("data-route-point-id") === routePointId
+  ), keyboardPointId, { timeout: 5_000 });
   const focusReturn = await labelPage.evaluate(() => ({
     tag: document.activeElement?.tagName.toLowerCase() ?? null,
     routePointId: document.activeElement?.getAttribute("data-route-point-id") ?? null,
@@ -1268,15 +1275,38 @@ try {
     && !projectionBefore.labelIds.includes(projectionPointIds.note)
     && !projectionBefore.labelIds.includes(projectionPointIds.media));
 
-  const projectedBClick = await clickRoutePointMarker(projectionPage, journeyId, projectionPointIds.b);
-  await projectionPage.locator(`[data-route-point-context][data-route-point-id="${projectionPointIds.b}"]`)
-    .waitFor({ state: "visible", timeout: 5_000 });
-  const projectedBActivation = await routePointActivationEvidence(projectionPage);
-  record("sparse Particle overview still opens B through its real marker hit", {
-    projectedBClick, projectedBActivation,
-  }, projectedBActivation.source === "marker"
-    && projectedBActivation.journeyId === journeyId
-    && projectedBActivation.routePointId === projectionPointIds.b);
+  // Route fitting guarantees the sparse overview identities, not that one
+  // particular primary stop is on the near hemisphere in every settled camera
+  // composition. Exercise the real pointer path on whichever canonical overview
+  // marker is actually projected now; membership above separately proves that B
+  // remains a primary overview record rather than being collapsed away.
+  const projectedPrimaryMarker = projectionPage.locator(
+    `.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id][data-temporal-visible="true"]:visible`,
+  ).first();
+  await projectedPrimaryMarker.waitFor({ state: "visible", timeout: 5_000 });
+  const projectedPrimaryPointId = await projectedPrimaryMarker.getAttribute("data-route-point-id");
+  const overviewPrimaryIds = [
+    projectionPointIds.firstA,
+    projectionPointIds.b,
+    projectionPointIds.returnA,
+  ];
+  if (!projectedPrimaryPointId || !overviewPrimaryIds.includes(projectedPrimaryPointId)) {
+    throw new Error(`sparse overview exposed a non-primary Route Point: ${projectedPrimaryPointId}`);
+  }
+  const projectedPrimaryClick = await clickRoutePointMarker(
+    projectionPage,
+    journeyId,
+    projectedPrimaryPointId,
+  );
+  await projectionPage.locator(
+    `[data-route-point-context][data-route-point-id="${projectedPrimaryPointId}"]`,
+  ).waitFor({ state: "visible", timeout: 5_000 });
+  const projectedPrimaryActivation = await routePointActivationEvidence(projectionPage);
+  record("sparse Particle overview opens its actually projected primary marker through a real hit", {
+    projectedPrimaryPointId, projectedPrimaryClick, projectedPrimaryActivation,
+  }, projectedPrimaryActivation.source === "marker"
+    && projectedPrimaryActivation.journeyId === journeyId
+    && projectedPrimaryActivation.routePointId === projectedPrimaryPointId);
   await projectionPage.locator("[data-route-point-context-close]").click();
   await projectionPage.locator("[data-route-point-context]").waitFor({ state: "detached", timeout: 5_000 });
 

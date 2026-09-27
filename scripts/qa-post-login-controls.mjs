@@ -2201,7 +2201,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         id: "fa-session",
         userId: "qa-user",
         token: "fa-token",
-        expiresAt: "2026-09-27T00:00:00.000Z",
+        expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
         createdAt: "2026-08-26T00:00:00.000Z",
         updatedAt: "2026-08-26T00:00:00.000Z",
         activeOrganizationId: "qa-org",
@@ -2325,7 +2325,7 @@ async function verifyFinalAcceptanceMobileFlow() {
           contentType: "application/json",
           body: JSON.stringify({
             url: assetId === "fa-soundtrack-1" ? tinyAudio : onePixelGif,
-            expiresAt: "2026-09-27T00:00:00.000Z",
+            expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
           }),
         });
       });
