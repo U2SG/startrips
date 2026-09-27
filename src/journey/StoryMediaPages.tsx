@@ -1173,6 +1173,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         className="story-media-pages__page"
         data-media-page={current ? "current" : offsets[slot] < 0 ? "previous" : "next"}
         data-media-page-id={id ?? undefined} data-media-page-ready={pageReady ? "true" : "false"}
+        data-media-read-state={read?.status ?? "missing"}
+        data-media-read-generation={read?.status === "ready" ? read.generation : undefined}
         data-media-layer={layer?.kind}
         data-media-preview-asset={layer?.kind === "preview" ? layer.assetId : undefined}
         data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}

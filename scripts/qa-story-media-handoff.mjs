@@ -889,8 +889,26 @@ function installStageSampler() {
       at: Math.round(performance.now()),
       presentation: pages.getAttribute("data-media-presentation"),
       kind: pages.getAttribute("data-current-media-kind"),
+      requestedId: root.getAttribute("data-media-requested"),
       currentId: current?.getAttribute("data-media-page-id") ?? null,
       incomingId: incoming?.getAttribute("data-media-page-id") ?? null,
+      // Only the timer-driven probe needs the physical writer trace. Keep the
+      // existing gesture suites' frame payloads small.
+      slots: state.autoplayDetails ? [...pages.querySelectorAll("[data-media-page]")].map((slot) => {
+        const picture = slot.querySelector("img");
+        const style = getComputedStyle(slot);
+        return {
+          id: slot.getAttribute("data-media-page-id"),
+          role: slot.getAttribute("data-media-page"),
+          read: slot.getAttribute("data-media-read-state"),
+          generation: slot.getAttribute("data-media-read-generation"),
+          ready: slot.getAttribute("data-media-page-ready"),
+          painted: picture instanceof HTMLImageElement && !picture.hidden && picture.currentSrc
+            ? new URL(picture.currentSrc).searchParams.get("qaAsset") : null,
+          opacity: style.opacity, zIndex: style.zIndex,
+          transform: style.transform, clip: style.clipPath,
+        };
+      }) : undefined,
       centre: drawables[0]?.occludedBy ? null : drawables[0] ?? null,
       drawables,
       aperture: { width: Math.round(bounds.width), height: Math.round(bounds.height) },
@@ -982,8 +1000,9 @@ function installStageSampler() {
   // Each window owns its own chain, retired by generation. A chain started at
   // document-start is not reliably carried into the committed document, and a
   // chain that only restarts on demand can be lost when a window closes.
-  window.__qaStageStart = (rootSelector) => {
+  window.__qaStageStart = (rootSelector, options = {}) => {
     state.roots = Array.isArray(rootSelector) ? rootSelector : [rootSelector];
+    state.autoplayDetails = Boolean(options.autoplayDetails);
     state.frames = [];
     state.gestures = [];
     state.unmeasurable = 0;
@@ -1010,8 +1029,9 @@ function installStageSampler() {
 }
 /* eslint-enable no-undef */
 
-async function startSampler(page, rootSelector) {
-  await page.evaluate((selector) => window.__qaStageStart(selector), rootSelector);
+async function startSampler(page, rootSelector, options = {}) {
+  await page.evaluate(({ selector, options }) => window.__qaStageStart(selector, options),
+    { selector: rootSelector, options });
 }
 
 async function stopSampler(page) {
@@ -2041,7 +2061,12 @@ function gradePageVideos(videos) {
 // asset's pixels under its new identity is visible as a `currentSrc` mismatch.
 const MANY_MEDIA = Array.from({ length: 8 }, (_, index) =>
   `00000000-0000-4000-8000-${String(100 + index).padStart(12, "0")}`);
-const MANY_MEDIA_PHOTOS = [WIDE_PHOTO, SECOND_WIDE_PHOTO];
+const MANY_MEDIA_PHOTOS = [
+  WIDE_PHOTO, TALL_PHOTO, SECOND_WIDE_PHOTO,
+  "/artworks/egypt-coffin.jpg", "/artworks/monet-water-lilies.jpg",
+  "/artworks/woman-power-poster.jpg", "/artworks/stieglitz-hand-of-man.jpg",
+  "/artworks/prehistoric-hands.jpg",
+];
 
 /**
  * Reopen `session.page` on the eight-photo Journey. The page-level routes added
@@ -3703,6 +3728,95 @@ try {
       });
     } catch (error) {
       record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      story?.release(MANY_MEDIA[3]);
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // #489 R3: the owner recording advances through the real Story timer. A
+  // manual burst cannot establish what owns the foreground after each timed
+  // step, particularly while a prefetched read is still held back.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-timer-autoplay-foreground-continuity";
+    const progress = { steps: [] };
+    let story = null;
+    try {
+      const { page } = session;
+      const delayed = MANY_MEDIA[3];
+      story = await openManyMediaStory(session, { gates: [delayed] });
+      await waitForSettledAsset(page, MANY_MEDIA[0]);
+      progress.normalMotion = await page.evaluate(() =>
+        !matchMedia("(prefers-reduced-motion: reduce)").matches);
+      progress.initialWarm = await waitForReadRequests(page, story, MANY_MEDIA.slice(1, 4));
+      await startPaintIdentityProbe(page, STAGE);
+      await startSampler(page, STAGE, { autoplayDetails: true });
+      await page.locator(".journey-story").getByRole("button", {
+        name: "自动播放媒体", exact: true,
+      }).click();
+      progress.playPressed = await page.locator('.journey-story__media-nav [aria-pressed="true"]')
+        .count() > 0;
+      for (let index = 1; index <= 6; index += 1) {
+        const id = MANY_MEDIA[index];
+        const previous = MANY_MEDIA[index - 1];
+        const requested = await waitForRequestedMedia(page, id, 9_000);
+        let hold = null;
+        if (id === delayed && requested) {
+          const from = await pageClock(page);
+          for (let frame = 0; frame < 25; frame += 1) await nextFrame(page);
+          const to = await pageClock(page);
+          hold = { from, to, readStillHeld: story.reads.some((entry) =>
+            entry.id === id && entry.servedAt === null) };
+          story.release(id);
+        }
+        const settled = requested && await waitForSettledAsset(page, id).then(() => true, () => false);
+        const frames = await stopSamplerFrames(page);
+        const continuity = gradeContinuity(frames, { allowedAssets: MANY_MEDIA });
+        const expected = [previous, id];
+        const heldFrames = hold ? frames.filter((frame) => frame.at >= hold.from && frame.at <= hold.to) : [];
+        const heldForegrounds = [...new Set(heldFrames.map((frame) => frame.centre?.asset ?? null))];
+        const dimmedPrevious = frames.filter((frame) => frame.centre?.asset === previous
+          && Number(frame.slots?.find((slot) => slot.id === previous)?.opacity) < 0.9);
+        progress.steps.push({
+          index, requested, settled, expected, continuity,
+          dimmedPrevious: dimmedPrevious.slice(0, 4),
+          requestTrace: frames.filter((frame) => frame.requestedId === id).slice(0, 2),
+          ownerChanges: frames.filter((frame, at) => at === 0
+            || frame.centre?.asset !== frames[at - 1].centre?.asset).slice(0, 5),
+          hold: hold ? { readStillHeld: hold.readStillHeld, frames: heldFrames.length,
+            foregrounds: heldForegrounds,
+            waiting: heldFrames.some((frame) => frame.waiting || frame.stageStatus),
+            dimmed: heldFrames.some((frame) =>
+              Number(frame.slots?.find((slot) => slot.id === previous)?.opacity) < 0.99),
+          } : null,
+          failed: !requested || !settled || continuity.failed
+            || JSON.stringify(continuity.foregroundSequence) !== JSON.stringify(expected)
+            || (hold && (!hold.readStillHeld || heldFrames.length < 20
+              || heldForegrounds.length !== 1 || heldForegrounds[0] !== previous
+              || heldFrames.some((frame) => frame.waiting || frame.stageStatus
+                || Number(frame.slots?.find((slot) => slot.id === previous)?.opacity) < 0.99))),
+        });
+        if (!settled) break;
+        if (index < 6) await startSampler(page, STAGE, { autoplayDetails: true });
+      }
+      progress.paint = await stopPaintIdentityProbe(page);
+      record({ name,
+        claim: "the real Story play button and timer carry six distinct mixed-aspect photographs across warm hits and a held read; every sampled step keeps a presentable foreground, moves only from its old owner to its target, never shows waiting over the old picture, and uses no more than three physical pages",
+        ...progress, reads: story.reads,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.normalMotion || !progress.initialWarm || !progress.playPressed
+          || progress.steps.length !== 6 || progress.steps.some((step) => step.failed)
+          || !progress.paint?.frames || progress.paint.mismatches.length > 0
+          || progress.paint.maxPages > 3 || progress.paint.maxVideos > 1
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await stageDiagnostic(session.page, STAGE).catch(() => null),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
     } finally {
       story?.release(MANY_MEDIA[3]);
