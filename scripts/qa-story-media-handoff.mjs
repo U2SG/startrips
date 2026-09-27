@@ -163,7 +163,7 @@ async function observedPointerTypes(page) {
  * asserted about the delay itself, and no assertion is relaxed while it runs.
  */
 async function createStoryPage({
-  mobile = false, viewport, reducedMotion = "no-preference",
+  mobile = false, viewport, reducedMotion = "no-preference", path = storyPath,
   readDelays = {}, byteDelays = {}, renewPausedVideo = false,
   renewalByteFailure = false, renewalReadFailure = false, renewalSameUrlRetry = false,
   expiredRangeFailure = false,
@@ -319,7 +319,7 @@ async function createStoryPage({
       return route.continue();
     });
   }
-  await page.goto(`${origin}${storyPath}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
   return { page, consoleErrors, pageErrors, mediaDelays,
     renewal: renewPausedVideo ? {
@@ -5681,6 +5681,144 @@ try {
       session.renewal.releaseExpiredRanges();
       session.renewal.releaseRead();
       session.renewal.releaseBytes();
+      await session.page.close();
+    }
+  }
+  {
+    const name = "story-desktop-chapter-rail-media-first";
+    const session = await createStoryPage({
+      viewport: { width: 1920, height: 1080 },
+      path: "/?qaState=journey-story&qaMode=desktop-chapter-rail",
+    });
+    const progress = {};
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I2);
+      await page.locator(".journey-story__point-note").waitFor({ state: "visible" });
+      progress.initial = await page.evaluate(() => {
+        const story = document.querySelector('.journey-story[data-story-layout="desktop"]');
+        const rail = story?.querySelector('header .journey-story__route-points');
+        const copy = story?.querySelector('.journey-story__copy');
+        const stage = story?.querySelector('.journey-story__media');
+        const current = stage?.querySelector('.story-media-pages__page[data-media-page="current"]');
+        const picture = current?.querySelector('img');
+        const note = copy?.querySelector('.journey-story__point-note');
+        const active = rail?.querySelector('button.is-chapter-active');
+        if (!story || !rail || !copy || !stage || !current || !picture || !note || !active) {
+          throw new Error("desktop chapter fixture did not render its presented Story");
+        }
+        const buttons = [...rail.querySelectorAll('button')];
+        const railRect = rail.getBoundingClientRect();
+        const activeRect = active.getBoundingClientRect();
+        const stageRect = stage.getBoundingClientRect();
+        const pageRect = current.getBoundingClientRect();
+        const pictureRect = picture.getBoundingClientRect();
+        const noteRect = note.getBoundingClientRect();
+        return {
+          viewport: { width: innerWidth, height: innerHeight },
+          routePointCount: buttons.length - 1,
+          railInHeader: rail.parentElement?.tagName === 'HEADER',
+          copyContainsRail: copy.contains(rail),
+          railOverflows: rail.scrollWidth > rail.clientWidth + 16,
+          railScrollLeft: rail.scrollLeft,
+          railRowSpread: Math.max(...buttons.map((button) => button.getBoundingClientRect().top))
+            - Math.min(...buttons.map((button) => button.getBoundingClientRect().top)),
+          activeRoutePointId: active.dataset.routePointId,
+          activeVisible: activeRect.left >= railRect.left - 2 && activeRect.right <= railRect.right + 2,
+          noteText: note.textContent,
+          noteTop: noteRect.top,
+          noteVisible: noteRect.top >= 0 && noteRect.bottom <= innerHeight,
+          currentPointLabel: copy.querySelector('.journey-story__current-point')?.textContent ?? null,
+          pageTopInset: pageRect.top - stageRect.top,
+          pageLeftInset: pageRect.left - stageRect.left,
+          pageBottomSpace: stageRect.bottom - pageRect.bottom,
+          paintedHeight: Math.min(pictureRect.height,
+            pictureRect.width * picture.naturalHeight / picture.naturalWidth),
+          naturalSize: { width: picture.naturalWidth, height: picture.naturalHeight },
+          pictureFit: getComputedStyle(picture).objectFit,
+        };
+      });
+      await mkdir("artifacts/story-media", { recursive: true });
+      await page.screenshot({ path: "artifacts/story-media/desktop-chapter-rail.png" });
+      const rail = page.locator("header .journey-story__route-points");
+      const railBox = await rail.boundingBox();
+      if (!railBox) throw new Error("desktop chapter rail lost its hit box");
+      await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + railBox.height / 2);
+      await page.mouse.wheel(0, -240);
+      await page.waitForFunction((before) => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        return rail && rail.scrollLeft < before - 5;
+      }, progress.initial.railScrollLeft, { polling: "raf", timeout: 3_000 });
+      progress.wheelScrollLeft = await rail.evaluate((element) => element.scrollLeft);
+      await rail.locator("button").first().focus();
+      await page.keyboard.press("End");
+      progress.end = await page.evaluate(() => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        const focused = document.activeElement;
+        const railRect = rail?.getBoundingClientRect();
+        const focusedRect = focused?.getBoundingClientRect();
+        return {
+          id: focused?.getAttribute('data-route-point-id'),
+          visible: Boolean(railRect && focusedRect && focusedRect.left >= railRect.left - 2
+            && focusedRect.right <= railRect.right + 2),
+          scrollLeft: rail?.scrollLeft ?? 0,
+        };
+      });
+      await page.keyboard.press("Home");
+      progress.home = await page.evaluate(() => ({
+        focusedAll: document.activeElement === document.querySelector('header .journey-story__route-points button'),
+        scrollLeft: document.querySelector('header .journey-story__route-points')?.scrollLeft ?? null,
+      }));
+      await rail.locator('[data-route-point-id="00000000-0000-4000-8000-000000000303"]').click();
+      await waitForSettledAsset(page, I1);
+      await page.locator(".journey-story__point-note").filter({ hasText: "海风转凉" })
+        .waitFor({ state: "visible" });
+      progress.switched = await page.evaluate(() => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
+        const railRect = rail?.getBoundingClientRect();
+        const activeRect = active?.getBoundingClientRect();
+        const note = document.querySelector('.journey-story__copy .journey-story__point-note');
+        return {
+          activeRoutePointId: active?.getAttribute('data-route-point-id') ?? null,
+          activeVisible: Boolean(railRect && activeRect && activeRect.left >= railRect.left - 2
+            && activeRect.right <= railRect.right + 2),
+          currentPointLabel: document.querySelector('.journey-story__current-point')?.textContent ?? null,
+          noteText: note?.textContent ?? null,
+          noteTop: note?.getBoundingClientRect().top ?? null,
+        };
+      });
+      record({ name,
+        claim: "at 1920x1080 twenty Route Points stay on one bounded keyboard-reachable rail above a materially larger uncropped portrait, while the current note remains in the initial viewport and changing chapter updates context without a layout jump",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: progress.initial.viewport.width !== 1920 || progress.initial.viewport.height !== 1080
+          || progress.initial.routePointCount !== 20 || !progress.initial.railInHeader
+          || progress.initial.copyContainsRail || !progress.initial.railOverflows
+          || progress.initial.railRowSpread > 2 || !progress.initial.activeVisible
+          || progress.initial.railScrollLeft <= 0
+          || progress.initial.activeRoutePointId !== "00000000-0000-4000-8000-000000000316"
+          || !progress.initial.noteText?.includes("从港湾") || !progress.initial.noteVisible
+          || !progress.initial.currentPointLabel?.includes("17")
+          || progress.initial.pageTopInset > 4 || progress.initial.pageLeftInset > 4
+          || progress.initial.pageBottomSpace < 44 || progress.initial.pageBottomSpace > 56
+          || progress.initial.naturalSize.width <= 0 || progress.initial.naturalSize.height <= 0
+          || !Number.isFinite(progress.initial.paintedHeight) || progress.initial.paintedHeight < 875
+          || progress.initial.pictureFit !== "contain"
+          || progress.end.id !== "00000000-0000-4000-8000-000000000319"
+          || progress.wheelScrollLeft >= progress.initial.railScrollLeft - 5
+          || !progress.end.visible || progress.end.scrollLeft <= 0
+          || !progress.home.focusedAll || progress.home.scrollLeft > 2
+          || progress.switched.activeRoutePointId !== "00000000-0000-4000-8000-000000000303"
+          || !progress.switched.activeVisible || !progress.switched.currentPointLabel?.includes("04")
+          || !progress.switched.noteText?.includes("海风转凉")
+          || !Number.isFinite(progress.switched.noteTop)
+          || Math.abs(progress.switched.noteTop - progress.initial.noteTop) > 16
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
       await session.page.close();
     }
   }
