@@ -2754,6 +2754,7 @@ export function LivingAtlasApp({
     setPlaybackFallbackMessage(fallbackMessage);
     setPlaybackPendingMode(null);
     setPlaybackModeMenuJourneyId(null);
+    setMobileSheetJourneyId(null);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
     setStoryInitialAssetId(null);

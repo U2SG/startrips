@@ -2666,6 +2666,9 @@ async function verifyFinalAcceptanceMobileFlow() {
       if (await page.locator(".journey-story").count() !== 0) {
         throw new Error("Mobile Story still owns presentation after Quick Recap opened");
       }
+      if (await page.locator(".mobile-v2__sheet-layer").count() !== 0) {
+        throw new Error("Journey detail sheet still covers mobile Quick Recap");
+      }
       await activateControl(page.locator('.journey-playback button[aria-label="退出播放"]'),
         "close Story Quick Recap after touch entry");
       await page.locator(".journey-story").waitFor({ state: "visible", timeout: 5_000 });

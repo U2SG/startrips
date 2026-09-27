@@ -678,10 +678,10 @@ export function JourneyStory({
   const fullscreenMobileIdleTimerRef = useRef(0);
   const storyMediaGestureConsumedRef = useRef(false);
   const mediaButtonTouchRef = useRef<{
-    pointerId: number; key: "previous" | "next" | "play" | "fullscreen"; x: number; y: number; moved: boolean;
+    pointerId: number; key: "previous" | "next" | "play" | "quick-recap" | "fullscreen"; x: number; y: number; moved: boolean;
   } | null>(null);
   const mediaButtonTouchClickRef = useRef<{
-    at: number; key: "previous" | "next" | "play" | "fullscreen";
+    at: number; key: "previous" | "next" | "play" | "quick-recap" | "fullscreen";
   } | null>(null);
   const inlineStageRef = useRef<StoryMediaPagesHandle>(null);
   const fullscreenStageRef = useRef<StoryMediaPagesHandle>(null);
