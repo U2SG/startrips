@@ -410,6 +410,18 @@ export function runSharedElementMorph({
 }
 
 function snapshotSource(source: HTMLElement): HTMLElement | null {
+  if (source instanceof HTMLCanvasElement) {
+    if (!source.width || !source.height) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = source.width;
+    canvas.height = source.height;
+    try {
+      const context = canvas.getContext("2d");
+      if (!context) return null;
+      context.drawImage(source, 0, 0);
+      return canvas;
+    } catch { return null; }
+  }
   if (source instanceof HTMLVideoElement) {
     if (source.readyState < 2 || !source.videoWidth || !source.videoHeight) return null;
     const canvas = document.createElement("canvas");
@@ -436,9 +448,11 @@ function mediaRect(element: HTMLElement): DOMRect {
   const rect = element.getBoundingClientRect();
   const style = getComputedStyle(element);
   const width = element instanceof HTMLImageElement ? element.naturalWidth
-    : element instanceof HTMLVideoElement ? element.videoWidth : 0;
+    : element instanceof HTMLVideoElement ? element.videoWidth
+      : element instanceof HTMLCanvasElement ? element.width : 0;
   const height = element instanceof HTMLImageElement ? element.naturalHeight
-    : element instanceof HTMLVideoElement ? element.videoHeight : 0;
+    : element instanceof HTMLVideoElement ? element.videoHeight
+      : element instanceof HTMLCanvasElement ? element.height : 0;
   if (!width || !height || (style.objectFit !== "contain" && style.objectFit !== "scale-down")) return rect;
   const scale = Math.min(rect.width / width, rect.height / height, style.objectFit === "scale-down" ? 1 : Infinity);
   const paintedWidth = width * scale, paintedHeight = height * scale;

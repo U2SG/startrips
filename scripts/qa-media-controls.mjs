@@ -2056,9 +2056,13 @@ try {
     await heldResize.page.close();
   }
 
+  // Three distinct photographs: Back now returns the second one (#530), and
+  // its paint is graded against every other ready page, so its neighbour
+  // must not share its pixels.
   const stageOwnerBack = await createQaPage("/?qaState=journey-story", (request) =>
     request.includes("000000000100") ? "/artworks/china-handscroll.jpg"
-      : "/artworks/mughal-akbarnama.jpg", {
+      : request.includes("000000000102") ? "/artworks/hokusai-wave.jpg"
+        : "/artworks/mughal-akbarnama.jpg", {
     mobile: true, reducedMotion: "no-preference",
   });
   try {
@@ -2156,18 +2160,21 @@ try {
     // The fullscreen shared-element clone owns paint until its exit finishes.
     // Once it releases the picture, the actual image must own the tap again.
     await page.locator('[data-shared-element-clone^="story-fullscreen"]').waitFor({ state: "hidden", timeout: 3_000 });
-    await waitForStoryPicture(page, first);
+    // #530: the swipe had already landed on the second picture when Back
+    // interrupted its settle, so leaving fullscreen keeps that navigation and
+    // returns the second picture rather than springing back to the first.
+    await waitForStoryPicture(page, second);
     const returned = await inspectStagePaint(page, ".journey-story__media");
     const clonePaintDistance = returningClone?.sourcePixel && returningScreenPixel
       ? pixelDistance([returningScreenPixel], [returningClone.sourcePixel]) : Infinity;
     const cloneBlackDistance = returningClone?.sourcePixel
       ? pixelDistance(["0,0,0,255"], [returningClone.sourcePixel]) : 0;
-    const backFailed = !stagePaintValid(beforeBack, first) || !stagePaintValid(returned, first)
-      || returningClone?.name !== `story-fullscreen-${first}`
+    const backFailed = !stagePaintValid(beforeBack, first) || !stagePaintValid(returned, second)
+      || returningClone?.name !== `story-fullscreen-${second}`
       || !returningClone.ready || !returningClone.animated || !returningClone.visible
       || !returningScreenPixel || cloneBlackDistance <= 0 || clonePaintDistance >= cloneBlackDistance / 2
       || !beforeBack.hitImage || !returned.hitImage
-      || returned.dragX !== "" || frontPixels(returned) !== frontPixels(beforeBack);
+      || returned.dragX !== "" || frontPixels(returned) === frontPixels(beforeBack);
     checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returningClone,
       returningScreenPixel, clonePaintDistance, cloneBlackDistance, returned,
       consoleErrors: stageOwnerBack.consoleErrors, pageErrors: stageOwnerBack.pageErrors,
