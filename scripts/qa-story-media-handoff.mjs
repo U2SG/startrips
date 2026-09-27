@@ -5700,20 +5700,27 @@ try {
         const rail = story?.querySelector('header .journey-story__route-points');
         const copy = story?.querySelector('.journey-story__copy');
         const stage = story?.querySelector('.journey-story__media');
+        const pages = stage?.querySelector('.story-media-pages');
         const current = stage?.querySelector('.story-media-pages__page[data-media-page="current"]');
+        const neighbor = stage?.querySelector('.story-media-pages__page:not([data-media-page="current"])[data-media-page-id]');
         const picture = current?.querySelector('img');
         const note = copy?.querySelector('.journey-story__point-note');
         const active = rail?.querySelector('button.is-chapter-active');
-        if (!story || !rail || !copy || !stage || !current || !picture || !note || !active) {
+        if (!story || !rail || !copy || !stage || !pages || !current || !neighbor || !picture || !note || !active) {
           throw new Error("desktop chapter fixture did not render its presented Story");
         }
         const buttons = [...rail.querySelectorAll('button')];
         const railRect = rail.getBoundingClientRect();
         const activeRect = active.getBoundingClientRect();
         const stageRect = stage.getBoundingClientRect();
+        const pagesRect = pages.getBoundingClientRect();
         const pageRect = current.getBoundingClientRect();
         const pictureRect = picture.getBoundingClientRect();
         const noteRect = note.getBoundingClientRect();
+        const priorInsetX = Math.min(56, Math.max(20, pagesRect.width * .04));
+        const priorInsetY = Math.min(60, Math.max(52, pagesRect.height * .06));
+        const priorPageWidth = pagesRect.width - priorInsetX * 2;
+        const priorPageHeight = pagesRect.height - priorInsetY * 2;
         return {
           viewport: { width: innerWidth, height: innerHeight },
           routePointCount: buttons.length - 1,
@@ -5732,8 +5739,13 @@ try {
           pageTopInset: pageRect.top - stageRect.top,
           pageLeftInset: pageRect.left - stageRect.left,
           pageBottomSpace: stageRect.bottom - pageRect.bottom,
+          currentPageSize: { width: current.offsetWidth, height: current.offsetHeight },
+          decorativePageSize: { width: neighbor.offsetWidth, height: neighbor.offsetHeight },
+          priorPageSize: { width: priorPageWidth, height: priorPageHeight },
           paintedHeight: Math.min(pictureRect.height,
             pictureRect.width * picture.naturalHeight / picture.naturalWidth),
+          priorPaintedHeight: Math.min(priorPageHeight,
+            priorPageWidth * picture.naturalHeight / picture.naturalWidth),
           naturalSize: { width: picture.naturalWidth, height: picture.naturalHeight },
           pictureFit: getComputedStyle(picture).objectFit,
         };
@@ -5769,6 +5781,27 @@ try {
         focusedAll: document.activeElement === document.querySelector('header .journey-story__route-points button'),
         scrollLeft: document.querySelector('header .journey-story__route-points')?.scrollLeft ?? null,
       }));
+      progress.tabEnter = { visited: [], activated: 0 };
+      const chapterButtons = rail.locator('button');
+      const chapterButtonCount = await chapterButtons.count();
+      for (let index = 0; index < chapterButtonCount; index += 1) {
+        const button = chapterButtons.nth(index);
+        const focused = await button.evaluate((element) => {
+          const railBounds = element.parentElement.getBoundingClientRect();
+          const bounds = element.getBoundingClientRect();
+          return document.activeElement === element
+            && bounds.left >= railBounds.left - 2 && bounds.right <= railBounds.right + 2;
+        });
+        if (!focused) throw new Error(`Route Point ${index} was not keyboard-visible in the rail`);
+        progress.tabEnter.visited.push(await button.getAttribute('data-route-point-id') ?? 'all');
+        await page.keyboard.press('Enter');
+        await page.waitForFunction((buttonIndex) => {
+          const buttons = document.querySelectorAll('header .journey-story__route-points button');
+          return buttons[buttonIndex]?.getAttribute('aria-pressed') === 'true';
+        }, index, { polling: 'raf', timeout: 3_000 });
+        progress.tabEnter.activated += 1;
+        if (index + 1 < chapterButtonCount) await page.keyboard.press('Tab');
+      }
       await rail.locator('[data-route-point-id="00000000-0000-4000-8000-000000000303"]').click();
       await waitForSettledAsset(page, I1);
       await page.locator(".journey-story__point-note").filter({ hasText: "海风转凉" })
@@ -5801,13 +5834,19 @@ try {
           || !progress.initial.currentPointLabel?.includes("17")
           || progress.initial.pageTopInset > 4 || progress.initial.pageLeftInset > 4
           || progress.initial.pageBottomSpace < 44 || progress.initial.pageBottomSpace > 56
+          || progress.initial.currentPageSize.width < progress.initial.decorativePageSize.width + 40
+          || progress.initial.currentPageSize.height <= progress.initial.decorativePageSize.height
+          || progress.initial.currentPageSize.height < progress.initial.priorPageSize.height + 40
           || progress.initial.naturalSize.width <= 0 || progress.initial.naturalSize.height <= 0
           || !Number.isFinite(progress.initial.paintedHeight) || progress.initial.paintedHeight < 875
+          || progress.initial.paintedHeight < progress.initial.priorPaintedHeight + 40
           || progress.initial.pictureFit !== "contain"
           || progress.end.id !== "00000000-0000-4000-8000-000000000319"
           || progress.wheelScrollLeft >= progress.initial.railScrollLeft - 5
           || !progress.end.visible || progress.end.scrollLeft <= 0
           || !progress.home.focusedAll || progress.home.scrollLeft > 2
+          || progress.tabEnter.visited.length !== 21 || progress.tabEnter.activated !== 21
+          || new Set(progress.tabEnter.visited).size !== 21
           || progress.switched.activeRoutePointId !== "00000000-0000-4000-8000-000000000303"
           || !progress.switched.activeVisible || !progress.switched.currentPointLabel?.includes("04")
           || !progress.switched.noteText?.includes("海风转凉")

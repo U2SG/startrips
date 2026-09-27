@@ -3616,15 +3616,16 @@ export function JourneyStory({
   }
 
   const hasStoryMedia = scopedMedia.length > 0;
+  const showDesktopChapterRail = !mobileLayout && visualMedia.length > 0;
   const canEditStory = Boolean(manageMedia || updateJourneyNotes || canEditJourney || canShareJourney || onDelete);
   const showSoundtrack = Boolean(soundtrack || (manageMedia && mediaEditing));
   const routePointNavigation = (
     <nav
-      ref={!mobileLayout && hasStoryMedia ? desktopChapterRailRef : undefined}
+      ref={showDesktopChapterRail ? desktopChapterRailRef : undefined}
       className="journey-story__route-points"
       aria-label="选择旅程途径点"
-      onWheel={!mobileLayout && hasStoryMedia ? scrollChapterRail : undefined}
-      onKeyDown={!mobileLayout && hasStoryMedia ? focusChapterRailButton : undefined}
+      onWheel={showDesktopChapterRail ? scrollChapterRail : undefined}
+      onKeyDown={showDesktopChapterRail ? focusChapterRailButton : undefined}
     >
       <button
         type="button"
@@ -3703,7 +3704,7 @@ export function JourneyStory({
           </button>
         ) : null}
         <header>
-          {!mobileLayout && hasStoryMedia ? routePointNavigation : null}
+          {showDesktopChapterRail ? routePointNavigation : null}
           {mobileLayout ? <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
             <h2 id="journey-story-title">{journey.title}</h2>
@@ -4134,7 +4135,7 @@ export function JourneyStory({
                 </IconActionButton> : null}
               </div>
             ) : null}
-            {mobileLayout || !hasStoryMedia ? routePointNavigation : null}
+            {!showDesktopChapterRail ? routePointNavigation : null}
             {mobileLayout && !overview ? <StoryMediaRail
               media={scopedMedia}
               currentId={shownAsset?.id ?? null}
