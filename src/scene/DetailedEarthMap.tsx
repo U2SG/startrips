@@ -30,6 +30,7 @@ import {
   DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD,
   getDetailedEarthStyle,
   isDetailedEarthNameLabel,
+  isPmtilesDetailedEarth,
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
@@ -44,6 +45,7 @@ import {
   type EarthDiveStage,
 } from "./earthDive";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
+import { ensurePmtilesProtocol } from "./pmtilesProtocol";
 
 // #252 section 2: the handoff has to prove "the same place did not move", so
 // the map publishes the two screen-space quantities that decide it — where the
@@ -370,6 +372,7 @@ export default function DetailedEarthMap({
       const debugWindow = window as Window & { __detailedEarthMapConstructionCount?: number };
       debugWindow.__detailedEarthMapConstructionCount = (debugWindow.__detailedEarthMapConstructionCount ?? 0) + 1;
     }
+    if (isPmtilesDetailedEarth()) ensurePmtilesProtocol();
     const map = new MapLibreMap({
       container: host,
       style: getDetailedEarthStyle(),

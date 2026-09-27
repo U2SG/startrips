@@ -131,6 +131,16 @@ self-hosted MapLibre style without changing application code. A replacement styl
 must allow browser CORS access from `https://${APP_HOST}` and expose `name:zh` or
 `name:zh-Hans` fields when Chinese labels are required.
 
+`ATLAS_PMTILES_URL` (with `ATLAS_PMTILES_GLYPHS_URL`) enables the optional,
+deployment-owned Protomaps PMTiles path. The approved validation asset is a
+versioned Guangdong + Hong Kong + Macau extract, with Shenzhen/Hong Kong/PRD as
+the representative review area. Put the archive and glyph tree under
+`ATLAS_BASEMAP_DIR`, mounted read-only at `/srv/basemap`; `/basemap/*` is served
+directly by Caddy instead of the SPA fallback. `ATLAS_MAP_STYLE_URL` still takes
+precedence, and leaving PMTiles unset keeps the existing `/api/mapstyle`
+OpenFreeMap proxy as the rollback/default until the deployed acceptance matrix
+in `docs/spikes/pmtiles-basemap.md` passes.
+
 ## Private media storage
 
 Media uses the existing multipart API with an `s3` protocol adapter. The browser
