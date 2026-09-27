@@ -255,9 +255,9 @@ async function createStoryPage({
       if (expiredRangeFailure && initialVideoBytes) {
         const range = route.request().headers().range ?? null;
         const start = Number(/^bytes=(\d+)-/.exec(range ?? "")?.[1] ?? 0);
-        // Include this clip's second keyframe (byte 136133) so early playback
-        // can paint a real held frame. Leave the later seek target uncached.
-        const initialPaintBytes = 147_456;
+        // Include the bytes needed to paint a real early-seek frame. The late
+        // native seek still has to fetch an uncached part of this 200368-byte clip.
+        const initialPaintBytes = 180_224;
         if (start >= initialPaintBytes) {
           const requestedAt = Date.now();
           const serveSparsePreSeekRange = () => {
@@ -5592,16 +5592,8 @@ try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
       progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
-      progress.play = await startStoryVideoPlayback(page, false);
-      if (progress.play.failed) throw new Error(`source playback did not start: ${progress.play.reason}`);
-      await page.waitForFunction(() => {
-        const video = document.querySelector('.journey-story__media .story-media-pages__video video');
-        return video instanceof HTMLVideoElement && video.currentTime >= 0.6
-          && video.getVideoPlaybackQuality().totalVideoFrames >= 2;
-      }, undefined, { polling: "raf", timeout: 3_000 });
+      progress.initialSeek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
-      // Keep a genuinely painted early frame as the hold. A warmup seek would
-      // load the later bytes that this scenario needs to leave uncached.
       progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
       progress.before = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
       await waitForPresentedVideoHit(page, FULLSCREEN, V1);
@@ -5609,7 +5601,7 @@ try {
       progress.beforePixels = await pausedVideoScreenPixels(page, FULLSCREEN);
       await page.waitForFunction((expiresAt) => Date.now() >= expiresAt + 100,
         session.renewal.initialRead.expiresAt, { polling: "raf", timeout: 9_000 });
-      progress.seek = await seekExpiredNativeTimeline(page, FULLSCREEN, session.renewal.armExpiredSeek);
+      progress.seek = await seekExpiredNativeTimeline(page, FULLSCREEN, session.renewal.armExpiredSeek, 0.97);
       progress.preErrorScreen = await capturePreErrorScreen(page, FULLSCREEN);
       session.renewal.releaseExpiredRanges(progress.seek.seekStartedAt ?? Number.POSITIVE_INFINITY);
       progress.oldRange = await waitForFixture(session.renewal.expiredRangeDenied, 8_000,
@@ -5658,7 +5650,7 @@ try {
         oldRanges: session.renewal.expiredRanges,
         renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: !progress.toVideo.ok || progress.play.failed || progress.pause.failed || progress.seek.failed
+        failed: !progress.toVideo.ok || progress.initialSeek.failed || progress.pause.failed || progress.seek.failed
           || progress.beforePixels.failed || progress.preErrorScreen.failed
           || progress.errorFrame.failed
           || progress.retryReadFrame.failed || progress.retryByteFrame.failed
