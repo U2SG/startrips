@@ -107,8 +107,8 @@ shipping the generator.
 
 - [ ] `curl -I <app origin>/basemap/fonts/Noto%20Sans%20Regular/0-255.pbf`
       returns a protobuf, not index.html.
-- [ ] `curl -I -H "Range: bytes=0-16383" <archive URL>` returns `206` with
-      `Content-Range` and an `ETag`.
+- [ ] `curl -D - -o /dev/null --range 0-16383 <archive URL>` performs a ranged
+      GET and returns `206` with `Content-Range` and an `ETag`.
 - [ ] A cross-origin fetch from `https://${APP_HOST}` with a `Range` header
       succeeds (no CORS error in the console).
 - [ ] Build with `ATLAS_PMTILES_URL` set, with `ATLAS_MAP_STYLE_URL` empty.
