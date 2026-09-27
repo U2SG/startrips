@@ -3741,7 +3741,7 @@ export function LivingAtlasApp({
                 <IconX size={17} stroke={1.35} aria-hidden="true" />
               </button>
             </header>
-            {staySummary && (staySummary.regionContext || visibleStayRoutePoints.length > 1) ? (
+            {staySummary && visibleStayRoutePoints.length > 1 ? (
               <section
                 className="living-atlas__route-point-context-switcher is-stay-summary"
                 data-stay-summary={staySummary.id}

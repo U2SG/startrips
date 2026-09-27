@@ -314,10 +314,12 @@ describe("buildPlaybackSteps (#19)", () => {
     ]);
 
     const steps = buildPlaybackSteps(grouped);
-    expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 1, 2]);
+    expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 2]);
     expect(steps.flatMap((step) => step.kind === "travel" ? [step.to] : [])).toEqual([1, 2]);
+    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([0, 2]);
     expect(playbackMediaForPoint(grouped, 0).map((asset) => asset.id)).toEqual(["stay-hotel"]);
     expect(playbackMediaForPoint(grouped, 1).map((asset) => asset.id)).toEqual(["stay-detour"]);
+    expect(storyMediaForScope(grouped, "point-1").map((asset) => asset.id)).toEqual(["stay-detour"]);
     expect(playbackMediaForPoint(grouped, 2).map((asset) => asset.id)).toEqual(["stay-place"]);
     expect(grouped.routePoints).toEqual(routeBefore);
     expect(grouped.media).toEqual(mediaBefore);

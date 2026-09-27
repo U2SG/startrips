@@ -1190,6 +1190,8 @@ describe("Route Point context integration (#291)", () => {
     expect(projection).toContain("selectedStaySummary?.id === activeStayDetailId");
     expect(projection).toContain("const detailIds = activeStaySummary?.routePointIds ?? []");
     expect(surfaceStart).toBeGreaterThan(0);
+    expect(surface).toContain('staySummary && visibleStayRoutePoints.length > 1');
+    expect(surface).not.toContain('staySummary.regionContext || visibleStayRoutePoints.length > 1');
     expect(surface).toContain('data-stay-detail-open={staySummary.id}');
     expect(surface).toContain('onClick={() => setActiveStayDetailId(staySummary.id)}');
     expect(surface).toContain('data-stay-detail-close={staySummary.id}');
