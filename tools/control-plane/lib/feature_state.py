@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from feature_store import StoreConflict, commit_document, load_document
@@ -147,6 +148,19 @@ def _apply_unit_state(path, fid, *, status, passes, message, operation='unit', c
     return commit_document(path, doc, allowed=allowed, expected_rows=set(allowed), delivery_operation=operation)
 
 
+MERGEABILITY_REREAD_DELAYS_S = (2, 4, 8)
+
+
+def settled_mergeability(repo, number, pr):
+    """Re-read until mergeability settles or the PR leaves the open lifecycle."""
+    for delay in MERGEABILITY_REREAD_DELAYS_S:
+        if pr.get('merged') or pr.get('state') != 'open' or pr.get('mergeable') is not None:
+            break
+        time.sleep(delay)
+        pr = api('repos/' + repo + '/pulls/' + str(number))
+    return pr
+
+
 def reconcile(path, repo, base):
     snapshot = load_document(path)
     candidates, seen = [], set(); unknown = False
@@ -178,6 +192,9 @@ def reconcile(path, repo, base):
             number = int(match.group(1))
             pr = api('repos/' + repo + '/pulls/' + str(number))
             package = package_snapshot(doc, fid)
+            handed_off = any(row.get('status') in {'ready_for_eval', 'ready_to_merge'} for row in rows)
+            if handed_off and pr.get('state') == 'open' and not pr.get('merged') and pr.get('mergeable') is None:
+                pr = settled_mergeability(repo, number, pr)
             if pr.get('merged'):
                 package_token = unit_token(doc, fid) if package else None
                 current_issues = None
@@ -210,6 +227,14 @@ def reconcile(path, repo, base):
                                               message='PR closed without merging; preserve existing delivery-unit owner for disposition.')
                     print(fid + ': ' + json.dumps(result))
             elif pr.get('state') == 'open':
+                if handed_off and pr.get('mergeable') is None:
+                    # GitHub recomputes mergeability lazily after its base moves, and
+                    # answers null until then. Null is not "no conflict": a sibling
+                    # merge can make this PR dirty, so keep the handoff state and let
+                    # the next reconcile observe the settled answer.
+                    print(fid + ': WAIT_MERGEABILITY: GitHub has not computed mergeability for PR #'
+                          + str(number) + '; handoff state unchanged')
+                    continue
                 if (any(row.get('status') == 'ready_to_merge' for row in rows)
                         and pr.get('mergeable') is False
                         and pr.get('mergeable_state') == 'dirty'):
@@ -217,7 +242,7 @@ def reconcile(path, repo, base):
                         path, fid, status='needs_work', passes=False,
                         message='Concrete GitHub merge conflict on the handed-off PR; preserve the existing delivery-unit owner and route it back for REPAIR_CONFLICT.')
                     print(fid + ': ' + json.dumps(result))
-                elif any(row.get('status') in {'ready_for_eval', 'ready_to_merge'} for row in rows):
+                elif handed_off:
                     review = review_backlog(repo, number)
                     if pr.get('head', {}).get('sha') != review['head_sha']:
                         raise EvidenceUnknown('Source changed between PR and review observations')

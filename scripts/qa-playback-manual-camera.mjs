@@ -683,6 +683,61 @@ try {
     } finally { await page.close(); }
   }
 
+  // #245: manual exit returns to the committed media, while natural completion
+  // returns to the whole Journey even after presenting media.
+  for (const ending of ["manual-exit-on-media", "completed"]) {
+    const { page, errors } = await open();
+    try {
+      await startPlayback(page);
+      await page.locator(".journey-playback__tempo select").selectOption("fast");
+      await page.waitForFunction((id) => {
+        const stage = document.querySelector(".journey-playback .playback-media-presentation");
+        return stage?.getAttribute("data-presented-asset") === id
+          && stage.getAttribute("data-media-presentation") === "settled";
+      }, videoId, { timeout: 60_000 });
+      if (ending === "completed") {
+        await page.locator('.journey-playback__controls button[aria-label="重新播放"]')
+          .waitFor({ state: "attached", timeout: 60_000 });
+      } else {
+        await page.locator('.journey-playback__controls button[aria-label="暂停播放"]')
+          .evaluate((button) => button.click());
+        await page.locator(".journey-playback.is-paused").waitFor();
+      }
+      await page.keyboard.press("Escape");
+      await page.locator(".journey-playback").waitFor({ state: "detached" });
+      let returned;
+      if (ending === "completed") {
+        await page.locator(".journey-story").waitFor({ state: "detached" });
+        returned = await page.waitForFunction((title) => {
+          const selected = Array.from(document.querySelectorAll(".living-atlas__journey-rail button"))
+            .find((button) => button.textContent?.includes(title));
+          const active = document.querySelector(".living-atlas__active");
+          return selected?.getAttribute("aria-current") === "true" && active && !active.inert
+            ? { surface: "atlas", selectedJourney: title } : false;
+        }, journey.title, { timeout: 10_000 }).then((handle) => handle.jsonValue());
+      } else {
+        await page.locator(".journey-story").waitFor({ state: "visible" });
+        returned = await page.waitForFunction(({ id, pointId }) => {
+          const current = document.querySelector('.journey-story [data-media-page="current"]')
+            ?.getAttribute("data-media-page-id") ?? null;
+          const pressed = document.querySelector(
+            `.journey-story__route-points button[data-route-point-id="${pointId}"]`,
+          )?.getAttribute("aria-pressed") ?? null;
+          window.__qaPlaybackReturnLast = { current, pressed };
+          return current === id && pressed === "true" ? { current, pressed } : false;
+        }, { id: videoId, pointId: points[2].id }, { timeout: 10_000 })
+          .then((handle) => handle.jsonValue())
+          .catch(async (error) => {
+            const last = await page.evaluate(() => window.__qaPlaybackReturnLast ?? null);
+            throw new Error(`Playback ${ending} did not return to the last presented media: ${JSON.stringify(last)}`,
+              { cause: error });
+          });
+      }
+      assert.deepEqual(errors, []);
+      reports.push({ mode: `playback-return:${ending}`, returned });
+    } finally { await page.close(); }
+  }
+
   // Detail map: real keyboard pan and drag claim the camera; the director keeps
   // advancing content, then Return and Back restore the latest explicit location.
   {
@@ -799,10 +854,13 @@ try {
         "an automatic Stop with a free camera must not wait for camera arrival");
       const populatedStop = await stopBlankPoint(page);
       assert.equal(populatedStop.chapterDensity, "single", "Seoul image chapter must use populated stop layout");
-      assert.ok(populatedStop.stageHeight > 0
-        && populatedStop.stopRect.height / populatedStop.stageHeight > 0.3
-        && populatedStop.stopRect.height / populatedStop.stageHeight < 0.42,
-      `populated stop must occupy the 36% stage row: ${JSON.stringify(populatedStop)}`);
+      // #126 R2 Q3: a populated chapter's caption is content-sized in the top
+      // row (capped at 34% of the stage), not a fixed 36% band and not the
+      // centred single-item layout of an empty chapter.
+      assert.ok(populatedStop.stageHeight > 0 && populatedStop.stopRect.height > 0
+        && populatedStop.stopRect.height <= populatedStop.stageHeight * 0.34 + 1
+        && populatedStop.stopRect.y < populatedStop.stageHeight * 0.2,
+      `populated stop must sit in the content-sized caption row: ${JSON.stringify(populatedStop)}`);
       const beforePopulatedDrag = await snapshot(page);
       await page.mouse.move(populatedStop.x, populatedStop.y);
       await page.mouse.down();

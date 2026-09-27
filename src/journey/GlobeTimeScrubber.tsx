@@ -31,6 +31,9 @@ export function GlobeTimeScrubber({
   const onPointerDown = (event: React.PointerEvent) => {
     const track = trackRef.current;
     if (!track) return;
+    // #522: the track owns the whole stream, so neither a selection nor a
+    // native drag elsewhere can take the pointer from a scrub in progress.
+    try { track.setPointerCapture(event.pointerId); } catch { /* already released */ }
     pause();
     let latest = cursor;
     const move = (clientX: number) => {
@@ -84,6 +87,7 @@ export function GlobeTimeScrubber({
           ref={trackRef}
           className="globe-time-scrubber__track"
           onPointerDown={onPointerDown}
+          onDragStart={(event) => event.preventDefault()}
           onKeyDown={onKeyDown}
           role="slider"
           aria-label="时间轴"

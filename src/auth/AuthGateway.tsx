@@ -552,7 +552,7 @@ function InvitationGate({ invitationId, onAccepted }: { invitationId: string; on
  */
 // #349: one place names a provider, so the gate button, the method list and
 // every outcome sentence agree.
-const PROVIDER_LABELS: Record<string, string> = { google: "Google", credential: "邮箱密码" };
+const PROVIDER_LABELS: Record<string, string> = { google: "Google", apple: "Apple", credential: "邮箱密码" };
 
 function providerLabel(providerId: string): string {
   return PROVIDER_LABELS[providerId] ?? providerId;

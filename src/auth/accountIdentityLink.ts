@@ -243,7 +243,7 @@ const REFUSAL_TEXT: Record<string, string> = {
   IDENTITY_ACTION_EXPIRED: "本次绑定已超时，请重新发起。",
   IDENTITY_ACTION_REPLAYED: "本次绑定已经完成过一次。",
   IDENTITY_ALREADY_OWNED: "该身份已归属其他账户，不能改绑。",
-  IDENTITY_LAST_USABLE_LOGIN: "这是最后一种可用登录方式，不能解绑。",
+  IDENTITY_LAST_USABLE_LOGIN: "解绑后将没有可用的登录或找回方式，不能解绑。",
   IDENTITY_CREDENTIAL_UNLINK_UNAVAILABLE: "密码登录暂不支持解绑。",
   IDENTITY_BIND_STATE_INVALID: "本次授权已失效，请重新发起绑定。",
   IDENTITY_BIND_INTENT_MISSING: "本次绑定的凭据已不在，请重新发起。",

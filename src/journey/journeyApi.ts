@@ -379,7 +379,13 @@ export async function setJourneyCover(
 export async function searchLocations(
   query: string,
   fetcher: Fetcher = fetch,
-  hints?: { aliases?: readonly string[]; searchArea?: string | null; countryCode?: string | null },
+  hints?: {
+    aliases?: readonly string[];
+    searchArea?: string | null;
+    countryCode?: string | null;
+    /** #546: the Journey context the server may bias ranking towards. */
+    focus?: { latitude: number; longitude: number } | null;
+  },
 ): Promise<LocationSearchResponse> {
   const parameters = [
     `q=${encodeURIComponent(query.trim())}`,
@@ -388,6 +394,9 @@ export async function searchLocations(
       .slice(0, 3).map((alias) => `alias=${encodeURIComponent(alias)}`),
     ...(hints?.searchArea ? [`area=${encodeURIComponent(hints.searchArea.trim())}`] : []),
     ...(hints?.countryCode ? [`country=${encodeURIComponent(hints.countryCode.trim())}`] : []),
+    ...(hints?.focus
+      ? [`lat=${hints.focus.latitude}`, `lon=${hints.focus.longitude}`]
+      : []),
   ];
   return requestJson<LocationSearchResponse>(
     `/api/locations/search?${parameters.join("&")}`,

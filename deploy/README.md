@@ -46,6 +46,23 @@ to the low-volume public Photon demo because it is reachable from the current ho
 demo has no availability guarantee, so production should use a contracted endpoint
 or a self-hosted compatible service.
 
+Chinese recall for foreign landmarks depends on the languages the Photon index was
+imported with (#547). Photon indexes the local `name` plus only the translations
+selected at import time, and its usual language set does not include Chinese, so
+`name:zh` of a POI such as Elizabeth Tower or Sagrada Família never becomes
+searchable. The preferred production path is a contracted or self-hosted Photon
+whose index is (re)imported with Chinese in its import language list, for example
+`zh,en` followed by the other languages the deployment needs, using the
+language option of the Photon importer version in use. Changing the list requires
+a reimport; it is not a runtime setting.
+
+`LOCATION_SEARCH_FALLBACK_BASE_URL` optionally names a Nominatim that the `photon`
+driver consults only for an all-Han query the Photon answer does not name. Leave it
+empty unless that endpoint is self-hosted or explicitly permits this traffic; the
+public `nominatim.openstreetmap.org` usage policy does not allow search-as-you-type
+use. With it empty nothing is consulted. A failing fallback leaves a non-empty
+Photon answer in place and otherwise reports search as unavailable.
+
 ## Itinerary import
 
 Importing an itinerary (#512) uses two independent adapters, both `disabled` by

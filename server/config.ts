@@ -173,6 +173,13 @@ export function loadServerConfig(
   ).replace(/\/$/, "");
   const locationSearchUserAgent = environment.LOCATION_SEARCH_USER_AGENT?.trim()
     || `Startrips/1.0 (${appOrigin})`;
+  // #547: an optional Nominatim consulted when Photon cannot name a Chinese
+  // query. It has no default on purpose — the public Nominatim instance does
+  // not permit search-as-you-type traffic, so only a deployment that names its
+  // own or an explicitly permitted endpoint gets a fallback at all.
+  const locationSearchFallbackBaseUrl = (
+    environment.LOCATION_SEARCH_FALLBACK_BASE_URL?.trim() || ""
+  ).replace(/\/$/, "") || null;
   // #350: Sign in with Apple. Apple issues no static client secret — the
   // "secret" is an ES256 JWT this server signs from a Team id, a Key id and a
   // downloaded .p8 private key, so all four values are one credential and none
@@ -502,6 +509,13 @@ export function loadServerConfig(
   ) {
     throw new Error("LOCATION_SEARCH_BASE_URL must use HTTPS in production");
   }
+  if (
+    locationSearchFallbackBaseUrl
+    && new URL(locationSearchFallbackBaseUrl).protocol !== "https:"
+    && production
+  ) {
+    throw new Error("LOCATION_SEARCH_FALLBACK_BASE_URL must use HTTPS in production");
+  }
 
   const authSecret = requiredInProduction(
     "BETTER_AUTH_SECRET",
@@ -567,6 +581,7 @@ export function loadServerConfig(
     locationSearchDriver,
     locationSearchBaseUrl,
     locationSearchUserAgent,
+    locationSearchFallbackBaseUrl,
     appleServiceId,
     appleTeamId,
     appleKeyId,

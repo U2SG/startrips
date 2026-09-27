@@ -1,5 +1,9 @@
 import { namesSamePlace } from "./place-name-aliases";
-import type { LocationSearch, LocationSearchResult } from "./location-search";
+import type {
+  LocationSearch,
+  LocationSearchOptions,
+  LocationSearchResult,
+} from "./location-search";
 
 type SearchHints = {
   aliases: readonly string[];
@@ -58,7 +62,7 @@ function countryMatches(result: LocationSearchResult, countryCode: string) {
 export async function searchLocationVariants(
   search: LocationSearch,
   query: string,
-  options: { limit: number; signal?: AbortSignal },
+  options: LocationSearchOptions,
   hints: SearchHints,
 ): Promise<LocationSearchResult[]> {
   const names = searchNames(query, hints.aliases);

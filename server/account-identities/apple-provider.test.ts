@@ -5,6 +5,8 @@ import { APPLE_PROVIDER_ID, appleSignInOptions } from "./apple-provider";
 import {
   bindableSocialProviderIds,
   configuredSocialProviderIds,
+  createBindProvider,
+  GOOGLE_PROVIDER_ID,
 } from "./social-providers";
 
 const privateKeyPem = generateKeyPairSync("ec", { namedCurve: "P-256" })
@@ -62,12 +64,25 @@ describe("Apple provider configuration", () => {
       .toEqual([APPLE_PROVIDER_ID]);
   });
 
-  // #350: Apple returns with `response_mode=form_post`, which the #349 bind
-  // round trip cannot receive -- its callback is a GET and its state cookie is
-  // SameSite=Lax. A usable login is therefore not yet a bindable one, and the
-  // surface must not offer a bind button that can only fail.
-  it("does not advertise apple as bindable while the credential is present", () => {
-    expect([...bindableSocialProviderIds(config(APPLE_ENVIRONMENT))]).toEqual([]);
+  // #504: the bind round trip receives Apple's `form_post` return, so the
+  // full credential makes apple bindable as well as usable.
+  it("advertises apple as bindable exactly when the full credential is present", () => {
+    expect([...bindableSocialProviderIds(config(APPLE_ENVIRONMENT))])
+      .toEqual([APPLE_PROVIDER_ID]);
+    expect([...bindableSocialProviderIds(config({}))]).toEqual([]);
+  });
+
+  // #504: the per-provider PKCE opt-out. Apple's adapter sends no challenge,
+  // so the bind route must mint and forward no verifier for it.
+  it("opts the apple bind adapter out of PKCE", () => {
+    const provider = createBindProvider(APPLE_PROVIDER_ID, config(APPLE_ENVIRONMENT));
+    expect(provider?.pkce).toBe(false);
+    expect(createBindProvider(APPLE_PROVIDER_ID, config({}))).toBeNull();
+    const google = createBindProvider(GOOGLE_PROVIDER_ID, config({
+      GOOGLE_CLIENT_ID: "st140-client.apps.googleusercontent.test",
+      GOOGLE_CLIENT_SECRET: "st140-client-secret",
+    }));
+    expect(google?.pkce).toBe(true);
   });
 
   // The secret is minted per exchange, not frozen at startup: the pinned

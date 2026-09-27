@@ -3,7 +3,9 @@ import {
   createDecodeRegistry,
   decodeImageUrl,
   mediaPrefetchUrlsForRead,
-  prefetchWindowFor,
+  STORY_WARM_DECODE_LIMIT,
+  STORY_WARM_READ_LIMIT,
+  storyWarmWindow,
 } from "./mediaPrefetch";
 
 describe("same-asset preview prefetch (#264)", () => {
@@ -26,35 +28,65 @@ describe("same-asset preview prefetch (#264)", () => {
   });
 });
 
-describe("prefetchWindowFor (#11)", () => {
-  it("returns next 1 + previous 1 for manual browsing", () => {
-    expect(prefetchWindowFor(2, 5, false)).toEqual({
-      next: [3],
-      previous: [1],
+describe("storyWarmWindow (#489 ST-159)", () => {
+  const base = { length: 12, wrap: false, autoplay: false } as const;
+
+  it("reads 3 ahead and 2 behind the requested intent, the lead first", () => {
+    expect(storyWarmWindow({ ...base, shownIndex: 4, requestedIndex: 4, direction: 1, pinned: [3, 5] })).toEqual({
+      reads: [4, 3, 5, 6, 7, 2],
+      decode: [4, 5, 3],
     });
   });
 
-  it("returns next 2 for autoplay", () => {
-    expect(prefetchWindowFor(2, 6, true)).toEqual({
-      next: [3, 4],
-      previous: [1],
-    });
+  it("follows the latest requested media, keeping the shown one warm", () => {
+    const window = storyWarmWindow({ ...base, shownIndex: 4, requestedIndex: 6, direction: 1 });
+    expect(window.reads).toEqual([6, 4, 7, 5, 8, 9]);
+    expect(window.decode).toEqual([6, 4, 7, 5]);
   });
 
-  it("clamps at both ends of the list", () => {
-    expect(prefetchWindowFor(0, 4, false)).toEqual({
-      next: [1],
-      previous: [],
-    });
-    expect(prefetchWindowFor(3, 4, true)).toEqual({
-      next: [],
-      previous: [2],
-    });
+  it("biases toward the last direction and evicts the old lead on reversal", () => {
+    const forward = storyWarmWindow({ ...base, shownIndex: 6, requestedIndex: 6, direction: 1 });
+    const reversed = storyWarmWindow({ ...base, shownIndex: 6, requestedIndex: 6, direction: -1 });
+    expect(reversed.reads).toEqual([6, 5, 7, 4, 3, 8]);
+    expect(forward.reads).toContain(9);
+    expect(reversed.reads).not.toContain(9);
   });
 
-  it("returns empty windows for a single item", () => {
-    expect(prefetchWindowFor(0, 1, false)).toEqual({ next: [], previous: [] });
-    expect(prefetchWindowFor(0, 1, true)).toEqual({ next: [], previous: [] });
+  it("counts the shown page's painted neighbours inside the caps when the intent runs ahead", () => {
+    const window = storyWarmWindow({ ...base, shownIndex: 0, requestedIndex: 5, direction: 1, pinned: [1, 2] });
+    expect(window.reads).toEqual([5, 0, 1, 2, 6, 4, 7]);
+    expect(window.decode).toEqual([5, 0, 6, 1]);
+  });
+
+  it("stays bounded: at most 7 reads and 4 decodes on a long Journey", () => {
+    for (let requested = 0; requested < 100; requested += 1) {
+      for (const lag of [0, 1, 3, 5, 9]) {
+        const shownIndex = Math.max(0, requested - lag);
+        const window = storyWarmWindow({ length: 100, wrap: false, autoplay: false,
+          shownIndex, requestedIndex: requested, direction: 1, pinned: [shownIndex - 1, shownIndex + 1] });
+        expect(window.reads.length).toBeLessThanOrEqual(STORY_WARM_READ_LIMIT);
+        expect(window.decode.length).toBeLessThanOrEqual(STORY_WARM_DECODE_LIMIT);
+        expect(window.reads).toContain(requested);
+        expect(window.decode).toContain(requested);
+      }
+    }
+  });
+
+  it("clamps at a Journey edge and wraps inside a Route Point scope", () => {
+    expect(storyWarmWindow({ ...base, shownIndex: 11, requestedIndex: 11, direction: 1 }).reads)
+      .toEqual([11, 10, 9]);
+    expect(storyWarmWindow({ length: 5, wrap: true, autoplay: false,
+      shownIndex: 4, requestedIndex: 4, direction: 1 }).reads).toEqual([4, 0, 3, 1, 2]);
+  });
+
+  it("looks forward during autoplay whatever the last manual direction was", () => {
+    expect(storyWarmWindow({ ...base, autoplay: true, shownIndex: 2, requestedIndex: 2, direction: -1 }).reads)
+      .toEqual([2, 3, 1, 4, 5, 0]);
+  });
+
+  it("has nothing to warm without a valid requested media", () => {
+    expect(storyWarmWindow({ ...base, shownIndex: 0, requestedIndex: -1, direction: 1 }))
+      .toEqual({ reads: [], decode: [] });
   });
 });
 
@@ -174,5 +206,49 @@ describe("decodeImageUrl (#11)", () => {
     } finally {
       (globalThis as { Image: unknown }).Image = originalImage;
     }
+  });
+});
+
+describe("decode registry eviction (#489 ST-159)", () => {
+  it("does not re-admit an asset whose decode settles after it was released or reset", async () => {
+    const pending: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+    const registry = createDecodeRegistry(() => new Promise<void>((resolve, reject) => {
+      pending.push({ resolve, reject });
+    }));
+    const settled = vi.fn();
+    registry.onSettle(settled);
+
+    registry.ensure("released", "https://media.example/a");
+    registry.release("released");
+    registry.ensure("reset", "https://media.example/b");
+    registry.reset();
+    registry.ensure("failed", "https://media.example/c");
+    registry.release("failed");
+    pending[0].resolve();
+    pending[1].resolve();
+    pending[2].reject(new Error("late"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(registry.readiness("released")).toBeUndefined();
+    expect(registry.readiness("reset")).toBeUndefined();
+    expect(registry.readiness("failed")).toBeUndefined();
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it("lets only the newest request for a re-ensured asset record its outcome", async () => {
+    const pending: Array<() => void> = [];
+    const registry = createDecodeRegistry(() => new Promise<void>((resolve) => { pending.push(resolve); }));
+    registry.ensure("asset", "https://media.example/old");
+    registry.release("asset");
+    registry.ensure("asset", "https://media.example/new");
+    pending[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(registry.readiness("asset")).toEqual({ status: "pending" });
+    pending[1]();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(registry.isDecoded("asset")).toBe(true);
   });
 });

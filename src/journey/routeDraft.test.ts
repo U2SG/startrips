@@ -6,6 +6,7 @@ import {
   matchRouteDraftPoints,
   moveRoutePoint,
   removeRoutePoint,
+  routeDraftSearchFocus,
   routeDraftToInput,
   suggestPointLabel,
   toggleRouteStop,
@@ -193,5 +194,22 @@ describe("route draft editor input and focus", () => {
     expect(routePointFocusAfterRemoval(points, "point-c")).toBe("point-b");
     expect(routePointFocusAfterRemoval([points[0]], "point-a")).toBeNull();
     expect(routePointFocusAfterRemoval(points, "missing")).toBeNull();
+  });
+});
+
+describe("route draft search focus", () => {
+  it("biases place search towards the last Route Point, not a centroid", () => {
+    expect(routeDraftSearchFocus([beijing, ulanBator])).toEqual({
+      latitude: 47.8864,
+      longitude: 106.9057,
+    });
+    expect(routeDraftSearchFocus([ulanBator, beijing])).toEqual({
+      latitude: 39.9042,
+      longitude: 116.4074,
+    });
+  });
+
+  it("sends no bias for an empty Route", () => {
+    expect(routeDraftSearchFocus([])).toBeNull();
   });
 });

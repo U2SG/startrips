@@ -230,7 +230,7 @@ async function recordEnrollmentReceipt(
  *   touched, so a merely live old session cannot mint a password and a retry
  *   cannot enroll twice;
  * - the server-side recovery precondition. A credential is only a usable login
- *   method while the account's email is verified (`accountIdentityUsable`), and
+ *   method while the account's email is verified (`accountIdentityLoginUsable`), and
  *   an unverified address is also the one that would have to recover it, so an
  *   unverified user is told to verify rather than handed a credential that
  *   cannot be used or recovered. That check runs before any Better Auth call;

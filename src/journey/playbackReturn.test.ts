@@ -147,10 +147,60 @@ describe("playback return handoff", () => {
     })).toBeNull();
   });
 
-  it("keeps completion at Atlas with the same Journey selected", () => {
+  it("returns a manual exit to the last presented media but natural completion to Journey context", () => {
+    const committedPosition = { journeyId: journey.id, routePointId: "point-a", assetId: "asset-a" };
     expect(resolvePlaybackReturn({
       entry,
-      committedPosition: { journeyId: journey.id, routePointId: "point-d", assetId: "asset-d" },
+      committedPosition,
+      reason: "exited",
+      currentIntentRevision: 7,
+      journeys: [journey],
+    })).toEqual({
+      surface: "story",
+      reason: "exited",
+      fallbackReason: "none",
+      journeyId: journey.id,
+      routePointId: "point-a",
+      assetId: "asset-a",
+      storySnapState: "expanded",
+    });
+
+    expect(resolvePlaybackReturn({
+      entry,
+      committedPosition,
+      reason: "completed",
+      currentIntentRevision: 7,
+      journeys: [journey],
+    })).toEqual({
+      surface: "atlas",
+      reason: "completed",
+      fallbackReason: "none",
+      journeyId: journey.id,
+      routePointId: null,
+      assetId: null,
+      storySnapState: "closed",
+    });
+  });
+
+  it("returns a manual exit to a later committed Route Point instead of the entry media", () => {
+    expect(resolvePlaybackReturn({
+      entry,
+      committedPosition: { journeyId: journey.id, routePointId: "point-a", assetId: null },
+      reason: "exited",
+      currentIntentRevision: 7,
+      journeys: [journey],
+    })).toMatchObject({
+      surface: "story",
+      routePointId: "point-a",
+      assetId: null,
+      fallbackReason: "none",
+    });
+  });
+
+  it("keeps a completed run that presented no media at Atlas with the same Journey selected", () => {
+    expect(resolvePlaybackReturn({
+      entry,
+      committedPosition: { journeyId: journey.id, routePointId: null, assetId: null },
       reason: "completed",
       currentIntentRevision: 7,
       journeys: [journey],

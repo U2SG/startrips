@@ -448,12 +448,14 @@ class RuntimeActivationPlanTests(unittest.TestCase):
         self.assertEqual([], plan['conflicts'])
         self.assertEqual('reviewed-hot-predecessor', plan['compatibility']['consumer.txt'])
 
-    def test_deployed_action_plan_predecessor_is_frozen_to_current_package_source(self):
-        predecessor = '93f6dbc6e6cfbff2cf1687aaab6a30348ff8feb9a75387430695f0858f39cf73'
-        incoming = runtime.sha(runtime._normalize((ROOT / 'lib/action_plan.py').read_bytes()))
+    def test_deployed_action_plan_predecessor_pair_stays_exact(self):
+        # The #527 activation pair. Later planner Source activates over its
+        # committed installed body as exact-base, not through this entry, so the
+        # pair stays frozen to its reviewed target instead of tracking Source.
         self.assertEqual(
-            incoming,
-            runtime.REVIEWED_HOT_PREDECESSORS['lib/action_plan.py'][predecessor],
+            {'93f6dbc6e6cfbff2cf1687aaab6a30348ff8feb9a75387430695f0858f39cf73':
+             'ab161a3abb92bb4fae75faeae2dc5be9001712e803fe6f7536c8c536a2a8e3f3'},
+            runtime.REVIEWED_HOT_PREDECESSORS['lib/action_plan.py'],
         )
 
     def test_reviewed_hot_predecessor_does_not_authorize_source_or_live_drift(self):

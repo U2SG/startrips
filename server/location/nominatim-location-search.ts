@@ -1,9 +1,12 @@
 import {
   fetchLocationSearch,
+  locationSearchFocusKey,
   LocationSearchUnavailableError,
+  roundLocationSearchFocus,
   throwIfLocationSearchAborted,
   waitForLocationSearchDelay,
   type LocationSearch,
+  type LocationSearchFocus,
   type LocationSearchOptions,
   type LocationSearchResult,
   type ReverseLocationOptions,
@@ -50,6 +53,24 @@ function firstText(properties: Record<string, unknown>, keys: readonly string[])
     if (value) return value;
   }
   return "";
+}
+
+/** Half-width in degrees of the preferred box: roughly one metropolitan area. */
+const FOCUS_VIEWBOX_HALF_DEGREES = 0.5;
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+/** Nominatim `viewbox` order: left,top,right,bottom (longitude,latitude). */
+function focusViewbox(focus: LocationSearchFocus): string {
+  const half = FOCUS_VIEWBOX_HALF_DEGREES;
+  return [
+    clamp(focus.longitude - half, -180, 180),
+    clamp(focus.latitude + half, -90, 90),
+    clamp(focus.longitude + half, -180, 180),
+    clamp(focus.latitude - half, -90, 90),
+  ].map((value) => String(Math.round(value * 100) / 100)).join(",");
 }
 
 function toLocationResult(place: NominatimPlace): LocationSearchResult | null {
@@ -130,9 +151,16 @@ export class NominatimLocationSearch implements LocationSearch {
     url.searchParams.set("namedetails", "1");
     url.searchParams.set("accept-language", "zh-CN,zh,en");
     url.searchParams.set("limit", String(options.limit));
+    // #546: Nominatim has no point bias, only a preferred viewbox. bounded=0
+    // keeps it a preference, so a Journey context never hides a far match.
+    const focus = roundLocationSearchFocus(options.focus);
+    if (focus) {
+      url.searchParams.set("viewbox", focusViewbox(focus));
+      url.searchParams.set("bounded", "0");
+    }
     return this.requestPayload(
       url,
-      `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}`,
+      `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}${locationSearchFocusKey(focus)}`,
       options.signal,
     ).then((payload) => {
       if (!Array.isArray(payload)) {

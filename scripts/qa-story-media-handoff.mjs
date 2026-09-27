@@ -21,7 +21,7 @@
  * each graded window reports its tick count so the two sources stay separable.
  */
 import { launchQaBrowser } from "./qa-browser.mjs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const storyPath = "/?qaState=journey-story&qaMode=mixed-media-pair";
@@ -93,8 +93,9 @@ const browser = await launchQaBrowser();
  *   - `JourneyStory.handleStorySheetPointerDown` returns early for
  *     `pointerType === "mouse"`, so the compact story sheet's own gesture never
  *     runs under a mouse;
- *   - the video owns all pointer streams starting on its picture or controls;
- *     Story navigation from video uses the separate visible step buttons;
+ *   - the whole native video owns streams starting on it, including controls
+ *     whose browser-owned geometry changes; stage-edge swipes and visible step
+ *     buttons still navigate;
  *   - `pointercancel` effectively never fires for a mouse, leaving the stage's
  *     cancellation and capture-loss paths unexercised.
  *
@@ -165,6 +166,7 @@ async function createStoryPage({
   mobile = false, viewport, reducedMotion = "no-preference",
   readDelays = {}, byteDelays = {}, renewPausedVideo = false,
   renewalByteFailure = false, renewalReadFailure = false, renewalSameUrlRetry = false,
+  expiredRangeFailure = false,
 } = {}) {
   const page = await browser.newPage({
     viewport: viewport ?? (mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 }),
@@ -189,6 +191,13 @@ async function createStoryPage({
   const releaseRetryBytes = deferred();
   const readCounts = new Map();
   const initialRead = { issuedAt: null, expiresAt: null };
+  const preSeekRanges = [];
+  const expiredRanges = [];
+  const expiredRangeDenied = deferred();
+  const releaseExpiredRanges = deferred();
+  let expiredSeekArmedAt = Number.POSITIVE_INFINITY;
+  const initialVideoBytes = expiredRangeFailure
+    ? await readFile(new URL("../public/demo-media/east-star-orbit.webm", import.meta.url)) : null;
   let sameUrlRetryReadServed = false;
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -243,6 +252,40 @@ async function createStoryPage({
   });
   if (renewPausedVideo) await page.route(/\/demo-media\/east-star-orbit\.webm\?storyRenewal=\d+$/, async (route) => {
     if (new URL(route.request().url()).searchParams.get("storyRenewal") === "1") {
+      if (expiredRangeFailure && initialVideoBytes) {
+        const range = route.request().headers().range ?? null;
+        const start = Number(/^bytes=(\d+)-/.exec(range ?? "")?.[1] ?? 0);
+        // Include the bytes needed to paint a real early-seek frame. The late
+        // native seek still has to fetch an uncached part of this 200368-byte clip.
+        const initialPaintBytes = 180_224;
+        if (start >= initialPaintBytes) {
+          const requestedAt = Date.now();
+          const serveSparsePreSeekRange = () => {
+            // Follow-up preload requests keep progressing without filling the
+            // later seek target before the user acts. This models a slow origin.
+            const end = Math.min(start + (preSeekRanges.length === 0 ? 1_023 : 63), initialVideoBytes.length - 1);
+            preSeekRanges.push({ range, requestedAt, start, end });
+            return route.fulfill({ status: 206, contentType: "video/webm",
+              headers: { "accept-ranges": "bytes", "content-range": `bytes ${start}-${end}/${initialVideoBytes.length}` },
+              body: initialVideoBytes.subarray(start, end + 1) });
+          };
+          if (requestedAt < expiredSeekArmedAt) {
+            return serveSparsePreSeekRange();
+          }
+          const seekStartedAt = await releaseExpiredRanges.promise;
+          if (requestedAt < seekStartedAt) {
+            return serveSparsePreSeekRange();
+          }
+          const entry = { url: route.request().url(), range, requestedAt, status: 403, at: Date.now() };
+          expiredRanges.push(entry);
+          expiredRangeDenied.resolve(entry);
+          return route.fulfill({ status: 403, contentType: "text/plain", body: "expired signed range" });
+        }
+        const end = Math.min(initialPaintBytes - 1, initialVideoBytes.length - 1);
+        return route.fulfill({ status: 206, contentType: "video/webm",
+          headers: { "accept-ranges": "bytes", "content-range": `bytes ${start}-${end}/${initialVideoBytes.length}` },
+          body: initialVideoBytes.subarray(start, end + 1) });
+      }
       return route.continue();
     }
     const token = new URL(route.request().url()).searchParams.get("storyRenewal");
@@ -280,7 +323,10 @@ async function createStoryPage({
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
   return { page, consoleErrors, pageErrors, mediaDelays,
     renewal: renewPausedVideo ? {
-      reads: renewalReads, bytes: renewalBytes, initialRead,
+      reads: renewalReads, bytes: renewalBytes, initialRead, preSeekRanges, expiredRanges,
+      expiredRangeDenied: expiredRangeDenied.promise,
+      armExpiredSeek: () => { expiredSeekArmedAt = Date.now(); },
+      releaseExpiredRanges: (seekStartedAt = Number.POSITIVE_INFINITY) => releaseExpiredRanges.resolve(seekStartedAt),
       readStarted: renewalReadStarted.promise, byteStarted: renewalByteStarted.promise,
       retryReadStarted: retryReadStarted.promise, retryByteStarted: retryByteStarted.promise,
       releaseRead: () => releaseRenewalRead.resolve(),
@@ -637,13 +683,14 @@ function installStageSampler() {
   };
   // Compare light across areas rather than single star texels. Rotated and
   // shifted references are same-signal negative controls for a wrong picture.
-  window.__qaSpatialFrameEvidence = (reference, visible) => {
+  // The floor drops near-black noise; a zero floor compares all light.
+  window.__qaSpatialFrameEvidence = (reference, visible, floor = 12) => {
     const source = Array(64).fill(0), screen = Array(64).fill(0);
     for (let y = 4; y < 60; y += 1) for (let x = 4; x < 60; x += 1) {
       const at = (y * 64 + x) * 4;
       const cell = Math.floor((y - 4) / 7) * 8 + Math.floor((x - 4) / 7);
       const light = (pixels) => Math.max(0,
-        (pixels[at] + pixels[at + 1] + pixels[at + 2]) / 3 - 12);
+        (pixels[at] + pixels[at + 1] + pixels[at + 2]) / 3 - floor);
       source[cell] += light(reference);
       screen[cell] += light(visible);
     }
@@ -1118,6 +1165,28 @@ async function presentedVideoPoint(page, rootSelector, { fraction = 0.5, control
   }, { selector: rootSelector, fraction, controlsTop });
 }
 
+/** A gesture start inside the stage's own edge, outside the native video. */
+async function videoStageEdgePoint(page, rootSelector, { side = "right", fraction = 0.4 } = {}) {
+  return await page.evaluate(({ selector, side: edge, fraction: at }) => {
+    const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const video = stage?.querySelector(".story-media-pages__video video");
+    if (!(stage instanceof HTMLElement) || !(video instanceof HTMLVideoElement) || video.hidden) {
+      throw new Error("no live video stage for an edge gesture");
+    }
+    const box = stage.getBoundingClientRect();
+    const videoBox = video.getBoundingClientRect();
+    const x = edge === "right" ? (videoBox.right + box.right) / 2 : (box.left + videoBox.left) / 2;
+    const y = box.top + box.height * at;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !stage.contains(hit) || hit === video || video.contains(hit)) {
+      throw new Error(`stage edge does not own gesture start: ${hit?.tagName ?? "none"}`);
+    }
+    return { x, y, hitTag: hit.tagName, hitClass: String(hit.className).slice(0, 60),
+      stageBox: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
+      videoBox: { left: videoBox.left, right: videoBox.right, top: videoBox.top, bottom: videoBox.bottom } };
+  }, { selector: rootSelector, side, fraction });
+}
+
 const cdpSessions = new WeakMap();
 
 async function cdpFor(page) {
@@ -1358,6 +1427,68 @@ async function seekNativeTimeline(page, rootSelector, { targetFraction = 0.7 } =
       || after.time < before.duration * (targetFraction - 0.1)
       || after.time > before.duration * Math.min(0.95, targetFraction + 0.2),
   };
+}
+
+/** A real native seek into an uncached portion of an expired signed clip. */
+async function seekExpiredNativeTimeline(page, rootSelector, armSeek, targetFraction = 0.85) {
+  const picture = await presentedVideoPoint(page, rootSelector);
+  if (!picture.hitIsVideo || !picture.controls) return { picture, failed: true, reason: "video target unavailable" };
+  await page.mouse.move(picture.x, picture.y);
+  const controls = await nativeControls(page, rootSelector);
+  const slider = controls.filter((entry) => entry.role === "slider"
+    && !entry.ignored && !/volume/i.test(entry.name))
+    .sort((left, right) => (right.box.right - right.box.left) - (left.box.right - left.box.left))[0];
+  if (!slider?.reachable || slider.box.right - slider.box.left < 32) {
+    return { picture, controls: controls.panel, slider, failed: true, reason: "native timeline unavailable" };
+  }
+  const before = await videoHandoffState(page, rootSelector);
+  await page.evaluate((selector) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    if (!(video instanceof HTMLVideoElement)) throw new Error("expired seek has no video");
+    const probe = { video, startedAt: null, events: [] };
+    for (const type of ["seeking", "seeked", "error"]) video.addEventListener(type, (event) => {
+      probe.events.push({ type, trusted: event.isTrusted, time: video.currentTime, at: performance.now() });
+    });
+    window.__qaExpiredNativeSeek = probe;
+  }, rootSelector);
+  const width = slider.box.right - slider.box.left;
+  const startX = slider.box.left + width * 0.2;
+  const endX = slider.box.left + width * targetFraction;
+  const y = slider.y;
+  const hits = await page.evaluate(({ points, selector }) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    return points.map(({ x, y }) => document.elementFromPoint(x, y) === video);
+  }, { selector: rootSelector, points: [{ x: startX, y }, { x: endX, y }] });
+  if (hits.some((hit) => !hit)) return { picture, before, slider, hits, failed: true,
+    reason: "native timeline covered before expired seek" };
+  armSeek();
+  await page.evaluate(() => { window.__qaExpiredNativeSeek.startedAt = performance.now(); });
+  const pointer = input(page);
+  await pointer.down(startX, y);
+  for (let step = 1; step <= 8; step += 1) {
+    await pointer.move(startX + (endX - startX) * step / 8, y);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  }
+  await pointer.up();
+  await page.waitForFunction(({ selector, fraction }) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    const probe = window.__qaExpiredNativeSeek;
+    return video instanceof HTMLVideoElement && probe?.video === video
+      && probe.events.some((event) => event.type === "seeking" && event.trusted
+        && event.at >= probe.startedAt && event.time >= video.duration * (fraction - 0.12));
+  }, { selector: rootSelector, fraction: targetFraction }, { polling: "raf", timeout: 4_000 })
+    .catch(() => null);
+  const probe = await page.evaluate(() => ({
+    timeOrigin: performance.timeOrigin,
+    startedAt: window.__qaExpiredNativeSeek.startedAt,
+    events: window.__qaExpiredNativeSeek.events,
+  }));
+  const trustedEvent = probe.events.find((event) => event.type === "seeking" && event.trusted
+    && event.at >= probe.startedAt && event.time >= before.duration * (targetFraction - 0.12));
+  const trustedSeek = Boolean(trustedEvent);
+  const seekStartedAt = trustedEvent ? probe.timeOrigin + trustedEvent.at : null;
+  return { picture, before, slider, hits, probe, targetFraction, trustedSeek, seekStartedAt,
+    failed: !trustedSeek || before.asset !== V1 || !before.paused };
 }
 
 /** Real transport observation: the element's own clock, sampled repeatedly. */
@@ -1693,7 +1824,7 @@ async function navigateByGesture(page, rootSelector, direction, expectedId) {
   }
 }
 
-/** Video has no page-drag owner. Its separate step button must itself be hit. */
+/** The visible video step button, which must itself be hit. */
 async function navigateByVideoButton(page, rootSelector, direction, expectedId) {
   const step = direction < 0 ? "previous" : "next";
   const selector = rootSelector === FULLSCREEN
@@ -1736,6 +1867,380 @@ async function navigateByPresentedInput(page, rootSelector, direction, expectedI
   return before.kind === "video"
     ? navigateByVideoButton(page, rootSelector, direction, expectedId)
     : navigateByGesture(page, rootSelector, direction, expectedId);
+}
+
+// ---------------------------------------------------------------------------
+// Story media engine (#530, #522, #489 ST-159). Helpers for the checks in the
+// "A (engine)" block below. Every one drives trusted browser input and reads
+// back the product's own published state; none of them waits on a clock.
+// ---------------------------------------------------------------------------
+
+const nextFrame = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+
+/** Trace entries recorded after `since` (page clock) by the stage sampler's input listeners. */
+async function gestureTraceSince(page, since) {
+  return await page.evaluate((from) => (window.__qaStage?.gestures ?? [])
+    .filter((entry) => entry.at >= from), since);
+}
+
+async function pageClock(page) {
+  return await page.evaluate(() => performance.now());
+}
+
+/**
+ * #530: a real swipe released past the commit threshold, then interrupted while
+ * its settle is still running. The interruption is armed in the page before the
+ * finger lifts and fires from the first animation frame on which the stage
+ * reports `settling` with the starting picture still current, through the
+ * same window event the product listens to. CI renders slowly enough that a
+ * round trip back to this script can outlast the whole settle, so the
+ * interruption is never scheduled from here.
+ */
+async function swipeThenInterruptSettle(page, rootSelector, direction, eventType) {
+  await page.evaluate(({ selector, type }) => {
+    const probe = { fired: null, frames: 0 };
+    window.__qaSettleInterrupt = probe;
+    const watch = () => {
+      const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const presentation = stage?.getAttribute("data-media-presentation") ?? null;
+      const current = stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null;
+      probe.frames += 1;
+      if (presentation === "settling") {
+        probe.fired = { type, at: Math.round(performance.now()), presentation, current };
+        window.dispatchEvent(type === "blur" ? new FocusEvent("blur") : new Event(type));
+        return;
+      }
+      if (probe.frames < 600) requestAnimationFrame(watch);
+    };
+    probe.start = () => requestAnimationFrame(watch);
+  }, { selector: rootSelector, type: eventType });
+  const geometry = await page.evaluate((selector) => {
+    const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const bounds = pages.getBoundingClientRect();
+    return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height * 0.35, width: bounds.width };
+  }, rootSelector);
+  const travel = Math.min(320, geometry.width * 0.45) * (direction > 0 ? -1 : 1);
+  const since = await pageClock(page);
+  const pointer = input(page);
+  await pointer.down(geometry.x, geometry.y);
+  for (let step = 1; step <= 10; step += 1) {
+    await pointer.move(geometry.x + travel * (step / 10), geometry.y);
+    await nextFrame(page);
+  }
+  // Armed only now, so no frame of the drag itself can trigger it.
+  await page.evaluate(() => window.__qaSettleInterrupt.start());
+  await pointer.up();
+  const interrupted = await page.waitForFunction(() => window.__qaSettleInterrupt?.fired ?? null,
+    undefined, { polling: "raf", timeout: 3_000 }).then((handle) => handle.jsonValue(), () => null);
+  return { geometry, travel, input: pointer.kind, since, eventType, interrupted };
+}
+
+/**
+ * #522: the refusal a gesture surface declares, read from the computed style,
+ * plus a prior selection covering it -- the state in which Chromium promotes
+ * a pointer stream into native text drag-and-drop and cancels the pointer.
+ */
+async function coverSurfaceWithSelection(page, selector) {
+  return await page.evaluate((query) => {
+    const surface = document.querySelector(query);
+    if (!surface) return { present: false };
+    const style = getComputedStyle(surface);
+    getSelection()?.selectAllChildren(surface);
+    return {
+      present: true,
+      userSelect: style.userSelect,
+      userDrag: style.getPropertyValue("-webkit-user-drag"),
+      selectedText: String(getSelection() ?? "").length,
+    };
+  }, selector);
+}
+
+function gradeNativeDragRefusal(style, trace) {
+  const hijack = trace.filter((entry) => entry.type === "pointercancel" || entry.type === "dragstart"
+    || entry.type === "drag");
+  return {
+    style, hijack: hijack.slice(0, 6),
+    failed: !style.present || style.userSelect !== "none" || style.userDrag !== "none" || hijack.length > 0,
+  };
+}
+
+/** A real drag that starts at a given point, in this page's own modality. */
+async function swipeFromPoint(page, x, y, travel) {
+  const pointer = input(page);
+  await pointer.down(x, y);
+  for (let step = 1; step <= 10; step += 1) {
+    await pointer.move(x + travel * (step / 10), y);
+    await nextFrame(page);
+  }
+  await pointer.up();
+  return { x, y, travel, input: pointer.kind };
+}
+
+async function waitForPresentedLiveVideo(page, rootSelector, assetId, timeout = 10_000) {
+  return await page.waitForFunction(({ selector, expected }) => {
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    return video instanceof HTMLVideoElement && !video.hidden && video.controls
+      && video.getAttribute("data-shared-media-id") === expected
+      && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  }, { selector: rootSelector, expected: assetId }, { polling: "raf", timeout }).then(() => true, () => false);
+}
+
+/** What the stage says about the current video's transport, in one read. */
+async function transportState(page, rootSelector) {
+  return await page.evaluate((selector) => {
+    const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const current = stage?.querySelector('[data-media-page="current"]');
+    const video = stage?.querySelector(".story-media-pages__video video");
+    const notice = stage?.querySelector(":scope > [data-story-transport-pending]");
+    const frame = current?.querySelector("canvas:not([hidden])");
+    return {
+      current: current?.getAttribute("data-media-page-id") ?? null,
+      currentReady: current?.getAttribute("data-media-page-ready") === "true",
+      presentation: stage?.getAttribute("data-media-presentation") ?? null,
+      frameShown: frame instanceof HTMLCanvasElement && frame.width > 0 && frame.height > 0,
+      videoHidden: video instanceof HTMLVideoElement ? video.hidden : null,
+      videoControls: video instanceof HTMLVideoElement ? video.controls : null,
+      notice: notice ? {
+        asset: notice.getAttribute("data-story-transport-pending"),
+        role: notice.getAttribute("role"),
+        text: notice.textContent?.trim() ?? "",
+        opacity: Number(getComputedStyle(notice).opacity),
+      } : null,
+      coveringWait: Boolean(stage?.querySelector(":scope > .starlight-media-state.is-waiting")),
+      // Every <video> in the document, not only this stage's: the inactive
+      // surface keeps its one persistent transport as a handoff destination.
+      pageVideos: [...document.querySelectorAll("video")].map((node) => ({
+        surface: node.closest(".journey-story-fullscreen") ? "immersive" : "inline",
+        active: Boolean(node.closest(selector)),
+        asset: node.getAttribute("data-shared-media-id"),
+        hasSource: Boolean(node.currentSrc || node.getAttribute("src")),
+        preload: node.preload, paused: node.paused, hidden: node.hidden,
+      })),
+    };
+  }, rootSelector);
+}
+
+/**
+ * The page-wide transport bound: at most one persistent <video> per Story
+ * surface, at most one of them playing, and the inactive surface's node --
+ * the fullscreen handoff destination -- paused, hidden and metadata-only.
+ */
+function gradePageVideos(videos) {
+  const inactive = videos.filter((video) => !video.active);
+  const offending = inactive.filter((video) => video.hasSource
+    && (video.preload !== "metadata" || !video.paused || !video.hidden));
+  return {
+    videos, offending,
+    failed: videos.length > 2 || videos.filter((video) => !video.paused).length > 1
+      || videos.filter((video) => video.active).length > 1 || offending.length > 0,
+  };
+}
+
+// Eight synthetic photographs (the preview's `many-media` Journey). Each read
+// URL names its own asset, so a physical page that still paints another
+// asset's pixels under its new identity is visible as a `currentSrc` mismatch.
+const MANY_MEDIA = Array.from({ length: 8 }, (_, index) =>
+  `00000000-0000-4000-8000-${String(100 + index).padStart(12, "0")}`);
+const MANY_MEDIA_PHOTOS = [WIDE_PHOTO, SECOND_WIDE_PHOTO];
+
+/**
+ * Reopen `session.page` on the eight-photo Journey. The page-level routes added
+ * here run before `createStoryPage`'s (Playwright matches the newest route
+ * first); `gates` holds one asset's read back until the caller releases it.
+ */
+async function openManyMediaStory(session, { gates = [] } = {}) {
+  const { page } = session;
+  const reads = [];
+  const released = new Map(gates.map((id) => [id, deferred()]));
+  await page.route("**/api/uploads/assets/*/read-url", async (route) => {
+    const id = /\/assets\/([^/]+)\/read-url/.exec(new URL(route.request().url()).pathname)?.[1] ?? null;
+    const index = MANY_MEDIA.indexOf(id);
+    if (index < 0) return route.fallback();
+    const entry = { id, index, requestedAt: Date.now(), servedAt: null };
+    reads.push(entry);
+    if (released.has(id)) await released.get(id).promise;
+    entry.servedAt = Date.now();
+    return route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({
+        url: `${MANY_MEDIA_PHOTOS[index % MANY_MEDIA_PHOTOS.length]}?qaAsset=${id}`,
+        expiresAt: new Date(Date.now() + 900_000).toISOString(),
+      }),
+    });
+  });
+  await page.route(/\/artworks\/[^?]+\?qaAsset=/, async (route) => {
+    const url = new URL(route.request().url());
+    url.search = "";
+    return route.fulfill({ response: await route.fetch({ url: url.toString() }) });
+  });
+  await page.goto(`${origin}/?qaState=journey-story&qaMode=many-media`, { waitUntil: "domcontentloaded" });
+  await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
+  return {
+    reads,
+    release: (id) => released.get(id)?.resolve(),
+    requested: (id) => reads.some((entry) => entry.id === id),
+  };
+}
+
+/** Poll this script's own read log on browser frames, never on a timer. */
+async function waitForReadRequests(page, story, ids, timeout = 5_000) {
+  const deadline = Date.now() + timeout;
+  while (!ids.every((id) => story.requested(id)) && Date.now() < deadline) await nextFrame(page);
+  return ids.every((id) => story.requested(id));
+}
+
+async function waitForRequestedMedia(page, assetId, timeout = 3_000) {
+  return await page.waitForFunction((expected) => {
+    const requested = document.querySelector("[data-media-requested]")?.getAttribute("data-media-requested") ?? null;
+    const current = document.querySelector(".journey-story__media [data-story-media-pages]")
+      ?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null;
+    return requested === expected || current === expected;
+  }, assetId, { polling: "raf", timeout }).then(() => true, () => false);
+}
+
+/**
+ * Every frame, every visible physical page: the asset its <img> is actually
+ * painting (`currentSrc`) against the identity the page publishes. A reassigned
+ * page keeps drawing its previous source until the new one decodes, which is
+ * exactly the old-neighbour frame the stack must never expose.
+ */
+async function startPaintIdentityProbe(page, rootSelector) {
+  await page.evaluate((selector) => {
+    const probe = { running: true, frames: 0, mismatches: [], maxPages: 0, maxVideos: 0 };
+    window.__qaPaintProbe = probe;
+    const tick = () => {
+      if (!probe.running) return;
+      probe.frames += 1;
+      const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const pages = [...(stage?.querySelectorAll("[data-media-page]") ?? [])];
+      probe.maxPages = Math.max(probe.maxPages, pages.length);
+      probe.maxVideos = Math.max(probe.maxVideos, stage?.querySelectorAll("video").length ?? 0);
+      for (const node of pages) {
+        const id = node.getAttribute("data-media-page-id");
+        const image = node.querySelector("img");
+        if (!id || !(image instanceof HTMLImageElement) || image.hidden || !image.currentSrc) continue;
+        const style = getComputedStyle(node);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) <= 0.05) continue;
+        const painted = new URL(image.currentSrc).searchParams.get("qaAsset");
+        if (painted && painted !== id && probe.mismatches.length < 12) {
+          probe.mismatches.push({ at: Math.round(performance.now()), page: id, painted,
+            role: node.getAttribute("data-media-page"), ready: node.getAttribute("data-media-page-ready") });
+        }
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, rootSelector);
+}
+
+async function stopPaintIdentityProbe(page) {
+  return await page.evaluate(() => {
+    const probe = window.__qaPaintProbe;
+    probe.running = false;
+    return { frames: probe.frames, mismatches: probe.mismatches, maxPages: probe.maxPages, maxVideos: probe.maxVideos };
+  });
+}
+
+/** One click on the navigating half of the presented photograph. */
+async function clickNextPhoto(page) {
+  const point = await photoClickPoint(page, STAGE, 1);
+  await input(page).click(point.x, point.y);
+  return Date.now();
+}
+
+// A minimal Atlas for the #522 scrubber check: two dated Journeys give the
+// globe-focus time scrubber a real time domain to seek across.
+const SCRUBBER_JOURNEYS = [0, 1].map((index) => {
+  const startedOn = ["2026-08-20", "2025-12-28"][index];
+  const id = `qa-scrubber-journey-${index}`;
+  return {
+    id, atlasId: "qa-atlas", title: ["海风经过深圳湾", "东京冬日散步"][index], startedOn, endedOn: null,
+    note: null, lightColor: "#77c8c2", lightEffect: null, coverMediaAssetId: null, revision: 1,
+    createdByUserId: "qa-user", createdAt: `${startedOn}T00:00:00.000Z`, updatedAt: `${startedOn}T00:00:00.000Z`,
+    routePoints: [{
+      id: `qa-scrubber-point-${index}`, journeyId: id, sortOrder: 0,
+      latitude: 22.5 + index * 13, longitude: 114 + index * 25, label: ["深圳湾", "东京上野"][index],
+      isStop: true, occurredAt: null, note: null, createdAt: `${startedOn}T00:00:00.000Z`,
+    }],
+    media: [],
+  };
+});
+
+/**
+ * #522 scrubber: a real mouse scrub across `.globe-time-scrubber__track` while a
+ * prior selection covers the scrubber. The globe needs WebGL, so this page runs
+ * in its own SwiftShader browser exactly as the globe lanes launch theirs.
+ */
+async function scrubberDragRefusal() {
+  const atlasBrowser = await launchQaBrowser({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+  try {
+    const page = await atlasBrowser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.route("**/api/auth/get-session", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: "null",
+    }));
+    await page.route("**/api/journeys", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({ journeys: SCRUBBER_JOURNEYS }),
+    }));
+    await page.route(/\/api\/mapstyle\?path=styles(?:%2F|\/)fiord(?:$|&)/i, (route) => route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ version: 8, name: "QA empty detailed-earth style", sources: {}, layers: [] }),
+    }));
+    await page.goto(`${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1`, { waitUntil: "domcontentloaded" });
+    await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 20_000 });
+    await page.locator(".living-atlas__globe-focus").click();
+    await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on",
+      null, { timeout: 5_000 });
+    const track = page.locator(".globe-time-scrubber__track");
+    await track.waitFor({ state: "visible", timeout: 5_000 });
+    const setup = await page.evaluate(() => {
+      const node = document.querySelector(".globe-time-scrubber__track");
+      const style = getComputedStyle(node);
+      getSelection()?.selectAllChildren(node.closest(".globe-time-scrubber") ?? node);
+      // Installed after the fixture selection, so only the scrub's own stream is recorded.
+      const probe = { events: [] };
+      window.__qaScrubberProbe = probe;
+      for (const type of ["pointercancel", "dragstart", "drag", "selectstart"]) {
+        document.addEventListener(type, (event) => probe.events.push({
+          type, at: Math.round(performance.now()),
+          target: event.target instanceof Element ? String(event.target.className).slice(0, 48) : null,
+        }), true);
+      }
+      const box = node.getBoundingClientRect();
+      return {
+        userSelect: style.userSelect, userDrag: style.getPropertyValue("-webkit-user-drag"),
+        selectedText: String(getSelection() ?? "").length,
+        box: { left: box.left, top: box.top, width: box.width, height: box.height },
+        before: Number(node.getAttribute("aria-valuenow")),
+      };
+    });
+    const y = setup.box.top + setup.box.height / 2;
+    const from = setup.box.left + setup.box.width * 0.2;
+    const to = setup.box.left + setup.box.width * 0.8;
+    await page.mouse.move(from, y);
+    await page.mouse.down();
+    for (let step = 1; step <= 8; step += 1) {
+      await page.mouse.move(from + (to - from) * (step / 8), y);
+      await nextFrame(page);
+    }
+    const during = Number(await track.getAttribute("aria-valuenow"));
+    await page.mouse.up();
+    await nextFrame(page);
+    const after = await page.evaluate(() => ({
+      value: Number(document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow")),
+      events: window.__qaScrubberProbe?.events ?? [],
+    }));
+    return {
+      setup, during, after, pageErrors,
+      failed: setup.userSelect !== "none" || setup.userDrag !== "none"
+        || after.events.length > 0
+        || Math.abs(during - 80) > 2 || Math.abs(after.value - 80) > 2
+        || pageErrors.length > 0,
+    };
+  } finally {
+    await atlasBrowser.close();
+  }
 }
 
 /** Every transition frame must have one picture owner; the snapshot alone owns a morph. */
@@ -1825,6 +2330,19 @@ async function videoHandoffFailureDiagnostic(page) {
     clones: [...document.querySelectorAll('[data-shared-element-clone]')]
       .map((clone) => clone.getAttribute('data-shared-element-clone')),
     historyStack: window.history.state?.__startripsMobileSurfaceStack ?? null,
+    videos: [...document.querySelectorAll('.journey-story__media, .journey-story-fullscreen')]
+      .map((root) => {
+        const video = root.querySelector('.story-media-pages__video video');
+        return { root: root.className, hidden: root.hidden,
+          id: video?.getAttribute('data-shared-media-id') ?? null,
+          src: video?.getAttribute('src') ?? null,
+          currentSrc: video instanceof HTMLVideoElement ? video.currentSrc : null,
+          generation: video?.getAttribute('data-story-read-generation') ?? null,
+          handoffReady: video?.getAttribute('data-video-handoff-ready') ?? null,
+          paused: video instanceof HTMLVideoElement ? video.paused : null,
+          seeking: video instanceof HTMLVideoElement ? video.seeking : null,
+          readyState: video instanceof HTMLVideoElement ? video.readyState : null };
+      }),
   }));
 }
 
@@ -2207,10 +2725,58 @@ function gradePausedFrameIdentity(before, after) {
     || pairs.length < 8 || meanDelta > 12 || after.retainedRatio < 0.75 || after.signalMeanDelta > 20 };
 }
 
-/** The retained page canvas must actually be the paused frame on screen. */
-async function heldRenewalFramePixels(page, rootSelector, { videoHidden = true } = {}) {
+/**
+ * Record the picture on screen while the expired Range is still withheld, i.e.
+ * the last frame the viewer saw before the failure. Later held-frame checks
+ * must show this same picture.
+ */
+async function capturePreErrorScreen(page, rootSelector) {
+  const native = await readNativeControls(page, rootSelector).catch(() => null);
+  const chromeTop = native?.controls
+    .filter((control) => !control.ignored)
+    .reduce((top, control) => Math.min(top, control.box.top), Number.POSITIVE_INFINITY);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const screenshot = (await page.screenshot()).toString("base64");
-  return await page.evaluate(async ({ selector, png, expectedHidden }) => {
+  return await page.evaluate(async ({ selector, png, controlsTop }) => {
+    window.__qaPreErrorScreen = null;
+    const video = document.querySelector(selector)?.querySelector(".story-media-pages__video video");
+    const alert = document.querySelector(`${selector} .journey-story__media-state.is-over-media[role="alert"]`);
+    if (!(video instanceof HTMLVideoElement) || video.hidden || !video.videoWidth || !video.videoHeight) {
+      return { failed: true, reason: "no presented video before the Range failure" };
+    }
+    const image = new Image();
+    image.src = `data:image/png;base64,${png}`;
+    await image.decode();
+    const box = video.getBoundingClientRect();
+    const scale = Math.min(box.width / video.videoWidth, box.height / video.videoHeight);
+    const width = video.videoWidth * scale, height = video.videoHeight * scale;
+    const left = box.left + (box.width - width) / 2;
+    const top = box.top + (box.height - height) / 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = 64; canvas.height = 64;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return { failed: true, reason: "pre-error screen context unavailable" };
+    const ratioX = image.naturalWidth / innerWidth, ratioY = image.naturalHeight / innerHeight;
+    context.drawImage(image, left * ratioX, top * ratioY, width * ratioX, height * ratioY, 0, 0, 64, 64);
+    const pixels = new Uint8ClampedArray(context.getImageData(0, 0, 64, 64).data);
+    const chromeRows = [];
+    if (Number.isFinite(controlsTop)) for (let y = 0; y < 64; y += 1) {
+      if (top + height * (y + 0.5) / 64 >= controlsTop) chromeRows.push(y);
+    }
+    const signal = window.__qaSpatialFrameEvidence(pixels, pixels);
+    window.__qaPreErrorScreen = { pixels, chromeRows };
+    return { signal, chromeRows: chromeRows.length, seeking: video.seeking, alertShown: Boolean(alert),
+      failed: Boolean(alert) || Boolean(video.error) || signal.sourceCells < 3 || signal.sourceEnergy < 500 || chromeRows.length > 24 };
+  }, { selector: rootSelector, png: screenshot,
+    controlsTop: Number.isFinite(chromeTop) ? chromeTop : null });
+}
+
+/** The retained page canvas must actually be the paused frame on screen. */
+async function heldRenewalFramePixels(page, rootSelector,
+  { videoHidden = true, heldFrame = null } = {}) {
+  const screenshot = (await page.screenshot()).toString("base64");
+  return await page.evaluate(async ({ selector, png, expectedHidden, heldMode }) => {
+    const compareHeld = heldMode !== null;
     const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
     const pageNode = stage?.querySelector('[data-media-page="current"]');
     const canvas = pageNode?.querySelector("canvas");
@@ -2239,12 +2805,20 @@ async function heldRenewalFramePixels(page, rootSelector, { videoHidden = true }
     const visibleContext = visible.getContext("2d", { willReadFrequently: true });
     if (!sourceContext || !visibleContext) return { failed: true, reason: "renewal pixel context unavailable" };
     sourceContext.drawImage(source, 0, 0, 64, 64);
+    const heldPixels = sourceContext.getImageData(0, 0, 64, 64).data;
+    const heldSignal = window.__qaSpatialFrameEvidence(heldPixels, heldPixels);
     const ratioX = image.naturalWidth / innerWidth, ratioY = image.naturalHeight / innerHeight;
     visibleContext.drawImage(image, left * ratioX, top * ratioY, width * ratioX, height * ratioY,
       0, 0, 64, 64);
     const frame = window.__qaSpatialFrameEvidence(reference.pixels,
       sourceContext.getImageData(0, 0, 64, 64).data);
-    const screenReference = new Uint8ClampedArray(reference.pixels);
+    // A native drag can decode later cached frames before the expired Range
+    // fails. In that case the last actually painted frame, rather than the
+    // picture from before the drag, is the continuity reference: "match"
+    // compares this screen with the screen captured before the Range 403.
+    const preError = heldMode === "match" ? window.__qaPreErrorScreen : null;
+    if (heldMode === "match" && !preError?.pixels) return { failed: true, reason: "no pre-error screen anchor" };
+    const screenReference = new Uint8ClampedArray(compareHeld ? heldPixels : reference.pixels);
     const screenPixels = visibleContext.getImageData(0, 0, 64, 64).data;
     const notice = document.querySelector(`${selector} .journey-story__media-state.is-over-media[role="alert"]`);
     const noticeBox = notice?.getBoundingClientRect();
@@ -2260,24 +2834,50 @@ async function heldRenewalFramePixels(page, rootSelector, { videoHidden = true }
         }
       }
     }
-    const screen = window.__qaSpatialFrameEvidence(screenReference, screenPixels);
+    // Floored light from a canvas bitmap (at most 960 px) is not comparable
+    // with floored light from a screenshot: the same paused frame measures
+    // about 2.4x brighter sampled from the held canvas than from its video.
+    // Against a held bitmap, compare all light so sampling cannot hide or
+    // invent the picture; the video reference keeps the floored comparison.
+    const screen = window.__qaSpatialFrameEvidence(screenReference, screenPixels, compareHeld ? 0 : 12);
+    // Both sides are screenshots sampled the same way, so the floored light
+    // applies. Rows under the current notice or the pre-error native controls
+    // are removed from both.
+    let preErrorScreen = null;
+    if (preError) {
+      const before = new Uint8ClampedArray(preError.pixels), after = new Uint8ClampedArray(screenPixels);
+      for (let y = 0; y < 64; y += 1) {
+        const sampleY = top + height * (y + 0.5) / 64;
+        const covered = (noticeBox && sampleY >= noticeBox.top && sampleY <= noticeBox.bottom)
+          || preError.chromeRows.includes(y);
+        if (!covered) continue;
+        for (let x = 0; x < 64; x += 1) {
+          const at = (y * 64 + x) * 4;
+          for (const pixels of [before, after]) { pixels[at] = 0; pixels[at + 1] = 0; pixels[at + 2] = 0; }
+        }
+      }
+      preErrorScreen = window.__qaSpatialFrameEvidence(before, after);
+    }
     const hit = document.elementFromPoint(left + width / 2, top + height * 0.7);
     const wrong = (quality) => quality.aligned < 0.8 || quality.margin < 0.08
       || quality.visibleCells < Math.ceil(quality.sourceCells * 0.6)
       || quality.energyRatio < 0.5 || quality.energyRatio > 2;
     return {
-      frame, screen, maskedRows, currentId: pageNode?.getAttribute("data-media-page-id") ?? null,
+      frame, screen, heldSignal, preErrorScreen, maskedRows, currentId: pageNode?.getAttribute("data-media-page-id") ?? null,
       currentReady: pageNode?.getAttribute("data-media-page-ready") ?? null,
       videoHidden: video.hidden, videoSrc: video.getAttribute("src"),
       hitIsSource: hit === source, hitTag: hit instanceof Element ? hit.tagName : null,
       // The canvas bitmap is diagnostic; CSS/compositor treatment determines
       // the frame the viewer actually sees. Keep the screenshot and hit tests
       // as the acceptance signal for a held renewal.
-      failed: wrong(screen) || maskedRows > 24 || hit !== source
+      failed: wrong(screen) || (compareHeld && (heldSignal.sourceCells < 3 || heldSignal.sourceEnergy < 500))
+        || (preErrorScreen !== null && wrong(preErrorScreen))
+        || maskedRows > 24 || hit !== source
         || pageNode?.getAttribute("data-media-page-ready") !== (expectedHidden ? "false" : "true")
         || video.hidden !== expectedHidden,
     };
-  }, { selector: rootSelector, png: screenshot, expectedHidden: videoHidden });
+  }, { selector: rootSelector, png: screenshot,
+    expectedHidden: videoHidden, heldMode: heldFrame });
 }
 
 /** Screenshot pixels over the active clone must match its decoded canvas. */
@@ -2491,6 +3091,63 @@ async function clickReturnedVideo(page) {
 }
 
 try {
+  // A held video's representative frame is a canvas. A DOM clone of that
+  // canvas has an empty drawing buffer, so the shared-element handoff must
+  // snapshot its pixels before hiding the source.
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-canvas-shared-element-snapshot";
+    try {
+      const evidence = await session.page.evaluate(async () => {
+        const { runSharedElementMorph } = await import("/src/motion/primitives/sharedElement.ts");
+        const source = document.createElement("canvas");
+        source.width = 120;
+        source.height = 80;
+        Object.assign(source.style, {
+          position: "fixed", left: "40px", top: "30px", width: "200px", height: "120px",
+          objectFit: "contain", zIndex: "1000",
+        });
+        const context = source.getContext("2d");
+        if (!context) return { failed: true, reason: "source context unavailable" };
+        context.fillStyle = "rgb(230, 40, 20)";
+        context.fillRect(0, 0, 60, 80);
+        context.fillStyle = "rgb(20, 70, 220)";
+        context.fillRect(60, 0, 60, 80);
+        document.body.appendChild(source);
+        const cancel = runSharedElementMorph({ source, resolveTarget: () => null,
+          isTargetCurrent: () => true, update: () => undefined,
+          name: "qa-canvas-bitmap", readinessTimeoutMs: 1_000 });
+        try {
+          const clone = document.querySelector('[data-shared-element-clone="qa-canvas-bitmap"]');
+          const pixels = clone instanceof HTMLCanvasElement
+            ? clone.getContext("2d")?.getImageData(0, 0, clone.width, clone.height) : null;
+          const sample = (x) => pixels
+            ? [...pixels.data.slice((40 * clone.width + x) * 4, (40 * clone.width + x) * 4 + 4)] : null;
+          const bounds = clone?.getBoundingClientRect();
+          return { cloneIsCanvas: clone instanceof HTMLCanvasElement,
+            dimensions: clone instanceof HTMLCanvasElement ? [clone.width, clone.height] : null,
+            left: sample(30), right: sample(90),
+            bounds: bounds ? { x: bounds.x, width: bounds.width } : null };
+        } finally {
+          cancel();
+          source.remove();
+        }
+      });
+      record({ name, claim: "a canvas media source hands its painted bitmap and contained picture bounds to the shared-element clone",
+        ...evidence, failed: !evidence.cloneIsCanvas
+          || evidence.dimensions?.[0] !== 120 || evidence.dimensions?.[1] !== 80
+          || evidence.left?.[0] !== 230 || evidence.left?.[1] !== 40
+          || evidence.right?.[1] !== 70 || evidence.right?.[2] !== 220
+          || Math.abs((evidence.bounds?.x ?? 0) - 50) > 1
+          || Math.abs((evidence.bounds?.width ?? 0) - 180) > 1
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0 });
+    } catch (error) {
+      record({ name, error: error instanceof Error ? error.message : String(error), failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
   // ---------------------------------------------------------------------
   // A. Real input on the presented video reaches its own transport.
   // ---------------------------------------------------------------------
@@ -2640,6 +3297,638 @@ try {
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // A (engine). #530: a swipe released past the commit threshold has already
+  // chosen its target. Interrupting its settle -- a real viewport resize, or a
+  // window blur dispatched while the stage itself reports `settling` -- must
+  // land on that target instead of springing back to the starting picture.
+  // ---------------------------------------------------------------------
+  for (const variant of ["resize", "blur"]) {
+    const session = await createStoryPage({ mobile: false });
+    const name = `story-interrupted-settle-commits-${variant}`;
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      await waitForReadablePage(page, STAGE, V1);
+      const run = await swipeThenInterruptSettle(page, STAGE, 1, variant);
+      const committed = await waitForSettledAsset(page, V1).then(() => true, () => false);
+      const settled = committed ? await currentAsset(page) : await stageDiagnostic(page, STAGE);
+      const cancels = (await gestureTraceSince(page, run.since)).filter((entry) => entry.type === "pointercancel");
+      record({ name,
+        claim: "a real swipe released past the commit threshold and interrupted by a window " + variant + " on a frame where the stage still reports settling with the starting picture current lands on the target the release chose, rather than discarding that navigation and springing back",
+        run, committed, settled, cancels,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: run.interrupted?.presentation !== "settling" || run.interrupted?.current !== I1
+          || !committed || settled.id !== V1 || cancels.length > 0
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // A (engine). #522: neither Story media surface lets a prior selection turn
+  // a real swipe into native drag-and-drop. The surface's computed refusal is
+  // graded together with the stream itself: no dragstart, no pointercancel,
+  // and the swipe still commits.
+  // ---------------------------------------------------------------------
+  for (const surface of [
+    { label: "inline", root: STAGE, container: ".journey-story__media", fullscreen: false },
+    { label: "immersive", root: FULLSCREEN, container: ".journey-story-fullscreen", fullscreen: true },
+  ]) {
+    const session = await createStoryPage({ mobile: false });
+    const name = `story-${surface.label}-surface-refuses-native-drag`;
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      if (surface.fullscreen) {
+        await page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
+        await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
+        await waitForSettledAsset(page, I1, FULLSCREEN);
+        await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+          .waitFor({ state: "detached", timeout: 5_000 });
+      }
+      await waitForReadablePage(page, surface.root, V1);
+      const style = await coverSurfaceWithSelection(page, surface.container);
+      const since = await pageClock(page);
+      const step = await navigateByGesture(page, surface.root, 1, V1);
+      const grade = gradeNativeDragRefusal(style, await gestureTraceSince(page, since));
+      record({ name,
+        claim: "with a prior selection covering the surface, a real mouse swipe on it is never promoted into native drag-and-drop or cancelled, and still commits; the surface itself computes user-select and -webkit-user-drag to none",
+        step, ...grade, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: grade.failed || !step.ok || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+  {
+    const name = "atlas-time-scrubber-refuses-native-drag";
+    try {
+      record({ name,
+        claim: "with a prior selection covering the time scrubber, a real mouse scrub across its track produces no selectstart, dragstart or pointercancel, follows the pointer and seeks to the release point; the track computes user-select and -webkit-user-drag to none",
+        ...await scrubberDragRefusal() });
+    } catch (error) {
+      record({ name, error: error instanceof Error ? error.message : String(error), failed: true });
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // A (engine). Native control geometry is browser-owned. A swipe on the video
+  // stays native even when it starts above the usual control strip; an edge
+  // gesture owned by Story still navigates from the same presented video.
+  // ---------------------------------------------------------------------
+  for (const profile of [
+    { label: "desktop", mobile: false },
+    { label: "phone-portrait", mobile: true, viewport: { width: 390, height: 844 } },
+  ]) {
+    const session = await createStoryPage({ mobile: profile.mobile, viewport: profile.viewport });
+    const name = `story-video-native-pointer-and-edge-swipe-${profile.label}`;
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      const toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      const live = await waitForPresentedLiveVideo(page, STAGE, V1);
+      const chromeTop = controlChromeTop(await nativeControls(page, STAGE));
+      const clickPoint = await presentedVideoPoint(page, STAGE, { fraction: 0.4, controlsTop: chromeTop });
+      await input(page).click(clickPoint.x, clickPoint.y);
+      await nextFrame(page);
+      await nextFrame(page);
+      const afterClick = await currentAsset(page);
+      const requestedAfterClick = (await stageDiagnostic(page, STAGE)).requested;
+      await waitForReadablePage(page, STAGE, V2);
+      const pictureSwipePoint = await presentedVideoPoint(page, STAGE, { fraction: 0.4, controlsTop: chromeTop });
+      const pictureSwipe = await swipeFromPoint(page, pictureSwipePoint.x, pictureSwipePoint.y,
+        -Math.min(320, Math.max(120, pictureSwipePoint.width * 0.45)));
+      await nextFrame(page);
+      const afterPictureSwipe = await currentAsset(page);
+      const requestedAfterPictureSwipe = (await stageDiagnostic(page, STAGE)).requested;
+      const edgePoint = await videoStageEdgePoint(page, STAGE);
+      const since = await pageClock(page);
+      const edgeSwipe = await swipeFromPoint(page, edgePoint.x, edgePoint.y,
+        -Math.min(320, Math.max(120, (edgePoint.videoBox.right - edgePoint.videoBox.left) * 0.45)));
+      const navigated = await waitForSettledAsset(page, V2).then(() => true, () => false);
+      const trace = await gestureTraceSince(page, since);
+      const start = trace.find((entry) => entry.type === "pointerdown") ?? null;
+      const settled = navigated ? await currentAsset(page) : await stageDiagnostic(page, STAGE);
+      record({ name,
+        claim: "real clicks and long swipes starting on the native video never request Story navigation; an edge swipe outside the video still reaches the next media",
+        toVideo, live, clickPoint, afterClick, requestedAfterClick,
+        pictureSwipePoint, pictureSwipe, afterPictureSwipe, requestedAfterPictureSwipe,
+        edgePoint, edgeSwipe, start, navigated, settled,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !toVideo.ok || !live || !clickPoint.hitIsVideo
+          || afterClick.id !== V1 || afterClick.presentation !== "settled" || requestedAfterClick !== null
+          || !pictureSwipePoint.hitIsVideo || afterPictureSwipe.id !== V1
+          || afterPictureSwipe.presentation !== "settled" || requestedAfterPictureSwipe !== null
+          || !start || start.tag === "VIDEO" || !navigated || settled.id !== V2
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // A mouse release outside the stage cannot reach its pointerup handler
+  // before horizontal lock. This still matters for a stage-owned edge swipe;
+  // autoplay after that release must advance rather than keeping Story held.
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-video-edge-prelock-exit-releases-hold";
+    const progress = {};
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.88 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      const edge = await videoStageEdgePoint(page, STAGE, { fraction: 0.005 });
+      progress.edge = { ...edge, outsideY: edge.stageBox.top - 3,
+        travel: edge.y - (edge.stageBox.top - 3) };
+      if (progress.edge.travel >= 8) throw new Error(`no pre-lock edge exit point: ${JSON.stringify(progress.edge)}`);
+      const since = await pageClock(page);
+      await page.mouse.move(progress.edge.x, progress.edge.y);
+      await page.mouse.down();
+      await page.mouse.move(progress.edge.x, progress.edge.outsideY);
+      await page.mouse.up();
+      progress.trace = await gestureTraceSince(page, since);
+      progress.afterLeave = await currentAsset(page);
+      await page.locator(".journey-story").getByRole("button", { name: "自动播放媒体", exact: true }).click();
+      progress.advanced = await waitForSettledAsset(page, V2).then(() => true, () => false);
+      progress.afterAutoplay = await currentAsset(page);
+      const down = progress.trace.find((entry) => entry.type === "pointerdown");
+      const up = progress.trace.find((entry) => entry.type === "pointerup");
+      record({ name,
+        claim: "a real mouse stream starting beside the native video and leaving before axis lock releases its Story hold, so autoplay advances after the native video ends",
+        ...progress, down, up, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || !down || down.tag === "VIDEO" || down.pointerType !== "mouse" || !up || up.tag === "VIDEO"
+          || progress.afterLeave.id !== V1 || progress.afterLeave.presentation !== "settled"
+          || !progress.advanced || progress.afterAutoplay.id !== V2
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // A (engine). On a phone a real touch swipe down from the stage edge, beyond
+  // the native video, exits fullscreen without taking a control's touch stream.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: true, viewport: { width: 390, height: 844 } });
+    const name = "story-video-edge-swipe-down-exits-fullscreen-phone-portrait";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      const toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      const inlineLive = await waitForPresentedLiveVideo(page, STAGE, V1);
+      const entry = page.locator(".journey-story__mobile-media-fullscreen");
+      await entry.click();
+      await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
+      await waitForSettledAsset(page, V1, FULLSCREEN);
+      await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+        .waitFor({ state: "detached", timeout: 5_000 });
+      const fullscreenLive = await waitForPresentedLiveVideo(page, FULLSCREEN, V1);
+      const start = await videoStageEdgePoint(page, FULLSCREEN, { side: "left", fraction: 0.3 });
+      const since = await pageClock(page);
+      const pointer = input(page);
+      await pointer.down(start.x, start.y);
+      for (let step = 1; step <= 10; step += 1) {
+        await pointer.move(start.x, start.y + 180 * (step / 10));
+        await nextFrame(page);
+      }
+      await pointer.up();
+      const exited = await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 5_000 })
+        .then(() => true, () => false);
+      const trace = await gestureTraceSince(page, since);
+      const down = trace.find((entry) => entry.type === "pointerdown") ?? null;
+      const returned = exited ? await waitForSettledAsset(page, V1).then(() => true, () => false) : false;
+      const after = await currentAsset(page);
+      record({ name,
+        claim: "on a phone, a real touch swipe down from the stage edge outside the native video exits fullscreen and returns the same video, settled, to the inline stage",
+        toVideo, inlineLive, fullscreenLive, start, down, exited, returned, after,
+        cancels: trace.filter((entry) => entry.type === "pointercancel"),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !toVideo.ok || !inlineLive || !fullscreenLive
+          || !down || down.tag === "VIDEO" || down.pointerType !== "touch" || !exited || !returned || after.id !== V1
+          || trace.some((entry) => entry.type === "pointercancel")
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // A (engine). A first frame is presentable, not playable. With V2's live
+  // transport deliberately held back after its representative frame exists,
+  // the settled V2 page keeps that frame, has no controls, and says so with
+  // the non-covering preparing notice; once the transport is live the notice
+  // is gone and the native controls are back. Nothing fakes playback.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-video-transport-pending-notice";
+    const gate = { holding: false, held: [] };
+    try {
+      const { page } = session;
+      await page.route(`**${VERTICAL_CLIP}`, async (route) => {
+        if (!gate.holding) return route.fallback();
+        const release = deferred();
+        gate.held.push({ range: route.request().headers().range ?? null, at: Date.now(), release });
+        await release.promise;
+        return route.fallback();
+      });
+      await waitForSettledAsset(page, I1);
+      const toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      await waitForReadablePage(page, STAGE, V2);
+      gate.holding = true;
+      const toSecond = await navigateByVideoButton(page, STAGE, 1, V2);
+      const deadline = Date.now() + 4_000;
+      while (gate.held.length === 0 && Date.now() < deadline) await nextFrame(page);
+      const noticeShown = await page.waitForFunction(({ selector, expected }) => {
+        const notice = document.querySelector(selector)?.querySelector(`[data-story-transport-pending="${expected}"]`);
+        return Boolean(notice) && Number(getComputedStyle(notice).opacity) >= 0.99;
+      }, { selector: STAGE, expected: V2 }, { polling: "raf", timeout: 3_000 }).then(() => true, () => false);
+      const pending = await transportState(page, STAGE);
+      const pendingVideos = gradePageVideos(pending.pageVideos);
+      const heldRequests = gate.held.map(({ range, at }) => ({ range, at }));
+      gate.holding = false;
+      for (const entry of gate.held) entry.release.resolve();
+      const live = await waitForPresentedLiveVideo(page, STAGE, V2);
+      const after = await transportState(page, STAGE);
+      const afterVideos = gradePageVideos(after.pageVideos);
+      record({ name,
+        claim: "while the current video's representative frame is shown and its one transport is not live, the page keeps that frame, exposes no controls, and shows the role=status preparing notice rather than a waiting cover; the live transport then replaces both; across the whole page there is at most one persistent video per surface, at most one playing, and the inactive surface's node stays paused, hidden and metadata-only",
+        toVideo, toSecond, heldRequests, noticeShown, pending, live, after, pendingVideos, afterVideos,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !toVideo.ok || !toSecond.ok || heldRequests.length === 0 || !noticeShown
+          || pending.current !== V2 || !pending.currentReady || pending.presentation !== "settled"
+          || !pending.frameShown || pending.videoHidden !== true || pending.videoControls !== false
+          || pending.notice?.asset !== V2 || pending.notice.role !== "status"
+          || !pending.notice.text.includes("正在准备画面") || pending.coveringWait
+          || !live || after.notice !== null || after.videoHidden !== false || after.videoControls !== true
+          || pendingVideos.failed || afterVideos.failed
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      gate.holding = false;
+      for (const entry of gate.held) entry.release.resolve();
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // A (engine). #489 ST-159 warm window over eight photographs. At rest the
+  // window already holds reads three ahead and nothing beyond; every paced
+  // step then lands on a read requested before its click; a two-click burst
+  // warms beyond the latest request before that request lands; and no frame
+  // shows a blank aperture, a waiting cover, or a page painting another
+  // asset's pixels, while the stack stays three pages.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-rapid-forward-browse-warm-window";
+    const progress = {};
+    let story = null;
+    try {
+      const { page } = session;
+      // C is requested by the warm window but its read stays cold until the
+      // sampler has observed B holding the front through the pending interval.
+      story = await openManyMediaStory(session, { gates: [MANY_MEDIA[3]] });
+      await waitForSettledAsset(page, MANY_MEDIA[0]);
+      progress.initialWarm = await waitForReadRequests(page, story, MANY_MEDIA.slice(1, 4));
+      progress.beyondWindowAtRest = story.reads.filter((entry) => entry.index >= 4).map((entry) => entry.index);
+      await startPaintIdentityProbe(page, STAGE);
+      const steps = [];
+      const clickTo = async (index, settle = true) => {
+        const id = MANY_MEDIA[index];
+        const clickedAt = await clickNextPhoto(page);
+        const read = story.reads.find((entry) => entry.id === id);
+        const step = { index, readRequestedBeforeClick: Boolean(read && read.requestedAt <= clickedAt) };
+        step.requested = await waitForRequestedMedia(page, id);
+        if (settle) step.settled = await waitForSettledAsset(page, id).then(() => true, () => false);
+        steps.push(step);
+      };
+      await startSampler(page, STAGE);
+      await clickTo(1);
+      const pacedStart = await stopSamplerFrames(page);
+      await startSampler(page, STAGE);
+      await clickTo(2, false);
+      // Make the burst abandon a handoff that is really on screen: the second
+      // photograph already paints the stage centre while the first is still
+      // the committed page. Only then is the third one requested.
+      progress.burstSecondPainted = await page.waitForFunction(({ selector, painted, committed }) => {
+        const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const box = stage?.getBoundingClientRect();
+        if (!box) return false;
+        const hit = document.elementsFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+          .find((node) => node instanceof HTMLImageElement && !node.hidden);
+        const current = stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id");
+        return hit?.closest("[data-media-page]")?.getAttribute("data-media-page-id") === painted
+          && (current === committed || current === painted);
+      }, { selector: STAGE, painted: MANY_MEDIA[2], committed: MANY_MEDIA[1] }, { polling: "raf", timeout: 3_000 })
+        .then(() => true, () => false);
+      const coldClickAt = await pageClock(page);
+      await clickTo(3, false);
+      progress.burstWarmedAhead = await waitForReadRequests(page, story, [MANY_MEDIA[6]], 2_000);
+      progress.burstStateWhenWarmed = await currentAsset(page);
+      for (let frame = 0; frame < 30; frame += 1) await nextFrame(page);
+      progress.burstReadStillHeld = story.reads.some((entry) => entry.id === MANY_MEDIA[3] && entry.servedAt === null);
+      const burstReleaseAt = await pageClock(page);
+      story.release(MANY_MEDIA[3]);
+      progress.burstSettled = await waitForSettledAsset(page, MANY_MEDIA[3]).then(() => true, () => false);
+      const burst = await stopSamplerFrames(page);
+      await startSampler(page, STAGE);
+      for (const index of [4, 5, 6, 7]) await clickTo(index);
+      const pacedEnd = await stopSamplerFrames(page);
+      progress.paint = await stopPaintIdentityProbe(page);
+      progress.steps = steps;
+      progress.paced = gradeContinuity([...pacedStart, ...pacedEnd], { allowedAssets: MANY_MEDIA });
+      // A burst abandons an in-flight handoff. The abandoned target keeps the
+      // front until the newest one is presentable, so the committed picture
+      // never returns: the foreground runs strictly 1 -> 2 -> 3.
+      const burstGrade = gradeContinuity(burst, { allowedAssets: MANY_MEDIA });
+      const burstOrder = MANY_MEDIA.slice(1, 4);
+      const pendingPaintFrames = burst.filter((frame) => frame.at >= coldClickAt && frame.at < burstReleaseAt);
+      progress.burstPendingPaint = {
+        frames: pendingPaintFrames.length,
+        foregrounds: [...new Set(pendingPaintFrames.map((frame) => frame.centre?.asset ?? null))],
+        failed: pendingPaintFrames.length < 20
+          || pendingPaintFrames.some((frame) => frame.centre?.asset !== MANY_MEDIA[2]),
+      };
+      progress.burst = { ...burstGrade, expectedSequence: burstOrder,
+        failed: burstGrade.failed || burstGrade.foregroundReversals.length > 0
+          || JSON.stringify(burstGrade.foregroundSequence) !== JSON.stringify(burstOrder) };
+      const warmMisses = steps.filter((step) => !step.readRequestedBeforeClick);
+      record({ name,
+        claim: "browsing eight synthetic photographs forward, the warm window holds reads three ahead at rest and none beyond, every paced step starts on a read requested before its click, a two-click burst holds the third picture's read while the second stays painted in front, requests the read three beyond its latest intent, then moves the foreground strictly 1 -> 2 -> 3 with no return of the committed picture; no sampled frame shows a blank aperture, a waiting cover or a page painting another asset, with at most three pages",
+        ...progress, warmMisses,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.initialWarm || progress.beyondWindowAtRest.length > 0
+          || steps.some((step) => !step.requested || step.settled === false) || warmMisses.length > 0
+          || !progress.burstWarmedAhead || !progress.burstSecondPainted
+          || !progress.burstReadStillHeld || progress.burstPendingPaint.failed
+          || (progress.burstStateWhenWarmed.id === MANY_MEDIA[3] && progress.burstStateWhenWarmed.presentation === "settled")
+          || !progress.burstSettled || progress.paced.failed || progress.burst.failed
+          || progress.paint.frames === 0 || progress.paint.mismatches.length > 0
+          || progress.paint.maxPages > 3 || progress.paint.maxVideos > 1
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      story?.release(MANY_MEDIA[3]);
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // A painted handoff survives a cold next read across both Story surfaces.
+  // The newly active stage must put the retained page at the front and expose
+  // that same page to focus and assistive technology until the read lands.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-held-page-fullscreen-semantics";
+    const progress = {};
+    let story = null;
+    try {
+      const { page } = session;
+      const committed = MANY_MEDIA[1];
+      const painted = MANY_MEDIA[2];
+      const pending = MANY_MEDIA[3];
+      story = await openManyMediaStory(session, { gates: [pending] });
+      await waitForSettledAsset(page, MANY_MEDIA[0]);
+      await clickNextPhoto(page);
+      await waitForSettledAsset(page, committed);
+      const nextPoint = await photoClickPoint(page, STAGE, 1);
+      // Two trusted clicks in one browser burst request B and then cold C
+      // before B's spring can commit. A wait between clicks let B settle and
+      // never constructed the held-front state this case must grade.
+      await page.mouse.dblclick(nextPoint.x, nextPoint.y, { delay: 0 });
+      progress.requested = await waitForRequestedMedia(page, pending);
+      progress.painted = await page.waitForFunction(({ selector, id, owner, pending }) => {
+        const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const box = stage?.getBoundingClientRect();
+        if (!box) return false;
+        const front = document.elementsFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+          .find((node) => node instanceof HTMLImageElement && !node.hidden);
+        return front?.closest("[data-media-page]")?.getAttribute("data-media-page-id") === id
+          && stage.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === owner
+          && stage.querySelector('[data-media-presented="true"]')?.getAttribute("data-media-page-id") === id
+          && [...stage.querySelectorAll("[data-media-page-id]")]
+            .find((node) => node.getAttribute("data-media-page-id") === pending)
+            ?.getAttribute("data-media-page-ready") === "false";
+      }, { selector: STAGE, id: painted, owner: committed, pending }, { polling: "raf", timeout: 3_000 })
+        .then(() => true, () => false);
+      const heldState = async (selector) => page.evaluate(({ selector, committed, painted, pending }) => {
+        const root = document.querySelector(selector);
+        const stage = root?.querySelector("[data-story-media-pages]");
+        const pages = [...(stage?.querySelectorAll("[data-media-page-id]") ?? [])];
+        const pageFor = (id) => pages.find((node) => node.getAttribute("data-media-page-id") === id);
+        const front = pageFor(painted);
+        const old = pageFor(committed);
+        const next = pageFor(pending);
+        const image = front?.querySelector("img");
+        const style = front ? getComputedStyle(front) : null;
+        const matrix = style ? new DOMMatrixReadOnly(style.transform) : null;
+        return {
+          visible: Boolean(root && !root.hidden && getComputedStyle(root).display !== "none"),
+          committed: stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id"),
+          presented: stage?.querySelector('[data-media-presented="true"]')?.getAttribute("data-media-page-id"),
+          shared: front?.querySelector("[data-shared-media-id]")?.getAttribute("data-shared-media-id"),
+          oldHidden: old?.getAttribute("aria-hidden"),
+          frontHidden: front?.getAttribute("aria-hidden"),
+          oldTabIndex: old?.querySelector("img")?.tabIndex,
+          frontTabIndex: image?.tabIndex,
+          frontFocus: document.activeElement === image,
+          frontPointer: style?.pointerEvents,
+          nextReady: next?.getAttribute("data-media-page-ready"),
+          transform: style?.transform,
+          opacity: style?.opacity,
+          clipPath: front?.style.clipPath,
+          poseRest: Boolean(matrix && Math.abs(matrix.m11 - 1) < 0.001
+            && Math.abs(matrix.m22 - 1) < 0.001 && Math.abs(matrix.m33 - 1) < 0.001
+            && Math.abs(matrix.m41) < 0.5 && Math.abs(matrix.m42) < 0.5
+            && Math.abs(matrix.m43) < 0.5 && Number(style.opacity) > 0.999
+            && ["inset(0%)", "inset(0% 0%)"].includes(front.style.clipPath)),
+        };
+      }, { selector, committed, painted, pending });
+      progress.inline = await heldState(STAGE);
+      await page.locator(".journey-story__fullscreen-entry").click();
+      await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 4_000 });
+      await page.waitForFunction(() => !document.querySelector('[data-shared-element-clone^="story-fullscreen-"]'),
+        null, { polling: "raf", timeout: 4_000 });
+      progress.fullscreen = await heldState(FULLSCREEN);
+      await page.locator(".journey-story-fullscreen__close").click();
+      await page.waitForFunction(() => !document.querySelector('[data-shared-element-clone^="story-fullscreen-"]'),
+        null, { polling: "raf", timeout: 4_000 });
+      progress.returned = await heldState(STAGE);
+      progress.readHeld = story.reads.some((entry) => entry.id === pending && entry.servedAt === null);
+      await startSampler(page, STAGE);
+      progress.swipe = await swipeStage(page, STAGE, 1);
+      const swipeFrames = await stopSamplerFrames(page);
+      progress.swipeContinuity = gradeContinuity(swipeFrames, { allowedAssets: [painted] });
+      progress.afterSwipe = await heldState(STAGE);
+      story.release(pending);
+      await clickNextPhoto(page);
+      progress.settled = await waitForSettledAsset(page, pending).then(() => true, () => false);
+      const semantic = (state) => state.visible && state.committed === committed
+        && state.presented === painted && state.shared === painted
+        && state.oldHidden === "true" && state.frontHidden === "false"
+        && state.oldTabIndex === -1 && state.frontTabIndex === 0
+        && state.frontPointer === "auto" && state.nextReady === "false";
+      record({ name,
+        claim: "while C's signed read is withheld after B paints over committed A, B remains the visible, focusable, accessible page in both inline and fullscreen stages; each newly active stage gives B an unclipped front pose, and a swipe from B never returns to A before C can settle",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.painted || !progress.requested || !progress.readHeld || !progress.settled
+          || !semantic(progress.inline) || !progress.inline.frontFocus
+          || !semantic(progress.fullscreen) || !progress.fullscreen.poseRest
+          || !semantic(progress.returned) || !progress.returned.poseRest
+          || progress.swipeContinuity.failed || progress.afterSwipe.committed !== painted
+          || progress.afterSwipe.presented !== painted
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      story?.release(MANY_MEDIA[3]);
+      await session.page.close();
+    }
+  }
+
+  // The held page is the last visible observation even while a newer read is
+  // pending. Closing here must not hand Atlas the older committed asset.
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-held-page-close-observes-foreground";
+    const progress = {};
+    const committed = MANY_MEDIA[1];
+    const painted = MANY_MEDIA[2];
+    const pending = MANY_MEDIA[3];
+    let story = null;
+    try {
+      const { page } = session;
+      story = await openManyMediaStory(session, { gates: [pending] });
+      await waitForSettledAsset(page, MANY_MEDIA[0]);
+      await clickNextPhoto(page);
+      await waitForSettledAsset(page, committed);
+      const point = await photoClickPoint(page, STAGE, 1);
+      await page.mouse.dblclick(point.x, point.y, { delay: 0 });
+      progress.requested = await waitForRequestedMedia(page, pending);
+      progress.held = await page.waitForFunction(({ selector, oldId, frontId }) => {
+        const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        return stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") === oldId
+          && stage.querySelector('[data-media-presented="true"]')?.getAttribute("data-media-page-id") === frontId;
+      }, { selector: STAGE, oldId: committed, frontId: painted }, { polling: "raf", timeout: 3_000 })
+        .then(() => true, () => false);
+      progress.beforeClose = await page.locator(".living-atlas").getAttribute("data-qa-story-observation-asset");
+      progress.readHeld = story.reads.some((entry) => entry.id === pending && entry.servedAt === null);
+      await page.getByRole("button", { name: "退出旅程故事" }).click();
+      await page.locator(".journey-story").waitFor({ state: "detached", timeout: 3_000 });
+      progress.afterClose = await page.locator(".living-atlas").getAttribute("data-qa-story-observation-asset");
+      record({ name,
+        claim: "Close during a B-front/C-pending handoff reports B, the painted foreground, rather than committed A",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.requested || !progress.held || !progress.readHeld
+          || progress.beforeClose !== painted || progress.afterClose !== painted
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      story?.release(pending);
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // A (engine). #489 ST-159 hold, not flash: the read of the requested
+  // photograph is held back until this script releases it. The presented
+  // picture stays the settled foreground for that whole window, the target
+  // never paints before its read exists, and it commits once presentable.
+  // ---------------------------------------------------------------------
+  {
+    const session = await createStoryPage({ mobile: false });
+    const name = "story-slow-read-holds-presented-picture";
+    const progress = {};
+    const held = MANY_MEDIA[4];
+    let story = null;
+    try {
+      const { page } = session;
+      story = await openManyMediaStory(session, { gates: [held] });
+      await waitForSettledAsset(page, MANY_MEDIA[0]);
+      for (const index of [1, 2, 3]) {
+        await clickNextPhoto(page);
+        await waitForSettledAsset(page, MANY_MEDIA[index]);
+      }
+      await startSampler(page, STAGE);
+      await startPaintIdentityProbe(page, STAGE);
+      await clickNextPhoto(page);
+      progress.pending = await page.waitForFunction(({ selector, expected, owner }) => {
+        const requested = document.querySelector("[data-media-requested]")?.getAttribute("data-media-requested") ?? null;
+        const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const current = stage?.querySelector('[data-media-page="current"]');
+        return requested === expected && current?.getAttribute("data-media-page-id") === owner
+          && current.getAttribute("data-media-page-ready") === "true"
+          ? { requested, heldBy: owner, presentation: stage.getAttribute("data-media-presentation") } : null;
+      }, { selector: STAGE, expected: held, owner: MANY_MEDIA[3] }, { polling: "raf", timeout: 3_000 })
+        .then((handle) => handle.jsonValue(), () => null);
+      // Hold across a number of real frames, not a duration.
+      for (let frame = 0; frame < 30; frame += 1) await nextFrame(page);
+      progress.heldState = await currentAsset(page);
+      progress.readStillHeld = story.reads.some((entry) => entry.id === held && entry.servedAt === null);
+      const releasedAt = await pageClock(page);
+      story.release(held);
+      progress.committed = await waitForSettledAsset(page, held).then(() => true, () => false);
+      const frames = await stopSamplerFrames(page);
+      progress.paint = await stopPaintIdentityProbe(page);
+      progress.continuity = gradeContinuity(frames, { allowedAssets: MANY_MEDIA });
+      progress.earlyTarget = frames.filter((frame) => frame.centre?.asset === held && frame.at < releasedAt).slice(0, 4);
+      record({ name,
+        claim: "while the requested photograph's read is held back, the previous photograph stays the settled, readable foreground with no waiting cover and no foreign pixels, the target never reaches the foreground before its read is released, and it commits once presentable",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.pending || !progress.readStillHeld
+          || progress.heldState.id !== MANY_MEDIA[3] || !progress.heldState.ready
+          || progress.earlyTarget.length > 0 || !progress.committed || progress.continuity.failed
+          || progress.paint.mismatches.length > 0
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      story?.release(held);
       await session.page.close();
     }
   }
@@ -4021,12 +5310,13 @@ try {
     }
   }
 
-  // Fullscreen owns the paused transport until Close returns its position to
-  // inline. An expired signed read must be renewed by that active inline stage.
+  // The visible fullscreen stage must renew its own paused transport. Holding
+  // both the signature and the bytes proves that the old video remains the
+  // native target during the request and its decoded frame covers the decode.
   {
     const session = await createStoryPage({ mobile: false, renewPausedVideo: true });
     const progress = {};
-    const name = "story-paused-video-fullscreen-expiry-return-renewal";
+    const name = "story-paused-video-fullscreen-live-renewal";
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
@@ -4038,66 +5328,61 @@ try {
       progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
       progress.fullscreen = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
       await waitForPresentedVideoHit(page, FULLSCREEN, V1);
-      const fullscreenOwnedAt = Date.now();
-      await page.waitForFunction((issuedAt) => Date.now() >= issuedAt + 25_000,
-        session.renewal.initialRead.issuedAt, { polling: "raf", timeout: 30_000 });
-      progress.fullscreenAfterExpiry = await videoHandoffState(page, FULLSCREEN);
       progress.fullscreenPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
       progress.fullscreenFrame = gradePausedFrameIdentity(progress.beforePixels, progress.fullscreenPixels);
-      progress.readsWhileFullscreen = session.renewal.reads.filter((read) => read.startedAt >= fullscreenOwnedAt).length;
-      progress.close = await clickFullscreenClose(page);
-      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
-      progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
-      await waitForPresentedVideoHit(page, STAGE, V1);
-      progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
-      progress.returnedFrame = gradePausedFrameIdentity(progress.beforePixels, progress.returnedPixels);
-      progress.returnedPoint = await presentedVideoPoint(page, STAGE);
       progress.renewalRead = await waitForFixture(session.renewal.readStarted, 28_000,
-        "inline renewal after fullscreen Close");
-      progress.duringRead = await videoHandoffState(page, STAGE);
+        "fullscreen signed-read renewal");
+      progress.duringRead = await videoHandoffState(page, FULLSCREEN);
+      progress.duringReadPoint = await presentedVideoPoint(page, FULLSCREEN);
+      await startSampler(page, FULLSCREEN);
       session.renewal.releaseRead();
       progress.renewalBytes = await waitForFixture(session.renewal.byteStarted, 5_000,
-        "inline video bytes after fullscreen Close");
+        "fullscreen renewed video bytes");
       await page.waitForFunction(() => {
-        const stage = document.querySelector('.journey-story__media [data-story-media-pages]');
+        const stage = document.querySelector('.journey-story-fullscreen [data-story-media-pages]');
         const video = stage?.querySelector('.story-media-pages__video video');
         const frame = stage?.querySelector('[data-media-page="current"] canvas');
         return video instanceof HTMLVideoElement && video.hidden
           && video.getAttribute('src')?.includes('storyRenewal=2')
           && frame instanceof HTMLCanvasElement && frame.width > 0 && frame.height > 0;
       }, undefined, { polling: "raf", timeout: 4_000 });
-      progress.held = await heldRenewalFramePixels(page, STAGE);
+      progress.held = await heldRenewalFramePixels(page, FULLSCREEN);
       session.renewal.releaseBytes();
-      progress.after = await waitForVideoHandoffState(page, STAGE, V1, true);
-      progress.afterPixels = await pausedVideoScreenPixels(page, STAGE);
-      progress.renewedFrame = gradePausedFrameIdentity(progress.beforePixels, progress.afterPixels);
+      progress.after = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      progress.continuity = gradeContinuity(await stopSamplerFrames(page), { allowedAssets: [V1] });
+      progress.afterPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
+      progress.renewedFrame = gradePausedFrameIdentity(progress.fullscreenPixels, progress.afterPixels);
+      progress.afterPoint = await presentedVideoPoint(page, FULLSCREEN);
+      progress.close = await clickFullscreenClose(page);
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
+      progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await waitForPresentedVideoHit(page, STAGE, V1);
+      progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.returnedFrame = gradePausedFrameIdentity(progress.afterPixels, progress.returnedPixels);
       progress.returnHit = await clickReturnedVideo(page);
       const near = (left, right) => Number.isFinite(left) && Number.isFinite(right)
         && Math.abs(left - right) <= 0.18;
       record({ name,
-        claim: "fullscreen keeps ownership of an expired paused signed video; Close returns the same frame and native time, then the active inline stage renews with its old frame visible until the new seeked source is decoded and clickable",
+        claim: "an expired paused fullscreen video renews in the visible stage: signed request keeps the old native target, byte decode keeps its frame painted, and completion plus Close retain time, settings and native hit ownership",
         ...progress, renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
           || progress.beforePixels.failed || progress.fullscreenFrame.failed
           || progress.returnedFrame.failed || progress.held.failed || progress.renewedFrame.failed
-          || progress.readsWhileFullscreen !== 0
-          || progress.fullscreenAfterExpiry.src !== progress.before.src
-          || !near(progress.fullscreenAfterExpiry.time, progress.before.time)
-          || !progress.fullscreenAfterExpiry.paused
-          || progress.returned.src !== progress.before.src
-          || !near(progress.returned.time, progress.before.time) || !progress.returned.paused
-          || !progress.returnedPoint.hitIsVideo
+          || progress.continuity.failed || !progress.duringReadPoint.hitIsVideo
           || progress.renewalRead.count !== 2 || progress.renewalRead.releasedAt === null
           || progress.renewalBytes.releasedAt === null
-          || progress.duringRead.src !== progress.before.src
-          || !near(progress.duringRead.time, progress.before.time)
+          || progress.duringRead.src !== progress.fullscreen.src
+          || !near(progress.duringRead.time, progress.fullscreen.time) || !progress.duringRead.paused
           || !progress.held.videoSrc?.includes("storyRenewal=2")
           || !progress.after.src?.includes("storyRenewal=2")
-          || !near(progress.after.time, progress.before.time) || !progress.after.paused
+          || !near(progress.after.time, progress.fullscreen.time) || !progress.after.paused
           || progress.after.muted !== progress.before.muted
           || Math.abs(progress.after.volume - progress.before.volume) > 0.001
           || Math.abs(progress.after.playbackRate - progress.before.playbackRate) > 0.001
+          || !progress.afterPoint.hitIsVideo || !progress.afterPoint.controls
+          || progress.returned.src !== progress.after.src
+          || !near(progress.returned.time, progress.after.time) || !progress.returned.paused
           || progress.returnHit.failed
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
@@ -4106,6 +5391,294 @@ try {
         diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
     } finally {
+      session.renewal.releaseRead();
+      session.renewal.releaseBytes();
+      await session.page.close();
+    }
+  }
+
+  // Close while the refreshed fullscreen bytes are still pending. Inline must
+  // receive the visible retained bitmap and the intended native time before
+  // fullscreen disappears; the delayed bytes may complete afterward.
+  {
+    const session = await createStoryPage({ mobile: false, renewPausedVideo: true });
+    const progress = {};
+    const name = "story-fullscreen-close-during-renewal-bytes";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
+      progress.before = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await waitForPresentedVideoHit(page, FULLSCREEN, V1);
+      progress.beforePixels = await pausedVideoScreenPixels(page, FULLSCREEN);
+      progress.renewalRead = await waitForFixture(session.renewal.readStarted, 28_000,
+        "fullscreen renewal before Close");
+      session.renewal.releaseRead();
+      progress.renewalBytes = await waitForFixture(session.renewal.byteStarted, 5_000,
+        "fullscreen renewed bytes before Close");
+      await page.waitForFunction(() => {
+        const stage = document.querySelector('.journey-story-fullscreen [data-story-media-pages]');
+        const video = stage?.querySelector('.story-media-pages__video video');
+        return video instanceof HTMLVideoElement && video.hidden
+          && stage?.querySelector('[data-media-page="current"] canvas:not([hidden])');
+      }, undefined, { polling: "raf", timeout: 4_000 });
+      progress.fullscreenHeld = await heldRenewalFramePixels(page, FULLSCREEN);
+      progress.close = await clickFullscreenClose(page);
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 4_000 });
+      progress.inlineHeld = await heldRenewalFramePixels(page, STAGE);
+      session.renewal.releaseBytes();
+      progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await waitForPresentedVideoHit(page, STAGE, V1);
+      progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.returnedFrame = gradePausedFrameIdentity(progress.beforePixels, progress.returnedPixels);
+      progress.returnedPoint = await presentedVideoPoint(page, STAGE);
+      const near = (left, right) => Number.isFinite(left) && Number.isFinite(right)
+        && Math.abs(left - right) <= 0.18;
+      record({ name,
+        claim: "Close during delayed fullscreen renewal bytes immediately returns the same painted frame to Story, then the single inline video restores its paused time and native click target",
+        ...progress, renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.beforePixels.failed || progress.fullscreenHeld.failed
+          || progress.inlineHeld.failed || progress.returnedFrame.failed
+          || progress.renewalRead.count !== 2 || progress.renewalBytes.releasedAt === null
+          || !progress.returned.src?.includes("storyRenewal=2")
+          || !near(progress.returned.time, progress.before.time) || !progress.returned.paused
+          || !progress.returnedPoint.hitIsVideo || !progress.returnedPoint.controls
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      session.renewal.releaseRead();
+      session.renewal.releaseBytes();
+      await session.page.close();
+    }
+  }
+
+  for (const failure of ["read", "bytes"]) {
+    const session = await createStoryPage({ mobile: false, renewPausedVideo: true,
+      renewalReadFailure: failure === "read", renewalByteFailure: failure === "bytes",
+      renewalSameUrlRetry: failure === "bytes" });
+    const progress = { failure };
+    const name = `story-fullscreen-renewal-${failure}-failure-retry-close`;
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.before = await waitForVideoHandoffState(page, STAGE, V1, true);
+      progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
+      if (failure === "bytes") {
+        progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
+        progress.entered = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+        await waitForPresentedVideoHit(page, FULLSCREEN, V1);
+      }
+      progress.renewalRead = await waitForFixture(session.renewal.readStarted, 28_000,
+        `fullscreen ${failure} failing signed renewal`);
+      if (failure === "bytes") progress.beforeRelease = await videoHandoffFailureDiagnostic(page);
+      session.renewal.releaseRead();
+      if (failure === "bytes") {
+        progress.renewalBytes = await waitForFixture(session.renewal.byteStarted, 5_000,
+          "failing fullscreen renewed bytes");
+        session.renewal.releaseBytes();
+      }
+      const errorRoot = failure === "read" ? STAGE : FULLSCREEN;
+      await page.locator(`${errorRoot} .journey-story__media-state.is-over-media[role="alert"]`)
+        .waitFor({ state: "visible", timeout: 8_000 });
+      if (failure === "read") {
+        progress.inlineAlertFrame = await heldRenewalFramePixels(page, STAGE, { videoHidden: false });
+        progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
+        progress.entered = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+        await waitForPresentedVideoHit(page, FULLSCREEN, V1);
+      }
+      const notice = page.locator(`${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"]`);
+      await notice.waitFor({ state: "visible", timeout: 4_000 });
+      progress.errorFrame = await heldRenewalFramePixels(page, FULLSCREEN,
+        { videoHidden: failure === "bytes" });
+      progress.noWaiting = await page.locator(`${FULLSCREEN} .starlight-media-state.is-waiting`).count() === 0;
+      if (failure === "bytes") await page.evaluate(() => {
+        const video = document.querySelector('.journey-story-fullscreen .story-media-pages__video video');
+        window.__qaFullscreenRetryVideo = video;
+        window.__qaFullscreenRetryLoads = 0;
+        video.addEventListener("loadstart", () => { window.__qaFullscreenRetryLoads += 1; });
+      });
+      progress.retryClick = await clickHandoffButton(page,
+        `${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"] button`);
+      progress.retryRead = await waitForFixture(session.renewal.retryReadStarted, 5_000,
+        "fullscreen retry signed read");
+      progress.retryReadFrame = await heldRenewalFramePixels(page, FULLSCREEN,
+        { videoHidden: failure === "bytes" });
+      session.renewal.releaseRetryRead();
+      progress.retryBytes = await waitForFixture(session.renewal.retryByteStarted, 5_000,
+        "fullscreen retry video bytes");
+      if (failure === "bytes") {
+        await page.waitForFunction(() => window.__qaFullscreenRetryLoads > 0,
+          undefined, { polling: "raf", timeout: 4_000 });
+        progress.sameUrlTransport = await page.evaluate(() => ({
+          sameNode: document.querySelector('.journey-story-fullscreen .story-media-pages__video video')
+            === window.__qaFullscreenRetryVideo,
+          loadStarts: window.__qaFullscreenRetryLoads,
+        }));
+      }
+      progress.retryByteFrame = await heldRenewalFramePixels(page, FULLSCREEN);
+      session.renewal.releaseRetryBytes();
+      progress.after = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await notice.waitFor({ state: "hidden", timeout: 4_000 });
+      progress.noticeCleared = await notice.count() === 0;
+      progress.afterPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
+      progress.frameIdentity = gradePausedFrameIdentity(progress.beforePixels, progress.afterPixels);
+      progress.afterPoint = await presentedVideoPoint(page, FULLSCREEN);
+      progress.close = await clickFullscreenClose(page);
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
+      progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await waitForPresentedVideoHit(page, STAGE, V1);
+      progress.returnedPoint = await presentedVideoPoint(page, STAGE);
+      progress.unexpectedConsoleErrors = session.consoleErrors.filter((message) => !message.includes("503"));
+      const near = (left, right) => Number.isFinite(left) && Number.isFinite(right)
+        && Math.abs(left - right) <= 0.18;
+      record({ name,
+        claim: failure === "read"
+          ? "a retained renewal alert does not interrupt Story-to-fullscreen handoff; fullscreen Retry restores the paused frame and Close returns its time"
+          : "fullscreen byte failure leaves a visible frame and Retry; even a repeated signed URL reloads real bytes on the same video node before Close",
+        ...progress, renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
+          || progress.inlineAlertFrame?.failed || progress.errorFrame.failed
+          || progress.retryReadFrame.failed || progress.retryByteFrame.failed
+          || progress.frameIdentity.failed || !progress.noWaiting || !progress.retryClick.hit.hitButton
+          || progress.renewalRead.outcome !== (failure === "read" ? "failed" : "ready")
+          || (failure === "bytes" && progress.renewalBytes?.outcome !== "failed")
+          || progress.retryRead.count !== 3 || progress.retryRead.outcome !== "ready"
+          || progress.retryBytes.outcome !== "continued" || !progress.noticeCleared
+          || (failure === "bytes" && (progress.retryRead.url !== progress.renewalRead.url
+            || progress.retryBytes.url !== progress.renewalBytes.url
+            || !progress.sameUrlTransport?.sameNode || progress.sameUrlTransport.loadStarts < 1))
+          || !progress.afterPoint.hitIsVideo || !progress.afterPoint.controls
+          || !near(progress.after.time, progress.before.time) || !progress.after.paused
+          || !near(progress.returned.time, progress.after.time) || !progress.returned.paused
+          || !progress.returnedPoint.hitIsVideo || progress.returned.src !== progress.after.src
+          || progress.unexpectedConsoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      session.renewal.releaseRead();
+      session.renewal.releaseBytes();
+      session.renewal.releaseRetryRead();
+      session.renewal.releaseRetryBytes();
+      await session.page.close();
+    }
+  }
+
+  // The old capability can be rejected between expiry sweeps when a viewer
+  // seeks into bytes the browser has never fetched. A real native timeline
+  // gesture must receive Range 403, then Retry obtains new bytes and seeks to
+  // that requested time rather than returning to the retained picture's time.
+  {
+    const session = await createStoryPage({ mobile: false, renewPausedVideo: true,
+      expiredRangeFailure: true });
+    const progress = {};
+    const name = "story-fullscreen-expired-range-seek-retry";
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I1);
+      progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.initialSeek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.43 });
+      progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
+      progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
+      progress.before = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await waitForPresentedVideoHit(page, FULLSCREEN, V1);
+      progress.beforePoint = await presentedVideoPoint(page, FULLSCREEN);
+      progress.beforePixels = await pausedVideoScreenPixels(page, FULLSCREEN);
+      await page.waitForFunction((expiresAt) => Date.now() >= expiresAt + 100,
+        session.renewal.initialRead.expiresAt, { polling: "raf", timeout: 9_000 });
+      progress.seek = await seekExpiredNativeTimeline(page, FULLSCREEN, session.renewal.armExpiredSeek, 0.97);
+      progress.preErrorScreen = await capturePreErrorScreen(page, FULLSCREEN);
+      session.renewal.releaseExpiredRanges(progress.seek.seekStartedAt ?? Number.POSITIVE_INFINITY);
+      progress.oldRange = await waitForFixture(session.renewal.expiredRangeDenied, 8_000,
+        "expired old URL Range 403 after native seek");
+      const notice = page.locator(`${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"]`);
+      await notice.waitFor({ state: "visible", timeout: 8_000 });
+      progress.errorFrame = await heldRenewalFramePixels(page, FULLSCREEN,
+        { heldFrame: "match" });
+      progress.noWaiting = await page.locator(`${FULLSCREEN} .starlight-media-state.is-waiting`).count() === 0;
+      progress.retryClick = await clickHandoffButton(page,
+        `${FULLSCREEN} .journey-story__media-state.is-over-media[role="alert"] button`);
+      progress.retryRead = await waitForFixture(session.renewal.readStarted, 5_000,
+        "expired range retry signed read");
+      progress.retryReadFrame = await heldRenewalFramePixels(page, FULLSCREEN,
+        { heldFrame: "match" });
+      session.renewal.releaseRead();
+      progress.retryBytes = await waitForFixture(session.renewal.byteStarted, 5_000,
+        "expired range retry video bytes");
+      progress.retryByteFrame = await heldRenewalFramePixels(page, FULLSCREEN,
+        { heldFrame: "match" });
+      session.renewal.releaseBytes();
+      progress.after = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
+      await notice.waitFor({ state: "hidden", timeout: 4_000 });
+      await waitForPresentedVideoHit(page, FULLSCREEN, V1);
+      // Retry has reached the originally requested later time. Compare its
+      // own decoded picture with the screen, then compare Close with that same
+      // new picture; the pre-seek frame has a different timeline position.
+      await page.evaluate(() => { window.__qaPausedFrameReference = null; });
+      progress.afterPixels = await pausedVideoScreenPixels(page, FULLSCREEN);
+      progress.afterPoint = await presentedVideoPoint(page, FULLSCREEN);
+      progress.close = await clickFullscreenClose(page);
+      await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
+      progress.returned = await waitForVideoHandoffState(page, STAGE, V1, true);
+      await waitForPresentedVideoHit(page, STAGE, V1);
+      progress.returnedPixels = await pausedVideoScreenPixels(page, STAGE);
+      progress.returnedFrame = gradePausedFrameIdentity(progress.afterPixels, progress.returnedPixels);
+      progress.returnedPoint = await presentedVideoPoint(page, STAGE);
+      progress.intendedTime = progress.seek.probe?.events.filter((event) => event.type === "seeking"
+        && event.trusted && event.at >= progress.seek.probe.startedAt).at(-1)?.time ?? null;
+      progress.unexpectedConsoleErrors = session.consoleErrors.filter((message) => !message.includes("403"));
+      const near = (left, right) => Number.isFinite(left) && Number.isFinite(right)
+        && Math.abs(left - right) <= 0.3;
+      record({ name,
+        claim: "a real native seek into uncached bytes receives old-URL Range 403 after TTL; fullscreen keeps its last painted frame and Retry uses a new signed URL to restore the requested time, native target, and Close position",
+        ...progress, preSeekRanges: session.renewal.preSeekRanges,
+        oldRanges: session.renewal.expiredRanges,
+        renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.toVideo.ok || progress.initialSeek.failed || progress.pause.failed || progress.seek.failed
+          || progress.beforePixels.failed || progress.preErrorScreen.failed
+          || progress.errorFrame.failed
+          || progress.retryReadFrame.failed || progress.retryByteFrame.failed
+          || progress.afterPixels.failed || progress.returnedFrame.failed
+          || !progress.beforePoint.hitIsVideo || !progress.noWaiting
+          || !progress.retryClick.hit.hitButton || progress.oldRange.status !== 403
+          || !progress.oldRange.range?.startsWith("bytes=")
+          || !progress.oldRange.url.includes("storyRenewal=1")
+          || progress.oldRange.requestedAt < progress.seek.seekStartedAt
+          || progress.oldRange.at < session.renewal.initialRead.expiresAt
+          || progress.retryRead.count !== 2 || progress.retryRead.outcome !== "ready"
+          || progress.retryBytes.outcome !== "continued"
+          || !progress.retryBytes.url.includes("storyRenewal=2")
+          || !progress.after.src?.includes("storyRenewal=2")
+          || !near(progress.after.time, progress.intendedTime) || !progress.after.paused
+          || !(progress.before.time < progress.intendedTime - 1)
+          || !progress.afterPoint.hitIsVideo || !progress.afterPoint.controls
+          || !near(progress.returned.time, progress.after.time) || !progress.returned.paused
+          || !progress.returnedPoint.hitIsVideo || progress.returned.src !== progress.after.src
+          || progress.unexpectedConsoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, preSeekRanges: session.renewal.preSeekRanges,
+        error: error instanceof Error ? error.message : String(error),
+        diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      session.renewal.releaseExpiredRanges();
       session.renewal.releaseRead();
       session.renewal.releaseBytes();
       await session.page.close();

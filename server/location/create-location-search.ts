@@ -7,6 +7,8 @@ type CreateLocationSearchOptions = {
   driver: string;
   baseUrl: string;
   userAgent: string;
+  /** Nominatim consulted when Photon cannot name a Chinese query (#547). */
+  fallbackBaseUrl?: string | null;
 };
 
 export function createLocationSearch(
@@ -23,6 +25,14 @@ export function createLocationSearch(
     return new PhotonLocationSearch({
       baseUrl: options.baseUrl,
       userAgent: options.userAgent,
+      ...(options.fallbackBaseUrl
+        ? {
+          fallback: new NominatimLocationSearch({
+            baseUrl: options.fallbackBaseUrl,
+            userAgent: options.userAgent,
+          }),
+        }
+        : {}),
     });
   }
   throw new Error(

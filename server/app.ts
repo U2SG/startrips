@@ -6,7 +6,10 @@ import { AtlasAccessError } from "./authorization/atlas-access";
 import { ShareAccessError } from "./authorization/share-access";
 import { CoverRevealWorkerAccessError } from "./cover-reveal/worker-credential";
 import { db } from "./db/client";
-import { LocationSearchUnavailableError } from "./location/location-search";
+import {
+  LocationSearchInvalidError,
+  LocationSearchUnavailableError,
+} from "./location/location-search";
 import {
   ItineraryImportStageError,
   itineraryImportStageFailure,
@@ -181,6 +184,10 @@ app.onError((error, context) => {
       { error: "STORAGE_UNAVAILABLE", message: error.message },
       503,
     );
+  }
+  // #546: unusable search parameters, such as a half-given search focus.
+  if (error instanceof LocationSearchInvalidError) {
+    return context.json({ error: error.code, message: error.message }, 400);
   }
   if (error instanceof LocationSearchUnavailableError) {
     return context.json(

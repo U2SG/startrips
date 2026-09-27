@@ -6,9 +6,16 @@ import { safeReturnPath, validProviderId } from "./identity-policy";
  *
  * The PKCE code verifier must never travel through the browser address bar or
  * through the provider's redirect -- that is the whole point of PKCE -- so it
- * lives in an HttpOnly, SameSite=Lax cookie for the ten minutes the
- * authorization round trip may take. `Lax` is required and sufficient: the
- * return from Google is a top-level GET navigation.
+ * lives in an HttpOnly cookie for the ten minutes the authorization round trip
+ * may take. A provider that opts out of PKCE (#504: Apple) carries `null`
+ * there instead, and the callback checks that against the provider's policy.
+ *
+ * #504: the cookie is `SameSite=None; Secure`. Google returns with a
+ * top-level GET, which `Lax` allowed, but Apple returns with
+ * `response_mode=form_post` -- a cross-site POST, on which a browser sends no
+ * `Lax` cookie at all. `None` requires `Secure`; the state inside is still
+ * signed, HttpOnly, path-scoped and single-use, so what it widens is only WHEN
+ * the browser presents it, never who can read or author it.
  *
  * The cookie is signed for the same reason `provider-proof.ts` signs its
  * token: the callback trusts every field in it -- which user, which session,
@@ -30,7 +37,7 @@ export type IdentityBindState = {
   userId: string;
   sessionId: string;
   state: string;
-  codeVerifier: string;
+  codeVerifier: string | null;
   returnPath: string;
   issuedAt: number;
   expiresAt: number;
@@ -97,9 +104,11 @@ export function readIdentityBindState(
     || typeof bind.sessionId !== "string"
     || typeof bind.state !== "string"
     || bind.state.length < 16
-    || typeof bind.codeVerifier !== "string"
-    || bind.codeVerifier.length < 43
-    || bind.codeVerifier.length > 128
+    || (bind.codeVerifier !== null && (
+      typeof bind.codeVerifier !== "string"
+      || bind.codeVerifier.length < 43
+      || bind.codeVerifier.length > 128
+    ))
     || safeReturnPath(bind.returnPath) === null
     || typeof bind.issuedAt !== "number"
     || typeof bind.expiresAt !== "number"

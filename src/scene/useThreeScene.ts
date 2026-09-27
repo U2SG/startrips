@@ -32,6 +32,7 @@ export function disposeSceneGraph(root: Object3D) {
 
 export function useThreeScene<T extends DisposableController>(
   createController: (host: HTMLDivElement) => T,
+  onCreateError?: (error: unknown, host: HTMLDivElement) => void,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<T | null>(null);
@@ -42,12 +43,21 @@ export function useThreeScene<T extends DisposableController>(
   // disposed first-pass instance.
   const [controllerRevision, setControllerRevision] = useState(0);
   const factoryRef = useRef(createController);
+  const createErrorRef = useRef(onCreateError);
   factoryRef.current = createController;
+  createErrorRef.current = onCreateError;
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const controller = factoryRef.current(host);
+    let controller: T;
+    try {
+      controller = factoryRef.current(host);
+    } catch (error) {
+      controllerRef.current = null;
+      createErrorRef.current?.(error, host);
+      return;
+    }
     controllerRef.current = controller;
     setControllerRevision((revision) => revision + 1);
 

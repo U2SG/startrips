@@ -1,4 +1,8 @@
-.journey-playback__media.playback-media-presentation {
+/* Q1: the arrival's opening still and the stage's slots share ONE aperture:
+   the same box as the media region, the same inset and the same contain fit,
+   so one asset keeps one rendered rect across the stop -> media handoff. */
+.journey-playback__media.playback-media-presentation,
+.journey-playback__chapter-aperture {
   position: relative;
   overflow: hidden;
   isolation: isolate;
@@ -31,7 +35,13 @@
   filter: drop-shadow(0 10px 18px rgb(0 0 0 / 20%));
 }
 
-.playback-media-presentation__slot {
+.journey-playback__chapter-aperture {
+  width: 100%;
+  height: 100%;
+}
+
+.playback-media-presentation__slot,
+.journey-playback__chapter-aperture-frame {
   position: absolute;
   inset: clamp(18px, 5%, 48px);
   display: grid;
@@ -45,7 +55,8 @@
 }
 .playback-media-presentation__slot:not([data-media-asset]) { display: none; }
 
-.journey-playback__media .playback-media-presentation__slot > :is(img, video, canvas) {
+.journey-playback__media .playback-media-presentation__slot > :is(img, video, canvas),
+.journey-playback__chapter-aperture-frame > img {
   display: block;
   width: 100%;
   height: 100%;

@@ -250,13 +250,15 @@ try {
     await page.keyboard.press("Space");
     await page.locator(".story-media-organizer__drag-stack").waitFor({ state: "visible" });
     await page.keyboard.press("ArrowRight");
-    // Collision measurement and its accessible announcement settle after the
-    // key event. Dropping immediately can still use the previous over target.
-    await page.waitForFunction((id) => [...document.querySelectorAll('[id^="DndLiveRegion"]')]
-      .some((node) => node.textContent?.includes(`over droppable area ${id}`)), assetId(2), { timeout: 3_000 })
+    // Drop only after the sortable target commits the collision result to the DOM.
+    await page.waitForFunction((id) => {
+      const over = document.querySelectorAll('.story-media-organizer__item[data-drag-over="true"]');
+      return over.length === 1 && over[0].getAttribute("data-media-tile-id") === id;
+    }, assetId(2), { timeout: 3_000 })
       .catch(async (error) => {
-        const targets = await page.locator('[id^="DndLiveRegion"]').allTextContents();
-        throw new Error(`Keyboard sort did not select seed-2: ${JSON.stringify(targets)}`, { cause: error });
+        const over = await page.locator('.story-media-organizer__item[data-drag-over="true"]')
+          .evaluateAll((tiles) => tiles.map((tile) => tile.getAttribute("data-media-tile-id")));
+        throw new Error(`Keyboard sort did not select seed-2: ${JSON.stringify(over)}`, { cause: error });
       });
     const reorderResponse = page.waitForResponse((response) => response.url().endsWith("/api/uploads/assets/reorder"));
     await page.keyboard.press("Space");

@@ -95,6 +95,10 @@ class ActionCases(unittest.TestCase):
         self.pr['mergeable'] = False
         self.assertEqual('REPAIR_CONFLICT', self.action(True))
 
+    def test_uncomputed_mergeability_is_missing_evidence(self):
+        self.pr['mergeable'] = None
+        self.assertEqual('WAIT_EVIDENCE', self.action(True))
+
     def test_merged_pending_main_ci_does_not_reimplement(self):
         self.pr['merged'] = True
         self.assertEqual('WAIT_MAIN_CI', self.action(True))

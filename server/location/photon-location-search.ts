@@ -1,6 +1,8 @@
 import {
   fetchLocationSearch,
+  locationSearchFocusKey,
   LocationSearchUnavailableError,
+  roundLocationSearchFocus,
   throwIfLocationSearchAborted,
   waitForLocationSearchDelay,
   type LocationSearch,
@@ -9,8 +11,10 @@ import {
   type ReverseLocationOptions,
 } from "./location-search";
 import {
+  isHanQuery,
   namesSamePlace,
   resolveEnglishPlaceQuery,
+  resolveNameVariant,
   type PlaceNameAliasResolver,
 } from "./place-name-aliases";
 
@@ -38,6 +42,13 @@ type PhotonLocationSearchOptions = {
   cacheTtlMs?: number;
   requestTimeoutMs?: number;
   placeNameAliases?: PlaceNameAliasResolver;
+  /**
+   * A second provider consulted only for an all-Han query that this one
+   * cannot answer by name (#547). Photon indexes just the translations chosen
+   * at import time, so a foreign landmark's `name:zh` is often absent here
+   * while a Nominatim over the same OSM data still matches it.
+   */
+  fallback?: LocationSearch;
 };
 
 const DEFAULT_REQUEST_INTERVAL_MS = 1_000;
@@ -216,6 +227,7 @@ export class PhotonLocationSearch implements LocationSearch {
   private readonly cacheTtlMs: number;
   private readonly requestTimeoutMs: number;
   private readonly placeNameAliases: PlaceNameAliasResolver;
+  private readonly fallback: LocationSearch | null;
   private readonly cache = new Map<string, CachedResults>();
   private queue: Promise<void> = Promise.resolve();
   private nextRequestAt = 0;
@@ -229,19 +241,33 @@ export class PhotonLocationSearch implements LocationSearch {
     this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.placeNameAliases = options.placeNameAliases ?? resolveEnglishPlaceQuery;
+    this.fallback = options.fallback ?? null;
   }
 
   search(
     query: string,
     options: LocationSearchOptions,
   ): Promise<LocationSearchResult[]> {
-    const normalizedQuery = query.trim().replace(/\s+/g, " ");
+    const typedQuery = query.trim().replace(/\s+/g, " ");
+    const normalizedQuery = resolveNameVariant(typedQuery);
+    // #546: Photon's own location bias. It reorders by distance to lat/lon
+    // but never drops far-away matches, and both round trips carry it so they
+    // rank against the same Journey context.
+    const focus = roundLocationSearchFocus(options.focus);
+    const focusKey = locationSearchFocusKey(focus);
+    const withFocus = (url: URL) => {
+      if (focus) {
+        url.searchParams.set("lat", String(focus.latitude));
+        url.searchParams.set("lon", String(focus.longitude));
+      }
+      return url;
+    };
     const primaryUrl = new URL("api/", this.baseUrl);
     primaryUrl.searchParams.set("q", normalizedQuery);
     primaryUrl.searchParams.set("limit", String(options.limit));
     return this.requestFeatures(
-      primaryUrl,
-      `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}`,
+      withFocus(primaryUrl),
+      `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}${focusKey}`,
       { limit: options.limit, signal: options.signal },
     ).then(async (primaryResults) => {
       // The English request is queued behind the primary one — a full
@@ -270,24 +296,72 @@ export class PhotonLocationSearch implements LocationSearch {
       englishUrl.searchParams.set("q", englishQuery);
       englishUrl.searchParams.set("limit", String(options.limit));
       englishUrl.searchParams.set("lang", "en");
-      let englishResults: LocationSearchResult[];
+      let englishResults: LocationSearchResult[] | null;
       try {
         englishResults = await this.requestFeatures(
-          englishUrl,
-          `search:${englishQuery.toLocaleLowerCase()}::${options.limit}::lang=en`,
+          withFocus(englishUrl),
+          `search:${englishQuery.toLocaleLowerCase()}::${options.limit}::lang=en${focusKey}`,
           { limit: options.limit, signal: options.signal },
         );
       } catch {
         throwIfLocationSearchAborted(options.signal);
-        return primaryResults;
+        englishResults = null;
       }
-      return mergeBilingualResults(
-        primaryResults,
-        englishResults,
-        options.limit,
-        englishQuery !== normalizedQuery && hasNonAscii(normalizedQuery),
-      );
+      const results = englishResults
+        ? mergeBilingualResults(
+          primaryResults,
+          englishResults,
+          options.limit,
+          englishQuery !== normalizedQuery && hasNonAscii(normalizedQuery),
+        )
+        : primaryResults;
+      const names = [...new Set([normalizedQuery, typedQuery, englishQuery])];
+      if (
+        !this.fallback
+        || !isHanQuery(normalizedQuery)
+        || results.some((result) => names.some((name) => namesQuery(result, name)))
+      ) {
+        return results;
+      }
+      return this.searchFallback(this.fallback, normalizedQuery, names, results, options);
     });
+  }
+
+  /**
+   * The fallback runs behind the primary answer and only for a query that
+   * answer did not name, so a confident local query such as `深圳` never pays
+   * for it. Only fallback hits that name the query are admitted, ahead of the
+   * primary answer in its own order: a fuzzy fallback hit is not evidence of
+   * the place asked for, so without a named hit the primary answer — possibly
+   * empty — is returned exactly as the provider gave it. A failed fallback leaves a
+   * non-empty primary answer standing, but an empty one is reported as
+   * unavailable rather than as "no such place".
+   */
+  private async searchFallback(
+    fallback: LocationSearch,
+    query: string,
+    names: readonly string[],
+    results: LocationSearchResult[],
+    options: LocationSearchOptions,
+  ): Promise<LocationSearchResult[]> {
+    let fallbackResults: LocationSearchResult[];
+    try {
+      fallbackResults = await fallback.search(query, options);
+    } catch (cause) {
+      throwIfLocationSearchAborted(options.signal);
+      if (results.length > 0) return results;
+      throw cause instanceof LocationSearchUnavailableError
+        ? cause
+        : new LocationSearchUnavailableError("Location search fallback request failed");
+    }
+    const named = fallbackResults.filter((result) =>
+      names.some((name) => namesQuery(result, name)));
+    if (named.length === 0) return results;
+    const output: LocationSearchResult[] = [];
+    for (const result of [...named, ...results]) {
+      if (!output.some((kept) => samePlace(kept, result))) output.push(result);
+    }
+    return output.slice(0, options.limit);
   }
 
   reverse(

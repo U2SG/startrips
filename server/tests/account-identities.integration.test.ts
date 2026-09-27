@@ -561,6 +561,40 @@ describe("account identity repository", () => {
     expect(remaining.filter((method) => method.usable)).toHaveLength(1);
   });
 
+  it("refuses an unlink that would leave only stale provider emails as the recovery channel", async () => {
+    const fixture = await seedUser("stale-provider-recovery", false);
+    const google = await linkIdentity(fixture, {
+      providerId: "google",
+      subject: randomUUID(),
+      email: "first@example.test",
+      emailVerified: true,
+    });
+    await linkIdentity(fixture, {
+      providerId: "apple",
+      subject: randomUUID(),
+      email: "relay@privaterelay.appleid.com",
+      emailVerified: true,
+    }, 20_000);
+    // #486: the Account's own address is no longer verified, so the remaining
+    // Apple identity can sign in but offers no reachable recovery channel.
+    await db.update(authUser).set({ emailVerified: false }).where(eq(authUser.id, fixture.userId));
+    const configured = new Set(["google", "apple"]);
+    const before = await listAccountIdentityMethods(fixture.userId, configured);
+    expect(before.map((method) => [method.usable, method.canUnlink])).toEqual([[true, false], [true, false]]);
+
+    const grant = await reverify(fixture.userId, fixture.sessionId, 40_000);
+    await expect(unlinkAccountIdentity({
+      userId: fixture.userId,
+      sessionId: fixture.sessionId,
+      accountRecordId: google.result.accountRecordId,
+      reverificationToken: grant.token,
+      usableProviderIds: configured,
+      now: new Date(TEST_NOW.getTime() + 41_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_LAST_USABLE_LOGIN" });
+    const after = await listAccountIdentityMethods(fixture.userId, configured);
+    expect(after).toHaveLength(2);
+  });
+
   it("makes a successful unlink retry idempotent and preserves the current session", async () => {
     const fixture = await seedUser("unlink-idempotent");
     const linked = await linkIdentity(fixture, {

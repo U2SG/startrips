@@ -218,4 +218,47 @@ describe("NominatimLocationSearch", () => {
     expect(errors).toHaveLength(24);
     expect(errors.every((error) => error instanceof LocationSearchUnavailableError)).toBe(true);
   });
+
+  it("biases towards a rounded focus with an unbounded viewbox and caches per focus", async () => {
+    const fetchMock = vi.fn(async () => Response.json([]));
+    const search = new NominatimLocationSearch({
+      baseUrl: "https://nominatim.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await search.search("Palace", { limit: 8 });
+    await search.search("Palace", { limit: 8, focus: { latitude: 39.9042, longitude: 116.4074 } });
+    // Rounds to the same ~1 km cell as the previous focus: served from cache.
+    await search.search("Palace", { limit: 8, focus: { latitude: 39.9001, longitude: 116.4051 } });
+    await search.search("Palace", { limit: 8, focus: { latitude: 22.3193, longitude: 114.1694 } });
+    // The focus-free answer is still its own entry, never a biased one.
+    await search.search("Palace", { limit: 8 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const urls = fetchMock.mock.calls.map((call) => (call as unknown as [URL])[0]);
+    expect(String(urls[0])).toBe(
+      "https://nominatim.example.test/search?q=Palace&format=jsonv2&addressdetails=1&namedetails=1&accept-language=zh-CN%2Czh%2Cen&limit=8",
+    );
+    expect(urls[1].searchParams.get("viewbox")).toBe("115.91,40.4,116.91,39.4");
+    expect(urls[1].searchParams.get("bounded")).toBe("0");
+    expect(urls[2].searchParams.get("viewbox")).toBe("113.67,22.82,114.67,21.82");
+    expect(urls[2].searchParams.get("bounded")).toBe("0");
+  });
+
+  it("clamps the focus viewbox to valid coordinates near the poles and antimeridian", async () => {
+    const fetchMock = vi.fn(async () => Response.json([]));
+    const search = new NominatimLocationSearch({
+      baseUrl: "https://nominatim.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await search.search("station", { limit: 8, focus: { latitude: 89.9, longitude: 179.9 } });
+
+    const url = (fetchMock.mock.calls[0] as unknown as [URL])[0];
+    expect(url.searchParams.get("viewbox")).toBe("179.4,90,180,89.4");
+  });
 });

@@ -34,6 +34,12 @@ export function mediaStackClip(page: HTMLElement, front: HTMLElement | null): [n
   const media = front.querySelector<HTMLImageElement | HTMLCanvasElement>('img:not([hidden]), canvas:not([hidden])');
   const width = media instanceof HTMLImageElement ? media.naturalWidth : media?.width;
   const height = media instanceof HTMLImageElement ? media.naturalHeight : media?.height;
+  return mediaStackApertureClip(page, width ?? 0, height ?? 0);
+}
+
+/** Symmetric [vertical, horizontal] percentage insets that clip `page` to a
+ * width x height picture contain-fitted in a box of the same size. */
+export function mediaStackApertureClip(page: HTMLElement, width: number, height: number): [number, number] {
   if (!width || !height || !page.clientWidth || !page.clientHeight) return [0, 0];
   const fit = Math.min(page.clientWidth / width, page.clientHeight / height);
   return [(1 - height * fit / page.clientHeight) * 50, (1 - width * fit / page.clientWidth) * 50];

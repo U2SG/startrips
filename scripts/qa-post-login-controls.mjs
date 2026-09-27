@@ -1916,6 +1916,10 @@ async function verifyFinalAcceptanceMobileFlow() {
 
   for (const [viewportLabel, width, height] of viewports) {
     console.error(`[qa-post-login] final:${viewportLabel}:start`);
+    // This flow checks valid signed media and an authenticated session. A
+    // calendar expiry made both fixtures stale on 2026-09-27, so playback could
+    // never start even though the real click and readiness checks were sound.
+    const validFixtureExpiry = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const context = await browser.newContext({
       viewport: { width, height },
       isMobile: true,
@@ -2201,7 +2205,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         id: "fa-session",
         userId: "qa-user",
         token: "fa-token",
-        expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        expiresAt: validFixtureExpiry,
         createdAt: "2026-08-26T00:00:00.000Z",
         updatedAt: "2026-08-26T00:00:00.000Z",
         activeOrganizationId: "qa-org",
@@ -2325,7 +2329,7 @@ async function verifyFinalAcceptanceMobileFlow() {
           contentType: "application/json",
           body: JSON.stringify({
             url: assetId === "fa-soundtrack-1" ? tinyAudio : onePixelGif,
-            expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+            expiresAt: validFixtureExpiry,
           }),
         });
       });

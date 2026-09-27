@@ -1514,6 +1514,12 @@
   /* Let the mobile drag-to-navigate gesture own horizontal panning; keep
      vertical scroll/pull-to-refresh untouched. */
   touch-action: pan-y;
+  /* #522: a swipe that starts on this surface must not become a native text
+     selection or drag-and-drop, which Chromium answers with pointercancel.
+     Status copy that is real text opts back in below. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 /* Mobile swipe drag (live finger-follow, see JourneyStory.tsx): while a
@@ -1650,19 +1656,14 @@
   border-color: rgba(200, 255, 61, 0.6);
 }
 
-.journey-story__media:has([data-story-media-pages] video[data-shared-media-id]) .journey-story__media-nav,
-.journey-story__media:has([data-story-media-pages] video[data-shared-media-id]) .journey-story__media-order {
-  bottom: 72px;
+/* The native control panel can change size across browsers. Reserve the
+   height of our own navigation below the video stage instead of positioning
+   our buttons over an estimated part of the video. */
+.journey-story__media:has(.journey-story__media-nav):has([data-story-media-pages] video[data-shared-media-id]) .story-media-pages {
+  bottom: 80px;
 }
-
-/* #489 acceptance 2, regression family of the rule above: the inline stage
-   already lifts its own bottom chrome clear of a presented transport's native
-   control strip, but the immersive viewer's nav stayed at bottom:22px and sat
-   right on top of it -- the transport's time scrubber hit-tested to this
-   button instead of to the video. The offset clears the stage's own bottom
-   inset plus Chromium's control panel. */
-.journey-story-fullscreen:has([data-story-media-pages] video[data-shared-media-id]) .journey-story-fullscreen__nav {
-  bottom: calc(clamp(28px, 6vh, 60px) + 84px);
+.journey-story-fullscreen:has(.journey-story-fullscreen__nav):has([data-story-media-pages] video[data-shared-media-id]) .story-media-pages {
+  bottom: 92px;
 }
 
 .journey-story__media-grid {
@@ -1941,6 +1942,8 @@
   color: var(--atlas-muted);
   font-size: 10px;
   letter-spacing: 0.05em;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .journey-story__move-undo {
@@ -1971,6 +1974,10 @@
   display: grid;
   place-items: center;
   touch-action: none;
+  /* #522: same refusal as the inline stage; its blank edges start gestures. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
   /* #7: immersive — a deep gradient derived from the media, not a flat black
      box; the media itself stays the focal point. */
   background:
@@ -6649,6 +6656,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     border-radius: 16px;
     background: rgba(2, 8, 8, 0.58);
     backdrop-filter: blur(14px);
+  }
+
+  .journey-story-fullscreen[data-mobile-layout="true"]:has(.journey-story-fullscreen__nav):has([data-story-media-pages] video[data-shared-media-id]) .story-media-pages {
+    bottom: calc(env(safe-area-inset-bottom) + 84px);
   }
 
   .journey-story__media-overview {
