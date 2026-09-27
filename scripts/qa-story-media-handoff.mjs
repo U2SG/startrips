@@ -3787,9 +3787,8 @@ try {
       progress.initialWarm = await waitForReadRequests(page, story, MANY_MEDIA.slice(1, 4));
       await startPaintIdentityProbe(page, STAGE);
       await startSampler(page, STAGE, { autoplayDetails: true });
-      await page.locator(".journey-story").getByRole("button", {
-        name: "自动播放媒体", exact: true,
-      }).click();
+      // #570 relabels this same timer as secondary Story autoplay.
+      await page.locator('.journey-story__media-nav button[aria-pressed="false"]').click();
       progress.playPressed = await page.locator('.journey-story__media-nav [aria-pressed="true"]')
         .count() > 0;
       for (let index = 1; index <= 6; index += 1) {
