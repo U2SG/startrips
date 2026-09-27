@@ -21,7 +21,7 @@
  * each graded window reports its tick count so the two sources stay separable.
  */
 import { launchQaBrowser } from "./qa-browser.mjs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const storyPath = "/?qaState=journey-story&qaMode=mixed-media-pair";
@@ -164,16 +164,20 @@ async function observedPointerTypes(page) {
  */
 async function createStoryPage({
   mobile = false, viewport, reducedMotion = "no-preference", path = storyPath,
+  videoEvidence = false,
   readDelays = {}, byteDelays = {}, renewPausedVideo = false,
   renewalByteFailure = false, renewalReadFailure = false, renewalSameUrlRetry = false,
   expiredRangeFailure = false,
 } = {}) {
+  if (videoEvidence) await mkdir("artifacts/story-media", { recursive: true });
   const page = await browser.newPage({
     viewport: viewport ?? (mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 }),
     isMobile: mobile,
     hasTouch: mobile,
     deviceScaleFactor: 1,
     reducedMotion,
+    ...(videoEvidence ? { recordVideo: { dir: "artifacts/story-media",
+      size: viewport ?? (mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 }) } } : {}),
   });
   inputDrivers.set(page, mobile ? await touchDriver(page) : mouseDriver(page));
   const consoleErrors = [];
@@ -3766,7 +3770,7 @@ try {
   // step, particularly while a prefetched read is still held back.
   // ---------------------------------------------------------------------
   for (const viewport of [{ width: 1280, height: 800 }, { width: 1084, height: 1222 }]) {
-    const session = await createStoryPage({ mobile: false, viewport });
+    const session = await createStoryPage({ mobile: false, viewport, videoEvidence: true });
     const name = `story-timer-autoplay-foreground-continuity-${viewport.width}x${viewport.height}`;
     const progress = { steps: [] };
     let story = null;
@@ -3807,6 +3811,7 @@ try {
           hold = { from, to, gate,
             responseHeld: (gate === "read" ? story.reads : story.bytes).some((entry) =>
               entry.id === id && entry.servedAt === null) };
+          await page.screenshot({ path: `artifacts/story-media/${name}-held-${gate}.png` });
           if (gate === "read") story.release(id);
           else story.releaseBytes(id);
         }
@@ -3844,6 +3849,7 @@ try {
         if (index < 6) await startSampler(page, STAGE, { autoplayDetails: true });
       }
       progress.paint = await stopPaintIdentityProbe(page);
+      await page.screenshot({ path: `artifacts/story-media/${name}-settled.png` });
       record({ name,
         claim: "the real Story play button and timer carry six distinct mixed-aspect photographs across warm hits, a held read and held image bytes; every sampled step keeps a presentable foreground, moves only from its old owner to its target, never shows waiting over the old picture, and uses no more than three physical pages",
         ...progress, reads: story.reads, bytes: story.bytes,
@@ -3861,7 +3867,9 @@ try {
     } finally {
       story?.release(MANY_MEDIA[3]);
       story?.releaseBytes(MANY_MEDIA[4]);
+      const video = session.page.video();
       await session.page.close();
+      if (video) await rename(await video.path(), `artifacts/story-media/${name}-continuous.webm`);
     }
   }
 
