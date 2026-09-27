@@ -93,9 +93,9 @@ const browser = await launchQaBrowser();
  *   - `JourneyStory.handleStorySheetPointerDown` returns early for
  *     `pointerType === "mouse"`, so the compact story sheet's own gesture never
  *     runs under a mouse;
- *   - the video's native control band owns every pointer stream starting in
- *     it, and a click on its picture never navigates; a swipe that starts on
- *     the picture itself may still leave it, as the visible step buttons do;
+ *   - the whole native video owns streams starting on it, including controls
+ *     whose browser-owned geometry changes; stage-edge swipes and visible step
+ *     buttons still navigate;
  *   - `pointercancel` effectively never fires for a mouse, leaving the stage's
  *     cancellation and capture-loss paths unexercised.
  *
@@ -1162,6 +1162,28 @@ async function presentedVideoPoint(page, rootSelector, { fraction = 0.5, control
       asset: video.getAttribute("data-shared-media-id"),
     };
   }, { selector: rootSelector, fraction, controlsTop });
+}
+
+/** A gesture start inside the stage's own edge, outside the native video. */
+async function videoStageEdgePoint(page, rootSelector, { side = "right", fraction = 0.4 } = {}) {
+  return await page.evaluate(({ selector, side: edge, fraction: at }) => {
+    const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+    const video = stage?.querySelector(".story-media-pages__video video");
+    if (!(stage instanceof HTMLElement) || !(video instanceof HTMLVideoElement) || video.hidden) {
+      throw new Error("no live video stage for an edge gesture");
+    }
+    const box = stage.getBoundingClientRect();
+    const videoBox = video.getBoundingClientRect();
+    const x = edge === "right" ? (videoBox.right + box.right) / 2 : (box.left + videoBox.left) / 2;
+    const y = box.top + box.height * at;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !stage.contains(hit) || hit === video || video.contains(hit)) {
+      throw new Error(`stage edge does not own gesture start: ${hit?.tagName ?? "none"}`);
+    }
+    return { x, y, hitTag: hit.tagName, hitClass: String(hit.className).slice(0, 60),
+      stageBox: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
+      videoBox: { left: videoBox.left, right: videoBox.right, top: videoBox.top, bottom: videoBox.bottom } };
+  }, { selector: rootSelector, side, fraction });
 }
 
 const cdpSessions = new WeakMap();
@@ -3362,16 +3384,16 @@ try {
   }
 
   // ---------------------------------------------------------------------
-  // A (engine). A presented video no longer swallows the gesture that would
-  // leave it: a swipe starting on its picture, above the native control band,
-  // navigates. A click on that same picture still never navigates (#489 A2).
+  // A (engine). Native control geometry is browser-owned. A swipe on the video
+  // stays native even when it starts above the usual control strip; an edge
+  // gesture owned by Story still navigates from the same presented video.
   // ---------------------------------------------------------------------
   for (const profile of [
     { label: "desktop", mobile: false },
     { label: "phone-portrait", mobile: true, viewport: { width: 390, height: 844 } },
   ]) {
     const session = await createStoryPage({ mobile: profile.mobile, viewport: profile.viewport });
-    const name = `story-video-picture-swipe-navigates-${profile.label}`;
+    const name = `story-video-native-pointer-and-edge-swipe-${profile.label}`;
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
@@ -3385,21 +3407,31 @@ try {
       const afterClick = await currentAsset(page);
       const requestedAfterClick = (await stageDiagnostic(page, STAGE)).requested;
       await waitForReadablePage(page, STAGE, V2);
-      const swipePoint = await presentedVideoPoint(page, STAGE, { fraction: 0.4, controlsTop: chromeTop });
+      const pictureSwipePoint = await presentedVideoPoint(page, STAGE, { fraction: 0.4, controlsTop: chromeTop });
+      const pictureSwipe = await swipeFromPoint(page, pictureSwipePoint.x, pictureSwipePoint.y,
+        -Math.min(320, Math.max(120, pictureSwipePoint.width * 0.45)));
+      await nextFrame(page);
+      const afterPictureSwipe = await currentAsset(page);
+      const requestedAfterPictureSwipe = (await stageDiagnostic(page, STAGE)).requested;
+      const edgePoint = await videoStageEdgePoint(page, STAGE);
       const since = await pageClock(page);
-      const gesture = await swipeFromPoint(page, swipePoint.x, swipePoint.y,
-        -Math.min(320, Math.max(120, swipePoint.width * 0.45)));
+      const edgeSwipe = await swipeFromPoint(page, edgePoint.x, edgePoint.y,
+        -Math.min(320, Math.max(120, (edgePoint.videoBox.right - edgePoint.videoBox.left) * 0.45)));
       const navigated = await waitForSettledAsset(page, V2).then(() => true, () => false);
       const trace = await gestureTraceSince(page, since);
       const start = trace.find((entry) => entry.type === "pointerdown") ?? null;
       const settled = navigated ? await currentAsset(page) : await stageDiagnostic(page, STAGE);
       record({ name,
-        claim: "a click inside the presented video's picture keeps that video presented and requests nothing, while a real swipe that starts on the same picture, above the native control band, navigates to the next media",
-        toVideo, live, clickPoint, afterClick, requestedAfterClick, swipePoint, gesture, start, navigated, settled,
+        claim: "real clicks and long swipes starting on the native video never request Story navigation; an edge swipe outside the video still reaches the next media",
+        toVideo, live, clickPoint, afterClick, requestedAfterClick,
+        pictureSwipePoint, pictureSwipe, afterPictureSwipe, requestedAfterPictureSwipe,
+        edgePoint, edgeSwipe, start, navigated, settled,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !toVideo.ok || !live || !clickPoint.hitIsVideo
           || afterClick.id !== V1 || afterClick.presentation !== "settled" || requestedAfterClick !== null
-          || !swipePoint.hitIsVideo || start?.tag !== "VIDEO" || !navigated || settled.id !== V2
+          || !pictureSwipePoint.hitIsVideo || afterPictureSwipe.id !== V1
+          || afterPictureSwipe.presentation !== "settled" || requestedAfterPictureSwipe !== null
+          || !start || start.tag === "VIDEO" || !navigated || settled.id !== V2
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } catch (error) {
@@ -3411,11 +3443,11 @@ try {
   }
 
   // A mouse release outside the stage cannot reach its pointerup handler
-  // before horizontal lock. Autoplay after that release must still advance;
-  // otherwise the abandoned gesture kept Story's holding state set.
+  // before horizontal lock. This still matters for a stage-owned edge swipe;
+  // autoplay after that release must advance rather than keeping Story held.
   {
     const session = await createStoryPage({ mobile: false });
-    const name = "story-video-prelock-exit-releases-hold";
+    const name = "story-video-edge-prelock-exit-releases-hold";
     const progress = {};
     try {
       const { page } = session;
@@ -3424,21 +3456,10 @@ try {
       await waitForVideoHandoffState(page, STAGE, V1, true);
       progress.seek = await seekNativeTimeline(page, STAGE, { targetFraction: 0.88 });
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
-      progress.edge = await page.evaluate((selector) => {
-        const stage = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
-        const video = stage?.querySelector(".story-media-pages__video video");
-        if (!(video instanceof HTMLVideoElement)) return null;
-        const stageBox = stage.getBoundingClientRect();
-        const videoBox = video.getBoundingClientRect();
-        const x = videoBox.left + videoBox.width / 2;
-        const y = videoBox.top + 3;
-        const outsideY = stageBox.top - 3;
-        return { x, y, outsideY, travel: y - outsideY,
-          hitIsVideo: document.elementFromPoint(x, y) === video };
-      }, STAGE);
-      if (!progress.edge?.hitIsVideo || progress.edge.travel >= 72) {
-        throw new Error(`no pre-lock video exit point: ${JSON.stringify(progress.edge)}`);
-      }
+      const edge = await videoStageEdgePoint(page, STAGE, { fraction: 0.005 });
+      progress.edge = { ...edge, outsideY: edge.stageBox.top - 3,
+        travel: edge.y - (edge.stageBox.top - 3) };
+      if (progress.edge.travel >= 8) throw new Error(`no pre-lock edge exit point: ${JSON.stringify(progress.edge)}`);
       const since = await pageClock(page);
       await page.mouse.move(progress.edge.x, progress.edge.y);
       await page.mouse.down();
@@ -3452,10 +3473,10 @@ try {
       const down = progress.trace.find((entry) => entry.type === "pointerdown");
       const up = progress.trace.find((entry) => entry.type === "pointerup");
       record({ name,
-        claim: "a real mouse stream starting on the video picture and leaving before axis lock releases its Story hold, so autoplay advances after the native video ends",
+        claim: "a real mouse stream starting beside the native video and leaving before axis lock releases its Story hold, so autoplay advances after the native video ends",
         ...progress, down, up, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
-          || down?.tag !== "VIDEO" || down.pointerType !== "mouse" || !up || up.tag === "VIDEO"
+          || !down || down.tag === "VIDEO" || down.pointerType !== "mouse" || !up || up.tag === "VIDEO"
           || progress.afterLeave.id !== V1 || progress.afterLeave.presentation !== "settled"
           || !progress.advanced || progress.afterAutoplay.id !== V2
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
@@ -3469,14 +3490,12 @@ try {
   }
 
   // ---------------------------------------------------------------------
-  // A (engine). On a phone the immersive video can be left the way a photo
-  // can: a real touch swipe down that starts on the presented video's picture,
-  // above its native control band, exits fullscreen and returns the same video
-  // to the inline stage.
+  // A (engine). On a phone a real touch swipe down from the stage edge, beyond
+  // the native video, exits fullscreen without taking a control's touch stream.
   // ---------------------------------------------------------------------
   {
     const session = await createStoryPage({ mobile: true, viewport: { width: 390, height: 844 } });
-    const name = "story-video-picture-swipe-down-exits-fullscreen-phone-portrait";
+    const name = "story-video-edge-swipe-down-exits-fullscreen-phone-portrait";
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
@@ -3489,8 +3508,7 @@ try {
       await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
         .waitFor({ state: "detached", timeout: 5_000 });
       const fullscreenLive = await waitForPresentedLiveVideo(page, FULLSCREEN, V1);
-      const chromeTop = controlChromeTop(await nativeControls(page, FULLSCREEN));
-      const start = await presentedVideoPoint(page, FULLSCREEN, { fraction: 0.3, controlsTop: chromeTop });
+      const start = await videoStageEdgePoint(page, FULLSCREEN, { side: "left", fraction: 0.3 });
       const since = await pageClock(page);
       const pointer = input(page);
       await pointer.down(start.x, start.y);
@@ -3506,12 +3524,12 @@ try {
       const returned = exited ? await waitForSettledAsset(page, V1).then(() => true, () => false) : false;
       const after = await currentAsset(page);
       record({ name,
-        claim: "on a phone, a real touch swipe down that starts on the immersive video's picture above its native control band exits fullscreen and returns the same video, settled, to the inline stage",
+        claim: "on a phone, a real touch swipe down from the stage edge outside the native video exits fullscreen and returns the same video, settled, to the inline stage",
         toVideo, inlineLive, fullscreenLive, start, down, exited, returned, after,
         cancels: trace.filter((entry) => entry.type === "pointercancel"),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: !toVideo.ok || !inlineLive || !fullscreenLive || !start.hitIsVideo
-          || down?.tag !== "VIDEO" || down.pointerType !== "touch" || !exited || !returned || after.id !== V1
+        failed: !toVideo.ok || !inlineLive || !fullscreenLive
+          || !down || down.tag === "VIDEO" || down.pointerType !== "touch" || !exited || !returned || after.id !== V1
           || trace.some((entry) => entry.type === "pointercancel")
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });

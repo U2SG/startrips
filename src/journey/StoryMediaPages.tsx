@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackClip, mediaStackOpacity, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
 import { springElementTo, springTransformVelocity, type SpringElementHandle } from "../motion/springElement";
-import { MEDIA_SWIPE_DISTANCE_PX, MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
+import { MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import type { JourneyMediaAsset, MediaPreviewRead } from "./types";
@@ -744,25 +744,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
 
   function mediaGestureCanStart(target: EventTarget | null) {
     if (!(target instanceof Element)) return false;
-    return !target.closest("button, input, select, textarea, [role='button']:not(img)");
-  }
-
-  // A swipe may start on the presented video's picture, so a video page can be
-  // browsed and a phone can swipe down out of fullscreen from it. A pointer is
-  // never taken by position alone: nothing is claimed until the stream locks an
-  // axis, a click never navigates (#489 A2), and the native control band --
-  // timeline, play, volume, overflow -- keeps every stream that starts in it.
-  // Chromium's control boxes live in a closed user-agent shadow tree, so the
-  // band is the one `--story-video-control-band` token the fullscreen nav
-  // also clears (tokens.css). Without a readable token the whole video stays
-  // with its transport rather than guessing.
-  function videoGestureCanStart(event: ReactPointerEvent<HTMLDivElement>) {
-    const target = event.target;
-    if (!(target instanceof Element) || !target.closest(".story-media-pages__video")) return true;
-    if (!(target instanceof HTMLVideoElement)) return false;
-    if (!target.controls) return true;
-    const band = Number.parseFloat(getComputedStyle(target).getPropertyValue("--story-video-control-band"));
-    return Number.isFinite(band) && event.clientY < target.getBoundingClientRect().bottom - band;
+    // Native video controls are a closed browser-owned tree. Their events are
+    // retargeted to the video, so no fixed inset can distinguish a scrub from a
+    // picture swipe. Keep the whole transport native; stage edges and the
+    // visible previous/next controls still provide media navigation.
+    return !target.closest("button, input, select, textarea, [role='button']:not(img), .story-media-pages__video");
   }
 
   function neighborFor(dx: number, baseId: string) {
@@ -796,8 +782,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   function beginGesture(event: ReactPointerEvent<HTMLDivElement>) {
     latest.current.onGestureConsumed(false);
     if (!event.isPrimary || !latest.current.active || !latest.current.gestureEnabled
-      || latest.current.media.length < 2 || !mediaGestureCanStart(event.target)
-      || !videoGestureCanStart(event)) return;
+      || latest.current.media.length < 2 || !mediaGestureCanStart(event.target)) return;
     const prior = settle.current;
     if (prior) prior.finishForTakeover();
     const base = pageNodes.current.find((node) => node?.dataset.mediaPresented === "true");
@@ -815,10 +800,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         && event.target instanceof HTMLImageElement,
       generation: ++gestureGeneration.current, scopeKey: latest.current.scopeKey,
       settleTakeover: Boolean(prior),
-      // On a video picture a small wobble belongs to the transport: its taps,
-      // pointerup and control reveal stay native. Only travel that is already
-      // a swipe by distance lets the stage claim the stream.
-      axisLock: event.target instanceof HTMLVideoElement ? MEDIA_SWIPE_DISTANCE_PX : 8,
+      axisLock: 8,
     };
     drag.current = value;
     if (prior) setGesturePhase("dragging");
