@@ -191,6 +191,7 @@ async function createStoryPage({
   const releaseRetryBytes = deferred();
   const readCounts = new Map();
   const initialRead = { issuedAt: null, expiresAt: null };
+  const preSeekRanges = [];
   const expiredRanges = [];
   const expiredRangeDenied = deferred();
   const releaseExpiredRanges = deferred();
@@ -259,21 +260,23 @@ async function createStoryPage({
         // Range from the expired old capability before Retry can succeed.
         if (start >= 131_072) {
           const requestedAt = Date.now();
-          if (requestedAt < expiredSeekArmedAt) {
-            // A preload Range that began before the user's seek is not the
-            // failure being tested. Serve it immediately: a held preload
-            // request can prevent the initial paused picture from decoding.
-            const end = Math.min(start + 1_023, initialVideoBytes.length - 1);
+          const serveSparsePreSeekRange = () => {
+            // The first follow-up may contain metadata needed for a paused
+            // frame. Later preload requests get only a small valid slice, so
+            // they keep progressing without filling the seek target before
+            // the user acts. This models a slow origin, not a test delay.
+            const end = Math.min(start + (preSeekRanges.length === 0 ? 1_023 : 63), initialVideoBytes.length - 1);
+            preSeekRanges.push({ range, requestedAt, start, end });
             return route.fulfill({ status: 206, contentType: "video/webm",
               headers: { "accept-ranges": "bytes", "content-range": `bytes ${start}-${end}/${initialVideoBytes.length}` },
               body: initialVideoBytes.subarray(start, end + 1) });
+          };
+          if (requestedAt < expiredSeekArmedAt) {
+            return serveSparsePreSeekRange();
           }
           const seekStartedAt = await releaseExpiredRanges.promise;
           if (requestedAt < seekStartedAt) {
-            const end = Math.min(start + 1_023, initialVideoBytes.length - 1);
-            return route.fulfill({ status: 206, contentType: "video/webm",
-              headers: { "accept-ranges": "bytes", "content-range": `bytes ${start}-${end}/${initialVideoBytes.length}` },
-              body: initialVideoBytes.subarray(start, end + 1) });
+            return serveSparsePreSeekRange();
           }
           const entry = { url: route.request().url(), range, requestedAt, status: 403, at: Date.now() };
           expiredRanges.push(entry);
@@ -322,7 +325,7 @@ async function createStoryPage({
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
   return { page, consoleErrors, pageErrors, mediaDelays,
     renewal: renewPausedVideo ? {
-      reads: renewalReads, bytes: renewalBytes, initialRead, expiredRanges,
+      reads: renewalReads, bytes: renewalBytes, initialRead, preSeekRanges, expiredRanges,
       expiredRangeDenied: expiredRangeDenied.promise,
       armExpiredSeek: () => { expiredSeekArmedAt = Date.now(); },
       releaseExpiredRanges: (seekStartedAt = Number.POSITIVE_INFINITY) => releaseExpiredRanges.resolve(seekStartedAt),
@@ -5645,7 +5648,8 @@ try {
         && Math.abs(left - right) <= 0.3;
       record({ name,
         claim: "a real native seek into uncached bytes receives old-URL Range 403 after TTL; fullscreen keeps its last painted frame and Retry uses a new signed URL to restore the requested time, native target, and Close position",
-        ...progress, oldRanges: session.renewal.expiredRanges,
+        ...progress, preSeekRanges: session.renewal.preSeekRanges,
+        oldRanges: session.renewal.expiredRanges,
         renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.toVideo.ok || progress.pause.failed || progress.initialSeek.failed || progress.seek.failed
@@ -5670,7 +5674,8 @@ try {
           || progress.unexpectedConsoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } catch (error) {
-      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+      record({ name, ...progress, preSeekRanges: session.renewal.preSeekRanges,
+        error: error instanceof Error ? error.message : String(error),
         diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
     } finally {
