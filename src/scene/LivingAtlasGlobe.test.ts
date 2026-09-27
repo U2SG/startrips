@@ -71,7 +71,16 @@ describe("Semantic Earth Dive renderer ownership", () => {
     })).toBe(true);
     expect(particleAnchorFramesEqual(frame, {
       ...frame,
+      screen: { ...frame.screen, x: frame.screen.x + 0.5 },
+      pxPerDegreeLat: frame.pxPerDegreeLat - 0.001,
+    })).toBe(true);
+    expect(particleAnchorFramesEqual(frame, {
+      ...frame,
       screen: { ...frame.screen, x: frame.screen.x + 1 },
+    })).toBe(false);
+    expect(particleAnchorFramesEqual(frame, {
+      ...frame,
+      pxPerDegreeLat: frame.pxPerDegreeLat + 0.01,
     })).toBe(false);
     expect(particleAnchorFramesEqual(frame, null)).toBe(false);
 
@@ -81,10 +90,14 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const handler = globe.slice(start, end);
-    const dedup = handler.indexOf("if (particleAnchorFramesEqual(previousFrame, frame)) return;");
+    const dedup = handler.indexOf(
+      "if (particleAnchorFramesEqual(lastScheduledParticleFrameRef.current, frame)) return;",
+    );
+    const publish = handler.indexOf("lastScheduledParticleFrameRef.current = frame;");
     const wake = handler.indexOf("scheduleDiveTick();");
     expect(dedup).toBeGreaterThanOrEqual(0);
-    expect(wake).toBeGreaterThan(dedup);
+    expect(publish).toBeGreaterThan(dedup);
+    expect(wake).toBeGreaterThan(publish);
   });
 
   it("mounts detail non-interactive and only enables particle hold after detail owns input", () => {

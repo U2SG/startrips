@@ -73,6 +73,10 @@ function readDetailedEarthScreenFrame(layer: HTMLElement | null): EarthDiveScree
   return { screen: { x, y }, pxPerDegreeLat: scale };
 }
 
+const PARTICLE_ANCHOR_SCREEN_SETTLE_PX = 0.75;
+const PARTICLE_ANCHOR_SCALE_SETTLE = 0.002;
+const PARTICLE_ANCHOR_ZOOM_SETTLE = 0.001;
+
 export function particleAnchorFramesEqual(
   previous: ParticleAnchorFrame | null,
   next: ParticleAnchorFrame | null,
@@ -81,10 +85,10 @@ export function particleAnchorFramesEqual(
   if (!previous || !next) return false;
   return previous.anchor.lat === next.anchor.lat
     && previous.anchor.lon === next.anchor.lon
-    && previous.screen.x === next.screen.x
-    && previous.screen.y === next.screen.y
-    && previous.pxPerDegreeLat === next.pxPerDegreeLat
-    && previous.zoom === next.zoom;
+    && Math.abs(previous.screen.x - next.screen.x) <= PARTICLE_ANCHOR_SCREEN_SETTLE_PX
+    && Math.abs(previous.screen.y - next.screen.y) <= PARTICLE_ANCHOR_SCREEN_SETTLE_PX
+    && Math.abs(previous.pxPerDegreeLat - next.pxPerDegreeLat) <= PARTICLE_ANCHOR_SCALE_SETTLE
+    && Math.abs(previous.zoom - next.zoom) <= PARTICLE_ANCHOR_ZOOM_SETTLE;
 }
 
 type LivingAtlasGlobeControlsProps = {
@@ -546,6 +550,11 @@ export function LivingAtlasGlobe({
     mode?: "sync" | "retry",
   ) => void) | null>(null);
   const particleFrameRef = useRef<ParticleAnchorFrame | null>(null);
+  // Keep the last frame that actually woke the Dive resolver separate from the
+  // latest published frame. This lets sub-pixel interpolation accumulate until
+  // it becomes meaningful instead of either waking every frame or being lost
+  // forever by comparing only adjacent publications.
+  const lastScheduledParticleFrameRef = useRef<ParticleAnchorFrame | null>(null);
   const snapshotRef = useRef<SemanticZoomSnapshot>({ level: "planet", zoom: 1, localProgress: 0 });
   const readinessRef = useRef<DetailReadiness>("unavailable");
   const reduceMotionRef = useRef(Boolean(reduceMotion));
@@ -737,17 +746,18 @@ export function LivingAtlasGlobe({
   }, [onSemanticZoomChange, scheduleDiveTick, syncDetailSpatialReveal]);
 
   const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame | null) => {
-    const previousFrame = particleFrameRef.current;
     particleFrameRef.current = frame;
     // Once Detailed Earth owns the camera, Particle Earth is no longer a
     // handoff input. Keep the last frame for a later release, but do not let
     // background particle frames wake the otherwise-idle Dive scheduler or
     // push stale particle geometry back into the detail renderer.
     if (diveRef.current.owner === "detail") return;
-    // ParticleEarthScene already bounds publication to meaningful screen/scale
-    // changes. A duplicate publication carries no new resolver input, so it
-    // must not re-arm the otherwise-idle Dive rAF.
-    if (particleAnchorFramesEqual(previousFrame, frame)) return;
+    // Ignore residual sub-pixel interpolation against the last frame that
+    // actually woke the resolver. Comparing against that scheduler-significant
+    // frame means small adjacent deltas accumulate and eventually wake the
+    // resolver once the visible movement crosses the bounded tolerance.
+    if (particleAnchorFramesEqual(lastScheduledParticleFrameRef.current, frame)) return;
+    lastScheduledParticleFrameRef.current = frame;
     scheduleDiveTick();
     if (frame && diveRef.current.owner === "particle") {
       // Keep the hidden/blending detail camera on the exact frame that was
