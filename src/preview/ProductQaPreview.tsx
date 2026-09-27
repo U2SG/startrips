@@ -421,6 +421,25 @@ const storyQaJourney: Journey = {
   })),
 };
 
+const storyQaDesktopChapterJourney: Journey = {
+  ...storyQaJourney,
+  routePoints: Array.from({ length: 20 }, (_, index) => ({
+    ...storyQaJourney.routePoints[0],
+    id: `00000000-0000-4000-8000-${String(index + 300).padStart(12, "0")}`,
+    sortOrder: index,
+    label: `途径点 ${String(index + 1).padStart(2, "0")} 海岸`,
+    note: index === 16
+      ? "从港湾回到山路，沿途的灯光一盏一盏亮起。这里是我最想记住的转弯。"
+      : index === 3 ? "海风转凉时，我们沿着岸边慢慢走。" : null,
+  })),
+  media: [
+    { ...storyQaJourney.media[2], sortOrder: 0, routePointId: "00000000-0000-4000-8000-000000000316" },
+    { ...storyQaJourney.media[0], sortOrder: 1, routePointId: "00000000-0000-4000-8000-000000000303" },
+  ],
+};
+
+const storyQaDesktopChapterNoMediaJourney: Journey = { ...storyQaDesktopChapterJourney, media: [] };
+
 const composerRoutePointsQaJourney: Journey = {
   ...storyQaJourney,
   title: "Composer Route Point QA",
@@ -546,8 +565,14 @@ function JourneyStoryQaPreview() {
   const mixedMediaMode = qaMode === "mixed-media";
   const mixedMediaPairMode = qaMode === "mixed-media-pair";
   const manyMediaMode = qaMode === "many-media";
+  const desktopChapterMode = qaMode === "desktop-chapter-rail";
+  const desktopChapterNoMediaMode = qaMode === "desktop-chapter-rail-no-media";
   const routeBoundaryMode = qaMode === "route-boundary";
-  const initialJourney = mixedMediaPairMode
+  const initialJourney = desktopChapterNoMediaMode
+    ? storyQaDesktopChapterNoMediaJourney
+    : desktopChapterMode
+    ? storyQaDesktopChapterJourney
+    : mixedMediaPairMode
     ? storyQaMixedPairJourney
     : mixedMediaMode
     ? storyQaMixedJourney

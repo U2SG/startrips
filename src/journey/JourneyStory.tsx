@@ -37,9 +37,10 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import type { DragEndEvent } from "@dnd-kit/core";
@@ -747,6 +748,7 @@ export function JourneyStory({
   const restoreJourneyDeleteFocusRef = useRef(false);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
   const copyRef = useRef<HTMLElement>(null);
+  const desktopChapterRailRef = useRef<HTMLElement>(null);
   const pendingReads = useRef(new Set<string>());
   const mediaReadScope = useRef({ journeyId, routePointId });
   const storyScopeRevisionRef = useRef(0);
@@ -2429,6 +2431,40 @@ export function JourneyStory({
     if (renewalError && renewalError.id !== (shownAssetId ?? activeAsset?.id)) setRenewalError(null);
   }, [renewalError, shownAssetId, activeAsset?.id]);
 
+  const chapterRailTargetId = selectedRoutePointId ?? activeAsset?.routePointId ?? null;
+  useLayoutEffect(() => {
+    if (mobileLayout) return;
+    const rail = desktopChapterRailRef.current;
+    if (!rail) return;
+    const keepCurrentChapterVisible = () => {
+      const buttons = [...rail.querySelectorAll<HTMLButtonElement>("button")];
+      const target = chapterRailTargetId
+        ? buttons.find((button) => button.dataset.routePointId === chapterRailTargetId)
+        : buttons[0];
+      if (!target) return;
+      const railBounds = rail.getBoundingClientRect();
+      const targetBounds = target.getBoundingClientRect();
+      if (targetBounds.left < railBounds.left) rail.scrollLeft += targetBounds.left - railBounds.left;
+      else if (targetBounds.right > railBounds.right) rail.scrollLeft += targetBounds.right - railBounds.right;
+    };
+    keepCurrentChapterVisible();
+    const observer = new ResizeObserver(keepCurrentChapterVisible);
+    observer.observe(rail);
+    const scrollOnWheel = (event: WheelEvent) => {
+      if (rail.scrollWidth <= rail.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      const next = Math.max(0, Math.min(rail.scrollWidth - rail.clientWidth, rail.scrollLeft + event.deltaY));
+      if (next === rail.scrollLeft) return;
+      rail.scrollLeft = next;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    rail.addEventListener("wheel", scrollOnWheel, { passive: false });
+    return () => {
+      observer.disconnect();
+      rail.removeEventListener("wheel", scrollOnWheel);
+    };
+  }, [chapterRailTargetId, journey?.id, mobileLayout, visualMedia.length]);
+
   if (!journey) return null;
   const selectedRoutePoint = selectedRoutePointId
     ? journey.routePoints.find((point) => point.id === selectedRoutePointId) ?? null
@@ -2596,12 +2632,25 @@ export function JourneyStory({
     if (event.target === event.currentTarget) requestClose();
   }
 
-  function scrollCopyFromMedia(event: WheelEvent<HTMLElement>) {
-    if ((event.target as Element).closest(".journey-story__copy")) return;
+  function scrollCopyFromMedia(event: ReactWheelEvent<HTMLElement>) {
+    if ((event.target as Element).closest(".journey-story__copy, .journey-story__route-points")) return;
     const copy = copyRef.current;
     if (!copy || copy.scrollHeight <= copy.clientHeight) return;
     copy.scrollTop += event.deltaY;
     event.preventDefault();
+  }
+
+  function focusChapterRailButton(event: ReactKeyboardEvent<HTMLElement>) {
+    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+    const current = buttons.indexOf(event.target as HTMLButtonElement);
+    if (current < 0) return;
+    const next = event.key === "ArrowRight" ? Math.min(current + 1, buttons.length - 1)
+      : event.key === "ArrowLeft" ? Math.max(current - 1, 0)
+        : event.key === "Home" ? 0
+          : event.key === "End" ? buttons.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    buttons[next]?.focus();
   }
 
   function cancelPendingMediaDragSettle(commitDecided = false) {
@@ -3575,8 +3624,56 @@ export function JourneyStory({
   }
 
   const hasStoryMedia = scopedMedia.length > 0;
+  const showDesktopChapterRail = !mobileLayout && visualMedia.length > 0;
   const canEditStory = Boolean(manageMedia || updateJourneyNotes || canEditJourney || canShareJourney || onDelete);
   const showSoundtrack = Boolean(soundtrack || (manageMedia && mediaEditing));
+  const routePointNavigation = (
+    <nav
+      ref={!mobileLayout ? desktopChapterRailRef : undefined}
+      className="journey-story__route-points"
+      aria-label="选择旅程途径点"
+      onKeyDown={!mobileLayout ? focusChapterRailButton : undefined}
+      onFocusCapture={!mobileLayout ? (event) => {
+        if (!(event.target instanceof HTMLButtonElement)) return;
+        const rail = event.currentTarget;
+        const railBounds = rail.getBoundingClientRect();
+        const buttonBounds = event.target.getBoundingClientRect();
+        if (buttonBounds.left < railBounds.left) rail.scrollLeft += buttonBounds.left - railBounds.left;
+        else if (buttonBounds.right > railBounds.right) rail.scrollLeft += buttonBounds.right - railBounds.right;
+      } : undefined}
+    >
+      <button
+        type="button"
+        disabled={mutationPending}
+        className={selectedRoutePointId === null ? "is-active" : ""}
+        aria-pressed={selectedRoutePointId === null}
+        onClick={() => selectMediaScope(null)}
+      >
+        {mobileLayout ? <span>00</span> : null}
+        <strong>{mobileLayout ? "整段旅程" : "全部"}</strong>
+        {mobileLayout ? <small>{visualMedia.length}</small> : null}
+      </button>
+      {journey.routePoints.map((point, index) => (
+        <button
+          key={point.id}
+          type="button"
+          disabled={mutationPending}
+          className={[
+            selectedRoutePointId === point.id ? "is-active" : "",
+            selectedRoutePointId === null && activeChapterRoutePointId === point.id ? "is-chapter-active" : "",
+          ].filter(Boolean).join(" ")}
+          aria-pressed={selectedRoutePointId === point.id}
+          aria-current={selectedRoutePointId === null && activeChapterRoutePointId === point.id ? "step" : undefined}
+          data-route-point-id={point.id}
+          onClick={() => selectMediaScope(point.id)}
+        >
+          {mobileLayout ? <span>{String(index + 1).padStart(2, "0")}</span> : null}
+          <strong>{point.label || `途径点 ${index + 1}`}</strong>
+          {mobileLayout ? <small>{visualMediaCount(point.id)}</small> : null}
+        </button>
+      ))}
+    </nav>
+  );
 
   const content = (
     <div
@@ -3622,6 +3719,7 @@ export function JourneyStory({
           </button>
         ) : null}
         <header>
+          {showDesktopChapterRail ? routePointNavigation : null}
           {mobileLayout ? <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
             <h2 id="journey-story-title">{journey.title}</h2>
@@ -4034,6 +4132,9 @@ export function JourneyStory({
               <p>{journeyRange(journey)}</p>
               <h2 id="journey-story-title">{journey.title}</h2>
             </div> : null}
+            {!mobileLayout && activeChapterRoutePoint ? (
+              <p className="journey-story__current-point">{activeChapterRoutePoint.label || `途径点 ${activeChapterRoutePoint.sortOrder + 1}`}</p>
+            ) : null}
             {mobileLayout && !overview && !asset && !mobileManageMode ? (
               <div className="journey-story__mobile-media-actions">
                 {manageMedia ? <IconActionButton
@@ -4049,38 +4150,7 @@ export function JourneyStory({
                 </IconActionButton> : null}
               </div>
             ) : null}
-            <nav className="journey-story__route-points" aria-label="选择旅程途径点">
-              <button
-                type="button"
-                disabled={mutationPending}
-                className={selectedRoutePointId === null ? "is-active" : ""}
-                aria-pressed={selectedRoutePointId === null}
-                onClick={() => selectMediaScope(null)}
-              >
-                {mobileLayout ? <span>00</span> : null}
-                <strong>{mobileLayout ? "整段旅程" : "全部"}</strong>
-                {mobileLayout ? <small>{visualMedia.length}</small> : null}
-              </button>
-              {journey.routePoints.map((point, index) => (
-                <button
-                  key={point.id}
-                  type="button"
-                  disabled={mutationPending}
-                  className={[
-                    selectedRoutePointId === point.id ? "is-active" : "",
-                    selectedRoutePointId === null && activeChapterRoutePointId === point.id ? "is-chapter-active" : "",
-                  ].filter(Boolean).join(" ")}
-                  aria-pressed={selectedRoutePointId === point.id}
-                  aria-current={selectedRoutePointId === null && activeChapterRoutePointId === point.id ? "step" : undefined}
-                  data-route-point-id={point.id}
-                  onClick={() => selectMediaScope(point.id)}
-                >
-                  {mobileLayout ? <span>{String(index + 1).padStart(2, "0")}</span> : null}
-                  <strong>{point.label || `途径点 ${index + 1}`}</strong>
-                  {mobileLayout ? <small>{visualMediaCount(point.id)}</small> : null}
-                </button>
-              ))}
-            </nav>
+            {!showDesktopChapterRail ? routePointNavigation : null}
             {mobileLayout && !overview ? <StoryMediaRail
               media={scopedMedia}
               currentId={shownAsset?.id ?? null}
