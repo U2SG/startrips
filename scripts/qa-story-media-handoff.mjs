@@ -255,16 +255,14 @@ async function createStoryPage({
       if (expiredRangeFailure && initialVideoBytes) {
         const range = route.request().headers().range ?? null;
         const start = Number(/^bytes=(\d+)-/.exec(range ?? "")?.[1] ?? 0);
-        // Leave the later part of this real clip uncached. The first slice is
-        // enough to paint the initial paused frame; native seek must fetch a
-        // Range from the expired old capability before Retry can succeed.
-        if (start >= 131_072) {
+        // Include this clip's second keyframe (byte 136133) so early playback
+        // can paint a real held frame. Leave the later seek target uncached.
+        const initialPaintBytes = 147_456;
+        if (start >= initialPaintBytes) {
           const requestedAt = Date.now();
           const serveSparsePreSeekRange = () => {
-            // The first follow-up may contain metadata needed for a paused
-            // frame. Later preload requests get only a small valid slice, so
-            // they keep progressing without filling the seek target before
-            // the user acts. This models a slow origin, not a test delay.
+            // Follow-up preload requests keep progressing without filling the
+            // later seek target before the user acts. This models a slow origin.
             const end = Math.min(start + (preSeekRanges.length === 0 ? 1_023 : 63), initialVideoBytes.length - 1);
             preSeekRanges.push({ range, requestedAt, start, end });
             return route.fulfill({ status: 206, contentType: "video/webm",
@@ -283,7 +281,7 @@ async function createStoryPage({
           expiredRangeDenied.resolve(entry);
           return route.fulfill({ status: 403, contentType: "text/plain", body: "expired signed range" });
         }
-        const end = Math.min(131_071, initialVideoBytes.length - 1);
+        const end = Math.min(initialPaintBytes - 1, initialVideoBytes.length - 1);
         return route.fulfill({ status: 206, contentType: "video/webm",
           headers: { "accept-ranges": "bytes", "content-range": `bytes ${start}-${end}/${initialVideoBytes.length}` },
           body: initialVideoBytes.subarray(start, end + 1) });
