@@ -3482,7 +3482,7 @@ try {
       await page.mouse.up();
       progress.trace = await gestureTraceSince(page, since);
       progress.afterLeave = await currentAsset(page);
-      await page.locator(".journey-story").getByRole("button", { name: "自动播放媒体", exact: true }).click();
+      await page.locator(".journey-story").getByRole("button", { name: "自动浏览当前媒体", exact: true }).click();
       progress.advanced = await waitForSettledAsset(page, V2).then(() => true, () => false);
       progress.afterAutoplay = await currentAsset(page);
       const down = progress.trace.find((entry) => entry.type === "pointerdown");

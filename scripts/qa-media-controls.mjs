@@ -1572,7 +1572,7 @@ try {
     const readingViewFailed = readingView.layout !== "desktop" || readingView.editing !== null
       || readingView.editingControls !== 0 || readingView.sidebarStats !== 0
       || readingView.thumbnailRail !== 0 || readingView.fullscreenEntry !== 1
-      || JSON.stringify(readingView.navigationButtons) !== JSON.stringify(["全屏查看媒体", "自动播放媒体"]);
+      || JSON.stringify(readingView.navigationButtons) !== JSON.stringify(["全屏查看媒体", "自动浏览当前媒体"]);
     checks.push({ name: "story-desktop-reading-view", ...readingView, failed: readingViewFailed });
     if (readingViewFailed) failed = true;
     const currentPhoto = storyPicture(storyDesktop.page);
@@ -1628,7 +1628,7 @@ try {
     await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
     const shortDragKeptFullscreen = await photoFullscreen.isVisible();
     const fullscreenNavigationFailed = !fullscreenPictureNavigation || !shortDragKeptFullscreen
-      || JSON.stringify(fullscreenNavigationButtons) !== JSON.stringify(["自动播放媒体"]);
+      || JSON.stringify(fullscreenNavigationButtons) !== JSON.stringify(["自动浏览当前媒体"]);
     checks.push({ name: "story-desktop-fullscreen-picture-navigation", fullscreenNavigationButtons,
       fullscreenPictureNavigation, shortDragKeptFullscreen, failed: fullscreenNavigationFailed });
     if (fullscreenNavigationFailed) failed = true;
@@ -2857,8 +2857,8 @@ try {
         || fullscreenPlacement.insideManageSheet
         || fullscreenPlacement.mobileMode !== "viewer"
         || placement.idlePressed !== "false"
-        || placement.idleLabel !== "自动播放媒体"
-        || playingLabel !== "暂停自动播放"
+        || placement.idleLabel !== "自动浏览当前媒体"
+        || playingLabel !== "暂停自动浏览"
         || restoredPressed !== "false"
         || !placement.inViewerCluster
         || placement.insideManageSheet
@@ -3031,7 +3031,7 @@ try {
       // Only Date changes. Real timers, media readiness and user input continue.
       await page.clock.setFixedTime(expiredNow);
       await Promise.race([started, new Promise((_, reject) => setTimeout(() => reject(new Error("Story refresh did not start")), 25_000))]);
-      await page.locator(".journey-story").getByRole("button", { name: "自动播放媒体", exact: true }).click();
+      await page.locator(".journey-story").getByRole("button", { name: "自动浏览当前媒体", exact: true }).click();
       await page.waitForFunction(() => !window.__qaRefreshVideo.paused);
       const completion = page.waitForResponse((response) => response.url().includes(`/assets/${videoId}/read-url`));
       releaseRefresh();
@@ -3043,9 +3043,9 @@ try {
           sameSource: element?.getAttribute("src") === window.__qaRefreshSource,
           sourceChanges: window.__qaRefreshSourceChanges, emptied: window.__qaRefreshEmptied,
           playing: Boolean(element && !element.paused),
-          storyPlaying: Boolean(document.querySelector('.journey-story button[aria-label="暂停自动播放"]')) };
+          storyPlaying: Boolean(document.querySelector('.journey-story button[aria-label="暂停自动浏览"]')) };
       });
-      await page.locator(".journey-story").getByRole("button", { name: "暂停自动播放", exact: true }).click();
+      await page.locator(".journey-story").getByRole("button", { name: "暂停自动浏览", exact: true }).click();
       await page.waitForFunction(() => document.querySelector(".journey-story__media video[data-shared-media-id]")
         ?.getAttribute("src")?.includes("renewal=2"), undefined, { timeout: 25_000 });
       const unexpectedErrors = refreshRace.consoleErrors.filter((message) => outcome !== "error" || !message.includes("500"));

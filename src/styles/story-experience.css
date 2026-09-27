@@ -182,6 +182,13 @@
   background: transparent;
   color: var(--startrips-muted);
 }
+.journey-story[data-story-layout="desktop"] .journey-story__media-nav :is(.journey-story__quick-recap-action, .journey-story__media-autobrowse) {
+  width: auto;
+  padding-inline: 10px;
+}
+.journey-story[data-story-layout="desktop"] .journey-story__media-nav .journey-story__quick-recap-action {
+  color: var(--startrips-starlight);
+}
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav button:hover:not(:disabled) { color: var(--startrips-starlight); }
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav button:disabled { opacity: .3; cursor: default; }
 .journey-story-fullscreen:not([data-mobile-layout="true"]) .journey-story-fullscreen__nav {
