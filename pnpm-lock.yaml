@@ -50,6 +50,9 @@ importers:
       pg:
         specifier: ^8.23.0
         version: 8.23.0
+      pmtiles:
+        specifier: ^4.5.0
+        version: 4.5.0
       react:
         specifier: ^19.1.1
         version: 19.2.8
@@ -1741,6 +1744,9 @@ packages:
     resolution: {integrity: sha512-GvZs4vU3U5ro2nZpeiwyb0zuFaqb9sUiAJuyrWpcGouD8y9/HLgGbNRjIph7zU9D3hnPaisMl9zG9CgFi/biIg==}
     engines: {node: '>=18'}
     hasBin: true
+
+  pmtiles@4.5.0:
+    resolution: {integrity: sha512-CBeD4SoUluFziGdy/8k7FOjQxQy486n+929W/tWophauvMICpkZ26vGBWhDt/6b1FZQWNaf4jFdT/5+q0Wii5w==}
 
   postcss@8.5.26:
     resolution: {integrity: sha512-u82N74LFzG8ca+dD8puPnplTXoGH4fTPpVGuIbt36G3qvNlkvfD0lEAZSxaly3KX8TS/L1A1gsCEmvKmBcVbkQ==}
@@ -3501,6 +3507,10 @@ snapshots:
       pathe: 2.0.3
 
   playwright-core@1.55.0: {}
+
+  pmtiles@4.5.0:
+    dependencies:
+      fflate: 0.8.3
 
   postcss@8.5.26:
     dependencies:

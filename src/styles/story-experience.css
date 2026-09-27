@@ -25,6 +25,14 @@
   border: 0;
   background: transparent;
 }
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  align-items: center;
+  margin: 0;
+  padding-right: 16px;
+}
 .journey-story[data-story-layout="desktop"] > header > button {
   flex: 0 0 auto;
   width: auto;
@@ -56,15 +64,26 @@
 .journey-story[data-story-layout="desktop"] .story-media-pages {
   background: transparent;
   --stack-x: clamp(20px, 4%, 56px);
-  /* The 44px media toolbar lives below the picture, including native video
-     controls; keep an 8px gap at the shortest desktop Story height. */
-  --stack-y: clamp(52px, 6%, 60px);
+  --stack-y: clamp(20px, 4%, 56px);
+}
+.journey-story[data-story-layout="desktop"] :is(
+  .story-media-pages__page[data-media-page="current"],
+  .story-media-pages__page[data-media-incoming="true"],
+  .story-media-pages__hit-surface
+) {
+  /* Only neighbouring cards pay the decorative inset. The presented picture
+     keeps a small lane for Story's own 44px controls. */
+  inset: 0 0 48px;
+}
+.journey-story[data-story-layout="desktop"] .story-media-pages__video {
+  /* Native video keeps a stage edge for Story navigation outside its controls. */
+  inset: 0 var(--stack-x) 48px;
 }
 .journey-story[data-story-layout="desktop"] .journey-story__copy {
-  align-self: center;
+  align-self: stretch;
   max-height: 100%;
   min-height: 0;
-  padding: 24px 8px 24px 0;
+  padding: clamp(32px, 8vh, 88px) 8px 24px 0;
   border: 0;
   background: transparent;
   scrollbar-width: thin;
@@ -85,36 +104,49 @@
   overflow-wrap: anywhere;
   text-wrap: balance;
 }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points {
-  flex-wrap: wrap;
-  gap: 0 16px;
-  margin: 24px 0 0;
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points {
+  flex-wrap: nowrap;
+  gap: clamp(12px, 1.2vw, 20px);
+  margin: 20px 0 0;
   padding: 0;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
 }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points button {
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points::-webkit-scrollbar { display: none; }
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points button {
   display: inline-flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-height: 44px;
-  max-width: 100%;
+  max-width: min(200px, 20vw);
   padding: 4px 0;
   border: 0;
   background: transparent;
   color: var(--startrips-muted);
   cursor: pointer;
 }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points button::after { content: none; }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points strong {
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points button::after { content: none; }
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points strong {
   font: 400 12px/1.6 var(--archive-sans);
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.journey-story[data-story-layout="desktop"] .journey-story__route-points button:is(.is-active, .is-chapter-active) {
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points button:is(.is-active, .is-chapter-active) {
   color: var(--startrips-starlight);
   text-decoration: underline;
   text-underline-offset: 7px;
   text-decoration-thickness: 1px;
   text-decoration-color: rgb(255 248 231 / 40%);
+}
+.journey-story[data-story-layout="desktop"] .journey-story__current-point {
+  margin: 26px 0 0;
+  color: var(--startrips-muted);
+  font: 400 12px/1.5 var(--archive-sans);
+}
+.journey-story[data-story-layout="desktop"] .journey-story__current-point + :is(.journey-story__point-note, .journey-story__note) {
+  margin-top: 12px;
 }
 .journey-story[data-story-layout="desktop"] :is(.journey-story__point-note, .journey-story__note) {
   margin: 28px 0 0;

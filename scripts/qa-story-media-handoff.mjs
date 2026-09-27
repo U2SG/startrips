@@ -163,7 +163,7 @@ async function observedPointerTypes(page) {
  * asserted about the delay itself, and no assertion is relaxed while it runs.
  */
 async function createStoryPage({
-  mobile = false, viewport, reducedMotion = "no-preference",
+  mobile = false, viewport, reducedMotion = "no-preference", path = storyPath,
   readDelays = {}, byteDelays = {}, renewPausedVideo = false,
   renewalByteFailure = false, renewalReadFailure = false, renewalSameUrlRetry = false,
   expiredRangeFailure = false,
@@ -319,7 +319,7 @@ async function createStoryPage({
       return route.continue();
     });
   }
-  await page.goto(`${origin}${storyPath}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
   return { page, consoleErrors, pageErrors, mediaDelays,
     renewal: renewPausedVideo ? {
@@ -1670,8 +1670,9 @@ async function stackRestState(page, rootSelector) {
       const [top, right = top, bottom = top, left = right] = sides;
       return [top, right, bottom, left];
     };
-    // The same fit the product computes for a rear page: the front picture's
-    // aperture expressed as a percentage inset of the page box.
+    // Compute the presented picture's aperture independently. The current
+    // desktop page can be larger than its decorative neighbours, so each rear
+    // inset must be graded against that rear page's own box.
     const media = front?.querySelector("img:not([hidden]), canvas:not([hidden])") ?? null;
     const natural = media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight]
       : media instanceof HTMLCanvasElement ? [media.width, media.height] : [0, 0];
@@ -1685,8 +1686,15 @@ async function stackRestState(page, rootSelector) {
       frontId: front?.getAttribute("data-media-page-id") ?? null,
       frontNatural: natural,
       expectedRear: expectedRear.map((value) => Number(value.toFixed(2))),
+      frontApertureSize: fit > 0 ? [natural[0] * fit, natural[1] * fit] : null,
       pages: slots.map((slot) => {
         const [top, right, bottom, left] = insets(slot);
+        const rearFit = natural[0] && natural[1] && slot.clientWidth && slot.clientHeight
+          ? Math.min(slot.clientWidth / natural[0], slot.clientHeight / natural[1]) : 0;
+        const expectedInset = rearFit > 0
+          ? [(1 - natural[1] * rearFit / slot.clientHeight) * 50,
+            (1 - natural[0] * rearFit / slot.clientWidth) * 50]
+          : [0, 0];
         return {
           id: slot.getAttribute("data-media-page-id"),
           role: slot.getAttribute("data-media-page"),
@@ -1694,6 +1702,9 @@ async function stackRestState(page, rootSelector) {
           zIndex: Number(getComputedStyle(slot).zIndex) || 0,
           clip: getComputedStyle(slot).clipPath.slice(0, 48),
           inset: [top, right, bottom, left].map((value) => Number(value.toFixed(2))),
+          expectedInset: expectedInset.map((value) => Number(value.toFixed(2))),
+          visibleSize: [slot.clientWidth * (1 - (left + right) / 100),
+            slot.clientHeight * (1 - (top + bottom) / 100)],
         };
       }),
     };
@@ -1711,8 +1722,11 @@ function gradeRestState(state, expectedFrontId, tolerance = 0.75) {
   const rear = state.pages.filter((slot) => slot.role !== "current");
   const frontResidue = front ? Math.max(...front.inset) : Number.POSITIVE_INFINITY;
   const misclipped = rear.filter((slot) =>
-    Math.abs(slot.inset[0] - state.expectedRear[0]) > tolerance
-    || Math.abs(slot.inset[1] - state.expectedRear[1]) > tolerance);
+    Math.abs(slot.inset[0] - slot.expectedInset[0]) > tolerance
+    || Math.abs(slot.inset[1] - slot.expectedInset[1]) > tolerance
+    || Boolean(state.frontApertureSize && (
+      slot.visibleSize[0] > state.frontApertureSize[0] + 2
+      || slot.visibleSize[1] > state.frontApertureSize[1] + 2)));
   const occluding = rear.filter((slot) => front && slot.zIndex >= front.zIndex);
   return {
     front, rear, frontResidue, expectedRear: state.expectedRear,
@@ -5795,6 +5809,283 @@ try {
       session.renewal.releaseExpiredRanges();
       session.renewal.releaseRead();
       session.renewal.releaseBytes();
+      await session.page.close();
+    }
+  }
+  {
+    const name = "story-desktop-chapter-rail-media-first";
+    const session = await createStoryPage({
+      viewport: { width: 1920, height: 1080 },
+      path: "/?qaState=journey-story&qaMode=desktop-chapter-rail",
+    });
+    const progress = {};
+    try {
+      const { page } = session;
+      await waitForSettledAsset(page, I2);
+      await page.locator(".journey-story__point-note").waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const copy = document.querySelector('.journey-story__copy');
+        return copy && copy.getAnimations().every((animation) => animation.playState === 'finished');
+      }, null, { polling: 'raf', timeout: 3_000 });
+      progress.initial = await page.evaluate(() => {
+        const story = document.querySelector('.journey-story[data-story-layout="desktop"]');
+        const rail = story?.querySelector('header .journey-story__route-points');
+        const copy = story?.querySelector('.journey-story__copy');
+        const stage = story?.querySelector('.journey-story__media');
+        const pages = stage?.querySelector('.story-media-pages');
+        const current = stage?.querySelector('.story-media-pages__page[data-media-page="current"]');
+        const neighbor = stage?.querySelector('.story-media-pages__page:not([data-media-page="current"])[data-media-page-id]');
+        const picture = current?.querySelector('img');
+        const note = copy?.querySelector('.journey-story__point-note');
+        const active = rail?.querySelector('button.is-chapter-active');
+        if (!story || !rail || !copy || !stage || !pages || !current || !neighbor || !picture || !note || !active) {
+          throw new Error("desktop chapter fixture did not render its presented Story");
+        }
+        const buttons = [...rail.querySelectorAll('button')];
+        const railRect = rail.getBoundingClientRect();
+        const activeRect = active.getBoundingClientRect();
+        const stageRect = stage.getBoundingClientRect();
+        const pagesRect = pages.getBoundingClientRect();
+        const pageRect = current.getBoundingClientRect();
+        const pictureRect = picture.getBoundingClientRect();
+        const noteRect = note.getBoundingClientRect();
+        const priorInsetX = Math.min(56, Math.max(20, pagesRect.width * .04));
+        const priorInsetY = Math.min(60, Math.max(52, pagesRect.height * .06));
+        const priorPageWidth = pagesRect.width - priorInsetX * 2;
+        const priorPageHeight = pagesRect.height - priorInsetY * 2;
+        return {
+          viewport: { width: innerWidth, height: innerHeight },
+          routePointCount: buttons.length - 1,
+          railInHeader: rail.parentElement?.tagName === 'HEADER',
+          copyContainsRail: copy.contains(rail),
+          railOverflows: rail.scrollWidth > rail.clientWidth + 16,
+          railWidth: rail.clientWidth,
+          railScrollLeft: rail.scrollLeft,
+          railRowSpread: Math.max(...buttons.map((button) => button.getBoundingClientRect().top))
+            - Math.min(...buttons.map((button) => button.getBoundingClientRect().top)),
+          activeRoutePointId: active.dataset.routePointId,
+          activeVisible: activeRect.left >= railRect.left - 2 && activeRect.right <= railRect.right + 2,
+          noteText: note.textContent,
+          noteTop: noteRect.top,
+          copyScrollTop: copy.scrollTop,
+          noteVisible: noteRect.top >= 0 && noteRect.bottom <= innerHeight,
+          currentPointLabel: copy.querySelector('.journey-story__current-point')?.textContent ?? null,
+          pageTopInset: pageRect.top - stageRect.top,
+          pageLeftInset: pageRect.left - stageRect.left,
+          pageBottomSpace: stageRect.bottom - pageRect.bottom,
+          currentPageSize: { width: current.offsetWidth, height: current.offsetHeight },
+          decorativePageSize: { width: neighbor.offsetWidth, height: neighbor.offsetHeight },
+          priorPageSize: { width: priorPageWidth, height: priorPageHeight },
+          paintedHeight: Math.min(pictureRect.height,
+            pictureRect.width * picture.naturalHeight / picture.naturalWidth),
+          priorPaintedHeight: Math.min(priorPageHeight,
+            priorPageWidth * picture.naturalHeight / picture.naturalWidth),
+          naturalSize: { width: picture.naturalWidth, height: picture.naturalHeight },
+          pictureFit: getComputedStyle(picture).objectFit,
+        };
+      });
+      await mkdir("artifacts/story-media", { recursive: true });
+      await page.screenshot({ path: "artifacts/story-media/desktop-chapter-rail.png" });
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.waitForFunction(() => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        const active = rail?.querySelector('button.is-chapter-active');
+        if (!rail || !active) return false;
+        const railBounds = rail.getBoundingClientRect();
+        const activeBounds = active.getBoundingClientRect();
+        return activeBounds.left >= railBounds.left - 2 && activeBounds.right <= railBounds.right + 2;
+      }, null, { polling: 'raf', timeout: 3_000 });
+      progress.resized = await page.evaluate(() => ({
+        width: innerWidth,
+        railWidth: document.querySelector('header .journey-story__route-points')?.clientWidth ?? 0,
+      }));
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      const rail = page.locator("header .journey-story__route-points");
+      const railBox = await rail.boundingBox();
+      if (!railBox) throw new Error("desktop chapter rail lost its hit box");
+      progress.beforeWheelScrollLeft = await rail.evaluate((element) => element.scrollLeft);
+      await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + railBox.height / 2);
+      await page.mouse.wheel(0, -240);
+      await page.waitForFunction((before) => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        return rail && rail.scrollLeft < before - 5;
+      }, progress.beforeWheelScrollLeft, { polling: "raf", timeout: 3_000 });
+      progress.wheelScrollLeft = await rail.evaluate((element) => element.scrollLeft);
+      await rail.locator("button").first().focus();
+      await page.keyboard.press("End");
+      progress.end = await page.evaluate(() => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        const focused = document.activeElement;
+        const railRect = rail?.getBoundingClientRect();
+        const focusedRect = focused?.getBoundingClientRect();
+        return {
+          id: focused?.getAttribute('data-route-point-id'),
+          visible: Boolean(railRect && focusedRect && focusedRect.left >= railRect.left - 2
+            && focusedRect.right <= railRect.right + 2),
+          scrollLeft: rail?.scrollLeft ?? 0,
+        };
+      });
+      await page.keyboard.press("Home");
+      progress.home = await page.evaluate(() => ({
+        focusedAll: document.activeElement === document.querySelector('header .journey-story__route-points button'),
+        scrollLeft: document.querySelector('header .journey-story__route-points')?.scrollLeft ?? null,
+      }));
+      await rail.locator('[data-route-point-id="00000000-0000-4000-8000-000000000303"]').click();
+      await waitForSettledAsset(page, I1);
+      await page.locator(".journey-story__point-note").filter({ hasText: "海风转凉" })
+        .waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const copy = document.querySelector('.journey-story__copy');
+        return copy && copy.getAnimations().every((animation) => animation.playState === 'finished');
+      }, null, { polling: 'raf', timeout: 3_000 });
+      progress.switched = await page.evaluate(() => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
+        const railRect = rail?.getBoundingClientRect();
+        const activeRect = active?.getBoundingClientRect();
+        const copy = document.querySelector('.journey-story__copy');
+        const note = copy?.querySelector('.journey-story__point-note');
+        const noteRect = note?.getBoundingClientRect();
+        return {
+          activeRoutePointId: active?.getAttribute('data-route-point-id') ?? null,
+          activeVisible: Boolean(railRect && activeRect && activeRect.left >= railRect.left - 2
+            && activeRect.right <= railRect.right + 2),
+          currentPointLabel: document.querySelector('.journey-story__current-point')?.textContent ?? null,
+          noteText: note?.textContent ?? null,
+          noteTop: noteRect?.top ?? null,
+          noteVisible: Boolean(noteRect && noteRect.top >= 0 && noteRect.bottom <= innerHeight),
+          copyScrollTop: copy?.scrollTop ?? null,
+        };
+      });
+      progress.tabEnter = { visited: [], activated: 0 };
+      const chapterButtons = rail.locator('button');
+      const chapterButtonCount = await chapterButtons.count();
+      await chapterButtons.first().focus();
+      for (let index = 0; index < chapterButtonCount; index += 1) {
+        const button = chapterButtons.nth(index);
+        await page.waitForFunction((buttonIndex) => {
+          const rail = document.querySelector('header .journey-story__route-points');
+          const focused = rail?.querySelectorAll('button')[buttonIndex];
+          if (!rail || !focused || document.activeElement !== focused) return false;
+          const railBounds = rail.getBoundingClientRect();
+          const bounds = focused.getBoundingClientRect();
+          return bounds.left >= railBounds.left - 2 && bounds.right <= railBounds.right + 2;
+        }, index, { polling: 'raf', timeout: 3_000 });
+        progress.tabEnter.visited.push(await button.getAttribute('data-route-point-id') ?? 'all');
+        await page.keyboard.press('Enter');
+        await page.waitForFunction((buttonIndex) => {
+          const buttons = document.querySelectorAll('header .journey-story__route-points button');
+          return buttons[buttonIndex]?.getAttribute('aria-pressed') === 'true';
+        }, index, { polling: 'raf', timeout: 3_000 });
+        progress.tabEnter.activated += 1;
+        if (index + 1 < chapterButtonCount) await page.keyboard.press('Tab');
+      }
+      record({ name,
+        claim: "at 1920x1080 twenty Route Points stay on one bounded keyboard-reachable rail above a materially larger uncropped portrait, while the current note remains in the initial viewport and changing chapter updates context without a layout jump",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: progress.initial.viewport.width !== 1920 || progress.initial.viewport.height !== 1080
+          || progress.initial.routePointCount !== 20 || !progress.initial.railInHeader
+          || progress.initial.copyContainsRail || !progress.initial.railOverflows
+          || progress.initial.railRowSpread > 2 || !progress.initial.activeVisible
+          || progress.initial.railScrollLeft <= 0
+          || progress.initial.activeRoutePointId !== "00000000-0000-4000-8000-000000000316"
+          || !progress.initial.noteText?.includes("从港湾") || !progress.initial.noteVisible
+          || !progress.initial.currentPointLabel?.includes("17")
+          || progress.initial.pageTopInset > 4 || progress.initial.pageLeftInset > 4
+          || progress.initial.pageBottomSpace < 44 || progress.initial.pageBottomSpace > 56
+          || progress.initial.currentPageSize.width < progress.initial.decorativePageSize.width + 40
+          || progress.initial.currentPageSize.height <= progress.initial.decorativePageSize.height
+          || progress.initial.currentPageSize.height < progress.initial.priorPageSize.height + 40
+          || progress.initial.naturalSize.width <= 0 || progress.initial.naturalSize.height <= 0
+          || !Number.isFinite(progress.initial.paintedHeight) || progress.initial.paintedHeight < 875
+          || progress.initial.paintedHeight < progress.initial.priorPaintedHeight + 40
+          || progress.initial.pictureFit !== "contain"
+          || progress.resized.width !== 1280
+          || progress.resized.railWidth >= progress.initial.railWidth - 200
+          || progress.end.id !== "00000000-0000-4000-8000-000000000319"
+          || progress.wheelScrollLeft >= progress.beforeWheelScrollLeft - 5
+          || !progress.end.visible || progress.end.scrollLeft <= 0
+          || !progress.home.focusedAll || progress.home.scrollLeft > 2
+          || progress.tabEnter.visited.length !== 21 || progress.tabEnter.activated !== 21
+          || new Set(progress.tabEnter.visited).size !== 21
+          || progress.switched.activeRoutePointId !== "00000000-0000-4000-8000-000000000303"
+          || !progress.switched.activeVisible || !progress.switched.currentPointLabel?.includes("04")
+          || !progress.switched.noteText?.includes("海风转凉") || !progress.switched.noteVisible
+          || !Number.isFinite(progress.switched.noteTop)
+          || Math.abs(progress.switched.noteTop - progress.initial.noteTop) > 16
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+  {
+    const name = "story-desktop-chapter-rail-no-media-fallback";
+    const session = await createStoryPage({
+      viewport: { width: 1920, height: 1080 },
+      path: "/?qaState=journey-story&qaMode=desktop-chapter-rail-no-media",
+    });
+    const progress = {};
+    try {
+      const { page } = session;
+      const rail = page.locator('.journey-story__copy .journey-story__route-points');
+      await rail.waitFor({ state: 'visible' });
+      progress.initial = await rail.evaluate((element) => ({
+        routePointCount: element.querySelectorAll('button').length - 1,
+        headerHasRail: Boolean(document.querySelector('header .journey-story__route-points')),
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+        overflowX: getComputedStyle(element).overflowX,
+        scrollbarWidth: getComputedStyle(element).scrollbarWidth,
+      }));
+      await mkdir("artifacts/story-media", { recursive: true });
+      await page.screenshot({ path: "artifacts/story-media/desktop-chapter-rail-no-media.png" });
+      const railBox = await rail.boundingBox();
+      if (!railBox) throw new Error('no-media chapter rail lost its hit box');
+      await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + railBox.height / 2);
+      await page.mouse.wheel(0, 240);
+      await page.waitForFunction(() => (
+        (document.querySelector('.journey-story__copy .journey-story__route-points')?.scrollLeft ?? 0) > 5
+      ), null, { polling: 'raf', timeout: 3_000 });
+      progress.wheelScrollLeft = await rail.evaluate((element) => element.scrollLeft);
+      await rail.locator('button').last().focus();
+      await page.waitForFunction(() => {
+        const rail = document.querySelector('.journey-story__copy .journey-story__route-points');
+        const last = rail?.querySelector('button:last-child');
+        if (!rail || !last || document.activeElement !== last) return false;
+        const railBounds = rail.getBoundingClientRect();
+        const lastBounds = last.getBoundingClientRect();
+        return lastBounds.left >= railBounds.left - 2 && lastBounds.right <= railBounds.right + 2;
+      }, null, { polling: 'raf', timeout: 3_000 });
+      progress.lastVisible = await rail.evaluate((element) => {
+        const last = element.querySelector('button:last-child');
+        const railBounds = element.getBoundingClientRect();
+        const lastBounds = last?.getBoundingClientRect();
+        return Boolean(lastBounds && lastBounds.left >= railBounds.left - 2
+          && lastBounds.right <= railBounds.right + 2);
+      });
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => (
+        document.querySelector('.journey-story__copy .journey-story__route-points button:last-child')
+          ?.getAttribute('aria-pressed') === 'true'
+      ), null, { polling: 'raf', timeout: 3_000 });
+      progress.lastActivated = await rail.locator('button').last().getAttribute('aria-pressed') === 'true';
+      record({ name,
+        claim: "a desktop Journey with no visual media keeps its Route Points in a scrollable copy-column fallback with visible scrollbar, wheel access and keyboard activation",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: progress.initial.routePointCount !== 20 || progress.initial.headerHasRail
+          || progress.initial.scrollWidth <= progress.initial.clientWidth + 16
+          || progress.initial.overflowX !== 'auto' || progress.initial.scrollbarWidth === 'none'
+          || progress.wheelScrollLeft <= 5 || !progress.lastVisible || !progress.lastActivated
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
       await session.page.close();
     }
   }

@@ -8,6 +8,7 @@ import {
 } from "./routePresentation";
 import type { EarthDiveStage } from "./earthDive";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
+import { buildPmtilesBasemapStyle } from "./pmtilesBasemapStyle";
 
 export type DetailedEarthLanguage = "zh" | "bilingual";
 
@@ -532,25 +533,54 @@ export const AMAP_RASTER_STYLE_SPEC: StyleSpecification = {
   ],
 };
 
-const CHINESE_NAME: ExpressionSpecification = [
-  "coalesce",
-  ["get", "name:zh-Hans"],
-  ["get", "name:zh"],
-  ["get", "name:nonlatin"],
-  ["get", "name"],
-  ["get", "name:en"],
-  ["get", "name_en"],
-  "",
-];
+// Vector tile schemas name their label fields differently. OpenFreeMap serves
+// the OpenMapTiles schema (name:zh, name:nonlatin, name_en); a self-hosted
+// Protomaps PMTiles basemap uses name:zh-Hans / name:zh-Hant and name:en. The
+// Protomaps pgf:name fields are pre-shaped glyph indices for Devanagari only and
+// need a custom font stack, so they are deliberately not read here.
+export type DetailedEarthLabelSchema = "openmaptiles" | "protomaps";
 
-const ENGLISH_NAME: ExpressionSpecification = [
-  "coalesce",
-  ["get", "name:en"],
-  ["get", "name_en"],
-  ["get", "name:latin"],
-  ["get", "name"],
-  "",
-];
+const LABEL_NAMES: Record<
+  DetailedEarthLabelSchema,
+  { chinese: ExpressionSpecification; english: ExpressionSpecification }
+> = {
+  openmaptiles: {
+    chinese: [
+      "coalesce",
+      ["get", "name:zh-Hans"],
+      ["get", "name:zh"],
+      ["get", "name:nonlatin"],
+      ["get", "name"],
+      ["get", "name:en"],
+      ["get", "name_en"],
+      "",
+    ],
+    english: [
+      "coalesce",
+      ["get", "name:en"],
+      ["get", "name_en"],
+      ["get", "name:latin"],
+      ["get", "name"],
+      "",
+    ],
+  },
+  protomaps: {
+    chinese: [
+      "coalesce",
+      ["get", "name:zh-Hans"],
+      ["get", "name:zh-Hant"],
+      ["get", "name"],
+      ["get", "name:en"],
+      "",
+    ],
+    english: [
+      "coalesce",
+      ["get", "name:en"],
+      ["get", "name"],
+      "",
+    ],
+  },
+};
 
 export function getConfiguredStyleUrl(): string {
   return import.meta.env.VITE_ATLAS_MAP_STYLE_URL?.trim() || "";
@@ -558,6 +588,27 @@ export function getConfiguredStyleUrl(): string {
 
 export function isRasterDetailedEarth(): boolean {
   return getConfiguredStyleUrl() === AMAP_RASTER_STYLE;
+}
+
+// Spike (#539 section 4): an optional self-hosted PMTiles basemap. Unset keeps
+// the OpenFreeMap proxy default. The URL must be one the deployment owns
+// (same origin or its own object storage), never a third-party tile CDN.
+export function getConfiguredPmtilesUrl(): string {
+  return import.meta.env.VITE_ATLAS_PMTILES_URL?.trim() || "";
+}
+
+export function getConfiguredPmtilesGlyphsUrl(): string {
+  return import.meta.env.VITE_ATLAS_PMTILES_GLYPHS_URL?.trim() || "";
+}
+
+// An explicit VITE_ATLAS_MAP_STYLE_URL keeps precedence, so an existing
+// deployment's style choice never changes because a PMTiles URL is also set.
+export function isPmtilesDetailedEarth(): boolean {
+  return !getConfiguredStyleUrl() && getConfiguredPmtilesUrl() !== "";
+}
+
+export function getDetailedEarthLabelSchema(): DetailedEarthLabelSchema {
+  return isPmtilesDetailedEarth() ? "protomaps" : "openmaptiles";
 }
 
 // Every vector style can use the globe projection. The server proxy keeps the
@@ -569,12 +620,22 @@ export function useGlobeProjection(): boolean {
 
 export function getDetailedEarthStyle(): StyleSpecification | string {
   if (isRasterDetailedEarth()) return AMAP_RASTER_STYLE_SPEC;
+  if (isPmtilesDetailedEarth()) {
+    return buildPmtilesBasemapStyle({
+      pmtilesUrl: getConfiguredPmtilesUrl(),
+      glyphsUrl: getConfiguredPmtilesGlyphsUrl(),
+      baseUrl: globalThis.location?.href ?? "http://localhost/",
+      labelTextField: createDetailedEarthLabelExpression("zh", "protomaps"),
+    });
+  }
   return getConfiguredStyleUrl() || DEFAULT_DETAILED_EARTH_STYLE_URL;
 }
 
 export function createDetailedEarthLabelExpression(
   language: DetailedEarthLanguage,
+  schema: DetailedEarthLabelSchema = getDetailedEarthLabelSchema(),
 ): ExpressionSpecification {
+  const { chinese: CHINESE_NAME, english: ENGLISH_NAME } = LABEL_NAMES[schema];
   if (language === "zh") return CHINESE_NAME;
 
   return [

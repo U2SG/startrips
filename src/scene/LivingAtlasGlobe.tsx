@@ -73,6 +73,32 @@ function readDetailedEarthScreenFrame(layer: HTMLElement | null): EarthDiveScree
   return { screen: { x, y }, pxPerDegreeLat: scale };
 }
 
+const PARTICLE_ANCHOR_SCREEN_SETTLE_PX = 0.75;
+const PARTICLE_ANCHOR_SCALE_SETTLE = 0.002;
+const PARTICLE_ANCHOR_ZOOM_SETTLE = 0.001;
+
+export function particleAnchorFramesEqual(
+  previous: ParticleAnchorFrame | null,
+  next: ParticleAnchorFrame | null,
+) {
+  if (previous === next) return true;
+  if (!previous || !next) return false;
+  const previousZoom = previous.zoom;
+  const nextZoom = next.zoom;
+  const zoomMatches = previousZoom === nextZoom
+    || (
+      previousZoom !== undefined
+      && nextZoom !== undefined
+      && Math.abs(previousZoom - nextZoom) <= PARTICLE_ANCHOR_ZOOM_SETTLE
+    );
+  return previous.anchor.lat === next.anchor.lat
+    && previous.anchor.lon === next.anchor.lon
+    && Math.abs(previous.screen.x - next.screen.x) <= PARTICLE_ANCHOR_SCREEN_SETTLE_PX
+    && Math.abs(previous.screen.y - next.screen.y) <= PARTICLE_ANCHOR_SCREEN_SETTLE_PX
+    && Math.abs(previous.pxPerDegreeLat - next.pxPerDegreeLat) <= PARTICLE_ANCHOR_SCALE_SETTLE
+    && zoomMatches;
+}
+
 type LivingAtlasGlobeControlsProps = {
   diveStage: EarthDiveStage;
   detailLanguage: DetailedEarthLanguage;
@@ -723,12 +749,18 @@ export function LivingAtlasGlobe({
   }, [onSemanticZoomChange, scheduleDiveTick, syncDetailSpatialReveal]);
 
   const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame | null) => {
+    const previousFrame = particleFrameRef.current;
     particleFrameRef.current = frame;
     // Once Detailed Earth owns the camera, Particle Earth is no longer a
     // handoff input. Keep the last frame for a later release, but do not let
     // background particle frames wake the otherwise-idle Dive scheduler or
     // push stale particle geometry back into the detail renderer.
     if (diveRef.current.owner === "detail") return;
+    // Residual focus interpolation is an adjacent-frame signal: once every
+    // published step is sub-pixel, it must not periodically accumulate into a
+    // fresh Dive wake-up. Real direct manipulation has its own scheduler claim,
+    // while larger focus/camera moves still cross this bound in one frame.
+    if (particleAnchorFramesEqual(previousFrame, frame)) return;
     scheduleDiveTick();
     if (frame && diveRef.current.owner === "particle") {
       // Keep the hidden/blending detail camera on the exact frame that was
