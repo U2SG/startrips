@@ -42,6 +42,7 @@ import {
   advanceGlobeIdleReleasePhase,
   buildProjectedRoutePath,
   buildRecordedTrackOverviewSamples,
+  selectRecordedTrackOverviewLevel,
   collectJourneyDimDirections,
   focusSignalAnchor,
   focusViewportCenter,
@@ -99,6 +100,14 @@ describe("ParticleEarthScene contracts", () => {
     expect(pointCounts.every((count) => count >= 2)).toBe(true);
     expect(pointCounts.reduce((sum, count) => sum + count, 0))
       .toBeLessThanOrEqual(MAX_RENDERED_RECORDED_TRACK_POINTS);
+    expect(tracks.every((track) => track.levels.length === 4)).toBe(true);
+    const far = selectRecordedTrackOverviewLevel(tracks[0].levels, 1_000);
+    const near = selectRecordedTrackOverviewLevel(tracks[0].levels, 100_000);
+    expect(far?.maxAngularErrorRad).toBe(0.00025);
+    expect(near?.maxAngularErrorRad).toBe(0.00001);
+    expect((far?.samples.lifts.length ?? Infinity)).toBeLessThanOrEqual(
+      MAX_RENDERED_RECORDED_TRACK_POINTS,
+    );
   });
 
   it("keeps all five provenance tiers visible in the particle route treatment", () => {

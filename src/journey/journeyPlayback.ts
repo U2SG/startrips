@@ -224,25 +224,29 @@ export function playbackCameraTargetKey(target: PlaybackCameraTarget) {
 }
 
 /**
- * Expand a journey into the ordered playback steps: intro -> for each point
- * (travel + stop + its media) -> outro. Points with no media and no note
- * still get a stop step (a quiet beat), so the route always reads as one
- * continuous narrative.
+ * Expand a journey into the ordered playback steps. Every Route Point remains
+ * part of the travel path, but only an explicit Stop owns an arrival/dwell
+ * beat. Media already attached to a historical non-stop point still plays:
+ * route shaping must not manufacture a stop, and it must not erase memory.
  */
 export function buildPlaybackSteps(
   journey: Journey,
   homeContext?: HomeNarrativeContext | null,
 ): PlaybackStep[] {
-  const byOwner = playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
+  const byOwner = playbackMediaByOwner(
+    journey,
+    journey.routePoints.map((point) => point.id),
+  );
   const steps: PlaybackStep[] = [];
   if (homeContext?.prelude.eligible) {
     steps.push({ kind: "home-prelude", cameraTarget: homeContext.prelude.cameraTarget });
   }
   steps.push({ kind: "intro" });
   for (let pointIndex = 0; pointIndex < journey.routePoints.length; pointIndex += 1) {
-    const media = byOwner.get(journey.routePoints[pointIndex].id) ?? [];
+    const point = journey.routePoints[pointIndex];
     if (pointIndex > 0) steps.push({ kind: "travel", to: pointIndex });
-    steps.push({ kind: "stop", pointIndex, media });
+    const media = byOwner.get(point.id) ?? [];
+    if (point.isStop) steps.push({ kind: "stop", pointIndex, media });
     for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
       steps.push({ kind: "media", pointIndex, mediaIndex });
     }

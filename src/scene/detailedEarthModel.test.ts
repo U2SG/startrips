@@ -29,6 +29,7 @@ import {
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
   pickDetailedEarthJourneyRoutePointHit,
+  selectDetailedEarthJourneyOverlayLod,
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
@@ -207,6 +208,80 @@ describe("detailed-earth Journey overlay", () => {
       "truth-route:recorded:recorded-a",
       "truth-route:recorded:recorded-b",
     ]);
+  });
+
+  it("selects recorded-track detail by projected screen error without merging track gaps", () => {
+    const dense = Array.from({ length: 5_000 }, (_, index) => ({
+      lat: 22 + index * 0.000004 + Math.sin(index / 30) * 0.001,
+      lon: 114 + index * 0.00002,
+    }));
+    const overlay = buildDetailedEarthJourneyOverlay({
+      route: {
+        id: "lod-route",
+        color: "#88d8ca",
+        points: [
+          { id: "start", lat: 22, lon: 114, isStop: true },
+          { id: "shape", lat: 22.2, lon: 114.4, isStop: false },
+          { id: "end", lat: 22.4, lon: 114.8, isStop: true },
+        ],
+        recordedTrackSegments: [
+          { id: "dense", points: dense },
+          { id: "after-gap", points: [
+            { lat: 23, lon: 115 },
+            { lat: 23.2, lon: 115.2 },
+            { lat: 23.4, lon: 115.1 },
+          ] },
+        ],
+      },
+    });
+
+    const far = selectDetailedEarthJourneyOverlayLod(overlay, 1_000);
+    const near = selectDetailedEarthJourneyOverlayLod(overlay, 100_000);
+    expect(far.key).not.toBe(near.key);
+    expect(far.renderedPointCount).toBeLessThan(near.renderedPointCount);
+    for (const selection of [far, near]) {
+      const recorded = selection.data.features.filter((feature) => (
+        feature.properties.provenance === "recorded-track"
+      ));
+      expect(recorded).toHaveLength(2);
+      expect(recorded.map((feature) => feature.id)).toEqual([
+        "lod-route:recorded:dense",
+        "lod-route:recorded:after-gap",
+      ]);
+      expect(selection.data.features.filter((feature) => (
+        feature.properties.featureKind === "route-point"
+      ))).toHaveLength(3);
+    }
+  });
+
+  it("changes the overlay revision when recorded-track interior geometry changes", () => {
+    const build = (middleLongitude: number) => buildDetailedEarthJourneyOverlay({
+      route: {
+        id: "recorded-revision-route",
+        color: "#88d8ca",
+        points: [
+          { id: "start", lat: 22, lon: 114, isStop: true },
+          { id: "end", lat: 23, lon: 115, isStop: true },
+        ],
+        recordedTrackSegments: [{
+          id: "same-segment",
+          points: [
+            { lat: 22, lon: 114 },
+            { lat: 22.5, lon: middleLongitude },
+            { lat: 23, lon: 115 },
+          ],
+        }],
+      },
+    });
+
+    const original = build(114.5);
+    const changedInterior = build(114.7);
+    expect(original.data.features.find((feature) => (
+      feature.id === "recorded-revision-route:recorded:same-segment"
+    ))?.geometry).not.toEqual(changedInterior.data.features.find((feature) => (
+      feature.id === "recorded-revision-route:recorded:same-segment"
+    ))?.geometry);
+    expect(original.revision).not.toBe(changedInterior.revision);
   });
 
   it("reuses shared selected/narrative Route Point semantics and temporal reveal", () => {

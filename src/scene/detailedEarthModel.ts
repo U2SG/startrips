@@ -1,7 +1,11 @@
 import type { FeatureCollection, Geometry, GeoJsonProperties } from "geojson";
 import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
 import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
-import { resolveJourneyRouteSegmentProvenance } from "../journey/journeyModel";
+import {
+  buildRecordedTrackLodLevels,
+  resolveJourneyRouteSegmentProvenance,
+  selectRecordedTrackLodLevel,
+} from "../journey/journeyModel";
 import {
   resolveRoutePointPresentation,
   type RoutePointSelection,
@@ -73,6 +77,16 @@ export type DetailedEarthJourneyOverlayProperties = GeoJsonProperties & {
   toRoutePointId?: string;
 };
 
+export type DetailedEarthRecordedTrackLodLevel = {
+  maxAngularErrorRad: number;
+  points: readonly { lat: number; lon: number }[];
+};
+
+export type DetailedEarthRecordedTrackLod = {
+  featureId: string;
+  levels: readonly DetailedEarthRecordedTrackLodLevel[];
+};
+
 export type DetailedEarthJourneyOverlay = {
   journeyId: string | null;
   revision: string;
@@ -80,6 +94,13 @@ export type DetailedEarthJourneyOverlay = {
   stopCount: number;
   passthroughCount: number;
   data: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>;
+  recordedTrackLods?: readonly DetailedEarthRecordedTrackLod[];
+};
+
+export type DetailedEarthJourneyOverlayLodSelection = {
+  data: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>;
+  key: string;
+  renderedPointCount: number;
 };
 
 export type DetailedEarthJourneyRoutePointHit = {
@@ -133,17 +154,89 @@ export function pickDetailedEarthJourneyRoutePointHit(
   return best ? { journeyId: best.journeyId, routePointId: best.routePointId } : null;
 }
 
-function overlayRevision(seed: string) {
-  let hash = 0x811c9dc5;
+function updateOverlayRevisionHash(hash: number, seed: string) {
   for (let index = 0; index < seed.length; index += 1) {
     hash ^= seed.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
+  }
+  return hash;
+}
+
+function overlayRevision(seed: string) {
+  return (updateOverlayRevisionHash(0x811c9dc5, seed) >>> 0).toString(36);
+}
+
+function recordedTrackGeometryRevision(
+  points: readonly { lat: number; lon: number }[],
+) {
+  let hash = 0x811c9dc5;
+  for (const point of points) {
+    if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
+    hash = updateOverlayRevisionHash(hash, `${point.lat},${point.lon};`);
   }
   return (hash >>> 0).toString(36);
 }
 
 function normalizeLongitude(longitude: number) {
   return ((((longitude + 180) % 360) + 360) % 360) - 180;
+}
+
+function recordedTrackCoordinates(
+  points: readonly { lat: number; lon: number }[],
+): Array<[number, number]> {
+  const coordinates: Array<[number, number]> = [];
+  let previousLongitude: number | null = null;
+  for (const point of points) {
+    if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
+    let longitude = normalizeLongitude(point.lon);
+    if (previousLongitude !== null) {
+      while (longitude - previousLongitude > 180) longitude -= 360;
+      while (longitude - previousLongitude < -180) longitude += 360;
+    }
+    coordinates.push([longitude, point.lat]);
+    previousLongitude = longitude;
+  }
+  return coordinates;
+}
+
+export function selectDetailedEarthJourneyOverlayLod(
+  overlay: DetailedEarthJourneyOverlay,
+  projectedPixelsPerRadian: number,
+  maxScreenErrorPx = 1.25,
+): DetailedEarthJourneyOverlayLodSelection {
+  const recordedTrackLods = overlay.recordedTrackLods ?? [];
+  if (recordedTrackLods.length === 0) {
+    return { data: overlay.data, key: "none", renderedPointCount: 0 };
+  }
+  const selected = new Map<string, DetailedEarthRecordedTrackLodLevel>();
+  const keyParts: string[] = [];
+  let renderedPointCount = 0;
+  for (const track of recordedTrackLods) {
+    const level = selectRecordedTrackLodLevel(
+      track.levels,
+      projectedPixelsPerRadian,
+      maxScreenErrorPx,
+    );
+    if (!level) continue;
+    selected.set(track.featureId, level);
+    renderedPointCount += level.points.length;
+    keyParts.push(`${track.featureId}:${level.maxAngularErrorRad}`);
+  }
+  const data: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties> = {
+    ...overlay.data,
+    features: overlay.data.features.map((feature) => {
+      const level = feature.id === undefined ? undefined : selected.get(String(feature.id));
+      if (!level || feature.geometry.type !== "LineString") return feature;
+      return {
+        ...feature,
+        geometry: {
+          ...feature.geometry,
+          coordinates: recordedTrackCoordinates(level.points),
+        },
+      };
+    }),
+  };
+  return { data, key: keyParts.join("|"), renderedPointCount };
 }
 
 function strongestAttentionRole(
@@ -190,6 +283,7 @@ export function buildDetailedEarthJourneyOverlay({
       stopCount: 0,
       passthroughCount: 0,
       data: emptyData,
+      recordedTrackLods: [],
     };
   }
 
@@ -214,6 +308,7 @@ export function buildDetailedEarthJourneyOverlay({
     };
   });
   const features: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>["features"] = [];
+  const recordedTrackLods: DetailedEarthRecordedTrackLod[] = [];
 
   for (const record of records) {
     if (!record.valid || !record.presentation.temporalVisible) continue;
@@ -280,22 +375,18 @@ export function buildDetailedEarthJourneyOverlay({
   }
 
   for (const segment of route.recordedTrackSegments ?? []) {
-    const coordinates: Array<[number, number]> = [];
-    let previousLongitude: number | null = null;
-    for (const point of segment.points) {
-      if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
-      let longitude = point.lon;
-      if (previousLongitude !== null) {
-        while (longitude - previousLongitude > 180) longitude -= 360;
-        while (longitude - previousLongitude < -180) longitude += 360;
-      }
-      coordinates.push([longitude, point.lat]);
-      previousLongitude = longitude;
-    }
+    const validPoints = segment.points.filter((point) => (
+      Number.isFinite(point.lat) && Number.isFinite(point.lon)
+    ));
+    if (validPoints.length < 2) continue;
+    const featureId = `${route.id}:recorded:${segment.id}`;
+    const levels = buildRecordedTrackLodLevels(validPoints);
+    const coordinates = recordedTrackCoordinates(levels[0]?.points ?? validPoints);
     if (coordinates.length < 2) continue;
+    recordedTrackLods.push({ featureId, levels });
     features.push({
       type: "Feature",
-      id: `${route.id}:recorded:${segment.id}`,
+      id: featureId,
       geometry: { type: "LineString", coordinates },
       properties: {
         featureKind: "segment",
@@ -318,8 +409,7 @@ export function buildDetailedEarthJourneyOverlay({
     recordedTrackSegments: (route.recordedTrackSegments ?? []).map((segment) => ({
       id: segment.id,
       pointCount: segment.points.length,
-      first: segment.points[0] ?? null,
-      last: segment.points.at(-1) ?? null,
+      geometryRevision: recordedTrackGeometryRevision(segment.points),
     })),
     points: records.map(({ point, pointIndex, presentation, valid }) => ({
       id: point.id ?? null,
@@ -347,6 +437,7 @@ export function buildDetailedEarthJourneyOverlay({
     stopCount: visibleRecords.filter((record) => record.presentation.semanticRole === "stop").length,
     passthroughCount: visibleRecords.filter((record) => record.presentation.semanticRole === "passthrough").length,
     data: { type: "FeatureCollection", features },
+    recordedTrackLods,
   };
 }
 

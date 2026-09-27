@@ -95,6 +95,142 @@ export function summarizeJourneyRouteProvenance(
   return tiers.size === 1 ? [...tiers][0] : "mixed";
 }
 
+/** Keep owner-private recorded evidence attached while a saved route is replaced by its edit draft. */
+export function attachRecordedTrackSegments(
+  route: JourneyRoute,
+  journeyId: string | null | undefined,
+  segments: NonNullable<JourneyRoute["recordedTrackSegments"]>,
+): JourneyRoute {
+  if (route.id !== journeyId || segments.length === 0) return route;
+  return { ...route, recordedTrackSegments: segments };
+}
+
+/**
+ * Recorded-track LOD is presentation-only. Each server segment remains an
+ * independent truth boundary, so simplification can never bridge a GPS gap or
+ * merge a lower-provenance relation into recorded evidence.
+ */
+export const RECORDED_TRACK_LOD_ERROR_RADIANS = [
+  0,
+  0.00001,
+  0.00005,
+  0.00025,
+] as const;
+
+export type RecordedTrackLodPoint = {
+  lat: number;
+  lon: number;
+  recordedAt?: string | null;
+};
+
+export type RecordedTrackLodLevel<T extends RecordedTrackLodPoint = RecordedTrackLodPoint> = {
+  maxAngularErrorRad: number;
+  points: readonly T[];
+};
+
+function recordedTrackUnitVector(point: RecordedTrackLodPoint) {
+  const latitude = point.lat * Math.PI / 180;
+  const longitude = point.lon * Math.PI / 180;
+  const cosLatitude = Math.cos(latitude);
+  return {
+    x: cosLatitude * Math.cos(longitude),
+    y: Math.sin(latitude),
+    z: cosLatitude * Math.sin(longitude),
+  };
+}
+
+function distanceToChord(
+  point: ReturnType<typeof recordedTrackUnitVector>,
+  start: ReturnType<typeof recordedTrackUnitVector>,
+  end: ReturnType<typeof recordedTrackUnitVector>,
+) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dz = end.z - start.z;
+  const lengthSquared = dx * dx + dy * dy + dz * dz;
+  if (lengthSquared <= Number.EPSILON) {
+    return Math.hypot(point.x - start.x, point.y - start.y, point.z - start.z);
+  }
+  const projection = Math.max(0, Math.min(1, (
+    (point.x - start.x) * dx
+    + (point.y - start.y) * dy
+    + (point.z - start.z) * dz
+  ) / lengthSquared));
+  return Math.hypot(
+    point.x - (start.x + projection * dx),
+    point.y - (start.y + projection * dy),
+    point.z - (start.z + projection * dz),
+  );
+}
+
+export function simplifyRecordedTrackPoints<T extends RecordedTrackLodPoint>(
+  points: readonly T[],
+  maxAngularErrorRad: number,
+): T[] {
+  if (points.length <= 2 || !(maxAngularErrorRad > 0)) return [...points];
+
+  const vectors = points.map(recordedTrackUnitVector);
+  const keep = new Uint8Array(points.length);
+  keep[0] = 1;
+  keep[points.length - 1] = 1;
+  const maxChordError = 2 * Math.sin(Math.min(Math.PI, maxAngularErrorRad) / 2);
+  const stack: Array<[number, number]> = [[0, points.length - 1]];
+
+  while (stack.length > 0) {
+    const [startIndex, endIndex] = stack.pop()!;
+    if (endIndex - startIndex <= 1) continue;
+    let furthestIndex = -1;
+    let furthestDistance = -1;
+    for (let index = startIndex + 1; index < endIndex; index += 1) {
+      const distance = distanceToChord(vectors[index], vectors[startIndex], vectors[endIndex]);
+      if (distance > furthestDistance) {
+        furthestDistance = distance;
+        furthestIndex = index;
+      }
+    }
+    if (furthestIndex >= 0 && furthestDistance > maxChordError) {
+      keep[furthestIndex] = 1;
+      stack.push([startIndex, furthestIndex], [furthestIndex, endIndex]);
+    }
+  }
+
+  return points.filter((_, index) => keep[index] === 1);
+}
+
+export function buildRecordedTrackLodLevels<T extends RecordedTrackLodPoint>(
+  points: readonly T[],
+  errors: readonly number[] = RECORDED_TRACK_LOD_ERROR_RADIANS,
+): RecordedTrackLodLevel<T>[] {
+  return errors.map((maxAngularErrorRad) => ({
+    maxAngularErrorRad,
+    points: simplifyRecordedTrackPoints(points, maxAngularErrorRad),
+  }));
+}
+
+/**
+ * Pick the coarsest precomputed level whose declared geographic error remains
+ * within the current projected-pixel budget. Camera zoom itself is not the
+ * authority: a different viewport/DPR/projection scale naturally selects a
+ * different level at the same nominal zoom.
+ */
+export function selectRecordedTrackLodLevel<T extends RecordedTrackLodPoint>(
+  levels: readonly RecordedTrackLodLevel<T>[],
+  projectedPixelsPerRadian: number,
+  maxScreenErrorPx = 1.25,
+): RecordedTrackLodLevel<T> | null {
+  if (levels.length === 0) return null;
+  if (!(projectedPixelsPerRadian > 0) || !(maxScreenErrorPx > 0)) {
+    return levels.at(-1) ?? null;
+  }
+  for (let index = levels.length - 1; index >= 0; index -= 1) {
+    const level = levels[index];
+    if (level.maxAngularErrorRad * projectedPixelsPerRadian <= maxScreenErrorPx) {
+      return level;
+    }
+  }
+  return levels[0];
+}
+
 export const ACCEPTED_JOURNEY_MEDIA_TYPES = new Set([
   "image/avif",
   "image/jpeg",

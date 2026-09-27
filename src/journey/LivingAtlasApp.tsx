@@ -122,6 +122,7 @@ import {
   type CrossPointReadingIntent,
 } from "./crossPointReading";
 import {
+  attachRecordedTrackSegments,
   journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
@@ -1085,6 +1086,7 @@ export function LivingAtlasApp({
   const [recordedTrackSegments, setRecordedTrackSegments] = useState<
     NonNullable<JourneyRoute["recordedTrackSegments"]>
   >([]);
+  const [recordedTrackRevision, setRecordedTrackRevision] = useState(0);
   const journeysRef = useRef(journeys);
   journeysRef.current = journeys;
   const [homeBasePeriods, setHomeBasePeriods] = useState<HomeBasePeriod[]>([]);
@@ -1994,7 +1996,7 @@ export function LivingAtlasApp({
         if (!controller.signal.aborted) setRecordedTrackSegments([]);
       });
     return () => controller.abort();
-  }, [activeJourney?.id]);
+  }, [activeJourney?.id, recordedTrackRevision]);
   const activeJourneyQuickRecapPlanningFingerprint = useMemo(
     () => quickRecapPlanningContentFingerprint(activeJourney),
     [activeJourney],
@@ -2033,14 +2035,17 @@ export function LivingAtlasApp({
   const effectiveDraftRoute = draftPlaybackOwnsSession ? draftPlaybackPreview!.route : draftRoute;
   const routes = useMemo(() => {
     const savedRoutes = toJourneyRoutes(journeys).map((route) => (
-      route.id === activeJourney?.id && recordedTrackSegments.length > 0
-        ? { ...route, recordedTrackSegments }
-        : route
+      attachRecordedTrackSegments(route, activeJourney?.id, recordedTrackSegments)
     ));
     if (!effectiveDraftRoute) return savedRoutes;
-    return savedRoutes.some((route) => route.id === effectiveDraftRoute.id)
-      ? savedRoutes.map((route) => route.id === effectiveDraftRoute.id ? effectiveDraftRoute : route)
-      : [...savedRoutes, effectiveDraftRoute];
+    const draftRoute = attachRecordedTrackSegments(
+      effectiveDraftRoute,
+      activeJourney?.id,
+      recordedTrackSegments,
+    );
+    return savedRoutes.some((route) => route.id === draftRoute.id)
+      ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
+      : [...savedRoutes, draftRoute];
   }, [activeJourney?.id, effectiveDraftRoute, journeys, recordedTrackSegments]);
   const focusPresentation = resolveMobilePlaybackPresentation(
     journeys,
@@ -3861,6 +3866,11 @@ export function LivingAtlasApp({
           onGlobePickRequest={startGlobePick}
           onGlobePickCancel={cancelGlobePick}
           onRoutePreviewChange={setDraftRoute}
+          onRecordedTracksChanged={(journeyId) => {
+            if (journeyId === activeJourney?.id) {
+              setRecordedTrackRevision((current) => current + 1);
+            }
+          }}
           onPlaybackPreview={startDraftPlaybackPreview}
           playbackPreviewActive={draftPlaybackOwnsSession}
           playbackPreviewPreparing={playbackPreparingId === draftPlaybackPreviewOwnerKey(editingJourneyId)}

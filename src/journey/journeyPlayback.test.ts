@@ -280,7 +280,7 @@ describe("buildPlaybackSteps (#19)", () => {
       .toEqual(["media-1"]);
   });
 
-  it("gives every point a stop step even without media, so no point is skipped", () => {
+  it("gives every Stop a quiet stop step even without media", () => {
     const silent: Journey = {
       ...journey,
       routePoints: [point("p0", 0, 0), point("p1", 1, 1)],
@@ -289,6 +289,34 @@ describe("buildPlaybackSteps (#19)", () => {
     const steps = buildPlaybackSteps(silent);
     expect(steps.filter((step) => step.kind === "stop")).toHaveLength(2);
     expect(steps.some((step) => step.kind === "media")).toBe(false);
+  });
+
+  it("keeps non-stop Route Points in travel order without inventing arrival, while preserving attached media", () => {
+    const via = { ...point("via", 0, 30, "shape only"), isStop: false };
+    const shaped: Journey = {
+      ...journey,
+      routePoints: [point("start", 0, 0), via, point("end", 0, 60)],
+      media: [
+        media("start-photo", "start", "image/jpeg"),
+        media("via-photo", "via", "image/jpeg"),
+        media("end-photo", "end", "image/jpeg"),
+      ],
+    };
+
+    const steps = buildPlaybackSteps(shaped);
+    expect(steps.map((step) => step.kind)).toEqual([
+      "intro",
+      "stop", "media",
+      "travel", "media",
+      "travel", "stop", "media",
+      "outro",
+    ]);
+    expect(steps.filter((step) => step.kind === "travel")).toEqual([
+      { kind: "travel", to: 1 },
+      { kind: "travel", to: 2 },
+    ]);
+    expect(steps.filter((step) => step.kind === "stop").map((step) => step.pointIndex)).toEqual([0, 2]);
+    expect(steps.filter((step) => step.kind === "media").map((step) => step.pointIndex)).toEqual([0, 1, 2]);
   });
 });
 

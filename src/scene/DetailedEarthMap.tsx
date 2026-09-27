@@ -13,6 +13,7 @@ import {
   getDetailedEarthRouteFrame,
   getDetailedEarthFocusDuration,
   pickDetailedEarthJourneyRoutePointHit,
+  selectDetailedEarthJourneyOverlayLod,
   getEarthDiveHandoffFrame,
   detailedEarthAnchorCorrection,
   solveDetailedEarthHandoffZoom,
@@ -69,17 +70,31 @@ const JOURNEY_OVERLAY_POINT_LAYER_ID = "startrips-active-journey-points";
 const JOURNEY_OVERLAY_LABEL_LAYER_ID = "startrips-active-journey-labels";
 const JOURNEY_OVERLAY_HIT_LAYER_ID = "startrips-active-journey-hit-targets";
 
+function detailedEarthProjectedPixelsPerRadian(map: MapLibreMap) {
+  const center = map.getCenter();
+  const probeLatitude = Math.max(-89.9, Math.min(89.9, center.lat + LOCAL_SCALE_PROBE_DEG));
+  const anchor = map.project([center.lng, center.lat]);
+  const probe = map.project([center.lng, probeLatitude]);
+  const angularDelta = Math.abs(probeLatitude - center.lat) * Math.PI / 180;
+  if (!(angularDelta > 0)) return 0;
+  return Math.hypot(probe.x - anchor.x, probe.y - anchor.y) / angularDelta;
+}
+
 function installDetailedEarthJourneyOverlay(
   map: MapLibreMap,
   overlay: DetailedEarthJourneyOverlay,
 ) {
+  const lodSelection = selectDetailedEarthJourneyOverlayLod(
+    overlay,
+    detailedEarthProjectedPixelsPerRadian(map),
+  );
   const existingSource = map.getSource(JOURNEY_OVERLAY_SOURCE_ID) as GeoJSONSource | undefined;
   if (existingSource) {
-    existingSource.setData(overlay.data);
+    existingSource.setData(lodSelection.data);
   } else {
     map.addSource(JOURNEY_OVERLAY_SOURCE_ID, {
       type: "geojson",
-      data: overlay.data,
+      data: lodSelection.data,
     });
   }
 
@@ -209,6 +224,7 @@ function installDetailedEarthJourneyOverlay(
       },
     });
   }
+  return lodSelection;
 }
 
 type DetailedEarthMapProps = {
@@ -438,6 +454,7 @@ export default function DetailedEarthMap({
     let idleCount = 0;
     let resizeCount = 0;
     let appliedJourneyOverlayRevision: string | null = null;
+    let appliedJourneyOverlayLodKey: string | null = null;
     let loadedJourneyOverlayRevision: string | null = null;
     let paintedJourneyOverlayRevision: string | null = null;
     let pendingRevealCommit: {
@@ -529,8 +546,11 @@ export default function DetailedEarthMap({
       // and addLayer genuinely require the style to be ready.
       if (!source && !map.isStyleLoaded()) return false;
       try {
-        installDetailedEarthJourneyOverlay(map, overlay);
+        const lodSelection = installDetailedEarthJourneyOverlay(map, overlay);
         appliedJourneyOverlayRevision = overlay.revision;
+        appliedJourneyOverlayLodKey = lodSelection.key;
+        host.dataset.journeyRecordedTrackLodKey = lodSelection.key;
+        host.dataset.journeyRecordedTrackRenderedPoints = String(lodSelection.renderedPointCount);
         // A new Journey revision owns a new settled lifecycle. Never let an
         // earlier overlay's fully-settled bit survive a rapid Route/Journey
         // switch and make the replacement look settled before its own frame.
@@ -558,6 +578,7 @@ export default function DetailedEarthMap({
         return true;
       } catch (error) {
         appliedJourneyOverlayRevision = null;
+        appliedJourneyOverlayLodKey = null;
         loadedJourneyOverlayRevision = null;
         paintedJourneyOverlayRevision = null;
         host.dataset.journeyOverlayReady = "false";
@@ -566,6 +587,21 @@ export default function DetailedEarthMap({
       }
     };
     syncJourneyOverlayRef.current = syncJourneyOverlay;
+    const syncJourneyOverlayLod = () => {
+      if (removed || appliedJourneyOverlayRevision !== journeyOverlayRef.current.revision) return false;
+      const source = map.getSource(JOURNEY_OVERLAY_SOURCE_ID) as GeoJSONSource | undefined;
+      if (!source) return false;
+      const selection = selectDetailedEarthJourneyOverlayLod(
+        journeyOverlayRef.current,
+        detailedEarthProjectedPixelsPerRadian(map),
+      );
+      if (selection.key === appliedJourneyOverlayLodKey) return true;
+      source.setData(selection.data);
+      appliedJourneyOverlayLodKey = selection.key;
+      host.dataset.journeyRecordedTrackLodKey = selection.key;
+      host.dataset.journeyRecordedTrackRenderedPoints = String(selection.renderedPointCount);
+      return true;
+    };
     const publishCameraObservation = () => {
       if (diveOwnerRef.current !== "detail") return;
       const center = map.getCenter();
@@ -832,6 +868,7 @@ export default function DetailedEarthMap({
     map.on("style.load", () => {
       if (removed) return;
       appliedJourneyOverlayRevision = null;
+      appliedJourneyOverlayLodKey = null;
       loadedJourneyOverlayRevision = null;
       paintedJourneyOverlayRevision = null;
       host.dataset.journeyOverlayReady = "false";
@@ -1009,6 +1046,7 @@ export default function DetailedEarthMap({
       publishCameraObservation();
     });
     map.on("moveend", () => {
+      syncJourneyOverlayLod();
       // `map.resize()` can emit moveend while an explicit flyTo/fitBounds is
       // still easing. Only retire focus-flight ownership when MapLibre itself
       // says that ease has actually completed or been interrupted.

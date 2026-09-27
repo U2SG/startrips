@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyScopeReorder,
+  attachRecordedTrackSegments,
   groupJourneysByYear,
   isSoundtrackAsset,
   isVisualMediaAsset,
@@ -8,6 +9,8 @@ import {
   journeySoundtrack,
   journeyVisualMedia,
   factualRouteText,
+  buildRecordedTrackLodLevels,
+  selectRecordedTrackLodLevel,
   resolveJourneyRouteSegmentProvenance,
   resolveRouteProvenance,
   resolveSuggestedRouteDecision,
@@ -110,6 +113,50 @@ describe("journeyModel", () => {
       ...shaped,
       segmentProvenance: ["recorded-track", "suggested-route"],
     })).toBe("mixed");
+  });
+
+  it("keeps recorded evidence on the active route while an edit draft replaces its Route Points", () => {
+    const segments = [{
+      id: "recorded-segment",
+      points: [
+        { lat: 22, lon: 114, recordedAt: null },
+        { lat: 22.1, lon: 114.1, recordedAt: null },
+      ],
+    }];
+    const draft = {
+      id: "journey-active",
+      color: "#88d8ca",
+      points: [
+        { id: "start", lat: 22, lon: 114, isStop: true },
+        { id: "shape", lat: 22.05, lon: 114.05, isStop: false },
+      ],
+    };
+
+    expect(attachRecordedTrackSegments(draft, "journey-active", segments))
+      .toEqual({ ...draft, recordedTrackSegments: segments });
+    expect(attachRecordedTrackSegments(draft, "another-journey", segments)).toBe(draft);
+  });
+
+  it("precomputes recorded-track LOD and selects it by projected screen error", () => {
+    const dense = Array.from({ length: 100_000 }, (_, index) => ({
+      lat: 22 + index * 0.000001 + Math.sin(index / 80) * 0.001,
+      lon: 114 + index * 0.00001,
+      recordedAt: null,
+    }));
+    const levels = buildRecordedTrackLodLevels(dense);
+    expect(levels).toHaveLength(4);
+    expect(levels[0].points).toHaveLength(dense.length);
+    expect(levels.every((level) => level.points[0] === dense[0])).toBe(true);
+    expect(levels.every((level) => level.points.at(-1) === dense.at(-1))).toBe(true);
+    for (let index = 1; index < levels.length; index += 1) {
+      expect(levels[index].points.length).toBeLessThanOrEqual(levels[index - 1].points.length);
+    }
+
+    const globalView = selectRecordedTrackLodLevel(levels, 1_000);
+    const closeView = selectRecordedTrackLodLevel(levels, 100_000);
+    expect(globalView?.maxAngularErrorRad).toBe(0.00025);
+    expect(closeView?.maxAngularErrorRad).toBe(0.00001);
+    expect(globalView!.points.length).toBeLessThan(closeView!.points.length);
   });
 
   it("requires an explicit confirmation before suggestion geometry can become factual", () => {

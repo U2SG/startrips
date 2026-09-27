@@ -46,6 +46,7 @@ import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import { compactMobileLayoutMarker } from "../journey/mobileLayout";
 import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
 import {
+  buildRecordedTrackLodLevels,
   resolveJourneyRouteSegmentProvenance,
   summarizeJourneyRouteProvenance,
 } from "../journey/journeyModel";
@@ -240,10 +241,53 @@ function uniformlyBoundRecordedPoints<T>(points: readonly T[], limit: number) {
   ));
 }
 
+export type RecordedTrackOverviewLevel = {
+  maxAngularErrorRad: number;
+  sourcePointCount: number;
+  samples: RouteArcSamples;
+};
+
+export type RecordedTrackOverview = {
+  id: string;
+  levels: readonly RecordedTrackOverviewLevel[];
+  samples: RouteArcSamples;
+};
+
+function recordedTrackArcSamples(
+  points: readonly { lat: number; lon: number }[],
+  maxPoints: number,
+): RouteArcSamples {
+  const bounded = uniformlyBoundRecordedPoints(points, maxPoints);
+  const directions = new Float32Array(bounded.length * 3);
+  const lifts = new Float32Array(bounded.length);
+  bounded.forEach((point, pointIndex) => {
+    const direction = latLonToVector3(point.lat, point.lon, 1);
+    const offset = pointIndex * 3;
+    directions[offset] = direction.x;
+    directions[offset + 1] = direction.y;
+    directions[offset + 2] = direction.z;
+  });
+  return { directions, lifts };
+}
+
+export function selectRecordedTrackOverviewLevel(
+  levels: readonly RecordedTrackOverviewLevel[],
+  projectedPixelsPerRadian: number,
+  maxScreenErrorPx = 1.25,
+) {
+  if (levels.length === 0) return null;
+  if (!(projectedPixelsPerRadian > 0) || !(maxScreenErrorPx > 0)) return levels.at(-1) ?? null;
+  for (let index = levels.length - 1; index >= 0; index -= 1) {
+    const level = levels[index];
+    if (level.maxAngularErrorRad * projectedPixelsPerRadian <= maxScreenErrorPx) return level;
+  }
+  return levels[0];
+}
+
 export function buildRecordedTrackOverviewSamples(
   segments: NonNullable<JourneyRoute["recordedTrackSegments"]>,
   maxPoints = MAX_RENDERED_RECORDED_TRACK_POINTS,
-): Array<{ id: string; samples: RouteArcSamples }> {
+): RecordedTrackOverview[] {
   const validSegments = segments
     .map((segment) => ({
       ...segment,
@@ -251,24 +295,26 @@ export function buildRecordedTrackOverviewSamples(
     }))
     .filter((segment) => segment.points.length >= 2);
   if (maxPoints < 2 || validSegments.length === 0) return [];
+
+  // Every independent server segment keeps its own SVG path: LOD may remove
+  // interior samples, but it never bridges a recorded-track gap. Very unusual
+  // inputs with more gaps than the bounded path budget keep a representative
+  // subset instead of constructing an unbounded DOM.
   const segmentLimit = Math.min(validSegments.length, Math.floor(maxPoints / 2));
   const chosenSegments = uniformlyBoundRecordedPoints(validSegments, segmentLimit);
   let remainingPoints = maxPoints;
+
   return chosenSegments.map((segment, index) => {
     const remainingSegments = chosenSegments.length - index;
-    const limit = Math.max(2, Math.floor(remainingPoints / remainingSegments));
-    const points = uniformlyBoundRecordedPoints(segment.points, limit);
-    remainingPoints -= points.length;
-    const directions = new Float32Array(points.length * 3);
-    const lifts = new Float32Array(points.length);
-    points.forEach((point, pointIndex) => {
-      const direction = latLonToVector3(point.lat, point.lon, 1);
-      const offset = pointIndex * 3;
-      directions[offset] = direction.x;
-      directions[offset + 1] = direction.y;
-      directions[offset + 2] = direction.z;
-    });
-    return { id: segment.id, samples: { directions, lifts } };
+    const pointBudget = Math.max(2, Math.floor(remainingPoints / remainingSegments));
+    const levels = buildRecordedTrackLodLevels(segment.points).map((level) => ({
+      maxAngularErrorRad: level.maxAngularErrorRad,
+      sourcePointCount: level.points.length,
+      samples: recordedTrackArcSamples(level.points, pointBudget),
+    }));
+    const samples = levels.at(-1)?.samples ?? recordedTrackArcSamples(segment.points, pointBudget);
+    remainingPoints -= pointBudget;
+    return { id: segment.id, levels, samples };
   });
 }
 
@@ -2541,6 +2587,7 @@ export function ParticleEarthScene({
       }>;
       recordedTracks: Array<{
         path: SVGPathElement;
+        levels: readonly RecordedTrackOverviewLevel[];
         samples: RouteArcSamples;
       }>;
       glowPath: SVGPathElement;
@@ -3082,7 +3129,7 @@ export function ParticleEarthScene({
           path.setAttribute("stroke-linecap", "round");
           path.setAttribute("stroke-linejoin", "round");
           group.appendChild(path);
-          return { path, samples: track.samples };
+          return { path, levels: track.levels, samples: track.samples };
         });
         routeVectorLayer.appendChild(group);
         routeVectorEntries.push({
@@ -3469,7 +3516,21 @@ export function ParticleEarthScene({
           }
           if (legPath.end) projectedLegEnds.push([leg.toPointIndex, legPath.end]);
         }
+        const recordedTrackPixelsPerRadian = Math.max(
+          1,
+          readInteractionGeometry().projectedRadiusPx,
+        );
         for (const track of entry.recordedTracks) {
+          const level = selectRecordedTrackOverviewLevel(
+            track.levels,
+            recordedTrackPixelsPerRadian,
+          );
+          if (level && track.samples !== level.samples) track.samples = level.samples;
+          if (level) {
+            track.path.dataset.recordedTrackLodErrorRad = String(level.maxAngularErrorRad);
+            track.path.dataset.recordedTrackLodSourcePoints = String(level.sourcePointCount);
+            track.path.dataset.recordedTrackLodRenderedPoints = String(level.samples.lifts.length);
+          }
           const trackPath = buildProjectedRoutePath(
             track.samples,
             projectRoutePoint,
