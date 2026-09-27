@@ -3817,7 +3817,7 @@ try {
         const heldFrames = hold ? frames.filter((frame) => frame.at >= hold.from && frame.at <= hold.to) : [];
         const heldForegrounds = [...new Set(heldFrames.map((frame) => frame.centre?.asset ?? null))];
         const dimmedPrevious = frames.filter((frame) => frame.centre?.asset === previous
-          && Number(frame.slots?.find((slot) => slot.id === previous)?.opacity) < 0.9);
+          && Number(frame.slots?.find((slot) => slot.id === previous)?.opacity) < 0.99);
         const dimmingMs = dimmedPrevious.length > 1
           ? dimmedPrevious.at(-1).at - dimmedPrevious[0].at : 0;
         progress.steps.push({
@@ -3834,7 +3834,7 @@ try {
           } : null,
           failed: !requested || !settled || continuity.failed
             || JSON.stringify(continuity.foregroundSequence) !== JSON.stringify(expected)
-            || dimmingMs > 500
+            || dimmedPrevious.length > 0
             || (hold && (!hold.responseHeld || heldFrames.length < 20
               || heldForegrounds.length !== 1 || heldForegrounds[0] !== previous
               || heldFrames.some((frame) => frame.waiting || frame.stageStatus
