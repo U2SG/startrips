@@ -2640,20 +2640,39 @@ async function verifyFinalAcceptanceMobileFlow() {
           .count()) {
         throw new Error("Story lost its media while soundtrack preparation was pending");
       }
-      if (viewportLabel !== "320") {
+      if (viewportLabel !== "320" && viewportLabel !== "360") {
         await storyPending.getByRole("button", { name: "取消准备" }).click();
       }
       holdStorySoundtrackRead = false;
       await Promise.all(heldStorySoundtrackRoutes.splice(0).map((route) => route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ url: tinyAudio, expiresAt: validFixtureExpiry }),
+        body: viewportLabel === "360" ? '{"url":' : JSON.stringify({
+          url: tinyAudio, expiresAt: validFixtureExpiry,
+        }),
       })));
       if (viewportLabel === "320") {
         const ready = page.locator('.journey-story [data-story-playback-state="ready"]');
         await ready.waitFor({ state: "visible", timeout: 5_000 });
         await pressStoryPlayback(ready.locator('[data-story-playback-continue="true"]'),
           "Story Quick Recap continuation after soundtrack preparation", true);
+        await page.locator('.journey-playback[data-playback-mode="quick-recap"]')
+          .waitFor({ state: "visible", timeout: 8_000 });
+      } else if (viewportLabel === "360") {
+        const errorState = page.locator('.journey-story [data-story-playback-state="error"]');
+        await errorState.waitFor({ state: "visible", timeout: 5_000 });
+        if (!String(await errorState.textContent()).includes("配乐暂时无法准备")
+          || await page.locator(".journey-playback").count() !== 0
+          || !await page.locator('.journey-story [data-media-page="current"][data-media-page-id="fa-image-2"]')
+            .count()) {
+          throw new Error("Failed Story soundtrack read displaced the current media");
+        }
+        await pressStoryPlayback(errorState.locator('[data-story-playback-continue="true"]'),
+          "Story Quick Recap retry after soundtrack failure", true);
+        const ready = page.locator('.journey-story [data-story-playback-state="ready"]');
+        await ready.waitFor({ state: "visible", timeout: 5_000 });
+        await pressStoryPlayback(ready.locator('[data-story-playback-continue="true"]'),
+          "Story Quick Recap continuation after retry", true);
         await page.locator('.journey-playback[data-playback-mode="quick-recap"]')
           .waitFor({ state: "visible", timeout: 8_000 });
       } else {
