@@ -37,7 +37,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type KeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent,
@@ -2632,7 +2632,7 @@ export function JourneyStory({
     event.stopPropagation();
   }
 
-  function focusChapterRailButton(event: KeyboardEvent<HTMLElement>) {
+  function focusChapterRailButton(event: ReactKeyboardEvent<HTMLElement>) {
     const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
     const current = buttons.indexOf(event.target as HTMLButtonElement);
     if (current < 0) return;
