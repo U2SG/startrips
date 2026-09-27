@@ -5594,9 +5594,16 @@ try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
       progress.toVideo = await navigateByGesture(page, STAGE, 1, V1);
+      progress.play = await startStoryVideoPlayback(page, false);
+      if (progress.play.failed) throw new Error(`source playback did not start: ${progress.play.reason}`);
+      await page.waitForFunction(() => {
+        const video = document.querySelector('.journey-story__media .story-media-pages__video video');
+        return video instanceof HTMLVideoElement && video.currentTime >= 0.6
+          && video.getVideoPlaybackQuality().totalVideoFrames >= 2;
+      }, undefined, { polling: "raf", timeout: 3_000 });
       progress.pause = await pauseNativeVideoIfNeeded(page, STAGE);
-      // Keep the first painted frame as the hold. A warmup seek would load the
-      // later bytes that this expired-capability scenario needs to leave uncached.
+      // Keep a genuinely painted early frame as the hold. A warmup seek would
+      // load the later bytes that this scenario needs to leave uncached.
       progress.enter = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
       progress.before = await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
       await waitForPresentedVideoHit(page, FULLSCREEN, V1);
@@ -5653,7 +5660,7 @@ try {
         oldRanges: session.renewal.expiredRanges,
         renewalReads: session.renewal.reads, renewalBytes: session.renewal.bytes,
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
-        failed: !progress.toVideo.ok || progress.pause.failed || progress.seek.failed
+        failed: !progress.toVideo.ok || progress.play.failed || progress.pause.failed || progress.seek.failed
           || progress.beforePixels.failed || progress.preErrorScreen.failed
           || progress.errorFrame.failed
           || progress.retryReadFrame.failed || progress.retryByteFrame.failed
