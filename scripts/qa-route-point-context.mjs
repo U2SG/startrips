@@ -1127,36 +1127,46 @@ try {
   const pausePlayback = projectionPage.locator('.journey-playback__controls button[aria-label="暂停播放"]');
   if (await pausePlayback.count()) await pausePlayback.click();
   const playbackProgress = projectionPage.locator('.journey-playback__progress input[type="range"]');
-  const detourSeekTarget = await playbackProgress.evaluate((range) => {
-    const tick = document.querySelectorAll(".journey-playback__progress-chapters i")[1];
-    if (!(tick instanceof HTMLElement)) throw new Error("detour Playback chapter tick is missing");
+  const firstStopSeekTarget = await playbackProgress.evaluate((range) => {
+    const tick = document.querySelectorAll(".journey-playback__progress-chapters i")[0];
+    if (!(tick instanceof HTMLElement)) throw new Error("first Stop Playback chapter tick is missing");
     const fraction = Number.parseFloat(tick.style.left) / 100 + 0.004;
     const rect = range.getBoundingClientRect();
     const inset = 8;
     return { x: rect.left + inset + (rect.width - inset * 2) * fraction,
       y: rect.top + rect.height / 2 };
   });
-  await projectionPage.mouse.click(detourSeekTarget.x, detourSeekTarget.y);
+  await projectionPage.mouse.click(firstStopSeekTarget.x, firstStopSeekTarget.y);
+  await projectionPage.waitForFunction(() => {
+    const playback = document.querySelector(".journey-playback");
+    return playback?.getAttribute("data-playback-step") === "1"
+      && playback.getAttribute("data-playback-phase") === "stop"
+      && document.querySelector('.journey-playback__chapter[data-chapter-point="0"]');
+  });
+  await projectionPage.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
   await projectionPage.waitForFunction((detourId) => {
     const playback = document.querySelector(".journey-playback");
     const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${detourId}"]`);
-    return playback?.getAttribute("data-playback-step") === "3"
-      && playback.getAttribute("data-playback-phase") === "stop"
-      && document.querySelector('.journey-playback__chapter[data-chapter-point="1"]')
+    return playback?.getAttribute("data-playback-step") === "2"
+      && playback.getAttribute("data-playback-phase") === "travel"
+      && !document.querySelector('.journey-playback__chapter[data-chapter-point="1"]')
       && marker?.getAttribute("data-attention-role") === "narrative-current"
       && marker.getBoundingClientRect().width > 0
       && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "6";
   }, projectionPointIds.detour);
+  await pausePlayback.click();
   const playbackDetourState = await projectionPage.evaluate(() => ({
     step: document.querySelector(".journey-playback")?.getAttribute("data-playback-step"),
-    chapter: document.querySelector(".journey-playback__chapter")?.getAttribute("data-chapter-point"),
+    phase: document.querySelector(".journey-playback")?.getAttribute("data-playback-phase"),
+    chapter: document.querySelector(".journey-playback__chapter")?.getAttribute("data-chapter-point") ?? null,
     camera: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point"),
     contextCount: document.querySelectorAll("[data-route-point-context]").length,
   }));
-  record("Full Playback's pure detour owns the displayed chapter, camera and marker", {
-    detourSeekTarget, playbackDetourState,
-  }, playbackDetourState.step === "3"
-    && playbackDetourState.chapter === "1"
+  record("Full Playback keeps the non-stop detour as travel while its camera and marker remain truthful", {
+    firstStopSeekTarget, playbackDetourState,
+  }, playbackDetourState.step === "2"
+    && playbackDetourState.phase === "travel"
+    && playbackDetourState.chapter === null
     && playbackDetourState.camera === "35.5,-116.5"
     && playbackDetourState.contextCount === 0);
   const followedDetourFocus = await sceneFocusSnapshot(projectionPage);
@@ -1178,23 +1188,24 @@ try {
     const playback = document.querySelector(".journey-playback");
     const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${detourId}"]`);
     return playback?.getAttribute("data-camera-follow") === "free"
-      && playback.getAttribute("data-playback-step") === "3"
+      && playback.getAttribute("data-playback-step") === "2"
+      && playback.getAttribute("data-playback-phase") === "travel"
       && playback.getAttribute("data-map-interactive") === "true"
       && marker?.getAttribute("data-attention-role") === "narrative-current"
       && marker.getBoundingClientRect().width > 0;
   }, projectionPointIds.detour);
   const freeDetourFocus = await sceneFocusSnapshot(projectionPage);
-  record("native map drag frees only the camera while pure-detour chapter and marker remain", {
+  record("native map drag frees only the camera while non-stop travel and marker remain", {
     playbackDrag, playbackDragEnd, followedDetourFocus, freeDetourFocus,
   }, freeDetourFocus.focusRevision === followedDetourFocus.focusRevision
     && await projectionPlayback.getAttribute("data-camera-follow") === "free"
-    && await projectionPlayback.locator('.journey-playback__chapter[data-chapter-point="1"]').count() === 1);
+    && await projectionPlayback.locator('.journey-playback__chapter[data-chapter-point="1"]').count() === 0);
   await projectionPage.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
   await projectionPage.waitForFunction((ids) => {
     const playback = document.querySelector(".journey-playback");
     const b = document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.b}"]`);
     return playback?.getAttribute("data-camera-follow") === "free"
-      && playback.getAttribute("data-playback-step") === "4"
+      && playback.getAttribute("data-playback-step") === "3"
       && playback.getAttribute("data-playback-phase") === "travel"
       && b?.getAttribute("data-attention-role") === "narrative-current"
       && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
