@@ -2328,6 +2328,13 @@ async function verifyFinalAcceptanceMobileFlow() {
         contentType: "application/json",
         body: JSON.stringify({ periods: [] }),
       }));
+      // Editing an existing Journey reads its recorded tracks on mount. This
+      // fixture has none; keep the read inside the authenticated QA API surface.
+      await page.route("**/api/journey-recorded-tracks/*", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ recordedTracks: [] }),
+      }));
       await page.route("**/api/journeys", async (route) => {
         const request = route.request();
         if (request.method() === "POST") {

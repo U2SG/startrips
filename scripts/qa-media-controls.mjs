@@ -3395,7 +3395,8 @@ try {
       const root = document.querySelector(".journey-story__media [data-story-media-pages]");
       window.__qaManyPhotoNodes = [...root.querySelectorAll("[data-media-page]")];
       window.__qaManyPhotoReloads = [];
-      const aperture = { boundaries: 0, jumps: [], samples: 0, maxBoundaryDelta: 0 };
+      const aperture = { boundaries: 0, jumps: [], samples: 0, maxBoundaryDelta: 0,
+        boundarySamples: [], roleWrites: [] };
       let previous = new Map();
       let lastTime = performance.now();
       const sample = (now) => {
@@ -3403,15 +3404,20 @@ try {
         for (const node of root.querySelectorAll("[data-media-page-id]")) {
           const clip = getComputedStyle(node).clipPath.match(/[-+]?(?:\d*\.?\d+)(?:e[-+]?\d+)?/gi)?.map(Number) ?? [0, 0];
           const state = { clip: [clip[0], clip[1] ?? clip[0]],
+            phase: root.dataset.mediaPresentation,
             role: `${node.dataset.mediaPage}:${node.dataset.mediaIncoming ?? "false"}` };
           const before = previous.get(node.dataset.mediaPageId);
           if (before && before.role !== state.role && now - lastTime < 80) {
             aperture.boundaries += 1;
             const delta = Math.max(...state.clip.map((value, index) => Math.abs(value - before.clip[index])));
             aperture.maxBoundaryDelta = Math.max(aperture.maxBoundaryDelta, delta);
+            const boundary = { assetId: node.dataset.mediaPageId,
+              slot: window.__qaManyPhotoNodes.indexOf(node), from: before, to: state,
+              delta, elapsed: now - lastTime };
+            aperture.boundarySamples.push(boundary);
             // At role handoff a retained photograph must not abruptly open or
             // recrop. Allow actual spring travel during the sampled interval.
-            if (delta > Math.max(2, (now - lastTime) * .16)) aperture.jumps.push({ delta, elapsed: now - lastTime });
+            if (delta > Math.max(2, (now - lastTime) * .16)) aperture.jumps.push(boundary);
           }
           next.set(node.dataset.mediaPageId, state);
         }
@@ -3422,6 +3428,29 @@ try {
       };
       window.__qaAperture = aperture;
       sample(performance.now());
+      // Retain the clip at the DOM role write as well as the later rAF sample.
+      // The first following style mutation's old value is the painted clip
+      // before layout effects start the new spring. This distinguishes a reset
+      // at the handoff from continuous travel before the next sampled frame.
+      const roleObserver = new MutationObserver((records) => {
+        for (const [index, record] of records.entries()) {
+          if (!["data-media-page", "data-media-incoming"].includes(record.attributeName)) continue;
+          const node = record.target;
+          if (!node.matches("[data-media-page-id]")) continue;
+          const followingStyle = records.slice(index + 1).find((entry) => (
+            entry.target === node && entry.attributeName === "style"
+          ));
+          const beforeStyle = document.createElement("div").style;
+          beforeStyle.cssText = followingStyle?.oldValue ?? node.getAttribute("style") ?? "";
+          aperture.roleWrites.push({ assetId: node.dataset.mediaPageId,
+            slot: window.__qaManyPhotoNodes.indexOf(node), attribute: record.attributeName,
+            from: record.oldValue, to: node.getAttribute(record.attributeName),
+            clipBefore: beforeStyle.clipPath, clipAfter: node.style.clipPath,
+            phase: root.dataset.mediaPresentation, at: performance.now() });
+        }
+      });
+      roleObserver.observe(root, { subtree: true, attributes: true,
+        attributeFilter: ["data-media-page", "data-media-incoming", "style"], attributeOldValue: true });
       const observer = new MutationObserver((records) => {
         for (const record of records) {
           const image = record.target;
