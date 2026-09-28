@@ -913,6 +913,75 @@ const sequenceContinuityQaJourney = buildContinuityQaJourney(SEQUENCE_CONTINUITY
 
 type ContinuityQaTrace = { cameraTargets: { key: string; at: number; step: number | null; phase: string | null }[] };
 
+// #342: Stop A -> shaping P1 -> A's media via P2 -> independent media via P3
+// -> empty Stop B -> shaping P4. All six retain their canonical identities.
+const chapterMembershipQaJourney: Journey = {
+  ...storyQaJourney,
+  id: "00000000-0000-4000-8000-000000003421",
+  title: "QA STOP AND VIA CHAPTERS",
+  note: "",
+  coverMediaAssetId: null,
+  routePoints: [
+    { label: "STOP A", isStop: true, latitude: 0, longitude: 0, regionContext: "A" },
+    { label: "P1 SHAPING", isStop: false, latitude: 2, longitude: 2 },
+    { label: "P2 STAY MEDIA", isStop: false, latitude: 0.1, longitude: 0.1, regionContext: "A" },
+    { label: "P3 INDEPENDENT MEDIA", isStop: false, latitude: 1, longitude: 1 },
+    { label: "STOP B", isStop: true, latitude: 2, longitude: 3, regionContext: "B" },
+    { label: "P4 SHAPING", isStop: false, latitude: 3, longitude: 4 },
+  ].map((point, index) => ({
+    ...point, id: `st121-chapter-point-${index}`, journeyId: "00000000-0000-4000-8000-000000003421",
+    sortOrder: index, occurredAt: null, createdAt: "2026-09-28T00:00:00.000Z",
+  })),
+  media: [2, 3].map((pointIndex, index) => ({
+    id: `st121-chapter-photo-${pointIndex}`, journeyId: "00000000-0000-4000-8000-000000003421",
+    routePointId: `st121-chapter-point-${pointIndex}`, storageDriver: "qa", storageKey: `qa/chapter-${pointIndex}`,
+    fileName: `chapter-${pointIndex}.png`, mimeType: "image/png", bytes: 68, sortOrder: index,
+    uploadedByUserId: storyQaJourney.createdByUserId, createdAt: "2026-09-28T00:00:00.000Z",
+  })),
+};
+
+function JourneyPlaybackChapterMembershipQaPreview() {
+  const recap = new URLSearchParams(window.location.search).get("qaRecap") === "1";
+  const [tempo, setTempo] = useState<PlaybackTempo>(PLAYBACK_INITIAL_TEMPO);
+  const prepared = useMemo(() => recap ? prepareQuickRecapPlayback(chapterMembershipQaJourney, {
+    generatedAt: "2026-09-28T00:00:00.000Z", tempo,
+  }) : null, [recap, tempo]);
+  const journey = prepared?.journey ?? chapterMembershipQaJourney;
+  const [handoff, setHandoff] = useState<{ routePointId: string | null; assetId: string | null; reason: string } | null>(null);
+  const resolveDuration = useCallback((targetJourney: Journey, step: PlaybackStep, activeTempo: PlaybackTempo) => (
+    prepared ? quickRecapStepDurationMs(targetJourney, step, prepared.plan, activeTempo) : undefined
+  ), [prepared]);
+  const recordCameraTarget = useCallback((target: PlaybackCameraTarget) => {
+    const store = window as unknown as { __qaPlaybackContinuity?: ContinuityQaTrace };
+    const trace = store.__qaPlaybackContinuity ?? { cameraTargets: [] };
+    store.__qaPlaybackContinuity = trace;
+    const overlay = document.querySelector<HTMLElement>(".journey-playback");
+    trace.cameraTargets.push({ key: playbackCameraTargetKey(target), at: Date.now(),
+      step: overlay ? Number(overlay.dataset.playbackStep) : null,
+      phase: overlay?.dataset.playbackPhase ?? null,
+    });
+  }, []);
+  return (
+    <main className="living-atlas" data-qa-chapter-membership
+      data-qa-canonical-route={JSON.stringify(journey.routePoints.map((point) => point.id))}
+      data-qa-return-route-point={handoff?.routePointId ?? undefined}
+      data-qa-return-asset={handoff?.assetId ?? undefined}
+      data-qa-return-reason={handoff?.reason ?? undefined}
+    >
+      <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
+      {handoff ? null : <JourneyPlaybackOverlay
+        journey={journey}
+        onClose={({ position, reason }) => setHandoff({ routePointId: position?.routePointId ?? null, assetId: position?.assetId ?? null, reason })}
+        onCameraTargetChange={recordCameraTarget}
+        onTempoChange={setTempo}
+        stepDurationResolver={prepared ? resolveDuration : undefined}
+        playbackMode={prepared ? "quick-recap" : "full"}
+        reduceMotion
+      />}
+    </main>
+  );
+}
+
 function JourneyPlaybackContinuityQaPreview() {
   const params = new URLSearchParams(window.location.search);
   const bridgeVideo = params.get("qaMapBridgeVideo") === "1";
@@ -1057,9 +1126,11 @@ const Experience = qaState === "journey-composer"
       // so the lanes already grading the default preview keep their fixture.
       : new URLSearchParams(window.location.search).get("qaMode") === "route-provenance"
         ? JourneyPlaybackRouteProvenanceQaPreview
-        : new URLSearchParams(window.location.search).get("qaMode") === "continuity"
-          ? JourneyPlaybackContinuityQaPreview
-          : JourneyPlaybackQaPreview)
+        : new URLSearchParams(window.location.search).get("qaMode") === "chapter-membership"
+          ? JourneyPlaybackChapterMembershipQaPreview
+          : new URLSearchParams(window.location.search).get("qaMode") === "continuity"
+            ? JourneyPlaybackContinuityQaPreview
+            : JourneyPlaybackQaPreview)
   : (qaState === "globe-controls" || qaState === "globe-controls-gateway")
     ? LivingAtlasGlobeControlsQaPreview
   : qaState === "earth-dive"

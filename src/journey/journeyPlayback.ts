@@ -9,6 +9,7 @@
 
 import type { HomeNarrativeContext, HomeNarrativeCameraTarget } from "./homeBasePrelude";
 import {
+  deriveJourneyStaySummaries,
   factualRouteText,
   isVisualMediaAsset,
   resolveJourneyRouteSegmentProvenance,
@@ -44,12 +45,13 @@ export function playbackFactualRouteText(
   route: Pick<JourneyRoute, "points" | "segmentProvenance"> | null | undefined,
   toPointIndex: number,
   text: string,
+  fromPointIndex = Math.max(0, toPointIndex - 1),
 ): string | null {
   if (!route || toPointIndex <= 0 || toPointIndex >= route.points.length) return null;
-  return factualRouteText(
-    resolveJourneyRouteSegmentProvenance(route, toPointIndex - 1),
-    text,
-  );
+  for (let index = Math.max(0, fromPointIndex); index < toPointIndex; index += 1) {
+    if (factualRouteText(resolveJourneyRouteSegmentProvenance(route, index), text) === null) return null;
+  }
+  return text;
 }
 
 export type PlaybackMediaAvailability = "waiting" | "ready" | "error";
@@ -93,9 +95,29 @@ export function playbackMediaByOwner(
   return byOwner;
 }
 
+/** Cinematic projection only: assets retain their canonical Route Point owner. */
+export function playbackMediaByChapter(journey: Journey): Map<string, JourneyMediaAsset[]> {
+  const pointsById = new Map(journey.routePoints.map((point) => [point.id, point]));
+  const chapterByOwner = new Map(journey.routePoints.map((point) => [point.id, point.id]));
+  for (const stay of deriveJourneyStaySummaries(journey)) {
+    if (!pointsById.get(stay.anchorRoutePointId)?.isStop) continue;
+    for (const pointId of stay.routePointIds) {
+      if (pointsById.get(pointId)?.isStop === false) chapterByOwner.set(pointId, stay.anchorRoutePointId);
+    }
+  }
+  const byChapter = new Map(journey.routePoints.map((point) => [point.id, [] as JourneyMediaAsset[]]));
+  for (const asset of journey.media) {
+    if (asset.routePointId === null || !isVisualMediaAsset(asset)) continue;
+    const chapterId = chapterByOwner.get(asset.routePointId);
+    if (chapterId !== undefined) byChapter.get(chapterId)?.push(asset);
+  }
+  for (const media of byChapter.values()) media.sort(comparePlaybackMedia);
+  return byChapter;
+}
+
 /**
- * The media of one route point in playback order (visual media only; the
- * soundtrack never enters the chapter stream).
+ * The media presented in one cinematic chapter, including its stay's vias.
+ * Story's explicit Route Point scope continues to read canonical owners.
  */
 export function playbackMediaForPoint(
   journey: Journey,
@@ -103,7 +125,7 @@ export function playbackMediaForPoint(
 ): JourneyMediaAsset[] {
   const point = journey.routePoints[pointIndex];
   if (!point) return [];
-  return orderedMediaForOwner(journey, point.id);
+  return playbackMediaByChapter(journey).get(point.id) ?? [];
 }
 
 /**
@@ -131,23 +153,21 @@ export function storyMediaForScope(
 ): JourneyMediaAsset[] {
   if (routePointId === null) return playbackStoryMedia(journey);
   const pointIndex = journey.routePoints.findIndex((point) => point.id === routePointId);
-  return pointIndex >= 0 ? playbackMediaForPoint(journey, pointIndex) : [];
+  return pointIndex >= 0 ? orderedMediaForOwner(journey, routePointId) : [];
 }
 
 export function isPlaybackTransitRoutePoint(
   point: Pick<RoutePoint, "isStop" | "placeRole">,
 ): boolean {
   // isStop is the canonical route-role bit carried by historical Journey
-  // records. Newer placeRole metadata can make the same intent explicit, but
-  // playback must not require a migration before an old non-stop point stops
-  // behaving like an arrival.
-  return point.isStop === false || point.placeRole === "pure-transit";
+  // records; descriptive placeRole metadata cannot override that role.
+  return point.isStop === false;
 }
 
 export type PlaybackStep =
   | { kind: "home-prelude"; cameraTarget: HomeNarrativeCameraTarget }
   | { kind: "intro" }
-  | { kind: "travel"; to: number }
+  | { kind: "travel"; to: number; from?: number }
   | { kind: "stop"; pointIndex: number; media: JourneyMediaAsset[] }
   | { kind: "media"; pointIndex: number; mediaIndex: number }
   | { kind: "home-epilogue"; cameraTarget: HomeNarrativeCameraTarget }
@@ -204,14 +224,30 @@ export type PlaybackCameraTarget =
 export function playbackTravelChoreography(
   journey: Journey,
   toPointIndex: number,
+  fromPointIndex = Math.max(0, toPointIndex - 1),
 ): PlaybackTravelChoreography {
   const to = journey.routePoints[toPointIndex];
-  const from = journey.routePoints[toPointIndex - 1];
+  const from = journey.routePoints[fromPointIndex];
   if (!from || !to) return "regional";
-  const degrees = routePointAngularDistance(from, to) * 180 / Math.PI;
+  const degrees = playbackTravelAngularDistance(journey, toPointIndex, fromPointIndex) * 180 / Math.PI;
   if (degrees < 6) return "nearby";
   if (degrees >= 55) return "long-haul";
   return "regional";
+}
+
+/** Every shaping point contributes to the leg, without owning an arrival. */
+export function playbackTravelAngularDistance(
+  journey: Journey,
+  toPointIndex: number,
+  fromPointIndex = Math.max(0, toPointIndex - 1),
+): number {
+  let distance = 0;
+  for (let index = Math.max(0, fromPointIndex); index < toPointIndex; index += 1) {
+    const from = journey.routePoints[index];
+    const to = journey.routePoints[index + 1];
+    if (from && to) distance += routePointAngularDistance(from, to);
+  }
+  return distance;
 }
 
 export function playbackCameraTargetForStep(
@@ -235,7 +271,7 @@ export function playbackCameraTargetForStep(
       return {
         kind: "point",
         pointIndex: step.to,
-        choreography: journey ? playbackTravelChoreography(journey, step.to) : undefined,
+        choreography: journey ? playbackTravelChoreography(journey, step.to, step.from) : undefined,
       };
     case "stop":
     case "media":
@@ -250,29 +286,30 @@ export function playbackCameraTargetKey(target: PlaybackCameraTarget) {
 }
 
 /**
- * Expand a journey into the ordered playback steps: intro -> for each point
- * (travel + stop + its media) -> outro. Points with no media and no note
- * still get a stop step (a quiet beat), so the route always reads as one
- * continuous narrative.
+ * Stops always own chapters. Ungrouped media-bearing vias own lightweight
+ * chapters; pure shaping points stay in travel geometry without an arrival.
  */
 export function buildPlaybackSteps(
   journey: Journey,
   homeContext?: HomeNarrativeContext | null,
 ): PlaybackStep[] {
-  const byOwner = playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
+  const byChapter = playbackMediaByChapter(journey);
   const steps: PlaybackStep[] = [];
   if (homeContext?.prelude.eligible) {
     steps.push({ kind: "home-prelude", cameraTarget: homeContext.prelude.cameraTarget });
   }
   steps.push({ kind: "intro" });
+  let previousChapterIndex = 0;
   for (let pointIndex = 0; pointIndex < journey.routePoints.length; pointIndex += 1) {
     const routePoint = journey.routePoints[pointIndex];
-    const media = byOwner.get(routePoint.id) ?? [];
-    if (pointIndex > 0) steps.push({ kind: "travel", to: pointIndex });
-    // #514: pure transit shapes the canonical route but is not an arrival.
-    // Existing note/media remain addressable, and Full Playback still presents
-    // every historical media asset at this canonical route position. Those media
-    // are content beats only: the pass-through never gains an arrival/stay step.
+    const media = byChapter.get(routePoint.id) ?? [];
+    if (!routePoint.isStop && media.length === 0) continue;
+    if (pointIndex > 0) steps.push(previousChapterIndex === pointIndex - 1
+      ? { kind: "travel", to: pointIndex }
+      : { kind: "travel", from: previousChapterIndex, to: pointIndex });
+    previousChapterIndex = pointIndex;
+    // An ungrouped media-bearing via has content beats without a Stop arrival.
+    // Grouped via media already belongs to its Stop-backed chapter above.
     if (isPlaybackTransitRoutePoint(routePoint)) {
       for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
         steps.push({ kind: "media", pointIndex, mediaIndex });
@@ -362,8 +399,8 @@ export function committedPlaybackPosition(
         assetId: null,
       };
     case "media": {
-      const routePointId = journey.routePoints[committedStep.pointIndex]?.id ?? null;
       const asset = playbackMediaForPoint(journey, committedStep.pointIndex)[committedStep.mediaIndex];
+      const routePointId = asset?.routePointId ?? journey.routePoints[committedStep.pointIndex]?.id ?? null;
       return { journeyId: journey.id, routePointId, assetId: asset?.id ?? null };
     }
   }
@@ -547,7 +584,7 @@ export function phaseForStep(step: PlaybackStep): JourneyPlaybackPhase {
     case "intro":
       return { type: "intro" };
     case "travel":
-      return { type: "travel", from: Math.max(0, step.to - 1), to: step.to };
+      return { type: "travel", from: step.from ?? Math.max(0, step.to - 1), to: step.to };
     case "stop":
       return { type: "stop", pointIndex: step.pointIndex };
     case "media":

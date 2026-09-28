@@ -163,6 +163,29 @@ describe("journeyModel", () => {
     expect(journeyOverviewRoutePointIds(trip, noVisibleStays)).toEqual([]);
   });
 
+  it("includes only visible, nearby media-bearing vias in a Stop-backed stay without changing its anchor", () => {
+    const trip = journey("via-stay", "2026-08-11");
+    trip.routePoints = [
+      { id: "stop-a", journeyId: trip.id, sortOrder: 0, latitude: 0, longitude: 0, label: "A", isStop: true, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+      { id: "shape", journeyId: trip.id, sortOrder: 1, latitude: 0.1, longitude: 0.1, label: "shape", isStop: false, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+      { id: "child", journeyId: trip.id, sortOrder: 2, latitude: 0.2, longitude: 0.2, label: "child", isStop: false, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+      { id: "unknown", journeyId: trip.id, sortOrder: 3, latitude: 0.2, longitude: 0.2, label: "unknown", isStop: false, occurredAt: null, createdAt: trip.createdAt },
+      { id: "distant", journeyId: trip.id, sortOrder: 4, latitude: 20, longitude: 20, label: "distant", isStop: false, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+    ];
+    trip.media = ["child", "unknown", "distant"].map((routePointId, sortOrder) => ({
+      id: `${routePointId}-photo`, journeyId: trip.id, routePointId, storageDriver: "test", storageKey: routePointId,
+      fileName: `${routePointId}.jpg`, mimeType: "image/jpeg", bytes: 1, sortOrder,
+      uploadedByUserId: "user-1", createdAt: trip.createdAt,
+    }));
+    const before = structuredClone(trip);
+    expect(deriveJourneyStaySummaries(trip)).toEqual([expect.objectContaining({
+      id: `stay:${trip.id}:stop-a`, anchorRoutePointId: "stop-a", routePointIds: ["stop-a", "child"], mediaAssetIds: ["child-photo"],
+    })]);
+    expect(deriveJourneyStaySummaries(trip, { includedMediaAssetIds: new Set(["unknown-photo"]) })[0].routePointIds).toEqual(["stop-a"]);
+    expect(deriveJourneyStaySummaries(trip, { includedRoutePointIds: new Set(["stop-a", "distant"]) })[0].routePointIds).toEqual(["stop-a"]);
+    expect(trip).toEqual(before);
+  });
+
   it("keeps the full route/provenance matrix intact while deriving stays (#514)", () => {
     const trip = journey("matrix", "2026-08-11");
     const routePoints = [

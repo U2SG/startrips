@@ -19,6 +19,16 @@ function fixture(counts: number[]): Journey {
 }
 
 describe("Playback map bridge boundaries", () => {
+  it("keeps the natural media-to-map seam when travel crosses shaping points (#342)", () => {
+    const journey = fixture([1, 0, 0]);
+    journey.routePoints[1] = { ...journey.routePoints[1], isStop: false };
+    const steps = buildPlaybackSteps(journey);
+    const mediaIndex = steps.findIndex((step) => step.kind === "media");
+    expect(steps[mediaIndex + 1]).toEqual({ kind: "travel", from: 0, to: 2 });
+    expect(playbackMapBridgeBoundary(journey, steps[mediaIndex], steps[mediaIndex + 1]))
+      .toEqual({ direction: "media-to-map", pointIndex: 0, density: "single" });
+  });
+
   it("keeps the director's nearby fast travel budget unchanged by spatial presentation", () => {
     const journey = fixture([0, 1, 3]);
     journey.routePoints = journey.routePoints.map((point, index) => ({

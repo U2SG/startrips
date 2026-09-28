@@ -91,7 +91,7 @@ function record(name, detail) {
   if (detail.failed) failed = true;
 }
 
-async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null }) {
+async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null, qaMode = "continuity", recap = false }) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
@@ -127,6 +127,7 @@ async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = 
         hold: overlay.getAttribute("data-playback-hold"),
         hasChapter: Boolean(chapter),
         chapterPoint: chapter?.getAttribute("data-chapter-point") ?? null,
+        transitPoint: overlay.querySelector("[data-transit-media-point]")?.getAttribute("data-transit-media-point") ?? null,
         hasCaption: Boolean(overlay.querySelector(".journey-playback__stop h3")),
         hasMediaRegion: Boolean(mediaRegion),
         hasMediaFrame: Boolean(presentation?.getAttribute("data-presented-asset")),
@@ -178,7 +179,8 @@ async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = 
 
   const query = new URLSearchParams({
     qaState: "journey-playback",
-    qaMode: "continuity",
+    qaMode,
+    qaRecap: recap ? "1" : "0",
     qaSequenceDensity: "1",
     qaReduceMotion: reduceMotion ? "1" : "0",
   });
@@ -924,6 +926,67 @@ for (const viewport of VIEWPORTS) {
     });
   } finally {
     await page.close();
+  }
+}
+
+// #342's owner clarification: play the six canonical points with production
+// timers in both modes, then use the real Close control during folded media.
+for (const viewport of VIEWPORTS.slice(0, 2)) {
+  for (const recap of [false, true]) {
+    const mode = recap ? "quick-recap" : "full";
+    const expectedRoute = Array.from({ length: 6 }, (_, index) => `st121-chapter-point-${index}`);
+    const run = await open({ viewport, qaMode: "chapter-membership", recap });
+    try {
+      await run.page.waitForFunction(() => document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "completed",
+        null, { timeout: 60_000 });
+      const trace = await readTrace(run.page);
+      const cameraKeys = trace.cameraTargets.map((entry) => entry.key);
+      const chapterPoints = [...new Set(trace.samples.map((sample) => sample.chapterPoint).filter((point) => point !== null))];
+      const transitPoints = [...new Set(trace.samples.map((sample) => sample.transitPoint).filter((point) => point !== null))];
+      const presentedAssets = [...new Set(trace.samples.filter((sample) => sample.phase === "media")
+        .map((sample) => sample.presentedAsset).filter((asset) => asset !== null))];
+      const canonicalRoute = await run.page.locator("main[data-qa-chapter-membership]").getAttribute("data-qa-canonical-route");
+      const playedMode = await run.page.locator(".journey-playback").getAttribute("data-playback-mode");
+      record(`${viewport.label}:${mode}:stop-via-natural-chapters`, {
+        cameraKeys, chapterPoints, transitPoints, presentedAssets, canonicalRoute, playedMode,
+        consoleErrors: run.consoleErrors, pageErrors: run.pageErrors,
+        failed: JSON.stringify(cameraKeys) !== JSON.stringify(["route", "point:0", "point:3", "point:4", "route"])
+          || JSON.stringify(chapterPoints) !== JSON.stringify(["0", "4"])
+          || JSON.stringify(transitPoints) !== JSON.stringify(["3"])
+          || JSON.stringify(presentedAssets) !== JSON.stringify(["st121-chapter-photo-2", "st121-chapter-photo-3"])
+          || canonicalRoute !== JSON.stringify(expectedRoute) || playedMode !== mode
+          || run.consoleErrors.length > 0 || run.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record(`${viewport.label}:${mode}:stop-via-natural-chapters`, { failed: true, error: String(error), trace: await readTrace(run.page) });
+    } finally {
+      await run.page.close();
+    }
+
+    const closeRun = await open({ viewport, qaMode: "chapter-membership", recap });
+    try {
+      await closeRun.page.waitForFunction(() => {
+        const root = document.querySelector(".journey-playback");
+        return root?.getAttribute("data-playback-phase") === "media"
+          && root.querySelector("[data-presented-asset]")?.getAttribute("data-presented-asset") === "st121-chapter-photo-2";
+      }, null, { timeout: 30_000 });
+      await closeRun.page.locator('button[aria-label="暂停播放"]').click();
+      await closeRun.page.locator('button[aria-label="退出播放"]').click();
+      await closeRun.page.locator(".journey-playback").waitFor({ state: "detached" });
+      const returned = await closeRun.page.locator("main[data-qa-chapter-membership]").evaluate((root) => ({
+        routePointId: root.getAttribute("data-qa-return-route-point"), assetId: root.getAttribute("data-qa-return-asset"),
+        reason: root.getAttribute("data-qa-return-reason"),
+      }));
+      record(`${viewport.label}:${mode}:folded-media-close-owner`, {
+        returned, consoleErrors: closeRun.consoleErrors, pageErrors: closeRun.pageErrors,
+        failed: returned.routePointId !== "st121-chapter-point-2" || returned.assetId !== "st121-chapter-photo-2" || returned.reason !== "exited"
+          || closeRun.consoleErrors.length > 0 || closeRun.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record(`${viewport.label}:${mode}:folded-media-close-owner`, { failed: true, error: String(error), trace: await readTrace(closeRun.page) });
+    } finally {
+      await closeRun.page.close();
+    }
   }
 }
 

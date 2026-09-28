@@ -1015,7 +1015,7 @@ export function quickRecapPlanningContentFingerprint(journey: Journey | null): s
   const digests = quickRecapDigestsForJourney(journey);
   const digestRoutePointIds = new Set(digests.map((digest) => digest.routePointId));
   const routePointIds = journey.routePoints
-    .filter((point) => digestRoutePointIds.has(point.id))
+    .filter((point) => point.isStop || digestRoutePointIds.has(point.id))
     .map((point) => point.id);
   return JSON.stringify({
     journeyId: journey.id,

@@ -1249,6 +1249,7 @@ export function JourneyPlaybackOverlay({
       playbackRoute,
       step.to,
       `实际路线到 ${activePoint.label || `途径点 ${step.to + 1}`}`,
+      step.from,
     )
     : null;
   // #456: one Route Point is one chapter. The arrival caption and the chapter's

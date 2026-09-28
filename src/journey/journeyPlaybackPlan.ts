@@ -2,9 +2,9 @@ import {
   buildPlaybackSteps,
   meaningfulPlaybackStepIndex,
   meaningfulPlaybackStepIndexes,
-  playbackMediaByOwner,
+  playbackMediaByChapter,
   playbackMediaForPoint,
-  routePointAngularDistance,
+  playbackTravelAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
@@ -60,11 +60,11 @@ function playbackStepDuration(
       return profile.introMs;
     case "travel": {
       const to = journey.routePoints[step.to];
-      const from = journey.routePoints[Math.max(0, step.to - 1)];
+      const from = journey.routePoints[step.from ?? Math.max(0, step.to - 1)];
       if (!from || !to) return profile.travelBaseMs;
       return Math.min(
         profile.travelMaxMs,
-        profile.travelBaseMs + routePointAngularDistance(from, to) * profile.travelPerRadiansMs,
+        profile.travelBaseMs + playbackTravelAngularDistance(journey, step.to, step.from) * profile.travelPerRadiansMs,
       );
     }
     case "stop": {
@@ -210,19 +210,13 @@ export function buildPlaybackPlan(
   homeContext?: HomeNarrativeContext | null,
 ): PlaybackPlan {
   const steps = buildPlaybackSteps(journey, homeContext);
-  const mediaByOwner = playbackMediaByOwner(
-    journey,
-    journey.routePoints.map((point) => point.id),
-  );
+  const mediaByChapter = playbackMediaByChapter(journey);
   let cursorMs = 0;
   const segments = steps.map((step, stepIndex) => {
-    // Media ownership is resolved from the step's Route Point directly. A
-    // pure-transit point intentionally has no preceding stop chapter, so any
-    // state carried from the previous Stop would misattribute its media. Build
-    // the owner index once so a long Journey remains linear rather than
-    // rescanning every asset for every media beat.
+    // Resolve the cinematic chapter once; folded media keeps its original
+    // asset identity, while an ungrouped via has no preceding Stop arrival.
     const asset = step.kind === "media"
-      ? mediaByOwner.get(journey.routePoints[step.pointIndex]?.id ?? "")?.[step.mediaIndex]
+      ? mediaByChapter.get(journey.routePoints[step.pointIndex]?.id ?? "")?.[step.mediaIndex]
       : undefined;
     const durationMs = resolvePlaybackStepDurationWithFallback(
       journey,

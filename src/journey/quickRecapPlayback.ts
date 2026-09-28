@@ -7,8 +7,9 @@ import {
   type QuickRecapRouteGeometryV1,
 } from "./autoEditPlan";
 import {
+  playbackMediaByChapter,
   playbackMediaForPoint,
-  routePointAngularDistance,
+  playbackTravelAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
 import type { HomeNarrativeContext, HomeNarrativeBeatDecision } from "./homeBasePrelude";
@@ -74,6 +75,11 @@ function visualMediaType(asset: JourneyMediaAsset): "image" | "video" {
   return asset.mimeType.startsWith("video/") ? "video" : "image";
 }
 
+function firstPlaybackChapterId(journey: Journey): string | null {
+  const byChapter = playbackMediaByChapter(journey);
+  return journey.routePoints.find((point) => point.isStop || (byChapter.get(point.id)?.length ?? 0) > 0)?.id ?? null;
+}
+
 // The explicit Journey cover opens the recap as the first chapter hero, but
 // only when moving it cannot empty the route point that owns it. When the cover
 // is that point's only visual media, relocating it would leave the chapter
@@ -85,7 +91,7 @@ function openingCoverAsset(
   journey: Journey,
   visualMedia: readonly JourneyMediaAsset[],
 ): JourneyMediaAsset | null {
-  const firstRoutePointId = journey.routePoints[0]?.id ?? null;
+  const firstRoutePointId = firstPlaybackChapterId(journey);
   if (!firstRoutePointId || !journey.coverMediaAssetId) return null;
   const cover = visualMedia.find((asset) => asset.id === journey.coverMediaAssetId);
   if (!cover) return null;
@@ -101,7 +107,7 @@ function openingCoverAsset(
 // chapter; only the soundtrack is excluded, matching Full Playback's chapter
 // stream (`playbackMediaForPoint`).
 function runtimeVisualCandidates(journey: Journey): JourneyMediaAsset[] {
-  const firstRoutePointId = journey.routePoints[0]?.id ?? null;
+  const firstRoutePointId = firstPlaybackChapterId(journey);
   const visualMedia = journey.media.filter(isVisualMediaAsset);
   const openingCoverId = openingCoverAsset(journey, visualMedia)?.id ?? null;
   return visualMedia
@@ -131,7 +137,12 @@ function runtimeVisualCandidates(journey: Journey): JourneyMediaAsset[] {
 }
 
 export function quickRecapDigestsForJourney(journey: Journey): MediaDigestV1[] {
-  return runtimeVisualCandidates(journey).map<MediaDigestV1>((asset, sourceIndex) => {
+  const candidates = runtimeVisualCandidates(journey);
+  const chapterByAssetId = new Map<string, string>();
+  for (const [chapterId, media] of playbackMediaByChapter({ ...journey, media: candidates })) {
+    for (const asset of media) chapterByAssetId.set(asset.id, chapterId);
+  }
+  return candidates.map<MediaDigestV1>((asset, sourceIndex) => {
     const mediaType = visualMediaType(asset);
     const duplicateClusterId = asset.contentHashVerified === true
       ? asset.contentHash || undefined
@@ -140,7 +151,7 @@ export function quickRecapDigestsForJourney(journey: Journey): MediaDigestV1[] {
       schemaVersion: 1,
       assetId: asset.id,
       journeyId: journey.id,
-      routePointId: asset.routePointId,
+      routePointId: chapterByAssetId.get(asset.id) ?? asset.routePointId,
       sourceRevision: String(journey.revision),
       mediaType,
       mimeType: asset.mimeType,
@@ -163,29 +174,29 @@ function noteLengthFor(point: RoutePoint) {
 }
 
 /**
- * The route geometry the planner needs, measured on the recap's own route.
- *
- * A route point with no visual media never becomes a chapter and is dropped
- * from the projected Journey, so the camera flies from the previous *surviving*
- * point. Measuring against the canonical neighbour instead would book a leg the
- * recap never flies. `candidateRoutePointIds` is `journey.routePoints` filtered,
- * so it already carries the recap's playing order.
+ * Chapter travel keeps every canonical shaping segment between the previous
+ * chapter and the next. Empty Stops remain chapters; shaping vias never own a
+ * camera destination or arrival, and never replace the previous chapter here.
  */
 export function quickRecapRouteGeometry(
   journey: Journey,
   candidateRoutePointIds: readonly string[],
 ): Record<string, QuickRecapRouteGeometryV1> {
-  const byId = new Map(journey.routePoints.map((point) => [point.id, point]));
+  const byId = new Map(journey.routePoints.map((point, index) => [point.id, { point, index }]));
+  const byChapter = playbackMediaByChapter(journey);
   const geometry: Record<string, QuickRecapRouteGeometryV1> = {};
-  for (const [index, routePointId] of candidateRoutePointIds.entries()) {
-    const point = byId.get(routePointId);
-    if (!point) continue;
-    const previous = index === 0 ? undefined : byId.get(candidateRoutePointIds[index - 1]);
+  let previousIndex = 0;
+  for (const routePointId of candidateRoutePointIds) {
+    const current = byId.get(routePointId);
+    if (!current) continue;
+    const { point, index: pointIndex } = current;
     geometry[routePointId] = {
       // The first point has no leg in front of it, so it resolves to the floor.
-      ...(previous ? { angularDistanceFromPrevious: routePointAngularDistance(previous, point) } : {}),
+      ...(pointIndex > 0 ? { angularDistanceFromPrevious: playbackTravelAngularDistance(journey, pointIndex, previousIndex) } : {}),
       noteLength: noteLengthFor(point),
+      isStop: point.isStop,
     };
+    if (point.isStop || (byChapter.get(point.id)?.length ?? 0) > 0) previousIndex = pointIndex;
   }
   return geometry;
 }
@@ -204,7 +215,7 @@ export function prepareQuickRecapPlaybackResult(
   if (digests.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
 
   const candidateRoutePointIds = journey.routePoints
-    .filter((point) => digests.some((digest) => digest.routePointId === point.id))
+    .filter((point) => point.isStop || digests.some((digest) => digest.routePointId === point.id))
     .map((point) => point.id);
   if (candidateRoutePointIds.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
 
@@ -236,9 +247,6 @@ export function prepareQuickRecapPlaybackResult(
   if (plan.plannedDurationMs > chapterBudgetMs) return { playback: null, fallbackReason: "over-budget" };
   const selectedIds = new Set(plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId)));
   if (selectedIds.size === 0) return { playback: null, fallbackReason: "no-visual-media" };
-  const plannedRoutePointIds = new Set(plan.chapters.map((chapter) => chapter.routePointId));
-  const projectedRoutePoints = journey.routePoints.filter((point) => plannedRoutePointIds.has(point.id));
-  if (projectedRoutePoints.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
 
   const projectedCandidates = new Map(runtimeVisualCandidates(journey).map((asset) => [asset.id, asset]));
   const projectedMedia = journey.media.flatMap((asset) => {
@@ -260,7 +268,7 @@ export function prepareQuickRecapPlaybackResult(
     fallbackReason: null,
     playback: {
       plan,
-      journey: { ...journey, routePoints: projectedRoutePoints, media: projectedMedia },
+      journey: { ...journey, media: projectedMedia },
       ...(homeNarrativeContext ? { homeNarrativeContext } : {}),
     },
   };

@@ -453,6 +453,33 @@ export function deriveJourneyStaySummaries(
   groups.forEach((group, groupIndex) => {
     group.rows.forEach(({ point }) => groupIndexByRoutePointId.set(point.id, groupIndex));
   });
+  // A media-bearing via may belong to the adjacent Stop-backed stay. Keep the
+  // same region/distance bounds and visibility filters; unknown or distant vias
+  // stay independent, and the overview anchor remains a real Stop.
+  const visibleMediaOwners = new Set(journey.media
+    .filter((asset) => isVisualMediaAsset(asset)
+      && (!options.includedMediaAssetIds || options.includedMediaAssetIds.has(asset.id)))
+    .map((asset) => asset.routePointId));
+  let nextStop = 0;
+  journey.routePoints.forEach((point, routeIndex) => {
+    while (nextStop < candidates.length && candidates[nextStop].routeIndex < routeIndex) nextStop += 1;
+    if (point.isStop || !visibleMediaOwners.has(point.id)
+      || (options.includedRoutePointIds && !options.includedRoutePointIds.has(point.id))) return;
+    const regionKey = normalizedRegionContext(point.regionContext);
+    if (!regionKey) return;
+    for (const neighbor of [candidates[nextStop - 1], candidates[nextStop]]) {
+      if (!neighbor || normalizedRegionContext(neighbor.point.regionContext) !== regionKey
+        || routePointDistanceKm(neighbor.point, point) > MAX_DERIVED_STAY_GAP_KM) continue;
+      const groupIndex = groupIndexByRoutePointId.get(neighbor.point.id);
+      if (groupIndex !== undefined) groupIndexByRoutePointId.set(point.id, groupIndex);
+      break;
+    }
+  });
+  const memberRowsByGroup = groups.map(() => [] as typeof candidates);
+  journey.routePoints.forEach((point, routeIndex) => {
+    const groupIndex = groupIndexByRoutePointId.get(point.id);
+    if (groupIndex !== undefined) memberRowsByGroup[groupIndex].push({ point, routeIndex });
+  });
   const mediaIdsByGroup = groups.map(() => [] as string[]);
   for (const asset of journey.media) {
     if (asset.routePointId === null) continue;
@@ -465,7 +492,8 @@ export function deriveJourneyStaySummaries(
   return groups.map((group, groupIndex) => {
     const points = group.rows.map(({ point }) => point);
     const anchor = chooseStayAnchor(points);
-    const routePointIds = points.map((point) => point.id);
+    const memberRows = memberRowsByGroup[groupIndex];
+    const routePointIds = memberRows.map(({ point }) => point.id);
     return {
       id: `stay:${journey.id}:${group.rows[0].point.id}`,
       journeyId: journey.id,
@@ -474,8 +502,8 @@ export function deriveJourneyStaySummaries(
       anchorRoutePointId: anchor.id,
       routePointIds,
       mediaAssetIds: mediaIdsByGroup[groupIndex] ?? [],
-      startRouteIndex: group.rows[0].routeIndex,
-      endRouteIndex: group.rows[group.rows.length - 1].routeIndex,
+      startRouteIndex: memberRows[0].routeIndex,
+      endRouteIndex: memberRows[memberRows.length - 1].routeIndex,
       overviewVisible: points.some((point) => point.overviewVisibility !== "detail"),
     };
   });
