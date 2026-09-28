@@ -35,6 +35,7 @@ export type JourneyValues = Pick<
     | "regionContext"
     | "placeRole"
     | "overviewVisibility"
+    | "stayAnchorRoutePointId"
   > & { id?: string }>;
 };
 
@@ -251,8 +252,19 @@ export async function updateJourneyForAtlas(
       .where(eq(journeyRoutePoints.journeyId, journey.id));
     const existingIds = new Set(existingPoints.map((point) => point.id));
     const retainedIds = values.routePoints.flatMap((point) => point.id ? [point.id] : []);
-    if (retainedIds.some((id) => !existingIds.has(id))) {
-      throw new JourneyRouteChangedError();
+    // #514/ST-164: assigning a not-yet-saved Stop requires giving it a stable
+    // client UUID before the PATCH, otherwise a child cannot persist an exact
+    // ownership relation to that Stop in the same atomic route replacement.
+    // A supplied id that is not already in this Journey is therefore a legal
+    // new Route Point id, but it must not collide with any existing Route Point
+    // anywhere else.
+    const newProvidedIds = retainedIds.filter((id) => !existingIds.has(id));
+    if (newProvidedIds.length > 0) {
+      const collidingPoints = await transaction
+        .select({ id: journeyRoutePoints.id })
+        .from(journeyRoutePoints)
+        .where(inArray(journeyRoutePoints.id, newProvidedIds));
+      if (collidingPoints.length > 0) throw new JourneyRouteChangedError();
     }
 
     await transaction
@@ -295,8 +307,11 @@ export async function updateJourneyForAtlas(
         ...(point.overviewVisibility !== undefined
           ? { overviewVisibility: point.overviewVisibility ?? null }
           : {}),
+        ...(point.stayAnchorRoutePointId !== undefined
+          ? { stayAnchorRoutePointId: point.stayAnchorRoutePointId ?? null }
+          : {}),
       };
-      if (point.id) {
+      if (point.id && existingIds.has(point.id)) {
         await transaction
           .update(journeyRoutePoints)
           .set(pointValues)
@@ -306,12 +321,14 @@ export async function updateJourneyForAtlas(
           ));
       } else {
         await transaction.insert(journeyRoutePoints).values({
+          ...(point.id ? { id: point.id } : {}),
           journeyId: journey.id,
           ...pointValues,
           ...(point.note === undefined ? { note: null } : {}),
           ...(point.regionContext === undefined ? { regionContext: null } : {}),
           ...(point.placeRole === undefined ? { placeRole: null } : {}),
           ...(point.overviewVisibility === undefined ? { overviewVisibility: null } : {}),
+          ...(point.stayAnchorRoutePointId === undefined ? { stayAnchorRoutePointId: null } : {}),
         });
       }
     }

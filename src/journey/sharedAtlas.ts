@@ -293,6 +293,7 @@ export function sharedJourneyToJourney(shared: SharedJourney): Journey {
     isStop: point.isStop,
     occurredAt: point.occurredAt,
     note: point.note,
+    stayAnchorRoutePointId: point.stayAnchorRoutePointId ?? null,
     createdAt: GUEST_WITHHELD,
   }));
   const media: JourneyMediaAsset[] = shared.media.map((asset, index) => ({

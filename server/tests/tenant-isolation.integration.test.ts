@@ -1675,6 +1675,42 @@ describe("tenant-scoped journey repository", () => {
     })).rejects.toBeInstanceOf(JourneyRouteChangedError);
   });
 
+  it("accepts a client-stable id for a new Stop so a child can persist exact ownership (#514)", async () => {
+    const created = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Owned route edit",
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+    const newStopId = "55555555-5555-4555-8555-555555555555";
+    const childId = "66666666-6666-4666-8666-666666666666";
+    const updated = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Owned route edit",
+      revision: created.revision,
+      routePoints: [
+        {
+          id: newStopId,
+          latitude: 22.31,
+          longitude: 114.17,
+          label: "New stop",
+          isStop: true,
+          occurredAt: new Date("2026-09-02T01:00:00Z"),
+        },
+        {
+          id: childId,
+          latitude: 22.32,
+          longitude: 114.18,
+          label: "Owned via",
+          isStop: false,
+          occurredAt: new Date("2026-09-02T02:00:00Z"),
+          stayAnchorRoutePointId: newStopId,
+        },
+      ],
+    });
+    expect(updated?.routePoints.map((point) => point.id)).toEqual([newStopId, childId]);
+    expect(updated?.routePoints[1].stayAnchorRoutePointId).toBe(newStopId);
+  });
+
   it("preserves route-point notes across edits and clears them explicitly (#10)", async () => {
     const created = await createJourneyForAtlas(atlasA, "user-a", {
       ...baseJourney,

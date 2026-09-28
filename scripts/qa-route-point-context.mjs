@@ -287,6 +287,39 @@ const staySummaryJourney = {
   ],
 };
 
+// #514 reopened mobile acceptance: enough canonical children to force the
+// expanded stay-detail list to scroll inside the card at 390x844 and 844x390.
+const mobileStayRoutePoints = [
+  { id: staySummaryPointIds.hotel, label: "成都住处", placeRole: "accommodation" },
+  { id: staySummaryPointIds.museum, label: "成都博物馆", placeRole: "attraction" },
+  ...Array.from({ length: 6 }, (_, index) => ({
+    id: `qa-stay-chengdu-child-${index + 1}`,
+    label: `成都停留 ${index + 1}`,
+    placeRole: "attraction",
+  })),
+  { id: staySummaryPointIds.chongqing, label: "重庆", placeRole: "attraction", regionContext: "重庆" },
+].map((point, sortOrder) => ({
+  journeyId,
+  sortOrder,
+  latitude: sortOrder === 8 ? 29.563 : 30.657 + sortOrder * 0.004,
+  longitude: sortOrder === 8 ? 106.551 : 104.066 + sortOrder * 0.004,
+  isStop: true,
+  regionContext: point.regionContext ?? "成都",
+  note: "",
+  occurredAt: `2026-04-08T${String(8 + sortOrder).padStart(2, "0")}:00:00.000Z`,
+  createdAt: "2026-04-08T00:00:00.000Z",
+  ...point,
+}));
+const mobileStayJourney = {
+  ...journey,
+  title: "成都长停留",
+  routePoints: mobileStayRoutePoints,
+  media: [
+    { ...journey.media[0], id: photoAssetId, routePointId: staySummaryPointIds.museum, sortOrder: 0 },
+    { ...journey.media[1], id: secondPhotoAssetId, routePointId: staySummaryPointIds.hotel, sortOrder: 1 },
+  ],
+};
+
 const sameCoordinateJourneyId = "qa-same-coordinate-journey";
 const same02Id = "qa-same-coordinate-02";
 const same07Id = "qa-same-coordinate-07";
@@ -1334,34 +1367,172 @@ try {
   record("stay-summary reduced-motion page errors", { pageErrors: stayRun.pageErrors }, stayRun.pageErrors.length === 0);
   await stayPage.close();
 
-  const compactStayRun = await openFocusAtlas({
-    compact: true,
-    reduceMotion: true,
-    journeysPayload: [staySummaryJourney],
-    initialPointId: staySummaryPointIds.museum,
-  });
-  const compactStayPage = compactStayRun.page;
-  await activateRoutePointId(compactStayPage, staySummaryPointIds.museum);
-  const compactStayContext = compactStayPage.locator(`[data-route-point-context][data-route-point-id="${staySummaryPointIds.museum}"]`);
-  await compactStayContext.waitFor({ state: "visible", timeout: 5_000 });
-  const compactSummary = compactStayContext.locator("[data-stay-summary]");
-  const compactBefore = await compactSummary.evaluate((node) => ({
-    detailOpen: node.getAttribute("data-stay-detail-open"),
-    childGroups: node.querySelectorAll("[data-stay-detail]").length,
-  }));
-  await compactSummary.locator("button[data-stay-detail-open]").click();
-  const compactAfter = await compactSummary.evaluate((node) => ({
-    detailOpen: node.getAttribute("data-stay-detail-open"),
-    childIds: [...node.querySelectorAll("[data-stay-route-point]")]
-      .map((button) => button.getAttribute("data-stay-route-point")),
-  }));
-  record("compact mobile keeps stay detail explicitly gated", { compactBefore, compactAfter },
-    compactBefore.detailOpen === "false"
-    && compactBefore.childGroups === 0
-    && compactAfter.detailOpen === "true"
-    && compactAfter.childIds.join(",") === [staySummaryPointIds.hotel, staySummaryPointIds.museum].join(","));
-  record("compact stay-summary page errors", { pageErrors: compactStayRun.pageErrors }, compactStayRun.pageErrors.length === 0);
-  await compactStayPage.close();
+  // #514/ST-164: mobile stay detail is graded as a real touch surface in both
+  // portrait and short landscape. A long stay must scroll inside the bounded
+  // child list without moving the page, covering persistent mobile chrome, or
+  // changing the selected stay/camera owner merely because detail opens/closes.
+  for (const mobileCase of [
+    { label: "portrait 390x844", viewport: { width: 390, height: 844 }, reduceMotion: false },
+    { label: "landscape 844x390 reduced motion", viewport: { width: 844, height: 390 }, reduceMotion: true },
+  ]) {
+    const mobileRun = await openFocusAtlas({
+      compact: true,
+      reduceMotion: mobileCase.reduceMotion,
+      viewport: mobileCase.viewport,
+      journeysPayload: [mobileStayJourney],
+      initialPointId: staySummaryPointIds.museum,
+    });
+    const mobilePage = mobileRun.page;
+    await activateRoutePointId(mobilePage, staySummaryPointIds.museum);
+    const mobileContext = mobilePage.locator(`[data-route-point-context][data-route-point-id="${staySummaryPointIds.museum}"]`);
+    await mobileContext.waitFor({ state: "visible", timeout: 5_000 });
+    const mobileSummary = mobileContext.locator("[data-stay-summary]");
+    const focusBefore = await mobilePage.locator("[data-qa-route-point-context-focus]").evaluate((node) => ({
+      focusPoint: node.getAttribute("data-focus-point"),
+      focusRoute: node.getAttribute("data-focus-route"),
+      activeRoute: node.getAttribute("data-active-route"),
+      revision: node.getAttribute("data-focus-revision"),
+    }));
+    const before = await mobileSummary.evaluate((node) => ({
+      id: node.getAttribute("data-stay-summary"),
+      detailOpen: node.getAttribute("data-stay-detail-open"),
+      childGroups: node.querySelectorAll("[data-stay-detail]").length,
+    }));
+    const openButton = mobileSummary.locator("button[data-stay-detail-open]");
+    const openBox = await openButton.boundingBox();
+    if (!openBox) throw new Error(`${mobileCase.label}: stay-detail open control has no touch geometry`);
+    await mobilePage.touchscreen.tap(openBox.x + openBox.width / 2, openBox.y + openBox.height / 2);
+    await mobilePage.waitForFunction(() => (
+      document.querySelector("[data-stay-summary]")?.getAttribute("data-stay-detail-open") === "true"
+    ));
+
+    const detailList = mobileSummary.locator("[data-stay-detail]");
+    const closeDetail = mobileSummary.locator("button[data-stay-detail-close]");
+    const storyEntry = mobileContext.locator(".living-atlas__route-point-context-entry");
+    const expanded = await mobilePage.evaluate(() => {
+      const rect = (selector) => {
+        const node = document.querySelector(selector);
+        if (!(node instanceof HTMLElement)) return null;
+        const box = node.getBoundingClientRect();
+        return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height };
+      };
+      const context = document.querySelector("[data-route-point-context]");
+      const detail = document.querySelector("[data-stay-detail]");
+      const childButtons = [...document.querySelectorAll("[data-stay-route-point]")];
+      const box = context?.getBoundingClientRect();
+      const headerBox = document.querySelector(".mobile-v2__header")?.getBoundingClientRect();
+      const scrubberBox = document.querySelector(".globe-time-scrubber")?.getBoundingClientRect();
+      const overlaps = (a, b) => Boolean(a && b
+        && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top);
+      return {
+        viewport: { width: innerWidth, height: innerHeight },
+        context: box ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom } : null,
+        header: rect(".mobile-v2__header"),
+        scrubber: rect(".globe-time-scrubber"),
+        detail: detail instanceof HTMLElement
+          ? { clientHeight: detail.clientHeight, scrollHeight: detail.scrollHeight, scrollTop: detail.scrollTop }
+          : null,
+        childCount: childButtons.length,
+        childHeights: childButtons.map((node) => node.getBoundingClientRect().height),
+        close: rect("button[data-stay-detail-close]"),
+        story: rect(".living-atlas__route-point-context-entry"),
+        pageScrollY: scrollY,
+        overlapsHeader: overlaps(box, headerBox),
+        overlapsScrubber: overlaps(box, scrubberBox),
+      };
+    });
+    record(`${mobileCase.label} keeps expanded stay detail inside the usable mobile viewport`, { before, openBox, expanded }, Boolean(
+      before.detailOpen === "false"
+      && before.childGroups === 0
+      && openBox.width >= 44
+      && openBox.height >= 44
+      && expanded.context
+      && expanded.context.left >= 0
+      && expanded.context.top >= 0
+      && expanded.context.right <= expanded.viewport.width
+      && expanded.context.bottom <= expanded.viewport.height
+      && !expanded.overlapsHeader
+      && !expanded.overlapsScrubber
+      && expanded.childCount >= 8
+      && expanded.childHeights.every((height) => height >= 44)
+      && expanded.detail
+      && expanded.detail.scrollHeight > expanded.detail.clientHeight
+    ));
+
+    const pageScrollBefore = await mobilePage.evaluate(() => scrollY);
+    await detailList.evaluate((node) => {
+      if (!(node instanceof HTMLElement)) throw new Error("stay-detail list is not scrollable");
+      node.scrollTop = node.scrollHeight;
+    });
+    const lastChild = detailList.locator("[data-stay-route-point]").last();
+    await lastChild.scrollIntoViewIfNeeded();
+    const lastChildBox = await lastChild.boundingBox();
+    const pageScrollAfter = await mobilePage.evaluate(() => scrollY);
+    record(`${mobileCase.label} keeps long child scrolling bounded to the stay list`, {
+      pageScrollBefore, pageScrollAfter, lastChildBox,
+    }, Boolean(
+      lastChildBox
+      && lastChildBox.width >= 44
+      && lastChildBox.height >= 44
+      && pageScrollAfter === pageScrollBefore
+      && lastChildBox.top >= 0
+      && lastChildBox.bottom <= mobileCase.viewport.height
+    ));
+
+    await storyEntry.scrollIntoViewIfNeeded();
+    const storyBox = await storyEntry.boundingBox();
+    const storyHit = storyBox ? await mobilePage.evaluate(({ x, y }) => (
+      Boolean(document.elementFromPoint(x, y)?.closest(".living-atlas__route-point-context-entry"))
+    ), {
+      x: storyBox.x + storyBox.width / 2,
+      y: storyBox.y + storyBox.height / 2,
+    }) : false;
+    await closeDetail.scrollIntoViewIfNeeded();
+    const closeBox = await closeDetail.boundingBox();
+    const closeHit = closeBox ? await mobilePage.evaluate(({ x, y }) => (
+      Boolean(document.elementFromPoint(x, y)?.closest("button[data-stay-detail-close]"))
+    ), {
+      x: closeBox.x + closeBox.width / 2,
+      y: closeBox.y + closeBox.height / 2,
+    }) : false;
+    record(`${mobileCase.label} keeps Story and back controls touch-reachable after scrolling`, {
+      storyBox, storyHit, closeBox, closeHit,
+    }, Boolean(
+      storyBox && storyBox.width >= 44 && storyBox.height >= 44 && storyHit
+      && closeBox && closeBox.width >= 44 && closeBox.height >= 44 && closeHit
+    ));
+
+    if (!closeBox) throw new Error(`${mobileCase.label}: stay-detail close control has no touch geometry`);
+    await mobilePage.touchscreen.tap(closeBox.x + closeBox.width / 2, closeBox.y + closeBox.height / 2);
+    await mobilePage.waitForFunction(() => (
+      document.querySelector("[data-stay-summary]")?.getAttribute("data-stay-detail-open") === "false"
+    ));
+    const afterClose = await mobilePage.evaluate(() => {
+      const summary = document.querySelector("[data-stay-summary]");
+      const context = document.querySelector("[data-route-point-context]");
+      const focus = document.querySelector("[data-qa-route-point-context-focus]");
+      return {
+        summaryId: summary?.getAttribute("data-stay-summary") ?? null,
+        detailOpen: summary?.getAttribute("data-stay-detail-open") ?? null,
+        contextPointId: context?.getAttribute("data-route-point-id") ?? null,
+        focusPoint: focus?.getAttribute("data-focus-point") ?? null,
+        focusRoute: focus?.getAttribute("data-focus-route") ?? null,
+        activeRoute: focus?.getAttribute("data-active-route") ?? null,
+        revision: focus?.getAttribute("data-focus-revision") ?? null,
+      };
+    });
+    record(`${mobileCase.label} touch close restores the same selected stay and camera owner`, {
+      focusBefore, afterClose,
+    }, afterClose.summaryId === before.id
+      && afterClose.detailOpen === "false"
+      && afterClose.contextPointId === staySummaryPointIds.museum
+      && afterClose.focusPoint === focusBefore.focusPoint
+      && afterClose.focusRoute === focusBefore.focusRoute
+      && afterClose.activeRoute === focusBefore.activeRoute
+      && afterClose.revision === focusBefore.revision);
+    record(`${mobileCase.label} stay-summary page errors`, { pageErrors: mobileRun.pageErrors }, mobileRun.pageErrors.length === 0);
+    await mobilePage.close();
+  }
 
   const projectionRun = await openFocusAtlas({
     realScene: true,

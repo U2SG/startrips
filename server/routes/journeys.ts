@@ -149,6 +149,14 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
           && ROUTE_POINT_OVERVIEW_VISIBILITIES.has(point.overviewVisibility)
           ? point.overviewVisibility
           : "invalid";
+    const stayAnchorRoutePointId = point.stayAnchorRoutePointId === undefined
+      ? undefined
+      : point.stayAnchorRoutePointId === null || point.stayAnchorRoutePointId === ""
+        ? null
+        : typeof point.stayAnchorRoutePointId === "string"
+          && UUID_PATTERN.test(point.stayAnchorRoutePointId)
+          ? point.stayAnchorRoutePointId
+          : "invalid";
     if (
       id === null
       || latitude === null
@@ -164,6 +172,7 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
         && regionContext.length > MAX_ROUTE_POINT_REGION_CONTEXT_LENGTH)
       || placeRole === "invalid"
       || overviewVisibility === "invalid"
+      || stayAnchorRoutePointId === "invalid"
     ) {
       return null;
     }
@@ -183,11 +192,42 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
       regionContext,
       placeRole,
       overviewVisibility,
+      stayAnchorRoutePointId,
     });
   }
 
   const persistedIds = routePoints.flatMap((point) => point.id ? [point.id] : []);
   if (new Set(persistedIds).size !== persistedIds.length) return null;
+
+  const pointIndexById = new Map(routePoints.flatMap((point, index) => point.id ? [[point.id, index] as const] : []));
+  for (let index = 0; index < routePoints.length; index += 1) {
+    const point = routePoints[index];
+    const anchorId = point.stayAnchorRoutePointId;
+    if (anchorId === undefined || anchorId === null) continue;
+    if (point.isStop) return null;
+    const anchorIndex = pointIndexById.get(anchorId);
+    if (anchorIndex === undefined || !routePoints[anchorIndex]?.isStop) return null;
+    let previousStopId: string | null = null;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const candidate = routePoints[cursor];
+      if (candidate.isStop) {
+        previousStopId = candidate.id ?? null;
+        break;
+      }
+    }
+    let nextStopId: string | null = null;
+    for (let cursor = index + 1; cursor < routePoints.length; cursor += 1) {
+      const candidate = routePoints[cursor];
+      if (candidate.isStop) {
+        nextStopId = candidate.id ?? null;
+        break;
+      }
+    }
+    // The persisted value is the exact Stop the member selected, but the UI
+    // only offers the nearest previous/next Stops. A reorder that makes it no
+    // longer adjacent is therefore a correction state, never a silent rebind.
+    if (anchorId !== previousStopId && anchorId !== nextStopId) return null;
+  }
 
   return { title, startedOn, endedOn, note, lightColor, lightEffect, revision, routePoints };
 }

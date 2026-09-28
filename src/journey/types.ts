@@ -58,6 +58,9 @@ export type RoutePoint = {
   regionContext?: string | null;
   placeRole?: RoutePointPlaceRole | null;
   overviewVisibility?: RoutePointOverviewVisibility | null;
+  // #514/ST-164: explicit membership of a non-stop Route Point in one exact
+  // Stop-backed stay. This never changes route geometry or media ownership.
+  stayAnchorRoutePointId?: string | null;
   createdAt: string;
 };
 
@@ -72,6 +75,7 @@ export type RoutePointInput = Pick<
   | "regionContext"
   | "placeRole"
   | "overviewVisibility"
+  | "stayAnchorRoutePointId"
 > & {
   id?: string;
 };

@@ -119,6 +119,31 @@ describe("journeyModel", () => {
     ]);
   });
 
+  it("lets an explicit non-stop owner override heuristic stay grouping without changing route/media identity (#514)", () => {
+    const trip = journey("owned", "2026-08-11");
+    trip.routePoints = [
+      { id: "stop-a", journeyId: trip.id, sortOrder: 0, latitude: 30.66, longitude: 104.06, label: "Stop A", isStop: true, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+      { id: "via", journeyId: trip.id, sortOrder: 1, latitude: 30.67, longitude: 104.07, label: "Via", isStop: false, occurredAt: null, regionContext: "B", stayAnchorRoutePointId: "stop-a", createdAt: trip.createdAt },
+      { id: "stop-b", journeyId: trip.id, sortOrder: 2, latitude: 31.1, longitude: 105.1, label: "Stop B", isStop: true, occurredAt: null, regionContext: "B", createdAt: trip.createdAt },
+    ];
+    trip.media = [{
+      id: "via-photo", journeyId: trip.id, routePointId: "via", storageDriver: "s3", storageKey: "via",
+      fileName: "via.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, uploadedByUserId: "user-1", createdAt: trip.createdAt,
+    }];
+    const beforeRoute = structuredClone(trip.routePoints);
+    const beforeMedia = structuredClone(trip.media);
+
+    const summaries = deriveJourneyStaySummaries(trip);
+    expect(summaries[0]).toMatchObject({
+      anchorRoutePointId: "stop-a",
+      routePointIds: ["stop-a", "via"],
+      mediaAssetIds: ["via-photo"],
+    });
+    expect(summaries[1].routePointIds).toEqual(["stop-b"]);
+    expect(trip.routePoints).toEqual(beforeRoute);
+    expect(trip.media).toEqual(beforeMedia);
+  });
+
   it("keeps unknown/far-apart places separate and filters before stay aggregation (#514)", () => {
     const trip = journey("bounds", "2026-08-11");
     trip.routePoints = [

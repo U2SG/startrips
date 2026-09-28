@@ -77,6 +77,8 @@ import {
   removeRoutePoint,
   routeDraftSearchFocus,
   routeDraftToInput,
+  routePointStayOwnershipTargets,
+  setRoutePointStayAnchor,
   suggestPointLabel,
   toggleRouteStop,
   updateRoutePoint,
@@ -1842,6 +1844,7 @@ export function JourneyComposer({
                   const menuOpen = routePointMenuDraftId === point.draftId;
                   const displayLabel = point.label.trim() || `途径点 ${index + 1}`;
                   const mediaAssociation = routePointMediaAssociation(point);
+                  const stayOwnership = routePointStayOwnershipTargets(routePoints, point.draftId);
                   const editorId = `journey-route-point-${point.draftId}-editor`;
                   const menuId = `journey-route-point-${point.draftId}-menu`;
                   return (
@@ -1872,7 +1875,7 @@ export function JourneyComposer({
                       >
                         <span>
                           <strong>{displayLabel}</strong>
-                          <small>{point.isStop ? "停靠" : "途径"} · {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</small>
+                          <small>{point.isStop ? "停靠点" : mediaAssociation.count > 0 ? "途径点" : "路线修正点"} · {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</small>
                         </span>
                         <IconChevronDown className="journey-route-draft__summary-chevron" size={17} stroke={1.35} aria-hidden="true" />
                       </button>
@@ -1952,28 +1955,20 @@ export function JourneyComposer({
                               }}
                             />
                           ) : null}
-                          <label>
-                            <span>停留城市 / 区域<small>可选 · 用于主地图归并</small></span>
-                            <input
-                              maxLength={120}
-                              value={point.regionContext ?? ""}
-                              placeholder="例如：成都、乌兰布统"
-                              onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { regionContext: event.target.value }))}
-                            />
-                          </label>
-                          <label>
-                            <span>主地图显示<small>可选</small></span>
-                            <select
-                              value={point.overviewVisibility ?? "auto"}
-                              onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, {
-                                overviewVisibility: event.target.value as "auto" | "main" | "detail",
-                              }))}
-                            >
-                              <option value="auto">自动</option>
-                              <option value="main">优先作为停留锚点</option>
-                              <option value="detail">只在停留详情显示</option>
-                            </select>
-                          </label>
+                          {(point.isStop || mediaAssociation.count > 0) ? (
+                            <details className="journey-route-draft__stay-correction">
+                              <summary>调整停留区域</summary>
+                              <label>
+                                <span>停留区域提示<small>仅在自动归并不准确时填写</small></span>
+                                <input
+                                  maxLength={120}
+                                  value={point.regionContext ?? ""}
+                                  placeholder="例如：成都、乌兰布统"
+                                  onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { regionContext: event.target.value }))}
+                                />
+                              </label>
+                            </details>
+                          ) : null}
                           {point.placeRole ? <small>导入类型 · {point.placeRole === "accommodation" ? "住宿" : point.placeRole === "attraction" ? "地点" : point.placeRole === "transport" ? "交通" : point.placeRole === "pure-transit" ? "途经" : "活动"}</small> : null}
                           <label className="journey-route-draft__note">
                             <span>这一站想记住什么？<small>可选</small></span>
@@ -1985,7 +1980,55 @@ export function JourneyComposer({
                               onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { note: event.target.value }))}
                             />
                           </label>
-                          <label className="journey-checkbox"><input type="checkbox" checked={point.isStop} onChange={() => setRoutePoints((current) => toggleRouteStop(current, point.draftId))} />停靠</label>
+                          <div className="journey-route-draft__meaning">
+                            <button
+                              type="button"
+                              className={point.isStop ? "journey-route-draft__stop-toggle is-stop" : "journey-route-draft__stop-toggle"}
+                              aria-pressed={point.isStop}
+                              onClick={() => setRoutePoints((current) => toggleRouteStop(current, point.draftId))}
+                            >
+                              <IconMapPin size={18} stroke={1.45} aria-hidden="true" />
+                              <span>
+                                <strong>{point.isStop ? "停靠点" : "设为停靠点"}</strong>
+                                <small>{point.isStop ? "主要停留 · Playback 会把这里作为叙事锚点" : mediaAssociation.count > 0 ? "现在是途径点 · 媒体仍保留在这条路线记录上" : "现在是路线修正点 · 只影响路线形状"}</small>
+                              </span>
+                            </button>
+                            {!point.isStop && (stayOwnership.previous || stayOwnership.next || stayOwnership.current) ? (
+                              <div className="journey-route-draft__stay-ownership" data-stay-ownership-correction={stayOwnership.needsCorrection ? "true" : "false"}>
+                                <span>跟随哪个停靠？<small>只记录停留归属，不改变路线或媒体身份</small></span>
+                                <div role="group" aria-label={`${displayLabel} 停留归属`}>
+                                  {stayOwnership.previous ? (
+                                    <button
+                                      type="button"
+                                      aria-pressed={point.stayAnchorRoutePointId === stayOwnership.previous.id}
+                                      onClick={() => setRoutePoints((current) => setRoutePointStayAnchor(current, point.draftId, stayOwnership.previous!.draftId))}
+                                    >
+                                      跟上一停靠 · {stayOwnership.previous.label.trim() || "未命名停靠"}
+                                    </button>
+                                  ) : null}
+                                  {stayOwnership.next ? (
+                                    <button
+                                      type="button"
+                                      aria-pressed={point.stayAnchorRoutePointId === stayOwnership.next.id}
+                                      onClick={() => setRoutePoints((current) => setRoutePointStayAnchor(current, point.draftId, stayOwnership.next!.draftId))}
+                                    >
+                                      跟下一停靠 · {stayOwnership.next.label.trim() || "未命名停靠"}
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    aria-pressed={!point.stayAnchorRoutePointId}
+                                    onClick={() => setRoutePoints((current) => setRoutePointStayAnchor(current, point.draftId, null))}
+                                  >
+                                    独立
+                                  </button>
+                                </div>
+                                {stayOwnership.needsCorrection ? (
+                                  <small role="status">原归属“{stayOwnership.current?.label.trim() || "已失效停靠"}”已不再是相邻停靠，请重新选择或设为独立。</small>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
                           <div className="journey-route-draft__media-association" data-route-point-media-count={mediaAssociation.count}>
                             <span>媒体归属</span>
                             <small>{mediaAssociation.label}</small>
