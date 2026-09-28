@@ -6,6 +6,7 @@ on:
       - src/journey/StoryMediaPages.tsx
       - src/journey/JourneyStory.tsx
       - scripts/qa-story-autoplay-reproduction.mjs
+      - scripts/qa-story-autoplay-pixels.mjs
       - .github/workflows/story-autoplay-reproduction.yml
 
 permissions:
@@ -38,12 +39,14 @@ jobs:
         run: |
           set -euo pipefail
           cp scripts/qa-story-autoplay-reproduction.mjs "$RUNNER_TEMP/r3-harness.mjs"
+          cp scripts/qa-story-autoplay-pixels.mjs "$RUNNER_TEMP/r3-pixels.mjs"
           cp scripts/qa-browser.mjs "$RUNNER_TEMP/r3-browser.mjs"
           if [ "$QA_R3_MODE" = baseline ]; then
             git checkout --detach "$R3_BASELINE_SHA"
           fi
           echo "QA_BUILD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           cp "$RUNNER_TEMP/r3-harness.mjs" scripts/qa-story-autoplay-reproduction.mjs
+          cp "$RUNNER_TEMP/r3-pixels.mjs" scripts/qa-story-autoplay-pixels.mjs
           cp "$RUNNER_TEMP/r3-browser.mjs" scripts/qa-browser.mjs
       - uses: pnpm/action-setup@v6
         with:
@@ -63,7 +66,7 @@ jobs:
           fi
       - name: Build selected production source
         run: pnpm build
-      - name: Observe real owner entry and six normal-speed timer handoffs
+      - name: Observe real timer handoffs and captured foreground pixels
         run: |
           set -euo pipefail
           pnpm exec vite preview --host 127.0.0.1 --port 4173 > "$RUNNER_TEMP/r3-preview.log" 2>&1 &
