@@ -1,0 +1,78 @@
+name: Story autoplay reproduction
+
+on:
+  pull_request:
+    paths:
+      - src/journey/StoryMediaPages.tsx
+      - src/journey/JourneyStory.tsx
+      - scripts/qa-story-autoplay-reproduction.mjs
+      - .github/workflows/story-autoplay-reproduction.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: story-autoplay-reproduction-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  production-autoplay:
+    name: production autoplay / ${{ matrix.mode }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [baseline, candidate]
+    env:
+      # #489 R3's confirmed failing deployment after #564 merged.
+      R3_BASELINE_SHA: aad077b848e75ee95f5275634e9ddbaf93b0a14b
+      QA_HARNESS_SHA: ${{ github.event.pull_request.head.sha }}
+      QA_R3_MODE: ${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Select exact production source with the same observing harness
+        run: |
+          set -euo pipefail
+          cp scripts/qa-story-autoplay-reproduction.mjs "$RUNNER_TEMP/r3-harness.mjs"
+          cp scripts/qa-browser.mjs "$RUNNER_TEMP/r3-browser.mjs"
+          if [ "$QA_R3_MODE" = baseline ]; then
+            git checkout --detach "$R3_BASELINE_SHA"
+          fi
+          echo "QA_BUILD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          cp "$RUNNER_TEMP/r3-harness.mjs" scripts/qa-story-autoplay-reproduction.mjs
+          cp "$RUNNER_TEMP/r3-browser.mjs" scripts/qa-browser.mjs
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright-core install --with-deps chromium
+      - name: Build selected production source
+        run: pnpm build
+      - name: Observe real owner entry and six normal-speed timer handoffs
+        run: |
+          set -euo pipefail
+          pnpm exec vite preview --host 127.0.0.1 --port 4173 > "$RUNNER_TEMP/r3-preview.log" 2>&1 &
+          PREVIEW_PID=$!
+          trap 'kill "$PREVIEW_PID" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat "$RUNNER_TEMP/r3-preview.log" && exit 1)
+          node scripts/qa-story-autoplay-reproduction.mjs
+      - name: Upload synthetic continuous video, keyframes and writer trace
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: story-autoplay-production-${{ matrix.mode }}-${{ github.run_attempt }}
+          path: artifacts/story-autoplay-reproduction/
+          if-no-files-found: error
+          retention-days: 7
