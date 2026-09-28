@@ -622,14 +622,16 @@
 .journey-playback__close,
 .journey-playback__controls,
 .journey-playback__soundtrack,
-.journey-playback__selection-summary {
+.journey-playback__selection-summary,
+.journey-playback__dense-nav {
   transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
 }
 
 .journey-playback.is-controls-hidden .journey-playback__close,
 .journey-playback.is-controls-hidden .journey-playback__controls,
 .journey-playback.is-controls-hidden .journey-playback__soundtrack,
-.journey-playback.is-controls-hidden .journey-playback__selection-summary {
+.journey-playback.is-controls-hidden .journey-playback__selection-summary,
+.journey-playback.is-controls-hidden .journey-playback__dense-nav {
   opacity: 0;
   pointer-events: none;
 }
