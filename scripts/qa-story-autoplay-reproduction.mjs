@@ -375,4 +375,4 @@ const summary = { buildSha, harnessSha, mode: baseline ? "baseline" : "candidate
   disposition: !valid ? "INVALID_EXECUTION" : baseline ? reproduced ? "BASELINE_REPRODUCED" : "BASELINE_NOT_REPRODUCED"
     : reproduced ? "CANDIDATE_FAILED" : "CANDIDATE_PASSED", results };
 await writeFile(`${directory}/summary.json`, JSON.stringify(summary, null, 2));
-if (!valid || (!baseline && reproduced)) process.exitCode = 1;
+if (!valid || (baseline ? !reproduced : reproduced)) process.exitCode = 1;
