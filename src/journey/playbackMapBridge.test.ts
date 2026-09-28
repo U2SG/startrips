@@ -50,16 +50,19 @@ describe("Playback map bridge boundaries", () => {
       const bridge = playbackMapBridgeBoundary(journey, steps[index - 1], step);
       return bridge ? [bridge] : [];
     });
-    expect(bridges.map((bridge) => bridge.direction)).toEqual(count > 0 && count <= 9
+    expect(bridges.map((bridge) => bridge.direction)).toEqual(count > 0
       ? ["map-to-media", "media-to-map"] : []);
     expect(bridges.every((bridge) => bridge.density === routePointChapterDensity(journey, 0))).toBe(true);
     expect(JSON.stringify(steps)).toBe(before);
   });
 
-  it("never turns adjacent 4-9 sequence media into a map boundary", () => {
-    const journey = fixture([6, 1]);
-    expect(routePointChapterDensity(journey, 0)).toBe("sequence");
-    for (let mediaIndex = 0; mediaIndex < 5; mediaIndex += 1) {
+  it.each([
+    [6, "sequence"],
+    [30, "dense"],
+  ] as const)("never turns adjacent %i-media %s chapters into a map boundary", (count, density) => {
+    const journey = fixture([count, 1]);
+    expect(routePointChapterDensity(journey, 0)).toBe(density);
+    for (let mediaIndex = 0; mediaIndex < count - 1; mediaIndex += 1) {
       expect(playbackMapBridgeBoundary(
         journey,
         { kind: "media", pointIndex: 0, mediaIndex },

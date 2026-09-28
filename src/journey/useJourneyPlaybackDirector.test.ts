@@ -383,6 +383,40 @@ describe("sequence chapter director ownership (#492)", () => {
     expect(projectUnder(true)).toEqual(projectUnder(false));
     expect(projectUnder(true)?.primaryAssetId).toBe("sequence-3");
   });
+
+  it.each([10, 30])("projects a %i-media dense chapter from the same director index with bounded context", (count) => {
+    const denseJourney: Journey = {
+      ...progressJourney,
+      routePoints: [progressPoint("point-dense", 0)],
+      media: Array.from({ length: count }, (_unused, index) => ({
+        ...progressMedia(`dense-${index}`, "point-dense"),
+        sortOrder: index,
+      })),
+    };
+    const steps = buildPlaybackSteps(denseJourney);
+    const mediaSteps = steps.flatMap((step, index) => step.kind === "media" ? [index] : []);
+    expect(mediaSteps).toHaveLength(count);
+
+    let state = playbackReducer(denseJourney, initialPlaybackState(), {
+      type: "seek",
+      stepIndex: mediaSteps[Math.floor(count / 2)],
+    });
+    let presentation = playbackSequenceChapterPresentation(denseJourney, steps[state.stepIndex]);
+    expect(presentation).toMatchObject({
+      density: "dense",
+      mediaIndex: Math.floor(count / 2),
+      position: Math.floor(count / 2) + 1,
+      total: count,
+      canPrevious: true,
+      canNext: true,
+    });
+    expect(presentation?.peekAssetIds.length).toBeLessThanOrEqual(2);
+
+    state = playbackReducer(denseJourney, state, { type: "next" });
+    presentation = playbackSequenceChapterPresentation(denseJourney, steps[state.stepIndex]);
+    expect(presentation?.primaryAssetId).toBe(`dense-${Math.floor(count / 2) + 1}`);
+    expect(presentation?.peekAssetIds.length).toBeLessThanOrEqual(2);
+  });
 });
 
 describe("completed director state (#126)", () => {

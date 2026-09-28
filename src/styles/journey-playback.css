@@ -311,7 +311,8 @@
    there is to show. */
 .journey-playback[data-playback-chapter-density="single"] .journey-playback__stage,
 .journey-playback[data-playback-chapter-density="few"] .journey-playback__stage,
-.journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stage {
+.journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stage,
+.journey-playback[data-playback-chapter-density="dense"] .journey-playback__stage {
   /* Q3: the caption row is only as tall as its content, capped so a very
      long note scrolls inside it; the media row owns everything else. The
      cap is the same in the arrival and media beats so the handoff frame keeps
@@ -324,7 +325,8 @@
 
 .journey-playback[data-playback-chapter-density="single"] .journey-playback__stop,
 .journey-playback[data-playback-chapter-density="few"] .journey-playback__stop,
-.journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop {
+.journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop,
+.journey-playback[data-playback-chapter-density="dense"] .journey-playback__stop {
   min-height: 0;
   /* A length, not 100%, so the media beat can fold it continuously. The row's
      fit-content(34%) cap still bounds it. */
@@ -371,7 +373,8 @@
      plays, instead of holding the arrival's reading height against the media. */
   .journey-playback[data-playback-chapter-density="single"] .journey-playback__stop.is-receded,
   .journey-playback[data-playback-chapter-density="few"] .journey-playback__stop.is-receded,
-  .journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop.is-receded {
+  .journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop.is-receded,
+  .journey-playback[data-playback-chapter-density="dense"] .journey-playback__stop.is-receded {
     max-height: min(9rem, 34vh);
   }
 
@@ -403,6 +406,51 @@
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+/* #498: dense chapters expose only a constant-size local navigator. It reads
+   the director-owned media index; the buttons dispatch the same back/next
+   actions as the global transport and never own a second seek cursor. */
+.journey-playback__dense-nav {
+  position: absolute;
+  z-index: 5;
+  right: max(18px, var(--playback-chapter-padding-inline));
+  bottom: calc(var(--playback-controls-reserve) + 8px);
+  display: grid;
+  grid-template-columns: 36px auto 36px;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 5px 7px;
+  border: 1px solid rgba(118, 198, 188, 0.24);
+  border-radius: 999px;
+  background: rgba(2, 8, 8, 0.78);
+  backdrop-filter: blur(12px);
+}
+
+.journey-playback__dense-nav button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--atlas-text);
+  cursor: pointer;
+}
+
+.journey-playback__dense-nav button:disabled {
+  opacity: 0.28;
+  cursor: default;
+}
+
+.journey-playback__dense-nav span {
+  min-width: 52px;
+  color: var(--atlas-muted);
+  font: 500 10px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.08em;
 }
 
 .journey-playback__media-state {
@@ -652,7 +700,8 @@
      note never compresses the media and the seam never resizes it. */
   .journey-playback[data-playback-chapter-density="single"] .journey-playback__stop,
   .journey-playback[data-playback-chapter-density="few"] .journey-playback__stop,
-  .journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop {
+  .journey-playback[data-playback-chapter-density="sequence"] .journey-playback__stop,
+  .journey-playback[data-playback-chapter-density="dense"] .journey-playback__stop {
     max-height: min(9rem, 34vh);
   }
 
@@ -705,7 +754,7 @@
 }
 
 .journey-playback[data-mobile-v2="on"]:is([data-playback-chapter-density="single"], [data-playback-chapter-density="few"],
-  [data-playback-chapter-density="sequence"]) .journey-playback__stage {
+  [data-playback-chapter-density="sequence"], [data-playback-chapter-density="dense"]) .journey-playback__stage {
   gap: 10px;
 }
 

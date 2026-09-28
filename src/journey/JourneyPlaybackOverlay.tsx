@@ -1276,6 +1276,9 @@ export function JourneyPlaybackOverlay({
       return url ? [{ asset, url }] : [];
     })
     : undefined;
+  const densePresentation = sequencePresentation?.density === "dense"
+    ? sequencePresentation
+    : null;
   // The arrival beat already waits for this asset to decode (`playbackHoldReason`),
   // so showing it as the chapter's opening still costs no extra read and removes
   // the blank frame the media beat used to enter from. A video chapter keeps the
@@ -1441,6 +1444,29 @@ export function JourneyPlaybackOverlay({
                     </div>
                   </div>
                 ) : null}
+
+        {densePresentation ? (
+          <nav
+            className="journey-playback__dense-nav"
+            aria-label="本地点媒体导航"
+            data-dense-position={densePresentation.position}
+            data-dense-total={densePresentation.total}
+          >
+            <button
+              type="button"
+              onClick={backByViewer}
+              disabled={!densePresentation.canPrevious}
+              aria-label="上一张媒体"
+            ><IconChevronLeft size={16} stroke={1.35} aria-hidden="true" /></button>
+            <span aria-live="polite">{densePresentation.position} / {densePresentation.total}</span>
+            <button
+              type="button"
+              onClick={nextByViewer}
+              disabled={!densePresentation.canNext}
+              aria-label="下一张媒体"
+            ><IconChevronRight size={16} stroke={1.35} aria-hidden="true" /></button>
+          </nav>
+        ) : null}
 
         {step?.kind === "media" && activeMedia ? (
           <PlaybackMediaStage
