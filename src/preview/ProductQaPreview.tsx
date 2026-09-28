@@ -6,7 +6,7 @@ import { LivingAtlasApp } from "../journey/LivingAtlasApp";
 import { JourneyComposer } from "../journey/JourneyComposer";
 import { JourneyStory } from "../journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "../journey/JourneyPlaybackOverlay";
-import { resolveSuggestedRouteDecision } from "../journey/journeyModel";
+import { resolveSuggestedRouteDecision, toJourneyRoutes } from "../journey/journeyModel";
 import {
   playbackCameraTargetKey,
   playbackMediaForPoint,
@@ -974,7 +974,7 @@ function JourneyPlaybackRouteProvenanceQaPreview() {
   const [provenance, setProvenance] = useState<RouteProvenanceTier>("sparse-relation");
   const [fallback, setFallback] = useState<"user-shaped-route" | "sparse-relation">("sparse-relation");
   const playbackRoute = useMemo(() => ({
-    points: routeProvenanceQaJourney.routePoints,
+    points: toJourneyRoutes([routeProvenanceQaJourney])[0].points,
     segmentProvenance: [provenance],
   }), [provenance]);
   const suggest = (nextFallback: "user-shaped-route" | "sparse-relation") => {
