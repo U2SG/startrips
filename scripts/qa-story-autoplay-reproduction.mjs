@@ -3,7 +3,9 @@
  * This observes DOM writers and delivered animation frames; it is not a claim
  * about every display refresh or about an actual Android/Opera device.
  */
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
@@ -45,12 +47,24 @@ const profiles = [
   { name: "desktop-control", viewport: { width: 1084, height: 1222 }, touch: false, dpr: 1, cpu: 1 },
   { name: "fold-wide-touch", viewport: { width: 800, height: 902 }, touch: true, dpr: 2.75, cpu: 4 },
   { name: "desktop-site-touch", viewport: { width: 980, height: 1105 }, touch: true, dpr: 2.75, cpu: 4 },
+  { name: "desktop-site-large-images", viewport: { width: 980, height: 1105 }, touch: true, dpr: 2.75, cpu: 4, large: true },
 ];
+const execute = promisify(execFile);
+const largePictures = [];
+await mkdir(`${directory}/fixtures`, { recursive: true });
+for (const [index, picture] of pictures.entries()) {
+  const path = `${directory}/fixtures/synthetic-${index + 1}.jpg`;
+  await execute("ffmpeg", ["-v", "error", "-y", "-i", `public${picture}`, "-vf",
+    "scale='if(gte(iw,ih),4096,-2)':'if(gte(iw,ih),-2,4096)'", "-frames:v", "1", "-q:v", "2", path]);
+  const { stdout } = await execute("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", path]);
+  const { width, height } = JSON.parse(stdout).streams[0];
+  largePictures.push({ body: await readFile(path), width, height });
+}
 const browser = await launchQaBrowser({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 const results = [];
 const latch = () => { let resolve; const promise = new Promise((ready) => { resolve = ready; }); return { promise, resolve }; };
 
-async function fixture(page) {
+async function fixture(page, profile) {
   const reads = [], bytes = [];
   const readGate = latch(), byteGate = latch();
   const json = (route, body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
@@ -66,7 +80,11 @@ async function fixture(page) {
   });
   await page.route("**/api/account-preferences/earth-experience", (route) => json(route, { earthExperience: "default", revision: 0, updatedAt: null }));
   await page.route("**/api/atlases/current", (route) => json(route, { atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "Synthetic" }, role: "owner" }));
-  await page.route("**/api/journeys", (route) => json(route, { journeys: [journey] }));
+  const suppliedJourney = profile.large ? { ...journey, media: journey.media.map((asset, index) => ({
+    ...asset, bytes: largePictures[index].body.length,
+    displayWidth: largePictures[index].width, displayHeight: largePictures[index].height,
+  })) } : journey;
+  await page.route("**/api/journeys", (route) => json(route, { journeys: [suppliedJourney] }));
   await page.route("**/api/home-bases/dismissal", (route) => json(route, { dismissals: [] }));
   await page.route("**/api/home-bases", (route) => json(route, { periods: [] }));
   await page.route("**/api/everyday-fragments", (route) => json(route, { fragments: [] }));
@@ -85,6 +103,10 @@ async function fixture(page) {
     const entry = { id, requestedAt: Date.now(), servedAt: null };
     bytes.push(entry);
     if (id === ids[4]) await byteGate.promise;
+    if (profile.large) {
+      entry.servedAt = Date.now();
+      return route.fulfill({ status: 200, contentType: "image/jpeg", body: largePictures[ids.indexOf(id)].body });
+    }
     url.search = "";
     const response = await route.fetch({ url: url.toString() });
     entry.servedAt = Date.now();
@@ -208,13 +230,17 @@ function grade(frames) {
 
 try {
   for (const profile of profiles) {
+    // This is an approximate wall-clock anchor for video keyframes, not frame
+    // grading. Browser observers retain their exact page-clock timestamps.
+    const videoStartedAt = Date.now();
     const page = await browser.newPage({ viewport: profile.viewport, isMobile: profile.touch, hasTouch: profile.touch,
       deviceScaleFactor: profile.dpr, reducedMotion: "no-preference", recordVideo: { dir: directory, size: profile.viewport } });
-    const errors = [], screenshots = [];
+    const errors = [];
     page.on("pageerror", (error) => errors.push(String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-    const record = { profile, buildSha, harnessSha, mode: baseline ? "baseline" : "candidate", errors, steps: [] };
-    const routes = await fixture(page);
+    const record = { profile, buildSha, harnessSha, mode: baseline ? "baseline" : "candidate", errors, steps: [], holds: [] };
+    const routes = await fixture(page, profile);
+    if (profile.large) record.fixtureDimensions = largePictures.map(({ width, height }) => [width, height]);
     try {
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("Emulation.setCPUThrottlingRate", { rate: profile.cpu });
@@ -248,9 +274,9 @@ try {
             await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
           }
           if (!log.some((entry) => entry.id === ids[index] && entry.servedAt === null)) throw new Error("Expected held response was not reached");
+          const from = Date.now();
           for (let frame = 0; frame < 25; frame += 1) await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
-          const path = `${directory}/${profile.name}-held-${index === 3 ? "read" : "bytes"}.png`;
-          await page.screenshot({ path }); screenshots.push(path);
+          record.holds.push({ index, gate: index === 3 ? "read" : "bytes", from, to: Date.now() });
           (index === 3 ? routes.readGate : routes.byteGate).resolve();
         }
         await settled(ids[index]);
@@ -263,12 +289,10 @@ try {
       record.ticks = observations.ticks;
       record.writerEvents = observations.writes.length;
       record.input = observations.input;
-      record.screenshots = screenshots;
       record.validExecution = record.steps.length === 6 && observations.ticks.raf > 0 && !record.environment.reducedMotion
         && record.environment.entry === "/" && record.environment.layout === "desktop"
         && observations.input.some((event) => event.trusted && event.pointerType === (profile.touch ? "touch" : "mouse"))
         && errors.length === 0;
-      await page.screenshot({ path: `${directory}/${profile.name}-settled.png` });
     } catch (error) {
       record.error = String(error);
       record.validExecution = false;
@@ -276,12 +300,25 @@ try {
         frames: window.__qaR3.frames, writes: window.__qaR3.writes, ticks: window.__qaR3.ticks, input: window.__qaR3.input } : null; }).catch(() => null);
       if (observations) record.observations = grade(observations.frames);
       await writeFile(`${directory}/${profile.name}-failure.json`, JSON.stringify({ ...record, observations, reads: routes.reads, bytes: routes.bytes }, null, 2));
-      await page.screenshot({ path: `${directory}/${profile.name}-failure.png` }).catch(() => undefined);
     } finally {
       routes.readGate.resolve(); routes.byteGate.resolve();
       const video = page.video();
       await page.close();
-      if (video) await rename(await video.path(), `${directory}/${profile.name}-continuous.webm`);
+      if (video) {
+        const path = `${directory}/${profile.name}-continuous.webm`;
+        await rename(await video.path(), path);
+        const { stdout } = await execute("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "json", path]);
+        const duration = Number(JSON.parse(stdout).format.duration);
+        record.keyframes = [];
+        const anchors = [...record.holds.map((hold) => ({ name: `held-${hold.gate}`,
+          seconds: ((hold.from + hold.to) / 2 - videoStartedAt) / 1000 })), { name: "end", seconds: duration - 0.4 }];
+        for (const anchor of anchors) {
+          const seconds = Math.max(0, Math.min(duration - 0.2, anchor.seconds));
+          const png = `${directory}/${profile.name}-${anchor.name}.png`;
+          await execute("ffmpeg", ["-v", "error", "-y", "-ss", String(seconds), "-i", path, "-frames:v", "1", png]);
+          record.keyframes.push({ path: png, seconds, approximateAnchor: true });
+        }
+      }
       results.push(record);
       console.log(JSON.stringify(record));
     }
