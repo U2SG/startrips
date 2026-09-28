@@ -3396,7 +3396,7 @@ try {
       window.__qaManyPhotoNodes = [...root.querySelectorAll("[data-media-page]")];
       window.__qaManyPhotoReloads = [];
       const aperture = { boundaries: 0, jumps: [], samples: 0, maxBoundaryDelta: 0,
-        boundarySamples: [], roleWrites: [] };
+        boundarySamples: [], roleWrites: [], boxChanges: [] };
       let previous = new Map();
       let lastTime = performance.now();
       const sample = (now) => {
@@ -3404,9 +3404,18 @@ try {
         for (const node of root.querySelectorAll("[data-media-page-id]")) {
           const clip = getComputedStyle(node).clipPath.match(/[-+]?(?:\d*\.?\d+)(?:e[-+]?\d+)?/gi)?.map(Number) ?? [0, 0];
           const state = { clip: [clip[0], clip[1] ?? clip[0]],
+            box: [node.offsetLeft, node.offsetTop, node.clientWidth, node.clientHeight],
             phase: root.dataset.mediaPresentation,
             role: `${node.dataset.mediaPage}:${node.dataset.mediaIncoming ?? "false"}` };
           const before = previous.get(node.dataset.mediaPageId);
+          // The clip spring assumes a stable physical page box. A role change
+          // must not resize or move it, even when a sparse rAF interval lets
+          // the clip delta itself fit under the original velocity threshold.
+          if (before && state.box.some((value, index) => value !== before.box[index])) {
+            aperture.boxChanges.push({ assetId: node.dataset.mediaPageId,
+              slot: window.__qaManyPhotoNodes.indexOf(node), from: before, to: state,
+              elapsed: now - lastTime });
+          }
           if (before && before.role !== state.role && now - lastTime < 80) {
             aperture.boundaries += 1;
             const delta = Math.max(...state.clip.map((value, index) => Math.abs(value - before.clip[index])));
@@ -3519,6 +3528,11 @@ try {
     checks.push({ name: "story-mixed-aspect-aperture-continuity", ...stable.aperture, ...apertureGrade,
       seams: apertureSeams, failed: apertureGrade.failed });
     if (apertureGrade.failed) failed = true;
+    const boxContinuityFailed = stable.aperture.boxChanges.length > 0;
+    checks.push({ name: "story-mixed-aspect-page-box-continuity",
+      changes: stable.aperture.boxChanges, samples: stable.aperture.samples,
+      seams: apertureSeams, failed: boxContinuityFailed });
+    if (boxContinuityFailed) failed = true;
   } finally {
     const video = manyPhotos.page.video();
     await manyPhotos.page.close();
