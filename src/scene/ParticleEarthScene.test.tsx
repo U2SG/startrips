@@ -170,7 +170,9 @@ describe("ParticleEarthScene contracts", () => {
     }
     expect(source).toContain("particle-earth-route__recorded-track");
     expect(source).toContain("--journey-recorded-track-temporal-progress");
-    expect(source).toContain("recordedProgress * entry.recordedTracks.length - trackIndex");
+    expect(source).toContain("recordedTrackSegmentTemporalProgress(");
+    expect(source).toContain("track.temporalStart");
+    expect(source).toContain("track.temporalEnd");
     expect(css).toContain("stroke-dasharray: var(--journey-recorded-track-temporal-progress, 1) 1");
   });
 
