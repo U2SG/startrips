@@ -2158,6 +2158,22 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error("Story kept presentation ownership after Quick Recap opened");
       }
     };
+    const editStoryJourney = async (touch) => {
+      const story = page.locator(".journey-story");
+      await pressStoryPlayback(story.getByRole("button", {
+        name: touch ? "管理旅程" : "编辑故事", exact: true,
+      }), "Story management before editing", touch);
+      await pressStoryPlayback(story.getByRole("button", { name: "编辑旅程", exact: true }),
+        "Edit Journey supersedes Story playback preparation", touch);
+      const composer = page.locator(".journey-composer");
+      await composer.waitFor({ state: "visible", timeout: 5_000 });
+      if (await story.count() !== 0 || await page.locator(".journey-playback").count() !== 0) {
+        throw new Error("Editing did not replace Story without starting Playback");
+      }
+      await pressStoryPlayback(composer.getByRole("button", { name: "关闭旅程编辑器", exact: true }),
+        "Close editor without restoring the superseded playback intent", touch);
+      await composer.waitFor({ state: "detached", timeout: 5_000 });
+    };
     const setInputValue = async (locator, value, label) => {
       await locator.evaluate((element) => {
         element.scrollIntoView({ block: "center", inline: "center" });
@@ -2641,7 +2657,11 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error("Story lost its media while soundtrack preparation was pending");
       }
       if (viewportLabel !== "320" && viewportLabel !== "360") {
-        await storyPending.getByRole("button", { name: "取消准备" }).click();
+        if (viewportLabel === "390") {
+          await editStoryJourney(true);
+        } else {
+          await storyPending.getByRole("button", { name: "取消准备" }).click();
+        }
       }
       holdStorySoundtrackRead = false;
       await Promise.all(heldStorySoundtrackRoutes.splice(0).map((route) => route.fulfill({
@@ -2679,6 +2699,33 @@ async function verifyFinalAcceptanceMobileFlow() {
         await storyPending.waitFor({ state: "detached", timeout: 5_000 });
         if (await page.locator(".journey-playback").count() !== 0) {
           throw new Error("Cancelled Story preparation opened Playback after its read resolved");
+        }
+        if (viewportLabel === "390") {
+          if (await page.locator(".journey-story").count() !== 0
+            || await page.getByRole("button", { name: /继续快速回顾/ }).count() !== 0) {
+            throw new Error("Edited Story preparation survived its late soundtrack response");
+          }
+          await pressStoryPlayback(page.locator(".mobile-v2__journey-chip"),
+            "Reopen Journey details after editing", true);
+          await pressStoryPlayback(page.locator(".mobile-v2__sheet-actions .is-primary"),
+            "Reopen Story after editing", true);
+          await page.locator(".journey-story").waitFor({ state: "visible", timeout: 5_000 });
+          if (await page.locator('.journey-story [data-story-playback-state]').count() !== 0) {
+            throw new Error("Reopened Story retained the superseded preparation");
+          }
+          await page.locator('.journey-story [data-shared-media-id="fa-image-1"]').first().click();
+          await storyFullscreen.waitFor({ state: "visible", timeout: 5_000 });
+          await page.keyboard.press("ArrowRight");
+          await page.waitForFunction(() => Boolean(
+            document.querySelector('.journey-story-fullscreen [data-shared-media-id="fa-image-2"]'),
+          ), null, { timeout: 5_000 });
+          await page.keyboard.press("Escape");
+          await storyFullscreen.waitFor({ state: "hidden", timeout: 5_000 });
+          await page.waitForFunction(() => Boolean(
+            document.querySelector('.journey-story [data-media-page="current"][data-media-page-id="fa-image-2"]'),
+          ), null, { timeout: 5_000 });
+          results.push({ name: `story-quick-recap-edit-pending-${viewportLabel}`,
+            lateResponseDidNotRestoreIntent: true, reopenedPreparation: "idle", failed: false });
         }
         await enterStoryQuickRecap(true);
       }
@@ -2796,6 +2843,27 @@ async function verifyFinalAcceptanceMobileFlow() {
       await activateControl(page.locator('.journey-playback button[aria-label="退出播放"]'),
         "close Story over-budget Full Playback");
       await overBudgetReturnedStory.waitFor({ state: "visible", timeout: 5_000 });
+      if (viewportLabel === "390") {
+        await pressStoryPlayback(
+          overBudgetReturnedStory.locator('[data-story-primary-playback="quick-recap"]'),
+          "Story over-budget choice before editing", false,
+        );
+        await storyOverBudgetChoice.waitFor({ state: "visible", timeout: 5_000 });
+        await editStoryJourney(false);
+        if (await page.locator(".living-atlas__playback-mode-menu").count() !== 0
+          || await page.locator(".journey-story, .journey-playback").count() !== 0) {
+          throw new Error("Editing retained the over-budget playback choice");
+        }
+        await pressStoryPlayback(page.getByRole("button", {
+          name: `打开旅程：${overBudgetJourney.title}`, exact: true,
+        }).first(), "Reopen Story after editing its over-budget choice", false);
+        await overBudgetReturnedStory.waitFor({ state: "visible", timeout: 5_000 });
+        if (await overBudgetReturnedStory.locator('[data-story-playback-state]').count() !== 0) {
+          throw new Error("Reopened Story retained the superseded over-budget choice");
+        }
+        results.push({ name: `story-quick-recap-edit-over-budget-${viewportLabel}`,
+          reopenedPreparation: "idle", failed: false });
+      }
       await activateControl(
         overBudgetReturnedStory.locator(".journey-story__close"),
         "close Story returned from over-budget Full Playback",

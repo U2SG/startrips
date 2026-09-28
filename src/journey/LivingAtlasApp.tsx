@@ -2326,6 +2326,7 @@ export function LivingAtlasApp({
 
   function editJourney(journeyId: string) {
     if (!canEditJourney) return;
+    cancelStoryPlaybackPreparation(journeyId);
     setInitialImport(null);
     timeCursor.selectJourney(journeyId);
     setStoryJourneyId(null);
