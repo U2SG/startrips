@@ -9,6 +9,8 @@ import {
   journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
+  resolveRouteProvenance,
+  resolveSuggestedRouteDecision,
   sortJourneysChronologically,
   stripMediaExtension,
   toJourneyRoutes,
@@ -17,6 +19,26 @@ import {
   validateJourneySoundtrack,
 } from "./journeyModel";
 import type { Journey, JourneyInput, JourneyMediaAsset } from "./types";
+
+describe("route provenance evidence (#342)", () => {
+  it("never upgrades geometry-only evidence into historical route truth", () => {
+    expect(resolveRouteProvenance({ geometryPresent: true })).toBe("sparse-relation");
+    expect(resolveRouteProvenance({ geometryPresent: true, suggested: true })).toBe("suggested-route");
+    expect(resolveRouteProvenance({ geometryPresent: true, userShaped: true })).toBe("user-shaped-route");
+  });
+
+  it("promotes a suggestion only after explicit confirmation", () => {
+    expect(resolveSuggestedRouteDecision("confirm", "sparse-relation"))
+      .toBe("user-confirmed-route");
+  });
+
+  it("restores the supplied evidence tier when a suggestion is rejected", () => {
+    expect(resolveSuggestedRouteDecision("none-of-these", "sparse-relation"))
+      .toBe("sparse-relation");
+    expect(resolveSuggestedRouteDecision("none-of-these", "user-shaped-route"))
+      .toBe("user-shaped-route");
+  });
+});
 
 function input(overrides: Partial<JourneyInput> = {}): JourneyInput {
   return {

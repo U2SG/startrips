@@ -850,8 +850,84 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
-await browser.close();
+// #342: prove route-provenance decisions on the real Playback travel surface.
+{
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" });
+  const consoleErrors = [];
+  const pageErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.route("**/api/auth/get-session", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: "null",
+  }));
+  const query = new URLSearchParams({
+    qaState: "journey-playback",
+    qaMode: "route-provenance",
+  });
+  await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded" });
+  await page.locator(".journey-playback").waitFor({ state: "visible", timeout: 30_000 });
+  await page.waitForFunction(() => (
+    document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "travel"
+  ), null, { timeout: 10_000 });
 
+  const readState = () => page.locator("main[data-qa-route-provenance]").evaluate((root) => {
+    const hint = root.querySelector(".journey-playback__route-hint");
+    return {
+      provenance: root.getAttribute("data-qa-route-provenance"),
+      hidden: hint?.getAttribute("aria-hidden") ?? null,
+      label: hint?.getAttribute("aria-label") ?? null,
+    };
+  });
+  const clickAction = async (action, expectedProvenance) => {
+    await page.locator(`[data-qa-action="${action}"]`).click();
+    await page.waitForFunction((expected) => (
+      document.querySelector("main[data-qa-route-provenance]")
+        ?.getAttribute("data-qa-route-provenance") === expected
+    ), expectedProvenance);
+    return readState();
+  };
+
+  try {
+    const sparse = await readState();
+    const suggested = await clickAction("suggest-sparse", "suggested-route");
+    const confirmed = await clickAction("confirm", "user-confirmed-route");
+    await clickAction("suggest-sparse", "suggested-route");
+    const rejectedSparse = await clickAction("reject", "sparse-relation");
+    await clickAction("suggest-shaped", "suggested-route");
+    const rejectedShaped = await clickAction("reject", "user-shaped-route");
+
+    const lowEvidenceHidden = [sparse, suggested, rejectedSparse, rejectedShaped]
+      .every((state) => state.hidden === "true" && state.label === null);
+    const confirmedClaimsActual = confirmed.hidden === null
+      && typeof confirmed.label === "string" && confirmed.label.length > 0;
+    record("route-provenance:dynamic-confirm-reject-and-sparse-ab", {
+      sparse,
+      suggested,
+      confirmed,
+      rejectedSparse,
+      rejectedShaped,
+      consoleErrors,
+      pageErrors,
+      failed: sparse.provenance !== "sparse-relation"
+        || suggested.provenance !== "suggested-route"
+        || confirmed.provenance !== "user-confirmed-route"
+        || rejectedSparse.provenance !== "sparse-relation"
+        || rejectedShaped.provenance !== "user-shaped-route"
+        || !lowEvidenceHidden
+        || !confirmedClaimsActual
+        || consoleErrors.length > 0
+        || pageErrors.length > 0,
+    });
+  } finally {
+    await page.close();
+  }
+}
+
+await browser.close();
 for (const check of checks) {
   console.error(`[qa-playback-continuity] ${check.failed ? "FAIL" : "ok"} ${check.name} ${JSON.stringify({ ...check, name: undefined, failed: undefined })}`);
 }

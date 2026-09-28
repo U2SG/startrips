@@ -6,6 +6,7 @@ import { LivingAtlasApp } from "../journey/LivingAtlasApp";
 import { JourneyComposer } from "../journey/JourneyComposer";
 import { JourneyStory } from "../journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "../journey/JourneyPlaybackOverlay";
+import { resolveSuggestedRouteDecision } from "../journey/journeyModel";
 import {
   playbackCameraTargetKey,
   playbackMediaForPoint,
@@ -18,7 +19,7 @@ import {
   prepareQuickRecapPlayback,
   quickRecapStepDurationMs,
 } from "../journey/quickRecapPlayback";
-import type { Journey } from "../journey/types";
+import type { Journey, RouteProvenanceTier } from "../journey/types";
 import { globeQaRoutes } from "./qaRoutes";
 import {
   LivingAtlasGlobe,
@@ -954,6 +955,60 @@ function JourneyPlaybackContinuityQaPreview() {
   );
 }
 
+const routeProvenanceQaJourneyId = "00000000-0000-4000-8000-000000000342";
+const routeProvenanceQaJourney: Journey = {
+  ...storyQaRouteBoundaryJourney,
+  id: routeProvenanceQaJourneyId,
+  title: "QA ROUTE PROVENANCE",
+  routePoints: storyQaRouteBoundaryJourney.routePoints.map((point, index) => ({
+    ...point,
+    id: `st121-route-point-${index}`,
+    journeyId: routeProvenanceQaJourneyId,
+    sortOrder: index,
+    label: index === 0 ? "QA ROUTE A" : "QA ROUTE B",
+  })),
+  media: [],
+};
+
+function JourneyPlaybackRouteProvenanceQaPreview() {
+  const [provenance, setProvenance] = useState<RouteProvenanceTier>("sparse-relation");
+  const [fallback, setFallback] = useState<"user-shaped-route" | "sparse-relation">("sparse-relation");
+  const playbackRoute = useMemo(() => ({
+    points: routeProvenanceQaJourney.routePoints,
+    segmentProvenance: [provenance],
+  }), [provenance]);
+  const suggest = (nextFallback: "user-shaped-route" | "sparse-relation") => {
+    setFallback(nextFallback);
+    setProvenance("suggested-route");
+  };
+  const decide = (decision: "confirm" | "none-of-these") => {
+    setProvenance(resolveSuggestedRouteDecision(decision, fallback));
+  };
+  return (
+    <main className="living-atlas" data-qa-route-provenance={provenance}>
+      <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
+      <JourneyPlaybackOverlay
+        journey={routeProvenanceQaJourney}
+        playbackRoute={playbackRoute}
+        onClose={() => undefined}
+        onCameraTargetChange={() => undefined}
+        stepDurationResolver={(_journey, step) => step.kind === "travel" ? 60_000 : 50}
+        playbackMode="full"
+        reduceMotion
+      />
+      <div
+        data-qa-route-provenance-controls
+        style={{ position: "fixed", inset: "8px auto auto 8px", zIndex: 10000, display: "flex", gap: 4 }}
+      >
+        <button type="button" data-qa-action="suggest-sparse" onClick={() => suggest("sparse-relation")}>suggest sparse</button>
+        <button type="button" data-qa-action="suggest-shaped" onClick={() => suggest("user-shaped-route")}>suggest shaped</button>
+        <button type="button" data-qa-action="confirm" onClick={() => decide("confirm")}>confirm</button>
+        <button type="button" data-qa-action="reject" onClick={() => decide("none-of-these")}>reject</button>
+      </div>
+    </main>
+  );
+}
+
 function BrandSignatureMotionQaPreview() {
   return (
     <main className="auth-gate auth-gate--brand-loading" data-qa-brand-signature-motion="true">
@@ -1000,9 +1055,11 @@ const Experience = qaState === "journey-composer"
       ? JourneyPlaybackPrefetchQaPreview
       // #456: the sparse 0/1/3-media continuity fixture is a sibling mode too,
       // so the lanes already grading the default preview keep their fixture.
-      : new URLSearchParams(window.location.search).get("qaMode") === "continuity"
-        ? JourneyPlaybackContinuityQaPreview
-        : JourneyPlaybackQaPreview)
+      : new URLSearchParams(window.location.search).get("qaMode") === "route-provenance"
+        ? JourneyPlaybackRouteProvenanceQaPreview
+        : new URLSearchParams(window.location.search).get("qaMode") === "continuity"
+          ? JourneyPlaybackContinuityQaPreview
+          : JourneyPlaybackQaPreview)
   : (qaState === "globe-controls" || qaState === "globe-controls-gateway")
     ? LivingAtlasGlobeControlsQaPreview
   : qaState === "earth-dive"
