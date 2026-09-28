@@ -106,7 +106,8 @@ export function currentRecordedTrackSnapshot(
   journeyId: string | null | undefined,
   revision: number,
 ) {
-  return snapshot?.journeyId === journeyId && snapshot.revision === revision ? snapshot : null;
+  if (!snapshot) return null;
+  return snapshot.journeyId === journeyId && snapshot.revision === revision ? snapshot : null;
 }
 
 /** Keep owner-private recorded evidence attached while a saved route is replaced by its edit draft. */

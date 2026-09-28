@@ -101,9 +101,9 @@ describe("Playback V2 timeline planner (#126)", () => {
       .toEqual(["p0-m0", "p0-m1", "p0-m2", "p1-m0", "p1-m1", "p1-m2"]);
   });
 
-  it("resolves pure-transit media from its own Route Point without a preceding arrival", () => {
+  it("resolves non-stop media from its own Route Point without a preceding arrival", () => {
     const journey = fixture(1);
-    journey.routePoints[1] = { ...journey.routePoints[1], isStop: false, placeRole: "pure-transit" };
+    journey.routePoints[1] = { ...journey.routePoints[1], isStop: false };
     const plan = buildPlaybackPlan(journey, "standard");
     expect(plan.segments.filter((segment) => segment.kind === "arrival").map((segment) => segment.routePointId))
       .toEqual(["p0"]);
