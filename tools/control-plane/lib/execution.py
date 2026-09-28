@@ -17,6 +17,11 @@ from github_evidence import EvidenceUnknown
 
 STOPS = ('AGENT_STOP', 'SUPERVISOR_STOP', 'CANCEL_SCHEDULED_RESTART')
 LANE_CAPACITY = {'backend': 1, 'experience': 2}
+TEMPORARY_BACKEND_SWITCH_ENV = 'STARTRIPS_TEMPORARY_BACKEND_SWITCH'
+TEMPORARY_BACKEND_STOP_PATTERN = re.compile(
+    rb'^user-authorized-temporary-backend-switch '
+    rb'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\r?\n?$'
+)
 
 
 def stopped(root, lane=None):
@@ -25,6 +30,27 @@ def stopped(root, lane=None):
     # must never strand the independent Experience lane.
     names = STOPS if lane in {None, 'backend'} else STOPS[:1]
     return [name for name in names if (Path(root) / name).exists()]
+
+
+def temporary_backend_switch_authorized(root, lane=None):
+    """Allow the one explicit Temporary Backend substitution without waking LOCAL.
+
+    The environment flag alone is never authority. Both LOCAL-only STOP markers
+    must exist, carry the exact same user-authorized switch receipt, AGENT_STOP
+    must be absent, and the caller must still prove provider idleness separately.
+    """
+    if lane != 'backend' or os.environ.get(TEMPORARY_BACKEND_SWITCH_ENV) != '1':
+        return False
+    root = Path(root)
+    if (root / 'AGENT_STOP').exists():
+        return False
+    try:
+        supervisor = (root / 'SUPERVISOR_STOP').read_bytes()
+        cancel = (root / 'CANCEL_SCHEDULED_RESTART').read_bytes()
+    except OSError:
+        return False
+    return (supervisor == cancel
+            and TEMPORARY_BACKEND_STOP_PATTERN.fullmatch(supervisor) is not None)
 
 
 WINDOWS_CARRIERS = frozenset({'bash.exe', 'sh.exe', 'claude.exe', 'codex.exe', 'node.exe', 'nodejs.exe'})

@@ -812,6 +812,27 @@ class StopAndPermissionCases(fixture.SyntheticOne):
         with self.assertRaises(fixture.store.StoreConflict): execution.clear_owned_stop(self.root, path.name, b'cancel')
         self.assertEqual(b'cancel', path.read_bytes())
 
+    def test_temporary_backend_switch_requires_env_and_matching_owned_stops(self):
+        receipt = 'user-authorized-temporary-backend-switch 2026-09-28T06:53:00Z\n'
+        (self.root / 'SUPERVISOR_STOP').write_text(receipt)
+        (self.root / 'CANCEL_SCHEDULED_RESTART').write_text(receipt)
+        with mock.patch.dict(os.environ, {'STARTRIPS_TEMPORARY_BACKEND_SWITCH': ''}):
+            self.assertFalse(execution.temporary_backend_switch_authorized(self.root, lane='backend'))
+        with mock.patch.dict(os.environ, {'STARTRIPS_TEMPORARY_BACKEND_SWITCH': '1'}):
+            self.assertTrue(execution.temporary_backend_switch_authorized(self.root, lane='backend'))
+            self.assertFalse(execution.temporary_backend_switch_authorized(self.root, lane='experience'))
+
+    def test_temporary_backend_switch_rejects_global_or_mismatched_stop(self):
+        receipt = 'user-authorized-temporary-backend-switch 2026-09-28T06:53:00Z\n'
+        (self.root / 'SUPERVISOR_STOP').write_text(receipt)
+        (self.root / 'CANCEL_SCHEDULED_RESTART').write_text(
+            'user-authorized-temporary-backend-switch 2026-09-28T06:54:00Z\n')
+        with mock.patch.dict(os.environ, {'STARTRIPS_TEMPORARY_BACKEND_SWITCH': '1'}):
+            self.assertFalse(execution.temporary_backend_switch_authorized(self.root, lane='backend'))
+            (self.root / 'CANCEL_SCHEDULED_RESTART').write_text(receipt)
+            (self.root / 'AGENT_STOP').write_text('human stop')
+            self.assertFalse(execution.temporary_backend_switch_authorized(self.root, lane='backend'))
+
     def test_manual_resume_requires_explicit_local_command(self):
         (self.root / 'AGENT_STOP').write_text('human stop')
         with mock.patch.dict(os.environ, {'STARTRIPS_EXPLICIT_RESUME': ''}):
@@ -1003,6 +1024,38 @@ class RealWorktreeCases(fixture.SyntheticOne):
         self.assertTrue(owner.name.startswith('st002-'))
         self.assertEqual('in_progress', fixture.store.load_document(self.path)['features'][0]['status'])
         self.assertEqual(2, run.call_count)
+
+    def test_user_authorized_temporary_backend_switch_can_prepare_owner_with_local_stops(self):
+        row = fixture.feature('ST-002', issue=2, phase='P0-process')
+        self.write(row)
+        main = 'a' * 40
+        inventory = f'worktree {self.repo}\nHEAD {main}\nbranch refs/heads/main\n'
+        receipt = 'user-authorized-temporary-backend-switch 2026-09-28T06:53:00Z\n'
+        (self.root / 'SUPERVISOR_STOP').write_text(receipt)
+        (self.root / 'CANCEL_SCHEDULED_RESTART').write_text(receipt)
+
+        def git_result(_repository, *args):
+            if args == ('worktree', 'list', '--porcelain'):
+                return inventory
+            if args == ('rev-parse', 'origin/main'):
+                return main
+            self.fail('unexpected git probe: ' + repr(args))
+
+        completed = mock.Mock(returncode=0)
+        with mock.patch.dict(os.environ, {'STARTRIPS_TEMPORARY_BACKEND_SWITCH': '1'}), \
+                mock.patch.object(runtime, 'git', side_effect=git_result), \
+                mock.patch.object(runtime, 'ensure_idle') as idle, \
+                mock.patch.object(runtime, 'api', return_value={'object': {'sha': main}}), \
+                mock.patch.object(runtime.subprocess, 'run', return_value=completed):
+            owner = runtime.prepare_unmapped(self.root, self.repo, row,
+                                             'synthetic/project', True, 'backend')
+
+        idle.assert_called_once_with(self.root, lane='backend', feature='ST-002')
+        self.assertEqual(self.root / 'worker-worktrees', owner.parent)
+        self.assertTrue(owner.name.startswith('st002-'))
+        self.assertTrue((self.root / 'SUPERVISOR_STOP').exists())
+        self.assertTrue((self.root / 'CANCEL_SCHEDULED_RESTART').exists())
+        self.assertEqual('in_progress', fixture.store.load_document(self.path)['features'][0]['status'])
 
     def test_new_owner_prepare_guard_is_lane_scoped(self):
         row = fixture.feature('ST-002', issue=2)
