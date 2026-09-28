@@ -705,8 +705,10 @@ try {
       await storyShowing(page, mediaJourneyTitle);
       const affordance = await page.evaluate(() => {
         const story = document.querySelector(".journey-story");
-        const play = document.querySelector(".journey-story__mobile-media-play");
+        const play = document.querySelector(".journey-story__mobile-autobrowse");
+        const quickRecap = document.querySelector('.journey-story [data-story-primary-playback="quick-recap"]');
         const box = play?.getBoundingClientRect();
+        const quickRecapBox = quickRecap?.getBoundingClientRect();
         return {
           mobileMode: story?.getAttribute("data-mobile-mode") ?? null,
           present: Boolean(play),
@@ -721,6 +723,12 @@ try {
           manageTriggers: document.querySelectorAll(".journey-story__mobile-media-menu-trigger").length,
           width: box?.width ?? 0,
           height: box?.height ?? 0,
+          quickRecapPresent: Boolean(quickRecap),
+          quickRecapDisabled: quickRecap instanceof HTMLButtonElement ? quickRecap.disabled : null,
+          quickRecapLabel: quickRecap?.getAttribute("aria-label") ?? null,
+          quickRecapInViewerCluster: Boolean(quickRecap?.closest(".journey-story__mobile-media-actions")),
+          quickRecapWidth: quickRecapBox?.width ?? 0,
+          quickRecapHeight: quickRecapBox?.height ?? 0,
         };
       });
       if (!affordance.present || affordance.disabled !== false) {
@@ -733,18 +741,23 @@ try {
       if (affordance.width < 44 || affordance.height < 44) {
         failures.push(`guest #199: touch target ${affordance.width}x${affordance.height} is under 44px`);
       }
+      if (!affordance.quickRecapPresent || affordance.quickRecapDisabled !== false
+        || affordance.quickRecapLabel !== "快速回顾" || !affordance.quickRecapInViewerCluster
+        || affordance.quickRecapWidth < 44 || affordance.quickRecapHeight < 44) {
+        failures.push(`guest #570: Quick Recap primary action is unavailable ${JSON.stringify(affordance)}`);
+      }
       // It has to actually drive the sequence, not merely render.
       let toggled = null;
       try {
-        await page.locator(".journey-story__mobile-media-play").click();
+        await page.locator(".journey-story__mobile-autobrowse").click();
         await page.waitForFunction(
-          () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+          () => document.querySelector(".journey-story__mobile-autobrowse")?.getAttribute("aria-pressed") === "true",
           undefined,
           { timeout: 5_000 },
         );
-        await page.locator(".journey-story__mobile-media-play").click();
+        await page.locator(".journey-story__mobile-autobrowse").click();
         await page.waitForFunction(
-          () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "false",
+          () => document.querySelector(".journey-story__mobile-autobrowse")?.getAttribute("aria-pressed") === "false",
           undefined,
           { timeout: 5_000 },
         );

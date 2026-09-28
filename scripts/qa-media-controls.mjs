@@ -1572,7 +1572,7 @@ try {
     const readingViewFailed = readingView.layout !== "desktop" || readingView.editing !== null
       || readingView.editingControls !== 0 || readingView.sidebarStats !== 0
       || readingView.thumbnailRail !== 0 || readingView.fullscreenEntry !== 1
-      || JSON.stringify(readingView.navigationButtons) !== JSON.stringify(["全屏查看媒体", "自动播放媒体"]);
+      || JSON.stringify(readingView.navigationButtons) !== JSON.stringify(["全屏查看媒体", "自动浏览当前媒体"]);
     checks.push({ name: "story-desktop-reading-view", ...readingView, failed: readingViewFailed });
     if (readingViewFailed) failed = true;
     const currentPhoto = storyPicture(storyDesktop.page);
@@ -1628,7 +1628,7 @@ try {
     await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
     const shortDragKeptFullscreen = await photoFullscreen.isVisible();
     const fullscreenNavigationFailed = !fullscreenPictureNavigation || !shortDragKeptFullscreen
-      || JSON.stringify(fullscreenNavigationButtons) !== JSON.stringify(["自动播放媒体"]);
+      || JSON.stringify(fullscreenNavigationButtons) !== JSON.stringify(["自动浏览当前媒体"]);
     checks.push({ name: "story-desktop-fullscreen-picture-navigation", fullscreenNavigationButtons,
       fullscreenPictureNavigation, shortDragKeptFullscreen, failed: fullscreenNavigationFailed });
     if (fullscreenNavigationFailed) failed = true;
@@ -2857,8 +2857,8 @@ try {
         || fullscreenPlacement.insideManageSheet
         || fullscreenPlacement.mobileMode !== "viewer"
         || placement.idlePressed !== "false"
-        || placement.idleLabel !== "自动播放媒体"
-        || playingLabel !== "暂停自动播放"
+        || placement.idleLabel !== "自动浏览当前媒体"
+        || playingLabel !== "暂停自动浏览"
         || restoredPressed !== "false"
         || !placement.inViewerCluster
         || placement.insideManageSheet
@@ -3031,7 +3031,7 @@ try {
       // Only Date changes. Real timers, media readiness and user input continue.
       await page.clock.setFixedTime(expiredNow);
       await Promise.race([started, new Promise((_, reject) => setTimeout(() => reject(new Error("Story refresh did not start")), 25_000))]);
-      await page.locator(".journey-story").getByRole("button", { name: "自动播放媒体", exact: true }).click();
+      await page.locator(".journey-story").getByRole("button", { name: "自动浏览当前媒体", exact: true }).click();
       await page.waitForFunction(() => !window.__qaRefreshVideo.paused);
       const completion = page.waitForResponse((response) => response.url().includes(`/assets/${videoId}/read-url`));
       releaseRefresh();
@@ -3043,9 +3043,9 @@ try {
           sameSource: element?.getAttribute("src") === window.__qaRefreshSource,
           sourceChanges: window.__qaRefreshSourceChanges, emptied: window.__qaRefreshEmptied,
           playing: Boolean(element && !element.paused),
-          storyPlaying: Boolean(document.querySelector('.journey-story button[aria-label="暂停自动播放"]')) };
+          storyPlaying: Boolean(document.querySelector('.journey-story button[aria-label="暂停自动浏览"]')) };
       });
-      await page.locator(".journey-story").getByRole("button", { name: "暂停自动播放", exact: true }).click();
+      await page.locator(".journey-story").getByRole("button", { name: "暂停自动浏览", exact: true }).click();
       await page.waitForFunction(() => document.querySelector(".journey-story__media video[data-shared-media-id]")
         ?.getAttribute("src")?.includes("renewal=2"), undefined, { timeout: 25_000 });
       const unexpectedErrors = refreshRace.consoleErrors.filter((message) => outcome !== "error" || !message.includes("500"));
@@ -3395,7 +3395,8 @@ try {
       const root = document.querySelector(".journey-story__media [data-story-media-pages]");
       window.__qaManyPhotoNodes = [...root.querySelectorAll("[data-media-page]")];
       window.__qaManyPhotoReloads = [];
-      const aperture = { boundaries: 0, jumps: [], samples: 0, maxBoundaryDelta: 0 };
+      const aperture = { boundaries: 0, jumps: [], samples: 0, maxBoundaryDelta: 0,
+        boundarySamples: [], roleWrites: [], boxChanges: [] };
       let previous = new Map();
       let lastTime = performance.now();
       const sample = (now) => {
@@ -3403,15 +3404,29 @@ try {
         for (const node of root.querySelectorAll("[data-media-page-id]")) {
           const clip = getComputedStyle(node).clipPath.match(/[-+]?(?:\d*\.?\d+)(?:e[-+]?\d+)?/gi)?.map(Number) ?? [0, 0];
           const state = { clip: [clip[0], clip[1] ?? clip[0]],
+            box: [node.offsetLeft, node.offsetTop, node.clientWidth, node.clientHeight],
+            phase: root.dataset.mediaPresentation,
             role: `${node.dataset.mediaPage}:${node.dataset.mediaIncoming ?? "false"}` };
           const before = previous.get(node.dataset.mediaPageId);
+          // The clip spring assumes a stable physical page box. A role change
+          // must not resize or move it, even when a sparse rAF interval lets
+          // the clip delta itself fit under the original velocity threshold.
+          if (before && state.box.some((value, index) => value !== before.box[index])) {
+            aperture.boxChanges.push({ assetId: node.dataset.mediaPageId,
+              slot: window.__qaManyPhotoNodes.indexOf(node), from: before, to: state,
+              elapsed: now - lastTime });
+          }
           if (before && before.role !== state.role && now - lastTime < 80) {
             aperture.boundaries += 1;
             const delta = Math.max(...state.clip.map((value, index) => Math.abs(value - before.clip[index])));
             aperture.maxBoundaryDelta = Math.max(aperture.maxBoundaryDelta, delta);
+            const boundary = { assetId: node.dataset.mediaPageId,
+              slot: window.__qaManyPhotoNodes.indexOf(node), from: before, to: state,
+              delta, elapsed: now - lastTime };
+            aperture.boundarySamples.push(boundary);
             // At role handoff a retained photograph must not abruptly open or
             // recrop. Allow actual spring travel during the sampled interval.
-            if (delta > Math.max(2, (now - lastTime) * .16)) aperture.jumps.push({ delta, elapsed: now - lastTime });
+            if (delta > Math.max(2, (now - lastTime) * .16)) aperture.jumps.push(boundary);
           }
           next.set(node.dataset.mediaPageId, state);
         }
@@ -3422,6 +3437,29 @@ try {
       };
       window.__qaAperture = aperture;
       sample(performance.now());
+      // Retain the clip at the DOM role write as well as the later rAF sample.
+      // The first following style mutation's old value is the painted clip
+      // before layout effects start the new spring. This distinguishes a reset
+      // at the handoff from continuous travel before the next sampled frame.
+      const roleObserver = new MutationObserver((records) => {
+        for (const [index, record] of records.entries()) {
+          if (!["data-media-page", "data-media-incoming"].includes(record.attributeName)) continue;
+          const node = record.target;
+          if (!node.matches("[data-media-page-id]")) continue;
+          const followingStyle = records.slice(index + 1).find((entry) => (
+            entry.target === node && entry.attributeName === "style"
+          ));
+          const beforeStyle = document.createElement("div").style;
+          beforeStyle.cssText = followingStyle?.oldValue ?? node.getAttribute("style") ?? "";
+          aperture.roleWrites.push({ assetId: node.dataset.mediaPageId,
+            slot: window.__qaManyPhotoNodes.indexOf(node), attribute: record.attributeName,
+            from: record.oldValue, to: node.getAttribute(record.attributeName),
+            clipBefore: beforeStyle.clipPath, clipAfter: node.style.clipPath,
+            phase: root.dataset.mediaPresentation, at: performance.now() });
+        }
+      });
+      roleObserver.observe(root, { subtree: true, attributes: true,
+        attributeFilter: ["data-media-page", "data-media-incoming", "style"], attributeOldValue: true });
       const observer = new MutationObserver((records) => {
         for (const record of records) {
           const image = record.target;
@@ -3490,6 +3528,11 @@ try {
     checks.push({ name: "story-mixed-aspect-aperture-continuity", ...stable.aperture, ...apertureGrade,
       seams: apertureSeams, failed: apertureGrade.failed });
     if (apertureGrade.failed) failed = true;
+    const boxContinuityFailed = stable.aperture.boxChanges.length > 0;
+    checks.push({ name: "story-mixed-aspect-page-box-continuity",
+      changes: stable.aperture.boxChanges, samples: stable.aperture.samples,
+      seams: apertureSeams, failed: boxContinuityFailed });
+    if (boxContinuityFailed) failed = true;
   } finally {
     const video = manyPhotos.page.video();
     await manyPhotos.page.close();

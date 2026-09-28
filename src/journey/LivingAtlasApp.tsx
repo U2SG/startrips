@@ -1266,6 +1266,8 @@ export function LivingAtlasApp({
     planningContentFingerprint: string;
   } | null>(null);
   const playbackOverBudgetActionRef = useRef<HTMLButtonElement | null>(null);
+  const playbackPreparationRevisionRef = useRef(0);
+  const [playbackPreparationErrorId, setPlaybackPreparationErrorId] = useState<string | null>(null);
   const previousPlaybackPendingRef = useRef<typeof playbackPendingMode>(null);
   const [playbackFallbackMessage, setPlaybackFallbackMessage] = useState<string | null>(null);
   const [playbackReleaseFocusRevision, setPlaybackReleaseFocusRevision] = useState(0);
@@ -2098,9 +2100,9 @@ export function LivingAtlasApp({
       && playbackOverBudgetChoice.planningContentFingerprint === activeJourneyQuickRecapPlanningFingerprint,
   );
   useEffect(() => {
-    if (!playbackOverBudgetChoiceIsCurrent) return;
+    if (!playbackOverBudgetChoiceIsCurrent || storyJourneyId === activeJourney?.id) return;
     playbackOverBudgetActionRef.current?.focus();
-  }, [playbackOverBudgetChoiceIsCurrent]);
+  }, [playbackOverBudgetChoiceIsCurrent, storyJourneyId, activeJourney?.id]);
 
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
   const effectiveDraftRoute = draftPlaybackOwnsSession ? draftPlaybackPreview!.route : draftRoute;
@@ -2319,8 +2321,11 @@ export function LivingAtlasApp({
     if (playbackEntryRef.current?.intentRevision === playbackReturnIntentRevisionRef.current) {
       playbackReturnIntentRevisionRef.current += 1;
     }
+    playbackPreparationRevisionRef.current += 1;
     setPlaybackPendingMode(null);
     setPlaybackFallbackMessage(null);
+    setPlaybackPreparationErrorId(null);
+    setPlaybackPreparingId((current) => current === playbackPendingMode.journeyId ? null : current);
   }, [activeJourneyId, playbackPendingMode]);
 
   useEffect(() => {
@@ -2447,6 +2452,7 @@ export function LivingAtlasApp({
 
   function editJourney(journeyId: string) {
     if (!canEditJourney) return;
+    cancelStoryPlaybackPreparation(journeyId);
     setInitialImport(null);
     timeCursor.selectJourney(journeyId);
     setStoryJourneyId(null);
@@ -2690,11 +2696,7 @@ export function LivingAtlasApp({
       : null;
 
     claimPlaybackReturnIntent();
-    if (playbackPendingMode?.journeyId === journeyId && playbackSession.journeyId === null) {
-      playbackEntryRef.current = null;
-      setPlaybackPendingMode(null);
-      setPlaybackFallbackMessage(null);
-    }
+    if (journeyId && playbackSession.journeyId === null) cancelStoryPlaybackPreparation(journeyId);
     runSharedElementMorph({
       // If no live Route Point aperture can be measured, close directly into
       // the semantic context instead of morphing its media into a Journey card.
@@ -2793,6 +2795,19 @@ export function LivingAtlasApp({
     setPlaybackCameraSettledRevision(null);
   }
 
+  function cancelStoryPlaybackPreparation(journeyId: string) {
+    if (playbackPendingMode?.journeyId !== journeyId
+      && playbackOverBudgetChoice?.journeyId !== journeyId) return;
+    playbackPreparationRevisionRef.current += 1;
+    if (playbackEntryRef.current?.journeyId === journeyId) playbackEntryRef.current = null;
+    setPlaybackPendingMode(null);
+    setPlaybackOverBudgetChoice(null);
+    setPlaybackModeMenuJourneyId(null);
+    setPlaybackFallbackMessage(null);
+    setPlaybackPreparationErrorId(null);
+    setPlaybackPreparingId((current) => current === journeyId ? null : current);
+  }
+
   function startPlayback(
     journeyId: string,
     requestedMode: "full" | "quick-recap" = "full",
@@ -2801,6 +2816,8 @@ export function LivingAtlasApp({
     clearHomeBaseContext();
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;
+    const preparationRevision = ++playbackPreparationRevisionRef.current;
+    setPlaybackPreparationErrorId(null);
     setDraftPlaybackPreview(null);
     let mode = requestedMode;
     let quickRecap: PreparedQuickRecapPlayback | null = null;
@@ -2822,7 +2839,7 @@ export function LivingAtlasApp({
           journeyId,
           planningContentFingerprint: quickRecapPlanningContentFingerprint(journey),
         });
-        setPlaybackModeMenuJourneyId(journeyId);
+        setPlaybackModeMenuJourneyId(storyJourneyId === journeyId ? null : journeyId);
         return;
       }
       if (!quickRecap) {
@@ -2856,16 +2873,27 @@ export function LivingAtlasApp({
       setPlaybackModeMenuJourneyId(null);
       setPlaybackPreparingId(journeyId);
       void prefetchSoundtrackRead(journey, readMedia)
-        .catch(() => null)
-        .finally(() => setPlaybackPreparingId((current) => (
-          current === journeyId ? null : current
-        )));
+        .then((url) => {
+          if (preparationRevision === playbackPreparationRevisionRef.current && !url) {
+            setPlaybackPreparationErrorId(journeyId);
+          }
+        }, () => {
+          if (preparationRevision === playbackPreparationRevisionRef.current) {
+            setPlaybackPreparationErrorId(journeyId);
+          }
+        })
+        .finally(() => {
+          if (preparationRevision === playbackPreparationRevisionRef.current) {
+            setPlaybackPreparingId((current) => current === journeyId ? null : current);
+          }
+        });
       return;
     }
     setPlaybackQuickRecap(mode === "quick-recap" ? quickRecap : null);
     setPlaybackFallbackMessage(fallbackMessage);
     setPlaybackPendingMode(null);
     setPlaybackModeMenuJourneyId(null);
+    setMobileSheetJourneyId(null);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
     setStoryInitialAssetId(null);
@@ -4050,6 +4078,27 @@ export function LivingAtlasApp({
           onObservationChange={handleStoryObservationChange}
           onGlobeCoverChange={setStoryGlobeCover}
           onClose={(source) => closeJourneyStory(source ?? null)}
+          quickRecap={{
+            state: playbackOverBudgetChoiceIsCurrent
+              && playbackOverBudgetChoice?.journeyId === storyJourneyId ? "over-budget"
+              : playbackPendingMode?.journeyId === storyJourneyId
+                ? playbackPreparingId === storyJourneyId ? "preparing"
+                  : playbackPreparationErrorId === storyJourneyId ? "error" : "ready"
+                : "idle",
+            mode: playbackPendingMode?.journeyId === storyJourneyId
+              ? playbackPendingMode.mode : "quick-recap",
+            message: playbackPendingMode?.journeyId === storyJourneyId
+              ? playbackPendingMode.fallbackMessage : null,
+            onStart: () => {
+              const pending = playbackPendingMode?.journeyId === storyJourneyId
+                ? playbackPendingMode : null;
+              startPlayback(storyJourneyId, pending?.mode ?? "quick-recap",
+                pending?.fallbackMessage ?? null);
+            },
+            onFullPlayback: () => startPlayback(storyJourneyId, "full",
+              "快速回顾无法容纳所有必要的旅程点，已按你的选择开始完整播放。"),
+            onCancel: () => cancelStoryPlaybackPreparation(storyJourneyId),
+          }}
           onNavigate={(id) => {
             claimPlaybackReturnIntent();
             timeCursor.selectJourney(id);

@@ -1213,7 +1213,7 @@ describe("Quick Recap over-budget choice (ST-011)", () => {
 
     expect(branchStart).toBeGreaterThan(0);
     expect(branch).toContain("setPlaybackOverBudgetChoice({");
-    expect(branch).toContain("setPlaybackModeMenuJourneyId(journeyId)");
+    expect(branch).toContain("setPlaybackModeMenuJourneyId(storyJourneyId === journeyId ? null : journeyId)");
     expect(branch).toContain("return;");
     expect(branch).not.toContain('mode = "full"');
     expect(branch).not.toContain("cachedSoundtrackRead");

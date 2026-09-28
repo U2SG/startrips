@@ -67,12 +67,12 @@
   --stack-y: clamp(20px, 4%, 56px);
 }
 .journey-story[data-story-layout="desktop"] :is(
-  .story-media-pages__page[data-media-page="current"],
-  .story-media-pages__page[data-media-incoming="true"],
+  .story-media-pages__page,
   .story-media-pages__hit-surface
 ) {
-  /* Only neighbouring cards pay the decorative inset. The presented picture
-     keeps a small lane for Story's own 44px controls. */
+  /* Physical page boxes stay fixed through a role handoff. Depth transforms
+     inset the neighbours without resizing their picture or crop at commit.
+     All pages keep the same lane for Story's own 44px controls. */
   inset: 0 0 48px;
 }
 .journey-story[data-story-layout="desktop"] .story-media-pages__video {
@@ -181,6 +181,13 @@
   border: 0;
   background: transparent;
   color: var(--startrips-muted);
+}
+.journey-story[data-story-layout="desktop"] .journey-story__media-nav :is(.journey-story__quick-recap-action, .journey-story__media-autobrowse) {
+  width: auto;
+  padding-inline: 10px;
+}
+.journey-story[data-story-layout="desktop"] .journey-story__media-nav .journey-story__quick-recap-action {
+  color: var(--startrips-starlight);
 }
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav button:hover:not(:disabled) { color: var(--startrips-starlight); }
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav button:disabled { opacity: .3; cursor: default; }
