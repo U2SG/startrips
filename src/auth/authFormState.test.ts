@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { AUTH_FORM_STATUSES, authExceptionEvent, authFormReducer, authServiceErrorEvent, createAuthFormState } from "./authFormState";
+import { AUTH_FORM_STATUSES, authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, createAuthFormState } from "./authFormState";
 
 
 describe("auth form state machine", () => {
@@ -34,6 +34,15 @@ describe("auth form state machine", () => {
     const started = authFormReducer(createAuthFormState(), { type: "submit" });
     const event = authServiceErrorEvent(started.requestId, { status: 429 }, "a@b.test");
     expect(authFormReducer(started, event).status).toBe("rate-limited");
+  });
+
+  it("classifies provider throttling without losing provider refusal text", () => {
+    const started = authFormReducer(createAuthFormState(), { type: "submit" });
+    expect(authProviderErrorEvent(started.requestId, { status: 429 }, "provider refused").type).toBe("rate-limited");
+    expect(authProviderErrorEvent(started.requestId, { code: "signup_disabled" }, "provider refused")).toMatchObject({
+      type: "validation-error",
+      message: "provider refused",
+    });
   });
 
   it("leaves submitting after exceptions and cancellation", () => {

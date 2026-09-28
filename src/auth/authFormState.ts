@@ -88,6 +88,12 @@ export function authServiceErrorEvent(requestId: number, error: AuthServiceError
   return { type: "validation-error", requestId, message: "认证信息未通过，请检查后重试。" };
 }
 
+export function authProviderErrorEvent(requestId: number, error: AuthServiceError, message: string): AuthFormEvent {
+  const classified = authServiceErrorEvent(requestId, error, "");
+  if (classified.type === "rate-limited") return classified;
+  return { type: "validation-error", requestId, message };
+}
+
 export function authExceptionEvent(requestId: number, error: unknown): AuthFormEvent {
   const name = error && typeof error === "object" && "name" in error ? String((error as { name?: unknown }).name ?? "") : "";
   return { type: "network-error", requestId, message: name === "AbortError" ? "请求已取消，可以立即重试。" : "网络连接中断，请检查网络后重试。" };

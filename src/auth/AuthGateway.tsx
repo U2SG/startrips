@@ -61,7 +61,7 @@ import {
   useEarthExperiencePreference,
 } from "../journey/EarthExperienceProvider";
 import { authClient } from "./auth-client";
-import { authExceptionEvent, authFormReducer, authServiceErrorEvent, createAuthFormState, type AuthFormEvent, type AuthFormState } from "./authFormState";
+import { authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, createAuthFormState, type AuthFormEvent, type AuthFormState } from "./authFormState";
 import { resolvePasswordResetOutcome, type PasswordResetOutcome } from "./passwordResetOutcome";
 
 type OrganizationSummary = {
@@ -258,11 +258,11 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
       });
       // A successful call navigates away; only a refusal returns here.
       if (result.error) {
-        transition({
-          type: "validation-error",
-          requestId: started.requestId,
-          message: socialSignInErrorText(result.error.code ?? null) || result.error.message || "登录未完成，请重试。",
-        });
+        transition(authProviderErrorEvent(
+          started.requestId,
+          result.error,
+          socialSignInErrorText(result.error.code ?? null) || result.error.message || "登录未完成，请重试。",
+        ));
       }
     } catch (error) {
       transition(authExceptionEvent(started.requestId, error));
