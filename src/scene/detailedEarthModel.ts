@@ -7,6 +7,7 @@ import {
   selectRecordedTrackLodLevel,
 } from "../journey/journeyModel";
 import {
+  recordedRouteTemporalProgress,
   resolveRoutePointPresentation,
   type RoutePointSelection,
   type RouteTemporalReveal,
@@ -184,27 +185,14 @@ function temporallyVisibleRecordedTrackSegments(
   const segments = route.recordedTrackSegments ?? [];
   if (!temporalReveal) return segments;
 
-  const journeyProgress = temporalReveal.journeys.get(route.id);
-  if (journeyProgress !== undefined && !(journeyProgress > 0)) return [];
-
-  // Route legs already use their destination Route Point's temporal progress.
-  // Derive the recorded-track reveal from that same projection so a Journey
-  // whose group is visible (journeyProgress=1) cannot leak future recorded
-  // geometry while later Route Points are still hidden.
-  let progress = journeyProgress === undefined ? 1 : Math.max(0, Math.min(1, journeyProgress));
-  if (route.points.length > 1) {
-    let hasPointReveal = false;
-    let revealedLegs = 0;
-    for (let pointIndex = 1; pointIndex < route.points.length; pointIndex += 1) {
-      const pointProgress = temporalReveal.points.get(`${route.id}:${pointIndex}`);
-      if (pointProgress !== undefined) hasPointReveal = true;
-      const legProgress = pointProgress === undefined
-        ? progress
-        : Math.max(0, Math.min(1, pointProgress));
-      revealedLegs += legProgress;
-    }
-    if (hasPointReveal) progress = revealedLegs / (route.points.length - 1);
-  }
+  // Detailed and Particle Earth share this exact time-cursor projection. A
+  // renderer may choose slicing vs dash reveal, but neither may reveal a future
+  // recorded segment merely because the Journey group itself is already shown.
+  const progress = recordedRouteTemporalProgress(
+    route.id,
+    route.points.length,
+    temporalReveal,
+  );
   if (progress >= 1) return segments;
   if (!(progress > 0)) return [];
 

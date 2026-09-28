@@ -5,7 +5,9 @@ import {
   committedPlaybackPosition,
   initialPlaybackState,
   isPlaybackTerminalState,
+  isPlaybackTransitRoutePoint,
   playbackReducer,
+  playbackFactualRouteText,
   playbackCameraTargetForStep,
   playbackTravelChoreography,
   playbackCameraTargetKey,
@@ -18,6 +20,7 @@ import {
   phaseForStep,
   routePointChapterDensity,
 } from "./journeyPlayback";
+import { deriveJourneyStaySummaries } from "./journeyModel";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -107,6 +110,24 @@ const homeNarrativeContext: HomeNarrativeContext = {
     },
   },
 };
+
+describe("route provenance text boundary (#342)", () => {
+  const route = (tier: "recorded-track" | "user-confirmed-route" | "user-shaped-route" | "suggested-route" | "sparse-relation") => ({
+    points: [
+      { lat: 0, lon: 0, isStop: true },
+      { lat: 1, lon: 1, isStop: true },
+    ],
+    segmentProvenance: [tier],
+  });
+
+  it("allows actual-route text only for recorded or explicitly confirmed travel", () => {
+    expect(playbackFactualRouteText(route("recorded-track"), 1, "actual street 2 km")).toBe("actual street 2 km");
+    expect(playbackFactualRouteText(route("user-confirmed-route"), 1, "actual street 2 km")).toBe("actual street 2 km");
+    expect(playbackFactualRouteText(route("user-shaped-route"), 1, "actual street 2 km")).toBeNull();
+    expect(playbackFactualRouteText(route("suggested-route"), 1, "actual street 2 km")).toBeNull();
+    expect(playbackFactualRouteText(route("sparse-relation"), 1, "actual street 2 km")).toBeNull();
+  });
+});
 
 describe("routePointAngularDistance (#19)", () => {
   it("measures the great-circle distance between two route points", () => {
@@ -280,7 +301,7 @@ describe("buildPlaybackSteps (#19)", () => {
       .toEqual(["media-1"]);
   });
 
-  it("gives every Stop a quiet stop step even without media", () => {
+  it("gives every point a stop step even without media, so no point is skipped", () => {
     const silent: Journey = {
       ...journey,
       routePoints: [point("p0", 0, 0), point("p1", 1, 1)],
@@ -291,32 +312,58 @@ describe("buildPlaybackSteps (#19)", () => {
     expect(steps.some((step) => step.kind === "media")).toBe(false);
   });
 
-  it("keeps non-stop Route Points in travel order without inventing arrival, while preserving attached media", () => {
-    const via = { ...point("via", 0, 30, "shape only"), isStop: false };
-    const shaped: Journey = {
+  it("keeps route shape and historical media without promoting pure transit to a stop (#514)", () => {
+    const grouped: Journey = {
       ...journey,
-      routePoints: [point("start", 0, 0), via, point("end", 0, 60)],
+      routePoints: [
+        { ...point("point-0", 30.66, 104.06), regionContext: "Chengdu", placeRole: "accommodation" },
+        { ...point("point-1", 30.67, 104.07), isStop: false, regionContext: "Chengdu", placeRole: "pure-transit" },
+        { ...point("point-2", 30.68, 104.08), regionContext: "Chengdu", placeRole: "attraction" },
+      ],
       media: [
-        media("start-photo", "start", "image/jpeg"),
-        media("via-photo", "via", "image/jpeg"),
-        media("end-photo", "end", "image/jpeg"),
+        media("stay-hotel", "point-0", "image/jpeg", 0),
+        media("stay-detour", "point-1", "image/jpeg", 1),
+        media("stay-place", "point-2", "video/mp4", 2),
       ],
     };
+    const routeBefore = structuredClone(grouped.routePoints);
+    const mediaBefore = [...grouped.media];
 
-    const steps = buildPlaybackSteps(shaped);
-    expect(steps.map((step) => step.kind)).toEqual([
-      "intro",
-      "stop", "media",
-      "travel", "media",
-      "travel", "stop", "media",
-      "outro",
+    expect(deriveJourneyStaySummaries(grouped).map((summary) => summary.routePointIds)).toEqual([
+      ["point-0", "point-2"],
     ]);
-    expect(steps.filter((step) => step.kind === "travel")).toEqual([
-      { kind: "travel", to: 1 },
-      { kind: "travel", to: 2 },
-    ]);
-    expect(steps.filter((step) => step.kind === "stop").map((step) => step.pointIndex)).toEqual([0, 2]);
-    expect(steps.filter((step) => step.kind === "media").map((step) => step.pointIndex)).toEqual([0, 1, 2]);
+
+    const steps = buildPlaybackSteps(grouped);
+    expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 2]);
+    expect(steps.flatMap((step) => step.kind === "travel" ? [step.to] : [])).toEqual([1, 2]);
+    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([0, 1, 2]);
+    expect(playbackMediaForPoint(grouped, 0).map((asset) => asset.id)).toEqual(["stay-hotel"]);
+    expect(playbackMediaForPoint(grouped, 1).map((asset) => asset.id)).toEqual(["stay-detour"]);
+    expect(storyMediaForScope(grouped, "point-1").map((asset) => asset.id)).toEqual(["stay-detour"]);
+    expect(playbackMediaForPoint(grouped, 2).map((asset) => asset.id)).toEqual(["stay-place"]);
+    expect(grouped.routePoints).toEqual(routeBefore);
+    expect(grouped.media).toEqual(mediaBefore);
+    expect(grouped.media).toEqual(expect.arrayContaining(mediaBefore));
+  });
+
+  it("keeps legacy isStop=false route points as transit without requiring placeRole metadata (#514)", () => {
+    const legacyTransit = { ...point("point-1", 30.67, 104.07), isStop: false };
+    const legacy: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 30.66, 104.06),
+        legacyTransit,
+        point("point-2", 30.68, 104.08),
+      ],
+      media: [media("legacy-transit-media", "point-1", "image/jpeg", 0)],
+    };
+
+    expect(legacyTransit.placeRole).toBeUndefined();
+    expect(isPlaybackTransitRoutePoint(legacyTransit)).toBe(true);
+    const steps = buildPlaybackSteps(legacy);
+    expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 2]);
+    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([1]);
+    expect(playbackMediaForPoint(legacy, 1).map((asset) => asset.id)).toEqual(["legacy-transit-media"]);
   });
 });
 

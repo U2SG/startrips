@@ -446,7 +446,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       return (frame?.url === read.url && frame.generation === read.generation && frame.state === "ready")
         || (binding.id === id && binding.generation === read.generation && liveReady === liveKey);
     }
-    return decodedImages.current.get(id) === read.url;
+    // The warm decode belongs to the asset, but a recycled physical page may still
+    // paint its previous src. Only that page's loaded image can take the stage.
+    const image = imageNodes.current[assigned.indexOf(id)];
+    return decodedImages.current.get(id) === read.url
+      && Boolean(image && image.getAttribute("src") === read.url
+        && image.currentSrc === image.src && image.complete && image.naturalWidth > 0);
   };
   const targetReady = ready(props.incomingId);
   // The pending read can clear incomingId before its replacement is decoded.
@@ -607,7 +612,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       // value is unchanged -- so a handoff that ended without changing the
       // presented identity left the stack painted in the abandoned order.
       const front = pageNodes.current[assigned.indexOf(recovering ? props.currentId : id)];
-      return [springElementTo(node, { transform: mediaStackRest(depth), opacity: mediaStackOpacity(depth),
+      // An incoming picture only moves after it can paint. Keep both participating
+      // pages opaque through the aperture handoff; dimming the still-visible
+      // outgoing page is the autoplay dark flash.
+      return [springElementTo(node, {
+        transform: mediaStackRest(depth),
+        opacity: !recovering && (isCurrent || isTarget) ? 1 : mediaStackOpacity(depth),
         clipInset: mediaStackClip(node, front) },
         { owner: assetId })];
     });
@@ -1173,6 +1183,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         className="story-media-pages__page"
         data-media-page={current ? "current" : offsets[slot] < 0 ? "previous" : "next"}
         data-media-page-id={id ?? undefined} data-media-page-ready={pageReady ? "true" : "false"}
+        data-media-read-state={read?.status ?? "missing"}
+        data-media-read-generation={read?.status === "ready" ? read.generation : undefined}
         data-media-layer={layer?.kind}
         data-media-preview-asset={layer?.kind === "preview" ? layer.assetId : undefined}
         data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}
@@ -1192,7 +1204,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
                 : id !== null && id === props.incomingId && targetReady ? 4
                   : holdingFront && id === heldFrontId ? 4 : 3 - depths[slot],
           transform: mediaStackRest(depths[slot]),
-          opacity: mediaStackOpacity(depths[slot]),
+          opacity: id === props.incomingId && targetReady ? 1 : mediaStackOpacity(depths[slot]),
           // Same-asset layer authority keeps the preview under this physical
           // page until its own original is decoded/presentable.
           backgroundImage: layer?.kind === "preview"

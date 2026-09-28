@@ -26,7 +26,15 @@ export type JourneyValues = Pick<
   revision?: number;
   routePoints: Array<Pick<
     typeof journeyRoutePoints.$inferInsert,
-    "latitude" | "longitude" | "label" | "isStop" | "occurredAt" | "note"
+    | "latitude"
+    | "longitude"
+    | "label"
+    | "isStop"
+    | "occurredAt"
+    | "note"
+    | "regionContext"
+    | "placeRole"
+    | "overviewVisibility"
   > & { id?: string }>;
 };
 
@@ -279,6 +287,14 @@ export async function updateJourneyForAtlas(
         // explicit null/empty (parsed to null) clears. New points default to
         // null (no note) because the column is nullable.
         ...(point.note !== undefined ? { note: point.note ?? null } : {}),
+        // #514: optional presentation evidence follows the same preservation
+        // rule as notes. Omitted fields from an older/partial client do not
+        // erase persisted corrections; explicit null clears them.
+        ...(point.regionContext !== undefined ? { regionContext: point.regionContext ?? null } : {}),
+        ...(point.placeRole !== undefined ? { placeRole: point.placeRole ?? null } : {}),
+        ...(point.overviewVisibility !== undefined
+          ? { overviewVisibility: point.overviewVisibility ?? null }
+          : {}),
       };
       if (point.id) {
         await transaction
@@ -293,6 +309,9 @@ export async function updateJourneyForAtlas(
           journeyId: journey.id,
           ...pointValues,
           ...(point.note === undefined ? { note: null } : {}),
+          ...(point.regionContext === undefined ? { regionContext: null } : {}),
+          ...(point.placeRole === undefined ? { placeRole: null } : {}),
+          ...(point.overviewVisibility === undefined ? { overviewVisibility: null } : {}),
         });
       }
     }

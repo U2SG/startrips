@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  recordedRouteTemporalProgress,
   resolveRouteAttentionRole,
   resolveRoutePointPresentation,
   routePointIsNarrativeCurrent,
@@ -67,6 +68,24 @@ describe("route presentation roles (#373)", () => {
       pointIndex: 2,
       narrativeSelection,
     })).toBe(false);
+  });
+
+  it("derives recorded-route reveal from destination point progress instead of a fully visible group", () => {
+    const partial = {
+      journeys: new Map([["journey-a", 1]]),
+      points: new Map([
+        ["journey-a:1", 1],
+        ["journey-a:2", 0.5],
+        ["journey-a:3", 0],
+      ]),
+    };
+    expect(recordedRouteTemporalProgress("journey-a", 4, partial)).toBe(0.5);
+    expect(recordedRouteTemporalProgress("journey-a", 4, undefined)).toBe(1);
+    expect(recordedRouteTemporalProgress("missing", 4, partial)).toBe(1);
+    expect(recordedRouteTemporalProgress("journey-a", 4, {
+      journeys: new Map([["journey-a", 0]]),
+      points: new Map([["journey-a:1", 1]]),
+    })).toBe(0);
   });
 
   it("keeps future points absent even if an inconsistent narrative selection names them", () => {

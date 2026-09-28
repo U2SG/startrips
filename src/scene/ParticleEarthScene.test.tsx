@@ -42,6 +42,7 @@ import {
   advanceGlobeIdleReleasePhase,
   buildProjectedRoutePath,
   buildRecordedTrackOverviewSamples,
+  recordedTrackSegmentTemporalProgress,
   selectRecordedTrackOverviewLevel,
   collectJourneyDimDirections,
   focusSignalAnchor,
@@ -73,6 +74,7 @@ import {
   resolveParticleDiveAnchor,
   cityPointCoordinates,
   journeyRoutePointTargetEligible,
+  selectJourneyRoutePointScreenTarget,
   selectHomeBasePointerTarget,
 } from "./ParticleEarthScene";
 import {
@@ -111,6 +113,32 @@ describe("ParticleEarthScene contracts", () => {
     expect((far?.samples.lifts.length ?? Infinity)).toBeLessThanOrEqual(
       MAX_RENDERED_RECORDED_TRACK_POINTS,
     );
+    expect(tracks[0]).toMatchObject({ temporalStart: 0 });
+    expect(tracks[0].temporalEnd).toBeGreaterThan(tracks[0].temporalStart);
+    expect(tracks[1]).toMatchObject({ temporalEnd: 1 });
+  });
+
+  it("reveals independent recorded segments sequentially inside canonical sample-order bounds", () => {
+    const tracks = buildRecordedTrackOverviewSamples([
+      { id: "first", points: [{ lat: 0, lon: 0 }, { lat: 0, lon: 1 }] },
+      { id: "future", points: [{ lat: 1, lon: 1 }, { lat: 1, lon: 2 }] },
+    ]);
+    expect(tracks.map(({ temporalStart, temporalEnd }) => [temporalStart, temporalEnd]))
+      .toEqual([[0, 0.5], [0.5, 1]]);
+    expect(recordedTrackSegmentTemporalProgress(0.25, tracks[0].temporalStart, tracks[0].temporalEnd))
+      .toBe(0.5);
+    expect(recordedTrackSegmentTemporalProgress(0.25, tracks[1].temporalStart, tracks[1].temporalEnd))
+      .toBe(0);
+    expect(recordedTrackSegmentTemporalProgress(0.75, tracks[0].temporalStart, tracks[0].temporalEnd))
+      .toBe(1);
+    expect(recordedTrackSegmentTemporalProgress(0.75, tracks[1].temporalStart, tracks[1].temporalEnd))
+      .toBe(0.5);
+
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    expect(source).toContain('"--journey-recorded-track-temporal-progress"');
+    expect(source).toContain('path.setAttribute("pathLength", "1")');
+    expect(css).toContain("stroke-dasharray: var(--journey-recorded-track-temporal-progress, 1) 1");
   });
 
   it("keeps LOD error bounds truthful when a tight point budget needs extra simplification", () => {
@@ -141,6 +169,9 @@ describe("ParticleEarthScene contracts", () => {
       expect(css).toContain(`data-route-provenance="${tier}"`);
     }
     expect(source).toContain("particle-earth-route__recorded-track");
+    expect(source).toContain("--journey-recorded-track-temporal-progress");
+    expect(source).toContain("recordedProgress * entry.recordedTracks.length - trackIndex");
+    expect(css).toContain("stroke-dasharray: var(--journey-recorded-track-temporal-progress, 1) 1");
   });
 
   it("degrades renderer construction failures without escaping the scene effect", () => {
@@ -1691,6 +1722,28 @@ describe("ST-065 renderer interaction arbitration", () => {
         points: new Map([["journey-a:0", 1]]),
       },
     )).toBe(false);
+  });
+
+  it("keeps Particle Earth Route Point hits touch-safe in screen space", () => {
+    const first = { journeyId: "journey-a", routePointId: "first", routePointIndex: 0 };
+    const second = { journeyId: "journey-a", routePointId: "second", routePointIndex: 1 };
+    const candidates = [
+      { target: first, x: 100, y: 100 },
+      { target: second, x: 118, y: 100 },
+    ];
+
+    expect(selectJourneyRoutePointScreenTarget(candidates, 121, 100)).toEqual(second);
+    expect(selectJourneyRoutePointScreenTarget(candidates, 78, 100)).toEqual(first);
+    expect(selectJourneyRoutePointScreenTarget(candidates, 150, 100)).toBeNull();
+  });
+
+  it("uses stable route order only when screen-space Route Point hits tie", () => {
+    const later = { journeyId: "journey-a", routePointId: "later", routePointIndex: 4 };
+    const earlier = { journeyId: "journey-a", routePointId: "earlier", routePointIndex: 1 };
+    expect(selectJourneyRoutePointScreenTarget([
+      { target: later, x: 100, y: 100 },
+      { target: earlier, x: 100, y: 100 },
+    ], 100, 100)).toEqual(earlier);
   });
 
   it("selects the last-painted Home marker when Home periods overlap", () => {

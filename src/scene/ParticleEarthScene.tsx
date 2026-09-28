@@ -70,6 +70,7 @@ import {
   vector3ToLatLon,
 } from "./geo";
 import {
+  recordedRouteTemporalProgress,
   resolveRouteAttentionRole,
   resolveRoutePointPresentation,
   routePointMarkerRadiusPx,
@@ -250,6 +251,9 @@ export type RecordedTrackOverviewLevel = {
 
 export type RecordedTrackOverview = {
   id: string;
+  /** Canonical sample-order interval inside the complete recorded evidence. */
+  temporalStart: number;
+  temporalEnd: number;
   levels: readonly RecordedTrackOverviewLevel[];
   samples: RouteArcSamples;
 };
@@ -317,12 +321,28 @@ export function buildRecordedTrackOverviewSamples(
     .filter((segment) => segment.points.length >= 2);
   if (maxPoints < 2 || validSegments.length === 0) return [];
 
+  // Time reveal is defined against canonical recorded sample order, before LOD
+  // or the unusual many-gap path cap can remove rendering detail. A later
+  // independent segment therefore stays at progress 0 until the cursor reaches
+  // its own evidence interval instead of all segments revealing in parallel.
+  const totalRecordedPoints = validSegments.reduce((total, segment) => total + segment.points.length, 0);
+  let temporalPointOffset = 0;
+  const temporallyBoundSegments = validSegments.map((segment) => {
+    const temporalStart = temporalPointOffset / totalRecordedPoints;
+    temporalPointOffset += segment.points.length;
+    return {
+      ...segment,
+      temporalStart,
+      temporalEnd: temporalPointOffset / totalRecordedPoints,
+    };
+  });
+
   // Every independent server segment keeps its own SVG path: LOD may remove
   // interior samples, but it never bridges a recorded-track gap. Very unusual
   // inputs with more gaps than the bounded path budget keep a representative
   // subset instead of constructing an unbounded DOM.
-  const segmentLimit = Math.min(validSegments.length, Math.floor(maxPoints / 2));
-  const chosenSegments = uniformlyBoundRecordedPoints(validSegments, segmentLimit);
+  const segmentLimit = Math.min(temporallyBoundSegments.length, Math.floor(maxPoints / 2));
+  const chosenSegments = uniformlyBoundRecordedPoints(temporallyBoundSegments, segmentLimit);
   let remainingPoints = maxPoints;
 
   return chosenSegments.map((segment, index) => {
@@ -335,8 +355,25 @@ export function buildRecordedTrackOverviewSamples(
     const levels = boundedRecordedTrackOverviewLevels(segment.points, pointBudget);
     const samples = levels.at(-1)!.samples;
     remainingPoints -= pointBudget;
-    return { id: segment.id, levels, samples };
+    return {
+      id: segment.id,
+      temporalStart: segment.temporalStart,
+      temporalEnd: segment.temporalEnd,
+      levels,
+      samples,
+    };
   });
+}
+
+export function recordedTrackSegmentTemporalProgress(
+  routeProgress: number,
+  temporalStart: number,
+  temporalEnd: number,
+) {
+  if (!(temporalEnd > temporalStart)) return routeProgress >= temporalEnd ? 1 : 0;
+  if (routeProgress <= temporalStart) return 0;
+  if (routeProgress >= temporalEnd) return 1;
+  return (routeProgress - temporalStart) / (temporalEnd - temporalStart);
 }
 
 export type AttentionParticleLayerId =
@@ -559,11 +596,57 @@ export function cityPointCoordinates(city: Pick<CityPoint, "latitude" | "longitu
   return city ? { latitude: city.latitude, longitude: city.longitude } : null;
 }
 
-type JourneyPointPointerTarget = {
+export type JourneyPointPointerTarget = {
   journeyId: string;
   routePointId?: string;
   routePointIndex: number;
 };
+
+export const JOURNEY_ROUTE_POINT_POINTER_RADIUS_PX = 22;
+
+export function selectJourneyRoutePointScreenTarget(
+  candidates: readonly {
+    target: JourneyPointPointerTarget;
+    x: number;
+    y: number;
+  }[],
+  clientX: number,
+  clientY: number,
+  radiusPx = JOURNEY_ROUTE_POINT_POINTER_RADIUS_PX,
+): JourneyPointPointerTarget | null {
+  if (
+    !Number.isFinite(clientX)
+    || !Number.isFinite(clientY)
+    || !Number.isFinite(radiusPx)
+    || radiusPx <= 0
+  ) return null;
+
+  const radiusSquared = radiusPx * radiusPx;
+  let best: {
+    target: JourneyPointPointerTarget;
+    distanceSquared: number;
+  } | null = null;
+
+  for (const candidate of candidates) {
+    if (!Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) continue;
+    const deltaX = clientX - candidate.x;
+    const deltaY = clientY - candidate.y;
+    const distanceSquared = deltaX * deltaX + deltaY * deltaY;
+    if (distanceSquared > radiusSquared) continue;
+    if (
+      !best
+      || distanceSquared < best.distanceSquared - 1e-6
+      || (
+        Math.abs(distanceSquared - best.distanceSquared) <= 1e-6
+        && candidate.target.routePointIndex < best.target.routePointIndex
+      )
+    ) {
+      best = { target: candidate.target, distanceSquared };
+    }
+  }
+
+  return best?.target ?? null;
+}
 
 export function journeyRoutePointTargetEligible(
   target: JourneyPointPointerTarget | null | undefined,
@@ -2608,6 +2691,8 @@ export function ParticleEarthScene({
       }>;
       recordedTracks: Array<{
         path: SVGPathElement;
+        temporalStart: number;
+        temporalEnd: number;
         levels: readonly RecordedTrackOverviewLevel[];
         samples: RouteArcSamples;
       }>;
@@ -2899,6 +2984,26 @@ export function ParticleEarthScene({
             reveal?.points.get(`${entry.routeId}:${leg.toPointIndex}`),
           );
         }
+        // Recorded evidence shares the exact route-level cursor projection
+        // with Detailed Earth, then reveals each independent server segment only
+        // inside its canonical sample-order interval. LOD/gap capping therefore
+        // cannot make a later segment appear early.
+        const recordedProgress = reveal === undefined
+          ? undefined
+          : recordedRouteTemporalProgress(entry.routeId, entry.routePointCount, reveal);
+        for (const track of entry.recordedTracks) {
+          applyTemporalProgress(
+            track.path,
+            "--journey-recorded-track-temporal-progress",
+            recordedProgress === undefined
+              ? undefined
+              : recordedTrackSegmentTemporalProgress(
+                recordedProgress,
+                track.temporalStart,
+                track.temporalEnd,
+              ),
+          );
+        }
       }
       syncRoutePresentations();
     };
@@ -3056,6 +3161,10 @@ export function ParticleEarthScene({
           // Visible Route Point optics are SVG/CSS-pixel beads. Pointer hit
           // testing remains the independent Three.js point layer below; this
           // marker never grows its geographic anchor or hit geometry.
+          // A freshly rebuilt SVG circle defaults to cx=0/cy=0. Keep it out of
+          // paint and hit discovery until the projection pass publishes its real
+          // screen coordinate and routePointIndex below.
+          element.style.display = "none";
           element.dataset.journeyRoute = route.id;
           if (point.id) element.dataset.routePointId = point.id;
           const presentation = resolveRoutePointPresentation({
@@ -3072,7 +3181,8 @@ export function ParticleEarthScene({
           element.dataset.temporalVisible = presentation.temporalVisible ? "true" : "false";
           element.setAttribute("r", String(routePointMarkerRadiusPx(presentation)));
           group.appendChild(element);
-          const labelText = point.label?.trim() ? point.label : undefined;
+          const overviewLabel = point.overviewLabel ?? point.label;
+          const labelText = overviewLabel?.trim() ? overviewLabel : undefined;
           vectorPoints.push({
             element,
             position,
@@ -3149,8 +3259,15 @@ export function ParticleEarthScene({
           path.setAttribute("fill", "none");
           path.setAttribute("stroke-linecap", "round");
           path.setAttribute("stroke-linejoin", "round");
+          path.setAttribute("pathLength", "1");
           group.appendChild(path);
-          return { path, levels: track.levels, samples: track.samples };
+          return {
+            path,
+            temporalStart: track.temporalStart,
+            temporalEnd: track.temporalEnd,
+            levels: track.levels,
+            samples: track.samples,
+          };
         });
         routeVectorLayer.appendChild(group);
         routeVectorEntries.push({
@@ -3481,11 +3598,14 @@ export function ParticleEarthScene({
         !projectionChanged
         && renderedRouteProjectionRevision === routeProjectionRevision
       ) {
-        // #432: skipping the pass is the SETTLED state, not a missing one -
-        // the placement already on screen is the placement this projection
-        // produces. A reader waiting for layout has to be able to tell that
-        // apart from a pass that has not happened yet, so it is published
-        // rather than left to a timeout to guess.
+        // #432: skipping route/label layout is the SETTLED state, but the
+        // coastline read-back still belongs to this exact camera frame. Refresh
+        // only that shared projection evidence so a prior behind-silhouette
+        // sample cannot leave the settled frame with no map anchor.
+        camera.updateMatrixWorld();
+        globe.updateWorldMatrix(true, false);
+        updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
+        publishCoastlineAnchor();
         publishPlaceLabelLayout("settled");
         return;
       }
@@ -3991,6 +4111,36 @@ export function ParticleEarthScene({
         ? null
         : journeyPointTargets[intersection.index] ?? null;
     };
+    const journeyScreenTargetFromPointer = (
+      clientX: number,
+      clientY: number,
+    ): JourneyPointPointerTarget | null => {
+      const routePointActivationEnabled = Boolean(latestOnJourneyRoutePointActivate.current);
+      const candidates = [...routeVectorLayer.querySelectorAll<SVGCircleElement>(
+        ".particle-earth-route__point[data-journey-route][data-route-point-id][data-route-point-index]",
+      )].flatMap((marker) => {
+        if (marker.style.display === "none") return [];
+        const journeyId = marker.dataset.journeyRoute;
+        const routePointId = marker.dataset.routePointId;
+        const routePointIndex = Number(marker.dataset.routePointIndex);
+        if (!journeyId || !routePointId || !Number.isInteger(routePointIndex)) return [];
+        const target: JourneyPointPointerTarget = { journeyId, routePointId, routePointIndex };
+        if (!journeyRoutePointTargetEligible(
+          target,
+          latestActiveJourneyRouteId.current,
+          routePointActivationEnabled,
+          latestTemporalReveal.current,
+        )) return [];
+        const rect = marker.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return [];
+        return [{
+          target,
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        }];
+      });
+      return selectJourneyRoutePointScreenTarget(candidates, clientX, clientY);
+    };
     const homeBaseTargetFromPointer = (clientX: number, clientY: number): string | null => {
       if (!latestOnHomeBaseActivate.current || publishedHomeBasePresenceFrame.length === 0) return null;
       return selectHomeBasePointerTarget(
@@ -4092,7 +4242,14 @@ export function ParticleEarthScene({
           );
           return;
         }
-        const target = journeyTargetFromPreparedRay();
+        // Visual Route Point markers are CSS-pixel UI, so their pointer target
+        // must stay CSS-pixel-stable too. Prefer the same projected marker
+        // centres the user sees, with a 44px target, and keep the Three.js
+        // raycast as a fallback for route-level interaction. A world-space
+        // Points threshold changes apparent size with camera scale and made
+        // visible markers intermittently miss at the exact visual centre.
+        const target = journeyScreenTargetFromPointer(event.clientX, event.clientY)
+          ?? journeyTargetFromPreparedRay();
         if (target?.routePointId && latestOnJourneyRoutePointActivate.current) {
           const routePointTarget = { journeyId: target.journeyId, routePointId: target.routePointId };
           publishRoutePointActivationEvidence(event, routePointTarget, "marker");
@@ -4267,6 +4424,11 @@ export function ParticleEarthScene({
       source: "marker" | "label";
     };
     const routeLabelPointerTargets = new Map<number, RouteLayerPointerTarget>();
+    // Canvas Route Point taps bind the identity at pointer-down, just like SVG
+    // labels do. The projected globe can continue composing between down/up;
+    // recomputing identity only on pointer-up lets a valid visible marker move
+    // out of the hit radius before the same contact resolves.
+    const routeCanvasPointerTargets = new Map<number, RouteLayerPointerTarget>();
     const cityPickFromEventTarget = (target: EventTarget | null) => {
       if (!(target instanceof SVGTextElement) || !target.classList.contains("particle-earth-city")) return null;
       const entry = cityLabelPool.find((candidate) => candidate.element === target) ?? null;
@@ -4280,37 +4442,17 @@ export function ParticleEarthScene({
       return journeyId && routePointId ? { journeyId, routePointId } : null;
     };
     const routeLabelTargetFromPointer = (event: PointerEvent): RouteLayerPointerTarget | null => {
-      // A visible marker owns its own visual center even when a neighbouring
-      // 44px label hit box overlaps that pixel. Resolve that stable geographic
-      // identity first; otherwise the transparent label rectangle can steal a
-      // marker click and open a different Route Point context.
-      const markerCandidates = [...routeVectorLayer.querySelectorAll<SVGCircleElement>(
-        ".particle-earth-route__point[data-journey-route][data-route-point-id]",
-      )]
-        .filter((marker) => marker.style.display !== "none")
-        .map((marker) => {
-          const journeyId = marker.dataset.journeyRoute;
-          const routePointId = marker.dataset.routePointId;
-          if (!journeyId || !routePointId) return null;
-          const rect = marker.getBoundingClientRect();
-          if (
-            event.clientX < rect.left || event.clientX > rect.right
-            || event.clientY < rect.top || event.clientY > rect.bottom
-          ) return null;
-          const centerX = rect.left + rect.width / 2;
-          const centerY = rect.top + rect.height / 2;
-          return {
-            journeyId,
-            routePointId,
-            source: "marker" as const,
-            distance: Math.hypot(event.clientX - centerX, event.clientY - centerY),
-          };
-        })
-        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
-        .sort((left, right) => left.distance - right.distance);
-      if (markerCandidates[0]) {
-        const { journeyId, routePointId, source } = markerCandidates[0];
-        return { journeyId, routePointId, source };
+      // Marker and label interaction share the same 44px screen-space Route
+      // Point target. If a transparent label box overlaps that target, the
+      // geographic marker keeps ownership of the pointer just as it does when
+      // the event lands directly on the WebGL canvas.
+      const markerTarget = journeyScreenTargetFromPointer(event.clientX, event.clientY);
+      if (markerTarget?.routePointId) {
+        return {
+          journeyId: markerTarget.journeyId,
+          routePointId: markerTarget.routePointId,
+          source: "marker",
+        };
       }
 
       const candidates = [...routeVectorLayer.querySelectorAll<SVGGElement>(
@@ -4354,6 +4496,29 @@ export function ParticleEarthScene({
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      if (event.currentTarget === renderer.domElement) {
+        const routePointTarget = journeyScreenTargetFromPointer(event.clientX, event.clientY);
+        host.dataset.routePointPointerDownId = routePointTarget?.routePointId ?? "";
+        host.dataset.routePointPointerDownCallback = latestOnJourneyRoutePointActivate.current ? "true" : "false";
+        host.dataset.routePointPointerDownActiveRoute = latestActiveJourneyRouteId.current ?? "";
+        delete host.dataset.routePointPointerFinishWasGesture;
+        delete host.dataset.routePointPointerFinishAllowActivation;
+        delete host.dataset.routePointPointerUpId;
+        delete host.dataset.routePointPointerUpTracked;
+        delete host.dataset.routePointPointerUpPrimary;
+        delete host.dataset.routePointPointerUpCallback;
+        delete host.dataset.routePointPointerUpGlobePick;
+        delete host.dataset.routePointPointerLostCapture;
+        if (routePointTarget?.routePointId) {
+          routeCanvasPointerTargets.set(event.pointerId, {
+            journeyId: routePointTarget.journeyId,
+            routePointId: routePointTarget.routePointId,
+            source: "marker",
+          });
+        } else {
+          routeCanvasPointerTargets.delete(event.pointerId);
+        }
+      }
       if (
         !latestDragToRotate.current
         || (event.pointerType === "mouse" && event.button !== 0)
@@ -4367,7 +4532,6 @@ export function ParticleEarthScene({
       }
       rejectedPointerIds.delete(event.pointerId);
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-      claimManualInteraction();
       renderer.domElement.setPointerCapture?.(event.pointerId);
       if (activePointers.size === 1) {
         beginRotationFrom(
@@ -4376,6 +4540,11 @@ export function ParticleEarthScene({
           event.timeStamp,
         );
       } else if (activePointers.size === 2) {
+        // A second contact is the first unambiguous direct-manipulation signal.
+        // A single pointer-down may still be a Route Point/Home/city tap, so it
+        // must not cancel semantic camera ownership before pointer-up resolves
+        // that activation target.
+        claimManualInteraction();
         gestureConsumed = true;
         dragStarted = true;
         dragPointerId = null;
@@ -4423,6 +4592,11 @@ export function ParticleEarthScene({
       dragLastTime = event.timeStamp;
       dragTravel += Math.hypot(deltaX, deltaY);
       if (!dragStarted && isGlobeDrag(dragTravel)) {
+        // Claim manual camera ownership only after this contact is actually a
+        // drag. Claiming on pointer-down raced tap activation against the focus
+        // owner and could move/cancel the projected Route Point before the same
+        // pointer reached pointer-up.
+        claimManualInteraction();
         dragStarted = true;
         gestureConsumed = true;
         host.dataset.dragging = "true";
@@ -4474,6 +4648,8 @@ export function ParticleEarthScene({
     ) => {
       if (!activePointers.has(event.pointerId)) return;
       const wasGesture = gestureConsumed || dragStarted || activePointers.size > 1;
+      host.dataset.routePointPointerFinishWasGesture = wasGesture ? "true" : "false";
+      host.dataset.routePointPointerFinishAllowActivation = allowActivation ? "true" : "false";
       activePointers.delete(event.pointerId);
       if (renderer.domElement.hasPointerCapture?.(event.pointerId)) {
         renderer.domElement.releasePointerCapture?.(event.pointerId);
@@ -4516,9 +4692,18 @@ export function ParticleEarthScene({
       explicitRouteTarget: RouteLayerPointerTarget | null = null,
     ) => {
       const cityPick = explicitGlobePick ?? cityPointerPicks.get(event.pointerId) ?? null;
-      const routeTarget = explicitRouteTarget ?? routeLabelPointerTargets.get(event.pointerId) ?? null;
+      const routeTarget = explicitRouteTarget
+        ?? routeLabelPointerTargets.get(event.pointerId)
+        ?? routeCanvasPointerTargets.get(event.pointerId)
+        ?? null;
+      host.dataset.routePointPointerUpId = routeTarget?.routePointId ?? "";
+      host.dataset.routePointPointerUpTracked = activePointers.has(event.pointerId) ? "true" : "false";
+      host.dataset.routePointPointerUpPrimary = isPrimaryPointerActivation(event) ? "true" : "false";
+      host.dataset.routePointPointerUpCallback = latestOnJourneyRoutePointActivate.current ? "true" : "false";
+      host.dataset.routePointPointerUpGlobePick = latestOnGlobePointPick.current ? "true" : "false";
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
+      routeCanvasPointerTargets.delete(event.pointerId);
       if (activePointers.has(event.pointerId)) {
         finishPointer(event, isPrimaryPointerActivation(event), cityPick, routeTarget);
         return;
@@ -4537,17 +4722,23 @@ export function ParticleEarthScene({
     const onPointerCancel = (event: PointerEvent) => {
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
+      routeCanvasPointerTargets.delete(event.pointerId);
       if (rejectedPointerIds.delete(event.pointerId)) return;
       finishPointer(event, false);
     };
     const onRejectedPointerLifecycleEnd = (event: PointerEvent) => {
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
+      routeCanvasPointerTargets.delete(event.pointerId);
       rejectedPointerIds.delete(event.pointerId);
     };
     const onLostPointerCapture = (event: PointerEvent) => {
+      host.dataset.routePointPointerLostCapture = activePointers.has(event.pointerId)
+        ? "pending-contact"
+        : "after-contact";
       cityPointerPicks.delete(event.pointerId);
       routeLabelPointerTargets.delete(event.pointerId);
+      routeCanvasPointerTargets.delete(event.pointerId);
       rejectedPointerIds.delete(event.pointerId);
       if (!activePointers.has(event.pointerId)) return;
       activePointers.delete(event.pointerId);

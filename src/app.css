@@ -246,6 +246,8 @@ button {
   opacity: 0.98;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
+  stroke-dasharray: var(--journey-recorded-track-temporal-progress, 1) 1;
+  stroke-dashoffset: 0;
 }
 
 .particle-earth-route.is-style-quiet-core[data-temporal-reveal] .particle-earth-route__glow,

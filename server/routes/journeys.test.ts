@@ -137,4 +137,39 @@ describe("parseJourneyInput", () => {
     });
     expect(lineBreak?.routePoints[0].note).toBe("line one\nline two");
   });
+
+  it("parses optional stay-presentation corrections without guessing missing metadata (#514)", () => {
+    const parsed = parseJourneyInput({
+      ...validJourney,
+      routePoints: [{
+        ...validJourney.routePoints[0],
+        regionContext: "  成都  ",
+        placeRole: "accommodation",
+        overviewVisibility: "detail",
+      }],
+    });
+    expect(parsed?.routePoints[0]).toMatchObject({
+      regionContext: "成都",
+      placeRole: "accommodation",
+      overviewVisibility: "detail",
+    });
+
+    const legacy = parseJourneyInput(validJourney)?.routePoints[0];
+    expect(legacy?.regionContext).toBeUndefined();
+    expect(legacy?.placeRole).toBeUndefined();
+    expect(legacy?.overviewVisibility).toBeUndefined();
+
+    expect(parseJourneyInput({
+      ...validJourney,
+      routePoints: [{ ...validJourney.routePoints[0], regionContext: "x".repeat(121) }],
+    })).toBeNull();
+    expect(parseJourneyInput({
+      ...validJourney,
+      routePoints: [{ ...validJourney.routePoints[0], placeRole: "hotel-by-name" }],
+    })).toBeNull();
+    expect(parseJourneyInput({
+      ...validJourney,
+      routePoints: [{ ...validJourney.routePoints[0], overviewVisibility: "hidden" }],
+    })).toBeNull();
+  });
 });

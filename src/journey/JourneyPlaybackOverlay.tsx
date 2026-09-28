@@ -43,6 +43,8 @@ import {
   playbackMediaForStep,
   playbackHoldTargetMedia,
   playbackStepIdentity,
+  playbackFactualRouteText,
+  isPlaybackTransitRoutePoint,
   routePointChapterDensity,
   type CommittedPlaybackPosition,
   type PlaybackCameraTarget,
@@ -86,7 +88,7 @@ import {
   writeAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
-import type { Journey, JourneyMediaAsset } from "./types";
+import type { Journey, JourneyMediaAsset, JourneyRoute } from "./types";
 import type { PlaybackReturnReason } from "./playbackReturn";
 
 const VIDEO_STALL_WATCHDOG_MS = 4_000;
@@ -147,8 +149,10 @@ export function JourneyPlaybackOverlay({
   quickRecapSourceJourney,
   statusMessage,
   homeNarrativeContext,
+  playbackRoute,
 }: {
   journey: Journey | null;
+  playbackRoute?: Pick<JourneyRoute, "points" | "segmentProvenance"> | null;
   onClose: (handoff: { reason: PlaybackReturnReason; position: CommittedPlaybackPosition | null }) => void;
   onCameraTargetChange: (target: PlaybackCameraTarget, explicitlySelected: boolean) => void;
   cameraFollowing?: boolean;
@@ -1240,20 +1244,38 @@ export function JourneyPlaybackOverlay({
     : step?.kind === "travel"
       ? journey.routePoints[step.to]
       : null;
+  const factualTravelClaim = step?.kind === "travel" && activePoint
+    ? playbackFactualRouteText(
+      playbackRoute,
+      step.to,
+      `实际路线到 ${activePoint.label || `途径点 ${step.to + 1}`}`,
+    )
+    : null;
   // #456: one Route Point is one chapter. The arrival caption and the chapter's
   // media live in the SAME container across the stop -> media seam, so entering
   // the memory reflows one surface instead of swapping two full-screen ones.
   // Density decides what that container may hold: an `empty` chapter is the
   // place itself and gets no media region at all.
-  const chapterPointIndex = step?.kind === "stop" || step?.kind === "media"
+  const playbackPointIndex = step?.kind === "stop" || step?.kind === "media"
     ? step.pointIndex
     : null;
+  // #514: media recorded on a pure-transit Route Point remains playable at
+  // that canonical route position, but it must not manufacture an arrival,
+  // stay, STOP caption or independent chapter around the asset.
+  const transitPoint = playbackPointIndex === null
+    ? null
+    : journey.routePoints[playbackPointIndex];
+  const transitMediaOnly = step?.kind === "media"
+    && transitPoint !== undefined
+    && transitPoint !== null
+    && isPlaybackTransitRoutePoint(transitPoint);
+  const chapterPointIndex = transitMediaOnly ? null : playbackPointIndex;
   const chapterDensity = chapterPointIndex === null
     ? null
     : routePointChapterDensity(journey, chapterPointIndex);
-  const chapterMedia = chapterPointIndex === null
+  const chapterMedia = playbackPointIndex === null
     ? []
-    : playbackMediaForPoint(journey, chapterPointIndex);
+    : playbackMediaForPoint(journey, playbackPointIndex);
   const sequencePresentation = playbackSequenceChapterPresentation(journey, step);
   const sequencePeeks = sequencePresentation
     ? sequencePresentation.peekMediaIndexes.flatMap((mediaIndex) => {
@@ -1333,6 +1355,7 @@ export function JourneyPlaybackOverlay({
       // #456: the sparse chapter density of the Route Point on screen, so the
       // continuity lane grades 0 / 1 / 3 media directly instead of counting DOM.
       data-playback-chapter-density={chapterDensity ?? "none"}
+      data-playback-transit-media={transitMediaOnly ? "true" : "false"}
       data-playback-map-bridge={mapBridge.boundary?.direction ?? "none"}
       data-playback-map-bridge-point={mapBridge.boundary?.pointIndex}
     >
@@ -1371,33 +1394,44 @@ export function JourneyPlaybackOverlay({
             </div>
             <p>正在前往</p>
             <h3>{activePoint.label || `途径点 ${step?.kind === "travel" ? step.to + 1 : (chapterPointIndex ?? 0) + 1}`}</h3>
-            <div className="journey-playback__route-hint" aria-hidden="true">
+            <div
+              className="journey-playback__route-hint"
+              aria-hidden={factualTravelClaim ? undefined : true}
+              aria-label={factualTravelClaim ?? undefined}
+            >
               <span />
             </div>
           </div>
         ) : null}
 
-        {chapterPointIndex !== null && activePoint && !arrivalPresentationPending ? (
+        {playbackPointIndex !== null && activePoint && !arrivalPresentationPending ? (
           <div
-            className={`journey-playback__chapter journey-playback__chapter--${chapterDensity}`}
-            data-chapter-beat={step?.kind}
-            data-chapter-point={chapterPointIndex}
+            className={transitMediaOnly
+              ? "journey-playback__transit-media"
+              : `journey-playback__chapter journey-playback__chapter--${chapterDensity}`}
+            data-chapter-beat={transitMediaOnly ? undefined : step?.kind}
+            data-chapter-point={chapterPointIndex ?? undefined}
+            data-transit-media-point={transitMediaOnly ? playbackPointIndex : undefined}
           >
-            {/* The arrival caption is the chapter's own heading: it opens the
-                chapter and STAYS while its media plays, so a populated chapter
-                never reads as arrival-then-a-separate-screen. */}
-            <div className={`journey-playback__stop${step?.kind === "media" ? " is-receded" : ""}`}>
-              <div className="journey-playback__stop-cue" aria-hidden="true">
-                <StartripsJourneyCue state="arrived" size={52} />
+            {transitMediaOnly ? null : (
+              /* The arrival caption is the chapter's own heading: it opens the
+                 chapter and STAYS while its media plays, so a populated chapter
+                 never reads as arrival-then-a-separate-screen. */
+              <div className={`journey-playback__stop${step?.kind === "media" ? " is-receded" : ""}`}>
+                <div className="journey-playback__stop-cue" aria-hidden="true">
+                  <StartripsJourneyCue state="arrived" size={52} />
+                </div>
+                <p>STOP {(chapterPointIndex ?? 0) + 1}</p>
+                <h3>{activePoint.label || `途径点 ${(chapterPointIndex ?? 0) + 1}`}</h3>
+                {activePoint.note ? (
+                  <blockquote>{activePoint.note}</blockquote>
+                ) : null}
               </div>
-              <p>STOP {chapterPointIndex + 1}</p>
-              <h3>{activePoint.label || `途径点 ${chapterPointIndex + 1}`}</h3>
-              {activePoint.note ? (
-                <blockquote>{activePoint.note}</blockquote>
-              ) : null}
-            </div>
+            )}
 
-            {/* `empty` renders no media region at all — the place IS the memory. */}
+            {/* `empty` renders no media region at all — the place IS the memory.
+                Pure-transit media has no chapter density, so its asset renders
+                directly without an arrival caption. */}
             {chapterDensity === "empty" ? null : (
               <div className="journey-playback__chapter-media">
                 {/* The arrival already waits for this asset to decode, so the

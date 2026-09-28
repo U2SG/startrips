@@ -8,8 +8,12 @@
 // machine pure makes the chapter order and pause/resume behavior unit-testable.
 
 import type { HomeNarrativeContext, HomeNarrativeCameraTarget } from "./homeBasePrelude";
-import { isVisualMediaAsset } from "./journeyModel";
-import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
+import {
+  factualRouteText,
+  isVisualMediaAsset,
+  resolveJourneyRouteSegmentProvenance,
+} from "./journeyModel";
+import type { Journey, JourneyMediaAsset, JourneyRoute, RoutePoint } from "./types";
 
 export type JourneyPlaybackPhase =
   | { type: "home-prelude"; homeBaseId: string }
@@ -34,6 +38,18 @@ export function routePointAngularDistance(
   const a = Math.sin(dLat / 2) ** 2
     + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+export function playbackFactualRouteText(
+  route: Pick<JourneyRoute, "points" | "segmentProvenance"> | null | undefined,
+  toPointIndex: number,
+  text: string,
+): string | null {
+  if (!route || toPointIndex <= 0 || toPointIndex >= route.points.length) return null;
+  return factualRouteText(
+    resolveJourneyRouteSegmentProvenance(route, toPointIndex - 1),
+    text,
+  );
 }
 
 export type PlaybackMediaAvailability = "waiting" | "ready" | "error";
@@ -63,7 +79,7 @@ function orderedMediaForOwner(
 }
 
 /** Build once per projection, sorting only the owners it consumes. */
-export function playbackMediaByOwner(
+function playbackMediaByOwner(
   journey: Journey,
   ownerIds: readonly (string | null)[],
 ): Map<string | null, JourneyMediaAsset[]> {
@@ -116,6 +132,16 @@ export function storyMediaForScope(
   if (routePointId === null) return playbackStoryMedia(journey);
   const pointIndex = journey.routePoints.findIndex((point) => point.id === routePointId);
   return pointIndex >= 0 ? playbackMediaForPoint(journey, pointIndex) : [];
+}
+
+export function isPlaybackTransitRoutePoint(
+  point: Pick<RoutePoint, "isStop" | "placeRole">,
+): boolean {
+  // isStop is the canonical route-role bit carried by historical Journey
+  // records. Newer placeRole metadata can make the same intent explicit, but
+  // playback must not require a migration before an old non-stop point stops
+  // behaving like an arrival.
+  return point.isStop === false || point.placeRole === "pure-transit";
 }
 
 export type PlaybackStep =
@@ -224,29 +250,36 @@ export function playbackCameraTargetKey(target: PlaybackCameraTarget) {
 }
 
 /**
- * Expand a journey into the ordered playback steps. Every Route Point remains
- * part of the travel path, but only an explicit Stop owns an arrival/dwell
- * beat. Media already attached to a historical non-stop point still plays:
- * route shaping must not manufacture a stop, and it must not erase memory.
+ * Expand a journey into the ordered playback steps: intro -> for each point
+ * (travel + stop + its media) -> outro. Points with no media and no note
+ * still get a stop step (a quiet beat), so the route always reads as one
+ * continuous narrative.
  */
 export function buildPlaybackSteps(
   journey: Journey,
   homeContext?: HomeNarrativeContext | null,
 ): PlaybackStep[] {
-  const byOwner = playbackMediaByOwner(
-    journey,
-    journey.routePoints.map((point) => point.id),
-  );
+  const byOwner = playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
   const steps: PlaybackStep[] = [];
   if (homeContext?.prelude.eligible) {
     steps.push({ kind: "home-prelude", cameraTarget: homeContext.prelude.cameraTarget });
   }
   steps.push({ kind: "intro" });
   for (let pointIndex = 0; pointIndex < journey.routePoints.length; pointIndex += 1) {
-    const point = journey.routePoints[pointIndex];
+    const routePoint = journey.routePoints[pointIndex];
+    const media = byOwner.get(routePoint.id) ?? [];
     if (pointIndex > 0) steps.push({ kind: "travel", to: pointIndex });
-    const media = byOwner.get(point.id) ?? [];
-    if (point.isStop) steps.push({ kind: "stop", pointIndex, media });
+    // #514: pure transit shapes the canonical route but is not an arrival.
+    // Existing note/media remain addressable, and Full Playback still presents
+    // every historical media asset at this canonical route position. Those media
+    // are content beats only: the pass-through never gains an arrival/stay step.
+    if (isPlaybackTransitRoutePoint(routePoint)) {
+      for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
+        steps.push({ kind: "media", pointIndex, mediaIndex });
+      }
+      continue;
+    }
+    steps.push({ kind: "stop", pointIndex, media });
     for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
       steps.push({ kind: "media", pointIndex, mediaIndex });
     }
