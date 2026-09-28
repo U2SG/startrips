@@ -702,19 +702,19 @@ async function routeMarkerClickState(page, pointId, target) {
 
 async function clickRoutePointLabel(page, routeId, pointId) {
   const label = page.locator(`.particle-earth-route__label[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
-  await label.waitFor({ state: "visible", timeout: 5_000 });
-  const hitTarget = label.locator(".particle-earth-route__label-hit");
-  const box = await hitTarget.boundingBox();
-  if (!box) throw new Error(`Route Point ${pointId} has no visible label hit geometry`);
   // A label's 44px touch target may legitimately overlap a neighbouring 6px
   // Route Point marker. The visible marker owns its own pixels; grade the label
   // through a real browser-hit pixel that belongs to this label and is not
   // physically occupied by any marker. If no such pixel exists, the product
   // label is effectively unclickable and this still fails closed.
-  const target = await label.evaluate((node) => {
+  // Label arbitration may change which candidate is visible between browser
+  // calls. Read this candidate's box and its real hit pixel in one frame.
+  const geometry = await label.evaluate((node) => {
     const hit = node.querySelector(".particle-earth-route__label-hit");
     if (!(hit instanceof SVGGraphicsElement)) return null;
     const rect = hit.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const box = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
     const markerRects = [...document.querySelectorAll(".particle-earth-route__point")]
       .filter((marker) => marker instanceof SVGGraphicsElement && marker.style.display !== "none")
       .map((marker) => marker.getBoundingClientRect());
@@ -725,12 +725,13 @@ async function clickRoutePointLabel(page, routeId, pointId) {
           y - (marker.top + marker.height / 2),
         ) <= 22)) continue;
         const hitElement = document.elementFromPoint(x, y);
-        if (hitElement?.closest(".particle-earth-route__label") === node) return { x, y };
+        if (hitElement?.closest(".particle-earth-route__label") === node) return { box, target: { x, y } };
       }
     }
     return null;
   });
-  if (!target) throw new Error(`Route Point ${pointId} has no unambiguous label-owned hit pixel`);
+  if (!geometry) throw new Error(`Route Point ${pointId} has no unambiguous label-owned hit pixel`);
+  const { box, target } = geometry;
   await page.mouse.click(target.x, target.y);
   return { box, target };
 }
@@ -1058,8 +1059,8 @@ try {
   await visibleLabels.first().waitFor({ state: "visible", timeout: 5_000 });
   let labelPointId = null;
   let labelClick = null;
-  for (let index = 0; index < await visibleLabels.count(); index += 1) {
-    const candidatePointId = await visibleLabels.nth(index).getAttribute("data-route-point-id");
+  const labelCandidateIds = await visibleLabels.evaluateAll((labels) => labels.map((label) => label.getAttribute("data-route-point-id")));
+  for (const candidatePointId of labelCandidateIds) {
     if (!candidatePointId) continue;
     try {
       labelClick = await clickRoutePointLabel(labelPage, journeyId, candidatePointId);
