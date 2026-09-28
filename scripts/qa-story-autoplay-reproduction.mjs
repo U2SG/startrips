@@ -305,15 +305,22 @@ try {
         await settled(ids[index]);
         record.steps.push({ index, id: ids[index] });
       }
-      const observations = await page.evaluate(() => { window.__qaR3.stop(); return {
-        frames: window.__qaR3.frames, writes: window.__qaR3.writes, ticks: window.__qaR3.ticks, input: window.__qaR3.input }; });
+      let capture;
       if (paintCapture) {
-        const capture = await paintCapture.stop();
+        const settledAt = await page.evaluate((expected) => window.__qaR3.frames.find((frame) =>
+          frame.presentation === "settled" && frame.current === expected && frame.points[0]?.actual === expected)?.at ?? null, ids[6]);
+        record.paintEnd = { settledAt, frameAt: await paintCapture.waitForFrame(settledAt) };
+        capture = await paintCapture.stop();
         paintCapture = null;
+      }
+      const observations = await page.evaluate(() => { window.__qaR3.stop(); return {
+        endedAt: performance.now(), frames: window.__qaR3.frames, writes: window.__qaR3.writes,
+        ticks: window.__qaR3.ticks, input: window.__qaR3.input }; });
+      if (capture) {
         // End the observed timer run through its real control before decoding
         // captures; analysis must not delay a later autoplay step or its network.
         await activate(page.locator('.journey-story__media-nav button[aria-pressed="true"]'));
-        record.paint = await gradePaint(page, capture, observations.frames, ids, `${directory}/${profile.name}-paint`);
+        record.paint = await gradePaint(page, capture, observations, ids, `${directory}/${profile.name}-paint`);
       }
       await writeFile(`${directory}/${profile.name}-trace.json`, JSON.stringify({ ...record, ...observations, reads: routes.reads, bytes: routes.bytes }, null, 2));
       record.observations = grade(observations.frames);
