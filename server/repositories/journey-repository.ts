@@ -247,10 +247,15 @@ export async function updateJourneyForAtlas(
     }
 
     const existingPoints = await transaction
-      .select({ id: journeyRoutePoints.id })
+      .select({
+        id: journeyRoutePoints.id,
+        isStop: journeyRoutePoints.isStop,
+        stayAnchorRoutePointId: journeyRoutePoints.stayAnchorRoutePointId,
+      })
       .from(journeyRoutePoints)
       .where(eq(journeyRoutePoints.journeyId, journey.id));
     const existingIds = new Set(existingPoints.map((point) => point.id));
+    const existingPointById = new Map(existingPoints.map((point) => [point.id, point] as const));
     const retainedIds = values.routePoints.flatMap((point) => point.id ? [point.id] : []);
     // #514/ST-164: assigning a not-yet-saved Stop requires giving it a stable
     // client UUID before the PATCH, otherwise a child cannot persist an exact
@@ -265,6 +270,52 @@ export async function updateJourneyForAtlas(
         .from(journeyRoutePoints)
         .where(inArray(journeyRoutePoints.id, newProvidedIds));
       if (collidingPoints.length > 0) throw new JourneyRouteChangedError();
+    }
+
+    // Older/partial clients legitimately omit the optional ownership field. In
+    // that case the repository preserves the stored exact Stop id, so validate
+    // the effective post-PATCH relation before deleting/demoting/reordering any
+    // target. Otherwise an old client could leave a child pointing at a removed
+    // or non-Stop Route Point even though parseJourneyInput never saw the field.
+    const effectiveRoutePoints = values.routePoints.map((point) => ({
+      id: point.id ?? null,
+      isStop: point.isStop,
+      stayAnchorRoutePointId: point.stayAnchorRoutePointId !== undefined
+        ? point.stayAnchorRoutePointId
+        : point.id
+          ? existingPointById.get(point.id)?.stayAnchorRoutePointId ?? null
+          : null,
+    }));
+    const effectiveIndexById = new Map(effectiveRoutePoints.flatMap((point, index) =>
+      point.id ? [[point.id, index] as const] : []));
+    for (let index = 0; index < effectiveRoutePoints.length; index += 1) {
+      const point = effectiveRoutePoints[index];
+      const anchorId = point.stayAnchorRoutePointId;
+      if (!anchorId) continue;
+      if (point.isStop) throw new JourneyRouteChangedError();
+      const anchorIndex = effectiveIndexById.get(anchorId);
+      if (anchorIndex === undefined || !effectiveRoutePoints[anchorIndex]?.isStop) {
+        throw new JourneyRouteChangedError();
+      }
+      let previousStopId: string | null = null;
+      for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+        const candidate = effectiveRoutePoints[cursor];
+        if (candidate.isStop) {
+          previousStopId = candidate.id;
+          break;
+        }
+      }
+      let nextStopId: string | null = null;
+      for (let cursor = index + 1; cursor < effectiveRoutePoints.length; cursor += 1) {
+        const candidate = effectiveRoutePoints[cursor];
+        if (candidate.isStop) {
+          nextStopId = candidate.id;
+          break;
+        }
+      }
+      if (anchorId !== previousStopId && anchorId !== nextStopId) {
+        throw new JourneyRouteChangedError();
+      }
     }
 
     await transaction

@@ -1711,6 +1711,60 @@ describe("tenant-scoped journey repository", () => {
     expect(updated?.routePoints[1].stayAnchorRoutePointId).toBe(newStopId);
   });
 
+  it("rejects stale persisted Stop ownership when an older PATCH omits the field (#514)", async () => {
+    const created = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Owned route legacy patch",
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+    const targetId = created.routePoints[0].id;
+    const anchored = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Owned route legacy patch",
+      revision: created.revision,
+      routePoints: created.routePoints.map(({ id, latitude, longitude, label, isStop, occurredAt }, index) => ({
+        id,
+        latitude,
+        longitude,
+        label,
+        isStop,
+        occurredAt,
+        stayAnchorRoutePointId: index === 1 ? targetId : null,
+      })),
+    });
+    if (!anchored) throw new Error("Anchored Journey fixture was not updated");
+    expect(anchored.routePoints[1].stayAnchorRoutePointId).toBe(targetId);
+
+    const omitOwnership = ({ id, latitude, longitude, label, isStop, occurredAt }: typeof anchored.routePoints[number]) => ({
+      id,
+      latitude,
+      longitude,
+      label,
+      isStop,
+      occurredAt,
+    });
+    await expect(updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Legacy demotion must conflict",
+      revision: anchored.revision,
+      routePoints: anchored.routePoints.map((point, index) => ({
+        ...omitOwnership(point),
+        isStop: index === 0 ? false : point.isStop,
+      })),
+    })).rejects.toBeInstanceOf(JourneyRouteChangedError);
+
+    await expect(updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Legacy deletion must conflict",
+      revision: anchored.revision,
+      routePoints: [omitOwnership(anchored.routePoints[1])],
+    })).rejects.toBeInstanceOf(JourneyRouteChangedError);
+
+    const [afterRejectedWrites] = await getJourneysForAtlas([created.id], atlasA);
+    expect(afterRejectedWrites?.routePoints[0].isStop).toBe(true);
+    expect(afterRejectedWrites?.routePoints[1].stayAnchorRoutePointId).toBe(targetId);
+  });
+
   it("preserves route-point notes across edits and clears them explicitly (#10)", async () => {
     const created = await createJourneyForAtlas(atlasA, "user-a", {
       ...baseJourney,
