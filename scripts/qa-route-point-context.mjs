@@ -1499,8 +1499,10 @@ try {
   const projectionPlayback = projectionPage.locator('.journey-playback[data-playback-mode="full"]');
   await projectionPlayback.waitFor({ state: "visible", timeout: 5_000 });
   const projectedFullSteps = Number(await projectionPlayback.getAttribute("data-playback-steps"));
+  const expectedProjectionChapters = projectionRoutePoints.filter((point) => point.isStop
+    || projectionJourney.media.some((asset) => asset.routePointId === point.id));
   const expectedProjectionPlaybackSteps = 2
-    + (projectionRoutePoints.length - 1)
+    + (expectedProjectionChapters.length - 1)
     + projectionRoutePoints.filter((point) => point.isStop).length
     + projectionJourney.media.length;
   record("Full Playback keeps route travel and owned media without promoting non-stops to arrivals", {
@@ -1522,7 +1524,7 @@ try {
   await projectionPage.waitForFunction((bId) => {
     const playback = document.querySelector(".journey-playback");
     const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${bId}"]`);
-    return playback?.getAttribute("data-playback-step") === "4"
+    return playback?.getAttribute("data-playback-step") === "3"
       && playback.getAttribute("data-playback-phase") === "stop"
       && document.querySelector('.journey-playback__chapter[data-chapter-point="2"]')
       && marker?.getAttribute("data-attention-role") === "narrative-current"
@@ -1537,7 +1539,7 @@ try {
   }));
   record("Full Playback keeps the actual stop B as the displayed chapter, camera and marker", {
     bSeekTarget, playbackBState,
-  }, playbackBState.step === "4"
+  }, playbackBState.step === "3"
     && playbackBState.chapter === "2"
     && playbackBState.camera === "36.1699,-115.1398"
     && playbackBState.contextCount === 0);
@@ -1560,7 +1562,7 @@ try {
     const playback = document.querySelector(".journey-playback");
     const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${bId}"]`);
     return playback?.getAttribute("data-camera-follow") === "free"
-      && playback.getAttribute("data-playback-step") === "4"
+      && playback.getAttribute("data-playback-step") === "3"
       && playback.getAttribute("data-map-interactive") === "true"
       && marker?.getAttribute("data-attention-role") === "narrative-current"
       && marker.getBoundingClientRect().width > 0;
@@ -1574,11 +1576,12 @@ try {
   await projectionPage.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
   await projectionPage.waitForFunction((ids) => {
     const playback = document.querySelector(".journey-playback");
-    const note = document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.note}"]`);
+    const media = document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.media}"]`);
     return playback?.getAttribute("data-camera-follow") === "free"
-      && playback.getAttribute("data-playback-step") === "5"
+      && playback.getAttribute("data-playback-step") === "4"
       && playback.getAttribute("data-playback-phase") === "travel"
-      && note?.getAttribute("data-attention-role") === "narrative-current"
+      && media?.getAttribute("data-attention-role") === "narrative-current"
+      && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.note}"]`)
       && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
       && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "4";
   }, projectionPointIds);

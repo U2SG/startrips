@@ -63,6 +63,28 @@ const journey: Journey = {
 };
 
 describe("Journey keepsake render manifest (#87)", () => {
+  it("exports folded stay media without losing its owner or any canonical shaping point (#342)", () => {
+    const trip: Journey = { ...journey, routePoints: [
+      { ...point("p0", 0, 0), latitude: 0, regionContext: "A" },
+      { ...point("p1", 1, 2), latitude: 2, isStop: false },
+      { ...point("p2", 2, 0.1), latitude: 0.1, isStop: false, regionContext: "A" },
+      { ...point("p3", 3, 1), latitude: 1, isStop: false },
+      { ...point("p4", 4, 3), latitude: 2, regionContext: "B" },
+      { ...point("p5", 5, 4), latitude: 3, isStop: false },
+    ], media: [media("child-photo", "p2", "image/jpeg", 0), media("via-photo", "p3", "image/jpeg", 1)] };
+    const before = structuredClone(trip);
+    const manifest = buildKeepsakeRenderManifest(trip, 30);
+    expect(manifest.scenes.filter((scene) => scene.kind === "media").map((scene) => [scene.mediaAssetId, scene.routePointId, scene.pointIndex]))
+      .toEqual([["child-photo", "p2", 0], ["via-photo", "p3", 3]]);
+    expect(manifest.scenes.filter((scene) => scene.kind === "map" && scene.role === "arrival").map((scene) => scene.routePointId))
+      .toEqual(["p0", "p4"]);
+    expect(manifest.scenes.find((scene) => scene.kind === "map" && scene.role === "travel"))
+      .toMatchObject({ fromRoutePointId: "p0", toRoutePointId: "p3", pointIndex: 3 });
+    expect(manifest.narrativeSnapshot.routePointIds).toEqual(trip.routePoints.map((point) => point.id));
+    expect(() => assertKeepsakeManifestRevision(manifest, trip)).not.toThrow();
+    expect(trip).toEqual(before);
+  });
+
   it("uses the same route-point and media ordering as live Journey Playback", () => {
     const manifest = buildKeepsakeRenderManifest(journey, 30);
     const liveSteps = buildPlaybackSteps(journey);
