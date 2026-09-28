@@ -2,6 +2,7 @@ import {
   buildPlaybackSteps,
   playbackCameraTargetForStep,
   playbackIntroMedia,
+  playbackMediaForPoint,
   playbackStoryMedia,
   routePointAngularDistance,
   type PlaybackStep,
@@ -265,10 +266,12 @@ export function buildKeepsakeRenderManifest(
         : KEEPSAKE_MIN_DURATION_MS.image,
     };
   });
-  let currentChapterMedia: readonly JourneyMediaAsset[] = [];
   const drafts = playbackSteps.flatMap((step, stepIndex) => {
-    if (step.kind === "stop") currentChapterMedia = step.media;
-    const asset = step.kind === "media" ? currentChapterMedia[step.mediaIndex] : undefined;
+    // Pure-transit media has no Stop beat by design. Resolve it from the Route
+    // Point encoded on the media step rather than inheriting a prior chapter.
+    const asset = step.kind === "media"
+      ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
+      : undefined;
     const scenes = sceneForStep(journey, step, asset);
     return stepIndex === 0 ? [...scenes, ...introMediaDrafts] : scenes;
   });

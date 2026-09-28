@@ -177,6 +177,50 @@ function recordedTrackGeometryRevision(
   return (hash >>> 0).toString(36);
 }
 
+function temporallyVisibleRecordedTrackSegments(
+  route: JourneyRoute,
+  temporalReveal: RouteTemporalReveal,
+): NonNullable<JourneyRoute["recordedTrackSegments"]> {
+  const segments = route.recordedTrackSegments ?? [];
+  if (!temporalReveal) return segments;
+
+  const journeyProgress = temporalReveal.journeys.get(route.id);
+  if (journeyProgress !== undefined && !(journeyProgress > 0)) return [];
+
+  // Route legs already use their destination Route Point's temporal progress.
+  // Derive the recorded-track reveal from that same projection so a Journey
+  // whose group is visible (journeyProgress=1) cannot leak future recorded
+  // geometry while later Route Points are still hidden.
+  let progress = journeyProgress === undefined ? 1 : Math.max(0, Math.min(1, journeyProgress));
+  if (route.points.length > 1) {
+    let hasPointReveal = false;
+    let revealedLegs = 0;
+    for (let pointIndex = 1; pointIndex < route.points.length; pointIndex += 1) {
+      const pointProgress = temporalReveal.points.get(`${route.id}:${pointIndex}`);
+      if (pointProgress !== undefined) hasPointReveal = true;
+      const legProgress = pointProgress === undefined
+        ? progress
+        : Math.max(0, Math.min(1, pointProgress));
+      revealedLegs += legProgress;
+    }
+    if (hasPointReveal) progress = revealedLegs / (route.points.length - 1);
+  }
+  if (progress >= 1) return segments;
+  if (!(progress > 0)) return [];
+
+  // Preserve server segment boundaries: reveal samples in canonical order, but
+  // never bridge a gap merely to draw a partial track.
+  const totalPoints = segments.reduce((total, segment) => total + segment.points.length, 0);
+  let remaining = Math.max(1, Math.ceil(totalPoints * progress));
+  return segments.flatMap((segment) => {
+    if (remaining <= 0) return [];
+    const count = Math.min(segment.points.length, remaining);
+    remaining -= count;
+    if (count < 2) return [];
+    return [{ ...segment, points: segment.points.slice(0, count) }];
+  });
+}
+
 function normalizeLongitude(longitude: number) {
   return ((((longitude + 180) % 360) + 360) % 360) - 180;
 }
@@ -309,6 +353,7 @@ export function buildDetailedEarthJourneyOverlay({
   });
   const features: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>["features"] = [];
   const recordedTrackLods: DetailedEarthRecordedTrackLod[] = [];
+  const visibleRecordedTrackSegments = temporallyVisibleRecordedTrackSegments(route, temporalReveal);
 
   for (const record of records) {
     if (!record.valid || !record.presentation.temporalVisible) continue;
@@ -374,7 +419,7 @@ export function buildDetailedEarthJourneyOverlay({
     });
   }
 
-  for (const segment of route.recordedTrackSegments ?? []) {
+  for (const segment of visibleRecordedTrackSegments) {
     const validPoints = segment.points.filter((point) => (
       Number.isFinite(point.lat) && Number.isFinite(point.lon)
     ));
@@ -406,7 +451,7 @@ export function buildDetailedEarthJourneyOverlay({
     segmentProvenance: Array.from({ length: Math.max(0, route.points.length - 1) }, (_, index) => (
       resolveJourneyRouteSegmentProvenance(route, index)
     )),
-    recordedTrackSegments: (route.recordedTrackSegments ?? []).map((segment) => ({
+    recordedTrackSegments: visibleRecordedTrackSegments.map((segment) => ({
       id: segment.id,
       pointCount: segment.points.length,
       geometryRevision: recordedTrackGeometryRevision(segment.points),

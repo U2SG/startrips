@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyScopeReorder,
   attachRecordedTrackSegments,
+  currentRecordedTrackSnapshot,
   groupJourneysByYear,
   isSoundtrackAsset,
   isVisualMediaAsset,
@@ -135,6 +136,14 @@ describe("journeyModel", () => {
     expect(attachRecordedTrackSegments(draft, "journey-active", segments))
       .toEqual({ ...draft, recordedTrackSegments: segments });
     expect(attachRecordedTrackSegments(draft, "another-journey", segments)).toBe(draft);
+  });
+
+  it("rejects recorded-track snapshots from another Journey or revision", () => {
+    const snapshot = { journeyId: "journey-a", revision: 3, segments: [] };
+    expect(currentRecordedTrackSnapshot(snapshot, "journey-a", 3)).toBe(snapshot);
+    expect(currentRecordedTrackSnapshot(snapshot, "journey-b", 3)).toBeNull();
+    expect(currentRecordedTrackSnapshot(snapshot, "journey-a", 4)).toBeNull();
+    expect(currentRecordedTrackSnapshot(null, "journey-a", 3)).toBeNull();
   });
 
   it("precomputes recorded-track LOD and selects it by projected screen error", () => {

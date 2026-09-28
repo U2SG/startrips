@@ -210,11 +210,13 @@ export function buildPlaybackPlan(
 ): PlaybackPlan {
   const steps = buildPlaybackSteps(journey, homeContext);
   let cursorMs = 0;
-  let currentChapterMedia: readonly JourneyMediaAsset[] = [];
   const segments = steps.map((step, stepIndex) => {
-    // Every chapter's stop precedes its media and already owns the sorted list.
-    if (step.kind === "stop") currentChapterMedia = step.media;
-    const asset = step.kind === "media" ? currentChapterMedia[step.mediaIndex] : undefined;
+    // Media ownership is resolved from the step's Route Point directly. A
+    // pure-transit point intentionally has no preceding stop chapter, so any
+    // state carried from the previous Stop would misattribute its media.
+    const asset = step.kind === "media"
+      ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
+      : undefined;
     const durationMs = resolvePlaybackStepDurationWithFallback(
       journey,
       step,

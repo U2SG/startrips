@@ -100,7 +100,10 @@ describe("ParticleEarthScene contracts", () => {
     expect(pointCounts.every((count) => count >= 2)).toBe(true);
     expect(pointCounts.reduce((sum, count) => sum + count, 0))
       .toBeLessThanOrEqual(MAX_RENDERED_RECORDED_TRACK_POINTS);
-    expect(tracks.every((track) => track.levels.length === 4)).toBe(true);
+    expect(tracks.every((track) => track.levels.length >= 1)).toBe(true);
+    expect(tracks.every((track) => track.levels.every((level) => (
+      level.samples.lifts.length <= MAX_RENDERED_RECORDED_TRACK_POINTS
+    )))).toBe(true);
     const far = selectRecordedTrackOverviewLevel(tracks[0].levels, 1_000);
     const near = selectRecordedTrackOverviewLevel(tracks[0].levels, 100_000);
     expect(far?.maxAngularErrorRad).toBe(0.00025);
@@ -108,6 +111,20 @@ describe("ParticleEarthScene contracts", () => {
     expect((far?.samples.lifts.length ?? Infinity)).toBeLessThanOrEqual(
       MAX_RENDERED_RECORDED_TRACK_POINTS,
     );
+  });
+
+  it("keeps LOD error bounds truthful when a tight point budget needs extra simplification", () => {
+    const dense = Array.from({ length: 300 }, (_, index) => ({
+      lat: 20 + index * 0.001,
+      lon: 110 + index * 0.001 + Math.sin(index * 0.9) * 0.02,
+    }));
+    const [track] = buildRecordedTrackOverviewSamples([{ id: "tight", points: dense }], 8);
+    expect(track.levels.length).toBeGreaterThan(0);
+    expect(track.levels.every((level) => level.samples.lifts.length <= 8)).toBe(true);
+    // The unsimplified level has zero error. It cannot survive this budget by
+    // truncation while still advertising that bound.
+    expect(track.levels.every((level) => level.maxAngularErrorRad > 0)).toBe(true);
+    expect(track.samples.lifts.length).toBeLessThanOrEqual(8);
   });
 
   it("keeps all five provenance tiers visible in the particle route treatment", () => {

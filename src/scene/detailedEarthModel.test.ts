@@ -210,6 +210,55 @@ describe("detailed-earth Journey overlay", () => {
     ]);
   });
 
+  it("applies Route Point temporal reveal to recorded-track geometry", () => {
+    const tracked: JourneyRoute = {
+      ...route,
+      recordedTrackSegments: [{
+        id: "timeline-track",
+        points: Array.from({ length: 8 }, (_, index) => ({
+          lat: 22.54 + index * 0.005,
+          lon: 114.05 + index * 0.01,
+        })),
+      }],
+    };
+    const partial = buildDetailedEarthJourneyOverlay({
+      route: tracked,
+      temporalReveal: {
+        journeys: new Map([[route.id, 1]]),
+        points: new Map([
+          [`${route.id}:0`, 1],
+          [`${route.id}:1`, 0.5],
+          [`${route.id}:2`, 0],
+        ]),
+      },
+    });
+    const full = buildDetailedEarthJourneyOverlay({ route: tracked });
+    const partialTrack = partial.data.features.find((feature) => (
+      feature.id === `${route.id}:recorded:timeline-track`
+    ));
+    const fullTrack = full.data.features.find((feature) => (
+      feature.id === `${route.id}:recorded:timeline-track`
+    ));
+    expect(partialTrack?.geometry.type).toBe("LineString");
+    expect(fullTrack?.geometry.type).toBe("LineString");
+    if (partialTrack?.geometry.type !== "LineString" || fullTrack?.geometry.type !== "LineString") {
+      throw new Error("expected recorded track lines");
+    }
+    expect(partialTrack.geometry.coordinates).toHaveLength(2);
+    expect(fullTrack.geometry.coordinates).toHaveLength(8);
+
+    const hidden = buildDetailedEarthJourneyOverlay({
+      route: tracked,
+      temporalReveal: {
+        journeys: new Map([[route.id, 0]]),
+        points: new Map(),
+      },
+    });
+    expect(hidden.data.features.some((feature) => (
+      feature.properties.provenance === "recorded-track"
+    ))).toBe(false);
+  });
+
   it("selects recorded-track detail by projected screen error without merging track gaps", () => {
     const dense = Array.from({ length: 5_000 }, (_, index) => ({
       lat: 22 + index * 0.000004 + Math.sin(index / 30) * 0.001,

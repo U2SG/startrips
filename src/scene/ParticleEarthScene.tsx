@@ -48,6 +48,7 @@ import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
 import {
   buildRecordedTrackLodLevels,
   resolveJourneyRouteSegmentProvenance,
+  simplifyRecordedTrackPoints,
   summarizeJourneyRouteProvenance,
 } from "../journey/journeyModel";
 import type { HomeBasePresenceDrawable, ProjectedHomeBasePresence } from "./homeBasePresenceLayer";
@@ -255,12 +256,10 @@ export type RecordedTrackOverview = {
 
 function recordedTrackArcSamples(
   points: readonly { lat: number; lon: number }[],
-  maxPoints: number,
 ): RouteArcSamples {
-  const bounded = uniformlyBoundRecordedPoints(points, maxPoints);
-  const directions = new Float32Array(bounded.length * 3);
-  const lifts = new Float32Array(bounded.length);
-  bounded.forEach((point, pointIndex) => {
+  const directions = new Float32Array(points.length * 3);
+  const lifts = new Float32Array(points.length);
+  points.forEach((point, pointIndex) => {
     const direction = latLonToVector3(point.lat, point.lon, 1);
     const offset = pointIndex * 3;
     directions[offset] = direction.x;
@@ -268,6 +267,28 @@ function recordedTrackArcSamples(
     directions[offset + 2] = direction.z;
   });
   return { directions, lifts };
+}
+
+function boundedRecordedTrackOverviewLevels(
+  points: readonly { lat: number; lon: number }[],
+  pointBudget: number,
+): RecordedTrackOverviewLevel[] {
+  const precomputed = buildRecordedTrackLodLevels(points);
+  let bounded = precomputed.filter((level) => level.points.length <= pointBudget);
+  if (bounded.length === 0) {
+    let maxAngularErrorRad = precomputed.at(-1)?.maxAngularErrorRad ?? 0.00025;
+    let simplified = precomputed.at(-1)?.points ?? points;
+    while (simplified.length > pointBudget && maxAngularErrorRad < Math.PI) {
+      maxAngularErrorRad = Math.min(Math.PI, Math.max(0.000001, maxAngularErrorRad * 2));
+      simplified = simplifyRecordedTrackPoints(points, maxAngularErrorRad);
+    }
+    bounded = [{ maxAngularErrorRad, points: simplified }];
+  }
+  return bounded.map((level) => ({
+    maxAngularErrorRad: level.maxAngularErrorRad,
+    sourcePointCount: level.points.length,
+    samples: recordedTrackArcSamples(level.points),
+  }));
 }
 
 export function selectRecordedTrackOverviewLevel(
@@ -307,12 +328,12 @@ export function buildRecordedTrackOverviewSamples(
   return chosenSegments.map((segment, index) => {
     const remainingSegments = chosenSegments.length - index;
     const pointBudget = Math.max(2, Math.floor(remainingPoints / remainingSegments));
-    const levels = buildRecordedTrackLodLevels(segment.points).map((level) => ({
-      maxAngularErrorRad: level.maxAngularErrorRad,
-      sourcePointCount: level.points.length,
-      samples: recordedTrackArcSamples(level.points, pointBudget),
-    }));
-    const samples = levels.at(-1)?.samples ?? recordedTrackArcSamples(segment.points, pointBudget);
+    // Do not truncate a selected LOD after declaring its screen-space error.
+    // Keep only levels that already fit this segment budget; if none fit,
+    // simplify with an explicit larger tolerance so the published error bound
+    // remains truthful even under the global point cap.
+    const levels = boundedRecordedTrackOverviewLevels(segment.points, pointBudget);
+    const samples = levels.at(-1)!.samples;
     remainingPoints -= pointBudget;
     return { id: segment.id, levels, samples };
   });

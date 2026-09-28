@@ -123,12 +123,14 @@ import {
 } from "./crossPointReading";
 import {
   attachRecordedTrackSegments,
+  currentRecordedTrackSnapshot,
   journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
   mergeJourney,
   sortJourneysChronologically,
   toJourneyRoutes,
+  type RecordedTrackSnapshot,
 } from "./journeyModel";
 import { getLightEffectGradient } from "./lightEffects";
 import "../styles/living-atlas-polish.css";
@@ -1083,9 +1085,7 @@ export function LivingAtlasApp({
   const shareClient = capabilities.canShareAtlas ? mutations : null;
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
-  const [recordedTrackSegments, setRecordedTrackSegments] = useState<
-    NonNullable<JourneyRoute["recordedTrackSegments"]>
-  >([]);
+  const [recordedTrackSnapshot, setRecordedTrackSnapshot] = useState<RecordedTrackSnapshot | null>(null);
   const [recordedTrackRevision, setRecordedTrackRevision] = useState(0);
   const journeysRef = useRef(journeys);
   journeysRef.current = journeys;
@@ -1977,23 +1977,34 @@ export function LivingAtlasApp({
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
   useEffect(() => {
-    setRecordedTrackSegments([]);
     if (!activeJourney) return undefined;
+    const requestedJourneyId = activeJourney.id;
+    const requestedRevision = recordedTrackRevision;
     const controller = new AbortController();
-    void readJourneyRecordedTrackGeometry(activeJourney.id, { signal: controller.signal })
+    void readJourneyRecordedTrackGeometry(requestedJourneyId, { signal: controller.signal })
       .then((operations) => {
         if (controller.signal.aborted) return;
-        setRecordedTrackSegments(operations.flatMap((operation) => (
-          operation.segments
-            .filter((segment) => segment.points.length >= 2)
-            .map((segment) => ({
-              id: `${operation.operationKey}:${segment.id}`,
-              points: segment.points,
-            }))
-        )));
+        setRecordedTrackSnapshot({
+          journeyId: requestedJourneyId,
+          revision: requestedRevision,
+          segments: operations.flatMap((operation) => (
+            operation.segments
+              .filter((segment) => segment.points.length >= 2)
+              .map((segment) => ({
+                id: `${operation.operationKey}:${segment.id}`,
+                points: segment.points,
+              }))
+          )),
+        });
       })
       .catch(() => {
-        if (!controller.signal.aborted) setRecordedTrackSegments([]);
+        if (!controller.signal.aborted) {
+          setRecordedTrackSnapshot({
+            journeyId: requestedJourneyId,
+            revision: requestedRevision,
+            segments: [],
+          });
+        }
       });
     return () => controller.abort();
   }, [activeJourney?.id, recordedTrackRevision]);
@@ -2033,20 +2044,27 @@ export function LivingAtlasApp({
 
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
   const effectiveDraftRoute = draftPlaybackOwnsSession ? draftPlaybackPreview!.route : draftRoute;
+  const activeRecordedTrackSnapshot = currentRecordedTrackSnapshot(
+    recordedTrackSnapshot,
+    activeJourney?.id,
+    recordedTrackRevision,
+  );
   const routes = useMemo(() => {
+    const trackOwnerId = activeRecordedTrackSnapshot?.journeyId;
+    const trackSegments = activeRecordedTrackSnapshot?.segments ?? [];
     const savedRoutes = toJourneyRoutes(journeys).map((route) => (
-      attachRecordedTrackSegments(route, activeJourney?.id, recordedTrackSegments)
+      attachRecordedTrackSegments(route, trackOwnerId, trackSegments)
     ));
     if (!effectiveDraftRoute) return savedRoutes;
     const draftRoute = attachRecordedTrackSegments(
       effectiveDraftRoute,
-      activeJourney?.id,
-      recordedTrackSegments,
+      trackOwnerId,
+      trackSegments,
     );
     return savedRoutes.some((route) => route.id === draftRoute.id)
       ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
       : [...savedRoutes, draftRoute];
-  }, [activeJourney?.id, effectiveDraftRoute, journeys, recordedTrackSegments]);
+  }, [activeRecordedTrackSnapshot, effectiveDraftRoute, journeys]);
   const focusPresentation = resolveMobilePlaybackPresentation(
     journeys,
     unknownCreateSemanticOwnership.selection,

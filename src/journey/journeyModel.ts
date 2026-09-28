@@ -95,6 +95,20 @@ export function summarizeJourneyRouteProvenance(
   return tiers.size === 1 ? [...tiers][0] : "mixed";
 }
 
+export type RecordedTrackSnapshot = {
+  journeyId: string;
+  revision: number;
+  segments: NonNullable<JourneyRoute["recordedTrackSegments"]>;
+};
+
+export function currentRecordedTrackSnapshot(
+  snapshot: RecordedTrackSnapshot | null,
+  journeyId: string | null | undefined,
+  revision: number,
+) {
+  return snapshot?.journeyId === journeyId && snapshot.revision === revision ? snapshot : null;
+}
+
 /** Keep owner-private recorded evidence attached while a saved route is replaced by its edit draft. */
 export function attachRecordedTrackSegments(
   route: JourneyRoute,

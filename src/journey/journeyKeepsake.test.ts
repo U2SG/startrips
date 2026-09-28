@@ -82,6 +82,22 @@ describe("Journey keepsake render manifest (#87)", () => {
     ]);
   });
 
+  it("keeps pure-transit media in the keepsake without fabricating an arrival scene", () => {
+    const transit: Journey = {
+      ...journey,
+      routePoints: journey.routePoints.map((routePoint) => (
+        routePoint.id === "p1"
+          ? { ...routePoint, isStop: false, placeRole: "pure-transit" as const }
+          : routePoint
+      )),
+    };
+    const manifest = buildKeepsakeRenderManifest(transit, 30);
+    expect(manifest.scenes.filter((scene) => scene.kind === "map" && scene.role === "arrival")
+      .map((scene) => scene.routePointId)).toEqual(["p0", "p2"]);
+    expect(manifest.scenes.find((scene) => scene.kind === "media" && scene.mediaAssetId === "p1-video"))
+      .toMatchObject({ pointIndex: 1, routePointId: "p1", mediaAssetId: "p1-video" });
+  });
+
   it("pins map geography to stable route-point IDs and rejects stale revisions", () => {
     const manifest = buildKeepsakeRenderManifest(journey, 30);
     const arrivals = manifest.scenes.filter(

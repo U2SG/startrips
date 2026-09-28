@@ -101,6 +101,16 @@ describe("Playback V2 timeline planner (#126)", () => {
       .toEqual(["p0-m0", "p0-m1", "p0-m2", "p1-m0", "p1-m1", "p1-m2"]);
   });
 
+  it("resolves pure-transit media from its own Route Point without a preceding arrival", () => {
+    const journey = fixture(1);
+    journey.routePoints[1] = { ...journey.routePoints[1], isStop: false, placeRole: "pure-transit" };
+    const plan = buildPlaybackPlan(journey, "standard");
+    expect(plan.segments.filter((segment) => segment.kind === "arrival").map((segment) => segment.routePointId))
+      .toEqual(["p0"]);
+    expect(plan.segments.find((segment) => segment.assetId === "p1-m0"))
+      .toMatchObject({ kind: "media", routePointId: "p1", assetId: "p1-m0" });
+  });
+
   // The discriminating fixture for the index space: journey-scoped media
   // (routePointId null) is NOT a beat of `buildPlaybackSteps`, so a plan that
   // gave it a segment of its own would address every later beat one index too
