@@ -714,7 +714,7 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain('aria-label="上一个媒体"');
     expect(markup).not.toContain('aria-label="下一个媒体"');
     expect(markup).toContain('aria-label="编辑故事"');
-    expect(markup).toContain('aria-label="自动播放媒体"');
+    expect(markup).toContain('aria-label="自动浏览当前媒体"');
     expect(markup).toContain('aria-pressed="false"');
     expect(markup).toContain('aria-label="全屏查看媒体"');
     expect(markup).toContain('aria-label="first.jpg。左侧上一张，右侧下一张，方向键切换"');
@@ -847,7 +847,7 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain("全部照片");
     // #199: playback is the one Viewer control that survives the toolbar cut.
     expect(markup).toContain("journey-story__mobile-media-play");
-    expect(markup).toContain('aria-label="自动播放媒体"');
+    expect(markup).toContain('aria-label="自动浏览当前媒体"');
     expect(markup).not.toContain("journey-story__mobile-media-sheet");
   });
 
@@ -887,7 +887,7 @@ describe("JourneyStory", () => {
     // Mixed image/video still reads as one playable sequence, and the control
     // sits in the Viewer action cluster rather than the management sheet.
     expect(sequence).toContain('class="icon-action-button journey-story__mobile-media-play"');
-    expect(sequence).toContain('aria-label="自动播放媒体"');
+    expect(sequence).toContain('aria-label="自动浏览当前媒体"');
     expect(sequence).toContain('aria-pressed="false"');
     expect(sequence).not.toContain("journey-story__mobile-media-sheet");
     expect(

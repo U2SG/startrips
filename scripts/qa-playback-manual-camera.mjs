@@ -624,7 +624,7 @@ try {
       await page.locator(".journey-story-fullscreen").waitFor({ state: "hidden" });
       const inlineReturn = await visibleVideo(page, ".journey-story__media", videoId);
 
-      await page.locator('.journey-story__media-nav button[aria-label="自动播放媒体"]').click();
+      await page.locator('.journey-story__media-nav button[aria-label="自动浏览当前媒体"]').click();
       await page.waitForFunction((id) => {
         const video = document.querySelector(`.journey-story__media video[data-shared-media-id="${id}"]`);
         return video instanceof HTMLVideoElement && !video.paused;
@@ -662,7 +662,7 @@ try {
       await page.locator(".journey-story").waitFor({ state: "visible" });
       assert.equal(await osaka.getAttribute("aria-pressed"), "true", "Playback returned to another Route Point");
       const returnedStory = await visibleVideo(page, ".journey-story__media", videoId);
-      const playButton = page.locator('.journey-story__media-nav button[aria-label="自动播放媒体"]');
+      const playButton = page.locator('.journey-story__media-nav button[aria-label="自动浏览当前媒体"]');
       const reachable = await playButton.evaluate((button) => {
         const rect = button.getBoundingClientRect();
         const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
