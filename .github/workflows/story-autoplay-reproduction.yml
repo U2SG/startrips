@@ -5,6 +5,9 @@ on:
     paths:
       - src/journey/StoryMediaPages.tsx
       - src/journey/JourneyStory.tsx
+      - src/styles/story-media-pages.css
+      - src/styles/story-experience.css
+      - src/styles/living-atlas.css
       - scripts/qa-story-autoplay-reproduction.mjs
       - scripts/qa-story-autoplay-pixels.mjs
       - .github/workflows/story-autoplay-reproduction.yml
