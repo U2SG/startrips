@@ -657,10 +657,31 @@ async function routePointActivationEvidence(page) {
 }
 
 async function clickRoutePointMarker(page, routeId, pointId, targetOverride = null) {
-  const marker = page.locator(`.particle-earth-route__point[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
-  await marker.waitFor({ state: "visible", timeout: 5_000 });
-  const box = await marker.boundingBox();
-  if (!box) throw new Error(`Route Point ${pointId} has no projected marker geometry`);
+  let box;
+  try {
+    // Read readiness and geometry in one browser task, from the current
+    // renderer projection. A separate boundingBox call can observe a later
+    // arbitration pass that has already hidden the previously visible bead.
+    const geometry = await page.waitForFunction(({ routeId, pointId }) => {
+      const scene = document.querySelector(".particle-earth-scene");
+      const focus = document.querySelector("[data-qa-route-point-context-focus]");
+      if (scene?.getAttribute("data-focus-revision") !== focus?.getAttribute("data-focus-revision")
+        || Number(scene?.getAttribute("data-focus-settle-count") ?? 0) <= 0) return null;
+      if (window.__particleEarthDebug?.().journeyRouteProjectionReady !== true) return null;
+      const marker = document.querySelector(
+        `.particle-earth-route__point[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`,
+      );
+      if (!marker) return null;
+      const style = getComputedStyle(marker);
+      const rect = marker.getBoundingClientRect();
+      if (style.display === "none" || style.visibility === "hidden" || rect.width <= 0 || rect.height <= 0) return null;
+      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    }, { routeId, pointId }, { timeout: 5_000, polling: "raf" });
+    try { box = await geometry.jsonValue(); } finally { await geometry.dispose(); }
+  } catch (error) {
+    const state = await routeMarkerClickState(page, pointId, null);
+    throw new Error(`Route Point ${pointId} has no current projected marker geometry: ${JSON.stringify(state)}`, { cause: error });
+  }
   const target = targetOverride ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   await page.mouse.click(target.x, target.y);
   return { box, target };
@@ -671,7 +692,7 @@ async function routeMarkerClickState(page, pointId, target) {
     const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${pointId}"]`);
     const scene = document.querySelector(".particle-earth-scene");
     const markerRect = marker?.getBoundingClientRect();
-    const hit = document.elementFromPoint(target.x, target.y);
+    const hit = target ? document.elementFromPoint(target.x, target.y) : null;
     return {
       contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
       activationId: scene?.getAttribute("data-route-point-activation-id") ?? null,
@@ -717,6 +738,7 @@ async function routeLabelInteractionState(page, routeId, pointId) {
       scene: Object.fromEntries([
         "data-focus-revision", "data-focus-settle-count", "data-place-label-layout",
         "data-place-label-layout-frame", "data-place-label-layout-revision", "data-route-focus-phase",
+        "data-route-point-activation-source", "data-route-point-activation-id",
       ].map((attribute) => [attribute, scene?.getAttribute(attribute) ?? null])),
       projectionReady: window.__particleEarthDebug?.().journeyRouteProjectionReady ?? null,
       labels: [...document.querySelectorAll(".particle-earth-route__label[data-journey-route]")]
@@ -734,19 +756,14 @@ async function routeLabelInteractionState(page, routeId, pointId) {
 
 async function clickRoutePointLabel(page, routeId, pointId) {
   const label = page.locator(`.particle-earth-route__label[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
-  await label.waitFor({ state: "visible", timeout: 5_000 });
   const hitTarget = label.locator(".particle-earth-route__label-hit");
-  const box = await hitTarget.boundingBox();
-  if (!box) {
-    const state = await routeLabelInteractionState(page, routeId, pointId);
-    throw new Error(`Route Point ${pointId} has no visible label hit geometry: ${JSON.stringify(state)}`);
-  }
+  await hitTarget.waitFor({ state: "visible", timeout: 5_000 });
   // A label's 44px touch target may legitimately overlap a neighbouring 6px
   // Route Point marker. The visible marker owns its own pixels; grade the label
   // through a real browser-hit pixel that belongs to this label and is not
   // physically occupied by any marker. If no such pixel exists, the product
   // label is effectively unclickable and this still fails closed.
-  const target = await label.evaluate((node) => {
+  const geometry = await label.evaluate((node) => {
     const hit = node.querySelector(".particle-earth-route__label-hit");
     if (!(hit instanceof SVGGraphicsElement)) return null;
     const rect = hit.getBoundingClientRect();
@@ -760,14 +777,19 @@ async function clickRoutePointLabel(page, routeId, pointId) {
           y - (marker.top + marker.height / 2),
         ) <= 22)) continue;
         const hitElement = document.elementFromPoint(x, y);
-        if (hitElement?.closest(".particle-earth-route__label") === node) return { x, y };
+        if (hitElement?.closest(".particle-earth-route__label") === node) {
+          return { box: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }, target: { x, y } };
+        }
       }
     }
     return null;
   });
-  if (!target) throw new Error(`Route Point ${pointId} has no unambiguous label-owned hit pixel`);
-  await page.mouse.click(target.x, target.y);
-  return { box, target };
+  if (!geometry) {
+    const state = await routeLabelInteractionState(page, routeId, pointId);
+    throw new Error(`Route Point ${pointId} has no unambiguous label-owned hit pixel: ${JSON.stringify(state)}`);
+  }
+  await page.mouse.click(geometry.target.x, geometry.target.y);
+  return geometry;
 }
 
 async function findBlankGlobePoint(page) {
@@ -1087,14 +1109,17 @@ try {
   });
   const labelPage = labelRun.page;
   const labelContext = labelPage.locator("[data-route-point-context]");
+  await labelPage.waitForFunction(() => (
+    document.querySelector(".particle-earth-scene")?.getAttribute("data-place-label-layout") === "settled"
+  ), null, { timeout: 5_000 });
   const visibleLabels = labelPage.locator(
     `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
   );
   await visibleLabels.first().waitFor({ state: "visible", timeout: 5_000 });
   let labelPointId = null;
   let labelClick = null;
-  for (let index = 0; index < await visibleLabels.count(); index += 1) {
-    const candidatePointId = await visibleLabels.nth(index).getAttribute("data-route-point-id");
+  const labelCandidates = await visibleLabels.evaluateAll((labels) => labels.map((label) => label.getAttribute("data-route-point-id")));
+  for (const candidatePointId of labelCandidates) {
     if (!candidatePointId) continue;
     try {
       labelClick = await clickRoutePointLabel(labelPage, journeyId, candidatePointId);
@@ -1126,20 +1151,28 @@ try {
   // current visible label surface instead of programmatically pressing a stale,
   // hidden SVG node; the assertion still requires one real focusable label to
   // open context and receive focus back after close.
+  await labelPage.waitForFunction(() => (
+    document.querySelector(".particle-earth-scene")?.getAttribute("data-place-label-layout") === "settled"
+  ), null, { timeout: 5_000 });
   const keyboardLabel = labelPage.locator(
     `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
   ).first();
   await keyboardLabel.waitFor({ state: "visible", timeout: 5_000 });
   const keyboardPointId = await keyboardLabel.getAttribute("data-route-point-id");
   if (!keyboardPointId) throw new Error("visible keyboard Route Point label has no stable id");
-  await keyboardLabel.focus();
+  // Keep focus and Enter on the same identity: :visible.first() is a live
+  // locator and can resolve to a different label after arbitration changes.
+  const keyboardTrigger = labelPage.locator(
+    `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id="${keyboardPointId}"]`,
+  );
+  await keyboardTrigger.focus();
   const focusedKeyboardPointId = await labelPage.evaluate(() => (
     document.activeElement?.getAttribute("data-route-point-id") ?? null
   ));
   if (focusedKeyboardPointId !== keyboardPointId) {
     throw new Error(`visible Route Point label did not receive keyboard focus: ${keyboardPointId}`);
   }
-  await keyboardLabel.press("Enter");
+  await keyboardTrigger.press("Enter");
   await labelContext.waitFor({ state: "visible", timeout: 5_000 });
   const keyboardActivation = await routePointActivationEvidence(labelPage);
   const labelCloseButton = labelContext.locator("[data-route-point-context-close]");
@@ -1155,7 +1188,7 @@ try {
     ), keyboardPointId, { timeout: 5_000 });
   } catch (error) {
     const state = await routeLabelInteractionState(labelPage, journeyId, keyboardPointId);
-    throw new Error(`Route Point label focus return did not commit: ${JSON.stringify(state)}`, { cause: error });
+    throw new Error(`Route Point label focus return did not commit: ${JSON.stringify({ keyboardActivation, state })}`, { cause: error });
   }
   const focusReturn = await labelPage.evaluate(() => ({
     tag: document.activeElement?.tagName.toLowerCase() ?? null,
