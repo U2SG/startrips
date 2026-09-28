@@ -1499,45 +1499,49 @@ try {
   const projectionPlayback = projectionPage.locator('.journey-playback[data-playback-mode="full"]');
   await projectionPlayback.waitFor({ state: "visible", timeout: 5_000 });
   const projectedFullSteps = Number(await projectionPlayback.getAttribute("data-playback-steps"));
-  record("Full Playback retains every route point and the owned media chapter", {
-    projectedFullSteps,
-  }, projectedFullSteps === 2 * projectionRoutePoints.length + 2);
+  const expectedProjectionPlaybackSteps = 2
+    + (projectionRoutePoints.length - 1)
+    + projectionRoutePoints.filter((point) => point.isStop).length
+    + projectionJourney.media.length;
+  record("Full Playback keeps route travel and owned media without promoting non-stops to arrivals", {
+    projectedFullSteps, expectedProjectionPlaybackSteps,
+  }, projectedFullSteps === expectedProjectionPlaybackSteps);
   const pausePlayback = projectionPage.locator('.journey-playback__controls button[aria-label="暂停播放"]');
   if (await pausePlayback.count()) await pausePlayback.click();
   const playbackProgress = projectionPage.locator('.journey-playback__progress input[type="range"]');
-  const detourSeekTarget = await playbackProgress.evaluate((range) => {
+  const bSeekTarget = await playbackProgress.evaluate((range) => {
     const tick = document.querySelectorAll(".journey-playback__progress-chapters i")[1];
-    if (!(tick instanceof HTMLElement)) throw new Error("detour Playback chapter tick is missing");
+    if (!(tick instanceof HTMLElement)) throw new Error("B Playback chapter tick is missing");
     const fraction = Number.parseFloat(tick.style.left) / 100 + 0.004;
     const rect = range.getBoundingClientRect();
     const inset = 8;
     return { x: rect.left + inset + (rect.width - inset * 2) * fraction,
       y: rect.top + rect.height / 2 };
   });
-  await projectionPage.mouse.click(detourSeekTarget.x, detourSeekTarget.y);
-  await projectionPage.waitForFunction((detourId) => {
+  await projectionPage.mouse.click(bSeekTarget.x, bSeekTarget.y);
+  await projectionPage.waitForFunction((bId) => {
     const playback = document.querySelector(".journey-playback");
-    const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${detourId}"]`);
-    return playback?.getAttribute("data-playback-step") === "3"
+    const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${bId}"]`);
+    return playback?.getAttribute("data-playback-step") === "4"
       && playback.getAttribute("data-playback-phase") === "stop"
-      && document.querySelector('.journey-playback__chapter[data-chapter-point="1"]')
+      && document.querySelector('.journey-playback__chapter[data-chapter-point="2"]')
       && marker?.getAttribute("data-attention-role") === "narrative-current"
       && marker.getBoundingClientRect().width > 0
-      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "4";
-  }, projectionPointIds.detour);
-  const playbackDetourState = await projectionPage.evaluate(() => ({
+      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "3";
+  }, projectionPointIds.b);
+  const playbackBState = await projectionPage.evaluate(() => ({
     step: document.querySelector(".journey-playback")?.getAttribute("data-playback-step"),
     chapter: document.querySelector(".journey-playback__chapter")?.getAttribute("data-chapter-point"),
     camera: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-focus-point"),
     contextCount: document.querySelectorAll("[data-route-point-context]").length,
   }));
-  record("Full Playback's pure detour owns the displayed chapter, camera and marker", {
-    detourSeekTarget, playbackDetourState,
-  }, playbackDetourState.step === "3"
-    && playbackDetourState.chapter === "1"
-    && playbackDetourState.camera === "35.5,-116.5"
-    && playbackDetourState.contextCount === 0);
-  const followedDetourFocus = await sceneFocusSnapshot(projectionPage);
+  record("Full Playback keeps the actual stop B as the displayed chapter, camera and marker", {
+    bSeekTarget, playbackBState,
+  }, playbackBState.step === "4"
+    && playbackBState.chapter === "2"
+    && playbackBState.camera === "36.1699,-115.1398"
+    && playbackBState.contextCount === 0);
+  const followedBFocus = await sceneFocusSnapshot(projectionPage);
   const playbackDrag = await findBlankGlobePoint(projectionPage);
   const playbackDragEnd = await projectionPage.evaluate(({ x, y }) => {
     const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
@@ -1552,36 +1556,36 @@ try {
   await projectionPage.mouse.down();
   await projectionPage.mouse.move(playbackDragEnd.x, playbackDragEnd.y, { steps: 6 });
   await projectionPage.mouse.up();
-  await projectionPage.waitForFunction((detourId) => {
+  await projectionPage.waitForFunction((bId) => {
     const playback = document.querySelector(".journey-playback");
-    const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${detourId}"]`);
+    const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${bId}"]`);
     return playback?.getAttribute("data-camera-follow") === "free"
-      && playback.getAttribute("data-playback-step") === "3"
+      && playback.getAttribute("data-playback-step") === "4"
       && playback.getAttribute("data-map-interactive") === "true"
       && marker?.getAttribute("data-attention-role") === "narrative-current"
       && marker.getBoundingClientRect().width > 0;
-  }, projectionPointIds.detour);
-  const freeDetourFocus = await sceneFocusSnapshot(projectionPage);
-  record("native map drag frees only the camera while pure-detour chapter and marker remain", {
-    playbackDrag, playbackDragEnd, followedDetourFocus, freeDetourFocus,
-  }, freeDetourFocus.focusRevision === followedDetourFocus.focusRevision
+  }, projectionPointIds.b);
+  const freeBFocus = await sceneFocusSnapshot(projectionPage);
+  record("native map drag frees only the camera while the real stop chapter and marker remain", {
+    playbackDrag, playbackDragEnd, followedBFocus, freeBFocus,
+  }, freeBFocus.focusRevision === followedBFocus.focusRevision
     && await projectionPlayback.getAttribute("data-camera-follow") === "free"
-    && await projectionPlayback.locator('.journey-playback__chapter[data-chapter-point="1"]').count() === 1);
+    && await projectionPlayback.locator('.journey-playback__chapter[data-chapter-point="2"]').count() === 1);
   await projectionPage.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
   await projectionPage.waitForFunction((ids) => {
     const playback = document.querySelector(".journey-playback");
-    const b = document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.b}"]`);
+    const note = document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.note}"]`);
     return playback?.getAttribute("data-camera-follow") === "free"
-      && playback.getAttribute("data-playback-step") === "4"
+      && playback.getAttribute("data-playback-step") === "5"
       && playback.getAttribute("data-playback-phase") === "travel"
-      && b?.getAttribute("data-attention-role") === "narrative-current"
+      && note?.getAttribute("data-attention-role") === "narrative-current"
       && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.detour}"]`)
-      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "3";
+      && document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") === "4";
   }, projectionPointIds);
   const freeAdvanceFocus = await sceneFocusSnapshot(projectionPage);
   record("automatic Playback advance changes the narrated point without recapturing free camera", {
     freeAdvanceFocus,
-  }, freeAdvanceFocus.focusRevision === followedDetourFocus.focusRevision
+  }, freeAdvanceFocus.focusRevision === followedBFocus.focusRevision
     && await projectionPlayback.getAttribute("data-camera-follow") === "free");
 
   // Dedicated pure-transit playback coverage runs on an isolated fixture below.
