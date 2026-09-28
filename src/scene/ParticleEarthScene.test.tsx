@@ -70,6 +70,7 @@ import {
   resolveParticleDiveAnchor,
   cityPointCoordinates,
   journeyRoutePointTargetEligible,
+  selectJourneyRoutePointScreenTarget,
   selectHomeBasePointerTarget,
 } from "./ParticleEarthScene";
 import {
@@ -1631,6 +1632,28 @@ describe("ST-065 renderer interaction arbitration", () => {
         points: new Map([["journey-a:0", 1]]),
       },
     )).toBe(false);
+  });
+
+  it("keeps Particle Earth Route Point hits touch-safe in screen space", () => {
+    const first = { journeyId: "journey-a", routePointId: "first", routePointIndex: 0 };
+    const second = { journeyId: "journey-a", routePointId: "second", routePointIndex: 1 };
+    const candidates = [
+      { target: first, x: 100, y: 100 },
+      { target: second, x: 118, y: 100 },
+    ];
+
+    expect(selectJourneyRoutePointScreenTarget(candidates, 121, 100)).toEqual(second);
+    expect(selectJourneyRoutePointScreenTarget(candidates, 78, 100)).toEqual(first);
+    expect(selectJourneyRoutePointScreenTarget(candidates, 150, 100)).toBeNull();
+  });
+
+  it("uses stable route order only when screen-space Route Point hits tie", () => {
+    const later = { journeyId: "journey-a", routePointId: "later", routePointIndex: 4 };
+    const earlier = { journeyId: "journey-a", routePointId: "earlier", routePointIndex: 1 };
+    expect(selectJourneyRoutePointScreenTarget([
+      { target: later, x: 100, y: 100 },
+      { target: earlier, x: 100, y: 100 },
+    ], 100, 100)).toEqual(earlier);
   });
 
   it("selects the last-painted Home marker when Home periods overlap", () => {

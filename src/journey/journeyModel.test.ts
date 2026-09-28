@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyScopeReorder,
+  deriveJourneyStaySummaries,
+  journeyOverviewRoutePointIds,
   groupJourneysByYear,
   isSoundtrackAsset,
   isVisualMediaAsset,
@@ -88,6 +90,145 @@ describe("journeyModel", () => {
       label: "Shenzhen",
     });
     expect(toJourneyRoutes([labeledJourney])[0].lightEffect).toBe("aurora");
+  });
+
+  it("derives consecutive stay summaries without creating or merging Route Point identity (#514)", () => {
+    const trip = journey("trip", "2026-08-11");
+    trip.routePoints = [
+      { id: "hotel-a", journeyId: trip.id, sortOrder: 0, latitude: 30.66, longitude: 104.06, label: "Hotel A", isStop: true, occurredAt: null, regionContext: "成都", placeRole: "accommodation", createdAt: trip.createdAt },
+      { id: "museum", journeyId: trip.id, sortOrder: 1, latitude: 30.67, longitude: 104.07, label: "Museum", isStop: true, occurredAt: null, regionContext: "成都", placeRole: "attraction", createdAt: trip.createdAt },
+      { id: "transit", journeyId: trip.id, sortOrder: 2, latitude: 30.8, longitude: 104.2, label: "", isStop: false, occurredAt: null, regionContext: "成都", placeRole: "pure-transit", createdAt: trip.createdAt },
+      { id: "chongqing", journeyId: trip.id, sortOrder: 3, latitude: 29.56, longitude: 106.55, label: "重庆", isStop: true, occurredAt: null, regionContext: "重庆", placeRole: "attraction", createdAt: trip.createdAt },
+      { id: "hotel-b", journeyId: trip.id, sortOrder: 4, latitude: 30.65, longitude: 104.08, label: "Hotel B", isStop: true, occurredAt: null, regionContext: "成都", placeRole: "accommodation", createdAt: trip.createdAt },
+    ];
+    trip.media = [{
+      id: "media-1", journeyId: trip.id, routePointId: "museum", storageDriver: "s3", storageKey: "a",
+      fileName: "a.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, uploadedByUserId: "user-1", createdAt: trip.createdAt,
+    }];
+
+    const summaries = deriveJourneyStaySummaries(trip);
+    expect(summaries.map((summary) => ({
+      label: summary.label,
+      anchor: summary.anchorRoutePointId,
+      points: summary.routePointIds,
+      media: summary.mediaAssetIds,
+    }))).toEqual([
+      { label: "成都", anchor: "museum", points: ["hotel-a", "museum"], media: ["media-1"] },
+      { label: "重庆", anchor: "chongqing", points: ["chongqing"], media: [] },
+      { label: "成都", anchor: "hotel-b", points: ["hotel-b"], media: [] },
+    ]);
+  });
+
+  it("keeps unknown/far-apart places separate and filters before stay aggregation (#514)", () => {
+    const trip = journey("bounds", "2026-08-11");
+    trip.routePoints = [
+      { id: "unknown-a", journeyId: trip.id, sortOrder: 0, latitude: 22.54, longitude: 114.05, label: "A", isStop: true, occurredAt: null, createdAt: trip.createdAt },
+      { id: "unknown-b", journeyId: trip.id, sortOrder: 1, latitude: 22.55, longitude: 114.06, label: "B", isStop: true, occurredAt: null, createdAt: trip.createdAt },
+      { id: "same-name-a", journeyId: trip.id, sortOrder: 2, latitude: 31.23, longitude: 121.47, label: "C", isStop: true, occurredAt: null, regionContext: "同名区域", createdAt: trip.createdAt },
+      { id: "same-name-b", journeyId: trip.id, sortOrder: 3, latitude: 39.90, longitude: 116.40, label: "D", isStop: true, occurredAt: null, regionContext: "同名区域", overviewVisibility: "detail", createdAt: trip.createdAt },
+    ];
+
+    expect(deriveJourneyStaySummaries(trip).map((summary) => summary.routePointIds)).toEqual([
+      ["unknown-a"],
+      ["unknown-b"],
+      ["same-name-a"],
+      ["same-name-b"],
+    ]);
+    expect(deriveJourneyStaySummaries(trip).at(-1)?.overviewVisible).toBe(false);
+    expect(deriveJourneyStaySummaries(trip, { includedRoutePointIds: new Set(["unknown-b", "same-name-a"]) })
+      .map((summary) => summary.routePointIds)).toEqual([["unknown-b"], ["same-name-a"]]);
+    const noVisibleStays = deriveJourneyStaySummaries(trip, { includedRoutePointIds: new Set() });
+    expect(journeyOverviewRoutePointIds(trip, noVisibleStays)).toEqual([]);
+  });
+
+  it("keeps the full route/provenance matrix intact while deriving stays (#514)", () => {
+    const trip = journey("matrix", "2026-08-11");
+    const routePoints = [
+      { id: "a-day-1", journeyId: trip.id, sortOrder: 0, latitude: 30.66, longitude: 104.06, label: "A hotel", isStop: true, occurredAt: "2026-08-11T23:30:00Z", regionContext: "A", placeRole: "accommodation", createdAt: trip.createdAt },
+      { id: "a-day-2", journeyId: trip.id, sortOrder: 1, latitude: 30.67, longitude: 104.07, label: "A museum", isStop: true, occurredAt: "2026-08-12T00:30:00Z", regionContext: "A", placeRole: "attraction", createdAt: trip.createdAt },
+      { id: "b-same-day", journeyId: trip.id, sortOrder: 2, latitude: 29.56, longitude: 106.55, label: "B", isStop: true, occurredAt: "2026-08-12T03:00:00Z", regionContext: "B", placeRole: "attraction", createdAt: trip.createdAt },
+      { id: "a-return", journeyId: trip.id, sortOrder: 3, latitude: 30.65, longitude: 104.08, label: "A return", isStop: true, occurredAt: "2026-08-12T08:00:00Z", regionContext: "A", placeRole: "attraction", createdAt: trip.createdAt },
+      { id: "same-coordinate-1", journeyId: trip.id, sortOrder: 4, latitude: 22.2855, longitude: 114.1577, label: "C one", isStop: true, occurredAt: null, regionContext: "C", placeRole: "attraction", createdAt: trip.createdAt },
+      { id: "same-coordinate-2", journeyId: trip.id, sortOrder: 5, latitude: 22.2855, longitude: 114.1577, label: "C two", isStop: true, occurredAt: null, regionContext: "C", placeRole: "attraction", createdAt: trip.createdAt },
+      { id: "same-name-near", journeyId: trip.id, sortOrder: 6, latitude: 31.23, longitude: 121.47, label: "D Shanghai", isStop: true, occurredAt: null, regionContext: "D", placeRole: "attraction", createdAt: trip.createdAt },
+      { id: "same-name-far", journeyId: trip.id, sortOrder: 7, latitude: 39.90, longitude: 116.40, label: "D Beijing", isStop: true, occurredAt: null, regionContext: "D", placeRole: "attraction", createdAt: trip.createdAt },
+      { id: "hotel-only", journeyId: trip.id, sortOrder: 8, latitude: 35.68, longitude: 139.76, label: "E hotel", isStop: true, occurredAt: null, regionContext: "E", placeRole: "accommodation", createdAt: trip.createdAt },
+      { id: "detour", journeyId: trip.id, sortOrder: 9, latitude: 35.70, longitude: 139.80, label: "detour", isStop: false, occurredAt: null, regionContext: "E", placeRole: "pure-transit", createdAt: trip.createdAt },
+    ] satisfies Journey["routePoints"];
+    trip.routePoints = routePoints;
+    trip.media = [
+      { id: "a-photo", journeyId: trip.id, routePointId: "a-day-2", storageDriver: "s3", storageKey: "a", fileName: "a.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, uploadedByUserId: "user-1", createdAt: trip.createdAt },
+      { id: "detour-photo", journeyId: trip.id, routePointId: "detour", storageDriver: "s3", storageKey: "d", fileName: "d.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 1, uploadedByUserId: "user-1", createdAt: trip.createdAt },
+    ];
+    const routeBefore = structuredClone(trip.routePoints);
+    const mediaBefore = structuredClone(trip.media);
+
+    const summaries = deriveJourneyStaySummaries(trip, { includedMediaAssetIds: new Set(["a-photo"]) });
+
+    expect(summaries.map((summary) => summary.routePointIds)).toEqual([
+      ["a-day-1", "a-day-2"],
+      ["b-same-day"],
+      ["a-return"],
+      ["same-coordinate-1", "same-coordinate-2"],
+      ["same-name-near"],
+      ["same-name-far"],
+      ["hotel-only"],
+    ]);
+    expect(summaries[0].mediaAssetIds).toEqual(["a-photo"]);
+    expect(summaries.flatMap((summary) => summary.mediaAssetIds)).not.toContain("detour-photo");
+    expect(summaries.at(-1)).toMatchObject({ label: "E", anchorRoutePointId: "hotel-only" });
+    expect(trip.routePoints).toEqual(routeBefore);
+    expect(trip.media).toEqual(mediaBefore);
+    expect(trip.routePoints.map((point) => point.id)).toEqual(routeBefore.map((point) => point.id));
+    expect(trip.routePoints.find((point) => point.id === "detour")).toMatchObject({
+      isStop: false, latitude: 35.70, longitude: 139.80,
+    });
+  });
+
+  it("keeps zero/one-point and large authorized projections bounded (#514)", () => {
+    const empty = journey("empty", "2026-08-11");
+    expect(deriveJourneyStaySummaries(empty)).toEqual([]);
+
+    const single = journey("single", "2026-08-11");
+    single.routePoints = [{
+      id: "only", journeyId: single.id, sortOrder: 0, latitude: 1, longitude: 1, label: "Only",
+      isStop: true, occurredAt: null, regionContext: "Only region", createdAt: single.createdAt,
+    }];
+    expect(deriveJourneyStaySummaries(single)).toEqual([expect.objectContaining({
+      routePointIds: ["only"], anchorRoutePointId: "only", mediaAssetIds: [],
+    })]);
+
+    const large = journey("large", "2026-08-11");
+    large.routePoints = Array.from({ length: 64 }, (_, index) => ({
+      id: `p-${index}`, journeyId: large.id, sortOrder: index, latitude: index / 10, longitude: index / 10,
+      label: `Point ${index}`, isStop: true, occurredAt: null, regionContext: `Region ${index}`, createdAt: large.createdAt,
+    }));
+    large.media = Array.from({ length: 512 }, (_, index) => ({
+      id: `m-${index}`, journeyId: large.id, routePointId: `p-${index % 64}`, storageDriver: "s3",
+      storageKey: `m-${index}`, fileName: `m-${index}.jpg`, mimeType: "image/jpeg", bytes: 1, sortOrder: index,
+      uploadedByUserId: "user-1", createdAt: large.createdAt,
+    }));
+    const authorizedPointIds = new Set(large.routePoints.filter((_, index) => index % 2 === 0).map((point) => point.id));
+    const authorizedMediaIds = new Set(large.media.filter((_, index) => index % 4 === 0).map((asset) => asset.id));
+    const summaries = deriveJourneyStaySummaries(large, {
+      includedRoutePointIds: authorizedPointIds,
+      includedMediaAssetIds: authorizedMediaIds,
+    });
+    expect(summaries).toHaveLength(32);
+    expect(summaries.flatMap((summary) => summary.routePointIds)).toHaveLength(32);
+    expect(summaries.flatMap((summary) => summary.mediaAssetIds).every((id) => authorizedMediaIds.has(id))).toBe(true);
+    expect(summaries.flatMap((summary) => summary.mediaAssetIds)).toHaveLength(128);
+  });
+  it("adds a presentation-only overview label without replacing the canonical place label (#514)", () => {
+    const labeledJourney = journey("overview", "2026-08-11");
+    labeledJourney.routePoints = [{
+      id: "point-1", journeyId: labeledJourney.id, sortOrder: 0, latitude: 22.5431, longitude: 114.0579,
+      label: "具体酒店", isStop: true, occurredAt: null, createdAt: labeledJourney.createdAt,
+    }];
+    expect(toJourneyRoutes([labeledJourney], new Map([["point-1", "深圳"]]))[0].points[0]).toMatchObject({
+      label: "具体酒店",
+      overviewLabel: "深圳",
+    });
   });
 
   it("accepts a single unnamed point and a multi-city route", () => {

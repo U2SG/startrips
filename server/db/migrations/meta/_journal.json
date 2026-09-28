@@ -239,6 +239,13 @@
       "when": 1790140106497,
       "tag": "0033_reflective_bloodstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790315145000,
+      "tag": "0034_stay_presentation_metadata",
+      "breakpoints": true
     }
   ]
 }

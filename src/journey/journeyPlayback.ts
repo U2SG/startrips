@@ -118,6 +118,16 @@ export function storyMediaForScope(
   return pointIndex >= 0 ? playbackMediaForPoint(journey, pointIndex) : [];
 }
 
+export function isPlaybackTransitRoutePoint(
+  point: Pick<RoutePoint, "isStop" | "placeRole">,
+): boolean {
+  // isStop is the canonical route-role bit carried by historical Journey
+  // records. Newer placeRole metadata can make the same intent explicit, but
+  // playback must not require a migration before an old non-stop point stops
+  // behaving like an arrival.
+  return point.isStop === false || point.placeRole === "pure-transit";
+}
+
 export type PlaybackStep =
   | { kind: "home-prelude"; cameraTarget: HomeNarrativeCameraTarget }
   | { kind: "intro" }
@@ -240,8 +250,19 @@ export function buildPlaybackSteps(
   }
   steps.push({ kind: "intro" });
   for (let pointIndex = 0; pointIndex < journey.routePoints.length; pointIndex += 1) {
-    const media = byOwner.get(journey.routePoints[pointIndex].id) ?? [];
+    const routePoint = journey.routePoints[pointIndex];
+    const media = byOwner.get(routePoint.id) ?? [];
     if (pointIndex > 0) steps.push({ kind: "travel", to: pointIndex });
+    // #514: pure transit shapes the canonical route but is not an arrival.
+    // Existing note/media remain addressable, and Full Playback still presents
+    // every historical media asset at this canonical route position. Those media
+    // are content beats only: the pass-through never gains an arrival/stay step.
+    if (isPlaybackTransitRoutePoint(routePoint)) {
+      for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
+        steps.push({ kind: "media", pointIndex, mediaIndex });
+      }
+      continue;
+    }
     steps.push({ kind: "stop", pointIndex, media });
     for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
       steps.push({ kind: "media", pointIndex, mediaIndex });

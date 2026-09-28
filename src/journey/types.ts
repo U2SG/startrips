@@ -33,6 +33,15 @@ export type JourneyMediaAsset = {
 /** #260. Only `ready` is ever served; see `server/media/preview-derivation.ts`. */
 export type MediaPreviewState = "none" | "pending" | "ready" | "failed";
 
+export type RoutePointPlaceRole =
+  | "accommodation"
+  | "attraction"
+  | "transport"
+  | "pure-transit"
+  | "activity";
+
+export type RoutePointOverviewVisibility = "auto" | "main" | "detail";
+
 export type RoutePoint = {
   id: string;
   journeyId: string;
@@ -44,12 +53,25 @@ export type RoutePoint = {
   occurredAt: string | null;
   // #10: a short personal note for this route point (plain text, nullable).
   note?: string | null;
+  // #514: optional presentation evidence. These fields never create a second
+  // place/stay record and never change route geometry or stop identity.
+  regionContext?: string | null;
+  placeRole?: RoutePointPlaceRole | null;
+  overviewVisibility?: RoutePointOverviewVisibility | null;
   createdAt: string;
 };
 
 export type RoutePointInput = Pick<
   RoutePoint,
-  "latitude" | "longitude" | "label" | "isStop" | "occurredAt" | "note"
+  | "latitude"
+  | "longitude"
+  | "label"
+  | "isStop"
+  | "occurredAt"
+  | "note"
+  | "regionContext"
+  | "placeRole"
+  | "overviewVisibility"
 > & {
   id?: string;
 };
@@ -122,6 +144,8 @@ export type JourneyRoute = {
     lon: number;
     isStop: boolean;
     label?: string;
+    /** Atlas overview label only; detailed map/story keep the canonical place label. */
+    overviewLabel?: string;
   }>;
 };
 

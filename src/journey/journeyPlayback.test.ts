@@ -5,6 +5,7 @@ import {
   committedPlaybackPosition,
   initialPlaybackState,
   isPlaybackTerminalState,
+  isPlaybackTransitRoutePoint,
   playbackReducer,
   playbackCameraTargetForStep,
   playbackTravelChoreography,
@@ -18,6 +19,7 @@ import {
   phaseForStep,
   routePointChapterDensity,
 } from "./journeyPlayback";
+import { deriveJourneyStaySummaries } from "./journeyModel";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -289,6 +291,60 @@ describe("buildPlaybackSteps (#19)", () => {
     const steps = buildPlaybackSteps(silent);
     expect(steps.filter((step) => step.kind === "stop")).toHaveLength(2);
     expect(steps.some((step) => step.kind === "media")).toBe(false);
+  });
+
+  it("keeps route shape and historical media without promoting pure transit to a stop (#514)", () => {
+    const grouped: Journey = {
+      ...journey,
+      routePoints: [
+        { ...point("point-0", 30.66, 104.06), regionContext: "Chengdu", placeRole: "accommodation" },
+        { ...point("point-1", 30.67, 104.07), isStop: false, regionContext: "Chengdu", placeRole: "pure-transit" },
+        { ...point("point-2", 30.68, 104.08), regionContext: "Chengdu", placeRole: "attraction" },
+      ],
+      media: [
+        media("stay-hotel", "point-0", "image/jpeg", 0),
+        media("stay-detour", "point-1", "image/jpeg", 1),
+        media("stay-place", "point-2", "video/mp4", 2),
+      ],
+    };
+    const routeBefore = structuredClone(grouped.routePoints);
+    const mediaBefore = [...grouped.media];
+
+    expect(deriveJourneyStaySummaries(grouped).map((summary) => summary.routePointIds)).toEqual([
+      ["point-0", "point-2"],
+    ]);
+
+    const steps = buildPlaybackSteps(grouped);
+    expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 2]);
+    expect(steps.flatMap((step) => step.kind === "travel" ? [step.to] : [])).toEqual([1, 2]);
+    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([0, 1, 2]);
+    expect(playbackMediaForPoint(grouped, 0).map((asset) => asset.id)).toEqual(["stay-hotel"]);
+    expect(playbackMediaForPoint(grouped, 1).map((asset) => asset.id)).toEqual(["stay-detour"]);
+    expect(storyMediaForScope(grouped, "point-1").map((asset) => asset.id)).toEqual(["stay-detour"]);
+    expect(playbackMediaForPoint(grouped, 2).map((asset) => asset.id)).toEqual(["stay-place"]);
+    expect(grouped.routePoints).toEqual(routeBefore);
+    expect(grouped.media).toEqual(mediaBefore);
+    expect(grouped.media).toEqual(expect.arrayContaining(mediaBefore));
+  });
+
+  it("keeps legacy isStop=false route points as transit without requiring placeRole metadata (#514)", () => {
+    const legacyTransit = { ...point("point-1", 30.67, 104.07), isStop: false };
+    const legacy: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 30.66, 104.06),
+        legacyTransit,
+        point("point-2", 30.68, 104.08),
+      ],
+      media: [media("legacy-transit-media", "point-1", "image/jpeg", 0)],
+    };
+
+    expect(legacyTransit.placeRole).toBeUndefined();
+    expect(isPlaybackTransitRoutePoint(legacyTransit)).toBe(true);
+    const steps = buildPlaybackSteps(legacy);
+    expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 2]);
+    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([1]);
+    expect(playbackMediaForPoint(legacy, 1).map((asset) => asset.id)).toEqual(["legacy-transit-media"]);
   });
 });
 

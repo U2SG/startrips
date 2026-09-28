@@ -24,7 +24,8 @@
   min-width: 0;
 }
 
-.journey-playback__stage:has(> .journey-playback__media) {
+.journey-playback__stage:has(> .journey-playback__media),
+.journey-playback__stage:has(> .journey-playback__transit-media) {
   grid-template-rows: minmax(0, 1fr);
 }
 
