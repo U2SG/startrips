@@ -100,7 +100,8 @@ export function playbackMediaByChapter(journey: Journey): Map<string, JourneyMed
   // Ordinary Stop-only journeys have no child media to fold. Keep their single
   // owner scan, including the planner/keepsake's existing large-journey bound.
   if (journey.routePoints.every((point) => point.isStop)) {
-    return playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
+    const byOwner = playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
+    return new Map(journey.routePoints.map((point) => [point.id, byOwner.get(point.id) ?? []]));
   }
   const pointsById = new Map(journey.routePoints.map((point) => [point.id, point]));
   const chapterByOwner = new Map(journey.routePoints.map((point) => [point.id, point.id]));
