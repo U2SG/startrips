@@ -221,9 +221,8 @@ export function buildPlaybackPlan(
     // state carried from the previous Stop would misattribute its media. Build
     // the owner index once so a long Journey remains linear rather than
     // rescanning every asset for every media beat.
-    const point = step.kind === "media" ? journey.routePoints[step.pointIndex] : undefined;
-    const asset = point
-      ? mediaByOwner.get(point.id)?.[step.mediaIndex]
+    const asset = step.kind === "media"
+      ? mediaByOwner.get(journey.routePoints[step.pointIndex]?.id ?? "")?.[step.mediaIndex]
       : undefined;
     const durationMs = resolvePlaybackStepDurationWithFallback(
       journey,

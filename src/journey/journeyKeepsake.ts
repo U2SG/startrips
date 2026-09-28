@@ -274,9 +274,8 @@ export function buildKeepsakeRenderManifest(
     // Point encoded on the media step rather than inheriting a prior chapter.
     // Reuse the manifest-wide owner index so export stays linear on long mixed
     // chapters.
-    const point = step.kind === "media" ? journey.routePoints[step.pointIndex] : undefined;
-    const asset = point
-      ? mediaByOwner.get(point.id)?.[step.mediaIndex]
+    const asset = step.kind === "media"
+      ? mediaByOwner.get(journey.routePoints[step.pointIndex]?.id ?? "")?.[step.mediaIndex]
       : undefined;
     const scenes = sceneForStep(journey, step, asset);
     return stepIndex === 0 ? [...scenes, ...introMediaDrafts] : scenes;
