@@ -7,6 +7,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { capturePaint, createPaintFixtures, gradePaint } from "./qa-story-autoplay-pixels.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const baseline = process.env.QA_R3_MODE === "baseline";
@@ -48,6 +49,8 @@ const profiles = [
   { name: "fold-wide-touch", viewport: { width: 800, height: 902 }, touch: true, dpr: 2.75, cpu: 4 },
   { name: "desktop-site-touch", viewport: { width: 980, height: 1105 }, touch: true, dpr: 2.75, cpu: 4 },
   { name: "desktop-site-large-images", viewport: { width: 980, height: 1105 }, touch: true, dpr: 2.75, cpu: 4, large: true },
+  { name: "desktop-site-painted-identities", viewport: { width: 980, height: 1105 }, touch: true, dpr: 2.75, cpu: 4, paint: true },
+  { name: "desktop-site-large-painted-identities", viewport: { width: 980, height: 1105 }, touch: true, dpr: 2.75, cpu: 4, paint: true, large: true },
 ];
 const execute = promisify(execFile);
 const largePictures = [];
@@ -60,6 +63,7 @@ for (const [index, picture] of pictures.entries()) {
   const { width, height } = JSON.parse(stdout).streams[0];
   largePictures.push({ body: await readFile(path), width, height });
 }
+const paintedPictures = await createPaintFixtures(directory, execute);
 const browser = await launchQaBrowser({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 const results = [];
 const latch = () => { let resolve; const promise = new Promise((ready) => { resolve = ready; }); return { promise, resolve }; };
@@ -80,7 +84,19 @@ async function fixture(page, profile) {
   });
   await page.route("**/api/account-preferences/earth-experience", (route) => json(route, { earthExperience: "default", revision: 0, updatedAt: null }));
   await page.route("**/api/atlases/current", (route) => json(route, { atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "Synthetic" }, role: "owner" }));
-  const suppliedJourney = profile.large ? { ...journey, media: journey.media.map((asset, index) => ({
+  const paintFixtures = paintedPictures[profile.large ? "large" : "ordinary"];
+  const suppliedJourney = profile.paint ? { ...journey,
+    routePoints: Array.from({ length: 18 }, (_, index) => ({ ...journey.routePoints[0],
+      id: `qa-r3-point-${index}`, sortOrder: index, latitude: 22.5 + index / 10,
+      longitude: 114 + index / 10, label: `Synthetic point ${index + 1}`,
+    })),
+    media: journey.media.map((asset, index) => ({ ...asset,
+      routePointId: `qa-r3-point-${index === 0 ? 0 : 9}`, mimeType: "image/png",
+      fileName: `synthetic-${index + 1}.png`, storageKey: `qa/r3-${index}.png`,
+      bytes: paintFixtures[index].body.length,
+      displayWidth: paintFixtures[index].width, displayHeight: paintFixtures[index].height,
+    })),
+  } : profile.large ? { ...journey, media: journey.media.map((asset, index) => ({
     ...asset, bytes: largePictures[index].body.length,
     displayWidth: largePictures[index].width, displayHeight: largePictures[index].height,
   })) } : journey;
@@ -103,6 +119,10 @@ async function fixture(page, profile) {
     const entry = { id, requestedAt: Date.now(), servedAt: null };
     bytes.push(entry);
     if (id === ids[4]) await byteGate.promise;
+    if (profile.paint) {
+      entry.servedAt = Date.now();
+      return route.fulfill({ status: 200, contentType: "image/png", body: paintFixtures[ids.indexOf(id)].body });
+    }
     if (profile.large) {
       entry.servedAt = Date.now();
       return route.fulfill({ status: 200, contentType: "image/jpeg", body: largePictures[ids.indexOf(id)].body });
@@ -239,8 +259,10 @@ try {
     page.on("pageerror", (error) => errors.push(String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     const record = { profile, buildSha, harnessSha, mode: baseline ? "baseline" : "candidate", errors, steps: [], holds: [] };
+    let paintCapture;
     const routes = await fixture(page, profile);
-    if (profile.large) record.fixtureDimensions = largePictures.map(({ width, height }) => [width, height]);
+    if (profile.paint || profile.large) record.fixtureDimensions = (profile.paint
+      ? paintedPictures[profile.large ? "large" : "ordinary"] : largePictures).map(({ width, height }) => [width, height]);
     try {
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("Emulation.setCPUThrottlingRate", { rate: profile.cpu });
@@ -263,6 +285,7 @@ try {
         reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
         layout: document.querySelector(".journey-story")?.getAttribute("data-story-layout"), entry: location.pathname + location.search }));
       await observe(page);
+      if (profile.paint) paintCapture = await capturePaint(cdp, page);
       await activate(page.locator('.journey-story__media-nav button[aria-pressed="false"]'));
       for (let index = 1; index <= 6; index += 1) {
         await page.waitForFunction((id) => document.querySelector(".journey-story__media")?.getAttribute("data-media-requested") === id,
@@ -282,8 +305,29 @@ try {
         await settled(ids[index]);
         record.steps.push({ index, id: ids[index] });
       }
+      let capture;
+      if (paintCapture) {
+        // Observe the last target's whole natural timer cycle. A DOM settlement
+        // or a later swap timestamp alone cannot prove its pixels were delivered.
+        // Keep the existing product dwell and observe its real next timer step.
+        await page.waitForFunction((id) => document.querySelector(".journey-story__media")?.getAttribute("data-media-requested") === id,
+          ids[7], { polling: "raf", timeout: 9_000 });
+        record.paintEnd = await page.evaluate((id) => ({ nextRequested: id,
+          nextRequestAt: window.__qaR3.frames.find((frame) => frame.requested === id)?.at ?? null }), ids[7]);
+        if (!Number.isFinite(record.paintEnd.nextRequestAt)) throw new Error("Final autoplay timer boundary was not observed");
+        capture = await paintCapture.stop();
+        paintCapture = null;
+      }
       const observations = await page.evaluate(() => { window.__qaR3.stop(); return {
-        frames: window.__qaR3.frames, writes: window.__qaR3.writes, ticks: window.__qaR3.ticks, input: window.__qaR3.input }; });
+        startedAt: window.__qaR3.input.find((event) => event.trusted && event.pressed === "false")?.at ?? null,
+        endedAt: performance.now(), frames: window.__qaR3.frames, writes: window.__qaR3.writes,
+        ticks: window.__qaR3.ticks, input: window.__qaR3.input }; });
+      if (capture) {
+        // End the observed timer run through its real control before decoding
+        // captures; analysis must not delay a later autoplay step or its network.
+        await activate(page.locator('.journey-story__media-nav button[aria-pressed="true"]'));
+        record.paint = await gradePaint(page, capture, observations, ids, `${directory}/${profile.name}-paint`);
+      }
       await writeFile(`${directory}/${profile.name}-trace.json`, JSON.stringify({ ...record, ...observations, reads: routes.reads, bytes: routes.bytes }, null, 2));
       record.observations = grade(observations.frames);
       record.ticks = observations.ticks;
@@ -292,7 +336,7 @@ try {
       record.validExecution = record.steps.length === 6 && observations.ticks.raf > 0 && !record.environment.reducedMotion
         && record.environment.entry === "/" && record.environment.layout === "desktop"
         && observations.input.some((event) => event.trusted && event.pointerType === (profile.touch ? "touch" : "mouse"))
-        && errors.length === 0;
+        && errors.length === 0 && (!profile.paint || record.paint?.validExecution);
     } catch (error) {
       record.error = String(error);
       record.validExecution = false;
@@ -301,6 +345,7 @@ try {
       if (observations) record.observations = grade(observations.frames);
       await writeFile(`${directory}/${profile.name}-failure.json`, JSON.stringify({ ...record, observations, reads: routes.reads, bytes: routes.bytes }, null, 2));
     } finally {
+      if (paintCapture) await paintCapture.stop().catch((error) => { record.paintError = String(error); });
       routes.readGate.resolve(); routes.byteGate.resolve();
       const video = page.video();
       await page.close();
@@ -325,9 +370,9 @@ try {
   }
 } finally { await browser.close(); }
 const valid = results.length === profiles.length && results.every((record) => record.validExecution);
-const reproduced = results.some((record) => record.observations?.reproduced);
+const reproduced = results.some((record) => record.observations?.reproduced || record.paint?.reproduced);
 const summary = { buildSha, harnessSha, mode: baseline ? "baseline" : "candidate", validExecution: valid,
   disposition: !valid ? "INVALID_EXECUTION" : baseline ? reproduced ? "BASELINE_REPRODUCED" : "BASELINE_NOT_REPRODUCED"
     : reproduced ? "CANDIDATE_FAILED" : "CANDIDATE_PASSED", results };
 await writeFile(`${directory}/summary.json`, JSON.stringify(summary, null, 2));
-if (!valid || (!baseline && reproduced)) process.exitCode = 1;
+if (!valid || (baseline ? !reproduced : reproduced)) process.exitCode = 1;
