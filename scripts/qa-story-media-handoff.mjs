@@ -21,7 +21,7 @@
  * each graded window reports its tick count so the two sources stay separable.
  */
 import { launchQaBrowser } from "./qa-browser.mjs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const storyPath = "/?qaState=journey-story&qaMode=mixed-media-pair";
@@ -165,16 +165,20 @@ async function observedPointerTypes(page) {
  */
 async function createStoryPage({
   mobile = false, viewport, reducedMotion = "no-preference", path = storyPath,
+  videoEvidence = false,
   readDelays = {}, readHolds = {}, byteDelays = {}, renewPausedVideo = false,
   renewalByteFailure = false, renewalReadFailure = false, renewalSameUrlRetry = false,
   expiredRangeFailure = false,
 } = {}) {
+  if (videoEvidence) await mkdir("artifacts/story-media", { recursive: true });
   const page = await browser.newPage({
     viewport: viewport ?? (mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 }),
     isMobile: mobile,
     hasTouch: mobile,
     deviceScaleFactor: 1,
     reducedMotion,
+    ...(videoEvidence ? { recordVideo: { dir: "artifacts/story-media",
+      size: viewport ?? (mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 }) } } : {}),
   });
   inputDrivers.set(page, mobile ? await touchDriver(page) : mouseDriver(page));
   const consoleErrors = [];
@@ -891,8 +895,26 @@ function installStageSampler() {
       at: Math.round(performance.now()),
       presentation: pages.getAttribute("data-media-presentation"),
       kind: pages.getAttribute("data-current-media-kind"),
+      requestedId: root.getAttribute("data-media-requested"),
       currentId: current?.getAttribute("data-media-page-id") ?? null,
       incomingId: incoming?.getAttribute("data-media-page-id") ?? null,
+      // Only the timer-driven probe needs the physical writer trace. Keep the
+      // existing gesture suites' frame payloads small.
+      slots: state.autoplayDetails ? [...pages.querySelectorAll("[data-media-page]")].map((slot) => {
+        const picture = slot.querySelector("img");
+        const style = getComputedStyle(slot);
+        return {
+          id: slot.getAttribute("data-media-page-id"),
+          role: slot.getAttribute("data-media-page"),
+          read: slot.getAttribute("data-media-read-state"),
+          generation: slot.getAttribute("data-media-read-generation"),
+          ready: slot.getAttribute("data-media-page-ready"),
+          painted: picture instanceof HTMLImageElement && !picture.hidden && picture.currentSrc
+            ? new URL(picture.currentSrc).searchParams.get("qaAsset") : null,
+          opacity: style.opacity, zIndex: style.zIndex,
+          transform: style.transform, clip: style.clipPath,
+        };
+      }) : undefined,
       centre: drawables[0]?.occludedBy ? null : drawables[0] ?? null,
       drawables,
       aperture: { width: Math.round(bounds.width), height: Math.round(bounds.height) },
@@ -984,8 +1006,9 @@ function installStageSampler() {
   // Each window owns its own chain, retired by generation. A chain started at
   // document-start is not reliably carried into the committed document, and a
   // chain that only restarts on demand can be lost when a window closes.
-  window.__qaStageStart = (rootSelector) => {
+  window.__qaStageStart = (rootSelector, options = {}) => {
     state.roots = Array.isArray(rootSelector) ? rootSelector : [rootSelector];
+    state.autoplayDetails = Boolean(options.autoplayDetails);
     state.frames = [];
     state.gestures = [];
     state.unmeasurable = 0;
@@ -1012,8 +1035,9 @@ function installStageSampler() {
 }
 /* eslint-enable no-undef */
 
-async function startSampler(page, rootSelector) {
-  await page.evaluate((selector) => window.__qaStageStart(selector), rootSelector);
+async function startSampler(page, rootSelector, options = {}) {
+  await page.evaluate(({ selector, options }) => window.__qaStageStart(selector, options),
+    { selector: rootSelector, options });
 }
 
 async function stopSampler(page) {
@@ -2052,22 +2076,31 @@ function gradePageVideos(videos) {
   };
 }
 
-// Eight synthetic photographs (the preview's `many-media` Journey). Each read
-// URL names its own asset, so a physical page that still paints another
-// asset's pixels under its new identity is visible as a `currentSrc` mismatch.
+// Eight synthetic media identities (the preview's `many-media` Journey). The
+// timed case overrides the default two-photo fixture with eight distinct
+// public pictures, while the existing gesture cases keep their original shape.
+// Each read URL names its own asset, exposing stale `currentSrc` on a slot.
 const MANY_MEDIA = Array.from({ length: 8 }, (_, index) =>
   `00000000-0000-4000-8000-${String(100 + index).padStart(12, "0")}`);
 const MANY_MEDIA_PHOTOS = [WIDE_PHOTO, SECOND_WIDE_PHOTO];
+const AUTOPLAY_MEDIA_PHOTOS = [
+  WIDE_PHOTO, TALL_PHOTO, SECOND_WIDE_PHOTO,
+  "/artworks/egypt-coffin.jpg", "/artworks/monet-water-lilies.jpg",
+  "/artworks/woman-power-poster.jpg", "/artworks/stieglitz-hand-of-man.jpg",
+  "/artworks/prehistoric-hands.jpg",
+];
 
 /**
  * Reopen `session.page` on the eight-photo Journey. The page-level routes added
  * here run before `createStoryPage`'s (Playwright matches the newest route
  * first); `gates` holds one asset's read back until the caller releases it.
  */
-async function openManyMediaStory(session, { gates = [] } = {}) {
+async function openManyMediaStory(session, { gates = [], byteGates = [], photos = MANY_MEDIA_PHOTOS } = {}) {
   const { page } = session;
   const reads = [];
   const released = new Map(gates.map((id) => [id, deferred()]));
+  const bytes = [];
+  const bytesReleased = new Map(byteGates.map((id) => [id, deferred()]));
   await page.route("**/api/uploads/assets/*/read-url", async (route) => {
     const id = /\/assets\/([^/]+)\/read-url/.exec(new URL(route.request().url()).pathname)?.[1] ?? null;
     const index = MANY_MEDIA.indexOf(id);
@@ -2079,21 +2112,28 @@ async function openManyMediaStory(session, { gates = [] } = {}) {
     return route.fulfill({
       status: 200, contentType: "application/json",
       body: JSON.stringify({
-        url: `${MANY_MEDIA_PHOTOS[index % MANY_MEDIA_PHOTOS.length]}?qaAsset=${id}`,
+        url: `${photos[index % photos.length]}?qaAsset=${id}`,
         expiresAt: new Date(Date.now() + 900_000).toISOString(),
       }),
     });
   });
   await page.route(/\/artworks\/[^?]+\?qaAsset=/, async (route) => {
     const url = new URL(route.request().url());
+    const id = url.searchParams.get("qaAsset");
+    const entry = { id, requestedAt: Date.now(), servedAt: null };
+    bytes.push(entry);
+    if (bytesReleased.has(id)) await bytesReleased.get(id).promise;
     url.search = "";
-    return route.fulfill({ response: await route.fetch({ url: url.toString() }) });
+    const response = await route.fetch({ url: url.toString() });
+    entry.servedAt = Date.now();
+    return route.fulfill({ response });
   });
   await page.goto(`${origin}/?qaState=journey-story&qaMode=many-media`, { waitUntil: "domcontentloaded" });
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
   return {
-    reads,
+    reads, bytes,
     release: (id) => released.get(id)?.resolve(),
+    releaseBytes: (id) => bytesReleased.get(id)?.resolve(),
     requested: (id) => reads.some((entry) => entry.id === id),
   };
 }
@@ -3723,6 +3763,114 @@ try {
     } finally {
       story?.release(MANY_MEDIA[3]);
       await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // #489 R3: the owner recording advances through the real Story timer. A
+  // manual burst cannot establish what owns the foreground after each timed
+  // step, particularly while a prefetched read is still held back.
+  // ---------------------------------------------------------------------
+  for (const viewport of [{ width: 1280, height: 800 }, { width: 1084, height: 1222 }]) {
+    const session = await createStoryPage({ mobile: false, viewport, videoEvidence: true });
+    const name = `story-timer-autoplay-foreground-continuity-${viewport.width}x${viewport.height}`;
+    const progress = { steps: [] };
+    let story = null;
+    try {
+      const { page } = session;
+      const delayedRead = MANY_MEDIA[3];
+      const delayedBytes = MANY_MEDIA[4];
+      story = await openManyMediaStory(session, {
+        gates: [delayedRead], byteGates: [delayedBytes], photos: AUTOPLAY_MEDIA_PHOTOS,
+      });
+      await waitForSettledAsset(page, MANY_MEDIA[0]);
+      progress.normalMotion = await page.evaluate(() =>
+        !matchMedia("(prefers-reduced-motion: reduce)").matches);
+      progress.initialWarm = await waitForReadRequests(page, story, MANY_MEDIA.slice(1, 4));
+      await startPaintIdentityProbe(page, STAGE);
+      await startSampler(page, STAGE, { autoplayDetails: true });
+      // #570 relabels this same timer as secondary Story autoplay.
+      await page.locator('.journey-story__media-nav button[aria-pressed="false"]').click();
+      progress.playPressed = await page.locator('.journey-story__media-nav [aria-pressed="true"]')
+        .count() > 0;
+      for (let index = 1; index <= 6; index += 1) {
+        const id = MANY_MEDIA[index];
+        const previous = MANY_MEDIA[index - 1];
+        const requested = await waitForRequestedMedia(page, id, 9_000);
+        const gate = id === delayedRead ? "read" : id === delayedBytes ? "decode" : null;
+        let hold = null;
+        if (gate && requested) {
+          if (gate === "decode") {
+            const deadline = Date.now() + 5_000;
+            while (!story.bytes.some((entry) => entry.id === id) && Date.now() < deadline) {
+              await nextFrame(page);
+            }
+          }
+          const from = await pageClock(page);
+          for (let frame = 0; frame < 25; frame += 1) await nextFrame(page);
+          const to = await pageClock(page);
+          hold = { from, to, gate,
+            responseHeld: (gate === "read" ? story.reads : story.bytes).some((entry) =>
+              entry.id === id && entry.servedAt === null) };
+          await page.screenshot({ path: `artifacts/story-media/${name}-held-${gate}.png` });
+          if (gate === "read") story.release(id);
+          else story.releaseBytes(id);
+        }
+        const settled = requested && await waitForSettledAsset(page, id).then(() => true, () => false);
+        const frames = await stopSamplerFrames(page);
+        const continuity = gradeContinuity(frames, { allowedAssets: MANY_MEDIA });
+        const expected = [previous, id];
+        const heldFrames = hold ? frames.filter((frame) => frame.at >= hold.from && frame.at <= hold.to) : [];
+        const heldForegrounds = [...new Set(heldFrames.map((frame) => frame.centre?.asset ?? null))];
+        const dimmedPrevious = frames.filter((frame) => frame.centre?.asset === previous
+          && Number(frame.slots?.find((slot) => slot.id === previous)?.opacity) < 0.99);
+        const dimmingMs = dimmedPrevious.length > 1
+          ? dimmedPrevious.at(-1).at - dimmedPrevious[0].at : 0;
+        progress.steps.push({
+          index, requested, settled, expected, continuity,
+          dimmingMs, dimmedPrevious: dimmedPrevious.slice(0, 4),
+          requestTrace: frames.filter((frame) => frame.requestedId === id).slice(0, 2),
+          ownerChanges: frames.filter((frame, at) => at === 0
+            || frame.centre?.asset !== frames[at - 1].centre?.asset).slice(0, 5),
+          hold: hold ? { gate, responseHeld: hold.responseHeld, frames: heldFrames.length,
+            foregrounds: heldForegrounds,
+            waiting: heldFrames.some((frame) => frame.waiting || frame.stageStatus),
+            dimmed: heldFrames.some((frame) =>
+              Number(frame.slots?.find((slot) => slot.id === previous)?.opacity) < 0.99),
+          } : null,
+          failed: !requested || !settled || continuity.failed
+            || JSON.stringify(continuity.foregroundSequence) !== JSON.stringify(expected)
+            || dimmedPrevious.length > 0
+            || (hold && (!hold.responseHeld || heldFrames.length < 20
+              || heldForegrounds.length !== 1 || heldForegrounds[0] !== previous
+              || heldFrames.some((frame) => frame.waiting || frame.stageStatus
+                || Number(frame.slots?.find((slot) => slot.id === previous)?.opacity) < 0.99))),
+        });
+        if (!settled) break;
+        if (index < 6) await startSampler(page, STAGE, { autoplayDetails: true });
+      }
+      progress.paint = await stopPaintIdentityProbe(page);
+      await page.screenshot({ path: `artifacts/story-media/${name}-settled.png` });
+      record({ name,
+        claim: "the real Story play button and timer carry six distinct mixed-aspect photographs across warm hits, a held read and held image bytes; every sampled step keeps a presentable foreground, moves only from its old owner to its target, never shows waiting over the old picture, and uses no more than three physical pages",
+        ...progress, reads: story.reads, bytes: story.bytes,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: !progress.normalMotion || !progress.initialWarm || !progress.playPressed
+          || progress.steps.length !== 6 || progress.steps.some((step) => step.failed)
+          || !progress.paint?.frames || progress.paint.mismatches.length > 0
+          || progress.paint.maxPages > 3 || progress.paint.maxVideos > 1
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        diagnostic: await stageDiagnostic(session.page, STAGE).catch(() => null),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      story?.release(MANY_MEDIA[3]);
+      story?.releaseBytes(MANY_MEDIA[4]);
+      const video = session.page.video();
+      await session.page.close();
+      if (video) await rename(await video.path(), `artifacts/story-media/${name}-continuous.webm`);
     }
   }
 
