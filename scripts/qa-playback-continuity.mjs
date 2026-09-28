@@ -937,8 +937,9 @@ for (const viewport of VIEWPORTS.slice(0, 2)) {
     const expectedRoute = Array.from({ length: 6 }, (_, index) => `st121-chapter-point-${index}`);
     const run = await open({ viewport, qaMode: "chapter-membership", recap });
     try {
-      await run.page.waitForFunction(() => document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "completed",
-        null, { timeout: 60_000 });
+      // The phase attribute names the retained final beat (`outro`). The real
+      // transport publishes completion through its Replay control.
+      await run.page.locator('button[aria-label="重新播放"]').waitFor({ state: "visible", timeout: 60_000 });
       const trace = await readTrace(run.page);
       const cameraKeys = trace.cameraTargets.map((entry) => entry.key);
       const chapterPoints = [...new Set(trace.samples.map((sample) => sample.chapterPoint).filter((point) => point !== null))];
