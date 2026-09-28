@@ -861,8 +861,11 @@ function JourneyPlaybackPrefetchQaPreview() {
 // #456's original 0/1/3 fixture is also consumed by the #465 map-bridge
 // lane. Keep that contract stable; #492 opts into the richer 4/6/9 fixture
 // explicitly so one QA slice cannot silently renumber another slice's beats.
+// #498 gets a separate 10/30/60 fixture so its large chapter does not make the
+// earlier continuity walk pay an unbounded navigation cost.
 const CONTINUITY_QA_MEDIA_COUNTS = [0, 1, 3];
 const SEQUENCE_CONTINUITY_QA_MEDIA_COUNTS = [0, 1, 3, 4, 6, 9];
+const DENSE_CONTINUITY_QA_MEDIA_COUNTS = [10, 30, 60];
 
 const continuityQaJourneyId = "00000000-0000-4000-8000-000000000456";
 function buildContinuityQaJourney(mediaCounts: readonly number[]): Journey {
@@ -889,10 +892,14 @@ function buildContinuityQaJourney(mediaCounts: readonly number[]): Journey {
       routePointId: point.id,
       storageDriver: "qa",
       storageKey: `qa/continuity-${pointIndex}-${mediaIndex}`,
-      fileName: pointIndex === 4 && mediaIndex === 2
+      fileName: (pointIndex === 4 && mediaIndex === 2)
+        || (mediaCounts[pointIndex] >= 30 && mediaIndex === 2)
         ? `continuity-${pointIndex}-${mediaIndex}.webm`
         : `continuity-${pointIndex}-${mediaIndex}.png`,
-      mimeType: pointIndex === 4 && mediaIndex === 2 ? "video/webm" : "image/png",
+      mimeType: (pointIndex === 4 && mediaIndex === 2)
+        || (mediaCounts[pointIndex] >= 30 && mediaIndex === 2)
+        ? "video/webm"
+        : "image/png",
       bytes: 68,
       sortOrder: pointIndex * 10 + mediaIndex,
       uploadedByUserId: storyQaJourney.createdByUserId,
@@ -910,6 +917,7 @@ function buildContinuityQaJourney(mediaCounts: readonly number[]): Journey {
 }
 const continuityQaJourney = buildContinuityQaJourney(CONTINUITY_QA_MEDIA_COUNTS);
 const sequenceContinuityQaJourney = buildContinuityQaJourney(SEQUENCE_CONTINUITY_QA_MEDIA_COUNTS);
+const denseContinuityQaJourney = buildContinuityQaJourney(DENSE_CONTINUITY_QA_MEDIA_COUNTS);
 
 type ContinuityQaTrace = { cameraTargets: { key: string; at: number; step: number | null; phase: string | null }[] };
 
@@ -987,7 +995,12 @@ function JourneyPlaybackContinuityQaPreview() {
   const bridgeVideo = params.get("qaMapBridgeVideo") === "1";
   const nearbyBridge = params.get("qaMapBridgeNearby") === "1";
   const sequenceDensityQa = params.get("qaSequenceDensity") === "1";
-  const baseJourney = sequenceDensityQa ? sequenceContinuityQaJourney : continuityQaJourney;
+  const denseDensityQa = params.get("qaDenseDensity") === "1";
+  const baseJourney = denseDensityQa
+    ? denseContinuityQaJourney
+    : sequenceDensityQa
+      ? sequenceContinuityQaJourney
+      : continuityQaJourney;
   const journey = useMemo(() => ({
     ...baseJourney,
     routePoints: nearbyBridge ? baseJourney.routePoints.map((point, index) => ({

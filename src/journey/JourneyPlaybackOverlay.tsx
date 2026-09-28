@@ -20,7 +20,7 @@ import "../styles/starlight-media.css";
 import { useAtlasView } from "./atlasView";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import { PlaybackMediaStage } from "./PlaybackMediaStage";
-import { playbackSequenceChapterPresentation } from "./playbackSequenceChapter";
+import { playbackSequenceChapterPresentation, type PlaybackSequenceChapterPresentation } from "./playbackSequenceChapter";
 import { usePlaybackMapBridge } from "./usePlaybackMapBridge";
 import { playbackReadIsReusable, type MediaReadState as MediaRead } from "./mediaReadRefresh";
 import { playbackMediaGate, playbackChapterOpeningUrl, playbackHoldReason, type PlaybackHoldReason } from "./playbackMediaPresentation";
@@ -120,6 +120,40 @@ function quickRecapOmissionReasonLabel(reason: QuickRecapOmissionReason) {
   switch (reason) {
     case "not-selected": return "本次快速回顾未选入";
   }
+}
+
+export function JourneyPlaybackDenseNavigator({
+  presentation,
+  onBack,
+  onNext,
+}: {
+  presentation: PlaybackSequenceChapterPresentation;
+  onBack: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <nav
+      className="journey-playback__dense-nav"
+      aria-label="本地点媒体导航"
+      data-dense-position={presentation.position}
+      data-dense-total={presentation.total}
+      data-dense-primary-asset={presentation.primaryAssetId}
+    >
+      <button
+        type="button"
+        onClick={onBack}
+        disabled={!presentation.canPrevious}
+        aria-label="上一张媒体"
+      ><IconChevronLeft size={16} stroke={1.35} aria-hidden="true" /></button>
+      <span aria-live="polite">{presentation.position} / {presentation.total}</span>
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={!presentation.canNext}
+        aria-label="下一张媒体"
+      ><IconChevronRight size={16} stroke={1.35} aria-hidden="true" /></button>
+    </nav>
+  );
 }
 
 /**
@@ -1287,6 +1321,9 @@ export function JourneyPlaybackOverlay({
       return url ? [{ asset, url }] : [];
     })
     : undefined;
+  const densePresentation = sequencePresentation?.density === "dense"
+    ? sequencePresentation
+    : null;
   // The arrival beat already waits for this asset to decode (`playbackHoldReason`),
   // so showing it as the chapter's opening still costs no extra read and removes
   // the blank frame the media beat used to enter from. A video chapter keeps the
@@ -1456,6 +1493,14 @@ export function JourneyPlaybackOverlay({
                     </div>
                   </div>
                 ) : null}
+
+        {densePresentation ? (
+          <JourneyPlaybackDenseNavigator
+            presentation={densePresentation}
+            onBack={backByViewer}
+            onNext={nextByViewer}
+          />
+        ) : null}
 
         {step?.kind === "media" && activeMedia ? (
           <PlaybackMediaStage

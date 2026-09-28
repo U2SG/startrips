@@ -4,8 +4,8 @@
 // `meaningfulPlaybackStepIndexes`); they cannot see the thing the issue is
 // actually about, which is what a viewer sees at the seam between an arrival
 // and the Route Point Media it introduces. This lane plays deterministic
-// 0/1/3/4/6/9-media chapters in a real browser and grades the claims that only
-// exist on screen:
+// 0/1/3/4/6/9-media chapters plus a separate 10/30/60 dense fixture in a
+// real browser and grades the claims that only exist on screen:
 //
 //   1. no same-point globe re-focus — one camera command per Route Point, and
 //      never two in a row for the same target;
@@ -15,7 +15,9 @@
 //   3. meaningful Next/Previous — an `empty` chapter's arrival is a
 //      destination, a populated chapter's arrival is not, and every media beat
 //      stays reachable in canonical order;
-//   4. 4-9 sequence chapters expose bounded peeks without a second video;
+//   4. 4-9 sequence and 10+ dense chapters expose bounded peeks without a
+//      second video; dense chapters also expose honest position / total and a
+//      constant-size navigator owned by the same Playback director;
 //   5. all of it on desktop, portrait phone AND phone landscape;
 //   6. #126 R2 Q1-Q3: the opening still and the first media keep one painted
 //      rect, a departing picture never shows outside the incoming aperture or
@@ -37,15 +39,16 @@ const tinyVideo = "/demo-media/east-star-orbit.webm";
  * the beat table it drives.
  */
 const MEDIA_COUNTS = [0, 1, 3, 4, 6, 9];
+const DENSE_MEDIA_COUNTS = [10, 30, 60];
 
 /** `buildPlaybackSteps` order for that fixture: intro, then per point a travel
  * (except the first), its arrival and one media beat per asset, then outro. */
-function fixtureSteps() {
+function fixtureSteps(mediaCounts = MEDIA_COUNTS) {
   const steps = [{ kind: "intro" }];
-  for (let pointIndex = 0; pointIndex < MEDIA_COUNTS.length; pointIndex += 1) {
+  for (let pointIndex = 0; pointIndex < mediaCounts.length; pointIndex += 1) {
     if (pointIndex > 0) steps.push({ kind: "travel", pointIndex });
-    steps.push({ kind: "stop", pointIndex, mediaCount: MEDIA_COUNTS[pointIndex] });
-    for (let mediaIndex = 0; mediaIndex < MEDIA_COUNTS[pointIndex]; mediaIndex += 1) {
+    steps.push({ kind: "stop", pointIndex, mediaCount: mediaCounts[pointIndex] });
+    for (let mediaIndex = 0; mediaIndex < mediaCounts[pointIndex]; mediaIndex += 1) {
       steps.push({ kind: "media", pointIndex, mediaIndex });
     }
   }
@@ -54,9 +57,11 @@ function fixtureSteps() {
 }
 
 const STEPS = fixtureSteps();
+const DENSE_STEPS = fixtureSteps(DENSE_MEDIA_COUNTS);
 
 const densityFor = (mediaCount) => (
-  mediaCount === 0 ? "empty" : mediaCount === 1 ? "single" : mediaCount <= 3 ? "few" : "sequence"
+  mediaCount === 0 ? "empty" : mediaCount === 1 ? "single" : mediaCount <= 3 ? "few"
+    : mediaCount <= 9 ? "sequence" : "dense"
 );
 
 /** The beats manual Next/Previous may land on: everything but travel and the
@@ -91,7 +96,7 @@ function record(name, detail) {
   if (detail.failed) failed = true;
 }
 
-async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null, qaMode = "continuity", recap = false }) {
+async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null, qaMode = "continuity", recap = false, densityQa = "sequence" }) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
@@ -119,6 +124,7 @@ async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = 
       const chapter = overlay.querySelector(".journey-playback__chapter");
       const mediaRegion = overlay.querySelector(".journey-playback__chapter-media");
       const presentation = mediaRegion?.querySelector(".playback-media-presentation");
+      const denseNav = overlay.querySelector(".journey-playback__dense-nav");
       return {
         at: Date.now(),
         step: Number(overlay.getAttribute("data-playback-step")),
@@ -135,6 +141,10 @@ async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = 
         presentedAsset: presentation?.getAttribute("data-presented-asset") ?? null,
         sequencePrimary: presentation?.getAttribute("data-sequence-primary") ?? null,
         sequencePeekCount: Number(presentation?.getAttribute("data-sequence-peek-count") ?? 0),
+        renderedMediaNodes: presentation?.querySelectorAll("[data-media-asset]").length ?? 0,
+        densePosition: Number(denseNav?.getAttribute("data-dense-position") ?? 0),
+        denseTotal: Number(denseNav?.getAttribute("data-dense-total") ?? 0),
+        denseNavButtons: denseNav?.querySelectorAll("button").length ?? 0,
         liveVideoCount: presentation?.querySelectorAll(".playback-media-presentation__slot video").length ?? 0,
         peekVideoCount: presentation?.querySelectorAll(".playback-media-presentation__peek video").length ?? 0,
       };
@@ -181,7 +191,7 @@ async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = 
     qaState: "journey-playback",
     qaMode,
     qaRecap: recap ? "1" : "0",
-    qaSequenceDensity: "1",
+    ...(densityQa === "dense" ? { qaDenseDensity: "1" } : { qaSequenceDensity: "1" }),
     qaReduceMotion: reduceMotion ? "1" : "0",
   });
   await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded" });
@@ -213,6 +223,14 @@ async function clickTransport(page, label) {
   await control.evaluate((button) => button.click());
   // The reducer commits with the click's own render; one animation frame is
   // enough to read the committed beat without polling for a timing guess.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => (
+    requestAnimationFrame(resolve)
+  ))));
+}
+
+async function clickDenseNav(page, label) {
+  const control = page.locator(`.journey-playback__dense-nav button[aria-label="${label}"]`);
+  await control.evaluate((button) => button.click());
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => (
     requestAnimationFrame(resolve)
   ))));
@@ -440,6 +458,192 @@ for (const viewport of VIEWPORTS) {
         || final.presented !== final.requested || final.peeks < 1,
     });
   } finally {
+    await run.page.close();
+  }
+}
+
+// ── Dense 10+/30+/large chapters: bounded DOM, honest position, same director ──
+const denseReadUrl = (url) => (
+  url.includes("st109-p1-m2") || url.includes("st109-p2-m2") ? tinyVideo : onePixelGif
+);
+
+for (const viewport of VIEWPORTS) {
+  const run = await open({ viewport, densityQa: "dense", readUrl: denseReadUrl });
+  try {
+    await pausePlayback(run.page);
+    for (let rewind = 0; rewind < DENSE_STEPS.length; rewind += 1) {
+      await clickTransport(run.page, "上一个章节");
+    }
+
+    const anomalies = [];
+    for (let pointIndex = 0; pointIndex < DENSE_MEDIA_COUNTS.length; pointIndex += 1) {
+      const total = DENSE_MEDIA_COUNTS[pointIndex];
+      for (let mediaIndex = 0; mediaIndex < total; mediaIndex += 1) {
+        await clickTransport(run.page, "下一个章节");
+        const expectedStep = DENSE_STEPS.findIndex((candidate) => (
+          candidate.kind === "media"
+          && candidate.pointIndex === pointIndex
+          && candidate.mediaIndex === mediaIndex
+        ));
+        const state = await run.page.locator(".journey-playback").evaluate((overlay) => {
+          const nav = overlay.querySelector(".journey-playback__dense-nav");
+          const presentation = overlay.querySelector(".playback-media-presentation");
+          const buttons = [...(nav?.querySelectorAll("button") ?? [])];
+          return {
+            step: Number(overlay.getAttribute("data-playback-step")),
+            density: overlay.getAttribute("data-playback-chapter-density"),
+            point: Number(overlay.querySelector(".journey-playback__chapter")?.getAttribute("data-chapter-point")),
+            position: Number(nav?.getAttribute("data-dense-position") ?? 0),
+            total: Number(nav?.getAttribute("data-dense-total") ?? 0),
+            previousDisabled: buttons[0]?.disabled ?? null,
+            nextDisabled: buttons[1]?.disabled ?? null,
+            primary: presentation?.getAttribute("data-sequence-primary") ?? null,
+            requested: presentation?.getAttribute("data-requested-asset") ?? null,
+            peeks: Number(presentation?.getAttribute("data-sequence-peek-count") ?? 0),
+            renderedMediaNodes: presentation?.querySelectorAll("[data-media-asset]").length ?? 0,
+            liveVideos: presentation?.querySelectorAll(".playback-media-presentation__slot video").length ?? 0,
+            peekVideos: presentation?.querySelectorAll(".playback-media-presentation__peek video").length ?? 0,
+          };
+        });
+        const invalid = state.step !== expectedStep
+          || state.density !== "dense"
+          || state.point !== pointIndex
+          || state.position !== mediaIndex + 1
+          || state.total !== total
+          || state.previousDisabled !== (mediaIndex === 0)
+          || state.nextDisabled !== (mediaIndex === total - 1)
+          || state.primary !== state.requested
+          || state.peeks > 2
+          || state.renderedMediaNodes > 4
+          || state.liveVideos > 1
+          || state.peekVideos > 0;
+        if (invalid) anomalies.push({ pointIndex, mediaIndex, expectedStep, ...state });
+
+        // The dense-local buttons are a projection of the same director. A
+        // round-trip must change only its media index and never re-focus the map.
+        if (mediaIndex === 0) {
+          const cameraBefore = (await readTrace(run.page)).cameraTargets.length;
+          await clickDenseNav(run.page, "下一张媒体");
+          const forward = await run.page.locator(".journey-playback__dense-nav").evaluate((nav) => ({
+            position: Number(nav.getAttribute("data-dense-position")),
+            point: Number(document.querySelector(".journey-playback__chapter")?.getAttribute("data-chapter-point")),
+          }));
+          await clickDenseNav(run.page, "上一张媒体");
+          const returned = await run.page.locator(".journey-playback__dense-nav").evaluate((nav) => ({
+            position: Number(nav.getAttribute("data-dense-position")),
+            point: Number(document.querySelector(".journey-playback__chapter")?.getAttribute("data-chapter-point")),
+          }));
+          const cameraAfter = (await readTrace(run.page)).cameraTargets.length;
+          if (forward.position !== 2 || returned.position !== 1
+            || forward.point !== pointIndex || returned.point !== pointIndex
+            || cameraAfter !== cameraBefore) {
+            anomalies.push({ pointIndex, localNav: { forward, returned, cameraBefore, cameraAfter } });
+          }
+        }
+      }
+    }
+
+    const trace = await readTrace(run.page);
+    const denseSamples = trace.samples.filter((sample) => sample.density === "dense");
+    const requestedVideos = denseSamples.filter((sample) => (
+      sample.requestedAsset === "st109-p1-m2" || sample.requestedAsset === "st109-p2-m2"
+    ));
+    record(`${viewport.label}:dense-10-30-60-bounded-seekable`, {
+      visitedDenseSamples: denseSamples.length,
+      requestedVideoSamples: requestedVideos.length,
+      maxRenderedMediaNodes: Math.max(0, ...denseSamples.map((sample) => sample.renderedMediaNodes)),
+      maxPeekCount: Math.max(0, ...denseSamples.map((sample) => sample.sequencePeekCount)),
+      maxLiveVideos: Math.max(0, ...denseSamples.map((sample) => sample.liveVideoCount)),
+      maxPeekVideos: Math.max(0, ...denseSamples.map((sample) => sample.peekVideoCount)),
+      anomalies,
+      consoleErrors: run.consoleErrors,
+      pageErrors: run.pageErrors,
+      failed: anomalies.length > 0
+        || requestedVideos.length === 0
+        || run.consoleErrors.length > 0
+        || run.pageErrors.length > 0,
+    });
+  } finally {
+    await run.page.close();
+  }
+}
+
+// Dense delayed-read + rapid tempo/seek: obsolete work must not win after a
+// newer director intent, and motion/reduced-motion share the same active asset.
+{
+  let releaseHeld = () => undefined;
+  const held = new Promise((resolve) => { releaseHeld = resolve; });
+  const run = await open({
+    viewport: VIEWPORTS[2],
+    reduceMotion: false,
+    densityQa: "dense",
+    readUrl: denseReadUrl,
+    holdRead: (url) => (url.includes("st109-p1-m2") ? held : undefined),
+  });
+  try {
+    await pausePlayback(run.page);
+    for (let rewind = 0; rewind < DENSE_STEPS.length; rewind += 1) {
+      await clickTransport(run.page, "上一个章节");
+    }
+    const heldStep = DENSE_STEPS.findIndex((candidate) => (
+      candidate.kind === "media" && candidate.pointIndex === 1 && candidate.mediaIndex === 2
+    ));
+    for (let move = 0; move < DENSE_STEPS.length; move += 1) {
+      if ((await currentStep(run.page)).step === heldStep) break;
+      await clickTransport(run.page, "下一个章节");
+    }
+
+    const scrubber = run.page.locator('.journey-playback__progress input[type="range"]');
+    const tempo = run.page.locator(".journey-playback__tempo select");
+    await tempo.selectOption("fast");
+    await scrubber.press("ArrowRight");
+    await tempo.selectOption("immersive");
+    await scrubber.press("ArrowRight");
+    await tempo.selectOption("standard");
+
+    await run.page.waitForFunction(() => {
+      const overlay = document.querySelector(".journey-playback");
+      const presentation = overlay?.querySelector(".playback-media-presentation");
+      return overlay?.getAttribute("data-playback-chapter-density") === "dense"
+        && presentation?.getAttribute("data-media-presentation") === "settled"
+        && presentation.getAttribute("data-presented-asset") === presentation.getAttribute("data-requested-asset")
+        && presentation.getAttribute("data-requested-asset") !== "st109-p1-m2";
+    }, null, { timeout: 10_000 });
+    const beforeRelease = await run.page.locator(".journey-playback").evaluate((overlay) => {
+      const presentation = overlay.querySelector(".playback-media-presentation");
+      const nav = overlay.querySelector(".journey-playback__dense-nav");
+      return {
+        requested: presentation?.getAttribute("data-requested-asset") ?? null,
+        presented: presentation?.getAttribute("data-presented-asset") ?? null,
+        position: Number(nav?.getAttribute("data-dense-position") ?? 0),
+        total: Number(nav?.getAttribute("data-dense-total") ?? 0),
+      };
+    });
+    releaseHeld();
+    await run.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const afterRelease = await run.page.locator(".journey-playback").evaluate((overlay) => {
+      const presentation = overlay.querySelector(".playback-media-presentation");
+      const nav = overlay.querySelector(".journey-playback__dense-nav");
+      return {
+        requested: presentation?.getAttribute("data-requested-asset") ?? null,
+        presented: presentation?.getAttribute("data-presented-asset") ?? null,
+        position: Number(nav?.getAttribute("data-dense-position") ?? 0),
+        total: Number(nav?.getAttribute("data-dense-total") ?? 0),
+      };
+    });
+    record("phone-landscape:dense-delayed-read-rapid-seek-stays-current", {
+      beforeRelease,
+      afterRelease,
+      consoleErrors: run.consoleErrors,
+      pageErrors: run.pageErrors,
+      failed: beforeRelease.requested === "st109-p1-m2"
+        || beforeRelease.requested !== beforeRelease.presented
+        || JSON.stringify(afterRelease) !== JSON.stringify(beforeRelease)
+        || run.consoleErrors.length > 0
+        || run.pageErrors.length > 0,
+    });
+  } finally {
+    releaseHeld();
     await run.page.close();
   }
 }

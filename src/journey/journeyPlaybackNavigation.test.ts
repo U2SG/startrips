@@ -4,6 +4,7 @@ import {
   initialPlaybackState,
   meaningfulPlaybackStepIndex,
   meaningfulPlaybackStepIndexes,
+  playbackMediaForStep,
   playbackReducer,
 } from "./journeyPlayback";
 import { buildPlaybackPlan, nextMeaningfulStepIndex } from "./journeyPlaybackPlan";
@@ -180,6 +181,26 @@ describe("meaningful Journey Playback navigation (#126)", () => {
       { type: "media", pointIndex: 0, mediaIndex: 2 },
       { type: "outro" },
     ]);
+  });
+
+  it("keeps every canonical visual asset of a dense chapter in sort order without sampling", () => {
+    const canonicalMedia = Array.from({ length: 30 }, (_value, index) =>
+      media(`dense-${index}`, "point-0", index));
+    const denseJourney: Journey = {
+      ...journey,
+      routePoints: [point("point-0", 0)],
+      // Feed the product builder the reverse storage order: the canonical
+      // playback order must still come from sortOrder, not array position.
+      media: [...canonicalMedia].reverse(),
+    };
+
+    const steps = buildPlaybackSteps(denseJourney);
+    const denseMediaSteps = steps.filter((step) => step.kind === "media");
+    expect(denseMediaSteps).toHaveLength(30);
+    expect(denseMediaSteps.map((step) => playbackMediaForStep(denseJourney, step)?.id))
+      .toEqual(canonicalMedia.map((asset) => asset.id));
+    expect(denseMediaSteps.map((step) => step.kind === "media" ? step.mediaIndex : -1))
+      .toEqual(Array.from({ length: 30 }, (_value, index) => index));
   });
 
 

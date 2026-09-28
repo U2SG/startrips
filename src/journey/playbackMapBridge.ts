@@ -34,11 +34,10 @@ export function playbackMapBridgeBoundary(
     direction = "media-to-map";
   } else return null;
   const density = routePointChapterDensity(journey, pointIndex);
-  // #492: a sequence is still one Route Point chapter, so it keeps the
-  // existing place -> first media / last media -> place bridge at its chapter
-  // edges. Only adjacent media stay quiet. The 10+ dense grammar is a later
-  // slice and keeps the pre-#492 no-bridge fallback for now.
-  if (density === "empty" || playbackMediaForPoint(journey, pointIndex).length > 9) return null;
+  // #492/#498: sequence and dense media are still one Route Point chapter,
+  // so only its outer place/media edges bridge. Adjacent assets stay inside
+  // the same chapter with no map transition regardless of media count.
+  if (density === "empty") return null;
   return { direction, pointIndex, density };
 }
 

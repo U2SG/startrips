@@ -264,6 +264,21 @@ describe("planPrefetchWindow", () => {
     expect(widest).toBeLessThanOrEqual(MAX_PREFETCH_ASSETS);
   });
 
+  it("keeps one 60-media dense chapter bounded across tempo changes and seeks", () => {
+    for (const tempo of ["fast", "standard", "immersive"] as const) {
+      const steps = imageJourneySteps(tempo, 1, 60);
+      const budgetMs = readyMsAheadForTempo(tempo);
+      for (const mediaIndex of [0, 29, 59]) {
+        const targetId = `p0-image${mediaIndex}`;
+        const targetStep = mediaStepIndex(steps, targetId);
+        const window = planFor(steps, targetStep, budgetMs);
+        expect(window.assetIds[0]).toBe(targetId);
+        expect(window.assetIds.length).toBeLessThanOrEqual(MAX_PREFETCH_ASSETS);
+        expect(window.assetIds.every((assetId) => mediaStepIndex(steps, assetId) >= targetStep)).toBe(true);
+      }
+    }
+  });
+
   it("caps the window when the steps ahead carry no duration to spend", () => {
     const steps: PrefetchStep[] = Array.from(
       { length: 60 },
