@@ -141,10 +141,10 @@ export type PlaybackStep =
  * How much media one Route Point chapter carries.
  *
  * Sparse 0 / 1 / 2-3 chapters keep their existing grammar. The 4-9 band is
- * `sequence`; 10+ deliberately keeps the old fallback until its dense chapter
- * grammar lands in the follow-up slice.
+ * `sequence`; 10+ is `dense`, while still preserving every canonical asset in
+ * the director-owned playback order.
  */
-export type RoutePointChapterDensity = "empty" | "single" | "few" | "sequence";
+export type RoutePointChapterDensity = "empty" | "single" | "few" | "sequence" | "dense";
 
 /**
  * The density of one already-resolved chapter media list.
@@ -160,7 +160,7 @@ function chapterDensityForMedia(
   if (media.length === 1) return "single";
   if (media.length <= 3) return "few";
   if (media.length <= 9) return "sequence";
-  return "few";
+  return "dense";
 }
 
 /** The sparse chapter density of one Route Point, derived only from

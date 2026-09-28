@@ -636,7 +636,7 @@ describe("routePointChapterDensity (#456)", () => {
     ],
   });
 
-  it("classifies sparse and 4-9 sequence Route Point Media without claiming the 10+ band", () => {
+  it("classifies sparse, sequence and dense Route Point media without changing the lower bands", () => {
     expect(routePointChapterDensity(densityJourney(0), 0)).toBe("empty");
     expect(routePointChapterDensity(densityJourney(1), 0)).toBe("single");
     expect(routePointChapterDensity(densityJourney(2), 0)).toBe("few");
@@ -644,7 +644,8 @@ describe("routePointChapterDensity (#456)", () => {
     expect(routePointChapterDensity(densityJourney(4), 0)).toBe("sequence");
     expect(routePointChapterDensity(densityJourney(6), 0)).toBe("sequence");
     expect(routePointChapterDensity(densityJourney(9), 0)).toBe("sequence");
-    expect(routePointChapterDensity(densityJourney(10), 0)).toBe("few");
+    expect(routePointChapterDensity(densityJourney(10), 0)).toBe("dense");
+    expect(routePointChapterDensity(densityJourney(30), 0)).toBe("dense");
   });
 
   it("derives density only from playbackMediaForPoint", () => {
