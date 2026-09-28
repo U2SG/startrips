@@ -1116,9 +1116,14 @@ try {
   const projectionPlayback = projectionPage.locator('.journey-playback[data-playback-mode="full"]');
   await projectionPlayback.waitFor({ state: "visible", timeout: 5_000 });
   const projectedFullSteps = Number(await projectionPlayback.getAttribute("data-playback-steps"));
-  record("Full Playback retains every route point and the owned media chapter", {
+  const expectedProjectedFullSteps = 2
+    + Math.max(0, projectionRoutePoints.length - 1)
+    + projectionRoutePoints.filter((point) => point.isStop).length
+    + projectionJourney.media.length;
+  record("Full Playback keeps route travel, real Stops, and owned media without inventing transit arrivals", {
     projectedFullSteps,
-  }, projectedFullSteps === 2 * projectionRoutePoints.length + 2);
+    expectedProjectedFullSteps,
+  }, projectedFullSteps === expectedProjectedFullSteps);
   const pausePlayback = projectionPage.locator('.journey-playback__controls button[aria-label="暂停播放"]');
   if (await pausePlayback.count()) await pausePlayback.click();
   const playbackProgress = projectionPage.locator('.journey-playback__progress input[type="range"]');

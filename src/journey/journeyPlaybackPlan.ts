@@ -2,6 +2,7 @@ import {
   buildPlaybackSteps,
   meaningfulPlaybackStepIndex,
   meaningfulPlaybackStepIndexes,
+  playbackMediaByOwner,
   playbackMediaForPoint,
   routePointAngularDistance,
   type PlaybackStep,
@@ -209,13 +210,20 @@ export function buildPlaybackPlan(
   homeContext?: HomeNarrativeContext | null,
 ): PlaybackPlan {
   const steps = buildPlaybackSteps(journey, homeContext);
+  const mediaByOwner = playbackMediaByOwner(
+    journey,
+    journey.routePoints.map((point) => point.id),
+  );
   let cursorMs = 0;
   const segments = steps.map((step, stepIndex) => {
     // Media ownership is resolved from the step's Route Point directly. A
     // pure-transit point intentionally has no preceding stop chapter, so any
-    // state carried from the previous Stop would misattribute its media.
-    const asset = step.kind === "media"
-      ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
+    // state carried from the previous Stop would misattribute its media. Build
+    // the owner index once so a long Journey remains linear rather than
+    // rescanning every asset for every media beat.
+    const point = step.kind === "media" ? journey.routePoints[step.pointIndex] : undefined;
+    const asset = point
+      ? mediaByOwner.get(point.id)?.[step.mediaIndex]
       : undefined;
     const durationMs = resolvePlaybackStepDurationWithFallback(
       journey,

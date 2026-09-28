@@ -818,12 +818,16 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   // scope so that entering shared mode — where this component never renders —
   // constructs no owner mutation client at all.
   const ownerRole = gate.kind === "ready" ? gate.role : "";
-  const ownerView = useMemo(
-    () => createOwnerAtlasView({
+  const qaOwnerPrivateReadsDisabled = import.meta.env.DEV
+    && Boolean(new URLSearchParams(window.location.search).get("qaState"));
+  const ownerView = useMemo(() => {
+    const view = createOwnerAtlasView({
       canDeleteJourney: ownerRole.split(",").includes("owner"),
-    }),
-    [ownerRole],
-  );
+    });
+    return qaOwnerPrivateReadsDisabled
+      ? { ...view, readRecordedTrackGeometry: null }
+      : view;
+  }, [ownerRole, qaOwnerPrivateReadsDisabled]);
   const accountSheetOpen = isMobileV2 && accountSurface !== null;
   const accountFormOpen = isAccountFormSurface(accountSurface);
   const accountSheetFocusActive = shouldActivateAccountSheetFocus(accountSheetOpen, gate.kind === "ready");
@@ -1248,13 +1252,18 @@ export function AuthGateway({ children }: { children: ReactNode }) {
   // explicitly so every other lane keeps the truthful no-reader default.
   const qaHomeBaseSuggestion = import.meta.env.DEV
     && new URLSearchParams(window.location.search).get("qaHomeBaseSuggestion") === "1";
-  const qaOwnerView = useMemo(() => (qaHomeBaseSuggestion ? createOwnerAtlasView() : {
-    ...createOwnerAtlasView(),
-    // Browser QA fixtures do not emulate the owner-private Home history API.
-    // Keep the fixture truthful instead of issuing an unowned /api/home-bases
-    // request that only produces a caught 500 and contaminates QA evidence.
-    listHomeBasePeriods: null,
-    listHomeBaseDismissals: null,
+  const qaOwnerView = useMemo(() => ({
+    ...(qaHomeBaseSuggestion ? createOwnerAtlasView() : {
+      ...createOwnerAtlasView(),
+      // Browser QA fixtures do not emulate the owner-private Home history API.
+      // Keep the fixture truthful instead of issuing an unowned /api/home-bases
+      // request that only produces a caught 500 and contaminates QA evidence.
+      listHomeBasePeriods: null,
+      listHomeBaseDismissals: null,
+    }),
+    // Generic browser fixtures do not emulate precise owner-private route
+    // evidence. Dedicated recorded-track editor QA stubs its own API surface.
+    readRecordedTrackGeometry: null,
   }), [qaHomeBaseSuggestion]);
   const session = authClient.useSession();
   const [revision, setRevision] = useState(0);

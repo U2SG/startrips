@@ -63,7 +63,7 @@ function orderedMediaForOwner(
 }
 
 /** Build once per projection, sorting only the owners it consumes. */
-function playbackMediaByOwner(
+export function playbackMediaByOwner(
   journey: Journey,
   ownerIds: readonly (string | null)[],
 ): Map<string | null, JourneyMediaAsset[]> {

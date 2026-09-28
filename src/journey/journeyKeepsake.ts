@@ -1,8 +1,7 @@
 import {
   buildPlaybackSteps,
   playbackCameraTargetForStep,
-  playbackIntroMedia,
-  playbackMediaForPoint,
+  playbackMediaByOwner,
   playbackStoryMedia,
   routePointAngularDistance,
   type PlaybackStep,
@@ -252,7 +251,11 @@ export function buildKeepsakeRenderManifest(
   aspect: KeepsakeAspect = "portrait",
 ): KeepsakeRenderManifest {
   const playbackSteps = buildPlaybackSteps(journey);
-  const introMediaDrafts: SceneDraft[] = playbackIntroMedia(journey).map((asset) => {
+  const mediaByOwner = playbackMediaByOwner(
+    journey,
+    [null, ...journey.routePoints.map((point) => point.id)],
+  );
+  const introMediaDrafts: SceneDraft[] = (mediaByOwner.get(null) ?? []).map((asset) => {
     const type = mediaType(asset.mimeType);
     return {
       kind: "media",
@@ -269,8 +272,11 @@ export function buildKeepsakeRenderManifest(
   const drafts = playbackSteps.flatMap((step, stepIndex) => {
     // Pure-transit media has no Stop beat by design. Resolve it from the Route
     // Point encoded on the media step rather than inheriting a prior chapter.
-    const asset = step.kind === "media"
-      ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
+    // Reuse the manifest-wide owner index so export stays linear on long mixed
+    // chapters.
+    const point = step.kind === "media" ? journey.routePoints[step.pointIndex] : undefined;
+    const asset = point
+      ? mediaByOwner.get(point.id)?.[step.mediaIndex]
       : undefined;
     const scenes = sceneForStep(journey, step, asset);
     return stepIndex === 0 ? [...scenes, ...introMediaDrafts] : scenes;
