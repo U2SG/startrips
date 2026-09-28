@@ -43,6 +43,7 @@ import {
   playbackMediaForStep,
   playbackHoldTargetMedia,
   playbackStepIdentity,
+  isPlaybackTransitRoutePoint,
   routePointChapterDensity,
   type CommittedPlaybackPosition,
   type PlaybackCameraTarget,
@@ -1251,9 +1252,13 @@ export function JourneyPlaybackOverlay({
   // #514: media recorded on a pure-transit Route Point remains playable at
   // that canonical route position, but it must not manufacture an arrival,
   // stay, STOP caption or independent chapter around the asset.
+  const transitPoint = playbackPointIndex === null
+    ? null
+    : journey.routePoints[playbackPointIndex];
   const transitMediaOnly = step?.kind === "media"
-    && playbackPointIndex !== null
-    && journey.routePoints[playbackPointIndex]?.placeRole === "pure-transit";
+    && transitPoint !== undefined
+    && transitPoint !== null
+    && isPlaybackTransitRoutePoint(transitPoint);
   const chapterPointIndex = transitMediaOnly ? null : playbackPointIndex;
   const chapterDensity = chapterPointIndex === null
     ? null

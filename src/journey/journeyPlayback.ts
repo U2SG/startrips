@@ -118,6 +118,16 @@ export function storyMediaForScope(
   return pointIndex >= 0 ? playbackMediaForPoint(journey, pointIndex) : [];
 }
 
+export function isPlaybackTransitRoutePoint(
+  point: Pick<RoutePoint, "isStop" | "placeRole">,
+): boolean {
+  // isStop is the canonical route-role bit carried by historical Journey
+  // records. Newer placeRole metadata can make the same intent explicit, but
+  // playback must not require a migration before an old non-stop point stops
+  // behaving like an arrival.
+  return point.isStop === false || point.placeRole === "pure-transit";
+}
+
 export type PlaybackStep =
   | { kind: "home-prelude"; cameraTarget: HomeNarrativeCameraTarget }
   | { kind: "intro" }
@@ -247,7 +257,7 @@ export function buildPlaybackSteps(
     // Existing note/media remain addressable, and Full Playback still presents
     // every historical media asset at this canonical route position. Those media
     // are content beats only: the pass-through never gains an arrival/stay step.
-    if (routePoint.placeRole === "pure-transit") {
+    if (isPlaybackTransitRoutePoint(routePoint)) {
       for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
         steps.push({ kind: "media", pointIndex, mediaIndex });
       }

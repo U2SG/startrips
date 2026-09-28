@@ -5,6 +5,7 @@ import {
   committedPlaybackPosition,
   initialPlaybackState,
   isPlaybackTerminalState,
+  isPlaybackTransitRoutePoint,
   playbackReducer,
   playbackCameraTargetForStep,
   playbackTravelChoreography,
@@ -324,6 +325,26 @@ describe("buildPlaybackSteps (#19)", () => {
     expect(grouped.routePoints).toEqual(routeBefore);
     expect(grouped.media).toEqual(mediaBefore);
     expect(grouped.media).toEqual(expect.arrayContaining(mediaBefore));
+  });
+
+  it("keeps legacy isStop=false route points as transit without requiring placeRole metadata (#514)", () => {
+    const legacyTransit = { ...point("point-1", 30.67, 104.07), isStop: false };
+    const legacy: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 30.66, 104.06),
+        legacyTransit,
+        point("point-2", 30.68, 104.08),
+      ],
+      media: [media("legacy-transit-media", "point-1", "image/jpeg", 0)],
+    };
+
+    expect(legacyTransit.placeRole).toBeUndefined();
+    expect(isPlaybackTransitRoutePoint(legacyTransit)).toBe(true);
+    const steps = buildPlaybackSteps(legacy);
+    expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 2]);
+    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([1]);
+    expect(playbackMediaForPoint(legacy, 1).map((asset) => asset.id)).toEqual(["legacy-transit-media"]);
   });
 });
 
