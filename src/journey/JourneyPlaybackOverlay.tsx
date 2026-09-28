@@ -20,7 +20,7 @@ import "../styles/starlight-media.css";
 import { useAtlasView } from "./atlasView";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import { PlaybackMediaStage } from "./PlaybackMediaStage";
-import { playbackSequenceChapterPresentation } from "./playbackSequenceChapter";
+import { playbackSequenceChapterPresentation, type PlaybackSequenceChapterPresentation } from "./playbackSequenceChapter";
 import { usePlaybackMapBridge } from "./usePlaybackMapBridge";
 import { playbackReadIsReusable, type MediaReadState as MediaRead } from "./mediaReadRefresh";
 import { playbackMediaGate, playbackChapterOpeningUrl, playbackHoldReason, type PlaybackHoldReason } from "./playbackMediaPresentation";
@@ -119,6 +119,40 @@ function quickRecapOmissionReasonLabel(reason: QuickRecapOmissionReason) {
   switch (reason) {
     case "not-selected": return "本次快速回顾未选入";
   }
+}
+
+export function JourneyPlaybackDenseNavigator({
+  presentation,
+  onBack,
+  onNext,
+}: {
+  presentation: PlaybackSequenceChapterPresentation;
+  onBack: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <nav
+      className="journey-playback__dense-nav"
+      aria-label="本地点媒体导航"
+      data-dense-position={presentation.position}
+      data-dense-total={presentation.total}
+      data-dense-primary-asset={presentation.primaryAssetId}
+    >
+      <button
+        type="button"
+        onClick={onBack}
+        disabled={!presentation.canPrevious}
+        aria-label="上一张媒体"
+      ><IconChevronLeft size={16} stroke={1.35} aria-hidden="true" /></button>
+      <span aria-live="polite">{presentation.position} / {presentation.total}</span>
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={!presentation.canNext}
+        aria-label="下一张媒体"
+      ><IconChevronRight size={16} stroke={1.35} aria-hidden="true" /></button>
+    </nav>
+  );
 }
 
 /**
@@ -1446,26 +1480,11 @@ export function JourneyPlaybackOverlay({
                 ) : null}
 
         {densePresentation ? (
-          <nav
-            className="journey-playback__dense-nav"
-            aria-label="本地点媒体导航"
-            data-dense-position={densePresentation.position}
-            data-dense-total={densePresentation.total}
-          >
-            <button
-              type="button"
-              onClick={backByViewer}
-              disabled={!densePresentation.canPrevious}
-              aria-label="上一张媒体"
-            ><IconChevronLeft size={16} stroke={1.35} aria-hidden="true" /></button>
-            <span aria-live="polite">{densePresentation.position} / {densePresentation.total}</span>
-            <button
-              type="button"
-              onClick={nextByViewer}
-              disabled={!densePresentation.canNext}
-              aria-label="下一张媒体"
-            ><IconChevronRight size={16} stroke={1.35} aria-hidden="true" /></button>
-          </nav>
+          <JourneyPlaybackDenseNavigator
+            presentation={densePresentation}
+            onBack={backByViewer}
+            onNext={nextByViewer}
+          />
         ) : null}
 
         {step?.kind === "media" && activeMedia ? (
