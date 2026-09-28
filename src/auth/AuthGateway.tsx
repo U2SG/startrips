@@ -61,6 +61,7 @@ import {
   useEarthExperiencePreference,
 } from "../journey/EarthExperienceProvider";
 import { authClient } from "./auth-client";
+import { authExceptionEvent, authFormReducer, authServiceErrorEvent, createAuthFormState, type AuthFormEvent, type AuthFormState } from "./authFormState";
 import { resolvePasswordResetOutcome, type PasswordResetOutcome } from "./passwordResetOutcome";
 
 type OrganizationSummary = {
@@ -181,15 +182,33 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   // after the session ended. That person lands here rather than in the account
   // surface, so the same marker opens the mode that can send them a new link
   // instead of a sign-in form they have no password for.
-  const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot">(
-    () => accountSurfaceFromLocationSearch(window.location.search) ? "forgot" : "sign-in",
-  );
+  const [formState, setFormState] = useState<AuthFormState>(() => createAuthFormState(
+    accountSurfaceFromLocationSearch(window.location.search) ? "forgot" : "sign-in",
+  ));
+  const formStateRef = useRef(formState);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [pending, setPending] = useState(false);
-  const [message, setMessage] = useState("");
-  const [messageTone, setMessageTone] = useState<"error" | "success">("error");
+  const { mode, message, tone: messageTone } = formState;
+  const pending = formState.status === "submitting";
+
+  function transition(event: AuthFormEvent): AuthFormState {
+    const next = authFormReducer(formStateRef.current, event);
+    if (next !== formStateRef.current) {
+      formStateRef.current = next;
+      setFormState(next);
+    }
+    return next;
+  }
+
+  function beginSubmission(): AuthFormState | null {
+    const current = formStateRef.current;
+    const next = authFormReducer(current, { type: "submit" });
+    if (next === current) return null;
+    formStateRef.current = next;
+    setFormState(next);
+    return next;
+  }
   // #349: which providers this deployment configured. An unconfigured one is
   // absent from the server entirely, so the button simply never renders --
   // there is no disabled placeholder promising a sign-in that cannot happen.
@@ -198,10 +217,9 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   const presentationReady = forceReady || handoff || introSkipped;
 
   function changeMode(nextMode: "sign-in" | "sign-up" | "forgot") {
-    if (pending || nextMode === mode) return;
-    setMode(nextMode);
-    setMessage("");
-    setMessageTone("error");
+    if (nextMode === mode) return;
+    setPassword("");
+    transition({ type: "switch-mode", mode: nextMode });
   }
 
   useEffect(() => {
@@ -220,8 +238,7 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
     const code = new URLSearchParams(window.location.search).get("error");
     if (!code) return;
     window.history.replaceState(window.history.state, "", window.location.pathname);
-    setMessageTone("error");
-    setMessage(socialSignInErrorText(code));
+    transition({ type: "validation-error", requestId: formStateRef.current.requestId, message: socialSignInErrorText(code) || "登录未完成，请重试。" });
   }, []);
 
   // #349 keeps registration, sign-in and binding three separate intents. The
@@ -230,64 +247,101 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   // unrecognised Google subject comes back refused as `signup_disabled`
   // instead of quietly registering one.
   async function signInWithProvider(providerId: "google", requestSignUp: boolean) {
-    setPending(true);
-    setMessage("");
-    const result = await authClient.signIn.social({
-      provider: providerId,
-      callbackURL: "/",
-      errorCallbackURL: "/",
-      requestSignUp,
-    });
-    // A successful call navigates away; only a refusal returns here.
-    if (result.error) {
-      setMessageTone("error");
-      setMessage(socialSignInErrorText(result.error.code ?? null) || result.error.message || "登录未完成，请重试。");
-      setPending(false);
+    const started = beginSubmission();
+    if (!started) return;
+    try {
+      const result = await authClient.signIn.social({
+        provider: providerId,
+        callbackURL: "/",
+        errorCallbackURL: "/",
+        requestSignUp,
+      });
+      // A successful call navigates away; only a refusal returns here.
+      if (result.error) {
+        transition({
+          type: "validation-error",
+          requestId: started.requestId,
+          message: socialSignInErrorText(result.error.code ?? null) || result.error.message || "登录未完成，请重试。",
+        });
+      }
+    } catch (error) {
+      transition(authExceptionEvent(started.requestId, error));
     }
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    setPending(true);
-    setMessage("");
-    setMessageTone("error");
+    const started = beginSubmission();
+    if (!started) return;
+    const requestId = started.requestId;
+    const requestMode = started.mode;
+    const normalizedEmail = email.trim();
     try {
-      if (mode === "forgot") {
+      if (requestMode === "forgot") {
         const result = await authClient.requestPasswordReset({
-          email: email.trim(),
+          email: normalizedEmail,
           redirectTo: `${window.location.origin}/reset-password`,
         });
-        if (result.error) throw new Error(result.error.message);
-        setMessageTone("success");
-        setMessage("如果这个邮箱已注册，请留意稍后收到的重置邮件。");
+        if (result.error) {
+          transition(authServiceErrorEvent(requestId, result.error, normalizedEmail));
+          return;
+        }
+        transition({
+          type: "email-sent",
+          requestId,
+          message: "如果这个邮箱已注册，请留意稍后收到的重置邮件。",
+        });
         return;
       }
 
-      if (mode === "sign-up") {
+      if (requestMode === "sign-up") {
         const result = await authClient.signUp.email({
           name: name.trim(),
-          email: email.trim(),
+          email: normalizedEmail,
           password,
           callbackURL: window.location.href,
         });
-        if (result.error) throw new Error(result.error.message);
-        setMessageTone("success");
-        setMessage("验证邮件已发送。完成邮箱验证后即可进入。");
+        if (result.error) {
+          transition(authServiceErrorEvent(requestId, result.error, normalizedEmail));
+          return;
+        }
+        transition({ type: "email-sent", requestId, message: "验证邮件已发送。完成邮箱验证后即可进入。" });
         return;
       }
 
       const result = await authClient.signIn.email({
-        email: email.trim(),
+        email: normalizedEmail,
         password,
         callbackURL: window.location.href,
       });
-      if (result.error) throw new Error(result.error.message);
-      onAuthenticated();
+      if (result.error) {
+        transition(authServiceErrorEvent(requestId, result.error, normalizedEmail));
+        return;
+      }
+      const authenticated = transition({ type: "authenticated", requestId });
+      if (authenticated.status === "authenticated" && authenticated.requestId === requestId) onAuthenticated();
     } catch (error) {
-      setMessageTone("error");
-      setMessage(error instanceof Error ? error.message : "认证失败，请重试");
-    } finally {
-      setPending(false);
+      transition(authExceptionEvent(requestId, error));
+    }
+  }
+
+  async function resendVerification() {
+    const verificationEmail = formStateRef.current.verificationEmail;
+    if (!verificationEmail) return;
+    const started = beginSubmission();
+    if (!started) return;
+    try {
+      const result = await authClient.sendVerificationEmail({
+        email: verificationEmail,
+        callbackURL: window.location.href,
+      });
+      if (result.error) {
+        transition(authServiceErrorEvent(started.requestId, result.error, verificationEmail));
+        return;
+      }
+      transition({ type: "email-sent", requestId: started.requestId, message: "验证邮件已重新发送，请留意收件箱。" });
+    } catch (error) {
+      transition(authExceptionEvent(started.requestId, error));
     }
   }
 
@@ -362,6 +416,13 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
           >
             {message}
           </p>
+        ) : null}
+        {formState.verificationEmail && formState.status !== "email-sent" ? (
+          <div className="auth-switches" aria-label="邮箱验证恢复">
+            <button type="button" disabled={pending} onClick={() => void resendVerification()}>
+              {pending ? "正在发送验证邮件…" : "重新发送验证邮件"}
+            </button>
+          </div>
         ) : null}
         <div className="auth-switches" aria-label="切换登录方式">
           <button
