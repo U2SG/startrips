@@ -307,13 +307,19 @@ try {
       }
       let capture;
       if (paintCapture) {
-        const settledAt = await page.evaluate((expected) => window.__qaR3.frames.find((frame) =>
-          frame.presentation === "settled" && frame.current === expected && frame.points[0]?.actual === expected)?.at ?? null, ids[6]);
-        record.paintEnd = { settledAt, frameAt: await paintCapture.waitForFrame(settledAt) };
+        // Observe the last target's whole natural timer cycle. A DOM settlement
+        // or a later swap timestamp alone cannot prove its pixels were delivered.
+        // Keep the existing product dwell and observe its real next timer step.
+        await page.waitForFunction((id) => document.querySelector(".journey-story__media")?.getAttribute("data-media-requested") === id,
+          ids[7], { polling: "raf", timeout: 9_000 });
+        record.paintEnd = await page.evaluate((id) => ({ nextRequested: id,
+          nextRequestAt: window.__qaR3.frames.find((frame) => frame.requested === id)?.at ?? null }), ids[7]);
+        if (!Number.isFinite(record.paintEnd.nextRequestAt)) throw new Error("Final autoplay timer boundary was not observed");
         capture = await paintCapture.stop();
         paintCapture = null;
       }
       const observations = await page.evaluate(() => { window.__qaR3.stop(); return {
+        startedAt: window.__qaR3.input.find((event) => event.trusted && event.pressed === "false")?.at ?? null,
         endedAt: performance.now(), frames: window.__qaR3.frames, writes: window.__qaR3.writes,
         ticks: window.__qaR3.ticks, input: window.__qaR3.input }; });
       if (capture) {
