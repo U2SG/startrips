@@ -161,10 +161,11 @@ async function observedPointerTypes(page) {
  * and it makes the readiness gating do work that a file served off localhost
  * never asks of it. It is a scenario, not a wait inserted to pass: nothing is
  * asserted about the delay itself, and no assertion is relaxed while it runs.
+ * `readHolds` gates a signed read until the scenario releases it after input.
  */
 async function createStoryPage({
   mobile = false, viewport, reducedMotion = "no-preference", path = storyPath,
-  readDelays = {}, byteDelays = {}, renewPausedVideo = false,
+  readDelays = {}, readHolds = {}, byteDelays = {}, renewPausedVideo = false,
   renewalByteFailure = false, renewalReadFailure = false, renewalSameUrlRetry = false,
   expiredRangeFailure = false,
 } = {}) {
@@ -230,6 +231,7 @@ async function createStoryPage({
       entry.outcome = "ready";
       if (renewalSameUrlRetry && count === 3) sameUrlRetryReadServed = true;
     }
+    if (readHolds[asset]) await readHolds[asset];
     await hold(readDelays[asset] ?? 0);
     const expiresAt = Date.now() + (renewPausedVideo && asset === V1 && count === 1
       ? 5_000 : 900_000);
@@ -4265,20 +4267,17 @@ try {
     // The reversal happens while the abandoned target is still unreadable, so
     // its read resolves after the user has already committed elsewhere. The
     // stale result must not take the stage back.
-    const session = await createStoryPage({ mobile: false, readDelays: { [V2]: 2_500 } });
+    const releaseV2Read = deferred();
+    const session = await createStoryPage({ mobile: false, readHolds: { [V2]: releaseV2Read.promise } });
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
-      // V2 is prefetched as soon as V1 becomes current, so arm this before
-      // entering V1 rather than missing the delayed response in flight.
+      // V2 is prefetched as soon as V1 becomes current. Hold it until the
+      // reversal settles, and still observe any premature response as a failure.
       let v2ResponseReceived = false;
-      const v2ReadResponse = page.waitForResponse((response) =>
-        response.url().includes(`/api/uploads/assets/${V2}/read-url`), { timeout: 8_000 })
-        .then(async (response) => {
-          v2ResponseReceived = true;
-          return { status: response.status(), body: await response.json() };
-        })
-        .catch((error) => ({ error: String(error) }));
+      page.on("response", (response) => {
+        if (response.url().includes(`/api/uploads/assets/${V2}/read-url`)) v2ResponseReceived = true;
+      });
       await navigateByGesture(page, STAGE, 1, V1);
       // Root cause of a claim that used to pass without ever being exercised:
       // this window was driven by two swipes, but a gesture toward a neighbour
@@ -4332,6 +4331,13 @@ try {
       const responseBeforeReversal = v2ResponseReceived;
       await waitForSettledAsset(page, V1);
       const afterReversal = await currentAsset(page);
+      // The response timeout starts at release, so time spent exercising the
+      // held-read input path cannot consume the post-response evidence window.
+      const v2ReadResponse = page.waitForResponse((response) =>
+        response.url().includes(`/api/uploads/assets/${V2}/read-url`), { timeout: 8_000 })
+        .then(async (response) => ({ status: response.status(), body: await response.json() }))
+        .catch((error) => ({ error: String(error) }));
+      releaseV2Read.resolve();
       // The route response, then the neighbour's ready page, prove that the
       // delayed signed read finished and React consumed it. Keep the sampler
       // running through both and for eight subsequent browser frames.
@@ -4359,7 +4365,7 @@ try {
         name: "story-late-read-never-takes-the-stage",
         claim: "an arrow-key step really does leave a request for a cold neighbour pending while the readable previous page still owns the stage, the opposite key cancels that request and keeps the visible page, and the read URL that resolves afterwards neither moves the committed owner at any point across the window nor leaves the aperture uncovered",
         abandonedIntent: V2, expectedOwner: V1,
-        readDelays: { [V2]: 2_500 }, stageRole, pending,
+        readRelease: "after-reversal-settled", stageRole, pending,
         readResponse, readProcessed, postReadObserved, responseBeforeReversal,
         postReadTicks: frames.ticks - postReadStart,
         wrongOwnerFrames: wrongOwnerFrames.slice(0, 3),
@@ -4376,6 +4382,7 @@ try {
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } finally {
+      releaseV2Read.resolve();
       await session.page.close();
     }
   }
@@ -5733,6 +5740,7 @@ try {
         const stageRect = stage.getBoundingClientRect();
         const pagesRect = pages.getBoundingClientRect();
         const pageRect = current.getBoundingClientRect();
+        const neighborRect = neighbor.getBoundingClientRect();
         const pictureRect = picture.getBoundingClientRect();
         const noteRect = note.getBoundingClientRect();
         const priorInsetX = Math.min(56, Math.max(20, pagesRect.width * .04));
@@ -5761,6 +5769,8 @@ try {
           pageBottomSpace: stageRect.bottom - pageRect.bottom,
           currentPageSize: { width: current.offsetWidth, height: current.offsetHeight },
           decorativePageSize: { width: neighbor.offsetWidth, height: neighbor.offsetHeight },
+          currentPaintedSize: { width: pageRect.width, height: pageRect.height },
+          decorativePaintedSize: { width: neighborRect.width, height: neighborRect.height },
           priorPageSize: { width: priorPageWidth, height: priorPageHeight },
           paintedHeight: Math.min(pictureRect.height,
             pictureRect.width * picture.naturalHeight / picture.naturalWidth),
@@ -5879,8 +5889,8 @@ try {
           || !progress.initial.currentPointLabel?.includes("17")
           || progress.initial.pageTopInset > 4 || progress.initial.pageLeftInset > 4
           || progress.initial.pageBottomSpace < 44 || progress.initial.pageBottomSpace > 56
-          || progress.initial.currentPageSize.width < progress.initial.decorativePageSize.width + 40
-          || progress.initial.currentPageSize.height <= progress.initial.decorativePageSize.height
+          || progress.initial.currentPaintedSize.width < progress.initial.decorativePaintedSize.width + 40
+          || progress.initial.currentPaintedSize.height <= progress.initial.decorativePaintedSize.height
           || progress.initial.currentPageSize.height < progress.initial.priorPageSize.height + 40
           || progress.initial.naturalSize.width <= 0 || progress.initial.naturalSize.height <= 0
           || !Number.isFinite(progress.initial.paintedHeight) || progress.initial.paintedHeight < 875
