@@ -234,7 +234,9 @@ async function verifyImportedJourney({ label, width, height, editing }) {
     await child.locator(".journey-itinerary-import__search input").fill("Human cafe");
     await child.locator(".journey-itinerary-import__search").getByRole("button", { name: "搜索", exact: true }).click();
     await child.locator(".journey-itinerary-import__candidates button").filter({ hasText: "Human cafe" }).click();
-    await child.locator(".journey-itinerary-import__entry-details > summary").click();
+    await child.locator(".journey-itinerary-import__entry-details > summary").evaluate((summary) => {
+      if (document.activeElement !== summary) throw new Error("Confirmed position did not return focus to its entry");
+    });
     const region = child.getByLabel("所在区域", { exact: true });
     await region.fill("Human region");
     await region.focus();
@@ -296,7 +298,7 @@ async function verifyImportedJourney({ label, width, height, editing }) {
       && imported[1].regionContext === "Human region" && imported[1].latitude === 23.123456 && imported[1].longitude === 112.123456
       && imported[2].label === imported[5].label && imported[2].id !== imported[5].id && imported[2].occurredAt !== imported[5].occurredAt
       && savedJourney.media.length === (editing ? 3 : 0) && pageErrors.length === 0);
-    await page.getByRole("button", { name: editing ? "关闭旅程编辑器" : "关闭创建器", exact: true }).click();
+    await page.getByRole("button", { name: "关闭旅程编辑器", exact: true }).click();
     await page.locator(".journey-composer").waitFor({ state: "detached" });
     await page.locator("[data-qa-composer-reopen]").click();
     await page.locator(".journey-composer").waitFor({ state: "visible" });

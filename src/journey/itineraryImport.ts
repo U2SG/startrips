@@ -598,31 +598,6 @@ export function itineraryEntryOrganizationTargets(
   };
 }
 
-export function updateItineraryEntryOrganization(
-  draft: ItineraryImportDraft,
-  entryId: string,
-  patch: { isStop?: boolean; stayAnchorEntryId?: string | null },
-): ItineraryImportDraft {
-  const entries = itineraryDraftEntries(draft);
-  const index = entries.findIndex((entry) => entry.entryId === entryId);
-  if (index < 0) return draft;
-  const entry = entries[index];
-  const currentOwnerIndex = entry.stayAnchorEntryId
-    ? entries.findIndex((candidate) => candidate.entryId === entry.stayAnchorEntryId)
-    : -1;
-  const requestedOwnerIndex = patch.stayAnchorEntryId === undefined
-    ? currentOwnerIndex
-    : patch.stayAnchorEntryId === null
-      ? -1
-      : entries.findIndex((candidate) => candidate.entryId === patch.stayAnchorEntryId);
-  return applyItineraryOrganization(draft, [{
-    index,
-    isStop: patch.isStop ?? entry.isStop ?? isStopRole(entry.role),
-    stayAnchorIndex: patch.isStop === true ? null : requestedOwnerIndex >= 0 ? requestedOwnerIndex : null,
-    regionContext: entry.regionContext,
-  }]);
-}
-
 /**
  * The entries a member gets by default: everything the source listed as a real
  * plan item and that has a position to put on the Route. An entry the source

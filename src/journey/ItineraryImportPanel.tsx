@@ -187,10 +187,17 @@ export function ItineraryImportPanel({
   const manuallyConfirmed = useRef(new Set<string>());
   const manuallyEditing = useRef(new Set<string>());
   const manuallyOrganized = useRef(new Set<string>());
+  const entryDetails = useRef(new Map<string, HTMLDetailsElement>());
+  const searchReturnFocus = useRef<string | null>(null);
   const reviewedSearches = useRef(new Map<string, { query: string; results: LocationSearchResult[] }>());
   const [candidates, setCandidates] = useState<
     { entryId: string; results: LocationSearchResult[] } | null
   >(null);
+  useEffect(() => {
+    if (candidates || searchReturnFocus.current === null) return;
+    entryDetails.current.get(searchReturnFocus.current)?.querySelector("summary")?.focus();
+    searchReturnFocus.current = null;
+  }, [candidates]);
   useEffect(() => () => {
     readingGeneration.current += 1;
     readingController.current?.abort();
@@ -586,6 +593,8 @@ export function ItineraryImportPanel({
     setLocating(null);
     const prepared = reviewedSearches.current.get(entry.entryId);
     setManualQuery(prepared?.query || searchableName(entry) || entry.name.slice(0, 120));
+    const details = entryDetails.current.get(entry.entryId);
+    if (details) details.open = true;
     setCandidates({ entryId: entry.entryId, results: prepared?.results ?? [] });
   }, []);
 
@@ -611,6 +620,7 @@ export function ItineraryImportPanel({
         current.includes(entryId) ? current : [...current, entryId]
       );
     }
+    searchReturnFocus.current = entryId;
     setCandidates(null);
   }, [draft]);
 
@@ -975,7 +985,10 @@ export function ItineraryImportPanel({
 
                             <details
                               className="journey-itinerary-import__entry-details"
-                              open={candidates?.entryId === entry.entryId ? true : undefined}
+                              ref={(element) => {
+                                if (element) entryDetails.current.set(entry.entryId, element);
+                                else entryDetails.current.delete(entry.entryId);
+                              }}
                             >
                               <summary>详情与修正</summary>
                               <div className="journey-itinerary-import__entry-details-body">
