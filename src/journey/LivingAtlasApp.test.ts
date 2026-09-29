@@ -1082,13 +1082,19 @@ describe("Route Point context integration (#291)", () => {
     const refreshBlock = appSource.slice(refreshStart, refreshStart + 900);
     const viewCleanupStart = appSource.indexOf('if (view !== "planet" && routePointContextSelection.intent)');
     const viewCleanupBlock = appSource.slice(viewCleanupStart, viewCleanupStart + 220);
-    const renderStart = appSource.indexOf('{view === "planet" && routePointContextSelection.context');
+    const visibilityStart = appSource.indexOf("const routePointContextVisible = Boolean(");
+    const visibilityBlock = appSource.slice(visibilityStart, visibilityStart + 650);
+    const renderStart = appSource.indexOf('{routePointContextVisible && routePointContextSelection.context');
 
     expect(refreshStart).toBeGreaterThan(0);
     expect(refreshBlock).toContain("buildRoutePointContext(journey, intent.routePointId)");
     expect(refreshBlock).toContain("resolveRoutePointContextSelection(");
     expect(viewCleanupStart).toBeGreaterThan(0);
     expect(viewCleanupBlock).toContain("clearRoutePointContext()");
+    expect(visibilityStart).toBeGreaterThan(0);
+    expect(visibilityBlock).toContain('view === "planet"');
+    expect(visibilityBlock).toContain("selectedPointContext.journeyId === activeJourneyId");
+    expect(visibilityBlock).toContain("routePointContextTemporallyVisible(");
     expect(renderStart).toBeGreaterThan(0);
   });
 

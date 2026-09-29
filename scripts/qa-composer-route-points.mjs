@@ -295,6 +295,7 @@ async function verifyImportedJourney({ label, width, height, editing }) {
     // Re-read and re-apply the same source through its ordinary entry. New
     // temporary UUIDs/model defaults must not replace the imported human rows.
     await page.locator(".journey-composer__import-shortcut").click();
+    await page.getByRole("button", { name: "更换导入来源", exact: true }).click();
     await page.locator(".journey-itinerary-import__modes").getByRole("button", { name: "粘贴文本" }).click();
     await page.locator(".journey-itinerary-import__field textarea").fill("Synthetic eight day coast itinerary");
     await page.locator(".journey-itinerary-import__field").getByRole("button", { name: "自动整理", exact: true }).click();

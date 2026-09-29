@@ -715,6 +715,7 @@ try {
   await pickingCity.waitFor({ state: "visible", timeout: 5_000 });
   await pickingCity.click();
   await globePickPage.waitForFunction(() => !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking"), null, { timeout: 5_000 });
+  await globePickPage.locator('[data-composer-task-back="location"]').click();
   const acceptedRoutePoint = globePickPage.locator(".journey-route-draft li:not(.is-empty)").first();
   const acceptedCoordinates = [
     Number(await acceptedRoutePoint.getAttribute("data-route-point-latitude")),

@@ -2223,8 +2223,10 @@ try {
   await detailPickPage.mouse.click(pickTarget.x, pickTarget.y);
   await detailPickPage.waitForFunction(() => (
     !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
-    && document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 1
   ), null, { timeout: 5_000 });
+  await detailPickPage.locator('[data-composer-task-back="location"]').click();
+  await detailPickPage.waitForFunction(() => document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 1,
+    null, { timeout: 5_000 });
   const detailPickOutcome = await detailPickPage.evaluate(() => ({
     draftLatitude: document.querySelector(".journey-route-draft > li:not(.is-empty)")?.getAttribute("data-route-point-latitude") ?? null,
     draftLongitude: document.querySelector(".journey-route-draft > li:not(.is-empty)")?.getAttribute("data-route-point-longitude") ?? null,
