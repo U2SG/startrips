@@ -53,6 +53,19 @@ def temporary_backend_switch_authorized(root, lane=None):
             and TEMPORARY_BACKEND_STOP_PATTERN.fullmatch(supervisor) is not None)
 
 
+def blocking_stops(root, lane=None):
+    """Return only STOP markers that block the requested execution lane/action.
+
+    Physical STOP files remain observable through stopped(). The explicit
+    Temporary Backend switch authorizes exactly the LOCAL-only Backend markers
+    without deleting or hiding them; AGENT_STOP always remains blocking.
+    """
+    markers = stopped(root, lane=lane)
+    if lane == 'backend' and temporary_backend_switch_authorized(root, lane=lane):
+        return [name for name in markers if name == 'AGENT_STOP']
+    return markers
+
+
 WINDOWS_CARRIERS = frozenset({'bash.exe', 'sh.exe', 'claude.exe', 'codex.exe', 'node.exe', 'nodejs.exe'})
 
 

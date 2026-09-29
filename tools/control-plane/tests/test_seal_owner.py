@@ -130,6 +130,17 @@ class SealRecoveryCases(fixture.SyntheticOne):
         self.assertEqual('', self.git('status', '--porcelain')); self.assertEqual(self.source, self.remote_head())
         self.assertEqual('human stop', (self.root / 'AGENT_STOP').read_text())
 
+    def test_authorized_temporary_backend_switch_can_seal_without_clearing_local_stops(self):
+        receipt = 'user-authorized-temporary-backend-switch 2026-09-28T06:53:00Z\n'
+        (self.root / 'SUPERVISOR_STOP').write_text(receipt)
+        (self.root / 'CANCEL_SCHEDULED_RESTART').write_text(receipt)
+        with mock.patch.dict(os.environ, {'STARTRIPS_TEMPORARY_BACKEND_SWITCH': '1'}):
+            result = self.invoke()
+        self.assertEqual('WAIT_FINAL_CI', result['action'])
+        self.assertEqual(result['final_sha'], self.remote_head())
+        self.assertEqual(receipt, (self.root / 'SUPERVISOR_STOP').read_text())
+        self.assertEqual(receipt, (self.root / 'CANCEL_SCHEDULED_RESTART').read_text())
+
     def test_stop_after_commit_preserves_final_without_push(self):
         actual = seal.git
         def stop_after_commit(worktree, *args):
