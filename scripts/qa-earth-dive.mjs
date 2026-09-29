@@ -530,16 +530,22 @@ async function wheelUntilDetailWithStableRetry(page, point, deltaY, label, maxSt
       && state.semanticZoom === "local"
       && Number(state.localProgress) >= 0.999
     ) {
-      // Stop sending wheel input. A fully-settled but non-converged detail
-      // renderer must finish through the EXISTING Dive rAF retry path while the
-      // particle frame is stable; otherwise this wait times out as a liveness
-      // failure instead of hiding it with more user input.
-      await page.waitForFunction(
-        () => document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") === "detail",
-        null,
-        { timeout: 5_000 },
-      );
-      return readDive(page);
+      // Stop sending wheel input while this exact commit attempt remains armed.
+      // A stable non-converged renderer still has the same five-second liveness
+      // bound; if the handoff is explicitly invalidated meanwhile, resume the
+      // existing bounded wheel loop instead of grading a stale attempt.
+      await page.waitForFunction(() => {
+        const globe = document.querySelector(".living-atlas-globe");
+        const scene = document.querySelector(".particle-earth-scene");
+        const stage = globe?.getAttribute("data-earth-dive") ?? null;
+        if (stage === "detail") return true;
+        return stage !== "blending"
+          || scene?.getAttribute("data-semantic-zoom") !== "local"
+          || Number(scene?.dataset?.localProgress ?? 0) < 0.999;
+      }, null, { timeout: 5_000 });
+      const settled = await readDive(page);
+      if (settled.stage === "detail") return settled;
+      continue;
     }
     if (step === maxSteps) break;
     target = await gesturePoint(page, target);
