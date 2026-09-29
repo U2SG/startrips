@@ -1533,6 +1533,14 @@
 .journey-story__quick-recap-status p { flex-basis: 100%; margin: 0; line-height: 1.5; }
 .journey-story__playback-entry--empty { width: min(280px, 100%); }
 .journey-story__playback-entry--empty .journey-story__quick-recap-status { position: static; width: 100%; }
+.journey-story[data-story-layout="desktop"] .journey-story__media-nav .journey-story__playback-entry {
+  position: static;
+}
+.journey-story[data-story-layout="desktop"] .journey-story__media-nav .journey-story__quick-recap-status {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav .journey-story__quick-recap-status button {
   width: auto;
   min-width: 44px;

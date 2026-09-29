@@ -2851,18 +2851,23 @@ async function verifyFinalAcceptanceMobileFlow() {
           const panel = button.closest("[data-story-playback-state]");
           const entry = button.closest("[data-story-playback-entry]");
           const bounds = panel.getBoundingClientRect();
+          const viewer = entry?.closest(".journey-story__media")?.getBoundingClientRect();
           const action = button.getBoundingClientRect();
           const hit = document.elementFromPoint(action.x + action.width / 2, action.y + action.height / 2);
           return {
             entry: entry?.getAttribute("data-story-playback-entry") ?? null,
             withinViewerControls: Boolean(entry?.closest(".journey-story__media-nav, .journey-story__mobile-media-actions")),
             contained: bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight,
+            withinViewer: Boolean(viewer && bounds.left >= viewer.left && bounds.top >= viewer.top
+              && bounds.right <= viewer.right && bounds.bottom <= viewer.bottom),
+            bounds: { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom },
+            viewer: viewer ? { left: viewer.left, top: viewer.top, right: viewer.right, bottom: viewer.bottom } : null,
             actionWidth: action.width, actionHeight: action.height,
             actionHit: hit?.closest("button") === button,
             focused: document.activeElement === button,
           };
         });
-        if (decision.entry !== layout || !decision.withinViewerControls || !decision.contained
+        if (decision.entry !== layout || !decision.withinViewerControls || !decision.contained || !decision.withinViewer
           || decision.actionWidth < 44 || decision.actionHeight < 44 || !decision.actionHit || !decision.focused
           || await overBudgetReturnedStory.locator('[data-media-page="current"]').first().getAttribute("data-media-page-id") !== overBudgetStoryAsset) {
           throw new Error(`Story media-heavy decision lost placement/focus/observation: ${JSON.stringify(decision)}`);
