@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from feature_store import load_document, commit_document, StoreConflict
 from feature_state import target, next_action, note
-from execution import ensure_idle, stopped
+from execution import ensure_idle, stopped, temporary_backend_switch_authorized
 import datetime
 from github_evidence import api, EvidenceUnknown
 from delivery import canonical_lead, unit_pr_links, unit_rows, unit_token, package_snapshot
@@ -104,7 +104,9 @@ def prepare_unmapped(root, repository, row, repo, prepare, lane):
         raise StoreConflict('In-flight delivery-unit owner carrier missing; reconcile, never create a competitor')
     if not prepare:
         raise StoreConflict('NEW_OWNER_WORKTREE_REQUIRED: use authorized worker prepare, not the old checkout')
-    if stopped(root, lane=lane): raise StoreConflict('Owner STOP prevents new worktree preparation')
+    stop_markers = stopped(root, lane=lane)
+    if stop_markers and not temporary_backend_switch_authorized(root, lane=lane):
+        raise StoreConflict('Owner STOP prevents new worktree preparation')
     ensure_idle(root, lane=lane, feature=fid)
     if observed_row is None:
         raise StoreConflict('Feature changed before owner claim')

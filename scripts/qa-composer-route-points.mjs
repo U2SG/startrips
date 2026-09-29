@@ -119,6 +119,61 @@ try {
         && duplicateCoordinates[0].draftId !== duplicateCoordinates[1].draftId
         && run.pageErrors.length === 0);
 
+      {
+        const ownershipRow = run.rows.nth(1);
+        await ownershipRow.locator(".journey-route-draft__summary").click();
+        const ownership = ownershipRow.locator(".journey-route-draft__stay-ownership");
+        await ownership.waitFor({ state: "visible" });
+        const ownershipTargets = await ownership.locator("button").evaluateAll((buttons) => buttons.map((button) => {
+          const rect = button.getBoundingClientRect();
+          return {
+            label: button.textContent?.trim() ?? "",
+            pressed: button.getAttribute("aria-pressed"),
+            width: rect.width,
+            height: rect.height,
+          };
+        }));
+        record(`composer-route-points:${viewport.label}:stay-ownership-targets`, { ownershipTargets },
+          ownershipTargets.length === 3
+          && ownershipTargets[0]?.label === "跟上一停靠 · Shared label"
+          && ownershipTargets[1]?.label === "跟下一停靠 · Record 04"
+          && ownershipTargets[2]?.label === "独立"
+          && ownershipTargets.every((target) => target.width >= 44 && target.height >= 44));
+
+        if (viewport.label === "390") {
+          const nextOwner = ownership.getByRole("button", { name: "跟下一停靠 · Record 04" });
+          await nextOwner.focus();
+          await run.page.keyboard.press("Enter");
+          await run.page.waitForFunction(() => document.activeElement?.textContent?.includes("跟下一停靠")
+            && document.activeElement?.getAttribute("aria-pressed") === "true");
+          const nextFocus = await run.page.evaluate(() => document.activeElement?.textContent?.trim() ?? "");
+
+          const independentOwner = ownership.getByRole("button", { name: "独立" });
+          await independentOwner.focus();
+          await run.page.keyboard.press("Enter");
+          await run.page.waitForFunction(() => document.activeElement?.textContent?.trim() === "独立"
+            && document.activeElement?.getAttribute("aria-pressed") === "true");
+          const independentFocus = await run.page.evaluate(() => document.activeElement?.textContent?.trim() ?? "");
+
+          const previousOwner = ownership.getByRole("button", { name: "跟上一停靠 · Shared label" });
+          await previousOwner.focus();
+          await run.page.keyboard.press("Enter");
+          await run.page.waitForFunction(() => document.activeElement?.textContent?.includes("跟上一停靠")
+            && document.activeElement?.getAttribute("aria-pressed") === "true");
+          const finalOwnershipState = await ownership.locator("button").evaluateAll((buttons) => buttons.map((button) => ({
+            label: button.textContent?.trim() ?? "",
+            pressed: button.getAttribute("aria-pressed"),
+          })));
+          record("composer-route-points:stay-ownership-keyboard-focus-and-state", {
+            nextFocus, independentFocus, finalOwnershipState,
+          }, nextFocus === "跟下一停靠 · Record 04"
+            && independentFocus === "独立"
+            && finalOwnershipState[0]?.pressed === "true"
+            && finalOwnershipState[1]?.pressed === "false"
+            && finalOwnershipState[2]?.pressed === "false");
+        }
+      }
+
       if (viewport.label === "390") {
         let releaseVegasSearch = null;
         let markVegasSearchStarted = null;
@@ -183,6 +238,73 @@ try {
           });
         });
 
+        let savedJourneyRequest = null;
+        await run.page.route("**/api/journeys/00000000-0000-4000-8000-000000000001", async (route) => {
+          const request = route.request();
+          if (request.method() !== "PATCH") {
+            await route.fallback();
+            return;
+          }
+          const submitted = request.postDataJSON();
+          savedJourneyRequest = submitted;
+          const journeyId = "00000000-0000-4000-8000-000000000001";
+          const createdAt = "2026-08-11T00:00:00.000Z";
+          const routePoints = submitted.routePoints.map((point, index) => ({
+            ...point,
+            id: point.id ?? `00000000-0000-4000-8000-${String(index + 900).padStart(12, "0")}`,
+            journeyId,
+            sortOrder: index,
+            occurredAt: point.occurredAt ?? null,
+            note: point.note ?? null,
+            regionContext: point.regionContext ?? null,
+            placeRole: point.placeRole ?? null,
+            overviewVisibility: point.overviewVisibility ?? null,
+            stayAnchorRoutePointId: point.stayAnchorRoutePointId ?? null,
+            createdAt,
+          }));
+          const mediaRoutePointIds = [
+            "00000000-0000-4000-8000-000000000022",
+            "00000000-0000-4000-8000-000000000021",
+            "00000000-0000-4000-8000-000000000026",
+          ];
+          const media = mediaRoutePointIds.map((routePointId, index) => ({
+            id: `00000000-0000-4000-8000-00000000010${index}`,
+            journeyId,
+            routePointId,
+            storageDriver: "qa",
+            storageKey: `qa/story-seed-${index}`,
+            fileName: `seed-${index}.png`,
+            mimeType: "image/png",
+            bytes: 68,
+            sortOrder: index,
+            uploadedByUserId: "00000000-0000-4000-8000-000000000003",
+            createdAt,
+          }));
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              journey: {
+                id: journeyId,
+                atlasId: "00000000-0000-4000-8000-000000000002",
+                title: submitted.title,
+                startedOn: submitted.startedOn,
+                endedOn: submitted.endedOn,
+                note: submitted.note,
+                lightColor: submitted.lightColor,
+                lightEffect: submitted.lightEffect ?? null,
+                coverMediaAssetId: null,
+                revision: (submitted.revision ?? 1) + 1,
+                createdByUserId: "00000000-0000-4000-8000-000000000003",
+                createdAt,
+                updatedAt: "2026-09-29T00:00:00.000Z",
+                routePoints,
+                media,
+              },
+            }),
+          });
+        });
+
         const persistenceRequests = [];
         run.page.on("request", (request) => {
           const url = new URL(request.url());
@@ -233,7 +355,7 @@ try {
         const row02 = run.page.locator(`[data-route-point-draft-id="${draft02}"]`);
         const locate02State = {
           note: await row02.locator("textarea").inputValue(),
-          isStop: await row02.locator('.journey-checkbox input[type="checkbox"]').isChecked(),
+          isStop: await row02.locator(".journey-route-draft__stop-toggle").getAttribute("aria-pressed") === "true",
           media: await row02.locator(".journey-route-draft__media-association small").textContent(),
         };
         record("composer-route-points:locate-record-02", { draft02, locate02State },
@@ -248,7 +370,7 @@ try {
         const row07 = run.page.locator(`[data-route-point-draft-id="${draft07}"]`);
         const locate07State = {
           note: await row07.locator("textarea").inputValue(),
-          isStop: await row07.locator('.journey-checkbox input[type="checkbox"]').isChecked(),
+          isStop: await row07.locator(".journey-route-draft__stop-toggle").getAttribute("aria-pressed") === "true",
           media: await row07.locator(".journey-route-draft__media-association small").textContent(),
         };
         record("composer-route-points:locate-record-07", { draft07, locate07State },
@@ -343,7 +465,9 @@ try {
           && providerAddTarget.height >= 44
           && persistenceRequests.length === 0);
 
-        const record03 = run.rows.filter({ hasText: "Record 03" }).first();
+        const record03 = run.rows.filter({
+          has: run.page.locator(".journey-route-draft__summary strong").filter({ hasText: /^Record 03$/ }),
+        }).first();
         const record03Summary = record03.locator(".journey-route-draft__summary");
         const record03DraftId = await record03.getAttribute("data-route-point-draft-id");
         await record03Summary.click();
@@ -356,7 +480,7 @@ try {
           // through its stable identity instead of assuming it is the only input.
           name: await expanded.locator('[data-route-point-label-input]').inputValue(),
           note: await expanded.locator("textarea").inputValue(),
-          hasStop: await expanded.locator('.journey-checkbox input[type="checkbox"]').count() === 1,
+          hasStop: await expanded.locator(".journey-route-draft__stop-toggle").count() === 1,
           hasCoordinates: await expanded.locator(".journey-route-draft__coordinates code").count() === 1,
           mediaCount: Number(await expanded.locator(".journey-route-draft__media-association").getAttribute("data-route-point-media-count")),
           mediaText: await expanded.locator(".journey-route-draft__media-association small").textContent(),
@@ -407,7 +531,9 @@ try {
           && focusAfterMenuClose.draftId === record03DraftId
           && composerStillOpen);
 
-        const record04 = run.rows.filter({ hasText: "Record 04" }).first();
+        const record04 = run.rows.filter({
+          has: run.page.locator(".journey-route-draft__summary strong").filter({ hasText: /^Record 04$/ }),
+        }).first();
         await record04.locator(".journey-route-draft__summary").click();
         const expandedIds = await run.page.locator('.journey-route-draft > li[data-route-point-expanded="true"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-route-point-draft-id")));
         record("composer-route-points:one-record-bound-expansion", { expandedIds }, expandedIds.length === 1 && expandedIds[0] !== record03DraftId);
@@ -460,6 +586,47 @@ try {
           && Number.isFinite(scrollGeometry.footerTop)
           && scrollGeometry.summaryTop >= 0
           && scrollGeometry.summaryBottom <= scrollGeometry.footerTop + 1);
+
+        const stopId = "00000000-0000-4000-8000-000000000020";
+        const childId = "00000000-0000-4000-8000-000000000021";
+        const childMediaId = "00000000-0000-4000-8000-000000000101";
+        await run.page.getByRole("button", { name: "保存修改" }).click();
+        const projectionOutput = run.page.locator("[data-qa-composer-projection]");
+        await projectionOutput.waitFor({ state: "attached", timeout: 10_000 });
+        const projection = await projectionOutput.evaluate((node) => ({
+          overviewRoutePointIds: JSON.parse(node.getAttribute("data-overview-route-point-ids") ?? "[]"),
+          stays: JSON.parse(node.getAttribute("data-stays") ?? "[]"),
+          playback: JSON.parse(node.getAttribute("data-playback") ?? "[]"),
+        }));
+        const submittedChild = savedJourneyRequest?.routePoints?.find((point) => point.id === childId) ?? null;
+        const owningStay = projection.stays.find((stay) => stay.routePointIds.includes(childId)) ?? null;
+        const foldedMedia = projection.playback.find((step) => step.kind === "media" && step.assetId === childMediaId) ?? null;
+        const childIndependentMedia = projection.playback.find((step) => (
+          step.kind === "media" && step.routePointId === childId && step.assetId === childMediaId
+        )) ?? null;
+        const childStopBeat = projection.playback.find((step) => step.kind === "stop" && step.routePointId === childId) ?? null;
+        record("composer-route-points:ownership-persists-into-overview-and-playback", {
+          submittedChild,
+          overviewRoutePointIds: projection.overviewRoutePointIds,
+          owningStay,
+          foldedMedia,
+          childIndependentMedia,
+          childStopBeat,
+          persistenceRequests,
+        }, Boolean(
+          savedJourneyRequest
+          && persistenceRequests.some((request) => request.method === "PATCH")
+          && submittedChild?.stayAnchorRoutePointId === stopId
+          && projection.overviewRoutePointIds.includes(stopId)
+          && owningStay?.anchorRoutePointId === stopId
+          && owningStay.routePointIds.includes(stopId)
+          && owningStay.routePointIds.includes(childId)
+          && owningStay.mediaAssetIds.includes(childMediaId)
+          && foldedMedia?.routePointId === stopId
+          && foldedMedia?.assetRoutePointId === childId
+          && childIndependentMedia === null
+          && childStopBeat === null
+        ));
       }
     } finally {
       await run.context.close();

@@ -1,6 +1,7 @@
 """Latest-attempt CI, failure history and non-replayable targeted reruns (CI only)."""
 import copy
 import json
+import os
 import subprocess
 import unittest
 from unittest import mock
@@ -325,6 +326,17 @@ class RetryCases(fixture.SyntheticOne):
         with mock.patch.object(ci, 'api', side_effect=self.api), \
                 mock.patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')):
             self.assertTrue(self.request(lane='experience')['requested'])
+
+    def test_authorized_temporary_backend_switch_allows_targeted_rerun(self):
+        receipt = 'user-authorized-temporary-backend-switch 2026-09-28T06:53:00Z\n'
+        (self.root / 'SUPERVISOR_STOP').write_text(receipt)
+        (self.root / 'CANCEL_SCHEDULED_RESTART').write_text(receipt)
+        with mock.patch.dict(os.environ, {'STARTRIPS_TEMPORARY_BACKEND_SWITCH': '1'}), \
+                mock.patch.object(ci, 'api', side_effect=self.api), \
+                mock.patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')):
+            self.assertTrue(self.request(lane='backend')['requested'])
+        self.assertEqual(receipt, (self.root / 'SUPERVISOR_STOP').read_text())
+        self.assertEqual(receipt, (self.root / 'CANCEL_SCHEDULED_RESTART').read_text())
 
     def test_wrong_owner_mapping_prevents_post(self):
         self.write(fixture.feature(pr_links=['https://github.com/synthetic/project/pull/2']))

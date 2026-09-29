@@ -148,7 +148,7 @@ describe("Stop/via cinematic chapters (#342)", () => {
       routePoints: [
         { ...point("point-0", 0, 0), regionContext: "A" },
         { ...point("point-1", 2, 2), isStop: false },
-        { ...point("point-2", 0.1, 0.1), isStop: false, regionContext: "A" },
+        { ...point("point-2", 0.1, 0.1), isStop: false, regionContext: "A", stayAnchorRoutePointId: "point-0" },
         { ...point("point-3", 1, 1), isStop: false },
         { ...point("point-4", 2, 3), regionContext: "B" },
         { ...point("point-5", 3, 4), isStop: false },
@@ -176,6 +176,33 @@ describe("Stop/via cinematic chapters (#342)", () => {
     );
     expect(trip).toEqual(before);
   });
+
+  it.each(["previous", "next", "independent", "reordered", "deleted", "demoted"] as const)(
+    "uses exact Stop ownership after %s without heuristic rebinding",
+    (state) => {
+      const child = { ...point("child", 0.1, 0.1), isStop: false, regionContext: "A",
+        stayAnchorRoutePointId: state === "independent" ? null : state === "previous" ? "a" : "b" };
+      const trip: Journey = { ...journey, routePoints: [
+        { ...point("a", 0, 0), regionContext: "A" }, child,
+        { ...point("b", 0.2, 0.2), regionContext: "A" },
+      ], media: [media("child-photo", "child", "image/jpeg")] };
+      if (state === "reordered") trip.routePoints = [trip.routePoints[2], trip.routePoints[0], child];
+      if (state === "deleted") trip.routePoints = trip.routePoints.filter((candidate) => candidate.id !== "b");
+      if (state === "demoted") trip.routePoints[2] = { ...trip.routePoints[2], isStop: false };
+      const before = structuredClone(trip);
+      const expectedOwner = ["independent", "deleted", "demoted"].includes(state)
+        ? "child" : state === "previous" ? "a" : "b";
+      const steps = buildPlaybackSteps(trip);
+      const mediaSteps = steps.filter((step) => step.kind === "media");
+      expect(mediaSteps.map((step) => trip.routePoints[step.pointIndex].id)).toEqual([expectedOwner]);
+      expect(committedPlaybackPosition(trip, mediaSteps[0])).toEqual({
+        journeyId: trip.id, routePointId: "child", assetId: "child-photo",
+      });
+      expect(steps.filter((step) => step.kind === "stop").map((step) => trip.routePoints[step.pointIndex].id))
+        .toEqual(trip.routePoints.filter((candidate) => candidate.isStop).map((candidate) => candidate.id));
+      expect(trip).toEqual(before);
+    },
+  );
 
   it("traverses leading shaping points without focusing them and respects the canonical Stop bit", () => {
     const trip = { ...journey, media: [], routePoints: [
@@ -376,7 +403,7 @@ describe("buildPlaybackSteps (#19)", () => {
       ...journey,
       routePoints: [
         { ...point("point-0", 30.66, 104.06), regionContext: "Chengdu", placeRole: "accommodation" },
-        { ...point("point-1", 30.67, 104.07), isStop: false, regionContext: "Chengdu", placeRole: "pure-transit" },
+        { ...point("point-1", 30.67, 104.07), isStop: false, regionContext: "Chengdu", placeRole: "pure-transit", stayAnchorRoutePointId: "point-2" },
         { ...point("point-2", 30.68, 104.08), regionContext: "Chengdu", placeRole: "attraction" },
       ],
       media: [
@@ -403,6 +430,43 @@ describe("buildPlaybackSteps (#19)", () => {
     expect(grouped.routePoints).toEqual(routeBefore);
     expect(grouped.media).toEqual(mediaBefore);
     expect(grouped.media).toEqual(expect.arrayContaining(mediaBefore));
+  });
+
+  it("folds explicitly-owned child media into the selected Stop without changing canonical media ownership (#514)", () => {
+    const child = {
+      ...point("point-1", 30.67, 104.07),
+      isStop: false,
+      placeRole: "pure-transit" as const,
+      stayAnchorRoutePointId: "point-0",
+    };
+    const promotedStop = {
+      ...point("point-2", 30.68, 104.08),
+      placeRole: "pure-transit" as const,
+    };
+    const owned: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 30.66, 104.06),
+        child,
+        promotedStop,
+      ],
+      media: [media("child-memory", "point-1", "image/jpeg", 0)],
+    };
+
+    expect(isPlaybackTransitRoutePoint(promotedStop)).toBe(false);
+    expect(playbackMediaForPoint(owned, 0).map((asset) => asset.id)).toEqual(["child-memory"]);
+    expect(playbackMediaForPoint(owned, 1)).toEqual([]);
+    expect(storyMediaForScope(owned, "point-1").map((asset) => asset.id)).toEqual(["child-memory"]);
+
+    const steps = buildPlaybackSteps(owned);
+    expect(steps.filter((step) => step.kind === "stop").map((step) => step.pointIndex)).toEqual([0, 2]);
+    expect(steps.filter((step) => step.kind === "media").map((step) => step.pointIndex)).toEqual([0]);
+    const foldedMedia = steps.find((step) => step.kind === "media");
+    expect(committedPlaybackPosition(owned, foldedMedia)).toEqual({
+      journeyId: owned.id,
+      routePointId: "point-1",
+      assetId: "child-memory",
+    });
   });
 
   it("keeps legacy isStop=false route points as transit without requiring placeRole metadata (#514)", () => {

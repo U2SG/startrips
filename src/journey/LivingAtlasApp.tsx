@@ -3865,7 +3865,7 @@ export function LivingAtlasApp({
                         >
                           <span>{String(routePointIndex + 1).padStart(2, "0")}</span>
                           <strong>{point.label}</strong>
-                          <small>{point.placeRole === "accommodation" ? "住宿" : "停靠点"}</small>
+                          <small>{point.placeRole === "accommodation" ? "住宿" : point.isStop ? "停靠点" : "途径点"}</small>
                         </button>
                       ))}
                     </div>

@@ -67,7 +67,7 @@ describe("Journey keepsake render manifest (#87)", () => {
     const trip: Journey = { ...journey, routePoints: [
       { ...point("p0", 0, 0), latitude: 0, regionContext: "A" },
       { ...point("p1", 1, 2), latitude: 2, isStop: false },
-      { ...point("p2", 2, 0.1), latitude: 0.1, isStop: false, regionContext: "A" },
+      { ...point("p2", 2, 0.1), latitude: 0.1, isStop: false, regionContext: "A", stayAnchorRoutePointId: "p0" },
       { ...point("p3", 3, 1), latitude: 1, isStop: false },
       { ...point("p4", 4, 3), latitude: 2, regionContext: "B" },
       { ...point("p5", 5, 4), latitude: 3, isStop: false },

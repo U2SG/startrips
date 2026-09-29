@@ -9,7 +9,6 @@
 
 import type { HomeNarrativeContext, HomeNarrativeCameraTarget } from "./homeBasePrelude";
 import {
-  deriveJourneyStaySummaries,
   factualRouteText,
   isVisualMediaAsset,
   resolveJourneyRouteSegmentProvenance,
@@ -95,26 +94,31 @@ export function playbackMediaByOwner(
   return byOwner;
 }
 
-/** Cinematic projection only: assets retain their canonical Route Point owner. */
+/**
+ * Cinematic chapter projection for #514/ST-164. An explicitly-owned non-stop
+ * keeps its canonical Route Point/media identity, while its visual media plays
+ * inside the exact Stop selected by the user. Invalid/stale pointers fail
+ * closed to the canonical child instead of silently rebinding to a neighbour.
+ */
 export function playbackMediaByChapter(journey: Journey): Map<string, JourneyMediaAsset[]> {
-  // Ordinary Stop-only journeys have no child media to fold. Keep their single
-  // owner scan, including the planner/keepsake's existing large-journey bound.
+  // Preserve the Stop-only projection's single owner scan and performance bound.
   if (journey.routePoints.every((point) => point.isStop)) {
     const byOwner = playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
     return new Map(journey.routePoints.map((point) => [point.id, byOwner.get(point.id) ?? []]));
   }
   const pointsById = new Map(journey.routePoints.map((point) => [point.id, point]));
-  const chapterByOwner = new Map(journey.routePoints.map((point) => [point.id, point.id]));
-  for (const stay of deriveJourneyStaySummaries(journey)) {
-    if (!pointsById.get(stay.anchorRoutePointId)?.isStop) continue;
-    for (const pointId of stay.routePointIds) {
-      if (pointsById.get(pointId)?.isStop === false) chapterByOwner.set(pointId, stay.anchorRoutePointId);
-    }
+  const chapterByOwner = new Map<string, string>();
+  for (const point of journey.routePoints) {
+    const explicitAnchor = point.isStop ? null : point.stayAnchorRoutePointId;
+    const anchor = explicitAnchor ? pointsById.get(explicitAnchor) : null;
+    chapterByOwner.set(point.id, anchor?.isStop ? anchor.id : point.id);
   }
+
   const byChapter = new Map(journey.routePoints.map((point) => [point.id, [] as JourneyMediaAsset[]]));
   for (const asset of journey.media) {
-    if (asset.routePointId === null || !isVisualMediaAsset(asset)) continue;
-    const chapterId = chapterByOwner.get(asset.routePointId);
+    const routePointId = asset.routePointId;
+    if (routePointId === null || !isVisualMediaAsset(asset)) continue;
+    const chapterId = chapterByOwner.get(routePointId);
     if (chapterId !== undefined) byChapter.get(chapterId)?.push(asset);
   }
   for (const media of byChapter.values()) media.sort(comparePlaybackMedia);
@@ -122,8 +126,8 @@ export function playbackMediaByChapter(journey: Journey): Map<string, JourneyMed
 }
 
 /**
- * The media presented in one cinematic chapter, including its stay's vias.
- * Story's explicit Route Point scope continues to read canonical owners.
+ * The visual media presented in one cinematic Route Point chapter. Story's
+ * explicit Route Point scope remains canonical and does not use this folding.
  */
 export function playbackMediaForPoint(
   journey: Journey,
@@ -165,8 +169,8 @@ export function storyMediaForScope(
 export function isPlaybackTransitRoutePoint(
   point: Pick<RoutePoint, "isStop" | "placeRole">,
 ): boolean {
-  // isStop is the canonical route-role bit carried by historical Journey
-  // records; descriptive placeRole metadata cannot override that role.
+  // isStop is the canonical route-role bit. Descriptive placeRole metadata
+  // cannot override an explicit Stop choice made in Composer.
   return point.isStop === false;
 }
 

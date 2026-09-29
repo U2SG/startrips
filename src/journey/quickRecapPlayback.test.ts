@@ -83,7 +83,7 @@ describe("Quick Recap playback handoff (#127)", () => {
     trip.routePoints = [
       { ...point("p0", 0), latitude: 0, longitude: 0, regionContext: "A" },
       { ...point("p1", 1), latitude: 2, longitude: 2, isStop: false },
-      { ...point("p2", 2), latitude: 0.1, longitude: 0.1, isStop: false, regionContext: "A" },
+      { ...point("p2", 2), latitude: 0.1, longitude: 0.1, isStop: false, regionContext: "A", stayAnchorRoutePointId: "p0" },
       { ...point("p3", 3), latitude: 1, longitude: 1, isStop: false },
       { ...point("p4", 4), latitude: 2, longitude: 3, regionContext: "B" },
       { ...point("p5", 5), latitude: 3, longitude: 4, isStop: false },
@@ -105,6 +105,28 @@ describe("Quick Recap playback handoff (#127)", () => {
       journeyId: trip.id, journeyRevision: String(trip.revision), routePointIds: trip.routePoints.map((point) => point.id),
       digests: quickRecapDigestsForJourney(trip), routePointGeometry: quickRecapRouteGeometry(trip, trip.routePoints.map((point) => point.id)),
     }).errors).toEqual([]);
+    expect(trip).toEqual(before);
+  });
+
+  it.each(["p0", "p2", null])("agrees with Full on persisted owner %s within one inferred city stay", (owner) => {
+    const trip = fixture();
+    trip.coverMediaAssetId = null;
+    trip.routePoints = [
+      { ...point("p0", 0), latitude: 0, longitude: 0, regionContext: "A" },
+      { ...point("p1", 1), latitude: 0.05, longitude: 0.05, isStop: false, regionContext: "A", stayAnchorRoutePointId: owner },
+      { ...point("p2", 2), latitude: 0.1, longitude: 0.1, regionContext: "A" },
+    ];
+    trip.media = [media("child-photo", "p1")];
+    const before = structuredClone(trip);
+    const prepared = prepareQuickRecapPlayback(trip, { generatedAt: "2026-09-29T00:00:00.000Z" })!;
+    expect(prepared).not.toBeNull();
+    expect(prepared.plan.chapters.filter((chapter) => chapter.items.length > 0).map((chapter) => chapter.routePointId))
+      .toEqual([owner ?? "p1"]);
+    const recapSteps = buildPlaybackSteps(prepared.journey);
+    expect(recapSteps).toEqual(buildPlaybackSteps(trip));
+    expect(committedPlaybackPosition(prepared.journey, recapSteps.find((step) => step.kind === "media")!))
+      .toEqual({ journeyId: trip.id, routePointId: "p1", assetId: "child-photo" });
+    expect(prepared.journey.routePoints).toEqual(trip.routePoints);
     expect(trip).toEqual(before);
   });
 

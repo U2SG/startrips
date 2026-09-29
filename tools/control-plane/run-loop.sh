@@ -382,8 +382,27 @@ transient_stop() {
 cd "$ROOT"
 # AGENT_STOP is global. SUPERVISOR_STOP and CANCEL_SCHEDULED_RESTART belong to
 # the dedicated LOCAL Backend supervisor lifecycle and must not strand Experience.
+# A user-authorized Temporary Backend substitution may run while those two LOCAL
+# markers remain present, but only when execution.py verifies the exact switch
+# receipt. The env flag alone never bypasses a STOP.
+TEMPORARY_BACKEND_SWITCH_AUTHORIZED=0
+if [[ "$STARTRIPS_LANE" == "backend" && "${STARTRIPS_TEMPORARY_BACKEND_SWITCH:-}" == "1" ]]; then
+  if python3 - "$ROOT" <<'PY'
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / 'lib'))
+from execution import temporary_backend_switch_authorized
+raise SystemExit(0 if temporary_backend_switch_authorized(root, lane='backend') else 1)
+PY
+  then
+    TEMPORARY_BACKEND_SWITCH_AUTHORIZED=1
+  fi
+fi
 STOP_GUARDS=(AGENT_STOP)
-[[ "$STARTRIPS_LANE" != "backend" ]] || STOP_GUARDS+=(SUPERVISOR_STOP CANCEL_SCHEDULED_RESTART)
+if [[ "$STARTRIPS_LANE" == "backend" && "$TEMPORARY_BACKEND_SWITCH_AUTHORIZED" != "1" ]]; then
+  STOP_GUARDS+=(SUPERVISOR_STOP CANCEL_SCHEDULED_RESTART)
+fi
 for guard in "${STOP_GUARDS[@]}"; do
   [[ ! -f "$ROOT/$guard" ]] || { echo "Owner STOP preserved for lane=$STARTRIPS_LANE; no execution"; exit 0; }
 done

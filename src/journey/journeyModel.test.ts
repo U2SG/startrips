@@ -141,6 +141,52 @@ describe("journeyModel", () => {
     ]);
   });
 
+  it("treats an explicitly promoted Stop as a stay even when imported role metadata remains transit (#514)", () => {
+    const trip = journey("promoted-stop", "2026-08-11");
+    trip.routePoints = [{
+      id: "promoted",
+      journeyId: trip.id,
+      sortOrder: 0,
+      latitude: 22.54,
+      longitude: 114.05,
+      label: "Promoted stop",
+      isStop: true,
+      occurredAt: null,
+      regionContext: "深圳",
+      placeRole: "pure-transit",
+      createdAt: trip.createdAt,
+    }];
+
+    const summaries = deriveJourneyStaySummaries(trip);
+    expect(summaries.map((summary) => summary.routePointIds)).toEqual([["promoted"]]);
+    expect(journeyOverviewRoutePointIds(trip, summaries)).toEqual(["promoted"]);
+  });
+
+  it("lets an explicit non-stop owner override heuristic stay grouping without changing route/media identity (#514)", () => {
+    const trip = journey("owned", "2026-08-11");
+    trip.routePoints = [
+      { id: "stop-a", journeyId: trip.id, sortOrder: 0, latitude: 30.66, longitude: 104.06, label: "Stop A", isStop: true, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+      { id: "via", journeyId: trip.id, sortOrder: 1, latitude: 30.67, longitude: 104.07, label: "Via", isStop: false, occurredAt: null, regionContext: "B", stayAnchorRoutePointId: "stop-a", createdAt: trip.createdAt },
+      { id: "stop-b", journeyId: trip.id, sortOrder: 2, latitude: 31.1, longitude: 105.1, label: "Stop B", isStop: true, occurredAt: null, regionContext: "B", createdAt: trip.createdAt },
+    ];
+    trip.media = [{
+      id: "via-photo", journeyId: trip.id, routePointId: "via", storageDriver: "s3", storageKey: "via",
+      fileName: "via.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, uploadedByUserId: "user-1", createdAt: trip.createdAt,
+    }];
+    const beforeRoute = structuredClone(trip.routePoints);
+    const beforeMedia = structuredClone(trip.media);
+
+    const summaries = deriveJourneyStaySummaries(trip);
+    expect(summaries[0]).toMatchObject({
+      anchorRoutePointId: "stop-a",
+      routePointIds: ["stop-a", "via"],
+      mediaAssetIds: ["via-photo"],
+    });
+    expect(summaries[1].routePointIds).toEqual(["stop-b"]);
+    expect(trip.routePoints).toEqual(beforeRoute);
+    expect(trip.media).toEqual(beforeMedia);
+  });
+
   it("keeps unknown/far-apart places separate and filters before stay aggregation (#514)", () => {
     const trip = journey("bounds", "2026-08-11");
     trip.routePoints = [
@@ -163,12 +209,12 @@ describe("journeyModel", () => {
     expect(journeyOverviewRoutePointIds(trip, noVisibleStays)).toEqual([]);
   });
 
-  it("includes only visible, nearby media-bearing vias in a Stop-backed stay without changing its anchor", () => {
+  it("preserves explicit child membership while filtering media and authorized route points", () => {
     const trip = journey("via-stay", "2026-08-11");
     trip.routePoints = [
       { id: "stop-a", journeyId: trip.id, sortOrder: 0, latitude: 0, longitude: 0, label: "A", isStop: true, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
       { id: "shape", journeyId: trip.id, sortOrder: 1, latitude: 0.1, longitude: 0.1, label: "shape", isStop: false, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
-      { id: "child", journeyId: trip.id, sortOrder: 2, latitude: 0.2, longitude: 0.2, label: "child", isStop: false, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+      { id: "child", journeyId: trip.id, sortOrder: 2, latitude: 0.2, longitude: 0.2, label: "child", isStop: false, occurredAt: null, regionContext: "A", stayAnchorRoutePointId: "stop-a", createdAt: trip.createdAt },
       { id: "unknown", journeyId: trip.id, sortOrder: 3, latitude: 0.2, longitude: 0.2, label: "unknown", isStop: false, occurredAt: null, createdAt: trip.createdAt },
       { id: "distant", journeyId: trip.id, sortOrder: 4, latitude: 20, longitude: 20, label: "distant", isStop: false, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
     ];
@@ -181,7 +227,8 @@ describe("journeyModel", () => {
     expect(deriveJourneyStaySummaries(trip)).toEqual([expect.objectContaining({
       id: `stay:${trip.id}:stop-a`, anchorRoutePointId: "stop-a", routePointIds: ["stop-a", "child"], mediaAssetIds: ["child-photo"],
     })]);
-    expect(deriveJourneyStaySummaries(trip, { includedMediaAssetIds: new Set(["unknown-photo"]) })[0].routePointIds).toEqual(["stop-a"]);
+    expect(deriveJourneyStaySummaries(trip, { includedMediaAssetIds: new Set(["unknown-photo"]) })[0])
+      .toMatchObject({ routePointIds: ["stop-a", "child"], mediaAssetIds: [] });
     expect(deriveJourneyStaySummaries(trip, { includedRoutePointIds: new Set(["stop-a", "distant"]) })[0].routePointIds).toEqual(["stop-a"]);
     expect(trip).toEqual(before);
   });

@@ -367,8 +367,10 @@ function normalizedRegionContext(value: string | null | undefined) {
 }
 
 function routePointCanRepresentStay(point: Journey["routePoints"][number]) {
-  if (!point.isStop) return false;
-  return point.placeRole !== "transport" && point.placeRole !== "pure-transit";
+  // #514/ST-164: `isStop` is the user's canonical journey-role choice. Import
+  // metadata such as `transport` / `pure-transit` is descriptive context only
+  // and must not override a later explicit promotion to Stop.
+  return point.isStop;
 }
 
 export function journeyOverviewRoutePointIds(
@@ -450,36 +452,22 @@ export function deriveJourneyStaySummaries(
   // order while keeping aggregation O(route points + media) rather than
   // rescanning every asset for every stay on media-heavy Journeys.
   const groupIndexByRoutePointId = new Map<string, number>();
+  const memberRowsByGroup = groups.map((group) => [...group.rows]);
   groups.forEach((group, groupIndex) => {
     group.rows.forEach(({ point }) => groupIndexByRoutePointId.set(point.id, groupIndex));
   });
-  // A media-bearing via may belong to the adjacent Stop-backed stay. Keep the
-  // same region/distance bounds and visibility filters; unknown or distant vias
-  // stay independent, and the overview anchor remains a real Stop.
-  const visibleMediaOwners = new Set(journey.media
-    .filter((asset) => isVisualMediaAsset(asset)
-      && (!options.includedMediaAssetIds || options.includedMediaAssetIds.has(asset.id)))
-    .map((asset) => asset.routePointId));
-  let nextStop = 0;
+  // #514/ST-164: an explicit child -> Stop relation outranks every inferred
+  // region grouping rule. It adds the canonical child identity to that stay;
+  // it does not promote the child to a Stop or alter route geometry.
   journey.routePoints.forEach((point, routeIndex) => {
-    while (nextStop < candidates.length && candidates[nextStop].routeIndex < routeIndex) nextStop += 1;
-    if (point.isStop || !visibleMediaOwners.has(point.id)
-      || (options.includedRoutePointIds && !options.includedRoutePointIds.has(point.id))) return;
-    const regionKey = normalizedRegionContext(point.regionContext);
-    if (!regionKey) return;
-    for (const neighbor of [candidates[nextStop - 1], candidates[nextStop]]) {
-      if (!neighbor || normalizedRegionContext(neighbor.point.regionContext) !== regionKey
-        || routePointDistanceKm(neighbor.point, point) > MAX_DERIVED_STAY_GAP_KM) continue;
-      const groupIndex = groupIndexByRoutePointId.get(neighbor.point.id);
-      if (groupIndex !== undefined) groupIndexByRoutePointId.set(point.id, groupIndex);
-      break;
-    }
+    if (point.isStop || !point.stayAnchorRoutePointId) return;
+    if (options.includedRoutePointIds && !options.includedRoutePointIds.has(point.id)) return;
+    const groupIndex = groupIndexByRoutePointId.get(point.stayAnchorRoutePointId);
+    if (groupIndex === undefined) return;
+    groupIndexByRoutePointId.set(point.id, groupIndex);
+    memberRowsByGroup[groupIndex]?.push({ point, routeIndex });
   });
-  const memberRowsByGroup = groups.map(() => [] as typeof candidates);
-  journey.routePoints.forEach((point, routeIndex) => {
-    const groupIndex = groupIndexByRoutePointId.get(point.id);
-    if (groupIndex !== undefined) memberRowsByGroup[groupIndex].push({ point, routeIndex });
-  });
+  memberRowsByGroup.forEach((rows) => rows.sort((left, right) => left.routeIndex - right.routeIndex));
   const mediaIdsByGroup = groups.map(() => [] as string[]);
   for (const asset of journey.media) {
     if (asset.routePointId === null) continue;
@@ -490,9 +478,9 @@ export function deriveJourneyStaySummaries(
   }
 
   return groups.map((group, groupIndex) => {
-    const points = group.rows.map(({ point }) => point);
-    const anchor = chooseStayAnchor(points);
-    const memberRows = memberRowsByGroup[groupIndex];
+    const stopPoints = group.rows.map(({ point }) => point);
+    const memberRows = memberRowsByGroup[groupIndex] ?? group.rows;
+    const anchor = chooseStayAnchor(stopPoints);
     const routePointIds = memberRows.map(({ point }) => point.id);
     return {
       id: `stay:${journey.id}:${group.rows[0].point.id}`,
@@ -504,7 +492,9 @@ export function deriveJourneyStaySummaries(
       mediaAssetIds: mediaIdsByGroup[groupIndex] ?? [],
       startRouteIndex: memberRows[0].routeIndex,
       endRouteIndex: memberRows[memberRows.length - 1].routeIndex,
-      overviewVisible: points.some((point) => point.overviewVisibility !== "detail"),
+      // Overview visibility belongs to the Stop-backed stay root. A child via
+      // point can contribute context/media without becoming an overview node.
+      overviewVisible: stopPoints.some((point) => point.overviewVisibility !== "detail"),
     };
   });
 }
@@ -595,6 +585,32 @@ export function validateJourneyInput(input: JourneyInput): ValidationResult {
         }
         lastOccurredAt = canonical;
       }
+    }
+  });
+
+  const pointIndexById = new Map(input.routePoints.flatMap((point, index) => point.id ? [[point.id, index] as const] : []));
+  input.routePoints.forEach((point, index) => {
+    const anchorId = point.stayAnchorRoutePointId;
+    if (anchorId === undefined || anchorId === null) return;
+    if (point.isStop) {
+      errors.push(`停靠点 ${index + 1} 不能归属于另一个停靠点`);
+      return;
+    }
+    const anchorIndex = pointIndexById.get(anchorId);
+    if (anchorIndex === undefined || !input.routePoints[anchorIndex]?.isStop) {
+      errors.push(`路线点 ${index + 1} 的停留归属已失效，请重新选择`);
+      return;
+    }
+    let previousStop: JourneyInput["routePoints"][number] | undefined;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (input.routePoints[cursor]?.isStop) {
+        previousStop = input.routePoints[cursor];
+        break;
+      }
+    }
+    const nextStop = input.routePoints.slice(index + 1).find((candidate) => candidate.isStop);
+    if (anchorId !== previousStop?.id && anchorId !== nextStop?.id) {
+      errors.push(`路线点 ${index + 1} 的停留归属因顺序变化需要重新确认`);
     }
   });
 

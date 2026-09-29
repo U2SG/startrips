@@ -138,6 +138,39 @@ describe("parseJourneyInput", () => {
     expect(lineBreak?.routePoints[0].note).toBe("line one\nline two");
   });
 
+  it("persists only an exact adjacent Stop ownership relation (#514)", () => {
+    const previousId = "11111111-1111-4111-8111-111111111111";
+    const childId = "22222222-2222-4222-8222-222222222222";
+    const nextId = "33333333-3333-4333-8333-333333333333";
+    const routePoints = [
+      { ...validJourney.routePoints[0], id: previousId, label: "Previous", isStop: true },
+      { ...validJourney.routePoints[0], id: childId, label: "Via", isStop: false, stayAnchorRoutePointId: nextId },
+      { ...validJourney.routePoints[0], id: nextId, label: "Next", isStop: true },
+    ];
+    expect(parseJourneyInput({ ...validJourney, routePoints })?.routePoints[1].stayAnchorRoutePointId).toBe(nextId);
+    expect(parseJourneyInput({
+      ...validJourney,
+      routePoints: routePoints.map((point, index) => index === 1 ? { ...point, stayAnchorRoutePointId: null } : point),
+    })?.routePoints[1].stayAnchorRoutePointId).toBeNull();
+    expect(parseJourneyInput({
+      ...validJourney,
+      routePoints: routePoints.map((point, index) => index === 1 ? { ...point, stayAnchorRoutePointId: childId } : point),
+    })).toBeNull();
+    expect(parseJourneyInput({
+      ...validJourney,
+      routePoints: routePoints.map((point, index) => index === 0 ? { ...point, stayAnchorRoutePointId: nextId } : point),
+    })).toBeNull();
+
+    const interveningStop = {
+      ...validJourney.routePoints[0],
+      id: "44444444-4444-4444-8444-444444444444",
+      label: "Intervening",
+      isStop: true,
+    };
+    const movedTargetAway = [routePoints[0], routePoints[2], interveningStop, routePoints[1]];
+    expect(parseJourneyInput({ ...validJourney, routePoints: movedTargetAway })).toBeNull();
+  });
+
   it("parses optional stay-presentation corrections without guessing missing metadata (#514)", () => {
     const parsed = parseJourneyInput({
       ...validJourney,
