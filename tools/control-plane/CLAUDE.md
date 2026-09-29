@@ -43,18 +43,22 @@ Automation prompts carry roles and this entry point, never current PRs or SHAs.
   proving an old execution ended; preserve that owner's dirty work. Never borrow
   someone else's dirty tree, create a competing owner or widen permissions.
   Distinguish requested readOnly access from an actual denied inherit operation.
-- Codexless VCS writes use one canonical transport. Before any owner commit/push on
-  Windows, fresh `project_context` for the exact owner worktree MUST prove
-  `:workspace` / `workspaceWrite`. Then execute the Git mutation through
-  Codexless `command_exec` with `access=inherit` and the directly resolved Git
-  executable (currently `D:\\工具\\Git\\cmd\\git.exe`), passing argv directly.
-  Do not wrap owner Git writes in PowerShell/cmd shell strings or another launcher.
-  A shell/bare-wrapper outer safety-parser rejection is transport evidence, not proof
-  that owner authority is absent: re-resolve the executable and retry that exact
-  idempotent Git mutation once through the canonical direct-executable path. If the
-  direct `access=inherit` call itself is denied, or its result is uncertain, fail
-  closed and preserve the owner state. For uncertain remote mutations, read the exact
-  branch/PR state before any retry; never blindly replay a push or GitHub write.
+- Codexless owner writes use one canonical Windows transport. Before any mutating
+  owner operation, fresh `project_context` for the exact owner worktree MUST prove
+  `:workspace` / `workspaceWrite`. Execute one operation per Codexless
+  `command_exec` call with direct argv; do not wrap mutations in PowerShell, cmd /c,
+  bash -c, chained shell operators, or another launcher. Git writes use
+  `access=inherit` plus the directly resolved Git executable (currently
+  `D:\\工具\\Git\\cmd\\git.exe`). Python control-plane commands use the absolute
+  interpreter `D:\\Python\\python.exe`, and GitHub CLI operations use
+  `C:\\Program Files\\GitHub CLI\\gh.exe`. A bare/wrapper outer safety-parser
+  rejection is transport evidence, not proof that owner authority is absent:
+  fresh-read exact local/remote state and retry that exact idempotent operation once
+  through the canonical absolute-executable path. Do not report the first parser
+  rejection as the final blocker. If the direct `access=inherit` call itself is
+  denied, or a remote mutation has an uncertain result, fail closed and preserve the
+  owner state; read exact branch/PR state before any retry and never blindly replay a
+  commit, push, PR/comment, label, or other GitHub write.
 - Execution-carrier exclusion is lane-scoped, not workspace-global. A provably
   Backend carrier and a provably Experience carrier may run concurrently. Same-lane
   carriers still exclude duplicates; an unknown lane, unreadable carrier whose lane
