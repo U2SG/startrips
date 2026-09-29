@@ -343,7 +343,9 @@ try {
           && providerAddTarget.height >= 44
           && persistenceRequests.length === 0);
 
-        const record03 = run.rows.filter({ hasText: "Record 03" }).first();
+        const record03 = run.rows.filter({
+          has: run.page.locator(".journey-route-draft__summary strong").filter({ hasText: /^Record 03$/ }),
+        }).first();
         const record03Summary = record03.locator(".journey-route-draft__summary");
         const record03DraftId = await record03.getAttribute("data-route-point-draft-id");
         await record03Summary.click();
@@ -407,7 +409,9 @@ try {
           && focusAfterMenuClose.draftId === record03DraftId
           && composerStillOpen);
 
-        const record04 = run.rows.filter({ hasText: "Record 04" }).first();
+        const record04 = run.rows.filter({
+          has: run.page.locator(".journey-route-draft__summary strong").filter({ hasText: /^Record 04$/ }),
+        }).first();
         await record04.locator(".journey-route-draft__summary").click();
         const expandedIds = await run.page.locator('.journey-route-draft > li[data-route-point-expanded="true"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-route-point-draft-id")));
         record("composer-route-points:one-record-bound-expansion", { expandedIds }, expandedIds.length === 1 && expandedIds[0] !== record03DraftId);
