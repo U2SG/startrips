@@ -286,17 +286,17 @@
 }
 
 .auth-password-field {
-  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  gap: 8px;
+  align-items: end;
 }
 
-.auth-password-field input {
-  padding-right: 76px;
+.auth-password-field label {
+  min-width: 0;
 }
 
 .auth-password-toggle {
-  position: absolute;
-  right: 2px;
-  bottom: 1px;
   min-width: 56px;
   min-height: 44px;
   border: 0;
