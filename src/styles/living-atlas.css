@@ -3699,6 +3699,105 @@
   cursor: pointer;
 }
 
+/* #514/ST-164: Route Point editing asks for journey meaning, not an internal
+   overview policy. These controls stay dark, touchable, and compact on both
+   desktop and mobile; no browser-native select/checkbox is involved. */
+.journey-route-draft__meaning {
+  display: grid;
+  gap: 10px;
+}
+
+.journey-route-draft__stop-toggle {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid rgba(122, 244, 237, 0.2);
+  background: rgba(5, 17, 16, 0.58);
+  color: var(--atlas-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.journey-route-draft__stop-toggle.is-stop {
+  border-color: rgba(122, 244, 237, 0.48);
+  background: rgba(16, 55, 50, 0.54);
+}
+
+.journey-route-draft__stop-toggle > span,
+.journey-route-draft__stay-ownership > span {
+  display: grid;
+  gap: 2px;
+}
+
+.journey-route-draft__stop-toggle strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.journey-route-draft__stop-toggle small,
+.journey-route-draft__stay-ownership small,
+.journey-route-draft__stay-correction small {
+  color: var(--atlas-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.journey-route-draft__stay-ownership {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-left: 1px solid rgba(122, 244, 237, 0.2);
+}
+
+.journey-route-draft__stay-ownership > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.journey-route-draft__stay-ownership button {
+  min-height: 44px;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(122, 244, 237, 0.2);
+  background: rgba(2, 8, 8, 0.45);
+  color: #a8bcb6;
+  font: inherit;
+  cursor: pointer;
+}
+
+.journey-route-draft__stay-ownership button[aria-pressed="true"] {
+  border-color: rgba(122, 244, 237, 0.58);
+  background: rgba(16, 55, 50, 0.62);
+  color: var(--atlas-cyan);
+}
+
+.journey-route-draft__stay-ownership[data-stay-ownership-correction="true"] > small {
+  color: #e8c48f;
+}
+
+.journey-route-draft__stay-correction {
+  min-width: 0;
+  border-top: 1px solid rgba(122, 244, 237, 0.1);
+  padding-top: 8px;
+}
+
+.journey-route-draft__stay-correction > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--atlas-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.journey-route-draft__stay-correction[open] > summary {
+  color: var(--atlas-cyan);
+}
+
 .journey-route-draft__position-editor {
   min-width: 0;
   display: grid;
@@ -5512,6 +5611,25 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   display: none;
 }
 
+/* #514/ST-164: once a stay is expanded, its children become a bounded reading
+   list inside the existing context surface instead of widening into a carousel.
+   The outer card keeps camera/chrome ownership; this inner list alone scrolls. */
+.living-atlas__route-point-context-switcher.is-stay-summary[data-stay-detail-open="true"] > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  max-height: min(34svh, 244px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.living-atlas__route-point-context-switcher.is-stay-summary[data-stay-detail-open="true"] > div > button {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+}
+
 .living-atlas__route-point-context-switcher button {
   min-width: 112px;
   min-height: 44px;
@@ -5789,6 +5907,26 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   width: auto;
   max-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 164px);
   transform: none;
+}
+
+.living-atlas[data-mobile-v2="on"] .living-atlas__route-point-context-switcher.is-stay-summary[data-stay-detail-open="true"] > div {
+  max-height: min(30svh, 220px);
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .living-atlas[data-mobile-v2="on"] .living-atlas__route-point-context {
+    /* Short landscape has two persistent chrome bands: the 56px header and
+       the 118px journey/timeline dock. Give both real geometry instead of
+       overlapping the lower dock and trying to win the pointer with z-index. */
+    top: calc(env(safe-area-inset-top) + 64px);
+    bottom: calc(env(safe-area-inset-bottom) + 136px);
+    max-height: none;
+    padding-block: 12px;
+  }
+
+  .living-atlas[data-mobile-v2="on"] .living-atlas__route-point-context-switcher.is-stay-summary[data-stay-detail-open="true"] > div {
+    max-height: min(28svh, 128px);
+  }
 }
 
 /* #253: the only persistent chrome of this mode. It sits in the top-left safe

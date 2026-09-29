@@ -31,6 +31,7 @@ export type SharedRoutePoint = {
   isStop: boolean;
   occurredAt: Date | null;
   note: string | null;
+  stayAnchorRoutePointId?: string | null;
 };
 
 /**
@@ -246,6 +247,7 @@ async function readSharedJourneyView(
       isStop: journeyRoutePoints.isStop,
       occurredAt: journeyRoutePoints.occurredAt,
       note: journeyRoutePoints.note,
+      stayAnchorRoutePointId: journeyRoutePoints.stayAnchorRoutePointId,
     })
     .from(journeyRoutePoints)
     .where(inArray(journeyRoutePoints.journeyId, journeyIds))

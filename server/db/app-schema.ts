@@ -182,6 +182,9 @@ export const journeyRoutePoints = pgTable(
     regionContext: text("region_context"),
     placeRole: text("place_role"),
     overviewVisibility: text("overview_visibility"),
+    // #514/ST-164: exact child -> Stop membership. Kept on the canonical
+    // Route Point instead of creating a second stay/place entity.
+    stayAnchorRoutePointId: uuid("stay_anchor_route_point_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

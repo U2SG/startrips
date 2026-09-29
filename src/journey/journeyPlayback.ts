@@ -78,8 +78,34 @@ function playbackMediaByOwner(
 }
 
 /**
- * The media of one route point in playback order (visual media only; the
- * soundtrack never enters the chapter stream).
+ * Cinematic chapter projection for #514/ST-164. An explicitly-owned non-stop
+ * keeps its canonical Route Point/media identity, while its visual media plays
+ * inside the exact Stop selected by the user. Invalid/stale pointers fail
+ * closed to the canonical child instead of silently rebinding to a neighbour.
+ */
+function playbackMediaByChapter(journey: Journey): Map<string, JourneyMediaAsset[]> {
+  const pointsById = new Map(journey.routePoints.map((point) => [point.id, point]));
+  const chapterByOwner = new Map<string, string>();
+  for (const point of journey.routePoints) {
+    const explicitAnchor = point.isStop ? null : point.stayAnchorRoutePointId;
+    const anchor = explicitAnchor ? pointsById.get(explicitAnchor) : null;
+    chapterByOwner.set(point.id, anchor?.isStop ? anchor.id : point.id);
+  }
+
+  const byChapter = new Map(journey.routePoints.map((point) => [point.id, [] as JourneyMediaAsset[]]));
+  for (const asset of journey.media) {
+    const routePointId = asset.routePointId;
+    if (routePointId === null || !isVisualMediaAsset(asset)) continue;
+    const chapterId = chapterByOwner.get(routePointId);
+    if (chapterId !== undefined) byChapter.get(chapterId)?.push(asset);
+  }
+  for (const media of byChapter.values()) media.sort(comparePlaybackMedia);
+  return byChapter;
+}
+
+/**
+ * The visual media presented in one cinematic Route Point chapter. Story's
+ * explicit Route Point scope remains canonical and does not use this folding.
  */
 export function playbackMediaForPoint(
   journey: Journey,
@@ -87,7 +113,7 @@ export function playbackMediaForPoint(
 ): JourneyMediaAsset[] {
   const point = journey.routePoints[pointIndex];
   if (!point) return [];
-  return orderedMediaForOwner(journey, point.id);
+  return playbackMediaByChapter(journey).get(point.id) ?? [];
 }
 
 /**
@@ -115,17 +141,15 @@ export function storyMediaForScope(
 ): JourneyMediaAsset[] {
   if (routePointId === null) return playbackStoryMedia(journey);
   const pointIndex = journey.routePoints.findIndex((point) => point.id === routePointId);
-  return pointIndex >= 0 ? playbackMediaForPoint(journey, pointIndex) : [];
+  return pointIndex >= 0 ? orderedMediaForOwner(journey, routePointId) : [];
 }
 
 export function isPlaybackTransitRoutePoint(
   point: Pick<RoutePoint, "isStop" | "placeRole">,
 ): boolean {
-  // isStop is the canonical route-role bit carried by historical Journey
-  // records. Newer placeRole metadata can make the same intent explicit, but
-  // playback must not require a migration before an old non-stop point stops
-  // behaving like an arrival.
-  return point.isStop === false || point.placeRole === "pure-transit";
+  // isStop is the canonical route-role bit. Descriptive placeRole metadata
+  // cannot override an explicit Stop choice made in Composer.
+  return point.isStop === false;
 }
 
 export type PlaybackStep =
@@ -243,7 +267,7 @@ export function buildPlaybackSteps(
   journey: Journey,
   homeContext?: HomeNarrativeContext | null,
 ): PlaybackStep[] {
-  const byOwner = playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
+  const byChapter = playbackMediaByChapter(journey);
   const steps: PlaybackStep[] = [];
   if (homeContext?.prelude.eligible) {
     steps.push({ kind: "home-prelude", cameraTarget: homeContext.prelude.cameraTarget });
@@ -251,12 +275,11 @@ export function buildPlaybackSteps(
   steps.push({ kind: "intro" });
   for (let pointIndex = 0; pointIndex < journey.routePoints.length; pointIndex += 1) {
     const routePoint = journey.routePoints[pointIndex];
-    const media = byOwner.get(routePoint.id) ?? [];
+    const media = byChapter.get(routePoint.id) ?? [];
     if (pointIndex > 0) steps.push({ kind: "travel", to: pointIndex });
-    // #514: pure transit shapes the canonical route but is not an arrival.
-    // Existing note/media remain addressable, and Full Playback still presents
-    // every historical media asset at this canonical route position. Those media
-    // are content beats only: the pass-through never gains an arrival/stay step.
+    // #514: transit shapes the canonical route but is not an arrival. Media
+    // explicitly owned by a Stop was folded into that Stop above; any media left
+    // here is independent content and remains addressable at its canonical point.
     if (isPlaybackTransitRoutePoint(routePoint)) {
       for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
         steps.push({ kind: "media", pointIndex, mediaIndex });
@@ -346,8 +369,8 @@ export function committedPlaybackPosition(
         assetId: null,
       };
     case "media": {
-      const routePointId = journey.routePoints[committedStep.pointIndex]?.id ?? null;
       const asset = playbackMediaForPoint(journey, committedStep.pointIndex)[committedStep.mediaIndex];
+      const routePointId = asset?.routePointId ?? journey.routePoints[committedStep.pointIndex]?.id ?? null;
       return { journeyId: journey.id, routePointId, assetId: asset?.id ?? null };
     }
   }

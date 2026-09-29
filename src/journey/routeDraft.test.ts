@@ -8,6 +8,8 @@ import {
   removeRoutePoint,
   routeDraftSearchFocus,
   routeDraftToInput,
+  routePointStayOwnershipTargets,
+  setRoutePointStayAnchor,
   suggestPointLabel,
   toggleRouteStop,
   updateRoutePoint,
@@ -57,6 +59,61 @@ describe("route draft operations", () => {
     const points = [beijing, ulanBator];
     expect(moveRoutePoint(points, "beijing", -1)).toEqual(points);
     expect(moveRoutePoint(points, "ulan-bator", 1)).toEqual(points);
+  });
+
+  it("persists exact via-to-Stop ownership without retargeting after reorder (#514)", () => {
+    const previous = { ...beijing, draftId: "previous", label: "Previous stop" };
+    const child: RouteDraftPoint = {
+      draftId: "via",
+      id: "22222222-2222-4222-8222-222222222222",
+      latitude: 40,
+      longitude: 117,
+      label: "Via",
+      isStop: false,
+      occurredAt: null,
+    };
+    const next: RouteDraftPoint = {
+      ...beijing,
+      draftId: "next",
+      id: "33333333-3333-4333-8333-333333333333",
+      label: "Next stop",
+    };
+    const assigned = setRoutePointStayAnchor([previous, child, next], "via", "next");
+    expect(assigned[1].stayAnchorRoutePointId).toBe(next.id);
+    expect(routeDraftToInput(assigned)[1].stayAnchorRoutePointId).toBe(next.id);
+    expect(routePointStayOwnershipTargets(assigned, "via").needsCorrection).toBe(false);
+
+    const reordered = moveRoutePoint(assigned, "next", -1);
+    expect(reordered.find((point) => point.draftId === "via")?.stayAnchorRoutePointId).toBe(next.id);
+    expect(routePointStayOwnershipTargets(reordered, "via").needsCorrection).toBe(false);
+
+    const movedAway = moveRoutePoint(reordered, "previous", 1);
+    expect(movedAway.find((point) => point.draftId === "via")?.stayAnchorRoutePointId).toBe(next.id);
+    expect(routePointStayOwnershipTargets(movedAway, "via").needsCorrection).toBe(true);
+  });
+
+  it("clears children truthfully when their target Stop is removed or demoted (#514)", () => {
+    const target = { ...beijing, draftId: "target" };
+    const child: RouteDraftPoint = {
+      draftId: "via",
+      id: "22222222-2222-4222-8222-222222222222",
+      latitude: 40,
+      longitude: 117,
+      label: "Via",
+      isStop: false,
+      occurredAt: null,
+      stayAnchorRoutePointId: target.id,
+    };
+    const tail: RouteDraftPoint = {
+      ...beijing,
+      draftId: "tail",
+      id: "33333333-3333-4333-8333-333333333333",
+    };
+    expect(removeRoutePoint([target, child, tail], "target")[0].stayAnchorRoutePointId).toBeNull();
+    expect(toggleRouteStop([target, child, tail], "target")[1]).toMatchObject({
+      draftId: "via",
+      stayAnchorRoutePointId: null,
+    });
   });
 
   it("fills only an empty point label with a reverse-geocoded suggestion", () => {

@@ -1423,6 +1423,62 @@ describe("media and atlas HTTP endpoints", () => {
     });
   });
 
+  it("POSTs a new Journey with client-stable Stop ownership and rejects cross-Journey id collisions (#514)", async () => {
+    const stopId = randomUUID();
+    const childId = randomUUID();
+    const routePoints = [
+      {
+        ...baseJourney.routePoints[0],
+        id: stopId,
+        label: "Created stop",
+        isStop: true,
+      },
+      {
+        ...baseJourney.routePoints[1],
+        id: childId,
+        label: "Created via",
+        isStop: false,
+        stayAnchorRoutePointId: stopId,
+      },
+    ];
+    const created = await app.request(
+      `${TEST_ORIGIN}/api/journeys`,
+      {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify({ ...baseJourney, title: "Stable owned create", routePoints }),
+      },
+    );
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({
+      journey: {
+        routePoints: [
+          { id: stopId, isStop: true },
+          { id: childId, isStop: false, stayAnchorRoutePointId: stopId },
+        ],
+      },
+    });
+
+    const collision = await app.request(
+      `${TEST_ORIGIN}/api/journeys`,
+      {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify({
+          ...baseJourney,
+          title: "Stable id collision",
+          routePoints: [
+            routePoints[0],
+            { ...routePoints[1], id: randomUUID() },
+          ],
+        }),
+      },
+    );
+    expect(collision.status).toBe(409);
+    await expect(collision.json()).resolves.toMatchObject({
+      error: "JOURNEY_ROUTE_POINT_ID_CONFLICT",
+    });
+  });
   it("updates and then deletes the current atlas through the tenant API", async () => {
     const patch = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
       method: "PATCH",
@@ -1673,6 +1729,97 @@ describe("tenant-scoped journey repository", () => {
         id: foreignJourney.routePoints[0].id,
       }],
     })).rejects.toBeInstanceOf(JourneyRouteChangedError);
+  });
+
+
+  it("accepts a client-stable id for a new Stop so a child can persist exact ownership (#514)", async () => {
+    const created = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Owned route edit",
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+    const newStopId = "55555555-5555-4555-8555-555555555555";
+    const childId = "66666666-6666-4666-8666-666666666666";
+    const updated = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Owned route edit",
+      revision: created.revision,
+      routePoints: [
+        {
+          id: newStopId,
+          latitude: 22.31,
+          longitude: 114.17,
+          label: "New stop",
+          isStop: true,
+          occurredAt: new Date("2026-09-02T01:00:00Z"),
+        },
+        {
+          id: childId,
+          latitude: 22.32,
+          longitude: 114.18,
+          label: "Owned via",
+          isStop: false,
+          occurredAt: new Date("2026-09-02T02:00:00Z"),
+          stayAnchorRoutePointId: newStopId,
+        },
+      ],
+    });
+    expect(updated?.routePoints.map((point) => point.id)).toEqual([newStopId, childId]);
+    expect(updated?.routePoints[1].stayAnchorRoutePointId).toBe(newStopId);
+  });
+
+  it("rejects stale persisted Stop ownership when an older PATCH omits the field (#514)", async () => {
+    const created = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Owned route legacy patch",
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+    const targetId = created.routePoints[0].id;
+    const anchored = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Owned route legacy patch",
+      revision: created.revision,
+      routePoints: created.routePoints.map(({ id, latitude, longitude, label, isStop, occurredAt }, index) => ({
+        id,
+        latitude,
+        longitude,
+        label,
+        isStop,
+        occurredAt,
+        stayAnchorRoutePointId: index === 1 ? targetId : null,
+      })),
+    });
+    if (!anchored) throw new Error("Anchored Journey fixture was not updated");
+    expect(anchored.routePoints[1].stayAnchorRoutePointId).toBe(targetId);
+
+    const omitOwnership = ({ id, latitude, longitude, label, isStop, occurredAt }: typeof anchored.routePoints[number]) => ({
+      id,
+      latitude,
+      longitude,
+      label,
+      isStop,
+      occurredAt,
+    });
+    await expect(updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Legacy demotion must conflict",
+      revision: anchored.revision,
+      routePoints: anchored.routePoints.map((point, index) => ({
+        ...omitOwnership(point),
+        isStop: index === 0 ? false : point.isStop,
+      })),
+    })).rejects.toBeInstanceOf(JourneyRouteChangedError);
+
+    await expect(updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Legacy deletion must conflict",
+      revision: anchored.revision,
+      routePoints: [omitOwnership(anchored.routePoints[1])],
+    })).rejects.toBeInstanceOf(JourneyRouteChangedError);
+
+    const [afterRejectedWrites] = await getJourneysForAtlas([created.id], atlasA);
+    expect(afterRejectedWrites?.routePoints[0].isStop).toBe(true);
+    expect(afterRejectedWrites?.routePoints[1].stayAnchorRoutePointId).toBe(targetId);
   });
 
   it("preserves route-point notes across edits and clears them explicitly (#10)", async () => {

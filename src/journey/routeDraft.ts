@@ -77,18 +77,115 @@ export function removeRoutePoint(
   points: readonly RouteDraftPoint[],
   draftId: string,
 ): RouteDraftPoint[] {
-  return points.filter((point) => point.draftId !== draftId);
+  const removed = points.find((point) => point.draftId === draftId);
+  const removedId = removed?.id ?? null;
+  return points
+    .filter((point) => point.draftId !== draftId)
+    .map((point) => removedId && point.stayAnchorRoutePointId === removedId
+      ? { ...point, stayAnchorRoutePointId: null }
+      : point);
 }
 
 export function toggleRouteStop(
   points: readonly RouteDraftPoint[],
   draftId: string,
 ): RouteDraftPoint[] {
-  return points.map((point) =>
-    point.draftId === draftId
-      ? { ...point, isStop: !point.isStop }
-      : point
+  const toggled = points.find((point) => point.draftId === draftId);
+  if (!toggled) return [...points];
+  const becomingStop = !toggled.isStop;
+  return points.map((point) => {
+    if (point.draftId === draftId) {
+      return {
+        ...point,
+        isStop: becomingStop,
+        // Stops are roots, never children. Demotion also drops any stale self
+        // membership rather than carrying hidden ownership through the edit.
+        stayAnchorRoutePointId: null,
+      };
+    }
+    // If a target Stop is demoted, truthfully clear children that pointed at
+    // that exact canonical id. Reorder never enters this path, so it cannot
+    // silently retarget a child to whichever Stop became adjacent.
+    if (!becomingStop && toggled.id && point.stayAnchorRoutePointId === toggled.id) {
+      return { ...point, stayAnchorRoutePointId: null };
+    }
+    return point;
+  });
+}
+
+export type RoutePointStayOwnershipTargets = {
+  previous: RouteDraftPoint | null;
+  next: RouteDraftPoint | null;
+  current: RouteDraftPoint | null;
+  needsCorrection: boolean;
+};
+
+export function routePointStayOwnershipTargets(
+  points: readonly RouteDraftPoint[],
+  draftId: string,
+): RoutePointStayOwnershipTargets {
+  const index = points.findIndex((point) => point.draftId === draftId);
+  const point = index >= 0 ? points[index] : null;
+  if (!point || point.isStop) {
+    return { previous: null, next: null, current: null, needsCorrection: false };
+  }
+  let previous: RouteDraftPoint | null = null;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (points[cursor].isStop) {
+      previous = points[cursor];
+      break;
+    }
+  }
+  let next: RouteDraftPoint | null = null;
+  for (let cursor = index + 1; cursor < points.length; cursor += 1) {
+    if (points[cursor].isStop) {
+      next = points[cursor];
+      break;
+    }
+  }
+  const current = point.stayAnchorRoutePointId
+    ? points.find((candidate) => candidate.id === point.stayAnchorRoutePointId) ?? null
+    : null;
+  const currentIsAdjacent = Boolean(
+    current
+    && (current.draftId === previous?.draftId || current.draftId === next?.draftId),
   );
+  return {
+    previous,
+    next,
+    current,
+    needsCorrection: Boolean(point.stayAnchorRoutePointId) && !currentIsAdjacent,
+  };
+}
+
+function newCanonicalRoutePointId() {
+  const id = globalThis.crypto?.randomUUID?.();
+  if (!id) throw new Error("Stable Route Point ownership requires UUID support");
+  return id;
+}
+
+export function setRoutePointStayAnchor(
+  points: readonly RouteDraftPoint[],
+  childDraftId: string,
+  targetDraftId: string | null,
+): RouteDraftPoint[] {
+  const child = points.find((point) => point.draftId === childDraftId);
+  if (!child || child.isStop) return [...points];
+  if (targetDraftId === null) {
+    return points.map((point) => point.draftId === childDraftId
+      ? { ...point, stayAnchorRoutePointId: null }
+      : point);
+  }
+  const targets = routePointStayOwnershipTargets(points, childDraftId);
+  const target = [targets.previous, targets.next]
+    .find((candidate) => candidate?.draftId === targetDraftId) ?? null;
+  if (!target?.isStop) return [...points];
+  const targetId = target.id ?? newCanonicalRoutePointId();
+  return points.map((point) => {
+    if (point.draftId === target.draftId && !point.id) return { ...point, id: targetId };
+    if (point.draftId === childDraftId) return { ...point, stayAnchorRoutePointId: targetId };
+    return point;
+  });
 }
 
 export function routeDraftToInput(
@@ -148,6 +245,7 @@ export function journeyToDraftPoints(journey: Journey): RouteDraftPoint[] {
     regionContext: point.regionContext ?? null,
     placeRole: point.placeRole ?? null,
     overviewVisibility: point.overviewVisibility ?? null,
+    stayAnchorRoutePointId: point.stayAnchorRoutePointId ?? null,
   }));
 }
 

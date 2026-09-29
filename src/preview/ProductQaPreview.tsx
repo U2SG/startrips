@@ -7,11 +7,14 @@ import { JourneyComposer } from "../journey/JourneyComposer";
 import { JourneyStory } from "../journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "../journey/JourneyPlaybackOverlay";
 import {
+  buildPlaybackSteps,
   playbackCameraTargetKey,
   playbackMediaForPoint,
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "../journey/journeyPlayback";
+import { deriveJourneyStaySummaries, journeyOverviewRoutePointIds } from "../journey/journeyModel";
+import type { JourneySaveResult } from "../journey/journeySaveRecovery";
 import { PLAYBACK_INITIAL_TEMPO } from "../journey/useJourneyPlaybackDirector";
 import type { PlaybackTempo } from "../journey/journeyPlaybackPlan";
 import {
@@ -364,16 +367,65 @@ function JourneyComposerQaPreview() {
       ? storyQaJourney
       : undefined;
   const [open, setOpen] = useState(true);
+  const [savedResult, setSavedResult] = useState<JourneySaveResult | null>(null);
+  const savedProjection = useMemo(() => {
+    if (!savedResult) return null;
+    const savedJourney = savedResult.journey;
+    const stays = deriveJourneyStaySummaries(savedJourney);
+    return {
+      overviewRoutePointIds: journeyOverviewRoutePointIds(savedJourney, stays),
+      stays: stays.map((stay) => ({
+        anchorRoutePointId: stay.anchorRoutePointId,
+        routePointIds: stay.routePointIds,
+        mediaAssetIds: stay.mediaAssetIds,
+      })),
+      playback: buildPlaybackSteps(savedJourney).flatMap<{
+        kind: "stop" | "media";
+        pointIndex: number;
+        routePointId: string | null;
+        assetId?: string | null;
+        assetRoutePointId?: string | null;
+      }>((step) => {
+        if (step.kind === "stop") {
+          return [{
+            kind: step.kind,
+            pointIndex: step.pointIndex,
+            routePointId: savedJourney.routePoints[step.pointIndex]?.id ?? null,
+          }];
+        }
+        if (step.kind === "media") {
+          const asset = playbackMediaForPoint(savedJourney, step.pointIndex)[step.mediaIndex];
+          return [{
+            kind: step.kind,
+            pointIndex: step.pointIndex,
+            routePointId: savedJourney.routePoints[step.pointIndex]?.id ?? null,
+            assetId: asset?.id ?? null,
+            assetRoutePointId: asset?.routePointId ?? null,
+          }];
+        }
+        return [];
+      }),
+    };
+  }, [savedResult]);
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       <button type="button" data-qa-composer-reopen onClick={() => setOpen(true)}>重新打开编辑器</button>
+      {savedProjection ? (
+        <output
+          hidden
+          data-qa-composer-projection
+          data-overview-route-point-ids={JSON.stringify(savedProjection.overviewRoutePointIds)}
+          data-stays={JSON.stringify(savedProjection.stays)}
+          data-playback={JSON.stringify(savedProjection.playback)}
+        />
+      ) : null}
       {open ? (
         <JourneyComposer
           open
           journey={journey}
           onClose={() => setOpen(false)}
-          onSaved={() => undefined}
+          onSaved={(result) => setSavedResult(result)}
           onGlobePickRequest={() => undefined}
         />
       ) : null}
