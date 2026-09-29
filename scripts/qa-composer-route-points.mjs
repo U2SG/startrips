@@ -119,6 +119,61 @@ try {
         && duplicateCoordinates[0].draftId !== duplicateCoordinates[1].draftId
         && run.pageErrors.length === 0);
 
+      {
+        const ownershipRow = run.rows.nth(1);
+        await ownershipRow.locator(".journey-route-draft__summary").click();
+        const ownership = ownershipRow.locator(".journey-route-draft__stay-ownership");
+        await ownership.waitFor({ state: "visible" });
+        const ownershipTargets = await ownership.locator("button").evaluateAll((buttons) => buttons.map((button) => {
+          const rect = button.getBoundingClientRect();
+          return {
+            label: button.textContent?.trim() ?? "",
+            pressed: button.getAttribute("aria-pressed"),
+            width: rect.width,
+            height: rect.height,
+          };
+        }));
+        record(`composer-route-points:${viewport.label}:stay-ownership-targets`, { ownershipTargets },
+          ownershipTargets.length === 3
+          && ownershipTargets[0]?.label === "跟上一停靠 · Shared label"
+          && ownershipTargets[1]?.label === "跟下一停靠 · Record 04"
+          && ownershipTargets[2]?.label === "独立"
+          && ownershipTargets.every((target) => target.width >= 44 && target.height >= 44));
+
+        if (viewport.label === "390") {
+          const nextOwner = ownership.getByRole("button", { name: "跟下一停靠 · Record 04" });
+          await nextOwner.focus();
+          await run.page.keyboard.press("Enter");
+          await run.page.waitForFunction(() => document.activeElement?.textContent?.includes("跟下一停靠")
+            && document.activeElement?.getAttribute("aria-pressed") === "true");
+          const nextFocus = await run.page.evaluate(() => document.activeElement?.textContent?.trim() ?? "");
+
+          const independentOwner = ownership.getByRole("button", { name: "独立" });
+          await independentOwner.focus();
+          await run.page.keyboard.press("Enter");
+          await run.page.waitForFunction(() => document.activeElement?.textContent?.trim() === "独立"
+            && document.activeElement?.getAttribute("aria-pressed") === "true");
+          const independentFocus = await run.page.evaluate(() => document.activeElement?.textContent?.trim() ?? "");
+
+          const previousOwner = ownership.getByRole("button", { name: "跟上一停靠 · Shared label" });
+          await previousOwner.focus();
+          await run.page.keyboard.press("Enter");
+          await run.page.waitForFunction(() => document.activeElement?.textContent?.includes("跟上一停靠")
+            && document.activeElement?.getAttribute("aria-pressed") === "true");
+          const finalOwnershipState = await ownership.locator("button").evaluateAll((buttons) => buttons.map((button) => ({
+            label: button.textContent?.trim() ?? "",
+            pressed: button.getAttribute("aria-pressed"),
+          })));
+          record("composer-route-points:stay-ownership-keyboard-focus-and-state", {
+            nextFocus, independentFocus, finalOwnershipState,
+          }, nextFocus === "跟下一停靠 · Record 04"
+            && independentFocus === "独立"
+            && finalOwnershipState[0]?.pressed === "true"
+            && finalOwnershipState[1]?.pressed === "false"
+            && finalOwnershipState[2]?.pressed === "false");
+        }
+      }
+
       if (viewport.label === "390") {
         let releaseVegasSearch = null;
         let markVegasSearchStarted = null;

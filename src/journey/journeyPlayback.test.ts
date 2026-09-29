@@ -327,6 +327,43 @@ describe("buildPlaybackSteps (#19)", () => {
     expect(grouped.media).toEqual(expect.arrayContaining(mediaBefore));
   });
 
+  it("folds explicitly-owned child media into the selected Stop without changing canonical media ownership (#514)", () => {
+    const child = {
+      ...point("point-1", 30.67, 104.07),
+      isStop: false,
+      placeRole: "pure-transit" as const,
+      stayAnchorRoutePointId: "point-0",
+    };
+    const promotedStop = {
+      ...point("point-2", 30.68, 104.08),
+      placeRole: "pure-transit" as const,
+    };
+    const owned: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 30.66, 104.06),
+        child,
+        promotedStop,
+      ],
+      media: [media("child-memory", "point-1", "image/jpeg", 0)],
+    };
+
+    expect(isPlaybackTransitRoutePoint(promotedStop)).toBe(false);
+    expect(playbackMediaForPoint(owned, 0).map((asset) => asset.id)).toEqual(["child-memory"]);
+    expect(playbackMediaForPoint(owned, 1)).toEqual([]);
+    expect(storyMediaForScope(owned, "point-1").map((asset) => asset.id)).toEqual(["child-memory"]);
+
+    const steps = buildPlaybackSteps(owned);
+    expect(steps.filter((step) => step.kind === "stop").map((step) => step.pointIndex)).toEqual([0, 2]);
+    expect(steps.filter((step) => step.kind === "media").map((step) => step.pointIndex)).toEqual([0]);
+    const foldedMedia = steps.find((step) => step.kind === "media");
+    expect(committedPlaybackPosition(owned, foldedMedia)).toEqual({
+      journeyId: owned.id,
+      routePointId: "point-1",
+      assetId: "child-memory",
+    });
+  });
+
   it("keeps legacy isStop=false route points as transit without requiring placeRole metadata (#514)", () => {
     const legacyTransit = { ...point("point-1", 30.67, 104.07), isStop: false };
     const legacy: Journey = {

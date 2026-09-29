@@ -1534,6 +1534,72 @@ try {
       && afterClose.focusRoute === focusBefore.focusRoute
       && afterClose.activeRoute === focusBefore.activeRoute
       && afterClose.revision === focusBefore.revision);
+
+    // Real touch must activate the Story entry, not merely pass hit-testing.
+    const storyTouchEntry = mobilePage.locator(`[data-route-point-context][data-route-point-id="${staySummaryPointIds.museum}"] .living-atlas__route-point-context-entry`);
+    await storyTouchEntry.scrollIntoViewIfNeeded();
+    const storyTouchBox = await storyTouchEntry.boundingBox();
+    if (!storyTouchBox) throw new Error(`${mobileCase.label}: Story entry has no touch geometry`);
+    await mobilePage.touchscreen.tap(
+      storyTouchBox.x + storyTouchBox.width / 2,
+      storyTouchBox.y + storyTouchBox.height / 2,
+    );
+    await mobilePage.locator(".journey-story").waitFor({ state: "visible", timeout: 5_000 });
+    await mobilePage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${photoAssetId}"][data-media-page-ready="true"]`)
+      .waitFor({ state: "attached", timeout: 5_000 });
+    const storyTouchIdentity = await mobilePage.locator(`.journey-story button[data-route-point-id="${staySummaryPointIds.museum}"]`).evaluate((node) => ({
+      pressed: node.getAttribute("aria-pressed"),
+      routePointId: node.getAttribute("data-route-point-id"),
+    }));
+    record(`${mobileCase.label} real touch opens Story with the same canonical Route Point/media owner`, {
+      storyTouchBox, storyTouchIdentity,
+    }, storyTouchBox.width >= 44
+      && storyTouchBox.height >= 44
+      && storyTouchIdentity.pressed === "true"
+      && storyTouchIdentity.routePointId === staySummaryPointIds.museum);
+    const storyTouchClose = mobilePage.locator(".journey-story__close");
+    const storyTouchCloseBox = await storyTouchClose.boundingBox();
+    if (!storyTouchCloseBox) throw new Error(`${mobileCase.label}: Story close has no touch geometry`);
+    await mobilePage.touchscreen.tap(
+      storyTouchCloseBox.x + storyTouchCloseBox.width / 2,
+      storyTouchCloseBox.y + storyTouchCloseBox.height / 2,
+    );
+    await mobilePage.locator(".journey-story").waitFor({ state: "detached", timeout: 5_000 });
+
+    // Re-open the stay detail and touch a real child Route Point. The resulting
+    // context must be the exact child id carried by the hit target; no duplicate
+    // or neighbouring Stop may silently take ownership.
+    const returnedContext = mobilePage.locator(`[data-route-point-context][data-route-point-id="${staySummaryPointIds.museum}"]`);
+    await returnedContext.waitFor({ state: "visible", timeout: 5_000 });
+    const reopenDetail = returnedContext.locator("button[data-stay-detail-open]");
+    const reopenBox = await reopenDetail.boundingBox();
+    if (!reopenBox) throw new Error(`${mobileCase.label}: stay-detail reopen has no touch geometry`);
+    await mobilePage.touchscreen.tap(reopenBox.x + reopenBox.width / 2, reopenBox.y + reopenBox.height / 2);
+    await mobilePage.waitForFunction(() => (
+      document.querySelector("[data-stay-summary]")?.getAttribute("data-stay-detail-open") === "true"
+    ));
+    const childTouch = returnedContext.locator(`[data-stay-route-point]:not([data-stay-route-point="${staySummaryPointIds.museum}"])`).first();
+    await childTouch.scrollIntoViewIfNeeded();
+    const childTouchId = await childTouch.getAttribute("data-stay-route-point");
+    const childTouchBox = await childTouch.boundingBox();
+    if (!childTouchId || !childTouchBox) throw new Error(`${mobileCase.label}: child Route Point has no touch identity/geometry`);
+    await mobilePage.touchscreen.tap(
+      childTouchBox.x + childTouchBox.width / 2,
+      childTouchBox.y + childTouchBox.height / 2,
+    );
+    await mobilePage.waitForFunction((routePointId) => (
+      document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") === routePointId
+    ), childTouchId);
+    const childTouchIdentity = await mobilePage.locator("[data-route-point-context]").evaluate((node) => ({
+      routePointId: node.getAttribute("data-route-point-id"),
+      journeyId: node.getAttribute("data-journey-id"),
+    }));
+    record(`${mobileCase.label} real touch opens the exact child Route Point without reassigning identity`, {
+      childTouchId, childTouchBox, childTouchIdentity,
+    }, childTouchBox.width >= 44
+      && childTouchBox.height >= 44
+      && childTouchIdentity.routePointId === childTouchId);
+
     record(`${mobileCase.label} stay-summary page errors`, { pageErrors: mobileRun.pageErrors }, mobileRun.pageErrors.length === 0);
     await mobilePage.close();
   }
