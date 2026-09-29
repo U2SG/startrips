@@ -1,9 +1,10 @@
+import type { ItineraryOrganizationDecision } from "./itineraryImport";
 /**
  * #512: the browser side of the import channel.
  *
- * Pasted text never comes here — `readTextItinerary` reads it in the browser,
- * so the one entry point that needs no provider keeps working on a deployment
- * that has configured none. A link and an image do come here, because reading
+ * Pasted text uses the configured recognizer when available; the local reader
+ * remains the fallback on deployments with no provider. Links and images
+ * come here because reading
  * a page and reading a screenshot are the server's to do: the page fetch is
  * guarded there, and the recognition credential lives there and nowhere else.
  *
@@ -37,7 +38,7 @@ export type ItineraryLocationReviewPlan = {
   }>;
 };
 
-export type ItineraryLocationReviewDecision = {
+export type ItineraryLocationReviewDecision = ItineraryOrganizationDecision & {
   index: number;
   candidateId: string | null;
   correctedQuery: string | null;
@@ -121,6 +122,15 @@ export async function readItineraryCapabilities(
   return response.json() as Promise<ItineraryImportCapabilities>;
 }
 
+export async function readItineraryFromText(
+  text: string,
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<ItineraryRecognition> {
+  const { recognition } = await post({ source: "text", text }, fetcher, signal);
+  return { ...recognition, sourceKind: "text" };
+}
+
 export async function readItineraryFromLink(
   link: string,
   fetcher: typeof fetch = fetch,
@@ -142,12 +152,14 @@ export async function readItineraryFromImage(
 export async function reviewItineraryLocations(
   plan: ItineraryLocationReviewPlan,
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<ItineraryLocationReviewDecision[]> {
   const response = await fetcher("/api/itinerary-import/review", {
     method: "POST",
     credentials: "include",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ plan }),
+    signal,
   });
   const payload = await response.json().catch(() => null) as
     | { decisions?: ItineraryLocationReviewDecision[]; error?: string; message?: string; stage?: ItineraryImportStage }

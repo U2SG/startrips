@@ -406,6 +406,7 @@ export function JourneyComposer({
     () => journey?.startedOn ?? recoveryInput?.startedOn ?? initialImport?.startedOn ?? new Date().toISOString().slice(0, 10),
   );
   const [endedOn, setEndedOn] = useState(journey?.endedOn ?? recoveryInput?.endedOn ?? initialImport?.endedOn ?? "");
+  const metadataEditedRef = useRef({ title: false, startedOn: false, endedOn: false });
   const [note, setNote] = useState(journey?.note ?? recoveryInput?.note ?? "");
   const [lightColor, setLightColor] = useState(journey?.lightColor ?? recoveryInput?.lightColor ?? LIGHT_COLORS[0]);
   const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? recoveryInput?.lightEffect ?? null);
@@ -415,14 +416,15 @@ export function JourneyComposer({
       : (initialUnknownCreateAttempt?.mediaFiles ?? []).map((media) => ({ ...media })),
   );
   const mobileLayout = useCompactMobileLayout();
-  // #375: which Composer task the compact-mobile surface is showing. Desktop
-  // renders the same information architecture inline and stays on "primary".
+  // Both desktop and compact layouts enter optional work from the route task.
   const [mobileTask, setMobileTask] = useState<ComposerMobileTaskId>("primary");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  const activeMobileTask: ComposerMobileTaskId = mobileLayout ? mobileTask : "primary";
+  const activeMobileTask: ComposerMobileTaskId = mobileTask;
   const taskHeadingRef = useRef<HTMLHeadingElement>(null);
   const taskEntryRefs = useRef(new Map<ComposerMobileTaskId | "more", HTMLButtonElement>());
   const taskReturnFocusRef = useRef<ComposerMobileTaskId | null>(null);
+  const importShortcutRef = useRef<HTMLButtonElement>(null);
+  const taskEnteredFromImportRef = useRef(false);
   const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
   const [mobileMediaDeleteIndex, setMobileMediaDeleteIndex] = useState<number | null>(null);
@@ -432,8 +434,7 @@ export function JourneyComposer({
   const routePointTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const routePointMenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const routePointRowRefs = useRef(new Map<string, HTMLLIElement>());
-  const narrativeScrollRef = useRef<HTMLElement>(null);
-  const routeScrollRef = useRef<HTMLElement>(null);
+  const editorScrollRef = useRef<HTMLDivElement>(null);
   const playbackPreviewRevisionRef = useRef(0);
   const playbackPreviewWasActiveRef = useRef(false);
   const lastEditorFocusRef = useRef<HTMLElement | null>(null);
@@ -444,8 +445,7 @@ export function JourneyComposer({
     selectedDraftId: string | null;
     expandedDraftId: string | null;
     focusTarget: HTMLElement | null;
-    narrativeScrollTop: number;
-    routeScrollTop: number;
+    editorScrollTop: number;
     mobileTask: ComposerMobileTaskId;
   } | null>(null);
   const pendingRoutePointFocusDraftIdRef = useRef<string | null>(null);
@@ -547,7 +547,7 @@ export function JourneyComposer({
       setMobileMediaMenuIndex(null);
       return;
     }
-    if (mobileLayout && mobileTask !== "primary") {
+    if (mobileTask !== "primary") {
       exitMobileTask();
       return;
     }
@@ -573,11 +573,6 @@ export function JourneyComposer({
     setMobileMediaMenuIndex(null);
     setMobileMediaAssignmentIndex(null);
     setMobileMediaDeleteIndex(null);
-    // Desktop shows the whole architecture inline, so a task left open on a
-    // rotated phone must not survive as a state nobody can see or leave.
-    setMobileTask("primary");
-    setMoreMenuOpen(false);
-    taskReturnFocusRef.current = null;
   }, [mobileLayout]);
 
   /**
@@ -587,7 +582,6 @@ export function JourneyComposer({
    * focus trap on top of the one `useModalFocus` already owns.
    */
   useEffect(() => {
-    if (!mobileLayout) return;
     if (mobileTask !== "primary") {
       taskHeadingRef.current?.focus({ preventScroll: true });
       return;
@@ -595,11 +589,16 @@ export function JourneyComposer({
     const returning = taskReturnFocusRef.current;
     taskReturnFocusRef.current = null;
     if (!returning) return;
+    if (taskEnteredFromImportRef.current) {
+      taskEnteredFromImportRef.current = false;
+      importShortcutRef.current?.focus({ preventScroll: true });
+      return;
+    }
     // A More-path entry is unmounted with its menu, so the control the person
     // actually came through - and the one still on screen - is More itself.
     const target = composerTask(returning).behindMore ? "more" : returning;
     taskEntryRefs.current.get(target)?.focus({ preventScroll: true });
-  }, [mobileLayout, mobileTask]);
+  }, [mobileTask]);
 
   /**
    * #375: a soft keyboard shrinks the visual viewport and leaves the layout
@@ -734,8 +733,7 @@ export function JourneyComposer({
       selectedDraftId,
       expandedDraftId: expandedRoutePointDraftId,
       focusTarget,
-      narrativeScrollTop: narrativeScrollRef.current?.scrollTop ?? 0,
-      routeScrollTop: routeScrollRef.current?.scrollTop ?? 0,
+      editorScrollTop: editorScrollRef.current?.scrollTop ?? 0,
       mobileTask,
     };
     playbackPreviewRevisionRef.current += 1;
@@ -779,8 +777,7 @@ export function JourneyComposer({
         window.requestAnimationFrame(restoreWhenVisible);
         return;
       }
-      if (narrativeScrollRef.current) narrativeScrollRef.current.scrollTop = context.narrativeScrollTop;
-      if (routeScrollRef.current) routeScrollRef.current.scrollTop = context.routeScrollTop;
+      if (editorScrollRef.current) editorScrollRef.current.scrollTop = context.editorScrollTop;
       const returnTarget = resolveModalInitialFocusTarget(root, resolvePlaybackPreviewReturnFocus);
       const needsRepair = document.activeElement !== returnTarget;
       if (needsRepair) returnTarget.focus({ preventScroll: true });
@@ -1071,12 +1068,13 @@ export function JourneyComposer({
     closeComposerWithUnknownCreateAttempt(unknownCreateAttempt);
   }
 
-  function enterMobileTask(task: ComposerMobileTaskId) {
+  function enterMobileTask(task: ComposerMobileTaskId, fromImport = false) {
     setMoreMenuOpen(false);
     if (task === "primary") {
       exitMobileTask();
       return;
     }
+    taskEnteredFromImportRef.current = fromImport;
     setMobileTask(task);
   }
 
@@ -1440,13 +1438,6 @@ export function JourneyComposer({
   const mobileDeleteMedia = mobileMediaDeleteIndex === null ? null : mediaFiles[mobileMediaDeleteIndex] ?? null;
 
 
-  const mediaHeadingFragment = (
-              <div className="journey-composer__section-heading">
-                <p>01 · MEMORY</p>
-                <h3>照片与影像</h3>
-                <span>可选，旅程会先保存，媒体按文件分块上传。</span>
-              </div>
-  );
   const mediaFieldsFragment = (
               <div className="journey-media-fields">
                 <label className="journey-media-picker">
@@ -1645,18 +1636,17 @@ export function JourneyComposer({
   );
   const journeyHeadingFragment = (
               <div className="journey-composer__section-heading journey-composer__story-heading">
-                {mobileLayout ? null : <p>02 · JOURNEY</p>}
                 <h3 id="journey-story-heading">这段旅程</h3>
               </div>
   );
   const journeyTitleFragment = (
-                <label className="journey-title-field"><span>旅程标题</span><input required maxLength={80} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="穿过北方的夜车" /></label>
+                <label className="journey-title-field"><span>旅程标题</span><input required maxLength={80} value={title} onChange={(event) => { metadataEditedRef.current.title = true; setTitle(event.target.value); }} placeholder="穿过北方的夜车" /></label>
   );
   const journeyMetaFragment = (
     <>
                 <div className="journey-story-fields__dates">
-                  <label><span>开始日期</span><input type="date" required value={startedOn} onChange={(event) => setStartedOn(event.target.value)} /></label>
-                  <label><span>结束日期 <small>可选</small></span><input type="date" min={startedOn} value={endedOn} onChange={(event) => setEndedOn(event.target.value)} /></label>
+                  <label><span>开始日期</span><input type="date" required value={startedOn} onChange={(event) => { metadataEditedRef.current.startedOn = true; setStartedOn(event.target.value); }} /></label>
+                  <label><span>结束日期 <small>可选</small></span><input type="date" min={startedOn} value={endedOn} onChange={(event) => { metadataEditedRef.current.endedOn = true; setEndedOn(event.target.value); }} /></label>
                 </div>
                 <label><span>旅程故事 <small>可选</small></span><textarea rows={5} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="记下沿途发生了什么，也可以留白。" /></label>
     </>
@@ -1735,9 +1725,7 @@ export function JourneyComposer({
   );
   const routeHeadingFragment = (
               <div className="journey-composer__section-heading">
-                {mobileLayout ? null : <p>03 · TRACE</p>}
-                <h3 id="journey-route-heading">在地图上留下它</h3>
-                {mobileLayout ? null : <span>一个地点就是一次停留；继续添加会自然连成路径。</span>}
+                <h3 id="journey-route-heading">路线</h3>
               </div>
   );
   const routeSearchFragment = (
@@ -1875,13 +1863,14 @@ export function JourneyComposer({
                       >
                         <span>
                           <strong>{displayLabel}</strong>
-                          <small>{point.isStop ? "停靠点" : mediaAssociation.count > 0 ? "途径点" : "路线修正点"} · {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</small>
+                          <small>
+                            {point.isStop ? "停靠点" : mediaAssociation.count > 0 ? "途径点" : "路线修正点"}
+                            {point.regionContext ? " · " + point.regionContext : ""}
+                          </small>
                         </span>
                         <IconChevronDown className="journey-route-draft__summary-chevron" size={17} stroke={1.35} aria-hidden="true" />
                       </button>
                       <div className="journey-route-draft__actions" role="group" aria-label={`${displayLabel} 排序和更多操作`}>
-                        <IconActionButton type="button" disabled={index === 0} onClick={() => moveDraftPointRow(point.draftId, -1)} label={`向前移动 ${displayLabel}`} tooltip="上移地点"><IconArrowUp size={16} stroke={1.4} aria-hidden="true" /></IconActionButton>
-                        <IconActionButton type="button" disabled={index === routePoints.length - 1} onClick={() => moveDraftPointRow(point.draftId, 1)} label={`向后移动 ${displayLabel}`} tooltip="下移地点"><IconArrowDown size={16} stroke={1.4} aria-hidden="true" /></IconActionButton>
                         <IconActionButton
                           type="button"
                           buttonRef={(node) => {
@@ -1913,6 +1902,16 @@ export function JourneyComposer({
                             closeRoutePointMenu(point.draftId);
                           }}
                         >
+                          <button type="button" role="menuitem" disabled={index === 0}
+                            aria-label={`向前移动 ${displayLabel}`}
+                            onClick={() => { moveDraftPointRow(point.draftId, -1); closeRoutePointMenu(point.draftId); }}>
+                            <IconArrowUp size={16} stroke={1.4} aria-hidden="true" />上移地点
+                          </button>
+                          <button type="button" role="menuitem" disabled={index === routePoints.length - 1}
+                            aria-label={`向后移动 ${displayLabel}`}
+                            onClick={() => { moveDraftPointRow(point.draftId, 1); closeRoutePointMenu(point.draftId); }}>
+                            <IconArrowDown size={16} stroke={1.4} aria-hidden="true" />下移地点
+                          </button>
                           <button type="button" role="menuitem" className="is-destructive-secondary" onClick={() => removeDraftPointFromMenu(point.draftId)}>
                             <IconTrash size={16} stroke={1.4} aria-hidden="true" />
                             删除地点
@@ -2062,7 +2061,13 @@ export function JourneyComposer({
   const applyItineraryDraft = useCallback((
     imported: readonly ItineraryRoutePointDraft[],
     insertAfterDraftId: string | null,
+    details: { title: string | null; startedOn: string | null; endedOn: string | null },
   ) => {
+    if (!journey && routePointsRef.current.length === 0) {
+      if (!metadataEditedRef.current.title && details.title) setTitle(details.title.slice(0, 80));
+      if (!metadataEditedRef.current.startedOn && details.startedOn) setStartedOn(details.startedOn);
+      if (!metadataEditedRef.current.endedOn && details.endedOn) setEndedOn(details.endedOn);
+    }
     setRoutePoints((current) => {
       const insertAtIndex = resolveInsertAtIndex(current, insertAfterDraftId);
       const applied = applyItineraryImport(current, imported, { insertAtIndex });
@@ -2076,11 +2081,16 @@ export function JourneyComposer({
       );
       return applied.routePoints;
     });
-  }, []);
+    setMobileTask((current) => {
+      if (current !== "primary") taskReturnFocusRef.current = current;
+      return "primary";
+    });
+  }, [journey]);
   const itineraryImportFragment = (
     <ItineraryImportPanel
       onApply={applyItineraryDraft}
       onMessage={setMessage}
+      standalone
       mobileLayout={mobileLayout}
       existingPoints={routePoints}
     />
@@ -2109,7 +2119,7 @@ export function JourneyComposer({
       <section
         ref={dialogRef}
         tabIndex={-1}
-        className="journey-composer motion-staged"
+        className="journey-composer journey-composer--focused motion-staged"
         data-mobile-layout={mobileLayout ? "true" : undefined}
         data-playback-preview-active={playbackPreviewActive ? "true" : undefined}
         data-playback-preview-return-focus={playbackPreviewReturnFocusKind ?? undefined}
@@ -2122,32 +2132,23 @@ export function JourneyComposer({
       >
         <header className="journey-composer__header">
           <div>
-            <p>PRIVATE ATLAS · {isEditing ? "EDIT JOURNEY" : "NEW JOURNEY"}</p>
-            <h2 id="journey-composer-title">{isEditing ? "重新整理这段旅程" : "把一段旅程，收进你的星球"}</h2>
-            <span>{isEditing ? "调整故事、日期和路线；已有媒体会原样保留。" : "一次停留、跨城路径，或一直在路上。"}</span>
+            <h2 id="journey-composer-title">{isEditing ? "编辑旅程" : "创建旅程"}</h2>
           </div>
           <button type="button" onClick={closeComposer} disabled={saving} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
         </header>
 
         <div className="journey-composer__body">
           <div
+            ref={editorScrollRef}
             className="journey-composer__editor"
-            data-composer-scroll-owner={mobileLayout ? "editor" : undefined}
+            data-composer-scroll-owner="editor"
             aria-disabled={editorLocked}
             inert={editorLocked}
             onFocusCapture={(event) => {
               if (event.target instanceof HTMLElement) lastEditorFocusRef.current = event.target;
             }}
           >
-            {mobileLayout ? (
-              /*
-               * #375: on compact mobile the Composer is one task at a time. The
-               * primary task carries the Journey title, the Route Point list,
-               * add/search and the sticky save; everything else is entered from
-               * here and returns here. `composerMobileTasks.ts` is the map, and
-               * its test is what keeps a capability from being merely hidden.
-               */
-              activeMobileTask === "primary" ? (
+            {activeMobileTask === "primary" ? (
                 <section
                   className="journey-composer__task"
                   data-composer-task="primary"
@@ -2213,8 +2214,9 @@ export function JourneyComposer({
                   <div className="journey-composer__route-tools">
                     <button
                       className="journey-composer__import-shortcut"
+                      ref={importShortcutRef}
                       type="button"
-                      onClick={() => enterMobileTask("location")}
+                      onClick={() => enterMobileTask("location", true)}
                     >
                       <IconUpload size={18} stroke={1.4} aria-hidden="true" />
                       导入已有行程
@@ -2262,33 +2264,6 @@ export function JourneyComposer({
                     </div>
                   ) : null}
                 </section>
-              )
-            ) : (
-              <>
-                <section ref={narrativeScrollRef} className="journey-composer__narrative" aria-labelledby="journey-story-heading">
-                  {mediaHeadingFragment}
-                  {mediaFieldsFragment}
-                  {journeyHeadingFragment}
-                  <div className="journey-story-fields">
-                    {journeyTitleFragment}
-                    {journeyMetaFragment}
-                    {recordedTracksFragment}
-                    {appearanceFragment}
-                  </div>
-                </section>
-
-                <section ref={routeScrollRef} className="journey-composer__route" aria-labelledby="journey-route-heading">
-                  {routeHeadingFragment}
-                  <div className="journey-composer__route-tools">
-                    {routeSearchFragment}
-                    {globePickFragment}
-                    {reverseAttributionFragment}
-                  </div>
-                  {itineraryImportFragment}
-                  {routeListFragment}
-                  {preciseLocationFragment}
-                </section>
-              </>
             )}
           </div>
         </div>

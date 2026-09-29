@@ -158,7 +158,7 @@ export function routePointStayOwnershipTargets(
   };
 }
 
-function newCanonicalRoutePointId() {
+export function newCanonicalRoutePointId() {
   const id = globalThis.crypto?.randomUUID?.();
   if (!id) throw new Error("Stable Route Point ownership requires UUID support");
   return id;

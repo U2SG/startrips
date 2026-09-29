@@ -415,6 +415,7 @@ describe("applying a reviewed itinerary draft", () => {
     // And nothing it writes reaches the Home Base evidence surface, which
     // reads saved Journeys rather than drafts.
     expect(IMPORTED_ROUTE_POINT_FIELDS).toEqual([
+      "id",
       "latitude",
       "longitude",
       "label",
@@ -424,6 +425,7 @@ describe("applying a reviewed itinerary draft", () => {
       "regionContext",
       "placeRole",
       "overviewVisibility",
+      "stayAnchorRoutePointId",
     ]);
     expect(imported.every((item) => item.point.occurredAt === null
       || /^\d{4}-\d{2}-\d{2}$/.test(item.point.occurredAt))).toBe(true);

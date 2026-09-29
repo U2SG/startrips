@@ -117,11 +117,14 @@ const REVIEW_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["index", "candidateId", "correctedQuery"],
+        required: ["index", "candidateId", "correctedQuery", "isStop", "stayAnchorIndex", "regionContext"],
         properties: {
           index: { type: "integer" },
           candidateId: { type: ["string", "null"] },
           correctedQuery: { type: ["string", "null"] },
+          isStop: { type: "boolean" },
+          stayAnchorIndex: { type: ["integer", "null"] },
+          regionContext: { type: ["string", "null"] },
         },
       },
     },
@@ -201,7 +204,21 @@ clearly the intended place. If the candidates are wrong or absent, provide one
 short, established English or local name as correctedQuery when it could find
 the intended place. If uncertain, return null for both. A correction is a new
 search term, never a coordinate. Never invent an ID or coordinate. Return one
-decision for every input index and valid JSON matching the schema.`;
+decision for every input index and valid JSON matching the schema.
+
+Also organize the editable Journey narrative. isStop is true for major stays,
+cities or meaningful primary venues, not every listed attraction, meal or
+photo position. Overnight accommodation can be a Stop but is not the only
+criterion: a significant visited landmark can be a Stop too. Ordinary meal
+venues, incidental photo points and pass-through geometry are usually vias.
+Venue-free activities and endpoint-only transport legs are not Stops.
+For a via, stayAnchorIndex may identify the nearest preceding or following
+Stop in the ordered plan when it belongs to that stay, or null for independent.
+A Stop itself has null ownership. Never point to self, another via or an invalid
+source entry. Keep every input index and visit separate, including consecutive
+nights at one hotel and an A-to-B-to-A return. regionContext is a concise city
+or region supported by the plan/map context, or null when unclear. These are
+editable initial choices; they do not record an actual road or alter source order.`;
 
 async function reviewLocations(document, signal) {
   const response = await fetch(UPSTREAM, {

@@ -36,7 +36,7 @@ const journey = {
 
 describe("persistJourneyDraft", () => {
 
-  it("renders one composer surface with precise coordinates collapsed", () => {
+  it("renders a focused desktop route with explicit secondary task entries", () => {
     const markup = renderToStaticMarkup(createElement(JourneyComposer, {
       open: true,
       onClose: () => undefined,
@@ -45,12 +45,16 @@ describe("persistJourneyDraft", () => {
     }));
 
     expect(markup).not.toContain("journey-composer__steps");
-    expect(markup).toContain("01 · MEMORY");
-    expect(markup).toContain("02 · JOURNEY");
-    expect(markup).toContain("03 · TRACE");
-    expect(markup).toContain('<details class="journey-precise-location">');
+    expect(markup).toContain('data-composer-task="primary"');
+    expect(markup).toContain('data-composer-scroll-owner="editor"');
+    expect(markup).toContain('data-composer-task-entry="journey-info"');
+    expect(markup).toContain('data-composer-task-entry="media"');
+    expect(markup).toContain("journey-composer__task-more");
+    expect(markup).toContain("导入已有行程");
+    expect(markup).not.toContain('type="date"');
+    expect(markup).not.toContain("journey-media-picker");
+    expect(markup).not.toContain("journey-precise-location");
     expect(markup).toContain("保存到星球");
-    expect(markup).toContain("先保存这段 Journey");
     expect(markup).not.toContain("导入这份 GPX");
   });
 
@@ -96,7 +100,7 @@ describe("persistJourneyDraft", () => {
       expect(markup).not.toContain("01 · MEMORY");
       expect(markup).not.toContain("02 · JOURNEY");
       expect(markup).not.toContain("03 · TRACE");
-      expect(markup).toContain("在地图上留下它");
+      expect(markup).toContain('id="journey-route-heading">路线');
     } finally {
       if (previous) globalThis.matchMedia = previous;
       else delete (globalThis as { matchMedia?: unknown }).matchMedia;
@@ -511,6 +515,6 @@ describe("place search Journey context", () => {
     // Itinerary import stays focus-free until it has a confirmed Route Point.
     const itineraryImport = readFileSync(new URL("./ItineraryImportPanel.tsx", import.meta.url), "utf8");
     expect(itineraryImport).toMatch(/searchLocations\(/);
-    expect(itineraryImport).not.toMatch(/focus/);
+    expect(itineraryImport).not.toMatch(/\bfocus\s*:/);
   });
 });

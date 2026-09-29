@@ -3992,7 +3992,7 @@ export function LivingAtlasApp({
             <header>
               <div>
                 <h2 id="living-atlas-import-title">导入已有行程</h2>
-                <p>读完后统一核对地点；处理中可以先关闭窗口，稍后回来查看。</p>
+                <p>自动整理成可编辑的路线。处理中可先关闭，稍后回来继续。</p>
               </div>
               <button type="button" onClick={() => setImportOpen(false)} aria-label="关闭行程导入"><IconX size={20} stroke={1.4} aria-hidden="true" /></button>
             </header>

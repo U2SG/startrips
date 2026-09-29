@@ -423,7 +423,7 @@ function JourneyComposerQaPreview() {
       {open ? (
         <JourneyComposer
           open
-          journey={journey}
+          journey={savedResult?.journey ?? journey}
           onClose={() => setOpen(false)}
           onSaved={(result) => setSavedResult(result)}
           onGlobePickRequest={() => undefined}

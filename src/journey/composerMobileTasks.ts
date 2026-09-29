@@ -13,8 +13,8 @@
  * owns it, the control that reveals it and where closing it returns to, and
  * `composerMobileTasks.test.ts` fails if any capability lacks one of those.
  *
- * Desktop renders the same information architecture with more of it inline; it
- * does not need visual parity and keeps its existing two-column markup.
+ * #512 follow-up: desktop uses the same focused task structure and one scroll
+ * owner. Media, precision and styling remain reachable without crowding the route.
  */
 
 export const COMPOSER_TASK_ATTRIBUTE = "data-composer-task";
@@ -127,9 +127,9 @@ export const COMPOSER_CAPABILITIES = {
   },
   "route-point-reorder": {
     label: "调整 Route Point 顺序",
-    tier: "primary",
+    tier: "contextual",
     task: "primary",
-    entry: "记录行上的上移与下移",
+    entry: "记录行的更多操作菜单里的上移与下移",
     returnTo: PRIMARY_SURFACE,
   },
   "route-point-remove": {
