@@ -240,6 +240,22 @@ async function verifyImportedJourney({ label, width, height, editing }) {
     const region = child.getByLabel("所在区域", { exact: true });
     await region.fill("Human region");
     await region.focus();
+    await page.locator('[data-composer-task-back="location"]').click();
+    await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+    const importHiddenWhilePrimary = await page.locator("[data-composer-location-tools]").evaluate((element) => element.hidden);
+    await page.locator(".journey-composer__import-shortcut").click();
+    await page.locator('[data-composer-task="location"]').waitFor({ state: "visible" });
+    await page.locator(".journey-itinerary-import__busy").waitFor({ state: "visible" });
+    const resumedDuringReview = {
+      via: await child.getByRole("button", { name: "途径点", exact: true }).getAttribute("aria-pressed"),
+      owner: await child.getByRole("button", { name: "上一停靠 · Hub 1", exact: true }).getAttribute("aria-pressed"),
+      region: await region.inputValue(),
+    };
+    record(`composer-import:${label}:task-back-preserves-inflight-draft`,
+      { importHiddenWhilePrimary, resumedDuringReview, mutationCount: mutations.length },
+      importHiddenWhilePrimary && resumedDuringReview.via === "true" && resumedDuringReview.owner === "true"
+      && resumedDuringReview.region === "Human region" && mutations.length === 0);
+    await region.focus();
     releaseReview();
     await page.locator(".journey-itinerary-import__busy").waitFor({ state: "detached" });
     const organization = { via: await child.getByRole("button", { name: "途径点", exact: true }).getAttribute("aria-pressed"),
@@ -262,6 +278,8 @@ async function verifyImportedJourney({ label, width, height, editing }) {
       && overview.touchTargets.every((rect) => rect.width >= 44 && rect.height >= 44)
       && reviewedPlan.entries.length === 24 && mutations.length === 0);
     await mkdir("artifacts/composer-route-points", { recursive: true });
+    await page.waitForFunction(() => document.querySelector(".journey-composer")?.getAnimations({ subtree: true })
+      .every((animation) => animation.effect?.getComputedTiming().iterations === Infinity || animation.playState !== "running"));
     await child.locator(".journey-itinerary-import__entry-details > summary").click();
     await page.locator('[data-composer-scroll-owner="editor"]').evaluate((element) => { element.scrollTop = 0; });
     await page.screenshot({ path: `artifacts/composer-route-points/import-${label}.png` });
@@ -271,6 +289,8 @@ async function verifyImportedJourney({ label, width, height, editing }) {
     record(`composer-import:${label}:editable-route-and-metadata`, { importedCount: importedIds.length, existingCount: existingIds.length },
       importedIds.length === 24 && await page.getByLabel("旅程标题", { exact: true }).inputValue() === "Human trip title"
       && await page.locator("[data-route-point-draft-id]").count() === existingIds.length + 24 && mutations.length === 0);
+    await page.waitForFunction(() => document.querySelector(".journey-composer")?.getAnimations({ subtree: true })
+      .every((animation) => animation.effect?.getComputedTiming().iterations === Infinity || animation.playState !== "running"));
     await page.screenshot({ path: `artifacts/composer-route-points/edit-${label}.png` });
     // Re-read and re-apply the same source through its ordinary entry. New
     // temporary UUIDs/model defaults must not replace the imported human rows.

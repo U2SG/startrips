@@ -3498,6 +3498,11 @@
 .journey-itinerary-import__cancel {
   min-height: var(--mobile-control-hit-size, 44px);
   justify-self: start;
+  padding: 0 12px;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-text);
+  cursor: pointer;
 }
 
 .journey-itinerary-import__days ul > li.journey-itinerary-import__entry {
@@ -5159,6 +5164,9 @@
 .journey-composer__import-shortcut {
   width: 100%;
   margin-bottom: 12px;
+  border-color: var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-text);
 }
 
 .journey-itinerary-import-panel {
@@ -8778,6 +8786,15 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   display: block;
   overflow: visible;
   padding: 22px 18px 32px;
+}
+
+/* Keep suspended cards/import work mounted without leaving a painted or
+   interactive second surface. Author display rules must respect `hidden`. */
+.living-atlas .living-atlas__active[hidden],
+.living-atlas .mobile-v2__journey-chip[hidden],
+.living-atlas .mobile-v2__sheet-layer[hidden],
+.journey-composer--focused [data-composer-location-tools][hidden] {
+  display: none;
 }
 
 .journey-composer--focused .journey-composer__task-header {

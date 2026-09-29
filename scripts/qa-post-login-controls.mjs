@@ -1265,6 +1265,7 @@ async function verifyComposerGlobeRoundTrip() {
     // header, rail and active Journey card before and after suspension.
     resetReverse("success");
     await openFreshComposer(1280, 800);
+    await openComposerTask(page, "location");
     const desktopPickTrigger = page.getByRole("button", { name: /直接在地球上取点/ });
     await desktopPickTrigger.scrollIntoViewIfNeeded();
     await settleRender();

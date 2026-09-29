@@ -1636,11 +1636,6 @@ export function JourneyComposer({
                 ) : null}
               </div>
   );
-  const journeyHeadingFragment = (
-              <div className="journey-composer__section-heading journey-composer__story-heading">
-                <h3 id="journey-story-heading">这段旅程</h3>
-              </div>
-  );
   const journeyTitleFragment = (
                 <label className="journey-title-field"><span>旅程标题</span><input required maxLength={80} value={title} onChange={(event) => { metadataEditedRef.current.title = true; setTitle(event.target.value); }} placeholder="穿过北方的夜车" /></label>
   );
@@ -2154,9 +2149,8 @@ export function JourneyComposer({
                 <section
                   className="journey-composer__task"
                   data-composer-task="primary"
-                  aria-labelledby="journey-story-heading"
+                  aria-labelledby="journey-composer-title"
                 >
-                  {journeyHeadingFragment}
                   <div className="journey-story-fields">
                     {journeyTitleFragment}
                   </div>
@@ -2228,7 +2222,7 @@ export function JourneyComposer({
                   </div>
                   {routeListFragment}
                 </section>
-              ) : (
+              ) : activeMobileTask !== "location" ? (
                 <section
                   className="journey-composer__task"
                   data-composer-task={activeMobileTask}
@@ -2245,8 +2239,7 @@ export function JourneyComposer({
                       <span>{composerTask("primary").entryLabel}</span>
                     </button>
                     <h3 id={`journey-composer-task-${activeMobileTask}`} ref={taskHeadingRef} tabIndex={-1}>
-                      {activeMobileTask === "location" && taskEnteredFromImportRef.current
-                        ? "导入行程" : composerTask(activeMobileTask).heading}
+                      {composerTask(activeMobileTask).heading}
                     </h3>
                   </div>
                   {activeMobileTask === "journey-info" ? (
@@ -2259,15 +2252,33 @@ export function JourneyComposer({
                   {activeMobileTask === "appearance" ? (
                     <div className="journey-story-fields">{appearanceFragment}</div>
                   ) : null}
-                  {activeMobileTask === "location" ? (
-                    <div className="journey-composer__route-tools">
-                      {itineraryImportFragment}
-                      {globePickFragment}
-                      {preciseLocationFragment}
-                    </div>
-                  ) : null}
                 </section>
-            )}
+            ) : null}
+            <section
+              className="journey-composer__task"
+              data-composer-task={activeMobileTask === "location" ? "location" : undefined}
+              data-composer-location-tools
+              hidden={activeMobileTask !== "location"}
+              inert={activeMobileTask !== "location" || undefined}
+              aria-labelledby={activeMobileTask === "location" ? "journey-composer-task-location" : undefined}
+            >
+              {activeMobileTask === "location" ? (
+                <div className="journey-composer__task-header">
+                  <button type="button" className="journey-composer__task-back" data-composer-task-back="location" onClick={exitMobileTask}>
+                    <IconChevronLeft size={18} stroke={1.4} aria-hidden="true" />
+                    <span>{composerTask("primary").entryLabel}</span>
+                  </button>
+                  <h3 id="journey-composer-task-location" ref={taskHeadingRef} tabIndex={-1}>
+                    {taskEnteredFromImportRef.current ? "导入行程" : composerTask("location").heading}
+                  </h3>
+                </div>
+              ) : null}
+              <div className="journey-composer__route-tools">
+                {itineraryImportFragment}
+                {activeMobileTask === "location" ? globePickFragment : null}
+                {activeMobileTask === "location" ? preciseLocationFragment : null}
+              </div>
+            </section>
           </div>
         </div>
 

@@ -1398,15 +1398,9 @@ export function LivingAtlasApp({
   );
   const mobileSheetActive = isMobileV2 && mobileSheetJourneyId !== null;
   const mobileSheetStoryActive = storyJourneyId !== null;
-  const mobileSheetChildActive = mobileSheetStoryActive;
   const mobileChipStartX = useRef<number | null>(null);
   const mobileChipSwiped = useRef(false);
   const mobileSheetStartY = useRef<number | null>(null);
-  const mobileSheetDialogRef = useModalFocus<HTMLElement>(
-    () => setMobileSheetJourneyId(null),
-    mobileSheetActive,
-    mobileSheetChildActive,
-  );
   const mobilePickerDialogRef = useModalFocus<HTMLElement>(
     () => setMobilePickerOpen(false),
     isMobileV2 && mobilePickerOpen,
@@ -1442,6 +1436,24 @@ export function LivingAtlasApp({
   const activeJourneyId = unknownCreateSemanticOwnership.activeJourneyId;
   const activeJourneyIdRef = useRef(activeJourneyId);
   activeJourneyIdRef.current = activeJourneyId;
+  const selectedPointContext = routePointContextSelection.context;
+  const routePointContextVisible = Boolean(
+    view === "planet" && selectedPointContext && routePointContextSelection.intent
+    && !storyJourneyId && !playbackActive
+    && selectedPointContext.journeyId === activeJourneyId
+    && journeys.some((candidate) => candidate.id === selectedPointContext.journeyId)
+    && routePointContextTemporallyVisible(
+      selectedPointContext.journeyId,
+      selectedPointContext.routePointIndex,
+      routePointContextTemporalReveal,
+    ),
+  );
+  const mobileSheetChildActive = mobileSheetStoryActive || routePointContextVisible;
+  const mobileSheetDialogRef = useModalFocus<HTMLElement>(
+    () => setMobileSheetJourneyId(null),
+    mobileSheetActive,
+    mobileSheetChildActive,
+  );
   const crossPointReading = resolveCrossPointReading(
     crossPointReadingIntent,
     activeJourneyId,
@@ -3334,7 +3346,9 @@ export function LivingAtlasApp({
       {!isMobileV2 && view === "planet" && activeJourney ? (
         <aside
           className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}${playbackModeMenuJourneyId === activeJourney.id ? " has-playback-menu" : ""}`}
-          inert={globeFocusMode || globePickActive || playbackActive || undefined}
+          hidden={routePointContextVisible}
+          aria-hidden={routePointContextVisible || undefined}
+          inert={routePointContextVisible || globeFocusMode || globePickActive || playbackActive || undefined}
           style={{
             "--journey-color": activeJourney.lightColor,
             "--journey-gradient": getLightEffectGradient(activeJourney.lightEffect, activeJourney.lightColor),
@@ -3478,6 +3492,9 @@ export function LivingAtlasApp({
           <button
             type="button"
             className="mobile-v2__journey-chip"
+            hidden={routePointContextVisible}
+            inert={routePointContextVisible || undefined}
+            aria-hidden={routePointContextVisible || undefined}
             aria-label={`查看当前旅程详情：${mobileJourney.title}。左右滑动切换旅程`}
             data-playback-journey={mobileJourney.id}
             onPointerDown={(event) => {
@@ -3522,8 +3539,9 @@ export function LivingAtlasApp({
       {mobileSheetActive && mobileSheetJourney ? (
         <div
           className="mobile-v2__sheet-layer"
-          inert={mobileSheetStoryActive || undefined}
-          aria-hidden={mobileSheetStoryActive || undefined}
+          hidden={routePointContextVisible}
+          inert={mobileSheetChildActive || undefined}
+          aria-hidden={mobileSheetChildActive || undefined}
         >
           <button className="mobile-v2__sheet-backdrop" type="button" tabIndex={-1} aria-label="关闭旅程详情" onClick={() => setMobileSheetJourneyId(null)} />
           <section
@@ -3687,7 +3705,7 @@ export function LivingAtlasApp({
         </aside>
       ) : null}
 
-      {view === "planet" && routePointContextSelection.context && routePointContextSelection.intent && !storyJourneyId && !playbackActive ? (() => {
+      {routePointContextVisible && routePointContextSelection.context && routePointContextSelection.intent ? (() => {
         const context = routePointContextSelection.context;
         const intent = routePointContextSelection.intent;
         const contextJourney = journeys.find((candidate) => candidate.id === context.journeyId) ?? null;

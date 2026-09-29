@@ -118,7 +118,18 @@ try {
   });
   if (!before.focusMatches) fail("route-point editing focus was not established", before);
 
+  // Observe the editor at the real preview pointer event. The browser may scroll
+  // a clicked control into view after the preceding focus() measurement; the
+  // return must preserve the position from which Playback actually started.
+  await page.locator("[data-playback-preview-trigger]").evaluate((button) => {
+    button.addEventListener("pointerdown", () => {
+      window.__qaComposerPreviewEntryScrollTop = document.querySelector(".journey-composer__editor")?.scrollTop ?? -1;
+    }, { once: true });
+  });
+
   await page.locator("[data-playback-preview-trigger]").click();
+  before.entryScrollTop = await page.evaluate(() => window.__qaComposerPreviewEntryScrollTop);
+  if (!Number.isFinite(before.entryScrollTop)) fail("preview entry scroll was not observed", before);
   await page.locator(".journey-playback").waitFor({ state: "visible" });
   await page.locator(".journey-playback__intro h2").filter({ hasText: "Unsaved preview title" }).waitFor({ state: "visible" });
   // The overlay becomes visible in the same commit that suspends the Composer,
@@ -208,7 +219,7 @@ try {
     || !returned.focusMatches
     || returned.returnFocusKind !== "editor"
     || returned.composerVisibility !== "visible"
-    || Math.abs(returned.scrollTop - before.scrollTop) > 2
+    || Math.abs(returned.scrollTop - before.entryScrollTop) > 2
   ) fail("Composer return context changed after Playback Preview", { before, returned });
 
   // A user-initiated failed save leaves the draft in place. Previewing again

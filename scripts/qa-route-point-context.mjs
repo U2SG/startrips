@@ -1,6 +1,7 @@
 // #291 - Route Point activation must reveal one truthful Atlas context surface
 // before Story, without becoming a camera owner or inventing media locations.
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { hasPublishedDiveReveal, nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
@@ -456,6 +457,8 @@ const crossReadingJourney = {
   media: [],
 };
 
+const cardQaOutput = "artifacts/route-point-context";
+await mkdir(cardQaOutput, { recursive: true });
 const browser = await launchQaBrowser({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
@@ -787,7 +790,7 @@ async function routeLabelInteractionState(page, routeId, pointId) {
   }, { routeId, pointId });
 }
 
-async function clickRoutePointLabel(page, routeId, pointId) {
+async function clickRoutePointLabel(page, routeId, pointId, touch = false) {
   const label = page.locator(`.particle-earth-route__label[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
   const hitTarget = label.locator(".particle-earth-route__label-hit");
   await hitTarget.waitFor({ state: "visible", timeout: 5_000 });
@@ -821,7 +824,8 @@ async function clickRoutePointLabel(page, routeId, pointId) {
     const state = await routeLabelInteractionState(page, routeId, pointId);
     throw new Error(`Route Point ${pointId} has no unambiguous label-owned hit pixel: ${JSON.stringify(state)}`);
   }
-  await page.mouse.click(geometry.target.x, geometry.target.y);
+  if (touch) await page.touchscreen.tap(geometry.target.x, geometry.target.y);
+  else await page.mouse.click(geometry.target.x, geometry.target.y);
   return geometry;
 }
 
@@ -2208,6 +2212,8 @@ try {
 
   await detailPickPage.locator(".living-atlas__create").click();
   await detailPickPage.locator(".journey-composer").waitFor({ state: "visible", timeout: 5_000 });
+  await detailPickPage.locator('.journey-composer__task-more').click();
+  await detailPickPage.locator('[data-composer-task-entry="location"]').click();
   const detailPickTrigger = detailPickPage.getByRole("button", { name: /直接在地球上取点/ });
   await detailPickTrigger.scrollIntoViewIfNeeded();
   await detailPickTrigger.click();
@@ -2995,6 +3001,83 @@ try {
     record(`${viewport.name} page errors`, { pageErrors: compactRun.pageErrors }, compactRun.pageErrors.length === 0);
     await compactPage.close();
   }
+  // Normal Atlas chrome, outside cinematic focus: one actual label click/tap
+  // opens one point card while the mounted Journey card yields its surface.
+  for (const cardCase of [
+    { name: "desktop", compact: false, viewport: { width: 1280, height: 900 } },
+    { name: "mobile", compact: true, viewport: { width: 390, height: 844 } },
+  ]) {
+    const cardRun = await openFocusAtlas({
+      realScene: true, focusMode: false, reduceMotion: true,
+      compact: cardCase.compact, viewport: cardCase.viewport,
+      journeysPayload: [siblingJourney, interactionJourney],
+    });
+    const cardPage = cardRun.page;
+    const cardSelector = cardCase.compact ? ".mobile-v2__journey-chip" : ".living-atlas__active";
+    const card = cardPage.locator(cardSelector);
+    await card.waitFor({ state: "visible", timeout: 5_000 });
+    if (!cardCase.compact) {
+      await card.locator(".living-atlas__active-media img").waitFor({ state: "visible", timeout: 5_000 });
+      await cardPage.waitForFunction(() => {
+        const image = document.querySelector(".living-atlas__active-media img");
+        return image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0;
+      });
+    }
+    const ownerBefore = await sceneFocusSnapshot(cardPage);
+    await card.evaluate((node) => {
+      window.__qaRetainedJourneyCard = node;
+      window.__qaRetainedJourneyCover = node.querySelector(".living-atlas__active-media img, .living-atlas__active-media video");
+      window.__qaRetainedJourneyScroll = node.scrollTop;
+    });
+    await cardPage.screenshot({ path: `${cardQaOutput}/${cardCase.name}-before.png` });
+    await cardPage.waitForFunction(() => document.querySelector(".particle-earth-scene")?.getAttribute("data-place-label-layout") === "settled");
+    const labelIds = await cardPage.locator(
+      `.particle-earth-route__label[data-journey-route="${journeyId}"][data-route-point-id]:visible`,
+    ).evaluateAll((labels) => labels.map((label) => label.getAttribute("data-route-point-id")));
+    let pointId = null;
+    for (const candidate of labelIds) {
+      if (!candidate) continue;
+      try {
+        await clickRoutePointLabel(cardPage, journeyId, candidate, cardCase.compact);
+        pointId = candidate;
+        break;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("no unambiguous label-owned hit pixel")) throw error;
+      }
+    }
+    if (!pointId) throw new Error(`${cardCase.name} normal Atlas has no reachable Route Point label`);
+    const context = cardPage.locator(`[data-route-point-context][data-route-point-id="${pointId}"]`);
+    await context.waitFor({ state: "visible", timeout: 5_000 });
+    const during = await card.evaluate((node) => ({
+      sameCard: node === window.__qaRetainedJourneyCard,
+      hidden: node.hidden, inert: node.inert, rectCount: node.getClientRects().length,
+      activeRoute: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route"),
+      globePresent: Boolean(document.querySelector(".particle-earth-scene canvas")),
+      timelineVisible: [...document.querySelectorAll(".globe-time-scrubber")].some((scrubber) => scrubber.getClientRects().length > 0),
+    }));
+    record(`${cardCase.name} point detail hides only the Journey card`, { pointId, during },
+      during.sameCard && during.hidden && during.inert && during.rectCount === 0
+      && during.activeRoute === ownerBefore.activeRoute && during.globePresent
+      && (!cardCase.compact || during.timelineVisible));
+    await cardPage.screenshot({ path: `${cardQaOutput}/${cardCase.name}-point.png` });
+    const close = context.locator("[data-route-point-context-close]");
+    if (cardCase.compact) await close.tap();
+    else await close.click();
+    await context.waitFor({ state: "detached", timeout: 5_000 });
+    await card.waitFor({ state: "visible", timeout: 5_000 });
+    const returned = await card.evaluate((node) => ({
+      sameCard: node === window.__qaRetainedJourneyCard,
+      sameCover: node.querySelector(".living-atlas__active-media img, .living-atlas__active-media video") === window.__qaRetainedJourneyCover,
+      sameScroll: node.scrollTop === window.__qaRetainedJourneyScroll,
+      inert: node.inert, hidden: node.hidden,
+      activeRoute: document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route"),
+    }));
+    record(`${cardCase.name} close restores the mounted Journey card`, { returned, pageErrors: cardRun.pageErrors },
+      returned.sameCard && returned.sameCover && returned.sameScroll && !returned.inert && !returned.hidden
+      && returned.activeRoute === ownerBefore.activeRoute && cardRun.pageErrors.length === 0);
+    await cardPage.screenshot({ path: `${cardQaOutput}/${cardCase.name}-returned.png` });
+    await cardPage.close();
+  }
 } catch (error) {
   // The accumulated checks are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#437). Print first, then rethrow so
@@ -3002,6 +3085,7 @@ try {
   console.log(JSON.stringify({ checks }, null, 2));
   throw error;
 } finally {
+  await writeFile(`${cardQaOutput}/results.json`, JSON.stringify({ checks }, null, 2));
   await browser.close();
 }
 
