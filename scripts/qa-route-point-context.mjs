@@ -1479,8 +1479,8 @@ try {
       && lastChildBox.width >= 44
       && lastChildBox.height >= 44
       && pageScrollAfter === pageScrollBefore
-      && lastChildBox.top >= 0
-      && lastChildBox.bottom <= mobileCase.viewport.height
+      && lastChildBox.y >= 0
+      && lastChildBox.y + lastChildBox.height <= mobileCase.viewport.height
     ));
 
     await storyEntry.scrollIntoViewIfNeeded();
