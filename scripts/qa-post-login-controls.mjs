@@ -1879,10 +1879,10 @@ async function verifyFinalAcceptanceMobileFlow() {
       note: null,
       createdAt: "2026-08-10T00:00:00.000Z",
     })),
-    media: Array.from({ length: 10 }, (_, index) => ({
+    media: Array.from({ length: 60 }, (_, index) => ({
       id: `fa-over-budget-image-${index}`,
       journeyId: "fa-journey-over-budget",
-      routePointId: `fa-over-budget-point-${index}`,
+      routePointId: `fa-over-budget-point-${Math.floor(index / 6)}`,
       storageDriver: "qa",
       storageKey: `qa/over-budget-${index}.gif`,
       fileName: `over-budget-${index}.gif`,
@@ -1890,7 +1890,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       bytes: 35,
       sortOrder: index,
       uploadedByUserId: "qa-user",
-      createdAt: `2026-08-${String(10 + index).padStart(2, "0")}T12:10:00.000Z`,
+      createdAt: `2026-08-${String(10 + Math.floor(index / 6)).padStart(2, "0")}T12:10:00.000Z`,
     })),
   };
   const latestJourney = {
@@ -2830,26 +2830,139 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.waitForFunction(() => Boolean(
         document.querySelector('.journey-story [data-media-page="current"][data-media-page-id]'),
       ), null, { timeout: 5_000 });
-      const overBudgetStoryAsset = await overBudgetReturnedStory
+      let overBudgetStoryAsset = await overBudgetReturnedStory
         .locator('[data-media-page="current"]').first().getAttribute("data-media-page-id");
-      await pressStoryPlayback(
-        overBudgetReturnedStory.locator('[data-story-primary-playback="quick-recap"]'),
-        "Story over-budget Quick Recap control", false,
-      );
       const storyOverBudgetChoice = overBudgetReturnedStory.locator('[data-story-playback-state="over-budget"]');
-      await storyOverBudgetChoice.waitFor({ state: "visible", timeout: 5_000 });
       const storyFullAction = storyOverBudgetChoice.locator('[data-story-playback-fallback="full"]');
-      if (!await storyFullAction.evaluate((button) => document.activeElement === button)
-        || await overBudgetReturnedStory.locator('[data-media-page="current"]')
-          .first().getAttribute("data-media-page-id") !== overBudgetStoryAsset) {
-        throw new Error("Story over-budget choice lost focus or media observation");
+      for (const [layout, touch, entryWidth, entryHeight] of [
+        ["desktop", false, 768, 1024],
+        ["mobile", true, width, height],
+      ]) {
+        await page.setViewportSize({ width: entryWidth, height: entryHeight });
+        await page.waitForFunction((expected) => (
+          document.querySelector(".journey-story")?.getAttribute("data-story-layout") === expected
+        ), layout, { timeout: 5_000 });
+        await pressStoryPlayback(
+          overBudgetReturnedStory.locator('[data-story-primary-playback="quick-recap"]'),
+          `Story media-heavy Quick Recap ${layout}`, touch,
+        );
+        await storyOverBudgetChoice.waitFor({ state: "visible", timeout: 5_000 });
+        const decision = await storyFullAction.evaluate((button) => {
+          const panel = button.closest("[data-story-playback-state]");
+          const entry = button.closest("[data-story-playback-entry]");
+          const bounds = panel.getBoundingClientRect();
+          const action = button.getBoundingClientRect();
+          const hit = document.elementFromPoint(action.x + action.width / 2, action.y + action.height / 2);
+          return {
+            entry: entry?.getAttribute("data-story-playback-entry") ?? null,
+            withinViewerControls: Boolean(entry?.closest(".journey-story__media-nav, .journey-story__mobile-media-actions")),
+            contained: bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight,
+            actionWidth: action.width, actionHeight: action.height,
+            actionHit: hit?.closest("button") === button,
+            focused: document.activeElement === button,
+          };
+        });
+        if (decision.entry !== layout || !decision.withinViewerControls || !decision.contained
+          || decision.actionWidth < 44 || decision.actionHeight < 44 || !decision.actionHit || !decision.focused
+          || await overBudgetReturnedStory.locator('[data-media-page="current"]').first().getAttribute("data-media-page-id") !== overBudgetStoryAsset) {
+          throw new Error(`Story media-heavy decision lost placement/focus/observation: ${JSON.stringify(decision)}`);
+        }
+        await pressStoryPlayback(storyFullAction, `Story explicit Full Playback ${layout}`, touch);
+        await overBudgetPlayback.waitFor({ state: "visible", timeout: 8_000 });
+        const activeOwnership = await page.evaluate(() => ({
+          playbackCount: document.querySelectorAll(".journey-playback").length,
+          storyCount: document.querySelectorAll(".journey-story").length,
+          fallbackCount: document.querySelectorAll('[data-story-playback-state="over-budget"], [data-quick-recap-fallback-message="over-budget"]').length,
+          staleMessage: (document.querySelector(".journey-playback")?.textContent ?? "").includes("快速回顾无法容纳"),
+        }));
+        if (activeOwnership.playbackCount !== 1 || activeOwnership.storyCount !== 0
+          || activeOwnership.fallbackCount !== 0 || activeOwnership.staleMessage) {
+          throw new Error(`Story Full Playback kept the consumed fallback: ${JSON.stringify(activeOwnership)}`);
+        }
+        // Reach the later part through the real transport, then require a
+        // presented media commit before Close. Mounting the overlay alone
+        // cannot prove its return identity or the consumed decision's lifetime.
+        await pressStoryPlayback(overBudgetPlayback.locator('button[aria-label="暂停播放"]'),
+          `Pause media-heavy Full Playback ${layout}`, touch);
+        const progress = overBudgetPlayback.locator('input[aria-label="播放进度"]');
+        await prepareControl(progress, `Seek later Full Playback ${layout}`);
+        const progressBox = await progress.boundingBox();
+        if (!progressBox) throw new Error("Full Playback progress has no target");
+        const seekX = progressBox.x + progressBox.width * 0.8;
+        const seekY = progressBox.y + progressBox.height / 2;
+        const priorStep = await overBudgetPlayback.getAttribute("data-playback-step");
+        if (touch) await page.touchscreen.tap(seekX, seekY);
+        else await page.mouse.click(seekX, seekY);
+        await page.waitForFunction((previous) => (
+          document.querySelector(".journey-playback")?.getAttribute("data-playback-step") !== previous
+        ), priorStep, { timeout: 5_000 });
+        // A time-scaled scrub can land on the adjacent travel/arrival beat.
+        // While paused, ordinary Next reaches that chapter's media without a
+        // timer racing the interaction or a synthetic director command.
+        for (let advance = 0; advance < 2
+          && await overBudgetPlayback.getAttribute("data-playback-phase") !== "media"; advance += 1) {
+          await pressStoryPlayback(overBudgetPlayback.locator('button[aria-label="下一个章节"]'),
+            `Reach later media ${layout}`, touch);
+        }
+        await page.waitForFunction(() => {
+          const playback = document.querySelector(".journey-playback");
+          const stage = playback?.querySelector(".journey-playback__media");
+          return playback?.getAttribute("data-playback-phase") === "media"
+            && playback.classList.contains("is-paused")
+            && stage?.getAttribute("data-presented-asset") !== null
+            && stage?.getAttribute("data-presented-asset") === stage?.getAttribute("data-requested-asset")
+            && stage?.getAttribute("data-media-presentation") === "settled"
+            && playback.getAttribute("data-playback-presentation-hold") === "none";
+        }, null, { timeout: 5_000 });
+        const laterPosition = await overBudgetPlayback.evaluate((playback) => ({
+          assetId: playback.querySelector(".journey-playback__media")?.getAttribute("data-presented-asset"),
+          step: Number(playback.getAttribute("data-playback-step")),
+          steps: Number(playback.getAttribute("data-playback-steps")),
+          fallbackCount: document.querySelectorAll('[data-story-playback-state], [data-quick-recap-fallback-message="over-budget"]').length,
+        }));
+        const laterAsset = overBudgetJourney.media.find((candidate) => candidate.id === laterPosition.assetId);
+        if (!laterAsset || laterAsset.sortOrder < overBudgetJourney.media.length / 2
+          || laterPosition.step < laterPosition.steps / 2 || laterPosition.fallbackCount !== 0) {
+          throw new Error(`Full Playback did not reach clean later media: ${JSON.stringify(laterPosition)}`);
+        }
+        overBudgetStoryAsset = laterAsset.id;
+        await pressStoryPlayback(overBudgetPlayback.locator('button[aria-label="退出播放"]'),
+          `Close Story Full Playback ${layout}`, touch);
+        await overBudgetReturnedStory.waitFor({ state: "visible", timeout: 5_000 });
+        await page.waitForFunction((assetId) => (
+          document.querySelector('.journey-story [data-media-page="current"]')?.getAttribute("data-media-page-id") === assetId
+        ), overBudgetStoryAsset, { timeout: 5_000 });
+        const returned = await page.evaluate(() => ({
+          title: document.querySelector("#journey-story-title")?.textContent ?? "",
+          stateCount: document.querySelectorAll('[data-story-playback-state], [data-story-playback-continue], .living-atlas__playback-mode-menu').length,
+          playbackCount: document.querySelectorAll(".journey-playback").length,
+          primaryCount: document.querySelectorAll('[data-story-primary-playback="quick-recap"]').length,
+          primaryEnabled: document.querySelector('[data-story-primary-playback="quick-recap"]')?.disabled === false,
+        }));
+        if (returned.title !== overBudgetJourney.title || returned.stateCount !== 0 || returned.playbackCount !== 0
+          || returned.primaryCount !== 1 || !returned.primaryEnabled) {
+          throw new Error(`Story return resurrected a fallback or pending intent: ${JSON.stringify(returned)}`);
+        }
+        // Only a fresh request may show the decision again; cancelling it must
+        // leave the same observation with an idle, enabled primary action.
+        await pressStoryPlayback(overBudgetReturnedStory.locator('[data-story-primary-playback="quick-recap"]'),
+          `Fresh Story Quick Recap ${layout}`, touch);
+        await storyOverBudgetChoice.waitFor({ state: "visible", timeout: 5_000 });
+        await pressStoryPlayback(storyOverBudgetChoice.getByRole("button", { name: "留在故事", exact: true }),
+          `Cancel Story over-budget choice ${layout}`, touch);
+        await storyOverBudgetChoice.waitFor({ state: "detached", timeout: 5_000 });
+        if (await page.locator(".journey-playback").count() !== 0
+          || !await overBudgetReturnedStory.locator('[data-story-primary-playback="quick-recap"]').isEnabled()
+          || await overBudgetReturnedStory.locator('[data-media-page="current"]').first().getAttribute("data-media-page-id") !== overBudgetStoryAsset) {
+          throw new Error("Cancelled overflow decision left a pending intent or changed Story media");
+        }
+        results.push({ name: `story-over-budget-consumed-${layout}-${viewportLabel}`,
+          mediaCount: overBudgetJourney.media.length, ...decision, claimedOwnership: activeOwnership, laterPosition,
+          returnedAsset: overBudgetStoryAsset, returnedState: returned, cancelIdle: true, failed: false });
       }
-      await storyFullAction.click();
-      await page.locator('.journey-playback[data-playback-mode="full"]')
-        .waitFor({ state: "visible", timeout: 8_000 });
-      await activateControl(page.locator('.journey-playback button[aria-label="退出播放"]'),
-        "close Story over-budget Full Playback");
-      await overBudgetReturnedStory.waitFor({ state: "visible", timeout: 5_000 });
+      await page.setViewportSize({ width: 768, height: 1024 });
+      await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-layout") === "desktop",
+        null, { timeout: 5_000 });
       if (viewportLabel === "390") {
         await pressStoryPlayback(
           overBudgetReturnedStory.locator('[data-story-primary-playback="quick-recap"]'),

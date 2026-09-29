@@ -525,9 +525,13 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 150));
       const option = document.querySelector('[data-playback-mode-option="full"]');
       if (!(option instanceof HTMLButtonElement)) return false;
+      const quickRecapCount = document.querySelectorAll('[data-playback-mode-option="quick-recap"]').length;
       option.click();
-      return true;
+      return { fullPlaybackStarted: true, quickRecapCount };
     });
+    if (playbackStarted && playbackStarted.quickRecapCount !== 0) {
+      failures.push(`guest #570: Quick Recap leaked into the actual shared mode chooser ${JSON.stringify(playbackStarted)}`);
+    }
     if (!playbackStarted) {
       failures.push("playback: no 播放旅程 entry point in the shared viewer");
     } else {
@@ -705,7 +709,7 @@ try {
       await storyShowing(page, mediaJourneyTitle);
       const affordance = await page.evaluate(() => {
         const story = document.querySelector(".journey-story");
-        const play = document.querySelector(".journey-story__mobile-autobrowse");
+        const play = document.querySelector(".journey-story__mobile-media-play");
         const quickRecap = document.querySelector('.journey-story [data-story-primary-playback="quick-recap"]');
         const box = play?.getBoundingClientRect();
         const quickRecapBox = quickRecap?.getBoundingClientRect();
@@ -741,23 +745,21 @@ try {
       if (affordance.width < 44 || affordance.height < 44) {
         failures.push(`guest #199: touch target ${affordance.width}x${affordance.height} is under 44px`);
       }
-      if (!affordance.quickRecapPresent || affordance.quickRecapDisabled !== false
-        || affordance.quickRecapLabel !== "快速回顾" || !affordance.quickRecapInViewerCluster
-        || affordance.quickRecapWidth < 44 || affordance.quickRecapHeight < 44) {
-        failures.push(`guest #570: Quick Recap primary action is unavailable ${JSON.stringify(affordance)}`);
+      if (affordance.quickRecapPresent) {
+        failures.push(`guest #570: Quick Recap leaked into the actual shared Story ${JSON.stringify(affordance)}`);
       }
       // It has to actually drive the sequence, not merely render.
       let toggled = null;
       try {
-        await page.locator(".journey-story__mobile-autobrowse").click();
+        await page.locator(".journey-story__mobile-media-play").click();
         await page.waitForFunction(
-          () => document.querySelector(".journey-story__mobile-autobrowse")?.getAttribute("aria-pressed") === "true",
+          () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
           undefined,
           { timeout: 5_000 },
         );
-        await page.locator(".journey-story__mobile-autobrowse").click();
+        await page.locator(".journey-story__mobile-media-play").click();
         await page.waitForFunction(
-          () => document.querySelector(".journey-story__mobile-autobrowse")?.getAttribute("aria-pressed") === "false",
+          () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "false",
           undefined,
           { timeout: 5_000 },
         );

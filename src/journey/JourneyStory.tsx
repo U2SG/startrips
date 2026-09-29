@@ -3700,6 +3700,30 @@ export function JourneyStory({
     </nav>
   );
 
+  const quickRecapStatus = quickRecap && quickRecap.state !== "idle" ? (
+    <div className="journey-story__quick-recap-status" data-story-playback-state={quickRecap.state}>
+      {quickRecap.state === "over-budget" ? (
+        <div role="group" aria-label="快速回顾时长选择">
+          <p>当前回顾时长放不下所有必要的旅程点。</p>
+          <button ref={quickRecapFullActionRef} type="button"
+            data-story-playback-fallback="full" onClick={quickRecap.onFullPlayback}>完整播放</button>
+          <button type="button" onClick={quickRecap.onCancel}>留在故事</button>
+        </div>
+      ) : (
+        <div role="status">
+          <p>{quickRecap.state === "error" ? "配乐暂时无法准备，请重试。"
+            : quickRecap.state === "preparing" ? "正在准备配乐，当前故事会保持在屏幕上。"
+              : quickRecap.message ?? "配乐已准备好，可以开始播放。"}</p>
+          {quickRecap.state !== "preparing" ? <button type="button"
+            data-story-playback-continue="true" onClick={beginQuickRecap}>
+            {quickRecapLabel}
+          </button> : null}
+          <button type="button" onClick={quickRecap.onCancel}>取消准备</button>
+        </div>
+      )}
+    </div>
+  ) : null;
+
   const content = (
     <div
       className={`journey-story-backdrop${mobileLayout ? " is-mobile-context" : ""}${mobileLayout && mobileStoryExpanded ? " is-story-expanded" : ""}`}
@@ -3771,30 +3795,6 @@ export function JourneyStory({
             <IconX size={19} stroke={1.35} aria-hidden="true" />
           </button>
         </header>
-
-        {quickRecap && quickRecap.state !== "idle" ? (
-          <div className="journey-story__quick-recap-status" data-story-playback-state={quickRecap.state}>
-            {quickRecap.state === "over-budget" ? (
-              <div role="group" aria-label="快速回顾时长选择">
-                <p>当前回顾时长放不下所有必要的旅程点。</p>
-                <button ref={quickRecapFullActionRef} type="button"
-                  data-story-playback-fallback="full" onClick={quickRecap.onFullPlayback}>完整播放</button>
-                <button type="button" onClick={quickRecap.onCancel}>留在故事</button>
-              </div>
-            ) : (
-              <div role="status">
-                <p>{quickRecap.state === "error" ? "配乐暂时无法准备，请重试。"
-                  : quickRecap.state === "preparing" ? "正在准备配乐，当前故事会保持在屏幕上。"
-                    : quickRecap.message ?? "配乐已准备好，可以开始播放。"}</p>
-                {quickRecap.state !== "preparing" ? <button type="button"
-                  data-story-playback-continue="true" onClick={beginQuickRecap}>
-                  {quickRecapLabel}
-                </button> : null}
-                <button type="button" onClick={quickRecap.onCancel}>取消准备</button>
-              </div>
-            )}
-          </div>
-        ) : null}
 
         {closeBlocked && (uploading || notesSaveState === "saving") ? (
           <p className="journey-story__close-blocked" role="status">
@@ -3946,12 +3946,15 @@ export function JourneyStory({
                 {videoNavigationVisible ? <button type="button" data-video-step="previous"
                   disabled={!canStepPrevious} {...videoStepButtonInput(-1)}
                   aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button> : null}
-                {quickRecap ? <button type="button" className="journey-story__quick-recap-action"
-                  data-story-primary-playback="quick-recap" disabled={quickRecapBusy}
-                  onClick={beginQuickRecap} aria-label={quickRecapLabel}>
-                  <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />
-                  <span>{quickRecapLabel}</span>
-                </button> : null}
+                {quickRecap ? <div className="journey-story__playback-entry" data-story-playback-entry="desktop">
+                  {quickRecap.state === "over-budget" ? null : <button type="button" className="journey-story__quick-recap-action"
+                    data-story-primary-playback="quick-recap" disabled={quickRecapBusy}
+                    onClick={beginQuickRecap} aria-label={quickRecapLabel}>
+                    <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />
+                    <span>{quickRecapLabel}</span>
+                  </button>}
+                  {quickRecapStatus}
+                </div> : null}
                 <button
                   type="button"
                   className={`journey-story__media-autobrowse${playing ? " is-active" : ""}`}
@@ -4014,15 +4017,18 @@ export function JourneyStory({
                     <IconMaximize size={19} stroke={1.5} aria-hidden="true" />
                   </IconActionButton>
                 ) : null}
-                {quickRecap ? <button type="button"
-                  className="journey-story__mobile-quick-recap"
-                  data-story-primary-playback="quick-recap"
-                  disabled={quickRecapBusy}
-                  {...mediaButtonInput("quick-recap", beginQuickRecap)}
-                  aria-label={quickRecapLabel}>
-                  <IconPlayerPlay size={17} stroke={1.5} aria-hidden="true" />
-                  <span>{quickRecapLabel}</span>
-                </button> : null}
+                {quickRecap ? <div className="journey-story__playback-entry" data-story-playback-entry="mobile">
+                  {quickRecap.state === "over-budget" ? null : <button type="button"
+                    className="journey-story__mobile-quick-recap"
+                    data-story-primary-playback="quick-recap"
+                    disabled={quickRecapBusy}
+                    {...mediaButtonInput("quick-recap", beginQuickRecap)}
+                    aria-label={quickRecapLabel}>
+                    <IconPlayerPlay size={17} stroke={1.5} aria-hidden="true" />
+                    <span>{quickRecapLabel}</span>
+                  </button>}
+                  {quickRecapStatus}
+                </div> : null}
                 {mobileStoryPlayControlVisible ? (quickRecap ? <button type="button"
                   className={`journey-story__mobile-autobrowse${playing ? " is-active" : ""}`}
                   aria-label={localAutobrowseLabel} aria-pressed={playing}
@@ -4209,11 +4215,17 @@ export function JourneyStory({
             {!mobileLayout && activeChapterRoutePoint ? (
               <p className="journey-story__current-point">{activeChapterRoutePoint.label || `途径点 ${activeChapterRoutePoint.sortOrder + 1}`}</p>
             ) : null}
-            {quickRecap && (!asset || overview) ? <button type="button" className="journey-story__quick-recap-empty"
-              data-story-primary-playback="quick-recap" disabled={quickRecapBusy}
-              onClick={beginQuickRecap}>
-              <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />{quickRecapLabel}
-            </button> : null}
+            {quickRecap && (!asset || overview) ? <div
+              className="journey-story__playback-entry journey-story__playback-entry--empty"
+              data-story-playback-entry="empty"
+            >
+              {quickRecap.state === "over-budget" ? null : <button type="button" className="journey-story__quick-recap-empty"
+                data-story-primary-playback="quick-recap" disabled={quickRecapBusy}
+                onClick={beginQuickRecap}>
+                <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />{quickRecapLabel}
+              </button>}
+              {quickRecapStatus}
+            </div> : null}
             {mobileLayout && !overview && !asset && !mobileManageMode ? (
               <div className="journey-story__mobile-media-actions">
                 {manageMedia ? <IconActionButton

@@ -1505,22 +1505,41 @@
   letter-spacing: 0.06em;
 }
 
+.journey-story__playback-entry {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+}
+
 .journey-story__quick-recap-status {
-  grid-row: 2;
-  grid-column: 1;
+  position: absolute;
+  right: 0;
+  bottom: 0;
   z-index: 12;
-  align-self: start;
-  justify-self: end;
-  width: min(340px, calc(100% - 24px));
-  margin: 12px;
-  padding: 16px;
+  width: min(280px, calc(100vw - 48px));
+  margin: 0;
+  padding: 12px;
   border: 1px solid var(--atlas-line);
   background: rgba(2, 8, 8, 0.96);
   color: var(--atlas-muted);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+  font: 400 12px/1.5 var(--archive-sans);
+  pointer-events: auto;
 }
 
-.journey-story__quick-recap-status p { margin: 0 0 12px; line-height: 1.5; }
+.journey-story__quick-recap-status > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.journey-story__quick-recap-status p { flex-basis: 100%; margin: 0; line-height: 1.5; }
+.journey-story__playback-entry--empty { width: min(280px, 100%); }
+.journey-story__playback-entry--empty .journey-story__quick-recap-status { position: static; width: 100%; }
+.journey-story[data-story-layout="desktop"] .journey-story__media-nav .journey-story__quick-recap-status button {
+  width: auto;
+  min-width: 44px;
+  padding-inline: 12px;
+  border: 1px solid var(--atlas-line);
+  color: var(--atlas-cyan);
+}
 .journey-story__quick-recap-status button,
 .journey-story__quick-recap-empty {
   min-height: 44px;
@@ -1531,6 +1550,7 @@
   color: var(--atlas-cyan);
   cursor: pointer;
 }
+.journey-story__quick-recap-status button { margin-right: 0; font: inherit; }
 
 .journey-story__quick-recap-empty {
   display: inline-flex;
@@ -6539,6 +6559,25 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story__mobile-media-actions.has-quick-recap .journey-story__mobile-quick-recap {
     right: 12px;
+  }
+
+  .journey-story__mobile-media-actions.has-quick-recap .journey-story__playback-entry {
+    position: absolute;
+    top: 64px;
+    right: 12px;
+    width: calc(100% - 24px);
+    justify-content: flex-end;
+    pointer-events: none;
+  }
+
+  .journey-story__mobile-media-actions.has-quick-recap .journey-story__playback-entry .journey-story__mobile-quick-recap {
+    position: static;
+  }
+
+  .journey-story__mobile-media-actions .journey-story__playback-entry .journey-story__quick-recap-status {
+    top: 0;
+    bottom: auto;
+    max-width: 100%;
   }
 
   .journey-story__mobile-media-actions.has-quick-recap .journey-story__mobile-autobrowse {
