@@ -267,10 +267,10 @@ def rerun_once(root, repo, ci, records, *, number=None, feature=None, lane=None)
     run = ci['run']; root = Path(root)
     from feature_store import load_document
     from feature_state import target
-    from execution import stopped
+    from execution import blocking_stops
     if lane not in {'backend', 'experience'}:
         raise StoreConflict('Targeted rerun requires exact execution lane')
-    if stopped(root, lane=lane): return {'requested': False, 'reason': 'owner-stop'}
+    if blocking_stops(root, lane=lane): return {'requested': False, 'reason': 'owner-stop'}
     if not number or not feature: raise StoreConflict('Targeted rerun requires exact owner feature/PR')
     row = target(load_document(root / 'feature_list.json'), feature)
     if row.get('human_gate') or row.get('pr_links') != ['https://github.com/' + repo + '/pull/' + str(number)]:
