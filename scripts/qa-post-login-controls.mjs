@@ -2847,6 +2847,12 @@ async function verifyFinalAcceptanceMobileFlow() {
           `Story media-heavy Quick Recap ${layout}`, touch,
         );
         await storyOverBudgetChoice.waitFor({ state: "visible", timeout: 5_000 });
+        // The panel mounts before Story's passive focus handoff completes.
+        // Grade the existing focus owner only once its observable handoff settles.
+        await page.waitForFunction(() => {
+          const action = document.querySelector('[data-story-playback-state="over-budget"] [data-story-playback-fallback="full"]');
+          return action !== null && document.activeElement === action;
+        }, null, { timeout: 5_000 });
         const decision = await storyFullAction.evaluate((button) => {
           const panel = button.closest("[data-story-playback-state]");
           const entry = button.closest("[data-story-playback-entry]");
