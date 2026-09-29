@@ -15,10 +15,16 @@ class ExternalVerdictCases(fixture.SyntheticOne):
                         ignore=shutil.ignore_patterns('__pycache__'))
         self.bash = shutil.which('bash')
         if os.name == 'nt':
-            for candidate in [
+            git = shutil.which('git')
+            candidates = []
+            if git:
+                git_root = Path(git).resolve().parent.parent
+                candidates.extend([git_root / 'bin/bash.exe', git_root / 'usr/bin/bash.exe'])
+            candidates.extend([
                 Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'Git/bin/bash.exe',
                 Path('C:/Program Files/Git/usr/bin/bash.exe'),
-            ]:
+            ])
+            for candidate in candidates:
                 if candidate.exists():
                     self.bash = str(candidate)
                     break
