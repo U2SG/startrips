@@ -106,8 +106,9 @@ export type PlaybackJourney = Journey & {
 };
 
 export function playbackMediaByChapter(journey: PlaybackJourney): Map<string, JourneyMediaAsset[]> {
-  if (journey.chapterMedia) {
-    return new Map(journey.routePoints.map((point) => [point.id, [...(journey.chapterMedia!.get(point.id) ?? [])]]));
+  const chapterMedia = journey.chapterMedia;
+  if (chapterMedia) {
+    return new Map(journey.routePoints.map((point) => [point.id, [...(chapterMedia.get(point.id) ?? [])]]));
   }
   // Preserve the Stop-only projection's single owner scan and performance bound.
   if (journey.routePoints.every((point) => point.isStop)) {

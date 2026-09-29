@@ -251,8 +251,8 @@ export function prepareQuickRecapPlaybackResult(
 
   // The plan controls presentation placement. Keep selected canonical assets
   // untouched so Close/return and Story still resolve the original child owner.
-  const projectedMedia = journey.media.filter((asset) => isSoundtrackAsset(asset) || selectedIds.has(asset.id));
-  const selectedAssets = new Map(projectedMedia.map((asset) => [asset.id, asset]));
+  const selectedMedia = journey.media.filter((asset) => isSoundtrackAsset(asset) || selectedIds.has(asset.id));
+  const selectedAssets = new Map(selectedMedia.map((asset) => [asset.id, asset]));
   const chapterMedia = new Map(plan.chapters.map((chapter) => [
     chapter.routePointId,
     chapter.items.flatMap((item) => {
@@ -274,7 +274,7 @@ export function prepareQuickRecapPlaybackResult(
     fallbackReason: null,
     playback: {
       plan,
-      journey: { ...journey, media: projectedMedia, chapterMedia },
+      journey: { ...journey, media: selectedMedia, chapterMedia },
       ...(homeNarrativeContext ? { homeNarrativeContext } : {}),
     },
   };

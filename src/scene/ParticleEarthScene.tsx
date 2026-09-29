@@ -3625,7 +3625,6 @@ export function ParticleEarthScene({
           if (level) {
             track.path.dataset.recordedTrackLodErrorRad = String(level.maxAngularErrorRad);
             track.path.dataset.recordedTrackLodSourcePoints = String(level.sourcePointCount);
-
           }
           const visibleCount = level?.sampleTimes
             ? recordedTrackVisibleSampleCount(level.sampleTimes, latestTemporalReveal.current?.timestamp)

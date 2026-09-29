@@ -383,7 +383,11 @@ export function buildDetailedEarthJourneyOverlay({
   }
 
   for (const segment of recordedSegments) {
-    const canonicalLevels = buildRecordedTrackLodLevels(segment.points);
+    const canonicalPoints = segment.points.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon))
+      ? segment.points
+      : segment.points.filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon));
+    if (canonicalPoints.length < 2) continue;
+    const canonicalLevels = buildRecordedTrackLodLevels(canonicalPoints);
     const reliableTime = recordedTrackSampleTimes(segment.points) !== null;
     // Clip precomputed levels at actual sampled instants. Simplification never
     // runs again on a cursor-dependent prefix and cannot join independent gaps.
