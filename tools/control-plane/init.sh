@@ -161,43 +161,48 @@ baseline_smoke() {
   return $rc
 }
 
-# Manual entry point for the intake step `run-loop.sh` runs every iteration.
+# Manual entry points for canonical external-verdict intake.
 #
-#   ./init.sh intake                     triage the eligible open issues (up to
-#                                        rules.intake.max_per_iteration)
-#   ./init.sh intake 86                  triage exactly issue #86
-#   ./init.sh intake 86 --dry-run        run the triage session and print the parsed
-#                                        decision and the computed id/priority, writing
-#                                        nothing and posting nothing
+#   ./init.sh intake-candidates
+#       read-only bounded candidate discovery; no model process and no ONE write
+#   ./init.sh intake 86 --verdict-file verdict.json [--dry-run]
+#       validate an issue-bound Orchestrator verdict and apply it through the existing
+#       safe-store intake transaction
+#   ./init.sh intake-check [--dry-run] [--verdict-dir DIR]
+#       deterministic mapped-issue reconcile; amend/follow-up reasoning is consumed
+#       only from issue/mode/feature-bound verdict envelopes in DIR
 #
-#   ./init.sh intake-check               NOT read-only despite the name: reconcile the issues
-#                                        already mapped to a
-#                                        feature: backfill a missing snapshot, amend
-#                                        an auto-intake pending entry whose issue
-#                                        moved, note a curated one, queue a follow-up
-#                                        for a reopened issue
-#   ./init.sh intake-check --dry-run     list every mapped issue and what would happen
-#                                        to it, writing nothing and posting nothing
-#
-# The dry run is enforced inside `intake_comment_issue` and inside the python
-# apply step, not at the call site, so no path can leak a comment or a queue
-# write out of it.
+# Missing external verdicts are normal deferrals: they do not create skips, do not
+# mutate ONE, and do not abort the recurring development loop.
+intake_candidates_cmd() {
+  need gh
+  intake_candidates
+}
+
 intake_cmd() {
   local num="" arg known
-  for arg in "$@"; do
+  INTAKE_VERDICT_FILE=""
+  while [[ "$#" -gt 0 ]]; do
+    arg="$1"; shift
     case "$arg" in
       --dry-run) INTAKE_DRY_RUN=1 ;;
+      --verdict-file)
+        [[ "$#" -gt 0 ]] || fail "usage: ./init.sh intake <issue-number> --verdict-file FILE [--dry-run]"
+        INTAKE_VERDICT_FILE="$1"; shift
+        ;;
       [0-9]*) num="$arg" ;;
-      *) fail "usage: ./init.sh intake [issue-number] [--dry-run]" ;;
+      *) fail "usage: ./init.sh intake <issue-number> --verdict-file FILE [--dry-run]" ;;
     esac
   done
   need gh
-  if [[ -z "$num" ]]; then
-    intake_new_issues
+  [[ -n "$num" ]] || fail "usage: ./init.sh intake <issue-number> --verdict-file FILE [--dry-run]"
+  if [[ -z "$INTAKE_VERDICT_FILE" ]]; then
+    echo "[st-init] issue #$num external-verdict-required; state unchanged"
     return 0
   fi
-  known="$(intake_known_state "$num" | tr -d '
-')"
+  INTAKE_VERDICT_FILE="$(intake_external_path "$INTAKE_VERDICT_FILE")" || fail "invalid verdict path: $INTAKE_VERDICT_FILE"
+  [[ -f "$INTAKE_VERDICT_FILE" ]] || fail "verdict file not found: $INTAKE_VERDICT_FILE"
+  known="$(intake_known_state "$num" | tr -d '\r\n')"
   if [[ -n "$known" ]]; then
     echo "[st-init] issue #$num is $known; nothing to triage"
     return 0
@@ -217,7 +222,8 @@ case "$MODE" in
   evidence-run) shift; evidence_run "$@" ;;
   evidence-check) shift; evidence_check "$@" ;;
   ci) shift; ci_evidence "$@" ;;
+  intake-candidates) shift; intake_candidates_cmd "$@" ;;
   intake) shift; intake_cmd "$@" ;;
   intake-check) shift; intake_check "$@" ;;
-  *) fail "usage: ./init.sh {status|bootstrap|smoke|baseline-smoke|evidence-run <id> <log> <cmd...>|evidence-check <id>|ci <id> <PR>|intake [issue] [--dry-run]|intake-check [--dry-run]}" ;;
+  *) fail "usage: ./init.sh {status|bootstrap|smoke|baseline-smoke|evidence-run <id> <log> <cmd...>|evidence-check <id>|ci <id> <PR>|intake-candidates|intake <issue> --verdict-file FILE [--dry-run]|intake-check [--dry-run] [--verdict-dir DIR]}" ;;
 esac

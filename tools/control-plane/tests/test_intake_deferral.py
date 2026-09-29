@@ -94,6 +94,7 @@ class AmendmentDeferralWiringCases(fixture.SyntheticOne):
         script = r'''set -euo pipefail
 ROOT="$PWD"
 source lib/intake.sh
+intake_triage_available() { return 0; }
 gh() { :; }
 intake_init_dirs
 intake_budget_take() { return 0; }

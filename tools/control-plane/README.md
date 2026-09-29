@@ -12,8 +12,9 @@ A long-running, evidence-gated builder/evaluator loop over one managed clone of
 5. `claude-progress.md` — persistent handoff log.
 
 `.claude/agents/startrips-evaluator.md` is the fresh-context, read-only evaluator;
-`.claude/agents/startrips-triage.md` is the read-only issue-intake triager (new issues, amendments
-and reopen follow-ups) and `lib/intake.sh` plus `lib/intake_json.py` are the intake step both
+`.claude/agents/startrips-triage.md` is the read-only intake reasoning rubric used by the recurring
+Orchestrator (never a child-agent launch); `lib/intake.sh` plus `lib/intake_json.py` are the canonical
+verdict-validation/apply boundary both
 `run-loop.sh` and `init.sh` call.
 `loop-supervisor.sh` / `launch-supervisor.sh` / `scheduled-restart.sh` run it unattended.
 
@@ -87,43 +88,52 @@ been resolved, and verify effective reviews on the observed head. Use
 
 ## Issue intake
 
-Every iteration, right after the merge-state reconcile and **before** a feature is selected,
-`run-loop.sh` triages new open issues into the queue. Candidates are open issues that no feature
-already references and that are not in `.agent-artifacts/intake/skipped.json`, `[P0]`/`[P1]`-titled first and otherwise oldest first, at
-most `rules.intake.max_per_iteration` (3) per iteration. An issue labelled **`no-loop`** is never
-picked up.
+Every iteration, right after merge-state reconcile and **before** feature selection,
+`run-loop.sh` performs bounded candidate discovery and mapped-issue reconciliation. The control-plane
+shell never starts a model/provider process for intake.
 
-Each candidate gets one read-only `startrips-triage` session, which verifies the claimed gap
-against the real code and returns either a skip with a reason or a full feature plus a `placement`
-block (an existing feature as anchor, `before` or `after`, and why). The loop assigns the `ST-0xx`
-id and a fractional `priority` of anchor ±0.5 — nudged 0.01 toward the anchor on a collision — then
-appends the feature and posts one comment on the issue. Placement rules per problem area, the
-handling of a `triage output invalid` result, and how a human overrides a placement are in
-`CLAUDE.md`, section *Issue intake*.
+The recurring Development Orchestrator owns the read-only reasoning turn in its **current session**.
+It uses Codexless to read the full issue, relevant code/Git history and a compact projection of the
+sole ONE, following `.claude/agents/startrips-triage.md` as a rubric only. It then supplies one
+ephemeral verdict envelope to the canonical intake boundary:
 
-Every iteration also **reconciles the issues already mapped to a feature**, right after that
-new-issue pass and still before selection. Each such entry carries `issue_snapshot_at` and
-`issue_snapshot_comments`; when the issue moves past them, what happens depends on the feature's
-status — backfill a missing snapshot, amend a `pending` auto-intake entry through an amend-mode
-triage session, record-and-flag a curated ST-000..ST-020 entry without rewriting it, leave an
-in-flight one for its builder to read, or queue a single follow-up after a `passed` feature whose
-issue is open again. Both halves share one session budget (3), and new issues spend it first. Full
-rules in `CLAUDE.md`, section *Issue update tracking*.
-
-Manually:
-
-```bash
-./init.sh intake                  # the new-issue step the loop runs
-./init.sh intake 86               # exactly one issue
-./init.sh intake 86 --dry-run     # print the decision and the computed id/priority; writes and posts nothing
-./init.sh intake-check --dry-run  # list every mapped issue and what would happen to it; writes and posts nothing
-./init.sh intake-check            # RUNS the reconcile: can start triage sessions, write the queue file and comment on issues
+```json
+{"issue":86,"mode":"new","verdict":{...}}
+{"issue":86,"mode":"amend","feature":"ST-123","verdict":{...}}
+{"issue":86,"mode":"followup","feature":"ST-123","verdict":{...}}
 ```
 
-Audit trail: `.agent-artifacts/intake/decisions.log` (one line per issue),
-`issue-<n>.log` (the triage session), `skipped.json`. These are gitignored, so a cleaned artifacts
-directory means previously skipped issues get re-triaged — use the `no-loop` label when the
-exclusion must be durable.
+`lib/intake.sh` binds the envelope to the exact issue/mode/feature before materializing the existing
+`<<<INTAKE ... INTAKE>>>` input consumed by `intake_json.py`. The existing safe-store transaction
+still assigns the ST id/priority, validates placement/dependencies/acceptance and performs the only
+ONE write. A missing verdict is a normal defer: it spends no intake budget, writes no skip, changes
+no ONE bytes and does not abort the loop. A mismatched/invalid envelope fails closed.
+
+Candidates remain open issues that no feature already references and that are not in
+`.agent-artifacts/intake/skipped.json`, with `[P0]` then `[P1]` titles first and otherwise oldest
+first, bounded by `rules.intake.max_per_iteration` (3). `no-loop` remains the durable human
+exclusion.
+
+Mapped issue movement is still status-aware: backfill missing snapshots, consume an external amend
+verdict only for pending auto-intake entries, preserve curated/in-flight owner state, or consume one
+external follow-up verdict after a passed feature when a genuine residual gap exists. New/amend/
+follow-up applications share the same bounded intake budget; candidates without verdicts do not
+consume it.
+
+Manual/control-plane entry points:
+
+```bash
+./init.sh intake-candidates
+./init.sh intake 86 --verdict-file .agent-artifacts/intake/verdict-86.json
+./init.sh intake 86 --verdict-file .agent-artifacts/intake/verdict-86.json --dry-run
+./init.sh intake-check --dry-run
+./init.sh intake-check --verdict-dir .agent-artifacts/intake/verdicts-current
+```
+
+Verdict files/directories are caller-owned ephemeral evidence for one invocation, not another queue,
+owner registry or routing table. Audit state remains `.agent-artifacts/intake/decisions.log`, the
+validated per-invocation triage log and `skipped.json`. Use the `no-loop` label when exclusion must
+survive artifact cleanup.
 
 ### Concurrent amendment deferral
 

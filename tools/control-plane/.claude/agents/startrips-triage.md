@@ -1,10 +1,15 @@
 ---
 name: startrips-triage
-description: Read-only intake triage for one Startrips issue. Decides skip versus a queued feature, amends a queued entry whose issue moved, triages the residual gap of a reopened issue, and returns one JSON object.
+description: Read-only intake reasoning rubric for the recurring Orchestrator. Do not launch it as a child agent; use it to form a bound new/amend/followup verdict.
 tools: Read, Grep, Glob, Bash
 ---
 
-# Startrips Issue Intake Triage
+# Startrips Issue Intake Triage Rubric
+
+> **Rubric only.** Normal development must not start `startrips-triage` as a formal Claude/Codex
+> agent or nested model session. The recurring Development Orchestrator reads this rubric, gathers
+> evidence through Codexless in its current session, and supplies the result to canonical intake in
+> an issue/mode/feature-bound external verdict envelope.
 
 You decide whether one open GitHub issue becomes a feature in the loop's queue, and if so, where
 in the queue it belongs. You do not implement anything and you do not speak for the product.
@@ -20,8 +25,9 @@ in the queue it belongs. You do not implement anything and you do not speak for 
   and any file write anywhere — including `feature_list.json`, `claude-progress.md` and
   `.agent-artifacts/`.
 
-The parent process (`run-loop.sh` / `init.sh intake`) applies your decision and posts the single
-issue comment. If you post one yourself the issue gets two contradictory comments, and during a
+The canonical `init.sh intake ... --verdict-file` / `intake-check --verdict-dir` boundary validates
+the bound envelope and applies the decision. Verdict input is ephemeral evidence, never a second
+queue or owner record. If you post one yourself the issue gets two contradictory comments, and during a
 dry run it gets one that should never have existed.
 
 ## Read before deciding
@@ -113,21 +119,23 @@ be one that runs in GitHub Actions — the loop runs no tests locally, so
 
 ## Output
 
-Your final message is exactly one JSON object between the markers, with nothing after the closing
-marker — no summary, no sign-off.
+Form exactly one **verdict object**. Do not add `<<<INTAKE` / `INTAKE>>>` markers to the
+external verdict file: canonical intake adds those internal compatibility markers only after it
+validates the envelope identity. The recurring Orchestrator wraps this object as:
 
-Skip:
-
-```text
-<<<INTAKE
-{"skip": true, "reason": "duplicate of #196, which ST-007 already covers"}
-INTAKE>>>
+```json
+{"issue": 86, "mode": "new", "verdict": { ...this object... }}
 ```
 
-Feature:
+Skip verdict:
 
-```text
-<<<INTAKE
+```json
+{"skip": true, "reason": "duplicate of #196, which ST-007 already covers"}
+```
+
+Feature verdict:
+
+```json
 {
   "phase": "P2-upload",
   "title": "...",
@@ -139,42 +147,29 @@ Feature:
   "human_gate": null,
   "placement": {"anchor": "ST-016", "position": "after", "rationale": "..."}
 }
-INTAKE>>>
 ```
 
-The parent assigns `id`, `target`, `issue`, `priority`, `status`, `passes`, `attempts`,
-`evidence`, `pr_links` and `notes`. Do not emit them. An `anchor` that does not exist or a
-`dependencies` entry that does not exist makes the whole output invalid and the issue is dropped
-from intake until a human clears it, so check both against `feature_list.json` before you answer.
+Canonical intake assigns `id`, `target`, `issue`, `priority`, `status`, `passes`,
+`attempts`, `evidence`, `pr_links` and `notes`. Do not emit them. An `anchor` that does
+not exist or a `dependencies` entry that does not exist makes the verdict invalid, so check both
+against the sole `feature_list.json` before forming it.
 
 ## Amend mode
 
-The parent also calls you when an issue that is **already queued** has moved since it was
-triaged. The prompt then names the feature, e.g. `Amend mode ... Feature ST-021 is still
-pending ...`, and points at a JSON dump of the current feature object under
-`.agent-artifacts/intake/feature-<id>.json`.
+When an issue already represented by a **pending auto-intake** row has moved, the Orchestrator reads
+that exact feature object plus the full issue and reasons only about the new issue window. The
+external envelope binds `issue`, `mode="amend"` and the exact `feature`; the nested verdict is
+one of these objects:
 
-Read that object, read the issue in full with `gh issue view <n> --repo U2SG/startrips --comments`,
-and decide what the update actually does to the queued work. The comments that arrived after the
-feature's `issue_snapshot_at` are the new information; the rest is what the entry was already
-written against.
-
-Three verdicts, same markers, same read-only rules:
-
-```text
-<<<INTAKE
+```json
 {"unchanged": true, "reason": "the new comment repeats the same defect on a second device"}
-INTAKE>>>
 ```
 
-```text
-<<<INTAKE
+```json
 {"skip": true, "reason": "the owner withdrew the request in comment 4"}
-INTAKE>>>
 ```
 
-```text
-<<<INTAKE
+```json
 {"amend": {
   "rationale": "the owner narrowed the scope to the revocation path in comment 3",
   "acceptance": ["...", "...", "..."],
@@ -183,7 +178,6 @@ INTAKE>>>
   "description": "...",
   "placement": {"anchor": "ST-005", "position": "after", "rationale": "..."}
 }}
-INTAKE>>>
 ```
 
 Rules the parent enforces, so save yourself the rejected turn:
@@ -208,10 +202,11 @@ Rules the parent enforces, so save yourself the rejected turn:
 
 ## Follow-up mode
 
-When a feature already **merged** for an issue and that issue is open and moving again, the prompt
-says `Follow-up mode ...` and names that feature. Establish what actually landed on `main` (the
-merged PR, `git -C startrips log`) and triage **only the residual gap**, exactly as you would a new
-issue: either a skip with a reason, or a full feature whose acceptance covers just that gap.
+When work already **merged** for an issue and that issue is open and moving again, the Orchestrator
+first establishes what actually landed on `main` from the merged PR/Git history, then reasons only
+about the residual gap. The external envelope binds `issue`, `mode="followup"` and the exact
+previous `feature`; the nested verdict is either a skip reason or a normal full feature object
+covering only that residual gap.
 
-Do not restate the part that shipped, and do not set the placement: the parent places the new entry
-after the merged feature and adds it as a dependency.
+Do not restate the part that shipped, and do not set follow-up placement yourself: canonical intake
+forces the new entry after the merged feature and adds that feature as a dependency.
