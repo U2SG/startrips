@@ -639,8 +639,9 @@ async function verifyEmailVerificationRecoveryFlow() {
     };
   };
 
+  const recoveryPath = `/accept-invitation?id=${invitationId}&return=${encodeURIComponent(externalReturn)}&qaState=login-gateway&qaLite=1`;
   const gateway = await createGatewayPage({
-    initialPath: `/accept-invitation?id=${invitationId}&return=${encodeURIComponent(externalReturn)}&qaState=login-gateway&qaLite=1`,
+    initialPath: recoveryPath,
   });
   try {
     await gateway.page.unroute("**/api/auth/**");
@@ -688,7 +689,14 @@ async function verifyEmailVerificationRecoveryFlow() {
     const signUpMail = await awaitMail(0, "sign-up verification mail");
     const signUpTarget = inspectMail(signUpMail);
 
-    await gateway.page.getByRole("button", { name: "已有账号，去登录" }).click();
+    // Better Auth may issue a post-sign-up session cookie even though later
+    // password sign-in remains verification-gated. The recovery contract is an
+    // unauthenticated return flow, so explicitly reopen that same protected
+    // invitation target without carrying the sign-up browser session.
+    await gateway.page.context().clearCookies();
+    await gateway.page.goto(`${origin}${recoveryPath}`, { waitUntil: "domcontentloaded", timeout: 8_000 });
+    await gateway.page.locator(".auth-card--login-v3").waitFor({ state: "visible", timeout: 4_000 });
+    await gateway.page.locator('input[autocomplete="email"]').fill(email);
     await gateway.page.locator('input[autocomplete="current-password"]').fill(password);
     const unverifiedResponsePromise = gateway.page.waitForResponse((response) => (
       new URL(response.url()).pathname === "/api/auth/sign-in/email"
