@@ -332,6 +332,11 @@
   transition: border-color 160ms ease, background-color 160ms ease;
 }
 
+.auth-card--login-v3 input,
+.auth-card--login-v3 textarea {
+  min-height: 44px;
+}
+
 .auth-card textarea {
   resize: vertical;
 }
