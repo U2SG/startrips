@@ -764,7 +764,7 @@ function installStageSampler() {
       // playing video. A decoded frame can advance during that gesture. Read
       // the now-paused source after the handler, while its frame still exists.
       const capturePausedSource = () => {
-        if (state.handoffSource !== source || source.paused || !video.paused
+        if (state.handoffSource !== source || source.paused || source.settled || !video.paused
           || video.getAttribute("data-shared-media-id") !== source.asset
           || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
         try {
@@ -776,6 +776,9 @@ function installStageSampler() {
           source.settled.snapshotNonBlack = signalOf(source.settled.snapshotPixels);
         } catch { /* The gesture frame remains the only admissible reference. */ }
       };
+      state.capturePausedSource = (pausedVideo) => {
+        if (pausedVideo === video) capturePausedSource();
+      };
       queueMicrotask(() => {
         capturePausedSource();
         if (!source.settled) requestAnimationFrame(capturePausedSource);
@@ -783,6 +786,18 @@ function installStageSampler() {
     } catch (error) {
       state.handoffSource = { trigger, wallAt: Date.now(), error: String(error) };
     }
+  };
+  // The production handoff pauses its source and takes the snapshot in one
+  // synchronous call. A microtask/rAF can run only after that source has been
+  // detached and its decoder released. Observe the real native pause before
+  // it returns to the caller, using the source video (never the clone) as the
+  // reference. This wrapper delegates exactly one native call; it issues no
+  // pause/play/seek of its own and changes none of the pixel thresholds.
+  const nativePause = HTMLMediaElement.prototype.pause;
+  HTMLMediaElement.prototype.pause = function (...args) {
+    const result = nativePause.apply(this, args);
+    if (state.running) state.capturePausedSource?.(this);
+    return result;
   };
   const handoffControl = (target) => {
     if (!(target instanceof Element)) return null;
@@ -1013,6 +1028,7 @@ function installStageSampler() {
     state.gestures = [];
     state.unmeasurable = 0;
     state.handoffSource = null;
+    state.capturePausedSource = null;
     state.running = true;
     state.generation = (state.generation ?? 0) + 1;
     const generation = state.generation;
@@ -1027,10 +1043,12 @@ function installStageSampler() {
   };
   window.__qaStageStop = () => {
     state.running = false;
+    state.capturePausedSource = null;
     const source = state.handoffSource;
     return { frames: state.frames, gestures: state.gestures, unmeasurable: state.unmeasurable,
       ticks: state.ticks, source: source ? { trigger: source.trigger, wallAt: source.wallAt, asset: source.asset,
-        time: source.time, nonBlack: source.nonBlack, error: source.error } : null };
+        time: source.time, nonBlack: source.nonBlack, error: source.error,
+        pausedFrame: source.settled ? { time: source.settled.time, nonBlack: source.settled.nonBlack } : null } : null };
   };
 }
 /* eslint-enable no-undef */
