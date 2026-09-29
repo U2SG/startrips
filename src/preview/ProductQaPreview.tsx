@@ -379,7 +379,13 @@ function JourneyComposerQaPreview() {
         routePointIds: stay.routePointIds,
         mediaAssetIds: stay.mediaAssetIds,
       })),
-      playback: buildPlaybackSteps(savedJourney).flatMap((step) => {
+      playback: buildPlaybackSteps(savedJourney).flatMap<{
+        kind: "stop" | "media";
+        pointIndex: number;
+        routePointId: string | null;
+        assetId?: string | null;
+        assetRoutePointId?: string | null;
+      }>((step) => {
         if (step.kind === "stop") {
           return [{
             kind: step.kind,
