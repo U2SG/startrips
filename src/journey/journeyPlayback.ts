@@ -94,8 +94,9 @@ function playbackMediaByChapter(journey: Journey): Map<string, JourneyMediaAsset
 
   const byChapter = new Map(journey.routePoints.map((point) => [point.id, [] as JourneyMediaAsset[]]));
   for (const asset of journey.media) {
-    if (asset.routePointId === null || !isVisualMediaAsset(asset)) continue;
-    const chapterId = chapterByOwner.get(asset.routePointId);
+    const routePointId = asset.routePointId;
+    if (routePointId === null || !isVisualMediaAsset(asset)) continue;
+    const chapterId = chapterByOwner.get(routePointId);
     if (chapterId !== undefined) byChapter.get(chapterId)?.push(asset);
   }
   for (const media of byChapter.values()) media.sort(comparePlaybackMedia);
