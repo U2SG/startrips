@@ -96,7 +96,7 @@ function record(name, detail) {
   if (detail.failed) failed = true;
 }
 
-async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null, qaMode = "continuity", recap = false, densityQa = "sequence" }) {
+async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null, qaMode = "continuity", recap = false, densityQa = "sequence", ownedCover = false }) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
@@ -191,6 +191,7 @@ async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = 
     qaState: "journey-playback",
     qaMode,
     qaRecap: recap ? "1" : "0",
+    qaOwnedCover: ownedCover ? "1" : "0",
     ...(densityQa === "dense" ? { qaDenseDensity: "1" } : { qaSequenceDensity: "1" }),
     qaReduceMotion: reduceMotion ? "1" : "0",
   });
@@ -1193,6 +1194,45 @@ for (const viewport of VIEWPORTS.slice(0, 2)) {
       await closeRun.page.close();
     }
   }
+}
+
+// A cover projected into the opening chapter still belongs to the child of a
+// later explicitly selected Stop. Grade settled pixels before the real Close.
+for (const viewport of VIEWPORTS.slice(0, 2)) {
+  const run = await open({ viewport, qaMode: "chapter-membership", recap: true, ownedCover: true });
+  try {
+    await run.page.waitForFunction(() => {
+      const root = document.querySelector(".journey-playback");
+      const media = root?.querySelector("[data-presented-asset]");
+      return root?.getAttribute("data-playback-phase") === "media"
+        && media?.getAttribute("data-presented-asset") === "st121-chapter-photo-2"
+        && media.getAttribute("data-media-presentation") === "settled";
+    }, null, { timeout: 30_000 });
+    await run.page.locator('button[aria-label="暂停播放"]').click();
+    const before = await run.page.locator("main[data-qa-chapter-membership]").evaluate((root) => ({
+      media: JSON.parse(root.getAttribute("data-qa-canonical-media")),
+      route: JSON.parse(root.getAttribute("data-qa-canonical-route")),
+      chapter: root.querySelector("[data-chapter-point]")?.getAttribute("data-chapter-point"),
+    }));
+    await run.page.locator('button[aria-label="退出播放"]').click();
+    await run.page.locator(".journey-playback").waitFor({ state: "detached" });
+    const returned = await run.page.locator("main[data-qa-chapter-membership]").evaluate((root) => ({
+      routePointId: root.getAttribute("data-qa-return-route-point"),
+      assetId: root.getAttribute("data-qa-return-asset"), reason: root.getAttribute("data-qa-return-reason"),
+    }));
+    const canonicalCover = before.media.find(([id]) => id === "st121-chapter-photo-2");
+    record(`${viewport.label}:quick-recap:later-stop-child-cover-close-owner`, {
+      before, returned, consoleErrors: run.consoleErrors, pageErrors: run.pageErrors,
+      failed: before.chapter !== "0" || before.route.length !== 6
+        || canonicalCover?.[1] !== "st121-chapter-point-2" || canonicalCover?.[2] !== 0
+        || returned.routePointId !== "st121-chapter-point-2" || returned.assetId !== "st121-chapter-photo-2"
+        || returned.reason !== "exited" || run.consoleErrors.length > 0 || run.pageErrors.length > 0,
+    });
+  } catch (error) {
+    record(`${viewport.label}:quick-recap:later-stop-child-cover-close-owner`, {
+      failed: true, error: String(error), trace: await readTrace(run.page),
+    });
+  } finally { await run.page.close(); }
 }
 
 await browser.close();

@@ -246,7 +246,7 @@ button {
   opacity: 0.98;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
-  stroke-dasharray: var(--journey-recorded-track-temporal-progress, 1) 1;
+  stroke-dasharray: none;
   stroke-dashoffset: 0;
 }
 

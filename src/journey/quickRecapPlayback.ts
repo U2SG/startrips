@@ -11,6 +11,7 @@ import {
   playbackMediaForPoint,
   playbackTravelAngularDistance,
   type PlaybackStep,
+  type PlaybackJourney,
 } from "./journeyPlayback";
 import type { HomeNarrativeContext, HomeNarrativeBeatDecision } from "./homeBasePrelude";
 import { isSoundtrackAsset, isVisualMediaAsset } from "./journeyModel";
@@ -31,7 +32,7 @@ export const QUICK_RECAP_TARGET_MS = 45_000;
 export const QUICK_RECAP_PENDING_VIDEO_DURATION_MS = UNMEASURED_VIDEO_DURATION_MS;
 
 export type PreparedQuickRecapPlayback = {
-  journey: Journey;
+  journey: PlaybackJourney;
   plan: AutoEditPlanV1;
   homeNarrativeContext?: HomeNarrativeContext;
 };
@@ -248,12 +249,17 @@ export function prepareQuickRecapPlaybackResult(
   const selectedIds = new Set(plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId)));
   if (selectedIds.size === 0) return { playback: null, fallbackReason: "no-visual-media" };
 
-  const projectedCandidates = new Map(runtimeVisualCandidates(journey).map((asset) => [asset.id, asset]));
-  const projectedMedia = journey.media.flatMap((asset) => {
-    if (isSoundtrackAsset(asset)) return [asset];
-    if (!selectedIds.has(asset.id)) return [];
-    return [projectedCandidates.get(asset.id) ?? asset];
-  });
+  // The plan controls presentation placement. Keep selected canonical assets
+  // untouched so Close/return and Story still resolve the original child owner.
+  const projectedMedia = journey.media.filter((asset) => isSoundtrackAsset(asset) || selectedIds.has(asset.id));
+  const selectedAssets = new Map(projectedMedia.map((asset) => [asset.id, asset]));
+  const chapterMedia = new Map(plan.chapters.map((chapter) => [
+    chapter.routePointId,
+    chapter.items.flatMap((item) => {
+      const asset = selectedAssets.get(item.assetId);
+      return asset ? [asset] : [];
+    }),
+  ]));
   const introMs = resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "intro" });
   const outroMs = resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "outro" });
   const homeNarrativeContext = options.homeNarrativeContext
@@ -268,7 +274,7 @@ export function prepareQuickRecapPlaybackResult(
     fallbackReason: null,
     playback: {
       plan,
-      journey: { ...journey, media: projectedMedia },
+      journey: { ...journey, media: projectedMedia, chapterMedia },
       ...(homeNarrativeContext ? { homeNarrativeContext } : {}),
     },
   };

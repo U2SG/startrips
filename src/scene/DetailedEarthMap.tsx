@@ -7,6 +7,7 @@ import {
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { JourneyRoute } from "../journey/types";
+import { recordedTrackLodConstructionCount } from "../journey/journeyModel";
 import {
   createDetailedEarthLabelExpression,
   DETAILED_EARTH_DRAG_PAN_OPTIONS,
@@ -532,6 +533,17 @@ export default function DetailedEarthMap({
         publishReadiness("fully-settled");
       }
     };
+    const publishRecordedTrackLod = (selection: ReturnType<typeof selectDetailedEarthJourneyOverlayLod>) => {
+      host.dataset.journeyRecordedTrackLodKey = selection.key;
+      host.dataset.journeyRecordedTrackRenderedPoints = String(selection.renderedPointCount);
+      host.dataset.journeyRecordedTrackLodBuilds = String(recordedTrackLodConstructionCount());
+      host.dataset.journeyRecordedTrackPixelsPerRadian = String(detailedEarthProjectedPixelsPerRadian(map));
+      // Counts and segment identities describe the actual submitted source;
+      // precise private sample coordinates stay out of the DOM/debug surface.
+      host.dataset.journeyRecordedTrackSegments = JSON.stringify(selection.data.features
+        .filter((feature) => feature.properties.provenance === "recorded-track" && feature.geometry.type === "LineString")
+        .map((feature) => [feature.id, feature.geometry.type === "LineString" ? feature.geometry.coordinates.length : 0]));
+    };
     const syncJourneyOverlay = () => {
       if (removed) return false;
       const overlay = journeyOverlayRef.current;
@@ -549,8 +561,7 @@ export default function DetailedEarthMap({
         const lodSelection = installDetailedEarthJourneyOverlay(map, overlay);
         appliedJourneyOverlayRevision = overlay.revision;
         appliedJourneyOverlayLodKey = lodSelection.key;
-        host.dataset.journeyRecordedTrackLodKey = lodSelection.key;
-        host.dataset.journeyRecordedTrackRenderedPoints = String(lodSelection.renderedPointCount);
+        publishRecordedTrackLod(lodSelection);
         // A new Journey revision owns a new settled lifecycle. Never let an
         // earlier overlay's fully-settled bit survive a rapid Route/Journey
         // switch and make the replacement look settled before its own frame.
@@ -598,8 +609,7 @@ export default function DetailedEarthMap({
       if (selection.key === appliedJourneyOverlayLodKey) return true;
       source.setData(selection.data);
       appliedJourneyOverlayLodKey = selection.key;
-      host.dataset.journeyRecordedTrackLodKey = selection.key;
-      host.dataset.journeyRecordedTrackRenderedPoints = String(selection.renderedPointCount);
+      publishRecordedTrackLod(selection);
       return true;
     };
     const publishCameraObservation = () => {

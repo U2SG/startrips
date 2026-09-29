@@ -47,6 +47,9 @@ import { compactMobileLayoutMarker } from "../journey/mobileLayout";
 import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
 import {
   buildRecordedTrackLodLevels,
+  recordedTrackLodConstructionCount,
+  recordedTrackSampleTimes,
+  recordedTrackVisibleSampleCount,
   resolveJourneyRouteSegmentProvenance,
   simplifyRecordedTrackPoints,
   summarizeJourneyRouteProvenance,
@@ -70,7 +73,6 @@ import {
   vector3ToLatLon,
 } from "./geo";
 import {
-  recordedRouteTemporalProgress,
   resolveRouteAttentionRole,
   resolveRoutePointPresentation,
   routePointMarkerRadiusPx,
@@ -246,14 +248,12 @@ function uniformlyBoundRecordedPoints<T>(points: readonly T[], limit: number) {
 export type RecordedTrackOverviewLevel = {
   maxAngularErrorRad: number;
   sourcePointCount: number;
+  sampleTimes: readonly number[] | null;
   samples: RouteArcSamples;
 };
 
 export type RecordedTrackOverview = {
   id: string;
-  /** Canonical sample-order interval inside the complete recorded evidence. */
-  temporalStart: number;
-  temporalEnd: number;
   levels: readonly RecordedTrackOverviewLevel[];
   samples: RouteArcSamples;
 };
@@ -274,7 +274,7 @@ function recordedTrackArcSamples(
 }
 
 function boundedRecordedTrackOverviewLevels(
-  points: readonly { lat: number; lon: number }[],
+  points: readonly { lat: number; lon: number; recordedAt?: string | null }[],
   pointBudget: number,
 ): RecordedTrackOverviewLevel[] {
   const precomputed = buildRecordedTrackLodLevels(points);
@@ -291,6 +291,7 @@ function boundedRecordedTrackOverviewLevels(
   return bounded.map((level) => ({
     maxAngularErrorRad: level.maxAngularErrorRad,
     sourcePointCount: level.points.length,
+    sampleTimes: recordedTrackSampleTimes(points) ? recordedTrackSampleTimes(level.points) : null,
     samples: recordedTrackArcSamples(level.points),
   }));
 }
@@ -316,33 +317,19 @@ export function buildRecordedTrackOverviewSamples(
   const validSegments = segments
     .map((segment) => ({
       ...segment,
-      points: segment.points.filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon)),
+      points: segment.points.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon))
+        ? segment.points
+        : segment.points.filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon)),
     }))
     .filter((segment) => segment.points.length >= 2);
   if (maxPoints < 2 || validSegments.length === 0) return [];
-
-  // Time reveal is defined against canonical recorded sample order, before LOD
-  // or the unusual many-gap path cap can remove rendering detail. A later
-  // independent segment therefore stays at progress 0 until the cursor reaches
-  // its own evidence interval instead of all segments revealing in parallel.
-  const totalRecordedPoints = validSegments.reduce((total, segment) => total + segment.points.length, 0);
-  let temporalPointOffset = 0;
-  const temporallyBoundSegments = validSegments.map((segment) => {
-    const temporalStart = temporalPointOffset / totalRecordedPoints;
-    temporalPointOffset += segment.points.length;
-    return {
-      ...segment,
-      temporalStart,
-      temporalEnd: temporalPointOffset / totalRecordedPoints,
-    };
-  });
 
   // Every independent server segment keeps its own SVG path: LOD may remove
   // interior samples, but it never bridges a recorded-track gap. Very unusual
   // inputs with more gaps than the bounded path budget keep a representative
   // subset instead of constructing an unbounded DOM.
-  const segmentLimit = Math.min(temporallyBoundSegments.length, Math.floor(maxPoints / 2));
-  const chosenSegments = uniformlyBoundRecordedPoints(temporallyBoundSegments, segmentLimit);
+  const segmentLimit = Math.min(validSegments.length, Math.floor(maxPoints / 2));
+  const chosenSegments = uniformlyBoundRecordedPoints(validSegments, segmentLimit);
   let remainingPoints = maxPoints;
 
   return chosenSegments.map((segment, index) => {
@@ -357,23 +344,10 @@ export function buildRecordedTrackOverviewSamples(
     remainingPoints -= pointBudget;
     return {
       id: segment.id,
-      temporalStart: segment.temporalStart,
-      temporalEnd: segment.temporalEnd,
       levels,
       samples,
     };
   });
-}
-
-export function recordedTrackSegmentTemporalProgress(
-  routeProgress: number,
-  temporalStart: number,
-  temporalEnd: number,
-) {
-  if (!(temporalEnd > temporalStart)) return routeProgress >= temporalEnd ? 1 : 0;
-  if (routeProgress <= temporalStart) return 0;
-  if (routeProgress >= temporalEnd) return 1;
-  return (routeProgress - temporalStart) / (temporalEnd - temporalStart);
 }
 
 export type AttentionParticleLayerId =
@@ -655,6 +629,7 @@ export function journeyRoutePointTargetEligible(
   temporalReveal?: {
     journeys: ReadonlyMap<string, number>;
     points: ReadonlyMap<string, number>;
+    timestamp?: number;
   },
 ) {
   if (!target) return false;
@@ -1482,6 +1457,7 @@ interface ParticleEarthSceneProps {
   temporalReveal?: {
     journeys: ReadonlyMap<string, number>;
     points: ReadonlyMap<string, number>;
+    timestamp?: number;
   };
   showArchiveSignals?: boolean;
   /** Static signal coordinates supplied by the legacy or QA scene owner. */
@@ -2131,6 +2107,7 @@ export function ParticleEarthScene({
         visitedImprintMaxGain: number;
         visitedImprintTextureUpdates: number;
         visitedImprintAttenuation: number;
+        recordedTrackLodBuilds: number;
         journeyRouteBuilds: number;
         journeyRouteBuildMs: number;
         journeyRoutePointGeometry: string;
@@ -2188,6 +2165,7 @@ export function ParticleEarthScene({
       visitedImprintTextureUpdates,
       visitedImprintAttenuation: visitedImprintMaterials[0]
         ?.uniforms.uVisitedImprintAttenuation.value ?? 1,
+      recordedTrackLodBuilds: recordedTrackLodConstructionCount(),
       journeyRouteBuilds,
       journeyRouteBuildMs,
       journeyRoutePointGeometry: routePointGeometry.uuid,
@@ -2691,8 +2669,6 @@ export function ParticleEarthScene({
       }>;
       recordedTracks: Array<{
         path: SVGPathElement;
-        temporalStart: number;
-        temporalEnd: number;
         levels: readonly RecordedTrackOverviewLevel[];
         samples: RouteArcSamples;
       }>;
@@ -2984,26 +2960,6 @@ export function ParticleEarthScene({
             reveal?.points.get(`${entry.routeId}:${leg.toPointIndex}`),
           );
         }
-        // Recorded evidence shares the exact route-level cursor projection
-        // with Detailed Earth, then reveals each independent server segment only
-        // inside its canonical sample-order interval. LOD/gap capping therefore
-        // cannot make a later segment appear early.
-        const recordedProgress = reveal === undefined
-          ? undefined
-          : recordedRouteTemporalProgress(entry.routeId, entry.routePointCount, reveal);
-        for (const track of entry.recordedTracks) {
-          applyTemporalProgress(
-            track.path,
-            "--journey-recorded-track-temporal-progress",
-            recordedProgress === undefined
-              ? undefined
-              : recordedTrackSegmentTemporalProgress(
-                recordedProgress,
-                track.temporalStart,
-                track.temporalEnd,
-              ),
-          );
-        }
       }
       syncRoutePresentations();
     };
@@ -3255,6 +3211,7 @@ export function ParticleEarthScene({
           path.classList.add("particle-earth-route__recorded-track");
           path.dataset.routeProvenance = "recorded-track";
           path.dataset.recordedTrackSegment = track.id;
+          path.dataset.recordedTrackLodLevels = String(track.levels.length);
           path.setAttribute("stroke", route.color);
           path.setAttribute("fill", "none");
           path.setAttribute("stroke-linecap", "round");
@@ -3263,8 +3220,6 @@ export function ParticleEarthScene({
           group.appendChild(path);
           return {
             path,
-            temporalStart: track.temporalStart,
-            temporalEnd: track.temporalEnd,
             levels: track.levels,
             samples: track.samples,
           };
@@ -3670,10 +3625,21 @@ export function ParticleEarthScene({
           if (level) {
             track.path.dataset.recordedTrackLodErrorRad = String(level.maxAngularErrorRad);
             track.path.dataset.recordedTrackLodSourcePoints = String(level.sourcePointCount);
-            track.path.dataset.recordedTrackLodRenderedPoints = String(level.samples.lifts.length);
+
           }
+          const visibleCount = level?.sampleTimes
+            ? recordedTrackVisibleSampleCount(level.sampleTimes, latestTemporalReveal.current?.timestamp)
+            : track.samples.lifts.length;
+          const visibleSamples = visibleCount === track.samples.lifts.length
+            ? track.samples
+            : {
+                directions: track.samples.directions.subarray(0, visibleCount * 3),
+                lifts: track.samples.lifts.subarray(0, visibleCount),
+              };
+          track.path.dataset.recordedTrackTimeEvidence = level?.sampleTimes ? "dated" : "spatial";
+          track.path.dataset.recordedTrackLodRenderedPoints = String(visibleCount);
           const trackPath = buildProjectedRoutePath(
-            track.samples,
+            visibleSamples,
             projectRoutePoint,
             { radius: ROUTE_ANCHOR_RADIUS, liftScale: 0 },
           );

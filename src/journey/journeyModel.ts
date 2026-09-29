@@ -220,14 +220,53 @@ export function simplifyRecordedTrackPoints<T extends RecordedTrackLodPoint>(
   return points.filter((_, index) => keep[index] === 1);
 }
 
+const recordedTrackLodCache = new WeakMap<readonly RecordedTrackLodPoint[], RecordedTrackLodLevel[]>();
+const recordedTrackTimeCache = new WeakMap<readonly RecordedTrackLodPoint[], readonly number[] | null>();
+let recordedTrackLodBuilds = 0;
+
+export function recordedTrackLodConstructionCount() {
+  return recordedTrackLodBuilds;
+}
+
+/** Missing, invalid, reversed or constant timestamps are spatial evidence only. */
+export function recordedTrackSampleTimes(points: readonly RecordedTrackLodPoint[]): readonly number[] | null {
+  if (recordedTrackTimeCache.has(points)) return recordedTrackTimeCache.get(points)!;
+  const times = points.map((point) => typeof point.recordedAt === "string" ? Date.parse(point.recordedAt) : NaN);
+  const reliable = times.length >= 2 && times.at(-1)! > times[0]
+    && times.every((time, index) => Number.isFinite(time) && (index === 0 || time >= times[index - 1]));
+  const result = reliable ? times : null;
+  recordedTrackTimeCache.set(points, result);
+  return result;
+}
+
+/** Read the existing clock's actual instant; never substitute sample-order progress. */
+export function recordedTrackVisibleSampleCount(times: readonly number[], timestamp?: number) {
+  if (timestamp === undefined || !Number.isFinite(timestamp)) return times.length;
+  let start = 0;
+  let end = times.length;
+  while (start < end) {
+    const middle = Math.floor((start + end) / 2);
+    if (times[middle] <= timestamp) start = middle + 1;
+    else end = middle;
+  }
+  return start;
+}
+
 export function buildRecordedTrackLodLevels<T extends RecordedTrackLodPoint>(
   points: readonly T[],
   errors: readonly number[] = RECORDED_TRACK_LOD_ERROR_RADIANS,
 ): RecordedTrackLodLevel<T>[] {
-  return errors.map((maxAngularErrorRad) => ({
+  const cached = errors === RECORDED_TRACK_LOD_ERROR_RADIANS ? recordedTrackLodCache.get(points) : undefined;
+  if (cached) return cached as RecordedTrackLodLevel<T>[];
+  const levels = errors.map((maxAngularErrorRad) => ({
     maxAngularErrorRad,
     points: simplifyRecordedTrackPoints(points, maxAngularErrorRad),
   }));
+  if (errors === RECORDED_TRACK_LOD_ERROR_RADIANS) {
+    recordedTrackLodCache.set(points, levels);
+    recordedTrackLodBuilds += 1;
+  }
+  return levels;
 }
 
 /**

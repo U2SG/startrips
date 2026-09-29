@@ -162,7 +162,10 @@ describe("Quick Recap playback handoff (#127)", () => {
 
     const prepared = prepareQuickRecapPlaybackResult(journey, { generatedAt: "2026-09-03T00:00:00.000Z" });
     expect(prepared.fallbackReason).toBeNull();
-    expect(prepared.playback?.journey.media.find((asset) => asset.id === "intro-a")?.routePointId).toBe("p0");
+    expect(prepared.playback?.journey.media.find((asset) => asset.id === "intro-a")?.routePointId).toBeNull();
+    expect(playbackMediaForPoint(prepared.playback!.journey, 0).map((asset) => asset.id)).toEqual(["intro-a", "intro-b"]);
+    expect(committedPlaybackPosition(prepared.playback!.journey, { kind: "media", pointIndex: 0, mediaIndex: 0 }))
+      .toEqual({ journeyId: journey.id, routePointId: null, assetId: "intro-a" });
     expect(journey.media.find((asset) => asset.id === "intro-a")?.routePointId).toBeNull();
   });
 
@@ -326,7 +329,36 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(journey.media.find((asset) => asset.id === "cover")?.routePointId).toBe("p1");
 
     const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
-    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.routePointId).toBe("p0");
+    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.routePointId).toBe("p1");
+    expect(committedPlaybackPosition(prepared.journey, { kind: "media", pointIndex: 0, mediaIndex: 0 }))
+      .toEqual({ journeyId: journey.id, routePointId: "p1", assetId: "cover" });
+  });
+
+  it("opens with a later Stop's child cover while returning to its exact canonical owner", () => {
+    const trip = fixture();
+    trip.routePoints = [
+      point("opening-stop", 0),
+      point("stop-a", 1),
+      { ...point("child", 2), isStop: false, stayAnchorRoutePointId: "stop-a" },
+    ];
+    trip.coverMediaAssetId = "child-cover";
+    trip.media = [media("opening", "opening-stop"), media("sibling", "child", "image/jpeg", 1),
+      media("child-cover", "child", "image/jpeg", 99)];
+    const canonical = structuredClone(trip);
+    const prepared = prepareQuickRecapPlayback(trip, { generatedAt: "2026-09-29T00:00:00.000Z" })!;
+    expect(prepared.plan.chapters[0].items[0].assetId).toBe("child-cover");
+    expect(prepared.plan.chapters[1].items.map((item) => item.assetId)).toContain("sibling");
+    expect(prepared.journey.routePoints).toEqual(canonical.routePoints);
+    expect(prepared.journey.media.find((asset) => asset.id === "child-cover"))
+      .toBe(trip.media.find((asset) => asset.id === "child-cover"));
+    const mediaSteps = buildPlaybackSteps(prepared.journey).filter((step) => step.kind === "media");
+    expect(playbackStepIdentity(prepared.journey, mediaSteps[0])).toBe("media:child-cover");
+    expect(committedPlaybackPosition(prepared.journey, mediaSteps[0])).toEqual({
+      journeyId: trip.id, routePointId: "child", assetId: "child-cover",
+    });
+    expect(runtimeChapterDurationMs(prepared, "standard"))
+      .toEqual({ total: prepared.plan.plannedDurationMs, unpriced: 0 });
+    expect(trip).toEqual(canonical);
   });
 
   it("puts the explicit cover first in both the plan and projected playback order", () => {
@@ -345,7 +377,7 @@ describe("Quick Recap playback handoff (#127)", () => {
     const openingChapter = prepared.plan.chapters.find((chapter) => chapter.routePointId === "p0")!;
     expect(openingChapter.items[0]?.assetId).toBe("cover");
     expect(playbackMediaForPoint(prepared.journey, 0)[0]?.id).toBe("cover");
-    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.sortOrder).toBe(Number.MIN_SAFE_INTEGER);
+    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.sortOrder).toBe(99);
     expect(journey.media.find((asset) => asset.id === "cover")?.sortOrder).toBe(99);
   });
 

@@ -1444,6 +1444,10 @@ export function LivingAtlasApp({
     ? {
         journeys: timeCursor.reveal.journeyProgress,
         points: timeCursor.reveal.pointProgress,
+        timestamp: timeCursor.timeDomain
+          ? timeCursor.timeDomain.minTime
+            + timeCursor.cursor * Math.max(0, timeCursor.timeDomain.maxTime - timeCursor.timeDomain.minTime)
+          : undefined,
       }
     : undefined;
   const unknownCreateSemanticOwnership = resolveUnknownCreateObservationOwnership({
@@ -3171,12 +3175,7 @@ export function LivingAtlasApp({
               opaqueMediaCover: storyGlobeCover.opaqueMediaCover || playbackGlobeCover.opaqueMediaCover,
               coverTransitionActive: storyGlobeCover.coverTransitionActive || playbackGlobeCover.coverTransitionActive,
             }}
-            temporalReveal={isMobileV2 || globeFocusMode
-              ? {
-                journeys: timeCursor.reveal.journeyProgress,
-                points: timeCursor.reveal.pointProgress,
-              }
-              : undefined}
+            temporalReveal={routePointContextTemporalReveal}
             homeBasePresence={listHomeBasePeriods ? {
               resolved: ordinaryAtlasHomePresence,
               periods: homeBasePeriods,

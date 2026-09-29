@@ -100,7 +100,15 @@ export function playbackMediaByOwner(
  * inside the exact Stop selected by the user. Invalid/stale pointers fail
  * closed to the canonical child instead of silently rebinding to a neighbour.
  */
-export function playbackMediaByChapter(journey: Journey): Map<string, JourneyMediaAsset[]> {
+export type PlaybackJourney = Journey & {
+  /** Runtime chapter placement; media objects keep their canonical owner/order. */
+  chapterMedia?: ReadonlyMap<string, readonly JourneyMediaAsset[]>;
+};
+
+export function playbackMediaByChapter(journey: PlaybackJourney): Map<string, JourneyMediaAsset[]> {
+  if (journey.chapterMedia) {
+    return new Map(journey.routePoints.map((point) => [point.id, [...(journey.chapterMedia!.get(point.id) ?? [])]]));
+  }
   // Preserve the Stop-only projection's single owner scan and performance bound.
   if (journey.routePoints.every((point) => point.isStop)) {
     const byOwner = playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
@@ -410,7 +418,7 @@ export function committedPlaybackPosition(
       };
     case "media": {
       const asset = playbackMediaForPoint(journey, committedStep.pointIndex)[committedStep.mediaIndex];
-      const routePointId = asset?.routePointId ?? journey.routePoints[committedStep.pointIndex]?.id ?? null;
+      const routePointId = asset ? asset.routePointId : journey.routePoints[committedStep.pointIndex]?.id ?? null;
       return { journeyId: journey.id, routePointId, assetId: asset?.id ?? null };
     }
   }

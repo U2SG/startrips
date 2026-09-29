@@ -1002,12 +1002,23 @@ const chapterMembershipQaJourney: Journey = {
 };
 
 function JourneyPlaybackChapterMembershipQaPreview() {
-  const recap = new URLSearchParams(window.location.search).get("qaRecap") === "1";
+  const params = new URLSearchParams(window.location.search);
+  const recap = params.get("qaRecap") === "1";
+  const ownedCover = params.get("qaOwnedCover") === "1";
+  const sourceJourney = useMemo(() => ownedCover ? {
+    ...chapterMembershipQaJourney,
+    coverMediaAssetId: "st121-chapter-photo-2",
+    routePoints: chapterMembershipQaJourney.routePoints.map((point, index) => index === 2
+      ? { ...point, stayAnchorRoutePointId: "st121-chapter-point-4" } : point),
+    media: [...chapterMembershipQaJourney.media, {
+      ...chapterMembershipQaJourney.media[0], id: "st121-chapter-sibling-2", sortOrder: 99,
+    }],
+  } : chapterMembershipQaJourney, [ownedCover]);
   const [tempo, setTempo] = useState<PlaybackTempo>(PLAYBACK_INITIAL_TEMPO);
-  const prepared = useMemo(() => recap ? prepareQuickRecapPlayback(chapterMembershipQaJourney, {
+  const prepared = useMemo(() => recap ? prepareQuickRecapPlayback(sourceJourney, {
     generatedAt: "2026-09-28T00:00:00.000Z", tempo,
-  }) : null, [recap, tempo]);
-  const journey = prepared?.journey ?? chapterMembershipQaJourney;
+  }) : null, [recap, tempo, sourceJourney]);
+  const journey = prepared?.journey ?? sourceJourney;
   const [handoff, setHandoff] = useState<{ routePointId: string | null; assetId: string | null; reason: string } | null>(null);
   const resolveDuration = useCallback((targetJourney: Journey, step: PlaybackStep, activeTempo: PlaybackTempo) => (
     prepared ? quickRecapStepDurationMs(targetJourney, step, prepared.plan, activeTempo) : undefined
@@ -1025,6 +1036,7 @@ function JourneyPlaybackChapterMembershipQaPreview() {
   return (
     <main className="living-atlas" data-qa-chapter-membership
       data-qa-canonical-route={JSON.stringify(journey.routePoints.map((point) => point.id))}
+      data-qa-canonical-media={JSON.stringify(journey.media.map((asset) => [asset.id, asset.routePointId, asset.sortOrder]))}
       data-qa-return-route-point={handoff?.routePointId ?? undefined}
       data-qa-return-asset={handoff?.assetId ?? undefined}
       data-qa-return-reason={handoff?.reason ?? undefined}

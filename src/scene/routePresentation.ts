@@ -10,6 +10,8 @@ export type RoutePointSelection = {
 export type RouteTemporalReveal = {
   journeys: ReadonlyMap<string, number>;
   points: ReadonlyMap<string, number>;
+  /** Epoch milliseconds from the existing Atlas time cursor, when available. */
+  timestamp?: number;
 } | undefined;
 
 /**

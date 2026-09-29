@@ -42,7 +42,6 @@ import {
   advanceGlobeIdleReleasePhase,
   buildProjectedRoutePath,
   buildRecordedTrackOverviewSamples,
-  recordedTrackSegmentTemporalProgress,
   selectRecordedTrackOverviewLevel,
   collectJourneyDimDirections,
   focusSignalAnchor,
@@ -85,6 +84,7 @@ import {
   routeArcVertexCount,
   routePointAnchor,
 } from "./geo";
+import { recordedTrackVisibleSampleCount } from "../journey/journeyModel";
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
@@ -113,32 +113,35 @@ describe("ParticleEarthScene contracts", () => {
     expect((far?.samples.lifts.length ?? Infinity)).toBeLessThanOrEqual(
       MAX_RENDERED_RECORDED_TRACK_POINTS,
     );
-    expect(tracks[0]).toMatchObject({ temporalStart: 0 });
-    expect(tracks[0].temporalEnd).toBeGreaterThan(tracks[0].temporalStart);
-    expect(tracks[1]).toMatchObject({ temporalEnd: 1 });
+    expect(tracks.every((track) => track.levels.every((level) => level.sampleTimes === null)))
+      .toBe(true);
   });
 
-  it("reveals independent recorded segments sequentially inside canonical sample-order bounds", () => {
+  it("uses sampled instants for dated evidence and keeps untimed gaps spatial", () => {
+    const instant = Date.parse("2026-09-01T00:00:00.000Z");
     const tracks = buildRecordedTrackOverviewSamples([
-      { id: "first", points: [{ lat: 0, lon: 0 }, { lat: 0, lon: 1 }] },
-      { id: "future", points: [{ lat: 1, lon: 1 }, { lat: 1, lon: 2 }] },
+      { id: "dated", points: [
+        { lat: 0, lon: 0, recordedAt: new Date(instant).toISOString() },
+        { lat: 0.2, lon: 0.3, recordedAt: new Date(instant + 10_000).toISOString() },
+        { lat: 0, lon: 1, recordedAt: new Date(instant + 90_000).toISOString() },
+      ] },
+      { id: "future", points: [
+        { lat: 1, lon: 1, recordedAt: new Date(instant + 120_000).toISOString() },
+        { lat: 1, lon: 2, recordedAt: new Date(instant + 150_000).toISOString() },
+      ] },
+      { id: "spatial", points: [{ lat: 2, lon: 2 }, { lat: 2, lon: 3 }] },
+      { id: "incomplete", points: [
+        { lat: 3, lon: 3, recordedAt: new Date(instant).toISOString() },
+        { lat: 3, lon: 3.5 },
+        { lat: 3, lon: 4, recordedAt: new Date(instant + 90_000).toISOString() },
+      ] },
     ]);
-    expect(tracks.map(({ temporalStart, temporalEnd }) => [temporalStart, temporalEnd]))
-      .toEqual([[0, 0.5], [0.5, 1]]);
-    expect(recordedTrackSegmentTemporalProgress(0.25, tracks[0].temporalStart, tracks[0].temporalEnd))
-      .toBe(0.5);
-    expect(recordedTrackSegmentTemporalProgress(0.25, tracks[1].temporalStart, tracks[1].temporalEnd))
-      .toBe(0);
-    expect(recordedTrackSegmentTemporalProgress(0.75, tracks[0].temporalStart, tracks[0].temporalEnd))
-      .toBe(1);
-    expect(recordedTrackSegmentTemporalProgress(0.75, tracks[1].temporalStart, tracks[1].temporalEnd))
-      .toBe(0.5);
-
-    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
-    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
-    expect(source).toContain('"--journey-recorded-track-temporal-progress"');
-    expect(source).toContain('path.setAttribute("pathLength", "1")');
-    expect(css).toContain("stroke-dasharray: var(--journey-recorded-track-temporal-progress, 1) 1");
+    expect(tracks.map((track) => track.id)).toEqual(["dated", "future", "spatial", "incomplete"]);
+    const dated = tracks[0].levels[0].sampleTimes!;
+    expect(recordedTrackVisibleSampleCount(dated, instant + 30_000)).toBe(2);
+    expect(recordedTrackVisibleSampleCount(tracks[1].levels[0].sampleTimes!, instant + 30_000)).toBe(0);
+    expect(tracks.slice(2).every((track) => track.levels.every((level) => level.sampleTimes === null)))
+      .toBe(true);
   });
 
   it("keeps LOD error bounds truthful when a tight point budget needs extra simplification", () => {
@@ -169,11 +172,8 @@ describe("ParticleEarthScene contracts", () => {
       expect(css).toContain(`data-route-provenance="${tier}"`);
     }
     expect(source).toContain("particle-earth-route__recorded-track");
-    expect(source).toContain("--journey-recorded-track-temporal-progress");
-    expect(source).toContain("recordedTrackSegmentTemporalProgress(");
-    expect(source).toContain("track.temporalStart");
-    expect(source).toContain("track.temporalEnd");
-    expect(css).toContain("stroke-dasharray: var(--journey-recorded-track-temporal-progress, 1) 1");
+    expect(source).toContain("recordedTrackVisibleSampleCount(level.sampleTimes, latestTemporalReveal.current?.timestamp)");
+    expect(css).toContain("stroke-dasharray: none;");
   });
 
   it("degrades renderer construction failures without escaping the scene effect", () => {

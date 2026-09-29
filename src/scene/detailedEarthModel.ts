@@ -3,11 +3,12 @@ import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
 import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
 import {
   buildRecordedTrackLodLevels,
+  recordedTrackSampleTimes,
+  recordedTrackVisibleSampleCount,
   resolveJourneyRouteSegmentProvenance,
   selectRecordedTrackLodLevel,
 } from "../journey/journeyModel";
 import {
-  recordedRouteTemporalProgress,
   resolveRoutePointPresentation,
   type RoutePointSelection,
   type RouteTemporalReveal,
@@ -178,44 +179,17 @@ function recordedTrackGeometryRevision(
   return (hash >>> 0).toString(36);
 }
 
-function temporallyVisibleRecordedTrackSegments(
-  route: JourneyRoute,
-  temporalReveal: RouteTemporalReveal,
-): NonNullable<JourneyRoute["recordedTrackSegments"]> {
-  const segments = route.recordedTrackSegments ?? [];
-  if (!temporalReveal) return segments;
-
-  // Detailed and Particle Earth share this exact time-cursor projection. A
-  // renderer may choose slicing vs dash reveal, but neither may reveal a future
-  // recorded segment merely because the Journey group itself is already shown.
-  const progress = recordedRouteTemporalProgress(
-    route.id,
-    route.points.length,
-    temporalReveal,
-  );
-  if (progress >= 1) return segments;
-  if (!(progress > 0)) return [];
-
-  // Preserve server segment boundaries: reveal samples in canonical order, but
-  // never bridge a gap merely to draw a partial track.
-  const totalPoints = segments.reduce((total, segment) => total + segment.points.length, 0);
-  let remaining = Math.max(1, Math.ceil(totalPoints * progress));
-  return segments.flatMap((segment) => {
-    if (remaining <= 0) return [];
-    const count = Math.min(segment.points.length, remaining);
-    remaining -= count;
-    if (count < 2) return [];
-    return [{ ...segment, points: segment.points.slice(0, count) }];
-  });
-}
-
 function normalizeLongitude(longitude: number) {
   return ((((longitude + 180) % 360) + 360) % 360) - 180;
 }
 
+const recordedTrackCoordinateCache = new WeakMap<readonly { lat: number; lon: number }[], Array<[number, number]>>();
+
 function recordedTrackCoordinates(
   points: readonly { lat: number; lon: number }[],
 ): Array<[number, number]> {
+  const cached = recordedTrackCoordinateCache.get(points);
+  if (cached) return cached;
   const coordinates: Array<[number, number]> = [];
   let previousLongitude: number | null = null;
   for (const point of points) {
@@ -228,6 +202,7 @@ function recordedTrackCoordinates(
     coordinates.push([longitude, point.lat]);
     previousLongitude = longitude;
   }
+  recordedTrackCoordinateCache.set(points, coordinates);
   return coordinates;
 }
 
@@ -341,7 +316,7 @@ export function buildDetailedEarthJourneyOverlay({
   });
   const features: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>["features"] = [];
   const recordedTrackLods: DetailedEarthRecordedTrackLod[] = [];
-  const visibleRecordedTrackSegments = temporallyVisibleRecordedTrackSegments(route, temporalReveal);
+  const recordedSegments = route.recordedTrackSegments ?? [];
 
   for (const record of records) {
     if (!record.valid || !record.presentation.temporalVisible) continue;
@@ -407,13 +382,21 @@ export function buildDetailedEarthJourneyOverlay({
     });
   }
 
-  for (const segment of visibleRecordedTrackSegments) {
-    const validPoints = segment.points.filter((point) => (
-      Number.isFinite(point.lat) && Number.isFinite(point.lon)
-    ));
+  for (const segment of recordedSegments) {
+    const canonicalLevels = buildRecordedTrackLodLevels(segment.points);
+    const reliableTime = recordedTrackSampleTimes(segment.points) !== null;
+    // Clip precomputed levels at actual sampled instants. Simplification never
+    // runs again on a cursor-dependent prefix and cannot join independent gaps.
+    const levels = reliableTime && temporalReveal?.timestamp !== undefined
+      ? canonicalLevels.map((level) => {
+          const times = recordedTrackSampleTimes(level.points);
+          const count = times ? recordedTrackVisibleSampleCount(times, temporalReveal.timestamp) : level.points.length;
+          return { ...level, points: level.points.slice(0, count) };
+        }).filter((level) => level.points.length >= 2)
+      : canonicalLevels;
+    const validPoints = levels[0]?.points ?? [];
     if (validPoints.length < 2) continue;
     const featureId = `${route.id}:recorded:${segment.id}`;
-    const levels = buildRecordedTrackLodLevels(validPoints);
     const coordinates = recordedTrackCoordinates(levels[0]?.points ?? validPoints);
     if (coordinates.length < 2) continue;
     recordedTrackLods.push({ featureId, levels });
@@ -439,10 +422,10 @@ export function buildDetailedEarthJourneyOverlay({
     segmentProvenance: Array.from({ length: Math.max(0, route.points.length - 1) }, (_, index) => (
       resolveJourneyRouteSegmentProvenance(route, index)
     )),
-    recordedTrackSegments: visibleRecordedTrackSegments.map((segment) => ({
-      id: segment.id,
-      pointCount: segment.points.length,
-      geometryRevision: recordedTrackGeometryRevision(segment.points),
+    recordedTrackSegments: recordedTrackLods.map((track) => ({
+      id: track.featureId,
+      pointCount: track.levels[0]?.points.length ?? 0,
+      geometryRevision: recordedTrackGeometryRevision(track.levels[0]?.points ?? []),
     })),
     points: records.map(({ point, pointIndex, presentation, valid }) => ({
       id: point.id ?? null,
