@@ -72,7 +72,9 @@ describe("auth form state machine", () => {
     const form = auth.slice(auth.indexOf("function AuthForm"), auth.indexOf("const RESET_PASSWORD_MESSAGES"));
     expect(form.match(/withAuthRequestBoundary\(/g)).toHaveLength(5);
     expect(form.match(/signal: controller\.signal/g)).toHaveLength(5);
-    expect(form).toContain(">取消等待</button>");
+    expect(form).toContain('type={pending ? "button" : "submit"}');
+    expect(form).toContain('onClick={pending ? cancelPendingRequest : undefined}');
+    expect(form).toContain('{pending ? "取消等待"');
   });
 
   it("maps an unverified-email refusal to verification recovery", () => {

@@ -419,29 +419,30 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
             <input required type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
           {mode !== "forgot" ? (
-            <>
+            <div className="auth-password-field">
               <label>
                 <span>密码</span>
                 <input required minLength={10} maxLength={128} type={passwordVisible ? "text" : "password"} autoComplete={mode === "sign-up" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} />
               </label>
               <button
-                className="auth-link"
+                className="auth-password-toggle"
                 type="button"
                 aria-pressed={passwordVisible}
                 aria-label={passwordVisible ? "隐藏密码" : "显示密码"}
                 onClick={() => setPasswordVisible((visible) => !visible)}
               >
-                {passwordVisible ? "隐藏密码" : "显示密码"}
+                {passwordVisible ? "隐藏" : "显示"}
               </button>
-            </>
+            </div>
           ) : null}
-          <button className="auth-primary" type="submit" disabled={pending}>
+          <button
+            className="auth-primary"
+            type={pending ? "button" : "submit"}
+            onClick={pending ? cancelPendingRequest : undefined}
+          >
             {pending ? <StartripsJourneyCue state="waiting" size={26} /> : null}
-            {pending ? "请稍候…" : mode === "sign-in" ? "登录" : mode === "sign-up" ? "注册并验证邮箱" : "发送重置链接"}
+            {pending ? "取消等待" : mode === "sign-in" ? "登录" : mode === "sign-up" ? "注册并验证邮箱" : "发送重置链接"}
           </button>
-          {pending ? (
-            <button className="auth-link" type="button" onClick={cancelPendingRequest}>取消等待</button>
-          ) : null}
         </form>
 
         {mode !== "forgot" && signInProviders.includes("google") ? (
