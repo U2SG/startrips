@@ -550,9 +550,6 @@ export function JourneyStory({
   // and C waits for a read. Close/Back must return from B's observation.
   const foregroundMediaIdRef = useRef<string | null>(initialMediaSelection.assetId);
   const quickRecapFullActionRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
-    if (quickRecap?.state === "over-budget") quickRecapFullActionRef.current?.focus();
-  }, [quickRecap?.state]);
   const [assetIndex, setAssetIndex] = useState(initialMediaSelection.assetIndex);
   const [selectedRoutePointId, setSelectedRoutePointId] = useState<string | null>(
     initialMediaSelection.routePointId,
@@ -655,6 +652,16 @@ export function JourneyStory({
   const playingRef = useRef(false);
   playingRef.current = playing;
   const mobileLayout = useCompactMobileLayout();
+  useEffect(() => {
+    if (quickRecap?.state !== "over-budget") return;
+    const action = quickRecapFullActionRef.current;
+    // Touch activation runs on pointerup. Its native compatibility-click focus
+    // completes after that commit, so hand focus to the new action next frame.
+    const frame = window.requestAnimationFrame(() => {
+      if (action?.isConnected) action.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [quickRecap?.state, mobileLayout]);
   const [mobileStoryExpanded, setMobileStoryExpanded] = useState(initialSnapState === "expanded");
   const [mobileStoryCoverTransitionActive, setMobileStoryCoverTransitionActive] = useState(false);
   const storySheetGestureRef = useRef<{ startY: number; pointerId: number } | null>(null);
