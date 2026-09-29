@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { AUTH_FORM_STATUSES, authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, createAuthFormState } from "./authFormState";
+import { AUTH_FORM_STATUSES, authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, createAuthFormState, withAuthRequestBoundary } from "./authFormState";
 
 
 describe("auth form state machine", () => {
@@ -53,6 +53,28 @@ describe("auth form state machine", () => {
     }
   });
 
+  it("terminates a stalled request at its deadline", async () => {
+    const stalled = new Promise<never>(() => undefined);
+    await expect(withAuthRequestBoundary(stalled, new AbortController(), 1))
+      .rejects.toMatchObject({ name: "TimeoutError" });
+  });
+
+  it("terminates a stalled request when the user cancels", async () => {
+    const controller = new AbortController();
+    const stalled = new Promise<never>(() => undefined);
+    const bounded = withAuthRequestBoundary(stalled, controller, 10_000);
+    controller.abort();
+    await expect(bounded).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("bounds every AuthForm request and exposes cancellation", () => {
+    const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
+    const form = auth.slice(auth.indexOf("function AuthForm"), auth.indexOf("const RESET_PASSWORD_MESSAGES"));
+    expect(form.match(/withAuthRequestBoundary\(/g)).toHaveLength(5);
+    expect(form.match(/signal: controller\.signal/g)).toHaveLength(5);
+    expect(form).toContain(">取消等待</button>");
+  });
+
   it("maps an unverified-email refusal to verification recovery", () => {
     const started = authFormReducer(createAuthFormState(), { type: "submit" });
     const code = ["EMAIL", "NOT", "VERIFIED"].join("_");
@@ -75,10 +97,12 @@ describe("auth form state machine", () => {
     expect(limited.verificationEmail).toBe("a@b.test");
   });
 
-  it("keeps the password field out of URL, logs, and persistent browser storage", () => {
+  it("keeps the password field private while providing an explicit visibility toggle", () => {
     const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
     const form = auth.slice(auth.indexOf("function AuthForm"), auth.indexOf("const RESET_PASSWORD_MESSAGES"));
-    expect(form).toContain('type="password"');
+    expect(form).toContain('const [passwordVisible, setPasswordVisible] = useState(false)');
+    expect(form).toContain('type={passwordVisible ? "text" : "password"}');
+    expect(form).toContain('aria-label={passwordVisible ? "隐藏密码" : "显示密码"}');
     expect(form).not.toContain("console.");
     expect(form).not.toContain("localStorage");
     expect(form).not.toContain("sessionStorage");

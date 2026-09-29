@@ -61,7 +61,7 @@ import {
   useEarthExperiencePreference,
 } from "../journey/EarthExperienceProvider";
 import { authClient } from "./auth-client";
-import { authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, createAuthFormState, type AuthFormEvent, type AuthFormState } from "./authFormState";
+import { authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, createAuthFormState, withAuthRequestBoundary, type AuthFormEvent, type AuthFormState } from "./authFormState";
 import { resolvePasswordResetOutcome, type PasswordResetOutcome } from "./passwordResetOutcome";
 
 type OrganizationSummary = {
@@ -189,6 +189,8 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const authRequestAbortRef = useRef<{ requestId: number; controller: AbortController } | null>(null);
   const { mode, message, tone: messageTone } = formState;
   const pending = formState.status === "submitting";
 
@@ -209,6 +211,27 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
     setFormState(next);
     return next;
   }
+
+  function startRequestBoundary(requestId: number): AbortController {
+    const controller = new AbortController();
+    authRequestAbortRef.current = { requestId, controller };
+    return controller;
+  }
+
+  function clearRequestBoundary(requestId: number) {
+    if (authRequestAbortRef.current?.requestId === requestId) authRequestAbortRef.current = null;
+  }
+
+  function cancelPendingRequest() {
+    const active = authRequestAbortRef.current;
+    if (!active || formStateRef.current.status !== "submitting" || active.requestId !== formStateRef.current.requestId) return;
+    active.controller.abort();
+  }
+
+  useEffect(() => () => {
+    authRequestAbortRef.current?.controller.abort();
+  }, []);
+
   // #349: which providers this deployment configured. An unconfigured one is
   // absent from the server entirely, so the button simply never renders --
   // there is no disabled placeholder promising a sign-in that cannot happen.
@@ -219,6 +242,7 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   function changeMode(nextMode: "sign-in" | "sign-up" | "forgot") {
     if (nextMode === mode) return;
     setPassword("");
+    setPasswordVisible(false);
     transition({ type: "switch-mode", mode: nextMode });
   }
 
@@ -249,13 +273,14 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   async function signInWithProvider(providerId: "google", requestSignUp: boolean) {
     const started = beginSubmission();
     if (!started) return;
+    const controller = startRequestBoundary(started.requestId);
     try {
-      const result = await authClient.signIn.social({
+      const result = await withAuthRequestBoundary(authClient.signIn.social({
         provider: providerId,
         callbackURL: "/",
         errorCallbackURL: "/",
         requestSignUp,
-      });
+      }, { signal: controller.signal }), controller);
       // A successful call navigates away; only a refusal returns here.
       if (result.error) {
         transition(authProviderErrorEvent(
@@ -266,6 +291,8 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
       }
     } catch (error) {
       transition(authExceptionEvent(started.requestId, error));
+    } finally {
+      clearRequestBoundary(started.requestId);
     }
   }
 
@@ -276,12 +303,13 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
     const requestId = started.requestId;
     const requestMode = started.mode;
     const normalizedEmail = email.trim();
+    const controller = startRequestBoundary(requestId);
     try {
       if (requestMode === "forgot") {
-        const result = await authClient.requestPasswordReset({
+        const result = await withAuthRequestBoundary(authClient.requestPasswordReset({
           email: normalizedEmail,
           redirectTo: `${window.location.origin}/reset-password`,
-        });
+        }, { signal: controller.signal }), controller);
         if (result.error) {
           transition(authServiceErrorEvent(requestId, result.error, normalizedEmail));
           return;
@@ -295,12 +323,12 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
       }
 
       if (requestMode === "sign-up") {
-        const result = await authClient.signUp.email({
+        const result = await withAuthRequestBoundary(authClient.signUp.email({
           name: name.trim(),
           email: normalizedEmail,
           password,
           callbackURL: window.location.href,
-        });
+        }, { signal: controller.signal }), controller);
         if (result.error) {
           transition(authServiceErrorEvent(requestId, result.error, normalizedEmail));
           return;
@@ -309,11 +337,11 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
         return;
       }
 
-      const result = await authClient.signIn.email({
+      const result = await withAuthRequestBoundary(authClient.signIn.email({
         email: normalizedEmail,
         password,
         callbackURL: window.location.href,
-      });
+      }, { signal: controller.signal }), controller);
       if (result.error) {
         transition(authServiceErrorEvent(requestId, result.error, normalizedEmail));
         return;
@@ -322,6 +350,8 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
       if (authenticated.status === "authenticated" && authenticated.requestId === requestId) onAuthenticated();
     } catch (error) {
       transition(authExceptionEvent(requestId, error));
+    } finally {
+      clearRequestBoundary(requestId);
     }
   }
 
@@ -330,11 +360,12 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
     if (!verificationEmail) return;
     const started = beginSubmission();
     if (!started) return;
+    const controller = startRequestBoundary(started.requestId);
     try {
-      const result = await authClient.sendVerificationEmail({
+      const result = await withAuthRequestBoundary(authClient.sendVerificationEmail({
         email: verificationEmail,
         callbackURL: window.location.href,
-      });
+      }, { signal: controller.signal }), controller);
       if (result.error) {
         transition(authServiceErrorEvent(started.requestId, result.error, verificationEmail));
         return;
@@ -342,6 +373,8 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
       transition({ type: "email-sent", requestId: started.requestId, message: "验证邮件已重新发送，请留意收件箱。" });
     } catch (error) {
       transition(authExceptionEvent(started.requestId, error));
+    } finally {
+      clearRequestBoundary(started.requestId);
     }
   }
 
@@ -386,15 +419,29 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
             <input required type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
           {mode !== "forgot" ? (
-            <label>
-              <span>密码</span>
-              <input required minLength={10} maxLength={128} type="password" autoComplete={mode === "sign-up" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} />
-            </label>
+            <>
+              <label>
+                <span>密码</span>
+                <input required minLength={10} maxLength={128} type={passwordVisible ? "text" : "password"} autoComplete={mode === "sign-up" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} />
+              </label>
+              <button
+                className="auth-link"
+                type="button"
+                aria-pressed={passwordVisible}
+                aria-label={passwordVisible ? "隐藏密码" : "显示密码"}
+                onClick={() => setPasswordVisible((visible) => !visible)}
+              >
+                {passwordVisible ? "隐藏密码" : "显示密码"}
+              </button>
+            </>
           ) : null}
           <button className="auth-primary" type="submit" disabled={pending}>
             {pending ? <StartripsJourneyCue state="waiting" size={26} /> : null}
             {pending ? "请稍候…" : mode === "sign-in" ? "登录" : mode === "sign-up" ? "注册并验证邮箱" : "发送重置链接"}
           </button>
+          {pending ? (
+            <button className="auth-link" type="button" onClick={cancelPendingRequest}>取消等待</button>
+          ) : null}
         </form>
 
         {mode !== "forgot" && signInProviders.includes("google") ? (

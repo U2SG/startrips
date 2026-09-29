@@ -40,6 +40,55 @@ export type AuthServiceError = {
   statusCode?: number | null;
 };
 
+export const AUTH_REQUEST_DEADLINE_MS = 15_000;
+
+function authRequestBoundaryError(name: "AbortError" | "TimeoutError"): Error {
+  const error = new Error(name === "AbortError" ? "Authentication request cancelled" : "Authentication request timed out");
+  error.name = name;
+  return error;
+}
+
+export function withAuthRequestBoundary<T>(
+  request: Promise<T>,
+  controller: AbortController,
+  timeoutMs = AUTH_REQUEST_DEADLINE_MS,
+): Promise<T> {
+  const { signal } = controller;
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(authRequestBoundaryError("AbortError"));
+      return;
+    }
+
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback();
+    };
+    const onAbort = () => settle(() => reject(authRequestBoundaryError("AbortError")));
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    timeout = setTimeout(
+      () => settle(() => {
+        controller.abort();
+        reject(authRequestBoundaryError("TimeoutError"));
+      }),
+      Math.max(1, timeoutMs),
+    );
+    request.then(
+      (value) => settle(() => resolve(value)),
+      (error) => settle(() => reject(error)),
+    );
+  });
+}
+
 export function createAuthFormState(mode: AuthFormMode = "sign-in"): AuthFormState {
   return { mode, status: "idle", message: "", tone: "error", requestId: 0, verificationEmail: null };
 }

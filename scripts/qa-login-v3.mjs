@@ -290,7 +290,12 @@ async function createGatewayPage({
 
 async function submitGatewayLogin(gatewayPage) {
   await gatewayPage.locator('input[type="email"]').fill("qa@example.com");
-  await gatewayPage.locator('input[type="password"]').fill("password1234");
+  const passwordInput = gatewayPage.locator('input[autocomplete="current-password"]');
+  await passwordInput.fill("password1234");
+  await gatewayPage.getByRole("button", { name: "显示密码", exact: true }).click();
+  if (await passwordInput.getAttribute("type") !== "text") throw new Error("password visibility toggle did not reveal the field");
+  await gatewayPage.getByRole("button", { name: "隐藏密码", exact: true }).click();
+  if (await passwordInput.getAttribute("type") !== "password") throw new Error("password visibility toggle did not restore masking");
   await gatewayPage.getByRole("button", { name: "登录", exact: true }).click();
 }
 
