@@ -4,6 +4,7 @@ import {
   createJourneyForAtlas,
   getJourneyForAtlas,
   JourneyRouteChangedError,
+  JourneyRoutePointIdConflictError,
   listJourneysForAtlas,
   restoreJourneyForAtlas,
   setJourneyCoverForAtlas,
@@ -258,13 +259,24 @@ journeyRoutes.post("/", async (context) => {
       400,
     );
   }
-  if (input.revision !== undefined || input.routePoints.some((point) => point.id)) {
+  if (input.revision !== undefined) {
     return context.json(
-      { error: "INVALID_JOURNEY", message: "New journey points cannot have ids" },
+      { error: "INVALID_JOURNEY", message: "New journeys cannot have a revision" },
       400,
     );
   }
-  const journey = await createJourneyForAtlas(atlas.id, session.user.id, input);
+  let journey;
+  try {
+    journey = await createJourneyForAtlas(atlas.id, session.user.id, input);
+  } catch (error) {
+    if (error instanceof JourneyRoutePointIdConflictError) {
+      return context.json(
+        { error: "JOURNEY_ROUTE_POINT_ID_CONFLICT", message: "Route Point id is already in use; reopen the composer and try again" },
+        409,
+      );
+    }
+    throw error;
+  }
   if (!journey) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);
   return context.json({ journey }, 201);
 });

@@ -365,7 +365,13 @@ export function validateJourneyInput(input: JourneyInput): ValidationResult {
       errors.push(`路线点 ${index + 1} 的停留归属已失效，请重新选择`);
       return;
     }
-    const previousStop = input.routePoints.slice(0, index).findLast((candidate) => candidate.isStop);
+    let previousStop: JourneyInput["routePoints"][number] | undefined;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (input.routePoints[cursor]?.isStop) {
+        previousStop = input.routePoints[cursor];
+        break;
+      }
+    }
     const nextStop = input.routePoints.slice(index + 1).find((candidate) => candidate.isStop);
     if (anchorId !== previousStop?.id && anchorId !== nextStop?.id) {
       errors.push(`路线点 ${index + 1} 的停留归属因顺序变化需要重新确认`);

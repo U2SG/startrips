@@ -233,7 +233,7 @@ try {
         const row02 = run.page.locator(`[data-route-point-draft-id="${draft02}"]`);
         const locate02State = {
           note: await row02.locator("textarea").inputValue(),
-          isStop: await row02.locator('.journey-checkbox input[type="checkbox"]').isChecked(),
+          isStop: await row02.locator(".journey-route-draft__stop-toggle").getAttribute("aria-pressed") === "true",
           media: await row02.locator(".journey-route-draft__media-association small").textContent(),
         };
         record("composer-route-points:locate-record-02", { draft02, locate02State },
@@ -248,7 +248,7 @@ try {
         const row07 = run.page.locator(`[data-route-point-draft-id="${draft07}"]`);
         const locate07State = {
           note: await row07.locator("textarea").inputValue(),
-          isStop: await row07.locator('.journey-checkbox input[type="checkbox"]').isChecked(),
+          isStop: await row07.locator(".journey-route-draft__stop-toggle").getAttribute("aria-pressed") === "true",
           media: await row07.locator(".journey-route-draft__media-association small").textContent(),
         };
         record("composer-route-points:locate-record-07", { draft07, locate07State },
@@ -356,7 +356,7 @@ try {
           // through its stable identity instead of assuming it is the only input.
           name: await expanded.locator('[data-route-point-label-input]').inputValue(),
           note: await expanded.locator("textarea").inputValue(),
-          hasStop: await expanded.locator('.journey-checkbox input[type="checkbox"]').count() === 1,
+          hasStop: await expanded.locator(".journey-route-draft__stop-toggle").count() === 1,
           hasCoordinates: await expanded.locator(".journey-route-draft__coordinates code").count() === 1,
           mediaCount: Number(await expanded.locator(".journey-route-draft__media-association").getAttribute("data-route-point-media-count")),
           mediaText: await expanded.locator(".journey-route-draft__media-association small").textContent(),

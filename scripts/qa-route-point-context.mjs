@@ -1421,6 +1421,7 @@ try {
       const childButtons = [...document.querySelectorAll("[data-stay-route-point]")];
       const box = context?.getBoundingClientRect();
       const headerBox = document.querySelector(".mobile-v2__header")?.getBoundingClientRect();
+      const chromeBox = document.querySelector(".mobile-v2__chrome")?.getBoundingClientRect();
       const scrubberBox = document.querySelector(".globe-time-scrubber")?.getBoundingClientRect();
       const overlaps = (a, b) => Boolean(a && b
         && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top);
@@ -1428,6 +1429,7 @@ try {
         viewport: { width: innerWidth, height: innerHeight },
         context: box ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom } : null,
         header: rect(".mobile-v2__header"),
+        chrome: rect(".mobile-v2__chrome"),
         scrubber: rect(".globe-time-scrubber"),
         detail: detail instanceof HTMLElement
           ? { clientHeight: detail.clientHeight, scrollHeight: detail.scrollHeight, scrollTop: detail.scrollTop }
@@ -1438,6 +1440,7 @@ try {
         story: rect(".living-atlas__route-point-context-entry"),
         pageScrollY: scrollY,
         overlapsHeader: overlaps(box, headerBox),
+        overlapsChrome: overlaps(box, chromeBox),
         overlapsScrubber: overlaps(box, scrubberBox),
       };
     });
@@ -1452,6 +1455,7 @@ try {
       && expanded.context.right <= expanded.viewport.width
       && expanded.context.bottom <= expanded.viewport.height
       && !expanded.overlapsHeader
+      && !expanded.overlapsChrome
       && !expanded.overlapsScrubber
       && expanded.childCount >= 8
       && expanded.childHeights.every((height) => height >= 44)

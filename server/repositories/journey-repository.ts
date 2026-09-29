@@ -46,6 +46,13 @@ export class JourneyRouteChangedError extends Error {
   }
 }
 
+export class JourneyRoutePointIdConflictError extends Error {
+  constructor() {
+    super("A supplied Route Point id is already in use");
+    this.name = "JourneyRoutePointIdConflictError";
+  }
+}
+
 export const JOURNEY_DELETION_GRACE_MS = 7 * 24 * 60 * 60 * 1_000;
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -179,6 +186,20 @@ export async function createJourneyForAtlas(
 ) {
   const journeyId = await db.transaction(async (transaction) => {
     if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
+
+    // #514/ST-164: the Composer may allocate UUIDs before the first save so an
+    // unsaved child can point at an exact unsaved Stop in the same POST. Keep
+    // those stable ids, but fail closed if any client-supplied id is already a
+    // persisted Route Point anywhere rather than surfacing a PK error or
+    // accidentally binding ownership to somebody else's record.
+    const providedIds = values.routePoints.flatMap((point) => point.id ? [point.id] : []);
+    if (providedIds.length > 0) {
+      const collidingPoints = await transaction
+        .select({ id: journeyRoutePoints.id })
+        .from(journeyRoutePoints)
+        .where(inArray(journeyRoutePoints.id, providedIds));
+      if (collidingPoints.length > 0) throw new JourneyRoutePointIdConflictError();
+    }
 
     const [journey] = await transaction
       .insert(journeys)

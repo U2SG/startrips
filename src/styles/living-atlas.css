@@ -5915,8 +5915,12 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 @media (orientation: landscape) and (max-height: 520px) {
   .living-atlas[data-mobile-v2="on"] .living-atlas__route-point-context {
-    bottom: calc(env(safe-area-inset-bottom) + 88px);
-    max-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 104px);
+    /* Short landscape has two persistent chrome bands: the 56px header and
+       the 118px journey/timeline dock. Give both real geometry instead of
+       overlapping the lower dock and trying to win the pointer with z-index. */
+    top: calc(env(safe-area-inset-top) + 64px);
+    bottom: calc(env(safe-area-inset-bottom) + 136px);
+    max-height: none;
     padding-block: 12px;
   }
 

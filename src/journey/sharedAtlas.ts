@@ -40,6 +40,7 @@ export type SharedRoutePoint = {
   isStop: boolean;
   occurredAt: string | null;
   note: string | null;
+  stayAnchorRoutePointId?: string | null;
 };
 
 export type SharedJourneyMedia = {

@@ -1675,6 +1675,64 @@ describe("tenant-scoped journey repository", () => {
     })).rejects.toBeInstanceOf(JourneyRouteChangedError);
   });
 
+  it("POSTs a new Journey with client-stable Stop ownership and rejects cross-Journey id collisions (#514)", async () => {
+    const identity = await createAuthenticatedAtlas("StableRouteCreate");
+    const stopId = randomUUID();
+    const childId = randomUUID();
+    const routePoints = [
+      {
+        ...baseJourney.routePoints[0],
+        id: stopId,
+        label: "Created stop",
+        isStop: true,
+      },
+      {
+        ...baseJourney.routePoints[1],
+        id: childId,
+        label: "Created via",
+        isStop: false,
+        stayAnchorRoutePointId: stopId,
+      },
+    ];
+    const created = await app.request(
+      `${TEST_ORIGIN}/api/journeys`,
+      {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify({ ...baseJourney, title: "Stable owned create", routePoints }),
+      },
+    );
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({
+      journey: {
+        routePoints: [
+          { id: stopId, isStop: true },
+          { id: childId, isStop: false, stayAnchorRoutePointId: stopId },
+        ],
+      },
+    });
+
+    const collision = await app.request(
+      `${TEST_ORIGIN}/api/journeys`,
+      {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify({
+          ...baseJourney,
+          title: "Stable id collision",
+          routePoints: [
+            routePoints[0],
+            { ...routePoints[1], id: randomUUID() },
+          ],
+        }),
+      },
+    );
+    expect(collision.status).toBe(409);
+    await expect(collision.json()).resolves.toMatchObject({
+      error: "JOURNEY_ROUTE_POINT_ID_CONFLICT",
+    });
+  });
+
   it("accepts a client-stable id for a new Stop so a child can persist exact ownership (#514)", async () => {
     const created = await createJourneyForAtlas(atlasA, "user-a", {
       ...baseJourney,
