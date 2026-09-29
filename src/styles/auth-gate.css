@@ -285,6 +285,37 @@
   gap: 7px;
 }
 
+.auth-password-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  gap: 8px;
+  align-items: end;
+}
+
+.auth-password-field label {
+  min-width: 0;
+}
+
+.auth-password-toggle {
+  min-width: 56px;
+  min-height: 44px;
+  border: 0;
+  padding: 0 10px;
+  color: #8f9c97;
+  background: transparent;
+  cursor: pointer;
+  font: 500 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.auth-password-toggle:hover {
+  color: #d0d8d4;
+}
+
+.auth-password-toggle:focus-visible {
+  outline: 1px solid rgba(232, 200, 122, 0.72);
+  outline-offset: -3px;
+}
+
 .auth-card input,
 .auth-card textarea {
   width: 100%;
@@ -299,6 +330,11 @@
   font: inherit;
   outline: none;
   transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.auth-card--login-v3 input,
+.auth-card--login-v3 textarea {
+  min-height: 44px;
 }
 
 .auth-card textarea {

@@ -14,7 +14,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { MobileAccountActionSlot, useAtlasCinematicIsolation } from "../auth/AuthGateway";
-import { useAtlasView, type AtlasMediaRead } from "./atlasView";
+import { isReadOnlyAtlasView, useAtlasView, type AtlasMediaRead } from "./atlasView";
 import { useCoverRevealOpening, type CoverRevealOpening } from "./useCoverRevealOpening";
 import { StartripsBrandLoader, StartripsWordmark } from "../brand/StartripsBrandMark";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
@@ -1088,6 +1088,7 @@ export function LivingAtlasApp({
     mutations,
     everydayFragments,
   } = useAtlasView();
+  const quickRecapAvailable = !isReadOnlyAtlasView(capabilities);
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
   // #200 phase E. Both halves must hold: the capability decides the affordance
   // exists, `mutations` decides a client capable of the call exists. In shared
@@ -3489,7 +3490,6 @@ export function LivingAtlasApp({
                       onClick={() => startPlayback(
                         activeJourney.id,
                         "full",
-                        "快速回顾无法容纳所有必要的旅程点，已按你的选择开始完整播放。",
                       )}
                     >
                       <strong>完整播放</strong><span>保留全部媒体与章节</span>
@@ -3497,13 +3497,13 @@ export function LivingAtlasApp({
                   </>
                 ) : (
                   <>
-                    <button
+                    {quickRecapAvailable ? <button
                       type="button"
                       data-playback-mode-option="quick-recap"
                       onClick={() => startPlayback(activeJourney.id, "quick-recap")}
                     >
                       <strong>快速回顾</strong><span>约 45 秒 · 照片优先</span>
-                    </button>
+                    </button> : null}
                     <button
                       type="button"
                       data-playback-mode-option="full"
@@ -4142,7 +4142,7 @@ export function LivingAtlasApp({
           onObservationChange={handleStoryObservationChange}
           onGlobeCoverChange={setStoryGlobeCover}
           onClose={(source) => closeJourneyStory(source ?? null)}
-          quickRecap={{
+          quickRecap={quickRecapAvailable ? {
             state: playbackOverBudgetChoiceIsCurrent
               && playbackOverBudgetChoice?.journeyId === storyJourneyId ? "over-budget"
               : playbackPendingMode?.journeyId === storyJourneyId
@@ -4159,10 +4159,9 @@ export function LivingAtlasApp({
               startPlayback(storyJourneyId, pending?.mode ?? "quick-recap",
                 pending?.fallbackMessage ?? null);
             },
-            onFullPlayback: () => startPlayback(storyJourneyId, "full",
-              "快速回顾无法容纳所有必要的旅程点，已按你的选择开始完整播放。"),
+            onFullPlayback: () => startPlayback(storyJourneyId, "full"),
             onCancel: () => cancelStoryPlaybackPreparation(storyJourneyId),
-          }}
+          } : undefined}
           onNavigate={(id) => {
             claimPlaybackReturnIntent();
             timeCursor.selectJourney(id);
