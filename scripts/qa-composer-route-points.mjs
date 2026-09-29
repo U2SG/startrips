@@ -238,6 +238,73 @@ try {
           });
         });
 
+        let savedJourneyRequest = null;
+        await run.page.route("**/api/journeys/00000000-0000-4000-8000-000000000001", async (route) => {
+          const request = route.request();
+          if (request.method() !== "PATCH") {
+            await route.fallback();
+            return;
+          }
+          const submitted = request.postDataJSON();
+          savedJourneyRequest = submitted;
+          const journeyId = "00000000-0000-4000-8000-000000000001";
+          const createdAt = "2026-08-11T00:00:00.000Z";
+          const routePoints = submitted.routePoints.map((point, index) => ({
+            ...point,
+            id: point.id ?? `00000000-0000-4000-8000-${String(index + 900).padStart(12, "0")}`,
+            journeyId,
+            sortOrder: index,
+            occurredAt: point.occurredAt ?? null,
+            note: point.note ?? null,
+            regionContext: point.regionContext ?? null,
+            placeRole: point.placeRole ?? null,
+            overviewVisibility: point.overviewVisibility ?? null,
+            stayAnchorRoutePointId: point.stayAnchorRoutePointId ?? null,
+            createdAt,
+          }));
+          const mediaRoutePointIds = [
+            "00000000-0000-4000-8000-000000000022",
+            "00000000-0000-4000-8000-000000000021",
+            "00000000-0000-4000-8000-000000000026",
+          ];
+          const media = mediaRoutePointIds.map((routePointId, index) => ({
+            id: `00000000-0000-4000-8000-00000000010${index}`,
+            journeyId,
+            routePointId,
+            storageDriver: "qa",
+            storageKey: `qa/story-seed-${index}`,
+            fileName: `seed-${index}.png`,
+            mimeType: "image/png",
+            bytes: 68,
+            sortOrder: index,
+            uploadedByUserId: "00000000-0000-4000-8000-000000000003",
+            createdAt,
+          }));
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              journey: {
+                id: journeyId,
+                atlasId: "00000000-0000-4000-8000-000000000002",
+                title: submitted.title,
+                startedOn: submitted.startedOn,
+                endedOn: submitted.endedOn,
+                note: submitted.note,
+                lightColor: submitted.lightColor,
+                lightEffect: submitted.lightEffect ?? null,
+                coverMediaAssetId: null,
+                revision: (submitted.revision ?? 1) + 1,
+                createdByUserId: "00000000-0000-4000-8000-000000000003",
+                createdAt,
+                updatedAt: "2026-09-29T00:00:00.000Z",
+                routePoints,
+                media,
+              },
+            }),
+          });
+        });
+
         const persistenceRequests = [];
         run.page.on("request", (request) => {
           const url = new URL(request.url());
@@ -519,6 +586,47 @@ try {
           && Number.isFinite(scrollGeometry.footerTop)
           && scrollGeometry.summaryTop >= 0
           && scrollGeometry.summaryBottom <= scrollGeometry.footerTop + 1);
+
+        const stopId = "00000000-0000-4000-8000-000000000020";
+        const childId = "00000000-0000-4000-8000-000000000021";
+        const childMediaId = "00000000-0000-4000-8000-000000000101";
+        await run.page.getByRole("button", { name: "保存修改" }).click();
+        const projectionOutput = run.page.locator("[data-qa-composer-projection]");
+        await projectionOutput.waitFor({ state: "attached", timeout: 10_000 });
+        const projection = await projectionOutput.evaluate((node) => ({
+          overviewRoutePointIds: JSON.parse(node.getAttribute("data-overview-route-point-ids") ?? "[]"),
+          stays: JSON.parse(node.getAttribute("data-stays") ?? "[]"),
+          playback: JSON.parse(node.getAttribute("data-playback") ?? "[]"),
+        }));
+        const submittedChild = savedJourneyRequest?.routePoints?.find((point) => point.id === childId) ?? null;
+        const owningStay = projection.stays.find((stay) => stay.routePointIds.includes(childId)) ?? null;
+        const foldedMedia = projection.playback.find((step) => step.kind === "media" && step.assetId === childMediaId) ?? null;
+        const childIndependentMedia = projection.playback.find((step) => (
+          step.kind === "media" && step.routePointId === childId && step.assetId === childMediaId
+        )) ?? null;
+        const childStopBeat = projection.playback.find((step) => step.kind === "stop" && step.routePointId === childId) ?? null;
+        record("composer-route-points:ownership-persists-into-overview-and-playback", {
+          submittedChild,
+          overviewRoutePointIds: projection.overviewRoutePointIds,
+          owningStay,
+          foldedMedia,
+          childIndependentMedia,
+          childStopBeat,
+          persistenceRequests,
+        }, Boolean(
+          savedJourneyRequest
+          && persistenceRequests.some((request) => request.method === "PATCH")
+          && submittedChild?.stayAnchorRoutePointId === stopId
+          && projection.overviewRoutePointIds.includes(stopId)
+          && owningStay?.anchorRoutePointId === stopId
+          && owningStay.routePointIds.includes(stopId)
+          && owningStay.routePointIds.includes(childId)
+          && owningStay.mediaAssetIds.includes(childMediaId)
+          && foldedMedia?.routePointId === stopId
+          && foldedMedia?.assetRoutePointId === childId
+          && childIndependentMedia === null
+          && childStopBeat === null
+        ));
       }
     } finally {
       await run.context.close();

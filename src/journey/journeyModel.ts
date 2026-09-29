@@ -133,8 +133,10 @@ function normalizedRegionContext(value: string | null | undefined) {
 }
 
 function routePointCanRepresentStay(point: Journey["routePoints"][number]) {
-  if (!point.isStop) return false;
-  return point.placeRole !== "transport" && point.placeRole !== "pure-transit";
+  // #514/ST-164: `isStop` is the user's canonical journey-role choice. Import
+  // metadata such as `transport` / `pure-transit` is descriptive context only
+  // and must not override a later explicit promotion to Stop.
+  return point.isStop;
 }
 
 export function journeyOverviewRoutePointIds(

@@ -119,6 +119,27 @@ describe("journeyModel", () => {
     ]);
   });
 
+  it("treats an explicitly promoted Stop as a stay even when imported role metadata remains transit (#514)", () => {
+    const trip = journey("promoted-stop", "2026-08-11");
+    trip.routePoints = [{
+      id: "promoted",
+      journeyId: trip.id,
+      sortOrder: 0,
+      latitude: 22.54,
+      longitude: 114.05,
+      label: "Promoted stop",
+      isStop: true,
+      occurredAt: null,
+      regionContext: "深圳",
+      placeRole: "pure-transit",
+      createdAt: trip.createdAt,
+    }];
+
+    const summaries = deriveJourneyStaySummaries(trip);
+    expect(summaries.map((summary) => summary.routePointIds)).toEqual([["promoted"]]);
+    expect(journeyOverviewRoutePointIds(trip, summaries)).toEqual(["promoted"]);
+  });
+
   it("lets an explicit non-stop owner override heuristic stay grouping without changing route/media identity (#514)", () => {
     const trip = journey("owned", "2026-08-11");
     trip.routePoints = [
