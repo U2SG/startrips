@@ -125,6 +125,7 @@ export async function reviewItineraryLocations(
       .map((decision) => decision.index)
       .sort((left, right) => left - right);
     return decisions.map((decision) => {
+      if (decision.isStop === undefined && decision.stayAnchorIndex === undefined) return decision;
       if (decision.isStop === true) return { ...decision, stayAnchorIndex: null };
       const previous = stopIndexes.filter((index) => index < decision.index).at(-1);
       const next = stopIndexes.find((index) => index > decision.index);

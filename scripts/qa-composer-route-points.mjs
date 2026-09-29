@@ -263,6 +263,7 @@ async function verifyImportedJourney({ label, width, height, editing }) {
       && reviewedPlan.entries.length === 24 && mutations.length === 0);
     await mkdir("artifacts/composer-route-points", { recursive: true });
     await child.locator(".journey-itinerary-import__entry-details > summary").click();
+    await page.locator('[data-composer-scroll-owner="editor"]').evaluate((element) => { element.scrollTop = 0; });
     await page.screenshot({ path: `artifacts/composer-route-points/import-${label}.png` });
     await page.getByRole("button", { name: "添加 24 个地点到路线", exact: true }).click();
     await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
@@ -746,7 +747,7 @@ try {
           && expandedState.mediaText?.includes("seed-0.png"));
 
         await record03.getByRole("button", { name: "更多操作 Record 03" }).click();
-        await record03.getByRole("button", { name: "向前移动 Record 03" }).click();
+        await record03.getByRole("menuitem", { name: "向前移动 Record 03" }).click();
         await run.page.waitForFunction((draftId) => {
           const row = document.querySelector(`[data-route-point-draft-id="${draftId}"]`);
           return row?.getAttribute("data-route-point-position") === "2";
@@ -893,7 +894,7 @@ try {
     await reduced.page.keyboard.press("Enter");
     await record03.getByRole("button", { name: "更多操作 Record 03" }).focus();
     await reduced.page.keyboard.press("Enter");
-    await record03.getByRole("button", { name: "向前移动 Record 03" }).focus();
+    await record03.getByRole("menuitem", { name: "向前移动 Record 03" }).focus();
     await reduced.page.keyboard.press("Enter");
     await reduced.page.waitForFunction((id) => document.querySelector(`[data-route-point-draft-id="${id}"]`)?.getAttribute("data-route-point-position") === "2", draftId);
     const sample = await snapshotRows(reduced.page);

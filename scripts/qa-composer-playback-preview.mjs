@@ -90,7 +90,7 @@ try {
   const pointLabel = targetRow.locator('input[type="text"]').first();
   if (await pointLabel.count()) await pointLabel.fill("Unsaved Route Point label");
 
-  const moveDown = targetRow.getByRole("button", { name: /向后移动/ });
+  const moveDown = targetRow.getByRole("menuitem", { name: /向后移动/ });
   await targetRow.getByRole("button", { name: /更多操作/ }).click();
   await moveDown.click();
   await page.waitForFunction(() => (

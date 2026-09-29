@@ -278,14 +278,15 @@ describe("persistJourneyDraft", () => {
       onSaved: () => undefined,
     }));
     expect(markup).toContain('value="Southbound light"');
-    expect(markup).toContain('value="2026-04-16"');
+    expect(markup).toContain("2026-04-16 · 已写下故事");
     expect(markup).toContain('data-route-point-draft-id="saved-route-point-1"');
     expect(markup).toContain('data-route-point-expanded="false"');
     expect(markup).toContain(">Shenzhen</strong>");
     expect(markup).toContain("1 个已有媒体");
     expect(markup).toContain("保存修改");
-    expect(markup).toContain("记录轨迹");
-    expect(markup).toContain("导入这份 GPX");
+    expect(markup).toContain('data-composer-task-entry="journey-info"');
+    expect(markup).not.toContain('type="date"');
+    expect(markup).not.toContain("导入这份 GPX");
     expect(markup).not.toContain("先保存这段 Journey");
   });
 

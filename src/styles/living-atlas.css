@@ -9042,6 +9042,52 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   margin: 16px 0 24px;
 }
 
+.journey-composer .journey-itinerary-import__days ul > li.journey-itinerary-import__entry {
+  position: relative;
+  display: block;
+  padding: 8px 0;
+}
+
+.journey-composer .journey-itinerary-import__entry-main {
+  min-height: 44px;
+  padding-right: 112px;
+}
+
+.journey-composer .journey-itinerary-import__entry-details > summary {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  min-width: 96px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--archive-muted);
+}
+
+.journey-composer .journey-itinerary-import__day > summary,
+.journey-composer .journey-itinerary-import__source-notes > summary {
+  border-left: 0;
+  background: transparent;
+}
+
+.journey-composer .journey-composer__pending-media-notice > summary {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--archive-muted);
+  font-size: 12px;
+}
+
+.journey-composer__pending-media-notice ul {
+  max-height: 120px;
+  overflow: auto;
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+}
+
 @media (max-width: 640px) {
   .journey-composer--focused .journey-composer__header {
     padding: 16px;

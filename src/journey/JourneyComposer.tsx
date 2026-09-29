@@ -583,12 +583,14 @@ export function JourneyComposer({
    */
   useEffect(() => {
     if (mobileTask !== "primary") {
+      if (editorScrollRef.current) editorScrollRef.current.scrollTop = 0;
       taskHeadingRef.current?.focus({ preventScroll: true });
       return;
     }
     const returning = taskReturnFocusRef.current;
     taskReturnFocusRef.current = null;
     if (!returning) return;
+    if (editorScrollRef.current) editorScrollRef.current.scrollTop = 0;
     if (taskEnteredFromImportRef.current) {
       taskEnteredFromImportRef.current = false;
       importShortcutRef.current?.focus({ preventScroll: true });
@@ -2243,7 +2245,8 @@ export function JourneyComposer({
                       <span>{composerTask("primary").entryLabel}</span>
                     </button>
                     <h3 id={`journey-composer-task-${activeMobileTask}`} ref={taskHeadingRef} tabIndex={-1}>
-                      {composerTask(activeMobileTask).heading}
+                      {activeMobileTask === "location" && taskEnteredFromImportRef.current
+                        ? "导入行程" : composerTask(activeMobileTask).heading}
                     </h3>
                   </div>
                   {activeMobileTask === "journey-info" ? (
@@ -2297,6 +2300,14 @@ export function JourneyComposer({
               : existingVisualMediaCount
                 ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
+            {unknownCreateAttempt && mediaFiles.length > 0 ? (
+              <details className="journey-composer__pending-media-notice">
+                <summary>查看待上传文件</summary>
+                <ul>{mediaFiles.map((media, index) => (
+                  <li key={`${index}-${media.file.name}`}>{media.file.name}</li>
+                ))}</ul>
+              </details>
+            ) : null}
           </div>
           <div className="journey-composer__footer-actions">
             {onPlaybackPreview && !savedResult ? (
