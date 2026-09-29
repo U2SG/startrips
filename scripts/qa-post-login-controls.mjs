@@ -2890,7 +2890,10 @@ async function verifyFinalAcceptanceMobileFlow() {
         await pressStoryPlayback(overBudgetPlayback.locator('button[aria-label="暂停播放"]'),
           `Pause media-heavy Full Playback ${layout}`, touch);
         const progress = overBudgetPlayback.locator('input[aria-label="播放进度"]');
-        await prepareControl(progress, `Seek later Full Playback ${layout}`);
+        // The native range is an intentionally transparent hit layer over the
+        // visible progress strip; grade the strip's visibility and owned hit.
+        await prepareControl(overBudgetPlayback.locator(".journey-playback__progress"),
+          `Seek later Full Playback ${layout}`);
         const progressBox = await progress.boundingBox();
         if (!progressBox) throw new Error("Full Playback progress has no target");
         const seekX = progressBox.x + progressBox.width * 0.8;
