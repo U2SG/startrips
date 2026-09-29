@@ -299,6 +299,61 @@ async function submitGatewayLogin(gatewayPage) {
   await gatewayPage.getByRole("button", { name: "登录", exact: true }).click();
 }
 
+async function verifyKeyboardValidationFocus() {
+  console.error("[qa-login-v3] keyboard submit validation focus");
+  const gateway = await createGatewayPage({ reducedMotion: "reduce" });
+  const keyboardPage = gateway.page;
+  await keyboardPage.setViewportSize({ width: 844, height: 390 });
+  let signInRequests = 0;
+  const signInPattern = "**/api/auth/sign-in/email";
+  await keyboardPage.route(signInPattern, async (route) => {
+    signInRequests += 1;
+    await route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ code: "INVALID_EMAIL_OR_PASSWORD", message: "Invalid email or password" }),
+    });
+  });
+  try {
+    const emailInput = keyboardPage.locator('input[autocomplete="email"]');
+    const passwordInput = keyboardPage.locator('input[autocomplete="current-password"]');
+    await emailInput.fill("qa-keyboard@example.test");
+    await passwordInput.fill("password1234");
+    await passwordInput.press("Enter");
+    const alert = keyboardPage.getByRole("alert");
+    await alert.waitFor({ state: "visible", timeout: 4_000 });
+    await keyboardPage.waitForFunction(() => document.activeElement?.id === "auth-email", null, { timeout: 4_000 });
+    const snapshot = await keyboardPage.evaluate(() => {
+      const email = document.querySelector("#auth-email");
+      const alert = document.querySelector("#auth-form-message");
+      return {
+        activeId: document.activeElement?.id ?? null,
+        invalid: email?.getAttribute("aria-invalid") ?? null,
+        describedBy: email?.getAttribute("aria-describedby") ?? null,
+        alertRole: alert?.getAttribute("role") ?? null,
+        alertText: alert?.textContent ?? "",
+      };
+    });
+    const unexpectedErrors = gateway.errors.filter((message) => !message.includes("401"));
+    return {
+      label: "keyboard-submit-validation-focus",
+      signInRequests,
+      ...snapshot,
+      errors: unexpectedErrors,
+      failed: signInRequests !== 1
+        || snapshot.activeId !== "auth-email"
+        || snapshot.invalid !== "true"
+        || snapshot.describedBy !== "auth-form-message"
+        || snapshot.alertRole !== "alert"
+        || !snapshot.alertText.includes("认证信息未通过")
+        || unexpectedErrors.length > 0,
+    };
+  } finally {
+    await keyboardPage.unroute(signInPattern);
+    await gateway.close();
+  }
+}
+
 async function waitForGatewayMetric(gateway, predicate, timeoutMs = 4_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -501,6 +556,223 @@ async function verifyResetPasswordCancellation() {
     };
   } finally {
     releaseResponse?.();
+    await gateway.close();
+  }
+}
+
+async function verifyEmailVerificationRecoveryFlow() {
+  console.error("[qa-login-v3] email verification recovery flow");
+  const email = `qa-verify-${randomUUID()}@example.test`;
+  const password = "qa-verification-password-123";
+  const invitationId = "qa-invitation";
+  const externalReturn = "https://evil.example/steal";
+  const authStore = {
+    user: [],
+    session: [],
+    account: [],
+    verification: [],
+  };
+  const verificationMails = [];
+  const qaAuth = betterAuth({
+    appName: "Startrips QA",
+    baseURL: origin,
+    secret: "qa-only-startrips-verification-secret-with-more-than-thirty-two-bytes",
+    database: memoryAdapter(authStore),
+    trustedOrigins: [origin],
+    advanced: {
+      cookiePrefix: "startrips",
+      useSecureCookies: false,
+    },
+    emailVerification: {
+      sendOnSignUp: true,
+      sendOnSignIn: true,
+      expiresIn: 60 * 60,
+      async sendVerificationEmail({ user, url }) {
+        if (user.email === email) verificationMails.push(url);
+      },
+    },
+    emailAndPassword: {
+      enabled: true,
+      requireEmailVerification: true,
+      minPasswordLength: 10,
+      maxPasswordLength: 128,
+    },
+  });
+
+  const authRequest = async (pathOrUrl, { method = "GET", body, cookie } = {}) => {
+    const url = pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")
+      ? pathOrUrl
+      : `${origin}${pathOrUrl}`;
+    const headers = new Headers({ origin });
+    if (body !== undefined) headers.set("content-type", "application/json");
+    if (cookie) headers.set("cookie", cookie);
+    return qaAuth.handler(new Request(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: "manual",
+    }));
+  };
+
+  const awaitMail = async (index, label) => {
+    const deadline = Date.now() + 4_000;
+    while (Date.now() < deadline) {
+      if (verificationMails[index]) return verificationMails[index];
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`${label} was not emitted`);
+  };
+
+  const inspectMail = (mailLink) => {
+    const mailUrl = new URL(mailLink);
+    const callbackValue = mailUrl.searchParams.get("callbackURL");
+    const callbackUrl = callbackValue ? new URL(callbackValue, origin) : null;
+    return {
+      endpointOrigin: mailUrl.origin,
+      endpointPath: mailUrl.pathname,
+      tokenPresent: mailUrl.searchParams.has("token"),
+      callbackOrigin: callbackUrl?.origin ?? null,
+      callbackPath: callbackUrl?.pathname ?? null,
+      invitationId: callbackUrl?.searchParams.get("id") ?? null,
+      externalReturn: callbackUrl?.searchParams.get("return") ?? null,
+      callbackUrl,
+    };
+  };
+
+  const gateway = await createGatewayPage({
+    initialPath: `/accept-invitation?id=${invitationId}&return=${encodeURIComponent(externalReturn)}&qaState=login-gateway&qaLite=1`,
+  });
+  try {
+    await gateway.page.unroute("**/api/auth/**");
+    const fulfillFromAuth = async (route) => {
+      const request = route.request();
+      const headers = new Headers(request.headers());
+      headers.set("origin", origin);
+      const response = await qaAuth.handler(new Request(request.url(), {
+        method: request.method(),
+        headers,
+        body: ["GET", "HEAD"].includes(request.method()) ? undefined : request.postData() ?? undefined,
+        redirect: "manual",
+      }));
+      const responseHeaders = {};
+      response.headers.forEach((value, key) => { responseHeaders[key] = value; });
+      await route.fulfill({
+        status: response.status,
+        headers: responseHeaders,
+        body: Buffer.from(await response.arrayBuffer()),
+      });
+    };
+    await gateway.page.route("**/api/auth/**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.endsWith("/organization/list")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([{ id: "qa-org", name: "QA Atlas", slug: "qa-atlas" }]),
+        });
+        return;
+      }
+      await fulfillFromAuth(route);
+    });
+
+    await gateway.page.getByRole("button", { name: "没有账号，先注册" }).click();
+    await gateway.page.locator('input[autocomplete="name"]').fill("QA Verification Traveler");
+    await gateway.page.locator('input[autocomplete="email"]').fill(email);
+    await gateway.page.locator('input[autocomplete="new-password"]').fill(password);
+    const signUpResponsePromise = gateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/sign-up/email"
+    ), { timeout: 4_000 });
+    await gateway.page.getByRole("button", { name: "注册并验证邮箱" }).click();
+    const signUpResponse = await signUpResponsePromise;
+    await gateway.page.getByRole("status").waitFor({ state: "visible", timeout: 4_000 });
+    const signUpMail = await awaitMail(0, "sign-up verification mail");
+    const signUpTarget = inspectMail(signUpMail);
+
+    await gateway.page.getByRole("button", { name: "已有账号，去登录" }).click();
+    await gateway.page.locator('input[autocomplete="current-password"]').fill(password);
+    const unverifiedResponsePromise = gateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/sign-in/email"
+    ), { timeout: 4_000 });
+    await gateway.page.getByRole("button", { name: "登录", exact: true }).click();
+    const unverifiedResponse = await unverifiedResponsePromise;
+    await gateway.page.getByRole("button", { name: "重新发送验证邮件" }).waitFor({ state: "visible", timeout: 4_000 });
+    const signInMail = await awaitMail(1, "sign-in verification mail");
+    const signInTarget = inspectMail(signInMail);
+
+    const resendResponsePromise = gateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/send-verification-email"
+    ), { timeout: 4_000 });
+    await gateway.page.getByRole("button", { name: "重新发送验证邮件" }).click();
+    const resendResponse = await resendResponsePromise;
+    await gateway.page.getByRole("status").waitFor({ state: "visible", timeout: 4_000 });
+    const resendMail = await awaitMail(2, "resend verification mail");
+    const resendTarget = inspectMail(resendMail);
+
+    const verificationResponse = await authRequest(resendMail);
+    const verificationRedirectValue = verificationResponse.headers.get("location") ?? "";
+    const verificationRedirect = verificationRedirectValue
+      ? new URL(verificationRedirectValue, origin)
+      : null;
+    const safeRedirect = verificationRedirect?.origin === origin
+      && verificationRedirect.pathname === "/accept-invitation"
+      && verificationRedirect.searchParams.get("id") === invitationId
+      && !verificationRedirect.searchParams.has("return");
+
+    const verifiedLoginResponsePromise = gateway.page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/auth/sign-in/email"
+    ), { timeout: 4_000 });
+    await gateway.page.getByRole("button", { name: "登录", exact: true }).click();
+    const verifiedLoginResponse = await verifiedLoginResponsePromise;
+    await gateway.page.getByRole("button", { name: "接受邀请" }).waitFor({ state: "visible", timeout: 5_000 });
+
+    const targetIsSafe = (target) => target.endpointOrigin === origin
+      && target.endpointPath === "/api/auth/verify-email"
+      && target.tokenPresent
+      && target.callbackOrigin === origin
+      && target.callbackPath === "/accept-invitation"
+      && target.invitationId === invitationId
+      && target.externalReturn === null;
+    const unexpectedErrors = gateway.errors.filter((message) => (
+      !message.includes("401") && !message.includes("403")
+    ));
+
+    return {
+      label: "email-verification-recovery-flow",
+      signUp: {
+        accepted: signUpResponse.status() === 200,
+        mailTargetSafe: targetIsSafe(signUpTarget),
+      },
+      unverifiedSignIn: {
+        refused: unverifiedResponse.status() >= 400,
+        mailTargetSafe: targetIsSafe(signInTarget),
+      },
+      resend: {
+        accepted: resendResponse.status() === 200,
+        mailTargetSafe: targetIsSafe(resendTarget),
+      },
+      verification: {
+        accepted: verificationResponse.status >= 200 && verificationResponse.status < 400,
+        safeRedirect,
+      },
+      login: {
+        accepted: verifiedLoginResponse.status() === 200,
+        invitationVisible: await gateway.page.getByRole("button", { name: "接受邀请" }).isVisible(),
+      },
+      errors: unexpectedErrors,
+      failed: signUpResponse.status() !== 200
+        || !targetIsSafe(signUpTarget)
+        || unverifiedResponse.status() < 400
+        || !targetIsSafe(signInTarget)
+        || resendResponse.status() !== 200
+        || !targetIsSafe(resendTarget)
+        || verificationResponse.status < 200
+        || verificationResponse.status >= 400
+        || !safeRedirect
+        || verifiedLoginResponse.status() !== 200
+        || !(await gateway.page.getByRole("button", { name: "接受邀请" }).isVisible())
+        || unexpectedErrors.length > 0,
+    };
+  } finally {
     await gateway.close();
   }
 }
@@ -1379,6 +1651,10 @@ try {
   await verifyViewport("tablet", { width: 768, height: 1024 }, false);
   await verifyViewport("mobile", { width: 390, height: 844 }, true);
   await verifyViewport("mobile-compact", { width: 360, height: 800 }, true);
+  await verifyViewport("mobile-landscape", { width: 844, height: 390 }, true);
+  const keyboardValidation = await verifyKeyboardValidationFocus();
+  if (keyboardValidation.failed) failed = true;
+  results.push(keyboardValidation);
 
   console.error("[qa-login-v3] intro");
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -1460,6 +1736,9 @@ try {
   const resetPasswordHappyPath = await verifyResetPasswordMailLinkHappyPath();
   if (resetPasswordHappyPath.failed) failed = true;
   results.push(resetPasswordHappyPath);
+  const verificationRecovery = await verifyEmailVerificationRecoveryFlow();
+  if (verificationRecovery.failed) failed = true;
+  results.push(verificationRecovery);
   const invitationPointers = await verifyAuthenticatedDirectGate(
     "gateway-authenticated-invitation-pointer-ownership",
     "/accept-invitation?id=qa-invitation",

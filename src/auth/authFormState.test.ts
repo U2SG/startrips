@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { AUTH_FORM_STATUSES, authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, createAuthFormState, withAuthRequestBoundary } from "./authFormState";
+import { AUTH_FORM_STATUSES, authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, authVerificationCallbackURL, createAuthFormState, withAuthRequestBoundary } from "./authFormState";
 
 
 describe("auth form state machine", () => {
@@ -77,6 +77,19 @@ describe("auth form state machine", () => {
     expect(form).toContain('{pending ? "取消等待"');
   });
 
+  it("keeps verification callbacks on a legal same-origin target", () => {
+    expect(authVerificationCallbackURL({
+      origin: "https://startrips.example",
+      pathname: "/accept-invitation",
+      search: "?id=invite-123&return=https%3A%2F%2Fevil.example%2Fsteal",
+    })).toBe("https://startrips.example/accept-invitation?id=invite-123");
+    expect(authVerificationCallbackURL({
+      origin: "https://startrips.example",
+      pathname: "/some-unknown-protected-path",
+      search: "?return=https%3A%2F%2Fevil.example%2Fsteal",
+    })).toBe("https://startrips.example/");
+  });
+
   it("maps an unverified-email refusal to verification recovery", () => {
     const started = authFormReducer(createAuthFormState(), { type: "submit" });
     const code = ["EMAIL", "NOT", "VERIFIED"].join("_");
@@ -105,6 +118,9 @@ describe("auth form state machine", () => {
     expect(form).toContain('const [passwordVisible, setPasswordVisible] = useState(false)');
     expect(form).toContain('type={passwordVisible ? "text" : "password"}');
     expect(form).toContain('aria-label={passwordVisible ? "隐藏密码" : "显示密码"}');
+    expect(form).toContain('aria-invalid={formState.status === "validation-error" || undefined}');
+    expect(form).toContain('id="auth-form-message"');
+    expect(form).toContain('emailInputRef.current?.focus()');
     expect(form).not.toContain("console.");
     expect(form).not.toContain("localStorage");
     expect(form).not.toContain("sessionStorage");

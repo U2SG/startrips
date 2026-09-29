@@ -61,7 +61,7 @@ import {
   useEarthExperiencePreference,
 } from "../journey/EarthExperienceProvider";
 import { authClient } from "./auth-client";
-import { authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, createAuthFormState, withAuthRequestBoundary, type AuthFormEvent, type AuthFormState } from "./authFormState";
+import { authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, authVerificationCallbackURL, createAuthFormState, withAuthRequestBoundary, type AuthFormEvent, type AuthFormState } from "./authFormState";
 import { resolvePasswordResetOutcome, type PasswordResetOutcome } from "./passwordResetOutcome";
 
 type OrganizationSummary = {
@@ -190,9 +190,11 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const emailInputRef = useRef<HTMLInputElement>(null);
   const authRequestAbortRef = useRef<{ requestId: number; controller: AbortController } | null>(null);
   const { mode, message, tone: messageTone } = formState;
   const pending = formState.status === "submitting";
+  const verificationCallbackURL = authVerificationCallbackURL(window.location);
 
   function transition(event: AuthFormEvent): AuthFormState {
     const next = authFormReducer(formStateRef.current, event);
@@ -231,6 +233,12 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   useEffect(() => () => {
     authRequestAbortRef.current?.controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (formState.status !== "validation-error") return;
+    const frame = window.requestAnimationFrame(() => emailInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [formState.requestId, formState.status]);
 
   // #349: which providers this deployment configured. An unconfigured one is
   // absent from the server entirely, so the button simply never renders --
@@ -327,7 +335,7 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
           name: name.trim(),
           email: normalizedEmail,
           password,
-          callbackURL: window.location.href,
+          callbackURL: verificationCallbackURL,
         }, { signal: controller.signal }), controller);
         if (result.error) {
           transition(authServiceErrorEvent(requestId, result.error, normalizedEmail));
@@ -340,7 +348,7 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
       const result = await withAuthRequestBoundary(authClient.signIn.email({
         email: normalizedEmail,
         password,
-        callbackURL: window.location.href,
+        callbackURL: verificationCallbackURL,
       }, { signal: controller.signal }), controller);
       if (result.error) {
         transition(authServiceErrorEvent(requestId, result.error, normalizedEmail));
@@ -364,7 +372,7 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
     try {
       const result = await withAuthRequestBoundary(authClient.sendVerificationEmail({
         email: verificationEmail,
-        callbackURL: window.location.href,
+        callbackURL: verificationCallbackURL,
       }, { signal: controller.signal }), controller);
       if (result.error) {
         transition(authServiceErrorEvent(started.requestId, result.error, verificationEmail));
@@ -416,7 +424,7 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
           ) : null}
           <label>
             <span>邮箱</span>
-            <input required type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <input ref={emailInputRef} id="auth-email" required type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} inputMode="email" aria-invalid={formState.status === "validation-error" || undefined} aria-describedby={message ? "auth-form-message" : undefined} value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
           {mode !== "forgot" ? (
             <div className="auth-password-field">
@@ -459,6 +467,7 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
 
         {message ? (
           <p
+            id="auth-form-message"
             className={`auth-message is-${messageTone}`}
             role={messageTone === "error" ? "alert" : "status"}
           >

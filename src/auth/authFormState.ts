@@ -42,6 +42,26 @@ export type AuthServiceError = {
 
 export const AUTH_REQUEST_DEADLINE_MS = 15_000;
 
+export type AuthReturnLocation = {
+  origin: string;
+  pathname: string;
+  search: string;
+};
+
+export function authVerificationCallbackURL(location: AuthReturnLocation): string {
+  const origin = new URL(location.origin).origin;
+  if (location.pathname === "/accept-invitation") {
+    const source = new URL(`${origin}${location.pathname}${location.search}`);
+    const invitationId = source.searchParams.get("id");
+    if (invitationId) {
+      const target = new URL("/accept-invitation", origin);
+      target.searchParams.set("id", invitationId);
+      return target.toString();
+    }
+  }
+  return new URL("/", origin).toString();
+}
+
 function authRequestBoundaryError(name: "AbortError" | "TimeoutError"): Error {
   const error = new Error(name === "AbortError" ? "Authentication request cancelled" : "Authentication request timed out");
   error.name = name;
