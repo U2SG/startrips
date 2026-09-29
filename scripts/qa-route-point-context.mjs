@@ -657,10 +657,31 @@ async function routePointActivationEvidence(page) {
 }
 
 async function clickRoutePointMarker(page, routeId, pointId, targetOverride = null) {
-  const marker = page.locator(`.particle-earth-route__point[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
-  await marker.waitFor({ state: "visible", timeout: 5_000 });
-  const box = await marker.boundingBox();
-  if (!box) throw new Error(`Route Point ${pointId} has no projected marker geometry`);
+  let box;
+  try {
+    // Read readiness and geometry in one browser task, from the current
+    // renderer projection. A separate boundingBox call can observe a later
+    // arbitration pass that has already hidden the previously visible bead.
+    const geometry = await page.waitForFunction(({ routeId, pointId }) => {
+      const scene = document.querySelector(".particle-earth-scene");
+      const focus = document.querySelector("[data-qa-route-point-context-focus]");
+      if (scene?.getAttribute("data-focus-revision") !== focus?.getAttribute("data-focus-revision")
+        || Number(scene?.getAttribute("data-focus-settle-count") ?? 0) <= 0) return null;
+      if (window.__particleEarthDebug?.().journeyRouteProjectionReady !== true) return null;
+      const marker = document.querySelector(
+        `.particle-earth-route__point[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`,
+      );
+      if (!marker) return null;
+      const style = getComputedStyle(marker);
+      const rect = marker.getBoundingClientRect();
+      if (style.display === "none" || style.visibility === "hidden" || rect.width <= 0 || rect.height <= 0) return null;
+      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    }, { routeId, pointId }, { timeout: 5_000, polling: "raf" });
+    try { box = await geometry.jsonValue(); } finally { await geometry.dispose(); }
+  } catch (error) {
+    const state = await routeMarkerClickState(page, pointId, null);
+    throw new Error(`Route Point ${pointId} has no current projected marker geometry: ${JSON.stringify(state)}`, { cause: error });
+  }
   const target = targetOverride ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   await page.mouse.click(target.x, target.y);
   return { box, target };
@@ -671,7 +692,7 @@ async function routeMarkerClickState(page, pointId, target) {
     const marker = document.querySelector(`.particle-earth-route__point[data-route-point-id="${pointId}"]`);
     const scene = document.querySelector(".particle-earth-scene");
     const markerRect = marker?.getBoundingClientRect();
-    const hit = document.elementFromPoint(target.x, target.y);
+    const hit = target ? document.elementFromPoint(target.x, target.y) : null;
     return {
       contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
       activationId: scene?.getAttribute("data-route-point-activation-id") ?? null,
