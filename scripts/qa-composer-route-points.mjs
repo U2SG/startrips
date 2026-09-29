@@ -298,7 +298,7 @@ async function verifyImportedJourney({ label, width, height, editing }) {
       && imported[1].regionContext === "Human region" && imported[1].latitude === 23.123456 && imported[1].longitude === 112.123456
       && imported[2].label === imported[5].label && imported[2].id !== imported[5].id && imported[2].occurredAt !== imported[5].occurredAt
       && savedJourney.media.length === (editing ? 3 : 0) && pageErrors.length === 0);
-    await page.getByRole("button", { name: "关闭旅程编辑器", exact: true }).click();
+    // A successful save closes the Composer through its normal callback.
     await page.locator(".journey-composer").waitFor({ state: "detached" });
     await page.locator("[data-qa-composer-reopen]").click();
     await page.locator(".journey-composer").waitFor({ state: "visible" });
