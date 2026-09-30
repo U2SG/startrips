@@ -7,6 +7,10 @@ import type {
   CreatedShareGrant,
   Journey,
   JourneyInput,
+  RoadProfile,
+  RouteCandidate,
+  RouteSegmentRecord,
+  RouteShapePoint,
   LocationSearchResponse,
   LocationSearchResult,
   PrivateMediaRead,
@@ -144,6 +148,70 @@ export async function listJourneys(fetcher: Fetcher = fetch): Promise<Journey[]>
     fetcher,
   );
   return payload.journeys;
+}
+
+export type SignedRouteCandidate = { candidate: RouteCandidate; confirmationToken: string };
+
+function routeSegmentPath(journeyId: string, fromId: string, toId: string) {
+  return `/api/journey-route-segments/journeys/${encodeURIComponent(journeyId)}`
+    + `/segments/${encodeURIComponent(fromId)}/${encodeURIComponent(toId)}`;
+}
+
+export async function routeCandidateAvailability(fetcher: Fetcher = fetch): Promise<RoadProfile[]> {
+  const response = await requestJson<{ profiles: RoadProfile[] }>(
+    "/api/journey-route-segments/availability", { cache: "no-store" }, fetcher,
+  );
+  return response.profiles;
+}
+
+export async function requestRouteCandidates(
+  journeyId: string,
+  fromId: string,
+  toId: string,
+  sourceKey: string,
+  revision: number,
+  profile: RoadProfile,
+  signal: AbortSignal,
+  fetcher: Fetcher = fetch,
+): Promise<{ sourceKey: string; revision: number; candidates: SignedRouteCandidate[] }> {
+  return requestJson(
+    `${routeSegmentPath(journeyId, fromId, toId)}/candidates`,
+    { method: "POST", body: JSON.stringify({ sourceKey, revision, profile, alternativesCount: 3 }), signal },
+    fetcher,
+  );
+}
+
+export async function saveRouteSegment(
+  journeyId: string,
+  fromId: string,
+  toId: string,
+  input: {
+    sourceKey: string;
+    expectedRevision: number;
+    action: "shape" | "none" | "confirm";
+    shapePoints?: RouteShapePoint[];
+    selected?: SignedRouteCandidate;
+  },
+  fetcher: Fetcher = fetch,
+): Promise<RouteSegmentRecord> {
+  const response = await requestJson<{ segment: RouteSegmentRecord }>(
+    routeSegmentPath(journeyId, fromId, toId),
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        sourceKey: input.sourceKey,
+        expectedRevision: input.expectedRevision,
+        action: input.action,
+        ...(input.action === "shape" ? { shapePoints: input.shapePoints } : {}),
+        ...(input.action === "confirm" ? {
+          candidate: input.selected?.candidate,
+          confirmationToken: input.selected?.confirmationToken,
+        } : {}),
+      }),
+    },
+    fetcher,
+  );
+  return response.segment;
 }
 
 export type CoverRevealRequestResult = {

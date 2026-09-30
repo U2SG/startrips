@@ -167,6 +167,15 @@ export function loadServerConfig(
   );
   const locationSearchDriver =
     environment.LOCATION_SEARCH_DRIVER?.trim() || "disabled";
+  // An OSRM graph is built for one profile. No public demo endpoint or
+  // implicit driving profile is used by a deployment without this setting.
+  const routingOsrmDrivingBaseUrl = environment.ROUTING_OSRM_DRIVING_BASE_URL?.trim().replace(/\/$/, "") || null;
+  if (routingOsrmDrivingBaseUrl) {
+    const url = new URL(routingOsrmDrivingBaseUrl);
+    if (!(["http:", "https:"].includes(url.protocol)) || url.username || url.password || url.search || url.hash) {
+      throw new Error("ROUTING_OSRM_DRIVING_BASE_URL must be an HTTP(S) origin without credentials or query");
+    }
+  }
   const locationSearchBaseUrl = (
     environment.LOCATION_SEARCH_BASE_URL?.trim()
     || "https://nominatim.openstreetmap.org"
@@ -579,6 +588,7 @@ export function loadServerConfig(
     shareMediaRateLimit,
     shareUnknownTokenRateLimit,
     locationSearchDriver,
+    routingOsrmDrivingBaseUrl,
     locationSearchBaseUrl,
     locationSearchUserAgent,
     locationSearchFallbackBaseUrl,

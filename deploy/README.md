@@ -122,8 +122,18 @@ is sent to the provider.
 The Living Atlas keeps its particle globe in Three.js and preloads a MapLibre
 vector detail view for zoom levels up to 20. It reveals the map only after the
 initial vector tiles are ready, then releases the hidden Three.js context. The
-detail view intentionally contains no Journey overlays and defaults to Chinese
-labels with a Chinese/bilingual switch.
+detail view projects the active Journey's Route Points and saved segment
+geometry. Shape points appear only while editing a route; they are never Journey
+nodes. The map defaults to Chinese labels with a Chinese/bilingual switch.
+
+Road candidates require a deployment-owned OSRM graph built for driving. Set
+`ROUTING_OSRM_DRIVING_BASE_URL` to the base URL reachable from the API container
+(for example, an internal service origin). Leave it empty to disable candidate
+generation; the existing Journey line remains available. The public OSRM demo
+is not a production service. The browser never calls this URL. The user must
+select driving for each candidate request, compare the suggestions and confirm
+one before its geometry becomes a saved route. Recorded tracks remain the
+strongest route evidence.
 
 The map renderer is provider-neutral. It uses OpenFreeMap's Fiord vector style by
 default. Set `ATLAS_MAP_STYLE_URL` in `.env.deploy` to use a contracted or

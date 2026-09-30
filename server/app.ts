@@ -33,6 +33,8 @@ import { homeBaseRoutes } from "./routes/home-bases";
 import { itineraryImportRoutes } from "./routes/itinerary-import";
 import { journeyRecordedTrackRoutes } from "./routes/journey-recorded-tracks";
 import { journeyRoutes } from "./routes/journeys";
+import { journeyRouteSegmentRoutes } from "./routes/journey-route-segments";
+import { RoutingInvalidError, RoutingUnavailableError } from "./routing/route-candidate-provider";
 import { locationRoutes } from "./routes/locations";
 import { mapStyleRoutes } from "./routes/mapstyle";
 import { mediaEvidenceRoutes } from "./routes/media-evidence";
@@ -109,6 +111,7 @@ app.route("/api/everyday-fragments", everydayFragmentRoutes);
 // Route.
 app.route("/api/itinerary-import", itineraryImportRoutes);
 app.route("/api/journeys", journeyRoutes);
+app.route("/api/journey-route-segments", journeyRouteSegmentRoutes);
 // #419: owner-only recorded-track evidence for one Journey, and since #341
 // the format-neutral import channel that writes it. Never part of a guest
 // share payload, because these samples are precise.
@@ -130,6 +133,9 @@ app.notFound((context) =>
 );
 
 app.onError((error, context) => {
+  if (error instanceof RoutingInvalidError || error instanceof RoutingUnavailableError) {
+    return context.json({ error: error.code, message: error.message }, error.status as 400);
+  }
   if (error instanceof AtlasAccessError) {
     return context.json(
       { error: error.code, message: error.message },

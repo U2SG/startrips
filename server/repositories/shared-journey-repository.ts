@@ -1,4 +1,6 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { currentRouteSegmentRecord } from "../../src/journey/journeyModel";
+import type { RouteSegmentRecord } from "../../src/journey/types";
 import {
   evaluateShareGrant,
   shareUnavailable,
@@ -67,6 +69,8 @@ export type SharedJourney = {
   previousJourneyId: string | null;
   nextJourneyId: string | null;
   routePoints: SharedRoutePoint[];
+  /** Geometry snapshots are projected only over adjacent granted Route Points. */
+  routeSegments?: RouteSegmentRecord[];
   media: SharedJourneyMedia[];
 };
 
@@ -130,15 +134,49 @@ export function buildSharedJourneyView(
 
   return {
     share: { expiresAt: grant.expiresAt, journeyCount: rows.journeys.length },
-    journeys: rows.journeys.map((journey, index) => ({
-      ...journey,
-      previousJourneyId: index > 0 ? rows.journeys[index - 1].id : null,
-      nextJourneyId: index < rows.journeys.length - 1
-        ? rows.journeys[index + 1].id
-        : null,
-      routePoints: routePointsByJourney.get(journey.id) ?? [],
-      media: mediaByJourney.get(journey.id) ?? [],
-    })),
+    journeys: rows.journeys.map((journey, index) => {
+      const { routeSegments: storedSegments = [], ...sharedJourney } = journey;
+      const routePoints = routePointsByJourney.get(journey.id) ?? [];
+      const points = routePoints.map((point) => ({ id: point.id, lat: point.latitude, lon: point.longitude }));
+      const routeSegments = points.slice(0, -1).flatMap((from, segmentIndex): RouteSegmentRecord[] => {
+        const to = points[segmentIndex + 1];
+        const segment = currentRouteSegmentRecord(points, segmentIndex, storedSegments);
+        if (!segment || segment.fromRoutePointId !== from.id || segment.toRoutePointId !== to.id) return [];
+        const candidate = segment.decision === "confirmed" ? segment.confirmedCandidate : null;
+        if (!candidate && segment.shapePoints.length === 0) return [];
+        // Copy only geometry/provenance content, never a whole stored object:
+        // future owner/provider fields cannot silently enter a guest payload.
+        return [{
+          fromRoutePointId: from.id, toRoutePointId: to.id,
+          sourceKey: segment.sourceKey, revision: segment.revision, decision: segment.decision,
+          shapePoints: segment.shapePoints.map(({ id, lat, lon }) => ({ id, lat, lon })),
+          confirmedCandidate: candidate ? {
+            id: candidate.id, geometry: candidate.geometry.map(([lon, lat]): [number, number] => [lon, lat]),
+            provider: candidate.provider, profile: candidate.profile,
+            distanceMeters: candidate.distanceMeters, durationSeconds: candidate.durationSeconds,
+            relevance: candidate.relevance,
+            snapping: {
+              maxDistanceMeters: candidate.snapping.maxDistanceMeters,
+              waypoints: candidate.snapping.waypoints.map((waypoint) => ({
+                requested: [waypoint.requested[0], waypoint.requested[1]],
+                snapped: [waypoint.snapped[0], waypoint.snapped[1]],
+                distanceMeters: waypoint.distanceMeters, providerDistanceMeters: waypoint.providerDistanceMeters,
+              })),
+            },
+          } : null,
+        }];
+      });
+      return {
+        ...sharedJourney,
+        previousJourneyId: index > 0 ? rows.journeys[index - 1].id : null,
+        nextJourneyId: index < rows.journeys.length - 1
+          ? rows.journeys[index + 1].id
+          : null,
+        routePoints,
+        routeSegments,
+        media: mediaByJourney.get(journey.id) ?? [],
+      };
+    }),
   };
 }
 
@@ -216,6 +254,7 @@ async function readSharedJourneyView(
       lightEffect: journeys.lightEffect,
       coverMediaAssetId: journeys.coverMediaAssetId,
       revision: journeys.revision,
+      routeSegments: journeys.routeSegments,
     })
     .from(shareGrantJourneys)
     .innerJoin(journeys, eq(journeys.id, shareGrantJourneys.journeyId))
