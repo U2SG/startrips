@@ -87,6 +87,7 @@ import {
   playbackLifecycleGate,
   playbackLifecycleHoldReason,
   playbackLifecycleMediaRead,
+  stopPlaybackMediaLifecycleActorsForJourney,
   type PlaybackMediaLifecycleActor,
   type PlaybackMediaLifecycleSnapshot,
 } from "./playbackMediaLifecycle";
@@ -424,12 +425,7 @@ export function JourneyPlaybackOverlay({
     const ownedJourneyId = journey?.id ?? null;
     return () => {
       if (!ownedJourneyId) return;
-      const prefix = `${ownedJourneyId}:`;
-      for (const [key, actor] of mediaLifecycleActorsRef.current) {
-        if (!key.startsWith(prefix)) continue;
-        actor.stop();
-        mediaLifecycleActorsRef.current.delete(key);
-      }
+      stopPlaybackMediaLifecycleActorsForJourney(mediaLifecycleActorsRef.current, ownedJourneyId);
       // A cleanup caused by switching journeys must not erase the active set
       // already established by the new journey's layout dispatch.
       if (journeyIdRef.current === ownedJourneyId) mediaLifecycleActiveIdsRef.current.clear();
@@ -541,7 +537,7 @@ export function JourneyPlaybackOverlay({
     if (status === "buffering") { sendVideoBeat("STALLED", beatKey); return; }
     if (status === "playing") {
       const positioning = snapshot.matches("positioning") || snapshot.matches("pausedPositioning");
-      sendVideoBeat(positioning ? "POSITION_READY" : "PROGRESS", beatKey);
+      sendVideoBeat(positioning ? "POSITION_READY" : "TIME_PROGRESS", beatKey);
     }
   }, [sendVideoBeat]);
 
@@ -1527,7 +1523,7 @@ export function JourneyPlaybackOverlay({
                       const beatKey = activeVideoBeatKey;
                       const snapshot = videoBeatActorRef.current?.getSnapshot() ?? null;
                       if (!beatKey || !playbackVideoBeatEventIsCurrent(snapshot, beatKey)) return;
-                      sendVideoBeat("PROGRESS", beatKey);
+                      sendVideoBeat("TIME_PROGRESS", beatKey);
                       advanceProgressFillFromMedia(
                         event.currentTarget,
                         activeVideoTrim?.assetId === activeMedia.id ? activeVideoTrim.trim : null,

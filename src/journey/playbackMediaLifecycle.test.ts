@@ -5,6 +5,7 @@ import {
   playbackLifecycleGate,
   playbackLifecycleMediaRead,
   playbackMediaLifecycleMachine,
+  stopPlaybackMediaLifecycleActorsForJourney,
 } from "./playbackMediaLifecycle";
 import type { PrivateMediaRead } from "./types";
 
@@ -61,6 +62,20 @@ beforeEach(() => vi.useFakeTimers({ now: NOW }));
 afterEach(() => vi.useRealTimers());
 
 describe("playbackMediaLifecycle", () => {
+  it("stops only actors owned by the journey being released", () => {
+    const stopped: string[] = [];
+    const actors = new Map([
+      ["journey-a:asset-1", { stop: () => stopped.push("a-1") }],
+      ["journey-b:asset-1", { stop: () => stopped.push("b-1") }],
+      ["journey-a:asset-2", { stop: () => stopped.push("a-2") }],
+    ]);
+
+    stopPlaybackMediaLifecycleActorsForJourney(actors, "journey-a");
+
+    expect(stopped).toEqual(["a-1", "a-2"]);
+    expect([...actors.keys()]).toEqual(["journey-b:asset-1"]);
+  });
+
   it("suppresses stale intents before read dispatch", () => {
     const { actor, reads } = start();
     actor.send({ type: "PREPARE", plannedRevision: 1, liveRevision: 2 });

@@ -31,7 +31,7 @@ describe("playbackVideoBeatLifecycle", () => {
     actor.stop();
   });
 
-  it("moves a positioned trim through stall and recovery without losing trim ownership", () => {
+  it("moves a positioned trim through stall and playback-time recovery without losing trim ownership", () => {
     const actor = start(true);
     actor.send({ type: "READ_READY", beatKey: "beat-a" });
     actor.send({ type: "POSITION_READY", beatKey: "beat-a" });
@@ -39,7 +39,20 @@ describe("playbackVideoBeatLifecycle", () => {
     actor.send({ type: "STALLED", beatKey: "beat-a" });
     expect(playbackVideoBeatBuffering(actor.getSnapshot())).toBe(true);
     expect(playbackVideoBeatTrimStatus(actor.getSnapshot())).toBe("buffering");
-    actor.send({ type: "PROGRESS", beatKey: "beat-a" });
+    actor.send({ type: "TIME_PROGRESS", beatKey: "beat-a" });
+    expect(actor.getSnapshot().value).toBe("playing");
+    expect(playbackVideoBeatTrimStatus(actor.getSnapshot())).toBe("playing");
+    actor.stop();
+  });
+
+  it("keeps a positioned trim playing across pause and resume instead of repositioning it", () => {
+    const actor = start(true);
+    actor.send({ type: "READ_READY", beatKey: "beat-a" });
+    actor.send({ type: "POSITION_READY", beatKey: "beat-a" });
+    actor.send({ type: "PAUSE", beatKey: "beat-a" });
+    expect(actor.getSnapshot().value).toBe("pausedPlaying");
+    expect(playbackVideoBeatTrimStatus(actor.getSnapshot())).toBe("playing");
+    actor.send({ type: "RESUME", beatKey: "beat-a" });
     expect(actor.getSnapshot().value).toBe("playing");
     expect(playbackVideoBeatTrimStatus(actor.getSnapshot())).toBe("playing");
     actor.stop();

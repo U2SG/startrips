@@ -252,6 +252,18 @@ export function createPlaybackMediaLifecycleActor(
 
 export type PlaybackMediaLifecycleActor = ReturnType<typeof createPlaybackMediaLifecycleActor>;
 
+export function stopPlaybackMediaLifecycleActorsForJourney<T extends { stop(): void }>(
+  actors: Map<string, T>,
+  journeyId: string,
+): void {
+  const prefix = `${journeyId}:`;
+  for (const [key, actor] of actors) {
+    if (!key.startsWith(prefix)) continue;
+    actor.stop();
+    actors.delete(key);
+  }
+}
+
 export type PlaybackMediaLifecycleSnapshot = SnapshotFrom<typeof playbackMediaLifecycleMachine>;
 
 export function playbackLifecycleMediaRead(

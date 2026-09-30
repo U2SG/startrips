@@ -16,7 +16,7 @@ export type PlaybackVideoBeatEvent =
   | { type: "POSITION_READY"; beatKey: string }
   | { type: "POSITION_UNAVAILABLE"; beatKey: string }
   | { type: "PLAYING"; beatKey: string }
-  | { type: "PROGRESS"; beatKey: string }
+  | { type: "TIME_PROGRESS"; beatKey: string }
   | { type: "STALLED"; beatKey: string }
   | { type: "FAILED"; beatKey: string }
   | { type: "ENDED"; beatKey: string }
@@ -97,7 +97,7 @@ export const playbackVideoBeatLifecycleMachine = setup({
       after: { watchdog: { target: "fallback", actions: "trimUnavailable" } },
       on: {
         PLAYING: { guard: "currentBeat", target: "playing", actions: "trimPlaying" },
-        PROGRESS: { guard: "currentBeat", target: "playing", actions: "trimPlaying" },
+        TIME_PROGRESS: { guard: "currentBeat", target: "playing", actions: "trimPlaying" },
         STALLED: { guard: "currentBeat", target: "buffering", actions: "trimBuffering" },
         FAILED: { guard: "currentBeat", target: "fallback", actions: "trimUnavailable" },
         ENDED: { guard: "currentBeat", target: "ended" },
@@ -108,7 +108,7 @@ export const playbackVideoBeatLifecycleMachine = setup({
       on: {
         RESUME: { guard: "currentBeat", target: "starting", actions: "markResumed" },
         PLAYING: { guard: "currentBeat", target: "pausedPlaying", actions: "trimPlaying" },
-        PROGRESS: { guard: "currentBeat", target: "pausedPlaying", actions: "trimPlaying" },
+        TIME_PROGRESS: { guard: "currentBeat", target: "pausedPlaying", actions: "trimPlaying" },
         STALLED: { guard: "currentBeat", target: "pausedBuffering", actions: "trimBuffering" },
         FAILED: { guard: "currentBeat", target: "fallback", actions: "trimUnavailable" },
         ENDED: { guard: "currentBeat", target: "ended" },
@@ -134,7 +134,7 @@ export const playbackVideoBeatLifecycleMachine = setup({
     playing: {
       on: {
         PLAYING: { guard: "currentBeat", actions: "trimPlaying" },
-        PROGRESS: { guard: "currentBeat", actions: "trimPlaying" },
+        TIME_PROGRESS: { guard: "currentBeat", actions: "trimPlaying" },
         STALLED: { guard: "currentBeat", target: "buffering", actions: "trimBuffering" },
         FAILED: { guard: "currentBeat", target: "fallback", actions: "trimUnavailable" },
         ENDED: { guard: "currentBeat", target: "ended" },
@@ -145,7 +145,7 @@ export const playbackVideoBeatLifecycleMachine = setup({
       on: {
         RESUME: { guard: "currentBeat", target: "playing", actions: "markResumed" },
         PLAYING: { guard: "currentBeat", actions: "trimPlaying" },
-        PROGRESS: { guard: "currentBeat", actions: "trimPlaying" },
+        TIME_PROGRESS: { guard: "currentBeat", actions: "trimPlaying" },
         STALLED: { guard: "currentBeat", target: "pausedBuffering", actions: "trimBuffering" },
         FAILED: { guard: "currentBeat", target: "fallback", actions: "trimUnavailable" },
         ENDED: { guard: "currentBeat", target: "ended" },
@@ -155,7 +155,7 @@ export const playbackVideoBeatLifecycleMachine = setup({
       after: { watchdog: { target: "fallback", actions: "trimUnavailable" } },
       on: {
         PLAYING: { guard: "currentBeat", target: "playing", actions: "trimPlaying" },
-        PROGRESS: { guard: "currentBeat", target: "playing", actions: "trimPlaying" },
+        TIME_PROGRESS: { guard: "currentBeat", target: "playing", actions: "trimPlaying" },
         FAILED: { guard: "currentBeat", target: "fallback", actions: "trimUnavailable" },
         ENDED: { guard: "currentBeat", target: "ended" },
         PAUSE: { guard: "currentBeat", target: "pausedBuffering", actions: "markPaused" },
@@ -165,7 +165,7 @@ export const playbackVideoBeatLifecycleMachine = setup({
       on: {
         RESUME: { guard: "currentBeat", target: "buffering", actions: "markResumed" },
         PLAYING: { guard: "currentBeat", target: "pausedPlaying", actions: "trimPlaying" },
-        PROGRESS: { guard: "currentBeat", target: "pausedPlaying", actions: "trimPlaying" },
+        TIME_PROGRESS: { guard: "currentBeat", target: "pausedPlaying", actions: "trimPlaying" },
         FAILED: { guard: "currentBeat", target: "fallback", actions: "trimUnavailable" },
         ENDED: { guard: "currentBeat", target: "ended" },
       },
