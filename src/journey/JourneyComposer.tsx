@@ -187,6 +187,7 @@ type JourneyComposerProps = {
   onGlobePickRequest?: (accept: (point: GlobePointPick) => void) => void;
   onGlobePickCancel?: () => void;
   onRoutePreviewChange?: (route: JourneyRoute | null) => void;
+  onRecordedTracksChanged?: (journeyId: string) => void;
   onPlaybackPreview?: (snapshot: DraftPlaybackPreviewSnapshot) => void;
   playbackPreviewActive?: boolean;
   playbackPreviewPreparing?: boolean;
@@ -367,6 +368,7 @@ export function JourneyComposer({
   onGlobePickRequest,
   onGlobePickCancel,
   onRoutePreviewChange,
+  onRecordedTracksChanged,
   onPlaybackPreview,
   playbackPreviewActive = false,
   playbackPreviewPreparing = false,
@@ -1649,7 +1651,10 @@ export function JourneyComposer({
     </>
   );
   const recordedTracksFragment = journey ? (
-    <JourneyRecordedTracks journeyId={journey.id} />
+    <JourneyRecordedTracks
+      journeyId={journey.id}
+      onTracksChanged={() => onRecordedTracksChanged?.(journey.id)}
+    />
   ) : (
     <section className="journey-recorded-tracks journey-recorded-tracks--save-first" aria-label="记录轨迹">
       <div className="journey-recorded-tracks__heading">

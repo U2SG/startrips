@@ -110,6 +110,8 @@ export type AutoEditPlanV1 = {
 export type QuickRecapRouteGeometryV1 = {
   angularDistanceFromPrevious?: number;
   noteLength?: number;
+  /** Canonical chapter role: a media-bearing via has no arrival ceremony. */
+  isStop?: boolean;
 };
 
 export type DeterministicQuickRecapInput = {
@@ -246,6 +248,7 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   const eligible = input.digests.filter((digest) =>
     isQuickRecapEligible(digest, input.journeyId, input.journeyRevision, canonicalRouteOrder),
   );
+  const mediaRouteScopes = new Set(eligible.map((digest) => digest.routePointId));
 
   const duplicateSizes = new Map<string, number>();
   for (const digest of eligible) {
@@ -278,12 +281,15 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   const routeBeatMs = (routePointId: string) => {
     const geometry = input.routePointGeometry?.[routePointId];
     return {
-      cameraMs: quickRecapTiming("travel", tempo, { routeDistanceRadians: geometry?.angularDistanceFromPrevious }),
-      arrivalMs: quickRecapTiming("arrival", tempo, { noteLength: geometry?.noteLength }),
+      cameraMs: geometry?.isStop === false && geometry.angularDistanceFromPrevious === undefined
+        ? 0 : quickRecapTiming("travel", tempo, { routeDistanceRadians: geometry?.angularDistanceFromPrevious }),
+      arrivalMs: geometry?.isStop === false
+        ? 0 : quickRecapTiming("arrival", tempo, { noteLength: geometry?.noteLength }),
     };
   };
   const baseOverhead = input.routePointIds
     .reduce((sum, routePointId) => {
+      if (input.routePointGeometry?.[routePointId]?.isStop === false && !mediaRouteScopes.has(routePointId)) return sum;
       const beat = routeBeatMs(routePointId);
       return sum + beat.cameraMs + beat.arrivalMs;
     }, 0);
@@ -329,7 +335,8 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
           selectionReason: selectionReason(digest, clusterKey ? (duplicateSizes.get(clusterKey) ?? 1) : 1),
         };
       });
-    if (chapterItems.length === 0) return [];
+    if (chapterItems.length === 0
+      && (routePointId === null || input.routePointGeometry?.[routePointId]?.isStop !== true)) return [];
     if (routePointId === null) {
       return [{
         chapterId: "journey-intro",
@@ -342,8 +349,10 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
     return [{
       chapterId: `route:${routePointId}`,
       routePointId,
-      camera: { primitive: "travel" as const, durationMs: beat.cameraMs },
-      arrival: { durationMs: beat.arrivalMs, showPlaceLabel: true, showNote: true },
+      camera: { primitive: beat.cameraMs === 0 ? "hold" as const : "travel" as const, durationMs: beat.cameraMs },
+      ...(input.routePointGeometry?.[routePointId]?.isStop === false ? {} : {
+        arrival: { durationMs: beat.arrivalMs, showPlaceLabel: true, showNote: true },
+      }),
       items: chapterItems,
     }];
   });
@@ -584,22 +593,23 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         errors.push(`duplicate chapter scope ${chapter.routePointId ?? "journey-intro"}`);
       }
       seenQuickRecapChapterScopes.add(scopeKey);
-      if (chapter.items.length === 0) errors.push(`empty quick recap chapter ${chapter.chapterId}`);
-      // Semantic choreography, not milliseconds (#166). The journey intro does
-      // not travel anywhere and has nothing to arrive at; a route chapter must
-      // hand off spatially and must announce the place it reached.
+      const geometry = chapter.routePointId === null ? undefined : input.routePointGeometry?.[chapter.routePointId];
+      if (chapter.items.length === 0 && geometry?.isStop !== true) errors.push(`empty quick recap chapter ${chapter.chapterId}`);
+      // Stops announce arrivals; media-bearing vias only travel to their media.
+      // An intro or first-position via has no incoming spatial leg.
       if (chapter.routePointId === null) {
         if (chapter.camera.primitive !== "hold" || chapter.camera.durationMs !== 0) {
           errors.push(`quick recap intro camera mismatch ${chapter.chapterId}`);
         }
         if (chapter.arrival !== undefined) errors.push(`quick recap intro arrival invalid ${chapter.chapterId}`);
       } else {
+        const stationaryVia = geometry?.isStop === false && geometry.angularDistanceFromPrevious === undefined;
         // The route travel grammar is the complement of `hold`, deliberately
         // permissive: `travel`, `pullback-travel` and `short-arc` are all
         // legitimate ways to reach the next route point, and `short-arc` is the
         // natural rendering of a nearby leg. What this forbids is a route
         // chapter that refuses to move at all.
-        if (!isRouteTravelPrimitive(chapter.camera.primitive)) {
+        if (stationaryVia ? chapter.camera.primitive !== "hold" : !isRouteTravelPrimitive(chapter.camera.primitive)) {
           errors.push(`quick recap route camera mismatch ${chapter.chapterId}`);
         }
         // A route chapter that travels for zero milliseconds does not travel.
@@ -607,18 +617,17 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         // choose any duration, but not free to choose none: `0` reads as a
         // legal non-negative duration to the generic check below, so the
         // grammar has to state the floor itself.
-        if (!isFinitePositiveDuration(chapter.camera.durationMs)) {
+        if (stationaryVia ? chapter.camera.durationMs !== 0 : !isFinitePositiveDuration(chapter.camera.durationMs)) {
           errors.push(`route camera duration must be positive ${chapter.chapterId}`);
         }
         // Presence is the live check; the two `typeof` guards restate a
         // guarantee the structural pass already enforces, so a non-boolean flag
         // is reported as `chapter arrival flags invalid` and never reaches here.
         // They stay so this branch reads as the complete arrival contract.
-        if (
-          !chapter.arrival
-          || typeof chapter.arrival.showPlaceLabel !== "boolean"
+        if (geometry?.isStop === false ? chapter.arrival !== undefined : (
+          !chapter.arrival || typeof chapter.arrival.showPlaceLabel !== "boolean"
           || typeof chapter.arrival.showNote !== "boolean"
-        ) {
+        )) {
           errors.push(`quick recap route arrival mismatch ${chapter.chapterId}`);
         }
         // Guarded on presence so a chapter with no arrival reports the missing
@@ -817,6 +826,10 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   }
 
   if (plan.mode === "quick-recap") {
+    for (const routePointId of input.routePointIds) {
+      if (input.routePointGeometry?.[routePointId]?.isStop === true
+        && !seenQuickRecapChapterScopes.has(`route:${routePointId}`)) errors.push(`stop chapter omitted ${routePointId}`);
+    }
     const eligibleDigests = quickRecapEligibleDigests;
     const eligibleById = new Map(eligibleDigests.map((digest) => [digest.assetId, digest]));
     const omissionSet = new Set<string>();

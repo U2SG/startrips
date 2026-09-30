@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPlaybackSteps,
+  committedPlaybackPosition,
   playbackMediaForPoint,
   playbackStepIdentity,
   routePointAngularDistance,
+  playbackTravelAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
 import { resolveNarrativeTiming, type NarrativeTempo } from "./narrativeTiming";
@@ -75,6 +77,74 @@ function homeContext(): HomeNarrativeContext {
 }
 
 describe("Quick Recap playback handoff (#127)", () => {
+  it("shares Full's Stop/via membership, includes empty Stops, and returns folded media to its original owner (#342)", () => {
+    const trip = fixture();
+    trip.coverMediaAssetId = null;
+    trip.routePoints = [
+      { ...point("p0", 0), latitude: 0, longitude: 0, regionContext: "A" },
+      { ...point("p1", 1), latitude: 2, longitude: 2, isStop: false },
+      { ...point("p2", 2), latitude: 0.1, longitude: 0.1, isStop: false, regionContext: "A", stayAnchorRoutePointId: "p0" },
+      { ...point("p3", 3), latitude: 1, longitude: 1, isStop: false },
+      { ...point("p4", 4), latitude: 2, longitude: 3, regionContext: "B" },
+      { ...point("p5", 5), latitude: 3, longitude: 4, isStop: false },
+    ];
+    trip.media = [media("child-photo", "p2"), media("via-photo", "p3", "image/jpeg", 1)];
+    const before = structuredClone(trip);
+    const prepared = prepareQuickRecapPlayback(trip, { generatedAt: "2026-09-28T00:00:00.000Z" })!;
+    expect(prepared).not.toBeNull();
+    expect(prepared.plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["p0", "p3", "p4"]);
+    expect(prepared.plan.chapters.map((chapter) => chapter.items.map((item) => item.assetId))).toEqual([["child-photo"], ["via-photo"], []]);
+    expect(prepared.plan.chapters[1].arrival).toBeUndefined();
+    expect(prepared.plan.chapters[2].arrival).toBeDefined();
+    expect(prepared.journey.routePoints).toEqual(trip.routePoints);
+    const recapSteps = buildPlaybackSteps(prepared.journey);
+    expect(recapSteps).toEqual(buildPlaybackSteps(trip));
+    expect(committedPlaybackPosition(prepared.journey, recapSteps[2])).toEqual({ journeyId: trip.id, routePointId: "p2", assetId: "child-photo" });
+    expect(runtimeChapterDurationMs(prepared, "standard")).toEqual({ total: prepared.plan.plannedDurationMs, unpriced: 0 });
+    expect(validateAutoEditPlanV1(prepared.plan, {
+      journeyId: trip.id, journeyRevision: String(trip.revision), routePointIds: trip.routePoints.map((point) => point.id),
+      digests: quickRecapDigestsForJourney(trip), routePointGeometry: quickRecapRouteGeometry(trip, trip.routePoints.map((point) => point.id)),
+    }).errors).toEqual([]);
+    expect(trip).toEqual(before);
+  });
+
+  it.each(["p0", "p2", null])("agrees with Full on persisted owner %s within one inferred city stay", (owner) => {
+    const trip = fixture();
+    trip.coverMediaAssetId = null;
+    trip.routePoints = [
+      { ...point("p0", 0), latitude: 0, longitude: 0, regionContext: "A" },
+      { ...point("p1", 1), latitude: 0.05, longitude: 0.05, isStop: false, regionContext: "A", stayAnchorRoutePointId: owner },
+      { ...point("p2", 2), latitude: 0.1, longitude: 0.1, regionContext: "A" },
+    ];
+    trip.media = [media("child-photo", "p1")];
+    const before = structuredClone(trip);
+    const prepared = prepareQuickRecapPlayback(trip, { generatedAt: "2026-09-29T00:00:00.000Z" })!;
+    expect(prepared).not.toBeNull();
+    expect(prepared.plan.chapters.filter((chapter) => chapter.items.length > 0).map((chapter) => chapter.routePointId))
+      .toEqual([owner ?? "p1"]);
+    const recapSteps = buildPlaybackSteps(prepared.journey);
+    expect(recapSteps).toEqual(buildPlaybackSteps(trip));
+    expect(committedPlaybackPosition(prepared.journey, recapSteps.find((step) => step.kind === "media")!))
+      .toEqual({ journeyId: trip.id, routePointId: "p1", assetId: "child-photo" });
+    expect(prepared.journey.routePoints).toEqual(trip.routePoints);
+    expect(trip).toEqual(before);
+  });
+
+  it("does not book a fabricated arrival or travel for a first media-only via (#342)", () => {
+    const trip = fixture();
+    trip.coverMediaAssetId = null;
+    trip.routePoints = [{ ...point("p0", 0), isStop: false }, point("p1", 1)];
+    trip.media = [media("via-photo", "p0")];
+    const prepared = prepareQuickRecapPlayback(trip, { generatedAt: "2026-09-28T00:00:00.000Z" })!;
+    expect(prepared.plan.chapters[0].camera).toEqual({ primitive: "hold", durationMs: 0 });
+    expect(prepared.plan.chapters[0].arrival).toBeUndefined();
+    expect(runtimeChapterDurationMs(prepared, "standard")).toEqual({ total: prepared.plan.plannedDurationMs, unpriced: 0 });
+    expect(validateAutoEditPlanV1(prepared.plan, {
+      journeyId: trip.id, journeyRevision: String(trip.revision), routePointIds: ["p0", "p1"],
+      digests: quickRecapDigestsForJourney(trip), routePointGeometry: quickRecapRouteGeometry(trip, ["p0", "p1"]),
+    }).valid).toBe(true);
+  });
+
   it("projects Journey-scoped photos into the first playable recap chapter without mutating ownership", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
@@ -92,7 +162,10 @@ describe("Quick Recap playback handoff (#127)", () => {
 
     const prepared = prepareQuickRecapPlaybackResult(journey, { generatedAt: "2026-09-03T00:00:00.000Z" });
     expect(prepared.fallbackReason).toBeNull();
-    expect(prepared.playback?.journey.media.find((asset) => asset.id === "intro-a")?.routePointId).toBe("p0");
+    expect(prepared.playback?.journey.media.find((asset) => asset.id === "intro-a")?.routePointId).toBeNull();
+    expect(playbackMediaForPoint(prepared.playback!.journey, 0).map((asset) => asset.id)).toEqual(["intro-a", "intro-b"]);
+    expect(committedPlaybackPosition(prepared.playback!.journey, { kind: "media", pointIndex: 0, mediaIndex: 0 }))
+      .toEqual({ journeyId: journey.id, routePointId: null, assetId: "intro-a" });
     expect(journey.media.find((asset) => asset.id === "intro-a")?.routePointId).toBeNull();
   });
 
@@ -256,7 +329,36 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(journey.media.find((asset) => asset.id === "cover")?.routePointId).toBe("p1");
 
     const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
-    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.routePointId).toBe("p0");
+    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.routePointId).toBe("p1");
+    expect(committedPlaybackPosition(prepared.journey, { kind: "media", pointIndex: 0, mediaIndex: 0 }))
+      .toEqual({ journeyId: journey.id, routePointId: "p1", assetId: "cover" });
+  });
+
+  it("opens with a later Stop's child cover while returning to its exact canonical owner", () => {
+    const trip = fixture();
+    trip.routePoints = [
+      point("opening-stop", 0),
+      point("stop-a", 1),
+      { ...point("child", 2), isStop: false, stayAnchorRoutePointId: "stop-a" },
+    ];
+    trip.coverMediaAssetId = "child-cover";
+    trip.media = [media("opening", "opening-stop"), media("sibling", "child", "image/jpeg", 1),
+      media("child-cover", "child", "image/jpeg", 99)];
+    const canonical = structuredClone(trip);
+    const prepared = prepareQuickRecapPlayback(trip, { generatedAt: "2026-09-29T00:00:00.000Z" })!;
+    expect(prepared.plan.chapters[0].items[0].assetId).toBe("child-cover");
+    expect(prepared.plan.chapters[1].items.map((item) => item.assetId)).toContain("sibling");
+    expect(prepared.journey.routePoints).toEqual(canonical.routePoints);
+    expect(prepared.journey.media.find((asset) => asset.id === "child-cover"))
+      .toBe(trip.media.find((asset) => asset.id === "child-cover"));
+    const mediaSteps = buildPlaybackSteps(prepared.journey).filter((step) => step.kind === "media");
+    expect(playbackStepIdentity(prepared.journey, mediaSteps[0])).toBe("media:child-cover");
+    expect(committedPlaybackPosition(prepared.journey, mediaSteps[0])).toEqual({
+      journeyId: trip.id, routePointId: "child", assetId: "child-cover",
+    });
+    expect(runtimeChapterDurationMs(prepared, "standard"))
+      .toEqual({ total: prepared.plan.plannedDurationMs, unpriced: 0 });
+    expect(trip).toEqual(canonical);
   });
 
   it("puts the explicit cover first in both the plan and projected playback order", () => {
@@ -275,14 +377,14 @@ describe("Quick Recap playback handoff (#127)", () => {
     const openingChapter = prepared.plan.chapters.find((chapter) => chapter.routePointId === "p0")!;
     expect(openingChapter.items[0]?.assetId).toBe("cover");
     expect(playbackMediaForPoint(prepared.journey, 0)[0]?.id).toBe("cover");
-    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.sortOrder).toBe(Number.MIN_SAFE_INTEGER);
+    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.sortOrder).toBe(99);
     expect(journey.media.find((asset) => asset.id === "cover")?.sortOrder).toBe(99);
   });
 
   it("budgets only route points that can produce recap chapters", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
-    journey.routePoints = Array.from({ length: 64 }, (_, index) => point(`p${index}`, index));
+    journey.routePoints = Array.from({ length: 64 }, (_, index) => ({ ...point(`p${index}`, index), isStop: index === 0 }));
     journey.media = [
       ...Array.from({ length: 12 }, (_, index) => media(`p0-${index}`, "p0", "image/jpeg", index)),
       media("track", null, "audio/mpeg", 99),
@@ -310,15 +412,15 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })).toBeNull();
   });
 
-  it("omits route points that have no recap chapter so empty Full Playback timing cannot leak in", () => {
+  it("retains shaping geometry without creating empty via chapters", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
-    journey.routePoints = Array.from({ length: 64 }, (_, index) => point(`p${index}`, index));
+    journey.routePoints = Array.from({ length: 64 }, (_, index) => ({ ...point(`p${index}`, index), isStop: index === 0 }));
     journey.media = [media("only-photo", "p0", "image/jpeg", 0), media("track", null, "audio/mpeg", 1)];
 
     const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
     expect(prepared.plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["p0"]);
-    expect(prepared.journey.routePoints.map((routePoint) => routePoint.id)).toEqual(["p0"]);
+    expect(prepared.journey.routePoints).toEqual(journey.routePoints);
     expect(buildPlaybackSteps(prepared.journey).some((step) => step.kind === "travel")).toBe(false);
   });
 
@@ -779,25 +881,25 @@ describe("Quick Recap planner and runtime timing parity (S1, follow-up to #208 a
     expect(arrivalMsFor(journey, "p1")).toBeGreaterThan(arrivalMsFor(journey, "p0"));
   });
 
-  it("books the leg the recap actually flies over a route point it drops", () => {
+  it("books every shaping segment without giving the via a chapter", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
     journey.routePoints = [
       { ...point("p0", 0), latitude: 22.3, longitude: 114.1 },
       // No media, so this point never becomes a chapter and the camera flies past it.
-      { ...point("p1", 1), latitude: 35.7, longitude: 139.7 },
+      { ...point("p1", 1), latitude: 35.7, longitude: 139.7, isStop: false },
       { ...point("p2", 2), latitude: 51.5, longitude: -0.13 },
     ];
     journey.media = [media("p0-a", "p0", "image/jpeg", 0), media("p2-a", "p2", "image/jpeg", 1)];
 
     const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-04T00:00:00.000Z" })!;
-    expect(prepared.journey.routePoints.map((routePoint) => routePoint.id)).toEqual(["p0", "p2"]);
+    expect(prepared.journey.routePoints.map((routePoint) => routePoint.id)).toEqual(["p0", "p1", "p2"]);
     expect(prepared.plan.chapters.find((chapter) => chapter.routePointId === "p2")!.camera.durationMs).toBe(
       resolveNarrativeTiming({
         mode: "quick-recap",
         tempo: "standard",
         segmentKind: "travel",
-        routeDistanceRadians: routePointAngularDistance(journey.routePoints[0], journey.routePoints[2]),
+        routeDistanceRadians: playbackTravelAngularDistance(journey, 2, 0),
       }),
     );
     expect(runtimeChapterDurationMs(prepared, "standard")).toEqual({

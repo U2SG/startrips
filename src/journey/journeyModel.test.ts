@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   applyScopeReorder,
+  buildRecordedTrackLodLevels,
+  recordedTrackLodConstructionCount,
+  recordedTrackSampleTimes,
+  recordedTrackVisibleSampleCount,
   deriveJourneyStaySummaries,
   journeyOverviewRoutePointIds,
   groupJourneysByYear,
@@ -9,6 +13,8 @@ import {
   journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
+  resolveRouteProvenance,
+  resolveSuggestedRouteDecision,
   sortJourneysChronologically,
   stripMediaExtension,
   toJourneyRoutes,
@@ -17,6 +23,64 @@ import {
   validateJourneySoundtrack,
 } from "./journeyModel";
 import type { Journey, JourneyInput, JourneyMediaAsset } from "./types";
+
+describe("recorded track time and reusable LOD", () => {
+  it("requires complete monotonic timestamps before treating samples as temporal evidence", () => {
+    const sample = (recordedAt?: string | null) => ({ lat: 22, lon: 114, recordedAt });
+    const start = "2026-09-01T00:00:00.000Z";
+    const end = "2026-09-01T00:00:10.000Z";
+    for (const points of [
+      [sample(), sample()],
+      [sample(start), sample(null), sample(end)],
+      [sample(start), sample("invalid")],
+      [sample(end), sample(start)],
+      [sample(start), sample(start)],
+    ]) expect(recordedTrackSampleTimes(points)).toBeNull();
+    const times = recordedTrackSampleTimes([sample(start), sample(start), sample(end)])!;
+    expect(recordedTrackVisibleSampleCount(times, Date.parse(start) - 1)).toBe(0);
+    expect(recordedTrackVisibleSampleCount(times, Date.parse(start))).toBe(2);
+    expect(recordedTrackVisibleSampleCount(times, Date.parse(end))).toBe(3);
+    expect(recordedTrackVisibleSampleCount(times)).toBe(3);
+  });
+
+  it("precomputes four 100k-sample levels once and retains both gap boundaries", () => {
+    const points = Array.from({ length: 100_000 }, (_, index) => ({
+      lat: 22 + index * 0.000004 + Math.sin(index / 30) * 0.001,
+      lon: 114 + index * 0.00002,
+    }));
+    const before = recordedTrackLodConstructionCount();
+    const levels = buildRecordedTrackLodLevels(points);
+    expect(levels).toHaveLength(4);
+    expect(levels[0].points).toHaveLength(100_000);
+    expect(levels.at(-1)!.points.length).toBeLessThan(100_000);
+    for (let repeat = 0; repeat < 8; repeat += 1) expect(buildRecordedTrackLodLevels(points)).toBe(levels);
+    expect(recordedTrackLodConstructionCount()).toBe(before + 1);
+    for (const level of levels) {
+      expect(level.points[0]).toBe(points[0]);
+      expect(level.points.at(-1)).toBe(points.at(-1));
+    }
+  });
+});
+
+describe("route provenance evidence (#342)", () => {
+  it("never upgrades geometry-only evidence into historical route truth", () => {
+    expect(resolveRouteProvenance({ geometryPresent: true })).toBe("sparse-relation");
+    expect(resolveRouteProvenance({ geometryPresent: true, suggested: true })).toBe("suggested-route");
+    expect(resolveRouteProvenance({ geometryPresent: true, userShaped: true })).toBe("user-shaped-route");
+  });
+
+  it("promotes a suggestion only after explicit confirmation", () => {
+    expect(resolveSuggestedRouteDecision("confirm", "sparse-relation"))
+      .toBe("user-confirmed-route");
+  });
+
+  it("restores the supplied evidence tier when a suggestion is rejected", () => {
+    expect(resolveSuggestedRouteDecision("none-of-these", "sparse-relation"))
+      .toBe("sparse-relation");
+    expect(resolveSuggestedRouteDecision("none-of-these", "user-shaped-route"))
+      .toBe("user-shaped-route");
+  });
+});
 
 function input(overrides: Partial<JourneyInput> = {}): JourneyInput {
   return {
@@ -185,6 +249,30 @@ describe("journeyModel", () => {
       .map((summary) => summary.routePointIds)).toEqual([["unknown-b"], ["same-name-a"]]);
     const noVisibleStays = deriveJourneyStaySummaries(trip, { includedRoutePointIds: new Set() });
     expect(journeyOverviewRoutePointIds(trip, noVisibleStays)).toEqual([]);
+  });
+
+  it("preserves explicit child membership while filtering media and authorized route points", () => {
+    const trip = journey("via-stay", "2026-08-11");
+    trip.routePoints = [
+      { id: "stop-a", journeyId: trip.id, sortOrder: 0, latitude: 0, longitude: 0, label: "A", isStop: true, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+      { id: "shape", journeyId: trip.id, sortOrder: 1, latitude: 0.1, longitude: 0.1, label: "shape", isStop: false, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+      { id: "child", journeyId: trip.id, sortOrder: 2, latitude: 0.2, longitude: 0.2, label: "child", isStop: false, occurredAt: null, regionContext: "A", stayAnchorRoutePointId: "stop-a", createdAt: trip.createdAt },
+      { id: "unknown", journeyId: trip.id, sortOrder: 3, latitude: 0.2, longitude: 0.2, label: "unknown", isStop: false, occurredAt: null, createdAt: trip.createdAt },
+      { id: "distant", journeyId: trip.id, sortOrder: 4, latitude: 20, longitude: 20, label: "distant", isStop: false, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
+    ];
+    trip.media = ["child", "unknown", "distant"].map((routePointId, sortOrder) => ({
+      id: `${routePointId}-photo`, journeyId: trip.id, routePointId, storageDriver: "test", storageKey: routePointId,
+      fileName: `${routePointId}.jpg`, mimeType: "image/jpeg", bytes: 1, sortOrder,
+      uploadedByUserId: "user-1", createdAt: trip.createdAt,
+    }));
+    const before = structuredClone(trip);
+    expect(deriveJourneyStaySummaries(trip)).toEqual([expect.objectContaining({
+      id: `stay:${trip.id}:stop-a`, anchorRoutePointId: "stop-a", routePointIds: ["stop-a", "child"], mediaAssetIds: ["child-photo"],
+    })]);
+    expect(deriveJourneyStaySummaries(trip, { includedMediaAssetIds: new Set(["unknown-photo"]) })[0])
+      .toMatchObject({ routePointIds: ["stop-a", "child"], mediaAssetIds: [] });
+    expect(deriveJourneyStaySummaries(trip, { includedRoutePointIds: new Set(["stop-a", "distant"]) })[0].routePointIds).toEqual(["stop-a"]);
+    expect(trip).toEqual(before);
   });
 
   it("keeps the full route/provenance matrix intact while deriving stays (#514)", () => {

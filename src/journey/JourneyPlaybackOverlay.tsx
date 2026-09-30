@@ -38,6 +38,7 @@ import {
   playbackMediaForStep,
   playbackHoldTargetMedia,
   playbackStepIdentity,
+  playbackFactualRouteText,
   isPlaybackTransitRoutePoint,
   routePointChapterDensity,
   type CommittedPlaybackPosition,
@@ -78,7 +79,7 @@ import {
   writeAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
-import type { Journey, JourneyMediaAsset } from "./types";
+import type { Journey, JourneyMediaAsset, JourneyRoute } from "./types";
 import type { PlaybackReturnReason } from "./playbackReturn";
 import {
   createPlaybackMediaLifecycleActor,
@@ -190,8 +191,10 @@ export function JourneyPlaybackOverlay({
   quickRecapSourceJourney,
   statusMessage,
   homeNarrativeContext,
+  playbackRoute,
 }: {
   journey: Journey | null;
+  playbackRoute?: Pick<JourneyRoute, "points" | "segmentProvenance"> | null;
   onClose: (handoff: { reason: PlaybackReturnReason; position: CommittedPlaybackPosition | null }) => void;
   onCameraTargetChange: (target: PlaybackCameraTarget, explicitlySelected: boolean) => void;
   cameraFollowing?: boolean;
@@ -1213,6 +1216,14 @@ export function JourneyPlaybackOverlay({
     : step?.kind === "travel"
       ? journey.routePoints[step.to]
       : null;
+  const factualTravelClaim = step?.kind === "travel" && activePoint
+    ? playbackFactualRouteText(
+      playbackRoute,
+      step.to,
+      `实际路线到 ${activePoint.label || `途径点 ${step.to + 1}`}`,
+      step.from,
+    )
+    : null;
   // #456: one Route Point is one chapter. The arrival caption and the chapter's
   // media live in the SAME container across the stop -> media seam, so entering
   // the memory reflows one surface instead of swapping two full-screen ones.
@@ -1359,7 +1370,11 @@ export function JourneyPlaybackOverlay({
             </div>
             <p>正在前往</p>
             <h3>{activePoint.label || `途径点 ${step?.kind === "travel" ? step.to + 1 : (chapterPointIndex ?? 0) + 1}`}</h3>
-            <div className="journey-playback__route-hint" aria-hidden="true">
+            <div
+              className="journey-playback__route-hint"
+              aria-hidden={factualTravelClaim ? undefined : true}
+              aria-label={factualTravelClaim ?? undefined}
+            >
               <span />
             </div>
           </div>

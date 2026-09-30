@@ -25,7 +25,7 @@ export function playbackMapBridgeBoundary(
     direction = "map-to-media";
     pointIndex = next.pointIndex;
   } else if (previous.kind === "media" && (
-    (next.kind === "travel" && next.to === previous.pointIndex + 1)
+    (next.kind === "travel" && (next.from ?? next.to - 1) === previous.pointIndex)
     || (next.kind === "stop" && next.pointIndex === previous.pointIndex + 1)
     || next.kind === "outro" || next.kind === "home-epilogue"
   )) {

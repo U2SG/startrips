@@ -81,6 +81,7 @@ async function mountApp() {
   const previewRequested = import.meta.env.DEV && !localDemo && (
     sharedQa || (!shared && knownAppPath && Boolean(params.get("qaState")))
   );
+  const mediaMotionLab = previewRequested && params.get("qaState") === "media-motion-lab";
   const previews = import.meta.env.DEV && previewRequested
     ? await (await import("./preview/qaEntry")).resolveQaExperience(params, sharedQa)
     : null;
@@ -99,7 +100,7 @@ async function mountApp() {
               sharedQa ? previews?.LivingAtlasGlobeChromeQa : undefined
             }
           />
-        ) : (
+        ) : mediaMotionLab ? <Experience /> : (
           <SessionEarthExperienceProvider>
             <AuthGateway>
               <Experience />
