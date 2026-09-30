@@ -78,10 +78,12 @@ import {
   routeDraftSearchFocus,
   routeDraftToInput,
   routePointStayOwnershipTargets,
+  routeDraftFingerprint,
   setRoutePointStayAnchor,
   suggestPointLabel,
   toggleRouteStop,
   updateRoutePoint,
+  type RouteDraftMediaRef,
   type RouteDraftPoint,
 } from "./routeDraft";
 import {
@@ -356,6 +358,21 @@ function RoutePointPositionEditor({
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * The close guard has to notice a picked photo being moved between Route
+ * Points, or swapped for a different file, so the fingerprint carries the
+ * ownership alongside the File's own identity rather than just counting.
+ */
+function mediaRefs(files: readonly PendingJourneyMedia[]): RouteDraftMediaRef[] {
+  return files.map(({ file, routePointDraftId }) => ({
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    lastModified: file.lastModified,
+    routePointDraftId,
+  }));
 }
 
 export function JourneyComposer({
@@ -1087,13 +1104,19 @@ export function JourneyComposer({
   // mount. Comparing against the props would be wrong for `routePoints`: editing
   // an existing Journey starts with that Journey's points, so "non-empty" is not
   // the same as "edited", and every edit session would look dirty on open.
+  //
+  // The baseline is a content fingerprint, not an identity list. A draft-id
+  // comparison cannot see an edit to an existing Route Point — its label, note,
+  // coordinates, Stop flag and stay ownership all move while the id stands
+  // still — so the guard would sit silent through exactly the edits it exists to
+  // protect. Same for a media count: reassigning a picked photo to another Route
+  // Point, or swapping one file for another, leaves the count untouched.
   const initialDraftRef = useRef<{
     title: string;
     note: string;
     lightColor: typeof LIGHT_COLORS[number];
     lightEffect: LightEffectId | null;
-    routePointKeys: string;
-    mediaCount: number;
+    fingerprint: string;
   } | null>(null);
   if (initialDraftRef.current === null) {
     initialDraftRef.current = {
@@ -1101,8 +1124,7 @@ export function JourneyComposer({
       note: journey?.note ?? recoveryInput?.note ?? "",
       lightColor: journey?.lightColor ?? recoveryInput?.lightColor ?? LIGHT_COLORS[0],
       lightEffect: journey?.lightEffect ?? recoveryInput?.lightEffect ?? null,
-      routePointKeys: routePoints.map((point) => point.draftId).join("|"),
-      mediaCount: mediaFiles.length,
+      fingerprint: routeDraftFingerprint(routePoints, mediaRefs(mediaFiles)),
     };
   }
   const initialDraft = initialDraftRef.current;
@@ -1112,8 +1134,7 @@ export function JourneyComposer({
     || note !== initialDraft.note
     || lightColor !== initialDraft.lightColor
     || lightEffect !== initialDraft.lightEffect
-    || routePoints.map((point) => point.draftId).join("|") !== initialDraft.routePointKeys
-    || mediaFiles.length !== initialDraft.mediaCount
+    || routeDraftFingerprint(routePoints, mediaRefs(mediaFiles)) !== initialDraft.fingerprint
     || metadataEditedRef.current.startedOn
     || metadataEditedRef.current.endedOn
   );
