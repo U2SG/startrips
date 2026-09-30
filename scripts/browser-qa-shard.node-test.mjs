@@ -59,3 +59,28 @@ test("a failed logical suite also leaves later suites diagnostic coverage", asyn
   assert.equal(result, 1);
   assert.deepEqual(executed, ["first", "second"]);
 });
+
+test("timing evidence records success, timeout and throw without suppressing later suites", async () => {
+  const timings = [];
+  let clock = 0;
+  const code = await runShard(parseEntries("ok::one\ntimeout::two\nthrows::three"), {
+    now: () => (clock += 125),
+    execute: async (_, { suite }) => {
+      if (suite === "throws") throw new Error("fixture execution error");
+      return { ok: suite === "ok", timedOut: suite === "timeout" };
+    },
+    record: (row) => timings.push(row), log: () => {}, error: () => {},
+  });
+  assert.equal(code, 1);
+  assert.deepEqual(timings.map((row) => row.status), ["passed", "timed_out", "failed"]);
+  assert.ok(timings.every((row) => row.durationMs === 125 && row.timeoutMs === 720000));
+});
+
+test("timing writer failure fails closed but preserves sibling coverage", async () => {
+  const ran = [];
+  assert.equal(await runShard(parseEntries("first::one\nsecond::two"), {
+    execute: async (_, { suite }) => { ran.push(suite); return { ok: true }; },
+    record: () => { throw new Error("disk fixture"); }, log: () => {}, error: () => {},
+  }), 1);
+  assert.deepEqual(ran, ["first", "second"]);
+});

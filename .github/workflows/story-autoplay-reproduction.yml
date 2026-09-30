@@ -10,6 +10,8 @@ on:
       - src/styles/living-atlas.css
       - scripts/qa-story-autoplay-reproduction.mjs
       - scripts/qa-story-autoplay-pixels.mjs
+      - scripts/ci-browser-runtime.mjs
+      - scripts/ci-ensure-ffmpeg.sh
       - .github/workflows/story-autoplay-reproduction.yml
 
 permissions:
@@ -22,13 +24,14 @@ concurrency:
 jobs:
   production-autoplay:
     name: production autoplay / ${{ matrix.mode }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         mode: [baseline, candidate]
     env:
+      QA_PLAYWRIGHT_VERSION: '1.55.0'
       # #489 R3's confirmed failing deployment after #564 merged.
       R3_BASELINE_SHA: aad077b848e75ee95f5275634e9ddbaf93b0a14b
       QA_HARNESS_SHA: ${{ github.event.pull_request.head.sha }}
@@ -44,6 +47,8 @@ jobs:
           cp scripts/qa-story-autoplay-reproduction.mjs "$RUNNER_TEMP/r3-harness.mjs"
           cp scripts/qa-story-autoplay-pixels.mjs "$RUNNER_TEMP/r3-pixels.mjs"
           cp scripts/qa-browser.mjs "$RUNNER_TEMP/r3-browser.mjs"
+          cp scripts/ci-browser-runtime.mjs "$RUNNER_TEMP/r3-runtime.mjs"
+          cp scripts/ci-ensure-ffmpeg.sh "$RUNNER_TEMP/r3-ffmpeg.sh"
           if [ "$QA_R3_MODE" = baseline ]; then
             git checkout --detach "$R3_BASELINE_SHA"
           fi
@@ -51,6 +56,8 @@ jobs:
           cp "$RUNNER_TEMP/r3-harness.mjs" scripts/qa-story-autoplay-reproduction.mjs
           cp "$RUNNER_TEMP/r3-pixels.mjs" scripts/qa-story-autoplay-pixels.mjs
           cp "$RUNNER_TEMP/r3-browser.mjs" scripts/qa-browser.mjs
+          cp "$RUNNER_TEMP/r3-runtime.mjs" scripts/ci-browser-runtime.mjs
+          cp "$RUNNER_TEMP/r3-ffmpeg.sh" scripts/ci-ensure-ffmpeg.sh
       - uses: pnpm/action-setup@v6
         with:
           version: 10.17.1
@@ -59,14 +66,20 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright-core install --with-deps chromium
+        timeout-minutes: 3
+      # QA already selects the hosted image's Chrome. Do not download unused
+      # Chromium or run apt for its dependencies; recording only needs this helper.
+      - name: Install Playwright video recorder only
+        timeout-minutes: 2
+        env:
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: '20000'
+        run: pnpm exec playwright-core install ffmpeg
+      - name: Verify preinstalled browser runtime
+        timeout-minutes: 1
+        run: node scripts/ci-browser-runtime.mjs
       - name: Ensure FFmpeg is available for public fixtures and recorded keyframes
-        run: |
-          set -euo pipefail
-          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg
-          fi
+        timeout-minutes: 3
+        run: bash scripts/ci-ensure-ffmpeg.sh
       - name: Build selected production source
         run: pnpm build
       - name: Observe real timer handoffs and captured foreground pixels
@@ -76,10 +89,10 @@ jobs:
           PREVIEW_PID=$!
           trap 'kill "$PREVIEW_PID" 2>/dev/null || true' EXIT
           for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then break; fi
+            if curl --max-time 2 --fail --silent http://127.0.0.1:4173/ > /dev/null; then break; fi
             sleep 1
           done
-          curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat "$RUNNER_TEMP/r3-preview.log" && exit 1)
+          curl --max-time 2 --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat "$RUNNER_TEMP/r3-preview.log" && exit 1)
           node scripts/qa-story-autoplay-reproduction.mjs
       - name: Upload synthetic continuous video, keyframes and writer trace
         if: always()
