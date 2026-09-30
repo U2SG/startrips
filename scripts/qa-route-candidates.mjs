@@ -77,6 +77,8 @@ function readMap(page) {
     pointCount: Number(host.dataset.journeyOverlayPointCount ?? 0),
     confirmedCount: Number(host.dataset.journeyOverlayConfirmedCount ?? 0),
     previewCount: Number(host.dataset.routeCandidatePreviewCount ?? 0),
+    renderedPreviewCount: window.__detailedEarthMapRenderedFeatureCount?.("startrips-road-candidate-preview-lines", "selected", true) ?? 0,
+    renderedConfirmedCount: window.__detailedEarthMapRenderedFeatureCount?.("startrips-active-journey-route", "provenance", "user-confirmed-route") ?? 0,
     revision: host.dataset.journeyOverlayRevision ?? "",
     camera: host.dataset.mapCameraObservation ?? "",
   }));
@@ -99,23 +101,28 @@ try {
   assert(baseline.pointCount === 3 && baseline.confirmedCount === 0, `baseline topology wrong: ${JSON.stringify(baseline)}`);
   assert(availabilityRequests === 0, "closed route editor requested provider availability");
   await page.getByRole("button", { name: "贴合道路" }).click();
+  await page.locator(".route-candidate-editor select").first().selectOption("1");
   await page.locator(".route-candidate-editor select").nth(1).selectOption("driving");
   assert(availabilityRequests === 1, "opening route editor did not request provider availability once");
   await page.getByRole("button", { name: "查看候选" }).click();
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
   await page.getByRole("button", { name: "路线 2" }).click();
+  await page.waitForFunction(() => window.__detailedEarthMapRenderedFeatureCount?.("startrips-road-candidate-preview-lines", "selected", true) > 0);
   const alternatives = await readMap(page);
   evidence.stages.push({ name: "alternatives", ...alternatives });
-  assert(alternatives.confirmedCount === 0 && alternatives.previewCount === 2
+  assert(alternatives.confirmedCount === 0 && alternatives.previewCount === 2 && alternatives.renderedPreviewCount > 0
     && alternatives.camera === baseline.camera, "candidates changed history or camera before confirmation");
   await page.screenshot({ path: `${artifactDir}/alternatives.png` });
 
   await page.getByRole("button", { name: "就是这条" }).click();
   await page.waitForFunction(() => document.querySelector("[data-qa-route-segment-decision]")?.getAttribute("data-qa-route-segment-decision") === "confirmed");
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayConfirmedCount === "1");
+  await page.waitForFunction(() => window.__detailedEarthMapRenderedFeatureCount?.("startrips-active-journey-route", "provenance", "user-confirmed-route") > 0
+    && window.__detailedEarthMapRenderedFeatureCount?.("startrips-road-candidate-preview-lines") === 0);
   const confirmed = await readMap(page);
   evidence.stages.push({ name: "confirmed", ...confirmed });
-  assert(confirmed.pointCount === baseline.pointCount && confirmed.previewCount === 0, "confirmation changed Route Point topology");
+  assert(confirmed.pointCount === baseline.pointCount && confirmed.previewCount === 0 && confirmed.renderedConfirmedCount > 0,
+    "confirmation did not render the selected route without changing Route Point topology");
   await page.screenshot({ path: `${artifactDir}/confirmed.png` });
 
   await page.getByRole("button", { name: "调整经过位置" }).click();
@@ -128,6 +135,7 @@ try {
   await page.getByRole("button", { name: "保存形状点" }).click();
   await page.waitForFunction(() => document.querySelector("[data-qa-route-segment-decision]")?.getAttribute("data-qa-route-segment-decision") === "open");
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayConfirmedCount === "0");
+  await page.waitForFunction(() => window.__detailedEarthMapRenderedFeatureCount?.("startrips-active-journey-route", "provenance", "user-confirmed-route") === 0);
   const shaped = await readMap(page);
   evidence.stages.push({ name: "shape-invalidated", ...shaped });
   assert(shaped.pointCount === baseline.pointCount && await page.locator(".route-shape-handle").count() === 0,

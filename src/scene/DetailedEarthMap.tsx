@@ -482,6 +482,7 @@ export default function DetailedEarthMap({
     setMapInstance(map);
     let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
     let debugScrollZoomActive: (() => boolean) | null = null;
+    let debugRenderedFeatureCount: ((layerId: string, property?: string, value?: string | boolean) => number) | null = null;
     let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
       journeyId: string;
       routePointId: string;
@@ -490,6 +491,7 @@ export default function DetailedEarthMap({
       const debugWindow = window as Window & {
         __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
         __detailedEarthMapScrollZoomActive?: () => boolean;
+        __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
       };
       debugProject = (longitude, latitude) => {
         const projected = map.project([longitude, latitude]);
@@ -499,6 +501,15 @@ export default function DetailedEarthMap({
       debugWindow.__detailedEarthMapProject = debugProject;
       debugScrollZoomActive = () => map.scrollZoom.isActive();
       debugWindow.__detailedEarthMapScrollZoomActive = debugScrollZoomActive;
+      debugRenderedFeatureCount = (layerId, property, value) => {
+        if (!map.getLayer(layerId)) return 0;
+        const features = map.queryRenderedFeatures(
+          [[0, 0], [map.getContainer().clientWidth, map.getContainer().clientHeight]],
+          { layers: [layerId] },
+        );
+        return property ? features.filter((feature) => feature.properties?.[property] === value).length : features.length;
+      };
+      debugWindow.__detailedEarthMapRenderedFeatureCount = debugRenderedFeatureCount;
     }
     // Register the one-shot load observation immediately after construction.
     // A tiny inline/QA style can become style-loaded before the rest of this
@@ -1243,6 +1254,7 @@ export default function DetailedEarthMap({
           __detailedEarthMapRemovalCount?: number;
           __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
           __detailedEarthMapScrollZoomActive?: () => boolean;
+          __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
           __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
             journeyId: string;
             routePointId: string;
@@ -1251,6 +1263,9 @@ export default function DetailedEarthMap({
         if (debugWindow.__detailedEarthMapProject === debugProject) delete debugWindow.__detailedEarthMapProject;
         if (debugWindow.__detailedEarthMapScrollZoomActive === debugScrollZoomActive) {
           delete debugWindow.__detailedEarthMapScrollZoomActive;
+        }
+        if (debugWindow.__detailedEarthMapRenderedFeatureCount === debugRenderedFeatureCount) {
+          delete debugWindow.__detailedEarthMapRenderedFeatureCount;
         }
         if (debugWindow.__detailedEarthJourneyRoutePointHit === debugJourneyRoutePointHit) {
           delete debugWindow.__detailedEarthJourneyRoutePointHit;
