@@ -3061,6 +3061,12 @@
 
 .journey-composer label > span,
 .journey-story-fields label > span,
+.journey-light-colors legend {
+  color: #718780;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
 /* Uncommitted-composer guard. A real nested alertdialog, not an inline banner.
    Deliberately NOT given a `position: relative` host on `.journey-composer`:
    that element currently has no positioning context, so `.journey-composer__more-menu`
@@ -3134,12 +3140,6 @@
   outline-offset: -4px;
 }
 
-.journey-light-colors legend {
-  color: #718780;
-  font-size: 9px;
-  letter-spacing: 0.1em;
-}
-
 .journey-composer input:not([type="checkbox"]):not([type="file"]),
 .journey-composer textarea {
   width: 100%;
@@ -3152,8 +3152,7 @@
      to specificity (0,3,1) — each `:not([type=…])` contributes its argument's —
      which silently beat the app-wide focus ring at (0,2,1). Every Composer text
      input therefore rendered with no outline, while the textarea half at
-     (0,1,1) kept it. Removing the opt-out lets both share the shared ring; the
-     underline rule below stays as the design-native second cue. */
+     (0,1,1) kept it. Removing the opt-out lets both share the shared ring. */
   background: transparent;
   color: var(--atlas-text);
 }
@@ -3163,12 +3162,15 @@
   color: #425652;
 }
 
-/* A 1px colour shift is a focus cue only by hue, which fails WCAG 2.2 SC 2.4.11
-   and SC 1.4.1. Thicken the underline to a 2px acid line instead, at a
-   specificity that actually outranks the base border above. */
+/* The focus cue is the shared ring above, so the underline only has to stay
+   design-native. Recolour it rather than thickening it: there is no global
+   `box-sizing: border-box`, so growing `border-bottom` from 1px to 2px adds a
+   real pixel of height to every Composer field on focus and reflows the form
+   under the pointer — a 1px colour change to acid is the better contrast cue
+   and costs no layout. */
 .journey-composer input:not([type="checkbox"]):not([type="file"]):focus,
 .journey-composer textarea:focus {
-  border-bottom: 2px solid var(--atlas-acid);
+  border-bottom-color: var(--atlas-acid);
 }
 
 .journey-location-search > button,
