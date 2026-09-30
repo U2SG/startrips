@@ -170,7 +170,7 @@ including draft PRs that are awaiting Source review. After its own inspection it
 records `.agent-artifacts/evaluations/<ST>-<SOURCE>-source-review.json` through:
 
 ```text
-STARTRIPS_ROLE=hourly-review python -B lib/action_plan.py feature_list.json <ST> --record-review <result.json>
+D:\\Python\\python.exe -B lib\\action_plan.py feature_list.json <ST> --record-review <result.json> --actor-role hourly-review
 ```
 
 The result is an evidence document, not a claim: `feature`, `pr`, `source_sha`,

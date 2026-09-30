@@ -140,7 +140,7 @@ bash run-loop.sh --carrier-lane=backend --carrier-token=synthetic-intake-probe -
                 self.seed()
                 result = self.invoke(self.command(payload))
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                self.assertIn('INTAKE_AMEND_DEFERRED', result.stderr)
+                self.assertNotIn('INTAKE_AMEND_DEFERRED', result.stderr)
                 self.assertIn('amend-deferred stage=context', result.stdout)
                 self.assertIn('CONTINUED_AFTER_INTAKE', result.stdout)
                 self.assertIn('SKIP=ST-001', result.stdout)
