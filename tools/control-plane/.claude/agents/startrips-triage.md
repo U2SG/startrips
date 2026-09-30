@@ -121,11 +121,18 @@ be one that runs in GitHub Actions — the loop runs no tests locally, so
 
 Form exactly one **verdict object**. Do not add `<<<INTAKE` / `INTAKE>>>` markers to the
 external verdict file: canonical intake adds those internal compatibility markers only after it
-validates the envelope identity. The recurring Orchestrator wraps this object as:
+validates the envelope identity. The recurring Orchestrator wraps this object with the exact
+issue evidence it just read. For mapped amend/follow-up modes it also includes the exact current
+ONE row token for that feature:
 
 ```json
-{"issue": 86, "mode": "new", "verdict": { ...this object... }}
+{"issue":86,"mode":"new","issue_snapshot_at":"<updatedAt>","issue_snapshot_comments":0,"verdict":{...}}
+{"issue":86,"mode":"amend","feature":"ST-123","feature_row_token":"<64-hex row token>","issue_snapshot_at":"<updatedAt>","issue_snapshot_comments":0,"verdict":{...}}
 ```
+
+A verdict file is single-snapshot evidence. If the issue revision/comment count or mapped row token
+changes before canonical apply, discard it and reason again from fresh evidence; never rewrite the
+envelope to match newer state.
 
 Skip verdict:
 
@@ -158,8 +165,9 @@ against the sole `feature_list.json` before forming it.
 
 When an issue already represented by a **pending auto-intake** row has moved, the Orchestrator reads
 that exact feature object plus the full issue and reasons only about the new issue window. The
-external envelope binds `issue`, `mode="amend"` and the exact `feature`; the nested verdict is
-one of these objects:
+external envelope binds `issue`, `mode="amend"`, the exact `feature`, the issue's observed
+`updatedAt` / comment count, and the exact current feature row token; the nested verdict is one
+of these objects:
 
 ```json
 {"unchanged": true, "reason": "the new comment repeats the same defect on a second device"}
@@ -204,8 +212,9 @@ Rules the parent enforces, so save yourself the rejected turn:
 
 When work already **merged** for an issue and that issue is open and moving again, the Orchestrator
 first establishes what actually landed on `main` from the merged PR/Git history, then reasons only
-about the residual gap. The external envelope binds `issue`, `mode="followup"` and the exact
-previous `feature`; the nested verdict is either a skip reason or a normal full feature object
+about the residual gap. The external envelope binds `issue`, `mode="followup"`, the exact
+previous `feature`, the issue's observed `updatedAt` / comment count, and that feature's exact
+current row token; the nested verdict is either a skip reason or a normal full feature object
 covering only that residual gap.
 
 Do not restate the part that shipped, and do not set follow-up placement yourself: canonical intake

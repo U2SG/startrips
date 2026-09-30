@@ -98,16 +98,20 @@ sole ONE, following `.claude/agents/startrips-triage.md` as a rubric only. It th
 ephemeral verdict envelope to the canonical intake boundary:
 
 ```json
-{"issue":86,"mode":"new","verdict":{...}}
-{"issue":86,"mode":"amend","feature":"ST-123","verdict":{...}}
-{"issue":86,"mode":"followup","feature":"ST-123","verdict":{...}}
+{"issue":86,"mode":"new","issue_snapshot_at":"<updatedAt>","issue_snapshot_comments":0,"verdict":{...}}
+{"issue":86,"mode":"amend","feature":"ST-123","feature_row_token":"<64-hex row token>","issue_snapshot_at":"<updatedAt>","issue_snapshot_comments":0,"verdict":{...}}
+{"issue":86,"mode":"followup","feature":"ST-123","feature_row_token":"<64-hex row token>","issue_snapshot_at":"<updatedAt>","issue_snapshot_comments":0,"verdict":{...}}
 ```
 
-`lib/intake.sh` binds the envelope to the exact issue/mode/feature before materializing the existing
-`<<<INTAKE ... INTAKE>>>` input consumed by `intake_json.py`. The existing safe-store transaction
-still assigns the ST id/priority, validates placement/dependencies/acceptance and performs the only
-ONE write. A missing verdict is a normal defer: it spends no intake budget, writes no skip, changes
-no ONE bytes and does not abort the loop. A mismatched/invalid envelope fails closed.
+`lib/intake.sh` binds every envelope to the exact issue revision/comment count the Orchestrator
+reasoned over; amend/follow-up also bind the exact mapped ONE row token. It re-reads both immediately
+before apply, and follow-up rechecks the row token again inside the append transaction. Known drift
+discards the verdict without mutating ONE; unreadable evidence remains UNKNOWN. Only then does intake
+materialize the existing `<<<INTAKE ... INTAKE>>>` input consumed by `intake_json.py`. The existing
+safe-store transaction still assigns the ST id/priority, validates placement/dependencies/acceptance
+and performs the only ONE write. A missing verdict is a normal defer: it spends no intake budget,
+writes no skip, changes no ONE bytes and does not abort the loop. A mismatched/invalid envelope fails
+closed.
 
 Candidates remain open issues that no feature already references and that are not in
 `.agent-artifacts/intake/skipped.json`, with `[P0]` then `[P1]` titles first and otherwise oldest
@@ -131,9 +135,16 @@ Manual/control-plane entry points:
 ```
 
 Verdict files/directories are caller-owned ephemeral evidence for one invocation, not another queue,
-owner registry or routing table. Audit state remains `.agent-artifacts/intake/decisions.log`, the
-validated per-invocation triage log and `skipped.json`. Use the `no-loop` label when exclusion must
-survive artifact cleanup.
+owner registry or routing table. Every envelope binds `issue`, `mode`, `issue_snapshot_at` and
+`issue_snapshot_comments` to the exact GitHub evidence used for reasoning; `amend` and `followup`
+also bind `feature` and the exact `feature_row_token` from ONE. Intake rejects a missing/mismatched
+binding as stale, re-reads the issue and mapped row immediately before apply, and keeps the existing
+in-transaction row guard for the final write. A raw intake candidate without such a verdict is
+Orchestrator work, not a LOCAL Backend wake condition; only a resulting registered Backend feature
+can wake the dedicated Backend hook.
+
+Audit state remains `.agent-artifacts/intake/decisions.log`, the validated per-invocation triage log
+and `skipped.json`. Use the `no-loop` label when exclusion must survive artifact cleanup.
 
 ### Concurrent amendment deferral
 

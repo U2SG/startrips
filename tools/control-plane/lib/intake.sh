@@ -199,17 +199,27 @@ if str(num) in s:
 PY
 }
 
-# Consume one external verdict. The envelope binds the verdict to the exact
-# issue and triage mode so stale/cross-issue evidence cannot be replayed.
-# Return 7 when no verdict exists: that is a normal defer, not UNKNOWN.
+# Consume one external verdict. The envelope is bound to the exact issue
+# evidence the Orchestrator reasoned over, and mapped modes are also bound to
+# the exact ONE row token. Return 7 when no verdict exists and 10 when the
+# supplied verdict is stale; both defer without mutating ONE.
 intake_triage() {
-  local num="$1" prompt="${2:-}" slug="${3:-}" verdict mode feature=""
+  local num="$1" prompt="${2:-}" slug="${3:-}" expected_upd="${4:-}" expected_cnt="${5:-}" expected_row="${6:-}"
+  local verdict mode feature="" validate_rc=0
   case "$slug" in
     "") mode="new" ;;
     amend-*) mode="amend"; feature="${slug#amend-}" ;;
     followup-*) mode="followup"; feature="${slug#followup-}" ;;
     *) echo "[intake] unsupported external triage slug: $slug" >&2; return 6 ;;
   esac
+  [[ -n "$expected_upd" && "$expected_cnt" =~ ^[0-9]+$ ]] || {
+    echo "[intake] issue #$num $mode snapshot evidence unavailable; state unchanged" >&2
+    return 6
+  }
+  if [[ "$mode" != "new" && ! "$expected_row" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[intake] issue #$num $mode row identity unavailable; state unchanged" >&2
+    return 6
+  fi
   intake_init_dirs
   INTAKE_LAST_LOG="$INTAKE_DIR/issue-$num${slug:+-$slug}-triage-${BASHPID}.log"
   : > "$INTAKE_LAST_LOG"
@@ -221,10 +231,10 @@ intake_triage() {
     echo "[intake] issue #$num $mode external-verdict-required; missing $verdict; state unchanged"
     return 7
   }
-  if ! python3 - "$verdict" "$INTAKE_LAST_LOG" "$num" "$mode" "$feature" <<'PY'
+  python3 - "$verdict" "$INTAKE_LAST_LOG" "$num" "$mode" "$feature" "$expected_upd" "$expected_cnt" "$expected_row" <<'PY' || validate_rc=$?
 import json, sys
 from pathlib import Path
-src, out, num_s, mode, feature = sys.argv[1:6]
+src, out, num_s, mode, feature, issue_updated, issue_comments, feature_row = sys.argv[1:9]
 path = Path(src)
 if path.is_symlink() or not path.is_file():
     raise SystemExit('verdict input must be a regular non-symlink file')
@@ -238,11 +248,31 @@ if envelope.get('issue') != int(num_s):
     raise SystemExit('verdict envelope issue mismatch')
 if envelope.get('mode') != mode:
     raise SystemExit('verdict envelope mode mismatch')
+
+def stale(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(10)
+
+if envelope.get('issue_snapshot_at') != issue_updated:
+    stale('verdict envelope issue snapshot mismatch')
+try:
+    bound_comments = int(envelope.get('issue_snapshot_comments'))
+except (TypeError, ValueError):
+    stale('verdict envelope issue comment snapshot missing')
+if bound_comments != int(issue_comments):
+    stale('verdict envelope issue comment snapshot mismatch')
+
 if mode == 'new':
     if envelope.get('feature') not in {None, ''}:
         raise SystemExit('new-issue verdict must not bind a feature')
-elif envelope.get('feature') != feature:
-    raise SystemExit('verdict envelope feature mismatch')
+    if envelope.get('feature_row_token') not in {None, ''}:
+        raise SystemExit('new-issue verdict must not bind a feature row')
+else:
+    if envelope.get('feature') != feature:
+        raise SystemExit('verdict envelope feature mismatch')
+    if envelope.get('feature_row_token') != feature_row:
+        stale('verdict envelope feature row token mismatch')
+
 verdict = envelope.get('verdict')
 if not isinstance(verdict, dict):
     raise SystemExit('verdict envelope missing object verdict')
@@ -250,9 +280,13 @@ Path(out).write_text(
     '<<<INTAKE\n' + json.dumps(verdict, ensure_ascii=False) + '\nINTAKE>>>\n',
     encoding='utf-8', newline='\n')
 PY
-  then
-    echo "[intake] invalid external verdict for issue #$num $mode; state unchanged" >&2
+  if [[ "$validate_rc" != "0" ]]; then
     : > "$INTAKE_LAST_LOG"
+    if [[ "$validate_rc" == "10" ]]; then
+      echo "[intake] stale external verdict for issue #$num $mode; state unchanged"
+      return 10
+    fi
+    echo "[intake] invalid external verdict for issue #$num $mode; state unchanged" >&2
     return 6
   fi
   cat "$INTAKE_LAST_LOG"
@@ -331,6 +365,20 @@ d = load_document(feat_p)
 before = json.dumps(d['features'], ensure_ascii=False, sort_keys=True)
 ids = {f['id'] for f in d['features']}
 by_id = {f['id']: f for f in d['features']}
+
+# Follow-up verdicts are bound to the exact shipped row the Orchestrator read.
+# Recheck inside the same Python apply transaction as the append so a row change
+# after shell-level revalidation cannot authorize a stale follow-up.
+expected_row = os.environ.get('INTAKE_EXPECTED_ROW', '').strip()
+if force_anchor:
+    if not expected_row:
+        raise SystemExit('follow-up expected row token unavailable')
+    from feature_state import row_token
+    anchor_row = by_id.get(force_anchor)
+    if anchor_row is None or row_token(anchor_row) != expected_row:
+        raise SystemExit(10)
+elif expected_row:
+    raise SystemExit('new-issue intake must not carry a feature row token')
 
 problems = []
 for key in ('phase', 'title', 'description'):
@@ -461,28 +509,44 @@ intake_resnapshot() {
 intake_issue() {
   local num="$1" decision reason fid phase anchor position rationale acc gate prio
   intake_init_dirs
-  local st upd="" cnt=""
+  local st upd="" cnt="" triage_rc=0 context_rc=0
   # The snapshot the created feature carries has to come from the same reader
   # the later comparison uses, or the very next reconcile sees a phantom move.
-  st="$(intake_issue_state "$num" || true)"
-  if [[ -n "$st" ]]; then
-    upd="$(intake_state_field "$st" updatedAt)"
-    cnt="$(intake_state_field "$st" comments)"
-  fi
+  st="$(intake_issue_state "$num")" || {
+    intake_record_decision "issue=$num snapshot-evidence-unknown mode=new; state unchanged"
+    return 6
+  }
+  [[ -n "$st" ]] || {
+    intake_record_decision "issue=$num snapshot-evidence-missing mode=new; state unchanged"
+    return 6
+  }
+  upd="$(intake_state_field "$st" updatedAt)"
+  cnt="$(intake_state_field "$st" comments)"
   if [[ "$INTAKE_DRY_RUN" == "1" ]]; then
     echo "=== Intake (dry run): $INTAKE_GH_REPO#$num ==="
   else
     echo "=== Intake: $INTAKE_GH_REPO#$num ==="
   fi
 
-  local triage_rc=0
-  intake_triage "$num" || triage_rc=$?
+  intake_triage "$num" "" "" "$upd" "$cnt" "" || triage_rc=$?
   if [[ "$triage_rc" == "7" ]]; then
     intake_record_decision "issue=$num external-verdict-required mode=new; state unchanged"
     return 0
   fi
+  if [[ "$triage_rc" == "10" ]]; then
+    intake_record_decision "issue=$num stale-external-verdict mode=new; state unchanged"
+    return 0
+  fi
   [[ "$triage_rc" == "0" ]] || return "$triage_rc"
   [[ -s "$INTAKE_LAST_LOG" ]] || { intake_record_decision "issue=$num triage-log-empty"; return 1; }
+
+  intake_revalidate_context "$num" "$upd" "$cnt" || context_rc=$?
+  if [[ "$context_rc" == "10" ]]; then
+    intake_record_decision "issue=$num stale-context-before-apply mode=new; state unchanged"
+    return 0
+  fi
+  [[ "$context_rc" == "0" ]] || return 6
+
   INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" intake_apply "$num" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num transaction-deferred; no stale result consumed"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || { intake_record_decision "issue=$num result-missing"; return 1; }
 
@@ -627,6 +691,50 @@ intake_issue_state() {
     --json number,state,updatedAt,comments,labels \
     --jq '{number: .number, state: .state, updatedAt: .updatedAt, comments: (.comments | length), labels: [.labels[].name]}' \
     2>/dev/null | tr -d '\r'
+}
+
+intake_feature_row_token() {
+python3 - "$INTAKE_FEATURES" "$1" "$INTAKE_ROOT/lib" <<'PY'
+import sys
+feat_p, fid, libdir = sys.argv[1:4]
+sys.path.insert(0, libdir)
+from feature_store import load_document
+from feature_state import row_token, target
+print(row_token(target(load_document(feat_p), fid)))
+PY
+}
+
+# Re-read the remote issue and, for mapped modes, the exact ONE row immediately
+# before applying a verdict. A known mismatch is a normal stale defer (10);
+# unreadable evidence remains UNKNOWN (6).
+intake_revalidate_context() {
+  local num="$1" expected_upd="$2" expected_cnt="$3" fid="${4:-}" expected_row="${5:-}"
+  local st current_upd current_cnt current_row
+  st="$(intake_issue_state "$num")" || {
+    echo "[intake] issue #$num context evidence UNKNOWN during revalidation" >&2
+    return 6
+  }
+  [[ -n "$st" ]] || {
+    echo "[intake] issue #$num context evidence missing during revalidation" >&2
+    return 6
+  }
+  current_upd="$(intake_state_field "$st" updatedAt)"
+  current_cnt="$(intake_state_field "$st" comments)"
+  if [[ "$current_upd" != "$expected_upd" || "$current_cnt" != "$expected_cnt" ]]; then
+    echo "[intake] issue #$num changed after verdict reasoning; stale verdict deferred"
+    return 10
+  fi
+  if [[ -n "$fid" ]]; then
+    current_row="$(intake_feature_row_token "$fid")" || {
+      echo "[intake] feature $fid row evidence UNKNOWN during revalidation" >&2
+      return 6
+    }
+    if [[ "$current_row" != "$expected_row" ]]; then
+      echo "[intake] feature $fid changed after verdict reasoning; stale verdict deferred"
+      return 10
+    fi
+  fi
+  return 0
 }
 
 intake_mapped_issue_numbers() {
@@ -1081,7 +1189,7 @@ intake_amend_failure() {
 }
 
 intake_amend() {
-  local num="$1" fid="$2" upd="$3" cnt="$4" dump decision reason changed snapshot expected_row amend_rc triage_rc
+  local num="$1" fid="$2" upd="$3" cnt="$4" dump decision reason changed snapshot expected_row amend_rc triage_rc context_rc
   case " ${FEATURE_SKIP:-} " in
     *" $fid "*)
       intake_record_decision "issue=$num feature=$fid amend deferred: already yielded in this invocation"
@@ -1099,15 +1207,28 @@ intake_amend() {
   IFS=$'\t' read -r dump expected_row <<< "$snapshot"
   [[ -n "$dump" && -n "$expected_row" ]] || return 6
   triage_rc=0
-  intake_triage "$num" "" "amend-$fid" || triage_rc=$?
-  [[ "$triage_rc" == "0" ]] || {
-    [[ "$triage_rc" == "7" ]] && return 0
-    return "$triage_rc"
-  }
+  intake_triage "$num" "" "amend-$fid" "$upd" "$cnt" "$expected_row" || triage_rc=$?
+  if [[ "$triage_rc" == "7" ]]; then
+    return 0
+  fi
+  if [[ "$triage_rc" == "10" ]]; then
+    intake_amend_failure "$fid" "$num" verdict 10
+    return $?
+  fi
+  [[ "$triage_rc" == "0" ]] || return "$triage_rc"
   [[ -s "$INTAKE_LAST_LOG" ]] || {
     intake_record_decision "issue=$num feature=$fid amend-log-empty"
     return 0
   }
+
+  context_rc=0
+  intake_revalidate_context "$num" "$upd" "$cnt" "$fid" "$expected_row" || context_rc=$?
+  if [[ "$context_rc" == "10" ]]; then
+    intake_amend_failure "$fid" "$num" context 10
+    return $?
+  fi
+  [[ "$context_rc" == "0" ]] || return 6
+
   INTAKE_EXPECTED_ROW="$expected_row" INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" \
     intake_apply_amend "$num" "$fid" "$INTAKE_LAST_LOG" || {
       amend_rc=$?
@@ -1199,7 +1320,7 @@ intake_mark_reopen_family() {
 
 # A passed feature's issue moved again while open: queue ONE follow-up after it.
 intake_followup() {
-  local num="$1" fid="$2" upd="$3" cnt="$4" decision reason newid prio st triage_rc
+  local num="$1" fid="$2" upd="$3" cnt="$4" decision reason newid prio st triage_rc context_rc apply_rc expected_row
   if ! intake_triage_available "$num" "followup-$fid"; then
     intake_record_decision "issue=$num feature=$fid external-verdict-required mode=followup; state unchanged"
     return 0
@@ -1208,21 +1329,43 @@ intake_followup() {
     intake_record_decision "issue=$num feature=$fid follow-up deferred: per-iteration intake budget spent"
     return 0
   }
+  expected_row="$(intake_feature_row_token "$fid")" || return 6
+  [[ "$expected_row" =~ ^[0-9a-f]{64}$ ]] || return 6
   triage_rc=0
-  intake_triage "$num" "" "followup-$fid" || triage_rc=$?
-  [[ "$triage_rc" == "0" ]] || {
-    [[ "$triage_rc" == "7" ]] && return 0
-    return "$triage_rc"
-  }
+  intake_triage "$num" "" "followup-$fid" "$upd" "$cnt" "$expected_row" || triage_rc=$?
+  if [[ "$triage_rc" == "7" ]]; then
+    return 0
+  fi
+  if [[ "$triage_rc" == "10" ]]; then
+    intake_record_decision "issue=$num feature=$fid stale-external-verdict mode=followup; state unchanged"
+    return 0
+  fi
+  [[ "$triage_rc" == "0" ]] || return "$triage_rc"
   [[ -s "$INTAKE_LAST_LOG" ]] || {
     intake_record_decision "issue=$num feature=$fid followup-log-empty"
     return 0
   }
-  INTAKE_FORCE_ANCHOR="$fid" INTAKE_FORCE_DEP="$fid" \
+
+  context_rc=0
+  intake_revalidate_context "$num" "$upd" "$cnt" "$fid" "$expected_row" || context_rc=$?
+  if [[ "$context_rc" == "10" ]]; then
+    intake_record_decision "issue=$num feature=$fid stale-context-before-apply mode=followup; state unchanged"
+    return 0
+  fi
+  [[ "$context_rc" == "0" ]] || return 6
+
+  apply_rc=0
+  INTAKE_EXPECTED_ROW="$expected_row" \
+    INTAKE_FORCE_ANCHOR="$fid" INTAKE_FORCE_DEP="$fid" \
     INTAKE_NOTES_PREFIX="follow-up of $fid (issue reopened)" \
     INTAKE_NO_SKIP_FILE=1 \
     INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" \
-    intake_apply "$num" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num followup-transaction-deferred"; return 6; }
+    intake_apply "$num" "$INTAKE_LAST_LOG" || apply_rc=$?
+  if [[ "$apply_rc" == "10" ]]; then
+    intake_record_decision "issue=$num feature=$fid stale-row-during-apply mode=followup; state unchanged"
+    return 0
+  fi
+  [[ "$apply_rc" == "0" ]] || { intake_record_decision "issue=$num followup-transaction-deferred"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || {
     intake_record_decision "issue=$num feature=$fid followup-result-missing"
     return 0

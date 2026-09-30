@@ -9,6 +9,9 @@ import test_control_plane as fixture
 
 
 class ExternalVerdictCases(fixture.SyntheticOne):
+    ISSUE_UPDATED = '2026-09-29T00:00:00Z'
+    ISSUE_COMMENTS = 0
+
     def setUp(self):
         super().setUp()
         shutil.copytree(fixture.ROOT / 'lib', self.root / 'lib',
@@ -42,7 +45,13 @@ class ExternalVerdictCases(fixture.SyntheticOne):
         return subprocess.run([self.bash, '-c', script], cwd=self.root, env=env,
                               capture_output=True, text=True, encoding='utf-8', timeout=20)
 
-    def verdict(self, issue=433, mode='new', feature=None):
+    def row_token(self, feature='ST-001'):
+        rows = fixture.store.load_document(self.path)['features']
+        row = next(item for item in rows if item['id'] == feature)
+        return fixture.state.row_token(row)
+
+    def verdict(self, issue=433, mode='new', feature=None, feature_row_token=None,
+                issue_snapshot_at=None, issue_snapshot_comments=None):
         payload = {
             'phase': 'P0-process',
             'title': 'Codexless intake transport',
@@ -62,9 +71,20 @@ class ExternalVerdictCases(fixture.SyntheticOne):
                 'rationale': 'process work belongs after the process anchor',
             },
         }
-        envelope = {'issue': issue, 'mode': mode, 'verdict': payload}
+        envelope = {
+            'issue': issue,
+            'mode': mode,
+            'issue_snapshot_at': issue_snapshot_at or self.ISSUE_UPDATED,
+            'issue_snapshot_comments': (
+                self.ISSUE_COMMENTS
+                if issue_snapshot_comments is None else issue_snapshot_comments
+            ),
+            'verdict': payload,
+        }
         if feature is not None:
             envelope['feature'] = feature
+        if feature_row_token is not None:
+            envelope['feature_row_token'] = feature_row_token
         return envelope
 
     def script(self, extra=''):
@@ -108,25 +128,76 @@ intake_issue_state() { printf '{"updatedAt":"2026-09-29T00:00:00Z","comments":0}
         self.assertEqual({}, json.loads(
             (self.root / '.agent-artifacts/intake/skipped.json').read_text()))
 
+    def test_stale_issue_snapshot_defers_without_write(self):
+        before = self.path.read_bytes()
+        verdict = self.root / 'stale.json'
+        verdict.write_text(json.dumps(self.verdict(
+            issue_snapshot_at='2026-09-28T23:59:59Z')), encoding='utf-8')
+        extra = f'INTAKE_VERDICT_FILE="{verdict.as_posix()}"; export INTAKE_VERDICT_FILE\n'
+        result = self.invoke(self.script(extra) + '\nintake_issue 433\n')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('stale external verdict', result.stdout)
+        self.assertEqual(before, self.path.read_bytes())
+
+    def test_context_change_after_verdict_blocks_new_issue_apply(self):
+        before = self.path.read_bytes()
+        verdict = self.root / 'verdict.json'
+        verdict.write_text(json.dumps(self.verdict()), encoding='utf-8')
+        extra = (
+            f'INTAKE_VERDICT_FILE="{verdict.as_posix()}"; export INTAKE_VERDICT_FILE\n'
+            'intake_revalidate_context() { return 10; }\n'
+        )
+        result = self.invoke(self.script(extra) + '\nintake_issue 433\n')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('stale-context-before-apply', result.stdout)
+        self.assertEqual(before, self.path.read_bytes())
+
     def test_mode_and_feature_binding_prevent_replay(self):
         verdict_dir = self.root / 'verdicts'
         verdict_dir.mkdir()
+        token = self.row_token()
         verdict = verdict_dir / 'issue-433-amend-ST-001.json'
-        verdict.write_text(
-            json.dumps(self.verdict(issue=433, mode='followup', feature='ST-001')),
-            encoding='utf-8')
+        verdict.write_text(json.dumps(self.verdict(
+            issue=433, mode='followup', feature='ST-001',
+            feature_row_token=token)), encoding='utf-8')
         extra = f'INTAKE_VERDICT_DIR="{verdict_dir.as_posix()}"; export INTAKE_VERDICT_DIR\n'
         result = self.invoke(
-            self.script(extra) + '\nintake_triage 433 "ignored" "amend-ST-001"\n')
+            self.script(extra)
+            + f'\nintake_triage 433 "" "amend-ST-001" "{self.ISSUE_UPDATED}" 0 "{token}"\n')
         self.assertEqual(6, result.returncode, result.stdout + result.stderr)
         self.assertIn('invalid external verdict', result.stderr)
 
+    def test_mapped_verdict_rejects_stale_feature_row_token(self):
+        verdict_dir = self.root / 'verdicts'
+        verdict_dir.mkdir()
+        token = self.row_token()
+        verdict = verdict_dir / 'issue-433-amend-ST-001.json'
+        verdict.write_text(json.dumps(self.verdict(
+            issue=433, mode='amend', feature='ST-001',
+            feature_row_token=token)), encoding='utf-8')
+        extra = f'INTAKE_VERDICT_DIR="{verdict_dir.as_posix()}"; export INTAKE_VERDICT_DIR\n'
+        stale_token = 'f' * 64
+        result = self.invoke(
+            self.script(extra)
+            + f'\nintake_triage 433 "" "amend-ST-001" "{self.ISSUE_UPDATED}" 0 "{stale_token}"\n')
+        self.assertEqual(10, result.returncode, result.stdout + result.stderr)
+        self.assertIn('feature row token mismatch', result.stderr)
+
 
 class StaticNoNestedModelCases(fixture.SyntheticOne):
-    def test_intake_has_no_nested_model_launch(self):
+    def test_intake_has_no_nested_model_launch_and_binds_verdict_evidence(self):
         source = (fixture.ROOT / 'lib/intake.sh').read_text(encoding='utf-8')
         self.assertNotIn('claude_run', source)
         self.assertNotIn('--model sonnet', source)
         self.assertNotIn('claude.exe', source)
         self.assertIn('external-verdict-required', source)
         self.assertIn('verdict envelope issue mismatch', source)
+        self.assertIn('verdict envelope issue snapshot mismatch', source)
+        self.assertIn('verdict envelope feature row token mismatch', source)
+        self.assertIn("row_token(anchor_row) != expected_row", source)
+
+    def test_backend_wake_does_not_fire_for_verdictless_intake_candidates(self):
+        wake = (fixture.ROOT / 'wake-if-work.sh').read_text(encoding='utf-8')
+        self.assertNotIn('intake_candidates', wake)
+        self.assertNotIn('intake candidate issue(s)', wake)
+        self.assertIn('Raw unqueued issues are Orchestrator-owned intake evidence', wake)

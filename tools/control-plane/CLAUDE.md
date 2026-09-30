@@ -363,12 +363,15 @@ compact direct projection of the authoritative `feature_list.json`. Never dump t
 into model context; the projection is ephemeral evidence, not a second backlog.
 
 The reasoning result is supplied to canonical intake as an ephemeral envelope bound to exact
-`issue`, `mode` (`new|amend|followup`) and, for amend/follow-up, exact `feature`. The shell
-validates that identity before handing only the nested `verdict` to the existing deterministic
-`intake_json.py` parser/apply path. A missing verdict is a normal defer with no budget spend,
-skip entry or ONE write. An issue/mode/feature mismatch or unreadable envelope fails closed. Verdict
-files are invocation inputs only; they are never a queue, owner registry, routing table or authority
-source.
+`issue`, `mode` (`new|amend|followup`), the issue `updatedAt` and comment count actually read
+for reasoning, and, for amend/follow-up, exact `feature` plus its current 64-hex row token. The
+shell validates those identities, then re-reads the issue and mapped row immediately before apply;
+follow-up append rechecks the row token again inside the safe-store apply transaction. Known drift
+returns a stale defer without mutating ONE or advancing snapshots. Missing/unreadable evidence is
+UNKNOWN and fails closed. Only after those checks is the nested `verdict` handed to the existing
+deterministic `intake_json.py` parser/apply path. A missing verdict is a normal defer with no budget
+spend, skip entry or ONE write. Verdict files are invocation inputs only; they are never a queue,
+owner registry, routing table or authority source.
 
 **Placement.** The triage output carries a `placement` block — an existing feature as `anchor`,
 `before` or `after`, and a rationale. Placement follows the problem area and the code the feature
@@ -424,8 +427,13 @@ never once the feature is `in_progress` or later.
 ```
 
 The Orchestrator creates the bound verdict after its Codexless evidence read, invokes the canonical
-apply command once, then may discard that verdict input. Never persist verdict files as another
-backlog or use them to infer ownership.
+apply command once, then may discard that verdict input. Every envelope carries the exact
+`issue_snapshot_at` and `issue_snapshot_comments` that were reasoned over; amend/follow-up
+envelopes additionally carry the mapped `feature` and its exact `feature_row_token`. Intake
+revalidates those bindings against fresh GitHub/ONE evidence immediately before the safe-store
+transaction and treats a known mismatch as stale evidence, never permission to apply an old verdict.
+A raw candidate with no matching verdict is not actionable by LOCAL Backend and must not wake its
+dedicated supervisor. Never persist verdict files as another backlog or use them to infer ownership.
 
 **Durability caveat.** `skipped.json` and `decisions.log` live under the gitignored
 `.agent-artifacts/intake/`. A re-clone or a cleaned artifacts directory loses them, so previously
