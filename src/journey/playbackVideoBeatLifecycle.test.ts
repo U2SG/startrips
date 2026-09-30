@@ -49,6 +49,7 @@ describe("playbackVideoBeatLifecycle", () => {
     const actor = start(true);
     actor.send({ type: "READ_READY", beatKey: "beat-a" });
     actor.send({ type: "POSITION_READY", beatKey: "beat-a" });
+    actor.send({ type: "PLAYING", beatKey: "beat-a" });
     actor.send({ type: "PAUSE", beatKey: "beat-a" });
     expect(actor.getSnapshot().value).toBe("pausedPlaying");
     expect(playbackVideoBeatTrimStatus(actor.getSnapshot())).toBe("playing");
