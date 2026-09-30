@@ -109,7 +109,9 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
     const apply = () => {
       if (applied) return;
       const source = map.getSource(SOURCE_ID) as GeoJSONSource | undefined;
-      if (!source && !map.isStyleLoaded()) return;
+      // The style document is sufficient for addSource/addLayer. isStyleLoaded
+      // also waits for every other source/tile and can strand this preview.
+      if (!source && !map.getStyle()) return;
       if (source) source.setData(previewData);
       else map.addSource(SOURCE_ID, { type: "geojson", data: previewData });
       if (!map.getLayer(LAYER_ID)) map.addLayer({

@@ -483,10 +483,11 @@ export default function DetailedEarthMap({
     let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
     let debugScrollZoomActive: (() => boolean) | null = null;
     let debugRenderedFeatureCount: ((layerId: string, property?: string, value?: string | boolean) => number) | null = null;
-    let debugLayerState: ((sourceId: string, layerId: string) => {
+    type DebugLayerState = (sourceId: string, layerId: string) => {
       sourcePresent: boolean; sourceLoaded: boolean; sourceFeatures: number;
       layerPresent: boolean; renderedFeatures: number; zoom: number; pitch: number;
-    }) | null = null;
+    };
+    let debugLayerState: DebugLayerState | null = null;
     let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
       journeyId: string;
       routePointId: string;
@@ -496,7 +497,7 @@ export default function DetailedEarthMap({
         __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
         __detailedEarthMapScrollZoomActive?: () => boolean;
         __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
-        __detailedEarthMapLayerState?: typeof debugLayerState;
+        __detailedEarthMapLayerState?: DebugLayerState;
       };
       debugProject = (longitude, latitude) => {
         const projected = map.project([longitude, latitude]);
@@ -1272,7 +1273,7 @@ export default function DetailedEarthMap({
           __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
           __detailedEarthMapScrollZoomActive?: () => boolean;
           __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
-          __detailedEarthMapLayerState?: typeof debugLayerState;
+          __detailedEarthMapLayerState?: DebugLayerState;
           __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
             journeyId: string;
             routePointId: string;
