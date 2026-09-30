@@ -196,7 +196,8 @@ try {
   await page.waitForFunction(() => document.querySelector('.globe-time-scrubber [role="slider"]')?.getAttribute("aria-valuenow") === "0");
   await page.waitForFunction(() => {
     const paths = [...document.querySelectorAll(".particle-earth-route__recorded-track")];
-    return paths.find((path) => path.dataset.recordedTrackSegment.endsWith(":dated-early"))
+    return window.__particleEarthDebug?.().journeyRouteProjectionReady
+      && paths.find((path) => path.dataset.recordedTrackSegment.endsWith(":dated-early"))
       ?.dataset.recordedTrackLodRenderedPoints === "1"
       && paths.find((path) => path.dataset.recordedTrackSegment.endsWith(":dated-late"))
         ?.dataset.recordedTrackLodRenderedPoints === "0";
@@ -207,7 +208,8 @@ try {
   await page.mouse.click(atQuarter.x + atQuarter.width * 0.25, atQuarter.y + atQuarter.height / 2);
   await page.waitForFunction(() => {
     const paths = [...document.querySelectorAll(".particle-earth-route__recorded-track")];
-    return paths.find((path) => path.dataset.recordedTrackSegment.endsWith(":dated-early"))
+    return window.__particleEarthDebug?.().journeyRouteProjectionReady
+      && paths.find((path) => path.dataset.recordedTrackSegment.endsWith(":dated-early"))
       ?.dataset.recordedTrackLodRenderedPoints === "2";
   });
   const quarter = await particleSnapshot();
@@ -240,6 +242,7 @@ try {
     await page.mouse.wheel(0, delta);
     await page.waitForFunction((zoom) => Math.abs((window.__particleEarthDebug?.().zoom ?? zoom) - zoom) > 0.001,
       snapshot.debug.zoom);
+    await page.waitForFunction(() => window.__particleEarthDebug?.().journeyRouteProjectionReady);
     overviewZooms.push(await particleSnapshot());
   }
   const overviewFrames = await endFrames();
@@ -261,14 +264,14 @@ try {
   const detailBefore = await detailSnapshot();
   await beginFrames();
   const detailZooms = [];
-  for (const delta of [2_400, -2_400, 2_400, -2_400]) {
+  // MapLibre returns to the globe below its regional zoom boundary. Native
+  // zoom-in controls cross the track's projected-error levels while retaining
+  // Detail ownership, then bounded zoom-out controls revisit those levels.
+  for (const direction of ["in", "in", "in", "in", "in", "in", "out", "out", "out"]) {
     const before = await detailSnapshot();
-    const canvas = await page.locator(".detailed-earth-map .maplibregl-canvas").boundingBox();
-    if (!canvas) throw new Error("Actual detail canvas is missing");
-    await page.mouse.move(canvas.x + canvas.width * 0.65, canvas.y + canvas.height * 0.45);
-    await page.mouse.wheel(0, delta);
+    await page.locator(`.detailed-earth-map .maplibregl-ctrl-zoom-${direction}`).click();
     await page.waitForFunction((previous) => Number(document.querySelector(".detailed-earth-map")?.dataset.mapIdleCount ?? 0) > previous.idle
-      && window.__detailedEarthMapScrollZoomActive?.() === false
+      && document.querySelector(".detailed-earth-map")?.dataset.diveOwner === "detail"
       && Math.abs(Number(document.querySelector(".detailed-earth-map")?.dataset.handoffZoom) - previous.zoom) > 0.001,
       before);
     detailZooms.push(await detailSnapshot());
@@ -295,6 +298,15 @@ try {
     routeCount: document.querySelectorAll(".particle-earth-route").length,
     trackCount: document.querySelectorAll(".particle-earth-route__recorded-track").length,
     activeJourney: document.querySelector(".living-atlas__journey-rail button.is-active")?.textContent?.trim() ?? null,
+    detail: (() => {
+      const host = document.querySelector(".detailed-earth-map");
+      return host ? {
+        owner: host.dataset.diveOwner, stage: host.dataset.diveStage,
+        zoom: host.dataset.handoffZoom, idle: host.dataset.mapIdleCount,
+        lodKey: host.dataset.journeyRecordedTrackLodKey,
+        rendered: host.dataset.journeyRecordedTrackRenderedPoints,
+      } : null;
+    })(),
   })).catch(() => null);
   await page.screenshot({ path: `${artifactDir}/failure.png` }).catch(() => undefined);
   record("recorded-track QA exception", {
