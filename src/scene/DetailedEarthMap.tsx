@@ -3,9 +3,11 @@ import {
   AttributionControl,
   Map as MapLibreMap,
   NavigationControl,
+  setWorkerUrl,
   type GeoJSONSource,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import mapLibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import type { JourneyRoute, RouteSegmentRecord } from "../journey/types";
 import { RouteCandidateEditor } from "./RouteCandidateEditor";
 import { recordedTrackLodConstructionCount } from "../journey/journeyModel";
@@ -49,6 +51,8 @@ import {
 } from "./earthDive";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
 import { ensurePmtilesProtocol } from "./pmtilesProtocol";
+
+setWorkerUrl(mapLibreWorkerUrl);
 
 // #252 section 2: the handoff has to prove "the same place did not move", so
 // the map publishes the two screen-space quantities that decide it — where the
