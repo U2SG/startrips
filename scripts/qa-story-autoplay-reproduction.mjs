@@ -101,6 +101,7 @@ async function fixture(page, profile) {
     displayWidth: largePictures[index].width, displayHeight: largePictures[index].height,
   })) } : journey;
   await page.route("**/api/journeys", (route) => json(route, { journeys: [suppliedJourney] }));
+  await page.route(`**/api/journey-recorded-tracks/${journey.id}`, (route) => json(route, { recordedTracks: [] }));
   await page.route("**/api/home-bases/dismissal", (route) => json(route, { dismissals: [] }));
   await page.route("**/api/home-bases", (route) => json(route, { periods: [] }));
   await page.route("**/api/everyday-fragments", (route) => json(route, { fragments: [] }));

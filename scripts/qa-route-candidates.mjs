@@ -79,6 +79,10 @@ function readMap(page) {
     previewCount: Number(host.dataset.routeCandidatePreviewCount ?? 0),
     renderedPreviewCount: window.__detailedEarthMapRenderedFeatureCount?.("startrips-road-candidate-preview-lines", "selected", true) ?? 0,
     renderedConfirmedCount: window.__detailedEarthMapRenderedFeatureCount?.("startrips-active-journey-route", "provenance", "user-confirmed-route") ?? 0,
+    previewLayer: window.__detailedEarthMapLayerState?.("startrips-road-candidate-preview", "startrips-road-candidate-preview-lines") ?? null,
+    projectedFrom: window.__detailedEarthMapProject?.(6.9603, 50.9375) ?? null,
+    projectedTo: window.__detailedEarthMapProject?.(8.6821, 50.1109) ?? null,
+    mapError: host.dataset.mapError ?? "",
     revision: host.dataset.journeyOverlayRevision ?? "",
     camera: host.dataset.mapCameraObservation ?? "",
   }));
@@ -107,7 +111,13 @@ try {
   await page.getByRole("button", { name: "查看候选" }).click();
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
   await page.getByRole("button", { name: "路线 2" }).click();
-  await page.waitForFunction(() => window.__detailedEarthMapRenderedFeatureCount?.("startrips-road-candidate-preview-lines", "selected", true) > 0);
+  try {
+    await page.waitForFunction(() => window.__detailedEarthMapRenderedFeatureCount?.("startrips-road-candidate-preview-lines", "selected", true) > 0);
+  } catch (error) {
+    evidence.stages.push({ name: "preview-render-failed", ...await readMap(page) });
+    await page.screenshot({ path: `${artifactDir}/preview-render-failed.png` });
+    throw error;
+  }
   const alternatives = await readMap(page);
   evidence.stages.push({ name: "alternatives", ...alternatives });
   assert(alternatives.confirmedCount === 0 && alternatives.previewCount === 2 && alternatives.renderedPreviewCount > 0

@@ -483,6 +483,10 @@ export default function DetailedEarthMap({
     let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
     let debugScrollZoomActive: (() => boolean) | null = null;
     let debugRenderedFeatureCount: ((layerId: string, property?: string, value?: string | boolean) => number) | null = null;
+    let debugLayerState: ((sourceId: string, layerId: string) => {
+      sourcePresent: boolean; sourceLoaded: boolean; sourceFeatures: number;
+      layerPresent: boolean; renderedFeatures: number; zoom: number; pitch: number;
+    }) | null = null;
     let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
       journeyId: string;
       routePointId: string;
@@ -492,6 +496,7 @@ export default function DetailedEarthMap({
         __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
         __detailedEarthMapScrollZoomActive?: () => boolean;
         __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
+        __detailedEarthMapLayerState?: typeof debugLayerState;
       };
       debugProject = (longitude, latitude) => {
         const projected = map.project([longitude, latitude]);
@@ -510,6 +515,18 @@ export default function DetailedEarthMap({
         return property ? features.filter((feature) => feature.properties?.[property] === value).length : features.length;
       };
       debugWindow.__detailedEarthMapRenderedFeatureCount = debugRenderedFeatureCount;
+      debugLayerState = (sourceId, layerId) => {
+        const sourcePresent = Boolean(map.getSource(sourceId));
+        const sourceLoaded = sourcePresent && map.isSourceLoaded(sourceId);
+        const layerPresent = Boolean(map.getLayer(layerId));
+        return {
+          sourcePresent, sourceLoaded,
+          sourceFeatures: sourceLoaded ? map.querySourceFeatures(sourceId).length : 0,
+          layerPresent, renderedFeatures: layerPresent ? debugRenderedFeatureCount?.(layerId) ?? 0 : 0,
+          zoom: map.getZoom(), pitch: map.getPitch(),
+        };
+      };
+      debugWindow.__detailedEarthMapLayerState = debugLayerState;
     }
     // Register the one-shot load observation immediately after construction.
     // A tiny inline/QA style can become style-loaded before the rest of this
@@ -1255,6 +1272,7 @@ export default function DetailedEarthMap({
           __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
           __detailedEarthMapScrollZoomActive?: () => boolean;
           __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
+          __detailedEarthMapLayerState?: typeof debugLayerState;
           __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
             journeyId: string;
             routePointId: string;
@@ -1267,6 +1285,7 @@ export default function DetailedEarthMap({
         if (debugWindow.__detailedEarthMapRenderedFeatureCount === debugRenderedFeatureCount) {
           delete debugWindow.__detailedEarthMapRenderedFeatureCount;
         }
+        if (debugWindow.__detailedEarthMapLayerState === debugLayerState) delete debugWindow.__detailedEarthMapLayerState;
         if (debugWindow.__detailedEarthJourneyRoutePointHit === debugJourneyRoutePointHit) {
           delete debugWindow.__detailedEarthJourneyRoutePointHit;
         }
