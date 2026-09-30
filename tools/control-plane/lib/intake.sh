@@ -510,6 +510,13 @@ intake_issue() {
   local num="$1" decision reason fid phase anchor position rationale acc gate prio
   intake_init_dirs
   local st upd="" cnt="" triage_rc=0 context_rc=0
+  # A missing external verdict is a normal coordination defer. Do not require a
+  # live issue read merely to prove that there is nothing authoritative to apply.
+  if ! intake_triage_available "$num"; then
+    echo "[intake] issue #$num new external-verdict-required; state unchanged"
+    intake_record_decision "issue=$num external-verdict-required mode=new; state unchanged"
+    return 0
+  fi
   # The snapshot the created feature carries has to come from the same reader
   # the later comparison uses, or the very next reconcile sees a phantom move.
   st="$(intake_issue_state "$num")" || {
@@ -1206,6 +1213,10 @@ intake_amend() {
   snapshot="$(intake_dump_feature "$fid" | tr -d '\r')" || return 6
   IFS=$'\t' read -r dump expected_row <<< "$snapshot"
   [[ -n "$dump" && -n "$expected_row" ]] || return 6
+  if [[ ! "$expected_row" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[intake] feature $fid snapshot identity unavailable" >&2
+    return 6
+  fi
   triage_rc=0
   intake_triage "$num" "" "amend-$fid" "$upd" "$cnt" "$expected_row" || triage_rc=$?
   if [[ "$triage_rc" == "7" ]]; then
