@@ -75,3 +75,29 @@ test("production baseline and candidate retain the same current harness and boun
   assert.match(setup, /timeout --kill-after=5s 90s/);
   assert.match(setup, /Acquire::http::Timeout=20/);
 });
+
+test("runtime preflight selects once and all actual browsers retain capability assertions", () => {
+  const runtime = read("scripts/ci-browser-runtime.mjs");
+  const browser = read("scripts/qa-browser.mjs");
+  assert.doesNotMatch(runtime, /chromium\.launch\(/);
+  assert.match(runtime, /QA_VERIFY_RUNTIME=1/);
+  assert.match(runtime, /canPlayType/);
+  assert.match(runtime, /recordVideo/);
+  assert.match(runtime, /page\.screenshot\(\)/);
+  assert.match(browser, /launchWithRuntimeCheck/);
+  assert.match(browser, /chromium\.launch\(\{ executablePath, headless: true, \.\.\.options \}\)/);
+  assert.match(reproduction, /- scripts\/qa-browser\.mjs/);
+});
+
+test("FFmpeg download routing stays on signed official repositories without global source rewrites", () => {
+  const setup = read("scripts/ci-ensure-ffmpeg.sh");
+  assert.match(job("keepsake-render"), /runs-on: ubuntu-24.04/);
+  assert.match(setup, /https:\/\/archive\.ubuntu\.com\/ubuntu noble main universe/);
+  assert.match(setup, /https:\/\/security\.ubuntu\.com\/ubuntu noble-security main universe/);
+  assert.match(setup, /signed-by=\/usr\/share\/keyrings\/ubuntu-archive-keyring\.gpg/);
+  assert.match(setup, /Dir::Etc::sourcelist=\$apt_sources/);
+  assert.match(setup, /Dir::Etc::sourceparts=-/);
+  assert.match(setup, /APT::Update::Error-Mode=any/);
+  assert.doesNotMatch(setup, /trusted=yes|--allow-unauthenticated|AllowInsecureRepositories/);
+  assert.match(job("quick-checks"), /scripts\/ci-ensure-ffmpeg\.node-test\.mjs/);
+});

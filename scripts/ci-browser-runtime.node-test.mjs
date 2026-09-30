@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertRuntimeVersion, selectHostedBrowser } from "./ci-browser-runtime.mjs";
+import { assertRuntimeVersion, selectHostedBrowser, launchWithRuntimeCheck } from "./ci-browser-runtime.mjs";
 
 test("Playwright helper, installed package and exact dependency pin must agree", () => {
   assert.doesNotThrow(() => assertRuntimeVersion("1.55.0", "1.55.0", "1.55.0"));
@@ -16,4 +16,39 @@ test("runtime selection preserves hosted Chrome precedence and never silently do
   assert.equal(selectHostedBrowser("/custom/chrome", () => true), "/custom/chrome");
   assert.equal(selectHostedBrowser(undefined, (p) => p === "/usr/bin/chromium"), "/usr/bin/chromium");
   assert.throws(() => selectHostedBrowser(undefined, () => false), /Hosted Chrome is missing/);
+});
+
+test("capability checks reuse exactly the suite browser without a second launch", async () => {
+  const calls = [];
+  const browser = { close: async () => calls.push("close") };
+  const result = await launchWithRuntimeCheck(async () => { calls.push("launch"); return browser; }, {
+    enabled: true,
+    verify: async (actual) => { assert.equal(actual, browser); calls.push("verify"); },
+  });
+  assert.equal(result, browser);
+  assert.deepEqual(calls, ["launch", "verify"]);
+});
+
+test("a failed capability assertion closes the real browser and cannot become a pass", async () => {
+  const failure = new Error("H.264 unavailable");
+  let closed = false;
+  await assert.rejects(launchWithRuntimeCheck(async () => ({
+    close: async () => { closed = true; throw new Error("cleanup failed"); },
+  }), { enabled: true, verify: async () => { throw failure; } }), (actual) => actual === failure);
+  assert.equal(closed, true);
+});
+
+test("normal non-CI QA does not acquire a second verification path", async () => {
+  const browser = {};
+  assert.equal(await launchWithRuntimeCheck(async () => browser, {
+    enabled: false, verify: async () => { assert.fail("must not run"); },
+  }), browser);
+});
+
+test("launch failure remains a failure and is never retried", async () => {
+  let calls = 0;
+  await assert.rejects(launchWithRuntimeCheck(async () => {
+    calls++; throw new Error("launch failed");
+  }, { enabled: true, verify: async () => assert.fail("must not run") }), /launch failed/);
+  assert.equal(calls, 1);
 });

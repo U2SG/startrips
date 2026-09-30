@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { chromium } from "playwright-core";
+import { launchWithRuntimeCheck } from "./ci-browser-runtime.mjs";
 
 function browserCandidates() {
   const candidates = [process.env.QA_BROWSER_PATH];
@@ -46,7 +47,9 @@ export async function launchQaBrowser(options = {}) {
       "No Chromium browser found. Set QA_BROWSER_PATH or run `pnpm exec playwright-core install chromium`.",
     );
   }
-  const browser = await chromium.launch({ executablePath, headless: true, ...options });
+  const browser = await launchWithRuntimeCheck(
+    () => chromium.launch({ executablePath, headless: true, ...options }),
+  );
   // Suites create pages both ways, and `browser.newPage()` makes its own
   // context, so both entry points have to install the harness routes.
   const openContext = browser.newContext.bind(browser);

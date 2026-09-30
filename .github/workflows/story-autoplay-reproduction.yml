@@ -11,6 +11,7 @@ on:
       - scripts/qa-story-autoplay-reproduction.mjs
       - scripts/qa-story-autoplay-pixels.mjs
       - scripts/ci-browser-runtime.mjs
+      - scripts/qa-browser.mjs
       - scripts/ci-ensure-ffmpeg.sh
       - .github/workflows/story-autoplay-reproduction.yml
 
