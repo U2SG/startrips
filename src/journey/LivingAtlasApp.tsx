@@ -1391,36 +1391,37 @@ export function LivingAtlasApp({
       target.focus({ preventScroll: true });
     }
   }, [shareTarget]);
-  // Browser Back owns every visible surface, on both form factors.
+  // The `isMobileV2` gate here is load-bearing, not an oversight, and an audit
+  // that reads it as one is wrong.
   //
-  // These four were gated on `isMobileV2`, so on desktop the portaled Story
-  // dialog, the share dialog and the two sheets were not Back-dismissible at
-  // all: Back left the Atlas entirely and discarded the open layer along with
-  // the reading position, share draft and selection inside it. The gate also
-  // made the model self-contradictory — `crossPointReading` below, a *transient*
-  // reading panel, was registered ungated and therefore already Back-dismissible
-  // on desktop, while the full-screen Story it escalates into was not.
+  // `qa-post-login-controls` asserts the opposite of "Back should close this on
+  // every viewport": crossing the responsive boundary while the mobile
+  // sheet → story → fullscreen stack is open must collapse every
+  // Startrips-owned sentinel in ONE bounded history move, without navigating or
+  // reloading the document. Those layers unmount at the desktop breakpoint, so a
+  // registration that outlived them would leave an orphaned token that Back
+  // consumes instead of doing anything meaningful.
   //
-  // `useMobileSurfaceHistory` is layout-agnostic by construction: `active` is its
-  // only layout input, and it already handles nested token stacks, deferred
-  // registration and stale-suffix reconciliation. The name is historical.
+  // So desktop Back genuinely does leave the Atlas with an open Story — that is
+  // the current contract, and closing it needs a desktop-side history owner that
+  // is scoped like the mobile one, not a removed gate. Tracked in #586.
   useMobileSurfaceHistory(
-    mobileSheetJourneyId !== null,
+    isMobileV2 && mobileSheetJourneyId !== null,
     "journey-sheet",
     () => setMobileSheetJourneyId(null),
   );
   useMobileSurfaceHistory(
-    mobilePickerOpen,
+    isMobileV2 && mobilePickerOpen,
     "journey-picker",
     () => setMobilePickerOpen(false),
   );
   useMobileSurfaceHistory(
-    storyJourneyId !== null,
+    isMobileV2 && storyJourneyId !== null,
     "journey-story",
     () => closeJourneyStory(null),
   );
   useMobileSurfaceHistory(
-    shareTarget !== null,
+    isMobileV2 && shareTarget !== null,
     "journey-share",
     requestShareClose,
   );

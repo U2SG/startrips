@@ -2978,7 +2978,6 @@
 }
 
 .journey-composer {
-  position: relative;
   width: min(1180px, 100%);
   height: min(820px, 100%);
   display: grid;
@@ -3062,9 +3061,13 @@
 
 .journey-composer label > span,
 .journey-story-fields label > span,
-/* Uncommitted-composer guard. Sits inside the Composer dialog as a real nested
-   alertdialog (focus trapped by useNestedModalFocus), so it is an overlay of
-   the dialog rather than another row in the form. */
+/* Uncommitted-composer guard. A real nested alertdialog, not an inline banner.
+   Deliberately NOT given a `position: relative` host on `.journey-composer`:
+   that element currently has no positioning context, so `.journey-composer__more-menu`
+   (position: absolute, left/right 0) resolves against `.journey-composer-backdrop`,
+   which is `position: fixed; inset: 0`. Adding a containing block to the composer
+   would silently narrow that dropdown from full-viewport to 880px. The backdrop
+   is already a viewport-sized positioned ancestor, so the guard simply uses it. */
 .journey-composer__discard-guard {
   position: absolute;
   inset: 0;
