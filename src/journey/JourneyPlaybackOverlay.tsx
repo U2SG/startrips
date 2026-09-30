@@ -420,10 +420,20 @@ export function JourneyPlaybackOverlay({
     actor.start();
     return actor;
   }, [journey, readMedia]);
-  useEffect(() => () => {
-    for (const actor of mediaLifecycleActorsRef.current.values()) actor.stop();
-    mediaLifecycleActorsRef.current.clear();
-    mediaLifecycleActiveIdsRef.current.clear();
+  useEffect(() => {
+    const ownedJourneyId = journey?.id ?? null;
+    return () => {
+      if (!ownedJourneyId) return;
+      const prefix = `${ownedJourneyId}:`;
+      for (const [key, actor] of mediaLifecycleActorsRef.current) {
+        if (!key.startsWith(prefix)) continue;
+        actor.stop();
+        mediaLifecycleActorsRef.current.delete(key);
+      }
+      // A cleanup caused by switching journeys must not erase the active set
+      // already established by the new journey's layout dispatch.
+      if (journeyIdRef.current === ownedJourneyId) mediaLifecycleActiveIdsRef.current.clear();
+    };
   }, [journey?.id]);
   const mediaDecodeReadiness = useCallback((assetId: string) => {
     const snapshot = mediaLifecycleSnapshots[assetId];
@@ -454,8 +464,11 @@ export function JourneyPlaybackOverlay({
   const activeVideoTrimAssetId = activeVideoTrim?.assetId ?? null;
   const activeVideoTrimInMs = activeVideoTrim?.trim.inMs ?? null;
   const activeVideoTrimOutMs = activeVideoTrim?.trim.outMs ?? null;
+  // Pause/resume bumps the director intent revision but does not create a new
+  // semantic video beat. Keep the actor identity on the beat itself so a pause
+  // is delivered to the existing actor instead of rebuilding trim positioning.
   const activeVideoBeatKey = activeVideoAsset?.mimeType.startsWith("video/")
-    ? `${journey?.id ?? "none"}:${activeVideoAsset.id}:${director.stepIndex}:${director.intentRevision}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`
+    ? `${journey?.id ?? "none"}:${activeVideoAsset.id}:${director.stepIndex}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`
     : null;
   const videoBeatActorRef = useRef<PlaybackVideoBeatActor | null>(null);
   const [videoBeatSnapshot, setVideoBeatSnapshot] = useState<PlaybackVideoBeatSnapshot | null>(null);
@@ -1510,9 +1523,6 @@ export function JourneyPlaybackOverlay({
                       if (activeVideoBeatKey) sendVideoBeat("STALLED", activeVideoBeatKey);
                     }}
                     onPlaying={() => recoverVideoPlayback(activeMedia.id)}
-                    onProgress={() => {
-                      if (activeVideoBeatKey) sendVideoBeat("PROGRESS", activeVideoBeatKey);
-                    }}
                     onTimeUpdate={(event) => {
                       const beatKey = activeVideoBeatKey;
                       const snapshot = videoBeatActorRef.current?.getSnapshot() ?? null;
