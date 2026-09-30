@@ -170,7 +170,10 @@ including draft PRs that are awaiting Source review. After its own inspection it
 records `.agent-artifacts/evaluations/<ST>-<SOURCE>-source-review.json` through:
 
 ```text
-D:\\Python\\python.exe -B lib\\action_plan.py feature_list.json <ST> --record-review <result.json> --actor-role hourly-review
+command_exec command=["D:\\Python\\python.exe","-B","lib\\action_plan.py","feature_list.json","<ST>","--record-review","<result.json>"]
+command_exec env={"STARTRIPS_ROLE":"hourly-review"}
+
+The reviewer role is transport-injected authority, not a caller-selectable action-plan argument.
 ```
 
 The result is an evidence document, not a claim: `feature`, `pr`, `source_sha`,

@@ -399,12 +399,8 @@ def handoff(path, fid, repo):
     return {**result, 'action': 'HANDOFF_REVIEW', 'final_sha': observed['final_sha']}
 
 
-def record_source_review(path, fid, repo, review_file, actor_role=None):
-    env_role = os.environ.get('STARTRIPS_ROLE')
-    if actor_role and env_role and actor_role != env_role:
-        raise StoreConflict('Source review role identity mismatch')
-    role = actor_role or env_role
-    if role != 'hourly-review':
+def record_source_review(path, fid, repo, review_file):
+    if os.environ.get('STARTRIPS_ROLE') != 'hourly-review':
         raise StoreConflict('Only the independent Hourly Review role records Source review')
     data = json.loads(Path(review_file).read_bytes())
     root = Path(path).parent; doc = load_document(path)
@@ -458,13 +454,10 @@ def main():
     parser.add_argument('--repo', default='U2SG/startrips'); parser.add_argument('--action-only', action='store_true')
     parser.add_argument('--record-failures', action='store_true'); parser.add_argument('--handoff', action='store_true')
     parser.add_argument('--record-review', type=Path)
-    parser.add_argument('--actor-role', choices=['hourly-review'])
     args = parser.parse_args()
     try:
-        if args.actor_role and not args.record_review:
-            raise StoreConflict('--actor-role is valid only with --record-review')
         if args.record_review:
-            result = record_source_review(args.path, args.feature, args.repo, args.record_review, actor_role=args.actor_role)
+            result = record_source_review(args.path, args.feature, args.repo, args.record_review)
         else: result = handoff(args.path, args.feature, args.repo) if args.handoff else plan(args.path, args.feature, args.repo, record_failures=args.record_failures)
         print(result['action'] if args.action_only else json.dumps(result)); return 0
     except (StoreConflict, EvidenceUnknown, OSError, ValueError, KeyError) as exc:

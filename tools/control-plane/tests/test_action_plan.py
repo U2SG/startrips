@@ -180,19 +180,22 @@ class ReceiptCases(fixture.SyntheticOne):
             with self.assertRaises(fixture.store.StoreConflict):
                 plan.record_source_review(self.path, 'ST-001', 'synthetic/project', self.root / 'absent.json')
 
-    def test_direct_argv_hourly_review_role_passes_role_gate(self):
+    def test_missing_role_cannot_write_maintainer_receipt(self):
         with mock.patch.dict('os.environ', {}, clear=True):
+            with self.assertRaisesRegex(fixture.store.StoreConflict, 'Only the independent Hourly Review role'):
+                plan.record_source_review(
+                    self.path, 'ST-001', 'synthetic/project', self.root / 'absent.json')
+
+    def test_transport_injected_hourly_review_role_passes_role_gate(self):
+        with mock.patch.dict('os.environ', {'STARTRIPS_ROLE': 'hourly-review'}, clear=True):
             with self.assertRaises(FileNotFoundError):
                 plan.record_source_review(
-                    self.path, 'ST-001', 'synthetic/project', self.root / 'absent.json',
-                    actor_role='hourly-review')
+                    self.path, 'ST-001', 'synthetic/project', self.root / 'absent.json')
 
-    def test_explicit_hourly_review_role_cannot_override_owner_environment(self):
-        with mock.patch.dict('os.environ', {'STARTRIPS_ROLE': 'local-backend'}):
-            with self.assertRaisesRegex(fixture.store.StoreConflict, 'role identity mismatch'):
-                plan.record_source_review(
-                    self.path, 'ST-001', 'synthetic/project', self.root / 'absent.json',
-                    actor_role='hourly-review')
+    def test_action_plan_exposes_no_argv_role_override(self):
+        source = Path(plan.__file__).read_text(encoding='utf-8')
+        self.assertNotIn('--actor-role', source)
+        self.assertNotIn('actor_role', source)
 
     def test_handoff_is_idempotent_after_state_transition(self):
         with mock.patch.object(plan, 'plan', return_value={'action': 'WAIT_REVIEW'}):
