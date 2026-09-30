@@ -31,6 +31,10 @@ export async function resolveQaExperience(
     const { CoverRevealQaPreview } = await import("../reveal/CoverRevealQaPreview");
     return { QaExperience: CoverRevealQaPreview };
   }
+  if (qaState === "media-motion-lab") {
+    const { MediaMotionLab } = await import("./MediaMotionLab");
+    return { QaExperience: MediaMotionLab };
+  }
   // Keep legacy state ids and the existing unknown-state/live fallback. The
   // legacy QA command uses qaState=legacy-live to request the interactive App.
   return import("./LegacyQaPreview");
