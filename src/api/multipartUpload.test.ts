@@ -28,10 +28,12 @@ describe("uploadMediaInParts", () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/uploads/start") {
-        expect(JSON.parse(String(init?.body))).toMatchObject({
+        const startBody = JSON.parse(String(init?.body));
+        expect(startBody).toMatchObject({
           journeyId: "journey-1",
           routePointId,
         });
+        expect(startBody).not.toHaveProperty("recordedEvidence");
         return Response.json({ uploadId: "upload-1", partSize: 4, partCount: 3 });
       }
       if (url.includes("/parts/")) {
@@ -69,6 +71,52 @@ describe("uploadMediaInParts", () => {
 
     expect(result.id).toBe("asset-1");
     expect(uploadedSizes.sort((left, right) => left - right)).toEqual([2, 4, 4]);
+  });
+
+  it("forwards normalized recorded evidence verbatim to upload start", async () => {
+    const recordedEvidence = {
+      spatial: {
+        source: "exif" as const,
+        granularity: "coordinate" as const,
+        latitude: 22.543096,
+        longitude: 114.057865,
+        accuracyMeters: 7.5,
+        label: null,
+      },
+      captureTime: {
+        source: "exif-original" as const,
+        timezone: "offset-known" as const,
+        local: "2026-09-30T12:34:56.789",
+        instant: "2026-09-30T04:34:56.789Z",
+        offsetMinutes: 480,
+      },
+    };
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/uploads/start") {
+        const startBody = JSON.parse(String(init?.body));
+        expect(startBody.recordedEvidence).toEqual(recordedEvidence);
+        return Response.json({ uploadId: "upload-evidence", partSize: 8, partCount: 1 });
+      }
+      if (url.endsWith("/parts/1")) {
+        return Response.json({ url: "https://storage.invalid/evidence", headers: {} });
+      }
+      if (url === "https://storage.invalid/evidence") {
+        return new Response(null, { status: 200, headers: { etag: "etag-evidence" } });
+      }
+      if (url.endsWith("/complete")) {
+        return Response.json({ asset: { id: "asset-evidence" } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }) as unknown as typeof fetch;
+
+    await expect(uploadMediaInParts({
+      file: new Blob(["evidence"], { type: "image/jpeg" }),
+      fileName: "evidence.jpg",
+      journeyId: "journey-evidence",
+      recordedEvidence,
+      fetcher,
+    })).resolves.toMatchObject({ id: "asset-evidence" });
   });
 
   it("retries ambiguous completion without aborting the upload", async () => {

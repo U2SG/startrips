@@ -135,6 +135,65 @@ export type PrivateMediaRead = {
   preview?: MediaPreviewRead;
 };
 
+/** Owner-private media evidence wire contract. */
+export type MediaSpatialSource = "exif" | "container-metadata" | "imported" | "unknown";
+export type MediaSpatialGranularity = "coordinate" | "city" | "unknown";
+export type MediaCaptureTimeSource =
+  | "exif-original"
+  | "exif-digitized"
+  | "gps"
+  | "container-metadata"
+  | "imported"
+  | "unknown";
+export type MediaTimezoneState = "offset-known" | "local-only" | "unknown";
+
+export type MediaRecordedEvidenceDocument = {
+  spatial: {
+    source: MediaSpatialSource;
+    granularity: MediaSpatialGranularity;
+    latitude: number | null;
+    longitude: number | null;
+    accuracyMeters: number | null;
+    label: string | null;
+  };
+  captureTime: {
+    source: MediaCaptureTimeSource;
+    timezone: MediaTimezoneState;
+    local: string | null;
+    instant: string | null;
+    offsetMinutes: number | null;
+  };
+};
+
+export type MediaDisplayCorrection = {
+  granularity: Exclude<MediaSpatialGranularity, "unknown">;
+  latitude: number | null;
+  longitude: number | null;
+  label: string | null;
+};
+
+export type MediaDisplayState = {
+  hidden: boolean;
+  correction: MediaDisplayCorrection | null;
+};
+
+export type MediaEvidenceRecord = {
+  mediaAssetId: string;
+  revision: number;
+  recorded: MediaRecordedEvidenceDocument;
+  display: MediaDisplayState;
+  effective: null | {
+    source: "recorded" | "user-correction";
+    provenance: MediaSpatialSource | null;
+    granularity: Exclude<MediaSpatialGranularity, "unknown">;
+    latitude: number | null;
+    longitude: number | null;
+    accuracyMeters: number | null;
+    label: string | null;
+  };
+  updatedAt: string | null;
+};
+
 export type JourneyYearGroup = {
   year: number;
   journeys: Journey[];

@@ -8,6 +8,8 @@ import {
   deleteJourney,
   deleteMedia,
   getPrivateMediaRead,
+  readMediaEvidence,
+  writeMediaDisplayState,
   listHomeBasePeriods,
   listJourneys,
   listHomeBaseDismissals,
@@ -146,6 +148,9 @@ export type AtlasMutations = {
     coverMediaAssetId: string | null,
   ) => Promise<Journey>;
   uploadJourneyMedia: UploadJourneyMedia;
+  /** Owner-private precise metadata. Absent from shared/guest mode. */
+  readMediaEvidence?: typeof readMediaEvidence;
+  writeMediaDisplayState?: typeof writeMediaDisplayState;
   /**
    * #200 phase E. Creating and revoking a share are owner writes, and the
    * owner's list of its own links is owner-private, so all three live here
@@ -200,6 +205,8 @@ export function createOwnerAtlasMutations(canEditJourney = true): AtlasMutations
     undoJourneyMediaMove,
     setJourneyCover,
     uploadJourneyMedia,
+    readMediaEvidence,
+    writeMediaDisplayState,
     confirmHomeBasePeriod: createHomeBasePeriod,
     recordHomeBaseDismissal,
     createShare,

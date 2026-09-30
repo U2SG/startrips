@@ -1,4 +1,5 @@
 import { prepareMediaPreview, type MediaPreviewSpec, type PreparedMediaPreview } from "../journey/mediaPreviewProduction";
+import type { MediaRecordedEvidenceDocument } from "../journey/types";
 
 export type UploadedMediaAsset = {
   id: string;
@@ -20,6 +21,7 @@ type MultipartUploadOptions = {
   fileName: string;
   journeyId: string;
   routePointId?: string | null;
+  recordedEvidence?: MediaRecordedEvidenceDocument;
   concurrency?: number;
   signal?: AbortSignal;
   onProgress?: (progress: { uploadedBytes: number; totalBytes: number }) => void;
@@ -219,6 +221,7 @@ export async function uploadMediaInParts({
   fileName,
   journeyId,
   routePointId,
+  recordedEvidence,
   concurrency = 3,
   signal,
   onProgress,
@@ -239,6 +242,7 @@ export async function uploadMediaInParts({
       mimeType: file.type,
       bytes: file.size,
       contentHash: await contentHashOfFile(file),
+      ...(recordedEvidence === undefined ? {} : { recordedEvidence }),
     }),
     signal,
   });

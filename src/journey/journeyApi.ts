@@ -13,6 +13,8 @@ import type {
   RouteShapePoint,
   LocationSearchResponse,
   LocationSearchResult,
+  MediaDisplayState,
+  MediaEvidenceRecord,
   PrivateMediaRead,
   ShareGrantSummary,
 } from "./types";
@@ -310,6 +312,39 @@ export function getPrivateMediaRead(
     {},
     fetcher,
   );
+}
+
+export async function readMediaEvidence(
+  assetId: string,
+  fetcher: Fetcher = fetch,
+): Promise<MediaEvidenceRecord> {
+  const payload = await requestJson<{ evidence: MediaEvidenceRecord }>(
+    `/api/media-evidence/${encodeURIComponent(assetId)}`,
+    { cache: "no-store" },
+    fetcher,
+  );
+  return payload.evidence;
+}
+
+export async function writeMediaDisplayState(
+  assetId: string,
+  expectedRevision: number,
+  display: MediaDisplayState,
+  fetcher: Fetcher = fetch,
+): Promise<MediaEvidenceRecord> {
+  const payload = await requestJson<{ evidence: MediaEvidenceRecord }>(
+    `/api/media-evidence/${encodeURIComponent(assetId)}/display`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedRevision,
+        hidden: display.hidden,
+        correction: display.correction,
+      }),
+    },
+    fetcher,
+  );
+  return payload.evidence;
 }
 
 export async function deleteMedia(

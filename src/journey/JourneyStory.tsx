@@ -104,12 +104,19 @@ import {
   validateJourneySoundtrack,
 } from "./journeyModel";
 import { playbackIntroMedia, storyMediaForScope } from "./journeyPlayback";
-import type { Journey, JourneyInput, JourneyMediaAsset } from "./types";
+import type {
+  Journey,
+  JourneyInput,
+  JourneyMediaAsset,
+  MediaEvidenceRecord,
+  MediaRecordedEvidenceDocument,
+} from "./types";
 import {
   completeMediaPlacementUploadPlan,
   groupMediaPlacementSuggestions,
   readMediaPlacementSignal,
   type MediaPlacementBatchResult,
+  type MediaPlacementReadResult,
 } from "./mediaPlacement";
 import { createPlacementAnalysisAuthority, placementAnalysisScope, runPlacementAnalysisBatch, type PlacementAnalysisIntent } from "./placementAnalysisAuthority";
 import { isModalFocusCandidate, useModalFocus, useNestedModalFocus } from "./useModalFocus";
@@ -235,6 +242,7 @@ type JourneyStoryProps = {
 
 type PendingPlacementReview = {
   files: File[];
+  reads: MediaPlacementReadResult[];
   batch: MediaPlacementBatchResult;
 };
 
@@ -242,6 +250,7 @@ type PendingPlacementUploadGroup = {
   journeyId: string;
   routePointId: string | null;
   files: File[];
+  recordedEvidenceByFile: Array<MediaRecordedEvidenceDocument | undefined>;
 };
 
 type MediaUploadState =
@@ -265,6 +274,171 @@ function formatUploadError(message: string) {
     return "媒体存储尚未配置，旅程内容不会受影响。配置对象存储后可以直接重试。";
   }
   return message;
+}
+
+export function recordedEvidenceForPlacementRead(
+  result: MediaPlacementReadResult,
+): MediaRecordedEvidenceDocument | undefined {
+  if (result.status !== "signal") return undefined;
+  const signal = result.signal;
+  if (
+    signal.spatialGranularity !== "coordinate"
+    || signal.spatialSource === undefined
+    || signal.spatialSource === "unknown"
+    || !Number.isFinite(signal.latitude)
+    || !Number.isFinite(signal.longitude)
+  ) return undefined;
+
+  const captureTime = signal.timezoneState === "offset-known"
+    && signal.captureTimeSource !== undefined
+    && signal.captureTimeSource !== "unknown"
+    && signal.capturedLocal !== undefined
+    && signal.capturedAt !== undefined
+    && typeof signal.offsetMinutes === "number"
+    ? {
+        source: signal.captureTimeSource,
+        timezone: "offset-known" as const,
+        local: signal.capturedLocal,
+        instant: signal.capturedAt,
+        offsetMinutes: signal.offsetMinutes,
+      }
+    : signal.timezoneState === "local-only"
+      && signal.captureTimeSource !== undefined
+      && signal.captureTimeSource !== "unknown"
+      && signal.capturedLocal !== undefined
+      ? {
+          source: signal.captureTimeSource,
+          timezone: "local-only" as const,
+          local: signal.capturedLocal,
+          instant: null,
+          offsetMinutes: null,
+        }
+      : {
+          source: "unknown" as const,
+          timezone: "unknown" as const,
+          local: null,
+          instant: null,
+          offsetMinutes: null,
+        };
+
+  return {
+    spatial: {
+      source: signal.spatialSource,
+      granularity: "coordinate",
+      latitude: signal.latitude!,
+      longitude: signal.longitude!,
+      accuracyMeters: signal.accuracyMeters ?? null,
+      label: null,
+    },
+    captureTime,
+  };
+}
+
+export function mediaEvidenceLocationText(evidence: MediaEvidenceRecord): string {
+  if (evidence.display.hidden) return "地点已隐藏";
+  const effective = evidence.effective;
+  if (!effective) {
+    return "没有可靠拍摄地点";
+  }
+  if (effective.granularity === "city") {
+    return `${effective.label ?? "已记录城市"} · 城市级（非精确坐标）`;
+  }
+  if (effective.latitude === null || effective.longitude === null) {
+    return "没有可靠拍摄地点";
+  }
+  const source = effective.source === "user-correction"
+    ? "用户纠正"
+    : effective.provenance === "exif"
+      ? "记录地点 · EXIF"
+      : "记录地点";
+  const accuracy = effective.accuracyMeters === null
+    ? "精度未知"
+    : `精度约 ${Math.round(effective.accuracyMeters)} m`;
+  return `${source} · ${effective.latitude.toFixed(5)}, ${effective.longitude.toFixed(5)} · ${accuracy}`;
+}
+
+function MediaEvidenceEditor({
+  assetId,
+  readEvidence,
+  writeDisplay,
+}: {
+  assetId: string;
+  readEvidence: NonNullable<AtlasMutations["readMediaEvidence"]>;
+  writeDisplay: NonNullable<AtlasMutations["writeMediaDisplayState"]>;
+}) {
+  const [evidence, setEvidence] = useState<MediaEvidenceRecord | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "saving" | "error">("loading");
+  const [message, setMessage] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+
+  useEffect(() => {
+    let current = true;
+    setState("loading");
+    setMessage("");
+    void readEvidence(assetId).then((next) => {
+      if (!current) return;
+      setEvidence(next);
+      const coordinate = next.effective?.granularity === "coordinate" ? next.effective : null;
+      setLatitude(coordinate?.latitude === null || coordinate?.latitude === undefined ? "" : String(coordinate.latitude));
+      setLongitude(coordinate?.longitude === null || coordinate?.longitude === undefined ? "" : String(coordinate.longitude));
+      setState("ready");
+    }).catch(() => {
+      if (!current) return;
+      setState("error");
+      setMessage("媒体地点读取失败，请稍后重试。");
+    });
+    return () => { current = false; };
+  }, [assetId, readEvidence]);
+
+  async function commitDisplay(display: MediaEvidenceRecord["display"]) {
+    if (!evidence || state === "saving") return;
+    setState("saving");
+    setMessage("");
+    try {
+      await writeDisplay(assetId, evidence.revision, display);
+      const refreshed = await readEvidence(assetId);
+      setEvidence(refreshed);
+      setState("ready");
+    } catch {
+      setState("error");
+      setMessage("媒体地点更新失败，已保留服务器上的当前状态。");
+    }
+  }
+
+  function saveCoordinateCorrection() {
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) {
+      setMessage("请输入有效的纬度（-90–90）和经度（-180–180）。");
+      return;
+    }
+    void commitDisplay({
+      hidden: false,
+      correction: { granularity: "coordinate", latitude: lat, longitude: lon, label: null },
+    });
+  }
+
+  return (
+    <section className="journey-story__placement-review" aria-label="媒体地点">
+      <div className="journey-story__placement-review-head">
+        <p>MEDIA LOCATION</p>
+        <strong>{evidence ? mediaEvidenceLocationText(evidence) : "正在读取媒体地点…"}</strong>
+        <span>拍摄地点属于媒体自身证据，不会改变它所属的旅程或停靠点。</span>
+      </div>
+      {evidence ? (
+        <div className="journey-story__placement-actions">
+          <input aria-label="纠正纬度" type="number" step="any" value={latitude} onChange={(event) => setLatitude(event.currentTarget.value)} />
+          <input aria-label="纠正经度" type="number" step="any" value={longitude} onChange={(event) => setLongitude(event.currentTarget.value)} />
+          <button type="button" disabled={state === "saving"} onClick={saveCoordinateCorrection}>保存纠正坐标</button>
+          <button type="button" disabled={state === "saving"} onClick={() => void commitDisplay({ ...evidence.display, hidden: !evidence.display.hidden })}>
+            {evidence.display.hidden ? "恢复显示地点" : "隐藏地点"}
+          </button>
+        </div>
+      ) : null}
+      {message ? <p className="journey-story__upload-message is-error" role="status">{message}</p> : null}
+    </section>
+  );
 }
 
 export function createStoryAutoplayFallbackController(
@@ -2753,6 +2927,7 @@ export function JourneyStory({
   async function uploadFiles(
     files: readonly File[],
     targetRoutePointId: string | null = selectedRoutePointId,
+    placementReads?: readonly MediaPlacementReadResult[],
   ) {
     if (!manageMedia) return;
     invalidateMoveUndo();
@@ -2767,6 +2942,15 @@ export function JourneyStory({
       return;
     }
 
+    const evidenceReads: MediaPlacementReadResult[] = placementReads
+      ? [...placementReads]
+      : [];
+    if (!placementReads) {
+      for (const file of files) evidenceReads.push(await readMediaPlacementSignal(file));
+    }
+    const recordedEvidenceByFile = files.map((_, index) =>
+      recordedEvidenceForPlacementRead(evidenceReads[index] ?? { status: "no-evidence" }));
+
     setUploadState({
       status: "uploading",
       fileName: files[0]?.name ?? "媒体",
@@ -2777,6 +2961,7 @@ export function JourneyStory({
       journeyId: journey.id,
       routePointId: targetRoutePointId ?? undefined,
       files,
+      recordedEvidenceByFile,
       onProgress: (progress) => setUploadState({ status: "uploading", ...progress }),
     });
 
@@ -2868,7 +3053,7 @@ export function JourneyStory({
       const signals = reads.map((result) => result.status === "signal" ? result.signal : null);
       const batch = groupMediaPlacementSuggestions(signals, journeys, journey.id);
       if (batch.groups.length === 0) {
-        if (placementAnalysisIsCurrent(intent)) await uploadFiles(files);
+        if (placementAnalysisIsCurrent(intent)) await uploadFiles(files, selectedRoutePointId, reads);
         return;
       }
       const completeSingleGroup = batch.groups.length === 1
@@ -2880,10 +3065,10 @@ export function JourneyStory({
         && suggestion.journeyId === journey.id
         && suggestion.routePointId === selectedRoutePointId
       ) {
-        if (placementAnalysisIsCurrent(intent)) await uploadFiles(files);
+        if (placementAnalysisIsCurrent(intent)) await uploadFiles(files, selectedRoutePointId, reads);
         return;
       }
-      if (placementAnalysisIsCurrent(intent)) setPlacementReview({ files, batch });
+      if (placementAnalysisIsCurrent(intent)) setPlacementReview({ files, reads, batch });
     } finally {
       // Analysis B may have started while A was awaiting metadata. A's finally
       // never clears B's analyzing owner.
@@ -2927,6 +3112,7 @@ export function JourneyStory({
         journeyId: group.journeyId,
         routePointId: group.routePointId ?? undefined,
         files: group.files,
+        recordedEvidenceByFile: group.recordedEvidenceByFile,
         onProgress: (progress) => setUploadState({
           status: "uploading",
           fileName: progress.fileName,
@@ -2962,9 +3148,16 @@ export function JourneyStory({
         }
       }
       if (result.mediaErrors.length > 0) {
-        const failedFiles = result.mediaErrors.map((error) => group.files[error.fileIndex]).filter(Boolean);
+        const failedIndexes = result.mediaErrors
+          .map((error) => error.fileIndex)
+          .filter((index) => group.files[index] !== undefined);
+        const failedFiles = failedIndexes.map((index) => group.files[index]);
         if (failedFiles.length > 0) {
-          failedGroups.push({ ...group, files: failedFiles });
+          failedGroups.push({
+            ...group,
+            files: failedFiles,
+            recordedEvidenceByFile: failedIndexes.map((index) => group.recordedEvidenceByFile[index]),
+          });
         }
         firstFailure ??= formatUploadError(result.mediaErrors[0].message);
       }
@@ -3007,6 +3200,8 @@ export function JourneyStory({
       journeyId: group.journeyId,
       routePointId: group.routePointId,
       files: group.fileIndexes.map((index) => placementReview.files[index]),
+      recordedEvidenceByFile: group.fileIndexes.map((index) =>
+        recordedEvidenceForPlacementRead(placementReview.reads[index] ?? { status: "no-evidence" })),
     }));
     if (groups.length === 1 && groups[0].journeyId === journey.id) {
       setSelectedRoutePointId(groups[0].routePointId);
@@ -3016,10 +3211,11 @@ export function JourneyStory({
   function confirmPlacementUpload(targetRoutePointId: string | null) {
     if (!placementReview || mutationPending) return;
     const files = placementReview.files;
+    const reads = placementReview.reads;
     cancelPendingMediaDragSettle();
     setSelectedRoutePointId(targetRoutePointId);
     setPlacementReview(null);
-    void uploadFiles(files, targetRoutePointId);
+    void uploadFiles(files, targetRoutePointId, reads);
   }
 
   async function confirmDelete() {
@@ -4429,6 +4625,14 @@ export function JourneyStory({
                   </section>
                 );
               })() : null}
+              {shownAsset?.id && manageMedia.readMediaEvidence && manageMedia.writeMediaDisplayState ? (
+                <MediaEvidenceEditor
+                  key={shownAsset.id}
+                  assetId={shownAsset.id}
+                  readEvidence={manageMedia.readMediaEvidence}
+                  writeDisplay={manageMedia.writeMediaDisplayState}
+                />
+              ) : null}
               {uploadState.status === "uploading" ? (
                 <div
                   className="journey-story__upload-progress"

@@ -1,4 +1,5 @@
 import { uploadMediaInParts, type UploadedMediaAsset } from "../api/multipartUpload";
+import type { MediaRecordedEvidenceDocument } from "./types";
 
 export type UploadProgress = {
   fileName: string;
@@ -9,6 +10,7 @@ export type UploadProgress = {
 export type JourneyMediaUploadAssignment = {
   file: File;
   routePointId?: string;
+  recordedEvidence?: MediaRecordedEvidenceDocument;
 };
 
 export type JourneyMediaUploadResult = {
@@ -29,6 +31,7 @@ type UploadJourneyMediaAssignmentsOptions = {
 type UploadJourneyMediaOptions = Omit<UploadJourneyMediaAssignmentsOptions, "assignments"> & {
   routePointId?: string;
   files: readonly File[];
+  recordedEvidenceByFile?: readonly (MediaRecordedEvidenceDocument | undefined)[];
 };
 
 export async function uploadJourneyMediaAssignments({
@@ -44,13 +47,14 @@ export async function uploadJourneyMediaAssignments({
   let completedBytes = 0;
 
   for (let fileIndex = 0; fileIndex < assignments.length; fileIndex += 1) {
-    const { file, routePointId } = assignments[fileIndex];
+    const { file, routePointId, recordedEvidence } = assignments[fileIndex];
     try {
       const asset = await upload({
         file,
         fileName: file.name,
         journeyId,
         routePointId,
+        recordedEvidence,
         concurrency: 2,
         onProgress: ({ uploadedBytes }) => onProgress?.({
           fileName: file.name,
@@ -83,12 +87,17 @@ export async function uploadJourneyMedia({
   journeyId,
   routePointId,
   files,
+  recordedEvidenceByFile,
   upload,
   onProgress,
 }: UploadJourneyMediaOptions): Promise<JourneyMediaUploadResult> {
   return uploadJourneyMediaAssignments({
     journeyId,
-    assignments: files.map((file) => ({ file, routePointId })),
+    assignments: files.map((file, index) => ({
+      file,
+      routePointId,
+      recordedEvidence: recordedEvidenceByFile?.[index],
+    })),
     upload,
     onProgress,
   });
