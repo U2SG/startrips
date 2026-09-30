@@ -487,6 +487,7 @@ export default function DetailedEarthMap({
     let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
     let debugScrollZoomActive: (() => boolean) | null = null;
     let debugRenderedFeatureCount: ((layerId: string, property?: string, value?: string | boolean) => number) | null = null;
+    let debugRenderedSegmentVertexCount: ((fromId: string, toId: string) => number) | null = null;
     type DebugLayerState = (sourceId: string, layerId: string) => {
       sourcePresent: boolean; sourceLoaded: boolean; sourceFeatures: number;
       layerPresent: boolean; renderedFeatures: number; zoom: number; pitch: number;
@@ -501,6 +502,7 @@ export default function DetailedEarthMap({
         __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
         __detailedEarthMapScrollZoomActive?: () => boolean;
         __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
+        __detailedEarthMapRenderedSegmentVertexCount?: (fromId: string, toId: string) => number;
         __detailedEarthMapLayerState?: DebugLayerState;
       };
       debugProject = (longitude, latitude) => {
@@ -520,6 +522,17 @@ export default function DetailedEarthMap({
         return property ? features.filter((feature) => feature.properties?.[property] === value).length : features.length;
       };
       debugWindow.__detailedEarthMapRenderedFeatureCount = debugRenderedFeatureCount;
+      debugRenderedSegmentVertexCount = (fromId, toId) => {
+        if (!map.getLayer(JOURNEY_OVERLAY_ROUTE_LAYER_ID)) return 0;
+        return map.queryRenderedFeatures(
+          [[0, 0], [host.clientWidth, host.clientHeight]],
+          { layers: [JOURNEY_OVERLAY_ROUTE_LAYER_ID] },
+        ).filter((feature) => feature.properties?.featureKind === "segment"
+          && feature.properties.fromRoutePointId === fromId && feature.properties.toRoutePointId === toId)
+          .reduce((count, feature) => feature.geometry.type === "LineString"
+            ? Math.max(count, feature.geometry.coordinates.length) : count, 0);
+      };
+      debugWindow.__detailedEarthMapRenderedSegmentVertexCount = debugRenderedSegmentVertexCount;
       debugLayerState = (sourceId, layerId) => {
         const sourcePresent = Boolean(map.getSource(sourceId));
         const sourceLoaded = sourcePresent && map.isSourceLoaded(sourceId);
@@ -1277,6 +1290,7 @@ export default function DetailedEarthMap({
           __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
           __detailedEarthMapScrollZoomActive?: () => boolean;
           __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
+          __detailedEarthMapRenderedSegmentVertexCount?: (fromId: string, toId: string) => number;
           __detailedEarthMapLayerState?: DebugLayerState;
           __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
             journeyId: string;
@@ -1289,6 +1303,9 @@ export default function DetailedEarthMap({
         }
         if (debugWindow.__detailedEarthMapRenderedFeatureCount === debugRenderedFeatureCount) {
           delete debugWindow.__detailedEarthMapRenderedFeatureCount;
+        }
+        if (debugWindow.__detailedEarthMapRenderedSegmentVertexCount === debugRenderedSegmentVertexCount) {
+          delete debugWindow.__detailedEarthMapRenderedSegmentVertexCount;
         }
         if (debugWindow.__detailedEarthMapLayerState === debugLayerState) delete debugWindow.__detailedEarthMapLayerState;
         if (debugWindow.__detailedEarthJourneyRoutePointHit === debugJourneyRoutePointHit) {

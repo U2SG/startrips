@@ -1,4 +1,5 @@
-import type { Journey, JourneyMediaAsset, PrivateMediaRead, RoutePoint } from "./types";
+import type { Journey, JourneyMediaAsset, PrivateMediaRead, RoutePoint, RouteSegmentRecord } from "./types";
+import { routeSegmentSourceKey } from "./journeyModel";
 import type { LightEffectId } from "./lightEffects";
 
 /** The one path that renders a shared Atlas. */
@@ -64,6 +65,7 @@ export type SharedJourney = {
   previousJourneyId: string | null;
   nextJourneyId: string | null;
   routePoints: SharedRoutePoint[];
+  routeSegments?: RouteSegmentRecord[];
   media: SharedJourneyMedia[];
 };
 
@@ -325,6 +327,7 @@ export function sharedJourneyToJourney(shared: SharedJourney): Journey {
     createdAt: GUEST_WITHHELD,
     updatedAt: GUEST_WITHHELD,
     routePoints,
+    routeSegments: shared.routeSegments ?? [],
     media,
   };
 }
@@ -354,11 +357,17 @@ export function sharedAtlasScopeIsClosed(view: SharedJourneyView): boolean {
       : null;
     const assetIds = new Set(journey.media.map((asset) => asset.id));
     const routePointIds = new Set(journey.routePoints.map((point) => point.id));
+    const points = journey.routePoints.map((point) => ({ id: point.id, lat: point.latitude, lon: point.longitude }));
     return journey.previousJourneyId === previous
       && journey.nextJourneyId === next
       && (journey.coverMediaAssetId === null
         || assetIds.has(journey.coverMediaAssetId))
       && journey.media.every((asset) => asset.routePointId === null
-        || routePointIds.has(asset.routePointId));
+        || routePointIds.has(asset.routePointId))
+      && (journey.routeSegments ?? []).every((segment) => {
+        const segmentIndex = points.findIndex((point) => point.id === segment.fromRoutePointId);
+        return segmentIndex >= 0 && points[segmentIndex + 1]?.id === segment.toRoutePointId
+          && segment.sourceKey === routeSegmentSourceKey(points, segmentIndex);
+      });
   });
 }

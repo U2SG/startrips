@@ -38,6 +38,28 @@ describe("OSRM road candidate gate", () => {
     expect(first[0].distanceMeters).toBe(12_000);
     expect(first[0].id).toBe((await provider.candidates(request))[0].id);
     expect(first[0]).not.toHaveProperty("provenance", "user-confirmed-route");
+    expect(first[0].snapping).toEqual({ maxDistanceMeters: 750, waypoints: [
+      { requested: [0, 0], snapped: [0, 0], distanceMeters: 0, providerDistanceMeters: 0 },
+      { requested: [0.1, 0], snapped: [0.1, 0], distanceMeters: 0, providerDistanceMeters: 0 },
+    ] });
+  });
+
+  it("preserves inspectable accepted offsets and rejects either distance outside the bound", async () => {
+    const request = { coordinates, profile: "driving" as const, alternativesCount: 1 as const, signal: new AbortController().signal };
+    const snappedRoute = { ...direct, geometry: { type: "LineString", coordinates: [[0, 0.0065], [0.05, 0.0065], [0.1, 0.0065]] } };
+    const waypoints = [{ location: [0, 0.0065], distance: 750 }, { location: [0.1, 0.0065], distance: 750 }];
+    const [accepted] = await providerWith(osrmResponse([snappedRoute], waypoints)).candidates(request);
+    expect(accepted.snapping.maxDistanceMeters).toBe(750);
+    expect(accepted.snapping.waypoints[0]).toMatchObject({ requested: [0, 0], snapped: [0, 0.0065], providerDistanceMeters: 750 });
+    expect(accepted.snapping.waypoints[0].distanceMeters).toBeGreaterThan(720);
+    expect(accepted.snapping.waypoints[0].distanceMeters).toBeLessThan(750);
+    for (const outside of [
+      [{ location: [0, 0.0065], distance: 750.01 }, waypoints[1]],
+      [{ location: [0, 0.007], distance: 0 }, waypoints[1]],
+      [{ location: [0, 0.0065], distance: -1 }, waypoints[1]],
+    ]) {
+      expect(await providerWith(osrmResponse([snappedRoute], outside)).candidates(request)).toEqual([]);
+    }
   });
 
   it("rejects a snapped point outside tolerance and a route skipping an ordered shape point", async () => {
@@ -74,5 +96,14 @@ describe("OSRM road candidate gate", () => {
     expect(await provider.candidates({
       coordinates, profile: "driving", alternativesCount: 1, signal: new AbortController().signal,
     })).toEqual([]);
+  });
+
+  it("reports malformed provider envelopes truthfully and discards malformed individual candidates", async () => {
+    const request = { coordinates, profile: "driving" as const, alternativesCount: 1 as const, signal: new AbortController().signal };
+    for (const payload of [null, { code: "Ok", routes: {}, waypoints: [] }]) {
+      await expect(providerWith(payload).candidates(request)).rejects.toMatchObject({ code: "ROUTING_UNAVAILABLE", status: 503 });
+    }
+    expect(await providerWith(osrmResponse([{ ...direct, legs: [null] }])).candidates(request)).toEqual([]);
+    expect(await providerWith({ code: "Ok", routes: [null], waypoints: [null] }).candidates(request)).toEqual([]);
   });
 });

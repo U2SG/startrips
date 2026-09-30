@@ -86,9 +86,11 @@ export function resolveJourneyRouteSegmentProvenance(
 ): RouteProvenanceTier {
   const declared = route.segmentProvenance?.[segmentIndex];
   if (declared === "recorded-track") return declared;
-  const confirmed = route.routeSegments?.[segmentIndex];
-  if (confirmed?.decision === "confirmed"
-    && confirmed.sourceKey === routeSegmentSourceKey(route.points, segmentIndex)) return "user-confirmed-route";
+  const stored = route.routeSegments?.[segmentIndex];
+  const segment = stored?.sourceKey === routeSegmentSourceKey(route.points, segmentIndex) ? stored : null;
+  if (segment?.decision === "confirmed" && (segment.confirmedCandidate?.geometry.length ?? 0) >= 2) return "user-confirmed-route";
+  if (declared === "user-confirmed-route") return declared;
+  if (segment?.shapePoints.length) return "user-shaped-route";
   if (declared) return declared;
   const left = route.points[segmentIndex];
   const right = route.points[segmentIndex + 1];

@@ -49,14 +49,18 @@ async function openPage(policy = "default") {
       return json(route, { error: "ROUTING_UNAVAILABLE", message: "Road routing is temporarily unavailable" }, 503);
     }
     const [, fromLat, fromLon, , toLat, toLon] = JSON.parse(body.sourceKey);
+    const ordered = [[fromLon, fromLat], ...(evidence.writes.at(-1)?.record.shapePoints ?? []).map(({ lon, lat }) => [lon, lat]), [toLon, toLat]];
     const middle = (bend) => [(fromLon + toLon) / 2, (fromLat + toLat) / 2 + bend];
     const candidates = [0.12, -0.12].map((bend, index) => ({
       candidate: {
         id: `qa-candidate-${index + 1}-${body.revision}`,
-        geometry: [[fromLon, fromLat], middle(bend), [toLon, toLat]],
+        geometry: [ordered[0], ...ordered.slice(1, -1), middle(bend), ordered.at(-1)],
         distanceMeters: 210_000 + index * 10_000,
         durationSeconds: 9_000 + index * 700,
         provider: "osrm", profile: "driving", relevance: 100 - index,
+        snapping: { maxDistanceMeters: 750, waypoints: ordered.map((coordinate) => ({
+          requested: coordinate, snapped: coordinate, distanceMeters: 0, providerDistanceMeters: 0,
+        })) },
       },
       confirmationToken: `qa-token-${index + 1}`,
     }));
@@ -96,6 +100,7 @@ function readMap(page) {
     previewCount: Number(host.dataset.routeCandidatePreviewCount ?? 0),
     renderedPreviewCount: window.__detailedEarthMapRenderedFeatureCount?.("startrips-road-candidate-preview-lines", "selected", true) ?? 0,
     renderedConfirmedCount: window.__detailedEarthMapRenderedFeatureCount?.("startrips-active-journey-route", "provenance", "user-confirmed-route") ?? 0,
+    renderedEditedVertexCount: window.__detailedEarthMapRenderedSegmentVertexCount?.("qa-p-9", "qa-p-10") ?? 0,
     previewLayer: window.__detailedEarthMapLayerState?.("startrips-road-candidate-preview", "startrips-road-candidate-preview-lines") ?? null,
     projectedFrom: window.__detailedEarthMapProject?.(6.9603, 50.9375) ?? null,
     projectedTo: window.__detailedEarthMapProject?.(8.6821, 50.1109) ?? null,
@@ -150,24 +155,31 @@ try {
   evidence.stages.push({ name: "confirmed", ...confirmed });
   assert(confirmed.pointCount === baseline.pointCount && confirmed.previewCount === 0 && confirmed.renderedConfirmedCount > 0,
     "confirmation did not render the selected route without changing Route Point topology");
+  assert(evidence.writes[0].record.confirmedCandidate.snapping.waypoints.length === 2,
+    "confirmation lost candidate snap measurements");
   await page.screenshot({ path: `${artifactDir}/confirmed.png` });
 
   await page.getByRole("button", { name: "调整经过位置" }).click();
   await page.getByRole("button", { name: "添加形状点" }).click();
-  const rect = await page.locator(".detailed-earth-map").boundingBox();
-  assert(rect, "detail map missing for shape edit");
-  await page.mouse.click(rect.x + rect.width * 0.75, rect.y + rect.height * 0.58);
+  const shapeScreen = await page.evaluate(() => window.__detailedEarthMapProject?.(7.8212, 50.7242));
+  assert(shapeScreen, "detail map missing for shape edit");
+  await page.mouse.click(shapeScreen.x, shapeScreen.y);
   await page.locator(".route-shape-handle").waitFor();
   assert(await page.locator(".route-shape-handle").count() === 1, "edit-only shape handle was not mounted");
   await page.getByRole("button", { name: "保存形状点" }).click();
   await page.waitForFunction(() => document.querySelector("[data-qa-route-segment-decision]")?.getAttribute("data-qa-route-segment-decision") === "open");
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayConfirmedCount === "0");
   await page.waitForFunction(() => window.__detailedEarthMapRenderedFeatureCount?.("startrips-active-journey-route", "provenance", "user-confirmed-route") === 0);
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.waitForFunction(() => window.__detailedEarthMapRenderedSegmentVertexCount?.("qa-p-9", "qa-p-10") >= 3);
   const shaped = await readMap(page);
   evidence.stages.push({ name: "shape-invalidated", ...shaped });
-  assert(shaped.pointCount === baseline.pointCount && await page.locator(".route-shape-handle").count() === 0,
-    "shape point leaked into ordinary Journey topology");
+  assert(shaped.pointCount === baseline.pointCount && shaped.renderedEditedVertexCount >= 3
+    && shaped.revision !== baseline.revision && await page.locator(".route-shape-handle").count() === 0,
+    "saved shape geometry disappeared or shape point leaked into ordinary Journey topology");
+  await page.screenshot({ path: `${artifactDir}/shape-preserved.png` });
 
+  await page.getByRole("button", { name: "贴合道路", exact: true }).click();
   await page.getByRole("button", { name: "查看候选" }).click();
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
   await page.getByRole("button", { name: "都不是／不记得" }).click();

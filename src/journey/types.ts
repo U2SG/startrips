@@ -97,7 +97,7 @@ export type Journey = {
   createdAt: string;
   updatedAt: string;
   routePoints: RoutePoint[];
-  /** Owner-private, segment-scoped geometry choices. Never Journey nodes. */
+  /** Segment-scoped geometry choices. Shared reads project only granted segments. Never Journey nodes. */
   routeSegments?: RouteSegmentRecord[];
   media: JourneyMediaAsset[];
 };
@@ -158,6 +158,15 @@ export type RouteCandidate = {
   profile: RoadProfile;
   /** Candidate relevance for presentation only; never historical confidence. */
   relevance: number;
+  snapping: {
+    maxDistanceMeters: number;
+    waypoints: {
+      requested: [number, number];
+      snapped: [number, number];
+      distanceMeters: number;
+      providerDistanceMeters: number;
+    }[];
+  };
 };
 export type RouteSegmentRecord = {
   fromRoutePointId: string;

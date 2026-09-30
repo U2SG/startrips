@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { routeSegmentSourceKey } from "../../src/journey/journeyModel";
+import type { RouteSegmentRecord } from "../../src/journey/types";
 import {
   buildSharedJourneyView,
   type SharedJourneyRows,
@@ -149,6 +151,46 @@ describe("shared journey view scope closure", () => {
     });
   });
 
+  it("shares current confirmed/shaped geometry only inside the granted adjacent-point scope", () => {
+    const routePoints = ["a", "b", "c"].map((id, index) => ({
+      ...routePointRow(SHARED_A, id), longitude: 103.8198 + index * 0.1,
+    }));
+    const points = routePoints.map((point) => ({ id: point.id, lat: point.latitude, lon: point.longitude }));
+    const segments: RouteSegmentRecord[] = [{
+      fromRoutePointId: "a", toRoutePointId: "b", sourceKey: routeSegmentSourceKey(points, 0)!, revision: 2,
+      shapePoints: [], decision: "confirmed",
+      confirmedCandidate: {
+        id: "road", geometry: [[103.8198, 1.3521], [103.8698, 1.36], [103.9198, 1.3521]],
+        provider: "osrm", profile: "driving", distanceMeters: 12_000, durationSeconds: 900, relevance: 100,
+        snapping: { maxDistanceMeters: 750, waypoints: [] },
+      },
+    }, {
+      fromRoutePointId: "b", toRoutePointId: "c", sourceKey: routeSegmentSourceKey(points, 1)!, revision: 3,
+      shapePoints: [{ id: "shape-only", lat: 1.37, lon: 103.97 }], decision: "none", confirmedCandidate: null,
+    }];
+    const stored = [
+      { ...segments[0], sourceKey: "stale-source-with-private-coordinates" },
+      { ...segments[0], fromRoutePointId: UNSHARED, sourceKey: "outside-grant" },
+      { ...segments[0], confirmationToken: "never-publish", confirmedCandidate: {
+        ...segments[0].confirmedCandidate!, privateProviderToken: "never-publish",
+      } },
+      segments[1],
+    ];
+    const view = buildSharedJourneyView(GRANT, rows({
+      journeys: [{ ...journeyRow(SHARED_A, "Shared route"), routeSegments: stored }], routePoints,
+    }));
+    expect(view.journeys[0].routeSegments).toEqual(segments);
+    expect(view.journeys[0].routePoints.map((point) => point.id)).toEqual(["a", "b", "c"]);
+    const serialized = JSON.stringify(view);
+    for (const withheld of [UNSHARED, "never-publish", "privateProviderToken", "confirmationToken", "stale-source-with-private-coordinates"])
+      expect(serialized).not.toContain(withheld);
+    const changed = buildSharedJourneyView(GRANT, rows({
+      journeys: [{ ...journeyRow(SHARED_A, "Changed route"), routeSegments: stored }],
+      routePoints: [routePoints[0], routePoints[2]],
+    }));
+    expect(changed.journeys[0].routeSegments).toEqual([]);
+  });
+
   it("counts only the journeys it returns", () => {
     const view = buildSharedJourneyView(GRANT, rows({
       journeys: [journeyRow(SHARED_A, "First"), journeyRow(SHARED_B, "Second")],
@@ -176,6 +218,7 @@ describe("shared journey view scope closure", () => {
       "previousJourneyId",
       "revision",
       "routePoints",
+      "routeSegments",
       "startedOn",
       "title",
     ]);

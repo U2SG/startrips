@@ -72,15 +72,17 @@ export function acceptOsrmCandidate(
   ordered: readonly RoutingCoordinate[],
   profile: RoadProfile,
 ): RouteCandidate | null {
-  if (profile !== "driving" || route.geometry?.type !== "LineString") return null;
+  if (!route || profile !== "driving" || route.geometry?.type !== "LineString") return null;
   const geometry = validGeometry(route.geometry.coordinates);
   if (!geometry || waypoints.length !== ordered.length
-    || route.legs?.length !== ordered.length - 1
-    || route.legs?.some((leg) => !leg.steps?.length || leg.steps.some((step) => step.mode !== "driving"))
+    || !Array.isArray(route.legs) || route.legs.length !== ordered.length - 1
+    || route.legs.some((leg) => !leg || !Array.isArray(leg.steps) || !leg.steps.length
+      || leg.steps.some((step) => !step || step.mode !== "driving"))
     || !Number.isFinite(route.distance) || !Number.isFinite(route.duration)
     || !(route.distance! > 0) || !(route.duration! > 0)) return null;
-  if (waypoints.some((point, index) => !point.location
-    || !Number.isFinite(point.distance) || point.distance! > MAX_SNAP_METERS
+  if (waypoints.some((point, index) => !Array.isArray(point?.location) || point.location.length !== 2
+    || !point.location.every(Number.isFinite) || Math.abs(point.location[0]) > 180 || Math.abs(point.location[1]) > 90
+    || !Number.isFinite(point.distance) || point.distance! < 0 || point.distance! > MAX_SNAP_METERS
     || meters(ordered[index], { lon: point.location[0], lat: point.location[1] }) > MAX_SNAP_METERS)) return null;
   const direct = ordered.slice(1).reduce((total, point, index) => total + meters(ordered[index], point), 0);
   if (!(direct > 0) || direct > MAX_DIRECT_METERS || route.distance! > Math.max(8_000, direct * 5)) return null;
@@ -111,6 +113,15 @@ export function acceptOsrmCandidate(
     provider: "osrm",
     profile,
     relevance: Math.round(1000 / (1 + route.distance! / direct + corridorError / 1000)),
+    snapping: {
+      maxDistanceMeters: MAX_SNAP_METERS,
+      waypoints: waypoints.map((point, index) => ({
+        requested: [ordered[index].lon, ordered[index].lat],
+        snapped: [point.location![0], point.location![1]],
+        distanceMeters: meters(ordered[index], { lon: point.location![0], lat: point.location![1] }),
+        providerDistanceMeters: point.distance!,
+      })),
+    },
   };
 }
 
@@ -151,7 +162,11 @@ export function createOsrmRouteCandidateProvider(
       } catch {
         throw new RoutingUnavailableError("Road route response is invalid");
       }
-      if (payload.code !== "Ok" || !payload.waypoints || !payload.routes) return [];
+      if (!payload || typeof payload !== "object") throw new RoutingUnavailableError("Road route response is invalid");
+      if (payload.code !== "Ok") return [];
+      if (!Array.isArray(payload.waypoints) || !Array.isArray(payload.routes)) {
+        throw new RoutingUnavailableError("Road route response is invalid");
+      }
       return payload.routes
         .slice(0, alternativesCount)
         .map((route) => acceptOsrmCandidate(route, payload.waypoints!, coordinates, profile))

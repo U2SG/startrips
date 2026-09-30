@@ -3181,7 +3181,7 @@ export function LivingAtlasApp({
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
-            routeEditingEnabled={!draftRoute && !playbackActive && !globePickActive && storyJourneyId === null}
+            routeEditingEnabled={canEditJourney && mutations !== null && !draftRoute && !playbackActive && !globePickActive && storyJourneyId === null}
             onRouteSegmentSaved={(journeyId, segment) => {
               setJourneys((current) => current.map((journey) => {
                 if (journey.id !== journeyId) return journey;
