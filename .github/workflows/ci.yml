@@ -135,6 +135,16 @@ jobs:
         run: |
           pnpm auth:schema
           git diff --exit-code -- server/db/auth-schema.ts
+      # ST-161 migration files are generated in CI under the current local
+      # command policy, then committed from the artifact in the next Source.
+      - name: Generate route segment migration
+        if: steps.final-plan.outputs.ledger_only_final != 'true'
+        run: pnpm db:generate
+      - uses: actions/upload-artifact@v4
+        if: steps.final-plan.outputs.ledger_only_final != 'true'
+        with:
+          name: st161-generated-migration
+          path: server/db/migrations/
       - name: Apply migrations to isolated PostgreSQL
         if: steps.final-plan.outputs.ledger_only_final != 'true'
         run: pnpm db:migrate

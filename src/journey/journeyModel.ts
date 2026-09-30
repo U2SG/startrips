@@ -5,6 +5,7 @@ import type {
   JourneyRoute,
   JourneyYearGroup,
   RouteProvenanceTier,
+  RouteSegmentRecord,
 } from "./types";
 import { isPersistedCalendarDate } from "./calendarDate";
 import { isLightEffectId } from "./lightEffects";
@@ -80,10 +81,14 @@ export function factualRouteText(
 }
 
 export function resolveJourneyRouteSegmentProvenance(
-  route: Pick<JourneyRoute, "points" | "segmentProvenance">,
+  route: Pick<JourneyRoute, "points" | "segmentProvenance" | "routeSegments">,
   segmentIndex: number,
 ): RouteProvenanceTier {
   const declared = route.segmentProvenance?.[segmentIndex];
+  if (declared === "recorded-track") return declared;
+  const confirmed = route.routeSegments?.[segmentIndex];
+  if (confirmed?.decision === "confirmed"
+    && confirmed.sourceKey === routeSegmentSourceKey(route.points, segmentIndex)) return "user-confirmed-route";
   if (declared) return declared;
   const left = route.points[segmentIndex];
   const right = route.points[segmentIndex + 1];
@@ -93,7 +98,7 @@ export function resolveJourneyRouteSegmentProvenance(
 }
 
 export function summarizeJourneyRouteProvenance(
-  route: Pick<JourneyRoute, "points" | "segmentProvenance">,
+  route: Pick<JourneyRoute, "points" | "segmentProvenance" | "routeSegments">,
 ): RouteProvenanceTier | "mixed" {
   const segmentCount = Math.max(0, route.points.length - 1);
   if (segmentCount === 0) return "sparse-relation";
@@ -101,6 +106,27 @@ export function summarizeJourneyRouteProvenance(
     resolveJourneyRouteSegmentProvenance(route, index)
   )));
   return tiers.size === 1 ? [...tiers][0] : "mixed";
+}
+
+/** Exact adjacent-node identity and coordinates, independent of Journey revision. */
+export function routeSegmentSourceKey(
+  points: readonly { id?: string; lat: number; lon: number }[],
+  index: number,
+): string | null {
+  const from = points[index];
+  const to = points[index + 1];
+  return from?.id && to?.id
+    ? JSON.stringify([from.id, from.lat, from.lon, to.id, to.lat, to.lon])
+    : null;
+}
+
+export function currentRouteSegmentRecord(
+  points: readonly { id?: string; lat: number; lon: number }[],
+  index: number,
+  records: readonly RouteSegmentRecord[] = [],
+): RouteSegmentRecord | null {
+  const sourceKey = routeSegmentSourceKey(points, index);
+  return sourceKey ? records.find((record) => record.sourceKey === sourceKey) ?? null : null;
 }
 
 export type RecordedTrackSnapshot = {
@@ -554,6 +580,11 @@ export function toJourneyRoutes(
       label: point.label,
       ...(overviewLabels.has(point.id) ? { overviewLabel: overviewLabels.get(point.id) } : {}),
     })),
+    routeSegments: journey.routePoints.slice(0, -1).map((_, index) => currentRouteSegmentRecord(
+      journey.routePoints.map((point) => ({ id: point.id, lat: point.latitude, lon: point.longitude })),
+      index,
+      journey.routeSegments,
+    )),
   }));
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { recordedTrackLodConstructionCount } from "../journey/journeyModel";
+import { recordedTrackLodConstructionCount, routeSegmentSourceKey } from "../journey/journeyModel";
 import type { JourneyRoute } from "../journey/types";
 import {
   AMAP_RASTER_STYLE,
@@ -38,6 +38,38 @@ import type { ParticleAnchorFrame } from "./detailedEarthModel";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
 
 describe("detailedEarthModel", () => {
+  it("renders confirmed segment geometry without promoting edit-only shape points to Journey markers", () => {
+    const points = [
+      { id: "a", lat: 0, lon: 0, isStop: true },
+      { id: "b", lat: 0, lon: 0.1, isStop: true },
+    ];
+    const route: JourneyRoute = {
+      id: "journey", color: "#aaa", points,
+      routeSegments: [{
+        fromRoutePointId: "a", toRoutePointId: "b",
+        sourceKey: routeSegmentSourceKey(points, 0)!, revision: 2,
+        shapePoints: [{ id: "shape", lat: 0.02, lon: 0.05 }], decision: "confirmed",
+        confirmedCandidate: {
+          id: "candidate", provider: "osrm", profile: "driving", relevance: 100,
+          distanceMeters: 15_000, durationSeconds: 1_000,
+          geometry: [[0, 0], [0.05, 0.02], [0.1, 0]],
+        },
+      }],
+    };
+    const overlay = buildDetailedEarthJourneyOverlay({ route });
+    const markers = overlay.data.features.filter((feature) => feature.properties.featureKind === "route-point");
+    const line = overlay.data.features.find((feature) => feature.properties.featureKind === "segment");
+    expect(markers).toHaveLength(2);
+    expect(markers.map((feature) => feature.properties.routePointId)).toEqual(["a", "b"]);
+    expect(line?.properties.provenance).toBe("user-confirmed-route");
+    expect(line?.geometry).toEqual({ type: "LineString", coordinates: [[0, 0], [0.05, 0.02], [0.1, 0]] });
+    route.points[1].lon = 0.11;
+    const stale = buildDetailedEarthJourneyOverlay({ route });
+    const staleLine = stale.data.features.find((feature) => feature.properties.featureKind === "segment");
+    expect(staleLine?.geometry).toEqual({ type: "LineString", coordinates: [[0, 0], [0.11, 0]] });
+    expect(staleLine?.properties.provenance).toBe("sparse-relation");
+  });
+
   it("uses a provider-neutral vector style by default", () => {
     expect(getDetailedEarthStyle()).toBe(DEFAULT_DETAILED_EARTH_STYLE_URL);
     expect(isRasterDetailedEarth()).toBe(false);

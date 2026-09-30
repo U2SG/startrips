@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import {
   AttributionControl,
   Map as MapLibreMap,
@@ -6,7 +6,8 @@ import {
   type GeoJSONSource,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { JourneyRoute } from "../journey/types";
+import type { JourneyRoute, RouteSegmentRecord } from "../journey/types";
+import { RouteCandidateEditor } from "./RouteCandidateEditor";
 import { recordedTrackLodConstructionCount } from "../journey/journeyModel";
 import {
   createDetailedEarthLabelExpression,
@@ -249,6 +250,9 @@ type DetailedEarthMapProps = {
   focusRoute?: JourneyRoute | null;
   /** Active authorized Journey projected from the same Route consumed by Particle Earth. */
   journeyOverlay: DetailedEarthJourneyOverlay;
+  routeForEditing?: JourneyRoute | null;
+  routeEditingEnabled?: boolean;
+  onRouteSegmentSaved?: (journeyId: string, segment: RouteSegmentRecord) => void;
   focusRevision?: number;
   focusEnabled?: boolean;
   focusFlightPending?: boolean;
@@ -324,6 +328,9 @@ export default function DetailedEarthMap({
   focusPoint,
   focusRoute,
   journeyOverlay,
+  routeForEditing = null,
+  routeEditingEnabled = false,
+  onRouteSegmentSaved,
   focusRevision = 0,
   focusEnabled = true,
   focusFlightPending = false,
@@ -342,6 +349,11 @@ export default function DetailedEarthMap({
 }: DetailedEarthMapProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
+  const routeEditModeRef = useRef(false);
+  const handleRouteEditModeChange = useCallback((editing: boolean) => {
+    routeEditModeRef.current = editing;
+  }, []);
   // One request per period of ownership: the map asks to go home once, and the
   // latch is released when ownership is no longer the map's, so a second dive
   // through the same instance can ask again.
@@ -467,6 +479,7 @@ export default function DetailedEarthMap({
       reason: "load" | "stage" | "resize-observer";
     } | null = null;
     mapRef.current = map;
+    setMapInstance(map);
     let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
     let debugScrollZoomActive: (() => boolean) | null = null;
     let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
@@ -1141,7 +1154,7 @@ export default function DetailedEarthMap({
       debugWindow.__detailedEarthJourneyRoutePointHit = debugJourneyRoutePointHit;
     }
     const handleJourneyRoutePointClickCapture = (event: MouseEvent) => {
-      if (diveOwnerRef.current !== "detail" || !onJourneyRoutePointActivateRef.current) return;
+      if (routeEditModeRef.current || diveOwnerRef.current !== "detail" || !onJourneyRoutePointActivateRef.current) return;
       const rect = host.getBoundingClientRect();
       const routePointHit = projectedJourneyRoutePointHit({
         x: event.clientX - rect.left,
@@ -1160,6 +1173,7 @@ export default function DetailedEarthMap({
 
     map.on("click", (event) => {
       if (diveOwnerRef.current !== "detail") return;
+      if (routeEditModeRef.current) return;
       // The capture listener above owns ordinary Route Point activation. Keep a
       // MapLibre-layer lookup as a bounded projection/style fallback and retain
       // this event for explicit map-point picking before a blank-map dismissal.
@@ -1212,6 +1226,7 @@ export default function DetailedEarthMap({
       revealRevision += 1;
       resizeObserver?.disconnect();
       mapRef.current = null;
+      setMapInstance(null);
       calibrateRef.current = null;
       revealSyncRef.current = null;
       syncJourneyOverlayRef.current = null;
@@ -1365,6 +1380,7 @@ export default function DetailedEarthMap({
   const ownsDetailInput = diveOwner === "detail";
 
   return (
+    <>
     <div
       ref={hostRef}
       className="detailed-earth-map"
@@ -1385,5 +1401,15 @@ export default function DetailedEarthMap({
       role="application"
       aria-label="可深度缩放的真实地球地图"
     />
+    {onRouteSegmentSaved ? (
+      <RouteCandidateEditor
+        map={mapInstance}
+        route={routeForEditing}
+        active={ownsDetailInput && routeEditingEnabled && !onGlobePointPick}
+        onSaved={onRouteSegmentSaved}
+        onEditModeChange={handleRouteEditModeChange}
+      />
+    ) : null}
+    </>
   );
 }

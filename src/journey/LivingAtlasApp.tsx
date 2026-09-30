@@ -129,6 +129,7 @@ import {
   journeySoundtrack,
   journeyVisualMedia,
   mergeJourney,
+  routeSegmentSourceKey,
   sortJourneysChronologically,
   toJourneyRoutes,
   type RecordedTrackSnapshot,
@@ -3180,6 +3181,24 @@ export function LivingAtlasApp({
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
+            routeEditingEnabled={!draftRoute && !playbackActive && !globePickActive && storyJourneyId === null}
+            onRouteSegmentSaved={(journeyId, segment) => {
+              setJourneys((current) => current.map((journey) => {
+                if (journey.id !== journeyId) return journey;
+                const points = journey.routePoints.map((point) => ({
+                  id: point.id, lat: point.latitude, lon: point.longitude,
+                }));
+                const sources = new Set(points.slice(0, -1).map((_, index) => routeSegmentSourceKey(points, index)));
+                if (!sources.has(segment.sourceKey)) return journey;
+                return {
+                  ...journey,
+                  routeSegments: [
+                    ...(journey.routeSegments ?? []).filter((entry) => entry.sourceKey !== segment.sourceKey),
+                    segment,
+                  ],
+                };
+              }));
+            }}
             visibleRoutePointIds={visibleRoutePointIds}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
             selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}
