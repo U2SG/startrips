@@ -894,7 +894,7 @@ export function ItineraryImportPanel({
                   </select>
                 </label>
               ) : null}
-              <button type="button" onClick={apply} disabled={willAdd === 0 || lookupBusy}>
+              <button type="button" onClick={apply} disabled={willAdd === 0 || reading || lookupBusy}>
                 <IconPlus size={17} stroke={1.4} aria-hidden="true" />
                 添加 {willAdd} 个地点到路线
               </button>
