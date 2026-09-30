@@ -7,6 +7,7 @@ import {
   resolveDetailedEarthRevealCameraCommit,
   resolveDetailedEarthRevealSyncAction,
   resolveEarthDive,
+  resolveEarthDivePresentation,
   EARTH_DIVE_BLEND_ENTER_PROGRESS,
   EARTH_DIVE_BLEND_MS,
   EARTH_DIVE_BLEND_READINESS,
@@ -99,6 +100,32 @@ function settle(from: EarthDiveStage, frame: Frame, maxFrames = 12) {
 }
 
 describe("earth dive resolver", () => {
+  it("revokes detail input throughout suspension, including a queued forward commit", () => {
+    const pendingStages: EarthDiveStage[] = ["blending", "detail", "blending", "prewarm", "particle"];
+    for (const stage of pendingStages) {
+      const committed = state(stage);
+      const presented = resolveEarthDivePresentation(committed, "default", true);
+      expect(presented.owner).toBe("particle");
+      expect(presented.stage).toBe(stage);
+      expect(presented.blendMs).toBe(committed.blendMs);
+      expect(committed.owner).toBe(stage === "detail" ? "detail" : "particle");
+    }
+  });
+
+  it("preserves ordinary ownership after suspension and enforces hard renderer policy", () => {
+    for (const stage of ["particle", "prewarm", "blending", "detail"] satisfies EarthDiveStage[]) {
+      const committed = { ...state(stage), blendMs: EARTH_DIVE_REDUCED_MOTION_BLEND_MS };
+      expect(resolveEarthDivePresentation(committed, "default", false)).toBe(committed);
+      for (const suspended of [false, true]) {
+        expect(resolveEarthDivePresentation(committed, "particle-only", suspended)).toEqual({
+          stage: "particle",
+          owner: "particle",
+          blendMs: EARTH_DIVE_REDUCED_MOTION_BLEND_MS,
+        });
+      }
+    }
+  });
+
   it("declares no zoom boundary, clamp or range of its own", () => {
     const source = readFileSync(new URL("./earthDive.ts", import.meta.url), "utf-8");
     // #252 section 1: `semanticZoom.ts` stays the single zoom authority. The

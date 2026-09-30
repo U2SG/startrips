@@ -200,6 +200,60 @@ export function routeDraftToInput(
   }));
 }
 
+/** The media attributes the Composer keeps beside a not-yet-uploaded File. */
+export type RouteDraftMediaRef = {
+  name: string;
+  size: number;
+  type: string;
+  lastModified: number;
+  routePointDraftId: string | null;
+};
+
+/**
+ * #586: a stable fingerprint of everything the Composer would persist.
+ *
+ * The Composer asks this before honouring a close, to decide whether the member
+ * would silently lose work. Identity alone is not enough, and that is the whole
+ * point of this helper: editing an *existing* Route Point's Place Label, note,
+ * coordinates, Stop flag, or stay ownership leaves its `draftId` untouched, so
+ * a guard built on draft ids — or on the media count — stays silent through an
+ * edit that the next save would have written. Both of those comparisons miss a
+ * real loss and both were live.
+ *
+ * So fingerprint exactly what `routeDraftToInput` persists, in payload order,
+ * plus the media ownership that decides which Route Point each file belongs to.
+ * Missing optional fields are normalised to `null` so that "absent" and
+ * "explicitly null" cannot disagree.
+ */
+export function routeDraftFingerprint(
+  points: readonly RouteDraftPoint[],
+  media: readonly RouteDraftMediaRef[],
+): string {
+  return JSON.stringify([
+    points.map((point) => [
+      point.draftId,
+      point.latitude,
+      point.longitude,
+      point.label,
+      point.isStop,
+      point.occurredAt ?? null,
+      point.note ?? null,
+      point.regionContext ?? null,
+      point.placeRole ?? null,
+      point.overviewVisibility ?? null,
+      point.stayAnchorRoutePointId ?? null,
+      point.id ?? null,
+    ]),
+    media.map((item) => [
+      item.name,
+      item.size,
+      item.type,
+      item.lastModified,
+      item.routePointDraftId,
+    ]),
+  ]);
+}
+
 export function routePointFocusAfterRemoval(
   routePoints: readonly RouteDraftPoint[],
   routePointDraftId: string,

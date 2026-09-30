@@ -169,8 +169,9 @@
   pointer-events: auto;
 }
 
-/* #252: the four Dive stages, and nothing else, decide what the detail layer
-   shows and whether it can be touched. Visibility and ownership are separate:
+/* #252: Dive stage decides visibility; the committed input owner decides
+   whether the detail layer can be touched. These remain separate during
+   focus-mode suspension, even if an older forward stage commits afterwards:
    at `blending` the surface is fully visible while the particle globe is still
    the interaction owner.
      prewarm  - mounted and warming, invisible, particle owns everything;
@@ -178,16 +179,21 @@
      detail   - visible and owning the view. */
 .living-atlas-globe[data-earth-dive="prewarm"] .living-atlas-globe__detail-layer {
   opacity: 0;
-  pointer-events: none;
 }
 
 .living-atlas-globe[data-earth-dive="blending"] .living-atlas-globe__detail-layer {
   opacity: 1;
-  pointer-events: none;
 }
 
 .living-atlas-globe[data-earth-dive="detail"] .living-atlas-globe__detail-layer {
   opacity: 1;
+}
+
+.living-atlas-globe[data-earth-dive-owner="particle"] .living-atlas-globe__detail-layer {
+  pointer-events: none;
+}
+
+.living-atlas-globe[data-earth-dive-owner="detail"] .living-atlas-globe__detail-layer {
   pointer-events: auto;
 }
 
@@ -204,6 +210,80 @@
 
 .detailed-earth-map {
   background: #010506;
+}
+
+.route-candidate-editor {
+  position: absolute;
+  z-index: 5;
+  left: clamp(12px, 3vw, 42px);
+  bottom: 88px;
+  width: min(340px, calc(100% - 24px));
+  color: var(--atlas-text);
+  font-size: 13px;
+}
+
+.route-candidate-editor__panel {
+  max-height: min(540px, calc(100vh - 200px));
+  overflow: auto;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(118, 198, 188, 0.26);
+  background: rgba(3, 12, 13, 0.94);
+  box-shadow: 0 12px 42px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(16px);
+}
+
+.route-candidate-editor__head,
+.route-candidate-editor__actions,
+.route-candidate-editor__shapes > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.route-candidate-editor__head { justify-content: space-between; }
+.route-candidate-editor__shapes,
+.route-candidate-editor__candidates { display: grid; gap: 8px; }
+.route-candidate-editor__shapes > div { justify-content: space-between; }
+.route-candidate-editor p { margin: 0; color: var(--atlas-muted); line-height: 1.5; }
+.route-candidate-editor label { display: grid; gap: 6px; color: var(--atlas-muted); }
+.route-candidate-editor select {
+  min-height: 44px;
+  width: 100%;
+  padding: 8px;
+  color: var(--atlas-text);
+  border: 1px solid rgba(118, 198, 188, 0.28);
+  background: #0a1718;
+}
+.route-candidate-editor button {
+  min-height: 44px;
+  padding: 8px 12px;
+  color: var(--atlas-text);
+  border: 1px solid rgba(118, 198, 188, 0.3);
+  background: rgba(20, 48, 47, 0.95);
+  cursor: pointer;
+}
+.route-candidate-editor button:hover,
+.route-candidate-editor button[aria-pressed="true"] { border-color: rgba(166, 224, 204, 0.75); }
+.route-candidate-editor button:disabled { opacity: 0.45; cursor: default; }
+.route-candidate-editor button:focus-visible,
+.route-candidate-editor select:focus-visible,
+.route-shape-handle:focus-visible { outline: 2px solid #b8dcca; outline-offset: 2px; }
+.route-shape-handle {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, #d9eee1 0 5px, rgba(21, 69, 63, 0.7) 6px 13px, transparent 14px);
+  cursor: grab;
+}
+.route-shape-handle:active { cursor: grabbing; }
+
+@media (max-width: 600px) {
+  .route-candidate-editor { left: 10px; bottom: 78px; }
+  .route-candidate-editor__panel { max-height: min(55vh, 480px); }
 }
 
 /* Earth Dive can keep MapLibre mounted before it owns input. MapLibre's own
@@ -1340,7 +1420,11 @@
   width: auto;
   padding: 0 13px;
   border: 1px solid rgba(200, 255, 61, 0.45);
-  color: var(--atlas-accent);
+  /* Was `var(--atlas-accent)`, a token defined nowhere in the codebase, so this
+     label silently fell back to the inherited notice colour while the border
+     above stayed acid — the delete-undo affordance was the one control a member
+     must notice fastest. --atlas-acid is the exact colour of that border. */
+  color: var(--atlas-acid);
   font-size: 11px;
   letter-spacing: 0.05em;
 }
@@ -3063,6 +3147,79 @@
   letter-spacing: 0.1em;
 }
 
+/* Uncommitted-composer guard. A real nested alertdialog, not an inline banner.
+   Deliberately NOT given a `position: relative` host on `.journey-composer`:
+   that element currently has no positioning context, so `.journey-composer__more-menu`
+   (position: absolute, left/right 0) resolves against `.journey-composer-backdrop`,
+   which is `position: fixed; inset: 0`. Adding a containing block to the composer
+   would silently narrow that dropdown from full-viewport to 880px. The backdrop
+   is already a viewport-sized positioned ancestor, so the guard simply uses it. */
+.journey-composer__discard-guard {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  background: rgb(1 5 6 / 0.88);
+  text-align: center;
+}
+
+.journey-composer__discard-guard h3 {
+  margin: 0;
+  color: var(--atlas-text);
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.journey-composer__discard-guard p {
+  margin: 0;
+  max-width: 30em;
+  color: var(--atlas-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.journey-composer__discard-guard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.journey-composer__discard-guard-actions button {
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid var(--atlas-line);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--atlas-text);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.journey-composer__discard-guard-actions button[data-composer-discard-confirm] {
+  border-color: var(--atlas-line-strong);
+  background: var(--atlas-panel-solid);
+}
+
+.journey-composer__discard-guard-actions button:hover {
+  border-color: var(--atlas-line-strong);
+}
+
+.journey-composer__discard-guard:focus {
+  outline: none;
+}
+
+.journey-composer__discard-guard:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: -4px;
+}
+
 .journey-composer input:not([type="checkbox"]):not([type="file"]),
 .journey-composer textarea {
   width: 100%;
@@ -3071,7 +3228,11 @@
   border: 0;
   border-bottom: 1px solid rgba(151, 197, 186, 0.25);
   border-radius: 0;
-  outline: none;
+  /* `outline: none` used to sit here. The input half of this selector resolves
+     to specificity (0,3,1) — each `:not([type=…])` contributes its argument's —
+     which silently beat the app-wide focus ring at (0,2,1). Every Composer text
+     input therefore rendered with no outline, while the textarea half at
+     (0,1,1) kept it. Removing the opt-out lets both share the shared ring. */
   background: transparent;
   color: var(--atlas-text);
 }
@@ -3081,9 +3242,15 @@
   color: #425652;
 }
 
-.journey-composer input:focus,
+/* The focus cue is the shared ring above, so the underline only has to stay
+   design-native. Recolour it rather than thickening it: there is no global
+   `box-sizing: border-box`, so growing `border-bottom` from 1px to 2px adds a
+   real pixel of height to every Composer field on focus and reflows the form
+   under the pointer — a 1px colour change to acid is the better contrast cue
+   and costs no layout. */
+.journey-composer input:not([type="checkbox"]):not([type="file"]):focus,
 .journey-composer textarea:focus {
-  border-color: var(--atlas-cyan);
+  border-bottom-color: var(--atlas-acid);
 }
 
 .journey-location-search > button,

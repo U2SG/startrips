@@ -67,6 +67,13 @@ Automation prompts carry roles and this entry point, never current PRs or SHAs.
   owner registry. ONE writes and intake state transitions remain globally serialized
   through `feature_store.py` transactions, so cross-lane execution does not weaken
   storage safety.
+- Lane capacity is governed by logical owners in ONE, not by whether a carrier happens
+  to be alive. Backend allows one logical owner; Experience allows two. An
+  `in_progress`, `needs_work` or `ready_for_eval` row continues to consume its
+  lane slot across process/session death, CI waits, review waits and invocation-local
+  `FEATURE_SKIP`. Process/external occupancy is additional duplicate-carrier
+  evidence and never frees a logical slot. When a lane is full, the selector may
+  resume those existing owners but must not prepare a new pending owner.
 - STOP scope follows the same boundary. `AGENT_STOP` is the explicit global owner
   stop and blocks every lane. `SUPERVISOR_STOP` and `CANCEL_SCHEDULED_RESTART`
   belong only to the dedicated LOCAL Backend supervisor/restart lifecycle; Experience
