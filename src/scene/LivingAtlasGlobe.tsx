@@ -32,6 +32,7 @@ import {
 import {
   INITIAL_EARTH_DIVE_STATE,
   resolveEarthDive,
+  resolveEarthDivePresentation,
   type DetailReadiness,
   type EarthDiveOwner,
   type EarthDiveStage,
@@ -1089,15 +1090,15 @@ export function LivingAtlasGlobe({
     };
   }, [gestureHint.session, gestureHintVisible]);
 
-  const effectiveDive: EarthDiveState = earthExperiencePolicy === "particle-only"
-    ? { ...INITIAL_EARTH_DIVE_STATE, blendMs: dive.blendMs }
-    : dive;
+  const effectiveDive = resolveEarthDivePresentation(dive, earthExperiencePolicy, globeFocusMode);
   const homeBaseInteractive = effectiveDive.owner !== "detail"
     && !cinematicActive
     && !onGlobePointPick
     && Boolean(onHomeBaseActivate);
 
-  useEffect(() => {
+  // Input ownership reaches the persistent renderer in the same composition
+  // commit as the DOM's inert/pointer boundary, before the next painted frame.
+  useLayoutEffect(() => {
     persistentEarth.setAtlasPresentation({
       focusPoint,
       focusRoute,
@@ -1143,8 +1144,8 @@ export function LivingAtlasGlobe({
     narrativeJourneyRoutePoint?.pointIndex,
     cinematicActive,
     earthExperiencePolicy,
-    dive.owner,
-    dive.stage,
+    effectiveDive.owner,
+    effectiveDive.stage,
     focusColor,
     focusPoint,
     focusRevision,
@@ -1188,7 +1189,7 @@ export function LivingAtlasGlobe({
   // particle-only policy is checked before mount so no hidden MapLibre lifetime
   // exists for CSS to conceal.
   const showDetail = earthExperiencePolicy === "default" && effectiveDive.stage !== "particle";
-  const detailMode = effectiveDive.stage === "detail";
+  const detailMode = effectiveDive.owner === "detail";
   // #308 review: compact mobile still needs a non-gesture path for external
   // keyboards and switch-control users. Keep the semantic Dive intent mounted
   // independently from the optional detail utility cluster; focus mode and
