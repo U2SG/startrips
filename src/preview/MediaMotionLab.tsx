@@ -9,7 +9,7 @@ import "../styles/media-motion-lab.css";
 
 type Mode = "explore" | "playback";
 type Density = "empty" | "single" | "few" | "sequence" | "dense";
-type Scenario = "direct" | "delayed" | "mixed" | "shared" | "stale" | "failure";
+type Scenario = "direct" | "delayed" | "mixed" | "video-first" | "shared" | "stale" | "failure";
 type Read = { status: "ready"; url: string } | { status: "loading" } | { status: "error"; message: string };
 type Snapshot = {
   requested: string | null;
@@ -40,7 +40,7 @@ const IMAGES = [
 const VIDEOS = ["/demo-media/east-star-orbit.webm", "/demo-media/qa-vertical-drift.webm"];
 const MODES: Mode[] = ["explore", "playback"];
 const DENSITIES: Density[] = ["empty", "single", "few", "sequence", "dense"];
-const SCENARIOS: Scenario[] = ["direct", "delayed", "mixed", "shared", "stale", "failure"];
+const SCENARIOS: Scenario[] = ["direct", "delayed", "mixed", "video-first", "shared", "stale", "failure"];
 const EMPTY_SNAPSHOT: Snapshot = { requested: null, presented: null, phase: "spatial", covered: true, liveVideoCount: 0, dragX: "0px" };
 
 function selected<T extends string>(value: string | null, values: readonly T[], fallback: T): T {
@@ -49,7 +49,8 @@ function selected<T extends string>(value: string | null, values: readonly T[], 
 
 function fixtureMedia(density: Density, scenario: Scenario): JourneyMediaAsset[] {
   return Array.from({ length: COUNTS[density] }, (_, index) => {
-    const video = scenario === "mixed" ? index % 3 === 1 : density === "dense" && index % 5 === 3;
+    const video = scenario === "mixed" ? index % 3 === 1
+      : scenario === "video-first" ? index === 0 : density === "dense" && index % 5 === 3;
     const url = video ? VIDEOS[index % VIDEOS.length] : IMAGES[index % IMAGES.length];
     return {
       id: `lab-${index + 1}`,
@@ -173,14 +174,15 @@ function LabSurface({ mode, density, scenario }: { mode: Mode; density: Density;
       const next = stageSnapshot(stage, mode);
       setSnapshot((prior) => JSON.stringify(prior) === JSON.stringify(next) ? prior : next);
       if (next.presented && next.presented !== lastPresented && next.covered) {
-        lastPresented = next.presented;
-        mark("presentable", next.presented);
+        const presentedId = next.presented;
+        lastPresented = presentedId;
+        mark("presentable", presentedId);
         // The second frame bounds a paint opportunity after the presentable
         // commit. It is a fallback marker, not a browser paint entry.
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const painted = stageSnapshot(stage, mode);
-          if (stage.isConnected && painted.presented === next.presented && painted.covered) {
-            mark("first-correct-frame", next.presented);
+          if (stage.isConnected && painted.presented === presentedId && painted.covered) {
+            mark("first-correct-frame", presentedId);
           }
         }));
       }

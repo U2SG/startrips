@@ -142,6 +142,20 @@ for (const mode of ["explore", "playback"]) {
   }
 }
 
+for (const mode of ["explore", "playback"]) {
+  await run(`${mode}-single-video-hero`, {
+    mode, density: "single", scenario: "video-first", viewport: viewports[3],
+  }, async (page) => {
+    assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-presented-media"), "lab-1");
+    assert.equal(await page.locator("[data-lab-stage] video").count(), 1);
+    assert.ok(await page.locator("[data-lab-stage] video").evaluate((video) =>
+      video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA));
+    assert.equal(await page.getByRole("button", { name: "Next" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Previous" }).count(), 0);
+    return { mode, density: "single", topology: "video" };
+  });
+}
+
 for (const viewport of viewports) {
   await run(`layout-${viewport.name}`, { mode: "explore", density: "single", viewport }, async (page) => {
     const lab = page.locator("[data-media-motion-lab]");
