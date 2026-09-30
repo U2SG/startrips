@@ -417,6 +417,7 @@ export function JourneyComposer({
       ? []
       : (initialUnknownCreateAttempt?.mediaFiles ?? []).map((media) => ({ ...media })),
   );
+  const [discardGuardOpen, setDiscardGuardOpen] = useState(false);
   const mobileLayout = useCompactMobileLayout();
   // Both desktop and compact layouts enter optional work from the route task.
   const [mobileTask, setMobileTask] = useState<ComposerMobileTaskId>("primary");
@@ -553,7 +554,7 @@ export function JourneyComposer({
       exitMobileTask();
       return;
     }
-    if (!saving) closeComposer();
+    if (!saving) requestClose();
   }, true, globePicking || playbackPreviewActive, resolvePlaybackPreviewReturnFocus);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (
@@ -569,6 +570,13 @@ export function JourneyComposer({
           ? `delete:${mobileMediaDeleteIndex}`
           : null,
   );
+  // The discard guard is a real nested layer, not an inline banner: it takes the
+  // Tab ring, owns initial focus and restores focus to the close control on
+  // dismissal. Note that the parent `useModalFocus` does NOT consult
+  // `isInsideNestedTrap` for Escape, so it still calls `onRequestClose` while
+  // the guard is open; `requestClose` below is what makes that key dismiss the
+  // guard instead of falling through to a discard.
+  const discardGuardRef = useNestedModalFocus<HTMLDivElement>(discardGuardOpen, "composer-discard");
 
   useEffect(() => {
     if (mobileLayout) return;
@@ -1068,9 +1076,80 @@ export function JourneyComposer({
     onClose(preservedUnknownCreateAttempt);
   }
 
-  function closeComposer() {
-    closeComposerWithUnknownCreateAttempt(unknownCreateAttempt);
+  // Whether closing now would destroy work the member cannot get back. The
+  // shell unmounts this whole subtree on close, so without this every Escape,
+  // header ✕ and browser Back threw away a title, a story, a hand-built route,
+  // per-point notes and every picked File handle. Journey Story already refuses
+  // to close on unsaved notes; the Composer — the one surface that actually
+  // holds an authoring session — did not.
+  //
+  // The baseline is the state the composer was *opened* with, captured once on
+  // mount. Comparing against the props would be wrong for `routePoints`: editing
+  // an existing Journey starts with that Journey's points, so "non-empty" is not
+  // the same as "edited", and every edit session would look dirty on open.
+  const initialDraftRef = useRef<{
+    title: string;
+    note: string;
+    lightColor: typeof LIGHT_COLORS[number];
+    lightEffect: LightEffectId | null;
+    routePointKeys: string;
+    mediaCount: number;
+  } | null>(null);
+  if (initialDraftRef.current === null) {
+    initialDraftRef.current = {
+      title: journey?.title ?? recoveryInput?.title ?? initialImport?.title ?? "",
+      note: journey?.note ?? recoveryInput?.note ?? "",
+      lightColor: journey?.lightColor ?? recoveryInput?.lightColor ?? LIGHT_COLORS[0],
+      lightEffect: journey?.lightEffect ?? recoveryInput?.lightEffect ?? null,
+      routePointKeys: routePoints.map((point) => point.draftId).join("|"),
+      mediaCount: mediaFiles.length,
+    };
   }
+  const initialDraft = initialDraftRef.current;
+
+  const hasUnsavedWork = (
+    title !== initialDraft.title
+    || note !== initialDraft.note
+    || lightColor !== initialDraft.lightColor
+    || lightEffect !== initialDraft.lightEffect
+    || routePoints.map((point) => point.draftId).join("|") !== initialDraft.routePointKeys
+    || mediaFiles.length !== initialDraft.mediaCount
+    || metadataEditedRef.current.startedOn
+    || metadataEditedRef.current.endedOn
+  );
+
+  // Once the save resolves there is nothing left to lose, so `savedResult` wins
+  // over the draft comparison: the 完成 button must stay a plain close.
+  const closeGuardRequired = hasUnsavedWork && !savedResult;
+
+  const requestClose = () => {
+    if (saving) return;
+    // Escape reaches here through the parent `useModalFocus` even while the
+    // guard owns the screen, so an open guard consumes the key rather than
+    // falling through to a discard the member did not ask for.
+    if (discardGuardOpen) {
+      setDiscardGuardOpen(false);
+      return;
+    }
+    if (closeGuardRequired) {
+      setDiscardGuardOpen(true);
+      return;
+    }
+    closeComposerWithUnknownCreateAttempt(unknownCreateAttempt);
+  };
+
+  // A dirty authoring session must survive a reload or a tab close too, not just
+  // the in-app Escape path. This is the browser's own affordance; we do not
+  // customise its copy.
+  useEffect(() => {
+    if (!closeGuardRequired) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [closeGuardRequired]);
 
   function enterMobileTask(task: ComposerMobileTaskId, fromImport = false) {
     setMoreMenuOpen(false);
@@ -2136,8 +2215,37 @@ export function JourneyComposer({
           <div>
             <h2 id="journey-composer-title">{isEditing ? "编辑旅程" : "创建旅程"}</h2>
           </div>
-          <button type="button" onClick={closeComposer} disabled={saving} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
+          <button type="button" onClick={requestClose} disabled={saving} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
         </header>
+
+        {discardGuardOpen ? (
+          <div
+            ref={discardGuardRef}
+            className="journey-composer__discard-guard"
+            role="alertdialog"
+            aria-modal="true"
+            tabIndex={-1}
+            aria-labelledby="journey-composer-discard-title"
+            aria-describedby="journey-composer-discard-description"
+          >
+            <h3 id="journey-composer-discard-title">放弃这次记录？</h3>
+            <p id="journey-composer-discard-description">
+              还没有保存的标题、故事、路线和照片会一起消失，无法恢复。
+            </p>
+            <div className="journey-composer__discard-guard-actions">
+              {/* Safe action first in DOM order: `useNestedModalFocus` focuses
+                  `focusable()[0]`, and both Journey Story confirmations already
+                  establish the convention of landing on 取消 rather than on the
+                  destructive control. */}
+              <button type="button" onClick={() => setDiscardGuardOpen(false)}>继续编辑</button>
+              <button
+                type="button"
+                data-composer-discard-confirm
+                onClick={() => closeComposerWithUnknownCreateAttempt(unknownCreateAttempt)}
+              >放弃并关闭</button>
+            </div>
+          </div>
+        ) : null}
 
         <div className="journey-composer__body">
           <div
@@ -2338,7 +2446,7 @@ export function JourneyComposer({
                 {playbackPreviewPreparing ? "正在准备预览…" : "预览播放"}
               </button>
             ) : null}
-            {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
+            {savedResult ? <button type="button" onClick={requestClose}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
           </div>
         </footer>
       </section>

@@ -588,6 +588,28 @@
   pointer-events: auto;
 }
 
+/* WebGL2 degradation notice. The host itself is `pointer-events: none` and
+   `aria-hidden`, so this lives outside it and must not be interactive either —
+   it explains, it does not offer an action. */
+.persistent-earth-unavailable {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  left: 24px;
+  z-index: 2;
+  margin: 0 auto;
+  max-width: 460px;
+  padding: 12px 16px;
+  border: 1px solid var(--atlas-line, rgb(118 198 188 / 0.17));
+  border-radius: 3px;
+  background: rgb(3 12 13 / 0.92);
+  color: var(--atlas-muted, #8a9e98);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+  pointer-events: none;
+}
+
 .persistent-earth-host__viewport {
   position: absolute;
   top: 0;

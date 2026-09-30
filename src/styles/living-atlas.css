@@ -1340,7 +1340,11 @@
   width: auto;
   padding: 0 13px;
   border: 1px solid rgba(200, 255, 61, 0.45);
-  color: var(--atlas-accent);
+  /* Was `var(--atlas-accent)`, a token defined nowhere in the codebase, so this
+     label silently fell back to the inherited notice colour while the border
+     above stayed acid — the delete-undo affordance was the one control a member
+     must notice fastest. --atlas-acid is the exact colour of that border. */
+  color: var(--atlas-acid);
   font-size: 11px;
   letter-spacing: 0.05em;
 }
@@ -2974,6 +2978,7 @@
 }
 
 .journey-composer {
+  position: relative;
   width: min(1180px, 100%);
   height: min(820px, 100%);
   display: grid;
@@ -3057,6 +3062,75 @@
 
 .journey-composer label > span,
 .journey-story-fields label > span,
+/* Uncommitted-composer guard. Sits inside the Composer dialog as a real nested
+   alertdialog (focus trapped by useNestedModalFocus), so it is an overlay of
+   the dialog rather than another row in the form. */
+.journey-composer__discard-guard {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  background: rgb(1 5 6 / 0.88);
+  text-align: center;
+}
+
+.journey-composer__discard-guard h3 {
+  margin: 0;
+  color: var(--atlas-text);
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.journey-composer__discard-guard p {
+  margin: 0;
+  max-width: 30em;
+  color: var(--atlas-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.journey-composer__discard-guard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.journey-composer__discard-guard-actions button {
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid var(--atlas-line);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--atlas-text);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.journey-composer__discard-guard-actions button[data-composer-discard-confirm] {
+  border-color: var(--atlas-line-strong);
+  background: var(--atlas-panel-solid);
+}
+
+.journey-composer__discard-guard-actions button:hover {
+  border-color: var(--atlas-line-strong);
+}
+
+.journey-composer__discard-guard:focus {
+  outline: none;
+}
+
+.journey-composer__discard-guard:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: -4px;
+}
+
 .journey-light-colors legend {
   color: #718780;
   font-size: 9px;
@@ -3071,7 +3145,12 @@
   border: 0;
   border-bottom: 1px solid rgba(151, 197, 186, 0.25);
   border-radius: 0;
-  outline: none;
+  /* `outline: none` used to sit here. The input half of this selector resolves
+     to specificity (0,3,1) — each `:not([type=…])` contributes its argument's —
+     which silently beat the app-wide focus ring at (0,2,1). Every Composer text
+     input therefore rendered with no outline, while the textarea half at
+     (0,1,1) kept it. Removing the opt-out lets both share the shared ring; the
+     underline rule below stays as the design-native second cue. */
   background: transparent;
   color: var(--atlas-text);
 }
@@ -3081,9 +3160,12 @@
   color: #425652;
 }
 
-.journey-composer input:focus,
+/* A 1px colour shift is a focus cue only by hue, which fails WCAG 2.2 SC 2.4.11
+   and SC 1.4.1. Thicken the underline to a 2px acid line instead, at a
+   specificity that actually outranks the base border above. */
+.journey-composer input:not([type="checkbox"]):not([type="file"]):focus,
 .journey-composer textarea:focus {
-  border-color: var(--atlas-cyan);
+  border-bottom: 2px solid var(--atlas-acid);
 }
 
 .journey-location-search > button,

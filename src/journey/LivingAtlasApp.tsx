@@ -1391,23 +1391,36 @@ export function LivingAtlasApp({
       target.focus({ preventScroll: true });
     }
   }, [shareTarget]);
+  // Browser Back owns every visible surface, on both form factors.
+  //
+  // These four were gated on `isMobileV2`, so on desktop the portaled Story
+  // dialog, the share dialog and the two sheets were not Back-dismissible at
+  // all: Back left the Atlas entirely and discarded the open layer along with
+  // the reading position, share draft and selection inside it. The gate also
+  // made the model self-contradictory — `crossPointReading` below, a *transient*
+  // reading panel, was registered ungated and therefore already Back-dismissible
+  // on desktop, while the full-screen Story it escalates into was not.
+  //
+  // `useMobileSurfaceHistory` is layout-agnostic by construction: `active` is its
+  // only layout input, and it already handles nested token stacks, deferred
+  // registration and stale-suffix reconciliation. The name is historical.
   useMobileSurfaceHistory(
-    isMobileV2 && mobileSheetJourneyId !== null,
+    mobileSheetJourneyId !== null,
     "journey-sheet",
     () => setMobileSheetJourneyId(null),
   );
   useMobileSurfaceHistory(
-    isMobileV2 && mobilePickerOpen,
+    mobilePickerOpen,
     "journey-picker",
     () => setMobilePickerOpen(false),
   );
   useMobileSurfaceHistory(
-    isMobileV2 && storyJourneyId !== null,
+    storyJourneyId !== null,
     "journey-story",
     () => closeJourneyStory(null),
   );
   useMobileSurfaceHistory(
-    isMobileV2 && shareTarget !== null,
+    shareTarget !== null,
     "journey-share",
     requestShareClose,
   );
