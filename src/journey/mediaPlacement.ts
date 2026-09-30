@@ -558,9 +558,13 @@ function normalizeGpsDateTime(dateStamp: string | null, timeParts: readonly numb
   const milliseconds = Math.round((secondValue - second) * 1000);
   const instant = new Date(Date.UTC(year, month - 1, day, hour, minute, second, milliseconds));
   if (!Number.isFinite(instant.valueOf())) return null;
+  const capturedAt = instant.toISOString();
+  const capturedLocal = capturedAt.endsWith(".000Z")
+    ? capturedAt.slice(0, -5)
+    : capturedAt.slice(0, -1);
   return {
-    capturedAt: instant.toISOString(),
-    capturedLocal: `${match[1]}-${match[2]}-${match[3]}T${String(Math.floor(hour)).padStart(2, "0")}:${String(Math.floor(minute)).padStart(2, "0")}:${String(second).padStart(2, "0")}`,
+    capturedAt,
+    capturedLocal,
     timezoneState: "offset-known" as const,
     offsetMinutes: 0,
   };

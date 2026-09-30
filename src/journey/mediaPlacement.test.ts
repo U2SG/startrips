@@ -209,11 +209,13 @@ function jpegWithExtendedEvidence(options: {
   original?: string;
   digitized?: string;
   gpsDate?: string;
+  gpsTime?: ReadonlyArray<readonly [number, number]>;
   accuracy?: readonly [number, number];
 } = {}) {
   const original = options.original ?? "2026:08:30 14:15:00";
   const digitized = options.digitized ?? "2026:08:31 09:30:00";
   const gpsDate = options.gpsDate ?? "2026:09:01";
+  const gpsTime = options.gpsTime ?? [[1, 1], [2, 1], [3, 1]] as const;
   const accuracy = options.accuracy ?? [15, 2] as const;
   const tiffLength = 336;
   const payloadLength = 6 + tiffLength;
@@ -261,7 +263,7 @@ function jpegWithExtendedEvidence(options: {
   writeAscii(bytes, tiff + 237, "+09:00");
   writeRationals(view, tiff + 244, [[22, 1], [16, 1], [4195, 100]]);
   writeRationals(view, tiff + 268, [[114, 1], [10, 1], [28884, 1000]]);
-  writeRationals(view, tiff + 292, [[1, 1], [2, 1], [3, 1]]);
+  writeRationals(view, tiff + 292, gpsTime);
   writeAscii(bytes, tiff + 316, gpsDate);
   writeRationals(view, tiff + 327, [accuracy]);
   bytes[bytes.length - 2] = 0xff; bytes[bytes.length - 1] = 0xd9;
@@ -384,9 +386,34 @@ describe("JPEG EXIF placement parsing (#86 / #333)", () => {
       digitized: "2026:13:40 25:61:61",
     }))).toMatchObject({
       capturedAt: "2026-09-01T01:02:03.000Z",
+      capturedLocal: "2026-09-01T01:02:03",
       captureTimeSource: "gps",
       timezoneState: "offset-known",
       offsetMinutes: 0,
+    });
+  });
+
+  it("keeps rounded fractional GPS local time aligned with the same UTC instant", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithExtendedEvidence({
+      original: "0000:01:01 12:00:00",
+      digitized: "2026:13:40 25:61:61",
+      gpsDate: "2026:09:01",
+      gpsTime: [[23, 1], [59, 1], [149999, 2500]],
+    }))).toMatchObject({
+      capturedAt: "2026-09-02T00:00:00.000Z",
+      capturedLocal: "2026-09-02T00:00:00",
+      captureTimeSource: "gps",
+      timezoneState: "offset-known",
+      offsetMinutes: 0,
+    });
+
+    expect(parseJpegExifPlacementSignal(jpegWithExtendedEvidence({
+      original: "0000:01:01 12:00:00",
+      digitized: "2026:13:40 25:61:61",
+      gpsTime: [[1, 1], [2, 1], [25, 8]],
+    }))).toMatchObject({
+      capturedAt: "2026-09-01T01:02:03.125Z",
+      capturedLocal: "2026-09-01T01:02:03.125",
     });
   });
 
