@@ -29,6 +29,8 @@ export type PlaybackLifecycleRead = {
 export type PlaybackMediaLifecycleContext = PlaybackMediaLifecycleInput & {
   requestedAt: number;
   read: PlaybackLifecycleRead | null;
+  previewRequestedUrl: string | null;
+  previewWarmedUrl: string | null;
   decoded: boolean;
   decodeError: string | null;
   error: string | null;
@@ -90,6 +92,15 @@ export const playbackMediaLifecycleMachine = setup({
       && prefetchDispatchDecision(event) === "suppress-stale",
     readIsReusable: ({ context }) => playbackReadIsReusable(readState(context.read), Date.now()),
     decodeNotNeeded: ({ context }) => !context.isImage,
+    previewNotNeeded: ({ context }) => !context.read?.preview,
+    previewWarmSatisfied: ({ context }) => context.read?.preview?.url === context.previewWarmedUrl,
+    previewWarmChanged: ({ context }) => (context.read?.preview?.url ?? null) !== context.previewWarmedUrl,
+    previewWarmNeeded: ({ context }) => Boolean(
+      context.read?.preview && context.read.preview.url !== context.previewWarmedUrl
+    ),
+    previewRequestChanged: ({ context }) => (
+      (context.read?.preview?.url ?? null) !== context.previewRequestedUrl
+    ),
     alreadyDecoded: ({ context }) => context.decoded,
   },
   delays: {
@@ -105,6 +116,12 @@ export const playbackMediaLifecycleMachine = setup({
       suppressedIntents: ({ context }) => context.suppressedIntents + 1,
     }),
     markRequested: assign({ requestedAt: () => Date.now() }),
+    markPreviewRequested: assign({
+      previewRequestedUrl: ({ context }) => context.read?.preview?.url ?? null,
+    }),
+    markPreviewWarmed: assign({
+      previewWarmedUrl: ({ context }) => context.previewRequestedUrl,
+    }),
   },
 }).createMachine({
   id: "playbackMediaLifecycle",
@@ -112,6 +129,8 @@ export const playbackMediaLifecycleMachine = setup({
     ...input,
     requestedAt: 0,
     read: null,
+    previewRequestedUrl: null,
+    previewWarmedUrl: null,
     decoded: false,
     decodeError: null,
     error: null,
@@ -187,6 +206,37 @@ export const playbackMediaLifecycleMachine = setup({
                       }),
                     },
                   },
+                },
+              },
+            },
+            previewWarm: {
+              initial: "checking",
+              states: {
+                checking: {
+                  always: [
+                    { guard: "previewNotNeeded", target: "notNeeded" },
+                    { guard: "previewWarmSatisfied", target: "warmed" },
+                    { target: "warming" },
+                  ],
+                },
+                warming: {
+                  entry: "markPreviewRequested",
+                  always: { guard: "previewRequestChanged", target: "checking" },
+                  invoke: {
+                    src: "decodeImage",
+                    input: ({ context }) => ({ url: context.read!.preview!.url }),
+                    onDone: { target: "warmed", actions: "markPreviewWarmed" },
+                    onError: { target: "failed" },
+                  },
+                },
+                warmed: {
+                  always: { guard: "previewWarmChanged", target: "checking" },
+                },
+                notNeeded: {
+                  always: { guard: "previewWarmNeeded", target: "checking" },
+                },
+                failed: {
+                  always: { guard: "previewRequestChanged", target: "checking" },
                 },
               },
             },

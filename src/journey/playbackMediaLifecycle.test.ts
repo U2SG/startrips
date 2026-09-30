@@ -24,13 +24,21 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-function signed(url: string, ttlMs = 90_000): PrivateMediaRead {
-  return { url, expiresAt: new Date(Date.now() + ttlMs).toISOString() };
+function signed(
+  url: string,
+  ttlMs = 90_000,
+  preview?: PrivateMediaRead["preview"],
+): PrivateMediaRead {
+  return {
+    url,
+    expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+    ...(preview ? { preview } : {}),
+  };
 }
 
 function start(isImage = true) {
   const reads: Array<{ signal: AbortSignal; request: Deferred<PrivateMediaRead> }> = [];
-  const decodes: Array<{ signal: AbortSignal; request: Deferred<void> }> = [];
+  const decodes: Array<{ signal: AbortSignal; url: string; request: Deferred<void> }> = [];
   const machine = playbackMediaLifecycleMachine.provide({
     actors: {
       readMedia: fromPromise<PrivateMediaRead, { assetId: string }>(({ signal }) => {
@@ -38,9 +46,9 @@ function start(isImage = true) {
         reads.push({ signal, request });
         return request.promise;
       }),
-      decodeImage: fromPromise<void, { url: string }>(({ signal }) => {
+      decodeImage: fromPromise<void, { url: string }>(({ signal, input }) => {
         const request = deferred<void>();
-        decodes.push({ signal, request });
+        decodes.push({ signal, url: input.url, request });
         return request.promise;
       }),
     },
@@ -125,6 +133,90 @@ describe("playbackMediaLifecycle", () => {
     decodes[0].request.resolve();
     await settle();
     expect(playbackLifecycleDecodeReadiness(actor.getSnapshot())).toBeUndefined();
+    actor.stop();
+  });
+
+  it("warms same-asset previews for image and video prefetch actors", async () => {
+    const preview = {
+      url: "preview",
+      expiresAt: new Date(Date.now() + 90_000).toISOString(),
+      mimeType: "image/jpeg",
+      width: 640,
+      height: 360,
+    };
+
+    const image = start(true);
+    image.actor.send(prepare(1));
+    image.reads[0].request.resolve(signed("image-original", 900_000, preview));
+    await settle();
+    expect(image.decodes.map(({ url }) => url).sort()).toEqual(["image-original", "preview"].sort());
+    expect(playbackLifecycleGate(image.actor.getSnapshot())).not.toBe("ready");
+    image.decodes.find(({ url }) => url === "image-original")!.request.resolve();
+    await settle();
+    expect(playbackLifecycleGate(image.actor.getSnapshot())).toBe("ready");
+    image.actor.stop();
+
+    const video = start(false);
+    video.actor.send(prepare(1));
+    video.reads[0].request.resolve(signed("video-original", 900_000, preview));
+    await settle();
+    expect(video.decodes.map(({ url }) => url)).toEqual(["preview"]);
+    expect(playbackLifecycleGate(video.actor.getSnapshot())).toBe("ready");
+    video.actor.stop();
+  });
+
+  it("invalidates obsolete preview warming with the owning intent", async () => {
+    const preview = {
+      url: "preview",
+      expiresAt: new Date(Date.now() + 900_000).toISOString(),
+      mimeType: "image/jpeg",
+      width: 640,
+      height: 360,
+    };
+    const { actor, reads, decodes } = start(false);
+    actor.send(prepare(1));
+    reads[0].request.resolve(signed("video-original", 900_000, preview));
+    await settle();
+    expect(decodes).toHaveLength(1);
+    expect(decodes[0].url).toBe("preview");
+
+    actor.send({ type: "RELEASE" });
+    expect(decodes[0].signal.aborted).toBe(true);
+    decodes[0].request.resolve();
+    await settle();
+
+    actor.send(prepare(2));
+    await settle();
+    expect(reads).toHaveLength(1);
+    expect(decodes).toHaveLength(2);
+    expect(decodes[1].url).toBe("preview");
+    actor.stop();
+  });
+
+  it("re-warms a refreshed preview without blanking the current read", async () => {
+    const firstPreview = {
+      url: "preview-1",
+      expiresAt: new Date(Date.now() + 90_000).toISOString(),
+      mimeType: "image/jpeg",
+      width: 640,
+      height: 360,
+    };
+    const secondPreview = { ...firstPreview, url: "preview-2" };
+    const { actor, reads, decodes } = start(false);
+    actor.send(prepare(1));
+    reads[0].request.resolve(signed("video-1", 90_000, firstPreview));
+    await settle();
+    expect(decodes.map(({ url }) => url)).toEqual(["preview-1"]);
+    decodes[0].request.resolve();
+    await settle();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads).toHaveLength(2);
+    expect(playbackLifecycleMediaRead(actor.getSnapshot())).toMatchObject({ status: "ready", url: "video-1" });
+    reads[1].request.resolve(signed("video-2", 90_000, secondPreview));
+    await settle();
+    expect(playbackLifecycleMediaRead(actor.getSnapshot())).toMatchObject({ status: "ready", url: "video-2" });
+    expect(decodes.map(({ url }) => url)).toEqual(["preview-1", "preview-2"]);
     actor.stop();
   });
 
