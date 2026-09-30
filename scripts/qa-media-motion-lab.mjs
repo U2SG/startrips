@@ -161,7 +161,17 @@ for (const viewport of viewports) {
     const lab = page.locator("[data-media-motion-lab]");
     assert.equal(await lab.getAttribute("data-stage-covered"), "true");
     assert.equal(await lab.getAttribute("data-mobile-v2"), viewport.mobile ? "on" : "off");
-    return { viewport };
+    if (!viewport.mobile) return { viewport };
+    await page.screenshot({ path: path.join(artifactDir, `layout-${viewport.name}-top.png`), fullPage: true });
+    const dimensions = await lab.evaluate((node) => ({ clientHeight: node.clientHeight, scrollHeight: node.scrollHeight }));
+    assert.ok(dimensions.scrollHeight > dimensions.clientHeight, "compact Lab content has its own scroll range");
+    const lastDetail = page.locator(".media-motion-lab__inspector dd").last();
+    await lastDetail.scrollIntoViewIfNeeded();
+    const bottom = await lastDetail.boundingBox();
+    const scrollTop = await lab.evaluate((node) => node.scrollTop);
+    assert.ok(scrollTop > 0 && bottom && bottom.y >= 0 && bottom.y + bottom.height <= viewport.height,
+      "the final inspector value is reachable within the compact viewport");
+    return { viewport, dimensions, scrollTop };
   });
 }
 
