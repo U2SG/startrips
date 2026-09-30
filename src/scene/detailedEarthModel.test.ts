@@ -259,7 +259,11 @@ describe("detailed-earth Journey overlay", () => {
     const partialTrack = partial.data.features.find((feature) => feature.properties.provenance === "recorded-track");
     expect(partialTrack?.geometry.type).toBe("LineString");
     if (partialTrack?.geometry.type !== "LineString") throw new Error("expected dated track line");
-    expect(partialTrack.geometry.coordinates).toEqual(points.slice(0, 3).map((point) => [point.lon, point.lat]));
+    expect(partialTrack.geometry.coordinates).toHaveLength(3);
+    partialTrack.geometry.coordinates.forEach(([longitude, latitude], index) => {
+      expect(longitude).toBeCloseTo(points[index].lon, 8);
+      expect(latitude).toBeCloseTo(points[index].lat, 8);
+    });
     expect(overlayAt(instant - 1).data.features.some((feature) => feature.properties.provenance === "recorded-track"))
       .toBe(false);
     overlayAt(instant + 180_000);

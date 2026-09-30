@@ -89,6 +89,7 @@ await page.route("**/api/**", async (route) => {
   const request = route.request();
   const url = new URL(request.url());
   const path = url.pathname;
+  if (!path.startsWith("/api/")) return route.continue();
   apiReads.push(`${request.method()} ${path}`);
   if (request.method() !== "GET") mutations.push({ path, method: request.method() });
   if (path === "/api/auth/get-session") return json(route, {
