@@ -2,7 +2,7 @@
 
 .globe-time-scrubber {
   position: absolute;
-  z-index: 75;
+  z-index: var(--z-chrome-75);
   left: 50%;
   bottom: 28px;
   transform: translateX(-50%);

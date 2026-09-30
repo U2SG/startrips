@@ -15,7 +15,7 @@
 .point-confirmation {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  z-index: var(--z-content-4);
   color: var(--archive-ink);
 }
 
@@ -27,7 +27,7 @@
   position: absolute;
   top: 70px;
   left: 39%;
-  z-index: 2;
+  z-index: var(--z-content-2);
   display: grid;
   gap: 10px;
   color: rgba(184, 202, 194, 0.42);
@@ -727,7 +727,7 @@
   right: max(80px, calc((100vw - 880px) / 2));
   bottom: 32px;
   left: max(80px, calc((100vw - 880px) / 2));
-  z-index: 8;
+  z-index: var(--z-content-8);
   min-height: 74px;
   padding: 14px 20px;
   border-radius: 12px;

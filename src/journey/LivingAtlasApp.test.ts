@@ -1157,9 +1157,9 @@ describe("Route Point context integration (#291)", () => {
     const chromeRule = css.slice(chromeStart, css.indexOf("}", chromeStart));
 
     expect(readerStart).toBeGreaterThan(0);
-    expect(readerRule).toContain("z-index: 200;");
-    expect(headerRule).toContain("z-index: 92;");
-    expect(chromeRule).toContain("z-index: 90;");
+    expect(readerRule).toContain("z-index: var(--z-overlay-200);");
+    expect(headerRule).toContain("z-index: var(--z-chrome-92);");
+    expect(chromeRule).toContain("z-index: var(--z-chrome-90);");
   });
 
   it("keeps same-coordinate switch targets touch-safe without turning the context into a toolbar", () => {

@@ -70,7 +70,7 @@
 
 .living-atlas__globe {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-content-1);
   inset: 0;
   width: 100%;
   /* The globe canvas must exactly match the visible viewport: a wider
@@ -157,11 +157,11 @@
    `on` marker, retaining the existing short full-frame blend. */
 
 .living-atlas-globe__particle-layer {
-  z-index: 1;
+  z-index: var(--z-content-1);
 }
 
 .living-atlas-globe__detail-layer {
-  z-index: 2;
+  z-index: var(--z-content-2);
 }
 
 .living-atlas-globe.is-overview .living-atlas-globe__particle-layer {
@@ -214,7 +214,7 @@
 
 .route-candidate-editor {
   position: absolute;
-  z-index: 5;
+  z-index: var(--z-content-5);
   left: clamp(12px, 3vw, 42px);
   bottom: 88px;
   width: min(340px, calc(100% - 24px));
@@ -335,7 +335,7 @@
 .living-atlas-globe::after {
   content: "";
   position: absolute;
-  z-index: 3;
+  z-index: var(--z-content-3);
   inset: 0;
   pointer-events: none;
   background:
@@ -345,7 +345,7 @@
 
 .living-atlas-globe__controls {
   position: absolute;
-  z-index: 8;
+  z-index: var(--z-content-8);
   top: calc(clamp(152px, 17vh, 184px) - 54px);
   left: clamp(24px, 3vw, 48px);
   width: auto;
@@ -425,7 +425,7 @@
    globe. Blobs are GPU-composited transforms, never layout. */
 .living-atlas-ambience {
   position: absolute;
-  z-index: 0;
+  z-index: var(--z-content-0);
   inset: 0;
   overflow: hidden;
   pointer-events: none;
@@ -509,7 +509,7 @@
 
 .living-atlas-globe__mode-note {
   position: absolute;
-  z-index: 7;
+  z-index: var(--z-content-7);
   top: 132px;
   left: min(280px, 24vw);
   color: rgba(138, 158, 152, 0.68);
@@ -523,7 +523,7 @@
 
 .living-atlas__header {
   position: absolute;
-  z-index: 40;
+  z-index: var(--z-surface-40);
   top: 0;
   left: 0;
   right: 0;
@@ -643,7 +643,7 @@
      Atlas lifecycle state overrides it; Playback and point-picking isolate the
      rail with `inert`, opacity and pointer-events instead. */
   visibility: visible;
-  z-index: 18;
+  z-index: var(--z-surface-18);
   top: clamp(152px, 17vh, 184px);
   left: clamp(24px, 3vw, 48px);
   width: min(300px, 23vw);
@@ -766,7 +766,7 @@
 .living-atlas__active {
   --journey-color: var(--atlas-warm);
   position: absolute;
-  z-index: 20;
+  z-index: var(--z-surface-20);
   top: clamp(172px, 22vh, 232px);
   right: clamp(26px, 3.2vw, 52px);
   width: min(306px, 27vw);
@@ -882,7 +882,7 @@
 
 .living-atlas__active-media figcaption {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-content-1);
   right: 9px;
   bottom: 8px;
   color: #dceae6;
@@ -952,7 +952,7 @@
 .living-atlas__active-hit-area {
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: var(--z-content-1);
   border: 0;
   border-radius: inherit;
   background: transparent;
@@ -961,7 +961,7 @@
 
 .living-atlas__active-actions {
   position: relative;
-  z-index: 2;
+  z-index: var(--z-content-2);
   display: grid;
   gap: 10px;
   margin-top: auto;
@@ -1088,7 +1088,7 @@
 
 .living-atlas__empty {
   position: absolute;
-  z-index: 20;
+  z-index: var(--z-surface-20);
   left: clamp(28px, 6vw, 86px);
   bottom: clamp(40px, 10vh, 110px);
   width: min(430px, calc(100vw - 56px));
@@ -1142,7 +1142,7 @@
 
 .living-atlas__notice {
   position: absolute;
-  z-index: 70;
+  z-index: var(--z-chrome-70);
   left: 50%;
   bottom: 24px;
   min-height: 44px;
@@ -1215,7 +1215,7 @@
 
 .journey-timeline {
   position: absolute;
-  z-index: 35;
+  z-index: var(--z-surface-35);
   inset: 66px 0 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -1344,7 +1344,7 @@
 .journey-timeline__hit-area {
   position: absolute;
   inset: 0 48px 0 0;
-  z-index: 1;
+  z-index: var(--z-content-1);
   border: 0;
   border-radius: inherit;
   background: transparent;
@@ -1355,7 +1355,7 @@
    pointer region. */
 .journey-timeline__content {
   position: relative;
-  z-index: 0;
+  z-index: var(--z-content-0);
   min-width: 0;
   min-height: 116px;
   display: grid;
@@ -1393,7 +1393,7 @@
 
 .journey-timeline__story {
   position: relative;
-  z-index: 2;
+  z-index: var(--z-content-2);
   width: 48px;
   display: grid;
   place-content: center;
@@ -1465,7 +1465,7 @@
 .journey-story-backdrop,
 .journey-composer-backdrop {
   position: fixed;
-  z-index: 220;
+  z-index: var(--z-overlay-220);
   inset: 0;
   display: grid;
   place-items: center;
@@ -1578,7 +1578,7 @@
 .journey-story__close-blocked {
   grid-row: 2;
   grid-column: 1;
-  z-index: 4;
+  z-index: var(--z-content-4);
   align-self: start;
   margin: 0;
   padding: 11px 22px;
@@ -1601,7 +1601,7 @@
   position: absolute;
   right: 0;
   bottom: 0;
-  z-index: 12;
+  z-index: var(--z-content-12);
   width: min(280px, calc(100vw - 48px));
   margin: 0;
   padding: 12px;
@@ -1700,7 +1700,7 @@
 
 .journey-story__media-overview {
   position: absolute;
-  z-index: 2;
+  z-index: var(--z-content-2);
   top: 16px;
   left: 16px;
   min-height: 44px;
@@ -1731,7 +1731,7 @@
    repositions this next to .journey-story__mobile-sort-done below. */
 .journey-story__media-select-toggle {
   position: absolute;
-  z-index: 2;
+  z-index: var(--z-content-2);
   top: 16px;
   right: 16px;
   min-height: 44px;
@@ -1751,7 +1751,7 @@
 
 .journey-story__media-move-bar {
   position: absolute;
-  z-index: 3;
+  z-index: var(--z-content-3);
   left: 16px;
   right: 16px;
   bottom: 16px;
@@ -1783,7 +1783,7 @@
 /* #7: explicit fullscreen-play entry, beside the overview toggle. */
 .journey-story__fullscreen-entry {
   position: absolute;
-  z-index: 3;
+  z-index: var(--z-content-3);
   /* Review P2: below the media actions (set cover / delete) so the two
      top-right controls never overlap. */
   top: 68px;
@@ -1845,7 +1845,7 @@
 .icon-action-button::after {
   content: attr(data-tooltip);
   position: absolute;
-  z-index: 40;
+  z-index: var(--z-surface-40);
   left: 50%;
   bottom: calc(100% + 8px);
   width: max-content;
@@ -1901,7 +1901,7 @@
 /* #12: drag-and-drop ordering — the dragged tile lifts with a soft shadow;
    sibling tiles animate out of the way via dnd-kit's layout transition. */
 .journey-story__media-grid > li.is-dragging {
-  z-index: 2;
+  z-index: var(--z-content-2);
   border-radius: 3px;
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
   filter: brightness(1.06);
@@ -2000,7 +2000,7 @@
 
 .journey-story__media-nav {
   position: absolute;
-  z-index: 3;
+  z-index: var(--z-content-3);
   right: 16px;
   bottom: 16px;
   display: flex;
@@ -2023,7 +2023,7 @@
 
 .journey-story__media-order {
   position: absolute;
-  z-index: 3;
+  z-index: var(--z-content-3);
   left: 16px;
   bottom: 16px;
   min-height: 40px;
@@ -2150,7 +2150,7 @@
 
 .journey-story-fullscreen {
   position: fixed;
-  z-index: 260;
+  z-index: var(--z-overlay-260);
   inset: 0;
   display: grid;
   place-items: center;
@@ -2282,7 +2282,7 @@
   position: absolute;
   top: 16px;
   right: 16px;
-  z-index: 4;
+  z-index: var(--z-content-4);
   max-width: calc(100% - 32px);
   display: flex;
   align-items: flex-start;
@@ -3052,7 +3052,7 @@
 /* Composer */
 
 .journey-composer-backdrop {
-  z-index: 240;
+  z-index: var(--z-overlay-240);
   grid-template-rows: minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr);
 }
@@ -3517,7 +3517,7 @@
 .living-atlas__import-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 239;
+  z-index: var(--z-overlay-239);
   display: grid;
   place-items: center;
   padding: 16px;
@@ -3575,7 +3575,7 @@
 .journey-itinerary-import__actions {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: var(--z-content-2);
   display: flex;
   flex-wrap: wrap;
   align-items: end;
@@ -4994,7 +4994,7 @@
 .journey-light-effect-preview::after {
   position: absolute;
   inset: -34%;
-  z-index: -1;
+  z-index: var(--z-content-minus-1);
   content: "";
   pointer-events: none;
 }
@@ -5031,7 +5031,7 @@
 .journey-light-effect-preview__copy,
 .journey-light-effect__copy {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content-1);
   display: grid;
   gap: 3px;
 }
@@ -5046,7 +5046,7 @@
 
 .journey-light-effect-preview__caption {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content-1);
   margin-left: auto;
   color: rgba(231, 248, 241, 0.68);
   font-size: 9px;
@@ -5106,7 +5106,7 @@
 .journey-light-effect__orb,
 .journey-light-effect__copy {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content-1);
 }
 
 .journey-light-effect__orb {
@@ -5507,7 +5507,7 @@
 
 .journey-globe-pick-hint {
   position: fixed;
-  z-index: 260;
+  z-index: var(--z-overlay-260);
   top: 86px;
   left: 50%;
   min-height: 62px;
@@ -5804,7 +5804,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .living-atlas.is-globe-focus .living-atlas__globe {
-  z-index: 60;
+  z-index: var(--z-chrome-60);
 }
 
 /* #291: Route Point context is transient content, not another mode toolbar.
@@ -5813,7 +5813,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    remains with the globe underneath. */
 .living-atlas__route-point-context {
   position: absolute;
-  z-index: 72;
+  z-index: var(--z-chrome-72);
   top: 50%;
   right: calc(env(safe-area-inset-right) + 24px);
   width: min(340px, calc(100vw - 48px));
@@ -6078,7 +6078,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .living-atlas__cross-point-reading-layer {
   position: absolute;
-  z-index: 84;
+  z-index: var(--z-chrome-84);
   inset: 0;
   pointer-events: none;
 }
@@ -6179,7 +6179,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .living-atlas[data-mobile-v2="on"] .living-atlas__cross-point-reading-layer {
-  z-index: 200;
+  z-index: var(--z-overlay-200);
 }
 
 .living-atlas[data-mobile-v2="on"] .living-atlas__cross-point-reading {
@@ -6229,7 +6229,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    modal close. No panel wraps it: it is the control itself. */
 .living-atlas__globe-focus-exit {
   position: absolute;
-  z-index: 80;
+  z-index: var(--z-chrome-80);
   top: calc(env(safe-area-inset-top) + 16px);
   left: calc(env(safe-area-inset-left) + 16px);
   min-width: 44px;
@@ -6730,7 +6730,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story__sheet-handle {
     position: sticky;
-    z-index: 6;
+    z-index: var(--z-content-6);
     top: 0;
     width: 100%;
     height: 44px;
@@ -6756,7 +6756,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story > header {
     position: sticky;
-    z-index: 4;
+    z-index: var(--z-content-4);
     top: 44px;
     height: 62px;
     padding: 0 12px;
@@ -6860,7 +6860,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story__mobile-media-actions {
     position: absolute;
-    z-index: 8;
+    z-index: var(--z-content-8);
     inset: 0;
     pointer-events: none;
   }
@@ -7054,7 +7054,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story__mobile-media-sheet-backdrop {
     position: absolute;
-    z-index: 1;
+    z-index: var(--z-content-1);
     inset: 0;
     width: 100%;
     min-height: 0;
@@ -7066,7 +7066,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story__mobile-media-sheet {
     position: absolute;
-    z-index: 2;
+    z-index: var(--z-content-2);
     right: 12px;
     bottom: 12px;
     left: 12px;
@@ -7146,7 +7146,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story__mobile-sort-done {
     position: absolute;
-    z-index: 9;
+    z-index: var(--z-content-9);
     top: 12px;
     right: 12px;
     min-height: var(--mobile-control-hit-size, 44px);
@@ -7163,7 +7163,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     top: 12px;
     right: auto;
     left: 12px;
-    z-index: 9;
+    z-index: var(--z-content-9);
     min-height: var(--mobile-control-hit-size, 44px);
     border-radius: 999px;
     background: rgba(2, 10, 11, 0.74);
@@ -7246,7 +7246,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story__media-controls {
     position: absolute;
-    z-index: 3;
+    z-index: var(--z-content-3);
     right: 12px;
     bottom: 12px;
     left: 12px;
@@ -7521,7 +7521,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-media-mobile-sheet-layer {
     position: fixed;
-    z-index: 285;
+    z-index: var(--z-overlay-285);
     inset: 0;
     display: grid;
     align-items: end;
@@ -7541,7 +7541,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-media-mobile-sheet {
     position: relative;
-    z-index: 1;
+    z-index: var(--z-content-1);
     max-height: min(72svh, 620px);
     overflow-y: auto;
     display: grid;
@@ -7718,7 +7718,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    atlas chrome and interaction model unchanged. */
 .mobile-v2__header {
   position: absolute;
-  z-index: 92;
+  z-index: var(--z-chrome-92);
   top: 0;
   right: 0;
   left: 0;
@@ -7763,7 +7763,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .mobile-v2__chrome {
   position: absolute;
-  z-index: 90;
+  z-index: var(--z-chrome-90);
   right: 12px;
   bottom: calc(env(safe-area-inset-bottom) + 8px);
   left: 12px;
@@ -7845,7 +7845,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .mobile-v2__timeline .globe-time-scrubber {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content-1);
   inset: auto;
   width: 100%;
   height: 50px;
@@ -7887,7 +7887,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .mobile-v2__scrub-bubble {
   position: absolute;
-  z-index: 3;
+  z-index: var(--z-content-3);
   right: 22px;
   bottom: 126px;
   max-width: min(230px, 72vw);
@@ -7917,7 +7917,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .mobile-v2__sheet-layer {
   position: fixed;
-  z-index: 180;
+  z-index: var(--z-overlay-180);
   inset: 0;
   display: grid;
   align-items: end;
@@ -7933,7 +7933,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .mobile-v2__sheet {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content-1);
   max-height: min(72svh, 640px);
   overflow-y: auto;
   padding: 8px 16px calc(env(safe-area-inset-bottom) + 16px);
@@ -8069,7 +8069,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .mobile-v2__picker {
   position: fixed;
-  z-index: 190;
+  z-index: var(--z-overlay-190);
   inset: 0;
   background: #010708;
 }
@@ -8195,7 +8195,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .living-atlas.is-mobile-v2 .living-atlas__empty {
-    z-index: 88;
+    z-index: var(--z-chrome-88);
     top: auto;
     right: 24px;
     bottom: calc(env(safe-area-inset-bottom) + 38px);
@@ -8306,7 +8306,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    target. */
 .journey-share {
   position: fixed;
-  z-index: 60;
+  z-index: var(--z-chrome-60);
   inset: 0;
   display: grid;
   place-items: center;
@@ -8323,7 +8323,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .journey-share__dialog {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content-1);
   overflow-y: auto;
   width: min(560px, 100%);
   max-height: 100%;
@@ -8635,7 +8635,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .journey-story__media.is-organizing > .journey-story__order-message {
-  z-index: 3;
+  z-index: var(--z-content-3);
   bottom: 4px;
   right: 16px;
   max-width: none;
@@ -8647,7 +8647,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    position comes from ParticleEarthScene's shared projection frame. */
 .living-atlas-globe__home-base {
   position: fixed;
-  z-index: 4;
+  z-index: var(--z-content-4);
   display: grid;
   place-items: center;
   box-sizing: border-box;
@@ -8697,7 +8697,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    owners in LivingAtlasApp. */
 .living-atlas__home-base-context {
   position: absolute;
-  z-index: 73;
+  z-index: var(--z-chrome-73);
   right: calc(env(safe-area-inset-right) + 24px);
   bottom: calc(env(safe-area-inset-bottom) + 28px);
   width: min(320px, calc(100vw - 48px));
@@ -8865,12 +8865,12 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    no fixed positioning over the timeline and no focus trap, so the Atlas
    behind it stays readable and clickable while the question goes unanswered. */
 .living-atlas__home-base-suggestion {
-  /* `.journey-timeline` is an opaque absolute layer at z-index 35, so the card
+  /* `.journey-timeline` is an opaque absolute layer at --z-surface-35, so the card
      sits above it at the foot of the same region rather than in page flow
      behind it. Still not an overlay: no backdrop, no inert siblings, and the
      timeline rail above it keeps every pointer event it had. */
   position: absolute;
-  z-index: 40;
+  z-index: var(--z-surface-40);
   left: 50%;
   bottom: calc(env(safe-area-inset-bottom) + 26px);
   width: min(520px, calc(100vw - 56px));
@@ -8946,7 +8946,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    covering that chrome: the question stays optional and the globe remains
    directly interactive everywhere outside the card. */
 .living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion {
-  z-index: 85;
+  z-index: var(--z-chrome-85);
   right: 12px;
   bottom: calc(env(safe-area-inset-bottom) + 142px);
   left: 12px;
@@ -9013,7 +9013,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .journey-composer--focused .journey-composer__task-header {
   position: sticky;
-  z-index: 3;
+  z-index: var(--z-content-3);
   top: 0;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -9087,7 +9087,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .journey-composer--focused .journey-composer__more-menu {
   position: absolute;
-  z-index: 4;
+  z-index: var(--z-content-4);
   top: calc(100% + 6px);
   right: 0;
   left: 0;

@@ -14,7 +14,7 @@
 .playback-media-presentation__peek {
   position: absolute;
   inset: clamp(18px, 5%, 48px);
-  z-index: 0;
+  z-index: var(--z-content-0);
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -22,8 +22,8 @@
   transform-origin: center;
 }
 
-.playback-media-presentation__peek[data-sequence-peek-depth="1"] { z-index: 1; }
-.playback-media-presentation__peek[data-sequence-peek-depth="2"] { z-index: 0; }
+.playback-media-presentation__peek[data-sequence-peek-depth="1"] { z-index: var(--z-content-1); }
+.playback-media-presentation__peek[data-sequence-peek-depth="2"] { z-index: var(--z-content-0); }
 
 .playback-media-presentation__peek > img {
   display: block;

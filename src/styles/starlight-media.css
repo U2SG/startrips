@@ -3,7 +3,7 @@
 .starlight-media-state {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: var(--z-content-2);
   display: grid;
   place-content: center;
   justify-items: center;
@@ -30,7 +30,7 @@
 }
 
 .journey-story-fullscreen:has(> .starlight-media-state) > :is(.journey-story-fullscreen__close, .journey-story-fullscreen__nav) {
-  z-index: 3;
+  z-index: var(--z-content-3);
 }
 
 .journey-playback__media-state.starlight-media-state {

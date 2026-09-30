@@ -2,7 +2,7 @@
 .artwork-detail {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  z-index: var(--z-content-4);
   overflow: hidden;
   background: var(--archive-bg);
 }
@@ -80,7 +80,7 @@
 
 .artwork-browser-card.is-selected {
   left: 50%;
-  z-index: 3;
+  z-index: var(--z-content-3);
   width: 234px;
   height: 360px;
   border-color: rgba(205, 220, 212, 0.24);
@@ -89,7 +89,7 @@
 
 .artwork-browser-card.is-previous,
 .artwork-browser-card.is-next {
-  z-index: 1;
+  z-index: var(--z-content-1);
   width: 166px;
   height: 126px;
   opacity: 0.42;
@@ -119,7 +119,7 @@
 .artwork-browser-pager {
   position: absolute;
   bottom: 116px;
-  z-index: 2;
+  z-index: var(--z-content-2);
 }
 
 .artwork-browser-instruction {
@@ -191,7 +191,7 @@
   position: absolute;
   top: 118px;
   left: calc(64% - 112px);
-  z-index: 2;
+  z-index: var(--z-content-2);
   display: grid;
   min-width: 80px;
   min-height: 54px;
