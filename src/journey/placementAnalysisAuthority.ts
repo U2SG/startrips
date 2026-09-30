@@ -107,3 +107,39 @@ export function createPlacementAnalysisAuthority() {
     revision() { return revision; },
   };
 }
+
+export const PLACEMENT_METADATA_READ_CONCURRENCY = 4;
+
+export async function runPlacementAnalysisBatch<T, R>(
+  authority: ReturnType<typeof createPlacementAnalysisAuthority>,
+  intent: PlacementAnalysisIntent,
+  currentScope: () => PlacementAnalysisScope,
+  items: readonly T[],
+  read: (item: T, index: number) => Promise<R>,
+  concurrency = PLACEMENT_METADATA_READ_CONCURRENCY,
+): Promise<R[] | null> {
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) {
+    throw new Error("Placement metadata concurrency must be between 1 and 8");
+  }
+  if (!authority.isCurrent(intent, currentScope())) return null;
+
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (true) {
+      if (!authority.isCurrent(intent, currentScope())) return;
+      const index = nextIndex;
+      if (index >= items.length) return;
+      nextIndex += 1;
+      const result = await read(items[index], index);
+      if (!authority.isCurrent(intent, currentScope())) return;
+      results[index] = result;
+    }
+  }
+
+  await Promise.all(Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => worker(),
+  ));
+  return authority.isCurrent(intent, currentScope()) ? results : null;
+}

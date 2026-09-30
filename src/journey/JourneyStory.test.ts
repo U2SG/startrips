@@ -27,7 +27,7 @@ import {
   replaceJourneySoundtrack,
 } from "./JourneyStory";
 import { JourneyApiError } from "./journeyApi";
-import { createPlacementAnalysisAuthority, placementAnalysisScope } from "./placementAnalysisAuthority";
+import { createPlacementAnalysisAuthority, placementAnalysisScope, runPlacementAnalysisBatch } from "./placementAnalysisAuthority";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 const journey: Journey = {
@@ -1243,6 +1243,50 @@ describe("placement analysis supersession (#113)", () => {
     authority.syncScope(scope);
     const intent = authority.start(scope);
     expect(authority.isCurrent(intent, scope)).toBe(true);
+  });
+
+  it("bounds metadata reads and discards normalized evidence after the batch is superseded", async () => {
+    const authority = createPlacementAnalysisAuthority();
+    const current = withPoints(journey, ["p1"]);
+    const scope = placementAnalysisScope([current], current.id, "p1");
+    authority.syncScope(scope);
+    const intent = authority.start(scope);
+    let active = 0;
+    let peak = 0;
+    const started: number[] = [];
+    const releases: Array<() => void> = [];
+    const batch = runPlacementAnalysisBatch(
+      authority,
+      intent,
+      () => scope,
+      [0, 1, 2, 3, 4, 5],
+      async (_item, index) => {
+        started.push(index);
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        active -= 1;
+        return {
+          status: "signal" as const,
+          signal: {
+            latitude: 22.2783,
+            longitude: 114.1747,
+            spatialSource: "exif" as const,
+            spatialGranularity: "coordinate" as const,
+            accuracyMeters: 5,
+          },
+        };
+      },
+      2,
+    );
+
+    expect(started).toEqual([0, 1]);
+    authority.invalidate(scope);
+    releases.splice(0).forEach((release) => release());
+
+    expect(await batch).toBeNull();
+    expect(started).toEqual([0, 1]);
+    expect(peak).toBe(2);
   });
 });
 

@@ -111,7 +111,7 @@ import {
   readMediaPlacementSignal,
   type MediaPlacementBatchResult,
 } from "./mediaPlacement";
-import { createPlacementAnalysisAuthority, placementAnalysisScope, type PlacementAnalysisIntent } from "./placementAnalysisAuthority";
+import { createPlacementAnalysisAuthority, placementAnalysisScope, runPlacementAnalysisBatch, type PlacementAnalysisIntent } from "./placementAnalysisAuthority";
 import { isModalFocusCandidate, useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
@@ -2857,8 +2857,15 @@ export function JourneyStory({
     }
     setPlacementAnalyzing(true);
     try {
-      const signals = await Promise.all(files.map(readMediaPlacementSignal));
-      if (!placementAnalysisIsCurrent(intent)) return;
+      const reads = await runPlacementAnalysisBatch(
+        authority,
+        intent,
+        () => placementAnalysisScopeRef.current,
+        files,
+        (file) => readMediaPlacementSignal(file),
+      );
+      if (!reads || !placementAnalysisIsCurrent(intent)) return;
+      const signals = reads.map((result) => result.status === "signal" ? result.signal : null);
       const batch = groupMediaPlacementSuggestions(signals, journeys, journey.id);
       if (batch.groups.length === 0) {
         if (placementAnalysisIsCurrent(intent)) await uploadFiles(files);
