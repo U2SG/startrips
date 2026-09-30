@@ -8,6 +8,7 @@ import {
   removeRoutePoint,
   routeDraftSearchFocus,
   routeDraftToInput,
+  routeDraftFingerprint,
   routePointStayOwnershipTargets,
   setRoutePointStayAnchor,
   suggestPointLabel,
@@ -268,5 +269,69 @@ describe("route draft search focus", () => {
 
   it("sends no bias for an empty Route", () => {
     expect(routeDraftSearchFocus([])).toBeNull();
+  });
+});
+
+// #586: the Composer close guard asks this fingerprint whether closing would
+// destroy work. The regression these pin is specifically that a draft-id or
+// media-count comparison cannot see an edit to a point that already existed.
+describe("route draft fingerprint", () => {
+  const media = [
+    { name: "a.jpg", size: 10, type: "image/jpeg", lastModified: 1, routePointDraftId: "beijing" },
+  ];
+
+  it("is stable for an untouched draft", () => {
+    expect(routeDraftFingerprint([beijing, ulanBator], media)).toBe(
+      routeDraftFingerprint([{ ...beijing }, { ...ulanBator }], [{ ...media[0] }]),
+    );
+  });
+
+  // Every one of these leaves `draftId` untouched, so the previous comparison
+// reported a clean draft and the close guard stayed silent through a real loss.
+  it("sees an edit to an existing Route Point's own fields", () => {
+    const anchorId = "33333333-3333-4333-8333-333333333333";
+    const baseline = routeDraftFingerprint([beijing, ulanBator], media);
+    const edited: [string, RouteDraftPoint][] = [
+      ["place label", { ...beijing, label: "Beijing (old name)" }],
+      ["note", { ...beijing, note: "a new personal note" }],
+      ["latitude", { ...beijing, latitude: 39.9999 }],
+      ["longitude", { ...beijing, longitude: 116.9999 }],
+      ["stop flag", { ...beijing, isStop: false }],
+      ["occurredAt", { ...beijing, occurredAt: "2026-08-20" }],
+      ["regionContext", { ...beijing, regionContext: "northern China" }],
+      ["placeRole", { ...beijing, placeRole: "attraction" }],
+      ["overviewVisibility", { ...beijing, overviewVisibility: "detail" }],
+      ["stay ownership", { ...beijing, stayAnchorRoutePointId: anchorId }],
+      ["persisted id", { ...beijing, id: "22222222-2222-4222-8222-222222222222" }],
+    ];
+    for (const [field, point] of edited) {
+      expect([field, routeDraftFingerprint([point, ulanBator], media)]).toEqual([
+        field,
+        expect.not.stringContaining(baseline),
+      ]);
+    }
+  });
+
+  it("sees media moving between Route Points and files being swapped", () => {
+    const baseline = routeDraftFingerprint([beijing, ulanBator], media);
+    expect(routeDraftFingerprint([beijing, ulanBator], [
+      { ...media[0], routePointDraftId: "ulan-bator" },
+    ])).not.toBe(baseline);
+    // Same length, different file: a count comparison cannot see this either.
+    expect(routeDraftFingerprint([beijing, ulanBator], [
+      { ...media[0], name: "b.jpg" },
+    ])).not.toBe(baseline);
+    expect(routeDraftFingerprint([beijing, ulanBator], [])).not.toBe(baseline);
+  });
+
+  it("sees order changes, since the payload order defines the Route", () => {
+    const baseline = routeDraftFingerprint([beijing, ulanBator], media);
+    expect(routeDraftFingerprint([ulanBator, beijing], media)).not.toBe(baseline);
+  });
+
+  it("does not confuse an absent optional field with an explicit null", () => {
+    expect(routeDraftFingerprint([beijing], [])).toBe(
+      routeDraftFingerprint([{ ...beijing, note: null, regionContext: null }], []),
+    );
   });
 });

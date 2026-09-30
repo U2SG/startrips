@@ -32,6 +32,7 @@ import {
 import {
   INITIAL_EARTH_DIVE_STATE,
   resolveEarthDive,
+  resolveEarthDivePresentation,
   type DetailReadiness,
   type EarthDiveOwner,
   type EarthDiveStage,
@@ -423,6 +424,25 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
             ) : null}
           </div>
         </div>
+        {particleEarthBackend === "unavailable" ? (
+          // The renderer already degrades honestly: `useThreeScene` catches the
+          // failed context probe, the DOM/SVG interaction layers never get built,
+          // and the host is left as a silent empty field. That state was known
+          // here (it drives the data attribute above) but was never shown to
+          // anyone. A member on a machine without WebGL2 needs to know the Earth
+          // is not broken on their side, and that route entry still works by
+          // manual coordinates — that fallback is a product contract, not a
+          // workaround, so it is named rather than left to be discovered.
+          //
+          // Sits outside `.persistent-earth-host` on purpose: that element is
+          // `aria-hidden="true"`, so a `role="status"` inside it would never be
+          // announced. Sibling of the host, so it also stays above its
+          // `pointer-events: none` surface.
+          <p className="persistent-earth-unavailable" role="status">
+            这台设备的浏览器没有可用的 WebGL2，粒子地球暂时无法显示。
+            {atlas ? "旅程仍可从左侧列表浏览；添加途径点时可以直接填写坐标。" : null}
+          </p>
+        ) : null}
         <div className="persistent-earth-content">{children}</div>
       </div>
     </PersistentEarthContext.Provider>
@@ -1089,15 +1109,15 @@ export function LivingAtlasGlobe({
     };
   }, [gestureHint.session, gestureHintVisible]);
 
-  const effectiveDive: EarthDiveState = earthExperiencePolicy === "particle-only"
-    ? { ...INITIAL_EARTH_DIVE_STATE, blendMs: dive.blendMs }
-    : dive;
+  const effectiveDive = resolveEarthDivePresentation(dive, earthExperiencePolicy, globeFocusMode);
   const homeBaseInteractive = effectiveDive.owner !== "detail"
     && !cinematicActive
     && !onGlobePointPick
     && Boolean(onHomeBaseActivate);
 
-  useEffect(() => {
+  // Input ownership reaches the persistent renderer in the same composition
+  // commit as the DOM's inert/pointer boundary, before the next painted frame.
+  useLayoutEffect(() => {
     persistentEarth.setAtlasPresentation({
       focusPoint,
       focusRoute,
@@ -1143,8 +1163,8 @@ export function LivingAtlasGlobe({
     narrativeJourneyRoutePoint?.pointIndex,
     cinematicActive,
     earthExperiencePolicy,
-    dive.owner,
-    dive.stage,
+    effectiveDive.owner,
+    effectiveDive.stage,
     focusColor,
     focusPoint,
     focusRevision,
@@ -1188,7 +1208,7 @@ export function LivingAtlasGlobe({
   // particle-only policy is checked before mount so no hidden MapLibre lifetime
   // exists for CSS to conceal.
   const showDetail = earthExperiencePolicy === "default" && effectiveDive.stage !== "particle";
-  const detailMode = effectiveDive.stage === "detail";
+  const detailMode = effectiveDive.owner === "detail";
   // #308 review: compact mobile still needs a non-gesture path for external
   // keyboards and switch-control users. Keep the semantic Dive intent mounted
   // independently from the optional detail utility cluster; focus mode and

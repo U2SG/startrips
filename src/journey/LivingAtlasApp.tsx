@@ -1392,6 +1392,20 @@ export function LivingAtlasApp({
       target.focus({ preventScroll: true });
     }
   }, [shareTarget]);
+  // The `isMobileV2` gate here is load-bearing, not an oversight, and an audit
+  // that reads it as one is wrong.
+  //
+  // `qa-post-login-controls` asserts the opposite of "Back should close this on
+  // every viewport": crossing the responsive boundary while the mobile
+  // sheet → story → fullscreen stack is open must collapse every
+  // Startrips-owned sentinel in ONE bounded history move, without navigating or
+  // reloading the document. Those layers unmount at the desktop breakpoint, so a
+  // registration that outlived them would leave an orphaned token that Back
+  // consumes instead of doing anything meaningful.
+  //
+  // So desktop Back genuinely does leave the Atlas with an open Story — that is
+  // the current contract, and closing it needs a desktop-side history owner that
+  // is scoped like the mobile one, not a removed gate. Tracked in #586.
   useMobileSurfaceHistory(
     isMobileV2 && mobileSheetJourneyId !== null,
     "journey-sheet",

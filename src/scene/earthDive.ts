@@ -210,6 +210,22 @@ export const INITIAL_EARTH_DIVE_STATE: EarthDiveState = {
   blendMs: EARTH_DIVE_BLEND_MS,
 };
 
+/**
+ * Composition can revoke input before the frame resolver walks the renderer
+ * home. A queued forward commit must never restore detail ownership while
+ * suspension is committed; keep its stage so the same reverse animation runs.
+ */
+export function resolveEarthDivePresentation(
+  state: EarthDiveState,
+  policy: EarthExperiencePolicy,
+  suspended: boolean,
+): EarthDiveState {
+  if (policy === "particle-only") {
+    return { ...INITIAL_EARTH_DIVE_STATE, blendMs: state.blendMs };
+  }
+  return suspended && state.owner === "detail" ? { ...state, owner: "particle" } : state;
+}
+
 function stageIndex(stage: EarthDiveStage) {
   return STAGE_ORDER.indexOf(stage);
 }

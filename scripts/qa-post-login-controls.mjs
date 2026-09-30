@@ -974,12 +974,35 @@ async function verifyComposerMediaActions() {
       await leaveComposerTask(page);
     }
 
+    // The Composer now refuses to drop an authoring session on a bare close.
+    // This flow has attached media and picked a globe point, so the first close
+    // must raise the discard guard and leave the surface mounted — and the
+    // guard must own initial focus on 继续编辑, never on the destructive control,
+    // matching the convention both Journey Story confirmations already use.
+    await page.getByRole("button", { name: "关闭旅程编辑器" }).click();
+    const discardGuard = page.locator(".journey-composer__discard-guard");
+    await discardGuard.waitFor({ state: "visible" });
+    const guardHeld = {
+      role: await discardGuard.getAttribute("role"),
+      composerStillMounted: await page.locator(".journey-composer").isVisible(),
+      initialFocus: await page.evaluate(() => document.activeElement?.textContent?.trim() ?? ""),
+    };
+    results.push({
+      name: "composer-discard-guard-holds-close",
+      ...guardHeld,
+      failed: guardHeld.role !== "alertdialog"
+        || !guardHeld.composerStillMounted
+        || guardHeld.initialFocus !== "继续编辑",
+    });
+    if (results.at(-1).failed) failed = true;
+    await page.locator("[data-composer-discard-confirm]").click();
+    await page.locator(".journey-composer").waitFor({ state: "detached" });
+
     // Review P2 regression: normal modal close must restore the opener only
     // after the atlas siblings have been released from inert. The preview's
     // reopen button is an atlas sibling, so the old cleanup order reproduced
-    // Chromium dropping focus to <body>.
-    await page.getByRole("button", { name: "关闭旅程编辑器" }).click();
-    await page.locator(".journey-composer").waitFor({ state: "detached" });
+    // Chromium dropping focus to <body>. The reopened Composer is clean, so this
+    // close is the unguarded path.
     const reopen = page.locator("[data-qa-composer-reopen]");
     await reopen.focus();
     await reopen.click();
