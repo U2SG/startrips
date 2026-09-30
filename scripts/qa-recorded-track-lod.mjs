@@ -123,20 +123,31 @@ await page.route("**/api/**", async (route) => {
   return json(route, {});
 });
 
-const particleSnapshot = () => page.evaluate(() => ({
-  debug: window.__particleEarthDebug?.(),
-  tracks: [...document.querySelectorAll(".particle-earth-route__recorded-track")].map((path) => ({
-    id: path.dataset.recordedTrackSegment,
-    evidence: path.dataset.recordedTrackTimeEvidence,
-    levels: Number(path.dataset.recordedTrackLodLevels),
-    error: Number(path.dataset.recordedTrackLodErrorRad),
-    source: Number(path.dataset.recordedTrackLodSourcePoints),
-    rendered: Number(path.dataset.recordedTrackLodRenderedPoints),
-    hasGeometry: Boolean(path.getAttribute("d")),
-  })),
-  pointIds: [...document.querySelectorAll(".particle-earth-route__point")].map((point) => point.dataset.routePointId),
-  ownerIds: [...document.querySelectorAll(".particle-earth-route")].map((group) => group.dataset.journeyRoute),
-}));
+const particleSnapshot = async () => {
+  // The camera can invalidate projection on the next animation frame. Capture
+  // renderer readiness and the paths in one browser task, not two round trips.
+  const handle = await page.waitForFunction(() => {
+    const debug = window.__particleEarthDebug?.();
+    if (!debug?.journeyRouteProjectionReady) return false;
+    const tracks = [...document.querySelectorAll(".particle-earth-route__recorded-track")].map((path) => ({
+      id: path.dataset.recordedTrackSegment,
+      evidence: path.dataset.recordedTrackTimeEvidence,
+      levels: Number(path.dataset.recordedTrackLodLevels),
+      error: Number(path.dataset.recordedTrackLodErrorRad),
+      source: Number(path.dataset.recordedTrackLodSourcePoints),
+      rendered: Number(path.dataset.recordedTrackLodRenderedPoints),
+      hasGeometry: Boolean(path.getAttribute("d")),
+    }));
+    if (tracks.length !== 5 || tracks.some((track) => !Number.isFinite(track.source)
+      || !Number.isFinite(track.rendered) || !track.evidence)) return false;
+    return {
+      debug, tracks,
+      pointIds: [...document.querySelectorAll(".particle-earth-route__point")].map((point) => point.dataset.routePointId),
+      ownerIds: [...document.querySelectorAll(".particle-earth-route")].map((group) => group.dataset.journeyRoute),
+    };
+  });
+  try { return await handle.jsonValue(); } finally { await handle.dispose(); }
+};
 const beginFrames = () => page.evaluate(() => {
   const intervals = [];
   const start = performance.now();
@@ -162,19 +173,25 @@ const endFrames = async () => {
     };
   });
 };
-const detailSnapshot = () => page.locator(".detailed-earth-map").evaluate((host) => ({
-  key: host.dataset.journeyRecordedTrackLodKey,
-  rendered: Number(host.dataset.journeyRecordedTrackRenderedPoints),
-  builds: Number(host.dataset.journeyRecordedTrackLodBuilds),
-  pixelsPerRadian: Number(host.dataset.journeyRecordedTrackPixelsPerRadian),
-  segments: JSON.parse(host.dataset.journeyRecordedTrackSegments ?? "[]"),
-  owner: host.dataset.journeyOverlayJourneyId,
-  points: Number(host.dataset.journeyOverlayPointCount),
-  stops: Number(host.dataset.journeyOverlayStopCount),
-  shaping: Number(host.dataset.journeyOverlayPassthroughCount),
-  idle: Number(host.dataset.mapIdleCount ?? 0),
-  zoom: Number(host.dataset.handoffZoom),
-}));
+const detailSnapshot = () => page.locator(".detailed-earth-map").evaluate((host) => {
+  const a = window.__detailedEarthMapProject?.(114.1, 22.2);
+  const b = window.__detailedEarthMapProject?.(114.2, 22.2);
+  return {
+    key: host.dataset.journeyRecordedTrackLodKey,
+    rendered: Number(host.dataset.journeyRecordedTrackRenderedPoints),
+    builds: Number(host.dataset.journeyRecordedTrackLodBuilds),
+    pixelsPerRadian: Number(host.dataset.journeyRecordedTrackPixelsPerRadian),
+    probeScale: a && b ? Math.hypot(a.x - b.x, a.y - b.y) : null,
+    segments: JSON.parse(host.dataset.journeyRecordedTrackSegments ?? "[]"),
+    owner: host.dataset.journeyOverlayJourneyId,
+    points: Number(host.dataset.journeyOverlayPointCount),
+    stops: Number(host.dataset.journeyOverlayStopCount),
+    shaping: Number(host.dataset.journeyOverlayPassthroughCount),
+    readiness: host.dataset.mapReadiness,
+    error: host.dataset.mapError ?? null,
+    zoom: Number(host.dataset.handoffZoom),
+  };
+});
 
 try {
   await mkdir(artifactDir, { recursive: true });
@@ -259,20 +276,32 @@ try {
   await dive.focus();
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => document.querySelector(".living-atlas-globe")?.dataset.earthDiveOwner === "detail"
-    && document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayReady === "true",
+    && document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayReady === "true"
+    && document.querySelector(".detailed-earth-map")?.dataset.mapReadiness === "fully-settled",
   null, { timeout: 25_000 });
   const detailBefore = await detailSnapshot();
   await beginFrames();
   const detailZooms = [];
   // MapLibre returns to the globe below its regional zoom boundary. Native
-  // zoom-in controls cross the track's projected-error levels while retaining
-  // Detail ownership, then bounded zoom-out controls revisit those levels.
-  for (const direction of ["in", "in", "in", "in", "in", "in", "out", "out", "out"]) {
+  // inward wheel gestures cross the track's projected-error levels; bounded
+  // outward gestures revisit them without releasing Detail ownership.
+  for (const delta of [-600, -600, -600, -600, 400, 400]) {
     const before = await detailSnapshot();
-    await page.locator(`.detailed-earth-map .maplibregl-ctrl-zoom-${direction}`).click();
-    await page.waitForFunction((previous) => Number(document.querySelector(".detailed-earth-map")?.dataset.mapIdleCount ?? 0) > previous.idle
-      && document.querySelector(".detailed-earth-map")?.dataset.diveOwner === "detail"
-      && Math.abs(Number(document.querySelector(".detailed-earth-map")?.dataset.handoffZoom) - previous.zoom) > 0.001,
+    if (!(before.probeScale > 0)) throw new Error("Detail projection probe is unavailable");
+    const canvas = await page.locator(".detailed-earth-map .maplibregl-canvas").boundingBox();
+    if (!canvas) throw new Error("Actual detail canvas is missing");
+    await page.mouse.move(canvas.x + canvas.width * 0.65, canvas.y + canvas.height * 0.45);
+    await page.mouse.wheel(0, delta);
+    await page.waitForFunction((previous) => {
+      const host = document.querySelector(".detailed-earth-map");
+      const a = window.__detailedEarthMapProject?.(114.1, 22.2);
+      const b = window.__detailedEarthMapProject?.(114.2, 22.2);
+      const scale = a && b ? Math.hypot(a.x - b.x, a.y - b.y) : NaN;
+      return host?.dataset.diveOwner === "detail"
+        && window.__detailedEarthMapScrollZoomActive?.() === false
+        && Math.abs(Number(host.dataset.handoffZoom) - previous.zoom) > 0.001
+        && Number.isFinite(scale) && Math.abs(scale / previous.probeScale - 1) > 0.02;
+    },
       before);
     detailZooms.push(await detailSnapshot());
   }
@@ -286,7 +315,7 @@ try {
       && snapshot.owner === journeyId && snapshot.points === 3 && snapshot.stops === 2 && snapshot.shaping === 1
       && snapshot.segments.map(([id]) => id).join() === expectedSegments.join()
       && snapshot.rendered <= sampleCount
-      && snapshot.pixelsPerRadian > 0));
+      && snapshot.pixelsPerRadian > 0 && snapshot.probeScale > 0));
   await page.screenshot({ path: `${artifactDir}/100k-detail.png` });
   record("owner renderer evidence is read-only and error-free", { geometryReads, mutations, errors },
     geometryReads > 0 && mutations.length === 0 && errors.length === 0);
@@ -303,6 +332,13 @@ try {
       return host ? {
         owner: host.dataset.diveOwner, stage: host.dataset.diveStage,
         zoom: host.dataset.handoffZoom, idle: host.dataset.mapIdleCount,
+        readiness: host.dataset.mapReadiness, mapError: host.dataset.mapError,
+        scrollZoomActive: window.__detailedEarthMapScrollZoomActive?.(),
+        probeScale: (() => {
+          const a = window.__detailedEarthMapProject?.(114.1, 22.2);
+          const b = window.__detailedEarthMapProject?.(114.2, 22.2);
+          return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : null;
+        })(),
         lodKey: host.dataset.journeyRecordedTrackLodKey,
         rendered: host.dataset.journeyRecordedTrackRenderedPoints,
       } : null;
