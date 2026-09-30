@@ -424,6 +424,25 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
             ) : null}
           </div>
         </div>
+        {particleEarthBackend === "unavailable" ? (
+          // The renderer already degrades honestly: `useThreeScene` catches the
+          // failed context probe, the DOM/SVG interaction layers never get built,
+          // and the host is left as a silent empty field. That state was known
+          // here (it drives the data attribute above) but was never shown to
+          // anyone. A member on a machine without WebGL2 needs to know the Earth
+          // is not broken on their side, and that route entry still works by
+          // manual coordinates — that fallback is a product contract, not a
+          // workaround, so it is named rather than left to be discovered.
+          //
+          // Sits outside `.persistent-earth-host` on purpose: that element is
+          // `aria-hidden="true"`, so a `role="status"` inside it would never be
+          // announced. Sibling of the host, so it also stays above its
+          // `pointer-events: none` surface.
+          <p className="persistent-earth-unavailable" role="status">
+            这台设备的浏览器没有可用的 WebGL2，粒子地球暂时无法显示。
+            {atlas ? "旅程仍可从左侧列表浏览；添加途径点时可以直接填写坐标。" : null}
+          </p>
+        ) : null}
         <div className="persistent-earth-content">{children}</div>
       </div>
     </PersistentEarthContext.Provider>
