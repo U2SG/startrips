@@ -1,0 +1,1 @@
+ALTER TABLE "journeys" ADD COLUMN "route_segments" jsonb DEFAULT '[]'::jsonb NOT NULL;

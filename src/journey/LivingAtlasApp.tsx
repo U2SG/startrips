@@ -129,6 +129,7 @@ import {
   journeySoundtrack,
   journeyVisualMedia,
   mergeJourney,
+  routeSegmentSourceKey,
   sortJourneysChronologically,
   toJourneyRoutes,
   type RecordedTrackSnapshot,
@@ -1391,6 +1392,20 @@ export function LivingAtlasApp({
       target.focus({ preventScroll: true });
     }
   }, [shareTarget]);
+  // The `isMobileV2` gate here is load-bearing, not an oversight, and an audit
+  // that reads it as one is wrong.
+  //
+  // `qa-post-login-controls` asserts the opposite of "Back should close this on
+  // every viewport": crossing the responsive boundary while the mobile
+  // sheet → story → fullscreen stack is open must collapse every
+  // Startrips-owned sentinel in ONE bounded history move, without navigating or
+  // reloading the document. Those layers unmount at the desktop breakpoint, so a
+  // registration that outlived them would leave an orphaned token that Back
+  // consumes instead of doing anything meaningful.
+  //
+  // So desktop Back genuinely does leave the Atlas with an open Story — that is
+  // the current contract, and closing it needs a desktop-side history owner that
+  // is scoped like the mobile one, not a removed gate. Tracked in #586.
   useMobileSurfaceHistory(
     isMobileV2 && mobileSheetJourneyId !== null,
     "journey-sheet",
@@ -3180,6 +3195,24 @@ export function LivingAtlasApp({
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
+            routeEditingEnabled={canEditJourney && mutations !== null && !draftRoute && !playbackActive && !globePickActive && storyJourneyId === null}
+            onRouteSegmentSaved={(journeyId, segment) => {
+              setJourneys((current) => current.map((journey) => {
+                if (journey.id !== journeyId) return journey;
+                const points = journey.routePoints.map((point) => ({
+                  id: point.id, lat: point.latitude, lon: point.longitude,
+                }));
+                const sources = new Set(points.slice(0, -1).map((_, index) => routeSegmentSourceKey(points, index)));
+                if (!sources.has(segment.sourceKey)) return journey;
+                return {
+                  ...journey,
+                  routeSegments: [
+                    ...(journey.routeSegments ?? []).filter((entry) => entry.sourceKey !== segment.sourceKey),
+                    segment,
+                  ],
+                };
+              }));
+            }}
             visibleRoutePointIds={visibleRoutePointIds}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
             selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}

@@ -27,6 +27,7 @@
     "qa:globe-interaction": "node scripts/qa-globe-interaction.mjs",
     "qa:particle-spatial-lod": "node scripts/qa-particle-spatial-lod.mjs",
     "qa:route-anchoring": "node scripts/qa-route-anchoring.mjs",
+    "qa:route-candidates": "node scripts/qa-route-candidates.mjs",
     "qa:earth-dive": "node scripts/qa-earth-dive.mjs",
     "qa:attention-hierarchy": "node scripts/qa-attention-hierarchy.mjs",
     "qa:brand-signature-motion": "node scripts/qa-brand-signature-motion.mjs",

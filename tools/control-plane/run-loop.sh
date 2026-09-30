@@ -160,7 +160,7 @@ process_used = int(process_occupied.get('occupied_slots') or 0)
 external_used = int(external_occupied.get('occupied_slots') or 0)
 overlap = len(process_features & external_features)
 experience_used = process_used + external_used - overlap
-experience_full = lane == 'experience' and not carrier_feature and experience_used >= 2
+experience_carrier_full = lane == 'experience' and not carrier_feature and experience_used >= 2
 d = json.load(open(p, encoding='utf-8'))
 
 # Canonical classification remains unchanged; package consumers share the same
@@ -173,7 +173,9 @@ from delivery import (feature_lane, grouped, members, blockers,
 from delivery_runtime import verify as verify_delivery_runtime
 
 merged = {f['id'] for f in d['features'] if f.get('status') == 'passed'}
-active_backend = {f['id'] for f in d['features'] if feature_lane(f) == 'backend' and f.get('status') in {'in_progress','needs_work','ready_for_eval'} and f['id'] not in skip}
+active_backend = {f['id'] for f in d['features'] if feature_lane(f) == 'backend' and f.get('status') in {'in_progress','needs_work','ready_for_eval'}}
+active_experience = {f['id'] for f in d['features'] if feature_lane(f) == 'experience' and f.get('status') in {'in_progress','needs_work','ready_for_eval'}}
+experience_owner_full = lane == 'experience' and len(active_experience) >= 2
 
 def eligible(f):
     if f.get('delivery_lead'):
@@ -194,7 +196,9 @@ def eligible(f):
         return False
     if lane == 'backend' and active_backend and f['id'] not in active_backend:
         return False
-    if lane == 'experience' and experience_full:
+    if lane == 'experience' and experience_carrier_full:
+        return False
+    if lane == 'experience' and experience_owner_full and f['id'] not in active_experience:
         return False
     if lane == 'experience' and f['id'] in occupied_features:
         return False

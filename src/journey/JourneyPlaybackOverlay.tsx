@@ -1080,8 +1080,9 @@ export function JourneyPlaybackOverlay({
         first.focus();
       }
     };
-    const firstButton = focusable()[0];
-    firstButton?.focus();
+    // Focus the dialog root, not its first control. See the tabIndex={-1} note
+    // on the root: landing on "退出播放" meant the first Space press exited.
+    root.focus({ preventScroll: true });
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
@@ -1310,6 +1311,13 @@ export function JourneyPlaybackOverlay({
       role="dialog"
       aria-modal={mapInteractive ? "false" : "true"}
       aria-label="播放旅程"
+      // The dialog itself is the initial focus target. A button cannot be: the
+      // global shortcut handler below skips every HTMLButtonElement target, so
+      // focusing `focusable()[0]` (the "退出播放" close control) made the
+      // documented Space-to-pause fire the native button activation instead and
+      // tear down the whole playthrough. tabIndex={-1} keeps the root out of the
+      // Tab ring while letting it hold programmatic focus.
+      tabIndex={-1}
       data-map-interactive={mapInteractive ? "true" : "false"}
       data-camera-follow={cameraFollowing === false ? "free" : "follow"}
       // #194: Playback follows the one product-level compact-mobile contract

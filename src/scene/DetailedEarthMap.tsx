@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import {
   AttributionControl,
   Map as MapLibreMap,
   NavigationControl,
+  setWorkerUrl,
   type GeoJSONSource,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { JourneyRoute } from "../journey/types";
+import mapLibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
+import type { JourneyRoute, RouteSegmentRecord } from "../journey/types";
+import { RouteCandidateEditor } from "./RouteCandidateEditor";
 import { recordedTrackLodConstructionCount } from "../journey/journeyModel";
 import {
   createDetailedEarthLabelExpression,
@@ -48,6 +51,8 @@ import {
 } from "./earthDive";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
 import { ensurePmtilesProtocol } from "./pmtilesProtocol";
+
+setWorkerUrl(mapLibreWorkerUrl);
 
 // #252 section 2: the handoff has to prove "the same place did not move", so
 // the map publishes the two screen-space quantities that decide it — where the
@@ -249,6 +254,9 @@ type DetailedEarthMapProps = {
   focusRoute?: JourneyRoute | null;
   /** Active authorized Journey projected from the same Route consumed by Particle Earth. */
   journeyOverlay: DetailedEarthJourneyOverlay;
+  routeForEditing?: JourneyRoute | null;
+  routeEditingEnabled?: boolean;
+  onRouteSegmentSaved?: (journeyId: string, segment: RouteSegmentRecord) => void;
   focusRevision?: number;
   focusEnabled?: boolean;
   focusFlightPending?: boolean;
@@ -324,6 +332,9 @@ export default function DetailedEarthMap({
   focusPoint,
   focusRoute,
   journeyOverlay,
+  routeForEditing = null,
+  routeEditingEnabled = false,
+  onRouteSegmentSaved,
   focusRevision = 0,
   focusEnabled = true,
   focusFlightPending = false,
@@ -342,6 +353,11 @@ export default function DetailedEarthMap({
 }: DetailedEarthMapProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
+  const routeEditModeRef = useRef(false);
+  const handleRouteEditModeChange = useCallback((editing: boolean) => {
+    routeEditModeRef.current = editing;
+  }, []);
   // One request per period of ownership: the map asks to go home once, and the
   // latch is released when ownership is no longer the map's, so a second dive
   // through the same instance can ask again.
@@ -467,8 +483,16 @@ export default function DetailedEarthMap({
       reason: "load" | "stage" | "resize-observer";
     } | null = null;
     mapRef.current = map;
+    setMapInstance(map);
     let debugProject: ((longitude: number, latitude: number) => { x: number; y: number }) | null = null;
     let debugScrollZoomActive: (() => boolean) | null = null;
+    let debugRenderedFeatureCount: ((layerId: string, property?: string, value?: string | boolean) => number) | null = null;
+    let debugRenderedSegmentVertexCount: ((fromId: string, toId: string) => number) | null = null;
+    type DebugLayerState = (sourceId: string, layerId: string) => {
+      sourcePresent: boolean; sourceLoaded: boolean; sourceFeatures: number;
+      layerPresent: boolean; renderedFeatures: number; zoom: number; pitch: number;
+    };
+    let debugLayerState: DebugLayerState | null = null;
     let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
       journeyId: string;
       routePointId: string;
@@ -477,6 +501,9 @@ export default function DetailedEarthMap({
       const debugWindow = window as Window & {
         __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
         __detailedEarthMapScrollZoomActive?: () => boolean;
+        __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
+        __detailedEarthMapRenderedSegmentVertexCount?: (fromId: string, toId: string) => number;
+        __detailedEarthMapLayerState?: DebugLayerState;
       };
       debugProject = (longitude, latitude) => {
         const projected = map.project([longitude, latitude]);
@@ -486,6 +513,38 @@ export default function DetailedEarthMap({
       debugWindow.__detailedEarthMapProject = debugProject;
       debugScrollZoomActive = () => map.scrollZoom.isActive();
       debugWindow.__detailedEarthMapScrollZoomActive = debugScrollZoomActive;
+      debugRenderedFeatureCount = (layerId, property, value) => {
+        if (!map.getLayer(layerId)) return 0;
+        const features = map.queryRenderedFeatures(
+          [[0, 0], [map.getContainer().clientWidth, map.getContainer().clientHeight]],
+          { layers: [layerId] },
+        );
+        return property ? features.filter((feature) => feature.properties?.[property] === value).length : features.length;
+      };
+      debugWindow.__detailedEarthMapRenderedFeatureCount = debugRenderedFeatureCount;
+      debugRenderedSegmentVertexCount = (fromId, toId) => {
+        if (!map.getLayer(JOURNEY_OVERLAY_ROUTE_LAYER_ID)) return 0;
+        return map.queryRenderedFeatures(
+          [[0, 0], [host.clientWidth, host.clientHeight]],
+          { layers: [JOURNEY_OVERLAY_ROUTE_LAYER_ID] },
+        ).filter((feature) => feature.properties?.featureKind === "segment"
+          && feature.properties.fromRoutePointId === fromId && feature.properties.toRoutePointId === toId)
+          .reduce((count, feature) => feature.geometry.type === "LineString"
+            ? Math.max(count, feature.geometry.coordinates.length) : count, 0);
+      };
+      debugWindow.__detailedEarthMapRenderedSegmentVertexCount = debugRenderedSegmentVertexCount;
+      debugLayerState = (sourceId, layerId) => {
+        const sourcePresent = Boolean(map.getSource(sourceId));
+        const sourceLoaded = sourcePresent && map.isSourceLoaded(sourceId);
+        const layerPresent = Boolean(map.getLayer(layerId));
+        return {
+          sourcePresent, sourceLoaded,
+          sourceFeatures: sourceLoaded ? map.querySourceFeatures(sourceId).length : 0,
+          layerPresent, renderedFeatures: layerPresent ? debugRenderedFeatureCount?.(layerId) ?? 0 : 0,
+          zoom: map.getZoom(), pitch: map.getPitch(),
+        };
+      };
+      debugWindow.__detailedEarthMapLayerState = debugLayerState;
     }
     // Register the one-shot load observation immediately after construction.
     // A tiny inline/QA style can become style-loaded before the rest of this
@@ -581,6 +640,9 @@ export default function DetailedEarthMap({
         host.dataset.journeyOverlayStopCount = String(overlay.stopCount);
         host.dataset.journeyOverlayPassthroughCount = String(overlay.passthroughCount);
         host.dataset.journeyOverlayFeatureCount = String(overlay.data.features.length);
+        host.dataset.journeyOverlayConfirmedCount = String(overlay.data.features.filter((feature) => (
+          feature.properties.featureKind === "segment" && feature.properties.provenance === "user-confirmed-route"
+        )).length);
         host.dataset.journeyOverlaySourceJourneyCount = String(new Set(
           overlay.data.features.map((feature) => feature.properties.journeyId),
         ).size);
@@ -1141,7 +1203,7 @@ export default function DetailedEarthMap({
       debugWindow.__detailedEarthJourneyRoutePointHit = debugJourneyRoutePointHit;
     }
     const handleJourneyRoutePointClickCapture = (event: MouseEvent) => {
-      if (diveOwnerRef.current !== "detail" || !onJourneyRoutePointActivateRef.current) return;
+      if (routeEditModeRef.current || diveOwnerRef.current !== "detail" || !onJourneyRoutePointActivateRef.current) return;
       const rect = host.getBoundingClientRect();
       const routePointHit = projectedJourneyRoutePointHit({
         x: event.clientX - rect.left,
@@ -1160,6 +1222,7 @@ export default function DetailedEarthMap({
 
     map.on("click", (event) => {
       if (diveOwnerRef.current !== "detail") return;
+      if (routeEditModeRef.current) return;
       // The capture listener above owns ordinary Route Point activation. Keep a
       // MapLibre-layer lookup as a bounded projection/style fallback and retain
       // this event for explicit map-point picking before a blank-map dismissal.
@@ -1212,6 +1275,7 @@ export default function DetailedEarthMap({
       revealRevision += 1;
       resizeObserver?.disconnect();
       mapRef.current = null;
+      setMapInstance(null);
       calibrateRef.current = null;
       revealSyncRef.current = null;
       syncJourneyOverlayRef.current = null;
@@ -1225,6 +1289,9 @@ export default function DetailedEarthMap({
           __detailedEarthMapRemovalCount?: number;
           __detailedEarthMapProject?: (longitude: number, latitude: number) => { x: number; y: number };
           __detailedEarthMapScrollZoomActive?: () => boolean;
+          __detailedEarthMapRenderedFeatureCount?: (layerId: string, property?: string, value?: string | boolean) => number;
+          __detailedEarthMapRenderedSegmentVertexCount?: (fromId: string, toId: string) => number;
+          __detailedEarthMapLayerState?: DebugLayerState;
           __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
             journeyId: string;
             routePointId: string;
@@ -1234,6 +1301,13 @@ export default function DetailedEarthMap({
         if (debugWindow.__detailedEarthMapScrollZoomActive === debugScrollZoomActive) {
           delete debugWindow.__detailedEarthMapScrollZoomActive;
         }
+        if (debugWindow.__detailedEarthMapRenderedFeatureCount === debugRenderedFeatureCount) {
+          delete debugWindow.__detailedEarthMapRenderedFeatureCount;
+        }
+        if (debugWindow.__detailedEarthMapRenderedSegmentVertexCount === debugRenderedSegmentVertexCount) {
+          delete debugWindow.__detailedEarthMapRenderedSegmentVertexCount;
+        }
+        if (debugWindow.__detailedEarthMapLayerState === debugLayerState) delete debugWindow.__detailedEarthMapLayerState;
         if (debugWindow.__detailedEarthJourneyRoutePointHit === debugJourneyRoutePointHit) {
           delete debugWindow.__detailedEarthJourneyRoutePointHit;
         }
@@ -1365,6 +1439,7 @@ export default function DetailedEarthMap({
   const ownsDetailInput = diveOwner === "detail";
 
   return (
+    <>
     <div
       ref={hostRef}
       className="detailed-earth-map"
@@ -1385,5 +1460,15 @@ export default function DetailedEarthMap({
       role="application"
       aria-label="可深度缩放的真实地球地图"
     />
+    {onRouteSegmentSaved ? (
+      <RouteCandidateEditor
+        map={mapInstance}
+        route={routeForEditing}
+        active={ownsDetailInput && routeEditingEnabled && !onGlobePointPick}
+        onSaved={onRouteSegmentSaved}
+        onEditModeChange={handleRouteEditModeChange}
+      />
+    ) : null}
+    </>
   );
 }

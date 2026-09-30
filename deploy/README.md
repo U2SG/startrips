@@ -34,7 +34,7 @@ ssh-add D:\path\to\server-key.pem
 
 `--key "D:\path\to\server-key.pem"` remains available as an explicit manual fallback when an SSH agent is intentionally not used.
 
-The script fetches the exact remote `main` commit into its deployment-owned ref without switching or modifying the current worktree, waits for that exact commit's GitHub Actions run to pass, uploads a `git archive`, backs up PostgreSQL, tags the running API/Web images for rollback, builds the new release, applies migrations, recreates API/Web, and verifies container state plus public HTTPS. It holds a server-side deployment lock, verifies any automatic application rollback, requires 5 GiB of free disk, and retains the five newest script-managed releases, backups, and rollback tags. The PEM contents and production `.env.deploy` are never copied into Git.
+The script fetches the exact remote `main` commit into its deployment-owned ref without switching or modifying the current worktree, waits for that exact commit's `ci.yml` workflow in `U2SG/startrips` to pass, uploads a `git archive`, backs up PostgreSQL, tags the running API/Web images for rollback, builds the new release, applies migrations, recreates API/Web, and verifies container state plus public HTTPS. Success from another workflow cannot authorize deployment. It holds a server-side deployment lock, verifies any automatic application rollback, requires 5 GiB of free disk, and retains the five newest script-managed releases, backups, and rollback tags. The PEM contents and production `.env.deploy` are never copied into Git.
 
 The default server's SSH host keys are pinned in the script. A different `--server` must also pass one or more trusted `--host-key-sha256` fingerprints. The CI wait defaults to 25 minutes and the remote deployment deadline to one hour; both are configurable command-line options. Server-local HTTPS checks are the activation gate; a workstation public-path failure is reported as a warning because a local network problem must not roll back an otherwise healthy server.
 
@@ -122,8 +122,18 @@ is sent to the provider.
 The Living Atlas keeps its particle globe in Three.js and preloads a MapLibre
 vector detail view for zoom levels up to 20. It reveals the map only after the
 initial vector tiles are ready, then releases the hidden Three.js context. The
-detail view intentionally contains no Journey overlays and defaults to Chinese
-labels with a Chinese/bilingual switch.
+detail view projects the active Journey's Route Points and saved segment
+geometry. Shape points appear only while editing a route; they are never Journey
+nodes. The map defaults to Chinese labels with a Chinese/bilingual switch.
+
+Road candidates require a deployment-owned OSRM graph built for driving. Set
+`ROUTING_OSRM_DRIVING_BASE_URL` to the base URL reachable from the API container
+(for example, an internal service origin). Leave it empty to disable candidate
+generation; the existing Journey line remains available. The public OSRM demo
+is not a production service. The browser never calls this URL. The user must
+select driving for each candidate request, compare the suggestions and confirm
+one before its geometry becomes a saved route. Recorded tracks remain the
+strongest route evidence.
 
 The map renderer is provider-neutral. It uses OpenFreeMap's Fiord vector style by
 default. Set `ATLAS_MAP_STYLE_URL` in `.env.deploy` to use a contracted or

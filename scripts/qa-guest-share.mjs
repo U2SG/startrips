@@ -57,6 +57,7 @@ const FORBIDDEN_CONTROL_TEXT = [
   "管理当前媒体",
   "媒体排序",
   "编辑旅程",
+  "贴合道路",
   "删除旅程",
   "添加照片或视频",
   "上传配乐",
@@ -915,6 +916,7 @@ try {
     // REAL shared-view grant, prove the installed MapLibre source contains only
     // that authorized Journey, then revoke the live grant and prove the source,
     // map surface and both Route Point hit paths leave with the guest session.
+    const [from, to] = sharedJourneys[0].routePoints;
     const scopedJourney = {
       ...sharedJourneys[0],
       // A one-Journey grant is its own closed navigation scope. Carrying the
@@ -922,6 +924,20 @@ try {
       // payload before the privacy boundary under test can mount.
       previousJourneyId: null,
       nextJourneyId: null,
+      routeSegments: [{
+        fromRoutePointId: from.id, toRoutePointId: to.id,
+        sourceKey: JSON.stringify([from.id, from.latitude, from.longitude, to.id, to.latitude, to.longitude]),
+        revision: 1, shapePoints: [], decision: "confirmed",
+        confirmedCandidate: {
+          id: "qa-shared-road", provider: "osrm", profile: "driving", relevance: 100,
+          distanceMeters: 80_000, durationSeconds: 5_000,
+          geometry: [[from.longitude, from.latitude], [(from.longitude + to.longitude) / 2, (from.latitude + to.latitude) / 2 + 0.2], [to.longitude, to.latitude]],
+          snapping: { maxDistanceMeters: 750, waypoints: [from, to].map((point) => ({
+            requested: [point.longitude, point.latitude], snapped: [point.longitude, point.latitude],
+            distanceMeters: 0, providerDistanceMeters: 0,
+          })) },
+        },
+      }],
     };
     const state = {
       journeysStatus: 200,
@@ -929,6 +945,10 @@ try {
       expiresAt: new Date(Date.now() + 2_000).toISOString(),
     };
     const { page } = await newGuestPage(context, state);
+    let routingRequests = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/journey-route-segments")) routingRequests += 1;
+    });
     await page.route(MAP_STYLE_PATTERN, (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -964,6 +984,9 @@ try {
         && map?.getAttribute("data-journey-overlay-ready") === "true"
         && map.getAttribute("data-journey-overlay-journey-id") === journeyId;
     }, scopedJourney.id, { timeout: 20_000 });
+    await page.waitForFunction(() => window.__detailedEarthMapRenderedFeatureCount?.(
+      "startrips-active-journey-route", "provenance", "user-confirmed-route",
+    ) > 0, null, { timeout: 20_000 });
 
     const scopedPoint = scopedJourney.routePoints[0];
     const detailScope = await page.evaluate(({ journeyId, routePointId, lon, lat }) => {
@@ -975,6 +998,8 @@ try {
         featureCount: Number(map?.getAttribute("data-journey-overlay-feature-count") ?? -1),
         sourceJourneyCount: Number(map?.getAttribute("data-journey-overlay-source-journey-count") ?? -1),
         mapCount: document.querySelectorAll(".detailed-earth-map").length,
+        routeEditorCount: document.querySelectorAll(".route-candidate-editor").length,
+        renderedConfirmedCount: window.__detailedEarthMapRenderedFeatureCount?.("startrips-active-journey-route", "provenance", "user-confirmed-route") ?? 0,
         expectedJourneyId: journeyId,
         expectedRoutePointId: routePointId,
         projected,
@@ -993,6 +1018,9 @@ try {
       || detailScope.pointCount !== scopedJourney.routePoints.length
       || detailScope.sourceJourneyCount !== 1
       || detailScope.mapCount !== 1
+      || detailScope.routeEditorCount !== 0
+      || detailScope.renderedConfirmedCount === 0
+      || routingRequests !== 0
       || detailScope.hit?.journeyId !== scopedJourney.id
       || detailScope.hit?.routePointId !== scopedPoint.id
       || detailScope.featureCount <= 0
@@ -1025,7 +1053,7 @@ try {
     ) {
       failures.push(`mid-session share revocation retained Detailed Earth authority: ${JSON.stringify(expired)}`);
     }
-    console.log(`[qa-guest-share] scoped Detailed Earth source revoked with the grant journey=${detailScope.journeyId} features=${detailScope.featureCount}`);
+    console.log(`[qa-guest-share] scoped confirmed route rendered without editing/routing and revoked with the grant journey=${detailScope.journeyId} features=${detailScope.featureCount} confirmed=${detailScope.renderedConfirmedCount} routingRequests=${routingRequests}`);
     await page.close();
   }
 

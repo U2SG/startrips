@@ -6,6 +6,7 @@ import {
   recordedTrackSampleTimes,
   recordedTrackVisibleSampleCount,
   resolveJourneyRouteSegmentProvenance,
+  routeSegmentSourceKey,
   selectRecordedTrackLodLevel,
 } from "../journey/journeyModel";
 import {
@@ -317,6 +318,16 @@ export function buildDetailedEarthJourneyOverlay({
   const features: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>["features"] = [];
   const recordedTrackLods: DetailedEarthRecordedTrackLod[] = [];
   const recordedSegments = route.recordedTrackSegments ?? [];
+  const nearRecordedSample = (point: { lat: number; lon: number }, samples: readonly { lat: number; lon: number }[]) => (
+    samples.some((sample) => {
+      const latitudeDelta = (sample.lat - point.lat) * Math.PI / 180;
+      const longitudeDelta = (sample.lon - point.lon) * Math.PI / 180;
+      const a = Math.sin(latitudeDelta / 2) ** 2
+        + Math.cos(point.lat * Math.PI / 180) * Math.cos(sample.lat * Math.PI / 180)
+        * Math.sin(longitudeDelta / 2) ** 2;
+      return 12_742_000 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a))) < 1_000;
+    })
+  );
 
   for (const record of records) {
     if (!record.valid || !record.presentation.temporalVisible) continue;
@@ -354,18 +365,30 @@ export function buildDetailedEarthJourneyOverlay({
       || !current.presentation.temporalVisible
     ) continue;
     const fromLongitude = previous.point.lon;
-    let toLongitude = current.point.lon;
-    while (toLongitude - fromLongitude > 180) toLongitude -= 360;
-    while (toLongitude - fromLongitude < -180) toLongitude += 360;
+    const stored = route.routeSegments?.[index - 1];
+    const segment = stored?.sourceKey === routeSegmentSourceKey(route.points, index - 1) ? stored : null;
+    // A recorded track spanning both ends is the stronger spatial evidence.
+    // Never paint a second confirmed road as another actual path over it.
+    if ((segment?.decision === "confirmed" || segment?.shapePoints.length)
+      && recordedSegments.some((track) => nearRecordedSample(previous.point, track.points)
+      && nearRecordedSample(current.point, track.points))) continue;
+    const confirmedGeometry = segment?.decision === "confirmed"
+      ? segment.confirmedCandidate?.geometry
+      : null;
+    let previousLongitude = fromLongitude;
+    const shapedGeometry = [previous.point, ...(segment?.shapePoints ?? []), current.point].map((point) => {
+      let longitude = point.lon;
+      while (longitude - previousLongitude > 180) longitude -= 360;
+      while (longitude - previousLongitude < -180) longitude += 360;
+      previousLongitude = longitude;
+      return [longitude, point.lat];
+    });
     features.push({
       type: "Feature",
       id: `${route.id}:segment:${index - 1}`,
       geometry: {
         type: "LineString",
-        coordinates: [
-          [fromLongitude, previous.point.lat],
-          [toLongitude, current.point.lat],
-        ],
+        coordinates: confirmedGeometry && confirmedGeometry.length >= 2 ? confirmedGeometry : shapedGeometry,
       },
       properties: {
         featureKind: "segment",
@@ -426,6 +449,9 @@ export function buildDetailedEarthJourneyOverlay({
     segmentProvenance: Array.from({ length: Math.max(0, route.points.length - 1) }, (_, index) => (
       resolveJourneyRouteSegmentProvenance(route, index)
     )),
+    segmentGeometry: route.routeSegments?.map((segment) => segment
+      ? [segment.sourceKey, segment.revision, segment.decision, segment.shapePoints, segment.confirmedCandidate?.id]
+      : null),
     recordedTrackSegments: recordedTrackLods.map((track) => ({
       id: track.featureId,
       pointCount: track.levels[0]?.points.length ?? 0,
