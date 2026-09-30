@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { routeSegmentSourceKey, toJourneyRoutes } from "./journeyModel";
+import { buildDetailedEarthJourneyOverlay } from "../scene/detailedEarthModel";
 import {
   SHARE_TOKEN_PATTERN,
   SharedAtlasError,
@@ -227,6 +229,37 @@ describe("createSharedAtlasClient", () => {
 });
 
 describe("sharedJourneyToJourney", () => {
+  it("preserves confirmed and user-shaped segments without adding narrative Route Points", () => {
+    const routePoints = ["a", "b", "c"].map((id, index) => ({
+      id, latitude: 0, longitude: index * 0.1, label: id, isStop: true, occurredAt: null, note: null,
+    }));
+    const points = routePoints.map((point) => ({ id: point.id, lat: point.latitude, lon: point.longitude }));
+    const shared = sharedJourney({ routePoints, media: [], routeSegments: [{
+      fromRoutePointId: "a", toRoutePointId: "b", sourceKey: routeSegmentSourceKey(points, 0)!, revision: 1,
+      shapePoints: [], decision: "confirmed", confirmedCandidate: {
+        id: "confirmed-road", provider: "osrm", profile: "driving", relevance: 100,
+        distanceMeters: 12_000, durationSeconds: 900, geometry: [[0, 0], [0.05, 0.02], [0.1, 0]],
+        snapping: { maxDistanceMeters: 750, waypoints: [] },
+      },
+    }, {
+      fromRoutePointId: "b", toRoutePointId: "c", sourceKey: routeSegmentSourceKey(points, 1)!, revision: 2,
+      shapePoints: [{ id: "shape", lat: 0.03, lon: 0.15 }], decision: "open", confirmedCandidate: null,
+    }] });
+    expect(sharedAtlasScopeIsClosed(sharedView([shared]))).toBe(true);
+    const journey = sharedJourneyToJourney(shared);
+    const overlay = buildDetailedEarthJourneyOverlay({ route: toJourneyRoutes([journey])[0] });
+    const lines = overlay.data.features.filter((feature) => feature.properties.featureKind === "segment");
+    expect(lines.map((line) => line.properties.provenance)).toEqual(["user-confirmed-route", "user-shaped-route"]);
+    expect(lines.map((line) => line.geometry)).toEqual([
+      { type: "LineString", coordinates: [[0, 0], [0.05, 0.02], [0.1, 0]] },
+      { type: "LineString", coordinates: [[0.1, 0], [0.15, 0.03], [0.2, 0]] },
+    ]);
+    expect(journey.routePoints.map((point) => point.id)).toEqual(["a", "b", "c"]);
+    expect(overlay.pointCount).toBe(3);
+    expect(sharedAtlasScopeIsClosed(sharedView([{ ...shared, routePoints: routePoints.slice(0, 1) }]))).toBe(false);
+    expect(sharedAtlasScopeIsClosed(sharedView([{ ...shared, routePoints: routePoints.map((point) => ({ ...point, longitude: point.longitude + 1 })) }]))).toBe(false);
+  });
+
   it("orders route points and media by payload position", () => {
     const journey = sharedJourneyToJourney(sharedJourney({
       routePoints: [

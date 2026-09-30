@@ -18,6 +18,7 @@ import {
   mediaAssets,
   mediaUploads,
 } from "../db/app-schema";
+import { routeSegmentSourceKey } from "../../src/journey/journeyModel";
 
 export type JourneyValues = Pick<
   typeof journeys.$inferInsert,
@@ -114,6 +115,7 @@ async function loadJourneys(atlasId: string, requestedIds?: readonly string[]) {
       lightEffect: journeys.lightEffect,
       coverMediaAssetId: journeys.coverMediaAssetId,
       revision: journeys.revision,
+      routeSegments: journeys.routeSegments,
       createdByUserId: journeys.createdByUserId,
       createdAt: journeys.createdAt,
       updatedAt: journeys.updatedAt,
@@ -252,7 +254,7 @@ export async function updateJourneyForAtlas(
         eq(journeys.revision, values.revision ?? -1),
         isNull(journeys.deletionStartedAt),
       ))
-      .returning({ id: journeys.id });
+      .returning({ id: journeys.id, routeSegments: journeys.routeSegments });
     if (!journey) {
       const [activeJourney] = await transaction
         .select({ id: journeys.id })
@@ -403,6 +405,20 @@ export async function updateJourneyForAtlas(
           ...(point.stayAnchorRoutePointId === undefined ? { stayAnchorRoutePointId: null } : {}),
         });
       }
+    }
+    const savedRoutePoints = await transaction
+      .select({ id: journeyRoutePoints.id, lat: journeyRoutePoints.latitude, lon: journeyRoutePoints.longitude })
+      .from(journeyRoutePoints)
+      .where(eq(journeyRoutePoints.journeyId, journey.id))
+      .orderBy(asc(journeyRoutePoints.sortOrder));
+    const currentSources = new Set(savedRoutePoints.slice(0, -1).map((_, index) => (
+      routeSegmentSourceKey(savedRoutePoints, index)
+    )));
+    const retainedSegments = journey.routeSegments.filter((segment) => currentSources.has(segment.sourceKey));
+    if (retainedSegments.length !== journey.routeSegments.length) {
+      await transaction.update(journeys)
+        .set({ routeSegments: retainedSegments })
+        .where(eq(journeys.id, journey.id));
     }
     return true;
   });

@@ -22,7 +22,7 @@ import {
   prepareQuickRecapPlayback,
   quickRecapStepDurationMs,
 } from "../journey/quickRecapPlayback";
-import type { Journey, RouteProvenanceTier } from "../journey/types";
+import type { Journey, RouteProvenanceTier, RouteSegmentRecord } from "../journey/types";
 import { globeQaRoutes } from "./qaRoutes";
 import {
   LivingAtlasGlobe,
@@ -143,6 +143,8 @@ function EarthDiveQaPreview() {
   const [focusRevision, setFocusRevision] = useState(0);
   const [activeRouteIndex, setActiveRouteIndex] = useState(0);
   const [activatedRoutePoint, setActivatedRoutePoint] = useState("");
+  const routeCandidateQa = qaParams.get("qaRouteCandidates") === "true";
+  const [routeCandidateRecords, setRouteCandidateRecords] = useState<Record<string, RouteSegmentRecord[]>>({});
   const shareScope = qaParams.get("qaScope") === "share";
   const [shareRevoked, setShareRevoked] = useState(false);
   const [earthExperiencePolicy, setEarthExperiencePolicy] = useState<"default" | "particle-only">(
@@ -160,9 +162,16 @@ function EarthDiveQaPreview() {
   // Share/guest authorization owns the route list before either renderer sees it.
   // This fixture can revoke that upstream scope while Detail remains mounted so
   // browser QA proves stale GeoJSON and hit targets are removed at the source.
-  const authorizedRoutes = shareScope
-    ? (shareRevoked ? [] : globeQaRoutes.slice(0, 1))
-    : globeQaRoutes;
+  const baseRoutes = routeCandidateQa ? globeQaRoutes.slice(2, 3) : globeQaRoutes;
+  const authorizedRoutes = (shareScope
+    ? (shareRevoked ? [] : baseRoutes.slice(0, 1))
+    : baseRoutes).map((route) => routeCandidateQa ? {
+      ...route,
+      routeSegments: route.points.slice(0, -1).map((point, index) => (
+        routeCandidateRecords[route.id]?.find((record) => record.fromRoutePointId === point.id
+          && record.toRoutePointId === route.points[index + 1]?.id) ?? null
+      )),
+    } : route);
   const focusRoute = authorizedRoutes[activeRouteIndex] ?? authorizedRoutes[0] ?? null;
   const routePoint = focusRoute?.points[Math.min(1, focusRoute.points.length - 1)] ?? null;
   const routeFocus = qaParams.get("qaFocus") === "route";
@@ -182,6 +191,16 @@ function EarthDiveQaPreview() {
           focusRoute={routeFocus ? focusRoute : null}
           focusRevision={focusRevision}
           journeyRoutes={authorizedRoutes}
+          routeEditingEnabled={routeCandidateQa}
+          onRouteSegmentSaved={routeCandidateQa ? (journeyId, segment) => {
+            setRouteCandidateRecords((current) => ({
+              ...current,
+              [journeyId]: [
+                ...(current[journeyId] ?? []).filter((record) => record.sourceKey !== segment.sourceKey),
+                segment,
+              ],
+            }));
+          } : undefined}
           activeJourneyRouteId={focusRoute?.id ?? null}
           onJourneyRouteActivate={() => undefined}
           onJourneyRoutePointActivate={(journeyId, routePointId) => {
@@ -205,6 +224,9 @@ function EarthDiveQaPreview() {
         data-qa-earth-dive-activated-route-point={activatedRoutePoint}
         style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
       >{activatedRoutePoint}</output>
+      {routeCandidateQa ? <output data-qa-route-segment-decision={routeCandidateRecords[focusRoute?.id ?? ""]?.[0]?.decision ?? "absent"}
+        data-qa-route-shape-count={routeCandidateRecords[focusRoute?.id ?? ""]?.[0]?.shapePoints.length ?? 0}
+        style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }} /> : null}
       {shareScope ? (
         <>
           <output

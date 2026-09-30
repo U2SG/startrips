@@ -97,6 +97,8 @@ export type Journey = {
   createdAt: string;
   updatedAt: string;
   routePoints: RoutePoint[];
+  /** Segment-scoped geometry choices. Shared reads project only granted segments. Never Journey nodes. */
+  routeSegments?: RouteSegmentRecord[];
   media: JourneyMediaAsset[];
 };
 
@@ -145,6 +147,37 @@ export type RouteProvenanceTier =
   | "suggested-route"
   | "sparse-relation";
 
+export type RoadProfile = "driving" | "walking" | "cycling";
+export type RouteShapePoint = { id: string; lat: number; lon: number };
+export type RouteCandidate = {
+  id: string;
+  geometry: [number, number][];
+  distanceMeters: number;
+  durationSeconds: number;
+  provider: "osrm";
+  profile: RoadProfile;
+  /** Candidate relevance for presentation only; never historical confidence. */
+  relevance: number;
+  snapping: {
+    maxDistanceMeters: number;
+    waypoints: {
+      requested: [number, number];
+      snapped: [number, number];
+      distanceMeters: number;
+      providerDistanceMeters: number;
+    }[];
+  };
+};
+export type RouteSegmentRecord = {
+  fromRoutePointId: string;
+  toRoutePointId: string;
+  sourceKey: string;
+  revision: number;
+  shapePoints: RouteShapePoint[];
+  decision: "open" | "none" | "confirmed";
+  confirmedCandidate: RouteCandidate | null;
+};
+
 export type JourneyRoute = {
   id: string;
   color: string;
@@ -163,6 +196,8 @@ export type JourneyRoute = {
    * source point index. Geometry alone never supplies or upgrades this value.
    */
   segmentProvenance?: readonly RouteProvenanceTier[];
+  /** Same index as point-to-point legs; holes have no stored decision. */
+  routeSegments?: readonly (RouteSegmentRecord | null)[];
   /** Owner-private recorded evidence. Each server segment stays independent so
    * gaps are never bridged by presentation code. */
   recordedTrackSegments?: readonly {

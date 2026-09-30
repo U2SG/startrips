@@ -16,6 +16,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { account as authAccount, session as authSession, user as authUser } from "./auth-schema";
+import type { RouteSegmentRecord } from "../../src/journey/types";
 
 export const atlases = pgTable(
   "atlases",
@@ -146,6 +147,9 @@ export const journeys = pgTable(
       { onDelete: "set null" },
     ),
     revision: integer("revision").notNull().default(1),
+    // Segment geometry is owner-private and revisioned independently of the
+    // Journey document. A Route Point PATCH prunes only changed adjacent legs.
+    routeSegments: jsonb("route_segments").$type<RouteSegmentRecord[]>().notNull().default([]),
     createdByUserId: text("created_by_user_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

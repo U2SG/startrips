@@ -206,6 +206,80 @@
   background: #010506;
 }
 
+.route-candidate-editor {
+  position: absolute;
+  z-index: 5;
+  left: clamp(12px, 3vw, 42px);
+  bottom: 88px;
+  width: min(340px, calc(100% - 24px));
+  color: var(--atlas-text);
+  font-size: 13px;
+}
+
+.route-candidate-editor__panel {
+  max-height: min(540px, calc(100vh - 200px));
+  overflow: auto;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(118, 198, 188, 0.26);
+  background: rgba(3, 12, 13, 0.94);
+  box-shadow: 0 12px 42px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(16px);
+}
+
+.route-candidate-editor__head,
+.route-candidate-editor__actions,
+.route-candidate-editor__shapes > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.route-candidate-editor__head { justify-content: space-between; }
+.route-candidate-editor__shapes,
+.route-candidate-editor__candidates { display: grid; gap: 8px; }
+.route-candidate-editor__shapes > div { justify-content: space-between; }
+.route-candidate-editor p { margin: 0; color: var(--atlas-muted); line-height: 1.5; }
+.route-candidate-editor label { display: grid; gap: 6px; color: var(--atlas-muted); }
+.route-candidate-editor select {
+  min-height: 44px;
+  width: 100%;
+  padding: 8px;
+  color: var(--atlas-text);
+  border: 1px solid rgba(118, 198, 188, 0.28);
+  background: #0a1718;
+}
+.route-candidate-editor button {
+  min-height: 44px;
+  padding: 8px 12px;
+  color: var(--atlas-text);
+  border: 1px solid rgba(118, 198, 188, 0.3);
+  background: rgba(20, 48, 47, 0.95);
+  cursor: pointer;
+}
+.route-candidate-editor button:hover,
+.route-candidate-editor button[aria-pressed="true"] { border-color: rgba(166, 224, 204, 0.75); }
+.route-candidate-editor button:disabled { opacity: 0.45; cursor: default; }
+.route-candidate-editor button:focus-visible,
+.route-candidate-editor select:focus-visible,
+.route-shape-handle:focus-visible { outline: 2px solid #b8dcca; outline-offset: 2px; }
+.route-shape-handle {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, #d9eee1 0 5px, rgba(21, 69, 63, 0.7) 6px 13px, transparent 14px);
+  cursor: grab;
+}
+.route-shape-handle:active { cursor: grabbing; }
+
+@media (max-width: 600px) {
+  .route-candidate-editor { left: 10px; bottom: 78px; }
+  .route-candidate-editor__panel { max-height: min(55vh, 480px); }
+}
+
 /* Earth Dive can keep MapLibre mounted before it owns input. MapLibre's own
    `.maplibregl-ctrl` rule opts native controls back into pointer-events, so the
    parent detail layer alone is not an ownership boundary. Key this override to

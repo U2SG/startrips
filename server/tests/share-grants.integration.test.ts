@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { routeSegmentSourceKey } from "../../src/journey/journeyModel";
+import type { RouteSegmentRecord } from "../../src/journey/types";
 import { app } from "../app";
 import {
   generateShareToken,
@@ -692,6 +694,7 @@ describe("guest journey read", () => {
       previousJourneyId: string | null;
       nextJourneyId: string | null;
       routePoints: Array<{ id: string; label: string }>;
+      routeSegments: RouteSegmentRecord[];
       media: Array<{ id: string; fileName: string }>;
     }>;
   };
@@ -779,6 +782,43 @@ describe("guest journey read", () => {
     // order and not re-derived at read time.
     expect(payload.journeys.map((journey) => journey.id))
       .toEqual([journeyA, journeyB]);
+  });
+
+  it("reads the granted road snapshot and drops stale/outside segments before serialization", async () => {
+    const journey = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney, title: "Shared confirmed road", routePoints: [
+        { ...baseJourney.routePoints[0], latitude: 0, longitude: 0 },
+        { ...baseJourney.routePoints[0], latitude: 0, longitude: 0.1 },
+      ],
+    });
+    if (!journey) throw new Error("Road journey fixture was not created");
+    const points = journey.routePoints.map((point) => ({ id: point.id, lat: point.latitude, lon: point.longitude }));
+    const snapshot: RouteSegmentRecord = {
+      fromRoutePointId: points[0].id, toRoutePointId: points[1].id,
+      sourceKey: routeSegmentSourceKey(points, 0)!, revision: 1, shapePoints: [], decision: "confirmed",
+      confirmedCandidate: {
+        id: "shared-road", provider: "osrm", profile: "driving", relevance: 100,
+        geometry: [[0, 0], [0.05, 0.02], [0.1, 0]], distanceMeters: 12_000, durationSeconds: 900,
+        snapping: { maxDistanceMeters: 750, waypoints: [
+          { requested: [0, 0], snapped: [0, 0], distanceMeters: 0, providerDistanceMeters: 0 },
+          { requested: [0.1, 0], snapped: [0.1, 0], distanceMeters: 0, providerDistanceMeters: 0 },
+        ] },
+      },
+    };
+    await db.update(journeys).set({ routeSegments: [snapshot, {
+      ...snapshot, fromRoutePointId: privateJourneyId, sourceKey: "private-segment-not-granted",
+    }] }).where(eq(journeys.id, journey.id));
+    const token = await createShare([journey.id]);
+    const response = await guestRead(token);
+    expect(response.status).toBe(200);
+    const payload = await response.json() as GuestPayload;
+    expect(payload.journeys.map((entry) => entry.id)).toEqual([journey.id]);
+    expect(payload.journeys[0].routeSegments).toEqual([snapshot]);
+    expect(JSON.stringify(payload)).not.toContain(privateJourneyId);
+    expect(JSON.stringify(payload)).not.toContain("private-segment-not-granted");
+    await db.update(journeyRoutePoints).set({ longitude: 0.11 }).where(eq(journeyRoutePoints.id, points[1].id));
+    const changed = await (await guestRead(token)).json() as GuestPayload;
+    expect(changed.journeys[0].routeSegments).toEqual([]);
   });
 
   it("closes previous/next navigation at both edges of the granted set", async () => {

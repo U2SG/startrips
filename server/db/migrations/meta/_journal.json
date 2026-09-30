@@ -253,6 +253,13 @@
       "when": 1790611534000,
       "tag": "0035_stay_anchor_route_point",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1790756088954,
+      "tag": "0036_violet_cloak",
+      "breakpoints": true
     }
   ]
 }
