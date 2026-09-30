@@ -93,5 +93,8 @@ describe("JourneyRecordedTracks", () => {
     }
     expect(api).toContain("body: JSON.stringify({ operationKey })");
     expect(api).not.toContain("?operationKey=");
+    // Renderer truth must be invalidated after either accepted mutation so the
+    // active globe cannot keep showing a withdrawn trace or miss a new one.
+    expect(component.split("onTracksChanged?.();")).toHaveLength(3);
   });
 });

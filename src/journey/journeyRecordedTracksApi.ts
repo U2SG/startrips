@@ -6,10 +6,14 @@ type ApiErrorPayload = {
 };
 
 type RecordedTrackWireSample = {
+  latitude?: number;
+  longitude?: number;
   recordedAt?: string | null;
 };
 
 type RecordedTrackWireSegment = {
+  id?: string;
+  segmentOrder?: number;
   sampleCount?: number;
   samples?: RecordedTrackWireSample[];
 };
@@ -31,6 +35,19 @@ export type JourneyRecordedTrackSummary = {
   sampleCount: number;
   startedAt: string | null;
   endedAt: string | null;
+};
+
+export type JourneyRecordedTrackGeometry = {
+  journeyId: string;
+  operationKey: string;
+  segments: Array<{
+    id: string;
+    points: Array<{
+      lat: number;
+      lon: number;
+      recordedAt: string | null;
+    }>;
+  }>;
 };
 
 export type JourneyRecordedTrackImportResult = {
@@ -95,6 +112,27 @@ function summarize(operation: RecordedTrackWireOperation): JourneyRecordedTrackS
   };
 }
 
+function geometry(operation: RecordedTrackWireOperation): JourneyRecordedTrackGeometry {
+  return {
+    journeyId: operation.journeyId,
+    operationKey: operation.operationKey,
+    segments: operation.segments.map((segment, segmentIndex) => ({
+      id: segment.id ?? `${operation.operationKey}:${segment.segmentOrder ?? segmentIndex}`,
+      points: (segment.samples ?? []).flatMap((sample) => (
+        Number.isFinite(sample.latitude) && Number.isFinite(sample.longitude)
+          ? [{
+            lat: sample.latitude!,
+            lon: sample.longitude!,
+            recordedAt: typeof sample.recordedAt === "string" && sample.recordedAt.length > 0
+              ? sample.recordedAt
+              : null,
+          }]
+          : []
+      )),
+    })),
+  };
+}
+
 /**
  * Read owner-private recorded-track batches. Precise sample coordinates are
  * deliberately collapsed to counts/time coverage at this boundary: the editor
@@ -113,6 +151,26 @@ export async function listJourneyRecordedTracks(
   if (!response.ok) throw await readError(response);
   const payload = await response.json() as { recordedTracks: RecordedTrackWireOperation[] };
   return payload.recordedTracks.map(summarize);
+}
+
+/**
+ * Read precise owner-private geometry only for the active Atlas renderer.
+ * This intentionally stays separate from the editor summary API above: precise
+ * positions never enter editor state, URLs, browser storage or telemetry.
+ */
+export async function readJourneyRecordedTrackGeometry(
+  journeyId: string,
+  options: JourneyRecordedTrackRequestOptions = {},
+): Promise<JourneyRecordedTrackGeometry[]> {
+  const response = await (options.fetcher ?? fetch)(routeForJourney(journeyId), {
+    method: "GET",
+    credentials: "include",
+    cache: "no-store",
+    signal: options.signal,
+  });
+  if (!response.ok) throw await readError(response);
+  const payload = await response.json() as { recordedTracks: RecordedTrackWireOperation[] };
+  return payload.recordedTracks.map(geometry);
 }
 
 /**

@@ -99,7 +99,13 @@ function provenanceLabel(track: JourneyRecordedTrackSummary) {
   return track.provenance ? `${track.source} · ${track.provenance}` : track.source;
 }
 
-export function JourneyRecordedTracks({ journeyId }: { journeyId: string }) {
+export function JourneyRecordedTracks({
+  journeyId,
+  onTracksChanged,
+}: {
+  journeyId: string;
+  onTracksChanged?: () => void;
+}) {
   const [tracks, setTracks] = useState<JourneyRecordedTrackSummary[]>([]);
   const [selected, setSelected] = useState<SelectedTrackFile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -224,6 +230,7 @@ export function JourneyRecordedTracks({ journeyId }: { journeyId: string }) {
             ? "服务器确认这份文件与已有记录相同；没有创建第二份记录。"
             : "记录轨迹已导入。";
           setMessage(confirmed);
+          onTracksChanged?.();
           const reconciled = await refreshTracks(scope, true);
           if (!scopeIsCurrent(scope)) return;
           if (!reconciled) {
@@ -262,6 +269,7 @@ export function JourneyRecordedTracks({ journeyId }: { journeyId: string }) {
         () => {
           setConfirmWithdrawal(null);
           setTracks((current) => current.filter((track) => track.operationKey !== operationKey));
+          onTracksChanged?.();
           setMessage("这份记录轨迹已撤回；Route Point 和媒体没有被修改。 ");
         },
       );

@@ -121,6 +121,8 @@ import {
   type CrossPointReadingIntent,
 } from "./crossPointReading";
 import {
+  attachRecordedTrackSegments,
+  currentRecordedTrackSnapshot,
   deriveJourneyStaySummaries,
   journeyOverviewRoutePointIds,
   journeyCover,
@@ -129,6 +131,7 @@ import {
   mergeJourney,
   sortJourneysChronologically,
   toJourneyRoutes,
+  type RecordedTrackSnapshot,
 } from "./journeyModel";
 import { getLightEffectGradient } from "./lightEffects";
 import "../styles/living-atlas-polish.css";
@@ -1012,7 +1015,7 @@ export function quickRecapPlanningContentFingerprint(journey: Journey | null): s
   const digests = quickRecapDigestsForJourney(journey);
   const digestRoutePointIds = new Set(digests.map((digest) => digest.routePointId));
   const routePointIds = journey.routePoints
-    .filter((point) => digestRoutePointIds.has(point.id))
+    .filter((point) => point.isStop || digestRoutePointIds.has(point.id))
     .map((point) => point.id);
   return JSON.stringify({
     journeyId: journey.id,
@@ -1075,7 +1078,16 @@ export function LivingAtlasApp({
   // #200 phase D: the product mode. `capabilities` decides which affordances
   // exist; `mutations` is null in shared mode, so there is no client here that
   // could write and the owner-only surfaces below are never constructed.
-  const { capabilities, listJourneys, listHomeBasePeriods, listHomeBaseDismissals, readMedia, mutations, everydayFragments } = useAtlasView();
+  const {
+    capabilities,
+    listJourneys,
+    listHomeBasePeriods,
+    listHomeBaseDismissals,
+    readRecordedTrackGeometry,
+    readMedia,
+    mutations,
+    everydayFragments,
+  } = useAtlasView();
   const quickRecapAvailable = !isReadOnlyAtlasView(capabilities);
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
   // #200 phase E. Both halves must hold: the capability decides the affordance
@@ -1084,6 +1096,8 @@ export function LivingAtlasApp({
   const shareClient = capabilities.canShareAtlas ? mutations : null;
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
+  const [recordedTrackSnapshot, setRecordedTrackSnapshot] = useState<RecordedTrackSnapshot | null>(null);
+  const [recordedTrackRevision, setRecordedTrackRevision] = useState(0);
   const journeysRef = useRef(journeys);
   journeysRef.current = journeys;
   const [homeBasePeriods, setHomeBasePeriods] = useState<HomeBasePeriod[]>([]);
@@ -1425,6 +1439,10 @@ export function LivingAtlasApp({
     ? {
         journeys: timeCursor.reveal.journeyProgress,
         points: timeCursor.reveal.pointProgress,
+        timestamp: timeCursor.timeDomain
+          ? timeCursor.timeDomain.minTime
+            + timeCursor.cursor * Math.max(0, timeCursor.timeDomain.maxTime - timeCursor.timeDomain.minTime)
+          : undefined,
       }
     : undefined;
   const unknownCreateSemanticOwnership = resolveUnknownCreateObservationOwnership({
@@ -2083,6 +2101,38 @@ export function LivingAtlasApp({
   }, [notice, undoJourney, clearNotice]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
+  useEffect(() => {
+    if (!activeJourney || !readRecordedTrackGeometry) return undefined;
+    const requestedJourneyId = activeJourney.id;
+    const requestedRevision = recordedTrackRevision;
+    const controller = new AbortController();
+    void readRecordedTrackGeometry(requestedJourneyId, { signal: controller.signal })
+      .then((operations) => {
+        if (controller.signal.aborted) return;
+        setRecordedTrackSnapshot({
+          journeyId: requestedJourneyId,
+          revision: requestedRevision,
+          segments: operations.flatMap((operation) => (
+            operation.segments
+              .filter((segment) => segment.points.length >= 2)
+              .map((segment) => ({
+                id: `${operation.operationKey}:${segment.id}`,
+                points: segment.points,
+              }))
+          )),
+        });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setRecordedTrackSnapshot({
+            journeyId: requestedJourneyId,
+            revision: requestedRevision,
+            segments: [],
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [activeJourney?.id, readRecordedTrackGeometry, recordedTrackRevision]);
   const activeJourneyQuickRecapPlanningFingerprint = useMemo(
     () => quickRecapPlanningContentFingerprint(activeJourney),
     [activeJourney],
@@ -2145,13 +2195,27 @@ export function LivingAtlasApp({
     }
     return labels;
   }, [staySummariesByJourney]);
+  const activeRecordedTrackSnapshot = currentRecordedTrackSnapshot(
+    recordedTrackSnapshot,
+    activeJourney?.id,
+    recordedTrackRevision,
+  );
   const routes = useMemo(() => {
-    const savedRoutes = toJourneyRoutes(journeys, stayOverviewLabels);
+    const trackOwnerId = activeRecordedTrackSnapshot?.journeyId;
+    const trackSegments = activeRecordedTrackSnapshot?.segments ?? [];
+    const savedRoutes = toJourneyRoutes(journeys, stayOverviewLabels).map((route) => (
+      attachRecordedTrackSegments(route, trackOwnerId, trackSegments)
+    ));
     if (!effectiveDraftRoute) return savedRoutes;
-    return savedRoutes.some((route) => route.id === effectiveDraftRoute.id)
-      ? savedRoutes.map((route) => route.id === effectiveDraftRoute.id ? effectiveDraftRoute : route)
-      : [...savedRoutes, effectiveDraftRoute];
-  }, [effectiveDraftRoute, journeys, stayOverviewLabels]);
+    const draftRoute = attachRecordedTrackSegments(
+      effectiveDraftRoute,
+      trackOwnerId,
+      trackSegments,
+    );
+    return savedRoutes.some((route) => route.id === draftRoute.id)
+      ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
+      : [...savedRoutes, draftRoute];
+  }, [activeRecordedTrackSnapshot, effectiveDraftRoute, journeys, stayOverviewLabels]);
   const focusPresentation = resolveMobilePlaybackPresentation(
     journeys,
     unknownCreateSemanticOwnership.selection,
@@ -3124,12 +3188,7 @@ export function LivingAtlasApp({
               opaqueMediaCover: storyGlobeCover.opaqueMediaCover || playbackGlobeCover.opaqueMediaCover,
               coverTransitionActive: storyGlobeCover.coverTransitionActive || playbackGlobeCover.coverTransitionActive,
             }}
-            temporalReveal={isMobileV2 || globeFocusMode
-              ? {
-                journeys: timeCursor.reveal.journeyProgress,
-                points: timeCursor.reveal.pointProgress,
-              }
-              : undefined}
+            temporalReveal={routePointContextTemporalReveal}
             homeBasePresence={listHomeBasePeriods ? {
               resolved: ordinaryAtlasHomePresence,
               periods: homeBasePeriods,
@@ -4079,6 +4138,11 @@ export function LivingAtlasApp({
           onGlobePickRequest={startGlobePick}
           onGlobePickCancel={cancelGlobePick}
           onRoutePreviewChange={setDraftRoute}
+          onRecordedTracksChanged={(journeyId) => {
+            if (journeyId === activeJourney?.id) {
+              setRecordedTrackRevision((current) => current + 1);
+            }
+          }}
           onPlaybackPreview={startDraftPlaybackPreview}
           playbackPreviewActive={draftPlaybackOwnsSession}
           playbackPreviewPreparing={playbackPreparingId === draftPlaybackPreviewOwnerKey(editingJourneyId)}
@@ -4153,6 +4217,7 @@ export function LivingAtlasApp({
       {playbackSession.journeyId ? (
         <JourneyPlaybackOverlay
           journey={playbackJourney}
+          playbackRoute={playbackJourneyRoute}
           homeNarrativeContext={playbackHomeNarrativeContext}
           onClose={handlePlaybackClose}
           cameraFollowing={playbackCameraFollowing}

@@ -23,6 +23,7 @@ import {
   type JourneyMediaMoveUndo,
 } from "./journeyApi";
 import { uploadJourneyMedia } from "./journeyMediaUpload";
+import { readJourneyRecordedTrackGeometry } from "./journeyRecordedTracksApi";
 import type { HomeBasePeriod } from "./homeBase";
 import type { HomeBaseDismissal } from "./homeBaseInference";
 import type { HomeBaseConfirmationRequest } from "./homeBaseSuggestion";
@@ -183,6 +184,8 @@ export type AtlasView = {
   listHomeBasePeriods: (() => Promise<HomeBasePeriod[]>) | null;
   /** Owner-private answer to a Home Base suggestion. Guest mode has no reader. */
   listHomeBaseDismissals: (() => Promise<HomeBaseDismissal[]>) | null;
+  /** Owner-private precise route evidence. Guest/demo/QA modes may omit it entirely. */
+  readRecordedTrackGeometry?: typeof readJourneyRecordedTrackGeometry | null;
   readMedia: AtlasMediaRead;
   mutations: AtlasMutations | null;
 };
@@ -220,6 +223,7 @@ export function createOwnerAtlasView(
     listJourneys: () => listJourneys(),
     listHomeBasePeriods: () => listHomeBasePeriods(),
     listHomeBaseDismissals: () => listHomeBaseDismissals(),
+    readRecordedTrackGeometry: readJourneyRecordedTrackGeometry,
     readMedia: (assetId) => getPrivateMediaRead(assetId),
     mutations: createOwnerAtlasMutations(capabilities.canEditJourney),
   };

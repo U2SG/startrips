@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { recordedTrackLodConstructionCount } from "../journey/journeyModel";
 import type { JourneyRoute } from "../journey/types";
 import {
   AMAP_RASTER_STYLE,
@@ -29,6 +30,7 @@ import {
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
   pickDetailedEarthJourneyRoutePointHit,
+  selectDetailedEarthJourneyOverlayLod,
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
@@ -144,7 +146,7 @@ describe("detailed-earth Journey overlay", () => {
     ]);
     const segments = overlay.data.features.filter((feature) => feature.properties.featureKind === "segment");
     expect(segments).toHaveLength(2);
-    expect(segments.every((feature) => feature.properties.provenance === "user-shaped")).toBe(true);
+    expect(segments.every((feature) => feature.properties.provenance === "user-shaped-route")).toBe(true);
     const firstSegment = segments[0];
     expect(firstSegment.geometry.type).toBe("LineString");
     if (firstSegment.geometry.type !== "LineString") throw new Error("expected line geometry");
@@ -152,6 +154,206 @@ describe("detailed-earth Journey overlay", () => {
       [route.points[0].lon, route.points[0].lat],
       [route.points[1].lon, route.points[1].lat],
     ]);
+  });
+
+  it("keeps all provenance tiers explicit and recorded segments independent from sparse relations", () => {
+    const truthRoute: JourneyRoute = {
+      id: "truth-route",
+      color: "#88d8ca",
+      points: [
+        { id: "p0", lat: 1, lon: 1, isStop: true },
+        { id: "p1", lat: 2, lon: 2, isStop: true },
+        { id: "p2", lat: 3, lon: 3, isStop: true },
+        { id: "p3", lat: 4, lon: 4, isStop: true },
+        { id: "p4", lat: 5, lon: 5, isStop: true },
+        { id: "p5", lat: 6, lon: 6, isStop: true },
+      ],
+      segmentProvenance: [
+        "recorded-track",
+        "user-confirmed-route",
+        "user-shaped-route",
+        "suggested-route",
+        "sparse-relation",
+      ],
+      recordedTrackSegments: [
+        {
+          id: "recorded-a",
+          points: [
+            { lat: 1.1, lon: 1.1 },
+            { lat: 1.2, lon: 1.3 },
+          ],
+        },
+        {
+          id: "recorded-b",
+          points: [
+            { lat: 4.1, lon: 4.1 },
+            { lat: 4.2, lon: 4.4 },
+          ],
+        },
+      ],
+    };
+
+    const overlay = buildDetailedEarthJourneyOverlay({ route: truthRoute });
+    const segments = overlay.data.features.filter((feature) => feature.properties.featureKind === "segment");
+    expect(segments.slice(0, 5).map((feature) => feature.properties.provenance)).toEqual([
+      "recorded-track",
+      "user-confirmed-route",
+      "user-shaped-route",
+      "suggested-route",
+      "sparse-relation",
+    ]);
+    const recorded = segments.filter((feature) => String(feature.id).includes(":recorded:"));
+    expect(recorded).toHaveLength(2);
+    expect(recorded.every((feature) => feature.properties.provenance === "recorded-track")).toBe(true);
+    expect(recorded.map((feature) => feature.id)).toEqual([
+      "truth-route:recorded:recorded-a",
+      "truth-route:recorded:recorded-b",
+    ]);
+  });
+
+  it("keeps untimed recorded geometry spatial while Route Points rewind", () => {
+    const tracked: JourneyRoute = {
+      ...route,
+      recordedTrackSegments: [{
+        id: "spatial-track",
+        points: Array.from({ length: 8 }, (_, index) => ({
+          lat: 22.54 + index * 0.005,
+          lon: 114.05 + index * 0.01,
+        })),
+      }],
+    };
+    const full = buildDetailedEarthJourneyOverlay({ route: tracked });
+    const fullTrack = full.data.features.find((feature) => feature.properties.provenance === "recorded-track");
+    for (const progress of [0, 0.5, 1]) {
+      const rewound = buildDetailedEarthJourneyOverlay({
+        route: tracked,
+        temporalReveal: {
+          journeys: new Map([[route.id, progress]]),
+          points: new Map(),
+          timestamp: Date.parse("2000-01-01T00:00:00.000Z"),
+        },
+      });
+      expect(rewound.data.features.find((feature) => feature.properties.provenance === "recorded-track"))
+        .toEqual(fullTrack);
+    }
+    expect(fullTrack?.geometry.type).toBe("LineString");
+    if (fullTrack?.geometry.type !== "LineString") throw new Error("expected spatial track line");
+    expect(fullTrack.geometry.coordinates).toHaveLength(8);
+  });
+
+  it("clips dated geometry at the actual clock instant without rebuilding LOD", () => {
+    const instant = Date.parse("2026-09-01T00:00:00.000Z");
+    const seconds = [0, 10, 20, 60, 120, 121, 150, 180];
+    const points = seconds.map((seconds, index) => ({
+      lat: 22.54 + index * 0.005,
+      lon: 114.05 + index * 0.01,
+      recordedAt: new Date(instant + seconds * 1_000).toISOString(),
+    }));
+    const tracked = { ...route, recordedTrackSegments: [{ id: "dated-track", points }] };
+    const overlayAt = (timestamp: number) => buildDetailedEarthJourneyOverlay({
+      route: tracked,
+      temporalReveal: { journeys: new Map([[route.id, 1]]), points: new Map(), timestamp },
+    });
+    const partial = overlayAt(instant + 20_000);
+    const builds = recordedTrackLodConstructionCount();
+    const partialTrack = partial.data.features.find((feature) => feature.properties.provenance === "recorded-track");
+    expect(partialTrack?.geometry.type).toBe("LineString");
+    if (partialTrack?.geometry.type !== "LineString") throw new Error("expected dated track line");
+    expect(partialTrack.geometry.coordinates).toHaveLength(3);
+    partialTrack.geometry.coordinates.forEach(([longitude, latitude], index) => {
+      expect(longitude).toBeCloseTo(points[index].lon, 8);
+      expect(latitude).toBeCloseTo(points[index].lat, 8);
+    });
+    expect(overlayAt(instant - 1).data.features.some((feature) => feature.properties.provenance === "recorded-track"))
+      .toBe(false);
+    overlayAt(instant + 180_000);
+    overlayAt(instant + 10_000);
+    expect(recordedTrackLodConstructionCount()).toBe(builds);
+
+    const incomplete = { ...tracked, recordedTrackSegments: [{ id: "incomplete", points: points.map((point, index) => (
+      index === 3 ? { ...point, recordedAt: null } : point
+    )) }] };
+    const spatial = buildDetailedEarthJourneyOverlay({
+      route: incomplete,
+      temporalReveal: { journeys: new Map(), points: new Map(), timestamp: instant - 1 },
+    }).data.features.find((feature) => feature.properties.provenance === "recorded-track");
+    expect(spatial?.geometry.type).toBe("LineString");
+    if (spatial?.geometry.type !== "LineString") throw new Error("expected incomplete-time spatial line");
+    expect(spatial.geometry.coordinates).toHaveLength(8);
+  });
+
+  it("selects recorded-track detail by projected screen error without merging track gaps", () => {
+    const dense = Array.from({ length: 100_000 }, (_, index) => ({
+      lat: 22 + index * 0.000004 + Math.sin(index / 30) * 0.001,
+      lon: 114 + index * 0.00002,
+    }));
+    const overlay = buildDetailedEarthJourneyOverlay({
+      route: {
+        id: "lod-route",
+        color: "#88d8ca",
+        points: [
+          { id: "start", lat: 22, lon: 114, isStop: true },
+          { id: "shape", lat: 22.2, lon: 114.4, isStop: false },
+          { id: "end", lat: 22.4, lon: 114.8, isStop: true },
+        ],
+        recordedTrackSegments: [
+          { id: "dense", points: dense },
+          { id: "after-gap", points: [
+            { lat: 23, lon: 115 },
+            { lat: 23.2, lon: 115.2 },
+            { lat: 23.4, lon: 115.1 },
+          ] },
+        ],
+      },
+    });
+
+    const far = selectDetailedEarthJourneyOverlayLod(overlay, 1_000);
+    const near = selectDetailedEarthJourneyOverlayLod(overlay, 100_000);
+    expect(far.key).not.toBe(near.key);
+    expect(far.renderedPointCount).toBeLessThan(near.renderedPointCount);
+    for (const selection of [far, near]) {
+      const recorded = selection.data.features.filter((feature) => (
+        feature.properties.provenance === "recorded-track"
+      ));
+      expect(recorded).toHaveLength(2);
+      expect(recorded.map((feature) => feature.id)).toEqual([
+        "lod-route:recorded:dense",
+        "lod-route:recorded:after-gap",
+      ]);
+      expect(selection.data.features.filter((feature) => (
+        feature.properties.featureKind === "route-point"
+      ))).toHaveLength(3);
+    }
+  });
+
+  it("changes the overlay revision when recorded-track interior geometry changes", () => {
+    const build = (middleLongitude: number) => buildDetailedEarthJourneyOverlay({
+      route: {
+        id: "recorded-revision-route",
+        color: "#88d8ca",
+        points: [
+          { id: "start", lat: 22, lon: 114, isStop: true },
+          { id: "end", lat: 23, lon: 115, isStop: true },
+        ],
+        recordedTrackSegments: [{
+          id: "same-segment",
+          points: [
+            { lat: 22, lon: 114 },
+            { lat: 22.5, lon: middleLongitude },
+            { lat: 23, lon: 115 },
+          ],
+        }],
+      },
+    });
+
+    const original = build(114.5);
+    const changedInterior = build(114.7);
+    expect(original.data.features.find((feature) => (
+      feature.id === "recorded-revision-route:recorded:same-segment"
+    ))?.geometry).not.toEqual(changedInterior.data.features.find((feature) => (
+      feature.id === "recorded-revision-route:recorded:same-segment"
+    ))?.geometry);
+    expect(original.revision).not.toBe(changedInterior.revision);
   });
 
   it("reuses shared selected/narrative Route Point semantics and temporal reveal", () => {

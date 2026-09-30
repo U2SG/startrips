@@ -7,8 +7,10 @@ import {
   isPlaybackTerminalState,
   isPlaybackTransitRoutePoint,
   playbackReducer,
+  playbackFactualRouteText,
   playbackCameraTargetForStep,
   playbackTravelChoreography,
+  playbackTravelAngularDistance,
   playbackCameraTargetKey,
   playbackIntroMedia,
   playbackMediaForPoint,
@@ -20,6 +22,7 @@ import {
   routePointChapterDensity,
 } from "./journeyPlayback";
 import { deriveJourneyStaySummaries } from "./journeyModel";
+import { buildPlaybackPlan } from "./journeyPlaybackPlan";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -109,6 +112,108 @@ const homeNarrativeContext: HomeNarrativeContext = {
     },
   },
 };
+
+describe("route provenance text boundary (#342)", () => {
+  const route = (tier: "recorded-track" | "user-confirmed-route" | "user-shaped-route" | "suggested-route" | "sparse-relation") => ({
+    points: [
+      { lat: 0, lon: 0, isStop: true },
+      { lat: 1, lon: 1, isStop: true },
+    ],
+    segmentProvenance: [tier],
+  });
+
+  it("allows actual-route text only for recorded or explicitly confirmed travel", () => {
+    expect(playbackFactualRouteText(route("recorded-track"), 1, "actual street 2 km")).toBe("actual street 2 km");
+    expect(playbackFactualRouteText(route("user-confirmed-route"), 1, "actual street 2 km")).toBe("actual street 2 km");
+    expect(playbackFactualRouteText(route("user-shaped-route"), 1, "actual street 2 km")).toBeNull();
+    expect(playbackFactualRouteText(route("suggested-route"), 1, "actual street 2 km")).toBeNull();
+    expect(playbackFactualRouteText(route("sparse-relation"), 1, "actual street 2 km")).toBeNull();
+  });
+
+  it("checks every shaping segment of a chapter leg before claiming an actual route", () => {
+    const shapedRoute = {
+      points: [0, 1, 2, 3].map((index) => ({ lat: index, lon: index, isStop: index === 0 || index === 3 })),
+      segmentProvenance: ["user-confirmed-route", "sparse-relation", "recorded-track"] as const,
+    };
+    expect(playbackFactualRouteText(shapedRoute, 3, "actual route", 0)).toBeNull();
+    expect(playbackFactualRouteText({ ...shapedRoute, segmentProvenance: ["user-confirmed-route", "recorded-track", "recorded-track"] }, 3, "actual route", 0))
+      .toBe("actual route");
+  });
+});
+
+describe("Stop/via cinematic chapters (#342)", () => {
+  it("folds stay media into Stop A, keeps an ungrouped via chapter and empty Stop B, and retains all geometry", () => {
+    const trip: Journey = {
+      ...journey,
+      routePoints: [
+        { ...point("point-0", 0, 0), regionContext: "A" },
+        { ...point("point-1", 2, 2), isStop: false },
+        { ...point("point-2", 0.1, 0.1), isStop: false, regionContext: "A", stayAnchorRoutePointId: "point-0" },
+        { ...point("point-3", 1, 1), isStop: false },
+        { ...point("point-4", 2, 3), regionContext: "B" },
+        { ...point("point-5", 3, 4), isStop: false },
+      ],
+      media: [media("child-photo", "point-2", "image/jpeg"), media("via-photo", "point-3", "image/jpeg", 1)],
+    };
+    const before = structuredClone(trip);
+    const steps = buildPlaybackSteps(trip);
+    expect(steps.map((step) => step.kind)).toEqual(["intro", "stop", "media", "travel", "media", "travel", "stop", "outro"]);
+    expect(steps.filter((step) => step.kind === "stop").map((step) => step.pointIndex)).toEqual([0, 4]);
+    expect(steps.filter((step) => step.kind === "travel")).toEqual([{ kind: "travel", from: 0, to: 3 }, { kind: "travel", to: 4 }]);
+    expect(steps.filter((step) => step.kind === "media").map((step) => step.pointIndex)).toEqual([0, 3]);
+    expect(playbackMediaForPoint(trip, 0)).toEqual([trip.media[0]]);
+    expect(playbackMediaForPoint(trip, 2)).toEqual([]);
+    expect(storyMediaForScope(trip, "point-2")).toEqual([trip.media[0]]);
+    const foldedStep = steps.find((step) => step.kind === "media")!;
+    expect(committedPlaybackPosition(trip, foldedStep)).toEqual({ journeyId: trip.id, routePointId: "point-2", assetId: "child-photo" });
+    expect(buildPlaybackPlan(trip).segments.filter((segment) => segment.kind === "media")
+      .map((segment) => [segment.routePointId, segment.assetId])).toEqual([["point-0", "child-photo"], ["point-3", "via-photo"]]);
+    expect(phaseForStep(steps[3])).toEqual({ type: "travel", from: 0, to: 3 });
+    expect(playbackTravelAngularDistance(trip, 3, 0)).toBeCloseTo(
+      routePointAngularDistance(trip.routePoints[0], trip.routePoints[1])
+      + routePointAngularDistance(trip.routePoints[1], trip.routePoints[2])
+      + routePointAngularDistance(trip.routePoints[2], trip.routePoints[3]),
+    );
+    expect(trip).toEqual(before);
+  });
+
+  it.each(["previous", "next", "independent", "reordered", "deleted", "demoted"] as const)(
+    "uses exact Stop ownership after %s without heuristic rebinding",
+    (state) => {
+      const child = { ...point("child", 0.1, 0.1), isStop: false, regionContext: "A",
+        stayAnchorRoutePointId: state === "independent" ? null : state === "previous" ? "a" : "b" };
+      const trip: Journey = { ...journey, routePoints: [
+        { ...point("a", 0, 0), regionContext: "A" }, child,
+        { ...point("b", 0.2, 0.2), regionContext: "A" },
+      ], media: [media("child-photo", "child", "image/jpeg")] };
+      if (state === "reordered") trip.routePoints = [trip.routePoints[2], trip.routePoints[0], child];
+      if (state === "deleted") trip.routePoints = trip.routePoints.filter((candidate) => candidate.id !== "b");
+      if (state === "demoted") trip.routePoints[2] = { ...trip.routePoints[2], isStop: false };
+      const before = structuredClone(trip);
+      const expectedOwner = ["independent", "deleted", "demoted"].includes(state)
+        ? "child" : state === "previous" ? "a" : "b";
+      const steps = buildPlaybackSteps(trip);
+      const mediaSteps = steps.filter((step) => step.kind === "media");
+      expect(mediaSteps.map((step) => trip.routePoints[step.pointIndex].id)).toEqual([expectedOwner]);
+      expect(committedPlaybackPosition(trip, mediaSteps[0])).toEqual({
+        journeyId: trip.id, routePointId: "child", assetId: "child-photo",
+      });
+      expect(steps.filter((step) => step.kind === "stop").map((step) => trip.routePoints[step.pointIndex].id))
+        .toEqual(trip.routePoints.filter((candidate) => candidate.isStop).map((candidate) => candidate.id));
+      expect(trip).toEqual(before);
+    },
+  );
+
+  it("traverses leading shaping points without focusing them and respects the canonical Stop bit", () => {
+    const trip = { ...journey, media: [], routePoints: [
+      { ...point("point-0", 0, 0), isStop: false },
+      { ...point("point-1", 0, 10), isStop: false },
+      { ...point("point-2", 0, 20), placeRole: "pure-transit" as const },
+    ] };
+    expect(buildPlaybackSteps(trip).map((step) => step.kind)).toEqual(["intro", "travel", "stop", "outro"]);
+    expect(buildPlaybackSteps(trip)[1]).toEqual({ kind: "travel", from: 0, to: 2 });
+  });
+});
 
 describe("routePointAngularDistance (#19)", () => {
   it("measures the great-circle distance between two route points", () => {
@@ -282,7 +387,7 @@ describe("buildPlaybackSteps (#19)", () => {
       .toEqual(["media-1"]);
   });
 
-  it("gives every point a stop step even without media, so no point is skipped", () => {
+  it("gives every real Stop a chapter even without media", () => {
     const silent: Journey = {
       ...journey,
       routePoints: [point("p0", 0, 0), point("p1", 1, 1)],
@@ -298,7 +403,7 @@ describe("buildPlaybackSteps (#19)", () => {
       ...journey,
       routePoints: [
         { ...point("point-0", 30.66, 104.06), regionContext: "Chengdu", placeRole: "accommodation" },
-        { ...point("point-1", 30.67, 104.07), isStop: false, regionContext: "Chengdu", placeRole: "pure-transit" },
+        { ...point("point-1", 30.67, 104.07), isStop: false, regionContext: "Chengdu", placeRole: "pure-transit", stayAnchorRoutePointId: "point-2" },
         { ...point("point-2", 30.68, 104.08), regionContext: "Chengdu", placeRole: "attraction" },
       ],
       media: [
@@ -311,17 +416,17 @@ describe("buildPlaybackSteps (#19)", () => {
     const mediaBefore = [...grouped.media];
 
     expect(deriveJourneyStaySummaries(grouped).map((summary) => summary.routePointIds)).toEqual([
-      ["point-0", "point-2"],
+      ["point-0", "point-1", "point-2"],
     ]);
 
     const steps = buildPlaybackSteps(grouped);
     expect(steps.flatMap((step) => step.kind === "stop" ? [step.pointIndex] : [])).toEqual([0, 2]);
-    expect(steps.flatMap((step) => step.kind === "travel" ? [step.to] : [])).toEqual([1, 2]);
-    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([0, 1, 2]);
+    expect(steps.flatMap((step) => step.kind === "travel" ? [step.to] : [])).toEqual([2]);
+    expect(steps.flatMap((step) => step.kind === "media" ? [step.pointIndex] : [])).toEqual([0, 2, 2]);
     expect(playbackMediaForPoint(grouped, 0).map((asset) => asset.id)).toEqual(["stay-hotel"]);
-    expect(playbackMediaForPoint(grouped, 1).map((asset) => asset.id)).toEqual(["stay-detour"]);
+    expect(playbackMediaForPoint(grouped, 1)).toEqual([]);
     expect(storyMediaForScope(grouped, "point-1").map((asset) => asset.id)).toEqual(["stay-detour"]);
-    expect(playbackMediaForPoint(grouped, 2).map((asset) => asset.id)).toEqual(["stay-place"]);
+    expect(playbackMediaForPoint(grouped, 2).map((asset) => asset.id)).toEqual(["stay-detour", "stay-place"]);
     expect(grouped.routePoints).toEqual(routeBefore);
     expect(grouped.media).toEqual(mediaBefore);
     expect(grouped.media).toEqual(expect.arrayContaining(mediaBefore));

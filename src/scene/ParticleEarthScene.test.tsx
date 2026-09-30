@@ -32,6 +32,7 @@ import {
   MAX_RENDERED_ROUTE_LABELS,
   MAX_RENDERED_ROUTE_LINE_VERTICES,
   MAX_RENDERED_ROUTE_POINTS,
+  MAX_RENDERED_RECORDED_TRACK_POINTS,
   MAX_ROUTE_LABEL_CANDIDATES,
   resolveRouteLabelLimit,
   resolveRouteLabelSafeArea,
@@ -40,6 +41,8 @@ import {
   buildJourneyConnectorPath,
   advanceGlobeIdleReleasePhase,
   buildProjectedRoutePath,
+  buildRecordedTrackOverviewSamples,
+  selectRecordedTrackOverviewLevel,
   collectJourneyDimDirections,
   focusSignalAnchor,
   focusViewportCenter,
@@ -81,9 +84,98 @@ import {
   routeArcVertexCount,
   routePointAnchor,
 } from "./geo";
+import { recordedTrackVisibleSampleCount } from "../journey/journeyModel";
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
+  it("bounds recorded-track overview geometry without joining independent gaps", () => {
+    const dense = Array.from({ length: MAX_RENDERED_RECORDED_TRACK_POINTS + 500 }, (_, index) => ({
+      lat: 20 + index / 10_000,
+      lon: 110 + index / 10_000,
+    }));
+    const tracks = buildRecordedTrackOverviewSamples([
+      { id: "a", points: dense },
+      { id: "b", points: [{ lat: 30, lon: 120 }, { lat: 31, lon: 121 }] },
+    ]);
+    expect(tracks.map((track) => track.id)).toEqual(["a", "b"]);
+    const pointCounts = tracks.map((track) => track.samples.lifts.length);
+    expect(pointCounts.every((count) => count >= 2)).toBe(true);
+    expect(pointCounts.reduce((sum, count) => sum + count, 0))
+      .toBeLessThanOrEqual(MAX_RENDERED_RECORDED_TRACK_POINTS);
+    expect(tracks.every((track) => track.levels.length >= 1)).toBe(true);
+    expect(tracks.every((track) => track.levels.every((level) => (
+      level.samples.lifts.length <= MAX_RENDERED_RECORDED_TRACK_POINTS
+    )))).toBe(true);
+    const far = selectRecordedTrackOverviewLevel(tracks[0].levels, 1_000);
+    const near = selectRecordedTrackOverviewLevel(tracks[0].levels, 100_000);
+    expect(far?.maxAngularErrorRad).toBe(0.00025);
+    expect(near?.maxAngularErrorRad).toBe(0.00001);
+    expect((far?.samples.lifts.length ?? Infinity)).toBeLessThanOrEqual(
+      MAX_RENDERED_RECORDED_TRACK_POINTS,
+    );
+    expect(tracks.every((track) => track.levels.every((level) => level.sampleTimes === null)))
+      .toBe(true);
+  });
+
+  it("uses sampled instants for dated evidence and keeps untimed gaps spatial", () => {
+    const instant = Date.parse("2026-09-01T00:00:00.000Z");
+    const tracks = buildRecordedTrackOverviewSamples([
+      { id: "dated", points: [
+        { lat: 0, lon: 0, recordedAt: new Date(instant).toISOString() },
+        { lat: 0.2, lon: 0.3, recordedAt: new Date(instant + 10_000).toISOString() },
+        { lat: 0, lon: 1, recordedAt: new Date(instant + 90_000).toISOString() },
+      ] },
+      { id: "future", points: [
+        { lat: 1, lon: 1, recordedAt: new Date(instant + 120_000).toISOString() },
+        { lat: 1, lon: 2, recordedAt: new Date(instant + 150_000).toISOString() },
+      ] },
+      { id: "spatial", points: [{ lat: 2, lon: 2 }, { lat: 2, lon: 3 }] },
+      { id: "incomplete", points: [
+        { lat: 3, lon: 3, recordedAt: new Date(instant).toISOString() },
+        { lat: 3, lon: 3.5 },
+        { lat: 3, lon: 4, recordedAt: new Date(instant + 90_000).toISOString() },
+      ] },
+    ]);
+    expect(tracks.map((track) => track.id)).toEqual(["dated", "future", "spatial", "incomplete"]);
+    const dated = tracks[0].levels[0].sampleTimes!;
+    expect(recordedTrackVisibleSampleCount(dated, instant + 30_000)).toBe(2);
+    expect(recordedTrackVisibleSampleCount(tracks[1].levels[0].sampleTimes!, instant + 30_000)).toBe(0);
+    expect(tracks.slice(2).every((track) => track.levels.every((level) => level.sampleTimes === null)))
+      .toBe(true);
+  });
+
+  it("keeps LOD error bounds truthful when a tight point budget needs extra simplification", () => {
+    const dense = Array.from({ length: 300 }, (_, index) => ({
+      lat: 20 + index * 0.001,
+      lon: 110 + index * 0.001 + Math.sin(index * 0.9) * 0.02,
+    }));
+    const [track] = buildRecordedTrackOverviewSamples([{ id: "tight", points: dense }], 8);
+    expect(track.levels.length).toBeGreaterThan(0);
+    expect(track.levels.every((level) => level.samples.lifts.length <= 8)).toBe(true);
+    // The unsimplified level has zero error. It cannot survive this budget by
+    // truncation while still advertising that bound.
+    expect(track.levels.every((level) => level.maxAngularErrorRad > 0)).toBe(true);
+    expect(track.samples.lifts.length).toBeLessThanOrEqual(8);
+  });
+
+  it("keeps all five provenance tiers visible in the particle route treatment", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    for (const tier of [
+      "recorded-track",
+      "user-confirmed-route",
+      "user-shaped-route",
+      "suggested-route",
+      "sparse-relation",
+    ]) {
+      expect(source).toContain("routeProvenance");
+      expect(css).toContain(`data-route-provenance="${tier}"`);
+    }
+    expect(source).toContain("particle-earth-route__recorded-track");
+    expect(source).toContain("recordedTrackVisibleSampleCount(level.sampleTimes, latestTemporalReveal.current?.timestamp)");
+    expect(css).toContain("stroke-dasharray: none;");
+  });
+
   it("degrades renderer construction failures without escaping the scene effect", () => {
     const rendererFactory = vi.fn(() => {
       throw new Error("context unavailable");

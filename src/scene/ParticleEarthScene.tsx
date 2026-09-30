@@ -44,7 +44,16 @@ import {
 } from "./cityLabels";
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import { compactMobileLayoutMarker } from "../journey/mobileLayout";
-import type { JourneyRoute } from "../journey/types";
+import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
+import {
+  buildRecordedTrackLodLevels,
+  recordedTrackLodConstructionCount,
+  recordedTrackSampleTimes,
+  recordedTrackVisibleSampleCount,
+  resolveJourneyRouteSegmentProvenance,
+  simplifyRecordedTrackPoints,
+  summarizeJourneyRouteProvenance,
+} from "../journey/journeyModel";
 import type { HomeBasePresenceDrawable, ProjectedHomeBasePresence } from "./homeBasePresenceLayer";
 import {
   buildArtworkPointPositions,
@@ -225,7 +234,121 @@ export function createParticleEarthRenderer(
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
+export const MAX_RENDERED_RECORDED_TRACK_POINTS = 2048;
 const EMPTY_ARCHIVE_POINTS: Parameters<typeof buildArtworkPointPositions>[0] = [];
+
+function uniformlyBoundRecordedPoints<T>(points: readonly T[], limit: number) {
+  if (points.length <= limit) return [...points];
+  if (limit <= 1) return points.length === 0 ? [] : [points[0]];
+  return Array.from({ length: limit }, (_, index) => (
+    points[Math.round((index * (points.length - 1)) / (limit - 1))]
+  ));
+}
+
+export type RecordedTrackOverviewLevel = {
+  maxAngularErrorRad: number;
+  sourcePointCount: number;
+  sampleTimes: readonly number[] | null;
+  samples: RouteArcSamples;
+};
+
+export type RecordedTrackOverview = {
+  id: string;
+  levels: readonly RecordedTrackOverviewLevel[];
+  samples: RouteArcSamples;
+};
+
+function recordedTrackArcSamples(
+  points: readonly { lat: number; lon: number }[],
+): RouteArcSamples {
+  const directions = new Float32Array(points.length * 3);
+  const lifts = new Float32Array(points.length);
+  points.forEach((point, pointIndex) => {
+    const direction = latLonToVector3(point.lat, point.lon, 1);
+    const offset = pointIndex * 3;
+    directions[offset] = direction.x;
+    directions[offset + 1] = direction.y;
+    directions[offset + 2] = direction.z;
+  });
+  return { directions, lifts };
+}
+
+function boundedRecordedTrackOverviewLevels(
+  points: readonly { lat: number; lon: number; recordedAt?: string | null }[],
+  pointBudget: number,
+): RecordedTrackOverviewLevel[] {
+  const precomputed = buildRecordedTrackLodLevels(points);
+  let bounded = precomputed.filter((level) => level.points.length <= pointBudget);
+  if (bounded.length === 0) {
+    let maxAngularErrorRad = precomputed.at(-1)?.maxAngularErrorRad ?? 0.00025;
+    let simplified = precomputed.at(-1)?.points ?? points;
+    while (simplified.length > pointBudget && maxAngularErrorRad < Math.PI) {
+      maxAngularErrorRad = Math.min(Math.PI, Math.max(0.000001, maxAngularErrorRad * 2));
+      simplified = simplifyRecordedTrackPoints(points, maxAngularErrorRad);
+    }
+    bounded = [{ maxAngularErrorRad, points: simplified }];
+  }
+  return bounded.map((level) => ({
+    maxAngularErrorRad: level.maxAngularErrorRad,
+    sourcePointCount: level.points.length,
+    sampleTimes: recordedTrackSampleTimes(points) ? recordedTrackSampleTimes(level.points) : null,
+    samples: recordedTrackArcSamples(level.points),
+  }));
+}
+
+export function selectRecordedTrackOverviewLevel(
+  levels: readonly RecordedTrackOverviewLevel[],
+  projectedPixelsPerRadian: number,
+  maxScreenErrorPx = 1.25,
+) {
+  if (levels.length === 0) return null;
+  if (!(projectedPixelsPerRadian > 0) || !(maxScreenErrorPx > 0)) return levels.at(-1) ?? null;
+  for (let index = levels.length - 1; index >= 0; index -= 1) {
+    const level = levels[index];
+    if (level.maxAngularErrorRad * projectedPixelsPerRadian <= maxScreenErrorPx) return level;
+  }
+  return levels[0];
+}
+
+export function buildRecordedTrackOverviewSamples(
+  segments: NonNullable<JourneyRoute["recordedTrackSegments"]>,
+  maxPoints = MAX_RENDERED_RECORDED_TRACK_POINTS,
+): RecordedTrackOverview[] {
+  const validSegments = segments
+    .map((segment) => ({
+      ...segment,
+      points: segment.points.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon))
+        ? segment.points
+        : segment.points.filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon)),
+    }))
+    .filter((segment) => segment.points.length >= 2);
+  if (maxPoints < 2 || validSegments.length === 0) return [];
+
+  // Every independent server segment keeps its own SVG path: LOD may remove
+  // interior samples, but it never bridges a recorded-track gap. Very unusual
+  // inputs with more gaps than the bounded path budget keep a representative
+  // subset instead of constructing an unbounded DOM.
+  const segmentLimit = Math.min(validSegments.length, Math.floor(maxPoints / 2));
+  const chosenSegments = uniformlyBoundRecordedPoints(validSegments, segmentLimit);
+  let remainingPoints = maxPoints;
+
+  return chosenSegments.map((segment, index) => {
+    const remainingSegments = chosenSegments.length - index;
+    const pointBudget = Math.max(2, Math.floor(remainingPoints / remainingSegments));
+    // Do not truncate a selected LOD after declaring its screen-space error.
+    // Keep only levels that already fit this segment budget; if none fit,
+    // simplify with an explicit larger tolerance so the published error bound
+    // remains truthful even under the global point cap.
+    const levels = boundedRecordedTrackOverviewLevels(segment.points, pointBudget);
+    const samples = levels.at(-1)!.samples;
+    remainingPoints -= pointBudget;
+    return {
+      id: segment.id,
+      levels,
+      samples,
+    };
+  });
+}
 
 export type AttentionParticleLayerId =
   | "base-particle-surface"
@@ -506,6 +629,7 @@ export function journeyRoutePointTargetEligible(
   temporalReveal?: {
     journeys: ReadonlyMap<string, number>;
     points: ReadonlyMap<string, number>;
+    timestamp?: number;
   },
 ) {
   if (!target) return false;
@@ -1333,6 +1457,7 @@ interface ParticleEarthSceneProps {
   temporalReveal?: {
     journeys: ReadonlyMap<string, number>;
     points: ReadonlyMap<string, number>;
+    timestamp?: number;
   };
   showArchiveSignals?: boolean;
   /** Static signal coordinates supplied by the legacy or QA scene owner. */
@@ -1982,6 +2107,7 @@ export function ParticleEarthScene({
         visitedImprintMaxGain: number;
         visitedImprintTextureUpdates: number;
         visitedImprintAttenuation: number;
+        recordedTrackLodBuilds: number;
         journeyRouteBuilds: number;
         journeyRouteBuildMs: number;
         journeyRoutePointGeometry: string;
@@ -2039,6 +2165,7 @@ export function ParticleEarthScene({
       visitedImprintTextureUpdates,
       visitedImprintAttenuation: visitedImprintMaterials[0]
         ?.uniforms.uVisitedImprintAttenuation.value ?? 1,
+      recordedTrackLodBuilds: recordedTrackLodConstructionCount(),
       journeyRouteBuilds,
       journeyRouteBuildMs,
       journeyRoutePointGeometry: routePointGeometry.uuid,
@@ -2538,6 +2665,12 @@ export function ParticleEarthScene({
         path: SVGPathElement;
         toPointIndex: number;
         samples: RouteArcSamples;
+        provenance: RouteProvenanceTier;
+      }>;
+      recordedTracks: Array<{
+        path: SVGPathElement;
+        levels: readonly RecordedTrackOverviewLevel[];
+        samples: RouteArcSamples;
       }>;
       glowPath: SVGPathElement;
       corePath: SVGPathElement;
@@ -2878,10 +3011,12 @@ export function ParticleEarthScene({
         group.classList.add(
           "particle-earth-route",
           "is-style-quiet-core",
+          "has-provenance-legs",
         );
         group.style.color = route.color;
         group.dataset.journeyRoute = route.id;
         group.dataset.lightEffect = route.lightEffect ?? "none";
+        group.dataset.routeProvenance = summarizeJourneyRouteProvenance(route);
         const glowPath = document.createElementNS(
           "http://www.w3.org/2000/svg",
           "path",
@@ -3057,14 +3192,37 @@ export function ParticleEarthScene({
             "http://www.w3.org/2000/svg",
             "path",
           );
+          const provenance = resolveJourneyRouteSegmentProvenance(route, legIndex);
           path.classList.add("particle-earth-route__leg");
+          path.dataset.routeProvenance = provenance;
           path.setAttribute("stroke", gradientReference);
           path.setAttribute("fill", "none");
           path.setAttribute("stroke-linecap", "round");
           path.setAttribute("stroke-linejoin", "round");
           path.setAttribute("pathLength", "1");
           group.appendChild(path);
-          return { path, toPointIndex: legIndex + 1, samples: leg };
+          return { path, toPointIndex: legIndex + 1, samples: leg, provenance };
+        });
+        const recordedTracks = buildRecordedTrackOverviewSamples(route.recordedTrackSegments ?? []).map((track) => {
+          const path = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "path",
+          );
+          path.classList.add("particle-earth-route__recorded-track");
+          path.dataset.routeProvenance = "recorded-track";
+          path.dataset.recordedTrackSegment = track.id;
+          path.dataset.recordedTrackLodLevels = String(track.levels.length);
+          path.setAttribute("stroke", route.color);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke-linecap", "round");
+          path.setAttribute("stroke-linejoin", "round");
+          path.setAttribute("pathLength", "1");
+          group.appendChild(path);
+          return {
+            path,
+            levels: track.levels,
+            samples: track.samples,
+          };
         });
         routeVectorLayer.appendChild(group);
         routeVectorEntries.push({
@@ -3073,6 +3231,7 @@ export function ParticleEarthScene({
           group,
           samples: routeSamples,
           legs,
+          recordedTracks,
           glowPath,
           corePath,
           leaderPath,
@@ -3452,6 +3611,38 @@ export function ParticleEarthScene({
             projectedLegEnds.push([leg.toPointIndex - 1, legPath.start]);
           }
           if (legPath.end) projectedLegEnds.push([leg.toPointIndex, legPath.end]);
+        }
+        const recordedTrackPixelsPerRadian = Math.max(
+          1,
+          readInteractionGeometry().projectedRadiusPx,
+        );
+        for (const track of entry.recordedTracks) {
+          const level = selectRecordedTrackOverviewLevel(
+            track.levels,
+            recordedTrackPixelsPerRadian,
+          );
+          if (level && track.samples !== level.samples) track.samples = level.samples;
+          if (level) {
+            track.path.dataset.recordedTrackLodErrorRad = String(level.maxAngularErrorRad);
+            track.path.dataset.recordedTrackLodSourcePoints = String(level.sourcePointCount);
+          }
+          const visibleCount = level?.sampleTimes
+            ? recordedTrackVisibleSampleCount(level.sampleTimes, latestTemporalReveal.current?.timestamp)
+            : track.samples.lifts.length;
+          const visibleSamples = visibleCount === track.samples.lifts.length
+            ? track.samples
+            : {
+                directions: track.samples.directions.subarray(0, visibleCount * 3),
+                lifts: track.samples.lifts.subarray(0, visibleCount),
+              };
+          track.path.dataset.recordedTrackTimeEvidence = level?.sampleTimes ? "dated" : "spatial";
+          track.path.dataset.recordedTrackLodRenderedPoints = String(visibleCount);
+          const trackPath = buildProjectedRoutePath(
+            visibleSamples,
+            projectRoutePoint,
+            { radius: ROUTE_ANCHOR_RADIUS, liftScale: 0 },
+          );
+          track.path.setAttribute("d", trackPath.d);
         }
         const projectedMarkers = new Map<number, ProjectedRoutePoint>();
         const labelCandidates = new Map<number, {
