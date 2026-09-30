@@ -594,6 +594,9 @@ export default function DetailedEarthMap({
         host.dataset.journeyOverlayStopCount = String(overlay.stopCount);
         host.dataset.journeyOverlayPassthroughCount = String(overlay.passthroughCount);
         host.dataset.journeyOverlayFeatureCount = String(overlay.data.features.length);
+        host.dataset.journeyOverlayConfirmedCount = String(overlay.data.features.filter((feature) => (
+          feature.properties.featureKind === "segment" && feature.properties.provenance === "user-confirmed-route"
+        )).length);
         host.dataset.journeyOverlaySourceJourneyCount = String(new Set(
           overlay.data.features.map((feature) => feature.properties.journeyId),
         ).size);

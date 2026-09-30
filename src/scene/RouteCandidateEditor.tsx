@@ -67,7 +67,6 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
     setCandidates([]);
     setCandidateIndex(0);
     setBusy(false);
-    setMessage("");
     setDraftShapes(record?.shapePoints ?? []);
     setAdding(false);
   }, [journeyId, sourceKey, revision, selectedIndex]);
@@ -90,9 +89,12 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
 
   useEffect(() => {
     if (!map) return;
+    map.getContainer().dataset.routeCandidatePreviewCount = String(previewData.features.length);
+    let applied = false;
     const apply = () => {
-      if (!map.isStyleLoaded()) return;
+      if (applied) return;
       const source = map.getSource(SOURCE_ID) as GeoJSONSource | undefined;
+      if (!source && !map.isStyleLoaded()) return;
       if (source) source.setData(previewData);
       else map.addSource(SOURCE_ID, { type: "geojson", data: previewData });
       if (!map.getLayer(LAYER_ID)) map.addLayer({
@@ -107,10 +109,13 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
           "line-dasharray": [1, 2],
         },
       });
+      applied = true;
     };
+    const reload = () => { applied = false; apply(); };
     apply();
-    map.on("style.load", apply);
-    return () => { map.off("style.load", apply); };
+    map.on("style.load", reload);
+    map.on("render", apply);
+    return () => { map.off("style.load", reload); map.off("render", apply); };
   }, [map, previewData]);
 
   useEffect(() => {
@@ -201,7 +206,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
         <div className="route-candidate-editor__panel">
           <div className="route-candidate-editor__head">
             <strong>这一段怎么走</strong>
-            <button type="button" onClick={() => { setOpen(false); setEditMode(false); setCandidates([]); }}>关闭</button>
+            <button type="button" onClick={() => { setOpen(false); setEditMode(false); setDraftShapes(record?.shapePoints ?? []); setCandidates([]); }}>关闭</button>
           </div>
           <label>
             路段
@@ -225,7 +230,11 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
             <button type="button" disabled={busy || !profile || editMode} onClick={() => void generate()}>
               {busy ? "处理中…" : "查看候选"}
             </button>
-            <button type="button" disabled={busy} onClick={() => { setEditMode((value) => !value); setCandidates([]); }}>
+            <button type="button" disabled={busy} onClick={() => {
+              if (editMode) setDraftShapes(record?.shapePoints ?? []);
+              setEditMode((value) => !value);
+              setCandidates([]);
+            }}>
               {editMode ? "退出调整" : "调整经过位置"}
             </button>
           </div>
