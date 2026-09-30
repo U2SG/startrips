@@ -1008,7 +1008,9 @@ function JourneyPlaybackContinuityQaPreview() {
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
-      {closed ? null : <JourneyPlaybackOverlay
+      {closed ? (
+        <button type="button" data-qa-playback-reopen onClick={() => setClosed(false)}>Reopen Playback</button>
+      ) : <JourneyPlaybackOverlay
         journey={journey}
         onClose={() => setClosed(true)}
         onCameraTargetChange={recordCameraTarget}
