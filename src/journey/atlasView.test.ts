@@ -71,6 +71,7 @@ describe("owner and guest atlas views", () => {
       "enqueueCoverReveal",
       "listShares",
       "moveJourneyMedia",
+      "readMediaEvidence",
       "recordHomeBaseDismissal",
       "reorderJourneyMedia",
       "restoreJourney",
@@ -79,6 +80,7 @@ describe("owner and guest atlas views", () => {
       "undoJourneyMediaMove",
       "updateJourneyNotes",
       "uploadJourneyMedia",
+      "writeMediaDisplayState",
     ]);
     expect(Object.values(createOwnerAtlasMutations())
       .every((entry) => typeof entry === "function")).toBe(true);
