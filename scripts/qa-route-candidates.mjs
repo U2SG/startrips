@@ -17,6 +17,7 @@ const browser = await launchQaBrowser({
 });
 const evidence = { requests: [], writes: [], stages: [] };
 let failNext = false;
+let availabilityRequests = 0;
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
 async function openPage(policy = "default") {
@@ -25,7 +26,10 @@ async function openPage(policy = "default") {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.route("**/api/auth/get-session", (route) => json(route, null));
   await page.route(/\/api\/mapstyle\?path=styles(?:%2F|\/)fiord/i, (route) => json(route, style));
-  await page.route("**/api/journey-route-segments/availability", (route) => json(route, { profiles: ["driving"] }));
+  await page.route("**/api/journey-route-segments/availability", (route) => {
+    availabilityRequests += 1;
+    return json(route, { profiles: ["driving"] });
+  });
   await page.route(/\/api\/journey-route-segments\/journeys\/.*\/segments\/.*\/candidates$/, async (route) => {
     const body = route.request().postDataJSON();
     evidence.requests.push({ sourceKey: body.sourceKey, revision: body.revision, profile: body.profile });
@@ -93,8 +97,10 @@ try {
   const baseline = await readMap(page);
   evidence.stages.push({ name: "baseline", ...baseline });
   assert(baseline.pointCount === 3 && baseline.confirmedCount === 0, `baseline topology wrong: ${JSON.stringify(baseline)}`);
+  assert(availabilityRequests === 0, "closed route editor requested provider availability");
   await page.getByRole("button", { name: "贴合道路" }).click();
   await page.locator(".route-candidate-editor select").nth(1).selectOption("driving");
+  assert(availabilityRequests === 1, "opening route editor did not request provider availability once");
   await page.getByRole("button", { name: "查看候选" }).click();
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
   await page.getByRole("button", { name: "路线 2" }).click();

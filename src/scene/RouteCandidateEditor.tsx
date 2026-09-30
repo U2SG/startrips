@@ -26,6 +26,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [profile, setProfile] = useState<RoadProfile | "">("");
   const [availableProfiles, setAvailableProfiles] = useState<RoadProfile[]>([]);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [draftShapes, setDraftShapes] = useState<RouteShapePoint[]>([]);
   const [candidates, setCandidates] = useState<SignedRouteCandidate[]>([]);
   const [candidateIndex, setCandidateIndex] = useState(0);
@@ -44,15 +45,24 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   const candidate = candidates[candidateIndex] ?? null;
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || !open) return;
     let current = true;
+    setAvailabilityLoading(true);
     void routeCandidateAvailability().then((profiles) => {
-      if (current) setAvailableProfiles(profiles);
+      if (current) {
+        setAvailableProfiles(profiles);
+        setProfile((selected) => selected && profiles.includes(selected) ? selected : "");
+      }
     }).catch(() => {
-      if (current) setAvailableProfiles([]);
+      if (current) {
+        setAvailableProfiles([]);
+        setProfile("");
+      }
+    }).finally(() => {
+      if (current) setAvailabilityLoading(false);
     });
     return () => { current = false; };
-  }, [active]);
+  }, [active, open]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -206,7 +216,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   return (
     <div className="route-candidate-editor" data-route-editor-open={open} data-route-edit-mode={editMode}>
       {!open ? (
-        <button type="button" onClick={() => setOpen(true)}>贴合道路</button>
+        <button type="button" onClick={() => { setAvailabilityLoading(true); setOpen(true); }}>贴合道路</button>
       ) : (
         <div className="route-candidate-editor__panel">
           <div className="route-candidate-editor__head">
@@ -230,9 +240,10 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
               {availableProfiles.includes("driving") ? <option value="driving">驾车</option> : null}
             </select>
           </label>
-          {availableProfiles.length === 0 ? <p>当前没有配置道路服务，原路线继续显示。</p> : null}
+          {availabilityLoading ? <p role="status">正在检查道路服务…</p> : availableProfiles.length === 0
+            ? <p>当前没有配置道路服务，原路线继续显示。</p> : null}
           <div className="route-candidate-editor__actions">
-            <button type="button" disabled={busy || !profile || editMode} onClick={() => void generate()}>
+            <button type="button" disabled={busy || availabilityLoading || !profile || !availableProfiles.includes(profile) || editMode} onClick={() => void generate()}>
               {busy ? "处理中…" : "查看候选"}
             </button>
             <button type="button" disabled={busy} onClick={() => {
