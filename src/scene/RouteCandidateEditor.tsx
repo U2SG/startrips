@@ -61,6 +61,11 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   }, [journeyId]);
 
   useEffect(() => {
+    const segmentCount = Math.max(0, (route?.points.length ?? 0) - 1);
+    setSelectedIndex((current) => segmentCount === 0 ? 0 : Math.min(current, segmentCount - 1));
+  }, [route?.points.length]);
+
+  useEffect(() => {
     requestEpochRef.current += 1;
     requestRef.current?.abort();
     requestRef.current = null;
@@ -80,12 +85,12 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
 
   const previewData = useMemo<FeatureCollection<LineString, { color: string; selected: boolean }>>(() => ({
     type: "FeatureCollection",
-    features: candidates.map((entry, index) => ({
+    features: active && open ? candidates.map((entry, index) => ({
       type: "Feature",
       geometry: { type: "LineString", coordinates: entry.candidate.geometry },
       properties: { color: route?.color ?? "#a4c4b8", selected: index === candidateIndex },
-    })),
-  }), [candidateIndex, candidates, route?.color]);
+    })) : [],
+  }), [active, candidateIndex, candidates, open, route?.color]);
 
   useEffect(() => {
     if (!map) return;
