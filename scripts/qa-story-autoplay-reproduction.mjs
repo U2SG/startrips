@@ -104,6 +104,14 @@ async function fixture(page, profile) {
   await page.route("**/api/home-bases/dismissal", (route) => json(route, { dismissals: [] }));
   await page.route("**/api/home-bases", (route) => json(route, { periods: [] }));
   await page.route("**/api/everyday-fragments", (route) => json(route, { fragments: [] }));
+  // #574 made the Atlas renderer read precise recorded-track geometry as soon as
+  // a Journey becomes active, so this endpoint is called on every Story open —
+  // not only from the editor. The harness never stubbed it, so the unhandled
+  // request reached the static preview server, which answers 500, and the
+  // browser logged it as a console error. `validExecution` treats any console
+  // error as an invalid run, so this lane failed for builds that were otherwise
+  // clean. The synthetic Journey genuinely owns no recorded tracks.
+  await page.route("**/api/journey-recorded-tracks/*", (route) => json(route, { recordedTracks: [] }));
   await page.route("**/api/uploads/assets/*/read-url", async (route) => {
     const id = /\/assets\/([^/]+)\/read-url/.exec(new URL(route.request().url()).pathname)?.[1];
     const index = ids.indexOf(id);
