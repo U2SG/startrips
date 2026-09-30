@@ -32,10 +32,16 @@ async function open({ mode = "explore", density = "sequence", scenario = "direct
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   let releaseTargetBytes = () => undefined;
+  let reportHeldTargetRequest = () => undefined;
+  const heldTargetRequest = new Promise((resolve) => { reportHeldTargetRequest = resolve; });
   if (holdTargetBytes) {
     const gate = new Promise((resolve) => { releaseTargetBytes = resolve; });
     const asset = holdTargetBytes === "video" ? "qa-vertical-drift.webm" : "greek-amphora.jpg";
-    await page.route(`**/${asset}`, async (route) => { await gate; await route.continue(); });
+    await page.route(`**/${asset}`, async (route) => {
+      reportHeldTargetRequest(route.request().url());
+      await gate;
+      await route.continue();
+    });
   }
   const params = new URLSearchParams({ qaState: "media-motion-lab", mode, density, scenario });
   try {
@@ -48,7 +54,20 @@ async function open({ mode = "explore", density = "sequence", scenario = "direct
     await page.close();
     throw error;
   }
-  return { page, errors, mode, density, scenario, viewport: viewport.name, reducedMotion, releaseTargetBytes };
+  return { page, errors, mode, density, scenario, viewport: viewport.name, reducedMotion,
+    releaseTargetBytes, heldTargetRequest };
+}
+
+async function requireHeldTargetRequest(opened) {
+  let timer;
+  try {
+    return await Promise.race([
+      opened.heldTargetRequest,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("target bytes were not intercepted")), 8_000); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function evidence(name, opened, detail = {}) {
@@ -196,22 +215,24 @@ await run("held-image-bytes-and-decode", {
   mode: "explore", density: "few", scenario: "direct", holdTargetBytes: "image", viewport: viewports[3],
 }, async (page, opened) => {
   await page.getByRole("button", { name: "Next" }).click();
+  const heldUrl = await requireHeldTargetRequest(opened);
   assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-presented-media"), "lab-1");
   assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-stage-covered"), "true");
   opened.releaseTargetBytes();
   await page.locator('[data-media-motion-lab][data-presented-media="lab-2"]').waitFor({ timeout: 15_000 });
-  return { heldAsset: "lab-2", retainedAsset: "lab-1", release: "actual public image bytes" };
+  return { heldAsset: "lab-2", retainedAsset: "lab-1", heldUrl, release: "actual public image bytes" };
 });
 
 await run("held-video-first-frame", {
   mode: "playback", density: "few", scenario: "mixed", holdTargetBytes: "video",
 }, async (page, opened) => {
   await page.getByRole("button", { name: "Next" }).click();
+  const heldUrl = await requireHeldTargetRequest(opened);
   assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-presented-media"), "lab-1");
   assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-stage-covered"), "true");
   opened.releaseTargetBytes();
   await page.locator('[data-media-motion-lab][data-presented-media="lab-2"]').waitFor({ timeout: 20_000 });
-  return { heldAsset: "lab-2", retainedAsset: "lab-1", release: "actual public video bytes" };
+  return { heldAsset: "lab-2", retainedAsset: "lab-1", heldUrl, release: "actual public video bytes" };
 });
 
 await run("stale-completion-cannot-reclaim", { scenario: "stale" }, async (page) => {
@@ -223,6 +244,28 @@ await run("stale-completion-cannot-reclaim", { scenario: "stale" }, async (page)
   assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-presented-media"), "lab-1");
   assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-stage-covered"), "true");
   return { staleTarget: "lab-2", winningIntent: "lab-1" };
+});
+
+await run("cached-revisit-a-b-a", { mode: "explore", density: "few", viewport: viewports[3] }, async (page) => {
+  const waitForCorrectFrame = async (assetId, after = 0) => {
+    const condition = ({ assetId: expected, after: threshold }) =>
+      window.__mediaMotionLab?.marks.some((mark) => mark.phase === "first-correct-frame"
+        && mark.assetId === expected && mark.at > threshold);
+    await page.waitForFunction(condition, { assetId, after }, { timeout: 10_000 });
+    return page.evaluate(({ assetId: expected, after: threshold }) =>
+      window.__mediaMotionLab.marks.filter((mark) => mark.phase === "first-correct-frame"
+        && mark.assetId === expected && mark.at > threshold).at(-1).at,
+    { assetId, after });
+  };
+  const firstA = await waitForCorrectFrame("lab-1");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.locator('[data-media-motion-lab][data-presented-media="lab-2"]').waitFor({ timeout: 15_000 });
+  const b = await waitForCorrectFrame("lab-2", firstA);
+  await page.getByRole("button", { name: "Previous" }).click();
+  await page.locator('[data-media-motion-lab][data-presented-media="lab-1"]').waitFor({ timeout: 15_000 });
+  const secondA = await waitForCorrectFrame("lab-1", b);
+  assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-stage-covered"), "true");
+  return { sequence: ["lab-1", "lab-2", "lab-1"], correctFrameMarks: [firstA, b, secondA] };
 });
 
 for (const mode of ["explore", "playback"]) {

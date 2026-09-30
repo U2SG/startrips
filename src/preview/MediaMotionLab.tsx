@@ -20,7 +20,7 @@ type Snapshot = {
   dragX: string;
 };
 type TraceContext = { scenario: Scenario; mode: Mode; density: Density; viewport: string; reducedMotion: boolean; topology: string };
-type TraceEntry = TraceContext & { phase: string; at: number };
+type TraceEntry = TraceContext & { phase: string; at: number; assetId?: string };
 
 declare global {
   interface Window {
@@ -134,9 +134,9 @@ function LabSurface({ mode, density, scenario }: { mode: Mode; density: Density;
   const currentIntent = useRef(intent);
   currentIntent.current = intent;
 
-  const mark = useCallback((phase: string) => {
+  const mark = useCallback((phase: string, assetId?: string) => {
     const entry: TraceEntry = {
-      phase, at: performance.now(), scenario, mode, density,
+      phase, at: performance.now(), assetId, scenario, mode, density,
       viewport: `${window.innerWidth}x${window.innerHeight}`,
       reducedMotion: prefersReducedMotion(),
       topology: media.map((asset) => asset.mimeType.startsWith("video/") ? "video" : "image").join("→") || "empty",
@@ -174,8 +174,15 @@ function LabSurface({ mode, density, scenario }: { mode: Mode; density: Density;
       setSnapshot((prior) => JSON.stringify(prior) === JSON.stringify(next) ? prior : next);
       if (next.presented && next.presented !== lastPresented && next.covered) {
         lastPresented = next.presented;
-        mark("presentable");
-        requestAnimationFrame(() => mark("first-correct-paint"));
+        mark("presentable", next.presented);
+        // The second frame bounds a paint opportunity after the presentable
+        // commit. It is a fallback marker, not a browser paint entry.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const painted = stageSnapshot(stage, mode);
+          if (stage.isConnected && painted.presented === next.presented && painted.covered) {
+            mark("first-correct-frame", next.presented);
+          }
+        }));
       }
     };
     sample();
