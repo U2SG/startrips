@@ -102,7 +102,7 @@ export function playbackMediaByOwner(
  */
 export type PlaybackJourney = Journey & {
   /** Runtime chapter placement; media objects keep their canonical owner/order. */
-  chapterMedia?: ReadonlyMap<string, readonly JourneyMediaAsset[]>;
+  chapterMedia?: ReadonlyMap<string | null, readonly JourneyMediaAsset[]>;
 };
 
 export function playbackMediaByChapter(journey: PlaybackJourney): Map<string, JourneyMediaAsset[]> {

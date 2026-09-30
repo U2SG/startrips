@@ -66,6 +66,7 @@ const browser = await launchQaBrowser({
 const checks = [];
 const errors = [];
 const mutations = [];
+const apiReads = [];
 let geometryReads = 0;
 let failed = false;
 const record = (name, data, condition) => {
@@ -78,6 +79,9 @@ const page = await browser.newPage({
   viewport: { width: 1280, height: 900 }, reducedMotion: "reduce", deviceScaleFactor: 1,
 });
 page.on("pageerror", (error) => errors.push(error.message));
+page.on("console", (message) => {
+  if (message.type() === "error") errors.push(message.text());
+});
 const json = (route, payload) => route.fulfill({
   status: 200, contentType: "application/json", body: JSON.stringify(payload),
 });
@@ -85,6 +89,7 @@ await page.route("**/api/**", async (route) => {
   const request = route.request();
   const url = new URL(request.url());
   const path = url.pathname;
+  apiReads.push(`${request.method()} ${path}`);
   if (request.method() !== "GET") mutations.push({ path, method: request.method() });
   if (path === "/api/auth/get-session") return json(route, {
     session: {
@@ -282,7 +287,18 @@ try {
   record("owner renderer evidence is read-only and error-free", { geometryReads, mutations, errors },
     geometryReads > 0 && mutations.length === 0 && errors.length === 0);
 } catch (error) {
-  record("recorded-track QA exception", { message: String(error.stack ?? error) }, false);
+  const snapshot = await page.evaluate(() => ({
+    surface: document.querySelector("main")?.className ?? null,
+    text: document.body.innerText.slice(0, 400),
+    debug: window.__particleEarthDebug?.() ?? null,
+    routeCount: document.querySelectorAll(".particle-earth-route").length,
+    trackCount: document.querySelectorAll(".particle-earth-route__recorded-track").length,
+    activeJourney: document.querySelector(".living-atlas__journey-rail button.is-active")?.textContent?.trim() ?? null,
+  })).catch(() => null);
+  await page.screenshot({ path: `${artifactDir}/failure.png` }).catch(() => undefined);
+  record("recorded-track QA exception", {
+    message: String(error.stack ?? error), snapshot, geometryReads, apiReads, errors,
+  }, false);
 } finally {
   await mkdir(artifactDir, { recursive: true });
   await writeFile(`${artifactDir}/results.json`, JSON.stringify({ sampleCount, checks }, null, 2));
