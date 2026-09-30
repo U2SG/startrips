@@ -19,14 +19,12 @@
  *   It carries no captured media, produces no recorded-track sample and is no
  *   evidence that anybody was ever there.
  *
- * Region context and role live on the import draft, not inside the
- * `RouteDraftPoint` it produces. A Route Point is what `routeDraftToInput`
- * sends to the server and that contract is fixed; the reading context #514
- * wants preserved travels beside the point, where it can be shown and grouped
- * without ever widening the wire document.
+ * The draft projects into the existing Route Point contract. Source-backed
+ * region/role context and exact Stop ownership survive the ordinary save path;
+ * source counts, flags and other reading metadata remain on the import draft.
  */
 
-import type { RouteDraftPoint } from "./routeDraft";
+import { newCanonicalRoutePointId, setRoutePointStayAnchor, type RouteDraftPoint } from "./routeDraft";
 import type { RoutePointInput } from "./types";
 
 /** Which entry point produced a draft. All three share one contract. */
@@ -122,6 +120,10 @@ export type ItineraryRecognition = {
 export type ItineraryEntryDraft = {
   /** Stable inside one import job, so re-applying the job is detectable. */
   entryId: string;
+  /** Allocated once per reading; exact Stop references survive repeated projection. */
+  pointId?: string;
+  isStop?: boolean;
+  stayAnchorEntryId?: string | null;
   sourceEntryId: string | null;
   dayNumber: number;
   orderInDay: number;
@@ -335,6 +337,9 @@ export function buildItineraryImportDraft(
 
     return {
       entryId,
+      pointId: newCanonicalRoutePointId(),
+      isStop: isStopRole(entry.role),
+      stayAnchorEntryId: null,
       sourceEntryId: entry.sourceEntryId ?? null,
       dayNumber: entry.dayNumber,
       orderInDay: entry.orderInDay,
@@ -440,6 +445,159 @@ export function itineraryDraftEntries(
   return draft.days.flatMap((day) => day.entries);
 }
 
+/** Retry one reading without replacing identities or corrections made in it. */
+export function retainItineraryImportEdits(
+  previous: ItineraryImportDraft,
+  incoming: ItineraryImportDraft,
+  positionedEntryIds: ReadonlySet<string>,
+  organizedEntryIds: ReadonlySet<string>,
+): ItineraryImportDraft {
+  if (previous.jobKey !== incoming.jobKey) return incoming;
+  const previousRows = itineraryDraftEntries(previous);
+  const previousEntries = new Map(previousRows.map((entry) => [entry.entryId, entry]));
+  const protectedOrganization = new Set(organizedEntryIds);
+  previousRows.forEach((entry, index) => {
+    if (!organizedEntryIds.has(entry.entryId) || !entry.stayAnchorEntryId) return;
+    const ownerIndex = previousRows.findIndex((candidate) => candidate.entryId === entry.stayAnchorEntryId);
+    if (ownerIndex < 0) return;
+    for (let at = Math.min(index, ownerIndex); at <= Math.max(index, ownerIndex); at += 1) {
+      protectedOrganization.add(previousRows[at].entryId);
+    }
+  });
+  const days = incoming.days.map((day) => ({ ...day, entries: day.entries.map((entry) => {
+    const old = previousEntries.get(entry.entryId);
+    if (!old) return entry;
+    return { ...entry, pointId: old.pointId ?? entry.pointId,
+      ...(positionedEntryIds.has(entry.entryId) ? {
+        latitude: old.latitude, longitude: old.longitude, aliases: old.aliases,
+        flags: old.flags, needsConfirmation: old.needsConfirmation,
+      } : {}),
+      ...(protectedOrganization.has(entry.entryId) ? {
+        isStop: old.isStop, stayAnchorEntryId: old.stayAnchorEntryId, regionContext: old.regionContext,
+      } : {}),
+    };
+  }) }));
+  const pendingConfirmationCount = days.flatMap((day) => day.entries).filter((entry) => entry.needsConfirmation).length;
+  return { ...incoming, days, counts: { ...incoming.counts, pendingConfirmationCount },
+    state: draftState(incoming.notices, pendingConfirmationCount, incoming.counts.recognizedEntryCount),
+  };
+}
+
+/** Initial model choices use the existing editable point fields, never new geometry. */
+export type ItineraryOrganizationDecision = {
+  index: number;
+  isStop?: boolean;
+  stayAnchorIndex?: number | null;
+  regionContext?: string | null;
+};
+
+export function applyItineraryOrganization(
+  draft: ItineraryImportDraft,
+  decisions: readonly ItineraryOrganizationDecision[],
+  protectedEntryIds: ReadonlySet<string> = new Set(),
+): ItineraryImportDraft {
+  const entries = itineraryDraftEntries(draft);
+  const protectedIds = new Set(protectedEntryIds);
+  // An explicit owner choice also fixes the intervening via span and target.
+  // A late model promotion inside that span must not invalidate human ownership.
+  entries.forEach((entry, index) => {
+    if (!protectedEntryIds.has(entry.entryId) || !entry.stayAnchorEntryId) return;
+    const ownerIndex = entries.findIndex((candidate) => candidate.entryId === entry.stayAnchorEntryId);
+    if (ownerIndex < 0) return;
+    for (let at = Math.min(index, ownerIndex); at <= Math.max(index, ownerIndex); at += 1) {
+      protectedIds.add(entries[at].entryId);
+    }
+  });
+  const byIndex = new Map<number, ItineraryOrganizationDecision>();
+  for (const decision of decisions) {
+    if (Number.isInteger(decision.index) && decision.index >= 0
+      && decision.index < entries.length && !byIndex.has(decision.index)) {
+      byIndex.set(decision.index, decision);
+    }
+  }
+  const proposed = entries.map((entry, index) => {
+    const decision = byIndex.get(index);
+    if (!decision || protectedIds.has(entry.entryId)
+      || entry.flags.includes("source-invalid") || entry.flags.includes("truncated")) return entry;
+    const region = decision.regionContext;
+    const regionValid = region === null || (typeof region === "string"
+      && region.trim().length <= 120 && !/[\r\n\x00-\x1f]/.test(region));
+    return {
+      ...entry,
+      pointId: entry.pointId ?? newCanonicalRoutePointId(),
+      isStop: isNonPlaceRole(entry.role) || isEndpointOnlyLeg(entry) ? false
+        : typeof decision.isStop === "boolean" ? decision.isStop
+          : entry.isStop ?? isStopRole(entry.role),
+      ...(regionValid ? { regionContext: region?.trim() || null } : {}),
+    };
+  });
+  const isStop = (entry: ItineraryEntryDraft) => !isNonPlaceRole(entry.role)
+    && !isEndpointOnlyLeg(entry) && !entry.flags.includes("source-invalid")
+    && !entry.flags.includes("truncated") && (entry.isStop ?? isStopRole(entry.role));
+  const stopIndices = proposed.flatMap((entry, index) => isStop(entry) ? [index] : []);
+  const nextEntries = proposed.map((entry, index) => {
+    const decision = protectedIds.has(entry.entryId) ? undefined : byIndex.get(index);
+    const anchorIndex = decision?.stayAnchorIndex;
+    const anchorId = anchorIndex === null ? null
+      : Number.isInteger(anchorIndex) && typeof anchorIndex === "number"
+        ? proposed[anchorIndex]?.entryId ?? null : entry.stayAnchorEntryId ?? null;
+    const ownerIndex = proposed.findIndex((candidate) => candidate.entryId === anchorId);
+    const previous = stopIndices.filter((stopIndex) => stopIndex < index).at(-1);
+    const next = stopIndices.find((stopIndex) => stopIndex > index);
+    const valid = !isStop(entry) && ownerIndex >= 0 && isStop(proposed[ownerIndex])
+      && (ownerIndex === previous || ownerIndex === next);
+    return { ...entry, stayAnchorEntryId: valid ? anchorId : null };
+  });
+  const byId = new Map(nextEntries.map((entry) => [entry.entryId, entry]));
+  return { ...draft, days: draft.days.map((day) => ({ ...day,
+    entries: day.entries.map((entry) => byId.get(entry.entryId) ?? entry),
+  })) };
+}
+
+function itineraryEntryCanBeStop(entry: ItineraryEntryDraft) {
+  return !isNonPlaceRole(entry.role)
+    && !isEndpointOnlyLeg(entry)
+    && !entry.flags.includes("source-invalid")
+    && !entry.flags.includes("truncated");
+}
+
+export function itineraryEntryOrganizationTargets(
+  draft: ItineraryImportDraft,
+  entryId: string,
+) {
+  const entries = itineraryDraftEntries(draft);
+  const index = entries.findIndex((entry) => entry.entryId === entryId);
+  if (index < 0) return { previous: null, next: null, current: null, needsCorrection: false };
+  const point = entries[index];
+  const isStop = (entry: ItineraryEntryDraft) => itineraryEntryCanBeStop(entry)
+    && (entry.isStop ?? isStopRole(entry.role));
+  let previous: ItineraryEntryDraft | null = null;
+  for (let at = index - 1; at >= 0; at -= 1) {
+    if (isStop(entries[at])) {
+      previous = entries[at];
+      break;
+    }
+  }
+  let next: ItineraryEntryDraft | null = null;
+  for (let at = index + 1; at < entries.length; at += 1) {
+    if (isStop(entries[at])) {
+      next = entries[at];
+      break;
+    }
+  }
+  const current = point.stayAnchorEntryId
+    ? entries.find((entry) => entry.entryId === point.stayAnchorEntryId) ?? null
+    : null;
+  return {
+    previous,
+    next,
+    current,
+    needsCorrection: Boolean(point.stayAnchorEntryId)
+      && current?.entryId !== previous?.entryId
+      && current?.entryId !== next?.entryId,
+  };
+}
+
 /**
  * The entries a member gets by default: everything the source listed as a real
  * plan item and that has a position to put on the Route. An entry the source
@@ -452,6 +610,7 @@ export function defaultItinerarySelection(
   return itineraryDraftEntries(draft)
     .filter((entry) => (
       !entry.flags.includes("source-invalid")
+      && !entry.flags.includes("truncated")
       && !entry.flags.includes("unresolved-position")
       && !isEndpointOnlyLeg(entry)
       && !isNonPlaceRole(entry.role)
@@ -472,7 +631,7 @@ export function itineraryDraftToRoutePoints(
   selectedEntryIds: readonly string[],
 ): ItineraryRoutePointDraft[] {
   const selected = new Set(selectedEntryIds);
-  return draft.days.flatMap((day) =>
+  const rows = draft.days.flatMap((day) =>
     day.entries
       .filter((entry) => selected.has(entry.entryId))
       .filter((entry) => !isNonPlaceRole(entry.role))
@@ -483,10 +642,11 @@ export function itineraryDraftToRoutePoints(
         role: entry.role,
         point: {
           draftId: `imported-${entry.entryId}`,
+          id: entry.pointId,
           latitude: entry.latitude as number,
           longitude: entry.longitude as number,
           label: entry.name,
-          isStop: isStopRole(entry.role),
+          isStop: entry.isStop ?? isStopRole(entry.role),
           occurredAt: day.yearConfirmed ? day.calendarDate : null,
           note: null,
           // #514: preserve source-backed stay/role evidence on the canonical
@@ -498,6 +658,20 @@ export function itineraryDraftToRoutePoints(
         },
       })),
   );
+  const entries = new Map(itineraryDraftEntries(draft).map((entry) => [entry.entryId, entry]));
+  const byEntry = new Map(rows.map((row) => [row.entryId, row]));
+  const stopIndices = rows.flatMap((row, index) => row.point.isStop ? [index] : []);
+  return rows.map((row, index) => {
+    const owner = byEntry.get(entries.get(row.entryId)?.stayAnchorEntryId ?? "");
+    const previous = stopIndices.filter((stopIndex) => stopIndex < index).at(-1);
+    const next = stopIndices.find((stopIndex) => stopIndex > index);
+    const adjacent = owner && ((previous !== undefined && rows[previous] === owner)
+      || (next !== undefined && rows[next] === owner));
+    return { ...row, point: { ...row.point,
+      stayAnchorRoutePointId: !row.point.isStop && owner?.point.isStop && adjacent
+        ? owner.point.id ?? null : null,
+    } };
+  });
 }
 
 export type ItineraryApplyResult = {
@@ -562,15 +736,20 @@ export function applyItineraryImport(
 
   const at = options.insertAtIndex ?? existing.length;
   const index = Math.max(0, Math.min(at, existing.length));
-  return {
-    routePoints: [
-      ...existing.slice(0, index),
-      ...additions,
-      ...existing.slice(index),
-    ],
-    addedRoutePointCount: additions.length,
-    replayed: false,
-  };
+  let routePoints = [
+    ...existing.slice(0, index),
+    ...additions,
+    ...existing.slice(index),
+  ];
+  const ownerDraftById = new Map([...existing, ...imported.map((item) => item.point)]
+    .flatMap((point) => point.id ? [[point.id, point.draftId] as const] : []));
+  for (const point of additions) {
+    if (point.isStop || !point.stayAnchorRoutePointId) continue;
+    const targetDraftId = ownerDraftById.get(point.stayAnchorRoutePointId);
+    routePoints = setRoutePointStayAnchor(routePoints, point.draftId, null);
+    if (targetDraftId) routePoints = setRoutePointStayAnchor(routePoints, point.draftId, targetDraftId);
+  }
+  return { routePoints, addedRoutePointCount: additions.length, replayed: false };
 }
 
 export function withAddedRoutePointCount(
@@ -585,6 +764,7 @@ export function withAddedRoutePointCount(
 
 /** The Route Point fields an import may ever write. Nothing else is invented. */
 export const IMPORTED_ROUTE_POINT_FIELDS: ReadonlyArray<keyof RoutePointInput> = [
+  "id",
   "latitude",
   "longitude",
   "label",
@@ -594,4 +774,5 @@ export const IMPORTED_ROUTE_POINT_FIELDS: ReadonlyArray<keyof RoutePointInput> =
   "regionContext",
   "placeRole",
   "overviewVisibility",
+  "stayAnchorRoutePointId",
 ];

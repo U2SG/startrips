@@ -3522,6 +3522,102 @@
   font-size: 11px;
 }
 
+.journey-itinerary-import__source-reopen,
+.journey-itinerary-import__cancel {
+  min-height: var(--mobile-control-hit-size, 44px);
+  justify-self: start;
+  padding: 0 12px;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-text);
+  cursor: pointer;
+}
+
+.journey-itinerary-import__days ul > li.journey-itinerary-import__entry {
+  display: grid;
+  gap: 8px;
+}
+
+.journey-itinerary-import__entry-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  width: 100%;
+}
+
+.journey-itinerary-import__entry-main > button,
+.journey-itinerary-import__entry-details button {
+  min-height: var(--mobile-control-hit-size, 44px);
+}
+
+.journey-itinerary-import__entry-kind {
+  color: #708882;
+  font-size: 11px;
+}
+
+.journey-itinerary-import__entry-details {
+  width: 100%;
+  color: #8ea39d;
+}
+
+.journey-itinerary-import__entry-details > summary {
+  min-height: var(--mobile-control-hit-size, 44px);
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  cursor: pointer;
+  color: #718983;
+  font-size: 12px;
+}
+
+.journey-itinerary-import__entry-details-body {
+  display: grid;
+  gap: 8px;
+  padding: 2px 0 8px 32px;
+}
+
+.journey-itinerary-import__organization {
+  display: grid;
+  gap: 6px;
+}
+
+.journey-itinerary-import__organization > span {
+  color: #718983;
+  font-size: 11px;
+}
+
+.journey-itinerary-import__organization [role="group"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.journey-itinerary-import__organization button {
+  padding: 0 12px;
+  border: 1px solid rgba(122, 244, 237, 0.16);
+  background: transparent;
+  color: #9fb5af;
+  cursor: pointer;
+}
+
+.journey-itinerary-import__organization button[aria-pressed="true"] {
+  border-color: rgba(122, 244, 237, 0.44);
+  color: #d0eeea;
+  background: rgba(122, 244, 237, 0.08);
+}
+
+@media (max-width: 640px) {
+  .journey-itinerary-import__entry-details-body {
+    padding-left: 0;
+  }
+
+  .journey-itinerary-import__organization [role="group"] {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}
+
 .journey-itinerary-import__flag {
   padding: 2px 8px;
   border: 1px solid rgba(224, 162, 162, 0.35);
@@ -5096,6 +5192,9 @@
 .journey-composer__import-shortcut {
   width: 100%;
   margin-bottom: 12px;
+  border-color: var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-text);
 }
 
 .journey-itinerary-import-panel {
@@ -8721,7 +8820,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
  * its own and cannot drift from `src/journey/mobileLayout.ts`.
  */
 /* The single scroll owner of the active task. */
-.journey-composer[data-mobile-layout="true"] .journey-composer__editor {
+.journey-composer--focused .journey-composer__editor {
   height: 100%;
   display: block;
   overflow-y: auto;
@@ -8729,14 +8828,23 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   scroll-padding: 64px 0 24px;
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__task {
+.journey-composer--focused .journey-composer__task {
   min-width: 0;
   display: block;
   overflow: visible;
   padding: 22px 18px 32px;
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__task-header {
+/* Keep suspended cards/import work mounted without leaving a painted or
+   interactive second surface. Author display rules must respect `hidden`. */
+.living-atlas .living-atlas__active[hidden],
+.living-atlas .mobile-v2__journey-chip[hidden],
+.living-atlas .mobile-v2__sheet-layer[hidden],
+.journey-composer--focused [data-composer-location-tools][hidden] {
+  display: none;
+}
+
+.journey-composer--focused .journey-composer__task-header {
   position: sticky;
   z-index: 3;
   top: 0;
@@ -8751,7 +8859,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   backdrop-filter: blur(14px);
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__task-header h3 {
+.journey-composer--focused .journey-composer__task-header h3 {
   margin: 0;
   color: #cfe2dc;
   font-family: var(--archive-serif);
@@ -8759,7 +8867,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   font-weight: 400;
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__task-back {
+.journey-composer--focused .journey-composer__task-back {
   min-width: 44px;
   min-height: 44px;
   display: inline-flex;
@@ -8772,7 +8880,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   font-size: 11px;
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__task-entries {
+.journey-composer--focused .journey-composer__task-entries {
   position: relative;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8780,7 +8888,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   margin: 16px 0 26px;
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__task-entries > button {
+.journey-composer--focused .journey-composer__task-entries > button {
   min-height: 56px;
   display: grid;
   align-content: center;
@@ -8793,7 +8901,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   text-align: left;
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__task-entries > button small {
+.journey-composer--focused .journey-composer__task-entries > button small {
   overflow: hidden;
   color: #5f756f;
   font-size: 10px;
@@ -8801,7 +8909,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   white-space: nowrap;
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__task-more {
+.journey-composer--focused .journey-composer__task-more {
   grid-column: 1 / -1;
   min-height: 44px;
   display: flex;
@@ -8810,7 +8918,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   gap: 6px;
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__more-menu {
+.journey-composer--focused .journey-composer__more-menu {
   position: absolute;
   z-index: 4;
   top: calc(100% + 6px);
@@ -8825,7 +8933,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.55);
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__more-menu button {
+.journey-composer--focused .journey-composer__more-menu button {
   min-height: 52px;
   display: grid;
   align-content: center;
@@ -8838,7 +8946,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   text-align: left;
 }
 
-.journey-composer[data-mobile-layout="true"] .journey-composer__more-menu button small {
+.journey-composer--focused .journey-composer__more-menu button small {
   overflow: hidden;
   color: #5f756f;
   font-size: 10px;
@@ -8853,6 +8961,220 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .journey-composer[data-mobile-layout="true"] .journey-composer__footer {
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+/* #512 follow-up: one editing surface, with optional work in explicit tasks. */
+.journey-composer--focused {
+  width: min(880px, 100%);
+}
+
+.journey-composer--focused .journey-composer__header {
+  min-height: 80px;
+  padding: 16px 24px;
+}
+
+.journey-composer--focused .journey-composer__header h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.journey-composer--focused .journey-composer__section-heading {
+  margin-bottom: 16px;
+}
+
+.journey-composer--focused .journey-composer__section-heading h3 {
+  font-size: 24px;
+}
+
+.journey-composer--focused .journey-composer__task {
+  padding: 24px;
+}
+
+.journey-composer--focused .journey-composer__task-header {
+  margin: -24px -24px 24px;
+  padding: 8px 24px;
+}
+
+.journey-composer--focused .journey-composer__task-entries {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 24px 0 32px;
+}
+
+.journey-composer--focused .journey-composer__task-more {
+  grid-column: auto;
+}
+
+.journey-composer--focused .journey-route-draft > li:not(.is-empty) {
+  grid-template-columns: 24px minmax(0, 1fr) 44px;
+  gap: 8px;
+  padding: 8px;
+}
+
+.journey-composer--focused .journey-route-draft__actions {
+  grid-column: auto;
+}
+
+.journey-composer--focused .journey-route-draft__menu {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.journey-composer--focused .journey-route-draft__menu > button:not(.is-destructive-secondary) {
+  border-color: var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-text);
+}
+
+.journey-itinerary-import__result-heading,
+.journey-itinerary-import__busy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 16px 0;
+}
+
+.journey-itinerary-import__result-heading h3 {
+  margin: 0;
+  color: var(--atlas-text);
+  font-size: 18px;
+  font-weight: 400;
+}
+
+.journey-itinerary-import__result-heading > span {
+  color: var(--archive-muted);
+  font-size: 12px;
+}
+
+.journey-itinerary-import__busy {
+  justify-content: space-between;
+  color: var(--archive-muted);
+  font-size: 12px;
+}
+
+.journey-itinerary-import__busy button,
+.journey-itinerary-import__source-notes > summary,
+.journey-itinerary-import__day > summary,
+.journey-itinerary-import__entry-main .journey-checkbox {
+  min-height: var(--mobile-control-hit-size, 44px);
+}
+
+.journey-itinerary-import__source-notes > summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  cursor: pointer;
+  color: var(--archive-muted);
+  font-size: 12px;
+}
+
+.journey-itinerary-import__day > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--atlas-line);
+  cursor: pointer;
+}
+
+.journey-itinerary-import__day > summary > span:first-child {
+  flex: 1;
+  display: grid;
+  gap: 8px;
+}
+
+.journey-itinerary-import__day > summary small,
+.journey-itinerary-import__day > summary > span:nth-child(2) {
+  color: var(--archive-muted);
+  font-size: 12px;
+}
+
+.journey-itinerary-import__day > summary::-webkit-details-marker {
+  display: none;
+}
+
+.journey-itinerary-import__day[open] > summary > svg {
+  transform: rotate(180deg);
+}
+
+.journey-itinerary-import__days {
+  gap: 8px;
+}
+
+.journey-itinerary-import__day > ul {
+  margin: 16px 0 24px;
+}
+
+.journey-composer .journey-itinerary-import__days ul > li.journey-itinerary-import__entry {
+  position: relative;
+  display: block;
+  padding: 8px 0;
+}
+
+.journey-composer .journey-itinerary-import__entry-main {
+  min-height: 44px;
+  padding-right: 112px;
+}
+
+.journey-composer .journey-itinerary-import__entry-details > summary {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  min-width: 96px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--archive-muted);
+}
+
+.journey-composer .journey-itinerary-import__day > summary,
+.journey-composer .journey-itinerary-import__source-notes > summary {
+  border-left: 0;
+  background: transparent;
+}
+
+.journey-composer .journey-composer__pending-media-notice > summary {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--archive-muted);
+  font-size: 12px;
+}
+
+.journey-composer__pending-media-notice ul {
+  max-height: 120px;
+  overflow: auto;
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .journey-composer--focused .journey-composer__header {
+    padding: 16px;
+  }
+  .journey-composer--focused .journey-composer__task {
+    padding: 24px 16px;
+  }
+  .journey-composer--focused .journey-composer__task-header {
+    margin-right: -16px;
+    margin-left: -16px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+  .journey-composer--focused .journey-composer__task-entries {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .journey-composer--focused .journey-composer__task-more {
+    grid-column: 1 / -1;
+  }
+  .journey-itinerary-import__day > summary {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 }
 
 /* #375: media belongs to the Route Point it was taken at. */

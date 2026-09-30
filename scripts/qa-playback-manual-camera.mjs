@@ -482,6 +482,13 @@ async function enterDetail(page) {
 }
 
 async function startPlayback(page) {
+  // A Story return can restore its Route Point card. Close that card through
+  // the user control before using the restored Journey card's Playback entry.
+  const context = page.locator(".living-atlas__route-point-context");
+  if (await context.isVisible()) {
+    await context.locator("[data-route-point-context-close]").click();
+    await context.waitFor({ state: "detached" });
+  }
   const play = page.locator(".living-atlas__active-play");
   await play.click();
   const menu = page.locator('.living-atlas__playback-mode-menu [data-playback-mode-option="full"]');

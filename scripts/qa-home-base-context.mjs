@@ -707,12 +707,15 @@ try {
   await globePickPage.locator(".living-atlas__globe-focus-exit").click();
   await globePickPage.getByRole("button", { name: "记录旅程" }).click();
   await globePickPage.locator(".journey-composer").waitFor({ state: "visible", timeout: 5_000 });
+  await globePickPage.locator('.journey-composer__task-more').click();
+  await globePickPage.locator('[data-composer-task-entry="location"]').click();
   await globePickPage.getByRole("button", { name: /直接在地球上取点/ }).click();
   await globePickPage.waitForFunction(() => document.querySelector(".living-atlas")?.classList.contains("is-globe-picking"));
   const pickingCity = globePickPage.locator(".particle-earth-city").filter({ hasText: "北京" }).first();
   await pickingCity.waitFor({ state: "visible", timeout: 5_000 });
   await pickingCity.click();
   await globePickPage.waitForFunction(() => !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking"), null, { timeout: 5_000 });
+  await globePickPage.locator('[data-composer-task-back="location"]').click();
   const acceptedRoutePoint = globePickPage.locator(".journey-route-draft li:not(.is-empty)").first();
   const acceptedCoordinates = [
     Number(await acceptedRoutePoint.getAttribute("data-route-point-latitude")),

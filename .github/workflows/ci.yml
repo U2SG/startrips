@@ -364,6 +364,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload Route Point card QA
+        if: ${{ always() && steps.final-plan.outputs.ledger_only_final != 'true' && contains(matrix.suites, '|route-point-context|') }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: route-point-context-${{ github.run_attempt }}
+          path: artifacts/route-point-context/
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Upload entry boundary QA
         if: ${{ always() && steps.final-plan.outputs.ledger_only_final != 'true' && contains(matrix.suites, '|entry-boundaries|') }}
         uses: actions/upload-artifact@v7.0.1

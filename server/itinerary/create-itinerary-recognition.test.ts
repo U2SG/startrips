@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createItineraryRecognizer } from "./create-itinerary-recognition";
+import { createItineraryRecognizer, reviewItineraryLocations, type ItineraryLocationReviewPlan } from "./create-itinerary-recognition";
 import { pageRecognitionDocument } from "./recognition-document";
 
 /**
@@ -117,5 +117,47 @@ describe("http-model recogniser", () => {
       kind: "text", text: "Day 1 · Mar. 14 · Singapore; 2025 hotel ranking",
     }, {});
     expect(undated.days[0]).toMatchObject({ calendarDate: null, partialDate: "03-14" });
+  });
+});
+
+describe("validated itinerary organization review", () => {
+  const plan: ItineraryLocationReviewPlan = {
+    sourceTitle: "Synthetic route", days: [{ dayNumber: 1, title: "Day 1", region: "Coast" }],
+    entries: Array.from({ length: 5 }, (_, index) => ({ index, name: `Place ${index}`,
+      aliases: [], dayNumber: 1, role: "attraction", sourceInvalid: false,
+      countryCode: "QA", searchArea: "Coast", candidates: [{ id: `provider-${index}`,
+        label: `Place ${index}`, context: "Coast", countryCode: "QA",
+      }],
+    })),
+  };
+  const review = (decisions: unknown[]) => reviewItineraryLocations(plan, {
+    baseUrl: "https://model.example/read", apiKey: null, model: "reader-1", timeoutMs: 1_000,
+    fetcher: async () => new Response(JSON.stringify({ contractVersion: 1, decisions })),
+  });
+
+  it("accepts exact neighboring Stops and strips invented provider IDs and coordinates", async () => {
+    const decisions = await review([
+      { index: 0, isStop: true, stayAnchorIndex: null, candidateId: "provider-0", regionContext: "Town A" },
+      { index: 1, isStop: false, stayAnchorIndex: 0, candidateId: "made-up", latitude: 35, longitude: 120 },
+      { index: 2, isStop: true, stayAnchorIndex: null },
+      { index: 3, isStop: false, stayAnchorIndex: 4 },
+      { index: 4, isStop: true, stayAnchorIndex: null },
+    ]);
+    expect(decisions[0]).toMatchObject({ candidateId: "provider-0", isStop: true, regionContext: "Town A" });
+    expect(decisions[1]).toMatchObject({ candidateId: null, isStop: false, stayAnchorIndex: 0 });
+    expect(decisions[1]).not.toHaveProperty("latitude");
+    expect(decisions[1]).not.toHaveProperty("longitude");
+    expect(decisions[3].stayAnchorIndex).toBe(4);
+  });
+
+  it("rejects self, non-Stop, missing and non-adjacent ownership and malformed regions", async () => {
+    for (const stayAnchorIndex of [1, 3, 4, 99]) {
+      const decisions = await review([
+        { index: 0, isStop: true }, { index: 1, isStop: false, stayAnchorIndex, regionContext: "bad\nregion" },
+        { index: 2, isStop: true }, { index: 3, isStop: false }, { index: 4, isStop: true },
+      ]);
+      expect(decisions[1].stayAnchorIndex).toBeNull();
+      expect(decisions[1]).not.toHaveProperty("regionContext");
+    }
   });
 });

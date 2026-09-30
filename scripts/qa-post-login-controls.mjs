@@ -663,10 +663,9 @@ async function verifyMobileStoryInertOwnership() {
 // below are unchanged; only the navigation to them is.
 async function openComposerTask(page, task) {
   // DOMContentLoaded can precede the async QA entry's first React commit.
-  // Only a mounted Composer can identify the inline desktop layout.
+  // Both layouts enter the same focused task through its real control.
   const composer = page.locator(".journey-composer");
   await composer.waitFor({ state: "visible" });
-  if (await composer.getAttribute("data-mobile-layout") !== "true") return;
   const entry = page.locator(`[data-composer-task-entry="${task}"]`);
   if (await page.locator(`[data-composer-task="${task}"]`).count()) return;
   await leaveComposerTask(page);
@@ -1266,6 +1265,7 @@ async function verifyComposerGlobeRoundTrip() {
     // header, rail and active Journey card before and after suspension.
     resetReverse("success");
     await openFreshComposer(1280, 800);
+    await openComposerTask(page, "location");
     const desktopPickTrigger = page.getByRole("button", { name: /直接在地球上取点/ });
     await desktopPickTrigger.scrollIntoViewIfNeeded();
     await settleRender();

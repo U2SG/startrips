@@ -75,8 +75,13 @@ try {
   await page.locator(".journey-composer").waitFor({ state: "visible" });
 
   await page.locator(".journey-title-field input").fill("Unsaved preview title");
+  await page.locator('[data-composer-task-entry="journey-info"]').click();
   await page.locator(".journey-story-fields textarea").fill("Unsaved Journey note for Playback Preview");
+  await page.locator("[data-composer-task-back]").click();
+  await page.locator(".journey-composer__task-more").click();
+  await page.locator('[data-composer-task-entry="appearance"]').click();
   await page.locator('.journey-light-color-list button[aria-label$="#8ca8df"]').click();
+  await page.locator("[data-composer-task-back]").click();
 
   const targetRow = page.locator('[data-route-point-draft-id="saved-qa-preview-point-2"]');
   await targetRow.locator(".journey-route-draft__summary").click();
@@ -85,22 +90,25 @@ try {
   const pointLabel = targetRow.locator('input[type="text"]').first();
   if (await pointLabel.count()) await pointLabel.fill("Unsaved Route Point label");
 
-  const moveDown = targetRow.getByRole("button", { name: /向后移动/ });
+  const moveDown = targetRow.getByRole("menuitem", { name: /向后移动/ });
+  await targetRow.getByRole("button", { name: /更多操作/ }).click();
   await moveDown.click();
   await page.waitForFunction(() => (
     document.querySelector('[data-route-point-draft-id="saved-qa-preview-point-2"]')?.getAttribute("data-route-point-position") === "4"
   ));
 
+  await page.locator('[data-composer-task-entry="media"]').click();
   await page.locator('.journey-media-picker input[type="file"]').setInputFiles({
     name: "local-pending.jpg",
     mimeType: "image/jpeg",
     buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
   });
+  await page.locator("[data-composer-task-back]").click();
 
-  await page.locator(".journey-composer__route").evaluate((element) => { element.scrollTop = 180; });
+  await page.locator(".journey-composer__editor").evaluate((element) => { element.scrollTop = 180; });
   await pointNote.focus();
   const before = await page.evaluate(() => {
-    const route = document.querySelector(".journey-composer__route");
+    const route = document.querySelector(".journey-composer__editor");
     const target = document.querySelector('[data-route-point-draft-id="saved-qa-preview-point-2"] textarea');
     return {
       scrollTop: route?.scrollTop ?? -1,
@@ -110,7 +118,18 @@ try {
   });
   if (!before.focusMatches) fail("route-point editing focus was not established", before);
 
+  // Observe the editor at the real preview pointer event. The browser may scroll
+  // a clicked control into view after the preceding focus() measurement; the
+  // return must preserve the position from which Playback actually started.
+  await page.locator("[data-playback-preview-trigger]").evaluate((button) => {
+    button.addEventListener("pointerdown", () => {
+      window.__qaComposerPreviewEntryScrollTop = document.querySelector(".journey-composer__editor")?.scrollTop ?? -1;
+    }, { once: true });
+  });
+
   await page.locator("[data-playback-preview-trigger]").click();
+  before.entryScrollTop = await page.evaluate(() => window.__qaComposerPreviewEntryScrollTop);
+  if (!Number.isFinite(before.entryScrollTop)) fail("preview entry scroll was not observed", before);
   await page.locator(".journey-playback").waitFor({ state: "visible" });
   await page.locator(".journey-playback__intro h2").filter({ hasText: "Unsaved preview title" }).waitFor({ state: "visible" });
   // The overlay becomes visible in the same commit that suspends the Composer,
@@ -166,11 +185,10 @@ try {
     { timeout: 10_000 },
   ).catch(() => {});
   const returned = await page.evaluate(() => {
-    const route = document.querySelector(".journey-composer__route");
+    const route = document.querySelector(".journey-composer__editor");
     const target = document.querySelector('[data-route-point-draft-id="saved-qa-preview-point-2"]');
     return {
       title: document.querySelector(".journey-title-field input")?.value ?? "",
-      journeyNote: document.querySelector(".journey-story-fields textarea")?.value ?? "",
       pointNote: target?.querySelector("textarea")?.value ?? "",
       position: target?.getAttribute("data-route-point-position"),
       expanded: target?.getAttribute("data-route-point-expanded"),
@@ -189,6 +207,9 @@ try {
       targetTextareaPresent: Boolean(target?.querySelector("textarea")),
     };
   });
+  await page.locator('[data-composer-task-entry="journey-info"]').click();
+  returned.journeyNote = await page.locator(".journey-story-fields textarea").inputValue();
+  await page.locator("[data-composer-task-back]").click();
   if (
     returned.title !== "Unsaved preview title"
     || returned.journeyNote !== "Unsaved Journey note for Playback Preview"
@@ -198,7 +219,7 @@ try {
     || !returned.focusMatches
     || returned.returnFocusKind !== "editor"
     || returned.composerVisibility !== "visible"
-    || Math.abs(returned.scrollTop - before.scrollTop) > 2
+    || Math.abs(returned.scrollTop - before.entryScrollTop) > 2
   ) fail("Composer return context changed after Playback Preview", { before, returned });
 
   // A user-initiated failed save leaves the draft in place. Previewing again

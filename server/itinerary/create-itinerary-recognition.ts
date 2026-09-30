@@ -12,6 +12,7 @@
  * credential is read here and never leaves the server.
  */
 
+import type { ItineraryOrganizationDecision } from "../../src/journey/itineraryImport";
 import {
   ItineraryImportStageError,
   ItineraryRecognitionUnavailableError,
@@ -39,7 +40,7 @@ export type ItineraryLocationReviewPlan = {
   }>;
 };
 
-export type ItineraryLocationReviewDecision = {
+export type ItineraryLocationReviewDecision = ItineraryOrganizationDecision & {
   index: number;
   candidateId: string | null;
   correctedQuery: string | null;
@@ -96,9 +97,43 @@ export async function reviewItineraryLocations(
         && decision.correctedQuery.length <= 120
         && !/[\r\n\x00-\x1f]/.test(decision.correctedQuery)
           ? decision.correctedQuery.trim() : null;
-      decisions.push({ index, candidateId, correctedQuery });
+      const anchor = decision.stayAnchorIndex;
+      const anchorValid = anchor === null || (typeof anchor === "number"
+        && Number.isInteger(anchor) && anchor !== index
+        && plan.entries.some((candidate) => candidate.index === anchor && !candidate.sourceInvalid));
+      const region = decision.regionContext;
+      const regionValid = region === null || (typeof region === "string"
+        && region.trim().length <= 120 && !/[\r\n\x00-\x1f]/.test(region));
+      decisions.push({
+        index,
+        candidateId,
+        correctedQuery,
+        ...(typeof decision.isStop === "boolean" && !entry.sourceInvalid
+          ? { isStop: decision.isStop } : {}),
+        ...(anchorValid ? { stayAnchorIndex: anchor as number | null } : {}),
+        ...(regionValid
+          ? { regionContext: typeof region === "string" ? region.trim() || null : null }
+          : {}),
+      });
     }
-    return decisions;
+
+    // The model may only bind a via to the exact nearest previous/next Stop it
+    // classified in this same ordered plan. Invalid/self/non-Stop/non-adjacent
+    // targets collapse to independent rather than becoming stored authority.
+    const stopIndexes = decisions
+      .filter((decision) => decision.isStop === true)
+      .map((decision) => decision.index)
+      .sort((left, right) => left - right);
+    return decisions.map((decision) => {
+      if (decision.isStop === undefined && decision.stayAnchorIndex === undefined) return decision;
+      if (decision.isStop === true) return { ...decision, stayAnchorIndex: null };
+      const previous = stopIndexes.filter((index) => index < decision.index).at(-1);
+      const next = stopIndexes.find((index) => index > decision.index);
+      const requested = decision.stayAnchorIndex;
+      const validOwner = requested !== null && requested !== undefined
+        && (requested === previous || requested === next);
+      return { ...decision, stayAnchorIndex: validOwner ? requested : null };
+    });
   }, "ai-review");
 }
 

@@ -596,8 +596,7 @@ try {
     await empty.context.close();
   }
 
-  // Desktop shares the architecture but keeps its inline layout: the task
-  // surface must not leak into it.
+  // #512 follow-up: desktop now uses the same focused task hierarchy.
   const desktop = await openComposer(browser, { width: 1280, height: 900 });
   try {
     const inline = await desktop.page.evaluate(() => ({
@@ -610,18 +609,18 @@ try {
       picker: document.querySelectorAll(".journey-media-picker").length,
       recordedTracks: document.querySelectorAll('.journey-recorded-tracks input[type="file"]').length,
     }));
-    record("composer-mobile-ia:desktop:inline-architecture", { inline },
+    record("composer-mobile-ia:desktop:focused-architecture", { inline },
       inline.mobileLayout === null
-      && inline.taskPanels === 0
-      && inline.narrative === 1
-      && inline.dates === 2
-      && inline.lights === 1
-      && inline.precise === 1
-      && inline.picker === 1
-      && inline.recordedTracks === 1
+      && inline.taskPanels === 1
+      && inline.narrative === 0
+      && inline.dates === 0
+      && inline.lights === 0
+      && inline.precise === 0
+      && inline.picker === 0
+      && inline.recordedTracks === 0
       && desktop.pageErrors.length === 0);
 
-    const recordedTrackKeyboard = await exerciseRecordedTrackKeyboard(desktop.page, "desktop");
+    const recordedTrackKeyboard = await exerciseRecordedTrackKeyboard(desktop.page, "desktop", { mobileTask: true });
     record("composer-mobile-ia:desktop:recorded-track-keyboard", { recordedTrackKeyboard },
       recordedTrackKeyboard.fileFocused
       && recordedTrackKeyboard.importFocused
