@@ -34,14 +34,19 @@ async function open({ mode = "explore", density = "sequence", scenario = "direct
   let releaseTargetBytes = () => undefined;
   if (holdTargetBytes) {
     const gate = new Promise((resolve) => { releaseTargetBytes = resolve; });
-    const asset = holdTargetBytes === "video" ? "east-star-orbit.webm" : "greek-amphora.jpg";
+    const asset = holdTargetBytes === "video" ? "qa-vertical-drift.webm" : "greek-amphora.jpg";
     await page.route(`**/${asset}`, async (route) => { await gate; await route.continue(); });
   }
   const params = new URLSearchParams({ qaState: "media-motion-lab", mode, density, scenario });
-  await page.goto(`${origin}/?${params}`, { waitUntil: "domcontentloaded" });
-  await page.locator("[data-media-motion-lab]").waitFor({ timeout: 20_000 });
-  if (density !== "empty") {
-    await page.locator('[data-media-motion-lab][data-stage-covered="true"]').waitFor({ timeout: 20_000 });
+  try {
+    await page.goto(`${origin}/?${params}`, { waitUntil: "domcontentloaded" });
+    await page.locator("[data-media-motion-lab]").waitFor({ timeout: 20_000 });
+    if (density !== "empty") {
+      await page.locator('[data-media-motion-lab][data-stage-covered="true"]').waitFor({ timeout: 20_000 });
+    }
+  } catch (error) {
+    await page.close();
+    throw error;
   }
   return { page, errors, mode, density, scenario, viewport: viewport.name, reducedMotion, releaseTargetBytes };
 }
@@ -70,6 +75,28 @@ async function run(name, config, exercise) {
   } finally {
     await opened?.page.close();
   }
+}
+
+async function observeNextSharedClone(page) {
+  await page.evaluate(() => {
+    window.__mediaMotionLabCloneCapture = null;
+    const observer = new MutationObserver((mutations) => {
+      const clone = mutations.flatMap((mutation) => [...mutation.addedNodes])
+        .find((node) => node instanceof HTMLElement && node.dataset.sharedElementClone === "media-motion-lab");
+      if (!(clone instanceof HTMLElement)) return;
+      const rect = clone.getBoundingClientRect();
+      window.__mediaMotionLabCloneCapture = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true });
+  });
+}
+
+async function capturedSharedClone(page) {
+  await page.waitForFunction(() => window.__mediaMotionLabCloneCapture !== null, null, { timeout: 3_000 });
+  const rect = await page.evaluate(() => window.__mediaMotionLabCloneCapture);
+  assert.ok(rect.width > 0 && rect.height > 0, "shared-element clone has paintable geometry");
+  return rect;
 }
 
 for (const mode of ["explore", "playback"]) {
@@ -219,20 +246,21 @@ await run("shared-entry-return", { mode: "explore", density: "single", scenario:
   const source = page.locator("[data-lab-shared-source]");
   const target = page.locator('[data-shared-media-id="lab-1"]');
   await target.waitFor();
+  await source.evaluate((image) => image.decode());
   const sourceRect = await source.boundingBox();
   const targetRect = await target.boundingBox();
   assert.ok(sourceRect && targetRect && sourceRect.width < targetRect.width);
+  await observeNextSharedClone(page);
   await page.getByRole("button", { name: "Enter immersive" }).click();
-  const clone = page.locator('[data-shared-element-clone="media-motion-lab"]');
-  await clone.waitFor({ state: "attached", timeout: 3_000 });
-  const cloneRect = await clone.boundingBox();
-  assert.ok(cloneRect && cloneRect.width > 0);
+  const cloneRect = await capturedSharedClone(page);
   await page.locator("[data-lab-stage].is-immersive").waitFor();
   const immersiveRect = await target.boundingBox();
   assert.ok(immersiveRect && immersiveRect.width > targetRect.width);
+  await observeNextSharedClone(page);
   await page.getByRole("button", { name: "Return from immersive" }).click();
+  const returnCloneRect = await capturedSharedClone(page);
   await page.locator("[data-lab-stage]:not(.is-immersive)").waitFor();
-  return { sourceRect, targetRect, cloneRect, immersiveRect };
+  return { sourceRect, targetRect, cloneRect, immersiveRect, returnCloneRect };
 });
 
 await run("reduced-motion-same-owner", { mode: "explore", density: "few", scenario: "direct", reducedMotion: true }, async (page) => {
