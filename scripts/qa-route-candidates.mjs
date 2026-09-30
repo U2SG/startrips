@@ -18,6 +18,12 @@ const browser = await launchQaBrowser({
 const evidence = { requests: [], writes: [], stages: [] };
 let failNext = false;
 let availabilityRequests = 0;
+let pendingCandidateGate = null;
+const latch = () => {
+  let resolve;
+  const promise = new Promise((ready) => { resolve = ready; });
+  return { promise, resolve };
+};
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
 async function openPage(policy = "default") {
@@ -33,6 +39,11 @@ async function openPage(policy = "default") {
   await page.route(/\/api\/journey-route-segments\/journeys\/.*\/segments\/.*\/candidates$/, async (route) => {
     const body = route.request().postDataJSON();
     evidence.requests.push({ sourceKey: body.sourceKey, revision: body.revision, profile: body.profile });
+    const gate = pendingCandidateGate;
+    if (gate) {
+      gate.started.resolve();
+      await gate.release.promise;
+    }
     if (failNext) {
       failNext = false;
       return json(route, { error: "ROUTING_UNAVAILABLE", message: "Road routing is temporarily unavailable" }, 503);
@@ -49,7 +60,13 @@ async function openPage(policy = "default") {
       },
       confirmationToken: `qa-token-${index + 1}`,
     }));
-    return json(route, { sourceKey: body.sourceKey, revision: body.revision, candidates });
+    try {
+      return await json(route, { sourceKey: body.sourceKey, revision: body.revision, candidates });
+    } catch (error) {
+      if (!gate || route.request().failure()?.errorText !== "net::ERR_ABORTED") throw error;
+    } finally {
+      gate?.completed.resolve();
+    }
   });
   await page.route(/\/api\/journey-route-segments\/journeys\/.*\/segments\/[^/]+\/[^/]+$/, async (route) => {
     if (route.request().method() !== "PUT") return route.continue();
@@ -169,6 +186,26 @@ try {
     "provider failure hid or promoted the original route");
   assert(evidence.requests.length === 3 && evidence.writes.map((write) => write.action).join(",") === "confirm,shape,none",
     `unexpected request/save sequence: ${JSON.stringify(evidence)}`);
+
+  const gate = { started: latch(), release: latch(), completed: latch() };
+  pendingCandidateGate = gate;
+  const abortedRequest = page.waitForEvent("requestfailed", {
+    predicate: (request) => /\/candidates$/.test(new URL(request.url()).pathname),
+  });
+  await page.getByRole("button", { name: "查看候选" }).click();
+  await gate.started.promise;
+  await page.locator(".route-candidate-editor select").nth(1).selectOption("");
+  const aborted = await abortedRequest;
+  gate.release.resolve();
+  await gate.completed.promise;
+  pendingCandidateGate = null;
+  const cancelled = await readMap(page);
+  evidence.stages.push({ name: "profile-cancelled", ...cancelled, requestFailure: aborted.failure()?.errorText });
+  assert(cancelled.previewCount === 0 && cancelled.renderedPreviewCount === 0
+    && await page.getByRole("button", { name: "路线 1", exact: true }).count() === 0
+    && await page.getByRole("button", { name: "查看候选" }).isDisabled(),
+    "late candidate response survived the changed routing profile");
+  assert(evidence.requests.length === 4 && evidence.writes.length === 3, "cancelled candidate request wrote route history");
   assert(pageErrors.length === 0, `browser errors: ${pageErrors.join(" | ")}`);
   await page.close();
 
@@ -179,6 +216,7 @@ try {
   await particle.page.close();
   console.log(JSON.stringify({ result: "PASS", evidence }));
 } finally {
+  pendingCandidateGate?.release.resolve();
   await fs.writeFile(`${artifactDir}/evidence.json`, JSON.stringify(evidence, null, 2));
   await browser.close();
 }

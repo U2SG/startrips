@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Marker, type Map as MapLibreMap, type GeoJSONSource } from "maplibre-gl";
 import type { FeatureCollection, LineString } from "geojson";
 import {
@@ -34,6 +34,15 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   const [message, setMessage] = useState("");
   const requestRef = useRef<AbortController | null>(null);
   const requestEpochRef = useRef(0);
+  const cancelCandidateRequest = useCallback(() => {
+    requestEpochRef.current += 1;
+    const pending = requestRef.current;
+    pending?.abort();
+    requestRef.current = null;
+    if (pending) setBusy(false);
+    setCandidates([]);
+    setCandidateIndex(0);
+  }, []);
   const selected = route?.points[selectedIndex];
   const next = route?.points[selectedIndex + 1];
   const sourceKey = route ? routeSegmentSourceKey(route.points, selectedIndex) : null;
@@ -76,22 +85,26 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   }, [route?.points.length]);
 
   useEffect(() => {
-    requestEpochRef.current += 1;
-    requestRef.current?.abort();
-    requestRef.current = null;
-    setCandidates([]);
-    setCandidateIndex(0);
+    cancelCandidateRequest();
     setBusy(false);
     setDraftShapes(record?.shapePoints ?? []);
     setAdding(false);
-  }, [journeyId, sourceKey, revision, selectedIndex]);
+  }, [cancelCandidateRequest, journeyId, sourceKey, revision, selectedIndex]);
+
+  useEffect(() => {
+    cancelCandidateRequest();
+  }, [active, cancelCandidateRequest, open, profile]);
 
   useEffect(() => {
     onEditModeChange(active && open && editMode);
     return () => onEditModeChange(false);
   }, [active, editMode, onEditModeChange, open]);
 
-  useEffect(() => () => requestRef.current?.abort(), []);
+  useEffect(() => () => {
+    requestEpochRef.current += 1;
+    requestRef.current?.abort();
+    requestRef.current = null;
+  }, []);
 
   const previewData = useMemo<FeatureCollection<LineString, { color: string; selected: boolean }>>(() => ({
     type: "FeatureCollection",
@@ -188,7 +201,10 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
       if (epoch !== requestEpochRef.current || controller.signal.aborted) return;
       setMessage(error instanceof Error ? error.message : "路线请求失败，原路线已保留。");
     } finally {
-      if (epoch === requestEpochRef.current) setBusy(false);
+      if (epoch === requestEpochRef.current) {
+        requestRef.current = null;
+        setBusy(false);
+      }
     }
   }
 
@@ -223,7 +239,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
         <div className="route-candidate-editor__panel">
           <div className="route-candidate-editor__head">
             <strong>这一段怎么走</strong>
-            <button type="button" onClick={() => { setOpen(false); setEditMode(false); setDraftShapes(record?.shapePoints ?? []); setCandidates([]); }}>关闭</button>
+            <button type="button" onClick={() => { cancelCandidateRequest(); setOpen(false); setEditMode(false); setDraftShapes(record?.shapePoints ?? []); }}>关闭</button>
           </div>
           <label>
             路段
@@ -237,7 +253,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
           </label>
           <label>
             交通方式
-            <select value={profile} onChange={(event) => { setProfile(event.target.value as RoadProfile | ""); setCandidates([]); }}>
+            <select value={profile} onChange={(event) => { cancelCandidateRequest(); setProfile(event.target.value as RoadProfile | ""); }}>
               <option value="">请选择</option>
               {availableProfiles.includes("driving") ? <option value="driving">驾车</option> : null}
             </select>
