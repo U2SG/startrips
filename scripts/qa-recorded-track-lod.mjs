@@ -308,10 +308,10 @@ try {
   const detailFrames = await endFrames();
   const expectedSegments = segments.map((segment) => `${journeyId}:recorded:${operationKey}:${segment.id}`);
   record("detail projected-error LOD changes preserve gaps, Stops, shaping order and cache", { detailBefore, detailZooms, detailFrames },
-    detailFrames.count >= 2 && Number.isFinite(detailFrames.p95Ms)
+    detailBefore.error === null && detailFrames.count >= 2 && Number.isFinite(detailFrames.p95Ms)
     && new Set(detailZooms.map((snapshot) => snapshot.key)).size >= 2
     && new Set(detailZooms.map((snapshot) => snapshot.rendered)).size >= 2
-    && detailZooms.every((snapshot) => snapshot.builds === detailBefore.builds
+    && detailZooms.every((snapshot) => snapshot.error === null && snapshot.builds === detailBefore.builds
       && snapshot.owner === journeyId && snapshot.points === 3 && snapshot.stops === 2 && snapshot.shaping === 1
       && snapshot.segments.map(([id]) => id).join() === expectedSegments.join()
       && snapshot.rendered <= sampleCount

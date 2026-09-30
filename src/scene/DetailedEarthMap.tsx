@@ -109,16 +109,16 @@ function installDetailedEarthJourneyOverlay(
       paint: {
         "line-color": ["get", "color"],
         "line-width": [
-          "*",
-          ["interpolate", ["linear"], ["zoom"], 5.6, 1.35, 10, 2.4, 16, 4.2],
-          [
-            "match", ["get", "provenance"],
-            "recorded-track", 1.3,
-            "user-confirmed-route", 1.15,
-            "user-shaped-route", 1,
-            "suggested-route", 0.82,
-            0.68,
-          ],
+          "interpolate", ["linear"], ["zoom"],
+          5.6, ["*", 1.35, ["match", ["get", "provenance"],
+            "recorded-track", 1.3, "user-confirmed-route", 1.15,
+            "user-shaped-route", 1, "suggested-route", 0.82, 0.68]],
+          10, ["*", 2.4, ["match", ["get", "provenance"],
+            "recorded-track", 1.3, "user-confirmed-route", 1.15,
+            "user-shaped-route", 1, "suggested-route", 0.82, 0.68]],
+          16, ["*", 4.2, ["match", ["get", "provenance"],
+            "recorded-track", 1.3, "user-confirmed-route", 1.15,
+            "user-shaped-route", 1, "suggested-route", 0.82, 0.68]],
         ],
         "line-opacity": [
           "*",
