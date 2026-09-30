@@ -2,8 +2,9 @@ import {
   buildPlaybackSteps,
   meaningfulPlaybackStepIndex,
   meaningfulPlaybackStepIndexes,
+  playbackMediaByChapter,
   playbackMediaForPoint,
-  routePointAngularDistance,
+  playbackTravelAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
@@ -59,11 +60,11 @@ function playbackStepDuration(
       return profile.introMs;
     case "travel": {
       const to = journey.routePoints[step.to];
-      const from = journey.routePoints[Math.max(0, step.to - 1)];
+      const from = journey.routePoints[step.from ?? Math.max(0, step.to - 1)];
       if (!from || !to) return profile.travelBaseMs;
       return Math.min(
         profile.travelMaxMs,
-        profile.travelBaseMs + routePointAngularDistance(from, to) * profile.travelPerRadiansMs,
+        profile.travelBaseMs + playbackTravelAngularDistance(journey, step.to, step.from) * profile.travelPerRadiansMs,
       );
     }
     case "stop": {
@@ -209,12 +210,14 @@ export function buildPlaybackPlan(
   homeContext?: HomeNarrativeContext | null,
 ): PlaybackPlan {
   const steps = buildPlaybackSteps(journey, homeContext);
+  const mediaByChapter = playbackMediaByChapter(journey);
   let cursorMs = 0;
-  let currentChapterMedia: readonly JourneyMediaAsset[] = [];
   const segments = steps.map((step, stepIndex) => {
-    // Every chapter's stop precedes its media and already owns the sorted list.
-    if (step.kind === "stop") currentChapterMedia = step.media;
-    const asset = step.kind === "media" ? currentChapterMedia[step.mediaIndex] : undefined;
+    // Resolve the cinematic chapter once; folded media keeps its original
+    // asset identity, while an ungrouped via has no preceding Stop arrival.
+    const asset = step.kind === "media"
+      ? mediaByChapter.get(journey.routePoints[step.pointIndex]?.id ?? "")?.[step.mediaIndex]
+      : undefined;
     const durationMs = resolvePlaybackStepDurationWithFallback(
       journey,
       step,

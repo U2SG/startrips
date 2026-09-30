@@ -1,6 +1,13 @@
 import type { FeatureCollection, Geometry, GeoJsonProperties } from "geojson";
 import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
-import type { JourneyRoute } from "../journey/types";
+import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
+import {
+  buildRecordedTrackLodLevels,
+  recordedTrackSampleTimes,
+  recordedTrackVisibleSampleCount,
+  resolveJourneyRouteSegmentProvenance,
+  selectRecordedTrackLodLevel,
+} from "../journey/journeyModel";
 import {
   resolveRoutePointPresentation,
   type RoutePointSelection,
@@ -60,7 +67,7 @@ export type DetailedEarthJourneyOverlayProperties = GeoJsonProperties & {
   featureKind: "segment" | "route-point";
   journeyId: string;
   color: string;
-  provenance: "user-shaped";
+  provenance: RouteProvenanceTier;
   attentionRole: "ordinary" | "selected" | "narrative-current";
   semanticRole?: "stop" | "passthrough";
   routePointId?: string;
@@ -72,6 +79,16 @@ export type DetailedEarthJourneyOverlayProperties = GeoJsonProperties & {
   toRoutePointId?: string;
 };
 
+export type DetailedEarthRecordedTrackLodLevel = {
+  maxAngularErrorRad: number;
+  points: readonly { lat: number; lon: number }[];
+};
+
+export type DetailedEarthRecordedTrackLod = {
+  featureId: string;
+  levels: readonly DetailedEarthRecordedTrackLodLevel[];
+};
+
 export type DetailedEarthJourneyOverlay = {
   journeyId: string | null;
   revision: string;
@@ -79,6 +96,13 @@ export type DetailedEarthJourneyOverlay = {
   stopCount: number;
   passthroughCount: number;
   data: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>;
+  recordedTrackLods?: readonly DetailedEarthRecordedTrackLod[];
+};
+
+export type DetailedEarthJourneyOverlayLodSelection = {
+  data: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>;
+  key: string;
+  renderedPointCount: number;
 };
 
 export type DetailedEarthJourneyRoutePointHit = {
@@ -132,17 +156,94 @@ export function pickDetailedEarthJourneyRoutePointHit(
   return best ? { journeyId: best.journeyId, routePointId: best.routePointId } : null;
 }
 
-function overlayRevision(seed: string) {
-  let hash = 0x811c9dc5;
+function updateOverlayRevisionHash(hash: number, seed: string) {
   for (let index = 0; index < seed.length; index += 1) {
     hash ^= seed.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
+  }
+  return hash;
+}
+
+function overlayRevision(seed: string) {
+  return (updateOverlayRevisionHash(0x811c9dc5, seed) >>> 0).toString(36);
+}
+
+function recordedTrackGeometryRevision(
+  points: readonly { lat: number; lon: number }[],
+) {
+  let hash = 0x811c9dc5;
+  for (const point of points) {
+    if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
+    hash = updateOverlayRevisionHash(hash, `${point.lat},${point.lon};`);
   }
   return (hash >>> 0).toString(36);
 }
 
 function normalizeLongitude(longitude: number) {
   return ((((longitude + 180) % 360) + 360) % 360) - 180;
+}
+
+const recordedTrackCoordinateCache = new WeakMap<readonly { lat: number; lon: number }[], Array<[number, number]>>();
+
+function recordedTrackCoordinates(
+  points: readonly { lat: number; lon: number }[],
+): Array<[number, number]> {
+  const cached = recordedTrackCoordinateCache.get(points);
+  if (cached) return cached;
+  const coordinates: Array<[number, number]> = [];
+  let previousLongitude: number | null = null;
+  for (const point of points) {
+    if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
+    let longitude = normalizeLongitude(point.lon);
+    if (previousLongitude !== null) {
+      while (longitude - previousLongitude > 180) longitude -= 360;
+      while (longitude - previousLongitude < -180) longitude += 360;
+    }
+    coordinates.push([longitude, point.lat]);
+    previousLongitude = longitude;
+  }
+  recordedTrackCoordinateCache.set(points, coordinates);
+  return coordinates;
+}
+
+export function selectDetailedEarthJourneyOverlayLod(
+  overlay: DetailedEarthJourneyOverlay,
+  projectedPixelsPerRadian: number,
+  maxScreenErrorPx = 1.25,
+): DetailedEarthJourneyOverlayLodSelection {
+  const recordedTrackLods = overlay.recordedTrackLods ?? [];
+  if (recordedTrackLods.length === 0) {
+    return { data: overlay.data, key: "none", renderedPointCount: 0 };
+  }
+  const selected = new Map<string, DetailedEarthRecordedTrackLodLevel>();
+  const keyParts: string[] = [];
+  let renderedPointCount = 0;
+  for (const track of recordedTrackLods) {
+    const level = selectRecordedTrackLodLevel(
+      track.levels,
+      projectedPixelsPerRadian,
+      maxScreenErrorPx,
+    );
+    if (!level) continue;
+    selected.set(track.featureId, level);
+    renderedPointCount += level.points.length;
+    keyParts.push(`${track.featureId}:${level.maxAngularErrorRad}`);
+  }
+  const data: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties> = {
+    ...overlay.data,
+    features: overlay.data.features.map((feature) => {
+      const level = feature.id === undefined ? undefined : selected.get(String(feature.id));
+      if (!level || feature.geometry.type !== "LineString") return feature;
+      return {
+        ...feature,
+        geometry: {
+          ...feature.geometry,
+          coordinates: recordedTrackCoordinates(level.points),
+        },
+      };
+    }),
+  };
+  return { data, key: keyParts.join("|"), renderedPointCount };
 }
 
 function strongestAttentionRole(
@@ -189,6 +290,7 @@ export function buildDetailedEarthJourneyOverlay({
       stopCount: 0,
       passthroughCount: 0,
       data: emptyData,
+      recordedTrackLods: [],
     };
   }
 
@@ -213,6 +315,8 @@ export function buildDetailedEarthJourneyOverlay({
     };
   });
   const features: FeatureCollection<Geometry, DetailedEarthJourneyOverlayProperties>["features"] = [];
+  const recordedTrackLods: DetailedEarthRecordedTrackLod[] = [];
+  const recordedSegments = route.recordedTrackSegments ?? [];
 
   for (const record of records) {
     if (!record.valid || !record.presentation.temporalVisible) continue;
@@ -228,7 +332,7 @@ export function buildDetailedEarthJourneyOverlay({
         featureKind: "route-point",
         journeyId: route.id,
         color: route.color,
-        provenance: "user-shaped",
+        provenance: "sparse-relation",
         semanticRole: record.presentation.semanticRole,
         attentionRole: record.presentation.attentionRole,
         routePointId,
@@ -267,7 +371,7 @@ export function buildDetailedEarthJourneyOverlay({
         featureKind: "segment",
         journeyId: route.id,
         color: route.color,
-        provenance: "user-shaped",
+        provenance: resolveJourneyRouteSegmentProvenance(route, index - 1),
         attentionRole: strongestAttentionRole(
           previous.presentation.attentionRole,
           current.presentation.attentionRole,
@@ -278,11 +382,55 @@ export function buildDetailedEarthJourneyOverlay({
     });
   }
 
+  for (const segment of recordedSegments) {
+    const canonicalPoints = segment.points.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon))
+      ? segment.points
+      : segment.points.filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon));
+    if (canonicalPoints.length < 2) continue;
+    const canonicalLevels = buildRecordedTrackLodLevels(canonicalPoints);
+    const reliableTime = recordedTrackSampleTimes(segment.points) !== null;
+    // Clip precomputed levels at actual sampled instants. Simplification never
+    // runs again on a cursor-dependent prefix and cannot join independent gaps.
+    const levels = reliableTime && temporalReveal?.timestamp !== undefined
+      ? canonicalLevels.map((level) => {
+          const times = recordedTrackSampleTimes(level.points);
+          const count = times ? recordedTrackVisibleSampleCount(times, temporalReveal.timestamp) : level.points.length;
+          return { ...level, points: level.points.slice(0, count) };
+        }).filter((level) => level.points.length >= 2)
+      : canonicalLevels;
+    const validPoints = levels[0]?.points ?? [];
+    if (validPoints.length < 2) continue;
+    const featureId = `${route.id}:recorded:${segment.id}`;
+    const coordinates = recordedTrackCoordinates(levels[0]?.points ?? validPoints);
+    if (coordinates.length < 2) continue;
+    recordedTrackLods.push({ featureId, levels });
+    features.push({
+      type: "Feature",
+      id: featureId,
+      geometry: { type: "LineString", coordinates },
+      properties: {
+        featureKind: "segment",
+        journeyId: route.id,
+        color: route.color,
+        provenance: "recorded-track",
+        attentionRole: "ordinary",
+      },
+    });
+  }
+
   const visibleRecords = records.filter((record) => record.valid && record.presentation.temporalVisible);
   const revisionSeed = JSON.stringify({
     id: route.id,
     color: route.color,
     lightEffect: route.lightEffect ?? null,
+    segmentProvenance: Array.from({ length: Math.max(0, route.points.length - 1) }, (_, index) => (
+      resolveJourneyRouteSegmentProvenance(route, index)
+    )),
+    recordedTrackSegments: recordedTrackLods.map((track) => ({
+      id: track.featureId,
+      pointCount: track.levels[0]?.points.length ?? 0,
+      geometryRevision: recordedTrackGeometryRevision(track.levels[0]?.points ?? []),
+    })),
     points: records.map(({ point, pointIndex, presentation, valid }) => ({
       id: point.id ?? null,
       pointIndex,
@@ -309,6 +457,7 @@ export function buildDetailedEarthJourneyOverlay({
     stopCount: visibleRecords.filter((record) => record.presentation.semanticRole === "stop").length,
     passthroughCount: visibleRecords.filter((record) => record.presentation.semanticRole === "passthrough").length,
     data: { type: "FeatureCollection", features },
+    recordedTrackLods,
   };
 }
 

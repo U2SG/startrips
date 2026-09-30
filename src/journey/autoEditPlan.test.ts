@@ -62,6 +62,26 @@ const baseInput = {
 };
 
 describe("deterministic auto-edit foundation (#127)", () => {
+  it("keeps real empty Stops and rejects their omission or a fabricated via arrival (#342)", () => {
+    const input = {
+      ...baseInput, routePointIds: ["tokyo", "via", "osaka"], digests: [digest("via-photo", "via", 0)],
+      routePointGeometry: {
+        tokyo: { isStop: true }, via: { isStop: false, angularDistanceFromPrevious: 0.1 }, osaka: { isStop: true, angularDistanceFromPrevious: 0.2 },
+      },
+    };
+    const plan = buildDeterministicQuickRecapPlan(input);
+    expect(plan.chapters.map((chapter) => [chapter.routePointId, chapter.items.length])).toEqual([["tokyo", 0], ["via", 1], ["osaka", 0]]);
+    expect(validateAutoEditPlanV1(plan, input).valid).toBe(true);
+    const omitted = structuredClone(plan);
+    omitted.chapters = omitted.chapters.filter((chapter) => chapter.routePointId !== "osaka");
+    omitted.plannedDurationMs = sumPlannedDurationMs(omitted);
+    expect(validateAutoEditPlanV1(omitted, input).errors).toContain("stop chapter omitted osaka");
+    const fakeArrival = structuredClone(plan);
+    fakeArrival.chapters[1].arrival = { durationMs: 100, showPlaceLabel: true, showNote: true };
+    fakeArrival.plannedDurationMs = sumPlannedDurationMs(fakeArrival);
+    expect(validateAutoEditPlanV1(fakeArrival, input).errors).toContain("quick recap route arrival mismatch route:via");
+  });
+
   it("produces the same baseline plan for the same normalized input", () => {
     const digests = [digest("a", "tokyo", 0), digest("b", "kyoto", 1), digest("c", "osaka", 2)];
     expect(buildDeterministicQuickRecapPlan({ ...baseInput, digests })).toEqual(buildDeterministicQuickRecapPlan({ ...baseInput, digests }));

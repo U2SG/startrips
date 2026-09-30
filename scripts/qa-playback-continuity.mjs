@@ -96,7 +96,7 @@ function record(name, detail) {
   if (detail.failed) failed = true;
 }
 
-async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null, densityQa = "sequence" }) {
+async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null, qaMode = "continuity", recap = false, densityQa = "sequence", ownedCover = false }) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
@@ -133,6 +133,7 @@ async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = 
         hold: overlay.getAttribute("data-playback-hold"),
         hasChapter: Boolean(chapter),
         chapterPoint: chapter?.getAttribute("data-chapter-point") ?? null,
+        transitPoint: overlay.querySelector("[data-transit-media-point]")?.getAttribute("data-transit-media-point") ?? null,
         hasCaption: Boolean(overlay.querySelector(".journey-playback__stop h3")),
         hasMediaRegion: Boolean(mediaRegion),
         hasMediaFrame: Boolean(presentation?.getAttribute("data-presented-asset")),
@@ -188,7 +189,9 @@ async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = 
 
   const query = new URLSearchParams({
     qaState: "journey-playback",
-    qaMode: "continuity",
+    qaMode,
+    qaRecap: recap ? "1" : "0",
+    qaOwnedCover: ownedCover ? "1" : "0",
     ...(densityQa === "dense" ? { qaDenseDensity: "1" } : { qaSequenceDensity: "1" }),
     qaReduceMotion: reduceMotion ? "1" : "0",
   });
@@ -1054,8 +1057,185 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
-await browser.close();
+// #342: prove route-provenance decisions on the real Playback travel surface.
+{
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" });
+  const consoleErrors = [];
+  const pageErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.route("**/api/auth/get-session", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: "null",
+  }));
+  const query = new URLSearchParams({
+    qaState: "journey-playback",
+    qaMode: "route-provenance",
+  });
+  await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded" });
+  await page.locator(".journey-playback").waitFor({ state: "visible", timeout: 30_000 });
+  await page.waitForFunction(() => (
+    document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "travel"
+  ), null, { timeout: 10_000 });
 
+  const readState = () => page.locator("main[data-qa-route-provenance]").evaluate((root) => {
+    const hint = root.querySelector(".journey-playback__route-hint");
+    return {
+      provenance: root.getAttribute("data-qa-route-provenance"),
+      hidden: hint?.getAttribute("aria-hidden") ?? null,
+      label: hint?.getAttribute("aria-label") ?? null,
+    };
+  });
+  const clickAction = async (action, expectedProvenance) => {
+    await page.locator(`[data-qa-action="${action}"]`).click();
+    await page.waitForFunction((expected) => (
+      document.querySelector("main[data-qa-route-provenance]")
+        ?.getAttribute("data-qa-route-provenance") === expected
+    ), expectedProvenance);
+    return readState();
+  };
+
+  try {
+    const sparse = await readState();
+    const suggested = await clickAction("suggest-sparse", "suggested-route");
+    const confirmed = await clickAction("confirm", "user-confirmed-route");
+    await clickAction("suggest-sparse", "suggested-route");
+    const rejectedSparse = await clickAction("reject", "sparse-relation");
+    await clickAction("suggest-shaped", "suggested-route");
+    const rejectedShaped = await clickAction("reject", "user-shaped-route");
+
+    const lowEvidenceHidden = [sparse, suggested, rejectedSparse, rejectedShaped]
+      .every((state) => state.hidden === "true" && state.label === null);
+    const confirmedClaimsActual = confirmed.hidden === null
+      && typeof confirmed.label === "string" && confirmed.label.length > 0;
+    record("route-provenance:dynamic-confirm-reject-and-sparse-ab", {
+      sparse,
+      suggested,
+      confirmed,
+      rejectedSparse,
+      rejectedShaped,
+      consoleErrors,
+      pageErrors,
+      failed: sparse.provenance !== "sparse-relation"
+        || suggested.provenance !== "suggested-route"
+        || confirmed.provenance !== "user-confirmed-route"
+        || rejectedSparse.provenance !== "sparse-relation"
+        || rejectedShaped.provenance !== "user-shaped-route"
+        || !lowEvidenceHidden
+        || !confirmedClaimsActual
+        || consoleErrors.length > 0
+        || pageErrors.length > 0,
+    });
+  } finally {
+    await page.close();
+  }
+}
+
+// #342's owner clarification: play the six canonical points with production
+// timers in both modes, then use the real Close control during folded media.
+for (const viewport of VIEWPORTS.slice(0, 2)) {
+  for (const recap of [false, true]) {
+    const mode = recap ? "quick-recap" : "full";
+    const expectedRoute = Array.from({ length: 6 }, (_, index) => `st121-chapter-point-${index}`);
+    const run = await open({ viewport, qaMode: "chapter-membership", recap });
+    try {
+      // The phase attribute names the retained final beat (`outro`). The real
+      // transport publishes completion through its Replay control.
+      await run.page.locator('button[aria-label="重新播放"]').waitFor({ state: "visible", timeout: 60_000 });
+      const trace = await readTrace(run.page);
+      const cameraKeys = trace.cameraTargets.map((entry) => entry.key);
+      const chapterPoints = [...new Set(trace.samples.map((sample) => sample.chapterPoint).filter((point) => point !== null))];
+      const transitPoints = [...new Set(trace.samples.map((sample) => sample.transitPoint).filter((point) => point !== null))];
+      const presentedAssets = [...new Set(trace.samples.filter((sample) => sample.phase === "media")
+        .map((sample) => sample.presentedAsset).filter((asset) => asset !== null))];
+      const canonicalRoute = await run.page.locator("main[data-qa-chapter-membership]").getAttribute("data-qa-canonical-route");
+      const playedMode = await run.page.locator(".journey-playback").getAttribute("data-playback-mode");
+      record(`${viewport.label}:${mode}:stop-via-natural-chapters`, {
+        cameraKeys, chapterPoints, transitPoints, presentedAssets, canonicalRoute, playedMode,
+        consoleErrors: run.consoleErrors, pageErrors: run.pageErrors,
+        failed: JSON.stringify(cameraKeys) !== JSON.stringify(["route", "point:0", "point:3", "point:4", "route"])
+          || JSON.stringify(chapterPoints) !== JSON.stringify(["0", "4"])
+          || JSON.stringify(transitPoints) !== JSON.stringify(["3"])
+          || JSON.stringify(presentedAssets) !== JSON.stringify(["st121-chapter-photo-2", "st121-chapter-photo-3"])
+          || canonicalRoute !== JSON.stringify(expectedRoute) || playedMode !== mode
+          || run.consoleErrors.length > 0 || run.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record(`${viewport.label}:${mode}:stop-via-natural-chapters`, { failed: true, error: String(error), trace: await readTrace(run.page) });
+    } finally {
+      await run.page.close();
+    }
+
+    const closeRun = await open({ viewport, qaMode: "chapter-membership", recap });
+    try {
+      await closeRun.page.waitForFunction(() => {
+        const root = document.querySelector(".journey-playback");
+        return root?.getAttribute("data-playback-phase") === "media"
+          && root.querySelector("[data-presented-asset]")?.getAttribute("data-presented-asset") === "st121-chapter-photo-2";
+      }, null, { timeout: 30_000 });
+      await closeRun.page.locator('button[aria-label="暂停播放"]').click();
+      await closeRun.page.locator('button[aria-label="退出播放"]').click();
+      await closeRun.page.locator(".journey-playback").waitFor({ state: "detached" });
+      const returned = await closeRun.page.locator("main[data-qa-chapter-membership]").evaluate((root) => ({
+        routePointId: root.getAttribute("data-qa-return-route-point"), assetId: root.getAttribute("data-qa-return-asset"),
+        reason: root.getAttribute("data-qa-return-reason"),
+      }));
+      record(`${viewport.label}:${mode}:folded-media-close-owner`, {
+        returned, consoleErrors: closeRun.consoleErrors, pageErrors: closeRun.pageErrors,
+        failed: returned.routePointId !== "st121-chapter-point-2" || returned.assetId !== "st121-chapter-photo-2" || returned.reason !== "exited"
+          || closeRun.consoleErrors.length > 0 || closeRun.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record(`${viewport.label}:${mode}:folded-media-close-owner`, { failed: true, error: String(error), trace: await readTrace(closeRun.page) });
+    } finally {
+      await closeRun.page.close();
+    }
+  }
+}
+
+// A cover projected into the opening chapter still belongs to the child of a
+// later explicitly selected Stop. Grade settled pixels before the real Close.
+for (const viewport of VIEWPORTS.slice(0, 2)) {
+  const run = await open({ viewport, qaMode: "chapter-membership", recap: true, ownedCover: true });
+  try {
+    await run.page.waitForFunction(() => {
+      const root = document.querySelector(".journey-playback");
+      const media = root?.querySelector("[data-presented-asset]");
+      return root?.getAttribute("data-playback-phase") === "media"
+        && media?.getAttribute("data-presented-asset") === "st121-chapter-photo-2"
+        && media.getAttribute("data-media-presentation") === "settled";
+    }, null, { timeout: 30_000 });
+    await run.page.locator('button[aria-label="暂停播放"]').click();
+    const before = await run.page.locator("main[data-qa-chapter-membership]").evaluate((root) => ({
+      media: JSON.parse(root.getAttribute("data-qa-canonical-media")),
+      route: JSON.parse(root.getAttribute("data-qa-canonical-route")),
+      chapter: root.querySelector("[data-chapter-point]")?.getAttribute("data-chapter-point"),
+    }));
+    await run.page.locator('button[aria-label="退出播放"]').click();
+    await run.page.locator(".journey-playback").waitFor({ state: "detached" });
+    const returned = await run.page.locator("main[data-qa-chapter-membership]").evaluate((root) => ({
+      routePointId: root.getAttribute("data-qa-return-route-point"),
+      assetId: root.getAttribute("data-qa-return-asset"), reason: root.getAttribute("data-qa-return-reason"),
+    }));
+    const canonicalCover = before.media.find(([id]) => id === "st121-chapter-photo-2");
+    record(`${viewport.label}:quick-recap:later-stop-child-cover-close-owner`, {
+      before, returned, consoleErrors: run.consoleErrors, pageErrors: run.pageErrors,
+      failed: before.chapter !== "0" || before.route.length !== 6
+        || canonicalCover?.[1] !== "st121-chapter-point-2" || canonicalCover?.[2] !== 0
+        || returned.routePointId !== "st121-chapter-point-2" || returned.assetId !== "st121-chapter-photo-2"
+        || returned.reason !== "exited" || run.consoleErrors.length > 0 || run.pageErrors.length > 0,
+    });
+  } catch (error) {
+    record(`${viewport.label}:quick-recap:later-stop-child-cover-close-owner`, {
+      failed: true, error: String(error), trace: await readTrace(run.page),
+    });
+  } finally { await run.page.close(); }
+}
+
+await browser.close();
 for (const check of checks) {
   console.error(`[qa-playback-continuity] ${check.failed ? "FAIL" : "ok"} ${check.name} ${JSON.stringify({ ...check, name: undefined, failed: undefined })}`);
 }

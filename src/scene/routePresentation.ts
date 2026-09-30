@@ -10,6 +10,8 @@ export type RoutePointSelection = {
 export type RouteTemporalReveal = {
   journeys: ReadonlyMap<string, number>;
   points: ReadonlyMap<string, number>;
+  /** Epoch milliseconds from the existing Atlas time cursor, when available. */
+  timestamp?: number;
 } | undefined;
 
 /**
@@ -37,6 +39,34 @@ export function routePointTemporalProgress(
   if (point !== undefined) return clamp01(point);
   const journey = reveal?.journeys.get(routeId);
   return journey === undefined ? 1 : clamp01(journey);
+}
+
+/**
+ * Recorded geometry follows the same route-leg reveal as ordinary connector
+ * legs. Once point-level reveal exists, the Journey-level value is only a
+ * fallback for missing point samples — a fully visible Journey group must not
+ * expose later recorded geometry whose destination Route Point is still hidden.
+ */
+export function recordedRouteTemporalProgress(
+  routeId: string,
+  routePointCount: number,
+  reveal: RouteTemporalReveal,
+) {
+  if (!reveal) return 1;
+  const journey = reveal.journeys.get(routeId);
+  if (journey !== undefined && !(journey > 0)) return 0;
+
+  let progress = journey === undefined ? 1 : clamp01(journey);
+  if (routePointCount <= 1) return progress;
+
+  let hasPointReveal = false;
+  let revealedLegs = 0;
+  for (let pointIndex = 1; pointIndex < routePointCount; pointIndex += 1) {
+    const point = reveal.points.get(`${routeId}:${pointIndex}`);
+    if (point !== undefined) hasPointReveal = true;
+    revealedLegs += point === undefined ? progress : clamp01(point);
+  }
+  return hasPointReveal ? revealedLegs / (routePointCount - 1) : progress;
 }
 
 /**

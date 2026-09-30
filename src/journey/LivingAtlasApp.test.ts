@@ -1298,6 +1298,9 @@ describe("Quick Recap over-budget choice (ST-011)", () => {
     expect(quickRecapPlanningContentFingerprint(geometryChanged)).not.toBe(baseline);
     expect(quickRecapPlanningContentFingerprint({ ...planningJourney, revision: planningJourney.revision + 1 })).not.toBe(baseline);
     expect(quickRecapPlanningContentFingerprint({ ...planningJourney, updatedAt: "later" })).toBe(baseline);
+    const emptyStop = { ...planningJourney, media: planningJourney.media.slice(0, 1) };
+    const emptyVia = { ...emptyStop, routePoints: emptyStop.routePoints.map((point) => point.id === "point-b" ? { ...point, isStop: false } : point) };
+    expect(quickRecapPlanningContentFingerprint(emptyVia)).not.toBe(quickRecapPlanningContentFingerprint(emptyStop));
   });
 });
 

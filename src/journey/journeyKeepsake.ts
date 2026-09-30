@@ -1,9 +1,10 @@
 import {
   buildPlaybackSteps,
   playbackCameraTargetForStep,
-  playbackIntroMedia,
+  playbackMediaByOwner,
+  playbackMediaByChapter,
   playbackStoryMedia,
-  routePointAngularDistance,
+  playbackTravelAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
 import { resolveNarrativeTiming, type NarrativeTimingContext } from "./narrativeTiming";
@@ -141,6 +142,7 @@ function sceneForStep(
   journey: Journey,
   step: PlaybackStep,
   asset: JourneyMediaAsset | undefined,
+  assetOwnerId: string | null,
 ): SceneDraft[] {
   const camera = playbackCameraTargetForStep(step);
   switch (step.kind) {
@@ -158,7 +160,7 @@ function sceneForStep(
       }];
     case "travel": {
       const toPointIndex = camera?.kind === "point" ? camera.pointIndex : step.to;
-      const fromPoint = journey.routePoints[Math.max(0, toPointIndex - 1)];
+      const fromPoint = journey.routePoints[step.from ?? Math.max(0, toPointIndex - 1)];
       const toPoint = journey.routePoints[toPointIndex];
       if (!fromPoint || !toPoint) return [];
       return [{
@@ -169,7 +171,7 @@ function sceneForStep(
         toRoutePointId: toPoint.id,
         desiredDurationMs: keepsakeDurationMs({
           segmentKind: "travel",
-          routeDistanceRadians: routePointAngularDistance(fromPoint, toPoint),
+          routeDistanceRadians: playbackTravelAngularDistance(journey, toPointIndex, step.from),
         }),
         minimumDurationMs: KEEPSAKE_MIN_DURATION_MS.travel,
       }];
@@ -197,7 +199,7 @@ function sceneForStep(
       return [{
         kind: "media",
         pointIndex: step.pointIndex,
-        routePointId: point.id,
+        routePointId: assetOwnerId,
         mediaAssetId: asset.id,
         mediaType: type,
         desiredDurationMs: keepsakeDurationMs({ segmentKind: "media", mediaKind: type }),
@@ -251,7 +253,17 @@ export function buildKeepsakeRenderManifest(
   aspect: KeepsakeAspect = "portrait",
 ): KeepsakeRenderManifest {
   const playbackSteps = buildPlaybackSteps(journey);
-  const introMediaDrafts: SceneDraft[] = playbackIntroMedia(journey).map((asset) => {
+  const mediaByOwner = playbackMediaByOwner(
+    journey,
+    [null, ...journey.routePoints.map((point) => point.id)],
+  );
+  const mediaByChapter = journey.routePoints.every((point) => point.isStop)
+    ? mediaByOwner : playbackMediaByChapter(journey);
+  const ownerByAssetId = new Map<string, string | null>();
+  for (const [ownerId, media] of mediaByOwner) {
+    for (const asset of media) ownerByAssetId.set(asset.id, ownerId);
+  }
+  const introMediaDrafts: SceneDraft[] = (mediaByOwner.get(null) ?? []).map((asset) => {
     const type = mediaType(asset.mimeType);
     return {
       kind: "media",
@@ -265,11 +277,13 @@ export function buildKeepsakeRenderManifest(
         : KEEPSAKE_MIN_DURATION_MS.image,
     };
   });
-  let currentChapterMedia: readonly JourneyMediaAsset[] = [];
   const drafts = playbackSteps.flatMap((step, stepIndex) => {
-    if (step.kind === "stop") currentChapterMedia = step.media;
-    const asset = step.kind === "media" ? currentChapterMedia[step.mediaIndex] : undefined;
-    const scenes = sceneForStep(journey, step, asset);
+    // Match live chapter membership while keeping the asset's canonical owner.
+    // Both indexes are built once; media-heavy exports never scan per beat.
+    const asset = step.kind === "media"
+      ? mediaByChapter.get(journey.routePoints[step.pointIndex]?.id ?? "")?.[step.mediaIndex]
+      : undefined;
+    const scenes = sceneForStep(journey, step, asset, asset ? ownerByAssetId.get(asset.id) ?? null : null);
     return stepIndex === 0 ? [...scenes, ...introMediaDrafts] : scenes;
   });
   const targetDurationMs = presetSeconds * 1000;

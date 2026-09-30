@@ -3,6 +3,7 @@ import {
   importJourneyRecordedTrack,
   JourneyRecordedTrackApiError,
   listJourneyRecordedTracks,
+  readJourneyRecordedTrackGeometry,
   withdrawJourneyRecordedTrack,
 } from "./journeyRecordedTracksApi";
 
@@ -89,6 +90,57 @@ describe("journeyRecordedTracksApi", () => {
     expect(result[0]).toMatchObject({ segmentCount: 1, sampleCount: 2 });
     expect(JSON.stringify(result)).not.toContain("22.5");
     expect(JSON.stringify(result)).not.toContain("114");
+  });
+
+  it("keeps precise renderer geometry owner-private and preserves independent recorded gaps", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ recordedTracks: [{
+      ...operation,
+      segments: [
+        {
+          id: "segment-a",
+          segmentOrder: 0,
+          samples: [
+            { latitude: 22.5, longitude: 114, recordedAt: "2026-09-21T08:00:00Z" },
+            { latitude: 22.6, longitude: 114.1, recordedAt: null },
+          ],
+        },
+        {
+          id: "segment-b",
+          segmentOrder: 1,
+          samples: [
+            { latitude: 23, longitude: 115, recordedAt: "2026-09-21T09:00:00Z" },
+            { latitude: Number.NaN, longitude: 116, recordedAt: null },
+            { latitude: 23.1, longitude: 115.2, recordedAt: "" },
+          ],
+        },
+      ],
+    }] })) as unknown as typeof fetch;
+
+    expect(await readJourneyRecordedTrackGeometry("journey-1", { fetcher })).toEqual([{
+      journeyId: "journey-1",
+      operationKey: "opaque-operation-key",
+      segments: [
+        {
+          id: "segment-a",
+          points: [
+            { lat: 22.5, lon: 114, recordedAt: "2026-09-21T08:00:00Z" },
+            { lat: 22.6, lon: 114.1, recordedAt: null },
+          ],
+        },
+        {
+          id: "segment-b",
+          points: [
+            { lat: 23, lon: 115, recordedAt: "2026-09-21T09:00:00Z" },
+            { lat: 23.1, lon: 115.2, recordedAt: null },
+          ],
+        },
+      ],
+    }]);
+    expect(fetcher).toHaveBeenCalledWith("/api/journey-recorded-tracks/journey-1", expect.objectContaining({
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+    }));
   });
 
   it("summarizes unsorted segments while preserving declared counts and wire-string time order", async () => {

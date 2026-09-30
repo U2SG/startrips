@@ -54,6 +54,7 @@
     "qa:globe-focus-chrome": "node scripts/qa-globe-focus-chrome.mjs",
     "qa:route-point-context": "node scripts/qa-route-point-context.mjs",
     "qa:globe-render-budget": "node scripts/qa-globe-render-budget.mjs",
+    "qa:recorded-track-lod": "node scripts/qa-recorded-track-lod.mjs",
     "qa:final-acceptance": "node scripts/qa-post-login-controls.mjs --final-acceptance",
     "qa:login-v3": "node scripts/qa-login-v3.mjs",
     "qa:cover-reveal-opening": "node scripts/qa-cover-reveal-opening.mjs",

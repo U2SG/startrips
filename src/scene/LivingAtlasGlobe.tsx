@@ -212,6 +212,7 @@ export type LivingAtlasGlobeProps = {
   temporalReveal?: {
     journeys: ReadonlyMap<string, number>;
     points: ReadonlyMap<string, number>;
+    timestamp?: number;
   };
   homeBasePresence?: {
     resolved: readonly ResolvedHomeBasePresence[];
