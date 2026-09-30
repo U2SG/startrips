@@ -101,6 +101,7 @@ async function fixture(page, profile) {
     displayWidth: largePictures[index].width, displayHeight: largePictures[index].height,
   })) } : journey;
   await page.route("**/api/journeys", (route) => json(route, { journeys: [suppliedJourney] }));
+  await page.route(`**/api/journey-recorded-tracks/${journey.id}`, (route) => json(route, { recordedTracks: [] }));
   await page.route("**/api/home-bases/dismissal", (route) => json(route, { dismissals: [] }));
   await page.route("**/api/home-bases", (route) => json(route, { periods: [] }));
   await page.route("**/api/everyday-fragments", (route) => json(route, { fragments: [] }));
@@ -256,9 +257,16 @@ try {
     const page = await browser.newPage({ viewport: profile.viewport, isMobile: profile.touch, hasTouch: profile.touch,
       deviceScaleFactor: profile.dpr, reducedMotion: "no-preference", recordVideo: { dir: directory, size: profile.viewport } });
     const errors = [];
+    const httpFailures = [];
     page.on("pageerror", (error) => errors.push(String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-    const record = { profile, buildSha, harnessSha, mode: baseline ? "baseline" : "candidate", errors, steps: [], holds: [] };
+    page.on("response", (response) => {
+      if (response.status() >= 500) {
+        const url = new URL(response.url());
+        httpFailures.push({ path: url.pathname + url.search, status: response.status() });
+      }
+    });
+    const record = { profile, buildSha, harnessSha, mode: baseline ? "baseline" : "candidate", errors, httpFailures, steps: [], holds: [] };
     let paintCapture;
     const routes = await fixture(page, profile);
     if (profile.paint || profile.large) record.fixtureDimensions = (profile.paint

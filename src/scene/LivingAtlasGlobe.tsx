@@ -18,7 +18,7 @@ import type { HomeBasePeriod } from "../journey/homeBase";
 import type { ResolvedHomeBasePresence } from "../journey/homeBasePresence";
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import { useCompactMobileLayout } from "../journey/mobileLayout";
-import type { JourneyRoute } from "../journey/types";
+import type { JourneyRoute, RouteSegmentRecord } from "../journey/types";
 import {
   buildHomeBasePresenceLayer,
   type HomeBasePresenceDrawable,
@@ -226,6 +226,8 @@ export type LivingAtlasGlobeProps = {
   onFocusSettled?: (revision: number) => void;
   onJourneyRouteActivate: (journeyId: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  routeEditingEnabled?: boolean;
+  onRouteSegmentSaved?: (journeyId: string, segment: RouteSegmentRecord) => void;
   onGlobeBlankActivate?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onPickRequest?: () => void;
@@ -450,6 +452,8 @@ export function LivingAtlasGlobe({
   onFocusSettled,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
+  routeEditingEnabled = false,
+  onRouteSegmentSaved,
   onGlobeBlankActivate,
   onGlobePointPick,
   onPickRequest,
@@ -1220,6 +1224,9 @@ export function LivingAtlasGlobe({
               focusPoint={focusPoint}
               focusRoute={focusRoute}
               journeyOverlay={detailedEarthJourneyOverlay}
+              routeForEditing={detailedEarthRoute}
+              routeEditingEnabled={routeEditingEnabled}
+              onRouteSegmentSaved={onRouteSegmentSaved}
               focusRevision={focusRevision}
               focusEnabled={focusEnabled}
               focusFlightPending={focusFlightPending}

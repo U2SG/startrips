@@ -130,6 +130,9 @@ async function verifyImportedJourney({ label, width, height, editing }) {
   const readGate = new Promise((resolve) => { releaseReading = resolve; });
   const readSettled = new Promise((resolve) => { markReadSettled = resolve; });
   const readAborted = new Promise((resolve) => { markReadAborted = resolve; });
+  let markReplayReadStarted, releaseReplayReading;
+  const replayReadStarted = new Promise((resolve) => { markReplayReadStarted = resolve; });
+  const replayReadGate = new Promise((resolve) => { releaseReplayReading = resolve; });
   let readingWasAborted = false;
   page.on("requestfailed", (request) => {
     if (new URL(request.url()).pathname === "/api/itinerary-import") {
@@ -147,6 +150,10 @@ async function verifyImportedJourney({ label, width, height, editing }) {
       recognitionCalls += 1;
       const held = !editing && recognitionCalls === 1;
       if (held) { markReadStarted(); await readGate; }
+      if (recognitionCalls === (editing ? 2 : 3)) {
+        markReplayReadStarted();
+        await replayReadGate;
+      }
       try {
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ recognition,
           sourceRead: { readVia: "synthetic-text", contentType: "text/plain" },
@@ -298,7 +305,17 @@ async function verifyImportedJourney({ label, width, height, editing }) {
     await page.getByRole("button", { name: "更换导入来源", exact: true }).click();
     await page.locator(".journey-itinerary-import__modes").getByRole("button", { name: "粘贴文本" }).click();
     await page.locator(".journey-itinerary-import__field textarea").fill("Synthetic eight day coast itinerary");
+    const replayReviewResponse = page.waitForResponse((response) => response.request().method() === "POST"
+      && new URL(response.url()).pathname === "/api/itinerary-import/review");
     await page.locator(".journey-itinerary-import__field").getByRole("button", { name: "自动整理", exact: true }).click();
+    await replayReadStarted;
+    const addDisabled = await page.getByRole("button", { name: "添加 24 个地点到路线", exact: true }).isDisabled();
+    const readingVisible = await page.getByRole("status").filter({ hasText: "正在读取行程" }).isVisible();
+    record(`composer-import:${label}:replay-reading-locks-previous-result`, { addDisabled, readingVisible, mutationCount: mutations.length },
+      addDisabled && readingVisible && mutations.length === 0);
+    releaseReplayReading();
+    await replayReviewResponse;
+    await page.locator(".journey-itinerary-import__busy").waitFor({ state: "detached" });
     await page.getByRole("button", { name: "添加 24 个地点到路线", exact: true }).click();
     await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
     const replayIds = await page.locator('[data-route-point-draft-id^="imported-"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-route-point-draft-id")));
@@ -335,6 +352,7 @@ async function verifyImportedJourney({ label, width, height, editing }) {
       && mutations.length === 1 && pageErrors.length === 0);
   } finally {
     releaseReading?.();
+    releaseReplayReading?.();
     releaseReview?.();
     await context.close();
   }
