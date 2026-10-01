@@ -105,6 +105,7 @@ import {
   isReliablePinchAnchor,
   projectedRadiusRotationDelta,
   rebaseGlobeDragSample,
+  globeDragDisplacementPx,
   shouldRememberUntrackedPointerStart,
   shouldRetainGlobeInertia,
   shouldSuppressUntrackedPointerActivation,
@@ -4333,7 +4334,11 @@ export function ParticleEarthScene({
     let dragLastX = 0;
     let dragLastY = 0;
     let dragLastTime = 0;
-    let dragTravel = 0;
+    // Where this contact went down. The drag threshold is measured against this
+    // point, never against accumulated path length, so a slow wander in place
+    // cannot be mistaken for a drag and swallow the tap underneath it.
+    let dragOriginX = 0;
+    let dragOriginY = 0;
     let dragStarted = false;
     let gestureConsumed = false;
     let pinchDistance = 0;
@@ -4351,7 +4356,8 @@ export function ParticleEarthScene({
 
     const clearDragState = () => {
       dragPointerId = null;
-      dragTravel = 0;
+      dragOriginX = 0;
+      dragOriginY = 0;
       dragStarted = false;
       gestureConsumed = false;
       pinchDistance = 0;
@@ -4376,7 +4382,8 @@ export function ParticleEarthScene({
       dragLastX = rebased.lastX;
       dragLastY = rebased.lastY;
       dragLastTime = rebased.lastTime;
-      dragTravel = rebased.travel;
+      dragOriginX = rebased.origin.x;
+      dragOriginY = rebased.origin.y;
       dragStarted = rebased.started;
       lastGestureAngularDelta = { x: 0, y: 0, total: 0 };
       dragAngularDisplacement = { x: 0, y: 0, total: 0 };
@@ -4555,8 +4562,11 @@ export function ParticleEarthScene({
       dragLastX = event.clientX;
       dragLastY = event.clientY;
       dragLastTime = event.timeStamp;
-      dragTravel += Math.hypot(deltaX, deltaY);
-      if (!dragStarted && isGlobeDrag(dragTravel)) {
+      const displacement = globeDragDisplacementPx(
+        { x: dragOriginX, y: dragOriginY },
+        { x: event.clientX, y: event.clientY },
+      );
+      if (!dragStarted && isGlobeDrag(displacement)) {
         // Claim manual camera ownership only after this contact is actually a
         // drag. Claiming on pointer-down raced tap activation against the focus
         // owner and could move/cancel the projected Route Point before the same

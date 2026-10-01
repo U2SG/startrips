@@ -6,6 +6,7 @@ import {
   canTrackGlobePointer,
   clampGlobeZoom,
   getGlobeInertiaSpeedLimit,
+  globeDragDisplacementPx,
   isGlobeDrag,
   isPrimaryPointerActivation,
   isReliablePinchAnchor,
@@ -145,11 +146,42 @@ describe("globe pointer intent", () => {
       true,
     )).toEqual({
       pointerId: 7,
+      origin: { x: 144, y: 288 },
       lastX: 144,
       lastY: 288,
       lastTime: 1234,
-      travel: GLOBE_DRAG_THRESHOLD_PX,
       started: true,
     });
+  });
+
+  // The regression this pins: a slow wander traces far more than the threshold
+  // of path while never leaving the press point's neighbourhood. Measuring
+  // accumulated travel turned that into a drag, which claimed the camera and
+  // consumed the gesture so the tap never reached the Route Point.
+  it("does not read a slow wander in place as a drag", () => {
+    const press = { x: 300, y: 300 };
+    // A tight circular drift: ~3px radius, many samples, 40px+ of traced arc.
+    const samples = Array.from({ length: 24 }, (_, index) => {
+      const angle = (index / 24) * Math.PI * 8;
+      return { x: 300 + Math.cos(angle) * 3, y: 300 + Math.sin(angle) * 3 };
+    });
+    const pathLength = samples.reduce((total, point, index) => {
+      if (index === 0) return total;
+      return total + Math.hypot(point.x - samples[index - 1].x, point.y - samples[index - 1].y);
+    }, 0);
+    // The old rule would have fired on the traced distance...
+    expect(pathLength).toBeGreaterThan(GLOBE_DRAG_THRESHOLD_PX * 4);
+    // ...but no sample ever strayed far enough from where the pointer went down.
+    for (const point of samples) {
+      const displacement = globeDragDisplacementPx(press, point);
+      expect(displacement).toBeLessThan(GLOBE_DRAG_THRESHOLD_PX);
+      expect(isGlobeDrag(displacement)).toBe(false);
+    }
+  });
+
+  it("still reads a straight move away from the press point as a drag", () => {
+    const press = { x: 300, y: 300 };
+    expect(isGlobeDrag(globeDragDisplacementPx(press, { x: 306, y: 300 }))).toBe(true);
+    expect(isGlobeDrag(globeDragDisplacementPx(press, { x: 297, y: 302 }))).toBe(false);
   });
 });
