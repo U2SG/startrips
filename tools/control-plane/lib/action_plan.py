@@ -322,7 +322,7 @@ def plan(path, fid, repo, *, record_failures=False):
              'conclusion': job['conclusion']}
             for job in sorted(ci.get('jobs') or [], key=lambda item: item['name'])]
     result.update(action=derive(unit_row, pr, relation, review, ci, source_verdict), pr=number, **relation,
-                  pr_head_ref=pr['head']['ref'],
+                  pr_head_ref=pr['head'].get('ref'),
                   source_review_clear=(source_verdict == 'CLEAR'), source_review_verdict=source_verdict,
                   ci_state=ci['state'], source_green=ci['source_green'],
                   final_green=ci['final_green'], ci_run=ci['run']['id'] if ci['run'] else None,
