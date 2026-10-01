@@ -1,6 +1,6 @@
 .experience-demo-notice {
   position: fixed;
-  z-index: 50;
+  z-index: var(--z-chrome-50);
   top: max(18px, env(safe-area-inset-top));
   right: 24px;
   display: grid;

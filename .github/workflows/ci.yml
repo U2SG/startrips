@@ -130,6 +130,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
         if: steps.final-plan.outputs.ledger_only_final != 'true'
+      - name: Test CSS token guard
+        if: steps.final-plan.outputs.ledger_only_final != 'true'
+        run: node --test scripts/css-token-guard.node-test.mjs
+      - name: Reject undefined CSS custom-property references
+        if: steps.final-plan.outputs.ledger_only_final != 'true'
+        run: node scripts/css-token-guard.mjs
       - name: Verify generated auth schema
         if: steps.final-plan.outputs.ledger_only_final != 'true'
         run: |

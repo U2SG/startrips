@@ -6,7 +6,7 @@
   grid-column: 1;
   grid-row: 1;
   position: relative;
-  z-index: 2;
+  z-index: var(--z-content-2);
   align-self: end;
   justify-self: start;
   padding-bottom: clamp(24px, 6vh, 80px);

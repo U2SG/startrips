@@ -23,7 +23,7 @@
 }
 .story-media-pages__page {
   opacity: calc(1 - var(--stack-depth, 0) * 0.18);
-  z-index: calc(3 - var(--stack-depth, 0));
+  z-index: calc(var(--z-content-3) - var(--stack-depth, 0));
   overflow: visible;
   border: 0;
   border-radius: 0;
@@ -31,9 +31,9 @@
   box-shadow: none;
 }
 .story-media-pages__page:not([data-media-page-id]) { display: none; }
-.story-media-pages__page[data-media-incoming="true"] { z-index: 4; }
-.story-media-pages__page[data-media-page="current"] { z-index: 5; }
-.story-media-pages > .starlight-media-state { z-index: 7; }
+.story-media-pages__page[data-media-incoming="true"] { z-index: var(--z-content-4); }
+.story-media-pages__page[data-media-page="current"] { z-index: var(--z-content-5); }
+.story-media-pages > .starlight-media-state { z-index: var(--z-content-7); }
 /* Shown the moment the transport is not live; the fade never delays it. */
 .story-media-pages__transport-state {
   animation: story-media-transport-state-in var(--motion-instant) var(--motion-ease-out);
@@ -56,7 +56,7 @@
 }
 .story-media-pages__page > [hidden] { display: none; }
 .story-media-pages__video {
-  z-index: var(--story-live-z, 6);
+  z-index: var(--story-live-z, var(--z-content-6));
   opacity: var(--story-live-opacity, 1);
   border: 0;
   pointer-events: none;
@@ -74,7 +74,7 @@
    the pointer mid-swipe, so the gesture never reached its commit. The pictures
    underneath already refuse both; this decorative overlay now matches them. */
 .story-media-pages__hit-surface {
-  z-index: 8;
+  z-index: var(--z-content-8);
   transform: none;
   will-change: auto;
   user-select: none;
@@ -93,7 +93,7 @@
 .story-media-pages[data-click-direction="next"] :is(.story-media-pages__hit-surface, .story-media-pages__page[data-media-page="current"] > img) {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M8 16h16m-7-7 7 7-7 7' fill='none' stroke='%230b1113' stroke-width='4'/%3E%3Cpath d='M8 16h16m-7-7 7 7-7 7' fill='none' stroke='white' stroke-width='1.5'/%3E%3C/svg%3E") 16 16, e-resize;
 }
-.journey-story-fullscreen > :is(.journey-story-fullscreen__close, .journey-story-fullscreen__nav) { z-index: 4; }
+.journey-story-fullscreen > :is(.journey-story-fullscreen__close, .journey-story-fullscreen__nav) { z-index: var(--z-content-4); }
 @media (prefers-reduced-motion: reduce) {
   /* The global 0.01ms duration still creates transitions for default "all".
      Disable the property itself so a synchronous handoff paints at rest. */

@@ -31,4 +31,65 @@
   --motion-ease-soft: cubic-bezier(0.2, 0.75, 0.15, 1);
   --motion-ease-out-soft: cubic-bezier(0.22, 0.72, 0.24, 1);
   --motion-ease-in-out-spatial: cubic-bezier(0.65, 0, 0.35, 1);
+  /* Stacking scale. Every z-index in the client names one step here, so a layer
+     can no longer pick a number that quietly outranks or underruns a sibling.
+     The values are load-bearing: they are the numbers the declarations had
+     before, so a smaller step still paints below a larger one and the token
+     name repeats the step on purpose, to keep the mapping auditable. Add a
+     step at the end of a band; never renumber one a rule already depends on. */
+
+  /* Content: stacking inside a single surface, below anything that floats. */
+  --z-content-minus-2: -2;
+  --z-content-minus-1: -1;
+  --z-content-0: 0;
+  --z-content-1: 1;
+  --z-content-2: 2;
+  --z-content-3: 3;
+  --z-content-4: 4;
+  --z-content-5: 5;
+  --z-content-6: 6;
+  --z-content-7: 7;
+  --z-content-8: 8;
+  --z-content-9: 9;
+  --z-content-10: 10;
+  --z-content-12: 12;
+
+  /* Surface: panels that lift clear of the content plane. */
+  --z-surface-18: 18;
+  --z-surface-20: 20;
+  --z-surface-30: 30;
+  --z-surface-35: 35;
+  --z-surface-40: 40;
+
+  /* Chrome: persistent furniture - Atlas header, notice, scrubber, docks. */
+  --z-chrome-50: 50;
+  --z-chrome-60: 60;
+  --z-chrome-70: 70;
+  --z-chrome-72: 72;
+  --z-chrome-73: 73;
+  --z-chrome-75: 75;
+  --z-chrome-80: 80;
+  --z-chrome-84: 84;
+  --z-chrome-85: 85;
+  --z-chrome-88: 88;
+  --z-chrome-90: 90;
+  --z-chrome-92: 92;
+  --z-chrome-100: 100;
+
+  /* Overlay: fixed sheets, backdrops and dialogs above the chrome. */
+  --z-overlay-180: 180;
+  --z-overlay-190: 190;
+  --z-overlay-200: 200;
+  --z-overlay-220: 220;
+  --z-overlay-239: 239;
+  --z-overlay-240: 240;
+  --z-overlay-260: 260;
+  --z-overlay-285: 285;
+
+  /* Modal: the highest ordinary surface. */
+  --z-modal-300: 300;
+
+  /* Transient: outranks every modal. The drag flight is pointer-events: none,
+     so nothing it passes over becomes unreachable while it is up. */
+  --z-transient-12000: 12000;
 }

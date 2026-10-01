@@ -34,7 +34,7 @@
 }
 
 .hanging-gallery-canvas {
-  z-index: 1;
+  z-index: var(--z-content-1);
   opacity: 0;
   transform: scale(1.026);
   transform-origin: 50% 50%;
@@ -67,7 +67,7 @@
 }
 
 .hanging-gallery-depth {
-  z-index: 3;
+  z-index: var(--z-content-3);
   pointer-events: none;
   background:
     linear-gradient(90deg, rgba(0, 0, 0, 0.48), transparent 14% 86%, rgba(0, 0, 0, 0.48)),
@@ -89,7 +89,7 @@
 
 .hanging-gallery-legend {
   position: absolute;
-  z-index: 6;
+  z-index: var(--z-content-6);
   bottom: clamp(24px, 4vw, 54px);
   left: clamp(22px, 3.2vw, 52px);
   display: flex;
@@ -122,7 +122,7 @@
 
 .hanging-gallery-loading {
   position: absolute;
-  z-index: 8;
+  z-index: var(--z-content-8);
   top: 50%;
   left: 50%;
   display: grid;
@@ -153,7 +153,7 @@
 
 .hanging-gallery-navigation {
   position: absolute;
-  z-index: 10;
+  z-index: var(--z-content-10);
   right: clamp(22px, 3.2vw, 52px);
   bottom: clamp(24px, 4vw, 54px);
   display: grid;
@@ -252,7 +252,7 @@
 
 .hanging-gallery-selection {
   position: absolute;
-  z-index: 10;
+  z-index: var(--z-content-10);
   bottom: clamp(26px, 4vw, 52px);
   left: 50%;
   display: flex;

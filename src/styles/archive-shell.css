@@ -3,7 +3,7 @@
 .archive-timeline,
 .archive-controls {
   position: absolute;
-  z-index: 3;
+  z-index: var(--z-content-3);
 }
 
 .archive-shell {

@@ -19,7 +19,7 @@
 .story-media-organizer__destinations {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-content-1);
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(108px, 1fr);
@@ -106,14 +106,14 @@
 .story-media-organizer__tile-actions .story-media-organizer__grip { cursor: grab; touch-action: none; }
 .story-media-organizer button:focus-visible { outline: 2px solid #e4ddad; outline-offset: 3px; }
 .story-media-organizer__empty { padding: 20px 8px; font-size: 12px; color: #b0baad; }
-.story-media-organizer__flight { position: fixed; z-index: 12000; pointer-events: none; overflow: hidden; border-radius: 8px; background: #182019; box-shadow: 0 10px 24px #0005; transform-origin: center; }
+.story-media-organizer__flight { position: fixed; z-index: var(--z-transient-12000); pointer-events: none; overflow: hidden; border-radius: 8px; background: #182019; box-shadow: 0 10px 24px #0005; transform-origin: center; }
 .story-media-organizer__flight img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .story-media-organizer__flight b,
 .story-media-organizer__drag-stack > b { position: absolute; bottom: 6px; right: 6px; padding: 4px 7px; border-radius: 12px; background: #d8d8ae; color: #192018; font: 600 12px/1.3 system-ui, sans-serif; }
 .story-media-organizer__drag-stack { position: relative; isolation: isolate; width: 110px; height: 110px; pointer-events: none; }
 .story-media-organizer__drag-stack > div { position: absolute; inset: 0; overflow: hidden; border-radius: 8px; background: #263127; box-shadow: 0 10px 22px #0005; }
-.story-media-organizer__drag-stack > div:nth-child(2) { transform: translate(4px, -5px) scale(.97); z-index: -1; }
-.story-media-organizer__drag-stack > div:nth-child(3) { transform: translate(7px, -9px) scale(.94); z-index: -2; }
+.story-media-organizer__drag-stack > div:nth-child(2) { transform: translate(4px, -5px) scale(.97); z-index: var(--z-content-minus-1); }
+.story-media-organizer__drag-stack > div:nth-child(3) { transform: translate(7px, -9px) scale(.94); z-index: var(--z-content-minus-2); }
 .story-media-organizer__drag-stack img { width: 100%; height: 100%; object-fit: cover; }
 @media (max-width: 760px) {
   .story-media-organizer { inset-block: 64px 54px; padding-inline: 12px; }

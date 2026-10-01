@@ -27,7 +27,7 @@
 
 .auth-v3-brand {
   position: absolute;
-  z-index: 4;
+  z-index: var(--z-content-4);
   top: max(24px, env(safe-area-inset-top));
   left: clamp(24px, 4vw, 58px);
   display: flex;
@@ -47,7 +47,7 @@
 
 .auth-v3-scene {
   position: absolute;
-  z-index: 0;
+  z-index: var(--z-content-0);
   inset: 0;
   overflow: hidden;
   pointer-events: none;
@@ -126,7 +126,7 @@
 }
 
 .auth-v3-scene__vignette {
-  z-index: 2;
+  z-index: var(--z-content-2);
   background:
     linear-gradient(90deg, rgba(1, 3, 4, 0.04) 0%, rgba(1, 3, 4, 0.02) 46%, rgba(1, 3, 4, 0.78) 78%, rgba(1, 3, 4, 0.96) 100%),
     radial-gradient(circle at center, transparent 42%, rgba(1, 3, 4, 0.42) 100%);
@@ -160,7 +160,7 @@
 
 .auth-card {
   position: relative;
-  z-index: 3;
+  z-index: var(--z-content-3);
   width: min(100%, 440px);
   padding: 34px;
   border: 1px solid rgba(146, 190, 184, 0.16);
@@ -579,7 +579,7 @@
 }
 
 .persistent-earth-host {
-  z-index: 1;
+  z-index: var(--z-content-1);
   overflow: hidden;
   pointer-events: none;
 }
@@ -652,7 +652,7 @@
 }
 
 .persistent-earth-content {
-  z-index: 2;
+  z-index: var(--z-content-2);
   pointer-events: none;
 }
 
@@ -684,7 +684,7 @@
 .auth-continuity__atlas {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: var(--z-content-0);
   pointer-events: none;
 }
 
@@ -699,7 +699,7 @@
 
 .auth-continuity > .auth-gate {
   position: absolute;
-  z-index: 5;
+  z-index: var(--z-content-5);
   inset: 0;
   pointer-events: auto;
 }
@@ -1044,7 +1044,7 @@
 
 .account-dock {
   position: fixed;
-  z-index: 100;
+  z-index: var(--z-chrome-100);
   pointer-events: auto;
   top: 14px;
   right: 18px;
@@ -1106,7 +1106,7 @@
 .account-dock form textarea { resize: vertical; font: inherit; }
 
 body:has(.living-atlas) .account-dock {
-  z-index: 90;
+  z-index: var(--z-chrome-90);
   top: 12px;
   right: 16px;
 }
@@ -1117,7 +1117,7 @@ body:has(.living-atlas) .account-dock button {
 
 .account-sheet-layer {
   position: fixed;
-  z-index: 200;
+  z-index: var(--z-overlay-200);
   inset: 0;
   display: grid;
   pointer-events: auto;
@@ -1134,7 +1134,7 @@ body:has(.living-atlas) .account-dock button {
 
 .account-sheet {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content-1);
   width: 100%;
   max-height: min(76svh, 620px);
   box-sizing: border-box;

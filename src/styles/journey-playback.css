@@ -3,7 +3,7 @@
 
 .journey-playback {
   position: fixed;
-  z-index: 300;
+  z-index: var(--z-modal-300);
   inset: 0;
   display: grid;
   place-items: center;
@@ -78,7 +78,7 @@
 
 .journey-playback__status {
   position: absolute;
-  z-index: 4;
+  z-index: var(--z-content-4);
   top: 18px;
   left: 50%;
   max-width: min(560px, calc(100vw - 120px));
@@ -107,7 +107,7 @@
 
 .journey-playback__selection-summary {
   position: absolute;
-  z-index: 5;
+  z-index: var(--z-content-5);
   top: 18px;
   right: 62px;
   width: min(380px, calc(100vw - 120px));
@@ -413,7 +413,7 @@
    actions as the global transport and never own a second seek cursor. */
 .journey-playback__dense-nav {
   position: absolute;
-  z-index: 5;
+  z-index: var(--z-content-5);
   right: max(18px, var(--playback-chapter-padding-inline));
   bottom: calc(var(--playback-controls-reserve) + 8px);
   display: grid;
@@ -488,7 +488,7 @@
 
 .journey-playback__return-location {
   position: absolute;
-  z-index: 5;
+  z-index: var(--z-content-5);
   top: 18px;
   left: 18px;
   min-height: 44px;
