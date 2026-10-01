@@ -320,6 +320,8 @@ try {
       await ownerPage.locator("[data-home-base-context]").waitFor();
     }
     await enterDetail(ownerPage);
+    if (fixture.home) assert(await ownerPage.locator("[data-home-base-context]").isVisible(),
+      `${fixture.name}: Home Base context disappeared before layout coverage`);
     const compact = await ownerPage.locator(".living-atlas").getAttribute("data-mobile-v2") === "on";
     if (!compact) assert(await ownerPage.locator(".living-atlas__journey-rail li").count() === 11,
       `${fixture.name}: long Journey list missing`);
@@ -333,6 +335,8 @@ try {
     await assertControlHit(generate, `${fixture.name}-generate`);
     await generate.click();
     await ownerPage.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
+    if (fixture.home) assert(await ownerPage.locator("[data-home-base-context]").isVisible(),
+      `${fixture.name}: Home Base context disappeared while the route panel was open`);
     await assertEditorLayout(ownerPage, `${fixture.name}-candidates`);
     await assertControlHit(ownerPage.getByRole("button", { name: "就是这条", exact: true }), `${fixture.name}-confirm`);
     const close = ownerPage.locator(".route-candidate-editor").getByRole("button", { name: "关闭", exact: true });
@@ -346,7 +350,8 @@ try {
         const editor = document.querySelector(".route-candidate-editor")?.getBoundingClientRect();
         const rail = document.querySelector(".living-atlas__journey-rail")?.getBoundingClientRect();
         const card = document.querySelector(".living-atlas__active")?.getBoundingClientRect();
-        return editor && rail && card && editor.left >= rail.right + 10 && editor.right <= card.left - 10;
+        return editor && rail && card && editor.left >= rail.right + 10 && editor.right <= card.left - 10
+          && editor.bottom <= innerHeight && editor.right <= innerWidth;
       });
       await assertEditorLayout(ownerPage, "desktop-live-resize");
       await assertControlHit(launcher, "desktop-live-resize-launcher");
