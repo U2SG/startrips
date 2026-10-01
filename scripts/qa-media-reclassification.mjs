@@ -77,6 +77,26 @@ try {
       : onePixelGif,
     expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
   }));
+  await page.route("**/api/media-evidence/*", (route) => {
+    const assetId = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1) ?? "qa-media");
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        evidence: {
+          mediaAssetId: assetId,
+          revision: 0,
+          recorded: {
+            spatial: { source: "unknown", granularity: "unknown", latitude: null, longitude: null, accuracyMeters: null, label: null },
+            captureTime: { source: "unknown", timezone: "unknown", local: null, instant: null, offsetMinutes: null },
+          },
+          display: { hidden: false, correction: null },
+          effective: null,
+          updatedAt: null,
+        },
+      }),
+    });
+  });
   await page.route("**/api/uploads/assets/move", async (route) => {
     const input = route.request().postDataJSON();
     moveRequests.push(input);
