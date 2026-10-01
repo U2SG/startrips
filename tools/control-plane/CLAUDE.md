@@ -178,10 +178,15 @@ records `.agent-artifacts/evaluations/<ST>-<SOURCE>-source-review.json` through:
 
 ```text
 command_exec command=["D:\\Python\\python.exe","-B","lib\\action_plan.py","feature_list.json","<ST>","--record-review","<result.json>"]
-command_exec env={"STARTRIPS_ROLE":"hourly-review"}
-
-The reviewer role is transport-injected authority, not a caller-selectable action-plan argument.
 ```
+
+Do not depend on a transport-injected role environment variable: Codexless command execution does
+not expose that as a stable authority primitive, and an environment string is not an independent
+review credential. Role separation remains an orchestration contract: only Hourly Review invokes
+`--record-review`. The helper enforces the substantive evidence boundary itself by binding the
+current PR/Source, full changed-file coverage, package/member coverage, findings semantics and
+current ONE scope, then re-reading Source/ONE immediately before writing. The input result must not
+pre-assert `reviewer_role` or `completed_at`; the helper stamps those fields only after validation.
 
 The result is an evidence document, not a claim: `feature`, `pr`, `source_sha`,
 `verdict` (CLEAR or CHANGES_REQUESTED), `findings`, `reviewed_paths`, `evidence`.

@@ -175,22 +175,17 @@ class ReceiptCases(fixture.SyntheticOne):
         with self.assertRaises(gh.EvidenceUnknown):
             plan.source_review(self.root, 'ST-001', 1, fixture.A)
 
-    def test_owner_cannot_write_maintainer_receipt(self):
-        with mock.patch.dict('os.environ', {'STARTRIPS_ROLE': 'local-backend'}):
-            with self.assertRaises(fixture.store.StoreConflict):
-                plan.record_source_review(self.path, 'ST-001', 'synthetic/project', self.root / 'absent.json')
-
-    def test_missing_role_cannot_write_maintainer_receipt(self):
+    def test_record_review_transport_does_not_require_role_environment(self):
         with mock.patch.dict('os.environ', {}, clear=True):
-            with self.assertRaisesRegex(fixture.store.StoreConflict, 'Only the independent Hourly Review role'):
-                plan.record_source_review(
-                    self.path, 'ST-001', 'synthetic/project', self.root / 'absent.json')
-
-    def test_transport_injected_hourly_review_role_passes_role_gate(self):
-        with mock.patch.dict('os.environ', {'STARTRIPS_ROLE': 'hourly-review'}, clear=True):
             with self.assertRaises(FileNotFoundError):
                 plan.record_source_review(
                     self.path, 'ST-001', 'synthetic/project', self.root / 'absent.json')
+
+    def test_review_result_cannot_preassert_recorder_identity(self):
+        result = self.root / 'review-result.json'
+        result.write_text(json.dumps({'reviewer_role': 'hourly-review'}), encoding='utf-8')
+        with self.assertRaisesRegex(fixture.store.StoreConflict, 'must not pre-assert recorder identity'):
+            plan.record_source_review(self.path, 'ST-001', 'synthetic/project', result)
 
     def test_action_plan_exposes_no_argv_role_override(self):
         source = Path(plan.__file__).read_text(encoding='utf-8')
