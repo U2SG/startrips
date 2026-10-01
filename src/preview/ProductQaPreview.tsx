@@ -228,75 +228,79 @@ function EarthDiveQaPreview() {
       {routeCandidateQa ? <output data-qa-route-segment-decision={routeCandidateRecords[focusRoute?.id ?? ""]?.[0]?.decision ?? "absent"}
         data-qa-route-shape-count={routeCandidateRecords[focusRoute?.id ?? ""]?.[0]?.shapePoints.length ?? 0}
         style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }} /> : null}
-      {shareScope ? (
-        <>
-          <output
-            data-qa-earth-dive-scope={shareRevoked ? "revoked" : "authorized"}
-            style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
-          >{shareRevoked ? "revoked" : "authorized"}</output>
-          <button
-            type="button"
-            data-qa-earth-dive-scope-revoke
-            onClick={() => {
-              setActivatedRoutePoint("");
-              setShareRevoked(true);
-              setFocusRevision((revision) => revision + 1);
-            }}
-            style={{ position: "absolute", zIndex: 60, bottom: 48, left: 14 }}
-          >QA 撤销共享范围</button>
-        </>
-      ) : (
-        <>
-          <button
-            type="button"
-            data-qa-earth-dive-route-switch="next"
-            onClick={() => { setActiveRouteIndex(1); setFocusRevision((revision) => revision + 1); }}
-            style={{ position: "absolute", zIndex: 60, bottom: 48, left: 14 }}
-          >QA 切换旅程</button>
-          <button
-            type="button"
-            data-qa-earth-dive-route-switch="first"
-            onClick={() => { setActiveRouteIndex(0); setFocusRevision((revision) => revision + 1); }}
-            style={{ position: "absolute", zIndex: 60, bottom: 48, left: 130 }}
-          >QA 返回首旅程</button>
-        </>
-      )}
-      <button
-        type="button"
-        data-qa-earth-dive-refocus
-        onClick={() => setFocusRevision((revision) => revision + 1)}
-        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 14 }}
-      >QA 重新对焦</button>
-      <button
-        type="button"
-        data-qa-earth-policy="particle-only"
-        onClick={() => setEarthExperiencePolicy("particle-only")}
-        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 140 }}
-      >QA 粒子地球</button>
-      <button
-        type="button"
-        data-qa-earth-policy="default"
-        onClick={() => setEarthExperiencePolicy("default")}
-        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 250 }}
-      >QA 默认地球</button>
-      <button
-        type="button"
-        data-qa-earth-motion-toggle
-        onClick={() => setQaReduceMotion((current) => !current)}
-        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 360 }}
-      >QA 动效切换</button>
-      <button
-        type="button"
-        data-qa-earth-quality="low"
-        onClick={() => persistentEarth.setStage("handoff")}
-        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 470 }}
-      >QA 低质量</button>
-      <button
-        type="button"
-        data-qa-earth-quality="high"
-        onClick={() => persistentEarth.setStage("atlas")}
-        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 570 }}
-      >QA 高质量</button>
+      <div style={routeCandidateQa && !shareScope
+        ? { position: "absolute", zIndex: 60, top: 0, right: 0, width: 660, height: 88 }
+        : { display: "contents" }}>
+        {shareScope ? (
+          <>
+            <output
+              data-qa-earth-dive-scope={shareRevoked ? "revoked" : "authorized"}
+              style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+            >{shareRevoked ? "revoked" : "authorized"}</output>
+            <button
+              type="button"
+              data-qa-earth-dive-scope-revoke
+              onClick={() => {
+                setActivatedRoutePoint("");
+                setShareRevoked(true);
+                setFocusRevision((revision) => revision + 1);
+              }}
+              style={{ position: "absolute", zIndex: 60, bottom: 48, left: 14 }}
+            >QA 撤销共享范围</button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              data-qa-earth-dive-route-switch="next"
+              onClick={() => { setActiveRouteIndex(1); setFocusRevision((revision) => revision + 1); }}
+              style={{ position: "absolute", zIndex: 60, bottom: 48, left: 14 }}
+            >QA 切换旅程</button>
+            <button
+              type="button"
+              data-qa-earth-dive-route-switch="first"
+              onClick={() => { setActiveRouteIndex(0); setFocusRevision((revision) => revision + 1); }}
+              style={{ position: "absolute", zIndex: 60, bottom: 48, left: 130 }}
+            >QA 返回首旅程</button>
+          </>
+        )}
+        <button
+          type="button"
+          data-qa-earth-dive-refocus
+          onClick={() => setFocusRevision((revision) => revision + 1)}
+          style={{ position: "absolute", zIndex: 60, bottom: 14, left: 14 }}
+        >QA 重新对焦</button>
+        <button
+          type="button"
+          data-qa-earth-policy="particle-only"
+          onClick={() => setEarthExperiencePolicy("particle-only")}
+          style={{ position: "absolute", zIndex: 60, bottom: 14, left: 140 }}
+        >QA 粒子地球</button>
+        <button
+          type="button"
+          data-qa-earth-policy="default"
+          onClick={() => setEarthExperiencePolicy("default")}
+          style={{ position: "absolute", zIndex: 60, bottom: 14, left: 250 }}
+        >QA 默认地球</button>
+        <button
+          type="button"
+          data-qa-earth-motion-toggle
+          onClick={() => setQaReduceMotion((current) => !current)}
+          style={{ position: "absolute", zIndex: 60, bottom: 14, left: 360 }}
+        >QA 动效切换</button>
+        <button
+          type="button"
+          data-qa-earth-quality="low"
+          onClick={() => persistentEarth.setStage("handoff")}
+          style={{ position: "absolute", zIndex: 60, bottom: 14, left: 470 }}
+        >QA 低质量</button>
+        <button
+          type="button"
+          data-qa-earth-quality="high"
+          onClick={() => persistentEarth.setStage("atlas")}
+          style={{ position: "absolute", zIndex: 60, bottom: 14, left: 570 }}
+        >QA 高质量</button>
+      </div>
     </main>
   );
 }

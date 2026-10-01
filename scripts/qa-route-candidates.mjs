@@ -40,17 +40,22 @@ const layoutJourneys = Array.from({ length: 11 }, (_, index) => {
     })),
   };
 });
+const layoutHome = {
+  id: "qa-layout-home", label: "Synthetic Home Base", startedOn: "2020-01-01", endedOn: null,
+  latitude: 50.5, longitude: 7.8, source: "manual",
+};
 
-async function openPage(policy = "default", { owner = false, viewport = { width: 1280, height: 900 }, touch = false } = {}) {
+async function openPage(policy = "default", { owner = false, viewport = { width: 1280, height: 900 }, touch = false, home = false } = {}) {
   const page = await browser.newPage({ viewport, hasTouch: touch, reducedMotion: "reduce" });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.route("**/api/auth/get-session", (route) => json(route, null));
   if (owner) {
     await page.route("**/api/journeys", (route) => json(route, { journeys: layoutJourneys }));
-    await page.route("**/api/home-bases", (route) => json(route, { periods: [] }));
+    await page.route("**/api/home-bases", (route) => json(route, { periods: home ? [layoutHome] : [] }));
     await page.route("**/api/home-bases/dismissal", (route) => json(route, { dismissals: [] }));
     await page.route("**/api/journey-recorded-tracks/*", (route) => json(route, { recordedTracks: [] }));
+    await page.route("**/api/everyday-fragments**", (route) => json(route, { fragments: [] }));
   }
   await page.route(/\/api\/mapstyle\?path=styles(?:%2F|\/)fiord/i, (route) => json(route, style));
   await page.route("**/api/journey-route-segments/availability", (route) => {
@@ -152,7 +157,7 @@ async function assertEditorLayout(page, name) {
     };
     const box = rect(editor);
     const chrome = [...document.querySelectorAll(
-      ".living-atlas__journey-rail, .living-atlas__active, .living-atlas__header, .mobile-v2__header, .mobile-v2__chrome, .globe-time-scrubber",
+      ".living-atlas__journey-rail, .living-atlas__active, .living-atlas__home-base-context, .living-atlas__header, .mobile-v2__header, .mobile-v2__chrome, .globe-time-scrubber",
     )].filter((element) => {
       const style = getComputedStyle(element);
       return style.display !== "none" && style.visibility !== "hidden" && element.getBoundingClientRect().width > 0;
@@ -302,10 +307,18 @@ try {
     { name: "desktop", viewport: { width: 1280, height: 900 } },
     { name: "fold-desktop", viewport: { width: 1100, height: 768 }, touch: true },
     { name: "narrow-desktop", viewport: { width: 800, height: 700 } },
+    { name: "narrow-desktop-home", viewport: { width: 800, height: 700 }, home: true },
     { name: "phone", viewport: { width: 390, height: 844 }, touch: true },
     { name: "phone-landscape", viewport: { width: 844, height: 390 }, touch: true },
   ]) {
     const { page: ownerPage, pageErrors: ownerErrors } = await openPage("default", { owner: true, ...fixture });
+    if (fixture.home) {
+      const homeMarker = ownerPage.locator(`.living-atlas-globe__home-base[data-home-base-period-id="${layoutHome.id}"]`);
+      await homeMarker.waitFor({ state: "visible", timeout: 25_000 });
+      await homeMarker.focus();
+      await ownerPage.keyboard.press("Enter");
+      await ownerPage.locator("[data-home-base-context]").waitFor();
+    }
     await enterDetail(ownerPage);
     const compact = await ownerPage.locator(".living-atlas").getAttribute("data-mobile-v2") === "on";
     if (!compact) assert(await ownerPage.locator(".living-atlas__journey-rail li").count() === 11,

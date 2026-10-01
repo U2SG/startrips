@@ -62,7 +62,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
     if (!atlas) return;
     const selectors = {
       left: ".living-atlas__journey-rail",
-      right: ".living-atlas__active, .living-atlas__route-point-context",
+      right: ".living-atlas__active, .living-atlas__route-point-context, .living-atlas__home-base-context",
       top: ".living-atlas__header, .mobile-v2__header",
       bottom: ".globe-time-scrubber, .mobile-v2__chrome",
     };
