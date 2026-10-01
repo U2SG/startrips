@@ -7,12 +7,12 @@ const ci = read(".github/workflows/ci.yml");
 const reproduction = read(".github/workflows/story-autoplay-reproduction.yml");
 const job = (name) => ci.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0];
 
-test("all 31 suite commands are retained exactly once across the same ten shards", () => {
+test("all 31 suite commands are retained exactly once across at most eight shards", () => {
   const browser = job("browser-qa");
   const matrix = browser.slice(browser.indexOf("      matrix:"), browser.indexOf("\n    steps:"));
   const names = [...matrix.matchAll(/^          - name: (.+)$/gm)].map((m) => m[1]);
-  assert.equal(names.length, 10);
-  assert.equal(new Set(names).size, 10);
+  assert.ok(names.length <= 8);
+  assert.equal(new Set(names).size, names.length);
   const rows = [...matrix.matchAll(/^              ([a-z0-9-]+)::(.+)$/gm)];
   assert.equal(rows.length, 31);
   assert.equal(new Set(rows.map((m) => m[1])).size, 31);

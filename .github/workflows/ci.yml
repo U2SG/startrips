@@ -230,13 +230,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: earth
-            suites: "|earth-dive|"
+          - name: auth-media
+            suites: "|earth-dive|login-media|composer-playback-preview|"
             commands: |
               earth-dive::pnpm qa:earth-dive
-          - name: auth-media
-            suites: "|login-media|composer-playback-preview|"
-            commands: |
               login-media::QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification
               composer-playback-preview::pnpm qa:composer-playback-preview
           - name: story-media
@@ -256,12 +253,6 @@ jobs:
               cover-reveal::pnpm qa:cover-reveal
               owner-share::pnpm qa:owner-share
               playback-map-bridge::pnpm qa:playback-map-bridge
-          - name: playback-brand
-            suites: "|playback-prefetch|playback-continuity|brand-signature-motion|"
-            commands: |
-              playback-prefetch::pnpm qa:playback-prefetch
-              playback-continuity::pnpm qa:playback-continuity
-              brand-signature-motion::pnpm qa:brand-signature-motion
           - name: shell-composer
             suites: "|post-login|mobile-contract|composer-route-points|composer-mobile-ia|entry-boundaries|final-acceptance|"
             commands: |
@@ -287,10 +278,13 @@ jobs:
               home-base-suggestion::pnpm qa:home-base-suggestion
               home-base-context::pnpm qa:home-base-context
           - name: route-candidates
-            suites: "|route-candidates|playback-manual-camera|"
+            suites: "|route-candidates|playback-manual-camera|playback-prefetch|playback-continuity|brand-signature-motion|"
             commands: |
               route-candidates::pnpm qa:route-candidates
               playback-manual-camera::pnpm qa:playback-manual-camera
+              playback-prefetch::pnpm qa:playback-prefetch
+              playback-continuity::pnpm qa:playback-continuity
+              brand-signature-motion::pnpm qa:brand-signature-motion
 
     steps:
       - uses: actions/checkout@v7
