@@ -95,7 +95,7 @@ test("fails closed when final uses more than one commit", () => {
   assert.equal(result.reason, "final-commit-count-2");
 });
 
-test("workflow keeps all 31 logical browser suites across exactly 10 shards", () => {
+test("workflow keeps all 31 logical browser suites across at most eight shards", () => {
   const workflow = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows", "ci.yml"), "utf8").replace(/\r\n/g, "\n");
   const matrixStart = workflow.indexOf("      matrix:\n        include:");
   const stepsStart = workflow.indexOf("\n    steps:", matrixStart);
@@ -111,7 +111,8 @@ test("workflow keeps all 31 logical browser suites across exactly 10 shards", ()
     "story-media-handoff", "playback-manual-camera", "media-motion-lab", "route-candidates",
   ]);
   const shardNames = [...matrixText.matchAll(/^          - name: ([a-z0-9-]+)$/gm)].map((match) => match[1]);
-  assert.equal(shardNames.length, 10);
+  assert.ok(shardNames.length <= 8);
+  assert.equal(new Set(shardNames).size, shardNames.length);
   const suites = new Set();
   for (const match of matrixText.matchAll(/^            suites: "([^"]+)"$/gm)) {
     for (const suite of match[1].split("|").filter(Boolean)) suites.add(suite);
