@@ -96,7 +96,7 @@ function record(name, detail) {
   if (detail.failed) failed = true;
 }
 
-async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null, qaMode = "continuity", recap = false, densityQa = "sequence", ownedCover = false }) {
+async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = null, qaMode = "continuity", recap = false, densityQa = "sequence", ownedCover = false, expireCachedReadOnClose = null }) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
@@ -194,6 +194,7 @@ async function open({ viewport, reduceMotion = true, readUrl = null, holdRead = 
     qaMode,
     qaRecap: recap ? "1" : "0",
     qaOwnedCover: ownedCover ? "1" : "0",
+    ...(expireCachedReadOnClose ? { qaExpireCachedReadOnClose: expireCachedReadOnClose } : {}),
     ...(densityQa === "dense" ? { qaDenseDensity: "1" } : { qaSequenceDensity: "1" }),
     qaReduceMotion: reduceMotion ? "1" : "0",
   });
@@ -651,14 +652,23 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
-{
-  const run = await open({ viewport: VIEWPORTS[0], reduceMotion: false });
+async function exerciseMixedVideoCloseReopen({ expireCachedRead = false } = {}) {
+  const run = await open({
+    viewport: VIEWPORTS[0],
+    reduceMotion: false,
+    expireCachedReadOnClose: expireCachedRead ? "st109-p4-m2" : null,
+  });
   try {
     await pausePlayback(run.page);
     let scrubber = run.page.locator('.journey-playback__progress input[type="range"]');
     for (let i = 0; i < STEPS.length; i += 1) await scrubber.press("ArrowLeft");
     const target = STEPS.findIndex((step) => step.kind === "media" && step.pointIndex === 4 && step.mediaIndex === 2);
     for (let i = 0; i < EXPECTED_MEANINGFUL.length && (await currentStep(run.page)).step !== target; i += 1) await scrubber.press("ArrowRight");
+    await run.page.waitForFunction(() => {
+      const node = document.querySelector(".playback-media-presentation");
+      return node?.getAttribute("data-media-presentation") === "settled"
+        && node.getAttribute("data-requested-asset") === "st109-p4-m2";
+    }, null, { timeout: 10_000 });
     await run.page.locator(".journey-playback__close").click();
     await run.page.locator("[data-qa-playback-reopen]").click();
     await run.page.locator(".journey-playback").waitFor({ state: "visible" });
@@ -677,16 +687,21 @@ for (const viewport of VIEWPORTS) {
       videos: node.querySelectorAll(".playback-media-presentation__slot video").length,
     }));
     const targetReads = run.readAttempts.filter((url) => url.includes("st109-p4-m2")).length;
-    record("desktop:mixed-video-close-reopen", {
+    record(expireCachedRead
+      ? "desktop:mixed-video-close-reopen-resigns-expired-read"
+      : "desktop:mixed-video-close-reopen-reuses-fresh-read", {
       ...final,
       targetReads,
-      failed: targetReads < 2 || final.requested !== "st109-p4-m2"
+      failed: targetReads !== (expireCachedRead ? 2 : 1) || final.requested !== "st109-p4-m2"
         || final.presented !== final.requested || final.videos !== 1,
     });
   } finally {
     await run.page.close();
   }
 }
+
+await exerciseMixedVideoCloseReopen();
+await exerciseMixedVideoCloseReopen({ expireCachedRead: true });
 
 // ── One uninterrupted cinematic pass: the seam itself ────────────────────────
 {

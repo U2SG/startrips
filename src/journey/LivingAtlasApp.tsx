@@ -102,6 +102,7 @@ import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayou
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import {
   mediaReadRefreshDelayMs,
+  type MediaReadState,
 } from "./mediaReadRefresh";
 import {
   buildRoutePointContext,
@@ -1256,6 +1257,26 @@ export function LivingAtlasApp({
     soundtrackRead: null,
     cameraCommand: null,
   });
+  // Signed visual reads survive an overlay close, but their actors do not. A
+  // reopened Playback can seed a new owner actor from a still-fresh read and
+  // the actor's normal lifetime policy re-signs it once expired.
+  const playbackMediaReadCacheRef = useRef(new Map<string, Record<string, MediaReadState>>());
+  const cachePlaybackMediaRead = useCallback((
+    journeyId: string,
+    assetId: string,
+    read: MediaReadState | null,
+  ) => {
+    const current = playbackMediaReadCacheRef.current.get(journeyId) ?? {};
+    if (read?.status === "ready") {
+      playbackMediaReadCacheRef.current.set(journeyId, { ...current, [assetId]: read });
+      return;
+    }
+    if (!(assetId in current)) return;
+    const next = { ...current };
+    delete next[assetId];
+    if (Object.keys(next).length > 0) playbackMediaReadCacheRef.current.set(journeyId, next);
+    else playbackMediaReadCacheRef.current.delete(journeyId);
+  }, []);
   // Playback's content target can advance while the viewer explores the map.
   // Only a fresh explicit location choice or the return control restores
   // camera follow; timer, media and renderer readiness cannot do so.
@@ -4299,6 +4320,10 @@ export function LivingAtlasApp({
             }) : current);
           }}
           initialSoundtrackRead={playbackSession.soundtrackRead}
+          initialMediaReads={playbackSession.journeyId
+            ? playbackMediaReadCacheRef.current.get(playbackSession.journeyId)
+            : undefined}
+          onMediaReadCacheChange={cachePlaybackMediaRead}
           stepDurationResolver={playbackStepDurationResolver}
           mediaTrimResolver={playbackMediaTrimResolver}
           onTempoChange={handlePlaybackTempoChange}

@@ -8,6 +8,7 @@ import {
   stopPlaybackMediaLifecycleActorsForJourney,
 } from "./playbackMediaLifecycle";
 import type { PrivateMediaRead } from "./types";
+import type { MediaReadState } from "./mediaReadRefresh";
 
 const NOW = Date.parse("2026-09-30T00:00:00.000Z");
 
@@ -36,7 +37,7 @@ function signed(
   };
 }
 
-function start(isImage = true) {
+function start(isImage = true, initialRead?: MediaReadState) {
   const reads: Array<{ signal: AbortSignal; request: Deferred<PrivateMediaRead> }> = [];
   const decodes: Array<{ signal: AbortSignal; url: string; request: Deferred<void> }> = [];
   const machine = playbackMediaLifecycleMachine.provide({
@@ -53,7 +54,7 @@ function start(isImage = true) {
       }),
     },
   });
-  const actor = createActor(machine, { input: { assetId: "asset", isImage } });
+  const actor = createActor(machine, { input: { assetId: "asset", isImage, initialRead } });
   actor.start();
   return { actor, reads, decodes };
 }
@@ -247,6 +248,34 @@ describe("playbackMediaLifecycle", () => {
     await settle();
     expect(playbackLifecycleMediaRead(actor.getSnapshot())).toMatchObject({ status: "ready", url: "video-2" });
     expect(decodes.map(({ url }) => url)).toEqual(["preview-1", "preview-2"]);
+    actor.stop();
+  });
+
+  it("seeds a replacement actor from a still-fresh read after overlay close", () => {
+    const initialRead: MediaReadState = {
+      status: "ready",
+      url: "cached-video",
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + 900_000,
+    };
+    const { actor, reads } = start(false, initialRead);
+    actor.send(prepare(1));
+    expect(reads).toHaveLength(0);
+    expect(playbackLifecycleMediaRead(actor.getSnapshot())).toEqual(initialRead);
+    actor.stop();
+  });
+
+  it("re-signs instead of reusing an expired read seeded into a replacement actor", () => {
+    const initialRead: MediaReadState = {
+      status: "ready",
+      url: "expired-video",
+      issuedAt: Date.now() - 120_000,
+      expiresAt: Date.now() - 1,
+    };
+    const { actor, reads } = start(false, initialRead);
+    actor.send(prepare(1));
+    expect(reads).toHaveLength(1);
+    expect(playbackLifecycleMediaRead(actor.getSnapshot())).toEqual({ status: "loading" });
     actor.stop();
   });
 

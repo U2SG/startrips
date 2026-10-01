@@ -17,6 +17,7 @@ import type { JourneyMediaAsset, MediaPreviewRead, PrivateMediaRead } from "./ty
 export type PlaybackMediaLifecycleInput = {
   assetId: string;
   isImage: boolean;
+  initialRead?: MediaReadState;
 };
 
 export type PlaybackLifecycleRead = {
@@ -69,6 +70,16 @@ function lifecycleRead(
 
 function readState(read: PlaybackLifecycleRead | null): MediaReadState | undefined {
   return read ? { status: "ready", ...read } : undefined;
+}
+
+function initialLifecycleRead(read: MediaReadState | undefined): PlaybackLifecycleRead | null {
+  if (read?.status !== "ready") return null;
+  return {
+    url: read.url,
+    preview: read.preview,
+    issuedAt: read.issuedAt,
+    expiresAt: read.expiresAt,
+  };
 }
 
 /**
@@ -137,9 +148,11 @@ export const playbackMediaLifecycleMachine = setup({
 }).createMachine({
   id: "playbackMediaLifecycle",
   context: ({ input }) => ({
-    ...input,
+    assetId: input.assetId,
+    isImage: input.isImage,
+    initialRead: input.initialRead,
     requestedAt: 0,
-    read: null,
+    read: initialLifecycleRead(input.initialRead),
     previewRequestedUrl: null,
     previewWarmedUrl: null,
     decodeRequestedUrl: null,

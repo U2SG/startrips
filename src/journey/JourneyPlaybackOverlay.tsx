@@ -182,6 +182,8 @@ export function JourneyPlaybackOverlay({
   cameraFlight,
   onReturnToCurrentLocation,
   initialSoundtrackRead,
+  initialMediaReads,
+  onMediaReadCacheChange,
   reduceMotion,
   stepDurationResolver,
   mediaTrimResolver,
@@ -204,6 +206,8 @@ export function JourneyPlaybackOverlay({
   // Review P1: a prefetched soundtrack signed read, so the first play() can
   // run inside the click gesture (browser user-activation policy).
   initialSoundtrackRead?: { url: string } | null;
+  initialMediaReads?: Readonly<Record<string, MediaRead>>;
+  onMediaReadCacheChange?: (journeyId: string, assetId: string, read: MediaRead | null) => void;
   reduceMotion?: boolean;
   stepDurationResolver?: PlaybackStepDurationResolver;
   // #195 Phase 2: the trim window the Edit Plan declared for a video beat. The
@@ -375,12 +379,18 @@ export function JourneyPlaybackOverlay({
     onClose({ reason, position });
   }, [director.completed, exit, onClose]);
   const [mediaReads, setMediaReads] = useState<Record<string, MediaRead>>(() => {
-    if (!journey || !initialSoundtrackRead) return {};
+    if (!journey) return {};
+    const now = Date.now();
+    const seeded = Object.fromEntries(Object.entries(initialMediaReads ?? {}).filter(([, read]) => (
+      playbackReadIsReusable(read, now)
+    )));
+    if (!initialSoundtrackRead) return seeded;
     const soundtrack = journeySoundtrack(journey);
-    if (!soundtrack) return {};
+    if (!soundtrack) return seeded;
     // The prefetch cache handed this one over as fresh, and the soundtrack is
     // deliberately never re-read while it plays, so no lifetime is known here.
     return {
+      ...seeded,
       [soundtrack.id]: {
         status: "ready",
         url: initialSoundtrackRead.url,
@@ -404,11 +414,17 @@ export function JourneyPlaybackOverlay({
     if (existing) return existing;
     const asset = journey.media.find((candidate) => candidate.id === assetId);
     if (!asset) return null;
-    const actor = createPlaybackMediaLifecycleActor({ assetId, isImage: asset.mimeType.startsWith("image/") }, readMedia);
+    const actor = createPlaybackMediaLifecycleActor({
+      assetId,
+      isImage: asset.mimeType.startsWith("image/"),
+      initialRead: mediaReadsRef.current[assetId],
+    }, readMedia);
     actor.subscribe((snapshot) => {
       if (journeyIdRef.current !== journey.id) return;
       setMediaLifecycleSnapshots((current) => ({ ...current, [assetId]: snapshot }));
       const read = playbackLifecycleMediaRead(snapshot);
+      if (read?.status === "ready") onMediaReadCacheChange?.(journey.id, assetId, read);
+      else if (snapshot.matches("failed")) onMediaReadCacheChange?.(journey.id, assetId, null);
       setMediaReads((current) => {
         if (read) return { ...current, [assetId]: read };
         if (!(assetId in current)) return current;
@@ -420,7 +436,7 @@ export function JourneyPlaybackOverlay({
     mediaLifecycleActorsRef.current.set(key, actor);
     actor.start();
     return actor;
-  }, [journey, readMedia]);
+  }, [journey, onMediaReadCacheChange, readMedia]);
   useEffect(() => {
     const ownedJourneyId = journey?.id ?? null;
     return () => {
