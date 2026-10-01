@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createStoryAutoplayFallbackController,
   JourneyStory,
+  mediaEvidenceCoordinateCorrection,
   mediaEvidenceLocationText,
   recordedEvidenceForPlacementRead,
   finalizeMediaDragCommit,
@@ -128,6 +129,28 @@ describe("media evidence bridge (#334)", () => {
         label: null,
       },
     })).toContain("用户纠正");
+  });
+
+  it("rejects blank coordinate editor inputs instead of emitting a false 0,0 correction", () => {
+    expect(mediaEvidenceCoordinateCorrection("", "")).toBeNull();
+    expect(mediaEvidenceCoordinateCorrection("   ", "\t")).toBeNull();
+    expect(mediaEvidenceCoordinateCorrection("", "114.1")).toBeNull();
+    expect(mediaEvidenceCoordinateCorrection("22.6", "")).toBeNull();
+    expect(mediaEvidenceCoordinateCorrection("0", "0")).toEqual({
+      granularity: "coordinate",
+      latitude: 0,
+      longitude: 0,
+      label: null,
+    });
+
+    const storySource = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
+    const start = storySource.indexOf("function saveCoordinateCorrection()");
+    const end = storySource.indexOf("\n  return (", start);
+    const saveSource = storySource.slice(start, end);
+    expect(start).toBeGreaterThan(0);
+    expect(saveSource).toContain("mediaEvidenceCoordinateCorrection(latitude, longitude)");
+    expect(saveSource).not.toContain("Number(latitude)");
+    expect(saveSource).not.toContain("Number(longitude)");
   });
 
   it("writes a correction, refetches it, and can hide the effective location", async () => {

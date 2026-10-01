@@ -357,6 +357,18 @@ export function mediaEvidenceLocationText(evidence: MediaEvidenceRecord): string
   return `${source} · ${effective.latitude.toFixed(5)}, ${effective.longitude.toFixed(5)} · ${accuracy}`;
 }
 
+export function mediaEvidenceCoordinateCorrection(latitudeInput: string, longitudeInput: string) {
+  const latitude = latitudeInput.trim();
+  const longitude = longitudeInput.trim();
+  if (!latitude || !longitude) return null;
+  const lat = Number(latitude);
+  const lon = Number(longitude);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) {
+    return null;
+  }
+  return { granularity: "coordinate" as const, latitude: lat, longitude: lon, label: null };
+}
+
 function MediaEvidenceEditor({
   assetId,
   readEvidence,
@@ -407,15 +419,14 @@ function MediaEvidenceEditor({
   }
 
   function saveCoordinateCorrection() {
-    const lat = Number(latitude);
-    const lon = Number(longitude);
-    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) {
+    const correction = mediaEvidenceCoordinateCorrection(latitude, longitude);
+    if (!correction) {
       setMessage("请输入有效的纬度（-90–90）和经度（-180–180）。");
       return;
     }
     void commitDisplay({
       hidden: false,
-      correction: { granularity: "coordinate", latitude: lat, longitude: lon, label: null },
+      correction,
     });
   }
 
