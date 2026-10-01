@@ -272,7 +272,7 @@
   border: 1px solid rgba(118, 198, 188, 0.28);
   background: #0a1718;
 }
-.route-shape-picker { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 100%; }
+.route-candidate-editor__shapes > .route-shape-picker { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 100%; }
 .route-shape-picker form { display: grid; gap: 8px; }
 .route-shape-picker input {
   min-height: 44px;

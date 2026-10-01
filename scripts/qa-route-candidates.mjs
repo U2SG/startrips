@@ -426,6 +426,22 @@ try {
     const close = ownerPage.locator(".route-candidate-editor").getByRole("button", { name: "关闭", exact: true });
     await assertControlHit(close, `${fixture.name}-close-after-scroll`, { scroll: false });
     await ownerPage.screenshot({ path: `${artifactDir}/${fixture.name}-layout.png` });
+    await ownerPage.getByRole("button", { name: "调整经过位置", exact: true }).click();
+    const shapePicker = ownerPage.locator(".route-shape-picker");
+    const searchInput = shapePicker.getByRole("textbox", { name: "搜索经过的地点" });
+    await assertControlHit(searchInput, `${fixture.name}-shape-search-input`);
+    await searchInput.fill("Synthetic pass");
+    await shapePicker.getByRole("button", { name: "搜索", exact: true }).click();
+    await assertControlHit(shapePicker.getByRole("button", { name: /添加到这段路线/ }), `${fixture.name}-shape-search-result`);
+    const coordinates = shapePicker.locator("summary");
+    await assertControlHit(coordinates, `${fixture.name}-shape-coordinate-toggle`);
+    await coordinates.click();
+    await assertControlHit(shapePicker.getByRole("textbox", { name: "纬度", exact: true }), `${fixture.name}-shape-latitude`);
+    await assertControlHit(shapePicker.getByRole("textbox", { name: "经度", exact: true }), `${fixture.name}-shape-longitude`);
+    await assertControlHit(shapePicker.getByRole("button", { name: "添加这组坐标" }), `${fixture.name}-shape-coordinate-add`);
+    await assertEditorLayout(ownerPage, `${fixture.name}-shape-picker`);
+    await assertControlHit(close, `${fixture.name}-shape-close-after-scroll`, { scroll: false });
+    await ownerPage.screenshot({ path: `${artifactDir}/${fixture.name}-shape-picker.png` });
     await close.click();
     await assertEditorLayout(ownerPage, `${fixture.name}-closed`);
     if (fixture.name === "desktop") {

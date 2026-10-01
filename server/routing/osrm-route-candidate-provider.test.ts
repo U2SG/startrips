@@ -62,16 +62,19 @@ describe("OSRM road candidate gate", () => {
     }
   });
 
-  it("offers roads near representative park coordinates without moving the requested places", async () => {
-    const waypoints = [{ location: [0, 0.06], distance: 6_500 }, { location: [0.1, 0.04], distance: 4_400 }];
-    const route = { ...direct, geometry: { type: "LineString", coordinates: [[0, 0.06], [0.05, 0.05], [0.1, 0.04]] } };
+  it.each([[0, 0], [45, -110], [-35, 150]])("preserves requested places and shape points at latitude %s, longitude %s", async (lat, lon) => {
+    const requested = [{ lat, lon }, { lat, lon: lon + 0.05 }, { lat, lon: lon + 0.1 }];
+    const snapped = [[lon, lat + 0.06], [lon + 0.05, lat + 0.05], [lon + 0.1, lat + 0.04]];
+    const waypoints = snapped.map((location, index) => ({ location, distance: [6_500, 5_500, 4_400][index] }));
+    const route = { ...direct, geometry: { type: "LineString", coordinates: snapped } };
     const [accepted] = await providerWith(osrmResponse([route], waypoints)).candidates({
-      coordinates, profile: "driving", alternativesCount: 1, signal: new AbortController().signal,
+      coordinates: requested, profile: "driving", alternativesCount: 1, signal: new AbortController().signal,
     });
-    expect(accepted.snapping.waypoints.map((point) => point.requested)).toEqual([[0, 0], [0.1, 0]]);
-    expect(accepted.snapping.waypoints.map((point) => point.snapped)).toEqual([[0, 0.06], [0.1, 0.04]]);
+    expect(accepted.snapping.waypoints.map((point) => point.requested)).toEqual(requested.map((point) => [point.lon, point.lat]));
+    expect(accepted.snapping.waypoints.map((point) => point.snapped)).toEqual(snapped);
     expect(accepted.snapping.waypoints[0].distanceMeters).toBeGreaterThan(6_500);
-    expect(accepted.snapping.waypoints[1].distanceMeters).toBeGreaterThan(4_400);
+    expect(accepted.snapping.waypoints[1].distanceMeters).toBeGreaterThan(5_500);
+    expect(accepted.snapping.waypoints[2].distanceMeters).toBeGreaterThan(4_400);
     expect(accepted.geometry).toEqual(route.geometry.coordinates);
   });
 
