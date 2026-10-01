@@ -122,6 +122,36 @@ describe("playbackMediaLifecycle", () => {
     actor.stop();
   });
 
+  it("re-decodes a refreshed image URL without blanking the presentable frame", async () => {
+    const { actor, reads, decodes } = start(true);
+    actor.send(prepare(1));
+    reads[0].request.resolve(signed("image-1", 90_000));
+    await settle();
+    expect(decodes).toHaveLength(1);
+    expect(decodes[0].url).toBe("image-1");
+    decodes[0].request.resolve();
+    await settle();
+    expect(playbackLifecycleGate(actor.getSnapshot())).toBe("ready");
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads).toHaveLength(2);
+    expect(playbackLifecycleMediaRead(actor.getSnapshot())).toMatchObject({ status: "ready", url: "image-1" });
+    expect(playbackLifecycleGate(actor.getSnapshot())).toBe("ready");
+
+    reads[1].request.resolve(signed("image-2", 90_000));
+    await settle();
+    expect(playbackLifecycleMediaRead(actor.getSnapshot())).toMatchObject({ status: "ready", url: "image-2" });
+    expect(decodes).toHaveLength(2);
+    expect(decodes[1].url).toBe("image-2");
+    expect(playbackLifecycleDecodeReadiness(actor.getSnapshot())).toEqual({ status: "pending" });
+    expect(playbackLifecycleGate(actor.getSnapshot())).not.toBe("ready");
+
+    decodes[1].request.resolve();
+    await settle();
+    expect(playbackLifecycleGate(actor.getSnapshot())).toBe("ready");
+    actor.stop();
+  });
+
   it("aborts decode when the intent leaves", async () => {
     const { actor, reads, decodes } = start(true);
     actor.send(prepare(1));
@@ -246,6 +276,34 @@ describe("playbackMediaLifecycle", () => {
     actor.send(prepare(2));
     expect(reads).toHaveLength(2);
     expect(playbackLifecycleMediaRead(actor.getSnapshot())).toEqual({ status: "loading" });
+    actor.stop();
+  });
+
+  it("re-decodes the new signed URL after an expired image reopen", async () => {
+    const { actor, reads, decodes } = start(true);
+    actor.send(prepare(1));
+    reads[0].request.resolve(signed("image-short", 20_000));
+    await settle();
+    expect(decodes[0].url).toBe("image-short");
+    decodes[0].request.resolve();
+    await settle();
+    expect(playbackLifecycleGate(actor.getSnapshot())).toBe("ready");
+
+    actor.send({ type: "RELEASE" });
+    await vi.advanceTimersByTimeAsync(11_000);
+    actor.send(prepare(2));
+    expect(reads).toHaveLength(2);
+    expect(playbackLifecycleMediaRead(actor.getSnapshot())).toEqual({ status: "loading" });
+
+    reads[1].request.resolve(signed("image-fresh", 90_000));
+    await settle();
+    expect(decodes).toHaveLength(2);
+    expect(decodes[1].url).toBe("image-fresh");
+    expect(playbackLifecycleDecodeReadiness(actor.getSnapshot())).toEqual({ status: "pending" });
+    expect(playbackLifecycleGate(actor.getSnapshot())).not.toBe("ready");
+    decodes[1].request.resolve();
+    await settle();
+    expect(playbackLifecycleGate(actor.getSnapshot())).toBe("ready");
     actor.stop();
   });
 

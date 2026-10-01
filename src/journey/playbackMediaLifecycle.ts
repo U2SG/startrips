@@ -31,7 +31,8 @@ export type PlaybackMediaLifecycleContext = PlaybackMediaLifecycleInput & {
   read: PlaybackLifecycleRead | null;
   previewRequestedUrl: string | null;
   previewWarmedUrl: string | null;
-  decoded: boolean;
+  decodeRequestedUrl: string | null;
+  decodedUrl: string | null;
   decodeError: string | null;
   error: string | null;
   intentRevision: number | null;
@@ -101,7 +102,10 @@ export const playbackMediaLifecycleMachine = setup({
     previewRequestChanged: ({ context }) => (
       (context.read?.preview?.url ?? null) !== context.previewRequestedUrl
     ),
-    alreadyDecoded: ({ context }) => context.decoded,
+    decodeRequestChanged: ({ context }) => (context.read?.url ?? null) !== context.decodeRequestedUrl,
+    alreadyDecoded: ({ context }) => Boolean(
+      context.read?.url && context.read.url === context.decodedUrl
+    ),
   },
   delays: {
     refreshDelay: ({ context }) => (context.read
@@ -122,6 +126,13 @@ export const playbackMediaLifecycleMachine = setup({
     markPreviewWarmed: assign({
       previewWarmedUrl: ({ context }) => context.previewRequestedUrl,
     }),
+    markDecodeRequested: assign({
+      decodeRequestedUrl: ({ context }) => context.read?.url ?? null,
+    }),
+    markDecoded: assign({
+      decodedUrl: ({ context }) => context.decodeRequestedUrl,
+      decodeError: null,
+    }),
   },
 }).createMachine({
   id: "playbackMediaLifecycle",
@@ -131,7 +142,8 @@ export const playbackMediaLifecycleMachine = setup({
     read: null,
     previewRequestedUrl: null,
     previewWarmedUrl: null,
-    decoded: false,
+    decodeRequestedUrl: null,
+    decodedUrl: null,
     decodeError: null,
     error: null,
     intentRevision: null,
@@ -251,12 +263,14 @@ export const playbackMediaLifecycleMachine = setup({
                   ],
                 },
                 decoding: {
+                  entry: "markDecodeRequested",
+                  always: { guard: "decodeRequestChanged", target: "checking" },
                   invoke: {
                     src: "decodeImage",
-                    input: ({ context }) => ({ url: context.read!.url }),
+                    input: ({ context }) => ({ url: context.decodeRequestedUrl! }),
                     onDone: {
                       target: "decoded",
-                      actions: assign({ decoded: true, decodeError: null }),
+                      actions: "markDecoded",
                     },
                     onError: {
                       target: "failed",
@@ -266,9 +280,13 @@ export const playbackMediaLifecycleMachine = setup({
                     },
                   },
                 },
-                decoded: {},
+                decoded: {
+                  always: { guard: "decodeRequestChanged", target: "checking" },
+                },
                 notNeeded: {},
-                failed: {},
+                failed: {
+                  always: { guard: "decodeRequestChanged", target: "checking" },
+                },
               },
             },
           },
@@ -276,7 +294,12 @@ export const playbackMediaLifecycleMachine = setup({
       },
     },
     failed: {
-      entry: assign({ read: null, decoded: false, decodeError: null }),
+      entry: assign({
+        read: null,
+        decodeRequestedUrl: null,
+        decodedUrl: null,
+        decodeError: null,
+      }),
       on: {
         RELEASE: { target: "idle" },
         PREPARE: [
