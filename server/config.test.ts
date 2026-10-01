@@ -12,6 +12,32 @@ const productionEnvironment = {
   MAIL_FROM: "Startrips <no-reply@startrips.example>",
 };
 
+describe("road profile configuration", () => {
+  it("disables each unconfigured mode without inheriting the driving URL", () => {
+    const config = loadServerConfig({ ...productionEnvironment, ROUTING_OSRM_DRIVING_BASE_URL: "http://car.internal:5000/" });
+    expect(config.routingOsrmDrivingBaseUrl).toBe("http://car.internal:5000");
+    expect(config.routingOsrmWalkingBaseUrl).toBeNull();
+    expect(config.routingOsrmCyclingBaseUrl).toBeNull();
+  });
+
+  it("reads the three deployment-owned graph URLs independently", () => {
+    const config = loadServerConfig({
+      ...productionEnvironment,
+      ROUTING_OSRM_DRIVING_BASE_URL: "http://car.internal:5000",
+      ROUTING_OSRM_WALKING_BASE_URL: " http://foot.internal:5000/ ",
+      ROUTING_OSRM_CYCLING_BASE_URL: "http://bike.internal:5000",
+    });
+    expect([config.routingOsrmDrivingBaseUrl, config.routingOsrmWalkingBaseUrl, config.routingOsrmCyclingBaseUrl])
+      .toEqual(["http://car.internal:5000", "http://foot.internal:5000", "http://bike.internal:5000"]);
+  });
+
+  it.each(["ROUTING_OSRM_DRIVING_BASE_URL", "ROUTING_OSRM_WALKING_BASE_URL", "ROUTING_OSRM_CYCLING_BASE_URL"])("validates %s before startup", (name) => {
+    for (const value of ["file:///roads", "http://user:password@routing.internal", "http://routing.internal?token=secret", "http://routing.internal#fragment"]) {
+      expect(() => loadServerConfig({ ...productionEnvironment, [name]: value })).toThrow(name);
+    }
+  });
+});
+
 describe("S3-compatible storage configuration", () => {
   it("does not require bucket credentials while storage is disabled", () => {
     expect(loadServerConfig({

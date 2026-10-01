@@ -5,7 +5,7 @@ const coordinates = [{ lat: 0, lon: 0 }, { lat: 0, lon: 0.1 }] as const;
 
 function providerWith(payload: unknown) {
   const fetcher = async () => new Response(JSON.stringify(payload), { status: 200 });
-  return createOsrmRouteCandidateProvider("http://routing.internal:5000", fetcher as typeof fetch);
+  return createOsrmRouteCandidateProvider({ driving: "http://routing.internal:5000" }, fetcher as typeof fetch);
 }
 
 function osrmResponse(routes: unknown[], waypoints = [
@@ -101,7 +101,7 @@ describe("OSRM road candidate gate", () => {
       coordinates: [{ lat: 0, lon: 0 }, { lat: 0, lon: 10 }],
       profile: "driving", alternativesCount: 1, signal: new AbortController().signal,
     })).toEqual([]);
-    expect(createOsrmRouteCandidateProvider(null).supports("driving")).toBe(false);
+    expect(createOsrmRouteCandidateProvider({}).supports("driving")).toBe(false);
     expect(provider.supports("walking")).toBe(false);
   });
 
@@ -112,6 +112,62 @@ describe("OSRM road candidate gate", () => {
     expect(await provider.candidates({
       coordinates, profile: "driving", alternativesCount: 1, signal: new AbortController().signal,
     })).toEqual([]);
+  });
+
+  it.each(["driving", "walking", "cycling"] as const)("uses the configured %s graph and preserves that mode", async (profile) => {
+    const calls: URL[] = [];
+    const provider = createOsrmRouteCandidateProvider({
+      driving: "http://car.internal:5000", walking: "http://foot.internal:5000", cycling: "http://bike.internal:5000",
+    }, (async (url: URL) => {
+      calls.push(url);
+      return new Response(JSON.stringify(osrmResponse([{ ...direct, legs: [{ steps: [{ mode: profile }] }] }])));
+    }) as typeof fetch);
+    const [candidate] = await provider.candidates({ coordinates, profile, alternativesCount: 1, signal: new AbortController().signal });
+    const host = { driving: "car", walking: "foot", cycling: "bike" }[profile];
+    expect(calls[0].origin).toBe(`http://${host}.internal:5000`);
+    expect(calls[0].pathname).toBe(`/route/v1/${profile}/0,0;0.1,0`);
+    expect(calls[0].searchParams.get("steps")).toBe("true");
+    expect(candidate.profile).toBe(profile);
+    expect(candidate.snapping.maxDistanceMeters).toBe(profile === "driving" ? 10_000 : 750);
+  });
+
+  it("never falls back to driving for an unconfigured walking or cycling graph", async () => {
+    let calls = 0;
+    const provider = createOsrmRouteCandidateProvider({ driving: "http://car.internal:5000" }, (async () => {
+      calls += 1;
+      return new Response("{}");
+    }) as typeof fetch);
+    for (const profile of ["walking", "cycling"] as const) {
+      expect(provider.supports(profile)).toBe(false);
+      await expect(provider.candidates({ coordinates, profile, alternativesCount: 1, signal: new AbortController().signal }))
+        .rejects.toMatchObject({ code: "ROUTING_UNAVAILABLE", status: 503 });
+    }
+    expect(calls).toBe(0);
+  });
+
+  it.each(["walking", "cycling"] as const)("rejects mismatched transport and distant snaps for %s", async (profile) => {
+    for (const mode of ["driving", "ferry", "train", profile === "walking" ? "cycling" : "walking"]) {
+      const provider = createOsrmRouteCandidateProvider({ [profile]: "http://routing.internal:5000" },
+        (async () => new Response(JSON.stringify(osrmResponse([{ ...direct, legs: [{ steps: [{ mode }] }] }])))) as typeof fetch);
+      expect(await provider.candidates({ coordinates, profile, alternativesCount: 1, signal: new AbortController().signal })).toEqual([]);
+    }
+    const provider = createOsrmRouteCandidateProvider({ [profile]: "http://routing.internal:5000" },
+      (async () => new Response(JSON.stringify(osrmResponse([{
+        ...direct, legs: [{ steps: [{ mode: profile }] }],
+        geometry: { type: "LineString", coordinates: [[0, 0.008], [0.1, 0.008]] },
+      }], [{ location: [0, 0.008], distance: 0 }, { location: [0.1, 0.008], distance: 0 }])))) as typeof fetch);
+    expect(await provider.candidates({ coordinates, profile, alternativesCount: 1, signal: new AbortController().signal })).toEqual([]);
+  });
+
+  it("accepts bike-pushing steps as part of cycling, with a different identity from driving", async () => {
+    const provider = createOsrmRouteCandidateProvider({ cycling: "http://bike.internal:5000" },
+      (async () => new Response(JSON.stringify(osrmResponse([{
+        ...direct, legs: [{ steps: [{ mode: "cycling" }, { mode: "pushing bike" }] }],
+      }])))) as typeof fetch);
+    const [cycling] = await provider.candidates({ coordinates, profile: "cycling", alternativesCount: 1, signal: new AbortController().signal });
+    const [driving] = await providerWith(osrmResponse([direct])).candidates({ coordinates, profile: "driving", alternativesCount: 1, signal: new AbortController().signal });
+    expect(cycling.profile).toBe("cycling");
+    expect(cycling.id).not.toBe(driving.id);
   });
 
   it("reports malformed provider envelopes truthfully and discards malformed individual candidates", async () => {

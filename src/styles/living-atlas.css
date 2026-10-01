@@ -264,6 +264,9 @@
 .route-candidate-editor__shapes > div { justify-content: space-between; }
 .route-candidate-editor p { margin: 0; color: var(--atlas-muted); line-height: 1.5; }
 .route-candidate-editor label { display: grid; gap: 6px; color: var(--atlas-muted); }
+.route-candidate-editor__profile { display: grid; gap: 6px; color: var(--atlas-muted); }
+.route-candidate-editor__profiles { display: flex; gap: 8px; flex-wrap: wrap; }
+.route-candidate-editor__profiles button { flex: 1 0 64px; min-width: 44px; }
 .route-candidate-editor select {
   min-height: 44px;
   width: 100%;
