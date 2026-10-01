@@ -9,7 +9,11 @@ import type { RoadProfile, RouteCandidate, RouteShapePoint } from "../../src/jou
 import { readJsonObject } from "./json-body";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const provider = createOsrmRouteCandidateProvider(serverConfig.routingOsrmDrivingBaseUrl);
+const provider = createOsrmRouteCandidateProvider({
+  driving: serverConfig.routingOsrmDrivingBaseUrl,
+  walking: serverConfig.routingOsrmWalkingBaseUrl,
+  cycling: serverConfig.routingOsrmCyclingBaseUrl,
+});
 export const journeyRouteSegmentRoutes = new Hono();
 
 function routeIds(context: { req: { param: (name: string) => string } }) {
@@ -49,7 +53,7 @@ function validShapePoints(raw: unknown): raw is RouteShapePoint[] {
 
 journeyRouteSegmentRoutes.get("/availability", async (context) => {
   await requireAtlasAccess(context.req.raw, "read");
-  return context.json({ profiles: provider.supports("driving") ? ["driving"] : [] });
+  return context.json({ profiles: (["driving", "walking", "cycling"] as const).filter((profile) => provider.supports(profile)) });
 });
 
 journeyRouteSegmentRoutes.post("/journeys/:journeyId/segments/:fromId/:toId/candidates", async (context) => {

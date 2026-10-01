@@ -126,14 +126,24 @@ detail view projects the active Journey's Route Points and saved segment
 geometry. Shape points appear only while editing a route; they are never Journey
 nodes. The map defaults to Chinese labels with a Chinese/bilingual switch.
 
-Road candidates require a deployment-owned OSRM graph built for driving. Set
-`ROUTING_OSRM_DRIVING_BASE_URL` to the base URL reachable from the API container
-(for example, an internal service origin). Leave it empty to disable candidate
-generation; the existing Journey line remains available. The public OSRM demo
-is not a production service. The browser never calls this URL. The user must
-select driving for each candidate request, compare the suggestions and confirm
-one before its geometry becomes a saved route. Recorded tracks remain the
-strongest route evidence.
+Road candidates require deployment-owned OSRM graphs. Configure the base URLs
+reachable from the API container for the modes you support:
+
+| Mode | Environment setting | OSRM build profile |
+| --- | --- | --- |
+| Driving | `ROUTING_OSRM_DRIVING_BASE_URL` | `car.lua` |
+| Walking | `ROUTING_OSRM_WALKING_BASE_URL` | `foot.lua` |
+| Cycling | `ROUTING_OSRM_CYCLING_BASE_URL` | `bicycle.lua` |
+
+Each URL must serve its matching graph; changing the URL's profile name does
+not change a driving graph into a walking or cycling graph. An empty setting
+disables that mode's button. The public OSRM demo is not a production service.
+The browser never calls these URLs. The member must select a mode, compare
+the suggestions and confirm one before its geometry becomes a saved route.
+All steps must match that mode; cycling may include bike-pushing steps, with
+a notice in its preview. Ferry and train steps are rejected. Walking and
+cycling retain a 750m snapping limit; driving permits up to 10km with visible
+offset measurements. Recorded tracks remain the strongest route evidence.
 
 The map renderer is provider-neutral. It uses OpenFreeMap's Fiord vector style by
 default. Set `ATLAS_MAP_STYLE_URL` in `.env.deploy` to use a contracted or

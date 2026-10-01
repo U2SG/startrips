@@ -13,6 +13,11 @@ import { RouteShapePointPicker } from "./RouteShapePointPicker";
 
 const SOURCE_ID = "startrips-road-candidate-preview";
 const LAYER_ID = "startrips-road-candidate-preview-lines";
+const ROAD_PROFILES = [
+  { profile: "driving", label: "驾车" },
+  { profile: "walking", label: "步行" },
+  { profile: "cycling", label: "骑行" },
+] as const;
 
 export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeChange }: {
   map: MapLibreMap | null;
@@ -334,13 +339,23 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
               ))}
             </select>
           </label>
-          <label>
-            交通方式
-            <select value={profile} onChange={(event) => { cancelCandidateRequest(); setProfile(event.target.value as RoadProfile | ""); }}>
-              <option value="">请选择</option>
-              {availableProfiles.includes("driving") ? <option value="driving">驾车</option> : null}
-            </select>
-          </label>
+          <div className="route-candidate-editor__profile">
+            <span>交通方式</span>
+            <div className="route-candidate-editor__profiles" role="group" aria-label="交通方式">
+              {ROAD_PROFILES.map((entry) => (
+                <button key={entry.profile} type="button" aria-pressed={profile === entry.profile}
+                  disabled={availabilityLoading || !availableProfiles.includes(entry.profile)}
+                  onClick={() => {
+                    if (profile === entry.profile) return;
+                    cancelCandidateRequest();
+                    setProfile(entry.profile);
+                    setMessage("");
+                  }}>
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+          </div>
           {availabilityLoading ? <p role="status">正在检查道路服务…</p> : availableProfiles.length === 0
             ? <p>当前没有配置道路服务，原路线继续显示。</p> : null}
           <div className="route-candidate-editor__actions">
@@ -391,9 +406,10 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
                 ))}
               </div>
               <p>{Math.round(candidate?.candidate.distanceMeters ?? 0) / 1000} km · 约 {Math.round((candidate?.candidate.durationSeconds ?? 0) / 60)} 分钟</p>
+              {candidate?.candidate.profile === "cycling" ? <p>骑行候选可能包含推行路段，请核对。</p> : null}
               {candidate?.candidate.snapping.waypoints.some((point) => point.distanceMeters > 750) ? (
                 <div className="route-candidate-editor__offsets">
-                  <p>部分地点离可驾车道路较远，请核对候选接到的道路位置。原地点坐标保持不变。</p>
+                  <p>部分地点离所选方式可通行的道路较远，请核对候选接到的道路位置。原地点坐标保持不变。</p>
                   <ul>{candidate.candidate.snapping.waypoints.map((point, index, waypoints) => point.distanceMeters > 750 ? (
                     <li key={index}>{index === 0 ? selected?.label || "起点" : index === waypoints.length - 1
                       ? next?.label || "终点" : record?.shapePoints[index - 1]?.label || `修正点 ${index}`}：

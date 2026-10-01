@@ -47,7 +47,8 @@ const layoutHome = {
   latitude: 50.5, longitude: 7.8, source: "manual",
 };
 
-async function openPage(policy = "default", { owner = false, viewport = { width: 1280, height: 900 }, touch = false, home = false } = {}) {
+async function openPage(policy = "default", { owner = false, viewport = { width: 1280, height: 900 }, touch = false, home = false,
+  profiles = ["driving", "walking", "cycling"] } = {}) {
   const page = await browser.newPage({ viewport, hasTouch: touch, reducedMotion: "reduce" });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -62,7 +63,7 @@ async function openPage(policy = "default", { owner = false, viewport = { width:
   await page.route(/\/api\/mapstyle\?path=styles(?:%2F|\/)fiord/i, (route) => json(route, style));
   await page.route("**/api/journey-route-segments/availability", (route) => {
     availabilityRequests += 1;
-    return json(route, { profiles: ["driving"] });
+    return json(route, { profiles });
   });
   await page.route("**/api/locations/search?**", async (route) => {
     const parameters = new URL(route.request().url()).searchParams;
@@ -98,12 +99,12 @@ async function openPage(policy = "default", { owner = false, viewport = { width:
     const middle = (bend) => [(fromLon + toLon) / 2, (fromLat + toLat) / 2 + bend];
     const candidates = [0.12, -0.12].map((bend, index) => ({
       candidate: {
-        id: `qa-candidate-${index + 1}-${body.revision}`,
+        id: `qa-candidate-${body.profile}-${index + 1}-${body.revision}`,
         geometry: [snapped[0], ...snapped.slice(1, -1), middle(bend), snapped.at(-1)],
         distanceMeters: 210_000 + index * 10_000,
         durationSeconds: 9_000 + index * 700,
-        provider: "osrm", profile: "driving", relevance: 100 - index,
-        snapping: { maxDistanceMeters: 10_000, waypoints: ordered.map((coordinate, index) => ({
+        provider: "osrm", profile: body.profile, relevance: 100 - index,
+        snapping: { maxDistanceMeters: body.profile === "driving" ? 10_000 : 750, waypoints: ordered.map((coordinate, index) => ({
           requested: coordinate, snapped: snapped[index], distanceMeters: index === 0 ? offsetMeters : 0,
           providerDistanceMeters: index === 0 ? offsetMeters : 0,
         })) },
@@ -210,9 +211,9 @@ async function assertControlHit(control, name, { scroll = true } = {}) {
   const hit = await control.evaluate((element) => {
     const bounds = element.getBoundingClientRect();
     const target = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
-    return { height: bounds.height, reachable: target === element || element.contains(target) };
+    return { width: bounds.width, height: bounds.height, reachable: target === element || element.contains(target) };
   });
-  assert(hit.height >= 44 && hit.reachable, `${name}: control blocked or too small: ${JSON.stringify(hit)}`);
+  assert(hit.width >= 44 && hit.height >= 44 && hit.reachable, `${name}: control blocked or too small: ${JSON.stringify(hit)}`);
 }
 
 await fs.mkdir(artifactDir, { recursive: true });
@@ -229,7 +230,8 @@ try {
   assert(availabilityRequests === 0, "closed route editor requested provider availability");
   await page.getByRole("button", { name: "贴合道路" }).click();
   await page.locator(".route-candidate-editor select").first().selectOption("1");
-  await page.locator(".route-candidate-editor select").nth(1).selectOption("driving");
+  assert(await page.getByRole("button", { name: "查看候选", exact: true }).isDisabled(), "a transport mode was chosen implicitly");
+  await page.getByRole("group", { name: "交通方式" }).getByRole("button", { name: "驾车", exact: true }).click();
   assert(availabilityRequests === 1, "opening route editor did not request provider availability once");
   await page.getByRole("button", { name: "查看候选" }).click();
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
@@ -348,7 +350,7 @@ try {
   });
   await page.getByRole("button", { name: "查看候选" }).click();
   await gate.started.promise;
-  await page.locator(".route-candidate-editor select").nth(1).selectOption("");
+  await page.getByRole("group", { name: "交通方式" }).getByRole("button", { name: "步行", exact: true }).click();
   const aborted = await abortedRequest;
   gate.release.resolve();
   await gate.completed.promise;
@@ -357,7 +359,7 @@ try {
   evidence.stages.push({ name: "profile-cancelled", ...cancelled, requestFailure: aborted.failure()?.errorText });
   assert(cancelled.previewCount === 0 && cancelled.renderedPreviewCount === 0
     && await page.getByRole("button", { name: "路线 1", exact: true }).count() === 0
-    && await page.getByRole("button", { name: "查看候选" }).isDisabled(),
+    && await page.getByRole("button", { name: "步行", exact: true }).getAttribute("aria-pressed") === "true",
     "late candidate response survived the changed routing profile");
   assert(evidence.requests.length === 4 && evidence.writes.length === 3, "cancelled candidate request wrote route history");
   await page.getByRole("button", { name: "调整经过位置" }).click();
@@ -382,6 +384,39 @@ try {
   assert(await particle.page.locator(".detailed-earth-map").count() === 0, "particle-only mounted MapLibre");
   assert(await particle.page.locator(".route-candidate-editor").count() === 0, "particle-only mounted candidate editor");
   await particle.page.close();
+
+  const modal = await openPage("default", { touch: true });
+  await enterDetail(modal.page);
+  await modal.page.getByRole("button", { name: "贴合道路", exact: true }).tap();
+  const modePointCount = (await readMap(modal.page)).pointCount;
+  for (const [profile, name] of [["walking", "步行"], ["cycling", "骑行"]]) {
+    const button = modal.page.getByRole("group", { name: "交通方式" }).getByRole("button", { name, exact: true });
+    await assertControlHit(button, `${profile}-touch`);
+    await button.tap();
+    await modal.page.getByRole("button", { name: "查看候选", exact: true }).tap();
+    await modal.page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
+    assert(evidence.requests.at(-1).profile === profile, `${profile}: request used the wrong graph profile`);
+    if (profile === "cycling") await modal.page.getByText("骑行候选可能包含推行路段，请核对。", { exact: true }).waitFor();
+    await modal.page.getByRole("button", { name: "就是这条", exact: true }).tap();
+    await modal.page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "0");
+    const saved = await readMap(modal.page);
+    assert(evidence.writes.at(-1).record.confirmedCandidate.profile === profile
+      && saved.confirmedCount === 1 && saved.pointCount === modePointCount,
+    `${profile}: confirmation changed the mode or Route Point topology`);
+    evidence.stages.push({ name: `${profile}-confirmed`, ...saved });
+    await modal.page.screenshot({ path: `${artifactDir}/${profile}-confirmed.png` });
+  }
+  assert(modal.pageErrors.length === 0, `mode browser errors: ${modal.pageErrors.join(" | ")}`);
+  await modal.page.close();
+
+  const limited = await openPage("default", { profiles: ["driving"] });
+  await enterDetail(limited.page);
+  await limited.page.getByRole("button", { name: "贴合道路", exact: true }).click();
+  await limited.page.getByRole("button", { name: "驾车", exact: true }).click();
+  assert(await limited.page.getByRole("button", { name: "步行", exact: true }).isDisabled()
+    && await limited.page.getByRole("button", { name: "骑行", exact: true }).isDisabled(),
+  "unconfigured transport modes became selectable");
+  await limited.page.close();
 
   const writesBeforeLayout = evidence.writes.length;
   for (const fixture of [
@@ -413,7 +448,15 @@ try {
     const launcher = ownerPage.getByRole("button", { name: "贴合道路", exact: true });
     await assertControlHit(launcher, `${fixture.name}-launcher`);
     await launcher.click();
-    await ownerPage.locator(".route-candidate-editor select").nth(1).selectOption("driving");
+    const modes = ownerPage.getByRole("group", { name: "交通方式" });
+    for (const name of ["步行", "骑行", "驾车"]) {
+      const button = modes.getByRole("button", { name, exact: true });
+      await assertControlHit(button, `${fixture.name}-${name}`);
+      if (fixture.touch) await button.tap();
+      else await button.click();
+      assert(await button.getAttribute("aria-pressed") === "true"
+        && await modes.locator('[aria-pressed="true"]').count() === 1, `${fixture.name}: mode did not respond to a real pointer`);
+    }
     await assertEditorLayout(ownerPage, `${fixture.name}-open`);
     const generate = ownerPage.getByRole("button", { name: "查看候选", exact: true });
     await assertControlHit(generate, `${fixture.name}-generate`);
@@ -426,6 +469,26 @@ try {
     const close = ownerPage.locator(".route-candidate-editor").getByRole("button", { name: "关闭", exact: true });
     await assertControlHit(close, `${fixture.name}-close-after-scroll`, { scroll: false });
     await ownerPage.screenshot({ path: `${artifactDir}/${fixture.name}-layout.png` });
+    if (fixture.name === "desktop" || fixture.name === "fold-desktop" || fixture.name === "phone") {
+      const originalViewport = ownerPage.viewportSize();
+      for (const viewport of fixture.name === "phone"
+        ? [{ width: 844, height: 390 }, { width: 390, height: 844 }]
+        : [{ width: 1024, height: 768 }, { width: 800, height: 700 }, originalViewport]) {
+        await ownerPage.setViewportSize(viewport);
+        await assertEditorLayout(ownerPage, `${fixture.name}-open-resize-${viewport.width}`);
+        for (const [profile, name] of [["walking", "步行"], ["cycling", "骑行"], ["driving", "驾车"]]) {
+          const button = modes.getByRole("button", { name, exact: true });
+          await assertControlHit(button, `${fixture.name}-resize-${viewport.width}-${name}`);
+          if (fixture.touch) await button.tap();
+          else await button.click();
+          assert(await button.getAttribute("aria-pressed") === "true", `${fixture.name}: mode blocked after viewport change`);
+          await generate.click();
+          await ownerPage.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
+          assert(evidence.requests.at(-1).profile === profile, `${fixture.name}: resize request used the wrong mode`);
+        }
+        await ownerPage.screenshot({ path: `${artifactDir}/${fixture.name}-resize-${viewport.width}.png` });
+      }
+    }
     await ownerPage.getByRole("button", { name: "调整经过位置", exact: true }).click();
     const shapePicker = ownerPage.locator(".route-shape-picker");
     const searchInput = shapePicker.getByRole("textbox", { name: "搜索经过的地点" });
