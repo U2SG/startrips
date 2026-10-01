@@ -654,11 +654,12 @@ export function JourneyStory({
   const mobileLayout = useCompactMobileLayout();
   useEffect(() => {
     if (quickRecap?.state !== "over-budget") return;
-    const action = quickRecapFullActionRef.current;
     // Touch activation runs on pointerup. Its native compatibility-click focus
     // completes after that commit, so hand focus to the new action next frame.
+    // Resolve the ref inside that frame: a responsive layout handoff can remount
+    // the playback entry between this effect and rAF, invalidating a captured node.
     const frame = window.requestAnimationFrame(() => {
-      if (action?.isConnected) action.focus({ preventScroll: true });
+      quickRecapFullActionRef.current?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [quickRecap?.state, mobileLayout]);
