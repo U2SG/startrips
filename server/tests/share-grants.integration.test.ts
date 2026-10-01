@@ -38,6 +38,25 @@ import {
 import { signSharedMediaRead } from "../routes/shares";
 import { disabledStorage } from "../storage/disabled-storage";
 
+// Scalar evidence must be matched as JSON data, not as a timestamp substring.
+function jsonLeafValues(value: unknown): unknown[] {
+  if (value !== null && typeof value === "object") {
+    return Object.values(value).flatMap(jsonLeafValues);
+  }
+  return [value];
+}
+
+it("distinguishes private precision values from coincidental expiry timestamp digits", () => {
+  const benign = { share: { expiresAt: "2026-10-08T00:32:12.547Z" }, journeys: [] };
+  expect(JSON.stringify(benign)).toContain("12.5");
+  expect(jsonLeafValues(benign)).not.toContain(12.5);
+  expect(jsonLeafValues(benign)).not.toContain("12.5");
+  for (const precision of [12.5, "12.5"]) {
+    expect(jsonLeafValues({ ...benign, journeys: [{ media: [{ evidence: { precision } }] }] }))
+      .toContain(precision);
+  }
+});
+
 const TEST_ORIGIN = "http://127.0.0.1:5173";
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/;
 const atlasIds: string[] = [];
@@ -842,7 +861,10 @@ describe("guest journey read", () => {
 
   it("leaks no unshared journey, owner field or storage key through the payload", async () => {
     const token = await createShare([journeyA]);
-    const body = await (await guestRead(token)).text();
+    const response = await guestRead(token);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    const payload = JSON.parse(body) as GuestPayload;
 
     // Nothing about the same atlas's other journeys, or another atlas's.
     expect(body).not.toContain(privateJourneyId);
@@ -857,7 +879,13 @@ describe("guest journey read", () => {
     // #388: owner-only media evidence is not joined into guest/share payloads.
     expect(body).not.toContain("47.620501");
     expect(body).not.toContain("-122.349277");
-    expect(body).not.toContain("12.5");
+    // A legitimate expiresAt such as 00:32:12.547Z contains the text "12.5".
+    // Neither a numeric nor string-valued precision may occur as guest data.
+    expect(jsonLeafValues(payload)).not.toContain(12.5);
+    expect(jsonLeafValues(payload)).not.toContain("12.5");
+    for (const asset of payload.journeys.flatMap((journey) => journey.media)) {
+      expect(Object.keys(asset).sort()).toEqual(["bytes", "fileName", "id", "mimeType", "routePointId"]);
+    }
     expect(body).not.toContain("accuracyMeters");
     expect(body).not.toContain(identity.atlasId);
     expect(body).not.toContain(identity.userId);
@@ -868,7 +896,6 @@ describe("guest journey read", () => {
     expect(body).not.toContain("atlasId");
     expect(body).not.toContain("deletion");
     // No aggregate or ordering hint that a wider set exists.
-    const payload = JSON.parse(body) as GuestPayload;
     expect(Object.keys(payload).sort()).toEqual(["journeys", "share"]);
     expect(Object.keys(payload.share).sort()).toEqual([
       "expiresAt",

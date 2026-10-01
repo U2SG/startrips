@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
+import fs from "node:fs";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_SUITE_TIMEOUT_MS = 12 * 60 * 1000;
@@ -75,11 +78,14 @@ export async function runShard(entries, {
   timeoutMs = DEFAULT_SUITE_TIMEOUT_MS,
   log = console.log,
   error = console.error,
+  now = () => performance.now(),
+  record = () => {},
 } = {}) {
   let failed = false;
   for (const { suite, command } of entries) {
     log(`STARTRIPS_QA_SUITE=${suite}`);
     log(`::group::${suite} :: ${command}`);
+    const started = now();
     let result;
     try {
       result = await execute(command, { timeoutMs, suite });
@@ -93,6 +99,19 @@ export async function runShard(entries, {
         : `failed${Number.isInteger(result?.code) ? ` with exit code ${result.code}` : ""}`;
       error(`::error::Browser QA suite ${suite} ${detail}: ${command}`);
     }
+    const timing = {
+      suite,
+      status: result?.ok ? "passed" : result?.timedOut ? "timed_out" : "failed",
+      durationMs: Math.max(0, Math.round(now() - started)),
+      timeoutMs,
+    };
+    log(`STARTRIPS_QA_RESULT=${JSON.stringify(timing)}`);
+    try {
+      await record(timing);
+    } catch (recordError) {
+      failed = true;
+      error(`::error::Browser QA timing evidence failed for ${suite}: ${recordError.message}`);
+    }
     log("::endgroup::");
   }
   return failed ? 1 : 0;
@@ -104,7 +123,20 @@ async function main() {
     throw new Error(`QA_SUITE_TIMEOUT_MS must be > 0 and <= ${DEFAULT_SUITE_TIMEOUT_MS}`);
   }
   const entries = parseEntries(process.env.QA_COMMANDS);
-  process.exitCode = await runShard(entries, { timeoutMs });
+  const target = process.env.QA_TIMINGS_PATH;
+  if (target) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "", "utf8");
+  }
+  const summary = process.env.GITHUB_STEP_SUMMARY;
+  if (summary) fs.appendFileSync(summary, "\n### Browser QA suite timings\n\n| Suite | Result | Seconds |\n|---|---|---:|\n");
+  process.exitCode = await runShard(entries, {
+    timeoutMs,
+    record: (timing) => {
+      if (target) fs.appendFileSync(target, `${JSON.stringify(timing)}\n`);
+      if (summary) fs.appendFileSync(summary, `| ${timing.suite} | ${timing.status} | ${(timing.durationMs / 1000).toFixed(2)} |\n`);
+    },
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
