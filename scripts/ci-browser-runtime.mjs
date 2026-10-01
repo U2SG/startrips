@@ -19,6 +19,30 @@ export function selectHostedBrowser(override, exists = fs.existsSync) {
   return executable;
 }
 
+/** Wait for Playwright's recording artifact before closing its producer page. */
+export async function finishRuntimeRecording(context, video, { timeoutMs = 10_000 } = {}) {
+  if (!video) throw new Error("Playwright recording smoke has no video transport");
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 10_000) {
+    throw new Error("Recording readiness deadline must be within 10000ms");
+  }
+  let timer;
+  let videoPath;
+  try {
+    // video.path() resolves when Playwright publishes its recording artifact.
+    // A screenshot's completion does not acknowledge the screencast recorder.
+    videoPath = await Promise.race([
+      video.path(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Playwright recorder produced no first frame")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  await context.close();
+  return videoPath;
+}
+
 /** Check capabilities on the real suite browser, not a second cold launch. */
 export async function verifyBrowserRuntime(browser) {
   const recordingDir = fs.mkdtempSync(path.join(os.tmpdir(), "startrips-ci-browser-"));
@@ -31,10 +55,9 @@ export async function verifyBrowserRuntime(browser) {
     if (!h264) throw new Error("Hosted browser lacks H.264 support required for media QA");
     // Request a painted frame before flushing the recorder; no fixed sleep.
     await page.screenshot();
-    const video = page.video();
-    await context.close();
+    const videoPath = await finishRuntimeRecording(context, page.video());
     context = null;
-    if (!video || fs.statSync(await video.path()).size === 0) throw new Error("Playwright recording smoke produced no video");
+    if (fs.statSync(videoPath).size === 0) throw new Error("Playwright recording smoke produced no video");
     console.log(`CI_BROWSER_RUNTIME=${JSON.stringify({ version: browser.version(), runnerImage: process.env.ImageVersion || "unknown", h264, recordingVerified: true })}`);
   } finally {
     if (context) await context.close().catch(() => {});
