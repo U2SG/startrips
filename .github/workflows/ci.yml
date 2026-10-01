@@ -101,7 +101,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/ci-ledger-fast-path.mjs
       - name: Test CI execution and fail-closed gate contracts
-        run: node --test scripts/ci-validation-results.node-test.mjs scripts/ci-browser-runtime.node-test.mjs scripts/ci-latency.node-test.mjs scripts/ci-ensure-ffmpeg.node-test.mjs scripts/browser-qa-shard.node-test.mjs
+        run: node --test scripts/ci-validation-results.node-test.mjs scripts/ci-browser-runtime.node-test.mjs scripts/ci-latency.node-test.mjs scripts/ci-ensure-ffmpeg.node-test.mjs scripts/qa-chapter-rail-observation.node-test.mjs scripts/browser-qa-shard.node-test.mjs
       - uses: pnpm/action-setup@v6
         if: steps.final-plan.outputs.ledger_only_final != 'true'
         with:
