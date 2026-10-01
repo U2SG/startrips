@@ -318,11 +318,16 @@ def plan(path, fid, repo, *, record_failures=False):
     missing = not relation['sealed'] and ledger_pending_final(repo, number, relation['source_sha'])
     ci = latest_ci(repo, relation['final_sha'], missing_ledger=missing)
     source_verdict = source_review(root, fid, number, relation['source_sha'], package)
+    jobs = [{'id': job['id'], 'name': job['name'], 'status': job['status'],
+             'conclusion': job['conclusion']}
+            for job in sorted(ci.get('jobs') or [], key=lambda item: item['name'])]
     result.update(action=derive(unit_row, pr, relation, review, ci, source_verdict), pr=number, **relation,
+                  pr_head_ref=pr['head']['ref'],
                   source_review_clear=(source_verdict == 'CLEAR'), source_review_verdict=source_verdict,
                   ci_state=ci['state'], source_green=ci['source_green'],
                   final_green=ci['final_green'], ci_run=ci['run']['id'] if ci['run'] else None,
                   ci_attempt=ci['run']['run_attempt'] if ci['run'] else None,
+                  ci_url=ci['run'].get('html_url') if ci['run'] else None, ci_jobs=jobs,
                   review=review, source_review_receipt=str(receipt_path(root, fid, relation['source_sha'])))
     if result['action'] == 'REPAIR_CI' and record_failures:
         records = observe_failures(root, repo, ci)
@@ -355,6 +360,31 @@ def plan(path, fid, repo, *, record_failures=False):
     return result
 
 
+def confirm_handoff_identity(path, fid, repo, observed):
+    """Re-read only mutable handoff identities after an exact-SHA snapshot was captured."""
+    path = Path(path); doc = load_document(path)
+    if canonical_lead(doc, fid) != fid or unit_token(doc, fid) != observed['row_token']:
+        raise StoreConflict('Delivery unit changed during handoff')
+    package = review_snapshot(doc, fid)
+    if package != observed.get('delivery_package'):
+        raise StoreConflict('Delivery package scope changed during handoff')
+    if source_review(path.parent, fid, observed['pr'], observed['source_sha'], package) != 'CLEAR':
+        raise StoreConflict('Source review changed during handoff')
+    urls = unit_pr_links(doc, fid)
+    expected_url = 'https://github.com/' + repo + '/pull/' + str(observed['pr'])
+    if urls != [expected_url]:
+        raise StoreConflict('Handoff PR ownership changed')
+    current = api('repos/' + repo + '/pulls/' + str(observed['pr']))
+    try:
+        if (current.get('state') != 'open' or current.get('merged')
+                or current['head']['sha'] != observed['final_sha']
+                or current['head']['ref'] != observed['pr_head_ref']):
+            raise StoreConflict('PR identity changed during handoff')
+    except (KeyError, TypeError) as exc:
+        raise EvidenceUnknown('Incomplete final PR identity') from exc
+    return True
+
+
 def handoff(path, fid, repo):
     observed = plan(path, fid, repo)
     if observed['action'] == 'WAIT_REVIEW': return {'changed': False, 'action': 'WAIT_REVIEW'}
@@ -369,17 +399,14 @@ def handoff(path, fid, repo):
     if lane not in {'backend', 'experience'}:
         raise StoreConflict('Delivery unit lane is undecided; handoff cannot infer a carrier')
     owner = preflight(path.parent, path.parent / 'startrips', lane, fid, repo)
-    captured = capture(path.parent, owner['worktree'], fid, observed['pr'], repo)
+    captured = capture(path.parent, owner['worktree'], fid, observed['pr'], repo, snapshot=observed)
     if captured['exit'] != 0 or captured['kind'] != 'final':
         raise StoreConflict('Final CI capture did not pass')
     identity_fields = {'head': 'final_sha', 'source_sha': 'source_sha',
                        'ci_run': 'ci_run', 'ci_attempt': 'ci_attempt'}
     if any(captured.get(left) != observed.get(right) for left, right in identity_fields.items()):
         raise StoreConflict('Captured handoff evidence changed identity; discard the mixed snapshot')
-    confirmed = plan(path, fid, repo)
-    keys = ('pr', 'source_sha', 'final_sha', 'ci_run', 'ci_attempt', 'row_token', 'delivery_package')
-    if confirmed.get('action') != 'HANDOFF_REVIEW' or any(confirmed.get(k) != observed.get(k) for k in keys):
-        raise StoreConflict('Handoff gate changed after capture; re-read Source review, package scope and CI')
+    confirm_handoff_identity(path, fid, repo, observed)
 
     relative = '.agent-artifacts/evaluations/' + fid + '-' + observed['final_sha'] + '-handoff.json'
     output = path.parent / relative
