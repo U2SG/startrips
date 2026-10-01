@@ -15,10 +15,12 @@ const browser = await launchQaBrowser({
   headless: true,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
-const evidence = { requests: [], writes: [], stages: [] };
+const evidence = { requests: [], writes: [], stages: [], searches: [] };
 let failNext = false;
 let availabilityRequests = 0;
 let pendingCandidateGate = null;
+let pendingShapeSearchGate = null;
+let nextSnapOffsetMeters = 0;
 const latch = () => {
   let resolve;
   const promise = new Promise((ready) => { resolve = ready; });
@@ -26,15 +28,54 @@ const latch = () => {
 };
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
-async function openPage(policy = "default") {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const layoutJourneys = Array.from({ length: 11 }, (_, index) => {
+  const id = `qa-layout-journey-${index}`;
+  return {
+    id, atlasId: "qa-atlas", title: `Synthetic journey ${index + 1}`,
+    startedOn: "2026-04-06", endedOn: null, note: "", lightColor: "#77c8c2", lightEffect: null,
+    coverMediaAssetId: null, revision: 1, createdByUserId: "qa-user",
+    createdAt: "2026-04-06T00:00:00.000Z", updatedAt: "2026-04-06T00:00:00.000Z", media: [],
+    routePoints: [[50.9375, 6.9603], [50.1109, 8.6821]].map(([latitude, longitude], pointIndex) => ({
+      id: `${id}-point-${pointIndex}`, journeyId: id, sortOrder: pointIndex,
+      latitude, longitude, label: `Route point ${pointIndex + 1}`, isStop: true,
+      occurredAt: null, note: null, createdAt: "2026-04-06T00:00:00.000Z",
+    })),
+  };
+});
+const layoutHome = {
+  id: "qa-layout-home", label: "Synthetic Home Base", startedOn: "2020-01-01", endedOn: null,
+  latitude: 50.5, longitude: 7.8, source: "manual",
+};
+
+async function openPage(policy = "default", { owner = false, viewport = { width: 1280, height: 900 }, touch = false, home = false } = {}) {
+  const page = await browser.newPage({ viewport, hasTouch: touch, reducedMotion: "reduce" });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.route("**/api/auth/get-session", (route) => json(route, null));
+  if (owner) {
+    await page.route("**/api/journeys", (route) => json(route, { journeys: layoutJourneys }));
+    await page.route("**/api/home-bases", (route) => json(route, { periods: home ? [layoutHome] : [] }));
+    await page.route("**/api/home-bases/dismissal", (route) => json(route, { dismissals: [] }));
+    await page.route("**/api/journey-recorded-tracks/*", (route) => json(route, { recordedTracks: [] }));
+    await page.route("**/api/everyday-fragments**", (route) => json(route, { fragments: [] }));
+  }
   await page.route(/\/api\/mapstyle\?path=styles(?:%2F|\/)fiord/i, (route) => json(route, style));
   await page.route("**/api/journey-route-segments/availability", (route) => {
     availabilityRequests += 1;
     return json(route, { profiles: ["driving"] });
+  });
+  await page.route("**/api/locations/search?**", async (route) => {
+    const parameters = new URL(route.request().url()).searchParams;
+    const query = parameters.get("q");
+    evidence.searches.push({ query, latitude: parameters.get("lat"), longitude: parameters.get("lon") });
+    const gate = pendingShapeSearchGate;
+    if (gate) { gate.started.resolve(); await gate.release.promise; }
+    try {
+      await json(route, { results: [{
+        id: "qa-shape-place", label: query, context: "Synthetic pass", countryCode: "DE",
+        latitude: 50.5, longitude: 7.65,
+      }], attribution: { label: "Synthetic search", url: "https://example.com" } });
+    } finally { gate?.completed.resolve(); }
   });
   await page.route(/\/api\/journey-route-segments\/journeys\/.*\/segments\/.*\/candidates$/, async (route) => {
     const body = route.request().postDataJSON();
@@ -50,16 +91,21 @@ async function openPage(policy = "default") {
     }
     const [, fromLat, fromLon, , toLat, toLon] = JSON.parse(body.sourceKey);
     const ordered = [[fromLon, fromLat], ...(evidence.writes.at(-1)?.record.shapePoints ?? []).map(({ lon, lat }) => [lon, lat]), [toLon, toLat]];
+    const offsetMeters = nextSnapOffsetMeters;
+    nextSnapOffsetMeters = 0;
+    const snapped = ordered.map((coordinate, index) => index === 0 && offsetMeters
+      ? [coordinate[0], coordinate[1] + offsetMeters / 111_195] : coordinate);
     const middle = (bend) => [(fromLon + toLon) / 2, (fromLat + toLat) / 2 + bend];
     const candidates = [0.12, -0.12].map((bend, index) => ({
       candidate: {
         id: `qa-candidate-${index + 1}-${body.revision}`,
-        geometry: [ordered[0], ...ordered.slice(1, -1), middle(bend), ordered.at(-1)],
+        geometry: [snapped[0], ...snapped.slice(1, -1), middle(bend), snapped.at(-1)],
         distanceMeters: 210_000 + index * 10_000,
         durationSeconds: 9_000 + index * 700,
         provider: "osrm", profile: "driving", relevance: 100 - index,
-        snapping: { maxDistanceMeters: 750, waypoints: ordered.map((coordinate) => ({
-          requested: coordinate, snapped: coordinate, distanceMeters: 0, providerDistanceMeters: 0,
+        snapping: { maxDistanceMeters: 10_000, waypoints: ordered.map((coordinate, index) => ({
+          requested: coordinate, snapped: snapped[index], distanceMeters: index === 0 ? offsetMeters : 0,
+          providerDistanceMeters: index === 0 ? offsetMeters : 0,
         })) },
       },
       confirmationToken: `qa-token-${index + 1}`,
@@ -86,7 +132,12 @@ async function openPage(policy = "default") {
     evidence.writes.push({ action: body.action, record });
     return json(route, { segment: record });
   });
-  const url = new URL(`/?qaState=earth-dive&qaRouteCandidates=true&qaPolicy=${policy}`, baseUrl);
+  const url = new URL(owner
+    ? "/?qaState=living-atlas&qaMode=globe-chrome&qaRoutePointContext=1&qaRealRoutePointScene=1"
+    : `/?qaState=earth-dive&qaRouteCandidates=true&qaPolicy=${policy}`, baseUrl);
+  // Generic QA disables private Home reads. This fixture owns their API
+  // boundary and uses the existing opt-in to mount the actual Home context.
+  if (home) url.searchParams.set("qaHomeBaseSuggestion", "1");
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
   await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 25_000 });
   return { page, pageErrors };
@@ -112,6 +163,56 @@ function readMap(page) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+async function enterDetail(page) {
+  await page.locator('[data-earth-dive-intent="true"]').focus();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector(".living-atlas-globe")?.dataset.earthDiveOwner === "detail", null, { timeout: 25_000 });
+  await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayReady === "true", null, { timeout: 15_000 });
+  await page.locator('.route-candidate-editor[data-route-editor-positioned="true"]').waitFor({ timeout: 15_000 });
+}
+
+async function assertEditorLayout(page, name) {
+  const layout = await page.locator(".route-candidate-editor").evaluate((editor) => {
+    const rect = (element) => {
+      const { left, top, right, bottom, width, height } = element.getBoundingClientRect();
+      return { left, top, right, bottom, width, height };
+    };
+    const box = rect(editor);
+    const chrome = [...document.querySelectorAll(
+      ".living-atlas__journey-rail, .living-atlas__active, .living-atlas__home-base-context, .living-atlas__header, .mobile-v2__header, .mobile-v2__chrome, .globe-time-scrubber",
+    )].filter((element) => {
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" && element.getBoundingClientRect().width > 0;
+    }).map((element) => ({ name: element.className, ...rect(element) }));
+    const overlaps = chrome.filter((other) => Math.min(box.right, other.right) - Math.max(box.left, other.left) > 0.5
+      && Math.min(box.bottom, other.bottom) - Math.max(box.top, other.top) > 0.5);
+    const panel = editor.querySelector(".route-candidate-editor__panel");
+    return {
+      box, chrome, overlaps, viewport: { width: innerWidth, height: innerHeight },
+      positioned: editor.dataset.routeEditorPositioned === "true",
+      horizontalOverflow: panel ? panel.scrollWidth > panel.clientWidth : false,
+    };
+  });
+  evidence.stages.push({ name, layout });
+  assert(layout.positioned, `${name}: route editor placement was not committed`);
+  assert(layout.chrome.length > 0, `${name}: real Atlas chrome was absent`);
+  assert(layout.overlaps.length === 0, `${name}: editor overlaps Atlas chrome: ${JSON.stringify(layout)}`);
+  assert(layout.box.width >= 160 && layout.box.left >= 0 && layout.box.top >= 0
+    && layout.box.right <= layout.viewport.width && layout.box.bottom <= layout.viewport.height,
+  `${name}: editor outside visible viewport: ${JSON.stringify(layout)}`);
+  assert(!layout.horizontalOverflow, `${name}: route panel has horizontal overflow`);
+}
+
+async function assertControlHit(control, name, { scroll = true } = {}) {
+  if (scroll) await control.scrollIntoViewIfNeeded();
+  const hit = await control.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const target = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+    return { height: bounds.height, reachable: target === element || element.contains(target) };
+  });
+  assert(hit.height >= 44 && hit.reachable, `${name}: control blocked or too small: ${JSON.stringify(hit)}`);
 }
 
 await fs.mkdir(artifactDir, { recursive: true });
@@ -160,28 +261,69 @@ try {
   await page.screenshot({ path: `${artifactDir}/confirmed.png` });
 
   await page.getByRole("button", { name: "调整经过位置" }).click();
-  await page.getByRole("button", { name: "添加形状点" }).click();
+  await page.getByRole("button", { name: "在地图上连续选点" }).click();
   const shapeScreen = await page.evaluate(() => window.__detailedEarthMapProject?.(7.8212, 50.7242));
   assert(shapeScreen, "detail map missing for shape edit");
   await page.mouse.click(shapeScreen.x, shapeScreen.y);
   await page.locator(".route-shape-handle").waitFor();
   assert(await page.locator(".route-shape-handle").count() === 1, "edit-only shape handle was not mounted");
-  await page.getByRole("button", { name: "保存形状点" }).click();
+  const secondShapeScreen = await page.evaluate(() => window.__detailedEarthMapProject?.(8.1, 50.35));
+  assert(secondShapeScreen, "detail map missing for the second shape point");
+  await page.mouse.click(secondShapeScreen.x, secondShapeScreen.y);
+  await page.waitForFunction(() => document.querySelectorAll(".route-shape-handle").length === 2);
+  assert(await page.locator(".route-shape-handle").count() === 2, "continuous map picking stopped after one point");
+  await page.getByRole("button", { name: "结束地图选点" }).click();
+
+  const picker = page.locator(".route-shape-picker");
+  await picker.getByRole("textbox", { name: "搜索经过的地点" }).fill("Synthetic pass");
+  await picker.getByRole("button", { name: "搜索", exact: true }).click();
+  await picker.getByRole("button", { name: /添加到这段路线/ }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".route-shape-handle").length === 3);
+  assert(await page.locator(".route-shape-handle").count() === 3, "search selection did not append a third shape point");
+  assert(evidence.searches[0].latitude === "50.9375" && evidence.searches[0].longitude === "6.9603",
+    "shape search lost its current Journey focus");
+  await picker.getByText("输入经纬度", { exact: true }).click();
+  await picker.getByRole("textbox", { name: "经度", exact: true }).fill("7.7");
+  await picker.getByRole("button", { name: "添加这组坐标" }).click();
+  await picker.getByRole("alert").filter({ hasText: "有效的纬度" }).waitFor();
+  assert(await page.locator(".route-shape-handle").count() === 3, "empty coordinates silently became a zero-valued shape point");
+  await picker.getByRole("textbox", { name: "纬度", exact: true }).fill("50.4");
+  await picker.getByRole("button", { name: "添加这组坐标" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".route-shape-handle").length === 4);
+  assert(await page.locator(".route-shape-handle").count() === 4, "manual coordinates did not append a fourth shape point");
+  await page.getByRole("button", { name: "上移第 3 个修正点", exact: true }).click();
+  await page.getByRole("button", { name: "上移第 2 个修正点", exact: true }).click();
+  await page.getByRole("button", { name: "移除第 3 个修正点", exact: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".route-shape-handle").length === 3);
+  assert((await page.locator(".route-candidate-editor__shape").first().textContent()).includes("Synthetic pass"),
+    "shape reordering did not preserve the searched place");
+  assert(await page.locator(".route-shape-handle").count() === 3, "shape deletion removed the wrong number of points");
+  await page.screenshot({ path: `${artifactDir}/multiple-shapes.png` });
+  await page.getByRole("button", { name: "保存修正点" }).click();
   await page.waitForFunction(() => document.querySelector("[data-qa-route-segment-decision]")?.getAttribute("data-qa-route-segment-decision") === "open");
+  assert(evidence.writes[1].record.shapePoints.length === 3
+    && evidence.writes[1].record.shapePoints[0].label === "Synthetic pass"
+    && evidence.writes[1].record.shapePoints[2].lat === 50.4
+    && evidence.writes[1].record.shapePoints[2].lon === 7.7, "saved shape points lost labels, order or manual coordinates");
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayConfirmedCount === "0");
   await page.waitForFunction(() => window.__detailedEarthMapRenderedFeatureCount?.("startrips-active-journey-route", "provenance", "user-confirmed-route") === 0);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await page.waitForFunction(() => window.__detailedEarthMapRenderedSegmentVertexCount?.("qa-p-9", "qa-p-10") >= 3);
+  await page.waitForFunction(() => window.__detailedEarthMapRenderedSegmentVertexCount?.("qa-p-9", "qa-p-10") >= 5);
   const shaped = await readMap(page);
   evidence.stages.push({ name: "shape-invalidated", ...shaped });
-  assert(shaped.pointCount === baseline.pointCount && shaped.renderedEditedVertexCount >= 3
+  assert(shaped.pointCount === baseline.pointCount && shaped.renderedEditedVertexCount >= 5
     && shaped.revision !== baseline.revision && await page.locator(".route-shape-handle").count() === 0,
     "saved shape geometry disappeared or shape point leaked into ordinary Journey topology");
   await page.screenshot({ path: `${artifactDir}/shape-preserved.png` });
 
   await page.getByRole("button", { name: "贴合道路", exact: true }).click();
+  nextSnapOffsetMeters = 6_500;
   await page.getByRole("button", { name: "查看候选" }).click();
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
+  await page.locator(".route-candidate-editor__offsets").filter({ hasText: "6.5 公里" }).waitFor();
+  assert(evidence.writes.length === 2 && (await readMap(page)).confirmedCount === 0,
+    "park road offsets were silently saved before the member's choice");
+  await page.screenshot({ path: `${artifactDir}/park-road-offsets.png` });
   await page.getByRole("button", { name: "都不是／不记得" }).click();
   await page.waitForFunction(() => document.querySelector("[data-qa-route-segment-decision]")?.getAttribute("data-qa-route-segment-decision") === "none");
   const rejected = await readMap(page);
@@ -218,6 +360,20 @@ try {
     && await page.getByRole("button", { name: "查看候选" }).isDisabled(),
     "late candidate response survived the changed routing profile");
   assert(evidence.requests.length === 4 && evidence.writes.length === 3, "cancelled candidate request wrote route history");
+  await page.getByRole("button", { name: "调整经过位置" }).click();
+  const searchGate = { started: latch(), release: latch(), completed: latch() };
+  pendingShapeSearchGate = searchGate;
+  await page.getByRole("textbox", { name: "搜索经过的地点" }).fill("Delayed synthetic pass");
+  await page.getByRole("button", { name: "搜索", exact: true }).click();
+  await searchGate.started.promise;
+  await page.locator(".route-candidate-editor select").first().selectOption("0");
+  await page.locator(".route-shape-picker").waitFor({ state: "detached" });
+  searchGate.release.resolve();
+  await searchGate.completed.promise;
+  pendingShapeSearchGate = null;
+  assert(await page.locator(".route-shape-picker").count() === 0
+    && await page.getByText("Delayed synthetic pass", { exact: true }).count() === 0
+    && evidence.writes.length === 3, "late shape search changed another segment or survived closing the picker");
   assert(pageErrors.length === 0, `browser errors: ${pageErrors.join(" | ")}`);
   await page.close();
 
@@ -226,7 +382,96 @@ try {
   assert(await particle.page.locator(".detailed-earth-map").count() === 0, "particle-only mounted MapLibre");
   assert(await particle.page.locator(".route-candidate-editor").count() === 0, "particle-only mounted candidate editor");
   await particle.page.close();
+
+  const writesBeforeLayout = evidence.writes.length;
+  for (const fixture of [
+    { name: "desktop", viewport: { width: 1280, height: 900 } },
+    { name: "fold-desktop", viewport: { width: 1100, height: 768 }, touch: true },
+    { name: "narrow-desktop", viewport: { width: 800, height: 700 } },
+    { name: "narrow-desktop-home", viewport: { width: 800, height: 700 }, home: true },
+    { name: "phone", viewport: { width: 390, height: 844 }, touch: true },
+    { name: "phone-landscape", viewport: { width: 844, height: 390 }, touch: true },
+  ]) {
+    const { page: ownerPage, pageErrors: ownerErrors } = await openPage("default", { owner: true, ...fixture });
+    if (fixture.home) {
+      // Home is a projected geographic target. Focus the synthetic Journey
+      // through its ordinary rail before activating the nearby Home anchor.
+      await ownerPage.locator(".living-atlas__journey-rail button.is-active").click();
+      const homeMarker = ownerPage.locator(`.living-atlas-globe__home-base[data-home-base-period-id="${layoutHome.id}"]`);
+      await homeMarker.waitFor({ state: "visible", timeout: 25_000 });
+      await homeMarker.focus();
+      await ownerPage.keyboard.press("Enter");
+      await ownerPage.locator("[data-home-base-context]").waitFor();
+    }
+    await enterDetail(ownerPage);
+    if (fixture.home) assert(await ownerPage.locator("[data-home-base-context]").isVisible(),
+      `${fixture.name}: Home Base context disappeared before layout coverage`);
+    const compact = await ownerPage.locator(".living-atlas").getAttribute("data-mobile-v2") === "on";
+    if (!compact) assert(await ownerPage.locator(".living-atlas__journey-rail li").count() === 11,
+      `${fixture.name}: long Journey list missing`);
+    await assertEditorLayout(ownerPage, `${fixture.name}-launcher`);
+    const launcher = ownerPage.getByRole("button", { name: "贴合道路", exact: true });
+    await assertControlHit(launcher, `${fixture.name}-launcher`);
+    await launcher.click();
+    await ownerPage.locator(".route-candidate-editor select").nth(1).selectOption("driving");
+    await assertEditorLayout(ownerPage, `${fixture.name}-open`);
+    const generate = ownerPage.getByRole("button", { name: "查看候选", exact: true });
+    await assertControlHit(generate, `${fixture.name}-generate`);
+    await generate.click();
+    await ownerPage.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
+    if (fixture.home) assert(await ownerPage.locator("[data-home-base-context]").isVisible(),
+      `${fixture.name}: Home Base context disappeared while the route panel was open`);
+    await assertEditorLayout(ownerPage, `${fixture.name}-candidates`);
+    await assertControlHit(ownerPage.getByRole("button", { name: "就是这条", exact: true }), `${fixture.name}-confirm`);
+    const close = ownerPage.locator(".route-candidate-editor").getByRole("button", { name: "关闭", exact: true });
+    await assertControlHit(close, `${fixture.name}-close-after-scroll`, { scroll: false });
+    await ownerPage.screenshot({ path: `${artifactDir}/${fixture.name}-layout.png` });
+    await ownerPage.getByRole("button", { name: "调整经过位置", exact: true }).click();
+    const shapePicker = ownerPage.locator(".route-shape-picker");
+    const searchInput = shapePicker.getByRole("textbox", { name: "搜索经过的地点" });
+    await assertControlHit(searchInput, `${fixture.name}-shape-search-input`);
+    await searchInput.fill("Synthetic pass");
+    await shapePicker.getByRole("button", { name: "搜索", exact: true }).click();
+    await assertControlHit(shapePicker.getByRole("button", { name: /添加到这段路线/ }), `${fixture.name}-shape-search-result`);
+    const coordinates = shapePicker.locator("summary");
+    await assertControlHit(coordinates, `${fixture.name}-shape-coordinate-toggle`);
+    await coordinates.click();
+    await assertControlHit(shapePicker.getByRole("textbox", { name: "纬度", exact: true }), `${fixture.name}-shape-latitude`);
+    await assertControlHit(shapePicker.getByRole("textbox", { name: "经度", exact: true }), `${fixture.name}-shape-longitude`);
+    await assertControlHit(shapePicker.getByRole("button", { name: "添加这组坐标" }), `${fixture.name}-shape-coordinate-add`);
+    await assertEditorLayout(ownerPage, `${fixture.name}-shape-picker`);
+    await assertControlHit(close, `${fixture.name}-shape-close-after-scroll`, { scroll: false });
+    await ownerPage.screenshot({ path: `${artifactDir}/${fixture.name}-shape-picker.png` });
+    await close.click();
+    await assertEditorLayout(ownerPage, `${fixture.name}-closed`);
+    if (fixture.name === "desktop") {
+      await ownerPage.setViewportSize({ width: 1024, height: 768 });
+      await ownerPage.waitForFunction(() => {
+        const editor = document.querySelector(".route-candidate-editor")?.getBoundingClientRect();
+        const rail = document.querySelector(".living-atlas__journey-rail")?.getBoundingClientRect();
+        const card = document.querySelector(".living-atlas__active")?.getBoundingClientRect();
+        return editor && rail && card && editor.left >= rail.right + 10 && editor.right <= card.left - 10
+          && editor.bottom <= innerHeight && editor.right <= innerWidth;
+      });
+      await assertEditorLayout(ownerPage, "desktop-live-resize");
+      await assertControlHit(launcher, "desktop-live-resize-launcher");
+    }
+    if (!compact) {
+      await ownerPage.locator(".living-atlas__journey-rail button:not(.is-active)").first().click();
+      await ownerPage.locator('[data-route-editor-open="false"]').waitFor();
+      await assertEditorLayout(ownerPage, `${fixture.name}-journey-switched`);
+    }
+    assert(ownerErrors.length === 0, `${fixture.name}: browser errors: ${ownerErrors.join(" | ")}`);
+    await ownerPage.close();
+  }
+  assert(evidence.writes.length === writesBeforeLayout, "layout interactions changed Journey history");
   console.log(JSON.stringify({ result: "PASS", evidence }));
+} catch (error) {
+  await fs.writeFile(`${artifactDir}/failure.json`, JSON.stringify({
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : null,
+  }, null, 2));
+  throw error;
 } finally {
   pendingCandidateGate?.release.resolve();
   await fs.writeFile(`${artifactDir}/evidence.json`, JSON.stringify(evidence, null, 2));
