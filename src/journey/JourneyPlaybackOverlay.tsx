@@ -540,6 +540,24 @@ export function JourneyPlaybackOverlay({
   const videoFallbackAssetId = playbackVideoBeatFailed(currentVideoBeatSnapshot)
     ? activeVideoAsset?.id ?? null
     : null;
+  // #596: this surface already counts its own transport — every element swap
+  // goes through `bindVideoElement` and bumps the revision. Mirrored in a ref so
+  // the ducking controller reads the current value without being rebuilt, and a
+  // swap re-anchors the ramp instead of inheriting the old video's target.
+  const videoGenerationRef = useRef(videoElementRevision);
+  videoGenerationRef.current = videoElementRevision;
+  // One ducking owner for Journey Playback, Quick Recap and Full Playback alike:
+  // they all present through this element, so this is not a per-mode state.
+  useEffect(() => {
+    const controller = createSoundtrackDuckingController({
+      getSoundtrack: () => audioRef.current,
+      getForegroundVideo: () => videoRef.current,
+      getMediaGeneration: () => videoGenerationRef.current,
+      getBaselineVolume: () => 1,
+    });
+    controller.start();
+    return () => controller.stop();
+  }, []);
 
   const settleVideoTrimSeek = useCallback((
     assetId: string,

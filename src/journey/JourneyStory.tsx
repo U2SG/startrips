@@ -89,6 +89,7 @@ import {
   storyWarmWindow,
 } from "./mediaPrefetch";
 import { createSoundtrackSampler } from "../motion/audioSampler";
+import { createSoundtrackDuckingController } from "./soundtrackDuckingController";
 import {
   resetAudioAtmosphereEnergy,
   writeAudioAtmosphereEnergy,
@@ -906,6 +907,12 @@ export function JourneyStory({
   // drives whichever stage is on screen so a video step can end itself.
   const storyVideoRef = useRef<HTMLVideoElement>(null);
   const fullscreenVideoRef = useRef<HTMLVideoElement>(null);
+  // #596: the element that currently owns the foreground in this surface, for
+  // the soundtrack ducking policy. Held in a ref and refreshed during render so
+  // one controller can live for the whole Story session: rebuilding it whenever
+  // the stage or the immersive mode changed would drop whatever gain the ramp
+  // had already reached and restart the transition from the element's value.
+  const foregroundVideoRef = useRef<HTMLVideoElement | null>(null);
   const videoHandoffGenerationRef = useRef(0);
   const videoHandoffRef = useRef<{
     id: string; src: string; time: number; shouldPlay: boolean; toFullscreen: boolean;
@@ -2805,6 +2812,31 @@ export function JourneyStory({
     && storyStageVideoRead?.status === "ready",
   );
   const storyStageVideoVisible = storyStageVideoSettled || storyStageVideoIncoming;
+  // The same expression the rest of this file already uses to name the current
+  // Story video, so the ducking owner and the playback hand-off cannot disagree
+  // about which element is foreground. A still-frame extractor or a video that
+  // is merely mounted is deliberately not an owner: the policy re-reads the
+  // element's live playing state every frame and drops out on its own.
+  foregroundVideoRef.current = storyStageVideoAsset
+    ? (fullscreen ? fullscreenVideoRef.current : storyVideoRef.current)
+    : null;
+  // #596: one ducking owner for the whole Story surface, covering inline media
+  // and the immersive stage. The immersive hand-off moves the same element
+  // rather than creating a second one, so this cannot become a second, divergent
+  // ducking state.
+  useEffect(() => {
+    const controller = createSoundtrackDuckingController({
+      getSoundtrack: () => audioRef.current,
+      getForegroundVideo: () => foregroundVideoRef.current,
+      // There is no member soundtrack volume control in the client today, so the
+      // element's own level is the baseline. Reading it through the policy keeps
+      // ducking relative rather than absolute, which is what makes it correct the
+      // moment such a control exists.
+      getBaselineVolume: () => 1,
+    });
+    controller.start();
+    return () => controller.stop();
+  }, []);
   function renderStageVideo(immersive: boolean) {
     return storyStageVideoAsset ? <video
       ref={immersive ? fullscreenVideoRef : storyVideoRef}

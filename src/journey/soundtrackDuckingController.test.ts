@@ -1,0 +1,201 @@
+import { describe, expect, it } from "vitest";
+import {
+  SOUNDTRACK_DUCK_FACTOR,
+  SOUNDTRACK_DUCK_ATTACK_MS,
+  SOUNDTRACK_DUCK_RELEASE_MS,
+} from "./soundtrackDucking";
+import { createSoundtrackDuckingController } from "./soundtrackDuckingController";
+
+function fakeAudio(volume = 1) {
+  const element = { volume };
+  return element as typeof element & HTMLAudioElement;
+}
+
+function fakeVideo(overrides: Partial<HTMLVideoElement> = {}) {
+  return {
+    paused: false,
+    ended: false,
+    muted: false,
+    volume: 1,
+    readyState: 4,
+    ...overrides,
+  } as unknown as HTMLVideoElement;
+}
+
+/** A manual clock, so the ramp is exercised without real animation frames. */
+function harness(initial = {
+  baseline: 1,
+  video: fakeVideo() as HTMLVideoElement | null,
+}) {  let time = 0;
+  let queue: (() => void)[] = [];
+  const state = {
+    baseline: initial.baseline,
+    video: initial.video,
+    generation: 0,
+  };
+  const audio = fakeAudio();
+  const controller = createSoundtrackDuckingController({
+    getSoundtrack: () => audio,
+    getForegroundVideo: () => state.video,
+    getMediaGeneration: () => state.generation,
+    getBaselineVolume: () => state.baseline,
+    now: () => time,
+    requestFrame: (callback: () => void) => {
+      queue.push(callback);
+      return queue.length;
+    },
+    cancelFrame: () => {
+      queue = [];
+    },
+  });
+  const drain = () => {
+    const pending = queue;
+    queue = [];
+    for (const callback of pending) callback();
+  };
+  const run = (ms: number) => {
+    const steps = Math.max(1, Math.round(ms / 8));
+    for (let index = 0; index < steps; index += 1) {
+      time += ms / steps;
+      drain();
+    }
+    // Sample once more at the final instant, so a transition that has exactly
+    // elapsed is observed as arrived rather than one step short of it.
+    drain();
+  };
+  return { audio, controller, state, run };
+}
+
+/**
+ * A transition only starts on the frame the controller first observes the
+ * change, one frame after the member sees it, so a transition declared to last
+ * `ATTACK` arrives just after `ATTACK`. Overshooting by a clear margin is what
+ * asserts arrival, rather than a rounding tolerance on the endpoint.
+ */
+const ARRIVED = 64;
+
+describe("soundtrack ducking controller", () => {
+  it("holds the member's own level while an image, note or place is showing", () => {
+    const { audio, controller, state, run } = harness();
+    controller.start();
+    state.video = null;
+    run(SOUNDTRACK_DUCK_RELEASE_MS * 2);
+    expect(audio.volume).toBe(1);
+  });
+
+  it("ramps down for an audible foreground video and back to the exact level", () => {
+    const { audio, controller, state, run } = harness();
+    controller.start();
+    state.video = fakeVideo();
+    // Part way through the attack it must be between the two levels, not a step.
+    run(SOUNDTRACK_DUCK_ATTACK_MS / 2);
+    expect(audio.volume).toBeLessThan(1);
+    expect(audio.volume).toBeGreaterThan(SOUNDTRACK_DUCK_FACTOR);
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+    expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+
+    state.video = null;
+    run(SOUNDTRACK_DUCK_RELEASE_MS / 2);
+    expect(audio.volume).toBeLessThan(1);
+    run(SOUNDTRACK_DUCK_RELEASE_MS + ARRIVED);
+    expect(audio.volume).toBe(1);
+  });
+
+  it("restores and re-ducks for pause, mute and unmute", () => {
+    const { audio, controller, state, run } = harness();
+    controller.start();
+    state.video = fakeVideo();
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+    expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+
+    for (const change of [{ paused: true }, { muted: true }, { ended: true }]) {
+      state.video = fakeVideo(change);
+      run(SOUNDTRACK_DUCK_RELEASE_MS + ARRIVED);
+      expect(audio.volume).toBe(1);
+
+      state.video = fakeVideo();
+      run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+      expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+    }
+  });
+
+  // The acceptance item that decides the whole design: ducking is relative to
+  // the level actually in force, not the one that happened to be in force when
+  // the duck began.
+  it("restores to a baseline lowered while ducked", () => {
+    const { audio, controller, state, run } = harness();
+    controller.start();
+    state.video = fakeVideo();
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+    expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+
+    state.baseline = 0.5;
+    state.video = null;
+    run(SOUNDTRACK_DUCK_RELEASE_MS + ARRIVED);
+    expect(audio.volume).toBe(0.5);
+  });
+
+  // A rejected play() leaves the element paused, so the soundtrack must never
+  // be parked at the ducked level with nothing audible to justify it.
+  it("never ducks a video whose playback did not start", () => {
+    const { audio, controller, state, run } = harness();
+    controller.start();
+    state.video = fakeVideo({ paused: true });
+    run(SOUNDTRACK_DUCK_ATTACK_MS * 2);
+    expect(audio.volume).toBe(1);
+  });
+
+  // "Has a first frame" is not "is playing": an un-paused element that has not
+  // delivered data yet must not pull the soundtrack down either.
+  it("does not duck before the video has current frame data", () => {
+    const { audio, controller, state, run } = harness();
+    controller.start();
+    state.video = fakeVideo({ readyState: 1 });
+    run(SOUNDTRACK_DUCK_ATTACK_MS * 2);
+    expect(audio.volume).toBe(1);
+  });
+
+  it("does not duck for a video at zero volume", () => {
+    const { audio, controller, state, run } = harness();
+    controller.start();
+    state.video = fakeVideo({ volume: 0 });
+    run(SOUNDTRACK_DUCK_ATTACK_MS * 2);
+    expect(audio.volume).toBe(1);
+  });
+
+  // Rapid video A -> image -> video B. The controller polls live state, so A's
+  // superseded target cannot be applied after B has taken over.
+  it("does not carry a stale transport's target across a video swap", () => {
+    const { audio, controller, state, run } = harness();
+    controller.start();
+    const videoA = fakeVideo();
+    state.video = videoA;
+    run(SOUNDTRACK_DUCK_ATTACK_MS / 2);
+    const midway = audio.volume;
+
+    state.video = null;
+    state.generation = 1;
+    state.video = fakeVideo();
+    state.generation = 2;
+    run(8);
+    // Straight from one ducking video to another, the gain must not jump to the
+    // restored level and then back down.
+    expect(audio.volume).toBeLessThan(1);
+    expect(Math.abs(audio.volume - midway)).toBeLessThan(0.2);
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+    expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+  });
+
+  it("stops touching the element once stopped", () => {
+    const { audio, controller, state, run } = harness();
+    controller.start();
+    state.video = fakeVideo();
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+    const settled = audio.volume;
+    controller.stop();
+    state.video = null;
+    run(SOUNDTRACK_DUCK_RELEASE_MS * 2);
+    expect(audio.volume).toBe(settled);
+    expect(controller.isRamping()).toBe(false);
+  });
+});
