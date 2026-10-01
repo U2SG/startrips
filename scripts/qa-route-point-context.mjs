@@ -2424,6 +2424,7 @@ try {
   ]) {
     for (const fixture of localZoomFixtures) {
       const localRun = await openFocusAtlas({
+        compact: true,
         viewport: localCase.viewport,
         reduceMotion: localCase.reduceMotion,
         journeysPayload: [fixture.journey],
