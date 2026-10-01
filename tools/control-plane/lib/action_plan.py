@@ -4,7 +4,6 @@ import argparse
 import base64
 import datetime
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -13,7 +12,7 @@ from feature_store import StoreConflict, load_document, commit_document
 from feature_state import target, row_token, TERMINAL
 from github_evidence import api, source_relation, review_backlog, merge_proof, EvidenceUnknown
 from ci_observer import latest_ci, observe_failures, write_json, pages
-from delivery import (blockers as delivery_blockers, canonical_lead, grouped,
+from delivery import (blockers as delivery_blockers, canonical_lead, feature_lane, grouped,
                       package_snapshot, review_snapshot, unit_pr_links, unit_rows, unit_token,
                       validate_coverage)
 from delivery_issues import assert_current as assert_issue_current, live_issues
@@ -366,7 +365,10 @@ def handoff(path, fid, repo):
         raise StoreConflict('Delivery unit changed before handoff')
     from runtime_preflight import preflight
     from evidence_capture import capture
-    owner = preflight(path.parent, path.parent / 'startrips', os.environ.get('STARTRIPS_LANE'), fid, repo)
+    lane = feature_lane(unit_rows(doc, fid)[0])
+    if lane not in {'backend', 'experience'}:
+        raise StoreConflict('Delivery unit lane is undecided; handoff cannot infer a carrier')
+    owner = preflight(path.parent, path.parent / 'startrips', lane, fid, repo)
     captured = capture(path.parent, owner['worktree'], fid, observed['pr'], repo)
     if captured['exit'] != 0 or captured['kind'] != 'final':
         raise StoreConflict('Final CI capture did not pass')

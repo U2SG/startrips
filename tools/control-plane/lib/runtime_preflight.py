@@ -2,7 +2,6 @@
 from __future__ import annotations
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -12,7 +11,7 @@ from feature_state import target, next_action, note
 from execution import ensure_idle, stopped, temporary_backend_switch_authorized
 import datetime
 from github_evidence import api, EvidenceUnknown
-from delivery import canonical_lead, unit_pr_links, unit_rows, unit_token, package_snapshot
+from delivery import canonical_lead, feature_lane, unit_pr_links, unit_rows, unit_token, package_snapshot
 
 
 def git(path, *args):
@@ -150,8 +149,8 @@ def prepare_unmapped(root, repository, row, repo, prepare, lane):
 
 def preflight(root, worktree, lane, fid, repo, prepare=False):
     root, worktree = Path(root).resolve(), Path(worktree).resolve()
-    if lane not in {'backend', 'experience'} or os.environ.get('STARTRIPS_LANE') != lane:
-        raise StoreConflict('Target runtime lane missing/mismatched; no Backend fallback')
+    if lane not in {'backend', 'experience'}:
+        raise StoreConflict('Target runtime lane missing/invalid; no Backend fallback')
     if Path.cwd().resolve() != root:
         raise StoreConflict('Run-loop cwd differs from its authoritative workspace')
     if not worktree.is_relative_to(root):
@@ -160,6 +159,8 @@ def preflight(root, worktree, lane, fid, repo, prepare=False):
     if canonical_lead(document, fid) != fid:
         raise StoreConflict('Package member cannot own an independent worktree')
     rows = unit_rows(document, fid); row = rows[0]
+    if {feature_lane(member) for member in rows} != {lane}:
+        raise StoreConflict('Target runtime lane disagrees with canonical ONE lane')
     if len({member.get('status') for member in rows}) != 1 or any(member.get('human_gate') for member in rows):
         raise StoreConflict('Delivery package lifecycle/gate is not executable')
     if next_action(row) not in {'IMPLEMENT', 'EVALUATE'}:
