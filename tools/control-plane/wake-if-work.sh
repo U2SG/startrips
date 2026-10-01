@@ -12,14 +12,13 @@
 # because a backgrounded child of this script does not survive its exit on
 # MSYS - an earlier version silently launched nothing.
 #
-# Three wake conditions, cheapest first:
+# Two wake conditions, cheapest first:
 #   1. The lane's selector already has a feature       -> `run-loop.sh --next`
-#   2. Intake owes an open issue a triage              -> `intake_candidates`
-#   3. Reconcile owes a PR a state change              -> `run-loop.sh --work-prs`
-# Every answer comes from the code the loop itself runs. A hook that re-derived
-# eligibility, candidacy or the live-PR set would be a second source of truth,
-# and the two would drift: condition 2 written by hand missed the intake skip
-# list and fired on ten issues intake had already declined.
+#   2. Reconcile owes a PR a state change              -> `run-loop.sh --work-prs`
+# Raw unqueued issues are Orchestrator-owned intake evidence. Since intake now
+# requires an external Codexless verdict, a LOCAL Backend wake cannot make a
+# verdictless candidate actionable and would only create a repeated empty run.
+# Every wake answer therefore comes from state the Backend carrier can consume.
 set -uo pipefail
 export PATH="/usr/bin:$PATH"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -77,16 +76,10 @@ if ! gh api rate_limit --silent >/dev/null 2>&1; then
   exit 0
 fi
 
-# Intake's own candidate list: open, unqueued, not on the skip list, not
-# labelled with rules.intake.skip_label.
-# shellcheck source=lib/intake.sh
-source "$ROOT/lib/intake.sh"
-if ! CANDS="$(intake_candidates | tr -d '\r' | tr '\n' ' ')"; then
-  say "intake candidates UNKNOWN; do not convert a failed discovery into idle"
-  exit 6
-fi
-CANDS="${CANDS% }"
-[[ -z "$CANDS" ]] || wake "intake candidate issue(s): $CANDS"
+# Unqueued issue discovery is intentionally not a LOCAL Backend wake condition.
+# The recurring Orchestrator reads those issues, produces an exact snapshot-bound
+# external verdict, and applies it through the canonical intake boundary. Only a
+# resulting registered Backend feature can wake this dedicated Backend hook.
 
 # Whatever a human merged or closed while the loop was down: that transition is
 # what turns a feature `passed` and unblocks its dependents.
@@ -121,5 +114,5 @@ while IFS=$'\t' read -r fid url; do
 done < <("$ROOT/run-loop.sh" --work-prs 2>/dev/null)
 [[ -z "$CHANGED" ]] || wake "PR state moved while down:$CHANGED"
 
-say "lane=$STARTRIPS_LANE idle: nothing eligible, no intake candidate, no PR state change, no waiting review."
+say "lane=$STARTRIPS_LANE idle: nothing eligible, no PR state change, no waiting review."
 exit 0

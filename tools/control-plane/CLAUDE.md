@@ -177,7 +177,10 @@ including draft PRs that are awaiting Source review. After its own inspection it
 records `.agent-artifacts/evaluations/<ST>-<SOURCE>-source-review.json` through:
 
 ```text
-STARTRIPS_ROLE=hourly-review python -B lib/action_plan.py feature_list.json <ST> --record-review <result.json>
+command_exec command=["D:\\Python\\python.exe","-B","lib\\action_plan.py","feature_list.json","<ST>","--record-review","<result.json>"]
+command_exec env={"STARTRIPS_ROLE":"hourly-review"}
+
+The reviewer role is transport-injected authority, not a caller-selectable action-plan argument.
 ```
 
 The result is an evidence document, not a claim: `feature`, `pr`, `source_sha`,
@@ -361,13 +364,24 @@ otherwise oldest first, at most `rules.intake.max_per_iteration` (3) per iterati
 `no-loop` (`rules.intake.skip_label`) is never a candidate — that label is how a human keeps an issue
 out of the queue permanently without arguing with the harness.
 
-**Triage.** One headless `startrips-triage` session per candidate. That agent is read-only. It
-reads this manual, `startrips/CLAUDE.md`, `startrips/CONTEXT.md`, the issue in full and a compact
-direct projection of the authoritative `feature_list.json` (identity/placement/gate fields only),
-then expands only the proposed anchor/dependency/sibling rows it actually needs. Never dump the
-whole raw ONE into model context; the projection is ephemeral evidence, not a second backlog. It
-verifies the claimed gap against the real code and returns one JSON object between `<<<INTAKE` and
-`INTAKE>>>`. It never comments, creates or writes; the parent applies the decision.
+**Triage.** Intake reasoning runs in the existing recurring Development Orchestrator session; the
+control-plane shell MUST NOT start Claude, Codex, or any other nested model/provider process.
+`.claude/agents/startrips-triage.md` is a read-only **rubric**, not a builder or child-agent
+invocation contract. The Orchestrator uses Codexless reads to inspect this manual,
+`startrips/CLAUDE.md`, `startrips/CONTEXT.md`, the full issue, relevant code/Git history and a
+compact direct projection of the authoritative `feature_list.json`. Never dump the whole raw ONE
+into model context; the projection is ephemeral evidence, not a second backlog.
+
+The reasoning result is supplied to canonical intake as an ephemeral envelope bound to exact
+`issue`, `mode` (`new|amend|followup`), the issue `updatedAt` and comment count actually read
+for reasoning, and, for amend/follow-up, exact `feature` plus its current 64-hex row token. The
+shell validates those identities, then re-reads the issue and mapped row immediately before apply;
+follow-up append rechecks the row token again inside the safe-store apply transaction. Known drift
+returns a stale defer without mutating ONE or advancing snapshots. Missing/unreadable evidence is
+UNKNOWN and fails closed. Only after those checks is the nested `verdict` handed to the existing
+deterministic `intake_json.py` parser/apply path. A missing verdict is a normal defer with no budget
+spend, skip entry or ONE write. Verdict files are invocation inputs only; they are never a queue,
+owner registry, routing table or authority source.
 
 **Placement.** The triage output carries a `placement` block — an existing feature as `anchor`,
 `before` or `after`, and a rationale. Placement follows the problem area and the code the feature
@@ -412,13 +426,24 @@ feature before it starts, and must extend its `notes` to say so. This is the onl
 immutable-field rule and applies to auto-intake entries only — never to a hand-written feature, and
 never once the feature is `in_progress` or later.
 
-**Manual entry point.**
+**Manual/control-plane entry points.**
 
 ```bash
-./init.sh intake                  # the same step the loop runs
-./init.sh intake 86               # exactly one issue
-./init.sh intake 86 --dry-run     # triage and print the decision; writes nothing, posts nothing
+./init.sh intake-candidates
+./init.sh intake 86 --verdict-file .agent-artifacts/intake/verdict-86.json
+./init.sh intake 86 --verdict-file .agent-artifacts/intake/verdict-86.json --dry-run
+./init.sh intake-check --dry-run
+./init.sh intake-check --verdict-dir .agent-artifacts/intake/verdicts-current
 ```
+
+The Orchestrator creates the bound verdict after its Codexless evidence read, invokes the canonical
+apply command once, then may discard that verdict input. Every envelope carries the exact
+`issue_snapshot_at` and `issue_snapshot_comments` that were reasoned over; amend/follow-up
+envelopes additionally carry the mapped `feature` and its exact `feature_row_token`. Intake
+revalidates those bindings against fresh GitHub/ONE evidence immediately before the safe-store
+transaction and treats a known mismatch as stale evidence, never permission to apply an old verdict.
+A raw candidate with no matching verdict is not actionable by LOCAL Backend and must not wake its
+dedicated supervisor. Never persist verdict files as another backlog or use them to infer ownership.
 
 **Durability caveat.** `skipped.json` and `decisions.log` live under the gitignored
 `.agent-artifacts/intake/`. A re-clone or a cleaned artifacts directory loses them, so previously
@@ -431,20 +456,20 @@ An issue keeps moving after it is queued, so a feature is a snapshot with a date
 that carries an `issue` also carries two **mutable** fields — `issue_snapshot_at` (the issue's
 `updatedAt` at the last reconcile) and `issue_snapshot_comments` (its comment count then) — and
 `run-loop.sh` runs `intake_reconcile_issues` (`lib/intake.sh`) right after `intake_new_issues`,
-before `next_feature`. Both halves share ONE per-iteration session budget
-(`rules.intake.max_per_iteration`, 3), and new issues spend it first: a fresh P0/P1 regression
-being built in the iteration it was triaged outranks an amend, which loses nothing by waiting one
-iteration. A backfill, a curated note and plain snapshot bookkeeping cost no session at all.
+before `next_feature`. New/amend/follow-up **applications** share ONE per-iteration intake budget
+(`rules.intake.max_per_iteration`, 3). Missing external verdicts do not spend it. New issue verdicts
+are applied before amend/follow-up verdicts when both are available; backfill, curated notes and plain
+snapshot bookkeeping cost no intake budget.
 
 What a move means depends on the **status** of the mapped feature:
 
 | Feature state | What intake does |
 | --- | --- |
 | No snapshot yet (every hand-written ST-000..ST-020) | Backfill both fields from the live issue on the first run, **without** re-triaging — they are the owner's curated contract. Recorded in `decisions.log`. |
-| `pending`, `notes` start with `auto-intake` | One `startrips-triage` session in **amend** mode; it may replace `acceptance`, `dependencies`, `human_gate`, `description` and the placement, or answer `unchanged`, or report the issue moot. One comment on the issue when it amends. |
+| `pending`, `notes` start with `auto-intake` | Consume one exact issue/feature-bound external **amend** verdict when supplied; it may replace `acceptance`, `dependencies`, `human_gate`, `description` and placement, answer `unchanged`, or report the issue moot. Missing verdict defers without changing the snapshot. |
 | `pending`, curated | Never rewritten. The update goes to `decisions.log`, a note is appended to the feature's `notes`, and a line lands in `claude-progress.md` under `### Needs owner attention`. Nothing is posted to GitHub. |
 | `in_progress`, `needs_work`, `ready_for_eval` | Nothing at all, **including the snapshot** — see the builder rule below. |
-| `passed`, issue OPEN and moved again | One follow-up feature through the normal triage path, placed `after` the passed feature with it as a dependency, `notes` starting `auto-intake follow-up of <id> (issue reopened)`, and one comment naming the new id. |
+| `passed`, issue OPEN and moved again | Consume one exact issue/feature-bound external **followup** verdict; when a residual gap exists, append one follow-up after the passed feature with it as dependency and `notes` starting `auto-intake follow-up of <id> (issue reopened)`. Missing verdict defers. |
 | `blocked` | Snapshot bookkeeping plus a `### Needs owner attention` line. A builder blocks a feature and posts ONE question on the issue when a comment contradicts the acceptance, so activity on a blocked entry's issue is usually the answer — and only a human unblocks it. |
 | `ready_to_merge`, `cancelled_by_product_decision`, closed issues | Snapshot bookkeeping only. |
 
