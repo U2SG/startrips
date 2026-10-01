@@ -36,6 +36,32 @@ def configure_utf8_stdio() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+def web_https_readiness_shell(server: str) -> str:
+    """Wait for Caddy's listener and the exact healthy API response with a bound."""
+    resolve = shlex.quote(f"{server}:443:127.0.0.1")
+    homepage = shlex.quote(f"https://{server}/")
+    health = shlex.quote(f"https://{server}/api/health")
+    return f"""
+wait_for_web_https() {{
+  local https_attempt health_body
+  for https_attempt in $(seq 1 12); do
+    if curl -fsS --max-time 5 --resolve {resolve} {homepage} >/dev/null &&
+       health_body=$(curl -fsS --max-time 5 --resolve {resolve} {health}) &&
+       [ "$health_body" = '{{"status":"ok"}}' ]; then
+      return 0
+    fi
+    if [ "$https_attempt" -lt 12 ]; then
+      echo "Waiting for Web HTTPS readiness ($https_attempt/12)..." >&2
+      sleep 2
+    fi
+  done
+  echo "Web HTTPS did not become ready within 12 attempts" >&2
+  sudo docker logs --tail 80 startrips-web-1 >&2 || true
+  return 1
+}}
+"""
+
+
 SERVER_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 DEFAULT_HOST_KEY_SHA256 = {
@@ -356,6 +382,7 @@ old_current=$(readlink -f /opt/startrips/current)
 old_api=$(sudo docker inspect startrips-api-1 --format '{{{{.Image}}}}')
 old_web=$(sudo docker inspect startrips-web-1 --format '{{{{.Image}}}}')
 rollback_needed=0
+{web_https_readiness_shell(arguments.server)}
 rollback_release() {{
   exit_code=$?
   trap - EXIT
@@ -382,6 +409,7 @@ rollback_release() {{
     [ "$(sudo docker inspect startrips-web-1 --format '{{{{.Image}}}}' 2>/dev/null)" = "$old_web" ] || rollback_failed=1
     [ "$(sudo docker inspect startrips-web-1 --format '{{{{.State.Status}}}}' 2>/dev/null)" = running ] || rollback_failed=1
     [ "$(readlink -f /opt/startrips/current)" = "$old_current" ] || rollback_failed=1
+    wait_for_web_https || rollback_failed=1
     if [ "$rollback_failed" -eq 0 ]; then
       echo "ROLLBACK CONFIRMED. Database migrations remain applied; backup: {backup_path}" >&2
     else
@@ -428,9 +456,7 @@ test "$(sudo docker inspect startrips-api-1 --format '{{{{.RestartCount}}}}')" =
 test "$(sudo docker inspect startrips-web-1 --format '{{{{.State.Status}}}}')" = running
 test "$(sudo docker inspect startrips-web-1 --format '{{{{.RestartCount}}}}')" = 0
 test "$(sudo docker inspect startrips-migrate-1 --format '{{{{.State.ExitCode}}}}')" = 0
-curl -fsS --max-time 30 --resolve {arguments.server}:443:127.0.0.1 https://{arguments.server}/ >/dev/null
-health_body=$(curl -fsS --max-time 30 --resolve {arguments.server}:443:127.0.0.1 https://{arguments.server}/api/health)
-test "$health_body" = '{{"status":"ok"}}'
+wait_for_web_https
 sudo docker logs --since 10m --tail 120 startrips-api-1
 sudo docker logs --since 10m --tail 80 startrips-web-1
 rollback_needed=0
