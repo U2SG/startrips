@@ -1,13 +1,29 @@
 import type { Journey, RoutePoint } from "./types";
 
+export type MediaSpatialSource = "exif" | "container-metadata" | "imported" | "unknown";
+export type MediaSpatialGranularity = "coordinate" | "city" | "unknown";
+export type MediaCaptureTimeSource = "exif-original" | "exif-digitized" | "gps" | "container-metadata" | "imported" | "unknown";
+export type MediaTimezoneState = "offset-known" | "local-only" | "unknown";
+
 export type MediaPlacementSignal = {
   latitude?: number;
   longitude?: number;
-  /** ISO timestamp when EXIF includes an explicit UTC offset. */
+  /** ISO timestamp when metadata supplies an explicit offset or UTC instant. */
   capturedAt?: string;
-  /** Wall-clock EXIF timestamp when the source omits timezone information. */
+  /** Wall-clock timestamp when the source omits timezone information. */
   capturedLocal?: string;
+  spatialSource?: MediaSpatialSource;
+  spatialGranularity?: MediaSpatialGranularity;
+  accuracyMeters?: number | null;
+  captureTimeSource?: MediaCaptureTimeSource;
+  timezoneState?: MediaTimezoneState;
+  offsetMinutes?: number | null;
 };
+
+export type MediaPlacementReadResult =
+  | { status: "signal"; signal: MediaPlacementSignal }
+  | { status: "no-evidence" }
+  | { status: "unsupported-format" };
 
 export type MediaPlacementSuggestion = {
   journeyId: string;
@@ -105,6 +121,16 @@ function signalDateKey(signal: MediaPlacementSignal) {
   return dateKey(signal.capturedLocal) ?? dateKey(signal.capturedAt);
 }
 
+function signalHasCoordinateEvidence(signal: MediaPlacementSignal) {
+  if (!Number.isFinite(signal.latitude) || !Number.isFinite(signal.longitude)) return false;
+  const hasExplicitSpatialSemantics = signal.spatialSource !== undefined
+    || signal.spatialGranularity !== undefined;
+  if (!hasExplicitSpatialSemantics) return true;
+  return signal.spatialGranularity === "coordinate"
+    && signal.spatialSource !== undefined
+    && signal.spatialSource !== "unknown";
+}
+
 function dateOrdinal(value: string) {
   const key = dateKey(value);
   if (!key || key !== value) return null;
@@ -186,7 +212,7 @@ function routeCandidate(
   point: RoutePoint,
   currentJourneyId: string | null | undefined,
 ): Candidate | null {
-  const hasGps = Number.isFinite(signal.latitude) && Number.isFinite(signal.longitude);
+  const hasGps = signalHasCoordinateEvidence(signal);
   const distanceKm = hasGps
     ? haversineDistanceKm(
       signal.latitude!,
@@ -271,7 +297,7 @@ export function suggestMediaPlacement(
   currentJourneyId?: string | null,
 ): MediaPlacementSuggestion | null {
   if (!signal) return null;
-  const hasGps = Number.isFinite(signal.latitude) && Number.isFinite(signal.longitude);
+  const hasGps = signalHasCoordinateEvidence(signal);
   const hasTime = Boolean(signal.capturedAt || signal.capturedLocal);
   if (!hasGps && !hasTime) return null;
 
@@ -454,6 +480,17 @@ function readRationalArray(reader: TiffReader, entryOffset: number | null) {
   return values;
 }
 
+function readRationalScalar(reader: TiffReader, entryOffset: number | null) {
+  if (entryOffset === null) return null;
+  const data = entryDataOffset(reader, entryOffset);
+  if (!data || data.type !== 5 || data.count !== 1 || !inTiffBounds(reader, data.offset, 8)) return null;
+  const numerator = readUint32(reader, data.offset);
+  const denominator = readUint32(reader, data.offset + 4);
+  if (numerator === null || denominator === null || denominator === 0) return null;
+  const value = numerator / denominator;
+  return Number.isFinite(value) && value >= 0 && value <= 1_000_000 ? value : null;
+}
+
 function isValidGpsDms(parts: readonly number[], maxDegrees: number) {
   if (parts.length < 3) return false;
   const [degrees, minutes, seconds] = parts;
@@ -477,29 +514,60 @@ function degreesFromGps(parts: readonly number[], reference: string) {
 }
 
 function normalizeExifDateTime(value: string | null, offset: string | null) {
-  if (!value) return {};
+  if (!value) return null;
   const match = /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(value);
-  if (!match) return {};
+  if (!match) return null;
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
   const hour = Number(match[4]);
   const minute = Number(match[5]);
   const second = Number(match[6]);
-  if (
-    !isValidCalendarDate(year, month, day)
-    || hour > 23
-    || minute > 59
-    || second > 59
-  ) {
-    return {};
-  }
+  if (!isValidCalendarDate(year, month, day) || hour > 23 || minute > 59 || second > 59) return null;
   const local = `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}`;
   const offsetMatch = offset?.match(/^([+-])(\d{2}):(\d{2})$/);
-  if (offsetMatch && Number(offsetMatch[2]) <= 23 && Number(offsetMatch[3]) <= 59) {
-    return { capturedAt: `${local}${offset}` };
+  if (offsetMatch) {
+    const hours = Number(offsetMatch[2]);
+    const minutes = Number(offsetMatch[3]);
+    if (minutes <= 59 && (hours < 14 || (hours === 14 && minutes === 0))) {
+      const sign = offsetMatch[1] === "-" ? -1 : 1;
+      return {
+        capturedAt: `${local}${offset}`,
+        capturedLocal: local,
+        timezoneState: "offset-known" as const,
+        offsetMinutes: sign * (hours * 60 + minutes),
+      };
+    }
   }
-  return { capturedLocal: local };
+  return {
+    capturedLocal: local,
+    timezoneState: "local-only" as const,
+    offsetMinutes: null,
+  };
+}
+
+function normalizeGpsDateTime(dateStamp: string | null, timeParts: readonly number[] | null) {
+  const match = /^(\d{4}):(\d{2}):(\d{2})$/.exec(dateStamp ?? "");
+  if (!match || !timeParts || timeParts.length < 3) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const [hour, minute, secondValue] = timeParts;
+  if (!isValidCalendarDate(year, month, day) || hour < 0 || hour >= 24 || minute < 0 || minute >= 60 || secondValue < 0 || secondValue >= 60) return null;
+  const second = Math.floor(secondValue);
+  const milliseconds = Math.round((secondValue - second) * 1000);
+  const instant = new Date(Date.UTC(year, month - 1, day, hour, minute, second, milliseconds));
+  if (!Number.isFinite(instant.valueOf())) return null;
+  const capturedAt = instant.toISOString();
+  const capturedLocal = capturedAt.endsWith(".000Z")
+    ? capturedAt.slice(0, -5)
+    : capturedAt.slice(0, -1);
+  return {
+    capturedAt,
+    capturedLocal,
+    timezoneState: "offset-known" as const,
+    offsetMinutes: 0,
+  };
 }
 
 /** Parse only normalized placement signals from JPEG EXIF; raw metadata is discarded. */
@@ -541,14 +609,28 @@ export function parseJpegExifPlacementSignal(buffer: ArrayBuffer): MediaPlacemen
       if (readUint16(reader, tiffStart + 2) !== 42) return null;
       const ifd0 = readUint32(reader, tiffStart + 4);
       if (ifd0 === null) return null;
-      const signal: MediaPlacementSignal = {};
+      const signal: MediaPlacementSignal = {
+        spatialSource: "unknown",
+        spatialGranularity: "unknown",
+        accuracyMeters: null,
+        captureTimeSource: "unknown",
+        timezoneState: "unknown",
+        offsetMinutes: null,
+      };
+      let hasEvidence = false;
 
       const gpsIfd = readLongEntry(reader, findIfdEntry(reader, ifd0, 0x8825));
+      let gpsDateTime: ReturnType<typeof normalizeGpsDateTime> = null;
       if (gpsIfd !== null) {
         const latRef = readAsciiEntry(reader, findIfdEntry(reader, gpsIfd, 0x0001));
         const latParts = readRationalArray(reader, findIfdEntry(reader, gpsIfd, 0x0002));
         const lonRef = readAsciiEntry(reader, findIfdEntry(reader, gpsIfd, 0x0003));
         const lonParts = readRationalArray(reader, findIfdEntry(reader, gpsIfd, 0x0004));
+        const accuracyMeters = readRationalScalar(reader, findIfdEntry(reader, gpsIfd, 0x001f));
+        gpsDateTime = normalizeGpsDateTime(
+          readAsciiEntry(reader, findIfdEntry(reader, gpsIfd, 0x001d)),
+          readRationalArray(reader, findIfdEntry(reader, gpsIfd, 0x0007)),
+        );
         if (
           latRef && /^[NS]$/.test(latRef)
           && lonRef && /^[EW]$/.test(lonRef)
@@ -561,25 +643,39 @@ export function parseJpegExifPlacementSignal(buffer: ArrayBuffer): MediaPlacemen
           if (latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
             signal.latitude = latitude;
             signal.longitude = longitude;
+            signal.spatialSource = "exif";
+            signal.spatialGranularity = "coordinate";
+            signal.accuracyMeters = accuracyMeters;
+            hasEvidence = true;
           }
         }
       }
 
+      let normalizedTime: ReturnType<typeof normalizeExifDateTime> = null;
+      let captureTimeSource: MediaCaptureTimeSource = "unknown";
       const exifIfd = readLongEntry(reader, findIfdEntry(reader, ifd0, 0x8769));
       if (exifIfd !== null) {
         const dateTimeOriginal = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9003));
         const dateTimeDigitized = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9004));
         const offsetTimeOriginal = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9011));
         const offsetTimeDigitized = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9012));
-        const normalizedOriginal = normalizeExifDateTime(dateTimeOriginal, offsetTimeOriginal);
-        Object.assign(
-          signal,
-          Object.keys(normalizedOriginal).length > 0
-            ? normalizedOriginal
-            : normalizeExifDateTime(dateTimeDigitized, offsetTimeDigitized),
-        );
+        normalizedTime = normalizeExifDateTime(dateTimeOriginal, offsetTimeOriginal);
+        if (normalizedTime) captureTimeSource = "exif-original";
+        else {
+          normalizedTime = normalizeExifDateTime(dateTimeDigitized, offsetTimeDigitized);
+          if (normalizedTime) captureTimeSource = "exif-digitized";
+        }
       }
-      return Object.keys(signal).length > 0 ? signal : null;
+      if (!normalizedTime && gpsDateTime) {
+        normalizedTime = gpsDateTime;
+        captureTimeSource = "gps";
+      }
+      if (normalizedTime) {
+        Object.assign(signal, normalizedTime);
+        signal.captureTimeSource = captureTimeSource;
+        hasEvidence = true;
+      }
+      return hasEvidence ? signal : null;
     }
     cursor += segmentLength;
   }
@@ -588,15 +684,18 @@ export function parseJpegExifPlacementSignal(buffer: ArrayBuffer): MediaPlacemen
 
 export const MAX_EXIF_SCAN_BYTES = 2 * 1024 * 1024;
 
-export async function readMediaPlacementSignal(file: File): Promise<MediaPlacementSignal | null> {
-  if (!/^image\/jpeg$/i.test(file.type) && !/\.jpe?g$/i.test(file.name)) return null;
+export async function readMediaPlacementSignal(file: File): Promise<MediaPlacementReadResult> {
+  if (!/^image\/jpeg$/i.test(file.type) && !/\.jpe?g$/i.test(file.name)) {
+    return { status: "unsupported-format" };
+  }
   try {
     // JPEG APP metadata lives before the compressed image scan. Bound the read
     // so a 500 MB original never becomes a 500 MB metadata allocation.
-    return parseJpegExifPlacementSignal(
+    const signal = parseJpegExifPlacementSignal(
       await file.slice(0, MAX_EXIF_SCAN_BYTES).arrayBuffer(),
     );
+    return signal ? { status: "signal", signal } : { status: "no-evidence" };
   } catch {
-    return null;
+    return { status: "no-evidence" };
   }
 }

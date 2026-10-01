@@ -16,6 +16,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createStoryAutoplayFallbackController,
   JourneyStory,
+  mediaEvidenceCoordinateCorrection,
+  mediaEvidenceLocationText,
+  recordedEvidenceForPlacementRead,
   finalizeMediaDragCommit,
   scheduleCancelableMediaDragSettle,
   scheduleCancelableDeferredFullscreenEntry,
@@ -26,9 +29,9 @@ import {
   retainMediaMoveUndoAfterError,
   replaceJourneySoundtrack,
 } from "./JourneyStory";
-import { JourneyApiError } from "./journeyApi";
-import { createPlacementAnalysisAuthority, placementAnalysisScope } from "./placementAnalysisAuthority";
-import type { Journey, JourneyMediaAsset } from "./types";
+import { JourneyApiError, readMediaEvidence, writeMediaDisplayState } from "./journeyApi";
+import { createPlacementAnalysisAuthority, placementAnalysisScope, runPlacementAnalysisBatch } from "./placementAnalysisAuthority";
+import type { Journey, JourneyMediaAsset, MediaEvidenceRecord } from "./types";
 
 const journey: Journey = {
   id: "journey-1",
@@ -48,6 +51,164 @@ const journey: Journey = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("media evidence bridge (#334)", () => {
+  it("persists only normalized coordinate evidence and preserves timezone semantics", () => {
+    const recorded = recordedEvidenceForPlacementRead({
+      status: "signal",
+      signal: {
+        latitude: 22.543096,
+        longitude: 114.057865,
+        spatialSource: "exif",
+        spatialGranularity: "coordinate",
+        accuracyMeters: 7.5,
+        captureTimeSource: "exif-original",
+        timezoneState: "offset-known",
+        capturedLocal: "2026-09-30T12:34:56.789",
+        capturedAt: "2026-09-30T04:34:56.789Z",
+        offsetMinutes: 480,
+      },
+    });
+    expect(recorded).toEqual({
+      spatial: {
+        source: "exif",
+        granularity: "coordinate",
+        latitude: 22.543096,
+        longitude: 114.057865,
+        accuracyMeters: 7.5,
+        label: null,
+      },
+      captureTime: {
+        source: "exif-original",
+        timezone: "offset-known",
+        local: "2026-09-30T12:34:56.789",
+        instant: "2026-09-30T04:34:56.789Z",
+        offsetMinutes: 480,
+      },
+    });
+    expect(recordedEvidenceForPlacementRead({ status: "unsupported-format" })).toBeUndefined();
+    expect(recordedEvidenceForPlacementRead({
+      status: "signal",
+      signal: { spatialSource: "exif", spatialGranularity: "unknown" },
+    })).toBeUndefined();
+  });
+
+  it("never presents city or unknown evidence as a precise coordinate", () => {
+    const evidence: MediaEvidenceRecord = {
+      mediaAssetId: "asset-city",
+      revision: 1,
+      recorded: {
+        spatial: { source: "imported", granularity: "city", latitude: null, longitude: null, accuracyMeters: null, label: "Honolulu" },
+        captureTime: { source: "unknown", timezone: "unknown", local: null, instant: null, offsetMinutes: null },
+      },
+      display: { hidden: false, correction: null },
+      effective: { source: "recorded", provenance: "imported", granularity: "city", latitude: null, longitude: null, accuracyMeters: null, label: "Honolulu" },
+      updatedAt: null,
+    };
+    expect(mediaEvidenceLocationText(evidence)).toContain("城市级（非精确坐标）");
+    const unknownRecorded = {
+      ...evidence,
+      recorded: { ...evidence.recorded, spatial: { ...evidence.recorded.spatial, granularity: "unknown" as const, label: null } },
+      effective: null,
+    };
+    expect(mediaEvidenceLocationText(unknownRecorded)).toBe("没有可靠拍摄地点");
+    expect(mediaEvidenceLocationText({
+      ...unknownRecorded,
+      display: {
+        hidden: false,
+        correction: { granularity: "coordinate", latitude: 22.6, longitude: 114.1, label: null },
+      },
+      effective: {
+        source: "user-correction",
+        provenance: null,
+        granularity: "coordinate",
+        latitude: 22.6,
+        longitude: 114.1,
+        accuracyMeters: null,
+        label: null,
+      },
+    })).toContain("用户纠正");
+  });
+
+  it("rejects blank coordinate editor inputs instead of emitting a false 0,0 correction", () => {
+    expect(mediaEvidenceCoordinateCorrection("", "")).toBeNull();
+    expect(mediaEvidenceCoordinateCorrection("   ", "\t")).toBeNull();
+    expect(mediaEvidenceCoordinateCorrection("", "114.1")).toBeNull();
+    expect(mediaEvidenceCoordinateCorrection("22.6", "")).toBeNull();
+    expect(mediaEvidenceCoordinateCorrection("0", "0")).toEqual({
+      granularity: "coordinate",
+      latitude: 0,
+      longitude: 0,
+      label: null,
+    });
+
+    const storySource = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
+    const start = storySource.indexOf("function saveCoordinateCorrection()");
+    const end = storySource.indexOf("\n  return (", start);
+    const saveSource = storySource.slice(start, end);
+    expect(start).toBeGreaterThan(0);
+    expect(saveSource).toContain("mediaEvidenceCoordinateCorrection(latitude, longitude)");
+    expect(saveSource).not.toContain("Number(latitude)");
+    expect(saveSource).not.toContain("Number(longitude)");
+  });
+
+  it("writes a correction, refetches it, and can hide the effective location", async () => {
+    let evidence: MediaEvidenceRecord = {
+      mediaAssetId: "asset-1",
+      revision: 1,
+      recorded: {
+        spatial: { source: "exif", granularity: "coordinate", latitude: 22.5, longitude: 114, accuracyMeters: null, label: null },
+        captureTime: { source: "unknown", timezone: "unknown", local: null, instant: null, offsetMinutes: null },
+      },
+      display: { hidden: false, correction: null },
+      effective: { source: "recorded", provenance: "exif", granularity: "coordinate", latitude: 22.5, longitude: 114, accuracyMeters: null, label: null },
+      updatedAt: null,
+    };
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path !== "/api/media-evidence/asset-1") {
+        if (path !== "/api/media-evidence/asset-1/display") throw new Error("unexpected media evidence request");
+        const body = JSON.parse(String(init?.body));
+        expect(body.correction?.granularity).not.toBe("unknown");
+        expect(body.expectedRevision).toBe(evidence.revision);
+        const display = { hidden: body.hidden, correction: body.correction };
+        evidence = {
+          ...evidence,
+          revision: evidence.revision + 1,
+          display,
+          effective: display.hidden ? null : display.correction ? {
+            source: "user-correction",
+            provenance: null,
+            granularity: display.correction.granularity,
+            latitude: display.correction.latitude,
+            longitude: display.correction.longitude,
+            accuracyMeters: null,
+            label: display.correction.label,
+          } : evidence.effective,
+        };
+      }
+      return Response.json({ evidence });
+    }) as unknown as typeof fetch;
+
+    const initial = await readMediaEvidence("asset-1", fetcher);
+    const correction = { granularity: "coordinate" as const, latitude: 22.6, longitude: 114.1, label: null };
+    await writeMediaDisplayState("asset-1", initial.revision, { hidden: false, correction }, fetcher);
+    const corrected = await readMediaEvidence("asset-1", fetcher);
+    expect(corrected.effective?.source).toBe("user-correction");
+    await writeMediaDisplayState("asset-1", corrected.revision, { ...corrected.display, hidden: true }, fetcher);
+    const hidden = await readMediaEvidence("asset-1", fetcher);
+    expect(hidden.display.hidden).toBe(true);
+    expect(hidden.effective).toBeNull();
+  });
+
+  it("keeps the shared surface away from owner-private media evidence endpoints", () => {
+    const storySource = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
+    const sharedSource = readFileSync(new URL("./SharedAtlasView.tsx", import.meta.url), "utf8");
+    expect(storySource).toContain("manageMedia.readMediaEvidence");
+    expect(storySource).toContain("manageMedia.writeMediaDisplayState");
+    expect(sharedSource).not.toContain("/api/media-evidence");
+  });
 });
 
 describe("Story shared-element ownership", () => {
@@ -1258,6 +1419,50 @@ describe("placement analysis supersession (#113)", () => {
     authority.syncScope(scope);
     const intent = authority.start(scope);
     expect(authority.isCurrent(intent, scope)).toBe(true);
+  });
+
+  it("bounds metadata reads and discards normalized evidence after the batch is superseded", async () => {
+    const authority = createPlacementAnalysisAuthority();
+    const current = withPoints(journey, ["p1"]);
+    const scope = placementAnalysisScope([current], current.id, "p1");
+    authority.syncScope(scope);
+    const intent = authority.start(scope);
+    let active = 0;
+    let peak = 0;
+    const started: number[] = [];
+    const releases: Array<() => void> = [];
+    const batch = runPlacementAnalysisBatch(
+      authority,
+      intent,
+      () => scope,
+      [0, 1, 2, 3, 4, 5],
+      async (_item, index) => {
+        started.push(index);
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        active -= 1;
+        return {
+          status: "signal" as const,
+          signal: {
+            latitude: 22.2783,
+            longitude: 114.1747,
+            spatialSource: "exif" as const,
+            spatialGranularity: "coordinate" as const,
+            accuracyMeters: 5,
+          },
+        };
+      },
+      2,
+    );
+
+    expect(started).toEqual([0, 1]);
+    authority.invalidate(scope);
+    releases.splice(0).forEach((release) => release());
+
+    expect(await batch).toBeNull();
+    expect(started).toEqual([0, 1]);
+    expect(peak).toBe(2);
   });
 });
 

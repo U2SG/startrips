@@ -3,6 +3,7 @@ import {
   completeMediaPlacementUploadPlan,
   groupMediaPlacementSuggestions,
   parseJpegExifPlacementSignal,
+  readMediaPlacementSignal,
   suggestMediaPlacement,
   type MediaPlacementSignal,
 } from "./mediaPlacement";
@@ -204,12 +205,84 @@ function jpegWithDigitizedExif() {
   return buffer;
 }
 
-describe("JPEG EXIF placement parsing (#86)", () => {
-  it("extracts only normalized GPS and DateTimeOriginal with timezone", () => {
-    expect(parseJpegExifPlacementSignal(jpegWithExif())).toEqual({
+function jpegWithExtendedEvidence(options: {
+  original?: string;
+  digitized?: string;
+  gpsDate?: string;
+  gpsTime?: ReadonlyArray<readonly [number, number]>;
+  accuracy?: readonly [number, number];
+} = {}) {
+  const original = options.original ?? "2026:08:30 14:15:00";
+  const digitized = options.digitized ?? "2026:08:31 09:30:00";
+  const gpsDate = options.gpsDate ?? "2026:09:01";
+  const gpsTime = options.gpsTime ?? [[1, 1], [2, 1], [3, 1]] as const;
+  const accuracy = options.accuracy ?? [15, 2] as const;
+  const tiffLength = 336;
+  const payloadLength = 6 + tiffLength;
+  const segmentLength = payloadLength + 2;
+  const bytes = new Uint8Array(2 + 2 + 2 + payloadLength + 2);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 0xff; bytes[1] = 0xd8; bytes[2] = 0xff; bytes[3] = 0xe1;
+  view.setUint16(4, segmentLength, false);
+  const payload = 6;
+  writeAscii(bytes, payload, "Exif");
+  bytes[payload + 4] = 0; bytes[payload + 5] = 0;
+  const tiff = payload + 6;
+  bytes[tiff] = 0x49; bytes[tiff + 1] = 0x49;
+  view.setUint16(tiff + 2, 42, true);
+  view.setUint32(tiff + 4, 8, true);
+
+  const ifd0 = tiff + 8;
+  view.setUint16(ifd0, 2, true);
+  writeEntry(view, ifd0 + 2, 0x8769, 4, 1, 38);
+  writeEntry(view, ifd0 + 14, 0x8825, 4, 1, 100);
+  view.setUint32(ifd0 + 26, 0, true);
+
+  const exifIfd = tiff + 38;
+  view.setUint16(exifIfd, 4, true);
+  writeEntry(view, exifIfd + 2, 0x9003, 2, 20, 190);
+  writeEntry(view, exifIfd + 14, 0x9004, 2, 20, 210);
+  writeEntry(view, exifIfd + 26, 0x9011, 2, 7, 230);
+  writeEntry(view, exifIfd + 38, 0x9012, 2, 7, 237);
+  view.setUint32(exifIfd + 50, 0, true);
+
+  const gpsIfd = tiff + 100;
+  view.setUint16(gpsIfd, 7, true);
+  writeEntry(view, gpsIfd + 2, 0x0001, 2, 2, 0, "N");
+  writeEntry(view, gpsIfd + 14, 0x0002, 5, 3, 244);
+  writeEntry(view, gpsIfd + 26, 0x0003, 2, 2, 0, "E");
+  writeEntry(view, gpsIfd + 38, 0x0004, 5, 3, 268);
+  writeEntry(view, gpsIfd + 50, 0x0007, 5, 3, 292);
+  writeEntry(view, gpsIfd + 62, 0x001d, 2, 11, 316);
+  writeEntry(view, gpsIfd + 74, 0x001f, 5, 1, 327);
+  view.setUint32(gpsIfd + 86, 0, true);
+
+  writeAscii(bytes, tiff + 190, original);
+  writeAscii(bytes, tiff + 210, digitized);
+  writeAscii(bytes, tiff + 230, "+08:00");
+  writeAscii(bytes, tiff + 237, "+09:00");
+  writeRationals(view, tiff + 244, [[22, 1], [16, 1], [4195, 100]]);
+  writeRationals(view, tiff + 268, [[114, 1], [10, 1], [28884, 1000]]);
+  writeRationals(view, tiff + 292, gpsTime);
+  writeAscii(bytes, tiff + 316, gpsDate);
+  writeRationals(view, tiff + 327, [accuracy]);
+  bytes[bytes.length - 2] = 0xff; bytes[bytes.length - 1] = 0xd9;
+  return bytes.buffer;
+}
+
+describe("JPEG EXIF placement parsing (#86 / #333)", () => {
+  it("emits explicit coordinate provenance while keeping missing accuracy unknown", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithExif())).toMatchObject({
       latitude: expect.closeTo(22.278319, 5),
       longitude: expect.closeTo(114.17469, 5),
+      spatialSource: "exif",
+      spatialGranularity: "coordinate",
+      accuracyMeters: null,
       capturedAt: "2026-08-30T14:15:00+08:00",
+      capturedLocal: "2026-08-30T14:15:00",
+      captureTimeSource: "exif-original",
+      timezoneState: "offset-known",
+      offsetMinutes: 480,
     });
   });
 
@@ -227,38 +300,120 @@ describe("JPEG EXIF placement parsing (#86)", () => {
     expect(parseJpegExifPlacementSignal(jpegWithGpsParts(
       latitude.map((part) => [...part]) as Array<[number, number]>,
       longitude.map((part) => [...part]) as Array<[number, number]>,
-    ))).toEqual({ capturedAt: "2026-08-30T14:15:00+08:00" });
+    ))).toMatchObject({
+      spatialSource: "unknown",
+      spatialGranularity: "unknown",
+      accuracyMeters: null,
+      capturedAt: "2026-08-30T14:15:00+08:00",
+      captureTimeSource: "exif-original",
+    });
   });
 
   it("accepts exact pole and antimeridian DMS coordinates", () => {
     expect(parseJpegExifPlacementSignal(jpegWithGpsParts(
       [[90, 1], [0, 1], [0, 1]],
       [[180, 1], [0, 1], [0, 1]],
-    ))).toEqual({
+    ))).toMatchObject({
       latitude: 90,
       longitude: 180,
+      spatialSource: "exif",
+      spatialGranularity: "coordinate",
+      accuracyMeters: null,
       capturedAt: "2026-08-30T14:15:00+08:00",
     });
   });
+
   it("rejects impossible EXIF calendar and clock values instead of normalizing them", () => {
-    expect(parseJpegExifPlacementSignal(jpegWithExifTimestamp("2026:13:40 25:61:61"))).toEqual({
+    expect(parseJpegExifPlacementSignal(jpegWithExifTimestamp("2026:13:40 25:61:61"))).toMatchObject({
       latitude: expect.closeTo(22.278319, 5),
       longitude: expect.closeTo(114.17469, 5),
+      spatialSource: "exif",
+      spatialGranularity: "coordinate",
+      captureTimeSource: "unknown",
+      timezoneState: "unknown",
     });
   });
 
-  it("rejects EXIF year 0000 and falls back to a valid Digitized timestamp", () => {
+  it("rejects EXIF year 0000 and falls back to a local-only Digitized timestamp", () => {
     expect(parseJpegExifPlacementSignal(jpegWithExifDateFallback(
       "0000:01:01 12:00:00",
       "2026:08:30 14:15:00",
-    ))).toEqual({ capturedLocal: "2026-08-30T14:15:00" });
+    ))).toMatchObject({
+      capturedLocal: "2026-08-30T14:15:00",
+      captureTimeSource: "exif-digitized",
+      timezoneState: "local-only",
+      offsetMinutes: null,
+    });
   });
 
-  it("falls back to local capture time when the EXIF offset range is invalid", () => {
-    expect(parseJpegExifPlacementSignal(jpegWithExifTimestamp("2026:08:30 14:15:00", "+99:99"))).toEqual({
+  it("never invents a timezone for an EXIF wall clock with no usable offset", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithExifTimestamp("2026:08:30 14:15:00", ""))).toMatchObject({
+      capturedLocal: "2026-08-30T14:15:00",
+      captureTimeSource: "exif-original",
+      timezoneState: "local-only",
+      offsetMinutes: null,
+    });
+  });
+
+  it("falls back to local-only capture time when the EXIF offset range is invalid", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithExifTimestamp("2026:08:30 14:15:00", "+99:99"))).toMatchObject({
       latitude: expect.closeTo(22.278319, 5),
       longitude: expect.closeTo(114.17469, 5),
       capturedLocal: "2026-08-30T14:15:00",
+      captureTimeSource: "exif-original",
+      timezoneState: "local-only",
+      offsetMinutes: null,
+    });
+  });
+
+  it("reads GPS horizontal positioning error and keeps Original authoritative over conflicting Digitized/GPS clocks", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithExtendedEvidence())).toMatchObject({
+      latitude: expect.closeTo(22.278319, 5),
+      longitude: expect.closeTo(114.17469, 5),
+      spatialSource: "exif",
+      spatialGranularity: "coordinate",
+      accuracyMeters: 7.5,
+      capturedAt: "2026-08-30T14:15:00+08:00",
+      captureTimeSource: "exif-original",
+      timezoneState: "offset-known",
+      offsetMinutes: 480,
+    });
+  });
+
+  it("uses the GPS clock as UTC evidence only when EXIF Original/Digitized clocks are unusable", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithExtendedEvidence({
+      original: "0000:01:01 12:00:00",
+      digitized: "2026:13:40 25:61:61",
+    }))).toMatchObject({
+      capturedAt: "2026-09-01T01:02:03.000Z",
+      capturedLocal: "2026-09-01T01:02:03",
+      captureTimeSource: "gps",
+      timezoneState: "offset-known",
+      offsetMinutes: 0,
+    });
+  });
+
+  it("keeps rounded fractional GPS local time aligned with the same UTC instant", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithExtendedEvidence({
+      original: "0000:01:01 12:00:00",
+      digitized: "2026:13:40 25:61:61",
+      gpsDate: "2026:09:01",
+      gpsTime: [[23, 1], [59, 1], [149999, 2500]],
+    }))).toMatchObject({
+      capturedAt: "2026-09-02T00:00:00.000Z",
+      capturedLocal: "2026-09-02T00:00:00",
+      captureTimeSource: "gps",
+      timezoneState: "offset-known",
+      offsetMinutes: 0,
+    });
+
+    expect(parseJpegExifPlacementSignal(jpegWithExtendedEvidence({
+      original: "0000:01:01 12:00:00",
+      digitized: "2026:13:40 25:61:61",
+      gpsTime: [[1, 1], [2, 1], [25, 8]],
+    }))).toMatchObject({
+      capturedAt: "2026-09-01T01:02:03.125Z",
+      capturedLocal: "2026-09-01T01:02:03.125",
     });
   });
 
@@ -266,20 +421,49 @@ describe("JPEG EXIF placement parsing (#86)", () => {
     const jpeg = new Uint8Array(jpegWithExif());
     const view = new DataView(jpeg.buffer);
     view.setUint16(4, 30, false);
-
     expect(parseJpegExifPlacementSignal(jpeg.buffer)).toBeNull();
   });
+
   it("pairs DateTimeDigitized with OffsetTimeDigitized", () => {
-    expect(parseJpegExifPlacementSignal(jpegWithDigitizedExif())).toEqual({
+    expect(parseJpegExifPlacementSignal(jpegWithDigitizedExif())).toMatchObject({
       latitude: expect.closeTo(22.278319, 5),
       longitude: expect.closeTo(114.17469, 5),
       capturedAt: "2026-08-30T14:15:00+08:00",
+      captureTimeSource: "exif-digitized",
+      timezoneState: "offset-known",
+      offsetMinutes: 480,
     });
   });
 
   it("returns no signal for non-JPEG or metadata-free bytes", () => {
     expect(parseJpegExifPlacementSignal(new Uint8Array([1, 2, 3]).buffer)).toBeNull();
     expect(parseJpegExifPlacementSignal(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer)).toBeNull();
+  });
+
+  it("distinguishes a parsed JPEG signal from JPEG no-evidence", async () => {
+    const signal = await readMediaPlacementSignal(new File([jpegWithExif()], "photo.jpg", { type: "image/jpeg" }));
+    expect(signal.status).toBe("signal");
+    if (signal.status === "signal") expect(signal.signal.spatialGranularity).toBe("coordinate");
+
+    const noEvidence = await readMediaPlacementSignal(new File([
+      new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+    ], "empty.jpg", { type: "image/jpeg" }));
+    expect(noEvidence).toEqual({ status: "no-evidence" });
+
+    const malformed = await readMediaPlacementSignal(new File([
+      new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x01, 0xff, 0xd9]),
+    ], "broken.jpg", { type: "image/jpeg" }));
+    expect(malformed).toEqual({ status: "no-evidence" });
+  });
+
+  it.each([
+    ["photo.heic", "image/heic"],
+    ["photo.png", "image/png"],
+    ["photo.webp", "image/webp"],
+    ["clip.mp4", "video/mp4"],
+  ])("reports unsupported containers explicitly: %s", async (name, type) => {
+    expect(await readMediaPlacementSignal(new File(["x"], name, { type })))
+      .toEqual({ status: "unsupported-format" });
   });
 });
 
@@ -300,6 +484,31 @@ describe("suggestMediaPlacement (#86)", () => {
     );
     expect(result).toMatchObject({ journeyId: "hong-kong", routePointId: "hk-island" });
     expect(result?.evidence).toContain("gps");
+  });
+
+  it("does not upgrade unknown spatial precision from a high-confidence placement suggestion", () => {
+    const signal: MediaPlacementSignal = {
+      capturedAt: "2026-08-30T14:10:00+08:00",
+      spatialSource: "unknown",
+      spatialGranularity: "unknown",
+      accuracyMeters: null,
+      captureTimeSource: "imported",
+      timezoneState: "offset-known",
+      offsetMinutes: 480,
+    };
+    const before = structuredClone(signal);
+    const result = suggestMediaPlacement(signal, [hongKong, tokyo], hongKong.id);
+
+    expect(result).toMatchObject({
+      journeyId: "hong-kong",
+      routePointId: "hk-island",
+      confidence: "high",
+    });
+    expect(result?.evidence).not.toContain("gps");
+    expect(result).not.toHaveProperty("distanceKm");
+    expect(signal).toEqual(before);
+    expect(signal.spatialGranularity).toBe("unknown");
+    expect(signal.accuracyMeters).toBeNull();
   });
 
   it("ignores impossible calendar dates instead of rolling them into another Journey", () => {

@@ -806,6 +806,26 @@ async function createQaPage(path, mediaUrl, {
     contentType: "application/json",
     body: "null",
   }));
+  await page.route("**/api/media-evidence/*", (route) => {
+    const assetId = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1) ?? "qa-media");
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        evidence: {
+          mediaAssetId: assetId,
+          revision: 0,
+          recorded: {
+            spatial: { source: "unknown", granularity: "unknown", latitude: null, longitude: null, accuracyMeters: null, label: null },
+            captureTime: { source: "unknown", timezone: "unknown", local: null, instant: null, offsetMinutes: null },
+          },
+          display: { hidden: false, correction: null },
+          effective: null,
+          updatedAt: null,
+        },
+      }),
+    });
+  });
   const delayedMedia = [
     [typeof mediaUrl === "string" && mediaUrl.startsWith("/") ? mediaUrl : null, originalResponseDelayMs],
     [mixedMedia ? tinyVideo : null, videoOriginalResponseDelayMs ?? originalResponseDelayMs],
