@@ -87,11 +87,18 @@ export function sanitizeCss(source) {
     }
 
     if (char === "/" && source[index + 1] === "*") {
+      // Blank the opening delimiter as well as the body and the close. A
+      // surviving `/*` between two declarations would stop a backwards scan for
+      // a declaration position, and a real property right after a comment would
+      // stop being recognised as one.
+      const start = index;
       let end = index + 2;
       while (end < length && !(source[end] === "*" && source[end + 1] === "/")) {
         blank(end);
         end += 1;
       }
+      blank(start);
+      blank(start + 1);
       if (end < length) {
         blank(end);
         blank(end + 1);
@@ -174,6 +181,21 @@ function clip(text, limit = 110) {
  * zero is a selector or an at-rule prelude, not a declaration, and a `var()`
  * outside a block is not a value the cascade would drop.
  */
+/**
+ * Whether `index` sits where a declaration may begin, i.e. the first
+ * non-whitespace character before it is `{` or `;`.
+ */
+function isDeclarationPosition(text, index) {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const character = text[cursor];
+    if (character === " " || character === "\t" || character === "\n" || character === "\r") {
+      continue;
+    }
+    return character === "{" || character === ";";
+  }
+  return false;
+}
+
 export function parseCss(source) {
   const text = sanitizeCss(source);
   const depth = depthAtEachOffset(text);
@@ -184,6 +206,12 @@ export function parseCss(source) {
   for (const match of text.matchAll(DEFINITION_PATTERN)) {
     const index = match.index;
     if (depth[index] < 1) continue;
+    // Brace depth alone is not a declaration position. A selector such as
+    // `.auth-card--login-v3::after` matches the property pattern too, and at
+    // depth 1 inside a media block it would be recorded as a definition — so a
+    // later `var(--login-v3)` would pass this guard and still be discarded by
+    // the browser. Only a name preceded by `{` or `;` is really a property.
+    if (!isDeclarationPosition(text, index)) continue;
     definitions.push({ name: match[1], line: lineOf(text, index, lineStarts) });
   }
 
@@ -335,6 +363,16 @@ export function formatReport(result) {
 }
 
 /** Read the tracked sources the guard covers. */
+/**
+ * A test module is never shipped, so it can neither define nor reference a real
+ * custom property — but it can talk about one. `LivingAtlasApp.test.ts` asserts
+ * that no implementation calls `style.setProperty("--journey-route-scale"`,
+ * and the runtime patterns would read that quoted name as a definition. The
+ * guard must not inherit a name from the very test that proves it is absent.
+ */
+export function isTestModule(filePath) {  return /\.(?:node-)?test\.[cm]?[jt]sx?$/i.test(path.basename(filePath));
+}
+
 export function scan(cwd = ROOT) {
   const tracked = execFileSync(
     "git",
@@ -350,7 +388,7 @@ export function scan(cwd = ROOT) {
     const extension = path.extname(filePath);
     if (extension === CSS_EXTENSION) {
       files.push({ filePath, kind: "css", source: fs.readFileSync(path.join(cwd, filePath), "utf8") });
-    } else if (MODULE_EXTENSIONS.has(extension)) {
+    } else if (MODULE_EXTENSIONS.has(extension) && !isTestModule(filePath)) {
       files.push({ filePath, kind: "module", source: fs.readFileSync(path.join(cwd, filePath), "utf8") });
     }
   }

@@ -163,9 +163,56 @@ test("a fallback-only reference is reported without failing", () => {
   assert.match(formatReport(result), /Resolved only by a var\(\) fallback \(1\)/);
 });
 
+// Review P2 #1. `.auth-card--login-v3::after` sits at depth 1 inside a media
+// block, so brace depth alone let its `--login-v3:` fragment register as a
+// property. A `var(--login-v3)` would then pass the guard while the browser
+// still discarded it — a false negative in the one direction that matters.
+test("a selector inside a media block is not a custom-property definition", () => {
+  const source = [
+    "@media (min-width: 800px) {",
+    "  .auth-card--login-v3::after {",
+    "    content: \"\";",
+    "  }",
+    "}",
+    "",
+    ":root { --real: 1; }",
+  ].join("\n");
+
+  assert.deepEqual(names(parseCss(source).definitions), ["--real"]);
+
+  const result = analyze([css("auth-gate.css", `${source}\n.a { color: var(--login-v3); }`)]);
+  assert.deepEqual(
+    result.violations.map((violation) => violation.name),
+    ["--login-v3"],
+  );
+});
+
+// Review P2 #2. `LivingAtlasApp.test.ts` asserts that nothing calls
+// `style.setProperty("--journey-route-scale"`. Reading that quoted name as a
+// runtime definition would let a real undefined reference inherit the very
+// token whose absence the test proves.
+test("test modules do not supply runtime definitions", async () => {
+  const { isTestModule } = await import("./css-token-guard.mjs");
+  assert.equal(isTestModule("src/journey/LivingAtlasApp.test.ts"), true);
+  assert.equal(isTestModule("scripts/css-token-guard.node-test.mjs"), true);
+  assert.equal(isTestModule("scripts/qa-fragment-observation.node-test.mjs"), true);
+  assert.equal(isTestModule("src/journey/LivingAtlasApp.tsx"), false);
+  assert.equal(isTestModule("src/scene/StoryMediaPages.tsx"), false);
+  // A name is only "provided" where the pattern really runs, but the parser
+  // itself still sees the string; the scan is what must skip test modules.
+  const source = `expect(other).not.toContain('style.setProperty("--journey-route-scale"');`;
+  assert.deepEqual([...parseRuntimeDefinitions(source)], ["--journey-route-scale"]);
+});
+
 test("the checked-in stylesheets have no undefined token reference", async () => {
   const { scan } = await import("./css-token-guard.mjs");
-  const result = analyze(scan(ROOT.replace(/[\\/]$/, "")));
+  const files = scan(ROOT.replace(/[\\/]$/, ""));
+  assert.equal(
+    files.some((file) => file.filePath.endsWith(".test.ts")),
+    false,
+    "test modules must not be scanned as client sources",
+  );
+  const result = analyze(files);
   assert.ok(result.cssFileCount >= 20, "expected the guard to cover the client stylesheets");
   assert.deepEqual(
     result.violations.map((violation) => `${violation.filePath}:${violation.line} ${violation.name}`),
