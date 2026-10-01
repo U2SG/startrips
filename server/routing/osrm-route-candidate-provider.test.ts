@@ -170,6 +170,36 @@ describe("OSRM road candidate gate", () => {
     expect(cycling.id).not.toBe(driving.id);
   });
 
+  it.each(["driving", "walking", "cycling"] as const)("returns no candidates for HTTP 400 no-road results in %s", async (profile) => {
+    for (const code of ["NoRoute", "NoSegment"]) {
+      const provider = createOsrmRouteCandidateProvider({ [profile]: "http://routing.internal:5000" },
+        (async () => new Response(JSON.stringify({ code }), { status: 400 })) as typeof fetch);
+      expect(await provider.candidates({
+        coordinates, profile, alternativesCount: 1, signal: new AbortController().signal,
+      })).toEqual([]);
+    }
+  });
+
+  it.each([[400, "InvalidQuery"], [400, "Ok"], [401, "NoRoute"], [429, "NoSegment"], [503, "NoRoute"]])(
+    "keeps HTTP %s %s failures visible as provider errors", async (status, code) => {
+      const provider = createOsrmRouteCandidateProvider({ walking: "http://routing.internal:5000" },
+        (async () => new Response(JSON.stringify({ code }), { status: Number(status) })) as typeof fetch);
+      await expect(provider.candidates({
+        coordinates, profile: "walking", alternativesCount: 1, signal: new AbortController().signal,
+      })).rejects.toMatchObject({ code: "ROUTING_UNAVAILABLE", status: 503 });
+    },
+  );
+
+  it("rejects invalid or oversized HTTP 400 envelopes before interpreting a no-road result", async () => {
+    for (const body of ["not-json", JSON.stringify(null), JSON.stringify({ code: "NoRoute", padding: "x".repeat(1_000_000) })]) {
+      const provider = createOsrmRouteCandidateProvider({ walking: "http://routing.internal:5000" },
+        (async () => new Response(body, { status: 400 })) as typeof fetch);
+      await expect(provider.candidates({
+        coordinates, profile: "walking", alternativesCount: 1, signal: new AbortController().signal,
+      })).rejects.toMatchObject({ code: "ROUTING_UNAVAILABLE", status: 503 });
+    }
+  });
+
   it("reports malformed provider envelopes truthfully and discards malformed individual candidates", async () => {
     const request = { coordinates, profile: "driving" as const, alternativesCount: 1 as const, signal: new AbortController().signal };
     for (const payload of [null, { code: "Ok", routes: {}, waypoints: [] }]) {
