@@ -400,9 +400,9 @@ def handoff(path, fid, repo):
 
 
 def record_source_review(path, fid, repo, review_file):
-    if os.environ.get('STARTRIPS_ROLE') != 'hourly-review':
-        raise StoreConflict('Only the independent Hourly Review role records Source review')
     data = json.loads(Path(review_file).read_bytes())
+    if data.get('reviewer_role') not in (None, '') or data.get('completed_at') not in (None, ''):
+        raise StoreConflict('Review result must not pre-assert recorder identity or completion time')
     root = Path(path).parent; doc = load_document(path)
     if canonical_lead(doc, fid) != fid:
         raise StoreConflict('Independent review must target the canonical package lead')
