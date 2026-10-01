@@ -331,6 +331,7 @@ async function fragmentQa(owner, name) {
     created.occurredOn === "2020-05-06" && created.homeBasePeriodId === null && created.placeLabel === null && created.note === null);
   await row.getByRole("button", { name: "编辑", exact: true }).click();
   form = row.getByRole("form", { name: "编辑日常" });
+  await form.locator(".everyday-fragments__manual-location > summary").click();
   await form.getByLabel("地点（选填）").fill("深圳湾");
   await form.getByLabel("随记（选填）").fill("晚风");
   fragments.holdNext = "PUT";
