@@ -76,8 +76,7 @@ async function openStory() {
   return page;
 }
 
-/** The Story's own keyboard navigation: focus the current page and step. */
-async function stepMedia(page, key) {
+/** The Story's own keyboard navigation: focus the current page and step. */async function stepMedia(page, key) {
   await page.evaluate(async (pressed) => {
     const current = document.querySelector('[data-media-page="current"]');
     if (!current) throw new Error("Story presented no current media page");
@@ -382,19 +381,47 @@ try {
       failed: afterRapidSwap === null || Math.abs(afterRapidSwap - DUCK_FACTOR) > 0.02,
     });
 
-    // The immersive stage hands off the SAME element rather than creating a
-    // second one, so the duck must follow it there without a second controller
-    // appearing - the issue's "fullscreen must not establish a second ducking
-    // state".
-    // The immersive hand-off is deliberately NOT asserted here. Clicking the
-    // current media page did not enter the immersive stage in this lane
-    // (`fullscreenVisible` came back false), so anything measured afterwards
-    // would describe a surface that was never opened - reporting "the immersive
-    // stage has no soundtrack" from a run that never entered it would be a
-    // fabricated finding. The hand-off moves the same element rather than
-    // creating a second one, and the controller has one owner per surface, but
-    // that remains unverified in a real browser and needs the correct immersive
-    // entry affordance before it can be claimed.
+    // #596 requires the fullscreen hand-off. The immersive stage hands off the
+    // SAME element rather than creating a second one, so the duck must follow it
+    // there with no second controller appearing - the issue's "fullscreen must
+    // not establish a second ducking state".
+    // The real entry is the Story's own explicit immersive control, not a click
+    // on the picture: 全屏查看媒体 on desktop, 沉浸查看媒体 on compact. Clicking
+    // the media itself does not open the stage.
+    const inImmersive = await page
+      .getByRole("button", { name: /全屏查看媒体|沉浸查看媒体/ })
+      .first()
+      .click({ timeout: 15_000 })
+      .then(() => page.locator(".journey-story-fullscreen").waitFor({ state: "visible", timeout: 15_000 }))
+      .then(() => true)
+      .catch(() => false);
+    const soundtracksInImmersive = inImmersive
+      ? await page.evaluate(() => document.querySelectorAll("audio").length)
+      : null;
+    await playAudibly(page);
+    await page.waitForTimeout(SETTLED_MS);
+    const immersiveView = inImmersive
+      ? await page.evaluate(() => {
+        const raw = document.querySelector(".journey-story")?.dataset.qaSoundtrackDuck;
+        return raw ? JSON.parse(raw) : null;
+      })
+      : null;
+    // The controller is the same instance before and after; prove it by reading
+    // the element it is driving, and that there is still exactly one soundtrack.
+    const inImmersiveVolume = immersiveView?.elementVolume ?? null;
+    const sameElement = immersiveView?.drivesElement !== false;
+    add({
+      name: "the-immersive-stage-ducks-without-a-second-soundtrack",
+      inImmersive,
+      soundtracksInImmersive,
+      sameElement,
+      inImmersiveVolume,
+      failed: !inImmersive
+        || soundtracksInImmersive !== 1
+        || !sameElement
+        || inImmersiveVolume === null
+        || Math.abs(inImmersiveVolume - DUCK_FACTOR) > 0.02,
+    });
   } finally {
     await page.close();
   }
