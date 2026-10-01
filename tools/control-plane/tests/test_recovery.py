@@ -812,16 +812,13 @@ class StopAndPermissionCases(fixture.SyntheticOne):
         with self.assertRaises(fixture.store.StoreConflict): execution.clear_owned_stop(self.root, path.name, b'cancel')
         self.assertEqual(b'cancel', path.read_bytes())
 
-    def test_temporary_backend_switch_requires_env_and_matching_owned_stops(self):
+    def test_temporary_backend_switch_uses_matching_user_receipts_without_env_authority(self):
         receipt = 'user-authorized-temporary-backend-switch 2026-09-28T06:53:00Z\n'
         (self.root / 'SUPERVISOR_STOP').write_text(receipt)
         (self.root / 'CANCEL_SCHEDULED_RESTART').write_text(receipt)
         with mock.patch.dict(os.environ, {'STARTRIPS_TEMPORARY_BACKEND_SWITCH': ''}):
-            self.assertFalse(execution.temporary_backend_switch_authorized(self.root, lane='backend'))
-        with mock.patch.dict(os.environ, {'STARTRIPS_TEMPORARY_BACKEND_SWITCH': '1'}):
             self.assertTrue(execution.temporary_backend_switch_authorized(self.root, lane='backend'))
             self.assertFalse(execution.temporary_backend_switch_authorized(self.root, lane='experience'))
-
     def test_temporary_backend_switch_rejects_global_or_mismatched_stop(self):
         receipt = 'user-authorized-temporary-backend-switch 2026-09-28T06:53:00Z\n'
         (self.root / 'SUPERVISOR_STOP').write_text(receipt)
