@@ -75,6 +75,8 @@ export type SoundtrackDuckingController = {
     foregroundPaused: boolean | null;
     foregroundPlaying: boolean | null;
     lastWritten: number | null;
+    elementVolume: number | null;
+    drivesElement: boolean;
   };
 };
 
@@ -262,6 +264,12 @@ export function createSoundtrackDuckingController(
         foregroundPaused: seenVideo ? seenVideo.paused : null,
         foregroundPlaying: seenVideo ? isActuallyPlaying(seenVideo) : null,
         lastWritten,
+        // The element this controller actually drives, and its level. A QA lane
+        // that reads `document.querySelector("audio")` can be looking at an
+        // orphaned element after a soundtrack re-key, and then it would report
+        // "the soundtrack did not restore" about a node nobody is driving.
+        elementVolume: seenSoundtrack ? seenSoundtrack.volume : null,
+        drivesElement: seenSoundtrack === host.getSoundtrack(),
       };
     },
   };

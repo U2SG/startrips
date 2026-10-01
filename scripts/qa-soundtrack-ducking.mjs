@@ -329,13 +329,19 @@ try {
       muted: element.muted,
     })));
     const afterLeavingVideo = await settledVolume(page);
-    // The controller's own view at the moment the restore should have happened.
-    // Without it, "the volume did not move" cannot be told apart from "the
-    // target is still ducked" or "the baseline itself drifted to that level".
+    // Assert against the element the controller actually drives. After the
+    // soundtrack re-key, `document.querySelector("audio")` can resolve to an
+    // orphaned node, and reading it would report "the soundtrack did not
+    // restore" about an element nobody is driving. `drivesElement` says which
+    // node the lane was looking at.
     const controllerView = await page.evaluate(() => {
       const raw = document.querySelector(".journey-story")?.dataset.qaSoundtrackDuck;
       return raw ? JSON.parse(raw) : null;
     });
+    const drivenVolume = controllerView?.elementVolume ?? null;
+    const restores = drivenVolume === null
+      ? afterLeavingVideo
+      : drivenVolume;
     for (let step = 0; step < 4 && !(await currentIsVideo(page)); step += 1) {
       await stepMedia(page, "ArrowLeft");
     }
@@ -347,12 +353,16 @@ try {
       onPhoto,
       videoStopped,
       controllerView,
+      domVolume: afterLeavingVideo,
+      drivenVolume,
+      restores,
       probe,
       afterLeavingVideo,
       afterComingBack,
       failed: !onPhoto
         || !videoStopped
-        || afterLeavingVideo === null || Math.abs(afterLeavingVideo - 1) > EPSILON
+        || controllerView?.drivesElement === false
+        || restores === null || Math.abs(restores - 1) > EPSILON
         || afterComingBack === null || Math.abs(afterComingBack - DUCK_FACTOR) > 0.02,
     });
 
