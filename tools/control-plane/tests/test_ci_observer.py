@@ -296,6 +296,7 @@ class RetryCases(fixture.SyntheticOne):
         with mock.patch.object(ci, 'api', side_effect=self.api), mock.patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as post:
             self.assertTrue(self.request()['requested']); self.assertFalse(self.request()['requested'])
             self.assertEqual(1, post.call_count)
+            self.assertEqual(ci.GH_EXE, post.call_args.args[0][0])
             self.assertIn('/actions/jobs/7/rerun', post.call_args.args[0][2])
 
     def test_uncertain_post_is_not_replayed(self):

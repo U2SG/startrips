@@ -9,10 +9,13 @@ Automation prompts carry roles and this entry point, never current PRs or SHAs.
 
 - ONE remains `feature_list.json`; do not create another backlog, owner registry,
   routing table or feature lock system. Use the existing selector. Generic
-  invocations MUST explicitly supply `STARTRIPS_LANE` in the executing shell;
-  missing/unknown lane is an error, not Backend. Existing local Backend launch
-  wrappers may explicitly declare their own lane. Never dispatch Backend from
-  Orchestrator or Experience.
+  run-loop invocations MUST explicitly supply `STARTRIPS_LANE` in the executing
+  shell; missing/unknown lane is an error, not Backend. This shell variable is a
+  selector input, not an authority token: direct Python control-plane helpers
+  receive lane by explicit argv or derive it from canonical ONE/owner evidence,
+  and MUST NOT require a matching `STARTRIPS_LANE` environment variable. Existing
+  local Backend launch wrappers may explicitly declare their own lane. Never
+  dispatch Backend from Orchestrator or Experience.
 - Read current ONE/selector and exact GitHub heads, workflows and review state.
   Historical notes, PR prose and previous task snapshots cannot invalidate newer
   machine evidence. No implicit feature claim or product decision from a probe.

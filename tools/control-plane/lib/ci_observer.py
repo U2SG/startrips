@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlencode
 from feature_store import _storage_mutex, StoreConflict
-from github_evidence import api, _repo, EvidenceUnknown
+from github_evidence import api, _repo, EvidenceUnknown, GH_EXE
 
 DIMENSIONS = ('lane', 'assertion', 'fixture', 'viewport', 'dpr', 'stage')
 PARSER_VERSION = 6
@@ -221,7 +221,7 @@ def observe_failures(root, repo, ci):
             if all(cached.get(key) == value for key, value in exact.items()):
                 record = cached
         if record is None:
-            result = subprocess.run(['gh', 'api', 'repos/' + repo + '/actions/jobs/' + str(job['id']) + '/logs'],
+            result = subprocess.run([GH_EXE, 'api', 'repos/' + repo + '/actions/jobs/' + str(job['id']) + '/logs'],
                                     capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=25)
             if result.returncode or len(result.stdout) > 8 * 1024 * 1024:
                 raise EvidenceUnknown('Failed-job evidence unavailable or too large')
@@ -287,7 +287,7 @@ def rerun_once(root, repo, ci, records, *, number=None, feature=None, lane=None)
             raise EvidenceUnknown('Owner PR changed before rerun')
         write_json(receipt, {'state': 'request-prepared-no-replay', 'run': run['id'], 'attempt': run['run_attempt'], 'sha': run['head_sha']})
     selected = records[0]['job_id']
-    result = subprocess.run(['gh', 'api', 'repos/' + repo + '/actions/jobs/' + str(selected) + '/rerun', '--method', 'POST'],
+    result = subprocess.run([GH_EXE, 'api', 'repos/' + repo + '/actions/jobs/' + str(selected) + '/rerun', '--method', 'POST'],
                             capture_output=True, text=True, encoding='utf-8', timeout=25)
     status = 'accepted' if result.returncode == 0 else 'uncertain-or-rejected-no-replay'
     with _storage_mutex(root / 'feature_list.json'):

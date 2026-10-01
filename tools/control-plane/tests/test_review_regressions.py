@@ -279,6 +279,14 @@ class HandoffIdentityCases(fixture.SyntheticOne):
         self.assertTrue(self.handoff()['changed'])
         self.assertEqual('ready_for_eval', fixture.store.load_document(self.path)['features'][0]['status'])
 
+    def test_handoff_derives_lane_from_one_not_environment(self):
+        with mock.patch.object(action_plan,'plan',side_effect=[self.observed, self.observed]), \
+             mock.patch.object(runtime_preflight,'preflight',return_value={'worktree':str(self.root)}) as preflight, \
+             mock.patch.object(evidence_capture,'capture',return_value=self.captured), \
+             mock.patch.dict(os.environ, {'STARTRIPS_LANE': 'backend'}):
+            action_plan.handoff(self.path,'ST-001','synthetic/project')
+        self.assertEqual('experience', preflight.call_args.args[2])
+
     def test_new_final_source_or_attempt_between_plan_and_capture_cannot_pass(self):
         for field, value in [('head',fixture.C),('source_sha',fixture.C),('ci_run',13),('ci_attempt',2)]:
             with self.subTest(field=field):

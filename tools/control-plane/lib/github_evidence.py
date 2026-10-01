@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -14,18 +15,33 @@ class EvidenceUnknown(RuntimeError):
     pass
 
 
+GH_EXE = r'C:\Program Files\GitHub CLI\gh.exe' if os.name == 'nt' else 'gh'
+
+
 def api(endpoint: str, fields: dict | None = None):
-    command = ['gh', 'api', endpoint]
+    command = [GH_EXE, 'api', endpoint]
     if fields:
         for key, value in fields.items():
             command += ['-F' if isinstance(value, int) else '-f', key + '=' + str(value)]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True,
-                                encoding='utf-8', timeout=25)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise EvidenceUnknown('GitHub transport unavailable: ' + type(exc).__name__) from exc
-    if result.returncode:
-        raise EvidenceUnknown('GitHub query failed: ' + endpoint.split('?')[0])
+    result = None
+    for attempt in range(2):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True,
+                                    encoding='utf-8', timeout=25)
+        except subprocess.TimeoutExpired as exc:
+            if attempt == 0:
+                continue
+            raise EvidenceUnknown('GitHub transport unavailable: TimeoutExpired') from exc
+        except OSError as exc:
+            raise EvidenceUnknown('GitHub transport unavailable: ' + type(exc).__name__) from exc
+        if not result.returncode:
+            break
+        detail = (result.stderr or '').strip().replace('\r', ' ').replace('\n', ' ')[:500]
+        transient = re.search(r'(^|[ :])EOF($|[ .])|TLS|connection reset|timed? out|timeout', detail, re.I)
+        if attempt == 0 and transient:
+            continue
+        suffix = (': ' + detail) if detail else ''
+        raise EvidenceUnknown('GitHub query failed: ' + endpoint.split('?')[0] + suffix)
     try:
         data = json.loads(result.stdout)
     except ValueError as exc:

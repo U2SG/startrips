@@ -967,7 +967,7 @@ class RealWorktreeCases(fixture.SyntheticOne):
         old = Path.cwd()
         try:
             os.chdir(self.root)
-            with mock.patch.dict(os.environ, {'STARTRIPS_LANE': 'backend'}), mock.patch.object(runtime, 'api', return_value={
+            with mock.patch.object(runtime, 'api', return_value={
                     'state': 'open', 'merged': False, 'head': {'ref': 'feat/issue1-synthetic', 'sha': self.sha}}):
                 return runtime.preflight(self.root, self.repo, 'backend', 'ST-001', 'synthetic/project')
         finally:
@@ -1072,13 +1072,24 @@ class RealWorktreeCases(fixture.SyntheticOne):
         guard.assert_called_once_with(self.root.resolve(), lane='experience', feature='ST-001',
                                       worktree=self.repo.resolve())
 
-    def test_wrong_target_lane_is_refused(self):
+    def test_environment_lane_does_not_override_explicit_canonical_lane(self):
         old = Path.cwd()
         try:
             os.chdir(self.root)
-            with mock.patch.dict(os.environ, {'STARTRIPS_LANE': 'experience'}):
-                with self.assertRaises(fixture.store.StoreConflict):
-                    runtime.preflight(self.root, self.repo, 'backend', 'ST-001', 'synthetic/project')
+            with mock.patch.dict(os.environ, {'STARTRIPS_LANE': 'experience'}), \
+                    mock.patch.object(runtime, 'api', return_value={
+                        'state': 'open', 'merged': False,
+                        'head': {'ref': 'feat/issue1-synthetic', 'sha': self.sha}}):
+                result = runtime.preflight(self.root, self.repo, 'backend', 'ST-001', 'synthetic/project')
+            self.assertEqual('backend', result['lane'])
+        finally: os.chdir(old)
+
+    def test_explicit_target_lane_must_match_one(self):
+        old = Path.cwd()
+        try:
+            os.chdir(self.root)
+            with self.assertRaisesRegex(fixture.store.StoreConflict, 'canonical ONE lane'):
+                runtime.preflight(self.root, self.repo, 'experience', 'ST-001', 'synthetic/project')
         finally: os.chdir(old)
 
 
