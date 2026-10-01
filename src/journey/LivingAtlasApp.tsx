@@ -406,6 +406,40 @@ export function nextAtlasNotice(current: AtlasNotice | null, message: string): A
   return { id: (current?.id ?? 0) + 1, message };
 }
 
+export const ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY = 4;
+
+export async function readRoutePointMediaEvidenceBounded<T>(
+  assetIds: readonly string[],
+  readEvidence: (assetId: string) => Promise<T>,
+  shouldContinue: () => boolean = () => true,
+): Promise<Map<string, T>> {
+  const evidenceByAssetId = new Map<string, T>();
+  let nextIndex = 0;
+  const workerCount = Math.min(ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY, assetIds.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < assetIds.length && shouldContinue()) {
+      const assetId = assetIds[nextIndex];
+      nextIndex += 1;
+      try {
+        evidenceByAssetId.set(assetId, await readEvidence(assetId));
+      } catch {
+        // One missing evidence row must not prevent other media on the point
+        // from contributing their recorded-coordinate precision.
+      }
+    }
+  }));
+  return evidenceByAssetId;
+}
+
+export function formatRoutePointMediaAccuracy(accuracyMeters: number | null): string {
+  if (accuracyMeters === null) return "精度未知";
+  const rounded = accuracyMeters > 0 && accuracyMeters < 1
+    ? Math.ceil(accuracyMeters * 10) / 10
+    : Math.round(accuracyMeters);
+  const value = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  return `精度约 ${value} m`;
+}
+
 // #8: the root class/data contract for globe focus mode, kept pure so the
 // layout toggle is unit-testable without mounting the full app.
 export function globeFocusState(focused: boolean) {
@@ -1941,9 +1975,11 @@ export function LivingAtlasApp({
     if (assets.length === 0) return;
 
     let cancelled = false;
-    void Promise.allSettled(assets.map(async (asset) => (
-      [asset.id, await readEvidence(asset.id)] as const
-    ))).then((results) => {
+    void readRoutePointMediaEvidenceBounded(
+      assets.map((asset) => asset.id),
+      readEvidence,
+      () => !cancelled,
+    ).then((evidenceByAssetId) => {
       if (cancelled) return;
       const activeIntent = routePointContextSelectionRef.current.intent;
       if (
@@ -1953,12 +1989,6 @@ export function LivingAtlasApp({
         || activeIntent.routePointId !== intent.routePointId
       ) {
         return;
-      }
-      const evidenceByAssetId = new Map<string, MediaEvidenceRecord>();
-      for (const result of results) {
-        if (result.status === "fulfilled") {
-          evidenceByAssetId.set(result.value[0], result.value[1]);
-        }
       }
       routePointMediaEvidenceRef.current = evidenceByAssetId;
       const nextContext = buildRoutePointContext(journey, intent.routePointId, evidenceByAssetId);
@@ -4070,9 +4100,7 @@ export function LivingAtlasApp({
                     ? "EXIF"
                     : context.location.precision.source === "container-metadata"
                       ? "媒体元数据"
-                      : "导入记录"} · {context.location.precision.accuracyMeters === null
-                    ? "精度未知"
-                    : `精度约 ${Math.round(context.location.precision.accuracyMeters)} m`}
+                      : "导入记录"} · {formatRoutePointMediaAccuracy(context.location.precision.accuracyMeters)}
                 </span>
               ) : null}
             </div>

@@ -35,6 +35,9 @@ import {
   playbackFocusRouteForCameraTarget,
   quickRecapPlanningContentFingerprint,
   nextAtlasNotice,
+  formatRoutePointMediaAccuracy,
+  readRoutePointMediaEvidenceBounded,
+  ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY,
   pendingPlaybackStoryRestore,
   railContentSignature,
   releaseStalePlaybackSession,
@@ -984,6 +987,49 @@ describe("Mobile V2 playback presentation", () => {
 
 describe("Route Point context integration (#291)", () => {
   const appSource = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+
+  it("bounds Route Point media-evidence reads instead of fanning out the whole media set", async () => {
+    const assetIds = Array.from({ length: 11 }, (_, index) => `asset-${index}`);
+    let active = 0;
+    let maxActive = 0;
+    const evidence = await readRoutePointMediaEvidenceBounded(assetIds, async (assetId) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return assetId;
+    });
+
+    expect(maxActive).toBe(ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY);
+    expect([...evidence.keys()]).toEqual(assetIds);
+    expect(appSource).toContain("readRoutePointMediaEvidenceBounded(");
+    expect(appSource).not.toContain("Promise.allSettled(assets.map");
+  });
+
+  it("stops scheduling media-evidence reads once Route Point ownership is cancelled", async () => {
+    const assetIds = Array.from({ length: 20 }, (_, index) => `asset-${index}`);
+    let reads = 0;
+    let current = true;
+    await readRoutePointMediaEvidenceBounded(
+      assetIds,
+      async (assetId) => {
+        reads += 1;
+        if (reads === ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY) current = false;
+        await Promise.resolve();
+        return assetId;
+      },
+      () => current,
+    );
+
+    expect(reads).toBe(ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY);
+  });
+
+  it("never renders nonzero sub-meter media accuracy as zero", () => {
+    expect(formatRoutePointMediaAccuracy(null)).toBe("精度未知");
+    expect(formatRoutePointMediaAccuracy(0.4)).toBe("精度约 0.4 m");
+    expect(formatRoutePointMediaAccuracy(0.01)).toBe("精度约 0.1 m");
+    expect(formatRoutePointMediaAccuracy(12.4)).toBe("精度约 12 m");
+  });
 
   it("reveals context from route-point activation without claiming camera or focus revision", () => {
     // Picking must remove this callback entirely so Detailed Earth lets the
