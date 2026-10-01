@@ -175,6 +175,24 @@ async function enterDetail(page) {
 }
 
 async function assertEditorLayout(page, name) {
+  // Viewport emulation acknowledges the size before window.resize and the
+  // editor's ResizeObserver have committed placement. Wait for the actual
+  // geometry; retain the same hit-testing and overlap assertions afterwards.
+  await page.waitForFunction(() => {
+    const editor = document.querySelector(".route-candidate-editor");
+    if (!editor) return false;
+    const box = editor.getBoundingClientRect();
+    if (box.width < 160 || box.left < 0 || box.top < 0 || box.right > innerWidth || box.bottom > innerHeight) return false;
+    return [...document.querySelectorAll(
+      ".living-atlas__journey-rail, .living-atlas__active, .living-atlas__home-base-context, .living-atlas__header, .mobile-v2__header, .mobile-v2__chrome, .globe-time-scrubber",
+    )].every((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display === "none" || style.visibility === "hidden" || rect.width <= 0
+        || Math.min(box.right, rect.right) - Math.max(box.left, rect.left) <= 0.5
+        || Math.min(box.bottom, rect.bottom) - Math.max(box.top, rect.top) <= 0.5;
+    });
+  }, null, { timeout: 5_000 });
   const layout = await page.locator(".route-candidate-editor").evaluate((editor) => {
     const rect = (element) => {
       const { left, top, right, bottom, width, height } = element.getBoundingClientRect();
