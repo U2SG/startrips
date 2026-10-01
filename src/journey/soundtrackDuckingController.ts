@@ -59,6 +59,23 @@ export type SoundtrackDuckingController = {
   currentGain(): number;
   /** True while a transition is in flight. */
   isRamping(): boolean;
+  /**
+   * What the controller currently believes, for QA. A restore that silently
+   * does not move is ambiguous from the outside: the element could be holding
+   * the ducked level because the decision is still "duck", or because the
+   * baseline itself drifted down to that level and "restore" now means 0.3.
+   * These fields tell the two apart.
+   */
+  snapshot(): {
+    baseline: number;
+    current: number;
+    target: number;
+    ducking: boolean;
+    hasForeground: boolean;
+    foregroundPaused: boolean | null;
+    foregroundPlaying: boolean | null;
+    lastWritten: number | null;
+  };
 };
 
 /** Is this element genuinely playing, rather than merely un-paused? */
@@ -227,6 +244,25 @@ export function createSoundtrackDuckingController(
       // of the last retarget so a new transport can re-anchor from it, which
       // would otherwise report "ramping" forever after the gain had settled.
       return Math.abs(to - current) > 1e-4;
+    },
+    /**
+     * What the controller currently believes, for QA. A restore that silently
+     * does not move is ambiguous from the outside: the element could be holding
+     * the ducked level because the decision is still "duck", or because the
+     * baseline itself drifted down to that level and "restore" now means 0.3.
+     * These fields tell the two apart.
+     */
+    snapshot() {
+      return {
+        baseline,
+        current,
+        target: to,
+        ducking: to < baseline,
+        hasForeground: seenVideo !== null,
+        foregroundPaused: seenVideo ? seenVideo.paused : null,
+        foregroundPlaying: seenVideo ? isActuallyPlaying(seenVideo) : null,
+        lastWritten,
+      };
     },
   };
 }

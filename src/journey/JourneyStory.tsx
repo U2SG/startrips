@@ -2851,7 +2851,24 @@ export function JourneyStory({
       },
     });
     controller.start();
-    return () => controller.stop();
+    // #596 QA: publish what the controller believes, so a restore that does not
+    // move can be diagnosed from the outside. DEV only - QA previews are a
+    // development surface, so a production build pays nothing - and written only
+    // when the value actually changes.
+    if (!import.meta.env.DEV) return () => controller.stop();
+    let written = "";
+    const publish = window.setInterval(() => {
+      const surface = document.querySelector<HTMLElement>(".journey-story");
+      if (!surface) return;
+      const next = JSON.stringify(controller.snapshot());
+      if (next === written) return;
+      written = next;
+      surface.dataset.qaSoundtrackDuck = next;
+    }, 120);
+    return () => {
+      window.clearInterval(publish);
+      controller.stop();
+    };
   }, []);
   function renderStageVideo(immersive: boolean) {
     return storyStageVideoAsset ? <video

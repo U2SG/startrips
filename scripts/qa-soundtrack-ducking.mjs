@@ -329,6 +329,13 @@ try {
       muted: element.muted,
     })));
     const afterLeavingVideo = await settledVolume(page);
+    // The controller's own view at the moment the restore should have happened.
+    // Without it, "the volume did not move" cannot be told apart from "the
+    // target is still ducked" or "the baseline itself drifted to that level".
+    const controllerView = await page.evaluate(() => {
+      const raw = document.querySelector(".journey-story")?.dataset.qaSoundtrackDuck;
+      return raw ? JSON.parse(raw) : null;
+    });
     for (let step = 0; step < 4 && !(await currentIsVideo(page)); step += 1) {
       await stepMedia(page, "ArrowLeft");
     }
@@ -339,6 +346,7 @@ try {
       name: "image-to-video-to-image-restores-between-videos",
       onPhoto,
       videoStopped,
+      controllerView,
       probe,
       afterLeavingVideo,
       afterComingBack,
