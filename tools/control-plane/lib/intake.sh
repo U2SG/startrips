@@ -1,28 +1,16 @@
 #!/usr/bin/env bash
 # Issue intake for the Startrips loop workspace.
 #
-# One implementation, two callers: `run-loop.sh` runs `intake_new_issues` at the
-# start of every iteration (right after `reconcile_merge_state`, i.e. BEFORE
-# `next_feature`, so an intake decision can take effect in the same iteration),
-# and `./init.sh intake [issue] [--dry-run]` is the manual entry point.
+# One implementation, two callers: `run-loop.sh` performs read-only candidate
+# discovery and mapped-issue reconciliation each iteration; `init.sh` exposes
+# the canonical external-verdict apply boundary used by the recurring Orchestrator.
 #
-# The queue file is the authority on what work exists; GitHub is the authority
-# on what the product wants. Intake is the bridge, in two halves that share one
-# per-iteration session budget:
-#
-#   intake_new_issues        an open issue nobody has queued becomes either a
-#                            queued feature at a justified position, or a
-#                            recorded skip with a public reason;
-#   intake_reconcile_issues  an issue ALREADY mapped to a feature, whose GitHub
-#                            state moved past the recorded snapshot, is handled
-#                            by the status of that feature: backfill, amend,
-#                            curated note, builder window, reopen follow-up or
-#                            plain snapshot bookkeeping.
-#
-# `intake_new_issues` runs FIRST and spends the shared budget first, because
-# CLAUDE.md promises that a P0/P1 regression triaged in an iteration is the one
-# that iteration builds; an amend deferred by one iteration costs far less than
-# breaking that promise.
+# ONE remains the authority on queued work and GitHub remains the authority on
+# product intent. Intake has two deterministic halves sharing one bounded apply
+# budget: new-issue append, and mapped-issue reconcile (backfill/amend/follow-up).
+# Reasoning never starts a nested model here: the Orchestrator supplies a bound
+# verdict after Codexless evidence reads. Missing verdicts defer without spending
+# budget, writing skip state, or mutating ONE.
 #
 # Sourced, not executed: it expects `ROOT` (workspace root) and optionally
 # `GH_REPO` from the caller and defines fallbacks for everything else.
@@ -37,6 +25,8 @@ INTAKE_DECISIONS="$INTAKE_DIR/decisions.log"
 INTAKE_DRY_RUN="${INTAKE_DRY_RUN:-0}"
 INTAKE_LAST_LOG=""
 INTAKE_LAST_RESULT=""
+INTAKE_VERDICT_FILE="${INTAKE_VERDICT_FILE:-}"
+INTAKE_VERDICT_DIR="${INTAKE_VERDICT_DIR:-}"
 
 # Windows-native python3 encodes stdout with the console codepage, which turns
 # any non-ASCII the triage session quoted from the product (Chinese UI copy, an
@@ -45,33 +35,9 @@ INTAKE_LAST_RESULT=""
 # stdout side the shell reads back.
 export PYTHONIOENCODING=utf-8
 
-# The loop defines these before sourcing; `init.sh` does not. Same nesting guard
-# and same quota semantics either way — a quota hit during triage exits 5
-# exactly like a builder or evaluator run, so the supervisor treats it as a
-# quota stop rather than a harness failure.
-if ! declare -F claude_run >/dev/null 2>&1; then
-  claude_run() {
-    env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION claude "$@"
-  }
-fi
-if ! declare -F quota_stop >/dev/null 2>&1; then
-  quota_stop() {
-    local log="$1" who="$2" line
-    line="$(grep -m1 -iE "hit your (weekly|session|usage) limit" "$log" 2>/dev/null || true)"
-    [[ -z "$line" ]] || {
-      echo "Claude quota exhausted during the $who run: ${line}"
-      echo "Feature state left untouched; re-run after the reset."
-      exit 5
-    }
-  }
-fi
-if ! declare -F transient_stop >/dev/null 2>&1; then
-  transient_stop() {
-    local log="$1" who="$2" line
-    line="$(grep -m1 -E '^API Error: (Unable to connect|5[0-9]{2}|Connection error|Request timed out)' "$log" 2>/dev/null || true)"
-    [[ -z "$line" ]] || { echo "Platform failure during the $who run: ${line}"; exit 6; }
-  }
-fi
+# Intake never launches a nested model/provider process. The recurring
+# Orchestrator gathers issue/code evidence through Codexless and supplies a
+# bound verdict envelope; this shell remains the sole validator/writer for ONE.
 
 intake_init_dirs() {
   mkdir -p "$INTAKE_DIR"
@@ -109,28 +75,36 @@ intake_field() {
     "$1" "$2" | tr -d '\r'
 }
 
-# Read-only duplicate suppression for the expensive model turn. This is process
-# evidence only: it creates no queue/owner claim/lock and never authorizes a write.
-intake_triage_peer_active() {
-  local num="$1"
-  if command -v powershell.exe >/dev/null 2>&1; then
-    powershell.exe -NoProfile -NonInteractive -Command "\$n='$num'; try { \$rows=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { \$_.Name -ieq 'claude.exe' -and \$_.CommandLine -match '--agent startrips-triage' -and \$_.CommandLine -match ('issue #' + [regex]::Escape(\$n) + '(?:\D|$)') }; if (\$rows) { exit 0 } else { exit 1 } } catch { exit 6 }" >/dev/null 2>&1
+# Normalize an external verdict path crossing Windows/Git-Bash/WSL boundaries.
+intake_external_path() {
+  local raw="$1"
+  if [[ "$raw" =~ ^[A-Za-z]:[\\/].* ]]; then
+    if command -v cygpath >/dev/null 2>&1; then cygpath -u "$raw"; return $?; fi
+    if command -v wslpath >/dev/null 2>&1; then wslpath -u "$raw"; return $?; fi
+  fi
+  printf '%s\n' "$raw"
+}
+
+# Resolve the external verdict envelope for one exact triage identity. New-issue
+# intake may use INTAKE_VERDICT_FILE; reconcile uses INTAKE_VERDICT_DIR with
+# deterministic issue/mode/feature file names. These are ephemeral inputs, not
+# a queue, owner registry, or authority source.
+intake_triage_verdict_path() {
+  local num="$1" slug="${2:-}"
+  if [[ -n "${INTAKE_VERDICT_FILE:-}" ]]; then
+    intake_external_path "$INTAKE_VERDICT_FILE"
     return $?
   fi
-  python3 - "$num" <<'PY'
-import os, re, subprocess, sys
-num = sys.argv[1]
-try:
-    text = subprocess.run(['ps', '-eo', 'pid=,args='], capture_output=True, text=True, timeout=5, check=True).stdout
-except Exception:
-    raise SystemExit(6)
-needle = re.compile(r'issue #' + re.escape(num) + r'(?:\D|$)')
-for line in text.splitlines():
-    pid, _, args = line.strip().partition(" ")
-    if pid.isdigit() and int(pid) != os.getpid() and "--agent startrips-triage" in args and needle.search(args):
-        raise SystemExit(0)
-raise SystemExit(1)
-PY
+  [[ -n "${INTAKE_VERDICT_DIR:-}" ]] || return 1
+  local directory
+  directory="$(intake_external_path "$INTAKE_VERDICT_DIR")" || return 1
+  printf '%s/issue-%s%s.json\n' "${directory%/}" "$num" "${slug:+-$slug}"
+}
+
+intake_triage_available() {
+  local verdict
+  verdict="$(intake_triage_verdict_path "$1" "${2:-}")" || return 1
+  [[ -f "$verdict" ]]
 }
 
 # Open issues that no feature already references and that intake has not already
@@ -225,45 +199,99 @@ if str(num) in s:
 PY
 }
 
-# One headless session, whatever the mode. `slug` keeps an amend or follow-up
-# log from overwriting the new-issue log for the same issue.
+# Consume one external verdict. The envelope is bound to the exact issue
+# evidence the Orchestrator reasoned over, and mapped modes are also bound to
+# the exact ONE row token. Return 7 when no verdict exists and 10 when the
+# supplied verdict is stale; both defer without mutating ONE.
 intake_triage() {
-  local num="$1" prompt="${2:-}" slug="${3:-}"
-  local ro="You are read-only — never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
-  [[ -n "$prompt" ]] || prompt="Triage issue #$num in $INTAKE_GH_REPO for the Startrips loop queue. Follow your agent instructions exactly: verify the claimed gap against the real code in startrips/ before believing the title, then decide skip versus a queued feature and choose the phase and anchor with the placement rules. $ro"
-  INTAKE_LAST_LOG="$INTAKE_DIR/issue-$num${slug:+-$slug}-triage-${BASHPID}.log"
-  : > "$INTAKE_LAST_LOG"
-  local triage_rc=0
-  # Triage needs only the custom agent built-ins (Read/Grep/Glob/Bash). Loading
-  # user/global MCP servers here adds unrelated startup processes and has caused
-  # successful provider sessions to terminate with an empty output log. Keep this
-  # narrow, and preserve the real Claude exit code instead of hiding it behind tee.
-  set +e
-  (
-    cd "$INTAKE_ROOT" || exit 1
-    # Write model output from the surviving child directly to the invocation log.
-    # If the outer Codexless/scheduler carrier disappears, MSYS may leave this
-    # sh/claude process alive; a parent-owned tee pipe then loses all evidence.
-    # A direct file descriptor stays valid for the child's lifetime.
-    claude_run --setting-sources project --strict-mcp-config --agent startrips-triage --dangerously-skip-permissions --model sonnet \
-      --output-format text \
-      -p "$prompt" \
-      >"$INTAKE_LAST_LOG" 2>&1
-  )
-  triage_rc=$?
-  set -e
-  cat "$INTAKE_LAST_LOG"
-  quota_stop "$INTAKE_LAST_LOG" "triage"
-  # An API failure leaves no marker block; without this it would be recorded
-  # as `triage output invalid` and the issue skipped until a human clears it
-  # (#244 and #245 on 2026-09-06). Exit 6 like the builder does instead.
-  transient_stop "$INTAKE_LAST_LOG" "triage"
-  if [[ "$triage_rc" != "0" ]]; then
-    echo "[intake] triage process failed rc=$triage_rc for issue #$num; state unchanged" >&2
+  local num="$1" prompt="${2:-}" slug="${3:-}" expected_upd="${4:-}" expected_cnt="${5:-}" expected_row="${6:-}"
+  local verdict mode feature="" validate_rc=0
+  case "$slug" in
+    "") mode="new" ;;
+    amend-*) mode="amend"; feature="${slug#amend-}" ;;
+    followup-*) mode="followup"; feature="${slug#followup-}" ;;
+    *) echo "[intake] unsupported external triage slug: $slug" >&2; return 6 ;;
+  esac
+  [[ -n "$expected_upd" && "$expected_cnt" =~ ^[0-9]+$ ]] || {
+    echo "[intake] issue #$num $mode snapshot evidence unavailable; state unchanged" >&2
+    return 6
+  }
+  if [[ "$mode" != "new" && ! "$expected_row" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[intake] issue #$num $mode row identity unavailable; state unchanged" >&2
     return 6
   fi
-}
+  intake_init_dirs
+  INTAKE_LAST_LOG="$INTAKE_DIR/issue-$num${slug:+-$slug}-triage-${BASHPID}.log"
+  : > "$INTAKE_LAST_LOG"
+  verdict="$(intake_triage_verdict_path "$num" "$slug")" || {
+    echo "[intake] issue #$num $mode external-verdict-required; state unchanged"
+    return 7
+  }
+  [[ -f "$verdict" ]] || {
+    echo "[intake] issue #$num $mode external-verdict-required; missing $verdict; state unchanged"
+    return 7
+  }
+  python3 - "$verdict" "$INTAKE_LAST_LOG" "$num" "$mode" "$feature" "$expected_upd" "$expected_cnt" "$expected_row" <<'PY' || validate_rc=$?
+import json, sys
+from pathlib import Path
+src, out, num_s, mode, feature, issue_updated, issue_comments, feature_row = sys.argv[1:9]
+path = Path(src)
+if path.is_symlink() or not path.is_file():
+    raise SystemExit('verdict input must be a regular non-symlink file')
+try:
+    envelope = json.loads(path.read_text(encoding='utf-8'))
+except Exception as exc:
+    raise SystemExit('invalid verdict envelope JSON: ' + str(exc))
+if not isinstance(envelope, dict):
+    raise SystemExit('verdict envelope must be an object')
+if envelope.get('issue') != int(num_s):
+    raise SystemExit('verdict envelope issue mismatch')
+if envelope.get('mode') != mode:
+    raise SystemExit('verdict envelope mode mismatch')
 
+def stale(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(10)
+
+if envelope.get('issue_snapshot_at') != issue_updated:
+    stale('verdict envelope issue snapshot mismatch')
+try:
+    bound_comments = int(envelope.get('issue_snapshot_comments'))
+except (TypeError, ValueError):
+    stale('verdict envelope issue comment snapshot missing')
+if bound_comments != int(issue_comments):
+    stale('verdict envelope issue comment snapshot mismatch')
+
+if mode == 'new':
+    if envelope.get('feature') not in {None, ''}:
+        raise SystemExit('new-issue verdict must not bind a feature')
+    if envelope.get('feature_row_token') not in {None, ''}:
+        raise SystemExit('new-issue verdict must not bind a feature row')
+else:
+    if envelope.get('feature') != feature:
+        raise SystemExit('verdict envelope feature mismatch')
+    if envelope.get('feature_row_token') != feature_row:
+        stale('verdict envelope feature row token mismatch')
+
+verdict = envelope.get('verdict')
+if not isinstance(verdict, dict):
+    raise SystemExit('verdict envelope missing object verdict')
+Path(out).write_text(
+    '<<<INTAKE\n' + json.dumps(verdict, ensure_ascii=False) + '\nINTAKE>>>\n',
+    encoding='utf-8', newline='\n')
+PY
+  if [[ "$validate_rc" != "0" ]]; then
+    : > "$INTAKE_LAST_LOG"
+    if [[ "$validate_rc" == "10" ]]; then
+      echo "[intake] stale external verdict for issue #$num $mode; state unchanged"
+      return 10
+    fi
+    echo "[intake] invalid external verdict for issue #$num $mode; state unchanged" >&2
+    return 6
+  fi
+  cat "$INTAKE_LAST_LOG"
+  return 0
+}
 # Parse, validate and apply in a single pass, because the placement rules can
 # only be checked against the queue the feature would join. Writes
 # feature_list.json / skipped.json itself (state first, comment second), and
@@ -337,6 +365,20 @@ d = load_document(feat_p)
 before = json.dumps(d['features'], ensure_ascii=False, sort_keys=True)
 ids = {f['id'] for f in d['features']}
 by_id = {f['id']: f for f in d['features']}
+
+# Follow-up verdicts are bound to the exact shipped row the Orchestrator read.
+# Recheck inside the same Python apply transaction as the append so a row change
+# after shell-level revalidation cannot authorize a stale follow-up.
+expected_row = os.environ.get('INTAKE_EXPECTED_ROW', '').strip()
+if force_anchor:
+    if not expected_row:
+        raise SystemExit('follow-up expected row token unavailable')
+    from feature_state import row_token
+    anchor_row = by_id.get(force_anchor)
+    if anchor_row is None or row_token(anchor_row) != expected_row:
+        raise SystemExit(10)
+elif expected_row:
+    raise SystemExit('new-issue intake must not carry a feature row token')
 
 problems = []
 for key in ('phase', 'title', 'description'):
@@ -467,34 +509,51 @@ intake_resnapshot() {
 intake_issue() {
   local num="$1" decision reason fid phase anchor position rationale acc gate prio
   intake_init_dirs
-  local st upd="" cnt=""
+  local st upd="" cnt="" triage_rc=0 context_rc=0
+  # A missing external verdict is a normal coordination defer. Do not require a
+  # live issue read merely to prove that there is nothing authoritative to apply.
+  if ! intake_triage_available "$num"; then
+    echo "[intake] issue #$num new external-verdict-required; state unchanged"
+    intake_record_decision "issue=$num external-verdict-required mode=new; state unchanged"
+    return 0
+  fi
   # The snapshot the created feature carries has to come from the same reader
   # the later comparison uses, or the very next reconcile sees a phantom move.
-  st="$(intake_issue_state "$num" || true)"
-  if [[ -n "$st" ]]; then
-    upd="$(intake_state_field "$st" updatedAt)"
-    cnt="$(intake_state_field "$st" comments)"
-  fi
+  st="$(intake_issue_state "$num")" || {
+    intake_record_decision "issue=$num snapshot-evidence-unknown mode=new; state unchanged"
+    return 6
+  }
+  [[ -n "$st" ]] || {
+    intake_record_decision "issue=$num snapshot-evidence-missing mode=new; state unchanged"
+    return 6
+  }
+  upd="$(intake_state_field "$st" updatedAt)"
+  cnt="$(intake_state_field "$st" comments)"
   if [[ "$INTAKE_DRY_RUN" == "1" ]]; then
     echo "=== Intake (dry run): $INTAKE_GH_REPO#$num ==="
   else
     echo "=== Intake: $INTAKE_GH_REPO#$num ==="
   fi
 
-  local peer_rc=0
-  if intake_triage_peer_active "$num"; then
-    intake_record_decision "issue=$num triage-active; deferred to existing invocation"
+  intake_triage "$num" "" "" "$upd" "$cnt" "" || triage_rc=$?
+  if [[ "$triage_rc" == "7" ]]; then
+    intake_record_decision "issue=$num external-verdict-required mode=new; state unchanged"
     return 0
-  else
-    peer_rc=$?
-    if [[ "$peer_rc" != "1" ]]; then
-      echo "[intake] triage peer evidence UNKNOWN rc=$peer_rc for issue #$num; no triage launched" >&2
-      intake_record_decision "issue=$num triage-peer-unknown rc=$peer_rc; no invocation launched"
-      return 6
-    fi
   fi
-  intake_triage "$num" || return $?
+  if [[ "$triage_rc" == "10" ]]; then
+    intake_record_decision "issue=$num stale-external-verdict mode=new; state unchanged"
+    return 0
+  fi
+  [[ "$triage_rc" == "0" ]] || return "$triage_rc"
   [[ -s "$INTAKE_LAST_LOG" ]] || { intake_record_decision "issue=$num triage-log-empty"; return 1; }
+
+  intake_revalidate_context "$num" "$upd" "$cnt" || context_rc=$?
+  if [[ "$context_rc" == "10" ]]; then
+    intake_record_decision "issue=$num stale-context-before-apply mode=new; state unchanged"
+    return 0
+  fi
+  [[ "$context_rc" == "0" ]] || return 6
+
   INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" intake_apply "$num" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num transaction-deferred; no stale result consumed"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || { intake_record_decision "issue=$num result-missing"; return 1; }
 
@@ -540,8 +599,8 @@ Recorded in the loop's intake skip list; clearing that entry has it re-triaged. 
   return 0
 }
 
-# The per-iteration entry point. Call it as a plain statement, never inside
-# `$(...)` or a pipeline: `quota_stop` exits 5 and that has to reach the loop.
+# The per-iteration entry point. Missing verdicts are normal deferrals; malformed
+# or unavailable evidence still propagates a fail-closed nonzero result.
 intake_new_issues() {
   # Reset per ITERATION, not per source: run-loop.sh sources this file once and
   # runs every iteration in the same shell, so a file-scope value would carry
@@ -559,9 +618,13 @@ intake_new_issues() {
   for n in "${cands[@]}"; do
     n="$(printf %s "$n" | tr -d '\r')"
     [[ -n "$n" ]] || continue
-    # New issues spend the shared per-iteration budget FIRST: CLAUDE.md promises
-    # that a P0/P1 regression triaged this iteration is the one it builds.
-    intake_budget_take || { echo "[intake] session budget spent; #$n waits for the next iteration"; break; }
+    # Missing verdict is a normal coordination defer and does not spend the
+    # bounded apply budget. The recurring Orchestrator supplies it externally.
+    if ! intake_triage_available "$n"; then
+      echo "[intake] issue #$n external-verdict-required; state unchanged"
+      continue
+    fi
+    intake_budget_take || { echo "[intake] intake budget spent; #$n waits for the next iteration"; break; }
     local issue_rc=0
     intake_issue "$n" || issue_rc=$?
     if [[ "$issue_rc" == "6" ]]; then
@@ -635,6 +698,50 @@ intake_issue_state() {
     --json number,state,updatedAt,comments,labels \
     --jq '{number: .number, state: .state, updatedAt: .updatedAt, comments: (.comments | length), labels: [.labels[].name]}' \
     2>/dev/null | tr -d '\r'
+}
+
+intake_feature_row_token() {
+python3 - "$INTAKE_FEATURES" "$1" "$INTAKE_ROOT/lib" <<'PY'
+import sys
+feat_p, fid, libdir = sys.argv[1:4]
+sys.path.insert(0, libdir)
+from feature_store import load_document
+from feature_state import row_token, target
+print(row_token(target(load_document(feat_p), fid)))
+PY
+}
+
+# Re-read the remote issue and, for mapped modes, the exact ONE row immediately
+# before applying a verdict. A known mismatch is a normal stale defer (10);
+# unreadable evidence remains UNKNOWN (6).
+intake_revalidate_context() {
+  local num="$1" expected_upd="$2" expected_cnt="$3" fid="${4:-}" expected_row="${5:-}"
+  local st current_upd current_cnt current_row
+  st="$(intake_issue_state "$num")" || {
+    echo "[intake] issue #$num context evidence UNKNOWN during revalidation" >&2
+    return 6
+  }
+  [[ -n "$st" ]] || {
+    echo "[intake] issue #$num context evidence missing during revalidation" >&2
+    return 6
+  }
+  current_upd="$(intake_state_field "$st" updatedAt)"
+  current_cnt="$(intake_state_field "$st" comments)"
+  if [[ "$current_upd" != "$expected_upd" || "$current_cnt" != "$expected_cnt" ]]; then
+    echo "[intake] issue #$num changed after verdict reasoning; stale verdict deferred"
+    return 10
+  fi
+  if [[ -n "$fid" ]]; then
+    current_row="$(intake_feature_row_token "$fid")" || {
+      echo "[intake] feature $fid row evidence UNKNOWN during revalidation" >&2
+      return 6
+    }
+    if [[ "$current_row" != "$expected_row" ]]; then
+      echo "[intake] feature $fid changed after verdict reasoning; stale verdict deferred"
+      return 10
+    fi
+  fi
+  return 0
 }
 
 intake_mapped_issue_numbers() {
@@ -1089,25 +1196,50 @@ intake_amend_failure() {
 }
 
 intake_amend() {
-  local num="$1" fid="$2" upd="$3" cnt="$4" dump prompt decision reason changed snapshot expected_row amend_rc
+  local num="$1" fid="$2" upd="$3" cnt="$4" dump decision reason changed snapshot expected_row amend_rc triage_rc context_rc
   case " ${FEATURE_SKIP:-} " in
     *" $fid "*)
       intake_record_decision "issue=$num feature=$fid amend deferred: already yielded in this invocation"
       return 0 ;;
   esac
+  if ! intake_triage_available "$num" "amend-$fid"; then
+    intake_record_decision "issue=$num feature=$fid external-verdict-required mode=amend; state unchanged"
+    return 0
+  fi
   intake_budget_take || {
-    intake_record_decision "issue=$num feature=$fid amend deferred: per-iteration session budget spent"
+    intake_record_decision "issue=$num feature=$fid amend deferred: per-iteration intake budget spent"
     return 0
   }
   snapshot="$(intake_dump_feature "$fid" | tr -d '\r')" || return 6
   IFS=$'\t' read -r dump expected_row <<< "$snapshot"
   [[ -n "$dump" && -n "$expected_row" ]] || return 6
-  prompt="Amend mode for the Startrips loop queue. Feature $fid is still pending and was created by intake from issue #$num in $INTAKE_GH_REPO, which has moved since it was triaged. Read your agent instructions (the Amend mode section), the current feature object at $dump, and the whole issue: gh issue view $num --repo $INTAKE_GH_REPO --comments. Decide whether the change is material to the queued work, then return one JSON object: {\"unchanged\": true, \"reason\": \"...\"} when it is not, {\"skip\": true, \"reason\": \"...\"} when the issue is now moot, or {\"amend\": {\"rationale\": \"...\", plus only the fields that must change: description, dependencies, acceptance, human_gate, placement}}. Keep every acceptance item a checkable fact and never widen the scope beyond what the issue asks. You are read-only: never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
-  intake_triage "$num" "$prompt" "amend-$fid" || return $?
+  if [[ ! "$expected_row" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[intake] feature $fid snapshot identity unavailable" >&2
+    return 6
+  fi
+  triage_rc=0
+  intake_triage "$num" "" "amend-$fid" "$upd" "$cnt" "$expected_row" || triage_rc=$?
+  if [[ "$triage_rc" == "7" ]]; then
+    return 0
+  fi
+  if [[ "$triage_rc" == "10" ]]; then
+    intake_amend_failure "$fid" "$num" verdict 10
+    return $?
+  fi
+  [[ "$triage_rc" == "0" ]] || return "$triage_rc"
   [[ -s "$INTAKE_LAST_LOG" ]] || {
     intake_record_decision "issue=$num feature=$fid amend-log-empty"
     return 0
   }
+
+  context_rc=0
+  intake_revalidate_context "$num" "$upd" "$cnt" "$fid" "$expected_row" || context_rc=$?
+  if [[ "$context_rc" == "10" ]]; then
+    intake_amend_failure "$fid" "$num" context 10
+    return $?
+  fi
+  [[ "$context_rc" == "0" ]] || return 6
+
   INTAKE_EXPECTED_ROW="$expected_row" INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" \
     intake_apply_amend "$num" "$fid" "$INTAKE_LAST_LOG" || {
       amend_rc=$?
@@ -1199,22 +1331,52 @@ intake_mark_reopen_family() {
 
 # A passed feature's issue moved again while open: queue ONE follow-up after it.
 intake_followup() {
-  local num="$1" fid="$2" upd="$3" cnt="$4" prompt decision reason newid prio st
+  local num="$1" fid="$2" upd="$3" cnt="$4" decision reason newid prio st triage_rc context_rc apply_rc expected_row
+  if ! intake_triage_available "$num" "followup-$fid"; then
+    intake_record_decision "issue=$num feature=$fid external-verdict-required mode=followup; state unchanged"
+    return 0
+  fi
   intake_budget_take || {
-    intake_record_decision "issue=$num feature=$fid follow-up deferred: per-iteration session budget spent"
+    intake_record_decision "issue=$num feature=$fid follow-up deferred: per-iteration intake budget spent"
     return 0
   }
-  prompt="Follow-up mode for the Startrips loop queue. Issue #$num in $INTAKE_GH_REPO is open again, or moved again while open, after feature $fid shipped for it and merged. Read your agent instructions, then read the whole issue: gh issue view $num --repo $INTAKE_GH_REPO --comments, and check what $fid actually landed on main (git -C startrips log and the merged PR). Triage ONLY the residual gap that is still open, exactly as you would a new issue: either a skip with a reason, or a full feature whose acceptance covers just that residual gap. The loop places it after $fid and adds $fid as a dependency, so you do not need to set the placement yourself. You are read-only: never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
-  intake_triage "$num" "$prompt" "followup-$fid" || return $?
+  expected_row="$(intake_feature_row_token "$fid")" || return 6
+  [[ "$expected_row" =~ ^[0-9a-f]{64}$ ]] || return 6
+  triage_rc=0
+  intake_triage "$num" "" "followup-$fid" "$upd" "$cnt" "$expected_row" || triage_rc=$?
+  if [[ "$triage_rc" == "7" ]]; then
+    return 0
+  fi
+  if [[ "$triage_rc" == "10" ]]; then
+    intake_record_decision "issue=$num feature=$fid stale-external-verdict mode=followup; state unchanged"
+    return 0
+  fi
+  [[ "$triage_rc" == "0" ]] || return "$triage_rc"
   [[ -s "$INTAKE_LAST_LOG" ]] || {
     intake_record_decision "issue=$num feature=$fid followup-log-empty"
     return 0
   }
-  INTAKE_FORCE_ANCHOR="$fid" INTAKE_FORCE_DEP="$fid" \
+
+  context_rc=0
+  intake_revalidate_context "$num" "$upd" "$cnt" "$fid" "$expected_row" || context_rc=$?
+  if [[ "$context_rc" == "10" ]]; then
+    intake_record_decision "issue=$num feature=$fid stale-context-before-apply mode=followup; state unchanged"
+    return 0
+  fi
+  [[ "$context_rc" == "0" ]] || return 6
+
+  apply_rc=0
+  INTAKE_EXPECTED_ROW="$expected_row" \
+    INTAKE_FORCE_ANCHOR="$fid" INTAKE_FORCE_DEP="$fid" \
     INTAKE_NOTES_PREFIX="follow-up of $fid (issue reopened)" \
     INTAKE_NO_SKIP_FILE=1 \
     INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" \
-    intake_apply "$num" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num followup-transaction-deferred"; return 6; }
+    intake_apply "$num" "$INTAKE_LAST_LOG" || apply_rc=$?
+  if [[ "$apply_rc" == "10" ]]; then
+    intake_record_decision "issue=$num feature=$fid stale-row-during-apply mode=followup; state unchanged"
+    return 0
+  fi
+  [[ "$apply_rc" == "0" ]] || { intake_record_decision "issue=$num followup-transaction-deferred"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || {
     intake_record_decision "issue=$num feature=$fid followup-result-missing"
     return 0
@@ -1336,10 +1498,17 @@ intake_reconcile_issues() {
 # `./init.sh intake-check [--dry-run]`: what the reconcile would do, or does it.
 intake_check() {
   local arg row fid num action state upd cnt snap snapc detail states acted=0
-  for arg in "$@"; do
+  while [[ "$#" -gt 0 ]]; do
+    arg="$1"; shift
     case "$arg" in
       --dry-run) INTAKE_DRY_RUN=1 ;;
-      *) echo "usage: ./init.sh intake-check [--dry-run]" >&2; return 1 ;;
+      --verdict-dir)
+        [[ "$#" -gt 0 ]] || { echo "usage: ./init.sh intake-check [--dry-run] [--verdict-dir DIR]" >&2; return 1; }
+        INTAKE_VERDICT_DIR="$1"; shift
+        INTAKE_VERDICT_DIR="$(intake_external_path "$INTAKE_VERDICT_DIR")" || { echo "[intake] invalid verdict directory" >&2; return 1; }
+        [[ -d "$INTAKE_VERDICT_DIR" ]] || { echo "[intake] verdict directory not found: $INTAKE_VERDICT_DIR" >&2; return 1; }
+        ;;
+      *) echo "usage: ./init.sh intake-check [--dry-run] [--verdict-dir DIR]" >&2; return 1 ;;
     esac
   done
   command -v gh >/dev/null 2>&1 || { echo "[intake] gh not available"; return 1; }

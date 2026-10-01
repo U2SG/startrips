@@ -456,7 +456,8 @@ def main():
     parser.add_argument('--record-review', type=Path)
     args = parser.parse_args()
     try:
-        if args.record_review: result = record_source_review(args.path, args.feature, args.repo, args.record_review)
+        if args.record_review:
+            result = record_source_review(args.path, args.feature, args.repo, args.record_review)
         else: result = handoff(args.path, args.feature, args.repo) if args.handoff else plan(args.path, args.feature, args.repo, record_failures=args.record_failures)
         print(result['action'] if args.action_only else json.dumps(result)); return 0
     except (StoreConflict, EvidenceUnknown, OSError, ValueError, KeyError) as exc:

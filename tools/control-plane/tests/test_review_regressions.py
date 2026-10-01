@@ -408,26 +408,29 @@ class IntakeDiscoveryCases(fixture.WiringTests):
         self.assertEqual(6,result.returncode,result.stdout+result.stderr)
         self.assertNotIn('no new open issues',result.stdout)
 
-    def test_runtime_triage_failure_propagates_from_new_issue_loop(self):
+    def test_missing_external_verdict_defers_without_running_apply(self):
         command=('set -euo pipefail; ROOT="$PWD"; source lib/intake.sh; '
                  'gh() { :; }; intake_candidates() { echo 448; }; '
-                 'intake_budget_take() { :; }; intake_issue() { return 6; }; '
+                 'intake_triage_available() { return 1; }; '
+                 'intake_budget_take() { echo BUDGET_SHOULD_NOT_RUN; return 6; }; '
+                 'intake_issue() { echo APPLY_SHOULD_NOT_RUN; return 6; }; '
                  'intake_new_issues')
         result=self.invoke(command)
-        self.assertEqual(6,result.returncode,result.stdout+result.stderr)
-        self.assertIn('evidence UNKNOWN',result.stderr)
-        self.assertNotIn('no new open issues',result.stdout)
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        self.assertIn('external-verdict-required',result.stdout)
+        self.assertNotIn('BUDGET_SHOULD_NOT_RUN',result.stdout+result.stderr)
+        self.assertNotIn('APPLY_SHOULD_NOT_RUN',result.stdout+result.stderr)
+        self.assertNotIn('evidence UNKNOWN',result.stdout+result.stderr)
 
-    def test_peer_evidence_unknown_never_launches_triage(self):
+    def test_missing_external_verdict_does_not_consult_legacy_peer_gate(self):
         command=('set -euo pipefail; ROOT="$PWD"; source lib/intake.sh; '
                  'intake_issue_state() { return 1; }; '
-                 'intake_triage_peer_active() { return 6; }; '
-                 'intake_triage() { echo TRIAGE_SHOULD_NOT_RUN; return 0; }; '
-                 'intake_issue 448')
+                 'intake_triage_peer_active() { echo PEER_SHOULD_NOT_RUN; return 6; }; '
+                 'INTAKE_VERDICT_FILE="$PWD/does-not-exist.json" intake_issue 448')
         result=self.invoke(command)
-        self.assertEqual(6,result.returncode,result.stdout+result.stderr)
-        self.assertIn('peer evidence UNKNOWN',result.stderr)
-        self.assertNotIn('TRIAGE_SHOULD_NOT_RUN',result.stdout+result.stderr)
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        self.assertIn('external-verdict-required',result.stdout)
+        self.assertNotIn('PEER_SHOULD_NOT_RUN',result.stdout+result.stderr)
 
     def test_urgent_mode_sees_p0_p1_without_bulk_intake(self):
         import shlex
