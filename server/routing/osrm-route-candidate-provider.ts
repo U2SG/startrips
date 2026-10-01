@@ -160,7 +160,7 @@ export function createOsrmRouteCandidateProvider(
       } catch {
         throw new RoutingUnavailableError();
       }
-      if (!response.ok) throw new RoutingUnavailableError();
+      if (!response.ok && response.status !== 400) throw new RoutingUnavailableError();
       const contentLength = Number(response.headers.get("content-length") ?? 0);
       if (contentLength > 1_000_000) throw new RoutingUnavailableError("Road route response is too large");
       let payload: OsrmResponse;
@@ -172,6 +172,10 @@ export function createOsrmRouteCandidateProvider(
         throw new RoutingUnavailableError("Road route response is invalid");
       }
       if (!payload || typeof payload !== "object") throw new RoutingUnavailableError("Road route response is invalid");
+      if (!response.ok) {
+        if (payload.code === "NoRoute" || payload.code === "NoSegment") return [];
+        throw new RoutingUnavailableError();
+      }
       if (payload.code !== "Ok") return [];
       if (!Array.isArray(payload.waypoints) || !Array.isArray(payload.routes)) {
         throw new RoutingUnavailableError("Road route response is invalid");
