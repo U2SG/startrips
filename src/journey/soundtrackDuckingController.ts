@@ -157,12 +157,23 @@ export function createSoundtrackDuckingController(
         to = Number.NaN;
       }
     }
-    // A level this controller did not write is the member's level. Adopting it
-    // is what makes "lowered the volume while ducked, and got the new level
-    // back on restore" true of the product rather than only of the policy: no
-    // caller has to volunteer a baseline, because the element is the record.
+    // A level this controller did not write is the member's level. Adopting it is
+    // what makes "the member changed the volume and the policy followed" true of
+    // the product rather than only of the policy: no caller has to volunteer a
+    // baseline, because the element is the record.
+    //
+    // `current` and `lastWritten` must move with it. Leaving `current` at the old
+    // gain starts the ramp below where the element actually is, so the first
+    // frame computes "no movement", never writes, and leaves `lastWritten`
+    // stale - which re-detects the very same unchanged level on every following
+    // frame and restarts the ramp forever. The element then sits wherever it was
+    // left, for the rest of a video that is still playing.
     if (audio && lastWritten !== null && Math.abs(audio.volume - lastWritten) > 1e-3) {
       baseline = audio.volume;
+      current = audio.volume;
+      from = current;
+      // Record it as observed, so the same level is not taken again next frame.
+      lastWritten = audio.volume;
       to = Number.NaN;
     }
     const ducking = video

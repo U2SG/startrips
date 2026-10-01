@@ -2824,7 +2824,7 @@ export function JourneyStory({
   // already uses to name the current Story video, so the ducking owner and the
   // playback hand-off cannot disagree about which element is foreground.
   storyStageVideoAssetRef.current = storyStageVideoAsset;
-  foregroundVideoKindRef.current = !storyStageVideoAsset
+  foregroundVideoKindRef.current = !storyStageVideoSettled
     ? "none"
     : fullscreen ? "immersive" : "inline";
   // One ducking owner for the whole Story surface, covering inline media and
@@ -2835,14 +2835,18 @@ export function JourneyStory({
     const controller = createSoundtrackDuckingController({
       getSoundtrack: () => audioRef.current,
       getForegroundVideo: () => {
+        // `foregroundVideoKindRef` is only set when the stage's video is the
+        // settled, presented one. That matters because a video the member has
+        // navigated past keeps its `data-shared-media-id` and can still report
+        // itself un-paused with frame data: the ducking policy correctly reads
+        // live transport state, and would then keep the soundtrack ducked under
+        // a photograph. DOM ancestry is not the test - the stage video is not
+        // rendered inside a page slot - the product's own settled signal is.
         const kind = foregroundVideoKindRef.current;
         if (kind === "none") return null;
         const element = kind === "immersive"
           ? fullscreenVideoRef.current
           : storyVideoRef.current;
-        // A video that is mounted but has not been presented as this stage's
-        // owner is not the foreground. The policy re-reads live playing state
-        // every frame, so a stale element drops out on its own.
         return element?.dataset.sharedMediaId ? element : null;
       },
     });

@@ -267,8 +267,17 @@ describe("soundtrack ducking controller", () => {
     run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
     expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
 
-    // Somebody else lowers the soundtrack while it is ducked.
+    // Somebody else raises the soundtrack while the video is still audible. The
+    // new level is the member's baseline, and because the video has NOT stopped
+    // the duck must re-apply to it: 0.5 * 0.3. Parking on 0.5 would leave the
+    // rest of that video playing at the level the member had already ducked
+    // past, which is the whole thing ducking exists to prevent.
     audio.volume = 0.5;
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+    expect(audio.volume).toBeCloseTo(0.5 * SOUNDTRACK_DUCK_FACTOR, 3);
+
+    // When the video finally stops, it restores to that same new baseline.
+    Object.defineProperty(foreground, "paused", { value: true, configurable: true });
     run(SOUNDTRACK_DUCK_RELEASE_MS + ARRIVED);
     expect(audio.volume).toBe(0.5);
   });

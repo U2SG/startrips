@@ -76,6 +76,25 @@ async function openStory() {
   return page;
 }
 
+/** The Story's own keyboard navigation: focus the current page and step. */
+async function stepMedia(page, key) {
+  await page.evaluate(async (pressed) => {
+    const current = document.querySelector('[data-media-page="current"]');
+    if (!current) throw new Error("Story presented no current media page");
+    if (current instanceof HTMLElement) current.focus();
+    current?.dispatchEvent(new KeyboardEvent("keydown", {
+      key: pressed,
+      bubbles: true,
+      cancelable: true,
+    }));
+  }, key);
+  await page.waitForTimeout(600);
+}
+
+const currentIsVideo = (page) => page.evaluate(
+  () => Boolean(document.querySelector('[data-media-page="current"] video')),
+);
+
 const videoPresented = (page) => page.evaluate(
   () => Boolean(document.querySelector("video[data-shared-media-id]")),
 );
@@ -106,8 +125,11 @@ async function settledVolume(page) {
 /** Put the real video into a genuinely audible, playing state. */
 async function playAudibly(page) {
   await page.evaluate(async () => {
-    const element = document.querySelector("video[data-shared-media-id]");
-    if (!element) throw new Error("Story presented no video element");
+    // The immersive stage does not necessarily tag its element the way the
+    // inline one does, so fall back to any video rather than insisting on a
+    // particular attribute.
+    const element = document.querySelector("video[data-shared-media-id]") ?? document.querySelector("video");
+    if (!element) return;
     Object.defineProperty(element, "ended", { value: false, configurable: true });
     element.muted = false;
     element.volume = 1;
@@ -199,18 +221,28 @@ try {
         || afterUnmute === null || Math.abs(afterUnmute - DUCK_FACTOR) > 0.02,
     });
 
-    // Resume must duck again, and ending the video must restore.
+    // Resume must duck again, and ending the video must restore. The ducked
+    // level has to be sampled BETWEEN the resume and the end: marking the
+    // element ended straight after play() would make this pass even if resume
+    // never ducked at all.
     await page.evaluate(() => {
       document.querySelector("video[data-shared-media-id]")?.pause();
     });
     await page.waitForTimeout(SETTLED_MS);
     const afterPauseAgain = await settledVolume(page);
-    await page.evaluate(async () => {
+    await playAudibly(page);
+    // The stage re-settles after a pause before the video counts as the
+    // presented one again, so wait for the duck rather than sampling a fixed
+    // moment that can land before the settle finishes.
+    const resumedDucked = await page.waitForFunction(
+      (limit) => (document.querySelector("audio")?.volume ?? 1) < limit,
+      0.5,
+      { polling: 150, timeout: 15_000 },
+    ).then(() => true).catch(() => false);
+    const afterResume = await settledVolume(page);
+    await page.evaluate(() => {
       const element = document.querySelector("video[data-shared-media-id]");
       if (!element) return;
-      await element.play();
-      // Ending is driven on the element rather than by waiting out the clip, so
-      // the lane does not depend on the fixture's duration.
       Object.defineProperty(element, "ended", { value: true, configurable: true });
     });
     await page.waitForTimeout(SETTLED_MS);
@@ -218,8 +250,12 @@ try {
     add({
       name: "resume-ducks-again-and-ended-restores",
       afterPauseAgain,
+      resumedDucked,
+      afterResume,
       afterEnded,
       failed: afterPauseAgain === null || Math.abs(afterPauseAgain - 1) > EPSILON
+        || !resumedDucked
+        || afterResume === null || Math.abs(afterResume - DUCK_FACTOR) > 0.02
         || afterEnded === null || Math.abs(afterEnded - 1) > EPSILON,
     });
 
@@ -263,14 +299,84 @@ try {
         || Math.abs(afterReplacement - 1) <= EPSILON,
     });
 
-    // Leaving the video for a photograph is deliberately NOT asserted here. The
-    // Story's media navigation is a scroll-snap surface this lane cannot drive
-    // reliably from a pointer click, and a check that quietly never navigates
-    // would report "the soundtrack did not restore" when nothing was ever
-    // tested. The restore branch itself is covered above by pause and by ended,
-    // which are the two ways a video stops being audible without unmounting;
-    // the unmount path is covered by the unit tests. Revisit with a proper
-    // gesture before claiming this case.
+    // Leaving a video for a photograph must restore, and coming back must duck
+    // again. The Story's own keyboard navigation is used rather than a nav-dot
+    // click: the media surface is a scroll-snap carousel, and a click there is
+    // not a reliable way to change chapter.
+    for (let step = 0; step < 4 && await currentIsVideo(page); step += 1) {
+      await stepMedia(page, "ArrowRight");
+    }
+    const onPhoto = !(await currentIsVideo(page));
+    // A navigated-away video is not stopped instantly, and while it is still
+    // playing the soundtrack is right to stay ducked. Wait for the transport to
+    // actually stop before asserting the restore - and report it when it never
+    // does, because a video that keeps playing under a photograph is a finding
+    // of its own rather than something to assert around.
+    const videoStopped = await page.waitForFunction(
+      () => ![...document.querySelectorAll("video")].some((element) => !element.paused),
+      undefined,
+      { polling: 150, timeout: 15_000 },
+    ).then(() => true).catch(() => false);
+    // Record why the soundtrack did or did not move. A lane that only asserts a
+    // volume cannot tell "did not restore" from "the video is still audible".
+    const probe = await page.evaluate(() => [...document.querySelectorAll("video")].map((element) => ({
+      sharedMediaId: element.dataset.sharedMediaId ?? null,
+      hidden: element.hidden,
+      paused: element.paused,
+      readyState: element.readyState,
+      currentTime: Number(element.currentTime.toFixed(2)),
+      volume: element.volume,
+      muted: element.muted,
+    })));
+    const afterLeavingVideo = await settledVolume(page);
+    for (let step = 0; step < 4 && !(await currentIsVideo(page)); step += 1) {
+      await stepMedia(page, "ArrowLeft");
+    }
+    await playAudibly(page);
+    await page.waitForTimeout(SETTLED_MS);
+    const afterComingBack = await settledVolume(page);
+    add({
+      name: "image-to-video-to-image-restores-between-videos",
+      onPhoto,
+      videoStopped,
+      probe,
+      afterLeavingVideo,
+      afterComingBack,
+      failed: !onPhoto
+        || !videoStopped
+        || afterLeavingVideo === null || Math.abs(afterLeavingVideo - 1) > EPSILON
+        || afterComingBack === null || Math.abs(afterComingBack - DUCK_FACTOR) > 0.02,
+    });
+
+    // Rapid video A -> photograph -> video B. The superseded transport's state
+    // must not leave the gain parked at the level it happened to be at.
+    const beforeSwap = await settledVolume(page);
+    await stepMedia(page, "ArrowRight");
+    await stepMedia(page, "ArrowLeft");
+    await stepMedia(page, "ArrowRight");
+    await playAudibly(page);
+    await page.waitForTimeout(SETTLED_MS);
+    const afterRapidSwap = await settledVolume(page);
+    add({
+      name: "a-rapid-video-photo-video-swap-settles-on-the-ducked-level",
+      beforeSwap,
+      afterRapidSwap,
+      failed: afterRapidSwap === null || Math.abs(afterRapidSwap - DUCK_FACTOR) > 0.02,
+    });
+
+    // The immersive stage hands off the SAME element rather than creating a
+    // second one, so the duck must follow it there without a second controller
+    // appearing - the issue's "fullscreen must not establish a second ducking
+    // state".
+    // The immersive hand-off is deliberately NOT asserted here. Clicking the
+    // current media page did not enter the immersive stage in this lane
+    // (`fullscreenVisible` came back false), so anything measured afterwards
+    // would describe a surface that was never opened - reporting "the immersive
+    // stage has no soundtrack" from a run that never entered it would be a
+    // fabricated finding. The hand-off moves the same element rather than
+    // creating a second one, and the controller has one owner per surface, but
+    // that remains unverified in a real browser and needs the correct immersive
+    // entry affordance before it can be claimed.
   } finally {
     await page.close();
   }
