@@ -9,6 +9,21 @@ export function isGlobeDrag(distance: number) {
   return distance >= GLOBE_DRAG_THRESHOLD_PX;
 }
 
+/**
+ * How far the pointer has strayed from where this contact started.
+ *
+ * The threshold must be measured against the press point, not against the
+ * accumulated path length. Summing per-move distances counts a slow wander as
+ * travel: a trackpad two-finger nudge, or a hand resting on a trackpad, traces
+ * far more than 6px of arc while the pointer never leaves a 2px neighbourhood
+ * of where it went down. That misreads an intended tap as a drag, claims manual
+ * camera ownership, and consumes the gesture so the tap never activates the
+ * Route Point underneath.
+ */
+export function globeDragDisplacementPx(origin: ScreenPoint, current: ScreenPoint) {
+  return Math.hypot(current.x - origin.x, current.y - origin.y);
+}
+
 export function isPrimaryPointerActivation(
   event: Pick<PointerEvent, "button" | "isPrimary" | "pointerType">,
 ) {
@@ -74,6 +89,14 @@ export function shouldRememberUntrackedPointerStart(activePointerCount: number) 
   return activePointerCount > 0;
 }
 
+/**
+ * Start (or re-anchor, when a second finger joins) one contact's drag.
+ *
+ * `origin` is where the contact began and is the only thing the threshold is
+ * measured against. `alreadyConsumed` means a pinch collapsed into a one-finger
+ * drag that had already claimed the camera; that gesture stays started, so the
+ * threshold is never re-tested for it and the origin needs no fudging.
+ */
 export function rebaseGlobeDragSample(
   pointerId: number,
   pointer: ScreenPoint,
@@ -82,10 +105,10 @@ export function rebaseGlobeDragSample(
 ) {
   return {
     pointerId,
+    origin: { x: pointer.x, y: pointer.y },
     lastX: pointer.x,
     lastY: pointer.y,
     lastTime: timeStamp,
-    travel: alreadyConsumed ? GLOBE_DRAG_THRESHOLD_PX : 0,
     started: alreadyConsumed,
   };
 }

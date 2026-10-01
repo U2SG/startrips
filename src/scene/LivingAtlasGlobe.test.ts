@@ -359,7 +359,7 @@ describe("ST-065 Home / Route Point pointer ownership", () => {
 
     const pointerUpStart = particleSource.indexOf("const onPointerUp = (", pointerMoveStart);
     const pointerMove = particleSource.slice(pointerMoveStart, pointerUpStart);
-    const dragThreshold = pointerMove.indexOf("if (!dragStarted && isGlobeDrag(dragTravel)) {");
+    const dragThreshold = pointerMove.indexOf("if (!dragStarted && isGlobeDrag(displacement)) {");
     const dragClaim = pointerMove.indexOf("claimManualInteraction();", dragThreshold);
     const dragStarted = pointerMove.indexOf("dragStarted = true;", dragThreshold);
     expect(dragThreshold).toBeGreaterThanOrEqual(0);
