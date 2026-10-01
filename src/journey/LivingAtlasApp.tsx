@@ -1974,13 +1974,13 @@ export function LivingAtlasApp({
       .sort((left, right) => left.sortOrder - right.sortOrder);
     if (assets.length === 0) return;
 
-    let cancelled = false;
+    const controller = new AbortController();
     void readRoutePointMediaEvidenceBounded(
       assets.map((asset) => asset.id),
-      readEvidence,
-      () => !cancelled,
+      (assetId) => readEvidence(assetId, undefined, controller.signal),
+      () => !controller.signal.aborted,
     ).then((evidenceByAssetId) => {
-      if (cancelled) return;
+      if (controller.signal.aborted) return;
       const activeIntent = routePointContextSelectionRef.current.intent;
       if (
         !activeIntent
@@ -2001,7 +2001,7 @@ export function LivingAtlasApp({
       setRoutePointContextSelection(refreshed);
     });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [journeys, mutations?.readMediaEvidence, routePointContextSelection.intent]);
   useEffect(() => {

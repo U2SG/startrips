@@ -1022,6 +1022,9 @@ describe("Route Point context integration (#291)", () => {
     );
 
     expect(reads).toBe(ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY);
+    expect(appSource).toContain("const controller = new AbortController()");
+    expect(appSource).toContain("readEvidence(assetId, undefined, controller.signal)");
+    expect(appSource).toContain("controller.abort()");
   });
 
   it("never renders nonzero sub-meter media accuracy as zero", () => {
