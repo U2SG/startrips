@@ -74,6 +74,7 @@ import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
 import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayout";
 import { EMPTY_PLAYBACK_GLOBE_COVER, playbackGlobeCoverState, type PlaybackGlobeCoverState } from "./playbackGlobeCover";
 import { createSoundtrackSampler } from "../motion/audioSampler";
+import { createSoundtrackDuckingController } from "./soundtrackDuckingController";
 import {
   resetAudioAtmosphereEnergy,
   writeAudioAtmosphereEnergy,
