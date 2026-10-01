@@ -147,6 +147,7 @@ async function enterDetail(page) {
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => document.querySelector(".living-atlas-globe")?.dataset.earthDiveOwner === "detail", null, { timeout: 25_000 });
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayReady === "true", null, { timeout: 15_000 });
+  await page.locator('.route-candidate-editor[data-route-editor-positioned="true"]').waitFor({ timeout: 15_000 });
 }
 
 async function assertEditorLayout(page, name) {
@@ -167,10 +168,12 @@ async function assertEditorLayout(page, name) {
     const panel = editor.querySelector(".route-candidate-editor__panel");
     return {
       box, chrome, overlaps, viewport: { width: innerWidth, height: innerHeight },
+      positioned: editor.dataset.routeEditorPositioned === "true",
       horizontalOverflow: panel ? panel.scrollWidth > panel.clientWidth : false,
     };
   });
   evidence.stages.push({ name, layout });
+  assert(layout.positioned, `${name}: route editor placement was not committed`);
   assert(layout.chrome.length > 0, `${name}: real Atlas chrome was absent`);
   assert(layout.overlaps.length === 0, `${name}: editor overlaps Atlas chrome: ${JSON.stringify(layout)}`);
   assert(layout.box.width >= 160 && layout.box.left >= 0 && layout.box.top >= 0

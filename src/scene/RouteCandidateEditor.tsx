@@ -32,7 +32,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const editorRef = useRef<HTMLDivElement>(null);
+  const [editor, setEditor] = useState<HTMLDivElement | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const requestEpochRef = useRef(0);
   const cancelCandidateRequest = useCallback(() => {
@@ -55,10 +55,9 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   const candidate = candidates[candidateIndex] ?? null;
 
   useLayoutEffect(() => {
-    const editor = editorRef.current;
     if (!active || !map || !editor) return;
     const host = map.getContainer();
-    const atlas = host.closest<HTMLElement>(".living-atlas");
+    const atlas = editor.closest<HTMLElement>(".living-atlas");
     if (!atlas) return;
     const selectors = {
       left: ".living-atlas__journey-rail",
@@ -96,6 +95,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
       editor!.style.bottom = `${bounds.bottom - bottom}px`;
       editor!.style.width = `${Math.max(0, Math.min(340, right - left))}px`;
       editor!.style.setProperty("--route-editor-max-height", `${Math.max(0, bottom - top)}px`);
+      editor!.dataset.routeEditorPositioned = "true";
     }
     function observeChrome() {
       const current = new Set([host, ...atlas!.querySelectorAll<HTMLElement>(Object.values(selectors).join(","))]);
@@ -114,8 +114,9 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
       resizeObserver.disconnect();
       chromeObserver.disconnect();
       window.removeEventListener("resize", place);
+      delete editor.dataset.routeEditorPositioned;
     };
-  }, [active, fromId, journeyId, map, toId]);
+  }, [active, editor, fromId, journeyId, map, toId]);
 
   useEffect(() => {
     if (!active || !open) return;
@@ -296,7 +297,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
 
   if (!active || !map || !route || route.points.length < 2 || !sourceKey || !fromId || !toId) return null;
   return (
-    <div ref={editorRef} className="route-candidate-editor" data-route-editor-open={open} data-route-edit-mode={editMode}>
+    <div ref={setEditor} className="route-candidate-editor" data-route-editor-open={open} data-route-edit-mode={editMode}>
       {!open ? (
         <button type="button" onClick={() => { setAvailabilityLoading(true); setOpen(true); }}>贴合道路</button>
       ) : (

@@ -220,6 +220,12 @@
   width: min(340px, calc(100% - 24px));
   color: var(--atlas-text);
   font-size: 13px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.route-candidate-editor[data-route-editor-positioned="true"] {
+  visibility: visible;
   pointer-events: auto;
 }
 
