@@ -316,6 +316,9 @@ try {
   ]) {
     const { page: ownerPage, pageErrors: ownerErrors } = await openPage("default", { owner: true, ...fixture });
     if (fixture.home) {
+      // Home is a projected geographic target. Focus the synthetic Journey
+      // through its ordinary rail before activating the nearby Home anchor.
+      await ownerPage.locator(".living-atlas__journey-rail button.is-active").click();
       const homeMarker = ownerPage.locator(`.living-atlas-globe__home-base[data-home-base-period-id="${layoutHome.id}"]`);
       await homeMarker.waitFor({ state: "visible", timeout: 25_000 });
       await homeMarker.focus();
@@ -369,6 +372,12 @@ try {
   }
   assert(evidence.writes.length === writesBeforeLayout, "layout interactions changed Journey history");
   console.log(JSON.stringify({ result: "PASS", evidence }));
+} catch (error) {
+  await fs.writeFile(`${artifactDir}/failure.json`, JSON.stringify({
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : null,
+  }, null, 2));
+  throw error;
 } finally {
   pendingCandidateGate?.release.resolve();
   await fs.writeFile(`${artifactDir}/evidence.json`, JSON.stringify(evidence, null, 2));
