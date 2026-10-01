@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -24,9 +26,17 @@ def readiness_shell() -> str:
 
 class DeployHttpsReadinessTests(unittest.TestCase):
     def run_scenario(self, scenario: str):
+        bash = shutil.which("bash")
+        if os.name == "nt":
+            for candidate in [Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe",
+                              Path("C:/Program Files/Git/usr/bin/bash.exe")]:
+                if candidate.exists():
+                    bash = str(candidate)
+                    break
+        self.assertIsNotNone(bash, "GitHub CI must supply Bash for deploy readiness regressions")
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
-            curl = folder / "curl"
+            curl = folder / "curl-fixture.py"
             curl.write_text("""#!/usr/bin/env python3
 import json, os, pathlib, sys
 folder = pathlib.Path(os.environ['PROBE_STATE_DIR'])
@@ -42,17 +52,15 @@ if sys.argv[-1].endswith('/api/health'):
     if scenario == 'api-transient' and number == 2:
         sys.exit(22)
     print('{"status":"starting"}' if scenario == 'wrong-body' else '{"status":"ok"}')
-""", encoding="utf-8")
-            curl.chmod(0o755)
-            for name in ["sleep", "sudo"]:
-                stub = folder / name
-                stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-                stub.chmod(0o755)
-            environment = {**os.environ, "PATH": str(folder) + os.pathsep + os.environ["PATH"],
-                           "PROBE_STATE_DIR": directory, "PROBE_SCENARIO": scenario}
-            result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + readiness_shell()
+""", encoding="utf-8", newline="\n")
+            environment = {**os.environ, "PROBE_STATE_DIR": directory, "PROBE_SCENARIO": scenario}
+            stubs = ("curl() { " + shlex.quote(Path(sys.executable).as_posix()) + " "
+                     + shlex.quote(curl.as_posix()) + " \"$@\"; }\n"
+                     + "sleep() { :; }\nsudo() { :; }\n")
+            result = subprocess.run([bash, "-c", "set -euo pipefail\n" + stubs + readiness_shell()
                                      + "\nwait_for_web_https\necho READY"],
-                                    env=environment, capture_output=True, text=True, timeout=10)
+                                    env=environment, capture_output=True, text=True, timeout=20)
+            self.assertTrue((folder / "calls").exists(), result.stderr)
             calls = [json.loads(line) for line in (folder / "calls").read_text().splitlines()]
             for arguments in calls:
                 self.assertNotIn("-k", arguments)
