@@ -186,6 +186,93 @@ describe("soundtrack ducking controller", () => {
     expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
   });
 
+  // The wiring bug this pins: a surface that copies `videoRef.current` during
+  // render sees null the first time a video appears, because React attaches the
+  // ref in the commit phase. Resolving the element lazily is what makes the
+  // first video duck at all, with no second render required to notice it.
+  it("ducks a video whose element only appears after the frame that requested it", () => {
+    let element: HTMLVideoElement | null = null;
+    const audio = fakeAudio(1);
+    let time = 0;
+    let queue: (() => void)[] = [];
+    const drain = () => {
+      const pending = queue;
+      queue = [];
+      for (const callback of pending) callback();
+    };
+    const run = (ms: number) => {
+      const steps = Math.max(1, Math.round(ms / 8));
+      for (let index = 0; index < steps; index += 1) {
+        time += ms / steps;
+        drain();
+      }
+      drain();
+    };
+    const controller = createSoundtrackDuckingController({
+      getSoundtrack: () => audio,
+      getForegroundVideo: () => element,
+      now: () => time,
+      requestFrame: (callback: () => void) => {
+        queue.push(callback);
+        return queue.length;
+      },
+      cancelFrame: () => {
+        queue = [];
+      },
+    });
+    controller.start();
+    // Nothing is mounted yet.
+    run(64);
+    expect(audio.volume).toBe(1);
+    // The element arrives, exactly as a commit-phase ref attach would.
+    element = fakeVideo();
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+    expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+  });
+
+  // The member's level is whatever this controller did not write. A surface
+  // that changes it while ducked - a future volume control - must get that new
+  // level back, not the one the duck started from.
+  it("treats an externally changed element level as the new baseline", () => {
+    const audio = fakeAudio(1);
+    const foreground = fakeVideo();
+    let time = 0;
+    let queue: (() => void)[] = [];
+    const drain = () => {
+      const pending = queue;
+      queue = [];
+      for (const callback of pending) callback();
+    };
+    const run = (ms: number) => {
+      const steps = Math.max(1, Math.round(ms / 8));
+      for (let index = 0; index < steps; index += 1) {
+        time += ms / steps;
+        drain();
+      }
+      drain();
+    };
+    const controller = createSoundtrackDuckingController({
+      getSoundtrack: () => audio,
+      getForegroundVideo: () => foreground,
+      now: () => time,
+      requestFrame: (callback: () => void) => {
+        queue.push(callback);
+        return queue.length;
+      },
+      cancelFrame: () => {
+        queue = [];
+      },
+    });
+    controller.start();
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+    expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+
+    // Somebody else lowers the soundtrack while it is ducked.
+    audio.volume = 0.5;
+    run(SOUNDTRACK_DUCK_RELEASE_MS + ARRIVED);
+    expect(audio.volume).toBe(0.5);
+  });
+
   it("stops touching the element once stopped", () => {
     const { audio, controller, state, run } = harness();
     controller.start();

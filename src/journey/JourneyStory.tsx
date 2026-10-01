@@ -907,12 +907,16 @@ export function JourneyStory({
   // drives whichever stage is on screen so a video step can end itself.
   const storyVideoRef = useRef<HTMLVideoElement>(null);
   const fullscreenVideoRef = useRef<HTMLVideoElement>(null);
-  // #596: the element that currently owns the foreground in this surface, for
-  // the soundtrack ducking policy. Held in a ref and refreshed during render so
-  // one controller can live for the whole Story session: rebuilding it whenever
-  // the stage or the immersive mode changed would drop whatever gain the ramp
-  // had already reached and restart the transition from the element's value.
-  const foregroundVideoRef = useRef<HTMLVideoElement | null>(null);
+  // #596: which element the ducking owner should read, as a *decision* rather
+  // than a captured element. Only this value is refreshed during render. The
+  // element refs must not be: React attaches `ref.current` in the commit phase,
+  // so a render-phase copy of `storyVideoRef.current` is still null the first
+  // time a video appears, and still the previous element across an inline ->
+  // immersive switch - in both cases the controller would be handed nothing, or
+  // the wrong element, until some unrelated render happened to refresh it. The
+  // getter reads the live refs at call time, which is always after commit.
+  const foregroundVideoKindRef = useRef<"none" | "inline" | "immersive">("none");
+  const storyStageVideoAssetRef = useRef<JourneyMediaAsset | null>(null);
   const videoHandoffGenerationRef = useRef(0);
   const videoHandoffRef = useRef<{
     id: string; src: string; time: number; shouldPlay: boolean; toFullscreen: boolean;
@@ -2812,27 +2816,35 @@ export function JourneyStory({
     && storyStageVideoRead?.status === "ready",
   );
   const storyStageVideoVisible = storyStageVideoSettled || storyStageVideoIncoming;
-  // The same expression the rest of this file already uses to name the current
-  // Story video, so the ducking owner and the playback hand-off cannot disagree
-  // about which element is foreground. A still-frame extractor or a video that
-  // is merely mounted is deliberately not an owner: the policy re-reads the
-  // element's live playing state every frame and drops out on its own.
-  foregroundVideoRef.current = storyStageVideoAsset
-    ? (fullscreen ? fullscreenVideoRef.current : storyVideoRef.current)
-    : null;
-  // #596: one ducking owner for the whole Story surface, covering inline media
-  // and the immersive stage. The immersive hand-off moves the same element
-  // rather than creating a second one, so this cannot become a second, divergent
+  // #596: which element owns the foreground, as a decision refreshed during
+  // render. The element itself is resolved lazily inside the getter, because
+  // React attaches these refs in the commit phase and a render-phase copy would
+  // still be null the first time a video appears, or the previous element across
+  // an inline -> immersive switch. The same expression the rest of this file
+  // already uses to name the current Story video, so the ducking owner and the
+  // playback hand-off cannot disagree about which element is foreground.
+  storyStageVideoAssetRef.current = storyStageVideoAsset;
+  foregroundVideoKindRef.current = !storyStageVideoAsset
+    ? "none"
+    : fullscreen ? "immersive" : "inline";
+  // One ducking owner for the whole Story surface, covering inline media and
+  // the immersive stage. The immersive hand-off moves the same element rather
+  // than creating a second one, so this cannot become a second, divergent
   // ducking state.
   useEffect(() => {
     const controller = createSoundtrackDuckingController({
       getSoundtrack: () => audioRef.current,
-      getForegroundVideo: () => foregroundVideoRef.current,
-      // There is no member soundtrack volume control in the client today, so the
-      // element's own level is the baseline. Reading it through the policy keeps
-      // ducking relative rather than absolute, which is what makes it correct the
-      // moment such a control exists.
-      getBaselineVolume: () => 1,
+      getForegroundVideo: () => {
+        const kind = foregroundVideoKindRef.current;
+        if (kind === "none") return null;
+        const element = kind === "immersive"
+          ? fullscreenVideoRef.current
+          : storyVideoRef.current;
+        // A video that is mounted but has not been presented as this stage's
+        // owner is not the foreground. The policy re-reads live playing state
+        // every frame, so a stale element drops out on its own.
+        return element?.dataset.sharedMediaId ? element : null;
+      },
     });
     controller.start();
     return () => controller.stop();

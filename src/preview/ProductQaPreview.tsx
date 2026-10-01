@@ -679,6 +679,38 @@ function JourneyStoryQaPreview() {
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       <button type="button" data-qa-story-reopen onClick={() => setOpen(true)}>重新打开旅程</button>
       <button type="button" data-qa-story-next-audio onClick={() => setNextMediaIsSoundtrack(true)}>下一个上传是配乐</button>
+      {/* #596 QA: attach a soundtrack directly, so the ducking lane can reach a
+          real `<audio>` without driving the whole upload pipeline to create one.
+          The upload path above stays the honest route; this is a fixture
+          affordance, the same kind as the button beside it. */}
+      <button
+        type="button"
+        data-qa-story-attach-soundtrack
+        onClick={() => {
+          setJourneys((current) => {
+            const journey = current[0];
+            if (!journey || journey.media.some((asset) => asset.id === QA_SOUNDTRACK_ASSET_ID)) {
+              return current;
+            }
+            return [{
+              ...journey,
+              media: [...journey.media, {
+                id: QA_SOUNDTRACK_ASSET_ID,
+                journeyId: journey.id,
+                routePointId: null,
+                storageDriver: "qa",
+                storageKey: "qa/story-soundtrack",
+                fileName: "night-theme.mp3",
+                mimeType: "audio/mpeg",
+                bytes: 68,
+                sortOrder: journey.media.length,
+                uploadedByUserId: journey.createdByUserId,
+                createdAt: "2026-08-11T00:00:00.000Z",
+              }],
+            }];
+          });
+        }}
+      >附加配乐</button>
       {open ? (
         <JourneyStory
           journeys={journeys}

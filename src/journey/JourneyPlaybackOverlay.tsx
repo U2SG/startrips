@@ -553,7 +553,6 @@ export function JourneyPlaybackOverlay({
       getSoundtrack: () => audioRef.current,
       getForegroundVideo: () => videoRef.current,
       getMediaGeneration: () => videoGenerationRef.current,
-      getBaselineVolume: () => 1,
     });
     controller.start();
     return () => controller.stop();

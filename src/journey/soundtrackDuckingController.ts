@@ -40,8 +40,13 @@ export type SoundtrackDuckingHost = {
    * dropped rather than acted on.
    */
   getMediaGeneration?: () => number;
-  /** The member's own soundtrack level. Re-read every frame, never snapshotted. */
-  getBaselineVolume: () => number;
+  /**
+   * The member's own soundtrack level. Optional: the controller reads it off the
+   * element itself, because a level it did not write IS the member's level.
+   * A surface only needs this when it keeps an independent source of truth,
+   * such as a volume control.
+   */
+  getBaselineVolume?: () => number;
   now?: () => number;
   requestFrame?: (callback: () => void) => number;
   cancelFrame?: (handle: number) => void;
@@ -94,12 +99,21 @@ export function createSoundtrackDuckingController(
   // would conclude "already there" and leave the new element playing at full
   // volume underneath a video that is still audible.
   let seenSoundtrack: HTMLAudioElement | null = null;
+  // The member's own soundtrack level, which the controller owns rather than
+  // being told. The element's volume IS the member's level whenever this
+  // controller is not the thing writing it, so the honest baseline is read off
+  // the element instead of a constant a caller has to remember to keep in sync.
+  let baseline = 1;
+  // The last value this controller wrote, so a difference from it means somebody
+  // else changed the level - a future volume control, a restored session - and
+  // that new level is the baseline to restore to.
+  let lastWritten: number | null = null;
 
   const retarget = (audio: HTMLAudioElement, ducking: boolean) => {
-    // The baseline is read here, every time, so lowering the soundtrack while
-    // ducked restores to the level actually in force rather than the one that
-    // happened to be in force when the duck started.
-    const target = soundtrackTargetGain(host.getBaselineVolume(), ducking);
+    const target = soundtrackTargetGain(
+      host.getBaselineVolume?.() ?? baseline,
+      ducking,
+    );
     // Only a changed target restarts the ramp. Comparing the origin as well
     // would re-anchor on every single frame — `current` is always moving — and
     // the transition would restart forever and never arrive. `NaN` never
@@ -136,9 +150,20 @@ export function createSoundtrackDuckingController(
       if (audio) {
         current = audio.volume;
         from = current;
+        // Whatever level this element arrived at is the member's level.
+        baseline = current;
+        lastWritten = null;
         // Force `retarget` to recompute even when the target value is unchanged.
         to = Number.NaN;
       }
+    }
+    // A level this controller did not write is the member's level. Adopting it
+    // is what makes "lowered the volume while ducked, and got the new level
+    // back on restore" true of the product rather than only of the policy: no
+    // caller has to volunteer a baseline, because the element is the record.
+    if (audio && lastWritten !== null && Math.abs(audio.volume - lastWritten) > 1e-3) {
+      baseline = audio.volume;
+      to = Number.NaN;
     }
     const ducking = video
       ? shouldDuckSoundtrack({
@@ -163,6 +188,7 @@ export function createSoundtrackDuckingController(
       if (Math.abs(gain - current) > 1e-4) {
         current = gain;
         audio.volume = gain;
+        lastWritten = gain;
       }
     }
     handle = requestFrame(step);
