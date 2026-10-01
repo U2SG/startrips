@@ -26,11 +26,32 @@ const latch = () => {
 };
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
-async function openPage(policy = "default") {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const layoutJourneys = Array.from({ length: 11 }, (_, index) => {
+  const id = `qa-layout-journey-${index}`;
+  return {
+    id, atlasId: "qa-atlas", title: `Synthetic journey ${index + 1}`,
+    startedOn: "2026-04-06", endedOn: null, note: "", lightColor: "#77c8c2", lightEffect: null,
+    coverMediaAssetId: null, revision: 1, createdByUserId: "qa-user",
+    createdAt: "2026-04-06T00:00:00.000Z", updatedAt: "2026-04-06T00:00:00.000Z", media: [],
+    routePoints: [[50.9375, 6.9603], [50.1109, 8.6821]].map(([latitude, longitude], pointIndex) => ({
+      id: `${id}-point-${pointIndex}`, journeyId: id, sortOrder: pointIndex,
+      latitude, longitude, label: `Route point ${pointIndex + 1}`, isStop: true,
+      occurredAt: null, note: null, createdAt: "2026-04-06T00:00:00.000Z",
+    })),
+  };
+});
+
+async function openPage(policy = "default", { owner = false, viewport = { width: 1280, height: 900 }, touch = false } = {}) {
+  const page = await browser.newPage({ viewport, hasTouch: touch, reducedMotion: "reduce" });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.route("**/api/auth/get-session", (route) => json(route, null));
+  if (owner) {
+    await page.route("**/api/journeys", (route) => json(route, { journeys: layoutJourneys }));
+    await page.route("**/api/home-bases", (route) => json(route, { periods: [] }));
+    await page.route("**/api/home-bases/dismissal", (route) => json(route, { dismissals: [] }));
+    await page.route("**/api/journey-recorded-tracks/*", (route) => json(route, { recordedTracks: [] }));
+  }
   await page.route(/\/api\/mapstyle\?path=styles(?:%2F|\/)fiord/i, (route) => json(route, style));
   await page.route("**/api/journey-route-segments/availability", (route) => {
     availabilityRequests += 1;
@@ -86,7 +107,9 @@ async function openPage(policy = "default") {
     evidence.writes.push({ action: body.action, record });
     return json(route, { segment: record });
   });
-  const url = new URL(`/?qaState=earth-dive&qaRouteCandidates=true&qaPolicy=${policy}`, baseUrl);
+  const url = new URL(owner
+    ? "/?qaState=living-atlas&qaMode=globe-chrome&qaRoutePointContext=1&qaRealRoutePointScene=1"
+    : `/?qaState=earth-dive&qaRouteCandidates=true&qaPolicy=${policy}`, baseUrl);
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
   await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 25_000 });
   return { page, pageErrors };
@@ -112,6 +135,53 @@ function readMap(page) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+async function enterDetail(page) {
+  await page.locator('[data-earth-dive-intent="true"]').focus();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector(".living-atlas-globe")?.dataset.earthDiveOwner === "detail", null, { timeout: 25_000 });
+  await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayReady === "true", null, { timeout: 15_000 });
+}
+
+async function assertEditorLayout(page, name) {
+  const layout = await page.locator(".route-candidate-editor").evaluate((editor) => {
+    const rect = (element) => {
+      const { left, top, right, bottom, width, height } = element.getBoundingClientRect();
+      return { left, top, right, bottom, width, height };
+    };
+    const box = rect(editor);
+    const chrome = [...document.querySelectorAll(
+      ".living-atlas__journey-rail, .living-atlas__active, .living-atlas__header, .mobile-v2__header, .mobile-v2__chrome, .globe-time-scrubber",
+    )].filter((element) => {
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" && element.getBoundingClientRect().width > 0;
+    }).map((element) => ({ name: element.className, ...rect(element) }));
+    const overlaps = chrome.filter((other) => Math.min(box.right, other.right) - Math.max(box.left, other.left) > 0.5
+      && Math.min(box.bottom, other.bottom) - Math.max(box.top, other.top) > 0.5);
+    const panel = editor.querySelector(".route-candidate-editor__panel");
+    return {
+      box, chrome, overlaps, viewport: { width: innerWidth, height: innerHeight },
+      horizontalOverflow: panel ? panel.scrollWidth > panel.clientWidth : false,
+    };
+  });
+  evidence.stages.push({ name, layout });
+  assert(layout.chrome.length > 0, `${name}: real Atlas chrome was absent`);
+  assert(layout.overlaps.length === 0, `${name}: editor overlaps Atlas chrome: ${JSON.stringify(layout)}`);
+  assert(layout.box.width >= 160 && layout.box.left >= 0 && layout.box.top >= 0
+    && layout.box.right <= layout.viewport.width && layout.box.bottom <= layout.viewport.height,
+  `${name}: editor outside visible viewport: ${JSON.stringify(layout)}`);
+  assert(!layout.horizontalOverflow, `${name}: route panel has horizontal overflow`);
+}
+
+async function assertControlHit(control, name, { scroll = true } = {}) {
+  if (scroll) await control.scrollIntoViewIfNeeded();
+  const hit = await control.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const target = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+    return { height: bounds.height, reachable: target === element || element.contains(target) };
+  });
+  assert(hit.height >= 44 && hit.reachable, `${name}: control blocked or too small: ${JSON.stringify(hit)}`);
 }
 
 await fs.mkdir(artifactDir, { recursive: true });
@@ -226,6 +296,57 @@ try {
   assert(await particle.page.locator(".detailed-earth-map").count() === 0, "particle-only mounted MapLibre");
   assert(await particle.page.locator(".route-candidate-editor").count() === 0, "particle-only mounted candidate editor");
   await particle.page.close();
+
+  const writesBeforeLayout = evidence.writes.length;
+  for (const fixture of [
+    { name: "desktop", viewport: { width: 1280, height: 900 } },
+    { name: "fold-desktop", viewport: { width: 1100, height: 768 }, touch: true },
+    { name: "narrow-desktop", viewport: { width: 800, height: 700 } },
+    { name: "phone", viewport: { width: 390, height: 844 }, touch: true },
+    { name: "phone-landscape", viewport: { width: 844, height: 390 }, touch: true },
+  ]) {
+    const { page: ownerPage, pageErrors: ownerErrors } = await openPage("default", { owner: true, ...fixture });
+    await enterDetail(ownerPage);
+    const compact = await ownerPage.locator(".living-atlas").getAttribute("data-mobile-v2") === "on";
+    if (!compact) assert(await ownerPage.locator(".living-atlas__journey-rail li").count() === 11,
+      `${fixture.name}: long Journey list missing`);
+    await assertEditorLayout(ownerPage, `${fixture.name}-launcher`);
+    const launcher = ownerPage.getByRole("button", { name: "贴合道路", exact: true });
+    await assertControlHit(launcher, `${fixture.name}-launcher`);
+    await launcher.click();
+    await ownerPage.locator(".route-candidate-editor select").nth(1).selectOption("driving");
+    await assertEditorLayout(ownerPage, `${fixture.name}-open`);
+    const generate = ownerPage.getByRole("button", { name: "查看候选", exact: true });
+    await assertControlHit(generate, `${fixture.name}-generate`);
+    await generate.click();
+    await ownerPage.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
+    await assertEditorLayout(ownerPage, `${fixture.name}-candidates`);
+    await assertControlHit(ownerPage.getByRole("button", { name: "就是这条", exact: true }), `${fixture.name}-confirm`);
+    const close = ownerPage.locator(".route-candidate-editor").getByRole("button", { name: "关闭", exact: true });
+    await assertControlHit(close, `${fixture.name}-close-after-scroll`, { scroll: false });
+    await ownerPage.screenshot({ path: `${artifactDir}/${fixture.name}-layout.png` });
+    await close.click();
+    await assertEditorLayout(ownerPage, `${fixture.name}-closed`);
+    if (fixture.name === "desktop") {
+      await ownerPage.setViewportSize({ width: 1024, height: 768 });
+      await ownerPage.waitForFunction(() => {
+        const editor = document.querySelector(".route-candidate-editor")?.getBoundingClientRect();
+        const rail = document.querySelector(".living-atlas__journey-rail")?.getBoundingClientRect();
+        const card = document.querySelector(".living-atlas__active")?.getBoundingClientRect();
+        return editor && rail && card && editor.left >= rail.right + 10 && editor.right <= card.left - 10;
+      });
+      await assertEditorLayout(ownerPage, "desktop-live-resize");
+      await assertControlHit(launcher, "desktop-live-resize-launcher");
+    }
+    if (!compact) {
+      await ownerPage.locator(".living-atlas__journey-rail button:not(.is-active)").first().click();
+      await ownerPage.locator('[data-route-editor-open="false"]').waitFor();
+      await assertEditorLayout(ownerPage, `${fixture.name}-journey-switched`);
+    }
+    assert(ownerErrors.length === 0, `${fixture.name}: browser errors: ${ownerErrors.join(" | ")}`);
+    await ownerPage.close();
+  }
+  assert(evidence.writes.length === writesBeforeLayout, "layout interactions changed Journey history");
   console.log(JSON.stringify({ result: "PASS", evidence }));
 } finally {
   pendingCandidateGate?.release.resolve();

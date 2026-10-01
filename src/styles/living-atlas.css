@@ -220,11 +220,14 @@
   width: min(340px, calc(100% - 24px));
   color: var(--atlas-text);
   font-size: 13px;
+  pointer-events: auto;
 }
 
 .route-candidate-editor__panel {
-  max-height: min(540px, calc(100vh - 200px));
+  max-height: min(540px, var(--route-editor-max-height, calc(100dvh - 200px)));
   overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   padding: 16px;
   display: grid;
   gap: 12px;
@@ -243,7 +246,13 @@
   flex-wrap: wrap;
 }
 
-.route-candidate-editor__head { justify-content: space-between; }
+.route-candidate-editor__head {
+  position: sticky;
+  z-index: var(--z-content-1);
+  top: 0;
+  justify-content: space-between;
+  background: var(--atlas-panel-solid);
+}
 .route-candidate-editor__shapes,
 .route-candidate-editor__candidates { display: grid; gap: 8px; }
 .route-candidate-editor__shapes > div { justify-content: space-between; }
@@ -280,11 +289,6 @@
   cursor: grab;
 }
 .route-shape-handle:active { cursor: grabbing; }
-
-@media (max-width: 600px) {
-  .route-candidate-editor { left: 10px; bottom: 78px; }
-  .route-candidate-editor__panel { max-height: min(55vh, 480px); }
-}
 
 /* Earth Dive can keep MapLibre mounted before it owns input. MapLibre's own
    `.maplibregl-ctrl` rule opts native controls back into pointer-events, so the

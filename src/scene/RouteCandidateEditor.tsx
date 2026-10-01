@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Marker, type Map as MapLibreMap, type GeoJSONSource } from "maplibre-gl";
 import type { FeatureCollection, LineString } from "geojson";
 import {
@@ -32,6 +32,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const editorRef = useRef<HTMLDivElement>(null);
   const requestRef = useRef<AbortController | null>(null);
   const requestEpochRef = useRef(0);
   const cancelCandidateRequest = useCallback(() => {
@@ -52,6 +53,69 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   const fromId = selected?.id ?? null;
   const toId = next?.id ?? null;
   const candidate = candidates[candidateIndex] ?? null;
+
+  useLayoutEffect(() => {
+    const editor = editorRef.current;
+    if (!active || !map || !editor) return;
+    const host = map.getContainer();
+    const atlas = host.closest<HTMLElement>(".living-atlas");
+    if (!atlas) return;
+    const selectors = {
+      left: ".living-atlas__journey-rail",
+      right: ".living-atlas__active, .living-atlas__route-point-context",
+      top: ".living-atlas__header, .mobile-v2__header",
+      bottom: ".globe-time-scrubber, .mobile-v2__chrome",
+    };
+    const resizeObserver = new ResizeObserver(place);
+    const observed = new Set<HTMLElement>();
+    function place() {
+      const bounds = host.getBoundingClientRect();
+      const gap = 12;
+      let left = bounds.left + gap;
+      let right = Math.min(bounds.right, window.innerWidth) - gap;
+      let top = Math.max(bounds.top, 0) + gap;
+      let bottom = Math.min(bounds.bottom, window.innerHeight) - gap;
+      for (const [side, selector] of Object.entries(selectors)) {
+        for (const element of atlas!.querySelectorAll<HTMLElement>(selector)) {
+          const style = getComputedStyle(element);
+          // Reserve chrome space even while its entrance animation fades in.
+          if (style.display === "none" || style.visibility === "hidden") continue;
+          const rect = element.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) continue;
+          if (side === "left") {
+            if (rect.width < bounds.width / 2) left = Math.max(left, rect.right + gap);
+            else top = Math.max(top, rect.bottom + gap);
+          } else if (side === "right") {
+            if (rect.width < bounds.width / 2) right = Math.min(right, rect.left - gap);
+            else bottom = Math.min(bottom, rect.top - gap);
+          } else if (side === "top") top = Math.max(top, rect.bottom + gap);
+          else bottom = Math.min(bottom, rect.top - gap);
+        }
+      }
+      editor!.style.left = `${left - bounds.left}px`;
+      editor!.style.bottom = `${bounds.bottom - bottom}px`;
+      editor!.style.width = `${Math.max(0, Math.min(340, right - left))}px`;
+      editor!.style.setProperty("--route-editor-max-height", `${Math.max(0, bottom - top)}px`);
+    }
+    function observeChrome() {
+      const current = new Set([host, ...atlas!.querySelectorAll<HTMLElement>(Object.values(selectors).join(","))]);
+      for (const element of observed) if (!current.has(element)) resizeObserver.unobserve(element);
+      for (const element of current) if (!observed.has(element)) resizeObserver.observe(element);
+      observed.clear();
+      for (const element of current) observed.add(element);
+      place();
+    }
+    // Watch only Atlas chrome and renderer size, never the map's frame-by-frame DOM.
+    const chromeObserver = new MutationObserver(observeChrome);
+    chromeObserver.observe(atlas, { childList: true, attributes: true, attributeFilter: ["class"] });
+    observeChrome();
+    window.addEventListener("resize", place);
+    return () => {
+      resizeObserver.disconnect();
+      chromeObserver.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [active, fromId, journeyId, map, toId]);
 
   useEffect(() => {
     if (!active || !open) return;
@@ -232,7 +296,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
 
   if (!active || !map || !route || route.points.length < 2 || !sourceKey || !fromId || !toId) return null;
   return (
-    <div className="route-candidate-editor" data-route-editor-open={open} data-route-edit-mode={editMode}>
+    <div ref={editorRef} className="route-candidate-editor" data-route-editor-open={open} data-route-edit-mode={editMode}>
       {!open ? (
         <button type="button" onClick={() => { setAvailabilityLoading(true); setOpen(true); }}>贴合道路</button>
       ) : (
