@@ -7,7 +7,9 @@ import {
   type RoutingCoordinate,
 } from "./route-candidate-provider";
 
-const MAX_SNAP_METERS = 750;
+// Place labels may identify a park's representative point rather than a road.
+// Keep a finite bound and preserve every offset for the member's comparison.
+const MAX_SNAP_METERS = 10_000;
 const MAX_GEOMETRY_POINTS = 4_000;
 const MAX_DIRECT_METERS = 400_000;
 

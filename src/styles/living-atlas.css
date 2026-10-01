@@ -272,6 +272,27 @@
   border: 1px solid rgba(118, 198, 188, 0.28);
   background: #0a1718;
 }
+.route-shape-picker { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 100%; }
+.route-shape-picker form { display: grid; gap: 8px; }
+.route-shape-picker input {
+  min-height: 44px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  color: var(--atlas-text);
+  border: 1px solid var(--atlas-line);
+  background: var(--atlas-panel-solid);
+}
+.route-shape-picker summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.route-shape-picker__results { padding: 0; margin: 0; list-style: none; display: grid; gap: 8px; }
+.route-shape-picker__results button { display: grid; gap: 4px; width: 100%; text-align: left; overflow-wrap: anywhere; }
+.route-shape-picker a { color: var(--atlas-text); overflow-wrap: anywhere; }
+.route-candidate-editor__shape { padding-block: 8px; border-top: 1px solid var(--atlas-line); }
+.route-candidate-editor__shape > span { display: grid; gap: 4px; min-width: 0; width: 100%; overflow-wrap: anywhere; }
+.route-candidate-editor__shape small { color: var(--atlas-muted); }
+.route-candidate-editor__offsets { display: grid; gap: 8px; }
+.route-candidate-editor__offsets ul { margin: 0; padding-left: 20px; color: var(--atlas-muted); line-height: 1.5; }
 .route-candidate-editor button {
   min-height: 44px;
   padding: 8px 12px;

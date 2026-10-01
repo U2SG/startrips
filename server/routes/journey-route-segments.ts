@@ -39,6 +39,7 @@ function validShapePoints(raw: unknown): raw is RouteShapePoint[] {
     const value = point as Record<string, unknown>;
     if (typeof value.id !== "string" || !UUID.test(value.id) || ids.has(value.id)
       || typeof value.lat !== "number" || typeof value.lon !== "number"
+      || (value.label !== undefined && (typeof value.label !== "string" || value.label.length > 120))
       || !Number.isFinite(value.lat) || !Number.isFinite(value.lon)
       || Math.abs(value.lat) > 90 || Math.abs(value.lon) > 180) return false;
     ids.add(value.id);

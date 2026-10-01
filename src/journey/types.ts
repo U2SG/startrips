@@ -207,7 +207,7 @@ export type RouteProvenanceTier =
   | "sparse-relation";
 
 export type RoadProfile = "driving" | "walking" | "cycling";
-export type RouteShapePoint = { id: string; lat: number; lon: number };
+export type RouteShapePoint = { id: string; lat: number; lon: number; label?: string };
 export type RouteCandidate = {
   id: string;
   geometry: [number, number][];
