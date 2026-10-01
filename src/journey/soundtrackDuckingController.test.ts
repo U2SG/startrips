@@ -198,4 +198,57 @@ describe("soundtrack ducking controller", () => {
     expect(audio.volume).toBe(settled);
     expect(controller.isRamping()).toBe(false);
   });
+
+  // The reported P2. Story renders the soundtrack with `key={soundtrack.id}`, so
+  // a replacement soundtrack is a NEW element sitting at the browser default
+  // while the duck is already settled. The cached gain describes the element
+  // that went away; without adopting the new one the controller would skip the
+  // write and let the replacement play at full level under a still-audible
+  // video.
+  it("re-ducks a replacement soundtrack element instead of trusting its cached gain", () => {
+    const first = fakeAudio(1);
+    const second = fakeAudio(1);
+    const state = {
+      video: fakeVideo() as HTMLVideoElement | null,
+      soundtrack: first as HTMLAudioElement,
+    };
+    let time = 0;
+    let queue: (() => void)[] = [];
+    const drain = () => {
+      const pending = queue;
+      queue = [];
+      for (const callback of pending) callback();
+    };
+    const run = (ms: number) => {
+      const steps = Math.max(1, Math.round(ms / 8));
+      for (let index = 0; index < steps; index += 1) {
+        time += ms / steps;
+        drain();
+      }
+      drain();
+    };
+    const controller = createSoundtrackDuckingController({
+      getSoundtrack: () => state.soundtrack,
+      getForegroundVideo: () => state.video,
+      getBaselineVolume: () => 1,
+      now: () => time,
+      requestFrame: (callback: () => void) => {
+        queue.push(callback);
+        return queue.length;
+      },
+      cancelFrame: () => {
+        queue = [];
+      },
+    });
+    controller.start();
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+    expect(first.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+
+    // The surface swaps in a different soundtrack; the video never stopped.
+    state.soundtrack = second as HTMLAudioElement;
+    run(SOUNDTRACK_DUCK_ATTACK_MS + ARRIVED);
+
+    expect(second.volume).toBeLessThan(1);
+    expect(second.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+  });
 });

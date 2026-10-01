@@ -88,6 +88,12 @@ export function createSoundtrackDuckingController(
   let seenVideo: HTMLVideoElement | null = null;
   let lastHostGeneration: number | null | undefined;
   let transport = 0;
+  // The soundtrack element the cached gain actually describes. A remount hands
+  // back a new element sitting at the browser's default volume, and the cached
+  // numbers say nothing about it: comparing the ramp's result against `current`
+  // would conclude "already there" and leave the new element playing at full
+  // volume underneath a video that is still audible.
+  let seenSoundtrack: HTMLAudioElement | null = null;
 
   const retarget = (audio: HTMLAudioElement, ducking: boolean) => {
     // The baseline is read here, every time, so lowering the soundtrack while
@@ -96,7 +102,8 @@ export function createSoundtrackDuckingController(
     const target = soundtrackTargetGain(host.getBaselineVolume(), ducking);
     // Only a changed target restarts the ramp. Comparing the origin as well
     // would re-anchor on every single frame — `current` is always moving — and
-    // the transition would restart forever and never arrive.
+    // the transition would restart forever and never arrive. `NaN` never
+    // compares equal, which is how a newly adopted element forces a decision.
     if (target === to) return;
     from = current;
     to = target;
@@ -117,6 +124,21 @@ export function createSoundtrackDuckingController(
       lastHostGeneration = hostGeneration;
       transport += 1;
       from = current;
+    }
+    // A new soundtrack element is a new thing to control, not a continuation of
+    // the old one: it starts at the browser default, and `current` describes an
+    // element that no longer exists. Adopt its real volume and force a fresh
+    // target, otherwise the ramp's result still equals the cached gain, the
+    // write is skipped, and the replacement soundtrack is audible at full level
+    // while the video is playing.
+    if (audio !== seenSoundtrack) {
+      seenSoundtrack = audio;
+      if (audio) {
+        current = audio.volume;
+        from = current;
+        // Force `retarget` to recompute even when the target value is unchanged.
+        to = Number.NaN;
+      }
     }
     const ducking = video
       ? shouldDuckSoundtrack({
