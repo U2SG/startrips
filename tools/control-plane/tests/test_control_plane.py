@@ -342,6 +342,21 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(gh.EvidenceUnknown):
                 gh.api('graphql', {'query': 'synthetic'})
 
+    def test_api_uses_canonical_gh_and_retries_one_transport_eof(self):
+        failed = subprocess.CompletedProcess([], 1, '', 'Get "https://api.github.com/test": EOF')
+        passed = subprocess.CompletedProcess([], 0, json.dumps({'ok': True}), '')
+        with mock.patch.object(gh.subprocess, 'run', side_effect=[failed, passed]) as run:
+            self.assertEqual({'ok': True}, gh.api('repos/synthetic/project'))
+        self.assertEqual(2, run.call_count)
+        self.assertTrue(all(call.args[0][0] == gh.GH_EXE for call in run.call_args_list))
+
+    def test_api_does_not_retry_non_transport_failure(self):
+        failed = subprocess.CompletedProcess([], 1, '', 'HTTP 404: Not Found')
+        with mock.patch.object(gh.subprocess, 'run', return_value=failed) as run:
+            with self.assertRaisesRegex(gh.EvidenceUnknown, 'HTTP 404'):
+                gh.api('repos/synthetic/project')
+        self.assertEqual(1, run.call_count)
+
     def source_api(self, source=A, mixed=False, drift=False, crlf=False):
         reads = 0
         def invoke(endpoint, fields=None):

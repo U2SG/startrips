@@ -404,7 +404,8 @@ class RuntimeActivationPlanTests(unittest.TestCase):
         expected = {
             'CLAUDE.md', 'README.md', 'run-loop.sh',
             'lib/delivery.py', 'lib/delivery_issues.py', 'lib/delivery_package.py',
-            'lib/delivery_runtime.py', 'lib/feature_store.py', 'lib/feature_state.py',
+            'lib/github_evidence.py', 'lib/ci_observer.py', 'lib/delivery_runtime.py',
+            'lib/feature_store.py', 'lib/feature_state.py',
             'lib/runtime_preflight.py', 'lib/action_plan.py', 'lib/policy_audit.py',
             'lib/seal_owner.py', 'lib/evidence_capture.py', 'lib/intake.sh',
             '.claude/agents/startrips-evaluator.md', '.claude/agents/startrips-triage.md',

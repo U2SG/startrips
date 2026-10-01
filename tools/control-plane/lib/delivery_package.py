@@ -7,6 +7,7 @@ from delivery import (VERSION, MATERIAL, complete_dependency, contract_revision,
 from delivery_issues import live_issues, classify
 from feature_store import StoreConflict, load_document, commit_document
 from delivery_runtime import verify as verify_runtime
+from github_evidence import GH_EXE
 
 
 def _ownership_conflicts(repository, repo, unit):
@@ -22,7 +23,7 @@ def _ownership_conflicts(repository, repo, unit):
     for block in wt.stdout.split('\n\n'):
         low=block.lower()
         if any(t and t in low for t in tokens): bad.append('worktree:'+block.replace('\n',' | '))
-    pr=subprocess.run(['gh','pr','list','--repo',repo,'--state','open','--limit','100','--json',
+    pr=subprocess.run([GH_EXE,'pr','list','--repo',repo,'--state','open','--limit','100','--json',
                        'number,headRefName,body,closingIssuesReferences'],
                       capture_output=True,text=True,encoding='utf-8',timeout=20)
     if pr.returncode: raise StoreConflict('Open PR ownership evidence unavailable')
