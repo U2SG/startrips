@@ -25,6 +25,7 @@ export function resolveEverydayFragmentPlaceSelection(
 }
 
 export type EverydayFragmentPlaceSearchCoordinator = {
+  activate: () => void;
   begin: () => number;
   invalidate: () => void;
   dispose: () => void;
@@ -35,6 +36,10 @@ export function createEverydayFragmentPlaceSearchCoordinator(): EverydayFragment
   let revision = 0;
   let disposed = false;
   return {
+    activate() {
+      disposed = false;
+      revision += 1;
+    },
     begin() {
       revision += 1;
       return revision;
@@ -92,7 +97,10 @@ export function EverydayFragmentPlaceInput({
   const activeCoordinator = coordinator ?? localCoordinator.current;
   const listId = useId();
 
-  useEffect(() => () => activeCoordinator.dispose(), [activeCoordinator]);
+  useEffect(() => {
+    activeCoordinator.activate();
+    return () => activeCoordinator.dispose();
+  }, [activeCoordinator]);
   useEffect(() => {
     activeCoordinator.invalidate();
     setResults([]);

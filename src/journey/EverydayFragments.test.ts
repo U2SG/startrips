@@ -125,6 +125,22 @@ describe("Everyday Fragment place input", () => {
     await expect(disposedRun).resolves.toBeNull();
   });
 
+  it("reactivates the coordinator after a StrictMode-style cleanup/setup replay", async () => {
+    const coordinator = createEverydayFragmentPlaceSearchCoordinator();
+    let resolveStale!: (value: LocationSearchResponse) => void;
+    const stalePromise = new Promise<LocationSearchResponse>((resolve) => { resolveStale = resolve; });
+    const staleRun = runEverydayFragmentPlaceSearch("stale", coordinator, async () => stalePromise);
+
+    coordinator.dispose();
+    coordinator.activate();
+    resolveStale(response(result({ id: "stale" })));
+    await expect(staleRun).resolves.toBeNull();
+
+    const fresh = response(result({ id: "fresh", label: "Fresh" }));
+    await expect(runEverydayFragmentPlaceSearch("fresh", coordinator, async () => fresh))
+      .resolves.toEqual(fresh);
+  });
+
   it("uses the shared location-search error vocabulary for provider and rate-limit failures", () => {
     const unavailable = new JourneyApiError(503, "LOCATION_SEARCH_UNAVAILABLE", "provider unavailable");
     const limited = new JourneyApiError(429, "LOCATION_SEARCH_RATE_LIMITED", "搜索太频繁，请稍后再试。");
