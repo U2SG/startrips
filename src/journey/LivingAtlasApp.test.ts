@@ -1087,8 +1087,12 @@ describe("Route Point context integration (#291)", () => {
     const renderStart = appSource.indexOf('{routePointContextVisible && routePointContextSelection.context');
 
     expect(refreshStart).toBeGreaterThan(0);
-    expect(refreshBlock).toContain("buildRoutePointContext(journey, intent.routePointId)");
+    expect(refreshBlock).toContain("buildRoutePointContext(journey, intent.routePointId, routePointMediaEvidenceRef.current)");
     expect(refreshBlock).toContain("resolveRoutePointContextSelection(");
+    expect(appSource).toContain("const routePointMediaEvidenceRef = useRef(new Map<string, MediaEvidenceRecord>());");
+    expect(appSource).toContain("mutations?.readMediaEvidence");
+    expect(appSource).toContain("activeIntent.revision !== intent.revision");
+    expect(appSource).toContain("routePointMediaEvidenceRef.current.clear();");
     expect(viewCleanupStart).toBeGreaterThan(0);
     expect(viewCleanupBlock).toContain("clearRoutePointContext()");
     expect(visibilityStart).toBeGreaterThan(0);

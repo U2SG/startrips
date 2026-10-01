@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sharedJourneyToJourney, type SharedJourney } from "./sharedAtlas";
-import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
+import type { Journey, JourneyMediaAsset, MediaEvidenceRecord, RoutePoint } from "./types";
 import {
   buildRoutePointContext,
   clearRoutePointContextSelection,
@@ -53,6 +53,33 @@ function asset(
   };
 }
 
+function evidence(
+  mediaAssetId: string,
+  spatial: MediaEvidenceRecord["recorded"]["spatial"],
+  options: { hidden?: boolean; effective?: MediaEvidenceRecord["effective"] } = {},
+): MediaEvidenceRecord {
+  return {
+    mediaAssetId,
+    revision: 1,
+    recorded: {
+      spatial,
+      captureTime: {
+        source: "unknown",
+        timezone: "unknown",
+        local: null,
+        instant: null,
+        offsetMinutes: null,
+      },
+    },
+    display: {
+      hidden: options.hidden ?? false,
+      correction: null,
+    },
+    effective: options.effective ?? null,
+    updatedAt: null,
+  };
+}
+
 function journey(
   routePoints: RoutePoint[],
   media: JourneyMediaAsset[],
@@ -93,7 +120,7 @@ describe("buildRoutePointContext", () => {
       notePresent: false,
       visualMediaCount: 1,
       representativeAssetId: "photo-1",
-      location: { latitude: 22.2855, longitude: 114.1577, precision: "route-point" },
+      location: { latitude: 22.2855, longitude: 114.1577, precision: { kind: "route-point" } },
     });
   });
 
@@ -141,12 +168,91 @@ describe("buildRoutePointContext", () => {
     expect(context?.location).toEqual({
       latitude: 22.3193,
       longitude: 114.1694,
-      precision: "route-point",
+      precision: {
+        kind: "route-point",
+        mediaAssetId: null,
+        source: null,
+        accuracyMeters: null,
+        latitude: null,
+        longitude: null,
+      },
     });
     expect(context).not.toHaveProperty("assetLocation");
     expect(context).not.toHaveProperty("captureCoordinates");
     expect(context).not.toHaveProperty("road");
     expect(context).not.toHaveProperty("track");
+  });
+
+  it("keeps Route Point coordinates canonical while exposing recorded media GPS precision", () => {
+    const target = point("point-recorded-gps", { latitude: 22.3193, longitude: 114.1694 });
+    const photo = asset("recorded-photo", target.id, "image/jpeg", 0);
+    const recorded = evidence(photo.id, {
+      source: "exif",
+      granularity: "coordinate",
+      latitude: 22.31955,
+      longitude: 114.16971,
+      accuracyMeters: 7.5,
+      label: null,
+    });
+
+    const context = buildRoutePointContext(
+      journey([target], [photo]),
+      target.id,
+      new Map([[photo.id, recorded]]),
+    );
+
+    expect(context?.location).toEqual({
+      latitude: 22.3193,
+      longitude: 114.1694,
+      precision: {
+        kind: "recorded-media-coordinate",
+        mediaAssetId: photo.id,
+        source: "exif",
+        accuracyMeters: 7.5,
+        latitude: 22.31955,
+        longitude: 114.16971,
+      },
+    });
+  });
+
+  it("never upgrades geographic precision from display corrections or hidden recorded evidence", () => {
+    const target = point("point-private-gps");
+    const photo = asset("private-photo", target.id, "image/jpeg", 0);
+    const userCorrectionOnly = evidence(photo.id, {
+      source: "unknown",
+      granularity: "unknown",
+      latitude: null,
+      longitude: null,
+      accuracyMeters: null,
+      label: null,
+    }, {
+      effective: {
+        source: "user-correction",
+        provenance: null,
+        granularity: "coordinate",
+        latitude: 22.31,
+        longitude: 114.18,
+        accuracyMeters: null,
+        label: null,
+      },
+    });
+    const hiddenRecorded = evidence(photo.id, {
+      source: "exif",
+      granularity: "coordinate",
+      latitude: 22.31,
+      longitude: 114.18,
+      accuracyMeters: 4,
+      label: null,
+    }, { hidden: true });
+
+    for (const mediaEvidence of [userCorrectionOnly, hiddenRecorded]) {
+      const context = buildRoutePointContext(
+        journey([target], [photo]),
+        target.id,
+        new Map([[photo.id, mediaEvidence]]),
+      );
+      expect(context?.location.precision).toMatchObject({ kind: "route-point" });
+    }
   });
 
   it("derives counts only from the guest-projected Journey supplied to it", () => {
