@@ -115,6 +115,9 @@ async function openPage(policy = "default", { owner = false, viewport = { width:
   const url = new URL(owner
     ? "/?qaState=living-atlas&qaMode=globe-chrome&qaRoutePointContext=1&qaRealRoutePointScene=1"
     : `/?qaState=earth-dive&qaRouteCandidates=true&qaPolicy=${policy}`, baseUrl);
+  // Generic QA disables private Home reads. This fixture owns their API
+  // boundary and uses the existing opt-in to mount the actual Home context.
+  if (home) url.searchParams.set("qaHomeBaseSuggestion", "1");
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
   await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 25_000 });
   return { page, pageErrors };
