@@ -15,10 +15,12 @@ const browser = await launchQaBrowser({
   headless: true,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
-const evidence = { requests: [], writes: [], stages: [] };
+const evidence = { requests: [], writes: [], stages: [], searches: [] };
 let failNext = false;
 let availabilityRequests = 0;
 let pendingCandidateGate = null;
+let pendingShapeSearchGate = null;
+let nextSnapOffsetMeters = 0;
 const latch = () => {
   let resolve;
   const promise = new Promise((ready) => { resolve = ready; });
@@ -62,6 +64,19 @@ async function openPage(policy = "default", { owner = false, viewport = { width:
     availabilityRequests += 1;
     return json(route, { profiles: ["driving"] });
   });
+  await page.route("**/api/locations/search?**", async (route) => {
+    const parameters = new URL(route.request().url()).searchParams;
+    const query = parameters.get("q");
+    evidence.searches.push({ query, latitude: parameters.get("lat"), longitude: parameters.get("lon") });
+    const gate = pendingShapeSearchGate;
+    if (gate) { gate.started.resolve(); await gate.release.promise; }
+    try {
+      await json(route, { results: [{
+        id: "qa-shape-place", label: query, context: "Synthetic pass", countryCode: "DE",
+        latitude: 50.5, longitude: 7.65,
+      }], attribution: { label: "Synthetic search", url: "https://example.com" } });
+    } finally { gate?.completed.resolve(); }
+  });
   await page.route(/\/api\/journey-route-segments\/journeys\/.*\/segments\/.*\/candidates$/, async (route) => {
     const body = route.request().postDataJSON();
     evidence.requests.push({ sourceKey: body.sourceKey, revision: body.revision, profile: body.profile });
@@ -76,16 +91,21 @@ async function openPage(policy = "default", { owner = false, viewport = { width:
     }
     const [, fromLat, fromLon, , toLat, toLon] = JSON.parse(body.sourceKey);
     const ordered = [[fromLon, fromLat], ...(evidence.writes.at(-1)?.record.shapePoints ?? []).map(({ lon, lat }) => [lon, lat]), [toLon, toLat]];
+    const offsetMeters = nextSnapOffsetMeters;
+    nextSnapOffsetMeters = 0;
+    const snapped = ordered.map((coordinate, index) => index === 0 && offsetMeters
+      ? [coordinate[0], coordinate[1] + offsetMeters / 111_195] : coordinate);
     const middle = (bend) => [(fromLon + toLon) / 2, (fromLat + toLat) / 2 + bend];
     const candidates = [0.12, -0.12].map((bend, index) => ({
       candidate: {
         id: `qa-candidate-${index + 1}-${body.revision}`,
-        geometry: [ordered[0], ...ordered.slice(1, -1), middle(bend), ordered.at(-1)],
+        geometry: [snapped[0], ...snapped.slice(1, -1), middle(bend), snapped.at(-1)],
         distanceMeters: 210_000 + index * 10_000,
         durationSeconds: 9_000 + index * 700,
         provider: "osrm", profile: "driving", relevance: 100 - index,
-        snapping: { maxDistanceMeters: 750, waypoints: ordered.map((coordinate) => ({
-          requested: coordinate, snapped: coordinate, distanceMeters: 0, providerDistanceMeters: 0,
+        snapping: { maxDistanceMeters: 10_000, waypoints: ordered.map((coordinate, index) => ({
+          requested: coordinate, snapped: snapped[index], distanceMeters: index === 0 ? offsetMeters : 0,
+          providerDistanceMeters: index === 0 ? offsetMeters : 0,
         })) },
       },
       confirmationToken: `qa-token-${index + 1}`,
@@ -241,28 +261,69 @@ try {
   await page.screenshot({ path: `${artifactDir}/confirmed.png` });
 
   await page.getByRole("button", { name: "调整经过位置" }).click();
-  await page.getByRole("button", { name: "添加形状点" }).click();
+  await page.getByRole("button", { name: "在地图上连续选点" }).click();
   const shapeScreen = await page.evaluate(() => window.__detailedEarthMapProject?.(7.8212, 50.7242));
   assert(shapeScreen, "detail map missing for shape edit");
   await page.mouse.click(shapeScreen.x, shapeScreen.y);
   await page.locator(".route-shape-handle").waitFor();
   assert(await page.locator(".route-shape-handle").count() === 1, "edit-only shape handle was not mounted");
-  await page.getByRole("button", { name: "保存形状点" }).click();
+  const secondShapeScreen = await page.evaluate(() => window.__detailedEarthMapProject?.(8.1, 50.35));
+  assert(secondShapeScreen, "detail map missing for the second shape point");
+  await page.mouse.click(secondShapeScreen.x, secondShapeScreen.y);
+  await page.waitForFunction(() => document.querySelectorAll(".route-shape-handle").length === 2);
+  assert(await page.locator(".route-shape-handle").count() === 2, "continuous map picking stopped after one point");
+  await page.getByRole("button", { name: "结束地图选点" }).click();
+
+  const picker = page.locator(".route-shape-picker");
+  await picker.getByRole("textbox", { name: "搜索经过的地点" }).fill("Synthetic pass");
+  await picker.getByRole("button", { name: "搜索", exact: true }).click();
+  await picker.getByRole("button", { name: /添加到这段路线/ }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".route-shape-handle").length === 3);
+  assert(await page.locator(".route-shape-handle").count() === 3, "search selection did not append a third shape point");
+  assert(evidence.searches[0].latitude === "50.9375" && evidence.searches[0].longitude === "6.9603",
+    "shape search lost its current Journey focus");
+  await picker.getByText("输入经纬度", { exact: true }).click();
+  await picker.getByRole("textbox", { name: "经度", exact: true }).fill("7.7");
+  await picker.getByRole("button", { name: "添加这组坐标" }).click();
+  await picker.getByRole("alert").filter({ hasText: "有效的纬度" }).waitFor();
+  assert(await page.locator(".route-shape-handle").count() === 3, "empty coordinates silently became a zero-valued shape point");
+  await picker.getByRole("textbox", { name: "纬度", exact: true }).fill("50.4");
+  await picker.getByRole("button", { name: "添加这组坐标" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".route-shape-handle").length === 4);
+  assert(await page.locator(".route-shape-handle").count() === 4, "manual coordinates did not append a fourth shape point");
+  await page.getByRole("button", { name: "上移第 3 个修正点", exact: true }).click();
+  await page.getByRole("button", { name: "上移第 2 个修正点", exact: true }).click();
+  await page.getByRole("button", { name: "移除第 3 个修正点", exact: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".route-shape-handle").length === 3);
+  assert((await page.locator(".route-candidate-editor__shape").first().textContent()).includes("Synthetic pass"),
+    "shape reordering did not preserve the searched place");
+  assert(await page.locator(".route-shape-handle").count() === 3, "shape deletion removed the wrong number of points");
+  await page.screenshot({ path: `${artifactDir}/multiple-shapes.png` });
+  await page.getByRole("button", { name: "保存修正点" }).click();
   await page.waitForFunction(() => document.querySelector("[data-qa-route-segment-decision]")?.getAttribute("data-qa-route-segment-decision") === "open");
+  assert(evidence.writes[1].record.shapePoints.length === 3
+    && evidence.writes[1].record.shapePoints[0].label === "Synthetic pass"
+    && evidence.writes[1].record.shapePoints[2].lat === 50.4
+    && evidence.writes[1].record.shapePoints[2].lon === 7.7, "saved shape points lost labels, order or manual coordinates");
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayConfirmedCount === "0");
   await page.waitForFunction(() => window.__detailedEarthMapRenderedFeatureCount?.("startrips-active-journey-route", "provenance", "user-confirmed-route") === 0);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await page.waitForFunction(() => window.__detailedEarthMapRenderedSegmentVertexCount?.("qa-p-9", "qa-p-10") >= 3);
+  await page.waitForFunction(() => window.__detailedEarthMapRenderedSegmentVertexCount?.("qa-p-9", "qa-p-10") >= 5);
   const shaped = await readMap(page);
   evidence.stages.push({ name: "shape-invalidated", ...shaped });
-  assert(shaped.pointCount === baseline.pointCount && shaped.renderedEditedVertexCount >= 3
+  assert(shaped.pointCount === baseline.pointCount && shaped.renderedEditedVertexCount >= 5
     && shaped.revision !== baseline.revision && await page.locator(".route-shape-handle").count() === 0,
     "saved shape geometry disappeared or shape point leaked into ordinary Journey topology");
   await page.screenshot({ path: `${artifactDir}/shape-preserved.png` });
 
   await page.getByRole("button", { name: "贴合道路", exact: true }).click();
+  nextSnapOffsetMeters = 6_500;
   await page.getByRole("button", { name: "查看候选" }).click();
   await page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.routeCandidatePreviewCount === "2");
+  await page.locator(".route-candidate-editor__offsets").filter({ hasText: "6.5 公里" }).waitFor();
+  assert(evidence.writes.length === 2 && (await readMap(page)).confirmedCount === 0,
+    "park road offsets were silently saved before the member's choice");
+  await page.screenshot({ path: `${artifactDir}/park-road-offsets.png` });
   await page.getByRole("button", { name: "都不是／不记得" }).click();
   await page.waitForFunction(() => document.querySelector("[data-qa-route-segment-decision]")?.getAttribute("data-qa-route-segment-decision") === "none");
   const rejected = await readMap(page);
@@ -299,6 +360,20 @@ try {
     && await page.getByRole("button", { name: "查看候选" }).isDisabled(),
     "late candidate response survived the changed routing profile");
   assert(evidence.requests.length === 4 && evidence.writes.length === 3, "cancelled candidate request wrote route history");
+  await page.getByRole("button", { name: "调整经过位置" }).click();
+  const searchGate = { started: latch(), release: latch(), completed: latch() };
+  pendingShapeSearchGate = searchGate;
+  await page.getByRole("textbox", { name: "搜索经过的地点" }).fill("Delayed synthetic pass");
+  await page.getByRole("button", { name: "搜索", exact: true }).click();
+  await searchGate.started.promise;
+  await page.locator(".route-candidate-editor select").first().selectOption("0");
+  await page.locator(".route-shape-picker").waitFor({ state: "detached" });
+  searchGate.release.resolve();
+  await searchGate.completed.promise;
+  pendingShapeSearchGate = null;
+  assert(await page.locator(".route-shape-picker").count() === 0
+    && await page.getByText("Delayed synthetic pass", { exact: true }).count() === 0
+    && evidence.writes.length === 3, "late shape search changed another segment or survived closing the picker");
   assert(pageErrors.length === 0, `browser errors: ${pageErrors.join(" | ")}`);
   await page.close();
 
@@ -351,6 +426,22 @@ try {
     const close = ownerPage.locator(".route-candidate-editor").getByRole("button", { name: "关闭", exact: true });
     await assertControlHit(close, `${fixture.name}-close-after-scroll`, { scroll: false });
     await ownerPage.screenshot({ path: `${artifactDir}/${fixture.name}-layout.png` });
+    await ownerPage.getByRole("button", { name: "调整经过位置", exact: true }).click();
+    const shapePicker = ownerPage.locator(".route-shape-picker");
+    const searchInput = shapePicker.getByRole("textbox", { name: "搜索经过的地点" });
+    await assertControlHit(searchInput, `${fixture.name}-shape-search-input`);
+    await searchInput.fill("Synthetic pass");
+    await shapePicker.getByRole("button", { name: "搜索", exact: true }).click();
+    await assertControlHit(shapePicker.getByRole("button", { name: /添加到这段路线/ }), `${fixture.name}-shape-search-result`);
+    const coordinates = shapePicker.locator("summary");
+    await assertControlHit(coordinates, `${fixture.name}-shape-coordinate-toggle`);
+    await coordinates.click();
+    await assertControlHit(shapePicker.getByRole("textbox", { name: "纬度", exact: true }), `${fixture.name}-shape-latitude`);
+    await assertControlHit(shapePicker.getByRole("textbox", { name: "经度", exact: true }), `${fixture.name}-shape-longitude`);
+    await assertControlHit(shapePicker.getByRole("button", { name: "添加这组坐标" }), `${fixture.name}-shape-coordinate-add`);
+    await assertEditorLayout(ownerPage, `${fixture.name}-shape-picker`);
+    await assertControlHit(close, `${fixture.name}-shape-close-after-scroll`, { scroll: false });
+    await ownerPage.screenshot({ path: `${artifactDir}/${fixture.name}-shape-picker.png` });
     await close.click();
     await assertEditorLayout(ownerPage, `${fixture.name}-closed`);
     if (fixture.name === "desktop") {
