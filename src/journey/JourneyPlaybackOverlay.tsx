@@ -25,11 +25,6 @@ import { usePlaybackMapBridge } from "./usePlaybackMapBridge";
 import { playbackReadIsReusable, type MediaReadState as MediaRead } from "./mediaReadRefresh";
 import { playbackMediaGate, playbackChapterOpeningUrl, playbackHoldReason, type PlaybackHoldReason } from "./playbackMediaPresentation";
 import {
-  createDecodeRegistry,
-  decodeImageUrl,
-  mediaPrefetchUrlsForRead,
-} from "./mediaPrefetch";
-import {
   playbackProgressFraction,
   useJourneyPlaybackDirector,
   type PlaybackStepDurationResolver,
@@ -54,14 +49,10 @@ import { includePlaybackPrefetchHoldTarget, planPrefetchWindow, prefetchDispatch
 import { rewindPlaybackMediaElement, syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import {
   resolveVideoTrim,
-  videoTrimBuffersOnStall,
   videoTrimEntryAction,
-  videoTrimHoldsStep,
   videoTrimProgressAction,
   videoTrimPlayedFraction,
   videoTrimPositionKnown,
-  videoTrimSeekApplies,
-  videoTrimStatusAfterPauseChange,
   type VideoTrimSeekStatus,
   type VideoTrimWindow,
 } from "./videoTrimPlayback";
@@ -90,8 +81,26 @@ import {
 import { prefersReducedMotion } from "../motion/preferences";
 import type { Journey, JourneyMediaAsset, JourneyRoute } from "./types";
 import type { PlaybackReturnReason } from "./playbackReturn";
-
-const VIDEO_STALL_WATCHDOG_MS = 4_000;
+import {
+  createPlaybackMediaLifecycleActor,
+  playbackLifecycleDecodeReadiness,
+  playbackLifecycleGate,
+  playbackLifecycleHoldReason,
+  playbackLifecycleMediaRead,
+  stopPlaybackMediaLifecycleActorsForJourney,
+  type PlaybackMediaLifecycleActor,
+  type PlaybackMediaLifecycleSnapshot,
+} from "./playbackMediaLifecycle";
+import {
+  PLAYBACK_VIDEO_WATCHDOG_MS,
+  createPlaybackVideoBeatLifecycleActor,
+  playbackVideoBeatEventIsCurrent,
+  playbackVideoBeatFailed,
+  playbackVideoBeatTrimStatus,
+  type PlaybackVideoBeatActor,
+  type PlaybackVideoBeatEvent,
+  type PlaybackVideoBeatSnapshot,
+} from "./playbackVideoBeatLifecycle";
 
 type PlaybackArrivalGate = {
   journeyId: string;
@@ -173,6 +182,8 @@ export function JourneyPlaybackOverlay({
   cameraFlight,
   onReturnToCurrentLocation,
   initialSoundtrackRead,
+  initialMediaReads,
+  onMediaReadCacheChange,
   reduceMotion,
   stepDurationResolver,
   mediaTrimResolver,
@@ -195,6 +206,8 @@ export function JourneyPlaybackOverlay({
   // Review P1: a prefetched soundtrack signed read, so the first play() can
   // run inside the click gesture (browser user-activation policy).
   initialSoundtrackRead?: { url: string } | null;
+  initialMediaReads?: Readonly<Record<string, MediaRead>>;
+  onMediaReadCacheChange?: (journeyId: string, assetId: string, read: MediaRead | null) => void;
   reduceMotion?: boolean;
   stepDurationResolver?: PlaybackStepDurationResolver;
   // #195 Phase 2: the trim window the Edit Plan declared for a video beat. The
@@ -234,7 +247,7 @@ export function JourneyPlaybackOverlay({
   const committedJourneyIdRef = useRef<string | null>(null);
   // Keep one director clock. Its stop budget waits for a real arrival commit,
   // just as a media beat waits for its own presentation, without a second timer.
-  const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
+  // Per-beat fallback is derived from the explicit video lifecycle actor below.
   const [arrivalGate, setArrivalGate] = useState<PlaybackArrivalGate | null>(null);
   const arrivalHolding = Boolean(playbackMode === "full" && arrivalGate && !arrivalGate.released
     && arrivalGate.journeyId === journey?.id
@@ -366,12 +379,18 @@ export function JourneyPlaybackOverlay({
     onClose({ reason, position });
   }, [director.completed, exit, onClose]);
   const [mediaReads, setMediaReads] = useState<Record<string, MediaRead>>(() => {
-    if (!journey || !initialSoundtrackRead) return {};
+    if (!journey) return {};
+    const now = Date.now();
+    const seeded = Object.fromEntries(Object.entries(initialMediaReads ?? {}).filter(([, read]) => (
+      playbackReadIsReusable(read, now)
+    )));
+    if (!initialSoundtrackRead) return seeded;
     const soundtrack = journeySoundtrack(journey);
-    if (!soundtrack) return {};
+    if (!soundtrack) return seeded;
     // The prefetch cache handed this one over as fresh, and the soundtrack is
     // deliberately never re-read while it plays, so no lifetime is known here.
     return {
+      ...seeded,
       [soundtrack.id]: {
         status: "ready",
         url: initialSoundtrackRead.url,
@@ -382,13 +401,56 @@ export function JourneyPlaybackOverlay({
   });
   const mediaReadsRef = useRef(mediaReads);
   mediaReadsRef.current = mediaReads;
-  const decodeRegistryRef = useRef(createDecodeRegistry(decodeImageUrl));
-  // Review P2: decode settles without React state; this revision bumps on
-  // every settle so the media gate re-renders once the image is decoded.
-  const [decodeSettleRevision, setDecodeSettleRevision] = useState(0);
-  useEffect(() => decodeRegistryRef.current.onSettle(
-    () => setDecodeSettleRevision((current) => current + 1),
-  ), []);
+  // Visual decode readiness is owned by each playbackMediaLifecycle actor.
+  const journeyIdRef = useRef<string | null>(journey?.id ?? null);
+  journeyIdRef.current = journey?.id ?? null;
+  const [mediaLifecycleSnapshots, setMediaLifecycleSnapshots] = useState<Record<string, PlaybackMediaLifecycleSnapshot>>({});
+  const mediaLifecycleActorsRef = useRef(new Map<string, PlaybackMediaLifecycleActor>());
+  const mediaLifecycleActiveIdsRef = useRef(new Set<string>());
+  const ensureMediaLifecycle = useCallback((assetId: string) => {
+    if (!journey) return null;
+    const key = `${journey.id}:${assetId}`;
+    const existing = mediaLifecycleActorsRef.current.get(key);
+    if (existing) return existing;
+    const asset = journey.media.find((candidate) => candidate.id === assetId);
+    if (!asset) return null;
+    const actor = createPlaybackMediaLifecycleActor({
+      assetId,
+      isImage: asset.mimeType.startsWith("image/"),
+      initialRead: mediaReadsRef.current[assetId],
+    }, readMedia);
+    actor.subscribe((snapshot) => {
+      if (journeyIdRef.current !== journey.id) return;
+      setMediaLifecycleSnapshots((current) => ({ ...current, [assetId]: snapshot }));
+      const read = playbackLifecycleMediaRead(snapshot);
+      if (read?.status === "ready") onMediaReadCacheChange?.(journey.id, assetId, read);
+      else if (snapshot.matches("failed")) onMediaReadCacheChange?.(journey.id, assetId, null);
+      setMediaReads((current) => {
+        if (read) return { ...current, [assetId]: read };
+        if (!(assetId in current)) return current;
+        const next = { ...current };
+        delete next[assetId];
+        return next;
+      });
+    });
+    mediaLifecycleActorsRef.current.set(key, actor);
+    actor.start();
+    return actor;
+  }, [journey, onMediaReadCacheChange, readMedia]);
+  useEffect(() => {
+    const ownedJourneyId = journey?.id ?? null;
+    return () => {
+      if (!ownedJourneyId) return;
+      stopPlaybackMediaLifecycleActorsForJourney(mediaLifecycleActorsRef.current, ownedJourneyId);
+      // A cleanup caused by switching journeys must not erase the active set
+      // already established by the new journey's layout dispatch.
+      if (journeyIdRef.current === ownedJourneyId) mediaLifecycleActiveIdsRef.current.clear();
+    };
+  }, [journey?.id]);
+  const mediaDecodeReadiness = useCallback((assetId: string) => {
+    const snapshot = mediaLifecycleSnapshots[assetId];
+    return snapshot ? playbackLifecycleDecodeReadiness(snapshot) : undefined;
+  }, [mediaLifecycleSnapshots]);
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoElementRevision, setVideoElementRevision] = useState(0);
@@ -398,201 +460,126 @@ export function JourneyPlaybackOverlay({
     videoRef.current = element;
     setVideoElementRevision((revision) => revision + 1);
   }, []);
-  const videoStallTimerRef = useRef<number | null>(null);
-  const videoStalledAssetIdRef = useRef<string | null>(null);
-  const clearVideoStallWatchdog = useCallback(() => {
-    if (videoStallTimerRef.current === null) return;
-    window.clearTimeout(videoStallTimerRef.current);
-    videoStallTimerRef.current = null;
-  }, []);
-  const scheduleVideoStallWatchdog = useCallback((assetId: string) => {
-    clearVideoStallWatchdog();
-    videoStalledAssetIdRef.current = assetId;
-    videoStallTimerRef.current = window.setTimeout(() => {
-      videoStallTimerRef.current = null;
-      if (videoStalledAssetIdRef.current === assetId) videoStalledAssetIdRef.current = null;
-      setVideoFallbackAssetId(assetId);
-      setHoldReason("none");
-    }, VIDEO_STALL_WATCHDOG_MS);
-  }, [clearVideoStallWatchdog]);
-  // #195 Phase 2. A video beat whose plan item declares a trim is owned by the
-  // segment, not by the element's `ended` event: the director's budget is
-  // `outMs - inMs`, so it may only start once the element sits at the in-point.
-  // `positioning` holds the budget while the seek is in flight, `playing`
-  // releases it, and `unavailable` means the trim could not be applied and the
-  // beat falls back to the pre-#195 `ended` ownership.
-  // The step index is part of the key, not decoration: consecutive beats may
-  // trim the same source, and then only the step tells a late settle from the
-  // previous beat apart from one meant for the current beat.
-  const [videoTrimSeek, setVideoTrimSeek] = useState<
-    { assetId: string; stepIndex: number; status: VideoTrimSeekStatus } | null
-  >(null);
-  const videoTrimTimerRef = useRef<number | null>(null);
-  const clearVideoTrimWatchdog = useCallback(() => {
-    if (videoTrimTimerRef.current === null) return;
-    window.clearTimeout(videoTrimTimerRef.current);
-    videoTrimTimerRef.current = null;
-  }, []);
-  // A settle only ever updates the beat it was computed for. It never creates a
-  // state: the entry effect is the single writer that opens one, so a settle
-  // arriving for a beat that has no trim — an `error` on an untrimmed video —
-  // has nothing to say and says nothing. The watchdog is not cleared here: the
-  // updater must stay pure (React may call it twice), and the effect that owns
-  // the timer re-runs on every status change and clears it in its cleanup.
+  // ST-154: stall/fallback watchdog ownership moves into playbackVideoBeatLifecycle.
+  // #548: one actor owns each video beat across trim positioning, play/stall,
+  // fallback, pause/resume and stale callbacks from superseded beats.
+  const activeVideoStep = director.step;
+  const activeVideoAsset = journey && activeVideoStep?.kind === "media"
+    ? playbackMediaForPoint(journey, activeVideoStep.pointIndex)[activeVideoStep.mediaIndex] ?? null
+    : null;
+  const activeVideoTrim = (() => {
+    if (!journey || !mediaTrimResolver || activeVideoStep?.kind !== "media") return null;
+    if (!activeVideoAsset?.mimeType.startsWith("video/")) return null;
+    const trim = mediaTrimResolver(journey, activeVideoStep);
+    return trim ? { assetId: activeVideoAsset.id, trim } : null;
+  })();
+  const activeVideoTrimAssetId = activeVideoTrim?.assetId ?? null;
+  const activeVideoTrimInMs = activeVideoTrim?.trim.inMs ?? null;
+  const activeVideoTrimOutMs = activeVideoTrim?.trim.outMs ?? null;
+  // Pause/resume bumps the director intent revision but does not create a new
+  // semantic video beat. Keep the actor identity on the beat itself so a pause
+  // is delivered to the existing actor instead of rebuilding trim positioning.
+  const activeVideoBeatKey = activeVideoAsset?.mimeType.startsWith("video/")
+    ? `${journey?.id ?? "none"}:${activeVideoAsset.id}:${director.stepIndex}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`
+    : null;
+  const videoBeatActorRef = useRef<PlaybackVideoBeatActor | null>(null);
+  const [videoBeatSnapshot, setVideoBeatSnapshot] = useState<PlaybackVideoBeatSnapshot | null>(null);
+
+  useEffect(() => {
+    videoBeatActorRef.current?.stop();
+    videoBeatActorRef.current = null;
+    setVideoBeatSnapshot(null);
+    if (!activeVideoBeatKey || !activeVideoAsset) return;
+    const actor = createPlaybackVideoBeatLifecycleActor({
+      beatKey: activeVideoBeatKey,
+      assetId: activeVideoAsset.id,
+      stepIndex: director.stepIndex,
+      hasTrim: Boolean(activeVideoTrim),
+      paused,
+    });
+    actor.subscribe((snapshot) => setVideoBeatSnapshot(snapshot));
+    videoBeatActorRef.current = actor;
+    actor.start();
+    return () => {
+      if (videoBeatActorRef.current === actor) videoBeatActorRef.current = null;
+      actor.stop();
+    };
+  }, [activeVideoBeatKey]);
+
+  const sendVideoBeat = useCallback((type: PlaybackVideoBeatEvent["type"], beatKey = activeVideoBeatKey) => {
+    const actor = videoBeatActorRef.current;
+    const snapshot = actor?.getSnapshot();
+    if (!actor || !snapshot || !beatKey || snapshot.context.beatKey !== beatKey) return false;
+    actor.send({ type, beatKey } as PlaybackVideoBeatEvent);
+    return true;
+  }, [activeVideoBeatKey]);
+
+  useEffect(() => {
+    if (activeVideoBeatKey) sendVideoBeat(paused ? "PAUSE" : "RESUME", activeVideoBeatKey);
+  }, [activeVideoBeatKey, paused, sendVideoBeat]);
+
+  const activeVideoRead = activeVideoAsset ? mediaReads[activeVideoAsset.id] : null;
+  useEffect(() => {
+    if (activeVideoBeatKey && activeVideoRead?.status === "ready") {
+      sendVideoBeat("READ_READY", activeVideoBeatKey);
+    }
+  }, [activeVideoBeatKey, activeVideoRead?.status, sendVideoBeat]);
+
+  const currentVideoBeatSnapshot = activeVideoBeatKey
+    && playbackVideoBeatEventIsCurrent(videoBeatSnapshot, activeVideoBeatKey)
+    ? videoBeatSnapshot
+    : null;
+  const videoTrimHoldingStatus = activeVideoTrimAssetId
+    ? playbackVideoBeatTrimStatus(currentVideoBeatSnapshot)
+    : null;
+  const videoTrimSeek = activeVideoTrimAssetId && videoTrimHoldingStatus
+    ? { assetId: activeVideoTrimAssetId, stepIndex: director.stepIndex, status: videoTrimHoldingStatus }
+    : null;
+  const videoTrimWaiting = videoTrimHoldingStatus === "positioning"
+    || videoTrimHoldingStatus === "buffering";
+  const videoFallbackAssetId = playbackVideoBeatFailed(currentVideoBeatSnapshot)
+    ? activeVideoAsset?.id ?? null
+    : null;
+
   const settleVideoTrimSeek = useCallback((
     assetId: string,
     stepIndex: number,
     status: VideoTrimSeekStatus,
   ) => {
-    setVideoTrimSeek((current) => (
-      videoTrimSeekApplies(current, assetId, stepIndex) && current!.status !== status
-        ? { ...current!, status }
-        : current
-    ));
-  }, []);
-  useEffect(() => () => clearVideoTrimWatchdog(), [clearVideoTrimWatchdog]);
-  // Position the element on the in-point. A seek can be refused outright (an
-  // unseekable source throws) or silently never land, so the caller's bounded
-  // watchdog is what turns either into `unavailable` instead of a stall.
+    const snapshot = videoBeatActorRef.current?.getSnapshot() ?? null;
+    if (!snapshot || snapshot.context.assetId !== assetId || snapshot.context.stepIndex !== stepIndex) return;
+    const beatKey = snapshot.context.beatKey;
+    if (status === "unavailable") { sendVideoBeat("POSITION_UNAVAILABLE", beatKey); return; }
+    if (status === "buffering") { sendVideoBeat("STALLED", beatKey); return; }
+    if (status === "playing") {
+      const positioning = snapshot.matches("positioning") || snapshot.matches("pausedPositioning");
+      sendVideoBeat(positioning ? "POSITION_READY" : "TIME_PROGRESS", beatKey);
+    }
+  }, [sendVideoBeat]);
+
   const applyVideoTrimEntry = useCallback((
     element: HTMLVideoElement,
     resolved: ReturnType<typeof resolveVideoTrim>,
     assetId: string,
     stepIndex: number,
   ) => {
-    if (resolved.kind !== "trimmed") {
-      settleVideoTrimSeek(assetId, stepIndex, "unavailable");
-      return;
-    }
+    if (resolved.kind !== "trimmed") { settleVideoTrimSeek(assetId, stepIndex, "unavailable"); return; }
     const action = videoTrimEntryAction(resolved, element.currentTime);
-    if (action.kind !== "seek") {
-      settleVideoTrimSeek(assetId, stepIndex, "playing");
-      return;
-    }
-    try {
-      element.currentTime = action.toSeconds;
-    } catch {
-      settleVideoTrimSeek(assetId, stepIndex, "unavailable");
-    }
+    if (action.kind !== "seek") { settleVideoTrimSeek(assetId, stepIndex, "playing"); return; }
+    try { element.currentTime = action.toSeconds; }
+    catch { settleVideoTrimSeek(assetId, stepIndex, "unavailable"); }
   }, [settleVideoTrimSeek]);
-  const recoverVideoPlayback = useCallback((assetId: string) => {
-    clearVideoStallWatchdog();
-    if (videoStalledAssetIdRef.current === assetId) videoStalledAssetIdRef.current = null;
-    setVideoFallbackAssetId((current) => current === assetId ? null : current);
-  }, [clearVideoStallWatchdog]);
-  useEffect(() => () => clearVideoStallWatchdog(), [clearVideoStallWatchdog]);
+
   useEffect(() => {
-    clearVideoStallWatchdog();
-    videoStalledAssetIdRef.current = null;
-    // A failed beat may fall back to its timer, but a later deliberate revisit
-    // must get its own attempt instead of inheriting that beat's failure.
-    setVideoFallbackAssetId(null);
-  }, [clearVideoStallWatchdog, director.stepIndex]);
-  useEffect(() => {
-    if (paused) {
-      clearVideoStallWatchdog();
-      return;
-    }
-    const stalledAssetId = videoStalledAssetIdRef.current;
-    if (stalledAssetId) scheduleVideoStallWatchdog(stalledAssetId);
-  }, [clearVideoStallWatchdog, paused, scheduleVideoStallWatchdog]);
-  // The trim window of the beat that is playing, recomputed every render:
-  // `buildPlaybackSteps` hands out a fresh step object each time, so there is
-  // nothing stable to memoise against.
-  const activeVideoTrim = (() => {
-    const step = director.step;
-    if (!journey || !mediaTrimResolver || step?.kind !== "media") return null;
-    const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
-    if (!asset?.mimeType.startsWith("video/")) return null;
-    const trim = mediaTrimResolver(journey, step);
-    return trim ? { assetId: asset.id, trim } : null;
-  })();
-  const activeVideoTrimAssetId = activeVideoTrim?.assetId ?? null;
-  const activeVideoTrimInMs = activeVideoTrim?.trim.inMs ?? null;
-  const activeVideoTrimOutMs = activeVideoTrim?.trim.outMs ?? null;
-  const activeVideoTrimKey = activeVideoTrim
-    ? `${activeVideoTrim.assetId}:${director.stepIndex}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`
-    : null;
-  const enteredVideoTrimKeyRef = useRef<string | null>(null);
-  // Entering the beat — including re-entering it with the step scrubber, which
-  // hands the director a fresh full budget while the `<video>` keeps its React
-  // key and therefore its `currentTime`. A remounted element has no metadata
-  // yet and is positioned by `loadedmetadata`; a surviving one is repositioned
-  // here, because that event will not fire a second time.
-  useEffect(() => {
-    clearVideoTrimWatchdog();
-    enteredVideoTrimKeyRef.current = activeVideoTrimKey;
-    if (!activeVideoTrimAssetId || activeVideoTrimInMs === null || activeVideoTrimOutMs === null) {
-      setVideoTrimSeek(null);
-      return;
-    }
-    const stepIndex = director.stepIndex;
-    setVideoTrimSeek({ assetId: activeVideoTrimAssetId, stepIndex, status: "positioning" });
+    if (!activeVideoTrim || videoTrimHoldingStatus !== "positioning") return;
     const element = videoRef.current;
     if (!element || element.readyState < 1) return;
-    applyVideoTrimEntry(
-      element,
-      resolveVideoTrim({ inMs: activeVideoTrimInMs, outMs: activeVideoTrimOutMs }, element.duration),
-      activeVideoTrimAssetId,
-      stepIndex,
-    );
-  }, [
-    applyVideoTrimEntry,
-    clearVideoTrimWatchdog,
-    activeVideoTrimAssetId,
-    activeVideoTrimInMs,
-    activeVideoTrimOutMs,
-    activeVideoTrimKey,
-    director.stepIndex,
-    videoElementRevision,
-  ]);
-  // The bounded escape acceptance 5 asks for, covering both holding states. It
-  // starts only once the signed read is ready and playback is running, so a slow
-  // read is never mistaken for an unseekable source. Either way the beat
-  // degrades to `ended` ownership — the pre-#195 behaviour — and deliberately no
-  // further: the overlay's media fallback stays owned by the existing
-  // `stalled` watchdog alone, so a slow refill after a resume cannot push a beat
-  // that was playing correctly out of the product's normal video path.
-  const videoTrimHoldingStatus = activeVideoTrimAssetId
-    && videoTrimSeekApplies(videoTrimSeek, activeVideoTrimAssetId, director.stepIndex)
-    ? videoTrimSeek!.status
-    : null;
-  const videoTrimWaiting = videoTrimHoldingStatus === "positioning"
-    || videoTrimHoldingStatus === "buffering";
-  const videoTrimReadReady = activeVideoTrimAssetId
-    ? mediaReads[activeVideoTrimAssetId]?.status === "ready"
-    : false;
-  useEffect(() => {
-    if (!videoTrimWaiting || !videoTrimReadReady || paused) return;
-    const assetId = activeVideoTrimAssetId;
-    if (!assetId) return;
-    const stepIndex = director.stepIndex;
-    clearVideoTrimWatchdog();
-    videoTrimTimerRef.current = window.setTimeout(() => {
-      videoTrimTimerRef.current = null;
-      settleVideoTrimSeek(assetId, stepIndex, "unavailable");
-    }, VIDEO_STALL_WATCHDOG_MS);
-    return () => clearVideoTrimWatchdog();
-  }, [
-    activeVideoTrimAssetId,
-    clearVideoTrimWatchdog,
-    director.stepIndex,
-    paused,
-    settleVideoTrimSeek,
-    videoTrimHoldingStatus,
-    videoTrimReadReady,
-    videoTrimWaiting,
-  ]);
-  // A pause freezes the budget by itself, so a beat never carries `buffering`
-  // across one: the resumed beat starts from `playing` and re-reports a stall
-  // that is still real, which keeps the watchdog window measuring the resume.
-  useEffect(() => {
-    setVideoTrimSeek((current) => {
-      if (!current) return current;
-      const next = videoTrimStatusAfterPauseChange(current.status);
-      return next === current.status ? current : { ...current, status: next! };
-    });
-  }, [paused]);
+    applyVideoTrimEntry(element, resolveVideoTrim(activeVideoTrim.trim, element.duration), activeVideoTrim.assetId, director.stepIndex);
+  }, [activeVideoBeatKey, activeVideoTrim, applyVideoTrimEntry, director.stepIndex, videoElementRevision, videoTrimHoldingStatus]);
+
+  const recoverVideoPlayback = useCallback((_assetId: string) => {
+    if (activeVideoBeatKey) sendVideoBeat("PLAYING", activeVideoBeatKey);
+  }, [activeVideoBeatKey, sendVideoBeat]);
   // #20: one sampler per soundtrack element; analyser built on first play.
   const samplerRef = useRef(createSoundtrackSampler());
   const lightStripRef = useRef<HTMLDivElement>(null);
@@ -668,11 +655,6 @@ export function JourneyPlaybackOverlay({
   // live Home context here would create a second step index space when Home
   // hydration resolves after Playback has already started.
   const playbackSteps = director.steps;
-  const mediaById = useMemo(() => {
-    const index = new Map<string, JourneyMediaAsset>();
-    for (const asset of journey?.media ?? []) index.set(asset.id, asset);
-    return index;
-  }, [journey]);
   const { durationForStep } = director;
   const prefetchAssetIds = useMemo(() => {
     if (!journey) return [] as string[];
@@ -727,43 +709,27 @@ export function JourneyPlaybackOverlay({
     const assetIds = [...prefetchAssetIds];
     queueMicrotask(() => {
       if (!allowPrefetchDispatch(plannedPrefetchRevision)) return;
+      const boundary = director.getPrefetchIntentBoundary();
+      const nextActive = new Set(assetIds);
       for (const assetId of assetIds) {
         overlayRef.current?.setAttribute(
           "data-playback-prefetch-dispatch-intent",
           String(plannedPrefetchRevision),
         );
-        loadMediaRead(assetId);
+        ensureMediaLifecycle(assetId)?.send({
+          type: "PREPARE",
+          plannedRevision: plannedPrefetchRevision,
+          liveRevision: boundary.liveRevision,
+          blockedThroughRevision: boundary.blockedThroughRevision,
+        });
       }
+      for (const assetId of mediaLifecycleActiveIdsRef.current) {
+        if (nextActive.has(assetId) || !journey) continue;
+        mediaLifecycleActorsRef.current.get(`${journey.id}:${assetId}`)?.send({ type: "RELEASE" });
+      }
+      mediaLifecycleActiveIdsRef.current = nextActive;
     });
-  }, [allowPrefetchDispatch, loadMediaRead, plannedPrefetchRevision, prefetchKey]);
-
-  // Review P2: decode media AHEAD of display so a chapter never mounts <img>
-  // with a loading gap. #264 also warms a same-asset preview for photos/videos;
-  // the original image decode remains the only readiness gate.
-  useEffect(() => {
-    if (!allowPrefetchDispatch(plannedPrefetchRevision)) return;
-    for (const assetId of prefetchAssetIds) {
-      const asset = mediaById.get(assetId);
-      const read = mediaReads[assetId];
-      if (!asset || read?.status !== "ready") continue;
-      overlayRef.current?.setAttribute(
-        "data-playback-prefetch-dispatch-intent",
-        String(plannedPrefetchRevision),
-      );
-      const layerUrls = mediaPrefetchUrlsForRead(assetId, assetId, read);
-      if (read.preview) void decodeImageUrl(layerUrls[0]).catch(() => undefined);
-      if (asset.mimeType.startsWith("image/")) {
-        decodeRegistryRef.current.ensure(assetId, read.url);
-      }
-    }
-  }, [
-    allowPrefetchDispatch,
-    decodeSettleRevision,
-    mediaById,
-    mediaReads,
-    plannedPrefetchRevision,
-    prefetchKey,
-  ]);
+  }, [allowPrefetchDispatch, director.getPrefetchIntentBoundary, ensureMediaLifecycle, journey, plannedPrefetchRevision, prefetchKey]);
 
   // Review P2: while a media chapter's image is not decoded yet, hold the
   // director so it never advances into a blank frame. Terminal read/decode
@@ -782,31 +748,31 @@ export function JourneyPlaybackOverlay({
     const asset = step?.kind === "stop" || step?.kind === "media"
       ? playbackHoldTargetMedia(journey, step)
       : null;
+    const snapshot = asset ? mediaLifecycleSnapshots[asset.id] : undefined;
     const isImage = asset?.mimeType.startsWith("image/") ?? false;
     const gate = asset
-      ? playbackMediaGate(
+      ? snapshot ? playbackLifecycleGate(snapshot) : playbackMediaGate(
         mediaReads[asset.id],
-        isImage ? decodeRegistryRef.current.readiness(asset.id) : undefined,
+        isImage ? mediaDecodeReadiness(asset.id) : undefined,
         isImage,
       )
       : "ready";
-    // #195 Phase 2: a trimmed video beat is owned by its segment instead of by
-    // the element's `ended` event. An `unavailable` trim is not owned by the
-    // segment at all, so it falls through to the untrimmed policy.
-    const trimOwnsStep = Boolean(
-      asset?.mimeType.startsWith("video/")
-      && videoTrimSeekApplies(videoTrimSeek, asset.id, director.stepIndex)
-      && videoTrimSeek!.status !== "unavailable",
-    );
-    setHoldReason(playbackHoldReason({
+    const trimStatus = asset?.mimeType.startsWith("video/")
+      && videoTrimSeek?.assetId === asset.id
+      && videoTrimSeek.stepIndex === director.stepIndex
+      ? videoTrimSeek.status
+      : null;
+    const beat = {
       stepKind: step?.kind,
       asset,
-      gate,
       videoPlaybackFailed: asset ? videoFallbackAssetId === asset.id : false,
-      trimStatus: trimOwnsStep ? videoTrimSeek!.status : null,
-    }));
+      trimStatus,
+    };
+    setHoldReason(snapshot
+      ? playbackLifecycleHoldReason(snapshot, beat)
+      : playbackHoldReason({ ...beat, gate }));
   }, [
-    decodeSettleRevision,
+    mediaLifecycleSnapshots,
     director.step,
     director.stepIndex,
     journey,
@@ -843,18 +809,15 @@ export function JourneyPlaybackOverlay({
     const asset = journey && step?.kind === "media"
       ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
       : null;
+    const beatKey = activeVideoBeatKey;
     return syncPlaybackMediaElement(
       videoRef.current,
       director.isPlaying && !paused && !presentationPending && videoFallbackAssetId !== asset?.id,
-      asset?.mimeType.startsWith("video/")
-        ? () => {
-            clearVideoStallWatchdog();
-            videoStalledAssetIdRef.current = null;
-            setVideoFallbackAssetId(asset.id);
-          }
+      asset?.mimeType.startsWith("video/") && beatKey
+        ? () => { sendVideoBeat("FAILED", beatKey); }
         : undefined,
     );
-  }, [clearVideoStallWatchdog, director.isPlaying, director.stepIndex, journey, mediaReads, paused, presentationPending, videoElementRevision, videoFallbackAssetId]);
+  }, [activeVideoBeatKey, director.isPlaying, director.stepIndex, journey, paused, presentationPending, sendVideoBeat, videoElementRevision, videoFallbackAssetId]);
 
   // #20: one analyser graph writes a shared mutable energy channel; the light
   // strip and Three.js scene read that channel without React per-frame state.
@@ -1269,7 +1232,7 @@ export function JourneyPlaybackOverlay({
     ? playbackMediaGate(
       activeRead,
       activeMedia.mimeType.startsWith("image/")
-        ? decodeRegistryRef.current.readiness(activeMedia.id)
+        ? mediaDecodeReadiness(activeMedia.id)
         : undefined,
       activeMedia.mimeType.startsWith("image/"),
     )
@@ -1336,7 +1299,7 @@ export function JourneyPlaybackOverlay({
     chapterOpeningAsset,
     chapterOpeningRead,
     chapterOpeningAsset?.mimeType.startsWith("image/")
-      ? decodeRegistryRef.current.readiness(chapterOpeningAsset.id)
+      ? mediaDecodeReadiness(chapterOpeningAsset.id)
       : undefined,
   );
   const openingHandoff = openingHandoffRef.current;
@@ -1522,20 +1485,19 @@ export function JourneyPlaybackOverlay({
             sequencePeeks={sequencePeeks}
             stepIndex={director.stepIndex}
             imageReady={activeMediaGate === "ready"}
-            videoPositionReady={!activeVideoTrim || (enteredVideoTrimKeyRef.current === activeVideoTrimKey
-              && (videoTrimHoldingStatus === "playing" || videoTrimHoldingStatus === "unavailable"))}
+            videoPositionReady={!activeVideoTrim
+              || videoTrimHoldingStatus === "playing"
+              || videoTrimHoldingStatus === "unavailable"}
             failed={activeMediaGate === "error" || videoFallbackAssetId === activeMedia.id}
             buffering={videoTrimWaiting}
             paused={paused}
             reduceMotion={audioReactiveReducedMotion}
-            videoWaitTimeoutMs={VIDEO_STALL_WATCHDOG_MS}
+            videoWaitTimeoutMs={PLAYBACK_VIDEO_WATCHDOG_MS}
             onVideoElement={bindVideoElement}
             onPendingChange={handlePresentationPendingChange}
             onPresented={handlePresentationCommit}
             onUnavailable={() => {
-              setVideoFallbackAssetId(activeMedia.id);
-              settleVideoTrimSeek(activeMedia.id, director.stepIndex, "unavailable");
-              setHoldReason("none");
+              if (activeVideoBeatKey) sendVideoBeat("FAILED", activeVideoBeatKey);
             }}
             video={activeMedia.mimeType.startsWith("video/") && activeRead?.status === "ready" ? (
                   <video
@@ -1543,27 +1505,21 @@ export function JourneyPlaybackOverlay({
                     src={activeRead.url}
                     playsInline
                     onEnded={() => {
-                      clearVideoStallWatchdog();
-                      videoStalledAssetIdRef.current = null;
-                      setHoldReason("none");
+                      const beatKey = activeVideoBeatKey;
+                      const snapshot = videoBeatActorRef.current?.getSnapshot() ?? null;
+                      if (!beatKey || !playbackVideoBeatEventIsCurrent(snapshot, beatKey)) return;
+                      sendVideoBeat("ENDED", beatKey);
                       director.complete();
                     }}
                     onError={() => {
-                      clearVideoStallWatchdog();
-                      videoStalledAssetIdRef.current = null;
-                      setVideoFallbackAssetId(activeMedia.id);
-                      settleVideoTrimSeek(activeMedia.id, director.stepIndex, "unavailable");
-                      setHoldReason("none");
+                      const beatKey = activeVideoBeatKey;
+                      if (beatKey) sendVideoBeat("FAILED", beatKey);
                     }}
                     onLoadedMetadata={(event) => {
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
-                      // Only while the beat is still holding: once it is
-                      // `playing` the segment is under way, and once it is
-                      // `unavailable` the watchdog has already given up, so
-                      // neither state may issue another seek. That is what
-                      // bounds the retry.
-                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
-                      if (!videoTrimHoldsStep(videoTrimSeek!.status)) return;
+                      const snapshot = videoBeatActorRef.current?.getSnapshot() ?? null;
+                      if (!activeVideoBeatKey || !playbackVideoBeatEventIsCurrent(snapshot, activeVideoBeatKey)) return;
+                      if (videoTrimHoldingStatus !== "positioning") return;
                       applyVideoTrimEntry(
                         event.currentTarget,
                         resolveVideoTrim(activeVideoTrim.trim, event.currentTarget.duration),
@@ -1572,21 +1528,10 @@ export function JourneyPlaybackOverlay({
                       );
                     }}
                     onSeeked={(event) => {
-                      // A seek lands on the nearest decodable frame, which can
-                      // be short of the in-point. Re-run the entry rule instead
-                      // of assuming the first attempt succeeded: it answers
-                      // `playing` when the element really is inside the segment
-                      // and re-seeks when it is not, so releasing the budget
-                      // always means the segment is under way.
-                      //
-                      // Bounded to the holding states exactly as
-                      // `loadedmetadata` is, and for the same reason: once the
-                      // watchdog has settled `unavailable` that degradation is
-                      // decided, and a later native scrub must not re-seek the
-                      // element and hand the beat a second completion owner.
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
-                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
-                      if (!videoTrimHoldsStep(videoTrimSeek!.status)) return;
+                      const snapshot = videoBeatActorRef.current?.getSnapshot() ?? null;
+                      if (!activeVideoBeatKey || !playbackVideoBeatEventIsCurrent(snapshot, activeVideoBeatKey)) return;
+                      if (videoTrimHoldingStatus !== "positioning") return;
                       applyVideoTrimEntry(
                         event.currentTarget,
                         resolveVideoTrim(activeVideoTrim.trim, event.currentTarget.duration),
@@ -1595,23 +1540,14 @@ export function JourneyPlaybackOverlay({
                       );
                     }}
                     onWaiting={() => {
-                      // The director spends the beat's budget on the wall clock,
-                      // so a segment that stops progressing has to freeze it.
-                      if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
-                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
-                      if (!videoTrimBuffersOnStall(videoTrimSeek!.status, paused)) return;
-                      settleVideoTrimSeek(activeMedia.id, director.stepIndex, "buffering");
+                      if (activeVideoBeatKey) sendVideoBeat("STALLED", activeVideoBeatKey);
                     }}
-                    onPlaying={() => {
-                      recoverVideoPlayback(activeMedia.id);
-                      if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
-                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
-                      if (videoTrimSeek!.status !== "buffering") return;
-                      settleVideoTrimSeek(activeMedia.id, director.stepIndex, "playing");
-                    }}
-                    onProgress={() => clearVideoStallWatchdog()}
+                    onPlaying={() => recoverVideoPlayback(activeMedia.id)}
                     onTimeUpdate={(event) => {
-                      clearVideoStallWatchdog();
+                      const beatKey = activeVideoBeatKey;
+                      const snapshot = videoBeatActorRef.current?.getSnapshot() ?? null;
+                      if (!beatKey || !playbackVideoBeatEventIsCurrent(snapshot, beatKey)) return;
+                      sendVideoBeat("TIME_PROGRESS", beatKey);
                       advanceProgressFillFromMedia(
                         event.currentTarget,
                         activeVideoTrim?.assetId === activeMedia.id ? activeVideoTrim.trim : null,
@@ -1620,21 +1556,15 @@ export function JourneyPlaybackOverlay({
                       if (
                         !activeVideoTrim
                         || activeVideoTrim.assetId !== activeMedia.id
-                        || !videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)
-                        || (videoTrimSeek!.status !== "playing" && videoTrimSeek!.status !== "buffering")
+                        || (videoTrimHoldingStatus !== "playing" && videoTrimHoldingStatus !== "buffering")
                       ) return;
-                      // `timeupdate` is the proof a buffering segment resumed:
-                      // it only fires when `currentTime` actually moved.
-                      if (videoTrimSeek!.status === "buffering") {
-                        settleVideoTrimSeek(activeMedia.id, director.stepIndex, "playing");
-                      }
                       const element = event.currentTarget;
                       const action = videoTrimProgressAction(
                         resolveVideoTrim(activeVideoTrim.trim, element.duration),
                         element.currentTime,
                       );
                       if (action.kind === "complete") {
-                        setHoldReason("none");
+                        sendVideoBeat("ENDED", beatKey);
                         director.complete();
                         return;
                       }
@@ -1647,15 +1577,7 @@ export function JourneyPlaybackOverlay({
                       }
                     }}
                     onStalled={() => {
-                      // `stalled` can be transient. Keep Full Playback ownership
-                      // while the browser may recover, and only fall back if no
-                      // progress/timeupdate may clear only this bounded watchdog; `playing` is the proof that playback resumed and may clear a persisted play failure.
-                      if (paused) videoStalledAssetIdRef.current = activeMedia.id;
-                      else scheduleVideoStallWatchdog(activeMedia.id);
-                      if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
-                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
-                      if (!videoTrimBuffersOnStall(videoTrimSeek!.status, paused)) return;
-                      settleVideoTrimSeek(activeMedia.id, director.stepIndex, "buffering");
+                      if (activeVideoBeatKey) sendVideoBeat("STALLED", activeVideoBeatKey);
                     }}
                   />
             ) : null}

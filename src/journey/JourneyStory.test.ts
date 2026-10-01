@@ -64,6 +64,21 @@ describe("Story shared-element ownership", () => {
   });
 });
 
+describe("Quick Recap fallback focus ownership", () => {
+  it("resolves the live Full Playback action after the responsive handoff frame", () => {
+    const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
+    const focusStart = source.indexOf('if (quickRecap?.state !== "over-budget") return;');
+    const focusEnd = source.indexOf('}, [quickRecap?.state, mobileLayout]);', focusStart);
+    const focusSource = source.slice(focusStart, focusEnd);
+
+    expect(focusStart).toBeGreaterThan(0);
+    expect(focusEnd).toBeGreaterThan(focusStart);
+    expect(focusSource).toContain("window.requestAnimationFrame(() => {");
+    expect(focusSource).toContain("quickRecapFullActionRef.current?.focus({ preventScroll: true });");
+    expect(focusSource).not.toContain("const action = quickRecapFullActionRef.current");
+  });
+});
+
 describe("mobile media delete focus ownership (#427)", () => {
   it("waits for the committed current Story trigger to become genuinely focusable", () => {
     const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");

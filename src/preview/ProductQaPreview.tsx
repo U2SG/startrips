@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
 import type { StartripsRecoveryKind } from "../brand/recoverySurfaces";
 import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
@@ -18,6 +18,7 @@ import { deriveJourneyStaySummaries, journeyOverviewRoutePointIds } from "../jou
 import type { JourneySaveResult } from "../journey/journeySaveRecovery";
 import { PLAYBACK_INITIAL_TEMPO } from "../journey/useJourneyPlaybackDirector";
 import type { PlaybackTempo } from "../journey/journeyPlaybackPlan";
+import type { MediaReadState } from "../journey/mediaReadRefresh";
 import {
   prepareQuickRecapPlayback,
   quickRecapStepDurationMs,
@@ -1097,6 +1098,33 @@ function JourneyPlaybackContinuityQaPreview() {
       ? { ...asset, mimeType: "video/webm", fileName: "bridge.webm" } : asset) : baseJourney.media,
   }), [baseJourney, bridgeVideo, nearbyBridge]);
   const [closed, setClosed] = useState(false);
+  const playbackMediaReadCacheRef = useRef<Record<string, MediaReadState>>({});
+  const expireCachedReadOnClose = params.get("qaExpireCachedReadOnClose");
+  const cachePlaybackMediaRead = useCallback((
+    _journeyId: string,
+    assetId: string,
+    read: MediaReadState | null,
+  ) => {
+    if (read?.status === "ready") {
+      playbackMediaReadCacheRef.current = { ...playbackMediaReadCacheRef.current, [assetId]: read };
+      return;
+    }
+    const next = { ...playbackMediaReadCacheRef.current };
+    delete next[assetId];
+    playbackMediaReadCacheRef.current = next;
+  }, []);
+  const closePlayback = useCallback(() => {
+    if (expireCachedReadOnClose) {
+      const cached = playbackMediaReadCacheRef.current[expireCachedReadOnClose];
+      if (cached?.status === "ready") {
+        playbackMediaReadCacheRef.current = {
+          ...playbackMediaReadCacheRef.current,
+          [expireCachedReadOnClose]: { ...cached, expiresAt: 0 },
+        };
+      }
+    }
+    setClosed(true);
+  }, [expireCachedReadOnClose]);
   // Reduced Motion is a run parameter here, not a constant: acceptance 6 is
   // only observable if the SAME fixture can be played both ways.
   const reduceMotion = params.get("qaReduceMotion") !== "0";
@@ -1113,9 +1141,13 @@ function JourneyPlaybackContinuityQaPreview() {
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
-      {closed ? null : <JourneyPlaybackOverlay
+      {closed ? (
+        <button type="button" data-qa-playback-reopen onClick={() => setClosed(false)}>Reopen Playback</button>
+      ) : <JourneyPlaybackOverlay
         journey={journey}
-        onClose={() => setClosed(true)}
+        initialMediaReads={playbackMediaReadCacheRef.current}
+        onMediaReadCacheChange={cachePlaybackMediaRead}
+        onClose={closePlayback}
         onCameraTargetChange={recordCameraTarget}
         playbackMode="full"
         reduceMotion={reduceMotion}
