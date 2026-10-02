@@ -1,4 +1,4 @@
-import type { Journey, RoutePoint } from "./types";
+import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 export type MediaSpatialSource = "exif" | "container-metadata" | "imported" | "unknown";
 export type MediaSpatialGranularity = "coordinate" | "city" | "unknown";
@@ -387,6 +387,483 @@ export function groupMediaPlacementSuggestions(
     ),
     unsuggestedFileIndexes,
   };
+}
+
+/**
+ * #335 / ST-114. These are planner bounds, not claims about a named place.
+ * Keeping them exported makes the product contract and its fixtures inspectable.
+ */
+export const MEDIA_PLACEMENT_PROPOSAL_LIMITS = {
+  neighborDistanceKm: 2,
+  timeWindowHours: 12,
+  maxClusterDiameterKm: 5,
+  maxAutomaticAccuracyMeters: 500,
+  maxPlausibleSpeedKmh: 1_200,
+  maxInputs: 1_000,
+} as const;
+
+export const MEDIA_PLACEMENT_PROPOSAL_ALGORITHM_VERSION = "route-point-proposal-v1";
+
+export type MediaPlacementProposalInput = Pick<
+  JourneyMediaAsset,
+  "contentHash" | "contentHashVerified"
+> & {
+  fileIndex: number;
+  signal: MediaPlacementSignal | null | undefined;
+};
+
+export type MediaPlacementProposalBasis = {
+  reason: string;
+  evidence: readonly string[];
+  uncertainty: readonly string[];
+};
+
+export type ExistingRoutePointProposal = {
+  kind: "match-existing";
+  journeyId: string;
+  routePointId: string;
+  fileIndexes: number[];
+  basis: MediaPlacementProposalBasis;
+};
+
+export type NewRoutePointProposal = {
+  kind: "suggest-new";
+  candidateId: string;
+  fileIndexes: number[];
+  representative: {
+    fileIndex: number;
+    latitude: number;
+    longitude: number;
+  };
+  basis: MediaPlacementProposalBasis;
+};
+
+export type PendingRoutePointProposal = {
+  kind: "pending-confirmation";
+  fileIndexes: number[];
+  basis: MediaPlacementProposalBasis;
+};
+
+export type MediaPlacementProposalPlan = {
+  algorithmVersion: typeof MEDIA_PLACEMENT_PROPOSAL_ALGORITHM_VERSION;
+  scope: {
+    batchId: string;
+    journeyId: string;
+    routeRevision: number;
+  };
+  matchExisting: ExistingRoutePointProposal[];
+  suggestNew: NewRoutePointProposal[];
+  pendingConfirmation: PendingRoutePointProposal[];
+};
+
+type ProposalTime = {
+  kind: "absolute" | "local" | "unknown";
+  value: number | null;
+};
+
+type ProposalIdentity = {
+  key: string;
+  fileIndexes: number[];
+  representative: MediaPlacementProposalInput;
+};
+
+function safeAbsoluteProposalTime(signal: MediaPlacementSignal) {
+  if (
+    signal.timezoneState === "local-only"
+    || signal.timezoneState === "unknown"
+    || !signal.capturedAt
+    || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(signal.capturedAt)
+  ) return null;
+  return safeDateMs(signal.capturedAt);
+}
+
+function safeLocalProposalTime(signal: MediaPlacementSignal) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/
+    .exec(signal.capturedLocal ?? "");
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (!isValidCalendarDate(year, month, day) || hour > 23 || minute > 59 || second > 59) {
+    return null;
+  }
+  const milliseconds = Number((match[7] ?? "").padEnd(3, "0").slice(0, 3) || "0");
+  return Date.UTC(year, month - 1, day, hour, minute, second, milliseconds);
+}
+
+function proposalTime(signal: MediaPlacementSignal | null | undefined): ProposalTime {
+  if (!signal) return { kind: "unknown", value: null };
+  const absolute = safeAbsoluteProposalTime(signal);
+  if (absolute !== null) return { kind: "absolute", value: absolute };
+  const local = safeLocalProposalTime(signal);
+  if (local !== null) return { kind: "local", value: local };
+  return { kind: "unknown", value: null };
+}
+
+function proposalTimeCompare(
+  left: MediaPlacementProposalInput,
+  right: MediaPlacementProposalInput,
+) {
+  const leftTime = proposalTime(left.signal);
+  const rightTime = proposalTime(right.signal);
+  const rank = (time: ProposalTime) => time.kind === "absolute" ? 0 : time.kind === "local" ? 1 : 2;
+  return rank(leftTime) - rank(rightTime)
+    || (leftTime.value ?? Number.POSITIVE_INFINITY) - (rightTime.value ?? Number.POSITIVE_INFINITY)
+    || left.fileIndex - right.fileIndex;
+}
+
+function proposalInputIdentity(input: MediaPlacementProposalInput) {
+  const hash = input.contentHash?.trim();
+  return input.contentHashVerified === true && hash
+    ? `hash:${hash}`
+    : `file:${String(input.fileIndex).padStart(12, "0")}`;
+}
+
+function proposalInputQuality(input: MediaPlacementProposalInput) {
+  const signal = input.signal;
+  if (!signal) return 0;
+  const coordinate = signalHasCoordinateEvidence(signal) ? 4 : 0;
+  const accuracy = Number.isFinite(signal.accuracyMeters) ? 2 : 0;
+  const time = proposalTime(signal);
+  return coordinate + accuracy + (time.kind === "absolute" ? 2 : time.kind === "local" ? 1 : 0);
+}
+
+function buildProposalIdentities(inputs: readonly MediaPlacementProposalInput[]) {
+  const groups = new Map<string, ProposalIdentity>();
+  const seenFileIndexes = new Set<number>();
+  for (const input of inputs) {
+    if (!Number.isInteger(input.fileIndex) || input.fileIndex < 0 || seenFileIndexes.has(input.fileIndex)) {
+      throw new RangeError("Media placement proposal fileIndex must be a unique non-negative integer");
+    }
+    seenFileIndexes.add(input.fileIndex);
+    const key = proposalInputIdentity(input);
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, { key, fileIndexes: [input.fileIndex], representative: input });
+      continue;
+    }
+    existing.fileIndexes.push(input.fileIndex);
+    const qualityDelta = proposalInputQuality(input) - proposalInputQuality(existing.representative);
+    if (qualityDelta > 0 || (qualityDelta === 0 && proposalTimeCompare(input, existing.representative) < 0)) {
+      existing.representative = input;
+    }
+  }
+  return [...groups.values()].map((identity) => ({
+    ...identity,
+    fileIndexes: identity.fileIndexes.sort((left, right) => left - right),
+  }));
+}
+
+function proposalEvidence(identity: ProposalIdentity) {
+  const signal = identity.representative.signal;
+  const evidence: string[] = [];
+  if (signal && signalHasCoordinateEvidence(signal)) {
+    evidence.push(`coordinate:${signal.spatialSource ?? "normalized"}`);
+  }
+  const time = proposalTime(signal);
+  if (time.kind === "absolute") evidence.push("time:absolute");
+  if (time.kind === "local") evidence.push("time:local-only");
+  if (identity.key.startsWith("hash:")) evidence.push("verified-content-hash");
+  return evidence;
+}
+
+function proposalUncertainty(identity: ProposalIdentity) {
+  const signal = identity.representative.signal;
+  const uncertainty: string[] = [];
+  const time = proposalTime(signal);
+  if (time.kind === "local") uncertainty.push("local-time-no-offset");
+  if (time.kind === "unknown") uncertainty.push("capture-time-unknown");
+  if (!signal || !Number.isFinite(signal.accuracyMeters)) uncertainty.push("accuracy-unknown");
+  else if ((signal.accuracyMeters ?? 0) > MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxAutomaticAccuracyMeters) {
+    uncertainty.push("accuracy-too-coarse");
+  }
+  return uncertainty;
+}
+
+function proposalIdentityCompare(left: ProposalIdentity, right: ProposalIdentity) {
+  return proposalTimeCompare(left.representative, right.representative)
+    || left.fileIndexes[0] - right.fileIndexes[0]
+    || left.key.localeCompare(right.key);
+}
+
+function routeEvidenceForProposal(signal: MediaPlacementSignal, journey: Journey) {
+  return journey.routePoints
+    .map((point) => routeCandidate(signal, journey, point, journey.id))
+    .filter((candidate): candidate is Candidate => Boolean(candidate));
+}
+
+function hasStrongRouteEvidenceConflict(signal: MediaPlacementSignal, journey: Journey) {
+  const candidates = routeEvidenceForProposal(signal, journey);
+  const spatialTarget = bestStrongGpsTarget(candidates);
+  const temporalTarget = bestStrongTimeTarget(candidates);
+  return Boolean(
+    spatialTarget
+    && temporalTarget
+    && (
+      spatialTarget.journeyId !== temporalTarget.journeyId
+      || spatialTarget.routePointId !== temporalTarget.routePointId
+    )
+  );
+}
+
+function hasStrongExistingSpatialTarget(signal: MediaPlacementSignal, journey: Journey) {
+  return routeEvidenceForProposal(signal, journey)
+    .some((candidate) => candidate.routePointId !== null && candidate.strongGps);
+}
+
+function coordinateDistance(left: ProposalIdentity, right: ProposalIdentity) {
+  const leftSignal = left.representative.signal!;
+  const rightSignal = right.representative.signal!;
+  return haversineDistanceKm(
+    leftSignal.latitude!,
+    leftSignal.longitude!,
+    rightSignal.latitude!,
+    rightSignal.longitude!,
+  );
+}
+
+function implausibleSpeedIdentityKeys(identities: readonly ProposalIdentity[]) {
+  const timed = identities
+    .filter((identity) => {
+      const signal = identity.representative.signal;
+      return Boolean(
+        signal
+        && signalHasCoordinateEvidence(signal)
+        && Number.isFinite(signal.accuracyMeters)
+        && (signal.accuracyMeters ?? -1) >= 0
+        && proposalTime(signal).kind === "absolute"
+      );
+    })
+    .sort(proposalIdentityCompare);
+  const invalid = new Set<string>();
+  for (let index = 1; index < timed.length; index += 1) {
+    const previous = timed[index - 1];
+    const current = timed[index];
+    const previousSignal = previous.representative.signal!;
+    const currentSignal = current.representative.signal!;
+    const previousTime = proposalTime(previousSignal).value!;
+    const currentTime = proposalTime(currentSignal).value!;
+    const deltaHours = (currentTime - previousTime) / 3_600_000;
+    const adjustedDistanceKm = Math.max(
+      0,
+      coordinateDistance(previous, current)
+      - ((previousSignal.accuracyMeters ?? 0) + (currentSignal.accuracyMeters ?? 0)) / 1_000,
+    );
+    const implausible = deltaHours <= 0
+      ? adjustedDistanceKm > MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxClusterDiameterKm
+      : adjustedDistanceKm / deltaHours > MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxPlausibleSpeedKmh;
+    if (implausible) {
+      invalid.add(previous.key);
+      invalid.add(current.key);
+    }
+  }
+  return invalid;
+}
+
+function pendingProposal(
+  identity: ProposalIdentity,
+  reason: string,
+  extraUncertainty: readonly string[] = [],
+): PendingRoutePointProposal {
+  return {
+    kind: "pending-confirmation",
+    fileIndexes: [...identity.fileIndexes],
+    basis: {
+      reason,
+      evidence: proposalEvidence(identity),
+      uncertainty: [...new Set([...proposalUncertainty(identity), ...extraUncertainty])],
+    },
+  };
+}
+
+function compatibleProposalTimes(left: ProposalIdentity, right: ProposalIdentity) {
+  const leftTime = proposalTime(left.representative.signal);
+  const rightTime = proposalTime(right.representative.signal);
+  if (
+    leftTime.kind === "unknown"
+    || rightTime.kind === "unknown"
+    || leftTime.kind !== rightTime.kind
+    || leftTime.value === null
+    || rightTime.value === null
+  ) return false;
+  return Math.abs(leftTime.value - rightTime.value) / 3_600_000
+    <= MEDIA_PLACEMENT_PROPOSAL_LIMITS.timeWindowHours;
+}
+
+function canJoinProposalCluster(
+  cluster: readonly ProposalIdentity[],
+  candidate: ProposalIdentity,
+) {
+  if (cluster.length === 0) return true;
+  const withinNeighbor = cluster.some((member) => (
+    coordinateDistance(member, candidate) <= MEDIA_PLACEMENT_PROPOSAL_LIMITS.neighborDistanceKm
+    && compatibleProposalTimes(member, candidate)
+  ));
+  if (!withinNeighbor) return false;
+  const expanded = [...cluster, candidate];
+  for (let left = 0; left < expanded.length; left += 1) {
+    for (let right = left + 1; right < expanded.length; right += 1) {
+      if (
+        coordinateDistance(expanded[left], expanded[right])
+          > MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxClusterDiameterKm
+        || !compatibleProposalTimes(expanded[left], expanded[right])
+      ) return false;
+    }
+  }
+  return true;
+}
+
+function proposalRepresentative(identities: readonly ProposalIdentity[]) {
+  return [...identities].sort((left, right) => {
+    const leftAccuracy = left.representative.signal?.accuracyMeters;
+    const rightAccuracy = right.representative.signal?.accuracyMeters;
+    return (Number.isFinite(leftAccuracy) ? leftAccuracy! : Number.POSITIVE_INFINITY)
+      - (Number.isFinite(rightAccuracy) ? rightAccuracy! : Number.POSITIVE_INFINITY)
+      || proposalIdentityCompare(left, right);
+  })[0];
+}
+
+function newProposalFromCluster(cluster: readonly ProposalIdentity[]): NewRoutePointProposal {
+  const ordered = [...cluster].sort(proposalIdentityCompare);
+  const representativeIdentity = proposalRepresentative(ordered);
+  const representativeSignal = representativeIdentity.representative.signal!;
+  const fileIndexes = ordered
+    .flatMap((identity) => identity.fileIndexes)
+    .sort((left, right) => left - right);
+  const evidence = [...new Set(ordered.flatMap(proposalEvidence))];
+  const uncertainty = [...new Set(ordered.flatMap(proposalUncertainty))];
+  if (ordered.length === 1) uncertainty.push("single-observation-candidate");
+  return {
+    kind: "suggest-new",
+    candidateId: `new:${fileIndexes.join("-")}`,
+    fileIndexes,
+    representative: {
+      fileIndex: representativeIdentity.representative.fileIndex,
+      latitude: representativeSignal.latitude!,
+      longitude: representativeSignal.longitude!,
+    },
+    basis: {
+      reason: ordered.length === 1 ? "single-observation-candidate" : "spatiotemporal-cluster",
+      evidence,
+      uncertainty: [...new Set(uncertainty)],
+    },
+  };
+}
+
+/**
+ * Build a proposal only from normalized evidence. This never persists a Route,
+ * never guesses a street path, and never turns uncertain time/precision into fact.
+ */
+export function planMediaPlacementProposals(
+  inputs: readonly MediaPlacementProposalInput[],
+  journey: Journey,
+  options: { batchId: string },
+): MediaPlacementProposalPlan {
+  if (!options.batchId) throw new RangeError("Media placement proposal batchId is required");
+  if (inputs.length > MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxInputs) {
+    throw new RangeError("Media placement proposal batch exceeds the bounded input limit");
+  }
+
+  const identities = buildProposalIdentities(inputs);
+  const implausibleSpeed = implausibleSpeedIdentityKeys(identities);
+  const matchExisting: ExistingRoutePointProposal[] = [];
+  const pendingConfirmation: PendingRoutePointProposal[] = [];
+  const newEligible: ProposalIdentity[] = [];
+
+  for (const identity of identities.sort(proposalIdentityCompare)) {
+    const signal = identity.representative.signal;
+    if (!signal || !signalHasCoordinateEvidence(signal)) {
+      pendingConfirmation.push(pendingProposal(identity, "missing-coordinate-evidence"));
+      continue;
+    }
+    if (!Number.isFinite(signal.accuracyMeters) || (signal.accuracyMeters ?? -1) < 0) {
+      pendingConfirmation.push(pendingProposal(identity, "accuracy-unknown"));
+      continue;
+    }
+    if ((signal.accuracyMeters ?? 0) > MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxAutomaticAccuracyMeters) {
+      pendingConfirmation.push(pendingProposal(identity, "accuracy-too-coarse"));
+      continue;
+    }
+    if (proposalTime(signal).kind === "unknown") {
+      pendingConfirmation.push(pendingProposal(identity, "missing-time-evidence"));
+      continue;
+    }
+    if (implausibleSpeed.has(identity.key)) {
+      pendingConfirmation.push(pendingProposal(identity, "implausible-speed", ["speed-conflict"]));
+      continue;
+    }
+    if (hasStrongRouteEvidenceConflict(signal, journey)) {
+      pendingConfirmation.push(
+        pendingProposal(identity, "conflicting-route-evidence", ["gps-time-conflict"]),
+      );
+      continue;
+    }
+
+    const suggestion = suggestMediaPlacement(signal, [journey], journey.id);
+    if (
+      suggestion?.routePointId
+      && suggestion.distanceKm !== undefined
+      && suggestion.distanceKm <= GPS_STRONG_DISTANCE_KM
+    ) {
+      matchExisting.push({
+        kind: "match-existing",
+        journeyId: journey.id,
+        routePointId: suggestion.routePointId,
+        fileIndexes: [...identity.fileIndexes],
+        basis: {
+          reason: "existing-route-point-evidence",
+          evidence: [...new Set([
+            ...proposalEvidence(identity),
+            ...suggestion.evidence.map((value) => `placement:${value}`),
+          ])],
+          uncertainty: proposalUncertainty(identity),
+        },
+      });
+      continue;
+    }
+    if (hasStrongExistingSpatialTarget(signal, journey)) {
+      pendingConfirmation.push(pendingProposal(identity, "ambiguous-existing-route"));
+      continue;
+    }
+    newEligible.push(identity);
+  }
+
+  const clusters: ProposalIdentity[][] = [];
+  for (const identity of newEligible.sort(proposalIdentityCompare)) {
+    const target = clusters.find((cluster) => canJoinProposalCluster(cluster, identity));
+    if (target) target.push(identity);
+    else clusters.push([identity]);
+  }
+
+  return {
+    algorithmVersion: MEDIA_PLACEMENT_PROPOSAL_ALGORITHM_VERSION,
+    scope: {
+      batchId: options.batchId,
+      journeyId: journey.id,
+      routeRevision: journey.revision,
+    },
+    matchExisting,
+    suggestNew: clusters.map(newProposalFromCluster),
+    pendingConfirmation,
+  };
+}
+
+export function isMediaPlacementProposalPlanCurrent(
+  plan: MediaPlacementProposalPlan,
+  current: {
+    batchId: string;
+    journeyId: string;
+    routeRevision: number;
+    cancelled?: boolean;
+  },
+) {
+  return current.cancelled !== true
+    && plan.scope.batchId === current.batchId
+    && plan.scope.journeyId === current.journeyId
+    && plan.scope.routeRevision === current.routeRevision;
 }
 
 function inBounds(view: DataView, offset: number, bytes: number) {
