@@ -21,6 +21,7 @@
  * each graded window reports its tick count so the two sources stay separable.
  */
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { gradeChapterRailReveal } from "./qa-chapter-rail-observation.mjs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
@@ -5921,6 +5922,10 @@ try {
           railOverflows: rail.scrollWidth > rail.clientWidth + 16,
           railWidth: rail.clientWidth,
           railScrollLeft: rail.scrollLeft,
+          railReveal: {
+            railWidth: railRect.width, scrollLeft: rail.scrollLeft,
+            activeLeft: activeRect.left - railRect.left, activeRight: activeRect.right - railRect.left,
+          },
           railRowSpread: Math.max(...buttons.map((button) => button.getBoundingClientRect().top))
             - Math.min(...buttons.map((button) => button.getBoundingClientRect().top)),
           activeRoutePointId: active.dataset.routePointId,
@@ -5957,10 +5962,25 @@ try {
         const activeBounds = active.getBoundingClientRect();
         return activeBounds.left >= railBounds.left - 2 && activeBounds.right <= railBounds.right + 2;
       }, null, { polling: 'raf', timeout: 3_000 });
-      progress.resized = await page.evaluate(() => ({
-        width: innerWidth,
-        railWidth: document.querySelector('header .journey-story__route-points')?.clientWidth ?? 0,
-      }));
+      progress.resized = await page.evaluate(() => {
+        const rail = document.querySelector('header .journey-story__route-points');
+        const active = rail?.querySelector('button.is-chapter-active');
+        if (!rail || !active) throw new Error("resized chapter rail lost its active chapter");
+        const railRect = rail.getBoundingClientRect();
+        const activeRect = active.getBoundingClientRect();
+        return {
+          width: innerWidth, railWidth: rail.clientWidth,
+          railReveal: {
+            railWidth: railRect.width, scrollLeft: rail.scrollLeft,
+            activeLeft: activeRect.left - railRect.left, activeRight: activeRect.right - railRect.left,
+          },
+        };
+      });
+      // A wide rail may already contain chapter 17 at scrollLeft=0. The real
+      // resize must force automatic reveal; no fixture CSS/scroll writes or
+      // click/focus assistance is used to make the selected chapter visible.
+      progress.initialReveal = gradeChapterRailReveal(progress.initial.railReveal);
+      progress.resizedReveal = gradeChapterRailReveal(progress.resized.railReveal);
       await page.setViewportSize({ width: 1920, height: 1080 });
       const rail = page.locator("header .journey-story__route-points");
       const railBox = await rail.boundingBox();
@@ -6049,7 +6069,8 @@ try {
           || progress.initial.routePointCount !== 20 || !progress.initial.railInHeader
           || progress.initial.copyContainsRail || !progress.initial.railOverflows
           || progress.initial.railRowSpread > 2 || !progress.initial.activeVisible
-          || progress.initial.railScrollLeft <= 0
+          || progress.initialReveal.failed || progress.resizedReveal.failed
+          || !progress.resizedReveal.requiresScroll
           || progress.initial.activeRoutePointId !== "00000000-0000-4000-8000-000000000316"
           || !progress.initial.noteText?.includes("从港湾") || !progress.initial.noteVisible
           || !progress.initial.currentPointLabel?.includes("17")

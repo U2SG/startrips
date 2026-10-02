@@ -7,7 +7,14 @@ import {
   type RoutingCoordinate,
 } from "./route-candidate-provider";
 
-const MAX_SNAP_METERS = 750;
+// Place labels may identify a park's representative point rather than a road.
+// Keep a finite bound and preserve every offset for the member's comparison.
+const MAX_SNAP_METERS: Record<RoadProfile, number> = { driving: 10_000, walking: 750, cycling: 750 };
+const STEP_MODES: Record<RoadProfile, readonly string[]> = {
+  driving: ["driving"],
+  walking: ["walking"],
+  cycling: ["cycling", "pushing bike"],
+};
 const MAX_GEOMETRY_POINTS = 4_000;
 const MAX_DIRECT_METERS = 400_000;
 
@@ -72,18 +79,19 @@ export function acceptOsrmCandidate(
   ordered: readonly RoutingCoordinate[],
   profile: RoadProfile,
 ): RouteCandidate | null {
-  if (!route || profile !== "driving" || route.geometry?.type !== "LineString") return null;
+  if (!route || route.geometry?.type !== "LineString") return null;
+  const maxSnapMeters = MAX_SNAP_METERS[profile];
   const geometry = validGeometry(route.geometry.coordinates);
   if (!geometry || waypoints.length !== ordered.length
     || !Array.isArray(route.legs) || route.legs.length !== ordered.length - 1
     || route.legs.some((leg) => !leg || !Array.isArray(leg.steps) || !leg.steps.length
-      || leg.steps.some((step) => !step || step.mode !== "driving"))
+      || leg.steps.some((step) => !step || !STEP_MODES[profile].includes(step.mode ?? "")))
     || !Number.isFinite(route.distance) || !Number.isFinite(route.duration)
     || !(route.distance! > 0) || !(route.duration! > 0)) return null;
   if (waypoints.some((point, index) => !Array.isArray(point?.location) || point.location.length !== 2
     || !point.location.every(Number.isFinite) || Math.abs(point.location[0]) > 180 || Math.abs(point.location[1]) > 90
-    || !Number.isFinite(point.distance) || point.distance! < 0 || point.distance! > MAX_SNAP_METERS
-    || meters(ordered[index], { lon: point.location[0], lat: point.location[1] }) > MAX_SNAP_METERS)) return null;
+    || !Number.isFinite(point.distance) || point.distance! < 0 || point.distance! > maxSnapMeters
+    || meters(ordered[index], { lon: point.location[0], lat: point.location[1] }) > maxSnapMeters)) return null;
   const direct = ordered.slice(1).reduce((total, point, index) => total + meters(ordered[index], point), 0);
   if (!(direct > 0) || direct > MAX_DIRECT_METERS || route.distance! > Math.max(8_000, direct * 5)) return null;
   if (geometry.some((point, index) => index > 0 && Math.abs(point[0] - geometry[index - 1][0]) > 180)) return null;
@@ -114,7 +122,7 @@ export function acceptOsrmCandidate(
     profile,
     relevance: Math.round(1000 / (1 + route.distance! / direct + corridorError / 1000)),
     snapping: {
-      maxDistanceMeters: MAX_SNAP_METERS,
+      maxDistanceMeters: maxSnapMeters,
       waypoints: waypoints.map((point, index) => ({
         requested: [ordered[index].lon, ordered[index].lat],
         snapped: [point.location![0], point.location![1]],
@@ -126,24 +134,25 @@ export function acceptOsrmCandidate(
 }
 
 export function createOsrmRouteCandidateProvider(
-  drivingBaseUrl: string | null,
+  baseUrls: Partial<Record<RoadProfile, string | null>>,
   fetcher: typeof fetch = fetch,
 ): RouteCandidateProvider {
   return {
     id: "osrm",
-    supports: (profile) => profile === "driving" && Boolean(drivingBaseUrl),
+    supports: (profile) => Boolean(baseUrls[profile]),
     async candidates({ coordinates, profile, alternativesCount, signal }: RouteCandidateRequest) {
-      if (profile !== "driving" || !drivingBaseUrl) throw new RoutingUnavailableError("Driving route provider is not configured");
+      const baseUrl = baseUrls[profile];
+      if (!baseUrl) throw new RoutingUnavailableError("This road profile is not configured");
       if (coordinates.length < 2 || coordinates.length > 18 || alternativesCount < 1 || alternativesCount > 3) {
         throw new RoutingUnavailableError("Road route request exceeds provider limits");
       }
       const coordinatePath = coordinates.map(({ lon, lat }) => `${lon},${lat}`).join(";");
-      const url = new URL(`${drivingBaseUrl}/route/v1/driving/${coordinatePath}`);
+      const url = new URL(`${baseUrl}/route/v1/${profile}/${coordinatePath}`);
       url.searchParams.set("overview", "full");
       url.searchParams.set("geometries", "geojson");
       url.searchParams.set("alternatives", String(alternativesCount - 1));
-      // A driving graph may still route over ferries. Inspect each returned
-      // step and reject any non-driving transport rather than road-label it.
+      // Each URL must serve a graph built for that profile. Check every step
+      // as well: a graph may use a ferry/train or be configured incorrectly.
       url.searchParams.set("steps", "true");
       let response: Response;
       try {
@@ -151,7 +160,7 @@ export function createOsrmRouteCandidateProvider(
       } catch {
         throw new RoutingUnavailableError();
       }
-      if (!response.ok) throw new RoutingUnavailableError();
+      if (!response.ok && response.status !== 400) throw new RoutingUnavailableError();
       const contentLength = Number(response.headers.get("content-length") ?? 0);
       if (contentLength > 1_000_000) throw new RoutingUnavailableError("Road route response is too large");
       let payload: OsrmResponse;
@@ -163,6 +172,10 @@ export function createOsrmRouteCandidateProvider(
         throw new RoutingUnavailableError("Road route response is invalid");
       }
       if (!payload || typeof payload !== "object") throw new RoutingUnavailableError("Road route response is invalid");
+      if (!response.ok) {
+        if (payload.code === "NoRoute" || payload.code === "NoSegment") return [];
+        throw new RoutingUnavailableError();
+      }
       if (payload.code !== "Ok") return [];
       if (!Array.isArray(payload.waypoints) || !Array.isArray(payload.routes)) {
         throw new RoutingUnavailableError("Road route response is invalid");
