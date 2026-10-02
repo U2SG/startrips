@@ -511,9 +511,19 @@ export function JourneyStream({
         ><IconChevronRight size={20} stroke={1.35} aria-hidden="true" /></button>
       ) : null}
       {paused ? <p className="journey-stream__paused" role="status">已暂停流动 · 空格继续</p> : null}
-      {lightbox && lightboxRead?.status === "ready" && lightboxEntry?.kind === "media" ? (
+      {lightbox && lightboxEntry?.kind === "media" ? (
         <div className="journey-stream__lightbox" role="dialog" aria-label="大图" onClick={() => setLightbox(null)}>
-          <img src={lightboxRead.read.url} alt={lightboxEntry.asset.fileName} />
+          {lightboxRead?.status === "ready" ? (
+            <img
+              src={lightboxRead.read.url}
+              alt={lightboxEntry.asset.fileName}
+              onLoad={() => clearRetry(lightboxEntry.asset.id)}
+              // An expired signed URL is read once more; the view stays open.
+              onError={() => expireRead(lightboxEntry.asset.id)}
+            />
+          ) : (
+            <p role="status">{lightboxRead?.status === "error" ? "这张照片暂时无法读取" : "正在读取原图…"}</p>
+          )}
           {lightboxEntry.place || lightboxEntry.date ? (
             <p>{[lightboxEntry.place, lightboxEntry.date].filter(Boolean).join(" · ")}</p>
           ) : null}

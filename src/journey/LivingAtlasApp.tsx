@@ -2891,6 +2891,18 @@ export function LivingAtlasApp({
     setShareTarget({ lockedJourneyId });
   }
 
+  /**
+   * A trial reader hands over to classic Story at the entry being read: its
+   * asset when it has one, and always its Route Point, so a note-only point
+   * opens where its note can be read and edited.
+   */
+  function openClassicStory(target: { routePointId: string | null; assetId: string | null }) {
+    setStoryRoutePointId(target.routePointId);
+    setStoryInitialAssetId(target.assetId);
+    setStoryInitialSnapState("in-context");
+    setStoryClassicFor(storyJourneyId);
+  }
+
   function navigateStoryJourney(id: string) {
     claimPlaybackReturnIntent();
     timeCursor.selectJourney(id);
@@ -4351,12 +4363,7 @@ export function LivingAtlasApp({
             onObservationChange={handleStoryObservationChange}
             onClose={() => closeJourneyStory(null)}
             onNavigate={navigateStoryJourney}
-            onOpenClassic={(target) => {
-              setStoryRoutePointId(null);
-              setStoryInitialAssetId(target.assetId);
-              setStoryInitialSnapState("in-context");
-              setStoryClassicFor(storyJourneyId);
-            }}
+            onOpenClassic={openClassicStory}
           />
         </Suspense>
       ) : storyJourneyId && storyReader === "book" ? (
@@ -4372,12 +4379,7 @@ export function LivingAtlasApp({
             onObservationChange={handleStoryObservationChange}
             onClose={() => closeJourneyStory(null)}
             onNavigate={navigateStoryJourney}
-            onOpenClassic={(target) => {
-              setStoryRoutePointId(null);
-              setStoryInitialAssetId(target.assetId);
-              setStoryInitialSnapState("in-context");
-              setStoryClassicFor(storyJourneyId);
-            }}
+            onOpenClassic={openClassicStory}
           />
         </Suspense>
       ) : storyJourneyId ? (
