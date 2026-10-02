@@ -8894,6 +8894,99 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .everyday-fragments__form textarea { resize: vertical; }
 
+/* #497: search-first Everyday Fragment place confirmation, scoped to the existing form. */
+.everyday-fragment-place-input {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.everyday-fragment-place-input__search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.everyday-fragment-place-input__confirmed,
+.everyday-fragment-place-input__hint,
+.everyday-fragment-place-input__message {
+  margin: 0;
+}
+
+.everyday-fragment-place-input__confirmed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  color: var(--atlas-muted);
+}
+
+.everyday-fragment-place-input__confirmed strong { color: var(--atlas-text); }
+
+.everyday-fragment-place-input__results {
+  gap: 6px !important;
+  margin: 0;
+}
+
+.everyday-fragment-place-input__results li {
+  padding: 0;
+  border: 0;
+}
+
+.everyday-fragment-place-input__results button {
+  display: grid;
+  width: 100%;
+  justify-items: start;
+  gap: 2px;
+  text-align: left;
+}
+
+.everyday-fragment-place-input__results button[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--atlas-cyan) 65%, var(--atlas-line));
+  background: rgba(119, 200, 194, 0.14);
+}
+
+.everyday-fragment-place-input__results small,
+.everyday-fragment-place-input__hint,
+.everyday-fragment-place-input__confirmed span {
+  color: var(--atlas-muted);
+}
+
+.everyday-fragment-place-input__attribution {
+  width: fit-content;
+  color: var(--atlas-cyan);
+}
+
+.everyday-fragments__manual-location {
+  border-top: 1px solid var(--atlas-line);
+  padding-top: 2px;
+}
+
+.everyday-fragments__manual-location summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  cursor: pointer;
+  color: var(--atlas-muted);
+}
+
+.everyday-fragments__manual-location[open] {
+  display: grid;
+  gap: 8px;
+}
+
+@media (max-width: 520px) {
+  .everyday-fragment-place-input__search {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .everyday-fragment-place-input__search > button {
+    width: 100%;
+  }
+}
+
 /* #232: the quiet Home Base suggestion beside the Atlas timeline.
    Deliberately a flow-level card rather than an overlay: it has no backdrop,
    no fixed positioning over the timeline and no focus trap, so the Atlas

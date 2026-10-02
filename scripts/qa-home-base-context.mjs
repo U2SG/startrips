@@ -260,6 +260,7 @@ async function waitForHeld(fragments) {
 
 async function fillFragment(form, note = "") {
   await form.getByLabel("日期", { exact: true }).fill("2020-05-06");
+  await form.locator(".everyday-fragments__manual-location > summary").click();
   await form.getByLabel("纬度", { exact: true }).fill("22.5431");
   await form.getByLabel("经度", { exact: true }).fill("114.0579");
   await form.getByLabel("随记（选填）", { exact: true }).fill(note);
@@ -330,6 +331,7 @@ async function fragmentQa(owner, name) {
     created.occurredOn === "2020-05-06" && created.homeBasePeriodId === null && created.placeLabel === null && created.note === null);
   await row.getByRole("button", { name: "编辑", exact: true }).click();
   form = row.getByRole("form", { name: "编辑日常" });
+  await form.locator(".everyday-fragments__manual-location > summary").click();
   await form.getByLabel("地点（选填）").fill("深圳湾");
   await form.getByLabel("随记（选填）").fill("晚风");
   fragments.holdNext = "PUT";

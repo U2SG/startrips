@@ -6,6 +6,11 @@ import {
   type EverydayFragmentValues,
 } from "./everydayFragment";
 import { JourneyApiError, type EverydayFragmentClient } from "./journeyApi";
+import {
+  createEverydayFragmentPlaceSearchCoordinator,
+  EverydayFragmentPlaceInput,
+  type EverydayFragmentConfirmedPlace,
+} from "./EverydayFragmentPlaceInput";
 
 const REASONS: Record<string, string> = {
   EVERYDAY_FRAGMENT_INVALID_DATE: "请填写有效的日期。",
@@ -59,7 +64,7 @@ function useAction() {
   return { pending, error, run };
 }
 
-function FragmentForm({ fragment, save, onSaved, onCancel }: {
+export function FragmentForm({ fragment, save, onSaved, onCancel }: {
   fragment?: EverydayFragment;
   save: (values: EverydayFragmentValues) => Promise<EverydayFragment>;
   onSaved: (fragment: EverydayFragment) => void;
@@ -70,13 +75,56 @@ function FragmentForm({ fragment, save, onSaved, onCancel }: {
   const [longitude, setLongitude] = useState(fragment ? String(fragment.longitude) : "");
   const [place, setPlace] = useState(fragment?.placeLabel ?? "");
   const [note, setNote] = useState(fragment?.note ?? "");
+  const placeSearchCoordinator = useRef(createEverydayFragmentPlaceSearchCoordinator());
+  const [confirmedPlace, setConfirmedPlace] = useState<EverydayFragmentConfirmedPlace | null>(fragment ? {
+    latitude: fragment.latitude,
+    longitude: fragment.longitude,
+    placeLabel: fragment.placeLabel,
+  } : null);
+  const [locationMode, setLocationMode] = useState<"confirmed" | "manual" | "unconfirmed">(
+    fragment ? "confirmed" : "unconfirmed",
+  );
+  const [searchResetEpoch, setSearchResetEpoch] = useState(0);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const action = useAction();
+
+  function applySelection(selection: EverydayFragmentConfirmedPlace) {
+    setConfirmedPlace(selection);
+    setLatitude(String(selection.latitude));
+    setLongitude(String(selection.longitude));
+    setPlace(selection.placeLabel ?? "");
+    setLocationMode("confirmed");
+    setLocationError(null);
+  }
+
+  function changeSearchQuery() {
+    setConfirmedPlace(null);
+    setLocationMode("unconfirmed");
+    setLocationError(null);
+  }
+
+  function changeManual(setter: (value: string) => void, value: string) {
+    placeSearchCoordinator.current.invalidate();
+    setSearchResetEpoch((current) => current + 1);
+    setter(value);
+    setConfirmedPlace(null);
+    setLocationMode("manual");
+    setLocationError(null);
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault();
+    if (locationMode === "unconfirmed") {
+      setLocationError("请先从搜索结果确认地点，或修改手动坐标后再保存。");
+      return;
+    }
+    setLocationError(null);
+    const parsedLatitude = latitude.trim() ? Number(latitude) : Number.NaN;
+    const parsedLongitude = longitude.trim() ? Number(longitude) : Number.NaN;
     void action.run(() => save({
       occurredOn: date,
-      latitude: Number(latitude),
-      longitude: Number(longitude),
+      latitude: parsedLatitude,
+      longitude: parsedLongitude,
       placeLabel: place.trim() || null,
       note: note.trim() || null,
       // Home context is presentation only. Never infer ownership from it.
@@ -88,17 +136,29 @@ function FragmentForm({ fragment, save, onSaved, onCancel }: {
       <fieldset disabled={action.pending}>
         <legend>{fragment ? "编辑日常" : "记录日常"}</legend>
         <label>日期<input type="date" required value={date} onChange={(event) => setDate(event.target.value)} /></label>
-        <div className="everyday-fragments__coordinates">
-          <label>纬度<input type="number" required min={-90} max={90} step="any" value={latitude} onChange={(event) => setLatitude(event.target.value)} /></label>
-          <label>经度<input type="number" required min={-180} max={180} step="any" value={longitude} onChange={(event) => setLongitude(event.target.value)} /></label>
-        </div>
-        <label>地点（选填）<input maxLength={MAX_EVERYDAY_FRAGMENT_PLACE_LABEL_LENGTH} value={place} onChange={(event) => setPlace(event.target.value)} /></label>
+        <EverydayFragmentPlaceInput
+          confirmed={confirmedPlace}
+          coordinator={placeSearchCoordinator.current}
+          disabled={action.pending}
+          resetEpoch={searchResetEpoch}
+          onQueryChange={changeSearchQuery}
+          onSelect={applySelection}
+        />
+        <details className="everyday-fragments__manual-location">
+          <summary>找不到地点？手动输入坐标</summary>
+          <div className="everyday-fragments__coordinates">
+            <label>纬度<input type="number" min={-90} max={90} step="any" value={latitude} onChange={(event) => changeManual(setLatitude, event.target.value)} /></label>
+            <label>经度<input type="number" min={-180} max={180} step="any" value={longitude} onChange={(event) => changeManual(setLongitude, event.target.value)} /></label>
+          </div>
+          <label>地点（选填）<input maxLength={MAX_EVERYDAY_FRAGMENT_PLACE_LABEL_LENGTH} value={place} onChange={(event) => changeManual(setPlace, event.target.value)} /></label>
+        </details>
         <label>随记（选填）<textarea rows={3} maxLength={MAX_EVERYDAY_FRAGMENT_NOTE_LENGTH} value={note} onChange={(event) => setNote(event.target.value)} /></label>
         <div className="everyday-fragments__actions">
           <button type="submit">{action.pending ? "保存中…" : "保存日常"}</button>
           <button type="button" onClick={onCancel}>取消</button>
         </div>
       </fieldset>
+      {locationError ? <p role="alert">{locationError}</p> : null}
       {action.error ? <p role="alert">{action.error}</p> : null}
     </form>
   );
