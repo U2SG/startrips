@@ -841,6 +841,25 @@ describe("planMediaPlacementProposals (#335 / ST-114)", () => {
     })).toBe(false);
   });
 
+  it("handles the configured maximum batch as one bounded cluster without changing coverage", () => {
+    const target = journey("target", "2026-10-01", "2026-10-01", []);
+    const inputs = Array.from(
+      { length: MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxInputs },
+      (_, fileIndex) => proposalInput(
+        fileIndex,
+        coordinateSignal(22.28, 114.17, "2026-10-01T06:00:00Z", 10),
+      ),
+    );
+
+    const plan = planMediaPlacementProposals(inputs, target, { batchId: "max-bounded-batch" });
+    expect(plan.matchExisting).toEqual([]);
+    expect(plan.pendingConfirmation).toEqual([]);
+    expect(plan.suggestNew).toHaveLength(1);
+    expect(plan.suggestNew[0].fileIndexes).toHaveLength(MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxInputs);
+    expect(plan.suggestNew[0].fileIndexes[0]).toBe(0);
+    expect(plan.suggestNew[0].fileIndexes.at(-1)).toBe(MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxInputs - 1);
+  });
+
   it("fails closed when a batch exceeds the explicit bounded input limit", () => {
     const target = journey("target", "2026-10-01", "2026-10-01", []);
     const oversized = Array.from(
