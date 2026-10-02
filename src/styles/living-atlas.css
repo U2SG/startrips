@@ -320,6 +320,23 @@
 }
 .route-shape-handle:active { cursor: grabbing; }
 
+.route-candidate-editor__ferry { display: flex !important; align-items: center; min-height: 44px; }
+.route-candidate-editor__access { display: grid; gap: 8px; }
+.route-candidate-editor__access summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.nearby-route-points { display: grid; gap: 8px; padding-block: 12px; border-block: 1px solid var(--atlas-line); }
+.nearby-route-points p { margin: 0; color: var(--atlas-muted); line-height: 1.5; }
+.nearby-route-points__modes { display: flex; gap: 8px; }
+.nearby-route-points__modes button { flex: 1; }
+.nearby-route-points ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.nearby-route-points button { min-height: 44px; padding: 8px 12px; color: var(--atlas-text); background: var(--atlas-panel-solid); border: 1px solid var(--atlas-line); cursor: pointer; }
+.nearby-route-points li button { display: grid; gap: 4px; width: 100%; text-align: left; overflow-wrap: anywhere; }
+.nearby-route-points span, .nearby-route-points small { color: var(--atlas-muted); }
+.nearby-route-points button[aria-pressed="true"] { border-color: var(--atlas-cyan); }
+.nearby-route-points button:focus-visible, .route-nearby-handle:focus-visible { outline: 2px solid var(--atlas-cyan); outline-offset: 2px; }
+.nearby-route-points button:disabled { opacity: 0.45; cursor: default; }
+.route-nearby-origin { width: 20px; height: 20px; border: 2px dashed var(--atlas-muted); border-radius: 50%; background: var(--atlas-panel-solid); }
+.route-nearby-handle { width: 44px; height: 44px; border: 1px solid var(--atlas-cyan); border-radius: 50%; color: var(--atlas-text); background: var(--atlas-panel-solid); cursor: pointer; }
+
 /* Earth Dive can keep MapLibre mounted before it owns input. MapLibre's own
    `.maplibregl-ctrl` rule opts native controls back into pointer-events, so the
    parent detail layer alone is not an ownership boundary. Key this override to

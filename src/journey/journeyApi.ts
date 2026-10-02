@@ -9,6 +9,9 @@ import type {
   JourneyInput,
   RoadProfile,
   RouteCandidate,
+  RouteAccessPoints,
+  RoutePointSuggestion,
+  RoutingPoint,
   RouteSegmentRecord,
   RouteShapePoint,
   LocationSearchResponse,
@@ -166,6 +169,18 @@ export async function routeCandidateAvailability(fetcher: Fetcher = fetch): Prom
   return response.profiles;
 }
 
+export async function requestRoutePointSuggestions(
+  input: { coordinate: RoutingPoint; neighbors: { before?: RoutingPoint; after?: RoutingPoint }; profile: RoadProfile; allowFerries?: boolean },
+  signal: AbortSignal,
+  fetcher: Fetcher = fetch,
+): Promise<RoutePointSuggestion[]> {
+  const response = await requestJson<{ suggestions: RoutePointSuggestion[] }>(
+    "/api/journey-route-segments/point-suggestions",
+    { method: "POST", body: JSON.stringify(input), signal }, fetcher,
+  );
+  return response.suggestions;
+}
+
 export async function requestRouteCandidates(
   journeyId: string,
   fromId: string,
@@ -175,10 +190,11 @@ export async function requestRouteCandidates(
   profile: RoadProfile,
   signal: AbortSignal,
   fetcher: Fetcher = fetch,
+  options: { allowFerries?: boolean; accessPoints?: RouteAccessPoints } = {},
 ): Promise<{ sourceKey: string; revision: number; candidates: SignedRouteCandidate[] }> {
   return requestJson(
     `${routeSegmentPath(journeyId, fromId, toId)}/candidates`,
-    { method: "POST", body: JSON.stringify({ sourceKey, revision, profile, alternativesCount: 3 }), signal },
+    { method: "POST", body: JSON.stringify({ sourceKey, revision, profile, alternativesCount: 3, ...options }), signal },
     fetcher,
   );
 }

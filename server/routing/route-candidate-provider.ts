@@ -1,4 +1,4 @@
-import type { RoadProfile, RouteCandidate } from "../../src/journey/types";
+import type { RoadProfile, RouteCandidate, RoutePointSuggestion } from "../../src/journey/types";
 
 export type RoutingCoordinate = { lat: number; lon: number };
 export type RouteCandidateRequest = {
@@ -6,12 +6,22 @@ export type RouteCandidateRequest = {
   profile: RoadProfile;
   alternativesCount: 1 | 2 | 3;
   signal: AbortSignal;
+  allowFerries?: boolean;
+  routingCoordinates?: readonly RoutingCoordinate[];
+};
+export type RoutePointSuggestionRequest = {
+  coordinate: RoutingCoordinate;
+  neighbors: { before?: RoutingCoordinate; after?: RoutingCoordinate };
+  profile: RoadProfile;
+  allowFerries?: boolean;
+  signal: AbortSignal;
 };
 
 export interface RouteCandidateProvider {
   readonly id: "osrm";
   supports(profile: RoadProfile): boolean;
   candidates(request: RouteCandidateRequest): Promise<RouteCandidate[]>;
+  pointSuggestions(request: RoutePointSuggestionRequest): Promise<RoutePointSuggestion[]>;
 }
 
 export class RoutingUnavailableError extends Error {

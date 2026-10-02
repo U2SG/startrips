@@ -959,19 +959,24 @@ try {
     // This case keeps re-signing on a one second cycle, so the canonical image
     // is briefly absent while each refresh is in flight. Wait for the stage to
     // be gone AND a fresh read to be on screen before grading the final state.
-    await page.waitForFunction(
+    const settledHandle = await page.waitForFunction(
       (expected) => {
-        const original = document.querySelector(
-          '.living-atlas__active-media img:not([data-cover-reveal-image])',
-        );
-        return document.querySelector(".living-atlas__active-media-reveal") === null
-          && original instanceof HTMLImageElement && original.src === expected
-          && original.complete && original.naturalWidth > 0;
+        const figure = document.querySelector(".living-atlas__active-media");
+        const stage = document.querySelector(".living-atlas__active-media-reveal");
+        const original = figure?.querySelector('img:not([data-cover-reveal-image])');
+        if (stage || !(original instanceof HTMLImageElement) || original.src !== expected
+          || !original.complete || original.naturalWidth === 0) return false;
+        // Preserve the successful observation. Another signed-read refresh can
+        // remove this image before a separate browser round trip reads it.
+        return { figure: Boolean(figure), stage: false, phase: null, degraded: null,
+          settleReason: null, canvases: figure.querySelectorAll("canvas").length,
+          originalSrc: original.src, originalComplete: original.complete };
       },
       ORIGINAL_URL_RESIGNED,
       { timeout: 40_000 },
     );
-    const settled = await coverState(page);
+    const settled = await settledHandle.jsonValue();
+    await settledHandle.dispose();
     check("resigned-original/settles-on-the-canonical-original", settled.stage === false, settled);
     check(
       "resigned-original/the-fresh-signed-read-is-the-final-image",

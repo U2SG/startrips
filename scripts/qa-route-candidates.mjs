@@ -15,11 +15,12 @@ const browser = await launchQaBrowser({
   headless: true,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
-const evidence = { requests: [], writes: [], stages: [], searches: [] };
+const evidence = { requests: [], writes: [], stages: [], searches: [], pointSuggestions: [] };
 let failNext = false;
 let availabilityRequests = 0;
 let pendingCandidateGate = null;
 let pendingShapeSearchGate = null;
+let pendingPointSuggestionGate = null;
 let nextSnapOffsetMeters = 0;
 const latch = () => {
   let resolve;
@@ -65,6 +66,22 @@ async function openPage(policy = "default", { owner = false, viewport = { width:
     availabilityRequests += 1;
     return json(route, { profiles });
   });
+  await page.route("**/api/journey-route-segments/point-suggestions", async (route) => {
+    const body = route.request().postDataJSON();
+    evidence.pointSuggestions.push(body);
+    const gate = pendingPointSuggestionGate;
+    pendingPointSuggestionGate = null;
+    if (gate) { gate.started.resolve(); await gate.release.promise; }
+    try {
+      await json(route, { suggestions: [1, 2, 3].map((index) => ({
+        id: `qa-nearby-${body.profile}-${index}`, label: `${body.profile} nearby road ${index}`,
+        coordinate: { lat: body.coordinate.lat + index * 0.003, lon: body.coordinate.lon + index * 0.003 },
+        distanceMeters: index * 470, connected: true,
+      })) });
+    } catch (error) {
+      if (!gate || route.request().failure()?.errorText !== "net::ERR_ABORTED") throw error;
+    } finally { gate?.completed.resolve(); }
+  });
   await page.route("**/api/locations/search?**", async (route) => {
     const parameters = new URL(route.request().url()).searchParams;
     const query = parameters.get("q");
@@ -80,7 +97,8 @@ async function openPage(policy = "default", { owner = false, viewport = { width:
   });
   await page.route(/\/api\/journey-route-segments\/journeys\/.*\/segments\/.*\/candidates$/, async (route) => {
     const body = route.request().postDataJSON();
-    evidence.requests.push({ sourceKey: body.sourceKey, revision: body.revision, profile: body.profile });
+    evidence.requests.push({ sourceKey: body.sourceKey, revision: body.revision, profile: body.profile,
+      allowFerries: body.allowFerries, accessPoints: body.accessPoints });
     const gate = pendingCandidateGate;
     if (gate) {
       gate.started.resolve();
@@ -94,7 +112,11 @@ async function openPage(policy = "default", { owner = false, viewport = { width:
     const ordered = [[fromLon, fromLat], ...(evidence.writes.at(-1)?.record.shapePoints ?? []).map(({ lon, lat }) => [lon, lat]), [toLon, toLat]];
     const offsetMeters = nextSnapOffsetMeters;
     nextSnapOffsetMeters = 0;
-    const snapped = ordered.map((coordinate, index) => index === 0 && offsetMeters
+    const selected = ordered.map((coordinate, index) => {
+      const access = index === 0 ? body.accessPoints?.from : index === ordered.length - 1 ? body.accessPoints?.to : null;
+      return access ? [access.lon, access.lat] : coordinate;
+    });
+    const snapped = selected.map((coordinate, index) => index === 0 && offsetMeters
       ? [coordinate[0], coordinate[1] + offsetMeters / 111_195] : coordinate);
     const middle = (bend) => [(fromLon + toLon) / 2, (fromLat + toLat) / 2 + bend];
     const candidates = [0.12, -0.12].map((bend, index) => ({
@@ -104,8 +126,10 @@ async function openPage(policy = "default", { owner = false, viewport = { width:
         distanceMeters: 210_000 + index * 10_000,
         durationSeconds: 9_000 + index * 700,
         provider: "osrm", profile: body.profile, relevance: 100 - index,
+        ...(body.allowFerries ? { includesFerry: true } : {}),
         snapping: { maxDistanceMeters: body.profile === "driving" ? 10_000 : 750, waypoints: ordered.map((coordinate, index) => ({
           requested: coordinate, snapped: snapped[index], distanceMeters: index === 0 ? offsetMeters : 0,
+          ...(selected[index] !== coordinate ? { selected: selected[index] } : {}),
           providerDistanceMeters: index === 0 ? offsetMeters : 0,
         })) },
       },
@@ -436,6 +460,133 @@ try {
   "unconfigured transport modes became selectable");
   await limited.page.close();
 
+  const assist = await openPage("default", { touch: true, viewport: { width: 390, height: 844 } });
+  await enterDetail(assist.page);
+  await assist.page.getByRole("button", { name: "贴合道路", exact: true }).tap();
+  await assist.page.getByRole("group", { name: "交通方式" }).getByRole("button", { name: "驾车", exact: true }).tap();
+  const assistBaseline = await readMap(assist.page);
+  const writesBeforeAssist = evidence.writes.length;
+  await assist.page.locator(".route-candidate-editor__access summary").tap();
+  await assist.page.getByRole("button", { name: "推荐终点附近", exact: true }).tap();
+  const nearby = assist.page.getByRole("region", { name: "附近可达点" });
+  await nearby.getByRole("button").filter({ hasText: "driving nearby road 1" }).waitFor();
+  await assist.page.locator(".route-nearby-handle").first().waitFor();
+  assert(evidence.writes.length === writesBeforeAssist && (await readMap(assist.page)).pointCount === assistBaseline.pointCount,
+    "nearby suggestions changed Journey topology or saved before selection");
+  await assertControlHit(nearby.locator("li button").first(), "nearby-mobile-choice");
+  await assist.page.screenshot({ path: `${artifactDir}/nearby-mobile-points.png` });
+  const chosenAccess = { lat: evidence.pointSuggestions.at(-1).coordinate.lat + 0.003, lon: evidence.pointSuggestions.at(-1).coordinate.lon + 0.003 };
+  await nearby.locator("li button").first().tap();
+  await assist.page.getByRole("button", { name: "查看候选", exact: true }).tap();
+  await assist.page.getByRole("button", { name: "路线 1", exact: true }).waitFor();
+  assert(JSON.stringify(evidence.requests.at(-1).accessPoints.to) === JSON.stringify(chosenAccess)
+    && (await readMap(assist.page)).pointCount === assistBaseline.pointCount, "selected road access did not reach routing or changed a Journey point");
+  await assist.page.getByRole("checkbox", { name: "允许包含轮渡", exact: true }).check();
+  await assist.page.getByRole("button", { name: "查看候选", exact: true }).tap();
+  await assist.page.getByText("这条路线包含轮渡，请核对班次和车辆运载限制。", { exact: true }).waitFor();
+  assert(evidence.requests.at(-1).allowFerries === true && (await readMap(assist.page)).camera === assistBaseline.camera,
+    "ferry was not explicitly requested or candidate preparation stole the map camera");
+  await assist.page.getByRole("button", { name: "就是这条", exact: true }).tap();
+  await assist.page.waitForFunction(() => document.querySelector(".detailed-earth-map")?.dataset.journeyOverlayConfirmedCount === "1");
+  assert(evidence.writes.at(-1).record.confirmedCandidate.includesFerry
+    && evidence.writes.at(-1).record.confirmedCandidate.snapping.waypoints.at(-1).selected,
+    "confirmation lost ferry or selected access-point metadata");
+
+  await assist.page.getByRole("button", { name: "调整经过位置", exact: true }).tap();
+  await assist.page.getByRole("textbox", { name: "搜索经过的地点" }).fill("Approximate synthetic bend");
+  await assist.page.getByRole("button", { name: "搜索", exact: true }).tap();
+  await assist.page.locator(".route-shape-picker__results button").first().tap();
+  await nearby.locator("li button").first().waitFor();
+  const coarseShape = evidence.pointSuggestions.at(-1).coordinate;
+  await nearby.locator("li button").first().tap();
+  await assist.page.getByRole("button", { name: "保存修正点", exact: true }).tap();
+  await assist.page.getByRole("status").filter({ hasText: "修正点已保存" }).waitFor();
+  const savedShape = evidence.writes.at(-1).record.shapePoints.at(-1);
+  assert(savedShape.lat === coarseShape.lat + 0.003 && savedShape.lon === coarseShape.lon + 0.003
+    && (await readMap(assist.page)).pointCount === assistBaseline.pointCount, "a recommended shape point did not shape the route independently of Journey nodes");
+
+  await assist.page.getByRole("button", { name: "调整经过位置", exact: true }).tap();
+  const removalPicker = assist.page.locator(".route-shape-picker");
+  await removalPicker.getByText("输入经纬度", { exact: true }).tap();
+  await removalPicker.getByRole("textbox", { name: "纬度", exact: true }).fill("50.4");
+  await removalPicker.getByRole("textbox", { name: "经度", exact: true }).fill("7.7");
+  const removalGate = { started: latch(), release: latch(), completed: latch() };
+  pendingPointSuggestionGate = removalGate;
+  const removedPointRequest = assist.page.waitForEvent("requestfailed", { predicate: (request) => /\/point-suggestions$/.test(new URL(request.url()).pathname) });
+  await removalPicker.getByRole("button", { name: "添加这组坐标", exact: true }).tap();
+  await removalGate.started.promise;
+  const removalIndex = await assist.page.locator(".route-candidate-editor__shape").count();
+  await assist.page.getByRole("button", { name: `移除第 ${removalIndex} 个修正点`, exact: true }).tap();
+  await removedPointRequest;
+  removalGate.release.resolve();
+  await removalGate.completed.promise;
+  await nearby.waitFor({ state: "detached" });
+  await assist.page.getByRole("button", { name: "退出调整", exact: true }).tap();
+  await assist.page.locator(".route-nearby-origin").waitFor({ state: "detached" });
+  const accessDetails = assist.page.locator(".route-candidate-editor__access");
+  if (await accessDetails.getAttribute("open") !== null) await accessDetails.locator("summary").tap();
+  const releasedMap = await readMap(assist.page);
+  const uncoveredRoutePoint = () => assist.page.evaluate(() => [
+    window.__detailedEarthMapProject?.(6.9603, 50.9375),
+    window.__detailedEarthMapProject?.(8.6821, 50.1109),
+  ].find((point) => point && point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight
+    && document.elementFromPoint(point.x, point.y)?.matches(".maplibregl-canvas")));
+  let normalPoint = await uncoveredRoutePoint();
+  if (!normalPoint) {
+    // Keep the editor open so closing it cannot mask a stale edit owner. Like a
+    // member, pan from exposed canvas to bring a covered Route Point into view.
+    const start = await assist.page.evaluate(() => Array.from({ length: 5 }, (_, i) => ({ x: innerWidth / 2, y: 120 + i * 50 }))
+      .reverse().find((point) => document.elementFromPoint(point.x, point.y)?.matches(".maplibregl-canvas")));
+    assert(start, `no exposed canvas for a real pan: ${JSON.stringify(releasedMap)}`);
+    await assist.page.mouse.move(start.x, start.y);
+    await assist.page.mouse.down();
+    await assist.page.mouse.move(start.x, 100, { steps: 12 });
+    // Holding the end of the drag gives a stationary release, without inertia.
+    await assist.page.waitForTimeout(250);
+    await assist.page.mouse.up();
+    normalPoint = await uncoveredRoutePoint();
+  }
+  assert(normalPoint, `no uncovered route point after a real map pan: ${JSON.stringify(await readMap(assist.page))}`);
+  await assist.page.touchscreen.tap(normalPoint.x, normalPoint.y);
+  await assist.page.waitForFunction(() => Boolean(document.querySelector("[data-qa-earth-dive-activated-route-point]")?.getAttribute("data-qa-earth-dive-activated-route-point")));
+  evidence.stages.push({ name: "removed-pending-point-releases-map", ...await readMap(assist.page) });
+
+  await accessDetails.locator("summary").tap();
+  const pointGate = { started: latch(), release: latch(), completed: latch() };
+  pendingPointSuggestionGate = pointGate;
+  const failedPointRequest = assist.page.waitForEvent("requestfailed", { predicate: (request) => /\/point-suggestions$/.test(new URL(request.url()).pathname) });
+  await assist.page.getByRole("button", { name: "推荐起点附近", exact: true }).tap();
+  await pointGate.started.promise;
+  await assist.page.getByRole("group", { name: "交通方式" }).getByRole("button", { name: "步行", exact: true }).tap();
+  await failedPointRequest;
+  pointGate.release.resolve();
+  await pointGate.completed.promise;
+  await nearby.getByRole("button").filter({ hasText: "walking nearby road 1" }).waitFor();
+  assert(await nearby.getByText("driving nearby road 1", { exact: true }).count() === 0,
+    "late nearby-point response survived a transport mode change");
+  await nearby.getByRole("button", { name: "使用原点", exact: true }).tap();
+  await assist.page.locator(".route-nearby-handle").first().waitFor({ state: "detached" });
+  assert(assist.pageErrors.length === 0, `nearby browser errors: ${assist.pageErrors.join(" | ")}`);
+  await assist.page.close();
+
+  const composer = await openPage();
+  await composer.page.goto(new URL("/?qaState=journey-composer&qaMode=route-points", baseUrl).toString(), { waitUntil: "domcontentloaded" });
+  const draftRow = composer.page.locator(".journey-route-draft > li[data-route-point-draft-id]").first();
+  await draftRow.locator(".journey-route-draft__summary").click();
+  const draftBefore = { lat: Number(await draftRow.getAttribute("data-route-point-latitude")), lon: Number(await draftRow.getAttribute("data-route-point-longitude")) };
+  const draftCount = await composer.page.locator(".journey-route-draft > li[data-route-point-draft-id]").count();
+  await draftRow.getByRole("button", { name: "附近可达点", exact: true }).click();
+  const draftNearby = draftRow.getByRole("region", { name: "附近可达点" });
+  await draftNearby.getByRole("button", { name: "步行", exact: true }).click();
+  await draftNearby.locator("li button").first().click();
+  assert(Number(await draftRow.getAttribute("data-route-point-latitude")) === draftBefore.lat + 0.003
+    && Number(await draftRow.getAttribute("data-route-point-longitude")) === draftBefore.lon + 0.003
+    && await composer.page.locator(".journey-route-draft > li[data-route-point-draft-id]").count() === draftCount,
+    "composer nearby selection replaced the wrong point or added a pseudo-place");
+  await composer.page.screenshot({ path: `${artifactDir}/composer-nearby-point.png` });
+  assert(composer.pageErrors.length === 0, `composer nearby errors: ${composer.pageErrors.join(" | ")}`);
+  await composer.page.close();
+
   const writesBeforeLayout = evidence.writes.length;
   for (const fixture of [
     { name: "desktop", viewport: { width: 1280, height: 900 } },
@@ -555,6 +706,7 @@ try {
   throw error;
 } finally {
   pendingCandidateGate?.release.resolve();
+  pendingPointSuggestionGate?.release.resolve();
   await fs.writeFile(`${artifactDir}/evidence.json`, JSON.stringify(evidence, null, 2));
   await browser.close();
 }

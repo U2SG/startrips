@@ -269,6 +269,20 @@ try {
     await firstGrip.focus();
     await page.keyboard.press("Space");
     await page.locator(".story-media-organizer__drag-stack").waitFor({ state: "visible" });
+    // KeyboardSensor defers its keydown listener to the next task. The overlay
+    // can paint before that listener and the droppable measurements are ready.
+    await page.evaluate(() => new Promise((resolve) => setTimeout(() => (
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ), 0)));
+    const keyboardStart = await page.locator(".story-media-organizer__item").evaluateAll((tiles) => tiles.map((tile) => ({
+      id: tile.getAttribute("data-media-tile-id"), rect: tile.getBoundingClientRect().toJSON(),
+    })));
+    await page.evaluate(() => {
+      window.addEventListener("keydown", (event) => {
+        window.__qaKeyboardSortEvent = { code: event.code, prevented: event.defaultPrevented,
+          focus: document.activeElement?.getAttribute("aria-label") };
+      }, { once: true });
+    });
     await page.keyboard.press("ArrowRight");
     // Drop only after the sortable target commits the collision result to the DOM.
     await page.waitForFunction((id) => {
@@ -278,7 +292,14 @@ try {
       .catch(async (error) => {
         const over = await page.locator('.story-media-organizer__item[data-drag-over="true"]')
           .evaluateAll((tiles) => tiles.map((tile) => tile.getAttribute("data-media-tile-id")));
-        throw new Error(`Keyboard sort did not select seed-2: ${JSON.stringify(over)}`, { cause: error });
+        const after = await page.evaluate(() => ({
+          event: window.__qaKeyboardSortEvent,
+          overlay: document.querySelector(".story-media-organizer__drag-stack")?.getBoundingClientRect().toJSON(),
+          tiles: [...document.querySelectorAll(".story-media-organizer__item")].map((tile) => ({
+            id: tile.getAttribute("data-media-tile-id"), rect: tile.getBoundingClientRect().toJSON(),
+          })),
+        }));
+        throw new Error(`Keyboard sort did not select seed-2: ${JSON.stringify({ over, keyboardStart, after })}`, { cause: error });
       });
     const reorderResponse = page.waitForResponse((response) => response.url().endsWith("/api/uploads/assets/reorder"));
     await page.keyboard.press("Space");
