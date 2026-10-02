@@ -2940,7 +2940,16 @@ async function verifyFinalAcceptanceMobileFlow() {
         await page.waitForFunction(() => {
           const action = document.querySelector('[data-story-playback-state="over-budget"] [data-story-playback-fallback="full"]');
           return action !== null && document.activeElement === action;
-        }, null, { timeout: 5_000 });
+        }, null, { timeout: 5_000 }).catch(async (error) => {
+          const focus = await page.evaluate(() => ({
+            layout: document.querySelector(".journey-story")?.getAttribute("data-story-layout"),
+            active: document.activeElement?.outerHTML.slice(0, 500),
+            actions: [...document.querySelectorAll('[data-story-playback-state="over-budget"] [data-story-playback-fallback="full"]')]
+              .map((action) => ({ html: action.outerHTML, rect: action.getBoundingClientRect().toJSON(),
+                inert: Boolean(action.closest("[inert]")), visibility: getComputedStyle(action).visibility })),
+          }));
+          throw new Error(`Story over-budget focus did not settle: ${JSON.stringify({ layout, focus })}`, { cause: error });
+        });
         const decision = await storyFullAction.evaluate((button) => {
           const panel = button.closest("[data-story-playback-state]");
           const entry = button.closest("[data-story-playback-entry]");
