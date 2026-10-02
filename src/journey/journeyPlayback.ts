@@ -105,6 +105,35 @@ export type PlaybackJourney = Journey & {
   chapterMedia?: ReadonlyMap<string | null, readonly JourneyMediaAsset[]>;
 };
 
+/**
+ * Which Stop-backed chapter owns each Route Point's presentation.
+ *
+ * A Stop owns its own chapter; a non-stop Route Point joins the chapter of the
+ * Stop it is anchored to, and otherwise forms its own lightweight chapter.
+ * This is the single derivation of chapter membership: `playbackMediaByChapter`
+ * and `storySequenceForJourney` both read it so a grouped Route Point cannot be
+ * placed in one chapter by one surface and another by the other.
+ */
+function playbackChapterByOwner(journey: Journey): Map<string, string> {
+  const pointsById = new Map(journey.routePoints.map((point) => [point.id, point]));
+  const chapterByOwner = new Map<string, string>();
+  for (const point of journey.routePoints) {
+    const explicitAnchor = point.isStop ? null : point.stayAnchorRoutePointId;
+    const anchor = explicitAnchor ? pointsById.get(explicitAnchor) : null;
+    chapterByOwner.set(point.id, anchor?.isStop ? anchor.id : point.id);
+  }
+  return chapterByOwner;
+}
+
+/** The Route Points that present inside one chapter, in canonical route order. */
+function playbackChapterMembers(
+  journey: Journey,
+  chapterId: string,
+  chapterByOwner: ReadonlyMap<string, string>,
+): RoutePoint[] {
+  return journey.routePoints.filter((point) => chapterByOwner.get(point.id) === chapterId);
+}
+
 export function playbackMediaByChapter(journey: PlaybackJourney): Map<string, JourneyMediaAsset[]> {
   const chapterMedia = journey.chapterMedia;
   if (chapterMedia) {
@@ -115,14 +144,8 @@ export function playbackMediaByChapter(journey: PlaybackJourney): Map<string, Jo
     const byOwner = playbackMediaByOwner(journey, journey.routePoints.map((point) => point.id));
     return new Map(journey.routePoints.map((point) => [point.id, byOwner.get(point.id) ?? []]));
   }
-  const pointsById = new Map(journey.routePoints.map((point) => [point.id, point]));
+  const chapterByOwner = playbackChapterByOwner(journey);
   const routeIndexById = new Map(journey.routePoints.map((point, index) => [point.id, index]));
-  const chapterByOwner = new Map<string, string>();
-  for (const point of journey.routePoints) {
-    const explicitAnchor = point.isStop ? null : point.stayAnchorRoutePointId;
-    const anchor = explicitAnchor ? pointsById.get(explicitAnchor) : null;
-    chapterByOwner.set(point.id, anchor?.isStop ? anchor.id : point.id);
-  }
 
   const byChapter = new Map(journey.routePoints.map((point) => [point.id, [] as JourneyMediaAsset[]]));
   for (const asset of journey.media) {
@@ -169,14 +192,105 @@ export function playbackIntroMedia(journey: Journey): JourneyMediaAsset[] {
   return orderedMediaForOwner(journey, null);
 }
 
+/**
+ * One entry of the canonical Story presentation sequence.
+ *
+ * `presentationId` is the entry's identity and is deliberately NOT the media
+ * asset id: the same asset can legitimately be presented twice under two
+ * different narrative roles, and a cursor keyed only by `assetId` cannot tell
+ * those appearances apart. `asset` is always the canonical stored row — a
+ * presentation entry never duplicates or re-uploads media.
+ *
+ * `contextOwner` says whose note/place context the entry speaks with, which is
+ * not always the asset's owner: a Journey-level opening may present an asset
+ * that belongs to one Route Point without presenting that Route Point.
+ */
+export type StorySequenceEntry = {
+  presentationId: string;
+  role: "media" | "note";
+  asset: JourneyMediaAsset | null;
+  routePointId: string | null;
+  contextOwner: "journey" | "route-point";
+  note?: string;
+};
+
+function routePointNoteText(point: RoutePoint | undefined): string | null {
+  const note = point?.note?.trim();
+  return note ? note : null;
+}
+
+function storyMediaEntry(asset: JourneyMediaAsset, routePointId: string | null): StorySequenceEntry {
+  return {
+    presentationId: `media:${asset.id}`,
+    role: "media",
+    asset,
+    routePointId,
+    contextOwner: routePointId === null ? "journey" : "route-point",
+  };
+}
+
+/**
+ * The canonical Story sequence for a whole Journey: Journey-level intro media,
+ * then every Route Point in canonical route order, each contributing its own
+ * content in route order.
+ *
+ * A Route Point that has a note but no media of its own is a real beat here,
+ * not an absence. "Empty is a valid chapter": the place and its note are the
+ * content, so the sequence keeps it instead of stepping past it.
+ *
+ * The media order here is identical to `playbackStoryMedia`, which is this
+ * sequence's media-only projection, so the two cannot drift apart.
+ */
+export function storySequenceForJourney(journey: Journey): StorySequenceEntry[] {
+  const chapterByOwner = playbackChapterByOwner(journey);
+  // One owner scan for the whole sequence. Each bucket is already in
+  // sortOrder, and walking a chapter's members in canonical route order
+  // concatenates those buckets into exactly the (route position, sortOrder)
+  // order `playbackMediaByChapter` produces, so no second sort and no second
+  // read of `routePointId` is needed. Keepsake measures owner reads against a
+  // linear budget (`journeyKeepsake.test.ts`).
+  const mediaByOwner = playbackMediaByOwner(
+    journey,
+    [null, ...journey.routePoints.map((point) => point.id)],
+  );
+  const entries: StorySequenceEntry[] = (mediaByOwner.get(null) ?? [])
+    .map((asset) => storyMediaEntry(asset, null));
+  for (const point of journey.routePoints) {
+    // A Route Point grouped under a Stop presents inside that Stop's chapter,
+    // so the chapter is walked once and its members in canonical route order.
+    const chapterId = chapterByOwner.get(point.id);
+    if (chapterId === undefined || chapterId !== point.id) continue;
+    for (const member of playbackChapterMembers(journey, chapterId, chapterByOwner)) {
+      const media = mediaByOwner.get(member.id) ?? [];
+      const note = routePointNoteText(member);
+      // A note rides with its own Route Point's media rather than becoming a
+      // separate step. Only a Route Point with no media of its own presents the
+      // note as the beat itself.
+      if (note && media.length === 0) {
+        entries.push({
+          presentationId: `note:${member.id}`,
+          role: "note",
+          asset: null,
+          routePointId: member.id,
+          contextOwner: "route-point",
+          note,
+        });
+      }
+      for (const asset of media) entries.push(storyMediaEntry(asset, member.id));
+    }
+  }
+  return entries;
+}
+
+/** The media-only projection of a presentation sequence. */
+export function storySequenceMedia(entries: readonly StorySequenceEntry[]): JourneyMediaAsset[] {
+  return entries.flatMap((entry) => entry.asset === null ? [] : [entry.asset]);
+}
+
 /** Canonical Story media order for the whole Journey: intro media first, then
  * each route point's visual media in the same order used by Journey Playback. */
 export function playbackStoryMedia(journey: Journey): JourneyMediaAsset[] {
-  const byOwner = playbackMediaByOwner(journey, [null, ...journey.routePoints.map((point) => point.id)]);
-  return [
-    ...(byOwner.get(null) ?? []),
-    ...journey.routePoints.flatMap((point) => byOwner.get(point.id) ?? []),
-  ];
+  return storySequenceMedia(storySequenceForJourney(journey));
 }
 
 /** Story browse scope: null means the aggregate Journey narrative, while a
@@ -240,6 +354,20 @@ export function routePointChapterDensity(
   pointIndex: number,
 ): RoutePointChapterDensity {
   return chapterDensityForMedia(playbackMediaForPoint(journey, pointIndex));
+}
+
+/**
+ * The density of one Route Point as it presents inside a Story sequence.
+ *
+ * Density counts media, never entries. A note-only Route Point presents as one
+ * entry but is still an `empty` chapter, because the place and its note are the
+ * memory rather than a thin stack: adding a note entry must not quietly promote
+ * an empty chapter into a stack-shaped one.
+ */
+export function storyEntryDensity(
+  entries: readonly StorySequenceEntry[],
+): RoutePointChapterDensity {
+  return chapterDensityForMedia(storySequenceMedia(entries));
 }
 
 export type PlaybackTravelChoreography = "nearby" | "regional" | "long-haul";
