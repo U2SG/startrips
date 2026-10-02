@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  MEDIA_PLACEMENT_PROPOSAL_LIMITS,
   completeMediaPlacementUploadPlan,
   groupMediaPlacementSuggestions,
+  isMediaPlacementProposalPlanCurrent,
   parseJpegExifPlacementSignal,
+  planMediaPlacementProposals,
   readMediaPlacementSignal,
   suggestMediaPlacement,
+  type MediaPlacementProposalInput,
   type MediaPlacementSignal,
 } from "./mediaPlacement";
 import type { Journey, RoutePoint } from "./types";
@@ -49,6 +53,53 @@ function journey(
     updatedAt: "2026-08-01T00:00:00Z",
     routePoints: points.map((point) => ({ ...point, journeyId: id })),
     media: [],
+  };
+}
+
+function proposalInput(
+  fileIndex: number,
+  signal: MediaPlacementSignal | null,
+  contentHash?: string,
+  contentHashVerified?: boolean,
+): MediaPlacementProposalInput {
+  return { fileIndex, signal, contentHash, contentHashVerified };
+}
+
+function coordinateSignal(
+  latitude: number,
+  longitude: number,
+  capturedAt: string,
+  accuracyMeters: number | null = 15,
+): MediaPlacementSignal {
+  return {
+    latitude,
+    longitude,
+    capturedAt,
+    capturedLocal: capturedAt.replace(/(?:Z|[+-]\d{2}:\d{2})$/, ""),
+    spatialSource: "exif",
+    spatialGranularity: "coordinate",
+    accuracyMeters,
+    captureTimeSource: "exif-original",
+    timezoneState: "offset-known",
+  };
+}
+
+function localCoordinateSignal(
+  latitude: number,
+  longitude: number,
+  capturedLocal: string,
+  accuracyMeters = 15,
+): MediaPlacementSignal {
+  return {
+    latitude,
+    longitude,
+    capturedLocal,
+    spatialSource: "exif",
+    spatialGranularity: "coordinate",
+    accuracyMeters,
+    captureTimeSource: "exif-original",
+    timezoneState: "local-only",
+    offsetMinutes: null,
   };
 }
 
@@ -631,6 +682,175 @@ describe("groupMediaPlacementSuggestions (#86)", () => {
   });
 });
 
+
+describe("planMediaPlacementProposals (#335 / ST-114)", () => {
+  it("classifies every selected input exactly once with observable basis evidence", () => {
+    const target = journey("target", "2026-10-01", "2026-10-01", [
+      routePoint("existing", 22.2855, 114.1577, "2026-10-01T02:00:00Z"),
+    ]);
+    const inputs = [
+      proposalInput(20, coordinateSignal(22.2856, 114.1578, "2026-10-01T10:05:00+08:00", 8)),
+      proposalInput(10, coordinateSignal(23.1291, 113.2644, "2026-10-01T05:00:00Z", 18)),
+      proposalInput(30, {
+        capturedLocal: "2026-10-01T14:00:00",
+        captureTimeSource: "exif-original",
+        timezoneState: "local-only",
+      }),
+    ];
+
+    const plan = planMediaPlacementProposals(inputs, target, { batchId: "batch-cover" });
+    expect(plan.matchExisting).toHaveLength(1);
+    expect(plan.matchExisting[0]).toMatchObject({
+      routePointId: "existing",
+      fileIndexes: [20],
+    });
+    expect(plan.suggestNew).toHaveLength(1);
+    expect(plan.suggestNew[0].fileIndexes).toEqual([10]);
+    expect(plan.pendingConfirmation).toHaveLength(1);
+    expect(plan.pendingConfirmation[0]).toMatchObject({
+      fileIndexes: [30],
+      basis: { reason: "missing-coordinate-evidence" },
+    });
+
+    const covered = [
+      ...plan.matchExisting,
+      ...plan.suggestNew,
+      ...plan.pendingConfirmation,
+    ].flatMap((entry) => entry.fileIndexes).sort((left, right) => left - right);
+    expect(covered).toEqual([10, 20, 30]);
+    for (const entry of [
+      ...plan.matchExisting,
+      ...plan.suggestNew,
+      ...plan.pendingConfirmation,
+    ]) {
+      expect(entry.basis.reason.length).toBeGreaterThan(0);
+      expect(Array.isArray(entry.basis.evidence)).toBe(true);
+      expect(Array.isArray(entry.basis.uncertainty)).toBe(true);
+    }
+  });
+
+  it("is stable under upload-array shuffles and normalizes offset-known order without coercing local-only time", () => {
+    const target = journey("target", "2026-09-30", "2026-10-01", []);
+    const inputs = [
+      proposalInput(1, coordinateSignal(35.001, -120.001, "2026-09-30T22:30:00-04:00", 10)),
+      proposalInput(5, localCoordinateSignal(35.08, -120.08, "2026-10-01T01:00:00", 10)),
+      proposalInput(9, coordinateSignal(35, -120, "2026-10-01T10:00:00+08:00", 10)),
+    ];
+    const first = planMediaPlacementProposals(inputs, target, { batchId: "batch-order" });
+    const shuffled = planMediaPlacementProposals(
+      [inputs[2], inputs[0], inputs[1]],
+      target,
+      { batchId: "batch-order" },
+    );
+
+    expect(shuffled).toEqual(first);
+    expect(first.suggestNew).toHaveLength(2);
+    expect(first.suggestNew[0].fileIndexes).toEqual([1, 9]);
+    expect(first.suggestNew[0].representative.fileIndex).toBe(9);
+    expect(first.suggestNew[1].fileIndexes).toEqual([5]);
+    expect(first.suggestNew[1].basis.uncertainty).toContain("local-time-no-offset");
+  });
+
+  it("uses explicit distance, time-window and maximum-diameter bounds instead of chain-merging a city", () => {
+    expect(MEDIA_PLACEMENT_PROPOSAL_LIMITS.neighborDistanceKm)
+      .toBeLessThan(MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxClusterDiameterKm);
+    expect(MEDIA_PLACEMENT_PROPOSAL_LIMITS.timeWindowHours).toBeGreaterThan(0);
+
+    const target = journey("target", "2026-09-30", "2026-10-01", []);
+    const inputs = [
+      proposalInput(0, coordinateSignal(22.28, 114.17, "2026-09-30T23:30:00Z", 12)),
+      proposalInput(1, coordinateSignal(22.281, 114.171, "2026-10-01T00:30:00Z", 12)),
+      proposalInput(2, coordinateSignal(22.34, 114.23, "2026-10-01T04:00:00Z", 12)),
+      proposalInput(3, coordinateSignal(22.341, 114.231, "2026-10-01T05:00:00Z", 12)),
+    ];
+
+    const plan = planMediaPlacementProposals(inputs, target, { batchId: "batch-clusters" });
+    expect(plan.pendingConfirmation).toEqual([]);
+    expect(plan.matchExisting).toEqual([]);
+    expect(plan.suggestNew.map((candidate) => candidate.fileIndexes)).toEqual([
+      [0, 1],
+      [2, 3],
+    ]);
+    expect(plan.suggestNew.every((candidate) => candidate.basis.reason === "spatiotemporal-cluster"))
+      .toBe(true);
+  });
+
+  it("keeps unknown accuracy and extreme implied speed in pending confirmation", () => {
+    const target = journey("target", "2026-10-01", "2026-10-01", []);
+    const inputs = [
+      proposalInput(0, coordinateSignal(22.28, 114.17, "2026-10-01T01:00:00Z", null)),
+      proposalInput(1, coordinateSignal(22.28, 114.17, "2026-10-01T03:00:00Z", 10)),
+      proposalInput(2, coordinateSignal(51.5074, -0.1278, "2026-10-01T03:05:00Z", 10)),
+    ];
+
+    const plan = planMediaPlacementProposals(inputs, target, { batchId: "batch-conflict" });
+    expect(plan.matchExisting).toEqual([]);
+    expect(plan.suggestNew).toEqual([]);
+    expect(plan.pendingConfirmation.map((entry) => entry.basis.reason)).toEqual([
+      "accuracy-unknown",
+      "implausible-speed",
+      "implausible-speed",
+    ]);
+    expect(plan.pendingConfirmation[1].basis.uncertainty).toContain("speed-conflict");
+  });
+
+  it("uses only verified content hashes as stable duplicate identity while preserving every selection", () => {
+    const target = journey("target", "2026-10-01", "2026-10-01", []);
+    const verified = coordinateSignal(22.28, 114.17, "2026-10-01T06:00:00Z", 10);
+    const inputs = [
+      proposalInput(0, verified, "sha256:verified", true),
+      proposalInput(1, { ...verified }, "sha256:verified", true),
+      proposalInput(2, coordinateSignal(22.5, 114.17, "2026-10-01T07:00:00Z", 10), "sha256:declared", false),
+      proposalInput(3, coordinateSignal(22.7, 114.17, "2026-10-01T08:00:00Z", 10), "sha256:declared", false),
+    ];
+
+    const plan = planMediaPlacementProposals(inputs, target, { batchId: "batch-hash" });
+    expect(plan.suggestNew.map((candidate) => candidate.fileIndexes)).toEqual([
+      [0, 1],
+      [2],
+      [3],
+    ]);
+    expect(plan.suggestNew[0].basis.evidence).toContain("verified-content-hash");
+    expect(plan.suggestNew[1].basis.evidence).not.toContain("verified-content-hash");
+    expect(plan.suggestNew[2].basis.evidence).not.toContain("verified-content-hash");
+  });
+
+  it("invalidates stale batch/revision results and cancellation without mutating the proposal", () => {
+    const target = journey("target", "2026-10-01", "2026-10-01", []);
+    const plan = planMediaPlacementProposals([], target, { batchId: "batch-current" });
+    expect(isMediaPlacementProposalPlanCurrent(plan, {
+      batchId: "batch-current",
+      journeyId: target.id,
+      routeRevision: target.revision,
+    })).toBe(true);
+    expect(isMediaPlacementProposalPlanCurrent(plan, {
+      batchId: "batch-current",
+      journeyId: target.id,
+      routeRevision: target.revision + 1,
+    })).toBe(false);
+    expect(isMediaPlacementProposalPlanCurrent(plan, {
+      batchId: "batch-current",
+      journeyId: target.id,
+      routeRevision: target.revision,
+      cancelled: true,
+    })).toBe(false);
+    expect(isMediaPlacementProposalPlanCurrent(plan, {
+      batchId: "different-batch",
+      journeyId: target.id,
+      routeRevision: target.revision,
+    })).toBe(false);
+  });
+
+  it("fails closed when a batch exceeds the explicit bounded input limit", () => {
+    const target = journey("target", "2026-10-01", "2026-10-01", []);
+    const oversized = Array.from(
+      { length: MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxInputs + 1 },
+      (_, fileIndex) => proposalInput(fileIndex, null),
+    );
+    expect(() => planMediaPlacementProposals(oversized, target, { batchId: "too-large" }))
+      .toThrow(/bounded input limit/);
+  });
+});
 
 describe("completeMediaPlacementUploadPlan", () => {
   const suggestion = (journeyId: string, routePointId: string | null) => ({
