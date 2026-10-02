@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -14,13 +15,16 @@ from ci_observer import latest_ci
 from action_plan import ledger_pending_final
 
 
+GIT_EXE = r'D:\工具\Git\cmd\git.exe' if os.name == 'nt' else 'git'
+
+
 def git(path, *args):
-    result = subprocess.run(['git', '-C', str(path), *args], capture_output=True, text=True, encoding='utf-8', timeout=15)
+    result = subprocess.run([GIT_EXE, '-C', str(path), *args], capture_output=True, text=True, encoding='utf-8', timeout=15)
     if result.returncode: raise EvidenceUnknown('Cannot verify evidence worktree')
     return result.stdout.strip()
 
 
-def capture(root, worktree, fid, number, repo):
+def capture(root, worktree, fid, number, repo, snapshot=None):
     root, worktree = Path(root).resolve(), Path(worktree).resolve()
     document = load_document(root / 'feature_list.json')
     if canonical_lead(document, fid) != fid:
@@ -29,27 +33,63 @@ def capture(root, worktree, fid, number, repo):
     if unit_pr_links(document, fid) != ['https://github.com/' + repo + '/pull/' + str(number)]:
         raise StoreConflict('Evidence PR is not this delivery-unit owner')
     head, branch = git(worktree, 'rev-parse', 'HEAD'), git(worktree, 'branch', '--show-current')
-    if git(worktree, 'status', '--porcelain'): raise StoreConflict('Dirty worktree cannot stamp committed evidence')
-    pr = api('repos/' + repo + '/pulls/' + str(number))
-    if pr['head']['sha'] != head or pr['head']['ref'] != branch:
-        raise StoreConflict('Local/remote evidence identities differ')
-    relation = source_relation(repo, number)
-    if relation['final_sha'] != head:
-        raise StoreConflict('Source/final identity changed during evidence capture')
-    missing = not relation['sealed'] and ledger_pending_final(repo, number, head)
-    ci = latest_ci(repo, head, missing_ledger=missing)
-    kind = 'final' if relation['sealed'] else 'source'
-    green = ci['final_green'] if kind == 'final' else ci['source_green']
-    if ci['state'] in {'missing', 'pending'}: raise EvidenceUnknown('CI has no terminal evidence yet')
-    run = ci['run']
+    if git(worktree, 'status', '--porcelain'):
+        raise StoreConflict('Dirty worktree cannot stamp committed evidence')
+
+    if snapshot is None:
+        pr = api('repos/' + repo + '/pulls/' + str(number))
+        if pr['head']['sha'] != head or pr['head']['ref'] != branch:
+            raise StoreConflict('Local/remote evidence identities differ')
+        relation = source_relation(repo, number)
+        if relation['final_sha'] != head:
+            raise StoreConflict('Source/final identity changed during evidence capture')
+        missing = not relation['sealed'] and ledger_pending_final(repo, number, head)
+        ci = latest_ci(repo, head, missing_ledger=missing)
+        kind = 'final' if relation['sealed'] else 'source'
+        green = ci['final_green'] if kind == 'final' else ci['source_green']
+        if ci['state'] in {'missing', 'pending'}:
+            raise EvidenceUnknown('CI has no terminal evidence yet')
+        run = ci['run']
+        jobs = [{'id': j['id'], 'name': j['name'], 'status': j['status'], 'conclusion': j['conclusion']}
+                for j in sorted(ci['jobs'], key=lambda j: j['name'])]
+        confirmed = api('repos/' + repo + '/pulls/' + str(number))
+        if (confirmed['head']['sha'] != head or confirmed['head']['ref'] != branch
+                or confirmed.get('state') != pr.get('state') or confirmed.get('merged') != pr.get('merged')):
+            raise StoreConflict('Remote owner identity changed during evidence capture')
+    else:
+        required = ('row_token', 'pr', 'source_sha', 'final_sha', 'pr_head_ref', 'sealed',
+                    'source_review_clear', 'ci_state', 'source_green', 'final_green',
+                    'ci_run', 'ci_attempt', 'ci_url', 'ci_jobs')
+        if any(key not in snapshot for key in required):
+            raise StoreConflict('Handoff snapshot is incomplete')
+        if snapshot['row_token'] != expected_unit or snapshot['pr'] != number:
+            raise StoreConflict('Handoff snapshot does not belong to this delivery unit')
+        if (snapshot['final_sha'] != head or snapshot['pr_head_ref'] != branch
+                or not snapshot['sealed'] or not snapshot['source_review_clear']
+                or snapshot['ci_state'] != 'success' or not snapshot['final_green']):
+            raise StoreConflict('Handoff snapshot is not an exact green final')
+        if not isinstance(snapshot['ci_run'], int) or not isinstance(snapshot['ci_attempt'], int):
+            raise StoreConflict('Handoff snapshot CI identity is invalid')
+        if not isinstance(snapshot['ci_url'], str) or not snapshot['ci_url']:
+            raise StoreConflict('Handoff snapshot CI URL is invalid')
+        raw_jobs = snapshot['ci_jobs']
+        if not isinstance(raw_jobs, list) or not raw_jobs:
+            raise StoreConflict('Handoff snapshot CI jobs are missing')
+        jobs = []
+        for item in raw_jobs:
+            if (not isinstance(item, dict)
+                    or set(item) != {'id', 'name', 'status', 'conclusion'}):
+                raise StoreConflict('Handoff snapshot CI jobs are invalid')
+            jobs.append({key: item[key] for key in ('id', 'name', 'status', 'conclusion')})
+        jobs.sort(key=lambda item: item['name'])
+        relation = {'source_sha': snapshot['source_sha'], 'final_sha': snapshot['final_sha'], 'sealed': True}
+        kind = 'final'; green = True
+        run = {'id': snapshot['ci_run'], 'run_attempt': snapshot['ci_attempt'],
+               'html_url': snapshot['ci_url']}
+        ci = {'source_green': snapshot['source_green'], 'final_green': snapshot['final_green']}
+
     if git(worktree, 'rev-parse', 'HEAD') != head or git(worktree, 'status', '--porcelain'):
         raise StoreConflict('Source changed during evidence capture')
-    confirmed = api('repos/' + repo + '/pulls/' + str(number))
-    if (confirmed['head']['sha'] != head or confirmed['head']['ref'] != branch
-            or confirmed.get('state') != pr.get('state') or confirmed.get('merged') != pr.get('merged')):
-        raise StoreConflict('Remote owner identity changed during evidence capture')
-    jobs = [{'id': j['id'], 'name': j['name'], 'status': j['status'], 'conclusion': j['conclusion']}
-            for j in sorted(ci['jobs'], key=lambda j: j['name'])]
     code = 0 if green else 1
     text = '\n'.join(['EVIDENCE_HEAD=' + head, 'EVIDENCE_BRANCH=' + branch,
                       'EVIDENCE_KIND=' + kind, 'SOURCE_HEAD=' + relation['source_sha'],
@@ -62,11 +102,14 @@ def capture(root, worktree, fid, number, repo):
     if unit_token(load_document(root / 'feature_list.json'), fid) != expected_unit:
         raise StoreConflict('Delivery unit changed during evidence capture')
     if path.exists():
-        if path.read_text(encoding='utf-8') != text: raise StoreConflict('Existing evidence identity has different contents')
+        if path.read_text(encoding='utf-8') != text:
+            raise StoreConflict('Existing evidence identity has different contents')
     else:
-        with path.open('x', encoding='utf-8', newline='\n') as stream: stream.write(text)
-    return {'path': str(path.relative_to(root)).replace('\\', '/'), 'exit': code, 'kind': kind, 'head': head, 'source_sha': relation['source_sha'], 'ci_run': run['id'], 'ci_attempt': run['run_attempt']}
-
+        with path.open('x', encoding='utf-8', newline='\n') as stream:
+            stream.write(text)
+    return {'path': str(path.relative_to(root)).replace('\\', '/'), 'exit': code, 'kind': kind,
+            'head': head, 'source_sha': relation['source_sha'],
+            'ci_run': run['id'], 'ci_attempt': run['run_attempt']}
 
 def check_log(text, source, final, branch):
     lines = text.splitlines()

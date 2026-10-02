@@ -59,13 +59,42 @@ def classify(run, jobs, missing_ledger=False):
         return {'state': 'pending', 'source_green': False, 'final_green': False, 'failures': []}
     if run.get('conclusion') not in {'success', 'failure'}:
         return {'state': 'unknown', 'source_green': False, 'final_green': False, 'failures': []}
-    failures = [j for j in effective if j.get('conclusion') != 'success']
+    raw_failures = [j for j in effective if j.get('conclusion') != 'success']
     product = [j for j in effective if j['name'] not in {'ledger', 'verify'}]
     product_green = bool(product) and all(j.get('conclusion') == 'success' for j in product)
     ledger = next(j for j in effective if j['name'] == 'ledger')
+    verify = next(j for j in effective if j['name'] == 'verify')
+    quick = next((j for j in effective if j['name'] == 'quick-checks'), None)
+    core = next((j for j in effective if j['name'] == 'core'), None)
+    keepsake = next((j for j in effective if j['name'] == 'keepsake-render'), None)
+    browsers = [j for j in effective if j['name'].startswith('browser-qa / ')]
+
+    # The workflow's verify job independently proves the exact reusable Source CI
+    # before accepting a ledger-only final. Only that exact fast-path shape may
+    # reinterpret product-lane SKIPPED conclusions as intentional rather than
+    # failed validation. Ordinary Source runs and partial/mismatched skips remain
+    # fail-closed.
+    def legal_final_skip(job):
+        return (job['name'] in {'core', 'keepsake-render'}
+                or job['name'].startswith('browser-qa / '))
+
+    ledger_only_final = (
+        run.get('conclusion') == 'success'
+        and ledger.get('conclusion') == 'success'
+        and verify.get('conclusion') == 'success'
+        and quick is not None and quick.get('conclusion') == 'success'
+        and core is not None and core.get('conclusion') == 'skipped'
+        and keepsake is not None and keepsake.get('conclusion') == 'skipped'
+        and bool(browsers) and all(j.get('conclusion') == 'skipped' for j in browsers)
+        and all(j.get('conclusion') in {'success', 'skipped'} for j in effective)
+        and all(j.get('conclusion') != 'skipped' or legal_final_skip(j) for j in effective)
+    )
+
     failed_steps = [step.get('name') for step in ledger.get('steps', []) if step.get('conclusion') == 'failure']
     expected_ledger_gap = missing_ledger and failed_steps == ['Validate current PR ledger']
-    source_green = product_green and (not failures or (expected_ledger_gap and all(j['name'] in {'ledger', 'verify'} for j in failures)))
+    source_green = product_green and (not raw_failures or (expected_ledger_gap and all(j['name'] in {'ledger', 'verify'} for j in raw_failures)))
+    failures = [j for j in raw_failures
+                if not (ledger_only_final and j.get('conclusion') == 'skipped' and legal_final_skip(j))]
     final_green = not failures and run.get('conclusion') == 'success'
     return {'state': 'success' if final_green else 'failure', 'source_green': source_green,
             'final_green': final_green, 'failures': failures}

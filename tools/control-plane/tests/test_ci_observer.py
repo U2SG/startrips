@@ -67,7 +67,49 @@ class ClassificationCases(unittest.TestCase):
 
     def test_skipped_product_job_is_not_success(self):
         jobs = complete_jobs() + [job('core', 5, 'skipped')]
-        self.assertFalse(ci.classify(run(conclusion='success'), jobs)['source_green'])
+        result = ci.classify(run(conclusion='success'), jobs)
+        self.assertFalse(result['source_green'])
+        self.assertFalse(result['final_green'])
+
+    def test_proved_ledger_only_final_accepts_expected_product_skips(self):
+        jobs = [
+            job('ledger', 1),
+            job('quick-checks', 2),
+            job('core', 3, 'skipped'),
+            job('verify', 4),
+            job('keepsake-render', 5, 'skipped'),
+            job('browser-qa / auth-media', 6, 'skipped'),
+            job('browser-qa / story-media', 7, 'skipped'),
+        ]
+        result = ci.classify(run(conclusion='success'), jobs)
+        self.assertFalse(result['source_green'])
+        self.assertTrue(result['final_green'])
+        self.assertEqual([], result['failures'])
+
+    def test_ledger_only_shape_without_successful_verify_fails_closed(self):
+        jobs = [
+            job('ledger', 1),
+            job('quick-checks', 2),
+            job('core', 3, 'skipped'),
+            job('verify', 4, 'failure'),
+            job('keepsake-render', 5, 'skipped'),
+            job('browser-qa / auth-media', 6, 'skipped'),
+        ]
+        result = ci.classify(run(conclusion='failure'), jobs)
+        self.assertFalse(result['final_green'])
+        self.assertIn('verify', {item['name'] for item in result['failures']})
+
+    def test_partial_product_skip_cannot_impersonate_ledger_only_final(self):
+        jobs = [
+            job('ledger', 1),
+            job('quick-checks', 2),
+            job('core', 3, 'skipped'),
+            job('verify', 4),
+            job('keepsake-render', 5, 'success'),
+            job('browser-qa / auth-media', 6, 'skipped'),
+        ]
+        result = ci.classify(run(conclusion='success'), jobs)
+        self.assertFalse(result['final_green'])
 
     def test_two_job_names_do_not_hide_each_other(self):
         result = ci.effective_jobs([job('lane-a', 1), job('lane-b', 2, 'failure'), job('lane-a', 3)])

@@ -35,11 +35,13 @@ def stopped(root, lane=None):
 def temporary_backend_switch_authorized(root, lane=None):
     """Allow the one explicit Temporary Backend substitution without waking LOCAL.
 
-    The environment flag alone is never authority. Both LOCAL-only STOP markers
-    must exist, carry the exact same user-authorized switch receipt, AGENT_STOP
-    must be absent, and the caller must still prove provider idleness separately.
+    Both LOCAL-only STOP markers must exist and carry the exact same
+    user-authorized switch receipt. AGENT_STOP must be absent, the caller must
+    target Backend, and provider idleness is still proved separately. No
+    environment variable is authority: canonical command_exec does not expose
+    env injection as a stable control-plane primitive.
     """
-    if lane != 'backend' or os.environ.get(TEMPORARY_BACKEND_SWITCH_ENV) != '1':
+    if lane != 'backend':
         return False
     root = Path(root)
     if (root / 'AGENT_STOP').exists():

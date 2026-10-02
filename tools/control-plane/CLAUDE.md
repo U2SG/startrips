@@ -53,15 +53,16 @@ Automation prompts carry roles and this entry point, never current PRs or SHAs.
   bash -c, chained shell operators, or another launcher. Git writes use
   `access=inherit` plus the directly resolved Git executable (currently
   `D:\\工具\\Git\\cmd\\git.exe`). Python control-plane commands use the absolute
-  interpreter `D:\\Python\\python.exe`, and GitHub CLI operations use
-  `C:\\Program Files\\GitHub CLI\\gh.exe`. A bare/wrapper outer safety-parser
-  rejection is transport evidence, not proof that owner authority is absent:
-  fresh-read exact local/remote state and retry that exact idempotent operation once
-  through the canonical absolute-executable path. Do not report the first parser
-  rejection as the final blocker. If the direct `access=inherit` call itself is
-  denied, or a remote mutation has an uncertain result, fail closed and preserve the
-  owner state; read exact branch/PR state before any retry and never blindly replay a
-  commit, push, PR/comment, label, or other GitHub write.
+  interpreter `D:\\Python\\python.exe`, and GitHub CLI operations use the absolute
+  `C:\\Program Files\\GitHub CLI\\gh.exe`. Hourly Review GitHub writes MUST use
+  direct `gh.exe api` REST calls with exactly one bounded mutation per
+  `command_exec` call; do not use `gh pr edit`, shell wrappers, or launcher
+  indirection. Applying `merge-ready` uses
+  `gh.exe api --method POST repos/U2SG/startrips/issues/<PR>/labels -f labels[]=merge-ready`.
+  If a direct `access=inherit` call is denied, or a remote mutation has an uncertain
+  result, fail closed and preserve owner state; fresh-read exact branch/PR state before
+  any retry and never blindly replay a commit, push, PR/comment, label, or other
+  GitHub write.
 - Execution-carrier exclusion is lane-scoped, not workspace-global. A provably
   Backend carrier and a provably Experience carrier may run concurrently. Same-lane
   carriers still exclude duplicates; an unknown lane, unreadable carrier whose lane

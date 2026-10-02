@@ -40,12 +40,23 @@ def live_issues(doc, fid, repo):
     return result
 
 
+def _content_identity(value):
+    if not isinstance(value, dict):
+        return None
+    comments = value.get('comments')
+    if not isinstance(comments, dict):
+        return None
+    return {'issue': value.get('issue'), 'body_sha256': value.get('body_sha256'),
+            'comments': comments}
+
+
 def assert_current(doc, fid, observed):
     index = rows(doc)
     if set(observed) != set(members(doc, fid)):
         raise EvidenceUnknown('Incomplete member issue observation')
     for member, value in observed.items():
-        if index[member].get('delivery_issue_observation') != value:
+        stored = index[member].get('delivery_issue_observation')
+        if _content_identity(stored) != _content_identity(value):
             raise EvidenceUnknown('Unread delivery issue decisions for ' + member)
 
 
