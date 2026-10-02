@@ -137,7 +137,7 @@ import {
 } from "./journeyModel";
 import { getLightEffectGradient } from "./lightEffects";
 import "../styles/living-atlas-polish.css";
-import type { Journey, JourneyRoute, MediaPreviewRead } from "./types";
+import type { Journey, JourneyRoute, MediaEvidenceRecord, MediaPreviewRead } from "./types";
 import {
   resolvePlaceMediaObservationRect,
   selectPlaceMediaMarkerAnchor,
@@ -404,6 +404,40 @@ export function pendingPlaybackStoryRestore(entry: PlaybackEntry | null) {
 
 export function nextAtlasNotice(current: AtlasNotice | null, message: string): AtlasNotice {
   return { id: (current?.id ?? 0) + 1, message };
+}
+
+export const ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY = 4;
+
+export async function readRoutePointMediaEvidenceBounded<T>(
+  assetIds: readonly string[],
+  readEvidence: (assetId: string) => Promise<T>,
+  shouldContinue: () => boolean = () => true,
+): Promise<Map<string, T>> {
+  const evidenceByAssetId = new Map<string, T>();
+  let nextIndex = 0;
+  const workerCount = Math.min(ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY, assetIds.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < assetIds.length && shouldContinue()) {
+      const assetId = assetIds[nextIndex];
+      nextIndex += 1;
+      try {
+        evidenceByAssetId.set(assetId, await readEvidence(assetId));
+      } catch {
+        // One missing evidence row must not prevent other media on the point
+        // from contributing their recorded-coordinate precision.
+      }
+    }
+  }));
+  return evidenceByAssetId;
+}
+
+export function formatRoutePointMediaAccuracy(accuracyMeters: number | null): string {
+  if (accuracyMeters === null) return "精度未知";
+  const rounded = accuracyMeters > 0 && accuracyMeters < 1
+    ? Math.ceil(accuracyMeters * 10) / 10
+    : Math.round(accuracyMeters);
+  const value = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  return `精度约 ${value} m`;
 }
 
 // #8: the root class/data contract for globe focus mode, kept pure so the
@@ -1138,6 +1172,7 @@ export function LivingAtlasApp({
   // intent so zoom/focus/context resolution can never disclose them by itself.
   const [activeStayDetailId, setActiveStayDetailId] = useState<string | null>(null);
   const routePointContextSelectionRef = useRef(routePointContextSelection);
+  const routePointMediaEvidenceRef = useRef(new Map<string, MediaEvidenceRecord>());
   type RoutePointContextReturnFocus = {
     element: Element & { focus: (options?: FocusOptions) => void };
     journeyId: string | null;
@@ -1149,6 +1184,7 @@ export function LivingAtlasApp({
   const clearRoutePointContext = useCallback(() => {
     routePointContextFocusObserverRef.current?.disconnect();
     routePointContextFocusObserverRef.current = null;
+    routePointMediaEvidenceRef.current.clear();
     const next = clearRoutePointContextSelection(routePointContextSelectionRef.current);
     routePointContextSelectionRef.current = next;
     setRoutePointContextSelection(next);
@@ -1912,7 +1948,9 @@ export function LivingAtlasApp({
     const intent = routePointContextSelection.intent;
     if (!intent) return;
     const journey = journeys.find((candidate) => candidate.id === intent.journeyId) ?? null;
-    const nextContext = journey ? buildRoutePointContext(journey, intent.routePointId) : null;
+    const nextContext = journey
+      ? buildRoutePointContext(journey, intent.routePointId, routePointMediaEvidenceRef.current)
+      : null;
     if (!nextContext) {
       clearRoutePointContext();
       return;
@@ -1925,6 +1963,47 @@ export function LivingAtlasApp({
     routePointContextSelectionRef.current = refreshed;
     setRoutePointContextSelection(refreshed);
   }, [clearRoutePointContext, journeys, routePointContextSelection.intent]);
+  useEffect(() => {
+    const intent = routePointContextSelection.intent;
+    const readEvidence = mutations?.readMediaEvidence;
+    if (!intent || !readEvidence) return;
+    const journey = journeys.find((candidate) => candidate.id === intent.journeyId) ?? null;
+    if (!journey) return;
+    const assets = journeyVisualMedia(journey)
+      .filter((asset) => asset.routePointId === intent.routePointId)
+      .sort((left, right) => left.sortOrder - right.sortOrder);
+    if (assets.length === 0) return;
+
+    const controller = new AbortController();
+    void readRoutePointMediaEvidenceBounded(
+      assets.map((asset) => asset.id),
+      (assetId) => readEvidence(assetId, undefined, controller.signal),
+      () => !controller.signal.aborted,
+    ).then((evidenceByAssetId) => {
+      if (controller.signal.aborted) return;
+      const activeIntent = routePointContextSelectionRef.current.intent;
+      if (
+        !activeIntent
+        || activeIntent.revision !== intent.revision
+        || activeIntent.journeyId !== intent.journeyId
+        || activeIntent.routePointId !== intent.routePointId
+      ) {
+        return;
+      }
+      routePointMediaEvidenceRef.current = evidenceByAssetId;
+      const nextContext = buildRoutePointContext(journey, intent.routePointId, evidenceByAssetId);
+      const refreshed = resolveRoutePointContextSelection(
+        routePointContextSelectionRef.current,
+        intent,
+        nextContext,
+      );
+      routePointContextSelectionRef.current = refreshed;
+      setRoutePointContextSelection(refreshed);
+    });
+    return () => {
+      controller.abort();
+    };
+  }, [journeys, mutations?.readMediaEvidence, routePointContextSelection.intent]);
   useEffect(() => {
     const context = routePointContextSelection.context;
     if (!context || context.journeyId === activeJourneyId) return;
@@ -2640,6 +2719,7 @@ export function LivingAtlasApp({
       return;
     }
     clearHomeBaseContext();
+    routePointMediaEvidenceRef.current.clear();
     const targetStayId = staySummariesByJourney.get(journeyId)
       ?.find((summary) => summary.routePointIds.includes(routePointId))?.id ?? null;
     if (activeStayDetailId !== null && activeStayDetailId !== targetStayId) {
@@ -2655,7 +2735,7 @@ export function LivingAtlasApp({
     const resolved = resolveRoutePointContextSelection(
       requested.selection,
       requested.intent,
-      journey ? buildRoutePointContext(journey, routePointId) : null,
+      journey ? buildRoutePointContext(journey, routePointId, routePointMediaEvidenceRef.current) : null,
     );
     routePointContextSelectionRef.current = resolved;
     setRoutePointContextSelection(resolved);
@@ -3882,7 +3962,9 @@ export function LivingAtlasApp({
             data-route-point-context
             data-route-point-id={context.routePointId}
             data-route-point-context-intent={intent.revision}
-            data-location-precision={context.location.precision}
+            data-location-precision={context.location.precision.kind}
+            data-location-source={context.location.precision.source ?? undefined}
+            data-location-accuracy-meters={context.location.precision.accuracyMeters ?? undefined}
             style={{ "--journey-color": contextJourney.lightColor } as React.CSSProperties}
             aria-live="polite"
           >
@@ -4012,6 +4094,15 @@ export function LivingAtlasApp({
               <span>{context.resolvedDate ? context.resolvedDate.slice(0, 10) : "日期未记录"}</span>
               <span>{context.visualMediaCount > 0 ? `${context.visualMediaCount} 项影像` : "仅文字记录"}</span>
               <span>路线点定位 · {context.location.latitude.toFixed(4)}, {context.location.longitude.toFixed(4)}</span>
+              {context.location.precision.kind === "recorded-media-coordinate" ? (
+                <span data-route-point-media-location-precision>
+                  媒体记录坐标 · {context.location.precision.source === "exif"
+                    ? "EXIF"
+                    : context.location.precision.source === "container-metadata"
+                      ? "媒体元数据"
+                      : "导入记录"} · {formatRoutePointMediaAccuracy(context.location.precision.accuracyMeters)}
+                </span>
+              ) : null}
             </div>
             {context.notePresent && context.note ? <blockquote>{context.note}</blockquote> : null}
             <RoutePointContextRepresentative

@@ -371,6 +371,71 @@ const sameCoordinateJourney = {
   media: [],
 };
 
+// #340/ST-119: bounded local-zoom matrix. These fixtures reuse the production
+// Particle route/context path while varying truthful geography: a dense
+// same-city cluster, a point beside the shipped HK coastline slice, and an
+// antimeridian-crossing route.
+function localZoomPoint(id, sortOrder, latitude, longitude, label) {
+  return {
+    id,
+    journeyId,
+    sortOrder,
+    latitude,
+    longitude,
+    label,
+    isStop: true,
+    occurredAt: `2026-06-01T${String(9 + sortOrder).padStart(2, "0")}:00:00.000Z`,
+    note: `${label} 的近景记录。`,
+    createdAt: `2026-06-01T${String(9 + sortOrder).padStart(2, "0")}:00:00.000Z`,
+  };
+}
+
+const localZoomFixtures = [
+  {
+    name: "same-city",
+    expectsCoastline: false,
+    journey: {
+      ...journey,
+      title: "香港同城近景路线",
+      coverMediaAssetId: null,
+      routePoints: [
+        localZoomPoint("qa-local-city-central", 0, 22.2855, 114.1577, "中环"),
+        localZoomPoint("qa-local-city-sheung-wan", 1, 22.2868, 114.1503, "上环"),
+        localZoomPoint("qa-local-city-admiralty", 2, 22.2783, 114.1648, "金钟"),
+      ],
+      media: [],
+    },
+  },
+  {
+    name: "coastline",
+    expectsCoastline: true,
+    journey: {
+      ...journey,
+      title: "维港海岸近景路线",
+      coverMediaAssetId: null,
+      routePoints: [
+        localZoomPoint("qa-local-coast-central-pier", 0, 22.2881, 114.1587, "中环码头"),
+        localZoomPoint("qa-local-coast-wan-chai", 1, 22.2819, 114.1736, "湾仔海旁"),
+      ],
+      media: [],
+    },
+  },
+  {
+    name: "antimeridian",
+    expectsCoastline: false,
+    journey: {
+      ...journey,
+      title: "日期变更线近景路线",
+      coverMediaAssetId: null,
+      routePoints: [
+        localZoomPoint("qa-local-date-line-west", 0, -16.20, 179.72, "日期变更线西侧"),
+        localZoomPoint("qa-local-date-line-east", 1, -16.16, -179.70, "日期变更线东侧"),
+      ],
+      media: [],
+    },
+  },
+];
+
 const sameCoordinateSuccessorJourneyId = "qa-same-coordinate-successor";
 const sameCoordinateSuccessorJourney = {
   ...sameCoordinateJourney,
@@ -482,6 +547,59 @@ async function stubAtlasApi(page, journeysPayload = [siblingJourney, journey]) {
     contentType: "application/json",
     body: JSON.stringify({ journeys: journeysPayload }),
   }));
+  await page.route("**/api/media-evidence/*", (route) => {
+    const assetId = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1) ?? "");
+    const precise = assetId === photoAssetId;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        evidence: {
+          mediaAssetId: assetId,
+          revision: 1,
+          recorded: {
+            spatial: precise
+              ? {
+                  source: "exif",
+                  granularity: "coordinate",
+                  latitude: 22.28562,
+                  longitude: 114.15782,
+                  accuracyMeters: 7.5,
+                  label: null,
+                }
+              : {
+                  source: "unknown",
+                  granularity: "unknown",
+                  latitude: null,
+                  longitude: null,
+                  accuracyMeters: null,
+                  label: null,
+                },
+            captureTime: {
+              source: "unknown",
+              timezone: "unknown",
+              local: null,
+              instant: null,
+              offsetMinutes: null,
+            },
+          },
+          display: { hidden: false, correction: null },
+          effective: precise
+            ? {
+                source: "recorded",
+                provenance: "exif",
+                granularity: "coordinate",
+                latitude: 22.28562,
+                longitude: 114.15782,
+                accuracyMeters: 7.5,
+                label: null,
+              }
+            : null,
+          updatedAt: null,
+        },
+      }),
+    });
+  });
   for (const [assetId, color, delay] of [
     [photoAssetId, "%23254a48", 120],
     [secondPhotoAssetId, "%234a3525", 20],
@@ -510,6 +628,7 @@ async function openFocusAtlas({
   initialPointId = photoPointId,
   realScene = false,
   focusMode = true,
+  particleOnly = false,
 } = {}) {
   // Mobile device emulation changes input semantics, not the CSS viewport.
   // Give compact fixtures a real phone-sized layout unless the caller already
@@ -540,8 +659,9 @@ async function openFocusAtlas({
   // ordinary globe-chrome lane remains on the real globe and continues to own
   // raycast/focus-mode chrome coverage.
   const sceneParams = realScene ? "&qaRealRoutePointScene=1" : "&qaLite=1&qaSpatialHandoff=1";
+  const policyParams = particleOnly ? "&qaPolicy=particle-only" : "";
   await page.goto(
-    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaRoutePointContext=1${sceneParams}`,
+    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaRoutePointContext=1${sceneParams}${policyParams}`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator("[data-qa-route-point-context-focus]").waitFor({ state: "attached", timeout: 20_000 });
@@ -871,6 +991,45 @@ async function dragBlankGlobe(page) {
   await page.mouse.move(target.x + 36, target.y + 18, { steps: 4 });
   await page.mouse.up();
   return target;
+}
+
+async function pinchParticleTowardLocal(page) {
+  const canvas = page.locator('canvas[data-three-scene="particle-earth"]');
+  await canvas.waitFor({ state: "visible", timeout: 20_000 });
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("local-zoom Particle canvas has no geometry");
+  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const before = await page.evaluate(() => window.__particleEarthDebug?.());
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [
+          { x: center.x - 24, y: center.y, id: 1 },
+          { x: center.x + 24, y: center.y, id: 2 },
+        ],
+      });
+      for (const spread of [42, 64, 88]) {
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [
+            { x: center.x - spread, y: center.y, id: 1 },
+            { x: center.x + spread, y: center.y, id: 2 },
+          ],
+        });
+        await page.waitForTimeout(24);
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await page.waitForTimeout(48);
+      const semantic = await page.evaluate(() => window.__particleEarthDebug?.().semanticLod ?? null);
+      if (semantic === "local") break;
+    }
+  } finally {
+    await cdp.detach();
+  }
+  await page.waitForFunction(() => window.__particleEarthDebug?.().semanticLod === "local", null, { timeout: 10_000 });
+  return { before, after: await page.evaluate(() => window.__particleEarthDebug?.()) };
 }
 
 async function detailWheelTarget(page) {
@@ -2256,6 +2415,110 @@ try {
   record("real Detail pick page errors", { pageErrors: detailPickRun.pageErrors }, detailPickRun.pageErrors.length === 0);
   await detailPickPage.close();
 
+  // #340/ST-119: local zoom must remain a truthful Particle-only experience.
+  // Run the same real two-pointer approach in portrait and short landscape
+  // across all three geography classes from the acceptance contract.
+  for (const localCase of [
+    { name: "portrait", viewport: { width: 390, height: 844 }, reduceMotion: false },
+    { name: "landscape-reduced-motion", viewport: { width: 844, height: 390 }, reduceMotion: true },
+  ]) {
+    for (const fixture of localZoomFixtures) {
+      const localRun = await openFocusAtlas({
+        compact: true,
+        viewport: localCase.viewport,
+        reduceMotion: localCase.reduceMotion,
+        journeysPayload: [fixture.journey],
+        initialPointId: fixture.journey.routePoints[0].id,
+        realScene: true,
+        focusMode: true,
+        particleOnly: true,
+      });
+      const localPage = localRun.page;
+      await localPage.waitForFunction(() => (
+        document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-policy") === "particle-only"
+      ));
+      const pinch = await pinchParticleTowardLocal(localPage);
+      if (fixture.expectsCoastline) {
+        await localPage.waitForFunction(() => (
+          (window.__particleEarthDebug?.().coastlineLocalVertices ?? 0) > 0
+        ), null, { timeout: 10_000 });
+      }
+      // Deliberate dwell: #340 carries #247's bounded rendering contract into a
+      // local view that stays open rather than measuring only the transition.
+      await localPage.waitForTimeout(400);
+      const targetId = fixture.journey.routePoints[0].id;
+      const click = await clickRoutePointMarker(localPage, journeyId, targetId);
+      await localPage.locator(`[data-route-point-context][data-route-point-id="${targetId}"]`)
+        .waitFor({ state: "visible", timeout: 5_000 });
+      // Opening Route Point context updates the selected-point presentation, which
+      // intentionally invalidates the route projection revision and wakes one real
+      // render frame. Grade the renderer only after that exact projection identity
+      // has caught up; sampling in the invalidation window is not a settled frame.
+      await localPage.waitForFunction(() => (
+        window.__particleEarthDebug?.().journeyRouteProjectionReady === true
+      ), null, { timeout: 5_000 });
+      const state = await localPage.evaluate(({ targetId, routeId, expectsCoastline }) => {
+        const debug = window.__particleEarthDebug?.();
+        const route = document.querySelector(`.particle-earth-route[data-journey-route="${routeId}"]`);
+        return {
+          policy: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-policy") ?? null,
+          semanticLod: debug?.semanticLod ?? null,
+          zoom: debug?.zoom ?? null,
+          canvasCount: document.querySelectorAll('canvas[data-three-scene="particle-earth"]').length,
+          detailConstructionCount: window.__detailedEarthMapConstructionCount ?? 0,
+          detailDomCount: document.querySelectorAll(".detailed-earth-map").length,
+          detailCanvasCount: document.querySelectorAll(".detailed-earth-map canvas").length,
+          drawingBufferPixels: debug?.drawingBufferPixels ?? null,
+          particleCount: debug?.particleCount ?? null,
+          particleRefinementCount: debug?.particleRefinementCount ?? null,
+          particleRefinementCap: debug?.particleRefinementCap ?? null,
+          projectionReady: debug?.journeyRouteProjectionReady ?? null,
+          coastlineLocalVertices: debug?.coastlineLocalVertices ?? null,
+          expectsCoastline,
+          routePointCount: Number(document.querySelector(".particle-earth-scene")?.getAttribute("data-journey-route-point-count") ?? 0),
+          markerCount: route?.querySelectorAll(".particle-earth-route__point[data-route-point-id]").length ?? 0,
+          labelCount: route?.querySelectorAll(".particle-earth-route__label[data-route-point-id]").length ?? 0,
+          legCount: route?.querySelectorAll(".particle-earth-route__leg").length ?? 0,
+          contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+          targetVisible: Boolean(document.querySelector(
+            `.particle-earth-route__point[data-route-point-id="${targetId}"][data-temporal-visible="true"]`,
+          )),
+        };
+      }, { targetId, routeId: journeyId, expectsCoastline: fixture.expectsCoastline });
+      record(`#340 ${localCase.name} ${fixture.name} stays Particle-only through local pinch`, {
+        pinch, click, state, pageErrors: localRun.pageErrors,
+      }, Boolean(
+        pinch.before && pinch.after
+        && pinch.after.zoom > pinch.before.zoom
+        && state.policy === "particle-only"
+        && state.semanticLod === "local"
+        && state.canvasCount === 1
+        && state.detailConstructionCount === 0
+        && state.detailDomCount === 0
+        && state.detailCanvasCount === 0
+        && Number.isFinite(state.drawingBufferPixels)
+        && state.drawingBufferPixels > 0
+        && state.drawingBufferPixels <= 4_010_000
+        && Number.isFinite(state.particleCount)
+        && state.particleCount > 0
+        && state.particleCount <= 28_000
+        && Number.isFinite(state.particleRefinementCount)
+        && Number.isFinite(state.particleRefinementCap)
+        && state.particleRefinementCount <= state.particleRefinementCap
+        && state.projectionReady === true
+        && state.routePointCount >= fixture.journey.routePoints.length
+        && state.markerCount >= fixture.journey.routePoints.length
+        && state.labelCount > 0
+        && state.legCount >= fixture.journey.routePoints.length - 1
+        && state.contextId === targetId
+        && state.targetVisible
+        && (!fixture.expectsCoastline || state.coastlineLocalVertices > 0)
+        && localRun.pageErrors.length === 0
+      ));
+      await localPage.close();
+    }
+  }
+
   // Keep the long-form context/Story/return regression on its deterministic QA
   // scene. The real-scene round above exclusively proves the new product hit
   // surfaces, while this round continues to pin the photo fixture whose media
@@ -2267,21 +2530,33 @@ try {
   await activateRoutePoint(page, 0);
   const context = page.locator("[data-route-point-context]");
   await context.waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForFunction(() => (
+    document.querySelector("[data-route-point-context]")?.getAttribute("data-location-precision")
+      === "recorded-media-coordinate"
+  ));
   const revealFocus = await sceneFocusSnapshot(page);
   const reveal = await context.evaluate((node) => ({
     count: document.querySelectorAll("[data-route-point-context]").length,
     routePointId: node.getAttribute("data-route-point-id"),
     precision: node.getAttribute("data-location-precision"),
+    source: node.getAttribute("data-location-source"),
+    accuracyMeters: node.getAttribute("data-location-accuracy-meters"),
     text: node.textContent ?? "",
+    mediaPrecisionText: node.querySelector("[data-route-point-media-location-precision]")?.textContent ?? "",
     entryCount: node.querySelectorAll(".living-atlas__route-point-context-entry").length,
     controlsCount: document.querySelectorAll(".living-atlas-globe__controls").length,
   }));
   record("photo context reveal", { reveal },
     reveal.count === 1
     && reveal.routePointId === photoPointId
-    && reveal.precision === "route-point"
+    && reveal.precision === "recorded-media-coordinate"
+    && reveal.source === "exif"
+    && reveal.accuracyMeters === "7.5"
     && reveal.text.includes("中环码头")
     && reveal.text.includes("1 项影像")
+    && reveal.text.includes("路线点定位")
+    && reveal.mediaPrecisionText.includes("EXIF")
+    && reveal.mediaPrecisionText.includes("精度约 8 m")
     && reveal.entryCount === 1
     && controlsBefore === 0
     && reveal.controlsCount === 0);

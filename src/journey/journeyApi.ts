@@ -317,10 +317,11 @@ export function getPrivateMediaRead(
 export async function readMediaEvidence(
   assetId: string,
   fetcher: Fetcher = fetch,
+  signal?: AbortSignal,
 ): Promise<MediaEvidenceRecord> {
   const payload = await requestJson<{ evidence: MediaEvidenceRecord }>(
     `/api/media-evidence/${encodeURIComponent(assetId)}`,
-    { cache: "no-store" },
+    { cache: "no-store", signal },
     fetcher,
   );
   return payload.evidence;
