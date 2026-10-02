@@ -526,7 +526,7 @@ try {
   const normalPoint = (await readMap(assist.page)).projectedTo;
   assert(normalPoint, "normal route point missing after recommendation deletion");
   await assist.page.touchscreen.tap(normalPoint.x, normalPoint.y);
-  await assist.page.waitForFunction(() => Boolean(document.querySelector("[data-qa-activated-route-point]")?.getAttribute("data-qa-activated-route-point")));
+  await assist.page.waitForFunction(() => Boolean(document.querySelector("[data-qa-earth-dive-activated-route-point]")?.getAttribute("data-qa-earth-dive-activated-route-point")));
   evidence.stages.push({ name: "removed-pending-point-releases-map", ...await readMap(assist.page) });
 
   const pointGate = { started: latch(), release: latch(), completed: latch() };

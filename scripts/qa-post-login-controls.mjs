@@ -2269,6 +2269,11 @@ async function verifyFinalAcceptanceMobileFlow() {
     let composerLayout = null;
     let holdStorySoundtrackRead = true;
     const heldStorySoundtrackRoutes = [];
+    // This fixture has no external road engine. Composer globe picks now expose
+    // nearby-point assistance, so model disabled routing instead of hitting Vite.
+    await page.route("**/api/journey-route-segments/availability", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({ profiles: [] }),
+    }));
     page.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
     });

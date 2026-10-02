@@ -17,7 +17,9 @@ const way = (id, refs, tags) => `<way id="${id}">${refs.map((ref) => `<nd ref="$
 
 try {
   docker("pull", image);
-  assert.equal(docker("image", "inspect", "--format", "{{.Id}}", image), expectedConfig,
+  // Classic Docker reports the config ID; containerd reports the manifest ID.
+  const inspectedImageId = docker("image", "inspect", "--format", "{{.Id}}", image);
+  assert.ok([expectedConfig, image.split("@")[1]].includes(inspectedImageId),
     "CI and production must use the same pinned OSRM runtime configuration");
   for (const profile of ["walking", "cycling"]) {
     const modeTag = profile === "walking" ? "foot" : "bicycle";
