@@ -1,0 +1,455 @@
+/*
+ * #393 Journey Book trial.
+ *
+ * Page proportions, paper and cloth colours, spine shading and plate layout
+ * follow create-photo-flipbook-ui (https://github.com/HaichaoLihc/create-photo-flipbook-ui),
+ * MIT License, Copyright (c) 2026 Haichao Li. No reference media, fonts or
+ * texture files are carried over.
+ */
+.journey-book {
+  --book-paper: #f7f6f0;
+  --book-ink: #292c26;
+  --book-cloth: #7d8572;
+  --book-endpaper: #e9e9dc;
+  --book-muted: #73766c;
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay-220);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  padding:
+    max(12px, env(safe-area-inset-top))
+    max(16px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+  background: var(--archive-bg);
+  color: var(--startrips-starlight);
+  font-family: var(--archive-serif);
+  outline: none;
+}
+
+.journey-book__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: min(100%, 1100px);
+  margin-inline: auto;
+}
+
+.journey-book__title {
+  min-width: 0;
+  text-align: center;
+}
+
+.journey-book__title h2 {
+  margin: 0;
+  overflow: hidden;
+  font: 400 16px/1.3 var(--archive-serif);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.journey-book__title span,
+.journey-book__status {
+  font: 400 11px/1.4 var(--archive-sans);
+  letter-spacing: 0.04em;
+  color: var(--startrips-muted);
+}
+
+.journey-book__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.journey-book__icon,
+.journey-book__text-action {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  background: none;
+  color: inherit;
+  font: 400 13px/1 var(--archive-sans);
+  cursor: pointer;
+}
+
+.journey-book__icon:disabled {
+  opacity: 0.28;
+  cursor: default;
+}
+
+.journey-book__icon:focus-visible,
+.journey-book__text-action:focus-visible,
+.journey-book__toc button:focus-visible,
+.journey-book__video-choose:focus-visible {
+  outline: 2px solid var(--startrips-aurora);
+  outline-offset: 2px;
+}
+
+.journey-book__toc {
+  position: absolute;
+  top: calc(max(12px, env(safe-area-inset-top)) + 52px);
+  right: 16px;
+  z-index: 5;
+  width: min(280px, calc(100% - 32px));
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--startrips-line);
+  background: rgb(2 7 6 / 0.94);
+}
+
+.journey-book__toc ol {
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+}
+
+.journey-book__toc button {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: 400 14px/1.3 var(--archive-serif);
+  text-align: left;
+  cursor: pointer;
+}
+
+.journey-book__toc button[aria-current="true"] {
+  color: var(--startrips-aurora);
+}
+
+.journey-book__stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Horizontal drags are the Book's page gestures; vertical ones scroll. */
+  touch-action: pan-y;
+}
+
+/* The Book sizes the rig from the stage (journeyBookLayout): one or two
+   pages wide and exactly one page tall, so it never overflows. */
+.journey-book__rig {
+  transition: translate var(--motion-morph) var(--motion-ease-out);
+}
+
+.journey-book__rig[data-orientation="landscape"][data-edge="front"] { translate: -25% 0; }
+.journey-book__rig[data-orientation="landscape"][data-edge="back"] { translate: 25% 0; }
+
+.journey-book__page {
+  position: relative;
+  overflow: hidden;
+  background: var(--book-paper);
+  color: var(--book-ink);
+}
+
+/* Spine shading. The paper is a background, so a picture keeps its pixels. */
+.journey-book__page.--left::before,
+.journey-book__page.--right::before {
+  position: absolute;
+  inset-block: 0;
+  z-index: 4;
+  width: clamp(14px, 4%, 28px);
+  content: "";
+  pointer-events: none;
+}
+
+.journey-book__page.--left::before { right: 0; background: linear-gradient(to left, rgb(28 30 24 / 12%), rgb(28 30 24 / 3%) 40%, transparent); }
+.journey-book__page.--right::before { left: 0; background: linear-gradient(to right, rgb(28 30 24 / 12%), rgb(28 30 24 / 3%) 40%, transparent); }
+
+.journey-book__sheet {
+  position: absolute;
+  inset: 0;
+  container-type: inline-size;
+}
+
+.journey-book__sheet--cloth {
+  background: var(--book-cloth);
+  color: #f2efdf;
+}
+
+.journey-book__sheet--endpaper {
+  background: var(--book-endpaper);
+}
+
+.journey-book__cover-title {
+  position: absolute;
+  top: 12%;
+  right: 10%;
+  left: 13.5%;
+  margin: 0;
+  font: 400 7cqw/1.15 var(--archive-serif);
+  letter-spacing: -0.01em;
+}
+
+.journey-book__cover-dates {
+  position: absolute;
+  top: 27%;
+  left: 13.5%;
+  margin: 0;
+  font: 400 2.4cqw/1.4 var(--archive-sans);
+  letter-spacing: 0.08em;
+}
+
+.journey-book__cover-plate {
+  position: absolute;
+  top: 36%;
+  left: 13.5%;
+  width: 58%;
+  height: 34%;
+  margin: 0;
+}
+
+.journey-book__back-mark {
+  position: absolute;
+  bottom: 10%;
+  left: 13.5%;
+  font: 400 2.6cqw/1.4 var(--archive-serif);
+}
+
+.journey-book__plate {
+  position: absolute;
+  top: 7%;
+  left: 7%;
+  width: 86%;
+  height: 80%;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.journey-book__picture {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+.journey-book__picture:not(.is-loaded) + .journey-book__picture:not(.is-loaded) {
+  opacity: 0;
+}
+
+.journey-book__plate-state {
+  padding: 16px;
+  font: 400 13px/1.5 var(--archive-sans);
+  color: var(--book-muted);
+  text-align: center;
+}
+
+.journey-book__caption {
+  position: absolute;
+  bottom: 5%;
+  left: 7.7%;
+  max-width: 70%;
+  overflow: hidden;
+  font: 400 max(11px, 2cqw)/1.4 var(--archive-serif);
+  color: var(--book-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.journey-book__folio {
+  position: absolute;
+  right: 7.7%;
+  bottom: 5%;
+  font: 400 max(10px, 1.6cqw)/1 var(--archive-serif);
+  color: var(--book-muted);
+}
+
+.journey-book__sheet.is-verso .journey-book__folio { right: auto; left: 7.7%; }
+.journey-book__sheet.is-verso .journey-book__caption { right: 7.7%; left: auto; text-align: right; }
+
+.journey-book__text-block {
+  position: absolute;
+  inset: 14% 14% 12%;
+  overflow-y: auto;
+}
+
+.journey-book__text-block h3 {
+  margin: 0 0 1.2em;
+  font: 400 max(18px, 4cqw)/1.25 var(--archive-serif);
+}
+
+.journey-book__note-placeholder {
+  margin: 0;
+  visibility: hidden;
+}
+
+.journey-book__video-frame {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #10120f;
+}
+
+.journey-book__video-choose {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid rgb(255 248 231 / 0.5);
+  background: rgb(2 7 6 / 0.5);
+  color: var(--startrips-starlight);
+  cursor: pointer;
+}
+
+/* PageFlip lets a tap through only when the target itself is a button. */
+.journey-book__video-choose svg {
+  pointer-events: none;
+}
+
+.journey-book__video {
+  position: absolute;
+  z-index: 20;
+  object-fit: contain;
+  background: #10120f;
+  /* A horizontal drag on the video turns the page (see onVideoPointerDown). */
+  touch-action: pan-y;
+}
+
+.journey-book__still-host {
+  position: absolute;
+  inset: 0;
+}
+
+.journey-book__journey-links {
+  position: absolute;
+  top: 14%;
+  right: 12%;
+  left: 13.5%;
+  display: grid;
+  gap: 12px;
+}
+
+.journey-book__journey-links button,
+.journey-book__toc-journeys button {
+  display: grid;
+  gap: 4px;
+  min-height: 44px;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid rgb(242 239 223 / 0.32);
+  background: none;
+  color: inherit;
+  font: 400 max(14px, 3cqw)/1.3 var(--archive-serif);
+  text-align: left;
+  cursor: pointer;
+}
+
+.journey-book__journey-links small,
+.journey-book__toc-journeys small {
+  font: 400 11px/1.4 var(--archive-sans);
+  letter-spacing: 0.08em;
+  opacity: 0.72;
+}
+
+.journey-book__toc-journeys {
+  display: grid;
+  padding: 8px 16px 12px;
+  border-top: 1px solid var(--startrips-line);
+}
+
+.journey-book__toc-journeys button {
+  border-bottom-color: var(--startrips-line);
+  font-size: 14px;
+}
+
+.journey-book__controls {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 16px;
+  width: min(100%, 300px);
+  margin-inline: auto;
+  text-align: center;
+}
+
+/* Notes inside the book: the overlay keeps its scrim over pictures; on
+   paper the note reads as type on the page. */
+.revealed-note.is-inline {
+  position: static;
+  padding: 0;
+  background: none;
+  color: inherit;
+}
+
+.revealed-note.is-inline.journey-book__cover-note {
+  position: absolute;
+  right: 10%;
+  bottom: 9%;
+  left: 13.5%;
+}
+
+.journey-book__cover-note .revealed-note__text {
+  font-size: max(13px, 2.6cqw);
+}
+
+.journey-book__page-note .revealed-note__text {
+  font-size: max(15px, 3cqw);
+  line-height: 1.8;
+}
+
+.journey-book__plate .revealed-note__text {
+  font-size: max(14px, 3cqw);
+}
+
+@media (max-width: 700px) {
+  .journey-book {
+    padding-right: max(8px, env(safe-area-inset-right));
+    padding-left: max(8px, env(safe-area-inset-left));
+  }
+  .journey-book__title h2 { font-size: 14px; }
+}
+
+/* Short landscape (a phone on its side): every pixel of height goes to the
+   book. The header tightens and the turn buttons move beside the spread. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .journey-book {
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 4px;
+    padding-top: max(4px, env(safe-area-inset-top));
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
+  }
+  .journey-book__title span { display: none; }
+  .journey-book__icon,
+  .journey-book__text-action { min-height: 40px; }
+  .journey-book__controls {
+    position: absolute;
+    inset: 50% max(4px, env(safe-area-inset-right)) auto max(4px, env(safe-area-inset-left));
+    z-index: 30;
+    display: flex;
+    justify-content: space-between;
+    width: auto;
+    translate: 0 -50%;
+    pointer-events: none;
+  }
+  .journey-book__controls .journey-book__turn {
+    background: rgb(2 7 6 / 0.56);
+    pointer-events: auto;
+  }
+  .journey-book__status {
+    position: absolute;
+    clip-path: inset(50%);
+  }
+  .journey-book__stage { padding-inline: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-book__rig { transition: none; }
+}

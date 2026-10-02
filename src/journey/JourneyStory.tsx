@@ -80,6 +80,8 @@ import {
   type JourneyMediaMoveUndo,
 } from "./journeyApi";
 import { useAtlasView, type AtlasMutations, type UploadJourneyMedia } from "./atlasView";
+import { useMediaPresentationStyle } from "./mediaPresentation";
+import { RevealedNote } from "./RevealedNote";
 import { shouldRefreshStoryMediaRead, type MediaReadState } from "./mediaReadRefresh";
 import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import { cancelSharedElementMorph, runSharedElementMorph } from "../motion/primitives/sharedElement";
@@ -724,6 +726,7 @@ export function JourneyStory({
   // Before this contract an absent `onMediaDelete` fell through to the owner
   // API, which meant hiding the control left deletion reachable.
   const { capabilities, readMedia, listJourneys, mutations } = useAtlasView();
+  const mediaPresentation = useMediaPresentationStyle();
   const manageMedia: AtlasMutations | null = capabilities.canManageMedia ? mutations : null;
   const removeMedia = onMediaDelete ?? manageMedia?.deleteMedia ?? null;
   const updateJourneyNotes = mutations?.updateJourneyNotes ?? null;
@@ -2697,6 +2700,15 @@ export function JourneyStory({
   const notesRoutePointNote = notesRoutePoint
     ? routePointNoteDrafts[notesRoutePoint.id] ?? notesRoutePoint.note ?? ""
     : "";
+  // #393 trial: the note of what is on screen, said over the picture. Keyed by
+  // its owner so turning to another picture of the same point does not replay.
+  const overlayNoteOwner = activeChapterRoutePoint?.note?.trim()
+    ? activeChapterRoutePoint
+    : null;
+  const overlayNote = mediaPresentation !== "note-overlay" ? null
+    : overlayNoteOwner ? { key: overlayNoteOwner.id, text: overlayNoteOwner.note!.trim() }
+      : !selectedRoutePointId && journey.note?.trim() && !activeChapterRoutePointId
+        ? { key: "journey", text: journey.note.trim() } : null;
   // These are semantic identities; StoryMediaPages retains the physical pages.
   const shownAsset = shownAssetId
     ? scopedMediaIndex.byId.get(shownAssetId) ?? null
@@ -4236,6 +4248,11 @@ export function JourneyStory({
               } : undefined}
               video={renderStageVideo(false)}
             /> : null}
+            {!overview && !fullscreen && overlayNote ? <RevealedNote
+              key={overlayNote.key}
+              text={overlayNote.text}
+              className={shownAsset?.mimeType.startsWith("video/") ? "is-passive is-top" : "is-passive"}
+            /> : null}
             {!mobileLayout && !overview && asset ? (
               <div className="journey-story__media-controls">
                 <nav className="journey-story__media-nav" aria-label="媒体导航">
@@ -4594,10 +4611,10 @@ export function JourneyStory({
               />
             ) : (
               <>
-                {(!desktopEditing || mobileLayout) && activeChapterRoutePoint && activeChapterRoutePoint.note ? (
+                {mediaPresentation !== "note-overlay" && (!desktopEditing || mobileLayout) && activeChapterRoutePoint && activeChapterRoutePoint.note ? (
                   <blockquote className="journey-story__point-note">{activeChapterRoutePoint.note}</blockquote>
                 ) : null}
-                {journey.note && (!desktopEditing || mobileLayout) && (mobileLayout || (!selectedRoutePoint && !activeChapterRoutePoint?.note)) ? <p className="journey-story__note">{journey.note}</p> : null}
+                {journey.note && !(overlayNote?.key === "journey") && (!desktopEditing || mobileLayout) && (mobileLayout || (!selectedRoutePoint && !activeChapterRoutePoint?.note)) ? <p className="journey-story__note">{journey.note}</p> : null}
               </>
             )}
             {mobileLayout && mobileManageMode ? (
@@ -4920,6 +4937,11 @@ export function JourneyStory({
             } : undefined}
             video={renderStageVideo(true)}
           />
+          {fullscreen && overlayNote ? <RevealedNote
+            key={overlayNote.key}
+            text={overlayNote.text}
+            className={shownAsset?.mimeType.startsWith("video/") ? "is-passive is-top" : "is-passive"}
+          /> : null}
           {scopedMedia.length > 1 || !mobileLayout ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
               {mobileLayout || videoNavigationVisible ? <button

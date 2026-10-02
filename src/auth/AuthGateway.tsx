@@ -60,6 +60,7 @@ import {
   nextEarthExperience,
   useEarthExperiencePreference,
 } from "../journey/EarthExperienceProvider";
+import { MediaPresentationMenuEntry } from "../journey/mediaPresentation";
 import { authClient } from "./auth-client";
 import { authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, authVerificationCallbackURL, createAuthFormState, withAuthRequestBoundary, type AuthFormEvent, type AuthFormState } from "./authFormState";
 import { resolvePasswordResetOutcome, type PasswordResetOutcome } from "./passwordResetOutcome";
@@ -1278,6 +1279,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                 busy={earthExperienceEntryBusy(earthExperience)}
                 onToggle={() => void toggleEarthExperience()}
               />
+              <MediaPresentationMenuEntry surface="dock" />
               <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
             </div>
             {inviteOpen ? (
@@ -1321,6 +1323,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                     busy={earthExperienceEntryBusy(earthExperience)}
                     onToggle={() => void toggleEarthExperience()}
                   />
+                  <MediaPresentationMenuEntry surface="sheet" />
                   <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}><span>退出</span><small>退出当前账户</small></button>
                 </div>
               </>
