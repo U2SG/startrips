@@ -67,6 +67,8 @@ export type SoundtrackDuckingController = {
    * These fields tell the two apart.
    */
   snapshot(): {
+    frames: number;
+    running: boolean;
     baseline: number;
     current: number;
     target: number;
@@ -102,6 +104,10 @@ export function createSoundtrackDuckingController(
 
   let handle: number | null = null;
   let running = false;
+  // How many times the loop has actually run. A frozen `frames` beside a
+  // pending-but-unreached target is what distinguishes "the ramp restarted" from
+  // "the loop stopped", which look identical from the gain alone.
+  let frames = 0;
   // What the element's volume is right now, and where it is heading.
   let current = 1;
   let from = 1;
@@ -145,6 +151,7 @@ export function createSoundtrackDuckingController(
 
   const step = () => {
     if (!running) return;
+    frames += 1;
     const audio = host.getSoundtrack();
     const video = host.getForegroundVideo();
     const hostGeneration = host.getMediaGeneration?.() ?? null;
@@ -256,6 +263,8 @@ export function createSoundtrackDuckingController(
      */
     snapshot() {
       return {
+        frames,
+        running,
         baseline,
         current,
         target: to,
