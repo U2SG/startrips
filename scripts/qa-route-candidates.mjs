@@ -526,15 +526,32 @@ try {
   const accessDetails = assist.page.locator(".route-candidate-editor__access");
   if (await accessDetails.getAttribute("open") !== null) await accessDetails.locator("summary").tap();
   const releasedMap = await readMap(assist.page);
-  const normalPoint = await assist.page.evaluate((points) => points.find((point) => {
-    if (!point || point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight) return false;
-    return document.elementFromPoint(point.x, point.y)?.matches(".maplibregl-canvas");
-  }), [releasedMap.projectedFrom, releasedMap.projectedTo]);
-  assert(normalPoint, `no uncovered route point after recommendation deletion: ${JSON.stringify(releasedMap)}`);
+  const uncoveredRoutePoint = () => assist.page.evaluate(() => [
+    window.__detailedEarthMapProject?.(6.9603, 50.9375),
+    window.__detailedEarthMapProject?.(8.6821, 50.1109),
+  ].find((point) => point && point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight
+    && document.elementFromPoint(point.x, point.y)?.matches(".maplibregl-canvas")));
+  let normalPoint = await uncoveredRoutePoint();
+  if (!normalPoint) {
+    // Keep the editor open so closing it cannot mask a stale edit owner. Like a
+    // member, pan from exposed canvas to bring a covered Route Point into view.
+    const start = await assist.page.evaluate(() => Array.from({ length: 5 }, (_, i) => ({ x: innerWidth / 2, y: 120 + i * 50 }))
+      .reverse().find((point) => document.elementFromPoint(point.x, point.y)?.matches(".maplibregl-canvas")));
+    assert(start, `no exposed canvas for a real pan: ${JSON.stringify(releasedMap)}`);
+    await assist.page.mouse.move(start.x, start.y);
+    await assist.page.mouse.down();
+    await assist.page.mouse.move(start.x, 100, { steps: 12 });
+    // Holding the end of the drag gives a stationary release, without inertia.
+    await assist.page.waitForTimeout(250);
+    await assist.page.mouse.up();
+    normalPoint = await uncoveredRoutePoint();
+  }
+  assert(normalPoint, `no uncovered route point after a real map pan: ${JSON.stringify(await readMap(assist.page))}`);
   await assist.page.touchscreen.tap(normalPoint.x, normalPoint.y);
   await assist.page.waitForFunction(() => Boolean(document.querySelector("[data-qa-earth-dive-activated-route-point]")?.getAttribute("data-qa-earth-dive-activated-route-point")));
   evidence.stages.push({ name: "removed-pending-point-releases-map", ...await readMap(assist.page) });
 
+  await accessDetails.locator("summary").tap();
   const pointGate = { started: latch(), release: latch(), completed: latch() };
   pendingPointSuggestionGate = pointGate;
   const failedPointRequest = assist.page.waitForEvent("requestfailed", { predicate: (request) => /\/point-suggestions$/.test(new URL(request.url()).pathname) });
