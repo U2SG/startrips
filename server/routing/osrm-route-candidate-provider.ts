@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { simplifyRecordedTrackPoints } from "../../src/journey/journeyModel";
 import type { RoadProfile, RouteCandidate } from "../../src/journey/types";
 import { createOsrmPointSuggestions } from "./osrm-point-suggestions";
-import { compatibleRoutingStep, MAX_SELECTED_POINT_METERS, routingDistanceMeters as meters, validRoutingCoordinate } from "./routing-coordinates";
+import { compatibleRoutingStep, MAX_SELECTED_POINT_METERS, MAX_SNAP_METERS, routingDistanceMeters as meters, validProfileSnap, validRoutingCoordinate } from "./routing-coordinates";
 import {
   RoutingUnavailableError,
   type RouteCandidateProvider,
@@ -12,7 +12,6 @@ import {
 
 // Place labels may identify a park's representative point rather than a road.
 // Keep a finite bound and preserve every offset for the member's comparison.
-const MAX_SNAP_METERS: Record<RoadProfile, number> = { driving: 10_000, walking: 750, cycling: 750 };
 const MAX_GEOMETRY_POINTS = 4_000;
 const MAX_PROVIDER_GEOMETRY_POINTS = 32_000;
 const GEOMETRY_ERROR_RADIANS = 5 / 6_371_000;
@@ -101,10 +100,7 @@ export function acceptOsrmCandidate(
       || leg.steps.some((step) => !step || !compatibleRoutingStep(step.mode, profile, allowFerries)))
     || !Number.isFinite(route.distance) || !Number.isFinite(route.duration)
     || !(route.distance! > 0) || !(route.duration! > 0)) return null;
-  if (waypoints.some((point, index) => !Array.isArray(point?.location) || point.location.length !== 2
-    || !point.location.every(Number.isFinite) || Math.abs(point.location[0]) > 180 || Math.abs(point.location[1]) > 90
-    || !Number.isFinite(point.distance) || point.distance! < 0 || point.distance! > maxSnapMeters
-    || meters(ordered[index], { lon: point.location[0], lat: point.location[1] }) > maxSnapMeters)) return null;
+  if (waypoints.some((point, index) => !validProfileSnap(point, ordered[index], profile))) return null;
   const direct = ordered.slice(1).reduce((total, point, index) => total + meters(ordered[index], point), 0);
   if (!(direct > 0) || direct > MAX_DIRECT_METERS || route.distance! > Math.max(8_000, direct * 5)) return null;
   if (geometry.some((point, index) => index > 0 && Math.abs(point[0] - geometry[index - 1][0]) > 180)) return null;

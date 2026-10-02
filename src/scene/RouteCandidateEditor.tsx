@@ -215,6 +215,10 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   }, [active, editMode, open]);
 
   useEffect(() => {
+    if (pendingPoint?.kind === "shape" && pendingIndex < 0) setPendingPoint(null);
+  }, [pendingIndex, pendingPoint]);
+
+  useEffect(() => {
     onEditModeChange(active && open && (editMode || pendingPoint !== null));
     return () => onEditModeChange(false);
   }, [active, editMode, onEditModeChange, open, pendingPoint]);
@@ -413,7 +417,10 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
               {busy ? "处理中…" : "查看候选"}
             </button>
             <button type="button" disabled={busy} onClick={() => {
-              if (editMode) setDraftShapes(record?.shapePoints ?? []);
+              if (editMode) {
+                setDraftShapes(record?.shapePoints ?? []);
+                setPendingPoint(null);
+              }
               setEditMode((value) => !value);
               setCandidates([]);
             }}>

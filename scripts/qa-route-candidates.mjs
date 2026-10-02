@@ -505,6 +505,30 @@ try {
   assert(savedShape.lat === coarseShape.lat + 0.003 && savedShape.lon === coarseShape.lon + 0.003
     && (await readMap(assist.page)).pointCount === assistBaseline.pointCount, "a recommended shape point did not shape the route independently of Journey nodes");
 
+  await assist.page.getByRole("button", { name: "调整经过位置", exact: true }).tap();
+  const removalPicker = assist.page.locator(".route-shape-picker");
+  await removalPicker.getByText("输入经纬度", { exact: true }).tap();
+  await removalPicker.getByRole("textbox", { name: "纬度", exact: true }).fill("50.4");
+  await removalPicker.getByRole("textbox", { name: "经度", exact: true }).fill("7.7");
+  const removalGate = { started: latch(), release: latch(), completed: latch() };
+  pendingPointSuggestionGate = removalGate;
+  const removedPointRequest = assist.page.waitForEvent("requestfailed", { predicate: (request) => /\/point-suggestions$/.test(new URL(request.url()).pathname) });
+  await removalPicker.getByRole("button", { name: "添加这组坐标", exact: true }).tap();
+  await removalGate.started.promise;
+  const removalIndex = await assist.page.locator(".route-candidate-editor__shape").count();
+  await assist.page.getByRole("button", { name: `移除第 ${removalIndex} 个修正点`, exact: true }).tap();
+  await removedPointRequest;
+  removalGate.release.resolve();
+  await removalGate.completed.promise;
+  await nearby.waitFor({ state: "detached" });
+  await assist.page.getByRole("button", { name: "退出调整", exact: true }).tap();
+  await assist.page.locator(".route-nearby-origin").waitFor({ state: "detached" });
+  const normalPoint = (await readMap(assist.page)).projectedTo;
+  assert(normalPoint, "normal route point missing after recommendation deletion");
+  await assist.page.touchscreen.tap(normalPoint.x, normalPoint.y);
+  await assist.page.waitForFunction(() => Boolean(document.querySelector("[data-qa-activated-route-point]")?.getAttribute("data-qa-activated-route-point")));
+  evidence.stages.push({ name: "removed-pending-point-releases-map", ...await readMap(assist.page) });
+
   const pointGate = { started: latch(), release: latch(), completed: latch() };
   pendingPointSuggestionGate = pointGate;
   const failedPointRequest = assist.page.waitForEvent("requestfailed", { predicate: (request) => /\/point-suggestions$/.test(new URL(request.url()).pathname) });

@@ -1,6 +1,17 @@
 import type { RoutingCoordinate } from "./route-candidate-provider";
+import type { RoadProfile } from "../../src/journey/types";
 
 export const MAX_SELECTED_POINT_METERS = 25_000;
+export const MAX_SNAP_METERS: Record<RoadProfile, number> = { driving: 10_000, walking: 750, cycling: 750 };
+
+export function validProfileSnap(value: unknown, requested: RoutingCoordinate, profile: RoadProfile): boolean {
+  const point = value as { location?: unknown; distance?: unknown } | null;
+  if (!Array.isArray(point?.location) || point.location.length !== 2
+    || typeof point.distance !== "number" || !Number.isFinite(point.distance) || point.distance < 0) return false;
+  const snapped = { lon: point.location[0], lat: point.location[1] };
+  return validRoutingCoordinate(snapped) && point.distance <= MAX_SNAP_METERS[profile]
+    && routingDistanceMeters(requested, snapped) <= MAX_SNAP_METERS[profile];
+}
 
 export function validRoutingCoordinate(value: unknown): value is RoutingCoordinate {
   if (!value || typeof value !== "object") return false;

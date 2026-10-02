@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createOsrmPointSuggestions } from "./osrm-point-suggestions";
+import { MAX_SNAP_METERS } from "./routing-coordinates";
 
 const coordinate = { lat: 0, lon: 0 };
 const signal = () => new AbortController().signal;
@@ -50,7 +51,7 @@ describe("nearby routable point suggestions", () => {
     const fetcher = async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
       if (url.pathname.includes("/nearest/")) return reply({ code: "Ok", waypoints: [{ location: [0.001, 0], distance: 111 }] });
-      return reply({ code: "Ok", waypoints: [{ location: [0.001, 0] }, { location: [0.1, 0] }],
+      return reply({ code: "Ok", waypoints: [{ location: [0.001, 0], distance: 0 }, { location: [0.1, 0], distance: 0 }],
         routes: [{ distance: 12_000, duration: 900, legs: [{ steps: [{ mode }] }] }] });
     };
     const suggest = createOsrmPointSuggestions({ cycling: "http://bike.internal" }, fetcher);
@@ -59,6 +60,33 @@ describe("nearby routable point suggestions", () => {
     expect(await suggest({ ...request, allowFerries: true })).toHaveLength(1);
     mode = "driving";
     expect(await suggest({ ...request, allowFerries: true })).toEqual([]);
+  });
+
+  it.each(["driving", "walking", "cycling"] as const)("uses the same %s snap gates for the recommendation and its neighbors", async (profile) => {
+    const limit = MAX_SNAP_METERS[profile];
+    let reported: unknown = limit;
+    let neighborOffset = 0;
+    let pointOffset = 0;
+    const fetcher = async (input: RequestInfo | URL) => {
+      if (String(input).includes("/nearest/")) return reply({ code: "Ok", waypoints: [{ location: [0.001, 0], distance: 111 }] });
+      return reply({ code: "Ok", waypoints: [
+        { location: [0.001 + pointOffset, 0], distance: 0 },
+        { location: [0.1 + neighborOffset, 0], distance: reported },
+      ], routes: [{ distance: 12_000, duration: 900, legs: [{ steps: [{ mode: profile }] }] }] });
+    };
+    const suggest = createOsrmPointSuggestions({ [profile]: "http://road.internal" }, fetcher);
+    const request = { coordinate, neighbors: { after: { lat: 0, lon: 0.1 } }, profile, signal: signal() };
+    expect(await suggest(request)).toHaveLength(1);
+    reported = limit + 1;
+    expect(await suggest(request)).toEqual([]);
+    reported = 0;
+    neighborOffset = (limit + 100) / 111_195;
+    expect(await suggest(request)).toEqual([]);
+    neighborOffset = 0;
+    pointOffset = (limit + 100) / 111_195;
+    expect(await suggest(request)).toEqual([]);
+    pointOffset = 0;
+    for (reported of [undefined, -1, "0"]) expect(await suggest(request)).toEqual([]);
   });
 
   it("treats NoSegment as empty while refusing malformed, failed or unconfigured providers", async () => {

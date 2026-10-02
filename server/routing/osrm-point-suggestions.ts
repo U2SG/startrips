@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { RoadProfile, RoutePointSuggestion } from "../../src/journey/types";
 import { RoutingUnavailableError, type RoutePointSuggestionRequest, type RoutingCoordinate } from "./route-candidate-provider";
-import { compatibleRoutingStep, MAX_SELECTED_POINT_METERS, routingDistanceMeters, validRoutingCoordinate } from "./routing-coordinates";
+import { compatibleRoutingStep, MAX_SELECTED_POINT_METERS, routingDistanceMeters, validProfileSnap, validRoutingCoordinate } from "./routing-coordinates";
 
 type NearestPoint = { location?: unknown; distance?: unknown; name?: unknown; hint?: unknown };
 
@@ -62,11 +62,9 @@ export function createOsrmPointSuggestions(baseUrls: Partial<Record<RoadProfile,
         if (route.code !== "Ok" || !Array.isArray(route.routes) || !Array.isArray(route.waypoints)) {
           throw new RoutingUnavailableError("Nearby road connection response is invalid");
         }
-        connected = route.waypoints.length === ordered.length && route.waypoints.every((waypoint: NearestPoint, index: number) => {
-          if (!Array.isArray(waypoint?.location) || waypoint.location.length !== 2) return false;
-          const snapped = { lon: waypoint.location[0], lat: waypoint.location[1] };
-          return validRoutingCoordinate(snapped) && routingDistanceMeters(ordered[index], snapped) <= MAX_SELECTED_POINT_METERS;
-        }) && route.routes.some((entry: { distance?: number; duration?: number; legs?: { steps?: { mode?: string }[] }[] }) =>
+        connected = route.waypoints.length === ordered.length
+          && route.waypoints.every((waypoint: NearestPoint, index: number) => validProfileSnap(waypoint, ordered[index], profile))
+          && route.routes.some((entry: { distance?: number; duration?: number; legs?: { steps?: { mode?: string }[] }[] }) =>
           Number.isFinite(entry?.distance) && Number(entry.distance) > 0
           && Number.isFinite(entry.duration) && Number(entry.duration) > 0
           && Array.isArray(entry.legs) && entry.legs.length === ordered.length - 1

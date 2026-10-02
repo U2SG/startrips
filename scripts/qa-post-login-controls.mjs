@@ -1386,7 +1386,8 @@ async function verifyComposerGlobeRoundTrip() {
         : "已从地球添加地点；坐标识别暂不可用，可手动补充名称。";
       await page.getByText(expectedMessage).waitFor({ state: "visible" });
       const lastRoutePoint = routeItems().last();
-      await lastRoutePoint.locator(".journey-route-draft__summary").click();
+      const lastSummary = lastRoutePoint.locator(".journey-route-draft__summary");
+      if (await lastSummary.getAttribute("aria-expanded") !== "true") await lastSummary.click();
       // #375 added a contextual media upload to the expanded record, so the name
       // field is addressed explicitly rather than as "the only input".
       const lastInput = lastRoutePoint.locator('.journey-route-draft__expanded [data-route-point-label-input]');
@@ -1967,9 +1968,7 @@ async function verifyFinalAcceptanceMobileFlow() {
     // already recovered. `recordRailState` logs that one observation, in the
     // iteration that passes as well as the one that fails.
     const prepareControl = async (locator, label, recordRailState = false) => {
-      await locator.evaluate((element) => {
-        element.scrollIntoView({ block: "center", inline: "center" });
-      });
+      await locator.scrollIntoViewIfNeeded();
       await page.evaluate(() => new Promise((resolve) => (
         requestAnimationFrame(() => requestAnimationFrame(resolve))
       )));
