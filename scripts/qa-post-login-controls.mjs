@@ -2180,6 +2180,46 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error("Story kept presentation ownership after Quick Recap opened");
       }
     };
+    const commitQuickRecapReturnFrame = async (touch) => {
+      // Return follows the last presented Playback position. An immediate exit
+      // races its autoplay clock and cannot always assume the old Story asset.
+      // Pause through the real transport, seek the rendered final chapter, and
+      // present the second photograph before checking its return identity.
+      const playback = page.locator(".journey-playback");
+      if (!await playback.evaluate((element) => element.classList.contains("is-paused"))) {
+        await pressStoryPlayback(playback.locator('button[aria-label="暂停播放"]'),
+          "pause Quick Recap before return witness", touch);
+      }
+      await page.waitForFunction(() => document.querySelector(".journey-playback")?.classList.contains("is-paused"));
+      const ticks = playback.locator(".journey-playback__progress-chapters i");
+      if (await ticks.count() !== targetJourney.routePoints.length) {
+        throw new Error("Quick Recap return chapter count drifted");
+      }
+      const fraction = await ticks.last().evaluate((marker) => Number.parseFloat(marker.style.left) / 100);
+      if (!Number.isFinite(fraction)) throw new Error("Quick Recap return chapter lacks a plan fraction");
+      const progress = playback.locator('input[aria-label="播放进度"]');
+      await progress.focus();
+      await progress.evaluate((input, fraction) => {
+        const min = Number(input.min || "0"), max = Number(input.max || "1000");
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        if (!setter) throw new Error("Quick Recap progress value setter unavailable");
+        setter.call(input, String(Math.min(max, Math.ceil(min + (max - min) * fraction))));
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }, fraction);
+      await page.waitForFunction((label) => document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "stop"
+        && document.querySelector(".journey-playback__stop h3")?.textContent?.trim() === label,
+      targetJourney.routePoints.at(-1)?.label ?? "", { timeout: 5_000 });
+      await pressStoryPlayback(playback.locator('button[aria-label="下一个章节"]'),
+        "Quick Recap return photograph after final chapter", touch);
+      await page.waitForFunction(() => {
+        const playback = document.querySelector(".journey-playback");
+        const stage = playback?.querySelector('.journey-playback__media[data-requested-asset="fa-image-2"]');
+        return playback?.classList.contains("is-paused")
+          && stage?.getAttribute("data-presented-asset") === "fa-image-2"
+          && stage?.getAttribute("data-media-presentation") === "settled"
+          && playback.getAttribute("data-playback-presentation-hold") === "none";
+      }, null, { timeout: 5_000 });
+    };
     const editStoryJourney = async (touch) => {
       const story = page.locator(".journey-story");
       await pressStoryPlayback(story.getByRole("button", {
@@ -2789,6 +2829,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       if (await page.locator(".mobile-v2__sheet-layer").count() !== 0) {
         throw new Error("Journey detail sheet still covers mobile Quick Recap");
       }
+      await commitQuickRecapReturnFrame(true);
       await activateControl(page.locator('.journey-playback button[aria-label="退出播放"]'),
         "close Story Quick Recap after touch entry");
       await page.locator(".journey-story").waitFor({ state: "visible", timeout: 5_000 });
@@ -3454,6 +3495,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error("Desktop Story local autoplay is not a visible secondary action");
       }
       await enterStoryQuickRecap(false);
+      await commitQuickRecapReturnFrame(false);
       await activateControl(page.locator('.journey-playback button[aria-label="退出播放"]'),
         "close Story Quick Recap after pointer entry");
       await returnedStory.waitFor({ state: "visible", timeout: 5_000 });
