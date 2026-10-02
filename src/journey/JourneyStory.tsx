@@ -4038,6 +4038,14 @@ export function JourneyStory({
         role="dialog"
         aria-modal={storyModal ? "true" : undefined}
         aria-labelledby="journey-story-title"
+        onFocusCapture={(event) => {
+          // A removed touch primary can retarget native focus to this shell after
+          // the one-shot handoff. The visible decision owns shell focus; other
+          // controls keep their own focus, including the choice to stay in Story.
+          if (quickRecap?.state !== "over-budget" || event.target !== event.currentTarget) return;
+          const action = quickRecapFullActionRef.current;
+          if (action && isModalFocusCandidate(action)) action.focus({ preventScroll: true });
+        }}
         onWheel={scrollCopyFromMedia}
         onTransitionEnd={(event) => {
           if (event.target !== event.currentTarget) return;

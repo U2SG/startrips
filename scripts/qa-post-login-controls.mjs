@@ -2950,6 +2950,21 @@ async function verifyFinalAcceptanceMobileFlow() {
           }));
           throw new Error(`Story over-budget focus did not settle: ${JSON.stringify({ layout, focus })}`, { cause: error });
         });
+        // Reproduce the late shell-focus retarget observed after touch activation.
+        // Redirect only shell focus: the alternative action must remain selectable.
+        const focusOwnership = await storyFullAction.evaluate((button) => {
+          const story = button.closest(".journey-story");
+          story.focus({ preventScroll: true });
+          const recoveredShellFocus = document.activeElement === button;
+          const stay = button.parentElement.querySelector("button:last-of-type");
+          stay.focus({ preventScroll: true });
+          const retainedAlternativeFocus = document.activeElement === stay;
+          button.focus({ preventScroll: true });
+          return { recoveredShellFocus, retainedAlternativeFocus };
+        });
+        if (!focusOwnership.recoveredShellFocus || !focusOwnership.retainedAlternativeFocus) {
+          throw new Error(`Story over-budget focus ownership failed: ${JSON.stringify(focusOwnership)}`);
+        }
         const decision = await storyFullAction.evaluate((button) => {
           const panel = button.closest("[data-story-playback-state]");
           const entry = button.closest("[data-story-playback-entry]");

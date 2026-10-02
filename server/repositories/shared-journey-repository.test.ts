@@ -151,7 +151,7 @@ describe("shared journey view scope closure", () => {
     });
   });
 
-  it("shares current confirmed/shaped geometry only inside the granted adjacent-point scope", () => {
+  it("shares current geometry and explicit access-point provenance only inside the granted adjacent-point scope", () => {
     const routePoints = ["a", "b", "c"].map((id, index) => ({
       ...routePointRow(SHARED_A, id), longitude: 103.8198 + index * 0.1,
     }));
@@ -162,7 +162,13 @@ describe("shared journey view scope closure", () => {
       confirmedCandidate: {
         id: "road", geometry: [[103.8198, 1.3521], [103.8698, 1.36], [103.9198, 1.3521]],
         provider: "osrm", profile: "driving", distanceMeters: 12_000, durationSeconds: 900, relevance: 100,
-        snapping: { maxDistanceMeters: 750, waypoints: [] },
+        snapping: { maxDistanceMeters: 750, waypoints: [{
+          requested: [103.8198, 1.3521], selected: [103.82, 1.3522], snapped: [103.8201, 1.3523],
+          distanceMeters: 39, providerDistanceMeters: 15,
+        }, {
+          requested: [103.9198, 1.3521], snapped: [103.9197, 1.3521],
+          distanceMeters: 11, providerDistanceMeters: 11,
+        }] },
       },
     }, {
       fromRoutePointId: "b", toRoutePointId: "c", sourceKey: routeSegmentSourceKey(points, 1)!, revision: 3,
@@ -173,6 +179,12 @@ describe("shared journey view scope closure", () => {
       { ...segments[0], fromRoutePointId: UNSHARED, sourceKey: "outside-grant" },
       { ...segments[0], confirmationToken: "never-publish", confirmedCandidate: {
         ...segments[0].confirmedCandidate!, privateProviderToken: "never-publish",
+        snapping: {
+          ...segments[0].confirmedCandidate!.snapping,
+          waypoints: segments[0].confirmedCandidate!.snapping.waypoints.map((waypoint) => ({
+            ...waypoint, privateWaypointToken: "never-publish",
+          })),
+        },
       } },
       segments[1],
     ];
@@ -181,8 +193,18 @@ describe("shared journey view scope closure", () => {
     }));
     expect(view.journeys[0].routeSegments).toEqual(segments);
     expect(view.journeys[0].routePoints.map((point) => point.id)).toEqual(["a", "b", "c"]);
+    const sharedWaypoints = view.journeys[0].routeSegments![0].confirmedCandidate!.snapping.waypoints;
+    const storedWaypoints = stored[2].confirmedCandidate!.snapping.waypoints;
+    // Explicit selection remains distinct from both the Journey point and the provider snap.
+    expect(sharedWaypoints[0].selected).toEqual([103.82, 1.3522]);
+    expect(sharedWaypoints[0].selected).not.toBe(storedWaypoints[0].selected);
+    expect(sharedWaypoints[0]).not.toBe(storedWaypoints[0]);
+    expect(sharedWaypoints[1]).not.toHaveProperty("selected");
     const serialized = JSON.stringify(view);
-    for (const withheld of [UNSHARED, "never-publish", "privateProviderToken", "confirmationToken", "stale-source-with-private-coordinates"])
+    const guestWaypoints = JSON.parse(serialized).journeys[0].routeSegments[0].confirmedCandidate.snapping.waypoints;
+    expect(guestWaypoints[0].selected).toEqual([103.82, 1.3522]);
+    expect(guestWaypoints[1]).not.toHaveProperty("selected");
+    for (const withheld of [UNSHARED, "never-publish", "privateProviderToken", "privateWaypointToken", "confirmationToken", "stale-source-with-private-coordinates"])
       expect(serialized).not.toContain(withheld);
     const changed = buildSharedJourneyView(GRANT, rows({
       journeys: [{ ...journeyRow(SHARED_A, "Changed route"), routeSegments: stored }],
