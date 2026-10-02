@@ -2450,6 +2450,13 @@ try {
       const click = await clickRoutePointMarker(localPage, journeyId, targetId);
       await localPage.locator(`[data-route-point-context][data-route-point-id="${targetId}"]`)
         .waitFor({ state: "visible", timeout: 5_000 });
+      // Opening Route Point context updates the selected-point presentation, which
+      // intentionally invalidates the route projection revision and wakes one real
+      // render frame. Grade the renderer only after that exact projection identity
+      // has caught up; sampling in the invalidation window is not a settled frame.
+      await localPage.waitForFunction(() => (
+        window.__particleEarthDebug?.().journeyRouteProjectionReady === true
+      ), null, { timeout: 5_000 });
       const state = await localPage.evaluate(({ targetId, routeId, expectsCoastline }) => {
         const debug = window.__particleEarthDebug?.();
         const route = document.querySelector(`.particle-earth-route[data-journey-route="${routeId}"]`);
