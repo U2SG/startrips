@@ -17,6 +17,15 @@ export type AccountSurface =
   // #349: the sign-in methods on this Account -- which providers are bound,
   // and the explicit bind/unbind actions over the ST-067 endpoints.
   | "identity-links"
+  | "email-change"
+  | "email-change-pending"
+  | "email-change-verifying-old"
+  | "email-change-verifying-new"
+  | "email-change-completed"
+  | "email-change-cancelled"
+  | "email-change-conflicted"
+  | "email-change-recovery-required"
+  | "email-change-delivery-failed"
   | "password-link-offered"
   | "password-link-sent"
   | "password-link-expired"
@@ -30,12 +39,25 @@ const PASSWORD_LINK_SURFACES: readonly AccountSurface[] = [
   "password-link-failed",
 ];
 
+const EMAIL_CHANGE_SURFACES: readonly AccountSurface[] = [
+  "email-change",
+  "email-change-pending",
+  "email-change-verifying-old",
+  "email-change-verifying-new",
+  "email-change-completed",
+  "email-change-cancelled",
+  "email-change-conflicted",
+  "email-change-recovery-required",
+  "email-change-delivery-failed",
+];
+
 const DRILL_SURFACES: readonly AccountSurface[] = [
   "invite",
   "edit",
   "identity-links",
   "password-change",
   ...PASSWORD_LINK_SURFACES,
+  ...EMAIL_CHANGE_SURFACES,
 ];
 
 export function previousAccountSurface(surface: AccountSurface): AccountSurface {
@@ -59,6 +81,10 @@ export function isPasswordLinkSurface(surface: AccountSurface): boolean {
 
 export function isAccountPasswordSurface(surface: AccountSurface): boolean {
   return surface === "password-change" || isPasswordLinkSurface(surface);
+}
+
+export function isAccountEmailChangeSurface(surface: AccountSurface): boolean {
+  return EMAIL_CHANGE_SURFACES.includes(surface);
 }
 
 /**
@@ -108,7 +134,7 @@ export function accountSurfaceFromLocationSearch(search: string): AccountSurface
 }
 
 export function accountSurfaceEyebrow(surface: AccountSurface): string {
-  if (isAccountPasswordSurface(surface) || surface === "identity-links") return "ACCOUNT SECURITY";
+  if (isAccountPasswordSurface(surface) || isAccountEmailChangeSurface(surface) || surface === "identity-links") return "ACCOUNT SECURITY";
   return surface === "invite" ? "INVITATION" : "ATLAS DETAILS";
 }
 
@@ -116,6 +142,7 @@ export function accountSurfaceTitle(surface: AccountSurface): string {
   if (surface === "identity-links") return "登录方式";
   if (surface === "password-change") return "修改密码";
   if (isPasswordLinkSurface(surface)) return "设置密码";
+  if (isAccountEmailChangeSurface(surface)) return "修改邮箱";
   return surface === "invite" ? "邀请另一位" : "编辑图谱";
 }
 

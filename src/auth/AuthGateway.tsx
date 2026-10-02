@@ -20,6 +20,7 @@ import {
   accountSurfaceEyebrow,
   accountSurfaceFromLocationSearch,
   accountSurfaceTitle,
+  isAccountEmailChangeSurface,
   isAccountFormSurface,
   isAccountPasswordSurface,
   nextPasswordLinkSurface,
@@ -54,6 +55,18 @@ import {
   submitAccountPasswordChange,
   type AccountPasswordState,
 } from "./accountPassword";
+import {
+  AccountEmailChangeRefusal,
+  accountEmailChangeRefusalSurface,
+  accountEmailChangeRefusalText,
+  accountEmailChangeSurface,
+  cancelAccountEmailChange,
+  consumeAccountEmailChangeProof,
+  loadAccountEmailChange,
+  readAccountEmailChangeProof,
+  startAccountEmailChange,
+  type AccountEmailChangeView,
+} from "./accountEmailChange";
 import {
   EarthExperienceMenuEntry,
   earthExperienceEntryBusy,
@@ -884,10 +897,199 @@ function AccountPasswordPanel({ state, surface, onSurface, email, className }: {
   );
 }
 
-function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cinematicActive = false }: {
+function AccountEmailChangePanel({
+  surface,
+  onSurface,
+  currentEmail,
+  className,
+}: {
+  surface: AccountSurface;
+  onSurface: (next: AccountSurface) => void;
+  currentEmail: string;
+  className?: string;
+}) {
+  const [change, setChange] = useState<AccountEmailChangeView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadAccountEmailChange()
+      .then((next) => {
+        if (cancelled) return;
+        setChange(next);
+        onSurface(accountEmailChangeSurface(next));
+        setMessage("");
+      })
+      .catch((error) => {
+        if (!cancelled) setMessage(error instanceof AccountEmailChangeRefusal
+          ? accountEmailChangeRefusalText(error.code)
+          : "无法读取邮箱换绑状态，请稍后再试。");
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function start(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const newEmail = String(values.get("newEmail") ?? "");
+    const oldAddressAvailable = values.get("oldAddressAvailable") === "yes";
+    const currentPassword = String(values.get("currentPassword") ?? "");
+    setPending(true);
+    setMessage("");
+    try {
+      const next = await startAccountEmailChange({
+        newEmail,
+        reverification: { kind: "password", password: currentPassword },
+        oldAddressAvailable,
+      });
+      form.reset();
+      setChange(next);
+      onSurface(accountEmailChangeSurface(next));
+      setMessage("验证邮件已分别发送到当前邮箱和新邮箱。");
+    } catch (error) {
+      if (error instanceof AccountEmailChangeRefusal) {
+        onSurface(accountEmailChangeRefusalSurface(error.code));
+        setMessage(accountEmailChangeRefusalText(error.code));
+      } else {
+        setMessage("邮箱换绑未完成，请稍后再试。");
+      }
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function cancel() {
+    setPending(true);
+    setMessage("");
+    try {
+      const next = await cancelAccountEmailChange();
+      setChange(next);
+      onSurface(accountEmailChangeSurface(next));
+      setMessage("邮箱换绑已取消，当前邮箱保持不变。");
+    } catch (error) {
+      setMessage(error instanceof AccountEmailChangeRefusal
+        ? accountEmailChangeRefusalText(error.code)
+        : "无法取消邮箱换绑，请稍后再试。");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (loading) return <p className="auth-message" role="status">正在读取邮箱换绑状态…</p>;
+
+  const livePending = change?.status === "pending";
+  const statusCopy = surface === "email-change-recovery-required"
+    ? "当前邮箱已无法使用，需要先完成受控账户恢复；这里不会跳过旧邮箱控制权验证。"
+    : surface === "email-change-delivery-failed"
+      ? "上一轮验证邮件未能完整送达，交易已经取消，可以重新发起。"
+      : surface === "email-change-conflicted"
+        ? "这次换绑已失效或发生冲突，当前邮箱没有被提前修改。"
+        : surface === "email-change-cancelled"
+          ? "这次换绑已经取消，当前邮箱保持不变。"
+          : surface === "email-change-completed"
+            ? "邮箱换绑已完成。旧会话已失效，请使用新邮箱重新登录。"
+            : "";
+
+  return (
+    <div className={className ?? "account-email-change-panel"}>
+      {statusCopy ? <p className="auth-copy" role="status">{statusCopy}</p> : null}
+      {livePending ? (
+        <>
+          <p className="auth-copy">{change.currentEmail} → {change.proposedEmail}</p>
+          <p className="auth-copy">
+            当前邮箱：{change.oldConfirmedAt ? "已确认" : "待确认"} · 新邮箱：{change.newVerifiedAt ? "已验证" : "待验证"}
+          </p>
+          <button type="button" disabled={pending} onClick={() => void cancel()}>
+            {pending ? "处理中…" : "取消换绑"}
+          </button>
+        </>
+      ) : surface === "email-change-completed" ? null : (
+        <form onSubmit={start}>
+          <label><span>当前邮箱</span><input type="email" value={currentEmail} readOnly aria-readonly="true" /></label>
+          <label><span>新邮箱</span><input required name="newEmail" type="email" autoComplete="email" inputMode="email" /></label>
+          <label><span>当前密码</span><input required name="currentPassword" type="password" autoComplete="current-password" /></label>
+          <label><input name="oldAddressAvailable" type="checkbox" value="yes" defaultChecked /><span>我仍可访问当前邮箱</span></label>
+          <button type="submit" disabled={pending}>{pending ? "发送中…" : "发送双邮箱验证"}</button>
+        </form>
+      )}
+      {message ? <p className="auth-message" role="status">{message}</p> : null}
+    </div>
+  );
+}
+
+function AccountEmailChangeLinkPage({
+  authenticated,
+  refreshSession,
+}: {
+  authenticated: boolean;
+  refreshSession: () => Promise<unknown>;
+}) {
+  const started = useRef(false);
+  const [state, setState] = useState<"working" | "accepted" | "completed" | "error" | "signed-out">(
+    authenticated ? "working" : "signed-out",
+  );
+  const [message, setMessage] = useState(
+    authenticated ? "正在确认邮箱控制权…" : "请在发起邮箱换绑时的同一登录会话中打开此链接。",
+  );
+
+  useEffect(() => {
+    if (started.current || !authenticated) return;
+    const proof = readAccountEmailChangeProof(window.location.hash);
+    if (!proof) {
+      setState("error");
+      setMessage("邮箱确认链接无效或缺少必要信息。");
+      return;
+    }
+    started.current = true;
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${window.location.search}`,
+    );
+    void consumeAccountEmailChangeProof(proof, { refreshSession })
+      .then((result) => {
+        if (result.completed) {
+          setState("completed");
+          setMessage("邮箱换绑已完成。旧会话已经退出，请使用新邮箱重新登录。");
+          return;
+        }
+        setState("accepted");
+        setMessage(proof.stage === "old"
+          ? "当前邮箱已确认，仍需完成新邮箱验证。"
+          : "新邮箱已验证，仍需完成当前邮箱确认。");
+      })
+      .catch((error) => {
+        setState("error");
+        setMessage(error instanceof AccountEmailChangeRefusal
+          ? accountEmailChangeRefusalText(error.code)
+          : "邮箱确认未完成，请稍后再试。");
+      });
+  }, [authenticated, refreshSession]);
+
+  return (
+    <main className="auth-gate">
+      <section className="auth-card" aria-busy={state === "working"}>
+        <StartripsWordmark size={38} />
+        <p className="auth-eyebrow">ACCOUNT SECURITY</p>
+        <h1>确认邮箱换绑</h1>
+        <p className="auth-copy" role={state === "error" ? "alert" : "status"}>{message}</p>
+        {state === "completed" || state === "signed-out"
+          ? <button className="auth-primary" type="button" onClick={() => window.location.assign("/")}>返回登录</button>
+          : null}
+      </section>
+    </main>
+  );
+}
+
+function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, onReady, cinematicActive = false }: {
   children: ReactNode;
   activeOrganizationId?: string;
   userName: string;
+  userEmail: string;
   onReady?: () => void;
   cinematicActive?: boolean;
 }) {
@@ -911,6 +1113,8 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   const [passwordState, setPasswordState] = useState<AccountPasswordState | null>(null);
   const [passwordEmail, setPasswordEmail] = useState("");
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [emailChangeOpen, setEmailChangeOpen] = useState(false);
+  const [emailChangeSurface, setEmailChangeSurface] = useState<AccountSurface>("email-change");
   // The password flow's own surface, shared by the desktop dock and the mobile
   // sheet so the link flow reports sent / expired / failed in one vocabulary.
   const [passwordSurface, setPasswordSurface] = useState<AccountSurface>(null);
@@ -973,6 +1177,20 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
     setPasswordSurface(next);
     setAccountSurface((current) => isAccountPasswordSurface(current) ? next : current);
   };
+  const applyEmailChangeSurface = (next: AccountSurface) => {
+    setEmailChangeSurface(next);
+    setAccountSurface((current) => isAccountEmailChangeSurface(current) ? next : current);
+  };
+  const openAccountEmailChange = () => {
+    setInviteOpen(false);
+    setEditAtlasOpen(false);
+    setPasswordOpen(false);
+    setIdentityOpen(false);
+    setEmailChangeSurface("email-change");
+    setEmailChangeOpen(true);
+    setMessage("");
+    if (isMobileV2) setAccountSurface("email-change");
+  };
   // #346: the entry point reads the authoritative identity list before it
   // decides what to render, so a credential-less Account is never shown a
   // "current password" field and a credential-holding one is never offered
@@ -981,6 +1199,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
     setInviteOpen(false);
     setEditAtlasOpen(false);
     setIdentityOpen(false);
+    setEmailChangeOpen(false);
     setPasswordState(null);
     // The surface is cleared with the state it belongs to: a read that fails,
     // or an Account whose identity list has changed, must not reopen on the
@@ -1237,7 +1456,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
         aria-label="打开账户菜单"
         aria-expanded={accountSheetOpen}
         aria-controls="account-mobile-sheet"
-        onClick={() => setAccountSurface((surface) => surface === null ? "menu" : null)}
+        onClick={() => { setEmailChangeOpen(false); setAccountSurface((surface) => surface === null ? "menu" : null); }}
       >
         <IconUserCircle size={19} stroke={1.35} aria-hidden="true" />
       </button>,
@@ -1269,10 +1488,11 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
             <span className="account-dock__identity"><strong>{gate.atlas.title}</strong> · {userName}</span>
             {message ? <small>{message}</small> : null}
             <div className="account-dock__actions">
-              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setIdentityOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
-              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setIdentityOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
+              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
+              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
               <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}>账户密码</button>
-              <button type="button" onClick={() => { setInviteOpen(false); setEditAtlasOpen(false); setPasswordOpen(false); setMessage(""); setIdentityOpen((value) => !value); }}>登录方式</button>
+              <button type="button" onClick={() => { if (emailChangeOpen) { setEmailChangeOpen(false); setMessage(""); return; } openAccountEmailChange(); }}>修改邮箱</button>
+              <button type="button" onClick={() => { setInviteOpen(false); setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setMessage(""); setIdentityOpen((value) => !value); }}>登录方式</button>
               <EarthExperienceMenuEntry
                 surface="dock"
                 policy={earthExperience.policy}
@@ -1297,14 +1517,15 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
             ) : null}
             {identityOpen ? <AccountIdentityPanel pendingReturn={bindReturn} onReturnConsumed={() => setBindReturn(null)} /> : null}
             {passwordOpen ? <AccountPasswordPanel state={passwordState} surface={passwordSurface} onSurface={applyPasswordSurface} email={passwordEmail} /> : null}
+            {emailChangeOpen ? <AccountEmailChangePanel surface={emailChangeSurface} onSurface={applyEmailChangeSurface} currentEmail={userEmail} /> : null}
           </div>
         </aside>
       ) : null}
       {accountSheetOpen ? (
         <div className="account-sheet-layer">
-          <button className="account-sheet__backdrop" type="button" tabIndex={-1} aria-label="关闭账户菜单" onClick={() => setAccountSurface(null)} />
+          <button className="account-sheet__backdrop" type="button" tabIndex={-1} aria-label="关闭账户菜单" onClick={() => { setEmailChangeOpen(false); setAccountSurface(null); }} />
           <section ref={accountSheetRef} id="account-mobile-sheet" className="account-sheet" tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-sheet-title">
-            <button className="account-sheet__handle" type="button" aria-label="关闭账户菜单" onClick={() => setAccountSurface(null)}><span aria-hidden="true" /></button>
+            <button className="account-sheet__handle" type="button" aria-label="关闭账户菜单" onClick={() => { setEmailChangeOpen(false); setAccountSurface(null); }}><span aria-hidden="true" /></button>
             {accountSurface === "menu" ? (
               <>
                 <header className="account-sheet__identity">
@@ -1316,6 +1537,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                   {isOwner ? <button type="button" onClick={() => { setMessage(""); setAccountSurface("invite"); }}><span>邀请另一位</span><small>发送私人图谱邀请</small></button> : null}
                   <button type="button" onClick={openMobileEdit}><span>编辑图谱</span><small>修改名称与题词</small></button>
                   <button type="button" onClick={() => void openAccountPassword()}><span>账户密码</span><small>修改或设置登录密码</small></button>
+                  <button type="button" onClick={openAccountEmailChange}><span>修改邮箱</span><small>查看、发起或取消邮箱换绑</small></button>
                   <button type="button" onClick={() => { setMessage(""); setAccountSurface("identity-links"); }}><span>登录方式</span><small>绑定或解绑第三方登录</small></button>
                   <EarthExperienceMenuEntry
                     surface="sheet"
@@ -1330,7 +1552,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
             ) : (
               <>
                 <header className="account-sheet__drill-header">
-                  <button type="button" onClick={() => setAccountSurface("menu")} aria-label="返回账户菜单">‹</button>
+                  <button type="button" onClick={() => { setEmailChangeOpen(false); setAccountSurface("menu"); }} aria-label="返回账户菜单">‹</button>
                   <div><p>{accountSurfaceEyebrow(accountSurface)}</p><h2 id="account-sheet-title">{accountSurfaceTitle(accountSurface)}</h2></div>
                 </header>
                 {message ? <p className="account-sheet__message" role="alert">{message}</p> : null}
@@ -1351,6 +1573,8 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                     <label><span>题词（可选）</span><textarea rows={3} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
                     <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
                   </form>
+                ) : isAccountEmailChangeSurface(accountSurface) ? (
+                  <AccountEmailChangePanel surface={accountSurface} onSurface={applyEmailChangeSurface} currentEmail={userEmail} className="account-sheet__form" />
                 ) : (
                   <AccountPasswordPanel state={passwordState} surface={accountSurface} onSurface={applyPasswordSurface} email={passwordEmail} className="account-sheet__form" />
                 )}
@@ -1417,7 +1641,16 @@ export function AuthGateway({ children }: { children: ReactNode }) {
       persistentEarth.setStage("login");
       return;
     }
-    if (!session.data) {
+    if (window.location.pathname === "/account/email-change") {
+    return (
+      <AccountEmailChangeLinkPage
+        authenticated={Boolean(session.data)}
+        refreshSession={async () => { await session.refetch(); }}
+      />
+    );
+  }
+
+  if (!session.data) {
       persistentEarth.setStage(handoffActive ? "handoff" : "login");
       return;
     }
@@ -1548,6 +1781,7 @@ export function AuthGateway({ children }: { children: ReactNode }) {
           key={`${session.data.session.activeOrganizationId ?? "none"}-${revision}`}
           activeOrganizationId={session.data.session.activeOrganizationId ?? undefined}
           userName={session.data.user.name}
+          userEmail={session.data.user.email}
           onReady={() => setWorkspaceReady(true)}
           cinematicActive={cinematicActive}
         >
