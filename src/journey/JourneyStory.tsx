@@ -89,6 +89,7 @@ import {
   storyWarmWindow,
 } from "./mediaPrefetch";
 import { createSoundtrackSampler } from "../motion/audioSampler";
+import { createSoundtrackDuckingController } from "./soundtrackDuckingController";
 import {
   resetAudioAtmosphereEnergy,
   writeAudioAtmosphereEnergy,
@@ -906,6 +907,16 @@ export function JourneyStory({
   // drives whichever stage is on screen so a video step can end itself.
   const storyVideoRef = useRef<HTMLVideoElement>(null);
   const fullscreenVideoRef = useRef<HTMLVideoElement>(null);
+  // #596: which element the ducking owner should read, as a *decision* rather
+  // than a captured element. Only this value is refreshed during render. The
+  // element refs must not be: React attaches `ref.current` in the commit phase,
+  // so a render-phase copy of `storyVideoRef.current` is still null the first
+  // time a video appears, and still the previous element across an inline ->
+  // immersive switch - in both cases the controller would be handed nothing, or
+  // the wrong element, until some unrelated render happened to refresh it. The
+  // getter reads the live refs at call time, which is always after commit.
+  const foregroundVideoKindRef = useRef<"none" | "inline" | "immersive">("none");
+  const storyStageVideoAssetRef = useRef<JourneyMediaAsset | null>(null);
   const videoHandoffGenerationRef = useRef(0);
   const videoHandoffRef = useRef<{
     id: string; src: string; time: number; shouldPlay: boolean; toFullscreen: boolean;
@@ -2805,6 +2816,60 @@ export function JourneyStory({
     && storyStageVideoRead?.status === "ready",
   );
   const storyStageVideoVisible = storyStageVideoSettled || storyStageVideoIncoming;
+  // #596: which element owns the foreground, as a decision refreshed during
+  // render. The element itself is resolved lazily inside the getter, because
+  // React attaches these refs in the commit phase and a render-phase copy would
+  // still be null the first time a video appears, or the previous element across
+  // an inline -> immersive switch. The same expression the rest of this file
+  // already uses to name the current Story video, so the ducking owner and the
+  // playback hand-off cannot disagree about which element is foreground.
+  storyStageVideoAssetRef.current = storyStageVideoAsset;
+  foregroundVideoKindRef.current = !storyStageVideoSettled
+    ? "none"
+    : fullscreen ? "immersive" : "inline";
+  // One ducking owner for the whole Story surface, covering inline media and
+  // the immersive stage. The immersive hand-off moves the same element rather
+  // than creating a second one, so this cannot become a second, divergent
+  // ducking state.
+  useEffect(() => {
+    const controller = createSoundtrackDuckingController({
+      getSoundtrack: () => audioRef.current,
+      getForegroundVideo: () => {
+        // `foregroundVideoKindRef` is only set when the stage's video is the
+        // settled, presented one. That matters because a video the member has
+        // navigated past keeps its `data-shared-media-id` and can still report
+        // itself un-paused with frame data: the ducking policy correctly reads
+        // live transport state, and would then keep the soundtrack ducked under
+        // a photograph. DOM ancestry is not the test - the stage video is not
+        // rendered inside a page slot - the product's own settled signal is.
+        const kind = foregroundVideoKindRef.current;
+        if (kind === "none") return null;
+        const element = kind === "immersive"
+          ? fullscreenVideoRef.current
+          : storyVideoRef.current;
+        return element?.dataset.sharedMediaId ? element : null;
+      },
+    });
+    controller.start();
+    // #596 QA: publish what the controller believes, so a restore that does not
+    // move can be diagnosed from the outside. DEV only - QA previews are a
+    // development surface, so a production build pays nothing - and written only
+    // when the value actually changes.
+    if (!import.meta.env.DEV) return () => controller.stop();
+    let written = "";
+    const publish = window.setInterval(() => {
+      const surface = document.querySelector<HTMLElement>(".journey-story");
+      if (!surface) return;
+      const next = JSON.stringify(controller.snapshot());
+      if (next === written) return;
+      written = next;
+      surface.dataset.qaSoundtrackDuck = next;
+    }, 120);
+    return () => {
+      window.clearInterval(publish);
+      controller.stop();
+    };
+  }, []);
   function renderStageVideo(immersive: boolean) {
     return storyStageVideoAsset ? <video
       ref={immersive ? fullscreenVideoRef : storyVideoRef}
@@ -3348,6 +3413,15 @@ export function JourneyStory({
           && performance.now() - touchClick.at < 1_000) {
           mediaButtonTouchClickRef.current = null;
           event.preventDefault();
+          // The touch pointerup can commit the over-budget replacement before
+          // Chromium finishes the compatibility click for the removed primary
+          // action. Reassert the new focus owner after that click has completed;
+          // the existing state effect still covers browsers that emit no click.
+          if (key === "quick-recap") {
+            window.requestAnimationFrame(() => {
+              quickRecapFullActionRef.current?.focus({ preventScroll: true });
+            });
+          }
           return;
         }
         activate();

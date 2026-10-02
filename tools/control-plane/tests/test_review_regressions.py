@@ -270,19 +270,25 @@ class HandoffIdentityCases(fixture.SyntheticOne):
                          'source_sha':fixture.A,'ci_run':12,'ci_attempt':1}
 
     def handoff(self, captured=None, confirmed=None):
-        with mock.patch.object(action_plan,'plan',side_effect=[self.observed, confirmed or self.observed]), \
+        drift = confirmed is not None and confirmed != self.observed
+        with mock.patch.object(action_plan,'plan',return_value=self.observed) as planner, \
              mock.patch.object(runtime_preflight,'preflight',return_value={'worktree':str(self.root)}), \
-             mock.patch.object(evidence_capture,'capture',return_value=captured or self.captured):
-            return action_plan.handoff(self.path,'ST-001','synthetic/project')
+             mock.patch.object(evidence_capture,'capture',return_value=captured or self.captured), \
+             mock.patch.object(action_plan,'confirm_handoff_identity',
+                               side_effect=fixture.store.StoreConflict('handoff identity drift') if drift else None):
+            result = action_plan.handoff(self.path,'ST-001','synthetic/project')
+        self.assertEqual(1, planner.call_count)
+        return result
 
     def test_only_matching_plan_capture_and_review_handoff(self):
         self.assertTrue(self.handoff()['changed'])
         self.assertEqual('ready_for_eval', fixture.store.load_document(self.path)['features'][0]['status'])
 
     def test_handoff_derives_lane_from_one_not_environment(self):
-        with mock.patch.object(action_plan,'plan',side_effect=[self.observed, self.observed]), \
+        with mock.patch.object(action_plan,'plan',return_value=self.observed), \
              mock.patch.object(runtime_preflight,'preflight',return_value={'worktree':str(self.root)}) as preflight, \
              mock.patch.object(evidence_capture,'capture',return_value=self.captured), \
+             mock.patch.object(action_plan,'confirm_handoff_identity',return_value=True), \
              mock.patch.dict(os.environ, {'STARTRIPS_LANE': 'backend'}):
             action_plan.handoff(self.path,'ST-001','synthetic/project')
         self.assertEqual('experience', preflight.call_args.args[2])

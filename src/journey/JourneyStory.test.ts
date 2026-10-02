@@ -202,6 +202,18 @@ describe("media evidence bridge (#334)", () => {
     expect(hidden.effective).toBeNull();
   });
 
+  it("forwards cancellation to owner-private media evidence reads", async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal);
+      return Response.json({ evidence: { mediaAssetId: "asset-abort" } });
+    }) as unknown as typeof fetch;
+
+    await readMediaEvidence("asset-abort", fetcher, controller.signal);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the shared surface away from owner-private media evidence endpoints", () => {
     const storySource = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
     const sharedSource = readFileSync(new URL("./SharedAtlasView.tsx", import.meta.url), "utf8");

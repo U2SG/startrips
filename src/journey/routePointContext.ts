@@ -1,8 +1,77 @@
 import { journeyVisualMedia } from "./journeyModel";
-import type { Journey } from "./types";
+import type { Journey, MediaEvidenceRecord, MediaSpatialSource } from "./types";
 
-export const ROUTE_POINT_LOCATION_PRECISION = "route-point" as const;
-export type RoutePointLocationPrecision = typeof ROUTE_POINT_LOCATION_PRECISION;
+export type RoutePointLocationPrecision =
+  | {
+      kind: "route-point";
+      mediaAssetId: null;
+      source: null;
+      accuracyMeters: null;
+      latitude: null;
+      longitude: null;
+    }
+  | {
+      kind: "recorded-media-coordinate";
+      mediaAssetId: string;
+      source: Exclude<MediaSpatialSource, "unknown">;
+      accuracyMeters: number | null;
+      latitude: number;
+      longitude: number;
+    };
+
+const ROUTE_POINT_LOCATION_PRECISION: RoutePointLocationPrecision = {
+  kind: "route-point",
+  mediaAssetId: null,
+  source: null,
+  accuracyMeters: null,
+  latitude: null,
+  longitude: null,
+};
+
+function routePointLocationPrecision(
+  visualMedia: ReturnType<typeof journeyVisualMedia>,
+  mediaEvidenceByAssetId: ReadonlyMap<string, MediaEvidenceRecord>,
+): RoutePointLocationPrecision {
+  let best: RoutePointLocationPrecision = ROUTE_POINT_LOCATION_PRECISION;
+  for (const asset of visualMedia) {
+    const evidence = mediaEvidenceByAssetId.get(asset.id);
+    const spatial = evidence?.recorded.spatial;
+    if (
+      !evidence
+      || !spatial
+      || evidence.display.hidden
+      || spatial.granularity !== "coordinate"
+      || spatial.source === "unknown"
+      || spatial.latitude === null
+      || spatial.longitude === null
+      || !Number.isFinite(spatial.latitude)
+      || !Number.isFinite(spatial.longitude)
+    ) {
+      continue;
+    }
+    const accuracyMeters = spatial.accuracyMeters !== null
+      && Number.isFinite(spatial.accuracyMeters)
+      && spatial.accuracyMeters >= 0
+      ? spatial.accuracyMeters
+      : null;
+    if (
+      best.kind === "recorded-media-coordinate"
+      && (best.accuracyMeters !== null || accuracyMeters === null)
+      && !(best.accuracyMeters !== null && accuracyMeters !== null && accuracyMeters < best.accuracyMeters)
+    ) {
+      continue;
+    }
+    best = {
+      kind: "recorded-media-coordinate",
+      mediaAssetId: asset.id,
+      source: spatial.source,
+      accuracyMeters,
+      latitude: spatial.latitude,
+      longitude: spatial.longitude,
+    };
+  }
+  return best;
+}
 
 export type RoutePointContextRouteRef = {
   routePointId: string;
@@ -66,6 +135,7 @@ function routePointRouteRef(
 export function buildRoutePointContext(
   journey: Journey,
   routePointId: string,
+  mediaEvidenceByAssetId: ReadonlyMap<string, MediaEvidenceRecord> = new Map(),
 ): RoutePointContext | null {
   const routePointIndex = journey.routePoints.findIndex((point) => point.id === routePointId);
   if (routePointIndex < 0) return null;
@@ -104,7 +174,7 @@ export function buildRoutePointContext(
     location: {
       latitude: point.latitude,
       longitude: point.longitude,
-      precision: ROUTE_POINT_LOCATION_PRECISION,
+      precision: routePointLocationPrecision(scopedVisualMedia, mediaEvidenceByAssetId),
     },
   };
 }
