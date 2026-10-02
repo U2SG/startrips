@@ -1,0 +1,12 @@
+/* #393: the placeholder shown while a lazily loaded Journey reader arrives.
+   Loaded with the app, unlike the readers' own styles. */
+.journey-reader-loading {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay-220);
+  display: grid;
+  place-items: center;
+  background: var(--archive-bg);
+  font: 400 13px/1.5 var(--archive-sans);
+  color: var(--startrips-muted);
+}

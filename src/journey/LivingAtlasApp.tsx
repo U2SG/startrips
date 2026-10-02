@@ -1,4 +1,4 @@
-import { type ComponentType, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowNarrowLeft,
   IconArrowRight,
@@ -88,6 +88,13 @@ import {
 } from "./playbackReturn";
 import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
 import { JourneyStory } from "./JourneyStory";
+import { useMediaPresentationStyle } from "./mediaPresentation";
+
+// #393 trial: loaded only when this device chose the Journey Book or Stream.
+const JourneyBook = lazy(() => import("./JourneyBook").then((module) => ({ default: module.JourneyBook })));
+const JourneyStream = lazy(() => import("./JourneyStream").then((module) => ({ default: module.JourneyStream })));
+/** A tap this recent is where the Journey was opened from (Stream's pour). */
+const STORY_ORIGIN_MAX_AGE_MS = 1500;
 import type { StoryLogicalObservation } from "./storyMediaPolicy";
 import {
   cachedSoundtrackRead,
@@ -1284,6 +1291,32 @@ export function LivingAtlasApp({
   }, []);
   const clearHomeBaseContext = useCallback(() => setHomeBaseContextPeriodId(null), []);
   const storyObservationRef = useRef<StoryLogicalObservation | null>(null);
+  const mediaPresentation = useMediaPresentationStyle();
+  // The Journey whose Book the reader left for classic Story (to edit, or to
+  // compare); reset whenever Story closes.
+  const [storyClassicFor, setStoryClassicFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (storyJourneyId === null) setStoryClassicFor(null);
+  }, [storyJourneyId]);
+  // The last tap, so a reader can open from where the person touched.
+  const lastPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  useEffect(() => {
+    const remember = (event: PointerEvent) => {
+      lastPointerRef.current = { x: event.clientX, y: event.clientY, at: performance.now() };
+    };
+    window.addEventListener("pointerdown", remember, { capture: true, passive: true });
+    return () => window.removeEventListener("pointerdown", remember, { capture: true });
+  }, []);
+  const storyReaderOrigin = useMemo(() => {
+    const pointer = lastPointerRef.current;
+    return storyJourneyId && pointer && performance.now() - pointer.at < STORY_ORIGIN_MAX_AGE_MS
+      ? { x: pointer.x, y: pointer.y }
+      : null;
+  }, [storyJourneyId]);
+  const storyReader = storyJourneyId && storyClassicFor !== storyJourneyId
+    && (mediaPresentation === "book" || mediaPresentation === "stream")
+    ? mediaPresentation
+    : null;
   const playbackReturnIntentRevisionRef = useRef(0);
   const playbackEntryRef = useRef<PlaybackEntry | null>(null);
   // #19: cinematic journey playback. The globe stays mounted underneath; the
@@ -2858,6 +2891,28 @@ export function LivingAtlasApp({
     setShareTarget({ lockedJourneyId });
   }
 
+  /**
+   * A trial reader hands over to classic Story at the entry being read: its
+   * asset when it has one, and always its Route Point, so a note-only point
+   * opens where its note can be read and edited.
+   */
+  function openClassicStory(target: { routePointId: string | null; assetId: string | null }) {
+    setStoryRoutePointId(target.routePointId);
+    setStoryInitialAssetId(target.assetId);
+    setStoryInitialSnapState("in-context");
+    setStoryClassicFor(storyJourneyId);
+  }
+
+  function navigateStoryJourney(id: string) {
+    claimPlaybackReturnIntent();
+    timeCursor.selectJourney(id);
+    setStoryRoutePointId(null);
+    setStoryInitialAssetId(null);
+    setStoryInitialSnapState("in-context");
+    setStoryFocusVisibleControlOnOpen(false);
+    setStoryJourneyId(id);
+  }
+
   function closeJourneyStory(source: HTMLElement | null, afterClose?: () => void) {
     const journeyId = storyJourneyId;
     const observation = storyObservationRef.current;
@@ -4294,7 +4349,40 @@ export function LivingAtlasApp({
         />
       ) : null}
 
-      {storyJourneyId ? (
+      {storyJourneyId && storyReader === "stream" ? (
+        <Suspense fallback={(
+          <div className="journey-reader-loading" role="status">正在打开旅程之流…</div>
+        )}>
+          <JourneyStream
+            key={storyJourneyId}
+            journeys={journeys}
+            journeyId={storyJourneyId}
+            routePointId={storyRoutePointId}
+            initialAssetId={storyInitialAssetId}
+            origin={storyReaderOrigin}
+            onObservationChange={handleStoryObservationChange}
+            onClose={() => closeJourneyStory(null)}
+            onNavigate={navigateStoryJourney}
+            onOpenClassic={openClassicStory}
+          />
+        </Suspense>
+      ) : storyJourneyId && storyReader === "book" ? (
+        <Suspense fallback={(
+          <div className="journey-reader-loading" role="status">正在打开旅程之书…</div>
+        )}>
+          <JourneyBook
+            key={storyJourneyId}
+            journeys={journeys}
+            journeyId={storyJourneyId}
+            routePointId={storyRoutePointId}
+            initialAssetId={storyInitialAssetId}
+            onObservationChange={handleStoryObservationChange}
+            onClose={() => closeJourneyStory(null)}
+            onNavigate={navigateStoryJourney}
+            onOpenClassic={openClassicStory}
+          />
+        </Suspense>
+      ) : storyJourneyId ? (
         <JourneyStory
           journeys={journeys}
           journeyId={storyJourneyId}
@@ -4325,15 +4413,7 @@ export function LivingAtlasApp({
             onFullPlayback: () => startPlayback(storyJourneyId, "full"),
             onCancel: () => cancelStoryPlaybackPreparation(storyJourneyId),
           } : undefined}
-          onNavigate={(id) => {
-            claimPlaybackReturnIntent();
-            timeCursor.selectJourney(id);
-            setStoryRoutePointId(null);
-            setStoryInitialAssetId(null);
-            setStoryInitialSnapState("in-context");
-            setStoryFocusVisibleControlOnOpen(false);
-            setStoryJourneyId(id);
-          }}
+          onNavigate={navigateStoryJourney}
           onEdit={canEditJourney ? editJourney : undefined}
           onJourneyUpdated={mutations?.updateJourneyNotes
             ? (updated) => setJourneys((current) => mergeJourney(current, updated))

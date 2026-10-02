@@ -81,6 +81,7 @@
     "hono": "^4.13.1",
     "maplibre-gl": "^6.3.0",
     "nodemailer": "^9.0.5",
+    "page-flip": "2.0.7",
     "pg": "^8.23.0",
     "pmtiles": "^4.5.0",
     "react": "^19.1.1",

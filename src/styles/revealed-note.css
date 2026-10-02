@@ -1,0 +1,94 @@
+/* #393: a note laid over a picture. The scrim is local to the text so the
+   rest of the picture keeps its own pixels. */
+.revealed-note {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 3;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  padding: 48px clamp(16px, 4vw, 32px) clamp(16px, 3vw, 24px);
+  background: linear-gradient(to top, rgb(2 7 6 / 0.72), rgb(2 7 6 / 0.36) 62%, transparent);
+  color: var(--startrips-starlight);
+  pointer-events: none;
+}
+
+.revealed-note__text {
+  max-width: 34em;
+  margin: 0;
+  font-family: var(--archive-serif);
+  font-size: clamp(16px, 2.1vw, 20px);
+  line-height: 1.7;
+  text-wrap: pretty;
+  pointer-events: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.revealed-note__char {
+  display: inline;
+  opacity: 0;
+  animation: revealed-note-char var(--motion-content) var(--motion-ease-out) forwards;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
+@keyframes revealed-note-char {
+  from { opacity: 0; transform: translateY(0.3em); }
+  to { opacity: 1; transform: none; }
+}
+
+.revealed-note__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.revealed-note__toggle {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--startrips-line);
+  background: rgb(2 7 6 / 0.48);
+  color: var(--startrips-muted);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+/* Over Story's swipeable stage the text must not take the gesture; only the
+   toggle stays interactive. */
+.revealed-note.is-passive .revealed-note__text {
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.revealed-note.is-collapsed {
+  background: none;
+}
+
+.revealed-note.is-collapsed .revealed-note__text {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .revealed-note__char {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* Over a video the note sits at the top, clear of the native controls. */
+.revealed-note.is-top {
+  inset: 0 0 auto 0;
+  padding: clamp(16px, 3vw, 24px) clamp(16px, 4vw, 32px) 48px;
+  background: linear-gradient(to bottom, rgb(2 7 6 / 0.72), rgb(2 7 6 / 0.36) 62%, transparent);
+}
+
+.revealed-note.is-top.is-collapsed {
+  background: none;
+}

@@ -1,0 +1,398 @@
+/*
+ * #393 Journey Stream trial. The opening (pour, glide, unfold), the margin
+ * journal and the flowing column follow Undertow, the stream-implement-3d
+ * collection of create-photo-flipbook-ui
+ * (https://github.com/HaichaoLihc/create-photo-flipbook-ui), MIT License,
+ * Copyright (c) 2026 Haichao Li. No reference media or hosting files are
+ * carried over; the WebGL curtain is not part of this reader.
+ */
+.journey-stream {
+  --accent: var(--startrips-aurora);
+  --pour-x: 50%;
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay-220);
+  overflow: hidden;
+  color: var(--startrips-starlight);
+  font-family: var(--archive-serif);
+  outline: none;
+}
+
+.journey-stream__backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--archive-bg);
+  opacity: 0;
+  transition: opacity var(--motion-content) var(--motion-ease-out);
+}
+
+.journey-stream:not([data-phase="closing"]) .journey-stream__backdrop { opacity: 1; }
+.journey-stream[data-phase="closing"] .journey-stream__backdrop { transition-delay: 380ms; }
+
+/* The thread: pours down from where the Journey was opened, glides to the
+   centre, and stays as the spine the pictures hang on. */
+.journey-stream__thread {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--pour-x);
+  width: 1px;
+  margin-left: -0.5px;
+  background: linear-gradient(to bottom, transparent, var(--accent) 12%, var(--accent) 88%, transparent);
+  opacity: 0.9;
+  transform: scaleY(0);
+  transform-origin: top;
+  animation: journey-stream-pour var(--motion-content) var(--motion-ease-out) forwards;
+  transition:
+    left 620ms cubic-bezier(0.6, 0, 0.4, 1),
+    opacity var(--motion-morph) ease,
+    transform 600ms cubic-bezier(0.6, 0, 0.4, 1);
+  pointer-events: none;
+}
+
+@keyframes journey-stream-pour {
+  to { transform: scaleY(1); }
+}
+
+.journey-stream[data-phase="centered"] .journey-stream__thread,
+.journey-stream[data-phase="unfolded"] .journey-stream__thread { left: 50%; }
+.journey-stream[data-phase="unfolded"] .journey-stream__thread { opacity: 0.32; }
+.journey-stream[data-phase="closing"] .journey-stream__thread {
+  left: var(--pour-x);
+  animation: journey-stream-retract 600ms cubic-bezier(0.6, 0, 0.4, 1) forwards;
+}
+
+@keyframes journey-stream-retract {
+  from { transform: scaleY(1); }
+  to { transform: scaleY(0); }
+}
+
+.journey-stream__flow {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* Vertical drags move the stream; horizontal ones change Journey. */
+  touch-action: none;
+  cursor: grab;
+}
+
+.journey-stream__strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--gap);
+  will-change: transform;
+}
+
+.journey-stream__item {
+  position: relative;
+  max-width: calc(100vw - 32px);
+}
+
+/* Thread segments between entries. */
+.journey-stream__item::before,
+.journey-stream__item::after {
+  position: absolute;
+  left: 50%;
+  width: 1px;
+  height: calc(var(--gap) / 2 + 1px);
+  margin-left: -0.5px;
+  background: var(--accent);
+  opacity: 0;
+  content: "";
+  transition: opacity var(--motion-content) ease var(--unfold-delay, 0ms);
+}
+
+.journey-stream__item::before { bottom: 100%; }
+.journey-stream__item::after { top: 100%; }
+.journey-stream[data-phase="unfolded"] .journey-stream__item::before,
+.journey-stream[data-phase="unfolded"] .journey-stream__item::after { opacity: 0.55; }
+
+.journey-stream__frame {
+  position: relative;
+  overflow: hidden;
+  background: #0a0c0b;
+  clip-path: inset(50% 0 50% 0);
+  transition: clip-path 900ms cubic-bezier(0.2, 0.75, 0.15, 1) var(--unfold-delay, 0ms);
+}
+
+.journey-stream[data-phase="unfolded"] .journey-stream__frame { clip-path: inset(0); }
+.journey-stream[data-phase="closing"] .journey-stream__frame {
+  transition: clip-path 450ms cubic-bezier(0.6, 0, 0.4, 1);
+}
+
+.journey-stream__shot {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+
+.journey-stream__shot img,
+.journey-stream__frame video,
+.journey-stream__still canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+.journey-stream__frame video {
+  object-fit: contain;
+  background: #0a0c0b;
+}
+
+.journey-stream__still {
+  position: absolute;
+  inset: 0;
+}
+
+.journey-stream__play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgb(255 248 231 / 0.5);
+  background: rgb(2 7 6 / 0.5);
+  color: var(--startrips-starlight);
+  translate: -50% -50%;
+}
+
+.journey-stream__state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 400 12px/1.5 var(--archive-sans);
+  color: var(--startrips-muted);
+}
+
+/* The journal: place, date and note in the margin of the first picture. */
+.journey-stream__note {
+  width: var(--note-width);
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity var(--motion-content) var(--motion-ease-out) var(--note-delay, 0ms),
+    transform var(--motion-content) var(--motion-ease-out) var(--note-delay, 0ms);
+}
+
+.journey-stream[data-phase="unfolded"] .journey-stream__note {
+  opacity: 1;
+  transform: none;
+}
+
+.journey-stream[data-layout="beside"] .journey-stream__note {
+  position: absolute;
+  top: 50%;
+  translate: 0 -50%;
+}
+
+.journey-stream[data-layout="beside"] .journey-stream__note.is-left {
+  right: calc(100% + var(--gutter));
+  text-align: right;
+}
+
+.journey-stream[data-layout="beside"] .journey-stream__note.is-right {
+  left: calc(100% + var(--gutter));
+}
+
+.journey-stream[data-layout="stacked"] .journey-stream__note {
+  width: auto;
+  margin-top: 16px;
+  text-align: center;
+}
+
+.journey-stream__note p,
+.journey-stream__intro p {
+  margin: 6px 0 0;
+  font-size: 15px;
+  line-height: 1.75;
+  color: rgb(255 248 231 / 0.82);
+  text-wrap: pretty;
+}
+
+.journey-stream__note-meta {
+  font: 400 11px/1.4 var(--archive-sans);
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+/* A note-only point is a mark on the thread with its note beside it. */
+.journey-stream__bead-item {
+  display: grid;
+  justify-items: center;
+  min-height: 24px;
+}
+
+.journey-stream[data-layout="stacked"] .journey-stream__bead-item .journey-stream__note {
+  max-width: min(26em, calc(100vw - 48px));
+}
+
+.journey-stream__bead {
+  display: block;
+  width: 15px;
+  height: 1px;
+  background: var(--accent);
+}
+
+.journey-stream[data-layout="beside"] .journey-stream__bead-item .journey-stream__note { top: 0; translate: 0 -40%; }
+
+.journey-stream__intro {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: min(32em, calc(100vw - 48px));
+  padding-top: 12px;
+  text-align: center;
+}
+
+.journey-stream__intro h2 {
+  margin: 8px 0 0;
+  font: 400 clamp(22px, 3vw, 30px)/1.25 var(--archive-serif);
+}
+
+.journey-stream__header {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding:
+    max(10px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    0
+    max(12px, env(safe-area-inset-left));
+  opacity: 0;
+  transition: opacity var(--motion-content) ease 700ms;
+}
+
+.journey-stream:is([data-phase="centered"], [data-phase="unfolded"]) .journey-stream__header { opacity: 1; }
+
+.journey-stream__title {
+  margin: 0;
+  overflow: hidden;
+  font: 400 14px/1.3 var(--archive-serif);
+  text-align: center;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: rgb(255 248 231 / 0.78);
+}
+
+.journey-stream__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.journey-stream__icon,
+.journey-stream__text-action,
+.journey-stream__side {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  background: none;
+  color: inherit;
+  font: 400 13px/1 var(--archive-sans);
+  cursor: pointer;
+}
+
+.journey-stream__icon:disabled { opacity: 0.3; cursor: default; }
+
+.journey-stream__icon:focus-visible,
+.journey-stream__text-action:focus-visible,
+.journey-stream__side:focus-visible,
+.journey-stream__shot:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.journey-stream__side {
+  position: absolute;
+  top: 50%;
+  z-index: 3;
+  padding: 0;
+  border-color: rgb(255 248 231 / 0.12);
+  color: var(--side-accent);
+  translate: 0 -50%;
+}
+
+.journey-stream__side.is-previous { left: max(8px, env(safe-area-inset-left)); }
+.journey-stream__side.is-next { right: max(8px, env(safe-area-inset-right)); }
+
+.journey-stream__paused {
+  position: absolute;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: 3;
+  margin: 0;
+  font: 400 11px/1.4 var(--archive-sans);
+  letter-spacing: 0.08em;
+  color: var(--startrips-muted);
+  translate: -50% 0;
+}
+
+.journey-stream__lightbox {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  background: rgb(2 7 6 / 0.94);
+  cursor: zoom-out;
+}
+
+.journey-stream__lightbox img {
+  max-width: 92vw;
+  max-height: 84vh;
+  object-fit: contain;
+}
+
+.journey-stream__lightbox p {
+  margin: 0;
+  font: 400 12px/1.4 var(--archive-sans);
+  letter-spacing: 0.06em;
+  color: var(--startrips-muted);
+}
+
+.journey-stream__lightbox .journey-stream__icon {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+}
+
+@media (max-width: 700px) {
+  .journey-stream__side { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-stream__thread {
+    left: 50%;
+    animation: none;
+    transform: none;
+    opacity: 0.32;
+    transition: none;
+  }
+  .journey-stream__frame,
+  .journey-stream__note,
+  .journey-stream__header,
+  .journey-stream__backdrop,
+  .journey-stream__item::before,
+  .journey-stream__item::after { transition: none; }
+}
