@@ -141,9 +141,17 @@ disables that mode's button. The public OSRM demo is not a production service.
 The browser never calls these URLs. The member must select a mode, compare
 the suggestions and confirm one before its geometry becomes a saved route.
 All steps must match that mode; cycling may include bike-pushing steps, with
-a notice in its preview. Ferry and train steps are rejected. Walking and
+a notice in its preview. Ferries require the member's explicit permission and
+show a notice; train steps remain rejected. Walking and
 cycling retain a 750m snapping limit; driving permits up to 10km with visible
 offset measurements. Recorded tracks remain the strongest route evidence.
+
+Nearby road recommendations check the selected mode and its neighboring points.
+Members may explicitly select a road access point up to 25km from an approximate
+Place; candidate snapping then uses that selected point with the same mode limit.
+The original Journey endpoint stays unchanged and the signed candidate records
+both coordinates. See [country access defaults](routing-profiles/README.md) for
+walking/cycling graph preparation that respects different country rules.
 
 The map renderer is provider-neutral. It uses OpenFreeMap's Fiord vector style by
 default. Set `ATLAS_MAP_STYLE_URL` in `.env.deploy` to use a contracted or
