@@ -3348,6 +3348,15 @@ export function JourneyStory({
           && performance.now() - touchClick.at < 1_000) {
           mediaButtonTouchClickRef.current = null;
           event.preventDefault();
+          // The touch pointerup can commit the over-budget replacement before
+          // Chromium finishes the compatibility click for the removed primary
+          // action. Reassert the new focus owner after that click has completed;
+          // the existing state effect still covers browsers that emit no click.
+          if (key === "quick-recap") {
+            window.requestAnimationFrame(() => {
+              quickRecapFullActionRef.current?.focus({ preventScroll: true });
+            });
+          }
           return;
         }
         activate();
