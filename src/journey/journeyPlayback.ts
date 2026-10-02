@@ -116,6 +116,7 @@ export function playbackMediaByChapter(journey: PlaybackJourney): Map<string, Jo
     return new Map(journey.routePoints.map((point) => [point.id, byOwner.get(point.id) ?? []]));
   }
   const pointsById = new Map(journey.routePoints.map((point) => [point.id, point]));
+  const routeIndexById = new Map(journey.routePoints.map((point, index) => [point.id, index]));
   const chapterByOwner = new Map<string, string>();
   for (const point of journey.routePoints) {
     const explicitAnchor = point.isStop ? null : point.stayAnchorRoutePointId;
@@ -130,7 +131,21 @@ export function playbackMediaByChapter(journey: PlaybackJourney): Map<string, Jo
     const chapterId = chapterByOwner.get(routePointId);
     if (chapterId !== undefined) byChapter.get(chapterId)?.push(asset);
   }
-  for (const media of byChapter.values()) media.sort(comparePlaybackMedia);
+  // #76: a folded chapter mixes several Route Points, and `sortOrder` is a
+  // Journey-global upload counter rather than a per-chapter sequence. Sorting
+  // the merged chapter by it alone let a group's child media outrun the Stop
+  // that owns the chapter, so Story's canonical whole-Journey order
+  // (`playbackStoryMedia`, route order per owner) and this chapter order
+  // disagreed on real journeys. Canonical route position decides first;
+  // `sortOrder` only orders media inside one Route Point. The all-Stop path
+  // above is unaffected because a chapter there has exactly one owner.
+  // Only point-owned media reaches this loop, so `routePointId` is always set.
+  const routeIndexOf = (asset: JourneyMediaAsset) =>
+    routeIndexById.get(asset.routePointId ?? "") ?? Number.MAX_SAFE_INTEGER;
+  for (const media of byChapter.values()) {
+    media.sort((left, right) => routeIndexOf(left) - routeIndexOf(right)
+      || comparePlaybackMedia(left, right));
+  }
   return byChapter;
 }
 
