@@ -1642,15 +1642,11 @@ export function AuthGateway({ children }: { children: ReactNode }) {
       return;
     }
     if (window.location.pathname === "/account/email-change") {
-    return (
-      <AccountEmailChangeLinkPage
-        authenticated={Boolean(session.data)}
-        refreshSession={async () => { await session.refetch(); }}
-      />
-    );
-  }
+      persistentEarth.setStage("login");
+      return;
+    }
 
-  if (!session.data) {
+    if (!session.data) {
       persistentEarth.setStage(handoffActive ? "handoff" : "login");
       return;
     }
@@ -1726,6 +1722,15 @@ export function AuthGateway({ children }: { children: ReactNode }) {
       <main className="auth-gate auth-gate--brand-loading" aria-busy="true">
         <StartripsBrandLoader message="正在验证私人入口…" />
       </main>
+    );
+  }
+
+  if (window.location.pathname === "/account/email-change") {
+    return (
+      <AccountEmailChangeLinkPage
+        authenticated={Boolean(session.data)}
+        refreshSession={async () => { await session.refetch(); }}
+      />
     );
   }
 
