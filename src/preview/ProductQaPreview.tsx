@@ -640,6 +640,9 @@ const storyQaMixedPairJourney: Journey = {
 };
 
 const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
+// #596: a second soundtrack identity, so the ducking lane can force a real
+// re-key and remount rather than swapping the node behind React's back.
+const QA_SOUNDTRACK_ALTERNATE_ID = "00000000-0000-4000-8000-000000000901";
 
 function JourneyStoryQaPreview() {
   const qaMode = new URLSearchParams(window.location.search).get("qaMode");
@@ -680,6 +683,47 @@ function JourneyStoryQaPreview() {
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       <button type="button" data-qa-story-reopen onClick={() => setOpen(true)}>重新打开旅程</button>
       <button type="button" data-qa-story-next-audio onClick={() => setNextMediaIsSoundtrack(true)}>下一个上传是配乐</button>
+      {/* #596 QA: attach a soundtrack directly, so the ducking lane can reach a
+          real `<audio>` without driving the whole upload pipeline to create one.
+          Clicking again swaps the soundtrack's identity, which is what makes a
+          Journey re-key and genuinely remount the element - the same path a
+          member takes when they replace their soundtrack. The upload path above
+          stays the honest route to one; this is a fixture affordance, the same
+          kind as the button beside it. */}
+      <button
+        type="button"
+        data-qa-story-attach-soundtrack
+        onClick={() => {
+          setJourneys((current) => {
+            const journey = current[0];
+            if (!journey) return current;
+            const hasPrimary = journey.media.some((asset) => asset.id === QA_SOUNDTRACK_ASSET_ID);
+            const hasAlternate = journey.media.some((asset) => asset.id === QA_SOUNDTRACK_ALTERNATE_ID);
+            const nextId = hasPrimary && !hasAlternate
+              ? QA_SOUNDTRACK_ALTERNATE_ID
+              : QA_SOUNDTRACK_ASSET_ID;
+            const kept = journey.media.filter((asset) => (
+              asset.id !== QA_SOUNDTRACK_ASSET_ID && asset.id !== QA_SOUNDTRACK_ALTERNATE_ID
+            ));
+            return [{
+              ...journey,
+              media: [...kept, {
+                id: nextId,
+                journeyId: journey.id,
+                routePointId: null,
+                storageDriver: "qa",
+                storageKey: "qa/story-soundtrack",
+                fileName: "night-theme.mp3",
+                mimeType: "audio/mpeg",
+                bytes: 68,
+                sortOrder: kept.length,
+                uploadedByUserId: journey.createdByUserId,
+                createdAt: "2026-08-11T00:00:00.000Z",
+              }],
+            }];
+          });
+        }}
+      >附加配乐</button>
       {open ? (
         <JourneyStory
           journeys={journeys}
