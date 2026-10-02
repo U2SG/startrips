@@ -353,6 +353,7 @@ function LivingAtlasQaPreview() {
   const globeChrome = params.get("qaMode") === "globe-chrome";
   const routePointContextQa = params.get("qaRoutePointContext") === "1";
   const realRoutePointScene = params.get("qaRealRoutePointScene") === "1";
+  const earthExperiencePolicy = params.get("qaPolicy") === "particle-only" ? "particle-only" : "default";
   const persistentEarth = usePersistentEarth();
   useEffect(() => {
     if (!realRoutePointScene) return undefined;
@@ -360,9 +361,9 @@ function LivingAtlasQaPreview() {
     return () => persistentEarth.setStage("idle");
   }, [persistentEarth, realRoutePointScene]);
   if (globeChrome && (!routePointContextQa || realRoutePointScene)) {
-    return <LivingAtlasApp GlobeComponent={LivingAtlasGlobeChromeQa} />;
+    return <LivingAtlasApp GlobeComponent={LivingAtlasGlobeChromeQa} earthExperiencePolicy={earthExperiencePolicy} />;
   }
-  return <LivingAtlasApp GlobeComponent={LivingAtlasQaGlobe} />;
+  return <LivingAtlasApp GlobeComponent={LivingAtlasQaGlobe} earthExperiencePolicy={earthExperiencePolicy} />;
 }
 
 function LivingAtlasGlobeControlsQaPreview() {
