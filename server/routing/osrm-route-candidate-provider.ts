@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { simplifyRecordedTrackPoints } from "../../src/journey/journeyModel";
 import type { RoadProfile, RouteCandidate } from "../../src/journey/types";
 import {
   RoutingUnavailableError,
@@ -16,6 +17,9 @@ const STEP_MODES: Record<RoadProfile, readonly string[]> = {
   cycling: ["cycling", "pushing bike"],
 };
 const MAX_GEOMETRY_POINTS = 4_000;
+const MAX_PROVIDER_GEOMETRY_POINTS = 32_000;
+const GEOMETRY_ERROR_RADIANS = 5 / 6_371_000;
+const SIMPLIFICATION_BLOCK_POINTS = 256;
 const MAX_DIRECT_METERS = 400_000;
 
 type OsrmRoute = {
@@ -40,7 +44,7 @@ function meters(a: RoutingCoordinate, b: RoutingCoordinate): number {
 }
 
 function validGeometry(value: unknown): [number, number][] | null {
-  if (!Array.isArray(value) || value.length < 2 || value.length > MAX_GEOMETRY_POINTS) return null;
+  if (!Array.isArray(value) || value.length < 2 || value.length > MAX_PROVIDER_GEOMETRY_POINTS) return null;
   const coordinates: [number, number][] = [];
   for (const point of value) {
     if (!Array.isArray(point) || point.length !== 2
@@ -50,6 +54,26 @@ function validGeometry(value: unknown): [number, number][] | null {
     coordinates.push([point[0], point[1]]);
   }
   return coordinates;
+}
+
+function boundedGeometry(geometry: [number, number][], waypointIndices: readonly number[]): [number, number][] | null {
+  if (geometry.length <= MAX_GEOMETRY_POINTS) return geometry;
+  const anchors = [...new Set([0, ...waypointIndices, geometry.length - 1])];
+  const result: [number, number][] = [];
+  // Pin every ordered waypoint, and bound the simplifier's work per block.
+  // Retained vertices are real provider samples with at most 5 m shape error.
+  for (let anchor = 1; anchor < anchors.length; anchor += 1) {
+    for (let start = anchors[anchor - 1]; start < anchors[anchor]; start += SIMPLIFICATION_BLOCK_POINTS - 1) {
+      const end = Math.min(anchors[anchor], start + SIMPLIFICATION_BLOCK_POINTS - 1);
+      const points = geometry.slice(start, end + 1).map((coordinate) => ({
+        lon: coordinate[0], lat: coordinate[1], coordinate,
+      }));
+      const simplified = simplifyRecordedTrackPoints(points, GEOMETRY_ERROR_RADIANS);
+      result.push(...simplified.slice(result.length ? 1 : 0).map((point) => point.coordinate));
+      if (result.length > MAX_GEOMETRY_POINTS) return null;
+    }
+  }
+  return result;
 }
 
 function cross(a: [number, number], b: [number, number], c: [number, number]) {
@@ -97,6 +121,7 @@ export function acceptOsrmCandidate(
   if (geometry.some((point, index) => index > 0 && Math.abs(point[0] - geometry[index - 1][0]) > 180)) return null;
   let cursor = 0;
   let corridorError = 0;
+  const waypointIndices: number[] = [];
   for (const waypoint of waypoints) {
     let best = { index: -1, distance: Infinity };
     for (let index = cursor; index < geometry.length; index += 1) {
@@ -107,15 +132,17 @@ export function acceptOsrmCandidate(
     }
     if (best.index < 0 || best.distance > 1_000) return null;
     cursor = best.index;
+    waypointIndices.push(best.index);
     corridorError += best.distance;
   }
-  if (obviousSelfIntersection(geometry)) return null;
+  const candidateGeometry = boundedGeometry(geometry, waypointIndices);
+  if (!candidateGeometry || obviousSelfIntersection(candidateGeometry)) return null;
   const id = createHash("sha256")
-    .update(JSON.stringify(["osrm", profile, geometry, route.distance, route.duration]))
+    .update(JSON.stringify(["osrm", profile, candidateGeometry, route.distance, route.duration]))
     .digest("hex").slice(0, 24);
   return {
     id,
-    geometry,
+    geometry: candidateGeometry,
     distanceMeters: route.distance!,
     durationSeconds: route.duration!,
     provider: "osrm",

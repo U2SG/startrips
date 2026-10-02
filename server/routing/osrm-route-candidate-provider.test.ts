@@ -24,7 +24,89 @@ const direct = {
   geometry: { type: "LineString", coordinates: [[0, 0], [0.05, 0], [0.1, 0]] },
 };
 
+function denseRoad(): [number, number][] {
+  const geometry: [number, number][] = Array.from({ length: 8_001 }, (_, index) => [
+    index / 8_000 * 0.3, Math.sin(index / 8_000 * Math.PI) * 0.003,
+  ]);
+  geometry[geometry.length - 1] = [0.3, 0];
+  return geometry;
+}
+
 describe("OSRM road candidate gate", () => {
+  it.each(["driving", "walking", "cycling"] as const)("keeps a dense %s road and its ordered shape anchor within a bounded snapshot", async (profile) => {
+    const geometry = denseRoad();
+    const anchors = [geometry[0], geometry[4_000], geometry.at(-1)!];
+    const waypoints = anchors.map((location) => ({ location, distance: 0 }));
+    const provider = createOsrmRouteCandidateProvider({ [profile]: "http://routing.internal:5000" },
+      (async () => new Response(JSON.stringify(osrmResponse([{
+        ...direct, distance: 35_000, geometry: { type: "LineString", coordinates: geometry },
+        legs: [{ steps: [{ mode: profile }] }, { steps: [{ mode: profile }] }],
+      }], waypoints)))) as typeof fetch);
+    const request = { coordinates: anchors.map(([lon, lat]) => ({ lon, lat })), profile,
+      alternativesCount: 1 as const, signal: new AbortController().signal };
+    const [candidate] = await provider.candidates(request);
+    expect(candidate.geometry.length).toBeLessThanOrEqual(4_000);
+    expect(candidate.geometry[0]).toEqual(anchors[0]);
+    expect(candidate.geometry.at(-1)).toEqual(anchors[2]);
+    expect(candidate.geometry).toContainEqual(anchors[1]);
+    expect(candidate).toMatchObject({ distanceMeters: 35_000, durationSeconds: 900, profile, provider: "osrm" });
+    expect(candidate.snapping.waypoints.map((point) => point.requested)).toEqual(anchors);
+    expect((await provider.candidates(request))[0].id).toBe(candidate.id);
+
+    // Independently measure the retained polyline against every source sample.
+    let segment = 0;
+    let maximumErrorMeters = 0;
+    for (const [lon, lat] of geometry) {
+      while (segment + 1 < candidate.geometry.length - 1 && candidate.geometry[segment + 1][0] < lon) segment += 1;
+      const [x, y] = candidate.geometry[segment];
+      const [endX, endY] = candidate.geometry[segment + 1];
+      const dx = endX - x, dy = endY - y;
+      const fraction = Math.max(0, Math.min(1, ((lon - x) * dx + (lat - y) * dy) / (dx * dx + dy * dy)));
+      maximumErrorMeters = Math.max(maximumErrorMeters, 111_320 * Math.hypot(lon - x - fraction * dx, lat - y - fraction * dy));
+    }
+    expect(maximumErrorMeters).toBeLessThanOrEqual(5.1);
+  });
+
+  it("rejects a dense road that skips a required shape point", async () => {
+    const geometry = denseRoad();
+    const anchors = [[0, 0], [0.15, 0.05], [0.3, 0]];
+    const provider = providerWith(osrmResponse([{
+      ...direct, distance: 35_000, geometry: { type: "LineString", coordinates: geometry },
+    }], anchors.map((location) => ({ location, distance: 0 }))));
+    expect(await provider.candidates({ coordinates: anchors.map(([lon, lat]) => ({ lon, lat })),
+      profile: "driving", alternativesCount: 1, signal: new AbortController().signal })).toEqual([]);
+  });
+
+  it("validates every raw vertex and bounds raw input before simplifying", async () => {
+    const invalid = denseRoad();
+    invalid[4_123] = [Number.NaN, 0];
+    for (const geometry of [invalid, Array.from({ length: 32_001 }, () => [0, 0])]) {
+      const provider = providerWith(osrmResponse([{ ...direct, geometry: { type: "LineString", coordinates: geometry } }]));
+      expect(await provider.candidates({ coordinates, profile: "driving", alternativesCount: 1,
+        signal: new AbortController().signal })).toEqual([]);
+    }
+  });
+
+  it("keeps the output budget when a sharp road cannot be simplified within the shape tolerance", async () => {
+    const geometry = Array.from({ length: 4_201 }, (_, index) => [index / 4_200 * 0.1, index % 2 ? 0.002 : 0]);
+    const provider = providerWith(osrmResponse([{ ...direct, geometry: { type: "LineString", coordinates: geometry } }]));
+    expect(await provider.candidates({ coordinates, profile: "driving", alternativesCount: 1,
+      signal: new AbortController().signal })).toEqual([]);
+  });
+
+  it("does not simplify an obvious crossing into an accepted dense road", async () => {
+    const corners = [[0, 0], [0.2, 0.1], [0, 0.1], [0.2, 0]];
+    const geometry = corners.slice(1).flatMap((end, leg) => Array.from({ length: 2_001 }, (_, index) => [
+      corners[leg][0] + (end[0] - corners[leg][0]) * index / 2_000,
+      corners[leg][1] + (end[1] - corners[leg][1]) * index / 2_000,
+    ]));
+    const provider = providerWith(osrmResponse([{
+      ...direct, distance: 50_000, geometry: { type: "LineString", coordinates: geometry },
+    }], [{ location: corners[0], distance: 0 }, { location: corners[3], distance: 0 }]));
+    expect(await provider.candidates({ coordinates: [{ lat: 0, lon: 0 }, { lat: 0, lon: 0.2 }],
+      profile: "driving", alternativesCount: 1, signal: new AbortController().signal })).toEqual([]);
+  });
+
   it("returns stable suggested geometries and ranks alternatives as relevance only", async () => {
     const provider = providerWith(osrmResponse([
       { distance: 16_000, duration: 1_200, geometry: {
