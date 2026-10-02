@@ -698,22 +698,23 @@ function canJoinProposalCluster(
   candidate: ProposalIdentity,
 ) {
   if (cluster.length === 0) return true;
-  const withinNeighbor = cluster.some((member) => (
-    coordinateDistance(member, candidate) <= MEDIA_PLACEMENT_PROPOSAL_LIMITS.neighborDistanceKm
-    && compatibleProposalTimes(member, candidate)
-  ));
-  if (!withinNeighbor) return false;
-  const expanded = [...cluster, candidate];
-  for (let left = 0; left < expanded.length; left += 1) {
-    for (let right = left + 1; right < expanded.length; right += 1) {
-      if (
-        coordinateDistance(expanded[left], expanded[right])
-          > MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxClusterDiameterKm
-        || !compatibleProposalTimes(expanded[left], expanded[right])
-      ) return false;
+
+  // Existing cluster members have already satisfied the pairwise diameter/time
+  // invariant. Only the new candidate can introduce a violation, so compare it
+  // once against each member instead of recomputing every historical pair.
+  let withinNeighbor = false;
+  for (const member of cluster) {
+    const distanceKm = coordinateDistance(member, candidate);
+    const compatibleTime = compatibleProposalTimes(member, candidate);
+    if (
+      distanceKm > MEDIA_PLACEMENT_PROPOSAL_LIMITS.maxClusterDiameterKm
+      || !compatibleTime
+    ) return false;
+    if (distanceKm <= MEDIA_PLACEMENT_PROPOSAL_LIMITS.neighborDistanceKm) {
+      withinNeighbor = true;
     }
   }
-  return true;
+  return withinNeighbor;
 }
 
 function proposalRepresentative(identities: readonly ProposalIdentity[]) {
