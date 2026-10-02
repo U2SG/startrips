@@ -88,7 +88,7 @@ function record(name, data, condition) {
   if (!condition) failed = true;
 }
 
-async function installOwnerApi(page, journeyRows = journeys) {
+async function installOwnerApi(page, journeyRows = journeys, homePeriods = [HISTORICAL_HOME, CURRENT_HOME]) {
   const fragments = { rows: [], requests: [], rejectReads: null, heldReads: null, rejectNext: null, holdNext: null, release: null };
   // Match both collection reads/creates and item edits/deletes. A trailing
   // `fragments**` glob does not cross the slash before an item id.
@@ -184,12 +184,12 @@ async function installOwnerApi(page, journeyRows = journeys) {
   await page.route("**/api/home-bases", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
-    body: JSON.stringify({ periods: [HISTORICAL_HOME, CURRENT_HOME] }),
+    body: JSON.stringify({ periods: homePeriods }),
   }));
   return fragments;
 }
 
-async function openOwner(viewport, { journeyRows = journeys } = {}) {
+async function openOwner(viewport, { journeyRows = journeys, homePeriods = [HISTORICAL_HOME, CURRENT_HOME] } = {}) {
   const page = await browser.newPage({ viewport });
   // This script runs Playwright directly rather than through @playwright/test,
   // so locator/action waits otherwise have no bounded default and a missing UI
@@ -198,24 +198,26 @@ async function openOwner(viewport, { journeyRows = journeys } = {}) {
   page.setDefaultTimeout(10_000);
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  const fragments = await installOwnerApi(page, journeyRows);
+  const fragments = await installOwnerApi(page, journeyRows, homePeriods);
   // This contract starts from the EXISTING projected Home anchor, so the lane
   // must mount the real LivingAtlasGlobe rather than LivingAtlasQaGlobe (which
   // intentionally has no geographic Home projection surface).
   await page.goto(`${origin}/?qaState=atlas-gateway&qaMode=globe-chrome`, { waitUntil: "domcontentloaded" });
   await page.locator(".living-atlas").waitFor({ state: "visible", timeout: 30_000 });
   try {
-    await page.waitForFunction(
-      (periodId) => {
-        const node = document.querySelector(`[data-home-base-period-id="${periodId}"]`);
-        if (!(node instanceof HTMLElement)) return false;
-        const rect = node.getBoundingClientRect();
-        const style = getComputedStyle(node);
-        return !node.hidden && style.display !== "none" && rect.width >= 44 && rect.height >= 44;
-      },
-      CURRENT_HOME.id,
-      { timeout: 30_000 },
-    );
+    if (homePeriods.some((period) => period.id === CURRENT_HOME.id)) {
+      await page.waitForFunction(
+        (periodId) => {
+          const node = document.querySelector(`[data-home-base-period-id="${periodId}"]`);
+          if (!(node instanceof HTMLElement)) return false;
+          const rect = node.getBoundingClientRect();
+          const style = getComputedStyle(node);
+          return !node.hidden && style.display !== "none" && rect.width >= 44 && rect.height >= 44;
+        },
+        CURRENT_HOME.id,
+        { timeout: 30_000 },
+      );
+    }
   } catch (error) {
     const diagnostics = await page.evaluate((periodId) => {
       const marker = document.querySelector(`[data-home-base-period-id="${periodId}"]`);
@@ -780,10 +782,102 @@ try {
   await closeContext(mobilePage);
   await mobilePage.close();
 
+  // #496: Everyday remains reachable from the Atlas even when Home history is
+  // empty. The create payload keeps the fragment independent instead of
+  // inventing a Home period.
+  const noHome = await openOwner({ width: 1280, height: 800 }, { homePeriods: [] });
+  const noHomePage = noHome.page;
+  const noHomeTrigger = noHomePage.locator("[data-atlas-everyday-trigger]");
+  await noHomeTrigger.waitFor({ state: "visible" });
+  record("zero-Home Atlas exposes Everyday without a Home marker", {
+    homeMarkers: await noHomePage.locator("[data-home-base-period-id]").count(),
+  }, (await noHomePage.locator("[data-home-base-period-id]").count()) === 0);
+  await noHomeTrigger.click();
+  const noHomeSurface = noHomePage.locator("[data-atlas-everyday-context]");
+  await noHomeSurface.waitFor({ state: "visible" });
+  const noHomeList = noHomePage.locator("#atlas-everyday-fragments-list");
+  await noHomeList.getByText("还没有日常，记下某一天、某个地方。", { exact: true }).waitFor();
+  await noHomeList.getByRole("button", { name: "记录日常", exact: true }).click();
+  const noHomeForm = noHomeList.getByRole("form", { name: "记录日常", exact: true });
+  await fillFragment(noHomeForm, "无常住地也能记录");
+  await noHomeForm.getByRole("button", { name: "保存日常", exact: true }).click();
+  await noHomeList.getByText("无常住地也能记录", { exact: true }).waitFor();
+  const noHomeCreate = noHome.fragments.requests.find((request) => request.method === "POST");
+  record("zero-Home create stays unassociated", { body: noHomeCreate?.body ?? null }, Boolean(
+    noHomeCreate
+    && noHomeCreate.body?.homeBasePeriodId === null
+    && noHomeCreate.body?.occurredOn === "2020-05-06"
+    && noHomeCreate.body?.latitude === 22.5431
+    && noHomeCreate.body?.longitude === 114.0579
+  ));
+  await noHomeSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
+  await noHomeSurface.waitFor({ state: "detached" });
+  record("closing zero-Home Everyday restores the Atlas action", {}, await noHomeTrigger.evaluate(
+    (node) => document.activeElement === node,
+  ));
+  await noHomePage.close();
+
+  const noHomeMobile = await openOwner({ width: 390, height: 844 }, { homePeriods: [] });
+  const noHomeMobileTrigger = noHomeMobile.page.locator("[data-atlas-everyday-trigger]");
+  const mobileEverydayHit = await noHomeMobileTrigger.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return Math.min(rect.width, rect.height);
+  });
+  await noHomeMobileTrigger.click();
+  const noHomeMobileSurface = noHomeMobile.page.locator("[data-atlas-everyday-context]");
+  await noHomeMobileSurface.waitFor({ state: "visible" });
+  const mobileEverydayPlacement = await noHomeMobileSurface.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return {
+      inViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
+      hit: Math.min(rect.width, rect.height),
+    };
+  });
+  record("zero-Home mobile Everyday keeps a >=44px entry and visible disclosure", {
+    triggerHit: mobileEverydayHit,
+    surface: mobileEverydayPlacement,
+  }, mobileEverydayHit >= 44 && mobileEverydayPlacement.inViewport);
+  await noHomeMobile.page.close();
+
+  const noHomeLandscape = await openOwner({ width: 844, height: 390 }, { homePeriods: [] });
+  const noHomeLandscapeTrigger = noHomeLandscape.page.locator("[data-atlas-everyday-trigger]");
+  const landscapeEverydayHit = await noHomeLandscapeTrigger.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return Math.min(rect.width, rect.height);
+  });
+  await noHomeLandscapeTrigger.click();
+  const noHomeLandscapeSurface = noHomeLandscape.page.locator("[data-atlas-everyday-context]");
+  await noHomeLandscapeSurface.waitFor({ state: "visible" });
+  const landscapeEverydayPlacement = await noHomeLandscapeSurface.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return {
+      inViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
+      overflow: node.scrollWidth > node.clientWidth,
+    };
+  });
+  record("zero-Home phone landscape keeps a >=44px entry and bounded disclosure", {
+    triggerHit: landscapeEverydayHit,
+    surface: landscapeEverydayPlacement,
+  }, landscapeEverydayHit >= 44
+    && landscapeEverydayPlacement.inViewport
+    && !landscapeEverydayPlacement.overflow);
+  await noHomeLandscapeSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
+  await noHomeLandscapeSurface.waitFor({ state: "detached" });
+  record("zero-Home phone landscape restores its exact Atlas action", {},
+    await noHomeLandscapeTrigger.evaluate((node) => document.activeElement === node));
+  await noHomeLandscape.page.close();
+
   record("owner browser pages have no page errors", {
     desktop: desktop.pageErrors,
     mobile: mobile.pageErrors,
-  }, desktop.pageErrors.length === 0 && mobile.pageErrors.length === 0);
+    noHome: noHome.pageErrors,
+    noHomeMobile: noHomeMobile.pageErrors,
+    noHomeLandscape: noHomeLandscape.pageErrors,
+  }, desktop.pageErrors.length === 0
+    && mobile.pageErrors.length === 0
+    && noHome.pageErrors.length === 0
+    && noHomeMobile.pageErrors.length === 0
+    && noHomeLandscape.pageErrors.length === 0);
 } catch (error) {
   // The accumulated checks are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439). Print first, then rethrow so

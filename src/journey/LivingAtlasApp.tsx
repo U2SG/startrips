@@ -65,7 +65,7 @@ import {
 } from "./homeBaseSuggestion";
 import { resolveHomeBaseCameraIntent, type HomeBaseCameraIntent } from "./homeBaseCameraPolicy";
 import { resolveHomeBaseContext } from "./homeBaseContext";
-import { EverydayFragments } from "./EverydayFragments";
+import { EverydayFragments, type EverydayFragmentsMode } from "./EverydayFragments";
 import { resolveHomeBasePresence, type HomeBaseTimelineContext, type ResolvedHomeBasePresence } from "./homeBasePresence";
 import type { GlobeSemanticZoom } from "../scene/semanticZoom";
 import {
@@ -153,6 +153,22 @@ import {
 } from "./placeMediaHandoff";
 
 type AtlasView = "planet" | "timeline";
+
+export function atlasEverydayEntryAvailable({
+  hasClient,
+  canCreate,
+  canEdit,
+  view,
+  narrativeActive,
+}: {
+  hasClient: boolean;
+  canCreate: boolean;
+  canEdit: boolean;
+  view: AtlasView;
+  narrativeActive: boolean;
+}) {
+  return hasClient && (canCreate || canEdit) && view === "planet" && !narrativeActive;
+}
 
 export function homeBaseContextActivationAvailable({
   hasHomeReader,
@@ -1156,6 +1172,8 @@ export function LivingAtlasApp({
   const [homeBaseSuggestionPending, setHomeBaseSuggestionPending] = useState(false);
   const [homeBaseSuggestionEvidenceRefreshPending, setHomeBaseSuggestionEvidenceRefreshPending] = useState(false);
   const [homeBaseContextPeriodId, setHomeBaseContextPeriodId] = useState<string | null>(null);
+  const [atlasEverydayMode, setAtlasEverydayMode] = useState<EverydayFragmentsMode>(null);
+  const atlasEverydayOpenerRef = useRef<HTMLButtonElement | null>(null);
   const [atlasSemanticZoom, setAtlasSemanticZoom] = useState<GlobeSemanticZoom>("planet");
   const [hasManualAtlasCameraInteraction, setHasManualAtlasCameraInteraction] = useState(false);
   const [initialHomeCameraIntent, setInitialHomeCameraIntent] = useState<HomeBaseCameraIntent | null>(null);
@@ -1290,6 +1308,14 @@ export function LivingAtlasApp({
     return true;
   }, []);
   const clearHomeBaseContext = useCallback(() => setHomeBaseContextPeriodId(null), []);
+  const closeAtlasEveryday = useCallback((restoreFocus = false) => {
+    const opener = atlasEverydayOpenerRef.current;
+    setAtlasEverydayMode(null);
+    atlasEverydayOpenerRef.current = null;
+    if (restoreFocus && opener) {
+      queueMicrotask(() => { if (opener.isConnected) opener.focus(); });
+    }
+  }, []);
   const storyObservationRef = useRef<StoryLogicalObservation | null>(null);
   const mediaPresentation = useMediaPresentationStyle();
   // The Journey whose Book the reader left for classic Story (to edit, or to
@@ -2064,6 +2090,17 @@ export function LivingAtlasApp({
   useEffect(() => {
     if (view !== "planet" && routePointContextSelection.intent) clearRoutePointContext();
   }, [clearRoutePointContext, routePointContextSelection.intent, view]);
+  const atlasEverydayAvailable = atlasEverydayEntryAvailable({
+    hasClient: Boolean(everydayFragments),
+    canCreate: canCreateJourney,
+    canEdit: canEditJourney,
+    view,
+    narrativeActive: storyJourneyId !== null
+      || playbackActive
+      || playbackModeMenuJourneyId !== null
+      || routePointContextSelection.intent !== null
+      || globePickActive,
+  });
   useEffect(() => {
     if (
       view !== "planet"
@@ -2075,8 +2112,14 @@ export function LivingAtlasApp({
     ) {
       clearHomeBaseContext();
     }
+    if (atlasEverydayMode !== null && !atlasEverydayAvailable) {
+      closeAtlasEveryday(true);
+    }
   }, [
+    atlasEverydayAvailable,
+    atlasEverydayMode,
     clearHomeBaseContext,
+    closeAtlasEveryday,
     globePickActive,
     playbackActive,
     playbackModeMenuJourneyId,
@@ -2664,9 +2707,20 @@ export function LivingAtlasApp({
 
   function openCreateComposer() {
     if (!canCreateJourney) return;
+    closeAtlasEveryday(false);
     setInitialImport(null);
     setEditingJourneyId(null);
     setComposerOpen(true);
+  }
+
+  function openAtlasEveryday(
+    mode: Exclude<EverydayFragmentsMode, null>,
+    opener?: HTMLButtonElement,
+  ) {
+    if (!atlasEverydayAvailable) return;
+    atlasEverydayOpenerRef.current = opener ?? null;
+    clearHomeBaseContext();
+    setAtlasEverydayMode(mode);
   }
 
   function openImport() {
@@ -3393,6 +3447,7 @@ export function LivingAtlasApp({
               globePickActive,
             }) ? (periodId) => {
               clearRoutePointContext();
+              closeAtlasEveryday(false);
               setHomeBaseContextPeriodId((current) => current === periodId ? null : periodId);
             } : undefined}
             onSemanticZoomChange={setAtlasSemanticZoom}
@@ -3443,6 +3498,16 @@ export function LivingAtlasApp({
           <nav aria-label="移动端旅程操作">
             {canManageAtlas ? <MobileAccountActionSlot /> : null}
             {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
+            {atlasEverydayAvailable ? (
+              <button
+                type="button"
+                data-atlas-everyday-trigger
+                aria-expanded={atlasEverydayMode !== null}
+                aria-controls={atlasEverydayMode ? "atlas-everyday-fragments-list" : undefined}
+                onClick={(event) => openAtlasEveryday("list", event.currentTarget)}
+                aria-label="打开日常"
+              ><IconPhoto size={18} stroke={1.4} aria-hidden="true" /></button>
+            ) : null}
             {canCreateJourney ? <button type="button" onClick={openImport} aria-label={importStatus.busy ? "查看正在处理的行程导入" : "导入已有行程"}><IconUpload size={18} stroke={1.4} aria-hidden="true" /></button> : null}
             {shareClient && journeys.length > 0 ? (
               <button type="button" data-atlas-share-trigger="true" disabled={storyJourneyId !== null} onClick={() => openShareSurface(null)} aria-label="分享多段旅程"><IconShare size={18} stroke={1.4} aria-hidden="true" /></button>
@@ -3459,6 +3524,15 @@ export function LivingAtlasApp({
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
             {canCreateJourney ? <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button> : null}
+            {atlasEverydayAvailable ? (
+              <button
+                type="button"
+                data-atlas-everyday-trigger
+                aria-expanded={atlasEverydayMode !== null}
+                aria-controls={atlasEverydayMode ? "atlas-everyday-fragments-list" : undefined}
+                onClick={(event) => openAtlasEveryday("list", event.currentTarget)}
+              ><IconPhoto size={16} stroke={1.35} aria-hidden="true" />日常</button>
+            ) : null}
             {shareClient && journeys.length > 0 ? (
               <button type="button" className="living-atlas__share" data-atlas-share-trigger="true" onClick={() => openShareSurface(null)}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享多段旅程</button>
             ) : null}
@@ -3907,6 +3981,32 @@ export function LivingAtlasApp({
             }}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录新旅程</button>
           ) : null}
         </section>
+      ) : null}
+
+      {atlasEverydayMode !== null && atlasEverydayAvailable && everydayFragments && !homeBaseContext ? (
+        <aside
+          className="living-atlas__everyday-context motion-fade-through"
+          data-atlas-everyday-context
+          aria-label="日常"
+        >
+          <header>
+            <div>
+              <p>EVERYDAY</p>
+              <h2>日常片段</h2>
+            </div>
+            <button type="button" onClick={() => closeAtlasEveryday(true)} aria-label="关闭日常">
+              <IconX size={16} stroke={1.35} aria-hidden="true" />
+            </button>
+          </header>
+          <EverydayFragments
+            client={everydayFragments}
+            canCreate={canCreateJourney}
+            canEdit={canEditJourney}
+            mode={atlasEverydayMode}
+            onModeChange={(mode) => mode === null ? closeAtlasEveryday(true) : setAtlasEverydayMode(mode)}
+            listId="atlas-everyday-fragments-list"
+          />
+        </aside>
       ) : null}
 
       {notice ? (

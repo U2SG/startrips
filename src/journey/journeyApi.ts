@@ -72,21 +72,21 @@ export const everydayFragmentClient = {
     );
     return payload.fragments;
   },
-  async create(values: EverydayFragmentValues): Promise<EverydayFragment> {
+  async create(values: EverydayFragmentValues, signal?: AbortSignal): Promise<EverydayFragment> {
     const payload = await requestJson<{ fragment: EverydayFragment }>(
-      "/api/everyday-fragments", { method: "POST", body: JSON.stringify(values) },
+      "/api/everyday-fragments", { method: "POST", body: JSON.stringify(values), signal },
     );
     return payload.fragment;
   },
-  async update(id: string, values: EverydayFragmentValues): Promise<EverydayFragment> {
+  async update(id: string, values: EverydayFragmentValues, signal?: AbortSignal): Promise<EverydayFragment> {
     const payload = await requestJson<{ fragment: EverydayFragment }>(
       `/api/everyday-fragments/${encodeURIComponent(id)}`,
-      { method: "PUT", body: JSON.stringify(values) },
+      { method: "PUT", body: JSON.stringify(values), signal },
     );
     return payload.fragment;
   },
-  async remove(id: string): Promise<void> {
-    await requestJson<void>(`/api/everyday-fragments/${encodeURIComponent(id)}`, { method: "DELETE" });
+  async remove(id: string, signal?: AbortSignal): Promise<void> {
+    await requestJson<void>(`/api/everyday-fragments/${encodeURIComponent(id)}`, { method: "DELETE", signal });
   },
 };
 
