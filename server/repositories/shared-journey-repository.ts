@@ -153,6 +153,7 @@ export function buildSharedJourneyView(
           confirmedCandidate: candidate ? {
             id: candidate.id, geometry: candidate.geometry.map(([lon, lat]): [number, number] => [lon, lat]),
             provider: candidate.provider, profile: candidate.profile,
+            ...(candidate.includesFerry ? { includesFerry: true as const } : {}),
             distanceMeters: candidate.distanceMeters, durationSeconds: candidate.durationSeconds,
             relevance: candidate.relevance,
             snapping: {

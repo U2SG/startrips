@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { simplifyRecordedTrackPoints } from "../../src/journey/journeyModel";
 import type { RoadProfile, RouteCandidate } from "../../src/journey/types";
+import { createOsrmPointSuggestions } from "./osrm-point-suggestions";
+import { compatibleRoutingStep, MAX_SELECTED_POINT_METERS, routingDistanceMeters as meters, validRoutingCoordinate } from "./routing-coordinates";
 import {
   RoutingUnavailableError,
   type RouteCandidateProvider,
@@ -11,11 +13,6 @@ import {
 // Place labels may identify a park's representative point rather than a road.
 // Keep a finite bound and preserve every offset for the member's comparison.
 const MAX_SNAP_METERS: Record<RoadProfile, number> = { driving: 10_000, walking: 750, cycling: 750 };
-const STEP_MODES: Record<RoadProfile, readonly string[]> = {
-  driving: ["driving"],
-  walking: ["walking"],
-  cycling: ["cycling", "pushing bike"],
-};
 const MAX_GEOMETRY_POINTS = 4_000;
 const MAX_PROVIDER_GEOMETRY_POINTS = 32_000;
 const GEOMETRY_ERROR_RADIANS = 5 / 6_371_000;
@@ -33,15 +30,6 @@ type OsrmResponse = {
   routes?: OsrmRoute[];
   waypoints?: { location?: [number, number]; distance?: number }[];
 };
-
-function meters(a: RoutingCoordinate, b: RoutingCoordinate): number {
-  const rad = Math.PI / 180;
-  const latitudeDelta = (b.lat - a.lat) * rad;
-  const longitudeDelta = (b.lon - a.lon) * rad;
-  const h = Math.sin(latitudeDelta / 2) ** 2
-    + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(longitudeDelta / 2) ** 2;
-  return 12_742_000 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
-}
 
 function validGeometry(value: unknown): [number, number][] | null {
   if (!Array.isArray(value) || value.length < 2 || value.length > MAX_PROVIDER_GEOMETRY_POINTS) return null;
@@ -102,6 +90,7 @@ export function acceptOsrmCandidate(
   waypoints: NonNullable<OsrmResponse["waypoints"]>,
   ordered: readonly RoutingCoordinate[],
   profile: RoadProfile,
+  allowFerries = false,
 ): RouteCandidate | null {
   if (!route || route.geometry?.type !== "LineString") return null;
   const maxSnapMeters = MAX_SNAP_METERS[profile];
@@ -109,7 +98,7 @@ export function acceptOsrmCandidate(
   if (!geometry || waypoints.length !== ordered.length
     || !Array.isArray(route.legs) || route.legs.length !== ordered.length - 1
     || route.legs.some((leg) => !leg || !Array.isArray(leg.steps) || !leg.steps.length
-      || leg.steps.some((step) => !step || !STEP_MODES[profile].includes(step.mode ?? "")))
+      || leg.steps.some((step) => !step || !compatibleRoutingStep(step.mode, profile, allowFerries)))
     || !Number.isFinite(route.distance) || !Number.isFinite(route.duration)
     || !(route.distance! > 0) || !(route.duration! > 0)) return null;
   if (waypoints.some((point, index) => !Array.isArray(point?.location) || point.location.length !== 2
@@ -147,6 +136,7 @@ export function acceptOsrmCandidate(
     durationSeconds: route.duration!,
     provider: "osrm",
     profile,
+    ...(route.legs.some((leg) => leg.steps!.some((step) => step.mode === "ferry")) ? { includesFerry: true as const } : {}),
     relevance: Math.round(1000 / (1 + route.distance! / direct + corridorError / 1000)),
     snapping: {
       maxDistanceMeters: maxSnapMeters,
@@ -167,13 +157,20 @@ export function createOsrmRouteCandidateProvider(
   return {
     id: "osrm",
     supports: (profile) => Boolean(baseUrls[profile]),
-    async candidates({ coordinates, profile, alternativesCount, signal }: RouteCandidateRequest) {
+    pointSuggestions: createOsrmPointSuggestions(baseUrls, fetcher),
+    async candidates({ coordinates, profile, alternativesCount, signal, allowFerries = false, routingCoordinates }: RouteCandidateRequest) {
       const baseUrl = baseUrls[profile];
       if (!baseUrl) throw new RoutingUnavailableError("This road profile is not configured");
-      if (coordinates.length < 2 || coordinates.length > 18 || alternativesCount < 1 || alternativesCount > 3) {
+      const routing = routingCoordinates ?? coordinates;
+      if (coordinates.length < 2 || coordinates.length > 18 || alternativesCount < 1 || alternativesCount > 3
+        || coordinates.some((point) => !validRoutingCoordinate(point)) || routing.length !== coordinates.length
+        || routing.some((point, index) => !validRoutingCoordinate(point)
+          || meters(point, coordinates[index]) > MAX_SELECTED_POINT_METERS)) {
         throw new RoutingUnavailableError("Road route request exceeds provider limits");
       }
-      const coordinatePath = coordinates.map(({ lon, lat }) => `${lon},${lat}`).join(";");
+      const direct = coordinates.slice(1).reduce((sum, point, index) => sum + meters(coordinates[index], point), 0);
+      if (!(direct > 0) || direct > MAX_DIRECT_METERS) return [];
+      const coordinatePath = routing.map(({ lon, lat }) => `${lon},${lat}`).join(";");
       const url = new URL(`${baseUrl}/route/v1/${profile}/${coordinatePath}`);
       url.searchParams.set("overview", "full");
       url.searchParams.set("geometries", "geojson");
@@ -209,8 +206,22 @@ export function createOsrmRouteCandidateProvider(
       }
       return payload.routes
         .slice(0, alternativesCount)
-        .map((route) => acceptOsrmCandidate(route, payload.waypoints!, coordinates, profile))
+        .map((route) => acceptOsrmCandidate(route, payload.waypoints!, routing, profile, allowFerries))
         .filter((candidate): candidate is RouteCandidate => candidate !== null)
+        .filter((candidate) => candidate.snapping.waypoints.every((point, index) =>
+          meters(coordinates[index], { lon: point.snapped[0], lat: point.snapped[1] }) <= MAX_SELECTED_POINT_METERS))
+        .map((candidate) => ({
+          ...candidate,
+          snapping: { ...candidate.snapping, waypoints: candidate.snapping.waypoints.map((point, index) => {
+            const original = coordinates[index];
+            const selected = routing[index];
+            return original.lat === selected.lat && original.lon === selected.lon ? point : {
+              ...point, requested: [original.lon, original.lat] as [number, number],
+              selected: [selected.lon, selected.lat] as [number, number],
+              distanceMeters: meters(original, { lon: point.snapped[0], lat: point.snapped[1] }),
+            };
+          }) },
+        }))
         .sort((left, right) => right.relevance - left.relevance || left.id.localeCompare(right.id));
     },
   };

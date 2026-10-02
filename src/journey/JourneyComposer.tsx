@@ -48,6 +48,7 @@ import {
 import { journeyLocationSearchErrorMessage } from "./journeyLocationSearchError";
 import { ItineraryImportPanel } from "./ItineraryImportPanel";
 import { JourneyRecordedTracks } from "./JourneyRecordedTracks";
+import { NearbyRoutePointPicker } from "../scene/NearbyRoutePointPicker";
 import {
   ambiguousUnknownCreateMessage,
   confirmationRequiredUnknownCreateMessage,
@@ -449,6 +450,7 @@ export function JourneyComposer({
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
   const [mobileMediaDeleteIndex, setMobileMediaDeleteIndex] = useState<number | null>(null);
   const [expandedRoutePointDraftId, setExpandedRoutePointDraftId] = useState<string | null>(null);
+  const [nearbyRoutePointDraftId, setNearbyRoutePointDraftId] = useState<string | null>(null);
   const [replacingRoutePointDraftId, setReplacingRoutePointDraftId] = useState<string | null>(null);
   const [routePointMenuDraftId, setRoutePointMenuDraftId] = useState<string | null>(null);
   const routePointTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -1029,6 +1031,8 @@ export function JourneyComposer({
         routePointsRef.current.length === 0,
       );
       addPoint(draftPoint);
+      setExpandedRoutePointDraftId(draftPoint.draftId);
+      setNearbyRoutePointDraftId(draftPoint.draftId);
       const geocodeRevision = ++reverseGeocodeRevisionRef.current;
       activeReverseGeocodeDraftIdRef.current = draftPoint.draftId;
       setMessage("已从地球添加地点；正在识别坐标对应的名称…");
@@ -2037,6 +2041,22 @@ export function JourneyComposer({
                             <span>规范坐标</span>
                             <code>{point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</code>
                           </div>
+                          <button type="button" aria-expanded={nearbyRoutePointDraftId === point.draftId}
+                            onClick={() => setNearbyRoutePointDraftId((current) => current === point.draftId ? null : point.draftId)}>
+                            附近可达点
+                          </button>
+                          {nearbyRoutePointDraftId === point.draftId ? (
+                            <NearbyRoutePointPicker coordinate={{ lat: point.latitude, lon: point.longitude }}
+                              neighbors={{ ...(routePoints[index - 1] ? { before: { lat: routePoints[index - 1].latitude, lon: routePoints[index - 1].longitude } } : {}),
+                                ...(routePoints[index + 1] ? { after: { lat: routePoints[index + 1].latitude, lon: routePoints[index + 1].longitude } } : {}) }}
+                              disabled={saving || globePicking || playbackPreviewActive}
+                              onChoose={(suggestion) => {
+                                replaceDraftPointLocation(point.draftId, { latitude: suggestion.coordinate.lat, longitude: suggestion.coordinate.lon,
+                                  label: point.label || suggestion.label });
+                                setNearbyRoutePointDraftId(null);
+                              }}
+                              onDismiss={() => setNearbyRoutePointDraftId(null)} />
+                          ) : null}
                           <button
                             type="button"
                             className="journey-route-draft__replace-trigger"

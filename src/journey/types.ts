@@ -207,6 +207,16 @@ export type RouteProvenanceTier =
   | "sparse-relation";
 
 export type RoadProfile = "driving" | "walking" | "cycling";
+export type RoutingPoint = { lat: number; lon: number };
+export type RoutePointSuggestion = {
+  id: string;
+  coordinate: RoutingPoint;
+  label: string;
+  distanceMeters: number;
+  /** Network connectivity, never evidence that the member visited this point. */
+  connected: boolean | null;
+};
+export type RouteAccessPoints = { from?: RoutingPoint; to?: RoutingPoint };
 export type RouteShapePoint = { id: string; lat: number; lon: number; label?: string };
 export type RouteCandidate = {
   id: string;
@@ -215,12 +225,16 @@ export type RouteCandidate = {
   durationSeconds: number;
   provider: "osrm";
   profile: RoadProfile;
+  /** Only present when the member explicitly allowed this mixed route. */
+  includesFerry?: true;
   /** Candidate relevance for presentation only; never historical confidence. */
   relevance: number;
   snapping: {
     maxDistanceMeters: number;
     waypoints: {
       requested: [number, number];
+      /** A nearby road point explicitly chosen for routing; Journey coordinates stay unchanged. */
+      selected?: [number, number];
       snapped: [number, number];
       distanceMeters: number;
       providerDistanceMeters: number;

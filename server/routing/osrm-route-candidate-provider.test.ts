@@ -33,6 +33,29 @@ function denseRoad(): [number, number][] {
 }
 
 describe("OSRM road candidate gate", () => {
+  it.each(["driving", "walking", "cycling"] as const)("keeps original %s places when a nearby road point was explicitly selected", async (profile) => {
+    const original = [{ lat: 0.12, lon: 0 }, coordinates[1]];
+    const payload = osrmResponse([{ ...direct, legs: [{ steps: [{ mode: profile }] }] }]);
+    const fetcher = async () => new Response(JSON.stringify(payload));
+    const provider = createOsrmRouteCandidateProvider({ [profile]: "http://routing.internal" }, fetcher);
+    const request = { coordinates: original, profile, alternativesCount: 1 as const, signal: new AbortController().signal };
+    expect(await provider.candidates(request)).toEqual([]);
+    const [candidate] = await provider.candidates({ ...request, routingCoordinates: coordinates });
+    expect(candidate.snapping.waypoints[0]).toMatchObject({ requested: [0, 0.12], selected: [0, 0], snapped: [0, 0] });
+    expect(candidate.snapping.waypoints[0].distanceMeters).toBeGreaterThan(12_000);
+    expect(original[0]).toEqual({ lat: 0.12, lon: 0 });
+    await expect(provider.candidates({ ...request, routingCoordinates: [{ lat: 1, lon: 0 }, coordinates[1]] })).rejects.toMatchObject({ code: "ROUTING_UNAVAILABLE" });
+  });
+
+  it("marks an explicitly allowed ferry and continues to reject incompatible land transport", async () => {
+    const request = { coordinates, profile: "driving" as const, alternativesCount: 1 as const, signal: new AbortController().signal };
+    const provider = providerWith(osrmResponse([{ ...direct, legs: [{ steps: [{ mode: "driving" }, { mode: "ferry" }] }] }]));
+    expect(await provider.candidates(request)).toEqual([]);
+    const [candidate] = await provider.candidates({ ...request, allowFerries: true });
+    expect(candidate.includesFerry).toBe(true);
+    expect(candidate.profile).toBe("driving");
+    expect(await providerWith(osrmResponse([{ ...direct, legs: [{ steps: [{ mode: "train" }] }] }])).candidates({ ...request, allowFerries: true })).toEqual([]);
+  });
   it.each(["driving", "walking", "cycling"] as const)("keeps a dense %s road and its ordered shape anchor within a bounded snapshot", async (profile) => {
     const geometry = denseRoad();
     const anchors = [geometry[0], geometry[4_000], geometry.at(-1)!];
