@@ -83,6 +83,35 @@ class HandoffTransportCases(fixture.SyntheticOne):
             with self.assertRaises(issues.EvidenceUnknown):
                 issues.assert_current({}, "ST-108", observed)
 
+    def test_final_review_reread_blocks_new_findings(self):
+        observed = self.snapshot()
+        current = {"state": "open", "merged": False,
+                   "head": {"sha": fixture.B, "ref": "feature"}}
+        with mock.patch.object(plan, "review_snapshot", return_value=None),              mock.patch.object(plan, "source_review", return_value="CLEAR"),              mock.patch.object(plan, "api", return_value=current),              mock.patch.object(plan, "review_backlog",
+                               return_value={"head_sha": fixture.B, "unresolved": 1,
+                                             "changes_requested": 0}):
+            with self.assertRaises(fixture.store.StoreConflict):
+                plan.confirm_handoff_identity(
+                    self.path, "ST-001", "synthetic/project", observed)
+
+    def test_package_issue_reread_blocks_content_drift(self):
+        observed = self.snapshot()
+        package = {"schema_version": 1, "revision": 1}
+        observed["delivery_package"] = package
+        current = {"state": "open", "merged": False,
+                   "head": {"sha": fixture.B, "ref": "feature"}}
+        fresh_issues = {"ST-001": {"issue": 333, "body_sha256": "changed",
+                                    "comments": {}, "updated_at": "now",
+                                    "comment_count": 0}}
+        with mock.patch.object(plan, "review_snapshot", return_value=package),              mock.patch.object(plan, "live_issues", return_value=fresh_issues) as live,              mock.patch.object(plan, "assert_issue_current",
+                               side_effect=plan.EvidenceUnknown("issue content changed")),              mock.patch.object(plan, "source_review", return_value="CLEAR"),              mock.patch.object(plan, "api", return_value=current),              mock.patch.object(plan, "review_backlog",
+                               return_value={"head_sha": fixture.B, "unresolved": 0,
+                                             "changes_requested": 0}):
+            with self.assertRaises(plan.EvidenceUnknown):
+                plan.confirm_handoff_identity(
+                    self.path, "ST-001", "synthetic/project", observed)
+        live.assert_called_once()
+
     def test_handoff_plans_once_and_passes_snapshot_to_capture(self):
         observed = self.snapshot()
         captured = {"path": ".agent-artifacts/st-001/final.log", "exit": 0,

@@ -361,13 +361,16 @@ def plan(path, fid, repo, *, record_failures=False):
 
 
 def confirm_handoff_identity(path, fid, repo, observed):
-    """Re-read only mutable handoff identities after an exact-SHA snapshot was captured."""
+    """Re-read only mutable handoff gates after an exact-SHA snapshot was captured."""
     path = Path(path); doc = load_document(path)
     if canonical_lead(doc, fid) != fid or unit_token(doc, fid) != observed['row_token']:
         raise StoreConflict('Delivery unit changed during handoff')
     package = review_snapshot(doc, fid)
     if package != observed.get('delivery_package'):
         raise StoreConflict('Delivery package scope changed during handoff')
+    if package is not None:
+        current_issues = live_issues(doc, fid, repo)
+        assert_issue_current(doc, fid, current_issues)
     if source_review(path.parent, fid, observed['pr'], observed['source_sha'], package) != 'CLEAR':
         raise StoreConflict('Source review changed during handoff')
     urls = unit_pr_links(doc, fid)
@@ -382,6 +385,10 @@ def confirm_handoff_identity(path, fid, repo, observed):
             raise StoreConflict('PR identity changed during handoff')
     except (KeyError, TypeError) as exc:
         raise EvidenceUnknown('Incomplete final PR identity') from exc
+    review = review_backlog(repo, observed['pr'])
+    if (review.get('head_sha') != observed['final_sha']
+            or review.get('unresolved') or review.get('changes_requested')):
+        raise StoreConflict('Review gate changed during handoff')
     return True
 
 
