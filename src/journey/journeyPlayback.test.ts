@@ -20,6 +20,9 @@ import {
   playbackMediaWaitPolicy,
   phaseForStep,
   routePointChapterDensity,
+  storyEntryDensity,
+  storySequenceForJourney,
+  storySequenceMedia,
 } from "./journeyPlayback";
 import { deriveJourneyStaySummaries } from "./journeyModel";
 import { buildPlaybackPlan } from "./journeyPlaybackPlan";
@@ -478,6 +481,199 @@ describe("Story and Playback share one grouped-chapter order (#76)", () => {
     ]);
     expect(playbackStoryMedia(stopsOnly).map((asset) => asset.id))
       .toEqual(playbackChapterOrder(stopsOnly));
+  });
+});
+
+// #595: the canonical Story sequence is the presentation authority. `note`
+// entries are what a Route Point with no media of its own presents as, so
+// "empty is a valid chapter" survives into the sequence instead of the point
+// being stepped past.
+describe("Story presentation sequence (#595)", () => {
+  // The order Journey Playback hands the director, straight from the media
+  // each `stop` step carries.
+  const playbackChapterOrder = (target: Journey) => buildPlaybackSteps(target)
+    .filter((step) => step.kind === "stop")
+    .flatMap((step) => (step.kind === "stop" ? step.media : []))
+    .map((asset) => asset.id);
+  const asVia = (target: RoutePoint, stayAnchorRoutePointId: string): RoutePoint => ({
+    ...target,
+    isStop: false,
+    placeRole: "pure-transit",
+    stayAnchorRoutePointId,
+  });
+  const withNote = (target: RoutePoint, note: string): RoutePoint => ({ ...target, note });
+  const roles = (entries: ReturnType<typeof storySequenceForJourney>) =>
+    entries.map((entry) => entry.presentationId);
+
+  it("keeps a note-only Route Point as a real beat between its media neighbours", () => {
+    const mixed: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 0, 0),
+        withNote(point("point-1", 0, 30), "只写了一句话"),
+        point("point-2", 0, 60),
+      ],
+      media: [
+        media("first", "point-0", "image/jpeg", 0),
+        media("last", "point-2", "image/jpeg", 1),
+      ],
+    };
+
+    expect(roles(storySequenceForJourney(mixed))).toEqual([
+      "media:first", "note:point-1", "media:last",
+    ]);
+    const [noteEntry] = storySequenceForJourney(mixed).filter((entry) => entry.role === "note");
+    expect(noteEntry).toMatchObject({
+      asset: null,
+      routePointId: "point-1",
+      contextOwner: "route-point",
+      note: "只写了一句话",
+    });
+  });
+
+  it("does not turn a Route Point's own note into a step beside its media", () => {
+    const noted: Journey = {
+      ...journey,
+      routePoints: [
+        withNote(point("point-0", 0, 0), "住在这里"),
+        withNote(point("point-1", 0, 30), "路过"),
+      ],
+      media: [
+        media("stay-a", "point-0", "image/jpeg", 0),
+        media("stay-b", "point-0", "image/jpeg", 1),
+        media("passed", "point-1", "image/jpeg", 2),
+      ],
+    };
+
+    // Each note rides with its own Route Point's media; neither becomes a
+    // second beat that makes the member swipe past a page of text.
+    expect(roles(storySequenceForJourney(noted)))
+      .toEqual(["media:stay-a", "media:stay-b", "media:passed"]);
+  });
+
+  it("keeps a parent Stop note and its children's notes in canonical route order", () => {
+    const grouped: Journey = {
+      ...journey,
+      routePoints: [
+        withNote(point("point-0", 0, 0), "Stop 的感想"),
+        withNote(asVia(point("point-1", 0, 10), "point-0"), "子点 A"),
+        withNote(asVia(point("point-2", 0, 20), "point-0"), "子点 B"),
+      ],
+      media: [media("child-a-media", "point-1", "image/jpeg", 0)],
+    };
+
+    expect(roles(storySequenceForJourney(grouped))).toEqual([
+      "note:point-0", "media:child-a-media", "note:point-2",
+    ]);
+  });
+
+  it("keeps grouped children inside their anchor Stop's chapter position", () => {
+    const grouped: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 0, 0),
+        asVia(point("point-1", 0, 10), "point-0"),
+        point("point-2", 0, 30),
+      ],
+      media: [
+        media("intro", null, "image/jpeg", 0),
+        media("child", "point-1", "image/jpeg", 1),
+        media("stop-media", "point-0", "image/jpeg", 2),
+        media("last", "point-2", "image/jpeg", 3),
+      ],
+    };
+
+    expect(roles(storySequenceForJourney(grouped))).toEqual([
+      "media:intro", "media:stop-media", "media:child", "media:last",
+    ]);
+  });
+
+  it("treats a Journey-level media entry as Journey context, not a Route Point's", () => {
+    const withIntro: Journey = {
+      ...journey,
+      routePoints: [point("point-0", 0, 0)],
+      media: [
+        media("intro", null, "image/jpeg", 0),
+        media("stop-media", "point-0", "image/jpeg", 1),
+      ],
+    };
+
+    expect(storySequenceForJourney(withIntro).map((entry) => entry.contextOwner))
+      .toEqual(["journey", "route-point"]);
+  });
+
+  it("projects back to exactly the media order the whole Journey already showed", () => {
+    // The sequence is a widening, not a reordering: nothing that consumed
+    // `playbackStoryMedia` before may observe a different list.
+    const grouped: Journey = {
+      ...journey,
+      routePoints: [
+        withNote(point("point-0", 0, 0), "Stop"),
+        withNote(asVia(point("point-1", 0, 10), "point-0"), "child note"),
+        withNote(point("point-2", 0, 30), "second stop"),
+        asVia(point("point-3", 0, 40), "point-2"),
+      ],
+      media: [
+        media("intro", null, "image/jpeg", 0),
+        media("child-media", "point-1", "video/mp4", 1),
+        media("stop-media", "point-0", "image/jpeg", 2),
+        media("second", "point-2", "image/jpeg", 3),
+      ],
+    };
+
+    const expected = ["intro", "stop-media", "child-media", "second"];
+    expect(storySequenceMedia(storySequenceForJourney(grouped)).map((asset) => asset.id))
+      .toEqual(expected);
+    expect(playbackStoryMedia(grouped).map((asset) => asset.id)).toEqual(expected);
+    expect(storyMediaForScope(grouped, null).map((asset) => asset.id)).toEqual(expected);
+    // And the point-owned part still equals what Journey Playback hands the
+    // director. Its `intro` media rides on its own step, not on a `stop` step,
+    // so it is compared separately.
+    expect(playbackIntroMedia(grouped).map((asset) => asset.id)).toEqual(["intro"]);
+    expect(playbackChapterOrder(grouped)).toEqual(expected.slice(1));
+  });
+
+  it("never reuses an asset id as a presentation identity", () => {
+    const sequence = storySequenceForJourney({
+      ...journey,
+      routePoints: [withNote(point("point-0", 0, 0), "note"), point("point-1", 0, 30)],
+      media: [media("only", "point-1", "image/jpeg", 0)],
+    });
+
+    expect(sequence.map((entry) => entry.presentationId)).toContain("note:point-0");
+    for (const entry of sequence) {
+      if (entry.asset) expect(entry.presentationId).not.toBe(entry.asset.id);
+    }
+    expect(new Set(sequence.map((entry) => entry.presentationId)).size).toBe(sequence.length);
+  });
+
+  it("counts density in media, so a note entry never promotes an empty chapter", () => {
+    const entries = storySequenceForJourney({
+      ...journey,
+      routePoints: [withNote(point("point-0", 0, 0), "只有一句话")],
+      media: [],
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(storyEntryDensity(entries)).toBe("empty");
+    expect(routePointChapterDensity({
+      ...journey,
+      routePoints: [point("point-0", 0, 0)],
+      media: [],
+    }, 0)).toBe("empty");
+  });
+
+  it("ignores blank and whitespace-only notes rather than presenting an empty beat", () => {
+    const blank: Journey = {
+      ...journey,
+      routePoints: [
+        { ...point("point-0", 0, 0), note: "   \n  " },
+        { ...point("point-1", 0, 30), note: null },
+      ],
+      media: [],
+    };
+
+    expect(storySequenceForJourney(blank)).toEqual([]);
   });
 });
 
