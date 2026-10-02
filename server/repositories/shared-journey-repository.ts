@@ -160,6 +160,7 @@ export function buildSharedJourneyView(
               maxDistanceMeters: candidate.snapping.maxDistanceMeters,
               waypoints: candidate.snapping.waypoints.map((waypoint) => ({
                 requested: [waypoint.requested[0], waypoint.requested[1]],
+                ...(waypoint.selected ? { selected: [waypoint.selected[0], waypoint.selected[1]] as [number, number] } : {}),
                 snapped: [waypoint.snapped[0], waypoint.snapped[1]],
                 distanceMeters: waypoint.distanceMeters, providerDistanceMeters: waypoint.providerDistanceMeters,
               })),
