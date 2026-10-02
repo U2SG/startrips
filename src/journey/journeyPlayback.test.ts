@@ -364,6 +364,123 @@ describe("Story whole-Journey media sequence (#76)", () => {
   });
 });
 
+// #76 acceptance: Story and Cinematic Journey Playback must agree on one
+// chapter/media order. `sortOrder` is a Journey-global upload counter, so a
+// folded child's media can carry a LOWER sortOrder than the Stop that owns the
+// chapter. Ordering the merged chapter by `sortOrder` alone therefore made the
+// two projections disagree on real journeys. These cases pin the agreement in
+// both anchor directions.
+describe("Story and Playback share one grouped-chapter order (#76)", () => {
+  const playbackChapterOrder = (target: Journey) => buildPlaybackSteps(target)
+    .filter((step) => step.kind === "stop")
+    .flatMap((step) => (step.kind === "stop" ? step.media : []))
+    .map((asset) => asset.id);
+
+  const asVia = (target: RoutePoint, stayAnchorRoutePointId: string): RoutePoint => ({
+    ...target,
+    isStop: false,
+    placeRole: "pure-transit",
+    stayAnchorRoutePointId,
+  });
+
+  it("keeps a backward-anchored child's media after its Stop even when uploaded first", () => {
+    const grouped: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 30.66, 104.06),
+        asVia(point("point-1", 30.67, 104.07), "point-0"),
+        point("point-2", 30.68, 104.08),
+      ],
+      media: [
+        media("via-first", "point-1", "image/jpeg", 0),
+        media("stop-first", "point-0", "image/jpeg", 1),
+        media("stop-second", "point-0", "image/jpeg", 2),
+      ],
+    };
+
+    expect(playbackChapterOrder(grouped)).toEqual(["stop-first", "stop-second", "via-first"]);
+    expect(playbackStoryMedia(grouped).map((asset) => asset.id))
+      .toEqual(playbackChapterOrder(grouped));
+  });
+
+  it("keeps a forward-anchored child's media before its Stop", () => {
+    const grouped: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 30.66, 104.06),
+        asVia(point("point-1", 30.67, 104.07), "point-2"),
+        point("point-2", 30.68, 104.08),
+      ],
+      media: [
+        media("via-late", "point-1", "image/jpeg", 9),
+        media("stop-first", "point-2", "image/jpeg", 0),
+        media("stop-second", "point-2", "image/jpeg", 1),
+      ],
+    };
+
+    expect(playbackChapterOrder(grouped)).toEqual(["via-late", "stop-first", "stop-second"]);
+    expect(playbackStoryMedia(grouped).map((asset) => asset.id))
+      .toEqual(playbackChapterOrder(grouped));
+  });
+
+  it("orders several grouped children by route position inside one chapter", () => {
+    const grouped: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 30.66, 104.06),
+        asVia(point("point-1", 30.67, 104.07), "point-0"),
+        asVia(point("point-2", 30.67, 104.08), "point-0"),
+      ],
+      media: [
+        media("child-b", "point-2", "image/jpeg", 0),
+        media("stop-media", "point-0", "image/jpeg", 1),
+        media("child-a", "point-1", "image/jpeg", 2),
+      ],
+    };
+
+    expect(playbackChapterOrder(grouped)).toEqual(["stop-media", "child-a", "child-b"]);
+    expect(playbackStoryMedia(grouped).map((asset) => asset.id))
+      .toEqual(playbackChapterOrder(grouped));
+  });
+
+  it("still orders intro media ahead of every chapter", () => {
+    const grouped: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 30.66, 104.06),
+        asVia(point("point-1", 30.67, 104.07), "point-0"),
+      ],
+      media: [
+        media("intro", null, "image/jpeg", 5),
+        media("via-first", "point-1", "image/jpeg", 0),
+        media("stop-media", "point-0", "image/jpeg", 1),
+      ],
+    };
+
+    expect(playbackStoryMedia(grouped).map((asset) => asset.id))
+      .toEqual(["intro", "stop-media", "via-first"]);
+  });
+
+  it("leaves the all-Stop projection byte-identical to per-owner ordering", () => {
+    const stopsOnly: Journey = {
+      ...journey,
+      routePoints: [point("point-0", 0, 0), point("point-1", 1, 1), point("point-2", 2, 2)],
+      media: [
+        media("point-2-b", "point-2", "image/jpeg", 7),
+        media("point-0-b", "point-0", "image/jpeg", 8),
+        media("point-1-a", "point-1", "image/jpeg", 9),
+        media("point-2-a", "point-2", "image/jpeg", 10),
+      ],
+    };
+
+    expect(playbackChapterOrder(stopsOnly)).toEqual([
+      "point-0-b", "point-1-a", "point-2-b", "point-2-a",
+    ]);
+    expect(playbackStoryMedia(stopsOnly).map((asset) => asset.id))
+      .toEqual(playbackChapterOrder(stopsOnly));
+  });
+});
+
 describe("buildPlaybackSteps (#19)", () => {
   it("expands intro, per-point travel/stop/media, and outro in order", () => {
     const steps = buildPlaybackSteps(journey);
