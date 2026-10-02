@@ -523,8 +523,14 @@ try {
   await nearby.waitFor({ state: "detached" });
   await assist.page.getByRole("button", { name: "退出调整", exact: true }).tap();
   await assist.page.locator(".route-nearby-origin").waitFor({ state: "detached" });
-  const normalPoint = (await readMap(assist.page)).projectedTo;
-  assert(normalPoint, "normal route point missing after recommendation deletion");
+  const accessDetails = assist.page.locator(".route-candidate-editor__access");
+  if (await accessDetails.getAttribute("open") !== null) await accessDetails.locator("summary").tap();
+  const releasedMap = await readMap(assist.page);
+  const normalPoint = await assist.page.evaluate((points) => points.find((point) => {
+    if (!point || point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight) return false;
+    return document.elementFromPoint(point.x, point.y)?.matches(".maplibregl-canvas");
+  }), [releasedMap.projectedFrom, releasedMap.projectedTo]);
+  assert(normalPoint, `no uncovered route point after recommendation deletion: ${JSON.stringify(releasedMap)}`);
   await assist.page.touchscreen.tap(normalPoint.x, normalPoint.y);
   await assist.page.waitForFunction(() => Boolean(document.querySelector("[data-qa-earth-dive-activated-route-point]")?.getAttribute("data-qa-earth-dive-activated-route-point")));
   evidence.stages.push({ name: "removed-pending-point-releases-map", ...await readMap(assist.page) });
