@@ -567,6 +567,53 @@ export const mediaUploads = pgTable(
   ],
 );
 
+// #336/ST-115: durable receipt for one confirmed Route Point batch apply.
+// The operation id is scoped to a Journey and survives refresh/network loss.
+// request is the normalized document used to reject conflicting replays;
+// receipt is written atomically with the route/media mutation and carries only
+// identifiers/snapshots needed for safe compensation.
+export const journeyRoutePointBatchOperations = pgTable(
+  "journey_route_point_batch_operations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    atlasId: uuid("atlas_id")
+      .notNull()
+      .references(() => atlases.id, { onDelete: "cascade" }),
+    journeyId: uuid("journey_id")
+      .notNull()
+      .references(() => journeys.id, { onDelete: "cascade" }),
+    operationId: text("operation_id").notNull(),
+    requestFingerprint: text("request_fingerprint").notNull(),
+    request: jsonb("request").$type<Record<string, unknown>>().notNull(),
+    status: text("status").notNull().default("staged"),
+    baseRevision: integer("base_revision").notNull(),
+    appliedRevision: integer("applied_revision"),
+    receipt: jsonb("receipt").$type<Record<string, unknown>>(),
+    outcome: jsonb("outcome").$type<Record<string, unknown>>(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("journey_route_point_batch_operation_unique").on(
+      table.journeyId,
+      table.operationId,
+    ),
+    index("journey_route_point_batch_journey_status_idx").on(
+      table.journeyId,
+      table.status,
+    ),
+    check(
+      "journey_route_point_batch_status_check",
+      sql`${table.status} in ('staged', 'applied', 'partially-undone', 'undone')`,
+    ),
+  ],
+);
+
 // #260: the record of one issued preview write, deliberately outside the
 // cascade that owns everything else about the asset.
 //

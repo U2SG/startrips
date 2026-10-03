@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   and,
   asc,
@@ -13,6 +14,7 @@ import {
 import { db } from "../db/client";
 import {
   atlases,
+  journeyRoutePointBatchOperations,
   journeyRoutePoints,
   journeys,
   mediaAssets,
@@ -423,6 +425,468 @@ export async function updateJourneyForAtlas(
     return true;
   });
   return updated ? getJourneyForAtlas(journeyId, atlasId) : undefined;
+}
+
+export const ROUTE_POINT_BATCH_UNDO_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+const ROUTE_POINT_BATCH_MAX_POINTS = 64;
+
+export type JourneyRoutePointBatchPoint = {
+  candidateId: string;
+  latitude: number;
+  longitude: number;
+  label: string;
+  isStop: boolean;
+  occurredAt: Date | null;
+};
+
+export type JourneyRoutePointBatchAttachment = {
+  assetId?: string;
+  uploadId?: string;
+  routePointId?: string;
+  candidateId?: string;
+  intentionalReuse: boolean;
+};
+
+export type JourneyRoutePointBatchInput = {
+  operationId: string;
+  baseRevision: number;
+  points: JourneyRoutePointBatchPoint[];
+  attachments: JourneyRoutePointBatchAttachment[];
+};
+
+type RoutePointBatchReceipt = {
+  pointMappings: Array<{ candidateId: string; routePointId: string }>;
+  createdPoints: Array<{ id: string; sortOrder: number }>;
+  placements: Array<{
+    assetId: string;
+    previousRoutePointId: string | null;
+    previousSortOrder: number;
+    targetRoutePointId: string;
+  }>;
+  appliedRevision: number;
+};
+
+export class JourneyRoutePointBatchError extends Error {
+  constructor(
+    readonly status: 400 | 404 | 409 | 410,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "JourneyRoutePointBatchError";
+  }
+}
+
+function normalizedRoutePointBatchRequest(input: JourneyRoutePointBatchInput) {
+  return {
+    operationId: input.operationId,
+    baseRevision: input.baseRevision,
+    points: input.points.map((point) => ({
+      ...point,
+      occurredAt: point.occurredAt?.toISOString() ?? null,
+    })),
+    attachments: input.attachments,
+  };
+}
+
+function routePointBatchFingerprint(request: Record<string, unknown>) {
+  return createHash("sha256").update(JSON.stringify(request)).digest("hex");
+}
+
+function routePointBatchView(operation: typeof journeyRoutePointBatchOperations.$inferSelect) {
+  const expiresAt = operation.expiresAt?.toISOString() ?? null;
+  const eligible = operation.status === "applied"
+    && operation.expiresAt !== null
+    && operation.expiresAt.valueOf() > Date.now();
+  return {
+    operationId: operation.operationId,
+    status: operation.status,
+    baseRevision: operation.baseRevision,
+    appliedRevision: operation.appliedRevision,
+    receipt: operation.receipt as RoutePointBatchReceipt | null,
+    outcome: operation.outcome,
+    undo: {
+      eligible,
+      expiresAt,
+      reason: eligible ? null : operation.status === "applied" ? "expired"
+        : operation.status === "staged" ? "not-applied" : "already-resolved",
+    },
+  };
+}
+
+async function lockRoutePointBatchJourney(
+  transaction: Transaction,
+  journeyId: string,
+  atlasId: string,
+) {
+  if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
+  const locked = await transaction.execute<{ id: string; revision: number }>(sql`
+    select ${journeys.id} as id, ${journeys.revision} as revision
+    from ${journeys}
+    where ${journeys.id} = ${journeyId}
+      and ${journeys.atlasId} = ${atlasId}
+      and ${journeys.deletionStartedAt} is null
+    for update
+  `);
+  return locked.rows[0];
+}
+
+async function loadRoutePointBatchOperation(
+  transaction: Transaction,
+  journeyId: string,
+  operationId: string,
+) {
+  const [operation] = await transaction
+    .select()
+    .from(journeyRoutePointBatchOperations)
+    .where(and(
+      eq(journeyRoutePointBatchOperations.journeyId, journeyId),
+      eq(journeyRoutePointBatchOperations.operationId, operationId),
+    ))
+    .limit(1);
+  return operation;
+}
+
+export async function applyJourneyRoutePointBatchForAtlas(
+  journeyId: string,
+  atlasId: string,
+  input: JourneyRoutePointBatchInput,
+) {
+  const request = normalizedRoutePointBatchRequest(input) as Record<string, unknown>;
+  const requestFingerprint = routePointBatchFingerprint(request);
+  const operation = await db.transaction(async (transaction) => {
+    const journey = await lockRoutePointBatchJourney(transaction, journeyId, atlasId);
+    if (!journey) return undefined;
+    const existingOperation = await loadRoutePointBatchOperation(transaction, journeyId, input.operationId);
+    if (existingOperation && existingOperation.requestFingerprint !== requestFingerprint) {
+      throw new JourneyRoutePointBatchError(409, "ROUTE_POINT_BATCH_ID_REUSED", "This operation id was already used with a different batch");
+    }
+    if (existingOperation && existingOperation.status !== "staged") return existingOperation;
+    if (journey.revision !== input.baseRevision) {
+      throw new JourneyRouteChangedError();
+    }
+
+    const routePoints = await transaction.select().from(journeyRoutePoints)
+      .where(eq(journeyRoutePoints.journeyId, journeyId))
+      .orderBy(asc(journeyRoutePoints.sortOrder));
+    if (routePoints.length + input.points.length > ROUTE_POINT_BATCH_MAX_POINTS) {
+      throw new JourneyRoutePointBatchError(400, "ROUTE_POINT_BATCH_TOO_LARGE", "Too many Route Points");
+    }
+    const routePointIds = new Set(routePoints.map((point) => point.id));
+    const candidateIds = new Set(input.points.map((point) => point.candidateId));
+    if (candidateIds.size !== input.points.length) {
+      throw new JourneyRoutePointBatchError(400, "INVALID_ROUTE_POINT_BATCH", "Duplicate candidate id");
+    }
+    for (const attachment of input.attachments) {
+      if (attachment.routePointId && !routePointIds.has(attachment.routePointId)) {
+        throw new JourneyRoutePointBatchError(404, "ROUTE_POINT_BATCH_TARGET_NOT_FOUND", "Route Point target not found");
+      }
+      if (attachment.candidateId && !candidateIds.has(attachment.candidateId)) {
+        throw new JourneyRoutePointBatchError(400, "INVALID_ROUTE_POINT_BATCH", "Unknown Route Point candidate");
+      }
+    }
+    for (const candidateId of candidateIds) {
+      if (!input.attachments.some((attachment) => attachment.candidateId === candidateId)) {
+        throw new JourneyRoutePointBatchError(400, "INVALID_ROUTE_POINT_BATCH", "Every new Route Point needs media");
+      }
+    }
+
+    const directAssetIds = input.attachments.flatMap((attachment) => attachment.assetId ? [attachment.assetId] : []);
+    const uploadIds = input.attachments.flatMap((attachment) => attachment.uploadId ? [attachment.uploadId] : []);
+    const directAssets = directAssetIds.length > 0
+      ? await transaction.select().from(mediaAssets).where(inArray(mediaAssets.id, directAssetIds))
+      : [];
+    if (new Set(directAssets.map((asset) => asset.id)).size !== new Set(directAssetIds).size
+      || directAssets.some((asset) => asset.journeyId !== journeyId)) {
+      throw new JourneyRoutePointBatchError(404, "ROUTE_POINT_BATCH_MEDIA_NOT_FOUND", "Media asset not found in this Journey");
+    }
+    const uploads = uploadIds.length > 0
+      ? await transaction.select().from(mediaUploads).where(inArray(mediaUploads.id, uploadIds))
+      : [];
+    if (new Set(uploads.map((upload) => upload.id)).size !== new Set(uploadIds).size
+      || uploads.some((upload) => upload.atlasId !== atlasId || upload.journeyId !== journeyId)) {
+      throw new JourneyRoutePointBatchError(404, "ROUTE_POINT_BATCH_UPLOAD_NOT_FOUND", "Upload not found in this Journey");
+    }
+
+    const pendingUploads = uploads
+      .filter((upload) => upload.status !== "completed" && upload.status !== "aborted")
+      .map((upload) => ({ uploadId: upload.id, status: upload.status }));
+    const failedUploads = uploads
+      .filter((upload) => upload.status === "aborted" || (upload.status === "completed" && !upload.mediaAssetId))
+      .map((upload) => ({ uploadId: upload.id, status: upload.status }));
+    if (pendingUploads.length > 0 || failedUploads.length > 0) {
+      const outcome = { status: failedUploads.length > 0 ? "partial" : "staged", mounted: false, pendingUploads, failedUploads };
+      if (existingOperation) {
+        const [updated] = await transaction.update(journeyRoutePointBatchOperations)
+          .set({ outcome, updatedAt: new Date() })
+          .where(eq(journeyRoutePointBatchOperations.id, existingOperation.id)).returning();
+        return updated;
+      }
+      const [staged] = await transaction.insert(journeyRoutePointBatchOperations).values({
+        atlasId, journeyId, operationId: input.operationId, requestFingerprint, request,
+        status: "staged", baseRevision: input.baseRevision, outcome,
+      }).returning();
+      return staged;
+    }
+
+    const completedUploadAssetIds = uploads.flatMap((upload) => upload.mediaAssetId ? [upload.mediaAssetId] : []);
+    const allAssetIds = [...new Set([...directAssetIds, ...completedUploadAssetIds])];
+    const allAssets = allAssetIds.length > 0
+      ? await transaction.select().from(mediaAssets).where(inArray(mediaAssets.id, allAssetIds))
+      : [];
+    if (allAssets.length !== allAssetIds.length
+      || allAssets.some((asset) => asset.journeyId !== journeyId || asset.mimeType.startsWith("audio/"))) {
+      throw new JourneyRoutePointBatchError(400, "INVALID_ROUTE_POINT_BATCH_MEDIA", "Batch media is unavailable or not placeable");
+    }
+    const uploadAssetByUploadId = new Map(uploads.map((upload) => [upload.id, upload.mediaAssetId!] as const));
+    const assetById = new Map(allAssets.map((asset) => [asset.id, asset] as const));
+    const resolvedAttachments = input.attachments.map((attachment) => {
+      const assetId = attachment.assetId ?? uploadAssetByUploadId.get(attachment.uploadId!);
+      const asset = assetId ? assetById.get(assetId) : undefined;
+      if (!asset) {
+        throw new JourneyRoutePointBatchError(400, "INVALID_ROUTE_POINT_BATCH_MEDIA", "Completed upload has no usable media asset");
+      }
+      return { ...attachment, asset };
+    });
+    if (new Set(resolvedAttachments.map((attachment) => attachment.asset.id)).size !== resolvedAttachments.length) {
+      throw new JourneyRoutePointBatchError(400, "INVALID_ROUTE_POINT_BATCH", "A media asset can appear only once in one batch");
+    }
+
+    const verifiedHashes = [...new Set(resolvedAttachments.flatMap((attachment) =>
+      attachment.asset.contentHashVerified && attachment.asset.contentHash ? [attachment.asset.contentHash] : [],
+    ))];
+    const sameHashAssets = verifiedHashes.length > 0
+      ? await transaction
+        .select({ id: mediaAssets.id, contentHash: mediaAssets.contentHash, routePointId: mediaAssets.routePointId })
+        .from(mediaAssets)
+        .where(and(
+          eq(mediaAssets.journeyId, journeyId),
+          eq(mediaAssets.contentHashVerified, true),
+          inArray(mediaAssets.contentHash, verifiedHashes),
+        ))
+      : [];
+    for (const attachment of resolvedAttachments) {
+      if (!attachment.candidateId || attachment.intentionalReuse) continue;
+      const asset = attachment.asset;
+      const duplicateAlreadyPlaced = asset.routePointId !== null
+        || (asset.contentHashVerified === true && asset.contentHash !== null
+          && sameHashAssets.some((candidate) =>
+            candidate.id !== asset.id
+            && candidate.contentHash === asset.contentHash
+            && candidate.routePointId !== null));
+      if (duplicateAlreadyPlaced) {
+        throw new JourneyRoutePointBatchError(409, "ROUTE_POINT_BATCH_DUPLICATE_MEDIA", "Verified duplicate media is already placed; explicit intentional reuse is required");
+      }
+    }
+
+    const pointMappings = input.points.map((point) => ({ candidateId: point.candidateId, routePointId: randomUUID() }));
+    const routePointIdByCandidate = new Map(pointMappings.map((mapping) => [mapping.candidateId, mapping.routePointId] as const));
+    const createdPoints = input.points.map((point, index) => ({
+      id: routePointIdByCandidate.get(point.candidateId)!,
+      journeyId,
+      sortOrder: routePoints.length + index,
+      latitude: point.latitude,
+      longitude: point.longitude,
+      label: point.label,
+      isStop: point.isStop,
+      occurredAt: point.occurredAt,
+    }));
+    if (createdPoints.length > 0) await transaction.insert(journeyRoutePoints).values(createdPoints);
+
+    const placements: RoutePointBatchReceipt["placements"] = [];
+    for (const attachment of resolvedAttachments) {
+      const targetRoutePointId = attachment.routePointId ?? routePointIdByCandidate.get(attachment.candidateId!)!;
+      placements.push({
+        assetId: attachment.asset.id,
+        previousRoutePointId: attachment.asset.routePointId,
+        previousSortOrder: attachment.asset.sortOrder,
+        targetRoutePointId,
+      });
+      await transaction.update(mediaAssets).set({ routePointId: targetRoutePointId }).where(and(
+        eq(mediaAssets.id, attachment.asset.id),
+        eq(mediaAssets.journeyId, journeyId),
+      ));
+    }
+
+    const [revisionUpdate] = await transaction.update(journeys)
+      .set({ revision: sql`${journeys.revision} + 1`, updatedAt: new Date() })
+      .where(and(
+        eq(journeys.id, journeyId),
+        eq(journeys.atlasId, atlasId),
+        eq(journeys.revision, input.baseRevision),
+        isNull(journeys.deletionStartedAt),
+      ))
+      .returning({ revision: journeys.revision });
+    if (!revisionUpdate) throw new JourneyRouteChangedError();
+
+    const receipt: RoutePointBatchReceipt = {
+      pointMappings,
+      createdPoints: createdPoints.map((point) => ({ id: point.id, sortOrder: point.sortOrder })),
+      placements,
+      appliedRevision: revisionUpdate.revision,
+    };
+    const expiresAt = new Date(Date.now() + ROUTE_POINT_BATCH_UNDO_RETENTION_MS);
+    const outcome = { status: "applied", mounted: true };
+    if (existingOperation) {
+      const [updated] = await transaction.update(journeyRoutePointBatchOperations)
+        .set({
+          status: "applied", appliedRevision: revisionUpdate.revision, receipt, outcome, expiresAt, updatedAt: new Date(),
+        })
+        .where(eq(journeyRoutePointBatchOperations.id, existingOperation.id))
+        .returning();
+      return updated;
+    }
+    const [applied] = await transaction.insert(journeyRoutePointBatchOperations).values({
+      atlasId, journeyId, operationId: input.operationId, requestFingerprint, request,
+      status: "applied", baseRevision: input.baseRevision, appliedRevision: revisionUpdate.revision,
+      receipt, outcome, expiresAt,
+    }).returning();
+    return applied;
+  });
+  return operation ? routePointBatchView(operation) : undefined;
+}
+
+export async function getJourneyRoutePointBatchForAtlas(
+  journeyId: string,
+  atlasId: string,
+  operationId: string,
+) {
+  const rows = await db
+    .select({ operation: journeyRoutePointBatchOperations })
+    .from(journeyRoutePointBatchOperations)
+    .innerJoin(journeys, eq(journeys.id, journeyRoutePointBatchOperations.journeyId))
+    .where(and(
+      eq(journeyRoutePointBatchOperations.journeyId, journeyId),
+      eq(journeyRoutePointBatchOperations.operationId, operationId),
+      eq(journeyRoutePointBatchOperations.atlasId, atlasId),
+      eq(journeys.atlasId, atlasId),
+      isNull(journeys.deletionStartedAt),
+    ))
+    .limit(1);
+  return rows[0] ? routePointBatchView(rows[0].operation) : undefined;
+}
+
+export async function undoJourneyRoutePointBatchForAtlas(
+  journeyId: string,
+  atlasId: string,
+  operationId: string,
+) {
+  const operation = await db.transaction(async (transaction) => {
+    const journey = await lockRoutePointBatchJourney(transaction, journeyId, atlasId);
+    if (!journey) return undefined;
+    const existing = await loadRoutePointBatchOperation(transaction, journeyId, operationId);
+    if (!existing || existing.atlasId !== atlasId) return undefined;
+    if (existing.status === "undone" || existing.status === "partially-undone") return existing;
+    if (existing.status !== "applied" || !existing.receipt || existing.appliedRevision === null) {
+      throw new JourneyRoutePointBatchError(409, "ROUTE_POINT_BATCH_NOT_APPLIED", "Batch has not been applied");
+    }
+    if (!existing.expiresAt || existing.expiresAt.valueOf() <= Date.now()) {
+      throw new JourneyRoutePointBatchError(410, "ROUTE_POINT_BATCH_UNDO_EXPIRED", "Batch undo retention window expired");
+    }
+    if (journey.revision !== existing.appliedRevision) {
+      throw new JourneyRoutePointBatchError(
+        409,
+        "ROUTE_POINT_BATCH_UNDO_CONFLICT",
+        "Journey route changed after the batch; undo would overwrite a later edit",
+      );
+    }
+
+    const receipt = existing.receipt as unknown as RoutePointBatchReceipt;
+    const placementIds = receipt.placements.map((placement) => placement.assetId);
+    const currentAssets = placementIds.length > 0
+      ? await transaction.select().from(mediaAssets).where(inArray(mediaAssets.id, placementIds))
+      : [];
+    const currentAssetById = new Map(currentAssets.map((asset) => [asset.id, asset] as const));
+    const conflicts: Array<{ kind: string; id: string }> = [];
+    const restoredAssetIds: string[] = [];
+    for (const placement of receipt.placements) {
+      const current = currentAssetById.get(placement.assetId);
+      if (!current
+        || current.journeyId !== journeyId
+        || current.routePointId !== placement.targetRoutePointId
+        || current.sortOrder !== placement.previousSortOrder) {
+        conflicts.push({ kind: "media-changed", id: placement.assetId });
+        continue;
+      }
+      await transaction.update(mediaAssets)
+        .set({ routePointId: placement.previousRoutePointId })
+        .where(and(eq(mediaAssets.id, placement.assetId), eq(mediaAssets.journeyId, journeyId)));
+      restoredAssetIds.push(placement.assetId);
+    }
+
+    const createdPointIds = receipt.createdPoints.map((point) => point.id);
+    const currentCreatedPoints = createdPointIds.length > 0
+      ? await transaction.select().from(journeyRoutePoints).where(inArray(journeyRoutePoints.id, createdPointIds))
+      : [];
+    const currentCreatedPointIds = new Set(currentCreatedPoints.map((point) => point.id));
+    for (const pointId of createdPointIds) {
+      if (!currentCreatedPointIds.has(pointId)) conflicts.push({ kind: "route-point-missing", id: pointId });
+    }
+    const mediaStillOnCreatedPoints = createdPointIds.length > 0
+      ? await transaction.select({ id: mediaAssets.id, routePointId: mediaAssets.routePointId })
+        .from(mediaAssets).where(inArray(mediaAssets.routePointId, createdPointIds))
+      : [];
+    const mediaByCreatedPoint = new Map<string, string[]>();
+    for (const media of mediaStillOnCreatedPoints) {
+      if (!media.routePointId) continue;
+      const ids = mediaByCreatedPoint.get(media.routePointId) ?? [];
+      ids.push(media.id);
+      mediaByCreatedPoint.set(media.routePointId, ids);
+    }
+    const removedRoutePointIds: string[] = [];
+    for (const point of receipt.createdPoints) {
+      if (!currentCreatedPointIds.has(point.id)) continue;
+      const remaining = mediaByCreatedPoint.get(point.id) ?? [];
+      if (remaining.length > 0) {
+        conflicts.push({ kind: "route-point-referenced", id: point.id });
+        continue;
+      }
+      await transaction.delete(journeyRoutePoints).where(and(
+        eq(journeyRoutePoints.id, point.id),
+        eq(journeyRoutePoints.journeyId, journeyId),
+      ));
+      removedRoutePointIds.push(point.id);
+    }
+
+    const changed = restoredAssetIds.length > 0 || removedRoutePointIds.length > 0;
+    if (!changed && conflicts.length > 0) {
+      throw new JourneyRoutePointBatchError(409, "ROUTE_POINT_BATCH_UNDO_CONFLICT", "Later media changes prevent safe undo");
+    }
+    let revision = journey.revision;
+    if (changed) {
+      const [updatedJourney] = await transaction.update(journeys)
+        .set({ revision: sql`${journeys.revision} + 1`, updatedAt: new Date() })
+        .where(and(
+          eq(journeys.id, journeyId),
+          eq(journeys.atlasId, atlasId),
+          eq(journeys.revision, journey.revision),
+          isNull(journeys.deletionStartedAt),
+        ))
+        .returning({ revision: journeys.revision });
+      if (!updatedJourney) throw new JourneyRouteChangedError();
+      revision = updatedJourney.revision;
+    }
+    const full = conflicts.length === 0
+      && restoredAssetIds.length === receipt.placements.length
+      && removedRoutePointIds.length === receipt.createdPoints.length;
+    const outcome = {
+      status: full ? "undone" : "partial",
+      restoredAssetIds,
+      removedRoutePointIds,
+      conflicts,
+      revision,
+    };
+    const [updatedOperation] = await transaction.update(journeyRoutePointBatchOperations)
+      .set({
+        status: full ? "undone" : "partially-undone",
+        outcome,
+        updatedAt: new Date(),
+      })
+      .where(eq(journeyRoutePointBatchOperations.id, existing.id))
+      .returning();
+    return updatedOperation;
+  });
+  return operation ? routePointBatchView(operation) : undefined;
 }
 
 // #14: set (or clear) a journey's explicit cover media. The asset must belong
