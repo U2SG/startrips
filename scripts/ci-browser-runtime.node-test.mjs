@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertRuntimeVersion, selectHostedBrowser, launchWithRuntimeCheck, finishRuntimeRecording } from "./ci-browser-runtime.mjs";
+import {
+  assertHostedBrowserExecutable,
+  assertRuntimeVersion,
+  finishRuntimeRecording,
+  launchWithRuntimeCheck,
+  probeHostedBrowserVersion,
+  selectHostedBrowser,
+} from "./ci-browser-runtime.mjs";
 
 test("Playwright helper, installed package and exact dependency pin must agree", () => {
   assert.doesNotThrow(() => assertRuntimeVersion("1.55.0", "1.55.0", "1.55.0"));
@@ -16,6 +23,34 @@ test("runtime selection preserves hosted Chrome precedence and never silently do
   assert.equal(selectHostedBrowser("/custom/chrome", () => true), "/custom/chrome");
   assert.equal(selectHostedBrowser(undefined, (p) => p === "/usr/bin/chromium"), "/usr/bin/chromium");
   assert.throws(() => selectHostedBrowser(undefined, () => false), /Hosted Chrome is missing/);
+});
+
+test("hosted browser must be executable before any version evidence is accepted", () => {
+  assert.doesNotThrow(() => assertHostedBrowserExecutable("/usr/bin/google-chrome", () => {}));
+  assert.throws(() => assertHostedBrowserExecutable("/usr/bin/google-chrome", () => {
+    throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+  }), /not executable/);
+});
+
+test("version probe timeout is deferred once to the real suite browser instead of failing the shard", () => {
+  let calls = 0;
+  const result = probeHostedBrowserVersion("/usr/bin/google-chrome", () => {
+    calls++;
+    throw Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" });
+  });
+  assert.deepEqual(result, { state: "deferred-to-suite-launch", version: null });
+  assert.equal(calls, 1);
+});
+
+test("version probe remains fail-closed for invalid output and non-timeout process failures", () => {
+  assert.deepEqual(probeHostedBrowserVersion("/usr/bin/google-chrome", () => "Google Chrome 140.0.7339.207\n"), {
+    state: "verified",
+    version: "Google Chrome 140.0.7339.207",
+  });
+  assert.throws(() => probeHostedBrowserVersion("/usr/bin/google-chrome", () => "not-a-browser\n"), /invalid version evidence/);
+  assert.throws(() => probeHostedBrowserVersion("/usr/bin/google-chrome", () => {
+    throw Object.assign(new Error("cannot execute"), { code: "ENOEXEC" });
+  }), /cannot execute/);
 });
 
 test("capability checks reuse exactly the suite browser without a second launch", async () => {

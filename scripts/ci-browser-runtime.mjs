@@ -19,6 +19,31 @@ export function selectHostedBrowser(override, exists = fs.existsSync) {
   return executable;
 }
 
+export function assertHostedBrowserExecutable(executablePath, access = fs.accessSync) {
+  try {
+    access(executablePath, fs.constants.X_OK);
+  } catch (error) {
+    throw new Error(`Hosted Chrome is not executable: ${executablePath}`, { cause: error });
+  }
+}
+
+export function probeHostedBrowserVersion(executablePath, run = execFileSync) {
+  try {
+    const version = run(executablePath, ["--version"], {
+      encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (!/^(?:Google Chrome|Chromium)\s+\d+(?:\.\d+){3}(?:\s.*)?$/.test(version)) {
+      throw new Error(`Hosted browser returned invalid version evidence: ${JSON.stringify(version)}`);
+    }
+    return { state: "verified", version };
+  } catch (error) {
+    if (error?.code === "ETIMEDOUT") {
+      return { state: "deferred-to-suite-launch", version: null };
+    }
+    throw error;
+  }
+}
+
 /** Wait for Playwright's recording artifact before closing its producer page. */
 export async function finishRuntimeRecording(context, video, { timeoutMs = 10_000 } = {}) {
   if (!video) throw new Error("Playwright recording smoke has no video transport");
@@ -86,11 +111,12 @@ async function main() {
   assertRuntimeVersion(process.env.QA_PLAYWRIGHT_VERSION,
     require("playwright-core/package.json").version, project.devDependencies["playwright-core"]);
   const executablePath = selectHostedBrowser(process.env.QA_BROWSER_PATH);
-  fs.accessSync(executablePath, fs.constants.X_OK);
-  const version = execFileSync(executablePath, ["--version"], {
-    encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-  console.log(`CI_BROWSER_SELECTION=${JSON.stringify({ executablePath, version, runnerImage: process.env.ImageVersion || "unknown" })}`);
+  assertHostedBrowserExecutable(executablePath);
+  const versionProbe = probeHostedBrowserVersion(executablePath);
+  console.log(`CI_BROWSER_SELECTION=${JSON.stringify({ executablePath, version: versionProbe.version, versionProbe: versionProbe.state, runnerImage: process.env.ImageVersion || "unknown" })}`);
+  if (versionProbe.state === "deferred-to-suite-launch") {
+    console.warn("::warning::Hosted Chrome version probe timed out; authoritative version and capability checks are deferred to the real suite launch");
+  }
   // Capability/recording assertions remain mandatory in each real suite. Reuse
   // its launch/options/budget rather than imposing a separate 20s cold start.
   if (process.env.GITHUB_ENV) fs.appendFileSync(process.env.GITHUB_ENV,
