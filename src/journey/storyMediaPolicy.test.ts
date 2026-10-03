@@ -20,6 +20,7 @@ import {
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
   storyInitialNoteBeatRoutePointId,
+  routePointPresentsNote,
 } from "./storyMediaPolicy";
 import { storyMediaForScope, storySequenceForJourney, storySequenceMedia } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
@@ -370,11 +371,11 @@ describe("storyRoutePointEntryIndex (#76 P1)", () => {
 
 describe("storyInitialNoteBeatRoutePointId (#76 P1 + #595)", () => {
   const withMedia = { ...asset("b1-media", "image/jpeg", 0, "b1.jpg"), routePointId: "B" };
-  const base = (media: JourneyMediaAsset[]): Journey => ({
+  const base = (media: JourneyMediaAsset[], note: string | null = "这一站只留下了一句话"): Journey => ({
     ...journey,
     routePoints: [
       { id: "A", journeyId: journey.id, sortOrder: 0, label: "A", latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
-      { id: "B", journeyId: journey.id, sortOrder: 1, label: "B", latitude: 2, longitude: 2, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+      { id: "B", journeyId: journey.id, sortOrder: 1, label: "B", latitude: 2, longitude: 2, occurredAt: null, note, isStop: true, createdAt: journey.createdAt },
     ],
     media,
   });
@@ -384,6 +385,17 @@ describe("storyInitialNoteBeatRoutePointId (#76 P1 + #595)", () => {
     // no media stage, rather than borrowing A's media.
     expect(storyInitialNoteBeatRoutePointId(base([withMedia]), "B")).toBeNull();
     expect(storyInitialNoteBeatRoutePointId(base([]), "B")).toBe("B");
+  });
+
+  it("does not blank the media stage for a Route Point with neither media nor note", () => {
+    // Presenting a chapter with nothing to show would drop the media stage and
+    // strand a deferred fullscreen already scheduled over it.
+    expect(storyInitialNoteBeatRoutePointId(base([], null), "B")).toBeNull();
+    expect(routePointPresentsNote(base([], null), [], "B")).toBe(false);
+    expect(routePointPresentsNote(base([]), [], "B")).toBe(true);
+    expect(routePointPresentsNote(base([]), [], null)).toBe(false);
+    expect(routePointPresentsNote(base([]), [withMedia], "B")).toBe(false);
+    expect(routePointPresentsNote(null, [], "B")).toBe(false);
   });
 
   it("does not take over a Journey entry, an unknown point, or an explicit asset", () => {
@@ -444,8 +456,7 @@ describe("storyInitialNoteBeatRoutePointId (#76 P1 + #595)", () => {
   it("does not treat a soundtrack as this Route Point's media", () => {
     const audio = { ...asset("track", "audio/mpeg", 0, "track.mp3"), routePointId: "B" };
     expect(storyInitialNoteBeatRoutePointId(base([audio]), "B")).toBe("B");
-  });
-});
+  });});
 
 describe("storyNavigationTargetDisposition (#204 final review)", () => {
   const video = asset("video-nav", "video/mp4", 0, "clip.mp4");

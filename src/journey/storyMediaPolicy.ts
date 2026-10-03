@@ -272,6 +272,25 @@ export function groupedPlacementRefreshSelection(
 // Point's own note instead of borrowing a neighbour's media, which is what
 // "Empty is a valid chapter" asks for. An explicitly requested asset always
 // wins, because newest explicit intent beats the Route Point that opened Story.
+/**
+ * #76 P1 + #595: whether a Route Point presents itself as a note chapter.
+ *
+ * A Route Point is a chapter in its own right only when it has no media of its
+ * own AND something to say. One with neither must not blank the media stage:
+ * `hasStoryMedia` drives that stage, and blanking it also strands a deferred
+ * fullscreen already scheduled over the media the viewer was looking at.
+ */
+export function routePointPresentsNote(
+  journey: Journey | null | undefined,
+  media: readonly JourneyMediaAsset[],
+  routePointId: string | null,
+): boolean {
+  if (!journey || routePointId === null) return false;
+  if (media.some((asset) => asset.routePointId === routePointId)) return false;
+  const routePoint = journey.routePoints.find((point) => point.id === routePointId);
+  return routePoint !== undefined && Boolean(routePoint.note?.trim());
+}
+
 export function storyInitialNoteBeatRoutePointId(
   journey: Journey | undefined,
   requestedRoutePointId: string | null,
@@ -287,7 +306,12 @@ export function storyInitialNoteBeatRoutePointId(
   const ownsMedia = journey.media.some(
     (asset) => asset.routePointId === requestedRoutePointId && isVisualMediaAsset(asset),
   );
-  return ownsMedia ? null : requestedRoutePointId;
+  // A Route Point with neither media of its own nor a note has nothing to
+  // present. Presenting it as a chapter would blank the media stage and strand
+  // any deferred fullscreen already scheduled over it, so it stays out of the
+  // beat and the Journey keeps showing.
+  if (ownsMedia || !routePoint.note?.trim()) return null;
+  return requestedRoutePointId;
 }
 
 // #76 P1 + #595: the media either side of a media-free Route Point's note beat.
