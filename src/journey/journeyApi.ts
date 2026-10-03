@@ -79,6 +79,7 @@ export const everydayFragmentClient = {
       longitude: values.longitude,
       placeLabel: values.placeLabel,
       note: values.note,
+      ...(values.homeBasePeriodId == null ? {} : { homeBasePeriodId: values.homeBasePeriodId }),
     };
     const payload = await requestJson<{ fragment: EverydayFragment }>(
       "/api/everyday-fragments", { method: "POST", body: JSON.stringify(createValues), signal },

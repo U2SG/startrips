@@ -3504,7 +3504,7 @@ export function LivingAtlasApp({
                 data-atlas-everyday-trigger
                 aria-expanded={atlasEverydayMode !== null}
                 aria-controls={atlasEverydayMode ? "atlas-everyday-fragments-list" : undefined}
-                onClick={(event) => openAtlasEveryday("list", event.currentTarget)}
+                onClick={(event) => atlasEverydayMode !== null ? closeAtlasEveryday(true) : openAtlasEveryday("list", event.currentTarget)}
                 aria-label="打开日常"
               ><IconPhoto size={18} stroke={1.4} aria-hidden="true" /></button>
             ) : null}
@@ -3530,7 +3530,7 @@ export function LivingAtlasApp({
                 data-atlas-everyday-trigger
                 aria-expanded={atlasEverydayMode !== null}
                 aria-controls={atlasEverydayMode ? "atlas-everyday-fragments-list" : undefined}
-                onClick={(event) => openAtlasEveryday("list", event.currentTarget)}
+                onClick={(event) => atlasEverydayMode !== null ? closeAtlasEveryday(true) : openAtlasEveryday("list", event.currentTarget)}
               ><IconPhoto size={16} stroke={1.35} aria-hidden="true" />日常</button>
             ) : null}
             {shareClient && journeys.length > 0 ? (

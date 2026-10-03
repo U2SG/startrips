@@ -111,6 +111,34 @@ describe("journeyApi", () => {
     }
   });
 
+  it("preserves an explicit Home association when the caller supplies one", async () => {
+    const fragment = {
+      id: "fragment-home",
+      occurredOn: "2020-05-07",
+      latitude: 22.5431,
+      longitude: 114.0579,
+      placeLabel: "深圳",
+      note: "回家",
+      homeBasePeriodId: "home-1",
+    };
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ fragment }));
+    try {
+      await expect(everydayFragmentClient.create({
+        occurredOn: fragment.occurredOn,
+        latitude: fragment.latitude,
+        longitude: fragment.longitude,
+        placeLabel: fragment.placeLabel,
+        note: fragment.note,
+        homeBasePeriodId: fragment.homeBasePeriodId,
+      })).resolves.toEqual(fragment);
+      const [, init] = fetcher.mock.calls[0];
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body.homeBasePeriodId).toBe(fragment.homeBasePeriodId);
+    } finally {
+      fetcher.mockRestore();
+    }
+  });
+
   it("confirms a first Home Base suggestion by creating a period", async () => {
     const period = {
       id: "home-1", label: "深圳", latitude: 22.5431, longitude: 114.0579,
