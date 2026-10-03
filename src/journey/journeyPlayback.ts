@@ -11,6 +11,7 @@ import type { HomeNarrativeContext, HomeNarrativeCameraTarget } from "./homeBase
 import {
   factualRouteText,
   isVisualMediaAsset,
+  journeyCover,
   resolveJourneyRouteSegmentProvenance,
 } from "./journeyModel";
 import type { Journey, JourneyMediaAsset, JourneyRoute, RoutePoint } from "./types";
@@ -207,12 +208,37 @@ export function playbackIntroMedia(journey: Journey): JourneyMediaAsset[] {
  */
 export type StorySequenceEntry = {
   presentationId: string;
-  role: "media" | "note";
+  role: "journey-cover" | "media" | "note";
   asset: JourneyMediaAsset | null;
   routePointId: string | null;
   contextOwner: "journey" | "route-point";
   note?: string;
 };
+
+/**
+ * #555: the Journey-level cover opening.
+ *
+ * A presentation copy of the canonical cover row, placed ahead of the canonical
+ * sequence and speaking for the WHOLE Journey rather than for the Route Point
+ * that happens to own the cover asset. The original cover media is untouched and
+ * still appears later, in its own Route Point, with that Route Point's context;
+ * the two appearances are different narrative roles and are never collapsed.
+ *
+ * It is opt-in. `playbackStoryMedia` must keep returning the canonical media
+ * list, because keepsake's narrative snapshot and render manifest consume it and
+ * a duplicated cover there would change the artifact a member already holds.
+ */
+function journeyCoverEntry(journey: Journey): StorySequenceEntry | null {
+  const cover = journeyCover(journey);
+  if (!cover) return null;
+  return {
+    presentationId: `journey-cover:${journey.id}:${cover.id}`,
+    role: "journey-cover",
+    asset: cover,
+    routePointId: null,
+    contextOwner: "journey",
+  };
+}
 
 function routePointNoteText(point: RoutePoint | undefined): string | null {
   const note = point?.note?.trim();
@@ -240,8 +266,17 @@ function storyMediaEntry(asset: JourneyMediaAsset, routePointId: string | null):
  *
  * The media order here is identical to `playbackStoryMedia`, which is this
  * sequence's media-only projection, so the two cannot drift apart.
+ *
+ * `withJourneyCoverOpening` adds the #555 cover presentation entry in front.
+ * That entry carries the cover asset, so projecting a sequence built WITH it
+ * would list the cover twice; `playbackStoryMedia` therefore always builds the
+ * canonical sequence without it, and keepsake stays byte-identical.
  */
-export function storySequenceForJourney(journey: Journey): StorySequenceEntry[] {
+export function storySequenceForJourney(
+  journey: Journey,
+  options: { withJourneyCoverOpening?: boolean } = {},
+): StorySequenceEntry[] {
+  const opening = options.withJourneyCoverOpening ? journeyCoverEntry(journey) : null;
   const chapterByOwner = playbackChapterByOwner(journey);
   // One owner scan for the whole sequence. Each bucket is already in
   // sortOrder, and walking a chapter's members in canonical route order
@@ -253,8 +288,12 @@ export function storySequenceForJourney(journey: Journey): StorySequenceEntry[] 
     journey,
     [null, ...journey.routePoints.map((point) => point.id)],
   );
+  // The opening is an ADDITIONAL presentation in front of the canonical
+  // sequence. The canonical media still follows in full, which is what leaves the
+  // original cover appearing again later at its own canonical position.
   const entries: StorySequenceEntry[] = (mediaByOwner.get(null) ?? [])
     .map((asset) => storyMediaEntry(asset, null));
+  if (opening) entries.unshift(opening);
   for (const point of journey.routePoints) {
     // A Route Point grouped under a Stop presents inside that Stop's chapter,
     // so the chapter is walked once and its members in canonical route order.
