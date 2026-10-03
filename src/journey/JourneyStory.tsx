@@ -2757,11 +2757,15 @@ export function JourneyStory({
     && videoResumeBlocked.id === shownAsset?.id
     && videoResumeBlocked.toFullscreen === fullscreen);
   const videoNavigationVisible = Boolean(shownAsset?.mimeType.startsWith("video/") && scopedMedia.length > 1);
-  // #76 P1: one Journey-wide cursor that returns to its first media at the
-  // Journey boundary, so previous/next are available at every step rather than
-  // only inside the Route Point that happens to be selected.
-  const canStepPrevious = !mutationPending && scopedMedia.length > 1;
-  const canStepNext = !mutationPending && scopedMedia.length > 1;
+  // #76 P1: these answer "is there content strictly before/after this one in the
+  // Journey", which is what the picture's activation uses to choose a direction:
+  // at the last media, activating must fall back to the previous one rather than
+  // jump back to the very start. The cursor itself still wraps at the Journey
+  // boundary - that is decided in `navigateMediaStep`, not here.
+  const canStepPrevious = !mutationPending && scopedMedia.length > 1
+    && requestedMediaIndex > 0;
+  const canStepNext = !mutationPending && scopedMedia.length > 1
+    && requestedMediaIndex < scopedMedia.length - 1;
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
   const heldRenewalError = renewalError?.id === shownAsset?.id && shownRead?.status === "ready"
     ? renewalError : null;
@@ -4290,8 +4294,9 @@ export function JourneyStory({
               direction={mediaNavigationDirection.current}
               reads={mediaReads}
               warmIds={fullscreen ? undefined : warmDecodeIds}
-              // BISECT: isolate whether the stage wrap prop causes the flick failure.
-              wrap={selectedRoutePointId !== null}
+              // #76 P1: the inline stage follows the Journey cursor, so paging
+              // past the last media returns to the first of the Journey.
+              wrap={true}
               videoAssetId={storyStageVideoAsset?.id ?? null}
               onSettled={settleIncoming}
               onMediaError={reportStageMediaError}
@@ -4980,8 +4985,9 @@ export function JourneyStory({
             direction={mediaNavigationDirection.current}
             reads={mediaReads}
             warmIds={fullscreen ? warmDecodeIds : undefined}
-            // BISECT: isolate whether the stage wrap prop causes the flick failure.
-            wrap={selectedRoutePointId !== null}
+            // #76 P1: the immersive stage follows the same Journey cursor as the
+            // inline stage; neither may wrap inside a single Route Point.
+            wrap={true}
             videoAssetId={storyStageVideoAsset?.id ?? null}
             onSettled={settleIncoming}
             onMediaError={reportStageMediaError}
