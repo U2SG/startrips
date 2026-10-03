@@ -1527,14 +1527,29 @@ try {
   }
 
   // #239 runs on its own Story page so changing Route Point scope cannot
-  // perturb the long-lived mobile-contract fixture that follows. The product
-  // behavior under test is still the real deferred image-tap entry: schedule a
-  // sub-threshold horizontal drag, let a newer scope win before 220 ms, then
-  // prove stale fullscreen never appears.
-  const deferredFullscreenStory = await createQaPage("/?qaState=journey-story", onePixelGif);
+  // perturb the long-lived mobile-contract fixture that follows.
+  //
+  // The behaviour under test is a DEFERRED image-tap entry: a sub-threshold
+  // horizontal drag schedules a fullscreen that has not opened yet, and a newer
+  // Route Point scope has to win before it lands.
+  //
+  // This case must therefore run with motion enabled. `createQaPage` defaults to
+  // `reducedMotion: "reduce"`, and under reduced motion the stage completes the
+  // gesture synchronously instead of arming a settle spring, so there is no
+  // deferred fullscreen to cancel at all. The previous version ran reduced, and
+  // still reported green - but only because selecting a media-free Route Point
+  // happened to unmount the fullscreen node, which is unrelated to cancellation.
+  const deferredFullscreenStory = await createQaPage("/?qaState=journey-story", onePixelGif, {
+    reducedMotion: "no-preference",
+  });
   try {
     const deferredStage = deferredFullscreenStory.page.locator(".journey-story__media");
+    const deferredPages = deferredStage.locator(storyMediaPagesSelector);
     await deferredFullscreenStory.page.locator(".journey-story").waitFor({ state: "visible" });
+    // The gesture has to start from a settled, ready photograph or there is no
+    // deferred fullscreen to cancel in the first place.
+    await deferredStage.locator(`${storyCurrentMediaSelector}[data-media-page-ready="true"]`)
+      .waitFor({ state: "attached", timeout: 10_000 });
     const deferredBox = await deferredStage.boundingBox();
     if (!deferredBox) throw new Error("deferred-fullscreen Story stage has no bounds");
     const deferredTouch = await deferredFullscreenStory.page.context().newCDPSession(deferredFullscreenStory.page);
@@ -1544,25 +1559,59 @@ try {
       ".journey-story__route-points button[data-route-point-id]",
     ).first();
     await scopeTarget.waitFor({ state: "visible" });
-    await deferredTouch.send("Input.dispatchTouchEvent", {
-      type: "touchStart",
-      touchPoints: [{ x: deferredX, y: deferredY }],
-    });
-    await deferredTouch.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: [{ x: deferredX - 30, y: deferredY }],
-    });
-    await deferredTouch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const subThresholdDrag = async () => {
+      await deferredTouch.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x: deferredX, y: deferredY }],
+      });
+      await deferredTouch.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x: deferredX - 30, y: deferredY }],
+      });
+      await deferredTouch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+    await subThresholdDrag();
+
+    // The two preconditions that make this case test #239 at all: the gesture is
+    // still settling, and the fullscreen has not opened yet. Without them the
+    // assertion below cannot distinguish cancellation from a late click.
+    const settlingAtScopeChange = await deferredPages.getAttribute("data-media-presentation") === "settling";
+    const fullscreenOpenBeforeScopeChange = await deferredFullscreenStory.page
+      .locator(".journey-story-fullscreen").isVisible();
+
     await scopeTarget.evaluate((button) => button.click());
     await deferredFullscreenStory.page.waitForTimeout(320);
     const deferredFullscreenCancelledByScopeChange = !(await deferredFullscreenStory.page
       .locator(".journey-story-fullscreen").isVisible());
+    // The scope change must not have achieved this by removing the node: there
+    // still has to be renderable media behind the fullscreen.
+    const mediaSurvivedScopeChange = await deferredStage.locator(storyCurrentMediaSelector).count() > 0;
+
+    // Positive control: the identical gesture, with no scope change, does open
+    // the fullscreen. Without this, a gesture that never would have opened one
+    // would make the assertion above pass for the wrong reason.
+    await deferredFullscreenStory.page.waitForTimeout(320);
+    await subThresholdDrag();
+    await deferredFullscreenStory.page.locator(".journey-story-fullscreen")
+      .waitFor({ state: "visible", timeout: 5_000 }).catch(() => undefined);
+    const sameGestureOpensFullscreen = await deferredFullscreenStory.page
+      .locator(".journey-story-fullscreen").isVisible();
+
+    const deferredCaseFailed = !settlingAtScopeChange
+      || fullscreenOpenBeforeScopeChange
+      || !deferredFullscreenCancelledByScopeChange
+      || !mediaSurvivedScopeChange
+      || !sameGestureOpensFullscreen;
     checks.push({
       name: "story-mobile-deferred-fullscreen-cancelled-by-scope-change",
+      settlingAtScopeChange,
+      fullscreenOpenBeforeScopeChange,
       deferredFullscreenCancelledByScopeChange,
-      failed: !deferredFullscreenCancelledByScopeChange,
+      mediaSurvivedScopeChange,
+      sameGestureOpensFullscreen,
+      failed: deferredCaseFailed,
     });
-    if (!deferredFullscreenCancelledByScopeChange) failed = true;
+    if (deferredCaseFailed) failed = true;
     if (deferredFullscreenStory.consoleErrors.length || deferredFullscreenStory.pageErrors.length) {
       checks.push({
         name: "story-mobile-deferred-fullscreen-runtime-errors",
