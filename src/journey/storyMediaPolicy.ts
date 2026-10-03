@@ -279,10 +279,42 @@ export function storyInitialNoteBeatRoutePointId(
 ): string | null {
   if (!journey || requestedRoutePointId === null) return null;
   if (requestedAssetId !== null) return null;
+  // A Route Point that is not part of this Journey cannot be presented as a
+  // chapter. A stale id would otherwise resolve as a media-free point, hide the
+  // media stage behind `hasStoryMedia === false`, and show nothing at all.
+  const routePoint = journey.routePoints.find((point) => point.id === requestedRoutePointId);
+  if (!routePoint) return null;
   const ownsMedia = journey.media.some(
     (asset) => asset.routePointId === requestedRoutePointId && isVisualMediaAsset(asset),
   );
   return ownsMedia ? null : requestedRoutePointId;
+}
+
+// #76 P1 + #595: the media either side of a media-free Route Point's note beat.
+//
+// The note beat is a stop in the canonical sequence, not a hidden cursor parked
+// on the nearest media. Stepping back from it must land on the media BEFORE the
+// Route Point, which a neighbour search anchored on that nearest media would
+// skip by one. These are resolved from the sequence itself.
+export function storyNoteBeatNeighbourMediaIndexes(
+  journey: Journey,
+  noteBeatRoutePointId: string,
+): { previousIndex: number | null; nextIndex: number | null } {
+  const entries = storySequenceForJourney(journey);
+  const beatIndex = entries.findIndex(
+    (entry) => entry.role === "note" && entry.routePointId === noteBeatRoutePointId,
+  );
+  if (beatIndex < 0) return { previousIndex: null, nextIndex: null };
+  const mediaIndexNear = (from: number, step: -1 | 1): number | null => {
+    for (let cursor = from; cursor >= 0 && cursor < entries.length; cursor += step) {
+      if (entries[cursor].role === "media") return storySequenceMedia(entries.slice(0, cursor + 1)).length - 1;
+    }
+    return null;
+  };
+  return {
+    previousIndex: mediaIndexNear(beatIndex - 1, -1),
+    nextIndex: mediaIndexNear(beatIndex + 1, 1),
+  };
 }
 
 // #76 P1: where a Route Point begins inside the Journey-wide sequence. Choosing

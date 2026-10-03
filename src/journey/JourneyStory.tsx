@@ -19,6 +19,7 @@ import {
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
   storyInitialNoteBeatRoutePointId,
+  storyNoteBeatNeighbourMediaIndexes,
   storyRoutePointEntryIndex,
 } from "./storyMediaPolicy";
 import {
@@ -3438,6 +3439,18 @@ export function JourneyStory({
 
   // Buttons, keyboard and automatic advance share the same readiness gate.
   function navigateMediaStep(direction: -1 | 1, wrap = false) {
+    // #76 P1 + #595: while a media-free Route Point is presented as its own note
+    // beat, stepping has to follow the sequence around that beat. The hidden
+    // cursor sits on the nearest media, so a plain neighbour search would step
+    // back past it and skip one photo, making previous and next asymmetric.
+    if (noteBeatRoutePointId !== null && journey) {
+      const neighbours = storyNoteBeatNeighbourMediaIndexes(journey, noteBeatRoutePointId);
+      const index = direction < 0 ? neighbours.previousIndex : neighbours.nextIndex;
+      if (index !== null && index >= 0 && index < scopedMedia.length) {
+        navigateToMedia(index, direction);
+      }
+      return;
+    }
     const anchorIndex = storyAssetIndexForId(scopedMedia, requestedMediaRef.current, assetIndex, scopedMediaIndex.indexById);
     const index = storyMediaNeighborIndex(anchorIndex, scopedMedia.length, direction, wrap);
     if (index !== null) navigateToMedia(index, direction);
