@@ -4,6 +4,8 @@ import {
   accountEmailChangeRefusalSurface,
   accountEmailChangeRefusalText,
   accountEmailChangeSurface,
+  canStartAccountEmailChange,
+  isRetryableAccountEmailChangeProofError,
   cancelAccountEmailChange,
   consumeAccountEmailChangeProof,
   loadAccountEmailChange,
@@ -67,6 +69,20 @@ describe("account email change", () => {
     for (const status of ["replaced", "expired", "conflicted"] as const) {
       expect(accountEmailChangeSurface(change({ status }))).toBe("email-change-conflicted");
     }
+  });
+
+  it("permits a fresh change after terminal transactions but not while one is pending", () => {
+    expect(canStartAccountEmailChange(null)).toBe(true);
+    expect(canStartAccountEmailChange(change())).toBe(false);
+    expect(canStartAccountEmailChange(change({ status: "completed" }))).toBe(true);
+    expect(canStartAccountEmailChange(change({ status: "cancelled" }))).toBe(true);
+  });
+
+  it("keeps proof capabilities retryable only for transient failures", () => {
+    expect(isRetryableAccountEmailChangeProofError(new TypeError("network"))).toBe(true);
+    expect(isRetryableAccountEmailChangeProofError(new AccountEmailChangeRefusal("REQUEST_FAILED_500"))).toBe(true);
+    expect(isRetryableAccountEmailChangeProofError(new AccountEmailChangeRefusal("REQUEST_FAILED_429"))).toBe(true);
+    expect(isRetryableAccountEmailChangeProofError(new AccountEmailChangeRefusal("EMAIL_CHANGE_PROOF_INVALID"))).toBe(false);
   });
 
   it("keeps recovery and delivery failure as distinct truthful surfaces", () => {

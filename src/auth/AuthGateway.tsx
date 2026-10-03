@@ -61,7 +61,9 @@ import {
   accountEmailChangeRefusalText,
   accountEmailChangeSurface,
   cancelAccountEmailChange,
+  canStartAccountEmailChange,
   consumeAccountEmailChangeProof,
+  isRetryableAccountEmailChangeProofError,
   loadAccountEmailChange,
   readAccountEmailChangeProof,
   startAccountEmailChange,
@@ -1007,7 +1009,7 @@ function AccountEmailChangePanel({
             {pending ? "处理中…" : "取消换绑"}
           </button>
         </>
-      ) : surface === "email-change-completed" ? null : (
+      ) : canStartAccountEmailChange(change) ? (
         <form onSubmit={start}>
           <label><span>当前邮箱</span><input type="email" value={currentEmail} readOnly aria-readonly="true" /></label>
           <label><span>新邮箱</span><input required name="newEmail" type="email" autoComplete="email" inputMode="email" /></label>
@@ -1015,7 +1017,7 @@ function AccountEmailChangePanel({
           <label><input name="oldAddressAvailable" type="checkbox" value="yes" defaultChecked /><span>我仍可访问当前邮箱</span></label>
           <button type="submit" disabled={pending}>{pending ? "发送中…" : "发送双邮箱验证"}</button>
         </form>
-      )}
+      ) : null}
       {message ? <p className="auth-message" role="status">{message}</p> : null}
     </div>
   );
@@ -1029,6 +1031,8 @@ function AccountEmailChangeLinkPage({
   refreshSession: () => Promise<unknown>;
 }) {
   const started = useRef(false);
+  const [retryRevision, setRetryRevision] = useState(0);
+  const [retryable, setRetryable] = useState(false);
   const [state, setState] = useState<"working" | "accepted" | "completed" | "error" | "signed-out">(
     authenticated ? "working" : "signed-out",
   );
@@ -1040,18 +1044,22 @@ function AccountEmailChangeLinkPage({
     if (started.current || !authenticated) return;
     const proof = readAccountEmailChangeProof(window.location.hash);
     if (!proof) {
+      setRetryable(false);
       setState("error");
       setMessage("邮箱确认链接无效或缺少必要信息。");
       return;
     }
     started.current = true;
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `${window.location.pathname}${window.location.search}`,
-    );
+    setRetryable(false);
+    setState("working");
+    setMessage("正在确认邮箱控制权…");
     void consumeAccountEmailChangeProof(proof, { refreshSession })
       .then((result) => {
+        window.history.replaceState(
+          window.history.state,
+          "",
+          window.location.pathname + window.location.search,
+        );
         if (result.completed) {
           setState("completed");
           setMessage("邮箱换绑已完成。旧会话已经退出，请使用新邮箱重新登录。");
@@ -1063,12 +1071,21 @@ function AccountEmailChangeLinkPage({
           : "新邮箱已验证，仍需完成当前邮箱确认。");
       })
       .catch((error) => {
+        const mayRetry = isRetryableAccountEmailChangeProofError(error);
+        setRetryable(mayRetry);
+        if (!mayRetry) {
+          window.history.replaceState(
+            window.history.state,
+            "",
+            window.location.pathname + window.location.search,
+          );
+        }
         setState("error");
         setMessage(error instanceof AccountEmailChangeRefusal
           ? accountEmailChangeRefusalText(error.code)
           : "邮箱确认未完成，请稍后再试。");
       });
-  }, [authenticated, refreshSession]);
+  }, [authenticated, refreshSession, retryRevision]);
 
   return (
     <main className="auth-gate">
@@ -1077,6 +1094,16 @@ function AccountEmailChangeLinkPage({
         <p className="auth-eyebrow">ACCOUNT SECURITY</p>
         <h1>确认邮箱换绑</h1>
         <p className="auth-copy" role={state === "error" ? "alert" : "status"}>{message}</p>
+        {state === "error" && retryable ? (
+          <button
+            className="auth-primary"
+            type="button"
+            onClick={() => {
+              started.current = false;
+              setRetryRevision((revision) => revision + 1);
+            }}
+          >重试确认</button>
+        ) : null}
         {state === "completed" || state === "signed-out"
           ? <button className="auth-primary" type="button" onClick={() => window.location.assign("/")}>返回登录</button>
           : null}

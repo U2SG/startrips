@@ -156,6 +156,15 @@ export function readAccountEmailChangeProof(hash: string): AccountEmailChangePro
   return { stage, token };
 }
 
+export function canStartAccountEmailChange(change: AccountEmailChangeView | null): boolean {
+  return change?.status !== "pending";
+}
+
+export function isRetryableAccountEmailChangeProofError(error: unknown): boolean {
+  if (!(error instanceof AccountEmailChangeRefusal)) return true;
+  return /^REQUEST_FAILED_(408|429|5\d\d)$/.test(error.code);
+}
+
 export function accountEmailChangeSurface(change: AccountEmailChangeView | null): AccountSurface {
   if (!change) return "email-change";
   if (change.status === "completed") return "email-change-completed";
