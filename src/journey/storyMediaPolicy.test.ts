@@ -15,12 +15,13 @@ import {
   storyMediaAvailability,
   storyAutoplayWaitsForVideoEnd,
   storyRoutePointEntryIndex,
+  storyNoteBeatNeighbourMediaIndexes,
   storyUploadedAssetIndex,
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
   storyInitialNoteBeatRoutePointId,
 } from "./storyMediaPolicy";
-import { storyMediaForScope } from "./journeyPlayback";
+import { storyMediaForScope, storySequenceForJourney, storySequenceMedia } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 const journey: Journey = {
@@ -387,10 +388,57 @@ describe("storyInitialNoteBeatRoutePointId (#76 P1 + #595)", () => {
 
   it("does not take over a Journey entry, an unknown point, or an explicit asset", () => {
     expect(storyInitialNoteBeatRoutePointId(base([]), null)).toBeNull();
-    expect(storyInitialNoteBeatRoutePointId(base([]), "missing")).toBe("missing");
+    // A Route Point that is not part of this Journey cannot be presented as a
+    // chapter: treating it as media-free would hide the media stage behind
+    // `hasStoryMedia === false` and leave a stale id with nothing on screen.
+    expect(storyInitialNoteBeatRoutePointId(base([]), "missing")).toBeNull();
     // Newest explicit intent wins: a named asset is an exact observation.
     expect(storyInitialNoteBeatRoutePointId(base([]), "B", "b1-media")).toBeNull();
     expect(storyInitialNoteBeatRoutePointId(undefined, "B")).toBeNull();
+  });
+
+  it("steps back onto the media before an empty Route Point instead of skipping it", () => {
+    // A(2) -> B(1) -> C(0) -> D(2). C is a note beat between B1 and D1.
+    const media = (id: string, owner: string, sortOrder: number): JourneyMediaAsset => ({
+      ...asset(id, "image/jpeg", sortOrder, `${id}.jpg`),
+      routePointId: owner,
+    });
+    const gap: Journey = {
+      ...journey,
+      routePoints: ["A", "B", "C", "D"].map((id, index) => ({
+        id,
+        journeyId: journey.id,
+        sortOrder: index,
+        label: id,
+        latitude: index,
+        longitude: index,
+        occurredAt: null,
+        note: id === "C" ? "这一站只留下了一句话" : null,
+        isStop: true,
+        createdAt: journey.createdAt,
+      })),
+      media: [
+        media("a1", "A", 0), media("a2", "A", 1),
+        media("b1", "B", 2),
+        media("d1", "D", 3), media("d2", "D", 4),
+      ],
+    };
+
+    expect(storySequenceMedia(storySequenceForJourney(gap)).map((item) => item.id))
+      .toEqual(["a1", "a2", "b1", "d1", "d2"]);
+
+    // Previous from C must land on B1, the photo before the empty Route Point.
+    // A neighbour search anchored on C's hidden cursor (which rests on B1) would
+    // step back past it to A2, making previous and next asymmetric.
+    expect(storyNoteBeatNeighbourMediaIndexes(gap, "C")).toEqual({
+      previousIndex: 2,
+      nextIndex: 3,
+    });
+  });
+
+  it("has no media either side of a note beat that is not in the sequence", () => {
+    expect(storyNoteBeatNeighbourMediaIndexes(base([]), "missing"))
+      .toEqual({ previousIndex: null, nextIndex: null });
   });
 
   it("does not treat a soundtrack as this Route Point's media", () => {
