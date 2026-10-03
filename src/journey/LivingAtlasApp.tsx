@@ -93,6 +93,7 @@ import { useMediaPresentationStyle } from "./mediaPresentation";
 // #393 trial: loaded only when this device chose the Journey Book or Stream.
 const JourneyBook = lazy(() => import("./JourneyBook").then((module) => ({ default: module.JourneyBook })));
 const JourneyStream = lazy(() => import("./JourneyStream").then((module) => ({ default: module.JourneyStream })));
+const JourneyBook3d = lazy(() => import("./JourneyBook3d").then((module) => ({ default: module.JourneyBook3d })));
 /** A tap this recent is where the Journey was opened from (Stream's pour). */
 const STORY_ORIGIN_MAX_AGE_MS = 1500;
 import type { StoryLogicalObservation } from "./storyMediaPolicy";
@@ -1340,7 +1341,7 @@ export function LivingAtlasApp({
       : null;
   }, [storyJourneyId]);
   const storyReader = storyJourneyId && storyClassicFor !== storyJourneyId
-    && (mediaPresentation === "book" || mediaPresentation === "stream")
+    && (mediaPresentation === "book" || mediaPresentation === "book-3d" || mediaPresentation === "stream")
     ? mediaPresentation
     : null;
   const playbackReturnIntentRevisionRef = useRef(0);
@@ -4461,6 +4462,23 @@ export function LivingAtlasApp({
             initialAssetId={storyInitialAssetId}
             origin={storyReaderOrigin}
             onObservationChange={handleStoryObservationChange}
+            onClose={() => closeJourneyStory(null)}
+            onNavigate={navigateStoryJourney}
+            onOpenClassic={openClassicStory}
+          />
+        </Suspense>
+      ) : storyJourneyId && storyReader === "book-3d" ? (
+        <Suspense fallback={(
+          <div className="journey-reader-loading" role="status">正在打开立体之书…</div>
+        )}>
+          <JourneyBook3d
+            key={storyJourneyId}
+            journeys={journeys}
+            journeyId={storyJourneyId}
+            routePointId={storyRoutePointId}
+            initialAssetId={storyInitialAssetId}
+            onObservationChange={handleStoryObservationChange}
+            onGlobeCoverChange={setStoryGlobeCover}
             onClose={() => closeJourneyStory(null)}
             onNavigate={navigateStoryJourney}
             onOpenClassic={openClassicStory}

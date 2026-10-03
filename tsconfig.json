@@ -14,7 +14,12 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    // Typecheck-only stand-ins for packages whose shipped declarations are
+    // broken; Vite resolves the real modules and ignores these.
+    "paths": {
+      "three.modifiers": ["./src/types/three-modifiers.d.ts"]
+    }
   },
   "include": ["src", "templates/personal-gallery"]
 }

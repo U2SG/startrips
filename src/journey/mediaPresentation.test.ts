@@ -11,7 +11,8 @@ describe("media presentation style", () => {
   it("cycles through every style and back", () => {
     expect(nextMediaPresentationStyle("classic")).toBe("note-overlay");
     expect(nextMediaPresentationStyle("note-overlay")).toBe("book");
-    expect(nextMediaPresentationStyle("book")).toBe("stream");
+    expect(nextMediaPresentationStyle("book")).toBe("book-3d");
+    expect(nextMediaPresentationStyle("book-3d")).toBe("stream");
     expect(nextMediaPresentationStyle("stream")).toBe("classic");
   });
 
@@ -19,6 +20,7 @@ describe("media presentation style", () => {
     expect(mediaPresentationLabel("classic")).toBe("默认");
     expect(mediaPresentationLabel("note-overlay")).toBe("图上感想");
     expect(mediaPresentationLabel("book")).toBe("旅程之书");
+    expect(mediaPresentationLabel("book-3d")).toBe("立体之书");
     expect(mediaPresentationLabel("stream")).toBe("旅程之流");
   });
 
