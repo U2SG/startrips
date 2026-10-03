@@ -2562,9 +2562,12 @@ export function JourneyStory({
     requestedIndex: scopedMedia.length > 0 ? requestedMediaIndex : -1,
     length: scopedMedia.length,
     direction: mediaNavigationDirection.current,
-    // #76 P1: the warm window follows the Journey cursor, so it prepares the
-    // next Route Point rather than wrapping inside the current one.
-    wrap: true,
+    // #76 P1: the warm window follows the Journey cursor forward, so it prepares
+    // the next Route Point rather than the current Route Point's own media. It
+    // stays a bounded lookahead: the Journey sequence is already continuous, so
+    // crossing a Route Point boundary needs no wrap, and wrapping here would
+    // warm media from the far end of the Journey past its first media.
+    wrap: false,
     autoplay: playing,
     pinned: stackNeighborIndices,
   });
