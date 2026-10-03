@@ -4290,9 +4290,8 @@ export function JourneyStory({
               direction={mediaNavigationDirection.current}
               reads={mediaReads}
               warmIds={fullscreen ? undefined : warmDecodeIds}
-              // #76 P1: the inline stage follows the Journey cursor, so paging
-              // past the last media returns to the first of the Journey.
-              wrap={true}
+              // BISECT: isolate whether the stage wrap prop causes the flick failure.
+              wrap={selectedRoutePointId !== null}
               videoAssetId={storyStageVideoAsset?.id ?? null}
               onSettled={settleIncoming}
               onMediaError={reportStageMediaError}
@@ -4981,9 +4980,8 @@ export function JourneyStory({
             direction={mediaNavigationDirection.current}
             reads={mediaReads}
             warmIds={fullscreen ? warmDecodeIds : undefined}
-            // #76 P1: the immersive stage follows the same Journey cursor as the
-            // inline stage; neither may wrap inside a single Route Point.
-            wrap={true}
+            // BISECT: isolate whether the stage wrap prop causes the flick failure.
+            wrap={selectedRoutePointId !== null}
             videoAssetId={storyStageVideoAsset?.id ?? null}
             onSettled={settleIncoming}
             onMediaError={reportStageMediaError}
