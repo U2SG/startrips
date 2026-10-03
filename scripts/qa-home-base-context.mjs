@@ -5,7 +5,7 @@
 // or semantic focus owner.
 import { mkdirSync } from "node:fs";
 import { launchQaBrowser } from "./qa-browser.mjs";
-import { releaseFragmentReply, waitForFragmentReadback } from "./qa-fragment-observation.mjs";
+import { waitForFragmentReadback } from "./qa-fragment-observation.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const captureDir = "artifacts/home-base-context";
@@ -112,7 +112,13 @@ async function installOwnerApi(page, journeyRows = journeys, homePeriods = [HIST
     } else if (method === "DELETE") {
       fragments.rows = fragments.rows.filter((row) => row.id !== id);
     } else {
-      const fragment = { ...body, id: id ?? `33333333-cccc-4333-8333-${String(fragments.requests.length).padStart(12, "0")}` };
+      // Mirror the server read model: create may omit homeBasePeriodId from the
+      // request, but persisted/readback fragments normalize no association to null.
+      const fragment = {
+        ...body,
+        homeBasePeriodId: body.homeBasePeriodId ?? null,
+        id: id ?? `33333333-cccc-4333-8333-${String(fragments.requests.length).padStart(12, "0")}`,
+      };
       fragments.rows = [...fragments.rows.filter((row) => row.id !== fragment.id), fragment];
       payload = { fragment };
     }
@@ -375,6 +381,10 @@ async function fragmentQa(owner, name) {
   await row.getByRole("button", { name: "保存日常" }).click();
   await waitForHeld(fragments);
   const releasePut = fragments.release;
+  const stalePutRequest = releasePut.request;
+  const stalePutAborted = page.waitForEvent("requestfailed", {
+    predicate: (request) => request === stalePutRequest,
+  });
   await closeContext(page);
   await (await currentHomeMarker(page)).focus();
   await page.keyboard.press("Enter");
@@ -384,26 +394,42 @@ async function fragmentQa(owner, name) {
   await row.getByLabel("随记（选填）").fill("最新编辑");
   await row.getByRole("button", { name: "保存日常" }).click();
   await waitForFragmentReadback(row, "最新编辑");
-  const stalePut = await releaseFragmentReply(page, releasePut, 200);
-  record(`${name}: exact stale PUT payload was delivered`, { stalePut }, stalePut.fragment.note === "延迟的编辑");
+  await releasePut();
+  const abortedPutRequest = await stalePutAborted;
+  const stalePutFailure = abortedPutRequest.failure();
+  record(`${name}: closing the disclosure aborts the exact stale PUT transport`, {
+    method: abortedPutRequest.method(),
+    url: abortedPutRequest.url(),
+    failure: stalePutFailure?.errorText ?? null,
+  }, abortedPutRequest === stalePutRequest && Boolean(stalePutFailure));
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  record(`${name}: stale PUT cannot replace reopened edits`, {}, (await row.innerText()).includes("最新编辑"));
+  record(`${name}: aborted stale PUT cannot replace reopened edits`, {}, (await row.innerText()).includes("最新编辑"));
 
   await row.getByRole("button", { name: "删除", exact: true }).click();
   fragments.holdNext = "DELETE";
   await row.getByRole("button", { name: "确认删除", exact: true }).click();
   await waitForHeld(fragments);
   const releaseDelete = fragments.release;
+  const staleDeleteRequest = releaseDelete.request;
+  const staleDeleteAborted = page.waitForEvent("requestfailed", {
+    predicate: (request) => request === staleDeleteRequest,
+  });
   await surface.getByRole("button", { name: "日常", exact: true }).click();
   await surface.getByRole("button", { name: "记录日常", exact: true }).click();
   form = list.getByRole("form", { name: "记录日常", exact: true });
   await fillFragment(form, "保留的日常");
   await form.getByRole("button", { name: "保存日常" }).click();
   await row.getByText("保留的日常", { exact: true }).waitFor();
-  await releaseFragmentReply(page, releaseDelete, 204);
-  record(`${name}: exact stale DELETE returned 204`, { url: releaseDelete.request.url() }, true);
+  await releaseDelete();
+  const abortedDeleteRequest = await staleDeleteAborted;
+  const staleDeleteFailure = abortedDeleteRequest.failure();
+  record(`${name}: closing the disclosure aborts the exact stale DELETE transport`, {
+    method: abortedDeleteRequest.method(),
+    url: abortedDeleteRequest.url(),
+    failure: staleDeleteFailure?.errorText ?? null,
+  }, abortedDeleteRequest === staleDeleteRequest && Boolean(staleDeleteFailure));
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  record(`${name}: stale DELETE cannot remove new records`, {}, (await row.innerText()).includes("保留的日常"));
+  record(`${name}: aborted stale DELETE cannot remove new records`, {}, (await row.innerText()).includes("保留的日常"));
   record(`${name}: CRUD never refreshes or changes Journey list`, { journeyRequests },
     journeyRequests.length === 0 && JSON.stringify(before) === JSON.stringify(await journeySnapshot()));
   page.off("request", watchJourneys);
