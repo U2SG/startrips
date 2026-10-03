@@ -1,14 +1,19 @@
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import {
+  applyJourneyRoutePointBatchForAtlas,
   createJourneyForAtlas,
   getJourneyForAtlas,
+  getJourneyRoutePointBatchForAtlas,
   JourneyRouteChangedError,
+  JourneyRoutePointBatchError,
   JourneyRoutePointIdConflictError,
   listJourneysForAtlas,
   restoreJourneyForAtlas,
   setJourneyCoverForAtlas,
+  undoJourneyRoutePointBatchForAtlas,
   updateJourneyForAtlas,
+  type JourneyRoutePointBatchInput,
   type JourneyValues,
 } from "../repositories/journey-repository";
 import { deleteJourneyWithStorage } from "../services/delete-journey";
@@ -56,6 +61,85 @@ function coordinateValue(value: unknown, minimum: number, maximum: number) {
     : null;
 }
 
+const ROUTE_POINT_BATCH_OPERATION_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/;
+const MAX_ROUTE_POINT_BATCH_ATTACHMENTS = 1_000;
+
+function parseRoutePointBatchInput(body: Record<string, unknown>): JourneyRoutePointBatchInput | null {
+  const operationId = typeof body.operationId === "string" ? body.operationId.trim() : "";
+  const baseRevision = typeof body.baseRevision === "number"
+    && Number.isSafeInteger(body.baseRevision)
+    && body.baseRevision >= 1
+    ? body.baseRevision
+    : null;
+  if (!ROUTE_POINT_BATCH_OPERATION_PATTERN.test(operationId)
+    || baseRevision === null
+    || !Array.isArray(body.points)
+    || body.points.length < 1
+    || body.points.length > MAX_ROUTE_POINTS
+    || !Array.isArray(body.attachments)
+    || body.attachments.length < 1
+    || body.attachments.length > MAX_ROUTE_POINT_BATCH_ATTACHMENTS) return null;
+
+  const points: JourneyRoutePointBatchInput["points"] = [];
+  for (const rawPoint of body.points) {
+    if (!rawPoint || typeof rawPoint !== "object") return null;
+    const point = rawPoint as Record<string, unknown>;
+    if ("sortOrder" in point) return null;
+    const candidateId = typeof point.candidateId === "string" ? point.candidateId.trim() : "";
+    const latitude = coordinateValue(point.latitude, -90, 90);
+    const longitude = coordinateValue(point.longitude, -180, 180);
+    const label = typeof point.label === "string" ? point.label.trim() : "";
+    const isStop = point.isStop === true;
+    const occurredAt = point.occurredAt === undefined || point.occurredAt === null || point.occurredAt === ""
+      ? null
+      : typeof point.occurredAt === "string"
+        ? new Date(point.occurredAt)
+        : new Date(Number.NaN);
+    if (!candidateId || candidateId.length > 128
+      || latitude === null || longitude === null
+      || label.length > 120 || (isStop && !label)
+      || (occurredAt !== null && Number.isNaN(occurredAt.valueOf()))) return null;
+    points.push({ candidateId, latitude, longitude, label, isStop, occurredAt });
+  }
+
+  const attachments: JourneyRoutePointBatchInput["attachments"] = [];
+  for (const rawAttachment of body.attachments) {
+    if (!rawAttachment || typeof rawAttachment !== "object") return null;
+    const attachment = rawAttachment as Record<string, unknown>;
+    const assetId = typeof attachment.assetId === "string" && UUID_PATTERN.test(attachment.assetId)
+      ? attachment.assetId : undefined;
+    const uploadId = typeof attachment.uploadId === "string" && UUID_PATTERN.test(attachment.uploadId)
+      ? attachment.uploadId : undefined;
+    const routePointId = typeof attachment.routePointId === "string" && UUID_PATTERN.test(attachment.routePointId)
+      ? attachment.routePointId : undefined;
+    const candidateId = typeof attachment.candidateId === "string" && attachment.candidateId.trim().length > 0
+      && attachment.candidateId.trim().length <= 128
+      ? attachment.candidateId.trim() : undefined;
+    if ((assetId ? 1 : 0) + (uploadId ? 1 : 0) !== 1
+      || (routePointId ? 1 : 0) + (candidateId ? 1 : 0) !== 1
+      || (attachment.intentionalReuse !== undefined && typeof attachment.intentionalReuse !== "boolean")) return null;
+    attachments.push({
+      ...(assetId ? { assetId } : {}),
+      ...(uploadId ? { uploadId } : {}),
+      ...(routePointId ? { routePointId } : {}),
+      ...(candidateId ? { candidateId } : {}),
+      intentionalReuse: attachment.intentionalReuse === true,
+    });
+  }
+  return { operationId, baseRevision, points, attachments };
+}
+
+function routePointBatchOperationId(value: string) {
+  return ROUTE_POINT_BATCH_OPERATION_PATTERN.test(value) ? value : null;
+}
+
+function routePointBatchErrorResponse(error: unknown) {
+  return error instanceof JourneyRoutePointBatchError
+    ? { status: error.status, body: { error: error.code, message: error.message } }
+    : error instanceof JourneyRouteChangedError
+      ? { status: 409 as const, body: { error: "JOURNEY_ROUTE_CHANGED", message: "Journey route changed; reopen it before saving" } }
+      : null;
+}
 export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
   const title = typeof body.title === "string" ? body.title.trim() : "";
   const startedOn = typeof body.startedOn === "string" ? body.startedOn.trim() : "";
@@ -305,6 +389,48 @@ journeyRoutes.patch("/:id", async (context) => {
   }
   if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
   return context.json({ journey });
+});
+
+journeyRoutes.post("/:id/route-point-batches", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseRoutePointBatchInput(body);
+  if (!input) {
+    return context.json({ error: "INVALID_ROUTE_POINT_BATCH", message: "Invalid Route Point batch" }, 400);
+  }
+  try {
+    const operation = await applyJourneyRoutePointBatchForAtlas(context.req.param("id"), atlas.id, input);
+    if (!operation) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+    return context.json({ operation }, operation.status === "staged" ? 202 : 200);
+  } catch (error) {
+    const response = routePointBatchErrorResponse(error);
+    if (response) return context.json(response.body, response.status);
+    throw error;
+  }
+});
+
+journeyRoutes.get("/:id/route-point-batches/:operationId", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  const operationId = routePointBatchOperationId(context.req.param("operationId"));
+  if (!operationId) return context.json({ error: "INVALID_ROUTE_POINT_BATCH_ID" }, 400);
+  const operation = await getJourneyRoutePointBatchForAtlas(context.req.param("id"), atlas.id, operationId);
+  if (!operation) return context.json({ error: "ROUTE_POINT_BATCH_NOT_FOUND" }, 404);
+  return context.json({ operation });
+});
+
+journeyRoutes.post("/:id/route-point-batches/:operationId/undo", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const operationId = routePointBatchOperationId(context.req.param("operationId"));
+  if (!operationId) return context.json({ error: "INVALID_ROUTE_POINT_BATCH_ID" }, 400);
+  try {
+    const operation = await undoJourneyRoutePointBatchForAtlas(context.req.param("id"), atlas.id, operationId);
+    if (!operation) return context.json({ error: "ROUTE_POINT_BATCH_NOT_FOUND" }, 404);
+    return context.json({ operation });
+  } catch (error) {
+    const response = routePointBatchErrorResponse(error);
+    if (response) return context.json(response.body, response.status);
+    throw error;
+  }
 });
 
 journeyRoutes.delete("/:id", async (context) => {
