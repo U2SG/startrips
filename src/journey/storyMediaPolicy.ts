@@ -1,5 +1,12 @@
 import { journeyCover } from "./journeyModel";
-import { playbackMediaWaitPolicy, storyMediaForScope, type PlaybackMediaAvailability } from "./journeyPlayback";
+import {
+  playbackMediaWaitPolicy,
+  playbackStoryMedia,
+  storyMediaForScope,
+  storySequenceForJourney,
+  storySequenceMedia,
+  type PlaybackMediaAvailability,
+} from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 export type StoryLogicalObservation = {
@@ -99,23 +106,25 @@ export function storyMediaInOptimisticOrder(
 export function storyAutoplayNextIndex(
   currentIndex: number,
   mediaLength: number,
-  wholeJourney: boolean,
 ): number | null {
   if (mediaLength < 2) return null;
   if (currentIndex < mediaLength - 1) return currentIndex + 1;
-  return wholeJourney ? null : 0;
+  // #76 P1: one Journey-wide sequence, so autoplay returns to the first
+  // playable media at the Journey boundary. It must never loop inside a single
+  // Route Point, and it must never stop short of the end of the Journey.
+  return 0;
 }
 
 export function storyAutoplayVideoCandidate(
   media: readonly JourneyMediaAsset[],
   currentIndex: number,
-  wholeJourney: boolean,
 ) {
   if (media.length === 0 || currentIndex < 0 || currentIndex >= media.length) return null;
+  // #76 P1: the lookahead wraps the whole Journey, so the next video across a
+  // Route Point boundary is warmed rather than the first video of the current
+  // Route Point being treated as the wrap target.
   for (let offset = 0; offset < media.length; offset += 1) {
-    const rawIndex = currentIndex + offset;
-    if (wholeJourney && rawIndex >= media.length) break;
-    const candidate = media[rawIndex % media.length];
+    const candidate = media[(currentIndex + offset) % media.length];
     if (candidate?.mimeType.startsWith("video/")) return candidate;
   }
   return null;
@@ -171,21 +180,20 @@ export const STORY_VIDEO_STALL_WATCHDOG_MS = 4_000;
 
 export type StoryAutoplayAdvance =
   | { kind: "stop" }
-  | { kind: "hold-terminal" }
   | { kind: "advance"; nextIndex: number };
 
-// What ends the current autoplay step: leave playback, hold the last frame of
-// a whole-journey run, or move to a specific next index.
+// What ends the current autoplay step: leave playback because there is nothing
+// left to present, or move to a specific next index.
+//
+// #76 P1: the "hold the terminal frame" state is gone. With one Journey-wide
+// cursor the run returns to the first playable media, so a journey always has
+// somewhere to continue rather than a dead end the viewer has to notice.
 export function storyAutoplayAdvance(
   currentIndex: number,
   mediaLength: number,
-  wholeJourney: boolean,
 ): StoryAutoplayAdvance {
-  const nextIndex = storyAutoplayNextIndex(currentIndex, mediaLength, wholeJourney);
-  if (nextIndex !== null) return { kind: "advance", nextIndex };
-  return shouldHoldWholeJourneyTerminalFrame(currentIndex, mediaLength, wholeJourney)
-    ? { kind: "hold-terminal" }
-    : { kind: "stop" };
+  const nextIndex = storyAutoplayNextIndex(currentIndex, mediaLength);
+  return nextIndex === null ? { kind: "stop" } : { kind: "advance", nextIndex };
 }
 
 // Signed-read status in the shared playback vocabulary, so the Story stage and
@@ -211,13 +219,10 @@ export function storyAutoplayWaitsForVideoEnd(
     && playbackMediaWaitPolicy(asset, availability) === "video-ended";
 }
 
-export function shouldHoldWholeJourneyTerminalFrame(
-  currentIndex: number,
-  mediaLength: number,
-  wholeJourney: boolean,
-): boolean {
-  return wholeJourney && mediaLength > 0 && currentIndex >= mediaLength - 1;
-}
+// #76 P1: `shouldHoldWholeJourneyTerminalFrame` was removed. Holding the last
+// frame was the old "stop at the end of the whole Journey" behaviour; with one
+// Journey-wide cursor that continues to the first playable media, there is no
+// terminal frame to hold.
 
 export function storyUploadedAssetIndex(
   media: readonly JourneyMediaAsset[],
@@ -245,18 +250,57 @@ export function storySelectionContainsRoutePointMedia(
   return media.some((asset) => selectedIds.has(asset.id) && asset.routePointId !== null);
 }
 
+// #76 P1: `assetIndex` is assigned to Story's Journey-wide cursor, so it is
+  // resolved against the Journey sequence. Resolving it inside a Route
+  // Point-scoped list would land the cursor on unrelated media whenever the
+  // Journey has anything ahead of that Route Point.
 export function groupedPlacementRefreshSelection(
   target: Journey | null,
   targetRoutePointId: string | null,
   uploadedAssetIds: readonly string[],
 ) {
   if (!target) return null;
-  const media = storyMediaForScope(target, targetRoutePointId);
+  const media = playbackStoryMedia(target);
   const assetIndex = storyUploadedAssetIndex(media, uploadedAssetIds);
   if (assetIndex === null) return null;
   return { media, assetIndex, assetId: media[assetIndex].id };
 }
 
+// #76 P1: where a Route Point begins inside the Journey-wide sequence. Choosing
+// a Route Point is a jump, not a filter: the Journey continues past it in both
+// directions, and a Route Point with no media of its own lands on the nearest
+// playable media rather than stranding the cursor or being skipped silently.
+//
+// `routePointIds` is the canonical route order, used only to measure distance
+// from an empty Route Point. Passing it keeps this pure instead of caching
+// journey state in module scope.
+export function storyRoutePointEntryIndex(
+  media: readonly JourneyMediaAsset[],
+  routePointId: string | null,
+  routePointIds: readonly string[] = [],
+): number {
+  if (media.length === 0) return 0;
+  if (routePointId === null) return 0;
+  const own = media.findIndex((asset) => asset.routePointId === routePointId);
+  if (own >= 0) return own;
+  const position = routePointIds.indexOf(routePointId);
+  if (position < 0) return 0;
+  // Empty-media Route Points are stepped over without breaking route order, so
+  // look outward along the route in both directions for the closest media.
+  for (let distance = 1; distance <= routePointIds.length; distance += 1) {
+    for (const candidate of [position - distance, position + distance]) {
+      const index = candidate < 0 || candidate >= routePointIds.length ? -1 : candidate;
+      if (index < 0) continue;
+      const mediaIndex = media.findIndex((asset) => asset.routePointId === routePointIds[index]);
+      if (mediaIndex >= 0) return mediaIndex;
+    }
+  }
+  return 0;
+}
+
+// #76 P1: opening Story on a Route Point selects a position in the Journey-wide
+// sequence. It never returns a Route Point-scoped list, because a truncated
+// list is what made each Route Point an island that could only loop on itself.
 export function storyInitialMediaSelection(
   journey: Journey | undefined,
   requestedRoutePointId: string | null,
@@ -266,32 +310,38 @@ export function storyInitialMediaSelection(
     return { routePointId: requestedRoutePointId, assetIndex: 0, assetId: null };
   }
 
-  const scoped = storyMediaForScope(journey, requestedRoutePointId);
+  const sequence = storySequenceForJourney(journey);
+  const media = storySequenceMedia(sequence);
   const requestedAssetIndex = requestedAssetId === null
     ? -1
-    : scoped.findIndex((asset) => asset.id === requestedAssetId);
+    : media.findIndex((asset) => asset.id === requestedAssetId);
   if (requestedAssetIndex >= 0) {
     return {
-      routePointId: requestedRoutePointId,
+      routePointId: media[requestedAssetIndex].routePointId,
       assetIndex: requestedAssetIndex,
-      assetId: scoped[requestedAssetIndex].id,
+      assetId: media[requestedAssetIndex].id,
     };
   }
   if (requestedRoutePointId !== null) {
+    // Start on that Route Point's own media inside the Journey sequence, so the
+    // previous step reaches the Route Point before it and the next step reaches
+    // the Route Point after it. Media keeps canonical ownership, so a Route Point
+    // grouped into a Stop still resolves to its own media here.
+    const startIndex = media.findIndex((asset) => asset.routePointId === requestedRoutePointId);
     return {
       routePointId: requestedRoutePointId,
-      assetIndex: 0,
-      assetId: scoped[0]?.id ?? null,
+      assetIndex: startIndex >= 0 ? startIndex : 0,
+      assetId: startIndex >= 0 ? media[startIndex].id : media[0]?.id ?? null,
     };
   }
 
-  // Whole-Journey mode stays aggregate even when the card cover belongs to a
-  // route point. Start on that cover inside the canonical narrative sequence.
+  // A fresh Journey entry starts on the cover inside the canonical narrative
+  // sequence, even when the cover belongs to a Route Point.
   const cover = journeyCover(journey);
-  const coverIndex = cover ? scoped.findIndex((asset) => asset.id === cover.id) : -1;
+  const coverIndex = cover ? media.findIndex((asset) => asset.id === cover.id) : -1;
   return {
     routePointId: null,
     assetIndex: coverIndex >= 0 ? coverIndex : 0,
-    assetId: coverIndex >= 0 ? cover!.id : scoped[0]?.id ?? null,
+    assetId: coverIndex >= 0 ? cover!.id : media[0]?.id ?? null,
   };
 }
