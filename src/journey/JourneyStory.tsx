@@ -2719,7 +2719,11 @@ export function JourneyStory({
     : null;
   const overlayNote = mediaPresentation !== "note-overlay" ? null
     : overlayNoteOwner ? { key: overlayNoteOwner.id, text: overlayNoteOwner.note!.trim() }
-      : !selectedRoutePointId && journey.note?.trim() && !activeChapterRoutePointId
+      // #76 P1: the Journey note belongs on Journey-level media, decided by the
+      // on-screen chapter being Journey-level. Gating it on the Route Point that
+      // opened Story hid it as soon as the cursor stepped onto intro media while
+      // that Route Point stayed selected as the management target.
+      : journey.note?.trim() && !activeChapterRoutePointId
         ? { key: "journey", text: journey.note.trim() } : null;
   // These are semantic identities; StoryMediaPages retains the physical pages.
   const shownAsset = shownAssetId
@@ -4010,6 +4014,9 @@ export function JourneyStory({
           type="button"
           disabled={mutationPending}
           className={[
+            // `is-active` marks the Route Point Story was opened on, which is
+            // still the management/upload target.
+            selectedRoutePointId === point.id ? "is-active" : "",
             // #76 P1: the chapter highlight follows the media on screen in every
             // case, not only when no Route Point was used to open Story.
             activeChapterRoutePointId === point.id ? "is-chapter-active" : "",
@@ -4635,7 +4642,7 @@ export function JourneyStory({
                 {mediaPresentation !== "note-overlay" && (!desktopEditing || mobileLayout) && activeChapterRoutePoint && activeChapterRoutePoint.note ? (
                   <blockquote className="journey-story__point-note">{activeChapterRoutePoint.note}</blockquote>
                 ) : null}
-                {journey.note && !(overlayNote?.key === "journey") && (!desktopEditing || mobileLayout) && (mobileLayout || (!selectedRoutePoint && !activeChapterRoutePoint?.note)) ? <p className="journey-story__note">{journey.note}</p> : null}
+                {journey.note && !(overlayNote?.key === "journey") && (!desktopEditing || mobileLayout) && (mobileLayout || !activeChapterRoutePoint?.note) ? <p className="journey-story__note">{journey.note}</p> : null}
               </>
             )}
             {mobileLayout && mobileManageMode ? (

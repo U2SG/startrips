@@ -327,11 +327,18 @@ export function storyInitialMediaSelection(
     // previous step reaches the Route Point before it and the next step reaches
     // the Route Point after it. Media keeps canonical ownership, so a Route Point
     // grouped into a Stop still resolves to its own media here.
-    const startIndex = media.findIndex((asset) => asset.routePointId === requestedRoutePointId);
+    //
+    // A Route Point with no media of its own lands on the nearest playable
+    // media by the SAME rule as clicking that Route Point after Story opens.
+    // Returning media[0] here instead would make a direct entry on an empty
+    // Route Point jump to the start of the Journey, which is the skipped-point
+    // behaviour this change exists to remove.
+    const routePointIds = journey.routePoints.map((point) => point.id);
+    const startIndex = storyRoutePointEntryIndex(media, requestedRoutePointId, routePointIds);
     return {
       routePointId: requestedRoutePointId,
-      assetIndex: startIndex >= 0 ? startIndex : 0,
-      assetId: startIndex >= 0 ? media[startIndex].id : media[0]?.id ?? null,
+      assetIndex: startIndex,
+      assetId: media[startIndex]?.id ?? null,
     };
   }
 

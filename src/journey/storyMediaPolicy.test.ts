@@ -339,6 +339,26 @@ describe("storyRoutePointEntryIndex (#76 P1)", () => {
     expect(storyRoutePointEntryIndex(journeyMedia, "C", routeOrder)).toBe(2);
   });
 
+  it("agrees with the empty-entry fallback a direct open must use (#76 P1 review)", () => {
+    // A direct open on an empty Route Point and clicking it after Story opens
+    // must resolve to the same media, or entering at C would jump to the start
+    // of the Journey and replay exactly the skipped-point behaviour.
+    const empty: Journey = {
+      ...journey,
+      routePoints: [
+        { id: "A", journeyId: journey.id, sortOrder: 0, label: "A", latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+        { id: "B", journeyId: journey.id, sortOrder: 1, label: "B", latitude: 2, longitude: 2, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+        { id: "C", journeyId: journey.id, sortOrder: 2, label: "C", latitude: 3, longitude: 3, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+        { id: "D", journeyId: journey.id, sortOrder: 3, label: "D", latitude: 4, longitude: 4, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+      ],
+      media: journeyMedia,
+    };
+    const opened = storyInitialMediaSelection(empty, "C");
+    expect(opened.assetIndex).toBe(storyRoutePointEntryIndex(journeyMedia, "C", ["A", "B", "C", "D"]));
+    // B holds the one media nearest C, so neither path may land on A.
+    expect(opened.assetId).toBe("b1");
+  });
+
   it("starts at the beginning for the whole Journey and for unknown points", () => {
     expect(storyRoutePointEntryIndex(journeyMedia, null, routeOrder)).toBe(0);
     expect(storyRoutePointEntryIndex(journeyMedia, "missing", routeOrder)).toBe(0);
