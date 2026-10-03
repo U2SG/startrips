@@ -1,4 +1,4 @@
-import { journeyCover } from "./journeyModel";
+import { journeyCover, isVisualMediaAsset } from "./journeyModel";
 import {
   playbackMediaWaitPolicy,
   playbackStoryMedia,
@@ -264,6 +264,25 @@ export function groupedPlacementRefreshSelection(
   const assetIndex = storyUploadedAssetIndex(media, uploadedAssetIds);
   if (assetIndex === null) return null;
   return { media, assetIndex, assetId: media[assetIndex].id };
+}
+
+// #76 P1 + #595: which Route Point Story opens on as a media-free note beat.
+//
+// Entering on a Route Point that has no media of its own presents that Route
+// Point's own note instead of borrowing a neighbour's media, which is what
+// "Empty is a valid chapter" asks for. An explicitly requested asset always
+// wins, because newest explicit intent beats the Route Point that opened Story.
+export function storyInitialNoteBeatRoutePointId(
+  journey: Journey | undefined,
+  requestedRoutePointId: string | null,
+  requestedAssetId: string | null = null,
+): string | null {
+  if (!journey || requestedRoutePointId === null) return null;
+  if (requestedAssetId !== null) return null;
+  const ownsMedia = journey.media.some(
+    (asset) => asset.routePointId === requestedRoutePointId && isVisualMediaAsset(asset),
+  );
+  return ownsMedia ? null : requestedRoutePointId;
 }
 
 // #76 P1: where a Route Point begins inside the Journey-wide sequence. Choosing
