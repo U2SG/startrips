@@ -291,6 +291,25 @@ export function routePointPresentsNote(
   return routePoint !== undefined && Boolean(routePoint.note?.trim());
 }
 
+/**
+ * #76 P1: the Route Point the chapter rail names as current.
+ *
+ * It follows the media on screen, so Journey-level intro media names no Route
+ * Point even while one stays selected as the management target. A Journey with
+ * no visual media has nothing on screen to follow, so the selected Route Point
+ * is the chapter, exactly as before the cursor became Journey-wide.
+ */
+export function storyActiveChapterRoutePointId(
+  noteBeatRoutePointId: string | null,
+  activeAsset: JourneyMediaAsset | null | undefined,
+  hasVisualMedia: boolean,
+  selectedRoutePointId: string | null,
+): string | null {
+  if (noteBeatRoutePointId !== null) return noteBeatRoutePointId;
+  if (!hasVisualMedia) return selectedRoutePointId;
+  return activeAsset?.routePointId ?? null;
+}
+
 export function storyInitialNoteBeatRoutePointId(
   journey: Journey | undefined,
   requestedRoutePointId: string | null,

@@ -20,6 +20,7 @@ import {
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
   storyInitialNoteBeatRoutePointId,
+  storyActiveChapterRoutePointId,
   routePointPresentsNote,
 } from "./storyMediaPolicy";
 import { storyMediaForScope, storySequenceForJourney, storySequenceMedia } from "./journeyPlayback";
@@ -457,6 +458,25 @@ describe("storyInitialNoteBeatRoutePointId (#76 P1 + #595)", () => {
     const audio = { ...asset("track", "audio/mpeg", 0, "track.mp3"), routePointId: "B" };
     expect(storyInitialNoteBeatRoutePointId(base([audio]), "B")).toBe("B");
   });});
+
+describe("storyActiveChapterRoutePointId (#76 P1)", () => {
+  const owned = { ...asset("b1", "image/jpeg", 0, "b1.jpg"), routePointId: "B" };
+  const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
+
+  it("lets a note beat name the chapter over the hidden cursor", () => {
+    expect(storyActiveChapterRoutePointId("C", owned, true, "A")).toBe("C");
+  });
+
+  it("follows the media on screen, so Journey-level media names no Route Point", () => {
+    expect(storyActiveChapterRoutePointId(null, owned, true, "A")).toBe("B");
+    expect(storyActiveChapterRoutePointId(null, intro, true, "A")).toBeNull();
+  });
+
+  it("names the selected Route Point when the Journey has no visual media", () => {
+    expect(storyActiveChapterRoutePointId(null, null, false, "D")).toBe("D");
+    expect(storyActiveChapterRoutePointId(null, null, false, null)).toBeNull();
+  });
+});
 
 describe("storyNavigationTargetDisposition (#204 final review)", () => {
   const video = asset("video-nav", "video/mp4", 0, "clip.mp4");

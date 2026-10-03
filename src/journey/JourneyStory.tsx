@@ -19,6 +19,7 @@ import {
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
   storyInitialNoteBeatRoutePointId,
+  storyActiveChapterRoutePointId,
   storyNoteBeatNeighbourMediaIndexes,
   routePointPresentsNote,
   storyRoutePointEntryIndex,
@@ -2730,7 +2731,9 @@ export function JourneyStory({
   // follows the Route Point that was used to open Story, so crossing a Route
   // Point boundary carries its note and place context with it. The one exception
   // is a media-free Route Point presented as its own note beat.
-  const activeChapterRoutePointId = noteBeatRoutePointId ?? asset?.routePointId ?? null;
+  const activeChapterRoutePointId = storyActiveChapterRoutePointId(
+    noteBeatRoutePointId, asset, scopedMedia.length > 0, selectedRoutePointId,
+  );
   const activeChapterRoutePoint = activeChapterRoutePointId
     ? journey.routePoints.find((point) => point.id === activeChapterRoutePointId) ?? null
     : null;

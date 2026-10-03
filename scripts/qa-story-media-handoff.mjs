@@ -6055,28 +6055,32 @@ try {
         }, index, { polling: 'raf', timeout: 3_000 });
         progress.tabEnter.visited.push(await button.getAttribute('data-route-point-id') ?? 'all');
         // #76: the rail names the CURRENT chapter, which follows the media on
-        // screen. Activating a Route Point that owns media makes it current.
-        // Activating a media-free one steps onto the nearest media instead, so
-        // the chapter lands on whichever Route Point owns that media, and
-        // activating the whole-Journey chip moves the cursor into the Journey.
-        // What all three must do is move the chapter - that is what makes the
-        // button actionable.
-        const activatedId = await button.getAttribute('data-route-point-id');
-        const chapterBefore = await rail.evaluate((element) => (
-          element.querySelector('button[aria-pressed="true"]')?.getAttribute('data-route-point-id') ?? null
-        ));
+        // screen. In this fixture only Route Points 04 (303) and 17 (316) own
+        // media. Activating either makes it current; activating a media-free,
+        // note-free Route Point lands on the nearest media along the route, and
+        // the whole-Journey chip lands on the first media of the Journey (303,
+        // there is no Journey-level media). Expected chapters are spelled out
+        // rather than derived, so drift in the nearest-media rule is caught.
+        const expectedChapterId = index <= 10
+          ? "00000000-0000-4000-8000-000000000303"
+          : "00000000-0000-4000-8000-000000000316";
         await page.keyboard.press('Enter');
-        await page.waitForFunction(({ buttonIndex, expectedId, beforeId }) => {
-          const railElement = document.querySelector('header .journey-story__route-points');
-          const buttons = railElement?.querySelectorAll('button');
-          const target = buttons?.[buttonIndex];
-          if (!railElement || !target) return false;
-          // Exactly one chapter is current at any time.
-          if (railElement.querySelectorAll('button[aria-pressed="true"]').length !== 1) return false;
-          const currentId = railElement
-            .querySelector('button[aria-pressed="true"]')?.getAttribute('data-route-point-id') ?? null;
-          return currentId === expectedId || currentId !== beforeId;
-        }, { buttonIndex: index, expectedId: activatedId, beforeId: chapterBefore }, { polling: 'raf', timeout: 3_000 });
+        try {
+          await page.waitForFunction((expectedId) => {
+            const railElement = document.querySelector('header .journey-story__route-points');
+            const pressed = railElement?.querySelectorAll('button[aria-pressed="true"]') ?? [];
+            // Exactly one chapter is current at any time.
+            return pressed.length === 1 && pressed[0].getAttribute('data-route-point-id') === expectedId;
+          }, expectedChapterId, { polling: 'raf', timeout: 3_000 });
+        } catch (error) {
+          progress.tabEnter.mismatch = {
+            index,
+            expectedChapterId,
+            pressed: await rail.evaluate((element) => [...element.querySelectorAll('button[aria-pressed="true"]')]
+              .map((pressed) => pressed.getAttribute('data-route-point-id') ?? 'all')),
+          };
+          throw error;
+        }
         progress.tabEnter.activated += 1;
         if (index + 1 < chapterButtonCount) await page.keyboard.press('Tab');
       }
