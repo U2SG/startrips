@@ -38,25 +38,30 @@ function errorMessage(error: unknown): string {
 function useAction() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const active = useRef<object | null>(null);
+  const active = useRef<{ token: object; controller: AbortController } | null>(null);
   const lifetime = useRef<object | null>(null);
   useEffect(() => {
     lifetime.current = {};
-    return () => { lifetime.current = null; active.current = null; };
+    return () => {
+      lifetime.current = null;
+      active.current?.controller.abort();
+      active.current = null;
+    };
   }, []);
-  async function run<T>(request: () => Promise<T>, commit: (value: T) => void) {
+  async function run<T>(request: (signal: AbortSignal) => Promise<T>, commit: (value: T) => void) {
     if (active.current) return;
     const token = {};
+    const controller = new AbortController();
     const owner = lifetime.current;
-    active.current = token;
+    active.current = { token, controller };
     setPending(true);
     setError(null);
-    const current = () => lifetime.current === owner && owner !== null && active.current === token;
+    const current = () => lifetime.current === owner && owner !== null && active.current?.token === token;
     try {
-      const value = await request();
+      const value = await request(controller.signal);
       if (current()) commit(value);
     } catch (failure) {
-      if (current()) setError(errorMessage(failure));
+      if (current() && !controller.signal.aborted) setError(errorMessage(failure));
     } finally {
       if (current()) { active.current = null; setPending(false); }
     }
@@ -66,7 +71,7 @@ function useAction() {
 
 export function FragmentForm({ fragment, save, onSaved, onCancel }: {
   fragment?: EverydayFragment;
-  save: (values: EverydayFragmentValues) => Promise<EverydayFragment>;
+  save: (values: EverydayFragmentValues, signal: AbortSignal) => Promise<EverydayFragment>;
   onSaved: (fragment: EverydayFragment) => void;
   onCancel: () => void;
 }) {
@@ -121,7 +126,7 @@ export function FragmentForm({ fragment, save, onSaved, onCancel }: {
     setLocationError(null);
     const parsedLatitude = latitude.trim() ? Number(latitude) : Number.NaN;
     const parsedLongitude = longitude.trim() ? Number(longitude) : Number.NaN;
-    void action.run(() => save({
+    void action.run((signal) => save({
       occurredOn: date,
       latitude: parsedLatitude,
       longitude: parsedLongitude,
@@ -129,7 +134,7 @@ export function FragmentForm({ fragment, save, onSaved, onCancel }: {
       note: note.trim() || null,
       // Home context is presentation only. Never infer ownership from it.
       homeBasePeriodId: fragment?.homeBasePeriodId ?? null,
-    }), onSaved);
+    }, signal), onSaved);
   }
   return (
     <form className="everyday-fragments__form" onSubmit={submit} aria-label={fragment ? "编辑日常" : "记录日常"} aria-busy={action.pending}>
@@ -177,7 +182,7 @@ function FragmentRow({ fragment, client, canEdit, onSaved, onDeleted }: {
   return (
     <li data-everyday-fragment-id={fragment.id}>
       {editing ? (
-        <FragmentForm fragment={fragment} save={(values) => client.update(fragment.id, values)}
+        <FragmentForm fragment={fragment} save={(values, signal) => client.update(fragment.id, values, signal)}
           onSaved={(saved) => { onSaved(saved); setEditing(false); }} onCancel={() => setEditing(false)} />
       ) : (
         <>
@@ -188,7 +193,7 @@ function FragmentRow({ fragment, client, canEdit, onSaved, onDeleted }: {
             <div className="everyday-fragments__actions" aria-busy={deletion.pending}>
               {confirmDelete ? <>
                 <span>删除这条日常？</span>
-                <button type="button" disabled={deletion.pending} onClick={() => void deletion.run(() => client.remove(fragment.id), () => onDeleted(fragment.id))}>
+                <button type="button" disabled={deletion.pending} onClick={() => void deletion.run((signal) => client.remove(fragment.id, signal), () => onDeleted(fragment.id))}>
                   {deletion.pending ? "删除中…" : "确认删除"}
                 </button>
                 <button type="button" disabled={deletion.pending} onClick={() => setConfirmDelete(false)}>取消</button>
@@ -205,11 +210,12 @@ function FragmentRow({ fragment, client, canEdit, onSaved, onDeleted }: {
   );
 }
 
-function FragmentList({ client, canCreate, canEdit, startCreating }: {
+function FragmentList({ client, canCreate, canEdit, startCreating, listId }: {
   client: EverydayFragmentClient;
   canCreate: boolean;
   canEdit: boolean;
   startCreating: boolean;
+  listId: string;
 }) {
   const [fragments, setFragments] = useState<EverydayFragment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -236,14 +242,14 @@ function FragmentList({ client, canCreate, canEdit, startCreating }: {
     setFragments((rows) => [...rows.filter((row) => row.id !== fragment.id), fragment]);
   }
   return (
-    <div id="everyday-fragments-list" aria-busy={loading}>
+    <div id={listId} aria-busy={loading}>
       {loading ? <p role="status">正在读取日常…</p> : error ? <>
         <p role="alert">{error}</p>
         <button type="button" onClick={() => setAttempt((value) => value + 1)}>重试</button>
       </> : <>
         <p>所有日常 · {fragments.length} 条</p>
         {canCreate && (creating ? (
-          <FragmentForm save={(values) => client.create(values)} onSaved={(fragment) => { saved(fragment); setCreating(false); }} onCancel={() => setCreating(false)} />
+          <FragmentForm save={(values, signal) => client.create(values, signal)} onSaved={(fragment) => { saved(fragment); setCreating(false); }} onCancel={() => setCreating(false)} />
         ) : <button type="button" onClick={() => setCreating(true)}>记录日常</button>)}
         {fragments.length === 0 ? <p>还没有日常，记下某一天、某个地方。</p> : null}
         <ul>
@@ -259,20 +265,45 @@ function FragmentList({ client, canCreate, canEdit, startCreating }: {
 
 /** #463: a disclosure inside #233's Home context, with no geographic or
  * Journey state input. Closing/switching Home unmounts its request owners. */
-export function EverydayFragments({ client, canCreate, canEdit }: {
+export type EverydayFragmentsMode = "list" | "create" | null;
+
+export function EverydayFragments({
+  client,
+  canCreate,
+  canEdit,
+  mode: controlledMode,
+  onModeChange,
+  listId = "everyday-fragments-list",
+}: {
   client: EverydayFragmentClient;
   canCreate: boolean;
   canEdit: boolean;
+  mode?: EverydayFragmentsMode;
+  onModeChange?: (mode: EverydayFragmentsMode) => void;
+  listId?: string;
 }) {
-  const [mode, setMode] = useState<"list" | "create" | null>(null);
+  const [internalMode, setInternalMode] = useState<EverydayFragmentsMode>(null);
+  const mode = controlledMode === undefined ? internalMode : controlledMode;
+  const setMode = (next: EverydayFragmentsMode) => {
+    if (controlledMode === undefined) setInternalMode(next);
+    onModeChange?.(next);
+  };
   return (
     <section className="everyday-fragments" aria-label="日常" data-everyday-fragments>
       <div className="everyday-fragments__actions">
-        <button type="button" aria-expanded={mode !== null} aria-controls={mode ? "everyday-fragments-list" : undefined}
-          onClick={() => setMode((current) => current ? null : "list")}>日常</button>
+        <button type="button" aria-expanded={mode !== null} aria-controls={mode ? listId : undefined}
+          onClick={() => setMode(mode ? null : "list")}>日常</button>
         {mode === null && canCreate ? <button type="button" onClick={() => setMode("create")}>记录日常</button> : null}
       </div>
-      {mode ? <FragmentList client={client} canCreate={canCreate} canEdit={canEdit} startCreating={mode === "create"} /> : null}
+      {mode ? (
+        <FragmentList
+          client={client}
+          canCreate={canCreate}
+          canEdit={canEdit}
+          startCreating={mode === "create"}
+          listId={listId}
+        />
+      ) : null}
     </section>
   );
 }

@@ -5,7 +5,7 @@
 // or semantic focus owner.
 import { mkdirSync } from "node:fs";
 import { launchQaBrowser } from "./qa-browser.mjs";
-import { releaseFragmentReply, waitForFragmentReadback } from "./qa-fragment-observation.mjs";
+import { waitForFragmentReadback } from "./qa-fragment-observation.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const captureDir = "artifacts/home-base-context";
@@ -88,7 +88,7 @@ function record(name, data, condition) {
   if (!condition) failed = true;
 }
 
-async function installOwnerApi(page, journeyRows = journeys) {
+async function installOwnerApi(page, journeyRows = journeys, homePeriods = [HISTORICAL_HOME, CURRENT_HOME]) {
   const fragments = { rows: [], requests: [], rejectReads: null, heldReads: null, rejectNext: null, holdNext: null, release: null };
   // Match both collection reads/creates and item edits/deletes. A trailing
   // `fragments**` glob does not cross the slash before an item id.
@@ -112,7 +112,13 @@ async function installOwnerApi(page, journeyRows = journeys) {
     } else if (method === "DELETE") {
       fragments.rows = fragments.rows.filter((row) => row.id !== id);
     } else {
-      const fragment = { ...body, id: id ?? `33333333-cccc-4333-8333-${String(fragments.requests.length).padStart(12, "0")}` };
+      // Mirror the server read model: create may omit homeBasePeriodId from the
+      // request, but persisted/readback fragments normalize no association to null.
+      const fragment = {
+        ...body,
+        homeBasePeriodId: body.homeBasePeriodId ?? null,
+        id: id ?? `33333333-cccc-4333-8333-${String(fragments.requests.length).padStart(12, "0")}`,
+      };
       fragments.rows = [...fragments.rows.filter((row) => row.id !== fragment.id), fragment];
       payload = { fragment };
     }
@@ -184,12 +190,12 @@ async function installOwnerApi(page, journeyRows = journeys) {
   await page.route("**/api/home-bases", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
-    body: JSON.stringify({ periods: [HISTORICAL_HOME, CURRENT_HOME] }),
+    body: JSON.stringify({ periods: homePeriods }),
   }));
   return fragments;
 }
 
-async function openOwner(viewport, { journeyRows = journeys } = {}) {
+async function openOwner(viewport, { journeyRows = journeys, homePeriods = [HISTORICAL_HOME, CURRENT_HOME] } = {}) {
   const page = await browser.newPage({ viewport });
   // This script runs Playwright directly rather than through @playwright/test,
   // so locator/action waits otherwise have no bounded default and a missing UI
@@ -198,24 +204,26 @@ async function openOwner(viewport, { journeyRows = journeys } = {}) {
   page.setDefaultTimeout(10_000);
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  const fragments = await installOwnerApi(page, journeyRows);
+  const fragments = await installOwnerApi(page, journeyRows, homePeriods);
   // This contract starts from the EXISTING projected Home anchor, so the lane
   // must mount the real LivingAtlasGlobe rather than LivingAtlasQaGlobe (which
   // intentionally has no geographic Home projection surface).
   await page.goto(`${origin}/?qaState=atlas-gateway&qaMode=globe-chrome`, { waitUntil: "domcontentloaded" });
   await page.locator(".living-atlas").waitFor({ state: "visible", timeout: 30_000 });
   try {
-    await page.waitForFunction(
-      (periodId) => {
-        const node = document.querySelector(`[data-home-base-period-id="${periodId}"]`);
-        if (!(node instanceof HTMLElement)) return false;
-        const rect = node.getBoundingClientRect();
-        const style = getComputedStyle(node);
-        return !node.hidden && style.display !== "none" && rect.width >= 44 && rect.height >= 44;
-      },
-      CURRENT_HOME.id,
-      { timeout: 30_000 },
-    );
+    if (homePeriods.some((period) => period.id === CURRENT_HOME.id)) {
+      await page.waitForFunction(
+        (periodId) => {
+          const node = document.querySelector(`[data-home-base-period-id="${periodId}"]`);
+          if (!(node instanceof HTMLElement)) return false;
+          const rect = node.getBoundingClientRect();
+          const style = getComputedStyle(node);
+          return !node.hidden && style.display !== "none" && rect.width >= 44 && rect.height >= 44;
+        },
+        CURRENT_HOME.id,
+        { timeout: 30_000 },
+      );
+    }
   } catch (error) {
     const diagnostics = await page.evaluate((periodId) => {
       const marker = document.querySelector(`[data-home-base-period-id="${periodId}"]`);
@@ -373,6 +381,10 @@ async function fragmentQa(owner, name) {
   await row.getByRole("button", { name: "保存日常" }).click();
   await waitForHeld(fragments);
   const releasePut = fragments.release;
+  const stalePutRequest = releasePut.request;
+  const stalePutAborted = page.waitForEvent("requestfailed", {
+    predicate: (request) => request === stalePutRequest,
+  });
   await closeContext(page);
   await (await currentHomeMarker(page)).focus();
   await page.keyboard.press("Enter");
@@ -382,26 +394,42 @@ async function fragmentQa(owner, name) {
   await row.getByLabel("随记（选填）").fill("最新编辑");
   await row.getByRole("button", { name: "保存日常" }).click();
   await waitForFragmentReadback(row, "最新编辑");
-  const stalePut = await releaseFragmentReply(page, releasePut, 200);
-  record(`${name}: exact stale PUT payload was delivered`, { stalePut }, stalePut.fragment.note === "延迟的编辑");
+  await releasePut();
+  const abortedPutRequest = await stalePutAborted;
+  const stalePutFailure = abortedPutRequest.failure();
+  record(`${name}: closing the disclosure aborts the exact stale PUT transport`, {
+    method: abortedPutRequest.method(),
+    url: abortedPutRequest.url(),
+    failure: stalePutFailure?.errorText ?? null,
+  }, abortedPutRequest === stalePutRequest && Boolean(stalePutFailure));
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  record(`${name}: stale PUT cannot replace reopened edits`, {}, (await row.innerText()).includes("最新编辑"));
+  record(`${name}: aborted stale PUT cannot replace reopened edits`, {}, (await row.innerText()).includes("最新编辑"));
 
   await row.getByRole("button", { name: "删除", exact: true }).click();
   fragments.holdNext = "DELETE";
   await row.getByRole("button", { name: "确认删除", exact: true }).click();
   await waitForHeld(fragments);
   const releaseDelete = fragments.release;
+  const staleDeleteRequest = releaseDelete.request;
+  const staleDeleteAborted = page.waitForEvent("requestfailed", {
+    predicate: (request) => request === staleDeleteRequest,
+  });
   await surface.getByRole("button", { name: "日常", exact: true }).click();
   await surface.getByRole("button", { name: "记录日常", exact: true }).click();
   form = list.getByRole("form", { name: "记录日常", exact: true });
   await fillFragment(form, "保留的日常");
   await form.getByRole("button", { name: "保存日常" }).click();
   await row.getByText("保留的日常", { exact: true }).waitFor();
-  await releaseFragmentReply(page, releaseDelete, 204);
-  record(`${name}: exact stale DELETE returned 204`, { url: releaseDelete.request.url() }, true);
+  await releaseDelete();
+  const abortedDeleteRequest = await staleDeleteAborted;
+  const staleDeleteFailure = abortedDeleteRequest.failure();
+  record(`${name}: closing the disclosure aborts the exact stale DELETE transport`, {
+    method: abortedDeleteRequest.method(),
+    url: abortedDeleteRequest.url(),
+    failure: staleDeleteFailure?.errorText ?? null,
+  }, abortedDeleteRequest === staleDeleteRequest && Boolean(staleDeleteFailure));
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  record(`${name}: stale DELETE cannot remove new records`, {}, (await row.innerText()).includes("保留的日常"));
+  record(`${name}: aborted stale DELETE cannot remove new records`, {}, (await row.innerText()).includes("保留的日常"));
   record(`${name}: CRUD never refreshes or changes Journey list`, { journeyRequests },
     journeyRequests.length === 0 && JSON.stringify(before) === JSON.stringify(await journeySnapshot()));
   page.off("request", watchJourneys);
@@ -538,6 +566,32 @@ try {
   record("desktop keyboard activation opens the same current Home context", {
     periodId: await context.getAttribute("data-home-base-period-id"),
   }, (await context.getAttribute("data-home-base-period-id")) === CURRENT_HOME.id);
+
+  // #496: the Home-context and Atlas-level Everyday entries are one disclosure
+  // owner. Exercise the actual transition in both directions instead of only
+  // asserting implementation text.
+  const homeEverydaySurface = context.locator("[data-everyday-fragments]");
+  await homeEverydaySurface.getByRole("button", { name: "日常", exact: true }).click();
+  await context.locator("#everyday-fragments-list").waitFor({ state: "visible" });
+  const desktopEverydayTrigger = page.locator("[data-atlas-everyday-trigger]");
+  await desktopEverydayTrigger.click();
+  await context.waitFor({ state: "detached" });
+  const desktopEverydayContext = page.locator("[data-atlas-everyday-context]");
+  await desktopEverydayContext.waitFor({ state: "visible" });
+  record("Atlas Everyday replaces the open Home Everyday disclosure", {
+    homeContexts: await page.locator("[data-home-base-context]").count(),
+    everydaySurfaces: await page.locator("[data-everyday-fragments]").count(),
+  }, (await page.locator("[data-home-base-context]").count()) === 0
+    && (await page.locator("[data-everyday-fragments]").count()) === 1);
+  await marker.focus();
+  await page.keyboard.press("Enter");
+  await desktopEverydayContext.waitFor({ state: "detached" });
+  await context.waitFor({ state: "visible", timeout: 5_000 });
+  record("Home activation replaces the open Atlas Everyday disclosure", {
+    atlasEverydayContexts: await page.locator("[data-atlas-everyday-context]").count(),
+    homeContexts: await page.locator("[data-home-base-context]").count(),
+  }, (await page.locator("[data-atlas-everyday-context]").count()) === 0
+    && (await page.locator("[data-home-base-context]").count()) === 1);
 
   // Story is a newer narrative owner. It closes Home context and closing Story
   // does not resurrect an old Home intent.
@@ -780,10 +834,103 @@ try {
   await closeContext(mobilePage);
   await mobilePage.close();
 
+  // #496: Everyday remains reachable from the Atlas even when Home history is
+  // empty. The create payload keeps the fragment independent instead of
+  // inventing a Home period.
+  const noHome = await openOwner({ width: 1280, height: 800 }, { homePeriods: [] });
+  const noHomePage = noHome.page;
+  const noHomeTrigger = noHomePage.locator("[data-atlas-everyday-trigger]");
+  await noHomeTrigger.waitFor({ state: "visible" });
+  record("zero-Home Atlas exposes Everyday without a Home marker", {
+    homeMarkers: await noHomePage.locator("[data-home-base-period-id]").count(),
+  }, (await noHomePage.locator("[data-home-base-period-id]").count()) === 0);
+  await noHomeTrigger.click();
+  const noHomeSurface = noHomePage.locator("[data-atlas-everyday-context]");
+  await noHomeSurface.waitFor({ state: "visible" });
+  const noHomeList = noHomePage.locator("#atlas-everyday-fragments-list");
+  await noHomeList.getByText("还没有日常，记下某一天、某个地方。", { exact: true }).waitFor();
+  await noHomeList.getByRole("button", { name: "记录日常", exact: true }).click();
+  const noHomeForm = noHomeList.getByRole("form", { name: "记录日常", exact: true });
+  await fillFragment(noHomeForm, "无常住地也能记录");
+  await noHomeForm.getByRole("button", { name: "保存日常", exact: true }).click();
+  await noHomeList.getByText("无常住地也能记录", { exact: true }).waitFor();
+  const noHomeCreate = noHome.fragments.requests.find((request) => request.method === "POST");
+  record("zero-Home create stays unassociated", { body: noHomeCreate?.body ?? null }, Boolean(
+    noHomeCreate
+    && noHomeCreate.body
+    && !("homeBasePeriodId" in noHomeCreate.body)
+    && noHomeCreate.body?.occurredOn === "2020-05-06"
+    && noHomeCreate.body?.latitude === 22.5431
+    && noHomeCreate.body?.longitude === 114.0579
+  ));
+  await noHomeSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
+  await noHomeSurface.waitFor({ state: "detached" });
+  record("closing zero-Home Everyday restores the Atlas action", {}, await noHomeTrigger.evaluate(
+    (node) => document.activeElement === node,
+  ));
+  await noHomePage.close();
+
+  const noHomeMobile = await openOwner({ width: 390, height: 844 }, { homePeriods: [] });
+  const noHomeMobileTrigger = noHomeMobile.page.locator("[data-atlas-everyday-trigger]");
+  const mobileEverydayHit = await noHomeMobileTrigger.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return Math.min(rect.width, rect.height);
+  });
+  await noHomeMobileTrigger.click();
+  const noHomeMobileSurface = noHomeMobile.page.locator("[data-atlas-everyday-context]");
+  await noHomeMobileSurface.waitFor({ state: "visible" });
+  const mobileEverydayPlacement = await noHomeMobileSurface.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return {
+      inViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
+      hit: Math.min(rect.width, rect.height),
+    };
+  });
+  record("zero-Home mobile Everyday keeps a >=44px entry and visible disclosure", {
+    triggerHit: mobileEverydayHit,
+    surface: mobileEverydayPlacement,
+  }, mobileEverydayHit >= 44 && mobileEverydayPlacement.inViewport);
+  await noHomeMobile.page.close();
+
+  const noHomeLandscape = await openOwner({ width: 844, height: 390 }, { homePeriods: [] });
+  const noHomeLandscapeTrigger = noHomeLandscape.page.locator("[data-atlas-everyday-trigger]");
+  const landscapeEverydayHit = await noHomeLandscapeTrigger.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return Math.min(rect.width, rect.height);
+  });
+  await noHomeLandscapeTrigger.click();
+  const noHomeLandscapeSurface = noHomeLandscape.page.locator("[data-atlas-everyday-context]");
+  await noHomeLandscapeSurface.waitFor({ state: "visible" });
+  const landscapeEverydayPlacement = await noHomeLandscapeSurface.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return {
+      inViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
+      overflow: node.scrollWidth > node.clientWidth,
+    };
+  });
+  record("zero-Home phone landscape keeps a >=44px entry and bounded disclosure", {
+    triggerHit: landscapeEverydayHit,
+    surface: landscapeEverydayPlacement,
+  }, landscapeEverydayHit >= 44
+    && landscapeEverydayPlacement.inViewport
+    && !landscapeEverydayPlacement.overflow);
+  await noHomeLandscapeSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
+  await noHomeLandscapeSurface.waitFor({ state: "detached" });
+  record("zero-Home phone landscape restores its exact Atlas action", {},
+    await noHomeLandscapeTrigger.evaluate((node) => document.activeElement === node));
+  await noHomeLandscape.page.close();
+
   record("owner browser pages have no page errors", {
     desktop: desktop.pageErrors,
     mobile: mobile.pageErrors,
-  }, desktop.pageErrors.length === 0 && mobile.pageErrors.length === 0);
+    noHome: noHome.pageErrors,
+    noHomeMobile: noHomeMobile.pageErrors,
+    noHomeLandscape: noHomeLandscape.pageErrors,
+  }, desktop.pageErrors.length === 0
+    && mobile.pageErrors.length === 0
+    && noHome.pageErrors.length === 0
+    && noHomeMobile.pageErrors.length === 0
+    && noHomeLandscape.pageErrors.length === 0);
 } catch (error) {
   // The accumulated checks are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439). Print first, then rethrow so

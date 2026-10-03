@@ -12,6 +12,7 @@ vi.mock("../auth/AuthGateway", () => ({
 import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
+  atlasEverydayEntryAvailable,
   synchronizeJourneyRailVisibility,
   journeyRailIsolation,
   captureUnknownCreateObservationOwnership,
@@ -90,6 +91,32 @@ const atlasCurrentHome: HomeBasePeriod = {
   endedOn: null,
   source: "manual",
 };
+
+describe("Atlas Everyday entry (#496)", () => {
+  it("stays available without Home while respecting client, capability, view and narrative gates", () => {
+    const available = { hasClient: true, canCreate: true, canEdit: false, view: "planet" as const, narrativeActive: false };
+    expect(atlasEverydayEntryAvailable(available)).toBe(true);
+    expect(atlasEverydayEntryAvailable({ ...available, canCreate: false, canEdit: true })).toBe(true);
+    expect(atlasEverydayEntryAvailable({ ...available, hasClient: false })).toBe(false);
+    expect(atlasEverydayEntryAvailable({ ...available, canCreate: false, canEdit: false })).toBe(false);
+    expect(atlasEverydayEntryAvailable({ ...available, view: "timeline" })).toBe(false);
+    expect(atlasEverydayEntryAvailable({ ...available, narrativeActive: true })).toBe(false);
+  });
+
+  it("keeps the owner Atlas entries mutually exclusive and restores the exact opening action", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("atlasEverydayOpenerRef.current = opener ?? null");
+    expect(source).toContain("if (opener.isConnected) opener.focus()");
+    expect(source).toContain("clearHomeBaseContext();\n    setAtlasEverydayMode(mode)");
+    expect(source).toContain("closeAtlasEveryday(false);\n              setHomeBaseContextPeriodId");
+  });
+
+  it("keeps guest/shared Atlas code free of Everyday Fragment disclosure and API access", () => {
+    const shared = readFileSync(new URL("./SharedAtlasView.tsx", import.meta.url), "utf8");
+    expect(shared).not.toContain("EverydayFragments");
+    expect(shared).not.toContain("/api/everyday-fragments");
+  });
+});
 
 describe("ordinary Atlas Home runtime (ST-056)", () => {
   it("presents one effective Home entry and none when private periods are absent", () => {
