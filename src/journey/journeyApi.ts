@@ -73,8 +73,15 @@ export const everydayFragmentClient = {
     return payload.fragments;
   },
   async create(values: EverydayFragmentValues, signal?: AbortSignal): Promise<EverydayFragment> {
+    const createValues = {
+      occurredOn: values.occurredOn,
+      latitude: values.latitude,
+      longitude: values.longitude,
+      placeLabel: values.placeLabel,
+      note: values.note,
+    };
     const payload = await requestJson<{ fragment: EverydayFragment }>(
-      "/api/everyday-fragments", { method: "POST", body: JSON.stringify(values), signal },
+      "/api/everyday-fragments", { method: "POST", body: JSON.stringify(createValues), signal },
     );
     return payload.fragment;
   },

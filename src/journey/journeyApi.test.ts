@@ -5,6 +5,7 @@ import {
   enqueueCoverReveal,
   deleteJourney,
   deleteMedia,
+  everydayFragmentClient,
   listHomeBasePeriods,
   listJourneys,
   moveJourneyMedia,
@@ -73,6 +74,41 @@ describe("journeyApi", () => {
     expect(fetcher).toHaveBeenCalledWith("/api/home-bases", expect.objectContaining({
       cache: "no-store", credentials: "include",
     }));
+  });
+
+  it("keeps Everyday create payload independent from Home selection", async () => {
+    const fragment = {
+      id: "fragment-1",
+      occurredOn: "2020-05-06",
+      latitude: 22.5431,
+      longitude: 114.0579,
+      placeLabel: "深圳",
+      note: "晚风",
+      homeBasePeriodId: null,
+    };
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ fragment }));
+    try {
+      await expect(everydayFragmentClient.create({
+        occurredOn: fragment.occurredOn,
+        latitude: fragment.latitude,
+        longitude: fragment.longitude,
+        placeLabel: fragment.placeLabel,
+        note: fragment.note,
+        homeBasePeriodId: null,
+      })).resolves.toEqual(fragment);
+      const [, init] = fetcher.mock.calls[0];
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).toEqual({
+        occurredOn: fragment.occurredOn,
+        latitude: fragment.latitude,
+        longitude: fragment.longitude,
+        placeLabel: fragment.placeLabel,
+        note: fragment.note,
+      });
+      expect(Object.keys(body)).not.toContain("homeBasePeriodId");
+    } finally {
+      fetcher.mockRestore();
+    }
   });
 
   it("confirms a first Home Base suggestion by creating a period", async () => {

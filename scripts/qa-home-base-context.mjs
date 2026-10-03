@@ -541,6 +541,32 @@ try {
     periodId: await context.getAttribute("data-home-base-period-id"),
   }, (await context.getAttribute("data-home-base-period-id")) === CURRENT_HOME.id);
 
+  // #496: the Home-context and Atlas-level Everyday entries are one disclosure
+  // owner. Exercise the actual transition in both directions instead of only
+  // asserting implementation text.
+  const homeEverydaySurface = context.locator("[data-everyday-fragments]");
+  await homeEverydaySurface.getByRole("button", { name: "日常", exact: true }).click();
+  await context.locator("#everyday-fragments-list").waitFor({ state: "visible" });
+  const desktopEverydayTrigger = page.locator("[data-atlas-everyday-trigger]");
+  await desktopEverydayTrigger.click();
+  await context.waitFor({ state: "detached" });
+  const desktopEverydayContext = page.locator("[data-atlas-everyday-context]");
+  await desktopEverydayContext.waitFor({ state: "visible" });
+  record("Atlas Everyday replaces the open Home Everyday disclosure", {
+    homeContexts: await page.locator("[data-home-base-context]").count(),
+    everydaySurfaces: await page.locator("[data-everyday-fragments]").count(),
+  }, (await page.locator("[data-home-base-context]").count()) === 0
+    && (await page.locator("[data-everyday-fragments]").count()) === 1);
+  await marker.focus();
+  await page.keyboard.press("Enter");
+  await desktopEverydayContext.waitFor({ state: "detached" });
+  await context.waitFor({ state: "visible", timeout: 5_000 });
+  record("Home activation replaces the open Atlas Everyday disclosure", {
+    atlasEverydayContexts: await page.locator("[data-atlas-everyday-context]").count(),
+    homeContexts: await page.locator("[data-home-base-context]").count(),
+  }, (await page.locator("[data-atlas-everyday-context]").count()) === 0
+    && (await page.locator("[data-home-base-context]").count()) === 1);
+
   // Story is a newer narrative owner. It closes Home context and closing Story
   // does not resurrect an old Home intent.
   await page.locator(".living-atlas__active-actions button", { hasText: "打开故事" }).click();
@@ -805,7 +831,8 @@ try {
   const noHomeCreate = noHome.fragments.requests.find((request) => request.method === "POST");
   record("zero-Home create stays unassociated", { body: noHomeCreate?.body ?? null }, Boolean(
     noHomeCreate
-    && noHomeCreate.body?.homeBasePeriodId === null
+    && noHomeCreate.body
+    && !("homeBasePeriodId" in noHomeCreate.body)
     && noHomeCreate.body?.occurredOn === "2020-05-06"
     && noHomeCreate.body?.latitude === 22.5431
     && noHomeCreate.body?.longitude === 114.0579
