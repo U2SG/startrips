@@ -5897,7 +5897,7 @@ try {
         const neighbor = stage?.querySelector('.story-media-pages__page:not([data-media-page="current"])[data-media-page-id]');
         const picture = current?.querySelector('img');
         const note = copy?.querySelector('.journey-story__point-note');
-        const active = rail?.querySelector('button.is-chapter-active');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!story || !rail || !copy || !stage || !pages || !current || !neighbor || !picture || !note || !active) {
           throw new Error("desktop chapter fixture did not render its presented Story");
         }
@@ -5956,7 +5956,7 @@ try {
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.waitForFunction(() => {
         const rail = document.querySelector('header .journey-story__route-points');
-        const active = rail?.querySelector('button.is-chapter-active');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!rail || !active) return false;
         const railBounds = rail.getBoundingClientRect();
         const activeBounds = active.getBoundingClientRect();
@@ -5964,7 +5964,7 @@ try {
       }, null, { polling: 'raf', timeout: 3_000 });
       progress.resized = await page.evaluate(() => {
         const rail = document.querySelector('header .journey-story__route-points');
-        const active = rail?.querySelector('button.is-chapter-active');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!rail || !active) throw new Error("resized chapter rail lost its active chapter");
         const railRect = rail.getBoundingClientRect();
         const activeRect = active.getBoundingClientRect();
@@ -6054,11 +6054,29 @@ try {
           return bounds.left >= railBounds.left - 2 && bounds.right <= railBounds.right + 2;
         }, index, { polling: 'raf', timeout: 3_000 });
         progress.tabEnter.visited.push(await button.getAttribute('data-route-point-id') ?? 'all');
+        // #76: the rail names the CURRENT chapter, which follows the media on
+        // screen. Activating a Route Point that owns media makes it current.
+        // Activating a media-free one steps onto the nearest media instead, so
+        // the chapter lands on whichever Route Point owns that media, and
+        // activating the whole-Journey chip moves the cursor into the Journey.
+        // What all three must do is move the chapter - that is what makes the
+        // button actionable.
+        const activatedId = await button.getAttribute('data-route-point-id');
+        const chapterBefore = await rail.evaluate((element) => (
+          element.querySelector('button[aria-pressed="true"]')?.getAttribute('data-route-point-id') ?? null
+        ));
         await page.keyboard.press('Enter');
-        await page.waitForFunction((buttonIndex) => {
-          const buttons = document.querySelectorAll('header .journey-story__route-points button');
-          return buttons[buttonIndex]?.getAttribute('aria-pressed') === 'true';
-        }, index, { polling: 'raf', timeout: 3_000 });
+        await page.waitForFunction(({ buttonIndex, expectedId, beforeId }) => {
+          const railElement = document.querySelector('header .journey-story__route-points');
+          const buttons = railElement?.querySelectorAll('button');
+          const target = buttons?.[buttonIndex];
+          if (!railElement || !target) return false;
+          // Exactly one chapter is current at any time.
+          if (railElement.querySelectorAll('button[aria-pressed="true"]').length !== 1) return false;
+          const currentId = railElement
+            .querySelector('button[aria-pressed="true"]')?.getAttribute('data-route-point-id') ?? null;
+          return currentId === expectedId || currentId !== beforeId;
+        }, { buttonIndex: index, expectedId: activatedId, beforeId: chapterBefore }, { polling: 'raf', timeout: 3_000 });
         progress.tabEnter.activated += 1;
         if (index + 1 < chapterButtonCount) await page.keyboard.press('Tab');
       }

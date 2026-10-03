@@ -18,6 +18,10 @@ import {
   storyUploadedAssetIndex,
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
+  storyInitialNoteBeatRoutePointId,
+  storyNoteBeatNeighbourMediaIndexes,
+  routePointPresentsNote,
+  storyRoutePointEntryIndex,
 } from "./storyMediaPolicy";
 import {
   mobileStoryExpandedForLayout,
@@ -106,7 +110,7 @@ import {
   validateJourneyFiles,
   validateJourneySoundtrack,
 } from "./journeyModel";
-import { playbackIntroMedia, storyMediaForScope } from "./journeyPlayback";
+import { playbackIntroMedia, playbackStoryMedia, storyMediaForScope } from "./journeyPlayback";
 import type {
   Journey,
   JourneyInput,
@@ -745,6 +749,13 @@ export function JourneyStory({
   );
   const selectedRoutePointIdRef = useRef(selectedRoutePointId);
   selectedRoutePointIdRef.current = selectedRoutePointId;
+  // #76 P1 + #595: a Route Point with no media of its own is still a chapter.
+  // Landing on one presents that Route Point's note with no media stage, rather
+  // than borrowing a neighbour's media or blanking the Journey. It is a beat of
+  // the same cursor, not a second one: any navigation to media clears it.
+  const [noteBeatRoutePointId, setNoteBeatRoutePointId] = useState<string | null>(
+    storyInitialNoteBeatRoutePointId(journey, routePointId, initialAssetId),
+  );
   const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState & { generation?: number }>>({});
   // A re-signed read can carry the same URL (for example two requests in one
   // signing second). Presentation still needs a new resource generation.
@@ -2020,11 +2031,21 @@ export function JourneyStory({
     () => journey ? journeyVisualMedia(journey) : [],
     [journey],
   );
+  // #76 P1: Story browses ONE Journey-wide sequence. `selectedRoutePointId`
+  // selects the starting position and the management/upload target; it no longer
+  // truncates the media array, which is what turned every Route Point into an
+  // island that could only loop inside itself.
   const scopedMedia = useMemo(
-    () => journey ? storyMediaForScope(journey, selectedRoutePointId) : [],
-    [journey, selectedRoutePointId],
+    () => journey ? playbackStoryMedia(journey) : [],
+    [journey],
   );
   const scopedMediaIndex = useMemo(() => indexStoryMedia(scopedMedia), [scopedMedia]);
+  // #76 P1: canonical route order, used only to find the nearest playable media
+  // when a chosen Route Point has none of its own.
+  const routePointIdsInOrder = useMemo(
+    () => (journey ? journey.routePoints.map((point) => point.id) : []),
+    [journey],
+  );
   // Review P2: while a drag is pending, the overview renders the optimistic
   // order; otherwise it follows scopedMedia (server truth).
   const orderedScopedMedia = useMemo(
@@ -2050,11 +2071,7 @@ export function JourneyStory({
     requestedMediaRef.current = activeAsset?.id ?? null;
   }
   const requestedMediaIndex = storyAssetIndexForId(scopedMedia, pendingMediaId ?? incomingAssetId, assetIndex, scopedMediaIndex.indexById);
-  const autoplayVideoCandidate = storyAutoplayVideoCandidate(
-    scopedMedia,
-    assetIndex,
-    selectedRoutePointId === null,
-  );
+  const autoplayVideoCandidate = storyAutoplayVideoCandidate(scopedMedia, assetIndex);
   const autoplayVideoCandidateRead = autoplayVideoCandidate
     ? mediaReads[autoplayVideoCandidate.id]
     : null;
@@ -2083,23 +2100,33 @@ export function JourneyStory({
     foregroundMediaIdRef.current = id;
     if (!journey) return;
     onObservationChange?.(storyLogicalObservation(
-      journey, selectedRoutePointId, id, mobileLayout, mobileStoryExpanded,
+      // #76 P1 + #595: while a media-free Route Point is the presented chapter,
+      // the nearest media must not speak for it. Publishing that asset would
+      // send the map back to a neighbouring Route Point when Story closes.
+      journey,
+      selectedRoutePointId,
+      noteBeatRoutePointId === null ? id : null,
+      mobileLayout,
+      mobileStoryExpanded,
     ));
-  }, [journey, selectedRoutePointId, mobileLayout, mobileStoryExpanded, onObservationChange]);
+  }, [journey, selectedRoutePointId, noteBeatRoutePointId, mobileLayout, mobileStoryExpanded, onObservationChange]);
   useEffect(() => {
     if (!journey) return;
     const foregroundId = foregroundMediaIdRef.current;
     onObservationChange?.(storyLogicalObservation(
       journey,
       selectedRoutePointId,
-      foregroundId && scopedMediaIndex.byId.has(foregroundId)
-        ? foregroundId : shownAssetId ?? activeAsset?.id ?? null,
+      noteBeatRoutePointId !== null
+        ? null
+        : foregroundId && scopedMediaIndex.byId.has(foregroundId)
+          ? foregroundId : shownAssetId ?? activeAsset?.id ?? null,
       mobileLayout,
       mobileStoryExpanded,
     ));
   }, [
     activeAsset?.id,
     journey,
+    noteBeatRoutePointId,
     mobileLayout,
     mobileStoryExpanded,
     onObservationChange,
@@ -2125,18 +2152,15 @@ export function JourneyStory({
     if (videoHandoffRef.current?.id === activeAsset?.id
       && videoHandoffRef.current.toFullscreen === fullscreen) return;
     if (activeRead?.status !== "error" && activeStagePlaybackReadyId !== activeAsset?.id) return;
-    const advance = storyAutoplayAdvance(
-      assetIndex,
-      scopedMedia.length,
-      selectedRoutePointId === null,
-    );
+    // #76 P1: one Journey-wide cursor. There is no whole-journey mode flag here -
+    // the sequence IS the whole Journey, so autoplay returns to the first
+    // playable media at the Journey boundary instead of stopping at the end.
+    const advance = storyAutoplayAdvance(assetIndex, scopedMedia.length);
     if (advance.kind === "stop") {
       setPlaying(false);
       return;
     }
-    const finishStep = advance.kind === "hold-terminal"
-      ? () => setPlaying(false)
-      : () => navigateToMediaRef.current(advance.nextIndex);
+    const finishStep = () => navigateToMediaRef.current(advance.nextIndex);
     // #199 review: a video step must last as long as the video, not 5.2s.
     // Only the settled element of this exact asset can report `ended`.
     const video = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
@@ -2316,9 +2340,11 @@ export function JourneyStory({
       if (event.key === "Escape") {
         exitFullscreen();
       } else if (event.key === "ArrowLeft") {
-        navigateMediaStepRef.current(-1, selectedRoutePointId !== null);
+        // #76 P1: keyboard, swipe, buttons and autoplay share one cursor and one
+        // boundary rule, so none of them may special-case a Route Point.
+        navigateMediaStepRef.current(-1, true);
       } else if (event.key === "ArrowRight") {
-        navigateMediaStepRef.current(1, selectedRoutePointId !== null);
+        navigateMediaStepRef.current(1, true);
       } else if (event.key === " " || event.key === "Spacebar") {
         event.preventDefault();
         togglePlaying();
@@ -2517,12 +2543,17 @@ export function JourneyStory({
 
   const stackNeighborIndices = useMemo(() => {
     const anchorId = shownAssetId ?? activeAsset?.id;
+    // #76 P1: neighbours are taken across the Journey boundary, so the warm
+    // window follows the cursor into the next Route Point. They still do NOT
+    // wrap: the painted stack is a bounded rendering concern, and wrapping it
+    // pins the far end of the Journey into the warm window as an index "beyond"
+    // the three-ahead budget.
     return mediaStackNeighbors(
       anchorId === undefined ? -1 : scopedMediaIndex.indexById.get(anchorId) ?? -1,
       scopedMedia.length,
-      selectedRoutePointId !== null,
+      false,
     );
-  }, [shownAssetId, activeAsset?.id, scopedMedia, scopedMediaIndex, selectedRoutePointId]);
+  }, [shownAssetId, activeAsset?.id, scopedMedia, scopedMediaIndex]);
 
   // #489 (ST-159): one bounded, tiered warm window behind the three physical
   // pages -- reads widest, decoded pictures narrower, one live transport --
@@ -2535,7 +2566,12 @@ export function JourneyStory({
     requestedIndex: scopedMedia.length > 0 ? requestedMediaIndex : -1,
     length: scopedMedia.length,
     direction: mediaNavigationDirection.current,
-    wrap: selectedRoutePointId !== null,
+    // #76 P1: the warm window follows the Journey cursor forward, so it prepares
+    // the next Route Point rather than the current Route Point's own media. It
+    // stays a bounded lookahead: the Journey sequence is already continuous, so
+    // crossing a Route Point boundary needs no wrap, and wrapping here would
+    // warm media from the far end of the Journey past its first media.
+    wrap: false,
     autoplay: playing,
     pinned: stackNeighborIndices,
   });
@@ -2690,13 +2726,15 @@ export function JourneyStory({
     ? journey.routePoints.find((point) => point.id === selectedRoutePointId) ?? null
     : null;
   const asset = activeAsset;
-  const activeChapterRoutePointId = selectedRoutePointId === null
-    ? asset?.routePointId ?? null
-    : selectedRoutePointId;
+  // #76 P1: the active chapter follows the media actually on screen. It no longer
+  // follows the Route Point that was used to open Story, so crossing a Route
+  // Point boundary carries its note and place context with it. The one exception
+  // is a media-free Route Point presented as its own note beat.
+  const activeChapterRoutePointId = noteBeatRoutePointId ?? asset?.routePointId ?? null;
   const activeChapterRoutePoint = activeChapterRoutePointId
     ? journey.routePoints.find((point) => point.id === activeChapterRoutePointId) ?? null
     : null;
-  const notesRoutePoint = selectedRoutePoint ?? activeChapterRoutePoint;
+  const notesRoutePoint = activeChapterRoutePoint;
   const notesRoutePointNote = notesRoutePoint
     ? routePointNoteDrafts[notesRoutePoint.id] ?? notesRoutePoint.note ?? ""
     : "";
@@ -2707,7 +2745,11 @@ export function JourneyStory({
     : null;
   const overlayNote = mediaPresentation !== "note-overlay" ? null
     : overlayNoteOwner ? { key: overlayNoteOwner.id, text: overlayNoteOwner.note!.trim() }
-      : !selectedRoutePointId && journey.note?.trim() && !activeChapterRoutePointId
+      // #76 P1: the Journey note belongs on Journey-level media, decided by the
+      // on-screen chapter being Journey-level. Gating it on the Route Point that
+      // opened Story hid it as soon as the cursor stepped onto intro media while
+      // that Route Point stayed selected as the management target.
+      : journey.note?.trim() && !activeChapterRoutePointId
         ? { key: "journey", text: journey.note.trim() } : null;
   // These are semantic identities; StoryMediaPages retains the physical pages.
   const shownAsset = shownAssetId
@@ -2717,10 +2759,15 @@ export function JourneyStory({
     && videoResumeBlocked.id === shownAsset?.id
     && videoResumeBlocked.toFullscreen === fullscreen);
   const videoNavigationVisible = Boolean(shownAsset?.mimeType.startsWith("video/") && scopedMedia.length > 1);
+  // #76 P1: these answer "is there content strictly before/after this one in the
+  // Journey", which is what the picture's activation uses to choose a direction:
+  // at the last media, activating must fall back to the previous one rather than
+  // jump back to the very start. The cursor itself still wraps at the Journey
+  // boundary - that is decided in `navigateMediaStep`, not here.
   const canStepPrevious = !mutationPending && scopedMedia.length > 1
-    && (selectedRoutePointId !== null || requestedMediaIndex > 0);
+    && requestedMediaIndex > 0;
   const canStepNext = !mutationPending && scopedMedia.length > 1
-    && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1);
+    && requestedMediaIndex < scopedMedia.length - 1;
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
   const heldRenewalError = renewalError?.id === shownAsset?.id && shownRead?.status === "ready"
     ? renewalError : null;
@@ -2791,11 +2838,8 @@ export function JourneyStory({
           {!mobileLayout && scopedMedia.length > 1 ? <button
             type="button"
             disabled={mutationPending}
-            onClick={() => navigateFromPicture(
-              selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1 ? 1 : -1,
-              true,
-            )}
-          >{selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1 ? "查看下一张" : "查看上一张"}</button> : null}
+            onClick={() => navigateFromPicture(1, true)}
+          >查看下一张</button> : null}
         </div>
       ) : null}
       {videoNeedsResume ? (
@@ -2959,9 +3003,10 @@ export function JourneyStory({
     const index = scopedMediaIndex.indexById.get(targetId);
     if (index === undefined) return;
     // A swipe is the latest navigation direction for the warm window too.
+    // #76 P1: a swipe follows the Journey cursor, so the direction is measured
+    // against the next media across the whole Journey.
     const from = storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById);
-    mediaNavigationDirection.current = storyMediaNeighborIndex(from, scopedMedia.length, 1,
-      selectedRoutePointId !== null) === index ? 1 : -1;
+    mediaNavigationDirection.current = storyMediaNeighborIndex(from, scopedMedia.length, 1, true) === index ? 1 : -1;
     requestedMediaRef.current = targetId;
     setPendingMediaTarget(null);
     setIncomingAssetId(null);
@@ -3000,7 +3045,9 @@ export function JourneyStory({
     }
     if (mutationPending || overview) return;
     storyMediaGestureConsumedRef.current = false;
-    navigateMediaStep(direction, selectedRoutePointId !== null);
+    // #76 P1: one cursor, one boundary rule - the picture buttons step through
+    // the whole Journey exactly like the keyboard, swipe and autoplay do.
+    navigateMediaStep(direction, true);
   }
 
   function revealMobileFullscreenControls() {
@@ -3058,8 +3105,10 @@ export function JourneyStory({
     if (result.uploadedCount > 0) {
       try {
         const refreshedJourney = await onMediaAdded(journey.id);
+        // #76 P1: the index lands on the Journey-wide cursor, so it is resolved in the
+        // Journey sequence rather than in a Route Point-scoped list.
         const refreshedMedia = refreshedJourney
-          ? storyMediaForScope(refreshedJourney, targetRoutePointId)
+          ? playbackStoryMedia(refreshedJourney)
           : [];
         const uploadedAssetIndex = storyUploadedAssetIndex(
           refreshedMedia,
@@ -3366,7 +3415,19 @@ export function JourneyStory({
     setPlayingFromGesture(false);
     invalidatePlacementAnalysis();
     setSelectedRoutePointId(routePointId);
-    setAssetIndex(0);
+    // #76 P1 + #595: picking a Route Point jumps the Journey cursor to that
+    // Route Point. A Route Point that presents its own note becomes the chapter;
+    // anything else starts on its own media inside the Journey sequence, which
+    // keeps playing past it in either direction. A Route Point with neither
+    // media nor a note has nothing to present, so it must not blank the stage.
+    const presentsOwnNote = routePointPresentsNote(journey, scopedMedia, routePointId);
+    if (presentsOwnNote) {
+      setNoteBeatRoutePointId(routePointId);
+      setAssetIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
+    } else {
+      setNoteBeatRoutePointId(null);
+      setAssetIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
+    }
     setShownAssetId(null);
     setIncomingAssetId(null);
     setPendingMediaTarget(null);
@@ -3381,6 +3442,18 @@ export function JourneyStory({
 
   // Buttons, keyboard and automatic advance share the same readiness gate.
   function navigateMediaStep(direction: -1 | 1, wrap = false) {
+    // #76 P1 + #595: while a media-free Route Point is presented as its own note
+    // beat, stepping has to follow the sequence around that beat. The hidden
+    // cursor sits on the nearest media, so a plain neighbour search would step
+    // back past it and skip one photo, making previous and next asymmetric.
+    if (noteBeatRoutePointId !== null && journey) {
+      const neighbours = storyNoteBeatNeighbourMediaIndexes(journey, noteBeatRoutePointId);
+      const index = direction < 0 ? neighbours.previousIndex : neighbours.nextIndex;
+      if (index !== null && index >= 0 && index < scopedMedia.length) {
+        navigateToMedia(index, direction);
+      }
+      return;
+    }
     const anchorIndex = storyAssetIndexForId(scopedMedia, requestedMediaRef.current, assetIndex, scopedMediaIndex.indexById);
     const index = storyMediaNeighborIndex(anchorIndex, scopedMedia.length, direction, wrap);
     if (index !== null) navigateToMedia(index, direction);
@@ -3443,7 +3516,7 @@ export function JourneyStory({
 
   function videoStepButtonInput(direction: -1 | 1) {
     return mediaButtonInput(direction === -1 ? "previous" : "next",
-      () => navigateMediaStep(direction, selectedRoutePointId !== null));
+      () => navigateMediaStep(direction, true));
   }
 
   function navigateToMedia(index: number, direction?: -1 | 1) {
@@ -3451,6 +3524,9 @@ export function JourneyStory({
     cancelPendingMediaDragSettle();
     const target = scopedMedia[index];
     if (!target) return;
+    // #76 P1 + #595: the cursor is back on media, so the media-free Route Point
+    // stops being the presented chapter.
+    setNoteBeatRoutePointId(null);
     mediaNavigationDirection.current = direction
       ?? (index < storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById) ? -1 : 1);
     requestedMediaRef.current = target.id;
@@ -3956,7 +4032,10 @@ export function JourneyStory({
     setDeleteMessage("");
   }
 
-  const hasStoryMedia = scopedMedia.length > 0;
+  // #76 P1: the media stage is hidden only while a media-free Route Point is being
+  // presented as its own note beat. Every other position in the Journey shows
+  // media, because the cursor is no longer truncated to one Route Point.
+  const hasStoryMedia = scopedMedia.length > 0 && noteBeatRoutePointId === null;
   const showDesktopChapterRail = !mobileLayout && visualMedia.length > 0;
   const canEditStory = Boolean(manageMedia || updateJourneyNotes || canEditJourney || canShareJourney || onDelete);
   const showSoundtrack = Boolean(soundtrack || (manageMedia && mediaEditing));
@@ -3978,8 +4057,10 @@ export function JourneyStory({
       <button
         type="button"
         disabled={mutationPending}
-        className={selectedRoutePointId === null ? "is-active" : ""}
-        aria-pressed={selectedRoutePointId === null}
+        // The whole-Journey chip is the current chapter only while nothing on screen
+        // belongs to a Route Point (Journey-level intro media).
+        className={activeChapterRoutePointId === null ? "is-active" : ""}
+        aria-pressed={activeChapterRoutePointId === null}
         onClick={() => selectMediaScope(null)}
       >
         {mobileLayout ? <span>00</span> : null}
@@ -3992,11 +4073,15 @@ export function JourneyStory({
           type="button"
           disabled={mutationPending}
           className={[
-            selectedRoutePointId === point.id ? "is-active" : "",
-            selectedRoutePointId === null && activeChapterRoutePointId === point.id ? "is-chapter-active" : "",
+            // #76 P1: the rail names the CURRENT chapter, which follows the media
+            // on screen. The Route Point Story was opened on stays the
+            // management/upload target internally, but marking that one active
+            // too made two Route Points look current at once - the desktop rail
+            // styles `is-active` and `is-chapter-active` identically.
+            activeChapterRoutePointId === point.id ? "is-active" : "",
           ].filter(Boolean).join(" ")}
-          aria-pressed={selectedRoutePointId === point.id}
-          aria-current={selectedRoutePointId === null && activeChapterRoutePointId === point.id ? "step" : undefined}
+          aria-pressed={activeChapterRoutePointId === point.id}
+          aria-current={activeChapterRoutePointId === point.id ? "step" : undefined}
           data-route-point-id={point.id}
           onClick={() => selectMediaScope(point.id)}
         >
@@ -4227,7 +4312,12 @@ export function JourneyStory({
               direction={mediaNavigationDirection.current}
               reads={mediaReads}
               warmIds={fullscreen ? undefined : warmDecodeIds}
-              wrap={selectedRoutePointId !== null}
+              // #76 P1: the painted stack does NOT wrap, even though the cursor
+              // does. Wrapping here makes the stage paint the Journey's last
+              // media as the previous page of its first, so a settled swipe no
+              // longer finds its neighbour among the painted pages. The cursor
+              // wraps in `navigateMediaStep` instead.
+              wrap={false}
               videoAssetId={storyStageVideoAsset?.id ?? null}
               onSettled={settleIncoming}
               onMediaError={reportStageMediaError}
@@ -4614,7 +4704,7 @@ export function JourneyStory({
                 {mediaPresentation !== "note-overlay" && (!desktopEditing || mobileLayout) && activeChapterRoutePoint && activeChapterRoutePoint.note ? (
                   <blockquote className="journey-story__point-note">{activeChapterRoutePoint.note}</blockquote>
                 ) : null}
-                {journey.note && !(overlayNote?.key === "journey") && (!desktopEditing || mobileLayout) && (mobileLayout || (!selectedRoutePoint && !activeChapterRoutePoint?.note)) ? <p className="journey-story__note">{journey.note}</p> : null}
+                {journey.note && !(overlayNote?.key === "journey") && (!desktopEditing || mobileLayout) && (mobileLayout || !activeChapterRoutePoint?.note) ? <p className="journey-story__note">{journey.note}</p> : null}
               </>
             )}
             {mobileLayout && mobileManageMode ? (
@@ -4916,7 +5006,9 @@ export function JourneyStory({
             direction={mediaNavigationDirection.current}
             reads={mediaReads}
             warmIds={fullscreen ? warmDecodeIds : undefined}
-            wrap={selectedRoutePointId !== null}
+            // #76 P1: the immersive stage paints the same bounded stack as the
+            // inline stage for the same reason; only the cursor wraps.
+            wrap={false}
             videoAssetId={storyStageVideoAsset?.id ?? null}
             onSettled={settleIncoming}
             onMediaError={reportStageMediaError}

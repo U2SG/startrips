@@ -1293,6 +1293,109 @@ describe("JourneyStory", () => {
   });
 });
 
+// #76: the Route Point rail names the CURRENT chapter, which follows the media
+// on screen. The Route Point Story was opened on is still the management/upload
+// target, but it must not keep looking active once the cursor has crossed into
+// another Route Point.
+describe("chapter rail follows the presented media across Route Points (#76)", () => {
+  const crossingPoint = (id: string, sortOrder: number) => ({
+    id,
+    journeyId: journey.id,
+    sortOrder,
+    label: `Stop ${id}`,
+    latitude: sortOrder,
+    longitude: sortOrder,
+    occurredAt: null,
+    note: null,
+    isStop: true,
+    createdAt: journey.createdAt,
+  });
+  const crossingJourney: Journey = {
+    ...journey,
+    routePoints: [crossingPoint("point-a", 0), crossingPoint("point-b", 1)],
+    media: [
+      { ...asset("a1", "image/jpeg", 0, "a1.jpg"), routePointId: "point-a" },
+      { ...asset("b1", "image/jpeg", 1, "b1.jpg"), routePointId: "point-b" },
+    ],
+  };
+
+  // The Route Point buttons that currently read as the active chapter, by
+  // either the class that paints them or the ARIA current marker.
+  const activePoints = (markup: string) =>
+    [...markup.matchAll(/<button[^>]*data-route-point-id="([^"]+)"[^>]*>/g)]
+      .filter((match) => /\bis-active\b/.test(match[0]) || /aria-current="step"/.test(match[0]))
+      .map((match) => match[1]);
+
+  const renderAt = (routePointId: string | null, initialAssetId: string | null) =>
+    renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [crossingJourney],
+      journeyId: journey.id,
+      routePointId,
+      initialAssetId,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+  it("marks exactly one Route Point active when the cursor sits on its media", () => {
+    const onA = renderAt("point-a", null);
+    expect(activePoints(onA)).toEqual(["point-a"]);
+
+    // Opened on A, but the observation is B's media: the chapter has crossed.
+    const crossed = renderAt("point-a", "b1");
+    expect(activePoints(crossed)).toEqual(["point-b"]);
+  });
+
+  it("never marks two Route Points active at once", () => {
+    for (const markup of [renderAt("point-a", null), renderAt("point-a", "b1"), renderAt("point-b", null)]) {
+      const active = activePoints(markup);
+      expect(active).toHaveLength(1);
+    }
+  });
+
+  it("keeps the whole-Journey chip current only while no Route Point is on screen", () => {
+    // Journey-level intro media means no Route Point is the chapter.
+    const introOnly: Journey = {
+      ...journey,
+      routePoints: [crossingPoint("point-a", 0)],
+      media: [{ ...asset("intro", "image/jpeg", 0, "intro.jpg"), routePointId: null }],
+    };
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [introOnly],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+    // Journey-level intro media means no Route Point is the chapter, so the
+    // whole-Journey chip is the current one.
+    const pressed = [...markup.matchAll(/<button[^>]*aria-pressed="true"[^>]*>/g)].map((match) => match[0]);
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0]).not.toContain("data-route-point-id");
+  });
+
+  it("moves the current chip off the whole-Journey chip once a Route Point is on screen", () => {
+    const onAPoint: Journey = {
+      ...journey,
+      routePoints: [crossingPoint("point-a", 0)],
+      media: [{ ...asset("a1", "image/jpeg", 0, "a1.jpg"), routePointId: "point-a" }],
+    };
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [onAPoint],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+    const pressed = [...markup.matchAll(/<button[^>]*aria-pressed="true"[^>]*>/g)].map((match) => match[0]);
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0]).toContain('data-route-point-id="point-a"');
+  });
+});
+
 describe("placement analysis supersession (#113)", () => {
   const point = (id: string, owner = "journey-1") => ({
     id, journeyId: owner, sortOrder: 0, label: id, latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt,
