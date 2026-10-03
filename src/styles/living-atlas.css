@@ -8829,6 +8829,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    Base, but it reuses the same quiet surface language and never becomes a
    Journey/Story owner. */
 .living-atlas__everyday-context {
+  box-sizing: border-box;
   position: absolute;
   z-index: var(--z-chrome-73);
   top: 96px;
