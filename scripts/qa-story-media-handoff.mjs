@@ -6055,20 +6055,28 @@ try {
         }, index, { polling: 'raf', timeout: 3_000 });
         progress.tabEnter.visited.push(await button.getAttribute('data-route-point-id') ?? 'all');
         // #76: the rail names the CURRENT chapter, which follows the media on
-        // screen. Activating a Route Point makes it current. Activating the
-        // whole-Journey chip moves the cursor into the Journey instead, so the
-        // chip stops being current and some Route Point becomes current - both
-        // are a successful activation.
-        const activatesRoutePoint = (await button.getAttribute('data-route-point-id')) !== null;
+        // screen. Activating a Route Point that owns media makes it current.
+        // Activating a media-free one steps onto the nearest media instead, so
+        // the chapter lands on whichever Route Point owns that media, and
+        // activating the whole-Journey chip moves the cursor into the Journey.
+        // What all three must do is move the chapter - that is what makes the
+        // button actionable.
+        const activatedId = await button.getAttribute('data-route-point-id');
+        const chapterBefore = await rail.evaluate((element) => (
+          element.querySelector('button[aria-pressed="true"]')?.getAttribute('data-route-point-id') ?? null
+        ));
         await page.keyboard.press('Enter');
-        await page.waitForFunction(({ buttonIndex, expectsRoutePoint }) => {
-          const rail = document.querySelector('header .journey-story__route-points');
-          const buttons = rail?.querySelectorAll('button');
+        await page.waitForFunction(({ buttonIndex, expectedId, beforeId }) => {
+          const railElement = document.querySelector('header .journey-story__route-points');
+          const buttons = railElement?.querySelectorAll('button');
           const target = buttons?.[buttonIndex];
-          if (!rail || !target) return false;
-          if (expectsRoutePoint) return target.getAttribute('aria-pressed') === 'true';
-          return rail.querySelector('button[aria-pressed="true"][data-route-point-id]') !== null;
-        }, { buttonIndex: index, expectsRoutePoint: activatesRoutePoint }, { polling: 'raf', timeout: 3_000 });
+          if (!railElement || !target) return false;
+          // Exactly one chapter is current at any time.
+          if (railElement.querySelectorAll('button[aria-pressed="true"]').length !== 1) return false;
+          const currentId = railElement
+            .querySelector('button[aria-pressed="true"]')?.getAttribute('data-route-point-id') ?? null;
+          return currentId === expectedId || currentId !== beforeId;
+        }, { buttonIndex: index, expectedId: activatedId, beforeId: chapterBefore }, { polling: 'raf', timeout: 3_000 });
         progress.tabEnter.activated += 1;
         if (index + 1 < chapterButtonCount) await page.keyboard.press('Tab');
       }
