@@ -5897,7 +5897,7 @@ try {
         const neighbor = stage?.querySelector('.story-media-pages__page:not([data-media-page="current"])[data-media-page-id]');
         const picture = current?.querySelector('img');
         const note = copy?.querySelector('.journey-story__point-note');
-        const active = rail?.querySelector('button.is-chapter-active');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!story || !rail || !copy || !stage || !pages || !current || !neighbor || !picture || !note || !active) {
           throw new Error("desktop chapter fixture did not render its presented Story");
         }
@@ -5956,7 +5956,7 @@ try {
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.waitForFunction(() => {
         const rail = document.querySelector('header .journey-story__route-points');
-        const active = rail?.querySelector('button.is-chapter-active');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!rail || !active) return false;
         const railBounds = rail.getBoundingClientRect();
         const activeBounds = active.getBoundingClientRect();
@@ -5964,7 +5964,7 @@ try {
       }, null, { polling: 'raf', timeout: 3_000 });
       progress.resized = await page.evaluate(() => {
         const rail = document.querySelector('header .journey-story__route-points');
-        const active = rail?.querySelector('button.is-chapter-active');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!rail || !active) throw new Error("resized chapter rail lost its active chapter");
         const railRect = rail.getBoundingClientRect();
         const activeRect = active.getBoundingClientRect();

@@ -4057,8 +4057,10 @@ export function JourneyStory({
       <button
         type="button"
         disabled={mutationPending}
-        className={selectedRoutePointId === null ? "is-active" : ""}
-        aria-pressed={selectedRoutePointId === null}
+        // The whole-Journey chip is the current chapter only while nothing on screen
+        // belongs to a Route Point (Journey-level intro media).
+        className={activeChapterRoutePointId === null ? "is-active" : ""}
+        aria-pressed={activeChapterRoutePointId === null}
         onClick={() => selectMediaScope(null)}
       >
         {mobileLayout ? <span>00</span> : null}
@@ -4071,14 +4073,14 @@ export function JourneyStory({
           type="button"
           disabled={mutationPending}
           className={[
-            // `is-active` marks the Route Point Story was opened on, which is
-            // still the management/upload target.
-            selectedRoutePointId === point.id ? "is-active" : "",
-            // #76 P1: the chapter highlight follows the media on screen in every
-            // case, not only when no Route Point was used to open Story.
-            activeChapterRoutePointId === point.id ? "is-chapter-active" : "",
+            // #76 P1: the rail names the CURRENT chapter, which follows the media
+            // on screen. The Route Point Story was opened on stays the
+            // management/upload target internally, but marking that one active
+            // too made two Route Points look current at once - the desktop rail
+            // styles `is-active` and `is-chapter-active` identically.
+            activeChapterRoutePointId === point.id ? "is-active" : "",
           ].filter(Boolean).join(" ")}
-          aria-pressed={selectedRoutePointId === point.id}
+          aria-pressed={activeChapterRoutePointId === point.id}
           aria-current={activeChapterRoutePointId === point.id ? "step" : undefined}
           data-route-point-id={point.id}
           onClick={() => selectMediaScope(point.id)}
