@@ -18,6 +18,7 @@ import {
   storyUploadedAssetIndex,
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
+  storyInitialNoteBeatRoutePointId,
 } from "./storyMediaPolicy";
 import { storyMediaForScope } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
@@ -341,8 +342,8 @@ describe("storyRoutePointEntryIndex (#76 P1)", () => {
 
   it("agrees with the empty-entry fallback a direct open must use (#76 P1 review)", () => {
     // A direct open on an empty Route Point and clicking it after Story opens
-    // must resolve to the same media, or entering at C would jump to the start
-    // of the Journey and replay exactly the skipped-point behaviour.
+    // must resolve the same way, or entering at C would land somewhere the
+    // click could never reach.
     const empty: Journey = {
       ...journey,
       routePoints: [
@@ -363,6 +364,38 @@ describe("storyRoutePointEntryIndex (#76 P1)", () => {
     expect(storyRoutePointEntryIndex(journeyMedia, null, routeOrder)).toBe(0);
     expect(storyRoutePointEntryIndex(journeyMedia, "missing", routeOrder)).toBe(0);
     expect(storyRoutePointEntryIndex([], "A", routeOrder)).toBe(0);
+  });
+});
+
+describe("storyInitialNoteBeatRoutePointId (#76 P1 + #595)", () => {
+  const withMedia = { ...asset("b1-media", "image/jpeg", 0, "b1.jpg"), routePointId: "B" };
+  const base = (media: JourneyMediaAsset[]): Journey => ({
+    ...journey,
+    routePoints: [
+      { id: "A", journeyId: journey.id, sortOrder: 0, label: "A", latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+      { id: "B", journeyId: journey.id, sortOrder: 1, label: "B", latitude: 2, longitude: 2, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+    ],
+    media,
+  });
+
+  it("presents a Route Point with no media of its own as its own note chapter", () => {
+    // "Empty is a valid chapter": entering B with no media shows B's note with
+    // no media stage, rather than borrowing A's media.
+    expect(storyInitialNoteBeatRoutePointId(base([withMedia]), "B")).toBeNull();
+    expect(storyInitialNoteBeatRoutePointId(base([]), "B")).toBe("B");
+  });
+
+  it("does not take over a Journey entry, an unknown point, or an explicit asset", () => {
+    expect(storyInitialNoteBeatRoutePointId(base([]), null)).toBeNull();
+    expect(storyInitialNoteBeatRoutePointId(base([]), "missing")).toBe("missing");
+    // Newest explicit intent wins: a named asset is an exact observation.
+    expect(storyInitialNoteBeatRoutePointId(base([]), "B", "b1-media")).toBeNull();
+    expect(storyInitialNoteBeatRoutePointId(undefined, "B")).toBeNull();
+  });
+
+  it("does not treat a soundtrack as this Route Point's media", () => {
+    const audio = { ...asset("track", "audio/mpeg", 0, "track.mp3"), routePointId: "B" };
+    expect(storyInitialNoteBeatRoutePointId(base([audio]), "B")).toBe("B");
   });
 });
 

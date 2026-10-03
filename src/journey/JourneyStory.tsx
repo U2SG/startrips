@@ -18,6 +18,7 @@ import {
   storyUploadedAssetIndex,
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
+  storyInitialNoteBeatRoutePointId,
   storyRoutePointEntryIndex,
 } from "./storyMediaPolicy";
 import {
@@ -746,6 +747,13 @@ export function JourneyStory({
   );
   const selectedRoutePointIdRef = useRef(selectedRoutePointId);
   selectedRoutePointIdRef.current = selectedRoutePointId;
+  // #76 P1 + #595: a Route Point with no media of its own is still a chapter.
+  // Landing on one presents that Route Point's note with no media stage, rather
+  // than borrowing a neighbour's media or blanking the Journey. It is a beat of
+  // the same cursor, not a second one: any navigation to media clears it.
+  const [noteBeatRoutePointId, setNoteBeatRoutePointId] = useState<string | null>(
+    storyInitialNoteBeatRoutePointId(journey, routePointId, initialAssetId),
+  );
   const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState & { generation?: number }>>({});
   // A re-signed read can carry the same URL (for example two requests in one
   // signing second). Presentation still needs a new resource generation.
@@ -2703,8 +2711,9 @@ export function JourneyStory({
   const asset = activeAsset;
   // #76 P1: the active chapter follows the media actually on screen. It no longer
   // follows the Route Point that was used to open Story, so crossing a Route
-  // Point boundary carries its note and place context with it.
-  const activeChapterRoutePointId = asset?.routePointId ?? null;
+  // Point boundary carries its note and place context with it. The one exception
+  // is a media-free Route Point presented as its own note beat.
+  const activeChapterRoutePointId = noteBeatRoutePointId ?? asset?.routePointId ?? null;
   const activeChapterRoutePoint = activeChapterRoutePointId
     ? journey.routePoints.find((point) => point.id === activeChapterRoutePointId) ?? null
     : null;
@@ -3385,10 +3394,17 @@ export function JourneyStory({
     setPlayingFromGesture(false);
     invalidatePlacementAnalysis();
     setSelectedRoutePointId(routePointId);
-    // #76 P1: picking a Route Point jumps the Journey cursor to that Route
-    // Point's own media instead of truncating the sequence to it. The Journey
-    // still keeps playing past that point in either direction.
-    setAssetIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
+    // #76 P1 + #595: picking a Route Point jumps the Journey cursor to that
+    // Route Point. A Route Point with no media of its own presents its own note
+    // as the chapter; anything else starts on its own media inside the
+    // Journey sequence, which keeps playing past it in either direction.
+    if (routePointId !== null && !scopedMedia.some((asset) => asset.routePointId === routePointId)) {
+      setNoteBeatRoutePointId(routePointId);
+      setAssetIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
+    } else {
+      setNoteBeatRoutePointId(null);
+      setAssetIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
+    }
     setShownAssetId(null);
     setIncomingAssetId(null);
     setPendingMediaTarget(null);
@@ -3473,6 +3489,9 @@ export function JourneyStory({
     cancelPendingMediaDragSettle();
     const target = scopedMedia[index];
     if (!target) return;
+    // #76 P1 + #595: the cursor is back on media, so the media-free Route Point
+    // stops being the presented chapter.
+    setNoteBeatRoutePointId(null);
     mediaNavigationDirection.current = direction
       ?? (index < storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById) ? -1 : 1);
     requestedMediaRef.current = target.id;
@@ -3978,7 +3997,10 @@ export function JourneyStory({
     setDeleteMessage("");
   }
 
-  const hasStoryMedia = scopedMedia.length > 0;
+  // #76 P1: the media stage is hidden only while a media-free Route Point is being
+  // presented as its own note beat. Every other position in the Journey shows
+  // media, because the cursor is no longer truncated to one Route Point.
+  const hasStoryMedia = scopedMedia.length > 0 && noteBeatRoutePointId === null;
   const showDesktopChapterRail = !mobileLayout && visualMedia.length > 0;
   const canEditStory = Boolean(manageMedia || updateJourneyNotes || canEditJourney || canShareJourney || onDelete);
   const showSoundtrack = Boolean(soundtrack || (manageMedia && mediaEditing));
