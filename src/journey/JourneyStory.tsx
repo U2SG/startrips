@@ -2542,12 +2542,14 @@ export function JourneyStory({
   const stackNeighborIndices = useMemo(() => {
     const anchorId = shownAssetId ?? activeAsset?.id;
     // #76 P1: neighbours are taken across the Journey boundary, so the warm
-    // window follows the cursor into the next Route Point instead of treating
-    // the current Route Point's own media as the wrap target.
+    // window follows the cursor into the next Route Point. They still do NOT
+    // wrap: the painted stack is a bounded rendering concern, and wrapping it
+    // pins the far end of the Journey into the warm window as an index "beyond"
+    // the three-ahead budget.
     return mediaStackNeighbors(
       anchorId === undefined ? -1 : scopedMediaIndex.indexById.get(anchorId) ?? -1,
       scopedMedia.length,
-      true,
+      false,
     );
   }, [shownAssetId, activeAsset?.id, scopedMedia, scopedMediaIndex]);
 
