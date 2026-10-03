@@ -131,7 +131,7 @@ export async function loadAccountIdentityMethods(
   return payload.methods ?? [];
 }
 
-async function claimReverification(
+export async function claimReverification(
   fetchImpl: typeof fetch,
   reverification: PasswordReverification,
 ): Promise<string> {

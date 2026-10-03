@@ -43,7 +43,7 @@ describe("mobile account surface", () => {
     const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
     const panel = auth.slice(
       auth.indexOf("function AccountPasswordPanel"),
-      auth.indexOf("function WorkspaceGate"),
+      auth.indexOf("function AccountEmailChangePanel"),
     );
     expect(panel).not.toBe("");
     // Both credential-less branches return before the change form is

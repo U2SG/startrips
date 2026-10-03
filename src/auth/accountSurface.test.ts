@@ -3,6 +3,7 @@ import {
   accountSurfaceEyebrow,
   accountSurfaceFromLocationSearch,
   accountSurfaceTitle,
+  isAccountEmailChangeSurface,
   isAccountFormSurface,
   isPasswordLinkSurface,
   nextPasswordLinkSurface,
@@ -18,7 +19,18 @@ const LINK: AccountSurface[] = [
   "password-link-expired",
   "password-link-failed",
 ];
-const DRILL: AccountSurface[] = ["invite", "edit", "password-change", ...LINK];
+const EMAIL_CHANGE: AccountSurface[] = [
+  "email-change",
+  "email-change-pending",
+  "email-change-verifying-old",
+  "email-change-verifying-new",
+  "email-change-completed",
+  "email-change-cancelled",
+  "email-change-conflicted",
+  "email-change-recovery-required",
+  "email-change-delivery-failed",
+];
+const DRILL: AccountSurface[] = ["invite", "edit", "identity-links", "password-change", ...LINK, ...EMAIL_CHANGE];
 
 describe("account surface transitions", () => {
   it("unwinds every drill surface to the account menu", () => {
@@ -67,6 +79,11 @@ describe("account surface transitions", () => {
     expect(accountSurfaceTitle("edit")).toBe("编辑图谱");
     for (const surface of LINK) {
       expect(accountSurfaceTitle(surface)).toBe("设置密码");
+      expect(accountSurfaceEyebrow(surface)).toBe("ACCOUNT SECURITY");
+    }
+    for (const surface of EMAIL_CHANGE) {
+      expect(isAccountEmailChangeSurface(surface)).toBe(true);
+      expect(accountSurfaceTitle(surface)).toBe("修改邮箱");
       expect(accountSurfaceEyebrow(surface)).toBe("ACCOUNT SECURITY");
     }
     expect(accountSurfaceEyebrow("password-change")).toBe("ACCOUNT SECURITY");

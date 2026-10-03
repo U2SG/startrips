@@ -67,7 +67,7 @@ function OwnerLivingAtlasApp() {
  * an owner atlas, an owner capability provider, or an account surface.
  */
 const shared = isSharedAtlasPathname(window.location.pathname);
-const knownAppPath = ["/", "/reset-password", "/accept-invitation"].includes(window.location.pathname);
+const knownAppPath = ["/", "/reset-password", "/accept-invitation", "/account/email-change"].includes(window.location.pathname);
 const localDemo = import.meta.env.DEV
   && window.location.pathname === "/"
   && new URLSearchParams(window.location.search).get("demo") === "1";
