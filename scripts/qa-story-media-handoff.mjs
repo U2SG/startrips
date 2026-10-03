@@ -6054,11 +6054,21 @@ try {
           return bounds.left >= railBounds.left - 2 && bounds.right <= railBounds.right + 2;
         }, index, { polling: 'raf', timeout: 3_000 });
         progress.tabEnter.visited.push(await button.getAttribute('data-route-point-id') ?? 'all');
+        // #76: the rail names the CURRENT chapter, which follows the media on
+        // screen. Activating a Route Point makes it current. Activating the
+        // whole-Journey chip moves the cursor into the Journey instead, so the
+        // chip stops being current and some Route Point becomes current - both
+        // are a successful activation.
+        const activatesRoutePoint = (await button.getAttribute('data-route-point-id')) !== null;
         await page.keyboard.press('Enter');
-        await page.waitForFunction((buttonIndex) => {
-          const buttons = document.querySelectorAll('header .journey-story__route-points button');
-          return buttons[buttonIndex]?.getAttribute('aria-pressed') === 'true';
-        }, index, { polling: 'raf', timeout: 3_000 });
+        await page.waitForFunction(({ buttonIndex, expectsRoutePoint }) => {
+          const rail = document.querySelector('header .journey-story__route-points');
+          const buttons = rail?.querySelectorAll('button');
+          const target = buttons?.[buttonIndex];
+          if (!rail || !target) return false;
+          if (expectsRoutePoint) return target.getAttribute('aria-pressed') === 'true';
+          return rail.querySelector('button[aria-pressed="true"][data-route-point-id]') !== null;
+        }, { buttonIndex: index, expectsRoutePoint: activatesRoutePoint }, { polling: 'raf', timeout: 3_000 });
         progress.tabEnter.activated += 1;
         if (index + 1 < chapterButtonCount) await page.keyboard.press('Tab');
       }
