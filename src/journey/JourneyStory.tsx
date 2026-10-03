@@ -20,6 +20,7 @@ import {
   storyInitialMediaSelection,
   storyInitialNoteBeatRoutePointId,
   storyNoteBeatNeighbourMediaIndexes,
+  routePointPresentsNote,
   storyRoutePointEntryIndex,
 } from "./storyMediaPolicy";
 import {
@@ -3415,10 +3416,12 @@ export function JourneyStory({
     invalidatePlacementAnalysis();
     setSelectedRoutePointId(routePointId);
     // #76 P1 + #595: picking a Route Point jumps the Journey cursor to that
-    // Route Point. A Route Point with no media of its own presents its own note
-    // as the chapter; anything else starts on its own media inside the
-    // Journey sequence, which keeps playing past it in either direction.
-    if (routePointId !== null && !scopedMedia.some((asset) => asset.routePointId === routePointId)) {
+    // Route Point. A Route Point that presents its own note becomes the chapter;
+    // anything else starts on its own media inside the Journey sequence, which
+    // keeps playing past it in either direction. A Route Point with neither
+    // media nor a note has nothing to present, so it must not blank the stage.
+    const presentsOwnNote = routePointPresentsNote(journey, scopedMedia, routePointId);
+    if (presentsOwnNote) {
       setNoteBeatRoutePointId(routePointId);
       setAssetIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
     } else {
