@@ -2098,23 +2098,33 @@ export function JourneyStory({
     foregroundMediaIdRef.current = id;
     if (!journey) return;
     onObservationChange?.(storyLogicalObservation(
-      journey, selectedRoutePointId, id, mobileLayout, mobileStoryExpanded,
+      // #76 P1 + #595: while a media-free Route Point is the presented chapter,
+      // the nearest media must not speak for it. Publishing that asset would
+      // send the map back to a neighbouring Route Point when Story closes.
+      journey,
+      selectedRoutePointId,
+      noteBeatRoutePointId === null ? id : null,
+      mobileLayout,
+      mobileStoryExpanded,
     ));
-  }, [journey, selectedRoutePointId, mobileLayout, mobileStoryExpanded, onObservationChange]);
+  }, [journey, selectedRoutePointId, noteBeatRoutePointId, mobileLayout, mobileStoryExpanded, onObservationChange]);
   useEffect(() => {
     if (!journey) return;
     const foregroundId = foregroundMediaIdRef.current;
     onObservationChange?.(storyLogicalObservation(
       journey,
       selectedRoutePointId,
-      foregroundId && scopedMediaIndex.byId.has(foregroundId)
-        ? foregroundId : shownAssetId ?? activeAsset?.id ?? null,
+      noteBeatRoutePointId !== null
+        ? null
+        : foregroundId && scopedMediaIndex.byId.has(foregroundId)
+          ? foregroundId : shownAssetId ?? activeAsset?.id ?? null,
       mobileLayout,
       mobileStoryExpanded,
     ));
   }, [
     activeAsset?.id,
     journey,
+    noteBeatRoutePointId,
     mobileLayout,
     mobileStoryExpanded,
     onObservationChange,
