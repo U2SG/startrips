@@ -677,6 +677,84 @@ describe("Story presentation sequence (#595)", () => {
   });
 });
 
+// #555: the Journey-level cover opening. Presentation identity is not asset
+// identity: the same canonical cover row is presented once as the whole
+// Journey's opening and again later inside its own Route Point.
+describe("Journey cover presentation entry (#555)", () => {
+  const withCover = (coverOwner: string): Journey => ({
+    ...journey,
+    coverMediaAssetId: "point-cover",
+    routePoints: [point("point-0", 0, 0), point("point-1", 0, 30)],
+    media: [
+      media("a1", "point-0", "image/jpeg", 0),
+      media("point-cover", coverOwner, "image/jpeg", 1),
+      media("b1", "point-1", "image/jpeg", 2),
+    ],
+  });
+
+  it("prepends one Journey-context entry without collapsing the canonical one", () => {
+    const target = withCover("point-1");
+    const canonical = storySequenceForJourney(target);
+    const presentation = storySequenceForJourney(target, { withJourneyCoverOpening: true });
+
+    expect(presentation[0]).toEqual({
+      presentationId: `journey-cover:${target.id}:point-cover`,
+      role: "journey-cover",
+      asset: target.media[1],
+      // Journey-level context: it must not inherit the cover's own Route Point.
+      routePointId: null,
+      contextOwner: "journey",
+    });
+    // Canonical media follow in full, so nothing before the cover is skipped.
+    expect(presentation.slice(1)).toEqual(canonical);
+    expect(presentation.map((entry) => entry.presentationId)).toEqual([
+      "journey-cover:journey-1:point-cover",
+      "media:a1",
+      "media:point-cover",
+      "media:b1",
+    ]);
+  });
+
+  it("keeps the two cover appearances as distinct roles on the same asset row", () => {
+    const target = withCover("point-1");
+    const presentation = storySequenceForJourney(target, { withJourneyCoverOpening: true });
+    const coverEntries = presentation.filter((entry) => entry.asset?.id === "point-cover");
+
+    expect(coverEntries).toHaveLength(2);
+    expect(coverEntries[0].role).toBe("journey-cover");
+    expect(coverEntries[0].contextOwner).toBe("journey");
+    // Later, the same media behaves as ordinary media inside its own chapter.
+    expect(coverEntries[1].role).toBe("media");
+    expect(coverEntries[1].contextOwner).toBe("route-point");
+    // Same canonical row in both places: no duplicated media object.
+    expect(coverEntries[0].asset).toBe(coverEntries[1].asset);
+  });
+
+  it("leaves the canonical media list untouched so keepsake cannot duplicate it", () => {
+    const target = withCover("point-1");
+    // `playbackStoryMedia` is what keepsake reads. It stays the canonical list,
+    // because it always builds the sequence WITHOUT the opening.
+    expect(playbackStoryMedia(target).map((asset) => asset.id)).toEqual(["a1", "point-cover", "b1"]);
+    // Projecting the PRESENTATION sequence does carry the cover twice, which is
+    // the whole point of the entry: one Journey opening, one Route Point media.
+    const projected = storySequenceMedia(storySequenceForJourney(target, { withJourneyCoverOpening: true }));
+    expect(projected.map((asset) => asset.id)).toEqual(["point-cover", "a1", "point-cover", "b1"]);
+  });
+
+  it("adds no opening when the Journey has no visual media to open with", () => {
+    const noMedia: Journey = { ...journey, routePoints: [point("point-0", 0, 0)], media: [] };
+    expect(storySequenceForJourney(noMedia, { withJourneyCoverOpening: true }))
+      .toEqual(storySequenceForJourney(noMedia));
+  });
+
+  it("opens with the resolved cover even when none was chosen explicitly", () => {
+    const implicit = { ...journey, routePoints: [point("point-0", 0, 0)], media: [media("a1", "point-0", "image/jpeg", 0)] };
+    const presentation = storySequenceForJourney(implicit, { withJourneyCoverOpening: true });
+    expect(presentation[0]).toMatchObject({ role: "journey-cover", contextOwner: "journey" });
+    expect(presentation[0].asset?.id).toBe("a1");
+  });
+});
+
 describe("buildPlaybackSteps (#19)", () => {
   it("expands intro, per-point travel/stop/media, and outro in order", () => {
     const steps = buildPlaybackSteps(journey);
