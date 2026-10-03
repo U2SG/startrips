@@ -71,7 +71,8 @@ describe("account email change", () => {
     }
   });
 
-  it("permits a fresh change after terminal transactions but not while one is pending", () => {
+  it("permits a fresh change only after the transaction status is known", () => {
+    expect(canStartAccountEmailChange(null, false)).toBe(false);
     expect(canStartAccountEmailChange(null)).toBe(true);
     expect(canStartAccountEmailChange(change())).toBe(false);
     expect(canStartAccountEmailChange(change({ status: "completed" }))).toBe(true);

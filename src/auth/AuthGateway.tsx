@@ -912,6 +912,7 @@ function AccountEmailChangePanel({
 }) {
   const [change, setChange] = useState<AccountEmailChangeView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [statusKnown, setStatusKnown] = useState(false);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -921,6 +922,7 @@ function AccountEmailChangePanel({
       .then((next) => {
         if (cancelled) return;
         setChange(next);
+        setStatusKnown(true);
         onSurface(accountEmailChangeSurface(next));
         setMessage("");
       })
@@ -1009,7 +1011,7 @@ function AccountEmailChangePanel({
             {pending ? "处理中…" : "取消换绑"}
           </button>
         </>
-      ) : canStartAccountEmailChange(change) ? (
+      ) : canStartAccountEmailChange(change, statusKnown) ? (
         <form onSubmit={start}>
           <label><span>当前邮箱</span><input type="email" value={currentEmail} readOnly aria-readonly="true" /></label>
           <label><span>新邮箱</span><input required name="newEmail" type="email" autoComplete="email" inputMode="email" /></label>
