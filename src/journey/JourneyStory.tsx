@@ -4307,9 +4307,12 @@ export function JourneyStory({
               direction={mediaNavigationDirection.current}
               reads={mediaReads}
               warmIds={fullscreen ? undefined : warmDecodeIds}
-              // #76 P1: the inline stage follows the Journey cursor, so paging
-              // past the last media returns to the first of the Journey.
-              wrap={true}
+              // #76 P1: the painted stack does NOT wrap, even though the cursor
+              // does. Wrapping here makes the stage paint the Journey's last
+              // media as the previous page of its first, so a settled swipe no
+              // longer finds its neighbour among the painted pages. The cursor
+              // wraps in `navigateMediaStep` instead.
+              wrap={false}
               videoAssetId={storyStageVideoAsset?.id ?? null}
               onSettled={settleIncoming}
               onMediaError={reportStageMediaError}
@@ -4998,9 +5001,9 @@ export function JourneyStory({
             direction={mediaNavigationDirection.current}
             reads={mediaReads}
             warmIds={fullscreen ? warmDecodeIds : undefined}
-            // #76 P1: the immersive stage follows the same Journey cursor as the
-            // inline stage; neither may wrap inside a single Route Point.
-            wrap={true}
+            // #76 P1: the immersive stage paints the same bounded stack as the
+            // inline stage for the same reason; only the cursor wraps.
+            wrap={false}
             videoAssetId={storyStageVideoAsset?.id ?? null}
             onSettled={settleIncoming}
             onMediaError={reportStageMediaError}
