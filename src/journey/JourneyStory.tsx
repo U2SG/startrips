@@ -2109,10 +2109,16 @@ export function JourneyStory({
   const setCursorMediaIndex = (mediaIndex: number) => {
     setEntryIndex(storyCursorEntryForMediaIndex(storyCursorRef.current, mediaIndex));
   };
-  // The stage keys pages by asset id; see `storyStageMedia`.
+  // The stage keys pages by asset id; see `storyStageMedia`. Its list follows
+  // the SETTLED entry: while an incoming page is handing off, the list it
+  // started from stays, so leaving the opening does not reshuffle the painted
+  // neighbours (and their stack depth) mid-transition.
+  const stageEntryIndexRef = useRef(entryIndex);
+  if (incomingAssetId === null) stageEntryIndexRef.current = entryIndex;
+  const stageEntryIndex = stageEntryIndexRef.current;
   const stageMedia = useMemo(
-    () => storyStageMedia(storyCursor, entryIndex, scopedMedia),
-    [storyCursor, entryIndex, scopedMedia],
+    () => storyStageMedia(storyCursor, stageEntryIndex, scopedMedia),
+    [storyCursor, stageEntryIndex, scopedMedia],
   );
   const stageMediaIndex = useMemo(
     () => stageMedia === scopedMedia ? scopedMediaIndex : indexStoryMedia(stageMedia),
