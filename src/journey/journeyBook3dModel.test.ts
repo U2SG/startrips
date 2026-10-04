@@ -124,10 +124,10 @@ describe("camera fit", () => {
         expect(side === "left" ? rect.left : rect.left + rect.width).toBeCloseTo(far.x, 6);
       }
     }
-    // A deep book: at the first spread the left page lies a whole stack lower.
+    // A deep book: at the first spread the left page lies 39 sheets below the right.
     const left = faceScreenRect({ side: "left", spread: 1, sheets, frame, pixelsPerUnit, spineX: 0, pageWidth: 0.8 });
     const right = faceScreenRect({ side: "right", spread: 1, sheets, frame, pixelsPerUnit, spineX: 0, pageWidth: 0.8 });
-    expect(left.top - right.top).toBeCloseTo(BOOK_SHEET_SPACING * sheets * sin * pixelsPerUnit, 6);
+    expect(left.top - right.top).toBeCloseTo(BOOK_SHEET_SPACING * (sheets - 1) * sin * pixelsPerUnit, 6);
   });
 });
 
