@@ -1049,8 +1049,8 @@
   top: 14px;
   right: 18px;
   display: block;
-  color: #d9d3c7;
-  font: 11px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+  color: rgba(226, 240, 234, 0.9);
+  font: 11px/1.2 var(--archive-sans, Inter, ui-sans-serif, system-ui, sans-serif);
 }
 .account-dock > .account-dock__tab {
   width: 44px;
@@ -1064,6 +1064,7 @@
   color: #b9d0cb;
   background: rgba(1, 7, 8, 0.84);
   backdrop-filter: blur(14px);
+  cursor: pointer;
 }
 .account-dock__tab-chevron { transition: transform 180ms ease; }
 .account-dock.is-open .account-dock__tab-chevron { transform: rotate(180deg); }
@@ -1073,11 +1074,14 @@
   right: 0;
   width: min(380px, calc(100vw - 36px));
   box-sizing: border-box;
+  max-height: calc(100svh - 76px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: none;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid rgba(118, 198, 188, 0.2);
-  background: rgba(1, 7, 8, 0.96);
+  padding: 14px 14px 12px;
+  font-size: 13px;
+  border: 1px solid rgba(118, 198, 188, 0.16);
+  background: rgba(3, 15, 16, 0.97);
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
   backdrop-filter: blur(18px);
 }
@@ -1091,23 +1095,17 @@
   opacity: 0;
   pointer-events: none;
 }
-.account-dock__identity {
-  display: block;
-  overflow: hidden;
-  color: #9bada8;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.account-dock__actions { display: flex; align-items: center; gap: 4px; }
-.account-dock__actions button { flex: 1 1 0; }
-.account-dock button { min-height: 32px; border: 0; padding: 4px 7px; color: #e8c87a; background: none; cursor: pointer; font: inherit; }
+/* The dock's content reuses the mobile sheet's identity, action-list and form
+   rules below; only the dropdown scale differs. :where() keeps this base under
+   every component rule for buttons nested inside the account panels. */
+.account-dock__panel :where(button) { min-height: 32px; border: 0; padding: 4px 7px; color: rgba(200, 225, 216, 0.85); background: none; cursor: pointer; font: inherit; }
+.account-dock__panel .account-sheet__identity { padding-bottom: 12px; }
+.account-dock__panel .account-sheet__identity h2 { font-size: 20px; }
+.account-dock__panel .account-dock__actions button { min-height: 48px; padding: 8px 2px; }
+.account-dock__panel .account-sheet__form { margin-top: 2px; border-top: 0; }
 .account-dock button:focus-visible,
-.account-dock input:focus-visible { outline: 1px solid #c8ff3d; outline-offset: 2px; }
-.account-dock form { position: static; width: auto; padding: 14px; border: 1px solid rgba(240, 234, 220, 0.18); background: #0b0f13; }
-.account-dock form label { display: grid; gap: 6px; }
-.account-dock form input,
-.account-dock form textarea { border: 1px solid rgba(240, 234, 220, 0.2); padding: 8px; color: white; background: transparent; }
-.account-dock form textarea { resize: vertical; font: inherit; }
+.account-dock input:focus-visible,
+.account-dock textarea:focus-visible { outline: 1px solid #c8ff3d; outline-offset: 2px; }
 
 body:has(.living-atlas) .account-dock {
   z-index: var(--z-chrome-90);
@@ -1115,7 +1113,7 @@ body:has(.living-atlas) .account-dock {
   right: 16px;
 }
 
-body:has(.living-atlas) .account-dock button {
+body:has(.living-atlas) .account-dock > .account-dock__tab {
   color: #c8ff3d;
 }
 
@@ -1194,7 +1192,9 @@ body:has(.living-atlas) .account-dock button {
 }
 
 .account-sheet p,
-.account-sheet h2 { margin: 0; }
+.account-sheet h2,
+.account-dock__panel p,
+.account-dock__panel h2 { margin: 0; }
 
 .account-sheet__identity p,
 .account-sheet__drill-header p {
@@ -1229,12 +1229,14 @@ body:has(.living-atlas) .account-dock button {
   font-size: 11px;
 }
 
-.account-sheet__actions {
+.account-sheet__actions,
+.account-dock__actions {
   display: grid;
   border-top: 1px solid rgba(118, 198, 188, 0.11);
 }
 
-.account-sheet__actions button {
+.account-sheet__actions button,
+.account-dock__actions button {
   min-height: 58px;
   display: grid;
   gap: 4px;
@@ -1246,8 +1248,10 @@ body:has(.living-atlas) .account-dock button {
   text-align: left;
 }
 
-.account-sheet__actions button span { font-size: 13px; }
-.account-sheet__actions button small { color: rgba(153, 184, 174, 0.56); font-size: 10px; }
+.account-sheet__actions button span,
+.account-dock__actions button span { font-size: 13px; }
+.account-sheet__actions button small,
+.account-dock__actions button small { color: rgba(153, 184, 174, 0.56); font-size: 10px; }
 
 .account-sheet__drill-header {
   min-height: 54px;
@@ -1290,7 +1294,14 @@ body:has(.living-atlas) .account-dock button {
 }
 
 .account-sheet__form textarea { resize: vertical; }
-.account-sheet__form > button {
+.account-sheet__form input[type="checkbox"] { min-height: 0; padding: 0; }
+.account-sheet__form label:has(> input[type="checkbox"]) { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
+/* The email-change and sign-in-method panels nest their real <form> inside the
+   panel wrapper; give it the same rhythm and primary submit as a direct form.
+   Secondary type="button" actions (取消, 解绑) keep their quiet styling. */
+.account-sheet__form form { display: grid; gap: 14px; }
+.account-sheet__form > button,
+.account-sheet__form form > button[type="submit"] {
   min-height: 48px;
   border: 1px solid rgba(118, 198, 188, 0.24);
   border-radius: 12px;

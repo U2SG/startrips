@@ -177,9 +177,7 @@ export function EarthExperienceMenuEntry({ surface, policy, busy, onToggle }: {
       disabled={busy}
       onClick={onToggle}
     >
-      {surface === "sheet"
-        ? <><span>地球呈现</span><small>{label}</small></>
-        : <>地球呈现：{label}</>}
+      <span>地球呈现</span><small>{label}</small>
     </button>
   );
 }
