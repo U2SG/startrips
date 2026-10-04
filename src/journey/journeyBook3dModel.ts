@@ -46,11 +46,6 @@ export function focusX(face: number, faceCount: number, pageWidth: number, orien
   return 0;
 }
 
-/**
- * The orthographic half-height that fits the book in a stage of `aspect`
- * (width / height): a spread in landscape, one page in portrait, with a
- * margin. World page height is 1.
- */
 /** Vertical gap quick_flipbook leaves between stacked sheets (world units). */
 export const BOOK_SHEET_SPACING = 0.0012;
 
@@ -68,10 +63,101 @@ export function bookTableHeight(sheets: number): number {
   return Math.min(-0.035, -BOOK_SHEET_SPACING * (Math.max(0, sheets) + 1) - 0.005);
 }
 
-export function cameraHalfHeight(aspect: number, pageWidth: number, orientation: JourneyBookOrientation): number {
-  const padding = 1.08;
-  const width = (orientation === "landscape" ? pageWidth * 2 : pageWidth) * padding;
-  return Math.max(padding / 2, width / (2 * Math.max(aspect, 1e-3)));
+/**
+ * The orthographic camera looks down at the book tilted this far about world X
+ * toward the reader, so the near edge of the spread shows the thickness of the
+ * page blocks. A flat page stays an axis-aligned rectangle on screen, its
+ * height foreshortened by cos(tilt); widths are unchanged.
+ */
+export const BOOK_CAMERA_TILT = (20 * Math.PI) / 180;
+
+/** Clearance around the book inside the frame (world units). */
+const FRAME_MARGIN = 0.05;
+const FRAME_WIDTH_PADDING = 1.08;
+
+/**
+ * The camera's view window, in world units on the camera plane: `top` and
+ * `bottom` are screen-up offsets from the world origin's projection, and
+ * `halfWidth` spans either side of the focus.
+ */
+export type BookFrame = { top: number; bottom: number; halfWidth: number };
+
+/**
+ * Screen-up position of a world point under the tilted camera. The camera sits
+ * on the +Z side, so the page edge at z = +0.5 is the near (lower) edge.
+ */
+export function screenUp(y: number, z: number, tilt = BOOK_CAMERA_TILT): number {
+  return y * Math.sin(tilt) - z * Math.cos(tilt);
+}
+
+/**
+ * Frame that fits the book in a stage of `aspect` (width / height): a spread
+ * in landscape, one page in portrait. Vertically it holds a page standing
+ * upright mid-turn (world page height is 1, so its far corner reaches
+ * sin(tilt) + cos(tilt)/2 up) and, below the near edge, the full thickness of
+ * a `sheets` book. Any slack is shared above and below.
+ */
+export function bookFrame(
+  aspect: number,
+  pageWidth: number,
+  orientation: JourneyBookOrientation,
+  sheets: number,
+  tilt = BOOK_CAMERA_TILT,
+): BookFrame {
+  const top = screenUp(1, -0.5, tilt) + FRAME_MARGIN;
+  const bottom = screenUp(-BOOK_SHEET_SPACING * (Math.max(0, sheets) + 1), 0.5, tilt) - FRAME_MARGIN;
+  const width = (orientation === "landscape" ? pageWidth * 2 : pageWidth) * FRAME_WIDTH_PADDING;
+  const safeAspect = Math.max(aspect, 1e-3);
+  const height = Math.max(top - bottom, width / safeAspect);
+  const slack = (height - (top - bottom)) / 2;
+  return { top: top + slack, bottom: bottom - slack, halfWidth: (height * safeAspect) / 2 };
+}
+
+/**
+ * World height of the page a settled side shows. quick_flipbook keeps sheet
+ * `r` at `-spacing * r` while unturned and at `-spacing * (sheets - r)` once
+ * turned, so the top of the right stack at spread `s` is sheet `s` and the top
+ * of the left stack is sheet `s - 1`.
+ */
+export function restingPageHeight(side: FaceSide, spread: number, sheets: number): number {
+  if (side === "left" || side === "closed-back") return -BOOK_SHEET_SPACING * (sheets - spread + 1);
+  return -BOOK_SHEET_SPACING * spread;
+}
+
+/**
+ * Sheets lying in each stack for a book at `progress`. A sheet in flight
+ * belongs to neither: blocks drawn for these counts stay under it.
+ */
+export function stackSheets(progress: number, sheets: number): { left: number; right: number; inFlight: boolean } {
+  const turned = Math.max(0, Math.min(sheets, Math.floor(progress + 1e-6)));
+  const inFlight = turned < sheets && progress - turned > 1e-6;
+  return { left: turned, right: sheets - turned - (inFlight ? 1 : 0), inFlight };
+}
+
+export type ScreenRect = { left: number; top: number; width: number; height: number };
+
+/**
+ * Where a settled face lies on the stage, in CSS px. `spineX` is the screen x
+ * of the spine (or of a closed book's centre); `pixelsPerUnit` the frame's
+ * scale; the face's own resting height shifts it on screen under the tilt.
+ */
+export function faceScreenRect(input: {
+  side: FaceSide;
+  spread: number;
+  sheets: number;
+  frame: BookFrame;
+  pixelsPerUnit: number;
+  spineX: number;
+  pageWidth: number;
+  tilt?: number;
+}): ScreenRect {
+  const { side, spread, sheets, frame, pixelsPerUnit, spineX, pageWidth, tilt = BOOK_CAMERA_TILT } = input;
+  const width = pageWidth * pixelsPerUnit;
+  const y = restingPageHeight(side, spread, sheets);
+  const top = (frame.top - screenUp(y, -0.5, tilt)) * pixelsPerUnit;
+  const bottom = (frame.top - screenUp(y, 0.5, tilt)) * pixelsPerUnit;
+  const left = side === "left" ? spineX - width : side === "right" ? spineX : spineX - width / 2;
+  return { left, top, width, height: bottom - top };
 }
 
 /** The face the reader is on after one step, and whether paper must turn. */

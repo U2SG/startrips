@@ -7,7 +7,7 @@ type QaPreview = {
 };
 
 const PRODUCT_QA_STATES = new Set([
-  "journey-composer", "journey-story", "journey-playback",
+  "journey-composer", "journey-story", "journey-book-3d", "journey-playback",
   "globe-controls", "globe-controls-gateway", "earth-dive",
   "living-atlas", "atlas-gateway", "brand-signature-motion",
   "recovery-surfaces", "final-acceptance", "login-v3", "login-gateway",

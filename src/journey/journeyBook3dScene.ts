@@ -1,7 +1,17 @@
 import * as THREE from "three";
 import { FlipBook } from "quick_flipbook";
 import type { JourneyBookOrientation } from "./journeyBookLayout";
-import { BOOK_SHEET_SPACING, bookTableHeight, cameraHalfHeight } from "./journeyBook3dModel";
+import {
+  BOOK_CAMERA_TILT,
+  BOOK_SHEET_SPACING,
+  bookFrame,
+  bookTableHeight,
+  faceScreenRect,
+  stackSheets,
+  type BookFrame,
+  type FaceSide,
+  type ScreenRect,
+} from "./journeyBook3dModel";
 
 /**
  * #393 3D Journey Book: the Three.js stage around Quick FlipBook
@@ -9,9 +19,10 @@ import { BOOK_SHEET_SPACING, bookTableHeight, cameraHalfHeight } from "./journey
  * 2024 bandinopla). Lighting, camera and material choices follow 3D Book 2 in
  * create-photo-flipbook-ui (MIT, Copyright (c) 2026 Haichao Li).
  *
- * The book lies on the XZ plane under a straight-down orthographic camera, so
- * a settled page is flat on screen and maps to a plain rectangle. It renders
- * only while something moves.
+ * The book lies on the XZ plane under an orthographic camera tilted toward the
+ * reader (`BOOK_CAMERA_TILT`), so a settled page still maps to a plain
+ * rectangle while the near edge shows the thickness of the page blocks. It
+ * renders only while something moves.
  */
 const MAX_PIXEL_RATIO = 2;
 const SHADOW_MAP_SIZE = 1024;
@@ -20,8 +31,50 @@ const FLIP_SECONDS = 0.78;
 const FOCUS_RATE = 9;
 const EDGE_LIFT = 0.055;
 const SETTLED_EPSILON = 1e-4;
+/** A block's top sits this far under the top sheet of its stack. */
+const BLOCK_TOP_GAP = BOOK_SHEET_SPACING * 0.4;
+/** World height of one tile of the paper-edge stripes (fixed on screen). */
+const EDGE_TILE_HEIGHT = 0.35;
+/** How far the contact shadow spreads past the book (world units). */
+const CONTACT_SPREAD = 0.07;
+const CONTACT_LIFT = 0.0015;
 
-export type ScreenRect = { left: number; top: number; width: number; height: number };
+/** Thin page edges seen on the near side of a page block, tiled vertically. */
+function paperEdgeTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 4;
+  canvas.height = 32;
+  const context = canvas.getContext("2d")!;
+  let seed = 0x51d3;
+  for (let row = 0; row < canvas.height; row += 1) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    // Alternate light page faces and slightly darker gaps, with a little jitter.
+    const shade = (row % 2 === 0 ? 228 : 204) + (seed % 9) - 4;
+    context.fillStyle = `rgb(${shade} ${shade - 3} ${shade - 10})`;
+    context.fillRect(0, row, canvas.width, 1);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  return texture;
+}
+
+/** A soft dark footprint, `inset` of each side being the blurred falloff. */
+function paintContactShadow(canvas: HTMLCanvasElement, insetX: number, insetY: number) {
+  const context = canvas.getContext("2d")!;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  const blur = Math.min(insetX * canvas.width, insetY * canvas.height) * 0.6;
+  // Draw the rectangle off canvas and keep only its blurred shadow.
+  const offset = canvas.width * 4;
+  context.shadowColor = "rgb(0 0 0 / 0.7)";
+  context.shadowBlur = blur;
+  context.shadowOffsetX = offset;
+  context.fillStyle = "#000";
+  const x = insetX * canvas.width;
+  const y = insetY * canvas.height;
+  context.fillRect(x - offset, y, canvas.width - 2 * x, canvas.height - 2 * y);
+}
 
 export class JourneyBook3dScene {
   readonly renderer: THREE.WebGLRenderer;
@@ -36,7 +89,15 @@ export class JourneyBook3dScene {
   private lastTime = 0;
   private cssWidth = 1;
   private cssHeight = 1;
-  private halfHeight = 1;
+  private orientation: JourneyBookOrientation = "landscape";
+  private frameBox: BookFrame = { top: 1, bottom: -1, halfWidth: 1 };
+  private readonly blocks: { left: THREE.Mesh; right: THREE.Mesh };
+  private readonly edgeTextures: THREE.Texture[] = [];
+  private readonly contact: THREE.Mesh;
+  private readonly contactCanvas = document.createElement("canvas");
+  private readonly contactTexture: THREE.CanvasTexture;
+  private stacksKey = "";
+  private contactKey = "";
   private focus = 0;
   private focusTarget = 0;
   /** The pointer owns progress while dragging; the book's own clock is paused. */
@@ -54,7 +115,8 @@ export class JourneyBook3dScene {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.scene.background = new THREE.Color(background);
 
-    this.camera.position.set(0, 5, 0);
+    // Tilted toward the reader on the +Z side; screen right stays world +X.
+    this.camera.position.set(0, 5 * Math.cos(BOOK_CAMERA_TILT), 5 * Math.sin(BOOK_CAMERA_TILT));
     this.camera.up.set(0, 0, -1);
     this.camera.lookAt(0, 0, 0);
 
@@ -89,6 +151,82 @@ export class JourneyBook3dScene {
     });
     this.book.scale.x = pageWidth;
     this.scene.add(this.book);
+
+    // Page blocks and the contact shadow are children of the book, so they
+    // share its `scale.x = pageWidth` and its closed-cover offset. Only the
+    // near (+Z) face of a block is ever seen; it carries the paper edges.
+    const top = new THREE.MeshStandardMaterial({ color: "#f2f0e8", roughness: 0.9, metalness: 0 });
+    const side = new THREE.MeshStandardMaterial({ color: "#d9d4c6", roughness: 0.95, metalness: 0 });
+    const block = () => {
+      const texture = paperEdgeTexture();
+      this.edgeTextures.push(texture);
+      const edge = new THREE.MeshStandardMaterial({ color: "#ffffff", map: texture, roughness: 0.95, metalness: 0 });
+      // BoxGeometry groups: +x, -x, +y, -y, +z, -z.
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), [side, side, top, top, edge, side]);
+      mesh.castShadow = true;
+      mesh.visible = false;
+      this.book.add(mesh);
+      return mesh;
+    };
+    this.blocks = { left: block(), right: block() };
+    this.blocks.left.position.x = -0.5;
+    this.blocks.right.position.x = 0.5;
+
+    this.contactCanvas.width = 256;
+    this.contactCanvas.height = 128;
+    this.contactTexture = new THREE.CanvasTexture(this.contactCanvas);
+    this.contact = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ map: this.contactTexture, transparent: true, depthWrite: false, toneMapped: false }),
+    );
+    this.contact.rotation.x = -Math.PI / 2;
+    this.contact.visible = false;
+    this.book.add(this.contact);
+  }
+
+  /**
+   * Fit the page blocks and the contact shadow to the stacks at the current
+   * progress. Runs only when a stack's sheet count changes, so a turn costs
+   * two updates and a settled book none.
+   */
+  private updateStacks() {
+    const sheets = this.sheets;
+    const { left, right, inFlight } = stackSheets(this.book.progress, sheets);
+    const key = `${sheets}:${left}:${right}`;
+    if (key === this.stacksKey) return;
+    this.stacksKey = key;
+    // The top of the left stack is sheet `left - 1`, of the right stack the
+    // first unturned sheet not in flight; each block runs down `count` sheets.
+    this.fitBlock(this.blocks.left, 0, left, -BOOK_SHEET_SPACING * (sheets - left + 1));
+    this.fitBlock(this.blocks.right, 1, right, -BOOK_SHEET_SPACING * (sheets - right));
+
+    const from = left > 0 ? -1 : 0;
+    const to = right > 0 || inFlight ? 1 : 0;
+    const contactKey = `${from}:${to}`;
+    if (to - from <= 0) {
+      this.contact.visible = false;
+      return;
+    }
+    // World footprint, then the plane grows by the spread on every side.
+    const width = (to - from) * this.pageWidth + 2 * CONTACT_SPREAD;
+    const depth = 1 + 2 * CONTACT_SPREAD;
+    if (contactKey !== this.contactKey) {
+      this.contactKey = contactKey;
+      paintContactShadow(this.contactCanvas, CONTACT_SPREAD / width, CONTACT_SPREAD / depth);
+      this.contactTexture.needsUpdate = true;
+    }
+    this.contact.scale.set(width / this.pageWidth, depth, 1);
+    this.contact.position.set((from + to) / 2, bookTableHeight(sheets) + CONTACT_LIFT, 0);
+    this.contact.visible = true;
+  }
+
+  private fitBlock(mesh: THREE.Mesh, edgeIndex: number, count: number, topSheet: number) {
+    const height = count * BOOK_SHEET_SPACING - BLOCK_TOP_GAP;
+    mesh.visible = count > 0 && height > 0;
+    if (!mesh.visible) return;
+    mesh.scale.y = height;
+    mesh.position.y = topSheet - BLOCK_TOP_GAP - height / 2;
+    this.edgeTextures[edgeIndex].repeat.set(1, height / EDGE_TILE_HEIGHT);
   }
 
   private paperMaterial(map: THREE.Texture | null): THREE.MeshStandardMaterial {
@@ -104,6 +242,10 @@ export class JourneyBook3dScene {
     for (let face = 0; face < count; face += 1) this.faceMaterials.push(this.paperMaterial(null));
     this.book.setPages([...this.faceMaterials]);
     this.table.position.y = bookTableHeight(this.sheets);
+    this.stacksKey = "";
+    this.contactKey = "";
+    this.updateStacks();
+    this.updateFrame();
     // Quick FlipBook assigns supplied materials through a promise chain;
     // assigning them directly makes the book complete in this frame.
     let index = 0;
@@ -162,20 +304,24 @@ export class JourneyBook3dScene {
   resize(width: number, height: number, orientation: JourneyBookOrientation) {
     this.cssWidth = Math.max(1, width);
     this.cssHeight = Math.max(1, height);
-    const aspect = this.cssWidth / this.cssHeight;
-    this.halfHeight = cameraHalfHeight(aspect, this.pageWidth, orientation);
+    this.orientation = orientation;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
     this.renderer.setSize(this.cssWidth, this.cssHeight, false);
+    this.updateFrame();
+  }
+
+  /** The frame depends on the stage, the orientation and the book's thickness. */
+  private updateFrame() {
+    this.frameBox = bookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets);
     this.applyCamera();
     this.requestRender();
   }
 
   private applyCamera() {
-    const aspect = this.cssWidth / this.cssHeight;
-    this.camera.left = this.focus - this.halfHeight * aspect;
-    this.camera.right = this.focus + this.halfHeight * aspect;
-    this.camera.top = this.halfHeight;
-    this.camera.bottom = -this.halfHeight;
+    this.camera.left = this.focus - this.frameBox.halfWidth;
+    this.camera.right = this.focus + this.frameBox.halfWidth;
+    this.camera.top = this.frameBox.top;
+    this.camera.bottom = this.frameBox.bottom;
     this.camera.updateProjectionMatrix();
   }
 
@@ -190,7 +336,7 @@ export class JourneyBook3dScene {
   }
 
   get pixelsPerUnit() {
-    return this.cssHeight / (2 * this.halfHeight);
+    return this.cssHeight / (this.frameBox.top - this.frameBox.bottom);
   }
 
   /** Screen x (stage CSS px) of the spine, or of the closed book's centre. */
@@ -202,18 +348,25 @@ export class JourneyBook3dScene {
     return this.pageWidth * this.pixelsPerUnit;
   }
 
+  /** On-screen height of a flat page, foreshortened by the tilt. */
   get pageHeightPx() {
-    return this.pixelsPerUnit;
+    return Math.cos(BOOK_CAMERA_TILT) * this.pixelsPerUnit;
   }
 
-  /** Where a settled face lies on the stage, in CSS px. */
-  faceRect(side: "closed-front" | "closed-back" | "left" | "right"): ScreenRect {
-    const width = this.pageWidthPx;
-    const height = this.pageHeightPx;
-    const top = this.cssHeight / 2 - height / 2;
-    const spine = this.spineX;
-    const left = side === "left" ? spine - width : side === "right" ? spine : spine - width / 2;
-    return { left, top, width, height };
+  /**
+   * Where a settled face lies on the stage, in CSS px. Each side rests at its
+   * own stack height, which the tilt turns into a vertical offset.
+   */
+  faceRect(side: FaceSide): ScreenRect {
+    return faceScreenRect({
+      side,
+      spread: Math.max(0, Math.min(this.sheets, Math.round(this.book.progress))),
+      sheets: this.sheets,
+      frame: this.frameBox,
+      pixelsPerUnit: this.pixelsPerUnit,
+      spineX: this.spineX,
+      pageWidth: this.pageWidth,
+    });
   }
 
   get progress() {
@@ -225,8 +378,11 @@ export class JourneyBook3dScene {
   }
 
   isSettled() {
+    // A turn's first frame can leave progress on the old spread; the book has
+    // settled only once it rests on the spread it was sent to.
     return !this.dragging && this.edge === null
       && Math.abs(this.book.progress - Math.round(this.book.progress)) < SETTLED_EPSILON
+      && Math.ceil(this.book.currentPage / 2) === Math.round(this.book.progress)
       && Math.abs(this.focus - this.focusTarget) < SETTLED_EPSILON;
   }
 
@@ -356,6 +512,7 @@ export class JourneyBook3dScene {
       if (Math.abs(this.focus - this.focusTarget) < SETTLED_EPSILON) this.focus = this.focusTarget;
       this.applyCamera();
     }
+    this.updateStacks();
     for (const sheet of this.dirtySheets) sheet.page.geometry.computeVertexNormals();
     this.dirtySheets.clear();
     this.renderer.render(this.scene, this.camera);
@@ -380,6 +537,8 @@ export class JourneyBook3dScene {
       }
     });
     this.book.dispose();
+    for (const texture of this.edgeTextures) texture.dispose();
+    this.contactTexture.dispose();
     for (const material of this.faceMaterials) material.dispose();
     this.blank.dispose();
     this.renderer.dispose();

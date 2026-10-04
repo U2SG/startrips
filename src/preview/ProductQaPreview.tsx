@@ -5,6 +5,7 @@ import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
 import { LivingAtlasApp } from "../journey/LivingAtlasApp";
 import { JourneyComposer } from "../journey/JourneyComposer";
 import { JourneyStory } from "../journey/JourneyStory";
+import { JourneyBook3d } from "../journey/JourneyBook3d";
 import { JourneyPlaybackOverlay } from "../journey/JourneyPlaybackOverlay";
 import { resolveSuggestedRouteDecision, toJourneyRoutes } from "../journey/journeyModel";
 import {
@@ -1294,10 +1295,45 @@ function RecoverySurfaceQaPreview() {
   );
 }
 
+/**
+ * 3D Journey Book QA: a deep book, so the stacks either side of the spine are
+ * thick enough to expose the table and tilt regressions. Cover + 78 pictures +
+ * back cover = 80 faces, 40 sheets; the Route Point has no note, so it adds no
+ * page. The QA lane serves the checked-in artworks for these assets.
+ */
+const BOOK_3D_QA_PICTURES = 78;
+const book3dQaJourney: Journey = {
+  ...storyQaJourney,
+  routePoints: storyQaJourney.routePoints.map((point) => ({ ...point, note: null })),
+  media: Array.from({ length: BOOK_3D_QA_PICTURES }, (_, index) => ({
+    ...storyQaJourney.media[0],
+    id: `00000000-0000-4000-8000-${String(5000 + index).padStart(12, "0")}`,
+    storageKey: `qa/book-3d-${index}`,
+    fileName: `book-3d-${index}.jpg`,
+    mimeType: "image/jpeg",
+    sortOrder: index,
+  })),
+};
+
+function JourneyBook3dQaPreview() {
+  return (
+    <main className="living-atlas">
+      <JourneyBook3d
+        journeys={[book3dQaJourney]}
+        journeyId={book3dQaJourney.id}
+        onClose={() => {}}
+        onOpenClassic={() => {}}
+      />
+    </main>
+  );
+}
+
 const Experience = qaState === "journey-composer"
   ? JourneyComposerQaPreview
   : qaState === "journey-story"
     ? JourneyStoryQaPreview
+  : qaState === "journey-book-3d"
+    ? JourneyBook3dQaPreview
   : qaState === "journey-playback"
     // #197: the prefetch capture needs its own image-heavy fixture, so it is a
     // sibling mode of the playback preview rather than a change to it.

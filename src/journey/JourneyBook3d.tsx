@@ -67,6 +67,14 @@ const EDGE_ZONE_PX = 28;
 /** The bottom of the live video belongs to its native controls. */
 const VIDEO_CONTROLS_BAND_PX = 52;
 
+let fineHoverQuery: MediaQueryList | null = null;
+/** Whether the primary pointer can hover precisely (a desktop mouse or trackpad). */
+function canHoverFinely(): boolean {
+  if (typeof window.matchMedia !== "function") return false;
+  fineHoverQuery ??= window.matchMedia("(hover: hover) and (pointer: fine)");
+  return fineHoverQuery.matches;
+}
+
 type FaceSurface = { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; signature: string };
 type Gesture = {
   pointerId: number;
@@ -459,8 +467,15 @@ export function JourneyBook3d({
   // a turn settles any note still arriving.
   useEffect(() => {
     if (!settled) {
-      for (const [target, state] of revealRef.current) if (state !== "done") revealRef.current.set(target, "done");
-      setRepaintTick((tick) => tick + 1);
+      // Repaint only when a note actually settled: `paint` changes with the
+      // tick, so an unconditional bump would re-run this effect for ever.
+      let changed = false;
+      for (const [target, state] of revealRef.current) {
+        if (state === "done") continue;
+        revealRef.current.set(target, "done");
+        changed = true;
+      }
+      if (changed) setRepaintTick((tick) => tick + 1);
       return;
     }
     const arriving: number[] = [];
@@ -522,6 +537,30 @@ export function JourneyBook3d({
       height: Math.round(rect.height * PLATE.height),
     });
   }, [faceCount, liveFace, orientation, settled, stageSize]);
+
+  // QA: publish where the settled faces lie, so browser QA can sample the
+  // rendered paper against them. DEV only; a production build writes nothing.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const stage = stageRef.current;
+    const scene = sceneRef.current;
+    if (!stage) return;
+    if (!scene || !settled) {
+      delete stage.dataset.qaBook;
+      return;
+    }
+    const at = Math.round(scene.progress);
+    const sides = at <= 0 ? ["closed-front"] as const : at >= scene.sheets ? ["closed-back"] as const : ["left", "right"] as const;
+    stage.dataset.qaBook = JSON.stringify({
+      spread: at,
+      face,
+      sheets: scene.sheets,
+      orientation,
+      pixelsPerUnit: scene.pixelsPerUnit,
+      spineX: scene.spineX,
+      rects: Object.fromEntries(sides.map((side) => [side, scene.faceRect(side)])),
+    });
+  }, [face, faceCount, orientation, settled, stageSize]);
 
   // A turn pauses the live video; the turning page shows its poster or still.
   // The player is not in CORS mode (deploy/README.md), so its frame cannot be
@@ -612,19 +651,27 @@ export function JourneyBook3d({
     const gesture = gestureRef.current;
     const stage = stageRef.current!.getBoundingClientRect();
     if (!gesture) {
-      if (event.pointerType !== "mouse" || reduced || orientationRef.current !== "landscape") return;
+      // The edge lift is a hover affordance: only for a fine pointer that can
+      // hover, so a tap (or a touch-emulated mouse event) never leaves it up.
+      if (event.pointerType !== "mouse" || !canHoverFinely() || reduced || orientationRef.current !== "landscape") return;
       // Lifting an edge unsettles the book, which would pause a playing video.
       if (videoRef.current && !videoRef.current.paused) return;
       if (!scene.isSettled() && !scene.hasEdge) return;
+      const spreadNow = Math.round(scene.progress);
+      const pointerX = event.clientX - stage.left;
+      // Under the tilt each side rests at its own height on screen.
+      const page = scene.faceRect(spreadNow <= 0 ? "closed-front"
+        : spreadNow >= scene.sheets ? "closed-back"
+          : pointerX < scene.spineX ? "left" : "right");
       scene.hoverEdge(edgePreviewDirection({
-        spread: Math.round(scene.progress),
+        spread: spreadNow,
         sheets: scene.sheets,
-        pointerX: event.clientX - stage.left,
+        pointerX,
         pointerY: event.clientY - stage.top,
         spineX: scene.spineX,
-        centerY: stage.height / 2,
+        centerY: page.top + page.height / 2,
         pageWidth: scene.pageWidthPx,
-        pageHeight: scene.pageHeightPx,
+        pageHeight: page.height,
         edgeZone: EDGE_ZONE_PX,
       }));
       return;

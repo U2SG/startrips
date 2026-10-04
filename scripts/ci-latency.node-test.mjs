@@ -7,15 +7,15 @@ const ci = read(".github/workflows/ci.yml");
 const reproduction = read(".github/workflows/story-autoplay-reproduction.yml");
 const job = (name) => ci.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0];
 
-test("all 33 suite commands are retained exactly once across at most eight shards", () => {
+test("all 34 suite commands are retained exactly once across at most eight shards", () => {
   const browser = job("browser-qa");
   const matrix = browser.slice(browser.indexOf("      matrix:"), browser.indexOf("\n    steps:"));
   const names = [...matrix.matchAll(/^          - name: (.+)$/gm)].map((m) => m[1]);
   assert.ok(names.length <= 8);
   assert.equal(new Set(names).size, names.length);
   const rows = [...matrix.matchAll(/^              ([a-z0-9-]+)::(.+)$/gm)];
-  assert.equal(rows.length, 33);
-  assert.equal(new Set(rows.map((m) => m[1])).size, 33);
+  assert.equal(rows.length, 34);
+  assert.equal(new Set(rows.map((m) => m[1])).size, 34);
   for (const [, suite, command] of rows) {
     const expected = suite === "login-media"
       ? "QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification"
