@@ -92,8 +92,10 @@
   cursor: pointer;
 }
 
-.story-notes-editor__actions button:hover:not(:disabled) {
-  border-color: var(--startrips-starlight);
+@media (hover: hover) and (pointer: fine) {
+  .story-notes-editor__actions button:hover:not(:disabled) {
+    border-color: var(--startrips-starlight);
+  }
 }
 
 .story-notes-editor__actions button:disabled {

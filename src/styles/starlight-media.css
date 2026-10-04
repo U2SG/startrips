@@ -104,10 +104,16 @@
     transform var(--motion-instant, 120ms) var(--motion-ease-out, ease);
 }
 
-.starlight-media-state > button:hover,
 .starlight-media-state > button:focus-visible {
   border-color: var(--startrips-aurora, #7ce0c3);
   background: rgb(124 224 195 / 0.12);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .starlight-media-state > button:hover {
+    border-color: var(--startrips-aurora, #7ce0c3);
+    background: rgb(124 224 195 / 0.12);
+  }
 }
 
 .starlight-media-state > button:active {

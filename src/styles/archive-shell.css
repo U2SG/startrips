@@ -80,11 +80,17 @@
   content: "";
 }
 
-.archive-node:hover,
 .archive-node:focus-visible,
 .archive-node.is-selected {
   color: rgba(235, 244, 240, 0.94);
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .archive-node:hover {
+    color: rgba(235, 244, 240, 0.94);
+    outline: none;
+  }
 }
 
 .archive-node:focus-visible::after,
@@ -239,11 +245,18 @@
   letter-spacing: 0.16em;
 }
 
-.archive-controls button:focus-visible,
-.archive-controls button:hover {
+.archive-controls button:focus-visible {
   border-color: var(--archive-cyan);
   color: var(--archive-ink);
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .archive-controls button:hover {
+    border-color: var(--archive-cyan);
+    color: var(--archive-ink);
+    outline: none;
+  }
 }
 
 @media (max-width: 720px) {

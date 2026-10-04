@@ -40,11 +40,18 @@
   font-size: 6px;
 }
 
-.artwork-browser-index:hover,
 .artwork-browser-index:focus-visible {
   border-color: rgba(116, 231, 208, 0.58);
   color: var(--archive-ink);
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .artwork-browser-index:hover {
+    border-color: rgba(116, 231, 208, 0.58);
+    color: var(--archive-ink);
+    outline: none;
+  }
 }
 
 .artwork-browser-lane {
@@ -179,13 +186,20 @@
   cursor: pointer;
 }
 
-.artwork-browser-pager button:hover,
 .artwork-browser-pager button:focus-visible,
-.artwork-detail-pager button:hover,
 .artwork-detail-pager button:focus-visible {
   border-color: var(--archive-cyan);
   color: var(--archive-ink);
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .artwork-browser-pager button:hover,
+  .artwork-detail-pager button:hover {
+    border-color: var(--archive-cyan);
+    color: var(--archive-ink);
+    outline: none;
+  }
 }
 
 .artwork-browser-pager span {
@@ -217,11 +231,18 @@
   font-size: 7px;
 }
 
-.artwork-detail-back:hover,
 .artwork-detail-back:focus-visible {
   border-color: var(--archive-cyan);
   color: var(--archive-ink);
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .artwork-detail-back:hover {
+    border-color: var(--archive-cyan);
+    color: var(--archive-ink);
+    outline: none;
+  }
 }
 
 .artwork-detail-stage {
@@ -348,10 +369,16 @@
   letter-spacing: 0.09em;
 }
 
-.artwork-detail-actions button:hover,
 .artwork-detail-actions button:focus-visible {
   border-color: var(--archive-cyan);
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .artwork-detail-actions button:hover {
+    border-color: var(--archive-cyan);
+    outline: none;
+  }
 }
 
 .artwork-detail-pager {

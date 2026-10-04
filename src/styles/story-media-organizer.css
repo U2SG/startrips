@@ -48,10 +48,15 @@
   transition: border-color var(--motion-ui, 260ms) ease, background var(--motion-ui, 260ms) ease;
 }
 .story-media-organizer__destination:disabled { cursor: default; }
-.story-media-organizer__destination:not(:disabled):hover,
 .story-media-organizer__destination.is-over {
   border-color: rgba(211, 210, 153, .8);
   background: rgba(61, 69, 44, .88);
+}
+@media (hover: hover) and (pointer: fine) {
+  .story-media-organizer__destination:not(:disabled):hover {
+    border-color: rgba(211, 210, 153, .8);
+    background: rgba(61, 69, 44, .88);
+  }
 }
 .story-media-organizer__folder { position: relative; display: block; width: 72px; height: 60px; }
 .story-media-organizer__folder-icon { width: 30px; height: 30px; color: #899376; stroke-width: 1.2; }

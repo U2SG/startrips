@@ -19,7 +19,8 @@
   /* Q3: the transport's own footprint (44px controls + 8px padding + 1px
      border on each side = 62px) above its bottom offset, plus a quiet gap.
      A populated chapter reserves it, so the bar never covers the media. */
-  --playback-controls-bottom: 22px;
+  /* viewport-fit=cover: every edge offset below is measured from the safe area. */
+  --playback-controls-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
   --playback-controls-reserve: calc(var(--playback-controls-bottom) + 62px + 12px);
   --playback-chapter-padding-top: 32px;
   --playback-chapter-padding-inline: 48px;
@@ -79,7 +80,7 @@
 .journey-playback__status {
   position: absolute;
   z-index: var(--z-content-4);
-  top: 18px;
+  top: calc(18px + env(safe-area-inset-top, 0px));
   left: 50%;
   max-width: min(560px, calc(100vw - 120px));
   transform: translateX(-50%);
@@ -108,8 +109,8 @@
 .journey-playback__selection-summary {
   position: absolute;
   z-index: var(--z-content-5);
-  top: 18px;
-  right: 62px;
+  top: calc(18px + env(safe-area-inset-top, 0px));
+  right: calc(62px + env(safe-area-inset-right, 0px));
   width: min(380px, calc(100vw - 120px));
   color: rgba(235, 250, 247, 0.9);
   text-align: left;
@@ -473,8 +474,8 @@
 /* Controls: bottom center, fade out on idle. */
 .journey-playback__close {
   position: absolute;
-  top: 18px;
-  right: 18px;
+  top: calc(18px + env(safe-area-inset-top, 0px));
+  right: calc(18px + env(safe-area-inset-right, 0px));
   width: 44px;
   height: 44px;
   display: grid;
@@ -489,8 +490,8 @@
 .journey-playback__return-location {
   position: absolute;
   z-index: var(--z-content-5);
-  top: 18px;
-  left: 18px;
+  top: calc(18px + env(safe-area-inset-top, 0px));
+  left: calc(18px + env(safe-area-inset-left, 0px));
   min-height: 44px;
   padding: 0 16px;
   border: 1px solid rgba(118, 198, 188, 0.42);
@@ -639,8 +640,8 @@
 /* Soundtrack: bottom-right light strip with the friendly name. */
 .journey-playback__soundtrack {
   position: absolute;
-  right: 18px;
-  bottom: 22px;
+  right: calc(18px + env(safe-area-inset-right, 0px));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
   display: grid;
   gap: 8px;
   width: min(240px, 30vw);
@@ -733,7 +734,7 @@
 
 @media (max-width: 1024px) {
   .journey-playback__soundtrack {
-    bottom: 88px;
+    bottom: calc(88px + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -745,14 +746,15 @@
    win over them still do. */
 
 :where(.journey-playback[data-mobile-v2="on"]) .journey-playback__stage {
-  padding: 24px;
+  padding: calc(24px + env(safe-area-inset-top, 0px)) calc(24px + env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px))
+    calc(24px + env(safe-area-inset-left, 0px));
 }
 
 /* Q3: compact chapters give the media the width and height the phone has. */
 .journey-playback[data-mobile-v2="on"] {
-  --playback-controls-bottom: 14px;
-  --playback-chapter-padding-top: 16px;
-  --playback-chapter-padding-inline: 12px;
+  --playback-controls-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  --playback-chapter-padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  --playback-chapter-padding-inline: calc(12px + max(env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px)));
 }
 
 .journey-playback[data-mobile-v2="on"]:is([data-playback-chapter-density="single"], [data-playback-chapter-density="few"],
@@ -761,8 +763,8 @@
 }
 
 :where(.journey-playback[data-mobile-v2="on"]) .journey-playback__selection-summary {
-  top: 12px;
-  right: 58px;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: calc(58px + env(safe-area-inset-right, 0px));
   width: min(340px, calc(100vw - 76px));
 }
 
@@ -776,7 +778,7 @@
 }
 
 :where(.journey-playback[data-mobile-v2="on"]) .journey-playback__soundtrack {
-  right: 12px;
-  bottom: 88px;
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  bottom: calc(88px + env(safe-area-inset-bottom, 0px));
   width: min(180px, 36vw);
 }

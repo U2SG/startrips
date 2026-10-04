@@ -19,6 +19,14 @@ body,
   overflow: hidden;
 }
 
+/* An app shell, not a document: a drag that reaches the root must not start
+   pull-to-refresh or rubber-band the whole page. Inner scrollers keep their
+   own `overscroll-behavior: contain`. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
 button {
   color: inherit;
   font: inherit;
@@ -408,8 +416,10 @@ html {
   background: rgba(122, 244, 237, 0.16);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(122, 244, 237, 0.3);
+@media (hover: hover) and (pointer: fine) {
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(122, 244, 237, 0.3);
+  }
 }
 
 ::-webkit-scrollbar-track {
@@ -422,6 +432,32 @@ input,
 textarea,
 [role="button"] {
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Touch baseline for controls. `manipulation` drops the double-tap-to-zoom
+   wait so a tap fires at once (pinch zoom stays); `user-select: none` stops a
+   long press from selecting a control's label. :where() keeps both at zero
+   specificity, so every gesture surface that states its own touch-action (Story
+   sheet handle and pan-y stages, globe canvas, Journey Book, scrubber, drag
+   grips) still wins. Content text stays selectable: only controls are listed. */
+:where(button, a[href], [role="button"], [role="tab"], summary) {
+  touch-action: manipulation;
+}
+
+:where(button, [role="button"], [role="tab"], summary) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* iOS Safari zooms the page when a focused field is under 16px and does not
+   zoom back; the fix is the size, never maximum-scale. Coarse pointers only, so
+   desktop typography is unchanged. `!important` because component rules set
+   smaller sizes at higher specificity; a field designed larger than the floor
+   opts out by name. */
+@media (pointer: coarse) {
+  :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]), textarea, select):not(.journey-title-field input, .editor-field--year input) {
+    font-size: 16px !important;
+  }
 }
 
 /* Fallback focus ring; :where keeps it below every component-level style. */
