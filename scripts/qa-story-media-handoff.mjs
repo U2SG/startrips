@@ -6084,6 +6084,34 @@ try {
         progress.tabEnter.activated += 1;
         if (index + 1 < chapterButtonCount) await page.keyboard.press('Tab');
       }
+      // #76: the loop ends with Route Point 20 selected and the cursor on 17's
+      // media. Stepping back crosses into Route Point 04's media while 20 stays
+      // selected; the rail must scroll the current chapter into view, not keep
+      // the selected entry point there.
+      await page.evaluate((selector) => (
+        document.querySelector(selector)?.querySelector('[data-story-media-pages]')?.focus()
+      ), STAGE);
+      await page.keyboard.press('ArrowLeft');
+      await waitForSettledAsset(page, I1);
+      await page.waitForFunction(() => {
+        const railElement = document.querySelector('header .journey-story__route-points');
+        const active = railElement?.querySelector('button[aria-pressed="true"]');
+        if (!railElement || !active) return false;
+        const railBounds = railElement.getBoundingClientRect();
+        const bounds = active.getBoundingClientRect();
+        return bounds.left >= railBounds.left - 2 && bounds.right <= railBounds.right + 2;
+      }, null, { polling: 'raf', timeout: 3_000 }).catch(() => null);
+      progress.crossed = await rail.evaluate((element) => {
+        const active = element.querySelector('button[aria-pressed="true"]');
+        const railBounds = element.getBoundingClientRect();
+        const bounds = active?.getBoundingClientRect();
+        return {
+          activeRoutePointId: active?.getAttribute('data-route-point-id') ?? null,
+          activeVisible: Boolean(bounds && bounds.left >= railBounds.left - 2
+            && bounds.right <= railBounds.right + 2),
+          scrollLeft: element.scrollLeft,
+        };
+      });
       record({ name,
         claim: "at 1920x1080 twenty Route Points stay on one bounded keyboard-reachable rail above a materially larger uncropped portrait, while the current note remains in the initial viewport and changing chapter updates context without a layout jump",
         ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
@@ -6113,6 +6141,8 @@ try {
           || !progress.home.focusedAll || progress.home.scrollLeft > 2
           || progress.tabEnter.visited.length !== 21 || progress.tabEnter.activated !== 21
           || new Set(progress.tabEnter.visited).size !== 21
+          || progress.crossed.activeRoutePointId !== "00000000-0000-4000-8000-000000000303"
+          || !progress.crossed.activeVisible
           || progress.switched.activeRoutePointId !== "00000000-0000-4000-8000-000000000303"
           || !progress.switched.activeVisible || !progress.switched.currentPointLabel?.includes("04")
           || !progress.switched.noteText?.includes("海风转凉") || !progress.switched.noteVisible

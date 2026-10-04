@@ -2688,15 +2688,20 @@ export function JourneyStory({
     if (renewalError && renewalError.id !== (shownAssetId ?? activeAsset?.id)) setRenewalError(null);
   }, [renewalError, shownAssetId, activeAsset?.id]);
 
-  const chapterRailTargetId = selectedRoutePointId ?? activeAsset?.routePointId ?? null;
+  // #76 P1: the rail keeps the CURRENT chapter in view, the same one it marks
+  // pressed. Preferring the Route Point Story was opened on kept that entry
+  // point visible after the cursor crossed into another Route Point.
+  const activeChapterRoutePointId = storyActiveChapterRoutePointId(
+    noteBeatRoutePointId, activeAsset, scopedMedia.length > 0, selectedRoutePointId,
+  );
   useLayoutEffect(() => {
     if (mobileLayout) return;
     const rail = desktopChapterRailRef.current;
     if (!rail) return;
     const keepCurrentChapterVisible = () => {
       const buttons = [...rail.querySelectorAll<HTMLButtonElement>("button")];
-      const target = chapterRailTargetId
-        ? buttons.find((button) => button.dataset.routePointId === chapterRailTargetId)
+      const target = activeChapterRoutePointId
+        ? buttons.find((button) => button.dataset.routePointId === activeChapterRoutePointId)
         : buttons[0];
       if (!target) return;
       const railBounds = rail.getBoundingClientRect();
@@ -2720,7 +2725,7 @@ export function JourneyStory({
       observer.disconnect();
       rail.removeEventListener("wheel", scrollOnWheel);
     };
-  }, [chapterRailTargetId, journey?.id, mobileLayout, visualMedia.length]);
+  }, [activeChapterRoutePointId, journey?.id, mobileLayout, visualMedia.length]);
 
   if (!journey) return null;
   const selectedRoutePoint = selectedRoutePointId
@@ -2731,9 +2736,6 @@ export function JourneyStory({
   // follows the Route Point that was used to open Story, so crossing a Route
   // Point boundary carries its note and place context with it. The one exception
   // is a media-free Route Point presented as its own note beat.
-  const activeChapterRoutePointId = storyActiveChapterRoutePointId(
-    noteBeatRoutePointId, asset, scopedMedia.length > 0, selectedRoutePointId,
-  );
   const activeChapterRoutePoint = activeChapterRoutePointId
     ? journey.routePoints.find((point) => point.id === activeChapterRoutePointId) ?? null
     : null;
