@@ -1,4 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import "../styles/story-point-note.css";
 
 type Props = {
@@ -71,6 +79,29 @@ export function StoryPointNote({ routePointId, label, text }: Props) {
     setExpanded(false);
   };
 
+  // Story's own media buttons complete a touch on pointerup, because inside
+  // the Story sheet a finger's compatibility click is not guaranteed to arrive
+  // (`mediaButtonInput` in JourneyStory). These two buttons follow the same
+  // rule, and swallow the click that may still follow so it cannot act twice.
+  const touchClickAt = useRef(0);
+  const touchActivation = (activate: () => void) => ({
+    onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.pointerType !== "touch" || !event.isPrimary) return;
+      const bounds = event.currentTarget.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right
+        || event.clientY < bounds.top || event.clientY > bounds.bottom) return;
+      touchClickAt.current = performance.now();
+      activate();
+    },
+    onClick: (event: MouseEvent<HTMLButtonElement>) => {
+      if (event.detail > 0 && performance.now() - touchClickAt.current < 1_000) {
+        touchClickAt.current = 0;
+        return;
+      }
+      activate();
+    },
+  });
+
   return (
     <>
       <section
@@ -87,7 +118,7 @@ export function StoryPointNote({ routePointId, label, text }: Props) {
             className="story-point-note__expand"
             aria-expanded={expanded}
             aria-controls={sheetId}
-            onClick={() => setExpanded(true)}
+            {...touchActivation(() => setExpanded(true))}
           >展开全文</button>
         ) : null}
       </section>
@@ -107,7 +138,7 @@ export function StoryPointNote({ routePointId, label, text }: Props) {
             ref={closeRef}
             type="button"
             className="story-point-note-sheet__close"
-            onClick={collapse}
+            {...touchActivation(collapse)}
           >收起</button>
         </div>
       ) : null}
