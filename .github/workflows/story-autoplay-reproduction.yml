@@ -82,6 +82,10 @@ jobs:
         timeout-minutes: 3
         run: bash scripts/ci-ensure-ffmpeg.sh
       - name: Build selected production source
+        # The harness fetches /artworks/* fixtures from `vite preview`; keep the
+        # development-only public files that a production build strips.
+        env:
+          STARTRIPS_KEEP_DEV_STATIC: '1'
         run: pnpm build
       - name: Observe real timer handoffs and captured foreground pixels
         run: |
