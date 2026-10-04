@@ -590,6 +590,47 @@ const storyQaRouteBoundaryJourney: Journey = {
   ],
 };
 
+// #555: the Journey cover opening. The explicit cover is the LAST media of
+// the second Route Point, so the opening, canonical entry 0 and the cover's own
+// canonical entry are three different positions with three different contexts:
+// entries are [cover(103) opening, 100, 101, 102, 103].
+const storyQaCoverOpeningJourney: Journey = {
+  ...storyQaRouteBoundaryJourney,
+  coverMediaAssetId: "00000000-0000-4000-8000-000000000103",
+  routePoints: storyQaRouteBoundaryJourney.routePoints.map((point, index) => ({
+    ...point,
+    note: index === 0 ? "美术馆台阶上的第一站。" : "福康宁山的树影里，我们停了很久。",
+  })),
+};
+
+// #555: the same Journey with its cover as canonical entry 0 (the first media
+// of the first Route Point), which is also what `journeyCover` falls back to
+// without an explicit cover. Entries are [100 opening, 100, 101, 102, 103]: the
+// step off the opening is a page change between two pages of one asset.
+const storyQaCoverOpeningLeadingJourney: Journey = {
+  ...storyQaCoverOpeningJourney,
+  coverMediaAssetId: "00000000-0000-4000-8000-000000000100",
+};
+
+// #555: a cover sourced from Journey-level media (routePointId null). It sorts
+// into the intro, so it is also canonical entry 0, in its Journey role rather
+// than any Route Point's: entries are [104 opening, 104, 100, 101, 102, 103].
+const storyQaCoverOpeningIntroJourney: Journey = {
+  ...storyQaCoverOpeningJourney,
+  coverMediaAssetId: "00000000-0000-4000-8000-000000000104",
+  media: [
+    ...storyQaCoverOpeningJourney.media,
+    {
+      ...storyQaCoverOpeningJourney.media[0],
+      id: "00000000-0000-4000-8000-000000000104",
+      storageKey: "qa/story-seed-4",
+      fileName: "seed-4.png",
+      sortOrder: 4,
+      routePointId: null,
+    },
+  ],
+};
+
 const STORY_QA_MIXED_VIDEO_ASSET_ID = "00000000-0000-4000-8000-000000000152";
 const storyQaMixedJourney: Journey = {
   ...storyQaJourney,
@@ -653,7 +694,18 @@ function JourneyStoryQaPreview() {
   const desktopChapterMode = qaMode === "desktop-chapter-rail";
   const desktopChapterNoMediaMode = qaMode === "desktop-chapter-rail-no-media";
   const routeBoundaryMode = qaMode === "route-boundary";
-  const initialJourney = desktopChapterNoMediaMode
+  // #555: the only preview mode that opens as a genuine whole-Journey entry.
+  // Every other mode keeps its current starting state (no opening).
+  const coverOpeningLeadingMode = qaMode === "journey-cover-opening-leading";
+  const coverOpeningIntroMode = qaMode === "journey-cover-opening-intro";
+  const coverOpeningMode = qaMode === "journey-cover-opening" || coverOpeningLeadingMode || coverOpeningIntroMode;
+  const initialJourney = coverOpeningIntroMode
+    ? storyQaCoverOpeningIntroJourney
+    : coverOpeningLeadingMode
+    ? storyQaCoverOpeningLeadingJourney
+    : coverOpeningMode
+    ? storyQaCoverOpeningJourney
+    : desktopChapterNoMediaMode
     ? storyQaDesktopChapterNoMediaJourney
     : desktopChapterMode
     ? storyQaDesktopChapterJourney
@@ -729,6 +781,7 @@ function JourneyStoryQaPreview() {
         <JourneyStory
           journeys={journeys}
           journeyId={initialJourney.id}
+          presentJourneyCoverOpening={coverOpeningMode}
           onObservationChange={(next) => setObservation((current) => {
             if (current?.assetId === next?.assetId && current?.routePointId === next?.routePointId) return current;
             return next ? { assetId: next.assetId, routePointId: next.routePointId } : null;

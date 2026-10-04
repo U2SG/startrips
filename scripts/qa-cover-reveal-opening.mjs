@@ -3,8 +3,9 @@
 //
 // `scripts/qa-cover-reveal.mjs` grades the vendored renderer through the
 // dev-only preview. This lane grades something the preview cannot answer: that
-// the opening appears at the existing Journey cover the owner approved, on the
-// desktop active panel and the mobile sheet, that every failure mode leaves the
+// the opening appears on Story's Journey cover opening (#555) - and never on
+// the Atlas card, desktop panel or mobile sheet, which show the canonical
+// cover - on desktop and phone layouts, that every failure mode leaves the
 // canonical original cover immediately reachable, that a newer intent takes the
 // surface at once, that a cover revision opens at most once, and that nothing
 // the browser sends carries an authority beyond the ordinary session.
@@ -402,37 +403,82 @@ async function recordOpeningFramePixel(page) {
   });
 }
 
-/** Everything about the cover surface, read straight from the DOM. */
+/**
+ * #555: the Cover Reveal belongs only to Story's Journey cover opening. The
+ * surface every case below grades is that opening's page inside Story, and the
+ * Atlas card is graded as the canonical cover with no reveal at all.
+ */
+const STORY_REVEAL = ".journey-story .journey-story__cover-reveal";
+const STORY_PAGE = '.journey-story__media [data-media-page="current"]';
+
+/** Everything about the opening page in Story, read straight from the DOM. */
 async function coverState(page) {
-  return page.evaluate(() => {
-    const figure = document.querySelector(".living-atlas__active-media");
-    const stage = document.querySelector(".living-atlas__active-media-reveal");
-    const original = figure?.querySelector('img:not([data-cover-reveal-image])') ?? null;
+  return page.evaluate(({ pageSelector, revealSelector }) => {
+    const figure = document.querySelector(pageSelector);
+    const stage = document.querySelector(revealSelector);
+    const original = figure?.querySelector(":scope > img") ?? null;
     return {
       figure: Boolean(figure),
+      presentationId: figure?.getAttribute("data-media-presentation-id") ?? null,
       stage: Boolean(stage),
       phase: stage?.getAttribute("data-cover-reveal-phase") ?? null,
       degraded: stage?.getAttribute("data-cover-reveal-degraded") ?? null,
       settleReason: stage?.getAttribute("data-cover-reveal-settle-reason") ?? null,
-      canvases: figure ? figure.querySelectorAll("canvas").length : 0,
+      // The reveal's renderer lives in its overlay; the page's own frame
+      // canvas is the stage's, not the reveal's.
+      canvases: document.querySelectorAll(".journey-story__media .story-media-pages__overlay canvas").length,
       originalSrc: original instanceof HTMLImageElement ? original.src : null,
       originalComplete: original instanceof HTMLImageElement ? original.complete : false,
+    };
+  }, { pageSelector: STORY_PAGE, revealSelector: STORY_REVEAL });
+}
+
+/** The Atlas card: the canonical cover and nothing else. */
+async function cardState(page) {
+  return page.evaluate(() => {
+    const figure = document.querySelector(".living-atlas__active-media");
+    const original = figure?.querySelector("img") ?? null;
+    return {
+      figure: Boolean(figure),
+      reveal: Boolean(figure?.querySelector("[data-cover-reveal-phase]")),
+      canvases: figure ? figure.querySelectorAll("canvas").length : 0,
+      originalSrc: original instanceof HTMLImageElement ? original.src : null,
+      originalComplete: original instanceof HTMLImageElement
+        ? original.complete && original.naturalWidth > 0 : false,
     };
   });
 }
 
 /**
- * The colours actually composited over the cover, via a real screenshot.
+ * The colours actually composited over the opening picture, via a real
+ * screenshot of the box the picture is contained in.
  *
  * A WebGL drawing buffer without `preserveDrawingBuffer` cannot be read back
  * from a later task, so the frame is captured by the browser's own compositor
  * and then decoded in the page. What is graded is what a person would see.
- * Every requested point is read from ONE capture, so two probes of the same
- * call describe the same frame and can be compared to each other.
+ * Story paints its picture with `object-fit: contain` and the reveal composes
+ * the same contained box, so the probes are relative to that box, not to the
+ * page around it. Every requested point is read from ONE capture.
  */
 async function compositedColors(page, points) {
-  const figure = page.locator(".living-atlas__active-media");
-  const shot = await figure.screenshot({ type: "png" });
+  const clip = await page.evaluate((pageSelector) => {
+    const figure = document.querySelector(pageSelector);
+    if (!figure) throw new Error("Story has no current page");
+    const rect = figure.getBoundingClientRect();
+    const image = figure.querySelector(":scope > img");
+    const width = image instanceof HTMLImageElement && image.naturalWidth ? image.naturalWidth : rect.width;
+    const height = image instanceof HTMLImageElement && image.naturalHeight ? image.naturalHeight : rect.height;
+    const scale = Math.min(rect.width / width, rect.height / height);
+    const w = Math.max(2, Math.floor(width * scale));
+    const h = Math.max(2, Math.floor(height * scale));
+    return {
+      x: Math.round(rect.left + (rect.width - w) / 2),
+      y: Math.round(rect.top + (rect.height - h) / 2),
+      width: w,
+      height: h,
+    };
+  }, STORY_PAGE);
+  const shot = await page.screenshot({ type: "png", clip });
   return page.evaluate(async ({ base64, at }) => {
     const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${base64}`)).blob());
     const canvas = document.createElement("canvas");
@@ -522,12 +568,50 @@ async function openCoverSurface(page, viewport) {
   await showCoverSurface(page, viewport);
 }
 
+/**
+ * #555: open Story as a genuine whole-Journey entry, which is the one place the
+ * Cover Reveal lives, and wait for its Journey cover opening page.
+ */
+async function openStory(page, viewport) {
+  if (!(await page.locator(".living-atlas__active-media").isVisible().catch(() => false))) {
+    await showCoverSurface(page, viewport);
+  }
+  await page.getByRole("button", { name: /打开故事/ }).first().click();
+  await page.locator(".journey-story").waitFor({ timeout: 20_000 });
+  await page.waitForFunction(
+    (pageSelector) => document.querySelector(pageSelector)
+      ?.getAttribute("data-media-presentation-id")?.startsWith("journey-cover:") === true,
+    STORY_PAGE,
+    { timeout: 20_000 },
+  );
+}
+
+async function closeStory(page) {
+  await page.getByRole("button", { name: "退出旅程故事" }).first().click();
+  await page.locator(".journey-story").waitFor({ state: "detached", timeout: 20_000 });
+}
+
+/** A drag across Story's stage: Next from the opening onto canonical entry 0. */
+async function dragStoryNext(page) {
+  const box = await page.locator(".journey-story__media [data-story-media-pages]").boundingBox();
+  if (!box) throw new Error("Story stage has no box");
+  const y = box.y + box.height * 0.35;
+  await page.mouse.move(box.x + box.width * 0.75, y);
+  await page.mouse.down();
+  for (let step = 1; step <= 10; step += 1) {
+    await page.mouse.move(box.x + box.width * (0.75 - 0.045 * step), y);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  }
+  await page.mouse.up();
+}
+
 async function openCase(viewport, {
   derivative,
   reducedMotion = false,
   gated = false,
   expireOriginalRead = false,
   journey = journeyFixture(),
+  story = true,
 } = {}) {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
@@ -557,7 +641,27 @@ async function openCase(viewport, {
   }
   await installAtlasApi(page, state);
   await openCoverSurface(page, viewport);
-  return { context, page, state, pageErrors, imageRequests };
+  // #555: the Atlas card is the canonical cover and nothing else. Held long
+  // enough that a card opening would have asked for its derivative and begun.
+  await page.waitForFunction(() => {
+    const image = document.querySelector(".living-atlas__active-media img");
+    return image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0;
+  }, undefined, { timeout: 20_000 });
+  await page.waitForTimeout(1500);
+  const card = { ...(await cardState(page)), displayReads: state.calls.length };
+  if (story) await openStory(page, viewport);
+  return { context, page, state, pageErrors, imageRequests, card };
+}
+
+/** #555: the Atlas card never reveals, in every case that visits it. */
+function checkCard(name, card) {
+  check(
+    `${name}/atlas-card-shows-the-canonical-original-without-a-reveal`,
+    card.figure && !card.reveal && card.canvases === 0
+      && card.originalSrc?.startsWith(ORIGINAL_URL.split("?")[0]) === true && card.originalComplete,
+    card,
+  );
+  check(`${name}/atlas-card-asks-for-no-derivative`, card.displayReads === 0, card);
 }
 
 await mkdir(artifactDir, { recursive: true });
@@ -567,17 +671,25 @@ try {
   for (const viewport of VIEWPORTS) {
     const label = viewport.name;
 
-    // 1. Normal completion: the opening runs at the real cover surface, the
-    //    first composited frame is the authorized derivative, and the settled
-    //    surface is the canonical original with no renderer left behind.
+    // 1. Normal completion. The Atlas card shows the canonical original and
+    //    never reveals; Story's Journey cover opening runs the reveal, its first
+    //    composited frame is the authorized derivative, and it settles on the
+    //    canonical original as the opening page with no renderer left behind.
     {
       const run = await openCase(viewport);
       const { page } = run;
+      checkCard(label, run.card);
       await page.waitForFunction(
-        () => document.querySelector(".living-atlas__active-media-reveal")
+        (selector) => document.querySelector(selector)
           ?.getAttribute("data-cover-reveal-phase") === "revealing",
-        undefined,
+        STORY_REVEAL,
         { timeout: 20_000 },
+      );
+      const during = await coverState(page);
+      check(
+        `${label}/the-reveal-runs-on-the-journey-cover-opening-page`,
+        during.presentationId?.startsWith("journey-cover:") === true && during.stage,
+        during,
       );
       // Each sampled colour is bracketed by the renderer's own report of what
       // it was compositing, so a sample the reveal moved through can be told
@@ -585,20 +697,19 @@ try {
       const opened = [];
       const samples = [];
       for (let attempt = 0; attempt < 6; attempt += 1) {
-        const before = await page.evaluate(() => {
-          const stage = document.querySelector(".living-atlas__active-media-reveal");
+        const before = await page.evaluate((selector) => {
+          const stage = document.querySelector(selector);
           return {
             revealing: stage?.getAttribute("data-cover-reveal-phase") === "revealing",
             composited: stage?.getAttribute("data-cover-reveal-composited") ?? "",
           };
-        });
+        }, STORY_REVEAL);
         if (!before.revealing) break;
         const [corner, origin] = (await compositedColors(
           page, [REVEAL_PROBE, MASK_ORIGIN_PROBE],
         )).map(classify);
-        const after = await page.evaluate(() => document.querySelector(
-          ".living-atlas__active-media-reveal",
-        )?.getAttribute("data-cover-reveal-composited") ?? "");
+        const after = await page.evaluate((selector) => document.querySelector(selector)
+          ?.getAttribute("data-cover-reveal-composited") ?? "", STORY_REVEAL);
         opened.push(corner);
         samples.push({
           composited: before.composited === after ? before.composited : "moved",
@@ -613,79 +724,31 @@ try {
       );
 
       await page.waitForFunction(
-        () => document.querySelector(".living-atlas__active-media-reveal") === null,
-        undefined,
+        (selector) => document.querySelector(selector) === null,
+        STORY_REVEAL,
         { timeout: 40_000 },
       );
 
-      // Graded here, once the opening is provably over, on what the renderer
+      // Graded once the opening is provably over, on what the renderer
       // reported it composited rather than on what a screenshot happened to
-      // catch: `opened` above is a race by construction, because a slow runner
-      // can finish the whole reveal before its first sample returns and then
-      // grade the settled cover as the opening frame (#454). The sampled
-      // colours stay attached, so which cover identity was actually on screen
-      // is still reported.
+      // catch (#454): see the sampling rules this lane has always applied.
       const composited = await page.evaluate(() => window.__qaCompositedFrames ?? []);
       // The renderer's own opening frame, read off the drawing buffer as it was
-      // drawn. This is the arm that cannot go vacuous: the other two pixel arms
-      // below are both conditioned on a sample that a late screenshot may never
-      // produce, so on their own they would let a renderer that visibly opens
-      // with the canonical cover pass whenever every screenshot landed after the
-      // probe had converted. This one exists for every reveal that ever drew a
-      // frame, and an absent or unreadable reading fails rather than abstains.
+      // drawn. This arm cannot go vacuous: an absent reading fails.
       const openingPixel = await page.evaluate(() => window.__qaOpeningPixel ?? null);
       const openingImage = openingPixel !== null && openingPixel.error === undefined
         ? classify(openingPixel)
         : "unobserved";
-      // The rendered pixels stay in the first-frame verdict, but each sample is
-      // only held to what its reported identity actually determines. A sample
-      // the renderer spent entirely on `generated-first` composited nothing but
-      // the opening asset, so it must LOOK like it. A `blend` sample cannot be
-      // pinned to a colour at all: `blend` is every progress strictly between 0
-      // and 1, and the mask reaches the probed corner at a progress that
-      // depends on the stage's aspect, so on the narrow portrait stage the
-      // corner is already the canonical cover while progress is still short of
-      // 1 (#454). What a blend sample still proves is DIRECTION: the mask only
-      // ever grows, so once the probe has converted to the canonical cover it
-      // can never show the opening asset again, and a swapped or reversed draw
-      // is caught by that. A sample whose window the reveal moved through
-      // grades nothing, because grading it is exactly the defect.
       const stable = samples.filter((sample) => sample.composited !== "moved"
         && sample.composited !== "");
       const openingFrames = stable.filter((sample) => sample.composited === "generated-first");
       const converted = stable.findIndex((sample) => sample.color === "original-cover");
       const reopened = converted !== -1
         && stable.slice(converted + 1).some((sample) => sample.color === "derivative");
-      // The pixel arm that no timing can race, though it can still go quiet:
-      // when every screenshot lands after the probe converted there is no such
-      // frame to find, which is why `openingImage` above carries the verdict's
-      // non-vacuous proof and this arm only adds to it. The mask reaches its
-      // origin before it reaches the corner, so ONE frame whose corner has
-      // already become the canonical cover while its origin has NOT is
-      // geometrically impossible for a correct reveal, and is precisely what a
-      // renderer drawing the two images the wrong way round puts on screen. Graded as "the origin is not the cover" rather than "the origin
-      // is the derivative", because an inverted draw converts its origin THROUGH
-      // the feathered edge and a sample caught in that band classifies as
-      // neither image. A correct reveal cannot trip it: once the corner has
-      // converted the edge is long past the origin, so the origin is a settled
-      // cover pixel, which is the same colour `settles-on-the-canonical-original`
-      // reads at this very point.
+      // A corner already converted while the mask origin is not is impossible
+      // for a correct reveal and is what an inverted draw puts on screen.
       const inverted = samples.some((sample) => sample.color === "original-cover"
         && sample.origin !== "original-cover");
-      // `generated-first` is the ARMED state, not a played frame, so the
-      // identity stream cannot be asked to contain it (#491). The vendor flow
-      // renders progress 0 from `setImages` while this stage is still
-      // `preparing`, and the reducer drops a frame outside `revealing`; every
-      // played tick then advances by a strictly positive `now - _lastTime`
-      // delta. So the only way that identity reaches the DOM at all is React
-      // committing the `images-loaded` state before the first `frame` event
-      // batches in with it, which is a scheduling accident rather than a
-      // property of the renderer. The progress-0 draw itself is not lost:
-      // `openingImage` above is read off that exact draw, straight from the
-      // drawing buffer, and it is mandatory here because "unobserved" fails.
-      // The sibling `qa-cover-reveal.mjs` keeps grading
-      // `firstFrame.progress === 0` because its preview retains a sticky
-      // first-wins frame record instead of sampling mutations.
       const midReveal = composited.filter((identity) => identity !== "original-cover");
       check(
         `${label}/first-frame-is-the-derivative`,
@@ -695,11 +758,6 @@ try {
           && !inverted,
         { composited, opened, samples, openingPixel, openingImage },
       );
-      // The reveal must have been SEEN mid-flight and must not have frozen on
-      // the opening asset. A non-terminal identity is what a played reveal
-      // actually produces over its duration's worth of ticks, so unlike the
-      // single progress-0 commit it is not a race; a reveal that jumped
-      // straight to the settled cover leaves none.
       check(
         `${label}/the-reveal-actually-transitions`,
         midReveal.length > 0 && composited.at(-1) !== "generated-first",
@@ -708,21 +766,25 @@ try {
       const settled = await coverState(page);
       const settledColor = classify(await compositedColor(page));
       check(`${label}/settles-on-the-canonical-original`, settledColor === "original-cover", settledColor);
+      check(
+        `${label}/settles-as-the-journey-cover-opening`,
+        settled.presentationId === during.presentationId,
+        settled,
+      );
       check(`${label}/original-cover-is-the-product-image`, settled.originalSrc === ORIGINAL_URL, settled);
       check(`${label}/no-renderer-survives-the-opening`, settled.canvases === 0, settled);
 
-      // 2. Once per cover revision. Re-mounting the cover — which is what
-      //    closing and reopening the sheet does, and what crossing a
-      //    breakpoint does — must not buy a second opening.
+      // 2. Once per cover revision. Closing Story and opening it again, which
+      //    is a genuine new whole-Journey open, must not buy a second reveal.
       const callsAfterFirst = run.state.calls.length;
-      if (viewport.compact) {
-        // Without a reload: a reload is a new visit and is allowed its own
-        // opening, so it would grade nothing. This is the same session
-        // re-mounting the same cover.
-        await page.keyboard.press("Escape");
-        await page.waitForTimeout(400);
-        await showCoverSurface(page, viewport);
-      }
+      await closeStory(page);
+      const cardAfterStory = await cardState(page);
+      check(
+        `${label}/atlas-card-still-never-reveals-after-story`,
+        !cardAfterStory.reveal && cardAfterStory.canvases === 0,
+        cardAfterStory,
+      );
+      await openStory(page, viewport);
       await page.waitForTimeout(1500);
       const replayed = await coverState(page);
       check(`${label}/no-replay-for-the-same-cover-revision`, replayed.stage === false, replayed);
@@ -732,12 +794,38 @@ try {
         { before: callsAfterFirst, after: run.state.calls.length },
       );
       check(
-        `${label}/remount-still-shows-the-canonical-original`,
+        `${label}/reopened-opening-shows-the-canonical-original`,
         classify(await compositedColor(page)) === "original-cover",
         replayed,
       );
 
-      // 3. Authority: an ordinary session read, and nothing else. The browser
+      // 3. The canonical cover entry, reached next, is ordinary media: the same
+      //    asset (this cover is Journey-level media, so it is canonical entry 0)
+      //    in its own role, and it never replays the opening's reveal.
+      await dragStoryNext(page);
+      await page.waitForFunction(
+        (expected) => document.querySelector('.journey-story__media [data-media-page="current"]')
+          ?.getAttribute("data-media-presentation-id") === expected
+          && document.querySelector(".journey-story__media [data-story-media-pages]")
+            ?.getAttribute("data-media-presentation") === "settled",
+        COVER_ASSET_ID,
+        { timeout: 10_000 },
+      );
+      const atCanonical = [];
+      for (let sample = 0; sample < 10; sample += 1) {
+        await page.waitForTimeout(150);
+        atCanonical.push(await page.evaluate(() => Boolean(
+          document.querySelector(".journey-story [data-cover-reveal-phase]"),
+        )));
+      }
+      check(`${label}/canonical-cover-entry-never-replays`, !atCanonical.includes(true), atCanonical);
+      check(
+        `${label}/canonical-cover-entry-asks-for-nothing`,
+        run.state.calls.length === callsAfterFirst,
+        { before: callsAfterFirst, after: run.state.calls.length },
+      );
+
+      // 4. Authority: an ordinary session read, and nothing else. The browser
       //    never speaks a worker credential and never touches a worker route.
       const display = run.state.calls[0];
       check(`${label}/display-read-is-a-plain-get`, display?.method === "GET", display?.method);
@@ -756,30 +844,32 @@ try {
       await run.context.close();
     }
 
-    // 4. A newer intent takes the surface at once, and the opening does not
+    // 5. A newer intent takes the opening at once, and the reveal does not
     //    reclaim it when the renderer would have finished.
     {
       const run = await openCase(viewport);
       const { page } = run;
       await page.waitForFunction(
-        () => document.querySelector(".living-atlas__active-media-reveal")
+        (selector) => document.querySelector(selector)
           ?.getAttribute("data-cover-reveal-phase") === "revealing",
-        undefined,
+        STORY_REVEAL,
         { timeout: 20_000 },
       );
-      // A wheel over the cover: a real viewer intent that is deliberately not
-      // a navigation, so what is graded here is the handoff itself rather than
-      // Story taking the surface. Entering Story is case 7.
-      await page.mouse.move(viewport.width / 2, viewport.height / 2);
+      // A wheel over the stage: a real viewer intent that is deliberately not a
+      // navigation, so what is graded is the handoff itself.
+      const box = await page.locator(STORY_PAGE).boundingBox();
+      await page.mouse.move(
+        (box?.x ?? 0) + (box?.width ?? viewport.width) / 2,
+        (box?.y ?? 0) + (box?.height ?? viewport.height) / 2,
+      );
       await page.mouse.wheel(0, 40);
       // Bounded rather than zero-frame: the yield is a React commit, and the
-      // shortest preset still runs for 3.4s, so one second separates "yielded
-      // at once" from "played on to the end" without grading a paint deadline.
+      // shortest preset still runs for 3.4s.
       let yielded = true;
       try {
         await page.waitForFunction(
-          () => document.querySelector(".living-atlas__active-media-reveal") === null,
-          undefined,
+          (selector) => document.querySelector(selector) === null,
+          STORY_REVEAL,
           { timeout: 1000 },
         );
       } catch {
@@ -793,7 +883,6 @@ try {
         interruptedColor === "original-cover",
         interruptedColor,
       );
-      // Well past the reveal's own duration: completion cannot reclaim focus.
       await page.waitForTimeout(4000);
       const afterCompletion = await coverState(page);
       check(`${label}/completion-cannot-reclaim-the-surface`, afterCompletion.stage === false, afterCompletion);
@@ -801,8 +890,8 @@ try {
       await run.context.close();
     }
 
-    // 5. Every honest degradation keeps the canonical original immediately
-    //    reachable, with nothing to interpret over the final pixels.
+    // 6. Every honest degradation keeps the canonical original on the opening
+    //    page, with nothing to interpret over the final pixels.
     const degradations = [
       {
         name: "missing-derivative",
@@ -847,7 +936,8 @@ try {
       check(`${label}/${degradation.name}/no-opening`, state.stage === false, state);
       check(
         `${label}/${degradation.name}/original-cover-is-on-screen`,
-        state.originalSrc === ORIGINAL_URL && state.originalComplete,
+        state.originalSrc === ORIGINAL_URL && state.originalComplete
+          && state.presentationId?.startsWith("journey-cover:") === true,
         state,
       );
       const color = classify(await compositedColor(page));
@@ -856,11 +946,12 @@ try {
       await run.context.close();
     }
 
-    // 6. Reduced Motion goes directly to the canonical original, and asks for
-    //    no display capability it would never look at.
+    // 7. Reduced Motion goes directly to the canonical original, and asks for
+    //    no display capability it would never look at, on either surface.
     {
       const run = await openCase(viewport, { reducedMotion: true });
       const { page } = run;
+      checkCard(`${label}/reduced-motion`, run.card);
       await page.waitForTimeout(2500);
       const state = await coverState(page);
       check(`${label}/reduced-motion/no-opening`, state.stage === false, state);
@@ -872,16 +963,23 @@ try {
     }
   }
 
-  // 7. An intent DURING the pending read. The answer must not start a reveal
+  // 8. An intent DURING the pending read. The answer must not start a reveal
   //    behind a viewer who has already moved on, and must not allocate a
   //    graphics context for one.
   {
     const viewport = VIEWPORTS[0];
     const run = await openCase(viewport, { gated: true });
     const { page } = run;
-    await page.waitForFunction(() => document.querySelector(".living-atlas__active-media") !== null,
-      undefined, { timeout: 20_000 });
-    await page.mouse.move(viewport.width / 2, viewport.height / 2);
+    // The opening's display read is in flight and held open.
+    await page.waitForFunction(() => true, undefined, { timeout: 1000 });
+    const deadline = Date.now() + 20_000;
+    while (run.state.calls.length === 0 && Date.now() < deadline) await page.waitForTimeout(50);
+    check("pending-read/the-opening-asked-for-its-derivative", run.state.calls.length > 0, run.state.calls.length);
+    const box = await page.locator(STORY_PAGE).boundingBox();
+    await page.mouse.move(
+      (box?.x ?? 0) + (box?.width ?? viewport.width) / 2,
+      (box?.y ?? 0) + (box?.height ?? viewport.height) / 2,
+    );
     await page.mouse.wheel(0, 40);
     await page.keyboard.press("Shift");
     run.state.openGate();
@@ -898,50 +996,28 @@ try {
     await run.context.close();
   }
 
-  // 8. Entering Story is a newer intent, and the opening yields the surface to
-  //    it rather than playing on over a narrative the viewer asked for.
-  {
-    const viewport = VIEWPORTS[0];
-    const run = await openCase(viewport);
-    const { page } = run;
-    await page.waitForFunction(
-      () => document.querySelector(".living-atlas__active-media-reveal")
-        ?.getAttribute("data-cover-reveal-phase") === "revealing",
-      undefined,
-      { timeout: 20_000 },
-    );
-    await page.getByRole("button", { name: /打开故事/ }).first().click();
-    await page.locator(".journey-story").waitFor({ timeout: 20_000 });
-    const duringStory = await page.evaluate(() => ({
-      stage: Boolean(document.querySelector(".living-atlas__active-media-reveal")),
-      canvasesInCover: document.querySelectorAll(".living-atlas__active-media canvas").length,
-    }));
-    check("story-entry/opening-yields-to-story", duringStory.stage === false, duringStory);
-    check("story-entry/no-renderer-behind-story", duringStory.canvasesInCover === 0, duringStory);
-    check("story-entry/no-page-errors", run.pageErrors.length === 0, run.pageErrors);
-    await run.context.close();
-  }
-
-  // 9. The canonical original is re-signed WHILE the opening is on screen. The
-  //    reveal runs with the pair it opened with: a re-signed read of the same
-  //    photograph is not a new cover revision and must not restart it.
+  // 9. The canonical original is re-signed around the opening. The reveal runs
+  //    with the pair it opened with, so a re-signed read of the same
+  //    photograph never restarts it, and it settles on the current read.
+  //    Story re-signs on its own sweep, so the url the opening began with is
+  //    already the re-signed one here; the pair-holding rule across a refresh
+  //    inside one reveal is graded in `coverRevealOpening.test.ts`.
   {
     const viewport = VIEWPORTS[0];
     const run = await openCase(viewport, { expireOriginalRead: true });
     const { page } = run;
     await page.waitForFunction(
-      () => document.querySelector(".living-atlas__active-media-reveal")
+      (selector) => document.querySelector(selector)
         ?.getAttribute("data-cover-reveal-phase") === "revealing",
-      undefined,
+      STORY_REVEAL,
       { timeout: 20_000 },
     );
     // Sampled through the whole reveal, because a restart is only visible as the
     // derivative coming BACK after the cover had begun to take over.
     const samples = [];
     for (let attempt = 0; attempt < 24; attempt += 1) {
-      const stage = await page.evaluate(() => document.querySelector(
-        ".living-atlas__active-media-reveal",
-      )?.getAttribute("data-cover-reveal-phase") ?? null);
+      const stage = await page.evaluate((selector) => document.querySelector(selector)
+        ?.getAttribute("data-cover-reveal-phase") ?? null, STORY_REVEAL);
       if (stage === null) break;
       samples.push(classify(await compositedColor(page, REVEAL_PROBE)));
     }
@@ -956,27 +1032,12 @@ try {
       leftTheDerivative >= 0 && !samples.slice(leftTheDerivative).includes("derivative"),
       samples,
     );
-    // This case keeps re-signing on a one second cycle, so the canonical image
-    // is briefly absent while each refresh is in flight. Wait for the stage to
-    // be gone AND a fresh read to be on screen before grading the final state.
-    const settledHandle = await page.waitForFunction(
-      (expected) => {
-        const figure = document.querySelector(".living-atlas__active-media");
-        const stage = document.querySelector(".living-atlas__active-media-reveal");
-        const original = figure?.querySelector('img:not([data-cover-reveal-image])');
-        if (stage || !(original instanceof HTMLImageElement) || original.src !== expected
-          || !original.complete || original.naturalWidth === 0) return false;
-        // Preserve the successful observation. Another signed-read refresh can
-        // remove this image before a separate browser round trip reads it.
-        return { figure: Boolean(figure), stage: false, phase: null, degraded: null,
-          settleReason: null, canvases: figure.querySelectorAll("canvas").length,
-          originalSrc: original.src, originalComplete: original.complete };
-      },
-      ORIGINAL_URL_RESIGNED,
+    await page.waitForFunction(
+      (selector) => document.querySelector(selector) === null,
+      STORY_REVEAL,
       { timeout: 40_000 },
     );
-    const settled = await settledHandle.jsonValue();
-    await settledHandle.dispose();
+    const settled = await coverState(page);
     check("resigned-original/settles-on-the-canonical-original", settled.stage === false, settled);
     check(
       "resigned-original/the-fresh-signed-read-is-the-final-image",
@@ -988,37 +1049,20 @@ try {
     await run.context.close();
   }
 
-  // 10. The CURRENT cover revision changes under a mounted opening, with the
-  //     cover asset id unchanged. #379 is explicit that old cover data cannot
-  //     attach to a new revision, and the same asset id carrying replacement
-  //     bytes is exactly the case where that is easy to get wrong: the opening
-  //     identity moves while a read keyed only by the asset id would not.
-  //
-  //     Driven at the real product surface. The owner opens the Journey, edits
-  //     it, and saves; the Atlas refreshes and the server reports a cover whose
-  //     stored bytes have moved. Entering Story is itself a newer intent, so the
-  //     first revision's opening is already gone before the edit - what is
-  //     graded here is the SECOND revision's opening and the pixels it settles
-  //     onto, not the handoff, which is case 4 and case 8.
+  // 10. The cover revision changes with the cover asset id unchanged. #379 is
+  //     explicit that old cover data cannot attach to a new revision. Driven at
+  //     the real product surface: the owner opens the Journey from its card,
+  //     edits and saves; the Atlas refreshes onto a cover whose stored bytes
+  //     have moved. The card re-reads the new revision without revealing, and
+  //     Story's next opening reveals the NEW revision onto its own bytes.
   {
     const viewport = VIEWPORTS[0];
-    const run = await openCase(viewport);
+    const run = await openCase(viewport, { story: false });
     const { page } = run;
-    await page.waitForFunction(
-      () => document.querySelector(".living-atlas__active-media-reveal")
-        ?.getAttribute("data-cover-reveal-phase") === "revealing",
-      undefined,
-      { timeout: 20_000 },
-    );
+    checkCard("cover-revision-change", run.card);
     const readsBeforeReplacement = run.state.originalReads;
-    const callsBeforeReplacement = run.state.calls.length;
-    // Marks the exact DOM node the cover figure is mounted on, from the page
-    // rather than from product code. If the surface were torn down and rebuilt
-    // across this flow, its canonical read would restart for that reason alone
-    // and every assertion below would hold whether or not the read is keyed by
-    // the cover revision - i.e. the case would grade nothing. The marker
-    // surviving is what makes "a fresh read was issued BECAUSE the revision
-    // moved" the only reading left.
+    // Marks the exact DOM node the cover figure is mounted on, so "a fresh read
+    // was issued BECAUSE the revision moved" is the only reading left.
     await page.evaluate(() => {
       document.querySelector(".living-atlas__active-media").dataset.qaMountMark = "cover-revision";
     });
@@ -1049,13 +1093,23 @@ try {
         && run.imageRequests.includes(REPLACED_ORIGINAL_URL),
       { before: readsBeforeReplacement, after: run.state.originalReads },
     );
+    await page.waitForTimeout(1500);
+    const cardAfterEdit = await cardState(page);
+    check(
+      "cover-revision-change/the-card-shows-the-new-revision-without-a-reveal",
+      !cardAfterEdit.reveal && cardAfterEdit.canvases === 0
+        && cardAfterEdit.originalSrc === REPLACED_ORIGINAL_URL,
+      cardAfterEdit,
+    );
 
+    const callsBeforeReplacement = run.state.calls.length;
+    await openStory(page, viewport);
     // The new revision buys its own opening: a different identity, so the
     // once-per-revision ledger does not suppress it.
     await page.waitForFunction(
-      () => document.querySelector(".living-atlas__active-media-reveal")
+      (selector) => document.querySelector(selector)
         ?.getAttribute("data-cover-reveal-phase") === "revealing",
-      undefined,
+      STORY_REVEAL,
       { timeout: 20_000 },
     );
     check(
@@ -1064,14 +1118,12 @@ try {
         && run.imageRequests.includes(REPLACED_DERIVATIVE_URL),
       { before: callsBeforeReplacement, after: run.state.calls.length },
     );
-    // Sampled across the whole second opening: the previous revision's cover
-    // bytes must not appear in it at any point, which is what a canonical read
-    // still pinned to the old revision would put on screen.
+    // Sampled across the whole opening: the previous revision's cover bytes
+    // must not appear in it at any point.
     const samples = [];
     for (let attempt = 0; attempt < 24; attempt += 1) {
-      const stage = await page.evaluate(() => document.querySelector(
-        ".living-atlas__active-media-reveal",
-      )?.getAttribute("data-cover-reveal-phase") ?? null);
+      const stage = await page.evaluate((selector) => document.querySelector(selector)
+        ?.getAttribute("data-cover-reveal-phase") ?? null, STORY_REVEAL);
       if (stage === null) break;
       samples.push(classify(await compositedColor(page, REVEAL_PROBE)));
     }
@@ -1084,9 +1136,8 @@ try {
     );
 
     await page.waitForFunction(
-      () => document.querySelector(".living-atlas__active-media-reveal") === null
-        && document.querySelector(".living-atlas__active-media img") !== null,
-      undefined,
+      (selector) => document.querySelector(selector) === null,
+      STORY_REVEAL,
       { timeout: 40_000 },
     );
     const settled = await coverState(page);

@@ -15,7 +15,6 @@ import {
 } from "@tabler/icons-react";
 import { MobileAccountActionSlot, useAtlasCinematicIsolation } from "../auth/AuthGateway";
 import { isReadOnlyAtlasView, useAtlasView, type AtlasMediaRead } from "./atlasView";
-import { useCoverRevealOpening, type CoverRevealOpening } from "./useCoverRevealOpening";
 import { StartripsBrandLoader, StartripsWordmark } from "../brand/StartripsBrandMark";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
 import {
@@ -29,12 +28,6 @@ import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
 import { ShinyText } from "../motion/primitives/ShinyText";
 import { morphJourneyCard, runSharedElementMorph } from "../motion/primitives/sharedElement";
-import { CoverRevealStage } from "../reveal/CoverRevealStage";
-import {
-  holdCoverRevealOpeningPair,
-  type HeldCoverRevealPair,
-} from "./coverRevealOpening";
-import type { CoverRevealImagePair } from "../reveal/coverRevealFlow";
 import { LivingAtlasGlobe, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
 import { JourneyComposer } from "./JourneyComposer";
 import { ItineraryImportPanel } from "./ItineraryImportPanel";
@@ -697,16 +690,13 @@ function JourneyCardMedia({
   journey,
   reduceMotion,
   readMedia,
-  opening = null,
-  onOpeningSettled,
 }: {
   journey: Journey;
   reduceMotion: boolean;
   readMedia: AtlasMediaRead;
-  /** #379: the approved cover opening for this exact cover revision, if any. */
-  opening?: CoverRevealOpening | null;
-  onOpeningSettled?: () => void;
 }) {
+  // #555: the Atlas card shows the canonical cover only. The Cover Reveal
+  // belongs to Story's Journey cover opening, which owns it end to end.
   // #14: the card cover is the explicit coverMediaAssetId when set, else the
   // first visual media by sortOrder, else nothing. The soundtrack never
   // becomes a cover.
@@ -749,30 +739,9 @@ function JourneyCardMedia({
     // #379: keyed by the exact cover REVISION, not only by the asset id. The
     // asset id alone does not name the bytes — replacing the photograph behind
     // the same cover asset keeps the id and moves the verified stored-byte
-    // identity — and the opening below composes this read's url with a
-    // derivative generated from one exact revision. Refreshing only on the id
-    // would let a new revision's reveal settle onto the previous revision's
-    // canonical bytes, which is precisely what #379 forbids. Re-running also
-    // puts the read back through `loading`, so `originalUrl` is null until the
-    // new revision's own signed read has arrived.
+    // identity — so a replaced cover is re-read rather than left showing the
+    // previous revision's canonical bytes.
   }, [asset?.id, asset?.contentHash, asset?.contentHashVerified]);
-
-  // #379: the opening is an overlay on a cover that is ALREADY on screen. It
-  // needs both the canonical original read and the derivative's display read,
-  // and the original's own path above is untouched — a derivative that never
-  // arrives, arrives late or cannot be shown costs the viewer nothing.
-  const originalUrl = read.status === "ready" ? read.url : null;
-  // The pair is held for the life of one opening rather than recomputed from
-  // the current reads. The canonical original re-signs itself on a timer whose
-  // floor is one second, and `CoverRevealStage` rebuilds its renderer for a new
-  // pair, so recomputing would restart the reveal mid-flight against an image
-  // it never opened with.
-  const heldOpeningPair = useRef<HeldCoverRevealPair | null>(null);
-  const openingPair = ((): CoverRevealImagePair | null => {
-    const held = holdCoverRevealOpeningPair(heldOpeningPair.current, opening, originalUrl);
-    heldOpeningPair.current = held;
-    return held?.pair ?? null;
-  })();
 
   if (!asset) return null;
   return (
@@ -795,25 +764,6 @@ function JourneyCardMedia({
           alt={asset.fileName}
           loading="eager"
           onError={() => setRead({ status: "error" })}
-        />
-      ) : null}
-      {openingPair && !asset.mimeType.startsWith("video/") ? (
-        <CoverRevealStage
-          // A fresh mount per cover revision, so no renderer, listener or
-          // graphics context of a previous opening can outlive it.
-          key={opening!.identity}
-          className="living-atlas__active-media-reveal"
-          pair={openingPair}
-          preset={opening!.preset}
-          revision={1}
-          // The canonical cover underneath is painted with `object-fit: cover`,
-          // so the reveal has to compose the same crop of the same photograph.
-          fit="cover"
-          onStateChange={(state) => {
-            // Settled is the canonical original cover on both surfaces, so the
-            // stage is dropped rather than left holding a graphics context.
-            if (state.phase === "settled") onOpeningSettled?.();
-          }}
         />
       ) : null}
       {read.status !== "ready" ? (
@@ -1192,6 +1142,15 @@ export function LivingAtlasApp({
   const [storyJourneyId, setStoryJourneyId] = useState<string | null>(null);
   const [storyRoutePointId, setStoryRoutePointId] = useState<string | null>(null);
   const [storyInitialAssetId, setStoryInitialAssetId] = useState<string | null>(null);
+  // #555: set only by a genuine "open the whole Journey" entry. Story then
+  // starts on the Journey cover opening. Every other open path (Route Point or
+  // asset deep links, Playback return, the classic-reader handoff) clears it,
+  // because a Playback return can also name no Route Point and no asset.
+  const [storyPresentsJourneyCoverOpening, setStoryPresentsJourneyCoverOpening] = useState(false);
+  // #555: the Cover Reveal belongs only to Story's Journey cover opening; the
+  // Atlas card shows the canonical cover. Its once-per-cover-revision ledger is
+  // kept here, outside Story, so reopening Story never replays it.
+  const storyCoverRevealPlayed = useRef<Set<string>>(new Set());
   const [storyInitialSnapState, setStoryInitialSnapState] = useState<Exclude<StorySnapState, "closed">>("in-context");
   const [storyFocusVisibleControlOnOpen, setStoryFocusVisibleControlOnOpen] = useState(false);
   const [storyGlobeCover, setStoryGlobeCover] = useState({ opaqueMediaCover: false, coverTransitionActive: false });
@@ -2649,6 +2608,7 @@ export function LivingAtlasApp({
     timeCursor.selectJourney(resolution.journeyId);
     setStoryRoutePointId(resolution.routePointId);
     setStoryInitialAssetId(resolution.assetId);
+    setStoryPresentsJourneyCoverOpening(false);
     setStoryInitialSnapState(
       resolution.storySnapState === "expanded" ? "expanded" : "in-context",
     );
@@ -2657,28 +2617,6 @@ export function LivingAtlasApp({
   }, [journeys, playbackPendingMode, playbackSession.journeyId, timeCursor.selectJourney]);
   const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
 
-  // #379: the Journey cover opening, owned here rather than inside the cover
-  // component. The cover has two mount sites — the desktop active panel and
-  // the mobile sheet — and the once-per-cover-revision ledger has to outlive
-  // both, so crossing a breakpoint cannot replay an opening already seen.
-  const coverOpeningJourney = isMobileV2 ? mobileSheetJourney : (view === "planet" ? activeJourney : null);
-  const coverOpening = useCoverRevealOpening({
-    journey: coverOpeningJourney,
-    // `canManageMedia` is the capability that already separates an owner's
-    // authority over their own media from a guest's read of a shared Journey,
-    // and a guest mounts this very component through `SharedAtlasView`. V1 is
-    // owner-only, so a guest tree never even asks for a display capability.
-    // Everything after it is a surface that is already a newer intent.
-    enabled: capabilities.canManageMedia
-      // Globe focus only hides this cover's opacity, so an opening there would
-      // be spent on something nobody can see.
-      && !globeFocusMode
-      && storyJourneyId === null
-      && !playbackActive
-      && !composerOpen
-      && undoJourney === null,
-    reducedMotion: reduceMotion,
-  });
   const playbackCameraTarget = playbackSession.cameraCommand?.target ?? null;
   const playbackJourneyRoute = routes.find((route) => route.id === playbackSession.journeyId) ?? null;
   const playbackFocusPoint = playbackCameraTarget
@@ -2908,7 +2846,7 @@ export function LivingAtlasApp({
   // Journey cover or a Route Point. Route Point entry gets one short-lived
   // observation aperture beside the CURRENT projected marker; no geographic
   // coordinate is persisted in React state.
-  function openJourneyStory(journeyId: string, routePointId: string | null) {
+  function openJourneyStory(journeyId: string, routePointId: string | null, presentJourneyCoverOpening = false) {
     claimPlaybackReturnIntent();
     setStoryInitialSnapState("in-context");
     setStoryFocusVisibleControlOnOpen(false);
@@ -2947,6 +2885,7 @@ export function LivingAtlasApp({
       update: () => {
         timeCursor.selectJourney(journeyId);
         setStoryRoutePointId(routePointId);
+        setStoryPresentsJourneyCoverOpening(presentJourneyCoverOpening && routePointId === null);
         setStoryJourneyId(journeyId);
       },
       // Same-asset identity is mandatory. An image/video element is the best
@@ -2959,7 +2898,10 @@ export function LivingAtlasApp({
         const direct = [...stage.querySelectorAll<HTMLElement>("[data-shared-media-id]")]
           .find((element) => element.dataset.sharedMediaId === sharedAssetId);
         if (direct) return direct;
+        // #555: one asset can be two Story pages (the Journey cover opening and
+        // the canonical cover); the current page is the destination.
         return [...stage.querySelectorAll<HTMLElement>("[data-media-page-id]")]
+          .sort((a, b) => Number(b.dataset.mediaPage === "current") - Number(a.dataset.mediaPage === "current"))
           .find((element) => element.dataset.mediaPageId === sharedAssetId
             && element.dataset.mediaPageReady === "true") ?? null;
       },
@@ -2971,6 +2913,7 @@ export function LivingAtlasApp({
         if (!sharedAssetId) return null;
         const stage = document.querySelector<HTMLElement>(".journey-story .journey-story__media");
         return [...stage?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? []]
+          .sort((a, b) => Number(b.dataset.mediaPage === "current") - Number(a.dataset.mediaPage === "current"))
           .find((element) => element.dataset.mediaPageId === sharedAssetId) ?? null;
       },
       // Signed reads/decode settle after the opening commit. Keep the source
@@ -3004,6 +2947,7 @@ export function LivingAtlasApp({
   function openClassicStory(target: { routePointId: string | null; assetId: string | null }) {
     setStoryRoutePointId(target.routePointId);
     setStoryInitialAssetId(target.assetId);
+    setStoryPresentsJourneyCoverOpening(false);
     setStoryInitialSnapState("in-context");
     setStoryClassicFor(storyJourneyId);
   }
@@ -3013,6 +2957,10 @@ export function LivingAtlasApp({
     timeCursor.selectJourney(id);
     setStoryRoutePointId(null);
     setStoryInitialAssetId(null);
+    // #555: switching to another Journey inside Story opens that whole Journey
+    // from its start, exactly like opening it from its card, so it presents
+    // that Journey's cover opening.
+    setStoryPresentsJourneyCoverOpening(true);
     setStoryInitialSnapState("in-context");
     setStoryFocusVisibleControlOnOpen(false);
     setStoryJourneyId(id);
@@ -3366,6 +3314,7 @@ export function LivingAtlasApp({
     }
     setStoryRoutePointId(resolution.routePointId);
     setStoryInitialAssetId(resolution.assetId);
+    setStoryPresentsJourneyCoverOpening(false);
     setStoryInitialSnapState(
       resolution.storySnapState === "expanded" ? "expanded" : "in-context",
     );
@@ -3651,6 +3600,7 @@ export function LivingAtlasApp({
             timeCursor.selectJourney(id);
             setStoryRoutePointId(null);
             setStoryInitialAssetId(null);
+            setStoryPresentsJourneyCoverOpening(true);
             setStoryInitialSnapState("in-context");
             setStoryFocusVisibleControlOnOpen(false);
             setStoryJourneyId(id);
@@ -3736,7 +3686,7 @@ export function LivingAtlasApp({
               type="button"
               className="living-atlas__active-hit-area"
               aria-label={`打开旅程：${activeJourney.title}`}
-              onClick={() => openJourneyStory(activeJourney.id, null)}
+              onClick={() => openJourneyStory(activeJourney.id, null, true)}
             />
             <div className="living-atlas__active-content" aria-hidden="true">
               <p>{activeJourney.startedOn}{activeJourney.endedOn ? ` — ${activeJourney.endedOn}` : ""}</p>
@@ -3747,8 +3697,6 @@ export function LivingAtlasApp({
                 journey={activeJourney}
                 reduceMotion={reduceMotion}
                 readMedia={readMedia}
-                opening={coverOpeningJourney?.id === activeJourney.id ? coverOpening.opening : null}
-                onOpeningSettled={coverOpening.dismiss}
               />
               <p className={`living-atlas__active-note${activeJourney.note ? "" : " is-empty"}`}>
                 {activeJourney.note || "路线已经留在地球上，故事等待被打开。"}
@@ -3756,7 +3704,7 @@ export function LivingAtlasApp({
             </div>
           </div>
           <div className="living-atlas__active-actions">
-            <button ref={storyMagnet.ref} onPointerMove={storyMagnet.onPointerMove} onPointerLeave={storyMagnet.onPointerLeave} type="button" onClick={() => openJourneyStory(activeJourney.id, null)}>
+            <button ref={storyMagnet.ref} onPointerMove={storyMagnet.onPointerMove} onPointerLeave={storyMagnet.onPointerLeave} type="button" onClick={() => openJourneyStory(activeJourney.id, null, true)}>
               <span>打开故事</span>
               <span className="living-atlas__active-action-icon" aria-hidden="true"><IconArrowRight size={17} stroke={1.35} /></span>
             </button>
@@ -3955,8 +3903,6 @@ export function LivingAtlasApp({
               journey={mobileSheetJourney}
               reduceMotion={reduceMotion}
               readMedia={readMedia}
-              opening={coverOpeningJourney?.id === mobileSheetJourney.id ? coverOpening.opening : null}
-              onOpeningSettled={coverOpening.dismiss}
             />
             <dl className="mobile-v2__stats">
               <div><dt>路线点</dt><dd>{mobileSheetJourney.routePoints.length}</dd></div>
@@ -3971,7 +3917,7 @@ export function LivingAtlasApp({
                 type="button"
                 className="is-primary"
                 onClick={() => {
-                  openJourneyStory(mobileSheetJourney.id, null);
+                  openJourneyStory(mobileSheetJourney.id, null, true);
                 }}
               >打开故事 <IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
               {canEditJourney ? (
@@ -4558,6 +4504,8 @@ export function LivingAtlasApp({
           routePointId={storyRoutePointId}
           initialAssetId={storyInitialAssetId}
           initialSnapState={storyInitialSnapState}
+          presentJourneyCoverOpening={storyPresentsJourneyCoverOpening}
+          coverRevealPlayed={storyCoverRevealPlayed}
           focusVisibleControlOnOpen={storyFocusVisibleControlOnOpen}
           onObservationChange={handleStoryObservationChange}
           onGlobeCoverChange={setStoryGlobeCover}

@@ -288,6 +288,29 @@ try {
           && new URL(image.currentSrc).searchParams.get("qaAsset") === expected;
       }, id, { polling: "raf", timeout: 8_000 });
       await settled(ids[0]);
+      // #555: the card is a whole-Journey open, so Story starts on the Journey
+      // cover opening. This reproduction measures autoplay from canonical entry
+      // 0, which here is the same cover picture inside Route Point 1, so enter it
+      // first: a page change between two pages of one asset that requests no new
+      // media read. Focus is released again before anything is observed. The
+      // same harness also observes the pinned baseline build, which predates the
+      // opening, so step off only when the current page really is the opening.
+      const onOpening = await page.evaluate(() => (document
+        .querySelector('.journey-story__media [data-media-page="current"]')
+        ?.getAttribute("data-media-presentation-id") ?? "").startsWith("journey-cover:"));
+      if (!onOpening && !baseline) throw new Error("a whole-Journey open did not start on the Journey cover opening");
+      if (onOpening) {
+        await page.evaluate(() => document.querySelector(".journey-story__media [data-story-media-pages]")?.focus());
+        await page.keyboard.press("ArrowRight");
+        await page.waitForFunction((expected) => Boolean(document.querySelector(
+          '.journey-story__route-points button[data-route-point-id="qa-r3-point-0"][aria-pressed="true"]'))
+          && document.querySelector('.journey-story__media [data-media-page="current"]')
+            ?.getAttribute("data-media-presentation-id") === expected,
+        ids[0], { polling: "raf", timeout: 8_000 });
+        await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
+        await settled(ids[0]);
+      }
+      record.startedOnOpening = onOpening;
       record.environment = await page.evaluate(() => ({ userAgent: navigator.userAgent, viewport: [innerWidth, innerHeight],
         dpr: devicePixelRatio, coarse: matchMedia("(any-pointer: coarse)").matches,
         reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,

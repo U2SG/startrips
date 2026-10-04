@@ -6,6 +6,7 @@ import {
   storySequenceForJourney,
   storySequenceMedia,
   type PlaybackMediaAvailability,
+  type StorySequenceEntry,
 } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 
@@ -45,17 +46,51 @@ export function mediaForRoutePoint(
   return journey.media.filter((asset) => asset.routePointId === routePointId);
 }
 
+/**
+ * The neighbour of a cursor position.
+ *
+ * #555: `firstCanonicalIndex` is where the canonical sequence starts. Anything
+ * ahead of it is the one-way Journey cover opening: Previous from there goes
+ * nowhere, Next enters the canonical sequence at its first entry, and neither
+ * the Journey-boundary wrap nor any other step ever lands back on it. With the
+ * default 0 there is no opening and this is the plain Journey-wide wrap.
+ */
 export function storyMediaNeighborIndex(
   currentIndex: number,
   mediaLength: number,
   direction: -1 | 1,
   wrap: boolean,
+  firstCanonicalIndex = 0,
 ): number | null {
-  if (mediaLength < 2) return null;
+  if (currentIndex < firstCanonicalIndex) {
+    return direction > 0 && firstCanonicalIndex < mediaLength ? firstCanonicalIndex : null;
+  }
+  if (mediaLength - firstCanonicalIndex < 2) return null;
   const next = currentIndex + direction;
-  if (next >= 0 && next < mediaLength) return next;
+  if (next >= firstCanonicalIndex && next < mediaLength) return next;
   if (!wrap) return null;
-  return direction > 0 ? 0 : mediaLength - 1;
+  return direction > 0 ? firstCanonicalIndex : mediaLength - 1;
+}
+
+/**
+ * #555: whether there is content strictly before/after the requested cursor
+ * position, which is what the picture's activation uses to choose a direction.
+ * The Journey cover opening has nothing before it, and nothing in the canonical
+ * sequence has the opening before it.
+ */
+export function storyStepAvailability(
+  requestedIndex: number,
+  length: number,
+  firstCanonicalIndex = 0,
+): { previous: boolean; next: boolean } {
+  if (requestedIndex < firstCanonicalIndex) {
+    return { previous: false, next: firstCanonicalIndex < length };
+  }
+  const canonicalLength = length - firstCanonicalIndex;
+  return {
+    previous: canonicalLength > 1 && requestedIndex > firstCanonicalIndex,
+    next: canonicalLength > 1 && requestedIndex < length - 1,
+  };
 }
 
 export function storyAssetIndexForId(
@@ -106,26 +141,43 @@ export function storyMediaInOptimisticOrder(
 export function storyAutoplayNextIndex(
   currentIndex: number,
   mediaLength: number,
+  firstCanonicalIndex = 0,
 ): number | null {
-  if (mediaLength < 2) return null;
-  if (currentIndex < mediaLength - 1) return currentIndex + 1;
   // #76 P1: one Journey-wide sequence, so autoplay returns to the first
   // playable media at the Journey boundary. It must never loop inside a single
   // Route Point, and it must never stop short of the end of the Journey.
-  return 0;
+  // #555: that first media is canonical entry 0, never the cover opening.
+  return storyMediaNeighborIndex(currentIndex, mediaLength, 1, true, firstCanonicalIndex);
 }
 
 export function storyAutoplayVideoCandidate(
   media: readonly JourneyMediaAsset[],
   currentIndex: number,
+  firstCanonicalIndex = 0,
 ) {
+  const index = storyAutoplayVideoCandidateIndex(media, currentIndex, firstCanonicalIndex);
+  return index === null ? null : media[index];
+}
+
+/** #555: the position of the autoplay video candidate, so its page is known. */
+export function storyAutoplayVideoCandidateIndex(
+  media: readonly JourneyMediaAsset[],
+  currentIndex: number,
+  firstCanonicalIndex = 0,
+): number | null {
   if (media.length === 0 || currentIndex < 0 || currentIndex >= media.length) return null;
   // #76 P1: the lookahead wraps the whole Journey, so the next video across a
   // Route Point boundary is warmed rather than the first video of the current
   // Route Point being treated as the wrap target.
-  for (let offset = 0; offset < media.length; offset += 1) {
-    const candidate = media[(currentIndex + offset) % media.length];
-    if (candidate?.mimeType.startsWith("video/")) return candidate;
+  // #555: it wraps the way the cursor does, to canonical entry 0, so the cover
+  // opening is only ever looked at while the cursor is still on it.
+  const wrapStart = Math.min(firstCanonicalIndex, currentIndex);
+  const order = [
+    ...Array.from({ length: media.length - currentIndex }, (_, offset) => currentIndex + offset),
+    ...Array.from({ length: Math.max(0, currentIndex - firstCanonicalIndex) }, (_, offset) => wrapStart + offset),
+  ];
+  for (const index of order) {
+    if (media[index]?.mimeType.startsWith("video/")) return index;
   }
   return null;
 }
@@ -191,8 +243,9 @@ export type StoryAutoplayAdvance =
 export function storyAutoplayAdvance(
   currentIndex: number,
   mediaLength: number,
+  firstCanonicalIndex = 0,
 ): StoryAutoplayAdvance {
-  const nextIndex = storyAutoplayNextIndex(currentIndex, mediaLength);
+  const nextIndex = storyAutoplayNextIndex(currentIndex, mediaLength, firstCanonicalIndex);
   return nextIndex === null ? { kind: "stop" } : { kind: "advance", nextIndex };
 }
 
@@ -304,8 +357,13 @@ export function storyActiveChapterRoutePointId(
   activeAsset: JourneyMediaAsset | null | undefined,
   hasVisualMedia: boolean,
   selectedRoutePointId: string | null,
+  onJourneyCoverOpening = false,
 ): string | null {
   if (noteBeatRoutePointId !== null) return noteBeatRoutePointId;
+  // #555: the cover opening speaks for the whole Journey. The asset it shows
+  // is owned by some Route Point, but that Route Point is not the chapter until
+  // the cursor reaches the cover's own canonical entry.
+  if (onJourneyCoverOpening) return null;
   if (!hasVisualMedia) return selectedRoutePointId;
   return activeAsset?.routePointId ?? null;
 }
@@ -453,5 +511,281 @@ export function storyInitialMediaSelection(
     routePointId: null,
     assetIndex: coverIndex >= 0 ? coverIndex : 0,
     assetId: coverIndex >= 0 ? cover!.id : media[0]?.id ?? null,
+  };
+}
+
+/**
+ * #555: one Story cursor position.
+ *
+ * Story's cursor is an index into these entries, not into media. The entries
+ * are the presentation sequence: the optional Journey cover opening followed by
+ * the canonical media entries. Media-free note entries are not cursor stops
+ * yet (#595). The asset is only what the entry paints, signs and prefetches;
+ * the same asset can appear at two positions (the opening and the cover's own
+ * canonical entry), so an asset id alone never identifies a position.
+ */
+export type StoryCursorEntry = Omit<StorySequenceEntry, "asset" | "role"> & {
+  role: "journey-cover" | "media";
+  asset: JourneyMediaAsset;
+};
+
+export type StoryCursor = {
+  entries: readonly StoryCursorEntry[];
+  /** What each entry paints, in entry order. */
+  assets: readonly JourneyMediaAsset[];
+  /** The canonical media index each entry paints. */
+  mediaIndexByEntry: readonly number[];
+  /** The canonical entry of each canonical media index. */
+  entryIndexByMediaIndex: readonly number[];
+  /** The canonical entry of each asset; the opening never appears here. */
+  canonicalEntryByAssetId: ReadonlyMap<string, number>;
+  /** Where the canonical sequence starts. Anything ahead is the opening. */
+  firstCanonicalEntry: number;
+  /** Each entry's stage page id; see `storyCursorPageId`. */
+  pageIds: readonly string[];
+  /** The entry of each page id. Unambiguous, unlike an asset id. */
+  entryByPageId: ReadonlyMap<string, number>;
+  /** Page id -> asset id, for the pages whose id is not their asset id. */
+  pageAssetIds: ReadonlyMap<string, string>;
+};
+
+/**
+ * #555: the stage page id of a cursor entry - its presentation identity.
+ *
+ * A canonical media entry is the one canonical presentation of its asset, so
+ * its page id is the asset id: everything that already names a canonical page
+ * by asset (signed reads, the DOM's `data-media-page-id`, shared-element
+ * morphs, QA) keeps working. Any other presentation of an asset, today the
+ * Journey cover opening, uses its sequence `presentationId`, so the stage can
+ * hold the opening and the canonical cover as two distinct pages of one asset.
+ */
+export function storyCursorPageId(entry: StoryCursorEntry): string {
+  return entry.role === "media" ? entry.asset.id : entry.presentationId;
+}
+
+/**
+ * The cursor for a Journey. `withJourneyCoverOpening` is decided once per open
+ * (see `storyInitialCursorSelection`), never re-derived from the current
+ * position, so the opening is part of exactly the open that presented it.
+ */
+export function storyCursorForJourney(
+  journey: Journey | undefined,
+  withJourneyCoverOpening: boolean,
+): StoryCursor {
+  const entries: StoryCursorEntry[] = [];
+  const mediaIndexByEntry: number[] = [];
+  const entryIndexByMediaIndex: number[] = [];
+  const canonicalEntryByAssetId = new Map<string, number>();
+  const canonicalMediaIndexByAssetId = new Map<string, number>();
+  let opening: StoryCursorEntry | null = null;
+  const sequence = journey
+    ? storySequenceForJourney(journey, { withJourneyCoverOpening })
+    : [];
+  for (const entry of sequence) {
+    if (entry.asset === null || entry.role === "note") continue;
+    if (entry.role === "journey-cover") {
+      opening = { ...entry, role: "journey-cover", asset: entry.asset };
+      continue;
+    }
+    const mediaIndex = entryIndexByMediaIndex.length;
+    if (!canonicalMediaIndexByAssetId.has(entry.asset.id)) {
+      canonicalMediaIndexByAssetId.set(entry.asset.id, mediaIndex);
+    }
+    entryIndexByMediaIndex.push(entries.length);
+    mediaIndexByEntry.push(mediaIndex);
+    entries.push({ ...entry, role: "media", asset: entry.asset });
+  }
+  // The opening is a second presentation of a canonical row. One whose asset
+  // is not canonical media has nothing to point at and is not presented.
+  const openingMediaIndex = opening
+    ? canonicalMediaIndexByAssetId.get(opening.asset.id)
+    : undefined;
+  if (opening && openingMediaIndex !== undefined) {
+    entries.unshift(opening);
+    mediaIndexByEntry.unshift(openingMediaIndex);
+    for (let index = 0; index < entryIndexByMediaIndex.length; index += 1) {
+      entryIndexByMediaIndex[index] += 1;
+    }
+  }
+  entryIndexByMediaIndex.forEach((entryIndex) => {
+    const assetId = entries[entryIndex].asset.id;
+    // Match find/findIndex if a malformed list repeats an id.
+    if (!canonicalEntryByAssetId.has(assetId)) canonicalEntryByAssetId.set(assetId, entryIndex);
+  });
+  const pageIds = entries.map(storyCursorPageId);
+  const entryByPageId = new Map<string, number>();
+  const pageAssetIds = new Map<string, string>();
+  pageIds.forEach((pageId, entryIndex) => {
+    if (!entryByPageId.has(pageId)) entryByPageId.set(pageId, entryIndex);
+    const assetId = entries[entryIndex].asset.id;
+    if (pageId !== assetId) pageAssetIds.set(pageId, assetId);
+  });
+  return {
+    entries,
+    assets: entries.map((entry) => entry.asset),
+    mediaIndexByEntry,
+    entryIndexByMediaIndex,
+    canonicalEntryByAssetId,
+    firstCanonicalEntry: entryIndexByMediaIndex[0] ?? entries.length,
+    pageIds,
+    entryByPageId,
+    pageAssetIds,
+  };
+}
+
+/** The asset a stage page paints. An unknown page id is taken as an asset id. */
+export function storyCursorAssetIdForPage(cursor: StoryCursor, pageId: string): string {
+  return cursor.pageAssetIds.get(pageId) ?? pageId;
+}
+
+export function storyCursorOnJourneyCover(cursor: StoryCursor, entryIndex: number): boolean {
+  return cursor.entries[entryIndex]?.role === "journey-cover";
+}
+
+/** The canonical media index an entry paints; counts and "i of n" use this. */
+export function storyCursorMediaIndex(cursor: StoryCursor, entryIndex: number): number {
+  return cursor.mediaIndexByEntry[entryIndex] ?? -1;
+}
+
+/**
+ * Keep an entry index inside the cursor. An index that has to move is clamped
+ * into the canonical sequence: only a cursor already on the opening stays there.
+ */
+export function storyCursorClampEntry(cursor: StoryCursor, entryIndex: number): number {
+  const length = cursor.entries.length;
+  if (length === 0) return 0;
+  const clamped = Math.min(Math.max(0, entryIndex), length - 1);
+  if (clamped === entryIndex || clamped >= cursor.firstCanonicalEntry) return clamped;
+  return Math.min(cursor.firstCanonicalEntry, length - 1);
+}
+
+/** The canonical entry of a canonical media index (a tile, a Route Point jump). */
+export function storyCursorEntryForMediaIndex(cursor: StoryCursor, mediaIndex: number): number {
+  const count = cursor.entryIndexByMediaIndex.length;
+  if (count === 0) return 0;
+  return cursor.entryIndexByMediaIndex[Math.min(Math.max(0, mediaIndex), count - 1)];
+}
+
+/**
+ * Turn a stage page id (shown, incoming, requested, a gesture target) back into
+ * a cursor position. Page ids are presentation identities, so the opening and
+ * the canonical cover resolve to their own entries. An unknown id keeps the
+ * current position (clamped), which never moves anyone onto the opening.
+ */
+export function storyCursorEntryForPageId(
+  cursor: StoryCursor,
+  pageId: string | null,
+  currentEntryIndex: number,
+): number {
+  if (pageId !== null) {
+    const entryIndex = cursor.entryByPageId.get(pageId);
+    if (entryIndex !== undefined) return entryIndex;
+  }
+  return storyCursorClampEntry(cursor, currentEntryIndex);
+}
+
+/** The entry an upload refresh lands on: always a canonical one. */
+export function storyUploadedEntryIndex(
+  cursor: StoryCursor,
+  uploadedAssetIds: readonly string[],
+): number | null {
+  for (const assetId of uploadedAssetIds) {
+    const entryIndex = cursor.canonicalEntryByAssetId.get(assetId);
+    if (entryIndex !== undefined) return entryIndex;
+  }
+  return null;
+}
+
+export function storyCursorNeighbourEntry(
+  cursor: StoryCursor,
+  currentEntryIndex: number,
+  direction: -1 | 1,
+  wrap: boolean,
+): number | null {
+  return storyMediaNeighborIndex(
+    currentEntryIndex,
+    cursor.entries.length,
+    direction,
+    wrap,
+    cursor.firstCanonicalEntry,
+  );
+}
+
+/**
+ * The pages the stage paints and swipes from the settled position, as media
+ * whose `id` is the PAGE id (see `storyCursorPageId`).
+ *
+ * On the opening the stage holds every entry, so its next page is canonical
+ * entry 0 - a real page even when that entry is the cover itself. Everywhere
+ * else it holds only the canonical entries, so nothing (a swipe, the painted
+ * previous page) can reach back to the one-way opening. Without an opening the
+ * canonical media array itself is returned.
+ */
+export function storyStagePages(
+  cursor: StoryCursor,
+  entryIndex: number,
+): readonly JourneyMediaAsset[] {
+  const from = storyCursorOnJourneyCover(cursor, entryIndex) ? 0 : cursor.firstCanonicalEntry;
+  if (from === 0 && cursor.pageAssetIds.size === 0) return cursor.assets;
+  return cursor.entries.slice(from).map((entry, offset) => {
+    const pageId = cursor.pageIds[from + offset];
+    return pageId === entry.asset.id ? entry.asset : { ...entry.asset, id: pageId };
+  });
+}
+
+/**
+ * The asset a Story observation may publish for a stage page. A media-free note
+ * beat and the Journey cover opening both speak for something other than the
+ * asset's owner Route Point, so publishing that asset would move the map to the
+ * wrong Route Point when Story closes.
+ */
+export function storyObservedAssetId(
+  cursor: StoryCursor,
+  pageId: string | null,
+  noteBeatRoutePointId: string | null,
+): string | null {
+  if (noteBeatRoutePointId !== null || pageId === null) return null;
+  const entryIndex = cursor.entryByPageId.get(pageId);
+  if (entryIndex !== undefined && storyCursorOnJourneyCover(cursor, entryIndex)) return null;
+  return storyCursorAssetIdForPage(cursor, pageId);
+}
+
+/**
+ * Where an open starts on the cursor.
+ *
+ * The opening is presented only when the open explicitly asks for it AND names
+ * no Route Point or asset AND the Journey has a cover. The null/null shape on
+ * its own is not enough: a Playback return can resolve to it and must land on
+ * the canonical cover, not replay the opening. Every other open starts on the
+ * canonical entry of the media selection.
+ */
+export function storyInitialCursorSelection(
+  journey: Journey | undefined,
+  mediaSelection: { assetIndex: number; assetId: string | null },
+  request: {
+    routePointId: string | null;
+    assetId: string | null;
+    presentJourneyCoverOpening: boolean;
+  },
+): { withJourneyCoverOpening: boolean; entryIndex: number; assetId: string | null; pageId: string | null } {
+  const wantsOpening = request.presentJourneyCoverOpening
+    && request.routePointId === null
+    && request.assetId === null;
+  const cursor = storyCursorForJourney(journey, wantsOpening);
+  const openingIndex = cursor.entries.findIndex((entry) => entry.role === "journey-cover");
+  if (openingIndex >= 0) {
+    return {
+      withJourneyCoverOpening: true,
+      entryIndex: openingIndex,
+      assetId: cursor.entries[openingIndex].asset.id,
+      pageId: cursor.pageIds[openingIndex],
+    };
+  }
+  const entryIndex = storyCursorEntryForMediaIndex(cursor, mediaSelection.assetIndex);
+  return {
+    withJourneyCoverOpening: false,
+    entryIndex,
+    assetId: mediaSelection.assetId,
+    pageId: cursor.pageIds[entryIndex] ?? null,
   };
 }

@@ -10,6 +10,7 @@ import {
 } from "./atlasView";
 import { JourneyStory } from "./JourneyStory";
 import { sharedAtlasStatusForFailure } from "./sharedAtlas";
+import { storyCoverRevealGate } from "./coverRevealOpening";
 import type { Journey } from "./types";
 
 const GUEST_VIEW: AtlasView = {
@@ -263,8 +264,16 @@ describe("ST-083 guest cover opening privacy contract", () => {
     // capability over a private derivative at all.
     expect(GUEST_ATLAS_VIEW_CAPABILITIES.canManageMedia).toBe(false);
     expect(OWNER_ATLAS_VIEW_CAPABILITIES.canManageMedia).toBe(true);
+    // #555: the only reveal is Story's Journey cover opening, gated on the
+    // same capability; the Atlas card asks for nothing at all.
+    const story = readFileSync(new URL("JourneyStory.tsx", import.meta.url), "utf8");
+    expect(story).toContain("canManageMedia: capabilities.canManageMedia");
+    expect(storyCoverRevealGate({
+      entryRole: "journey-cover", canManageMedia: GUEST_ATLAS_VIEW_CAPABILITIES.canManageMedia,
+      cover: { mimeType: "image/jpeg" }, stageSettled: true,
+    })).toEqual({ enabled: false, reason: "no-capability" });
     const app = readFileSync(new URL("LivingAtlasApp.tsx", import.meta.url), "utf8");
-    expect(app).toContain("enabled: capabilities.canManageMedia");
+    expect(app).not.toContain("useCoverRevealOpening");
 
     // And the read itself is an ordinary session call: no bearer token, no
     // worker credential, no worker source-read URL anywhere in the client.

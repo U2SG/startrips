@@ -6224,6 +6224,318 @@ try {
       await session.page.close();
     }
   }
+  {
+    // #555: the Journey cover opening. The fixture's explicit cover (103) is
+    // the last media of Route Point 0005, so the cursor entries are
+    // [103 opening, 100, 101, 102, 103]: the opening, canonical entry 0 and the
+    // cover's own canonical entry are three different positions and contexts.
+    const name = "story-journey-cover-opening";
+    const POINT_A = "00000000-0000-4000-8000-000000000004";
+    const POINT_B = "00000000-0000-4000-8000-000000000005";
+    const SECOND = "00000000-0000-4000-8000-000000000101";
+    const JOURNEY_NOTE = "灯光沿着海岸";
+    const POINT_A_NOTE = "美术馆台阶上的第一站";
+    const POINT_B_NOTE = "福康宁山的树影里";
+    const session = await createStoryPage({
+      viewport: { width: 1280, height: 800 },
+      path: "/?qaState=journey-story&qaMode=journey-cover-opening",
+    });
+    const progress = {};
+    try {
+      const { page } = session;
+      const readContext = () => page.evaluate(({ selector, notes }) => {
+        const story = document.querySelector(".journey-story");
+        const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const current = pages?.querySelector('[data-media-page="current"]');
+        const pressed = [...(story?.querySelectorAll('.journey-story__route-points button[aria-pressed="true"]') ?? [])];
+        const visibleText = (text) => [...(story?.querySelectorAll("p, blockquote, span, div") ?? [])]
+          .some((element) => element.children.length === 0 && element.textContent?.includes(text)
+            && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+        const main = document.querySelector("main.living-atlas");
+        return {
+          assetId: current?.getAttribute("data-media-page-id") ?? null,
+          pressed: pressed.map((button) => button.getAttribute("data-route-point-id") ?? "all"),
+          pointNote: story?.querySelector(".journey-story__point-note")?.textContent ?? null,
+          journeyNoteVisible: visibleText(notes.journey),
+          pointANoteVisible: visibleText(notes.pointA),
+          pointBNoteVisible: visibleText(notes.pointB),
+          observationAsset: main?.getAttribute("data-qa-story-observation-asset") ?? null,
+          observationRoutePoint: main?.getAttribute("data-qa-story-observation-route-point") ?? null,
+        };
+      }, { selector: STAGE, notes: { journey: JOURNEY_NOTE, pointA: POINT_A_NOTE, pointB: POINT_B_NOTE } });
+      const waitForChapter = (assetId, chapter) => page.waitForFunction(({ selector, expectedAsset, expectedChapter }) => {
+        const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const current = pages?.querySelector('[data-media-page="current"]');
+        const pressed = [...document.querySelectorAll('.journey-story .journey-story__route-points button[aria-pressed="true"]')];
+        return current?.getAttribute("data-media-page-id") === expectedAsset
+          && current?.getAttribute("data-media-page-ready") === "true"
+          && pages?.getAttribute("data-media-presentation") === "settled"
+          && pressed.length === 1
+          && (pressed[0].getAttribute("data-route-point-id") ?? "all") === expectedChapter;
+      }, { selector: STAGE, expectedAsset: assetId, expectedChapter: chapter }, { polling: "raf", timeout: 10_000 });
+      const press = async (key) => {
+        await page.evaluate((selector) => (
+          document.querySelector(selector)?.querySelector("[data-story-media-pages]")?.focus()
+        ), STAGE);
+        await page.keyboard.press(key);
+      };
+
+      // 1. A whole-Journey open starts on the opening: the cover, with the
+      // whole Journey as the chapter and nothing published for the map.
+      await waitForChapter(I3, "all");
+      progress.opening = await readContext();
+      await mkdir("artifacts/story-media", { recursive: true });
+      await page.screenshot({ path: "artifacts/story-media/journey-cover-opening.png" });
+
+      // 2. Previous does nothing on the opening: no wrap to the end.
+      await press("ArrowLeft");
+      await page.waitForTimeout(700);
+      progress.afterPrevious = await readContext();
+
+      // 3. Next enters canonical entry 0 with its own Route Point context.
+      await press("ArrowRight");
+      await waitForChapter(I1, POINT_A);
+      progress.entryZero = await readContext();
+
+      // 4. The cover appears again later, inside its own Route Point.
+      await press("ArrowRight");
+      await waitForChapter(SECOND, POINT_A);
+      await press("ArrowRight");
+      await waitForChapter(I2, POINT_B);
+      await press("ArrowRight");
+      await waitForChapter(I3, POINT_B);
+      progress.coverInPoint = await readContext();
+
+      // 5. The Journey boundary wraps onto canonical entry 0, never the
+      // opening. On the inline stage the arrows answer "is there content after
+      // this one" and stop at the last media; the cursor's wrap is reached by
+      // autoplay, whose timer step here crosses the Journey boundary. (Previous
+      // from canonical entry 0 wrapping to the end is a unit-test case.)
+      await page.locator('.journey-story__media-nav button[aria-pressed="false"]').click();
+      await waitForChapter(I1, POINT_A);
+      progress.wrapped = await readContext();
+      await page.locator('.journey-story__media-nav button[aria-pressed="true"]').click();
+
+      // 6. The whole-Journey chip after leaving the opening goes to canonical
+      // entry 0, not back to the opening.
+      await page.locator(".journey-story .journey-story__route-points button:not([data-route-point-id])").first().click();
+      await waitForChapter(I1, POINT_A);
+      progress.allChip = await readContext();
+
+      const opening = progress.opening;
+      record({ name,
+        claim: "a whole-Journey open starts on a Journey-level cover opening (whole-Journey chip pressed, Journey note, no Point note, no map observation); Previous does nothing there; Next enters canonical entry 0 with its own Route Point; the cover reappears in its own Route Point; the Journey boundary wrap and the whole-Journey chip land on canonical entry 0, never the opening",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: opening.assetId !== I3 || opening.pressed.join() !== "all"
+          || opening.pointNote !== null || !opening.journeyNoteVisible
+          || opening.pointANoteVisible || opening.pointBNoteVisible
+          || opening.observationAsset !== null || opening.observationRoutePoint !== null
+          || progress.afterPrevious.assetId !== I3 || progress.afterPrevious.pressed.join() !== "all"
+          || progress.afterPrevious.observationAsset !== null
+          || progress.entryZero.assetId !== I1 || !progress.entryZero.pointANoteVisible
+          || progress.entryZero.observationAsset !== I1 || progress.entryZero.observationRoutePoint !== POINT_A
+          || progress.coverInPoint.assetId !== I3 || !progress.coverInPoint.pointBNoteVisible
+          || progress.coverInPoint.observationAsset !== I3 || progress.coverInPoint.observationRoutePoint !== POINT_B
+          || progress.wrapped.assetId !== I1 || progress.wrapped.pressed.join() !== POINT_A
+          || progress.wrapped.observationAsset !== I1
+          || progress.allChip.assetId !== I1 || progress.allChip.pressed.join() !== POINT_A
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+  {
+    // #555: the cover IS canonical entry 0 (asset 100, first media of Route
+    // Point 0004), so the opening and canonical entry 0 are two pages of one
+    // asset. Stepping off the opening must still be a real page change into
+    // entry 0's Route Point, by swipe, by the picture's Next activation and on
+    // compact mobile, where the "i / n" counter only appears off the opening.
+    const name = "story-journey-cover-opening-leading";
+    const POINT_A = "00000000-0000-4000-8000-000000000004";
+    const OPENING = "journey-cover:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000100";
+    const POINT_A_NOTE = "美术馆台阶上的第一站";
+    const path = "/?qaState=journey-story&qaMode=journey-cover-opening-leading";
+    const progress = {};
+    const sessions = [];
+    const readPage = (page) => page.evaluate(({ selector, note }) => {
+      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      const pressed = [...document.querySelectorAll('.journey-story .journey-story__route-points button[aria-pressed="true"]')];
+      return {
+        presentationId: current?.getAttribute("data-media-presentation-id") ?? null,
+        assetId: current?.getAttribute("data-media-page-id") ?? null,
+        pressed: pressed.map((button) => button.getAttribute("data-route-point-id") ?? "all"),
+        pointNote: document.querySelector(".journey-story .journey-story__point-note")?.textContent?.includes(note) ?? false,
+        counter: document.querySelector("[data-story-media-counter]")?.textContent?.trim() ?? null,
+        observationAsset: document.querySelector("main.living-atlas")?.getAttribute("data-qa-story-observation-asset") ?? null,
+      };
+    }, { selector: STAGE, note: POINT_A_NOTE });
+    const waitForPage = (page, presentationId, chapter) => page.waitForFunction(({ selector, expected, expectedChapter }) => {
+      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      const pressed = [...document.querySelectorAll('.journey-story .journey-story__route-points button[aria-pressed="true"]')];
+      return current?.getAttribute("data-media-presentation-id") === expected
+        && current?.getAttribute("data-media-page-ready") === "true"
+        && pages?.getAttribute("data-media-presentation") === "settled"
+        && pressed.length === 1
+        && (pressed[0].getAttribute("data-route-point-id") ?? "all") === expectedChapter;
+    }, { selector: STAGE, expected: presentationId, expectedChapter: chapter }, { polling: "raf", timeout: 10_000 });
+    try {
+      // Desktop: the picture's Next activation (its right half) steps off the opening.
+      const desktop = await createStoryPage({ viewport: { width: 1280, height: 800 }, path });
+      sessions.push(desktop);
+      await waitForPage(desktop.page, OPENING, "all");
+      progress.desktopOpening = await readPage(desktop.page);
+      const nextPoint = await photoClickPoint(desktop.page, STAGE, 1);
+      await desktop.page.mouse.click(nextPoint.x, nextPoint.y);
+      await waitForPage(desktop.page, I1, POINT_A);
+      progress.desktopNext = await readPage(desktop.page);
+
+      // Desktop: a swipe from the opening lands on canonical entry 0 too.
+      const swiped = await createStoryPage({ viewport: { width: 1280, height: 800 }, path });
+      sessions.push(swiped);
+      await waitForPage(swiped.page, OPENING, "all");
+      progress.desktopSwipeInput = await swipeStage(swiped.page, STAGE, 1);
+      await waitForPage(swiped.page, I1, POINT_A);
+      progress.desktopSwipe = await readPage(swiped.page);
+
+      // Compact mobile: touch swipe, and the counter starts at 1 off the opening.
+      const mobile = await createStoryPage({ mobile: true, path });
+      sessions.push(mobile);
+      await waitForPage(mobile.page, OPENING, "all");
+      progress.mobileOpening = await readPage(mobile.page);
+      progress.mobileSwipeInput = await swipeStage(mobile.page, STAGE, 1);
+      await waitForPage(mobile.page, I1, POINT_A);
+      progress.mobileSwipe = await readPage(mobile.page);
+
+      const errors = sessions.flatMap((session) => [...session.consoleErrors, ...session.pageErrors]);
+      record({ name,
+        claim: "with the cover as canonical entry 0, the opening and entry 0 are two pages of one asset: the picture's Next, a desktop swipe and a mobile touch swipe each change the current page from the opening to entry 0 with its Route Point context, and the i / n counter is absent on the opening and reads 1 / 4 on entry 0",
+        ...progress, errors,
+        failed: progress.desktopOpening.presentationId !== OPENING || progress.desktopOpening.assetId !== I1
+          || progress.desktopOpening.pressed.join() !== "all" || progress.desktopOpening.pointNote
+          || progress.desktopOpening.observationAsset !== null
+          || progress.desktopNext.presentationId !== I1 || progress.desktopNext.assetId !== I1
+          || progress.desktopNext.pressed.join() !== POINT_A || !progress.desktopNext.pointNote
+          || progress.desktopNext.observationAsset !== I1
+          || progress.desktopSwipe.presentationId !== I1 || progress.desktopSwipe.pressed.join() !== POINT_A
+          || !progress.desktopSwipe.pointNote
+          || progress.mobileOpening.presentationId !== OPENING || progress.mobileOpening.counter !== null
+          || progress.mobileSwipe.presentationId !== I1 || progress.mobileSwipe.pressed.join() !== POINT_A
+          || progress.mobileSwipe.counter !== "1 / 4"
+          || errors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        errors: sessions.flatMap((session) => [...session.consoleErrors, ...session.pageErrors]), failed: true });
+    } finally {
+      for (const session of sessions) await session.page.close();
+    }
+  }
+  {
+    // #555: the cover is Journey-level media (routePointId null), so it is also
+    // canonical entry 0, in its intro role. Entries are [104 opening, 104, 100,
+    // 101, 102, 103]. Neither the opening nor entry 0 names a Route Point, so the
+    // whole-Journey chip stays pressed and the Journey note shows on both; what
+    // changes is the page, the map observation (none -> the intro asset) and the
+    // counter (absent -> "1 / 5").
+    const name = "story-journey-cover-opening-journey-level";
+    const POINT_A = "00000000-0000-4000-8000-000000000004";
+    const INTRO = "00000000-0000-4000-8000-000000000104";
+    const OPENING = `journey-cover:00000000-0000-4000-8000-000000000001:${INTRO}`;
+    const JOURNEY_NOTE = "灯光沿着海岸";
+    const POINT_A_NOTE = "美术馆台阶上的第一站";
+    const path = "/?qaState=journey-story&qaMode=journey-cover-opening-intro";
+    const progress = {};
+    const sessions = [];
+    const readPage = (page) => page.evaluate(({ selector, notes }) => {
+      const story = document.querySelector(".journey-story");
+      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      const pressed = [...(story?.querySelectorAll('.journey-story__route-points button[aria-pressed="true"]') ?? [])];
+      const visibleText = (text) => [...(story?.querySelectorAll("p, blockquote, span, div") ?? [])]
+        .some((element) => element.children.length === 0 && element.textContent?.includes(text)
+          && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+      const main = document.querySelector("main.living-atlas");
+      return {
+        presentationId: current?.getAttribute("data-media-presentation-id") ?? null,
+        assetId: current?.getAttribute("data-media-page-id") ?? null,
+        pressed: pressed.map((button) => button.getAttribute("data-route-point-id") ?? "all"),
+        pointNote: story?.querySelector(".journey-story__point-note")?.textContent ?? null,
+        journeyNoteVisible: visibleText(notes.journey),
+        pointANoteVisible: visibleText(notes.pointA),
+        counter: document.querySelector("[data-story-media-counter]")?.textContent?.trim() ?? null,
+        observationAsset: main?.getAttribute("data-qa-story-observation-asset") ?? null,
+        observationRoutePoint: main?.getAttribute("data-qa-story-observation-route-point") ?? null,
+      };
+    }, { selector: STAGE, notes: { journey: JOURNEY_NOTE, pointA: POINT_A_NOTE } });
+    const waitForPage = (page, presentationId, chapter) => page.waitForFunction(({ selector, expected, expectedChapter }) => {
+      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      const pressed = [...document.querySelectorAll('.journey-story .journey-story__route-points button[aria-pressed="true"]')];
+      return current?.getAttribute("data-media-presentation-id") === expected
+        && current?.getAttribute("data-media-page-ready") === "true"
+        && pages?.getAttribute("data-media-presentation") === "settled"
+        && pressed.length === 1
+        && (pressed[0].getAttribute("data-route-point-id") ?? "all") === expectedChapter;
+    }, { selector: STAGE, expected: presentationId, expectedChapter: chapter }, { polling: "raf", timeout: 10_000 });
+    const press = async (page, key) => {
+      await page.evaluate((selector) => (
+        document.querySelector(selector)?.querySelector("[data-story-media-pages]")?.focus()
+      ), STAGE);
+      await page.keyboard.press(key);
+    };
+    try {
+      const desktop = await createStoryPage({ viewport: { width: 1280, height: 800 }, path });
+      sessions.push(desktop);
+      await waitForPage(desktop.page, OPENING, "all");
+      progress.opening = await readPage(desktop.page);
+      await press(desktop.page, "ArrowLeft");
+      await desktop.page.waitForTimeout(700);
+      progress.afterPrevious = await readPage(desktop.page);
+      await press(desktop.page, "ArrowRight");
+      await waitForPage(desktop.page, INTRO, "all");
+      progress.entryZero = await readPage(desktop.page);
+      await press(desktop.page, "ArrowRight");
+      await waitForPage(desktop.page, I1, POINT_A);
+      progress.pointA = await readPage(desktop.page);
+
+      const mobile = await createStoryPage({ mobile: true, path });
+      sessions.push(mobile);
+      await waitForPage(mobile.page, OPENING, "all");
+      progress.mobileOpening = await readPage(mobile.page);
+      progress.mobileSwipeInput = await swipeStage(mobile.page, STAGE, 1);
+      await waitForPage(mobile.page, INTRO, "all");
+      progress.mobileEntryZero = await readPage(mobile.page);
+
+      const errors = sessions.flatMap((session) => [...session.consoleErrors, ...session.pageErrors]);
+      const { opening, entryZero } = progress;
+      record({ name,
+        claim: "a cover from Journey-level media opens on a Journey-level opening (whole-Journey chip, Journey note, no Point note, no observation, no counter); Previous does nothing; Next is a page change to canonical entry 0, the same intro asset, which keeps the whole-Journey chip and Journey note but now publishes its asset and reads 1 / 5; the next step reaches Point A",
+        ...progress, errors,
+        failed: opening.presentationId !== OPENING || opening.assetId !== INTRO
+          || opening.pressed.join() !== "all" || opening.pointNote !== null || !opening.journeyNoteVisible
+          || opening.observationAsset !== null || opening.observationRoutePoint !== null
+          || progress.afterPrevious.presentationId !== OPENING
+          || entryZero.presentationId !== INTRO || entryZero.assetId !== INTRO
+          || entryZero.pressed.join() !== "all" || entryZero.pointNote !== null || !entryZero.journeyNoteVisible
+          || entryZero.observationAsset !== INTRO || entryZero.observationRoutePoint !== null
+          || progress.pointA.presentationId !== I1 || !progress.pointA.pointANoteVisible
+          || progress.mobileOpening.presentationId !== OPENING || progress.mobileOpening.counter !== null
+          || progress.mobileEntryZero.presentationId !== INTRO || progress.mobileEntryZero.counter !== "1 / 5"
+          || errors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        errors: sessions.flatMap((session) => [...session.consoleErrors, ...session.pageErrors]), failed: true });
+    } finally {
+      for (const session of sessions) await session.page.close();
+    }
+  }
 } catch (error) {
   // The accumulated checks are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439).

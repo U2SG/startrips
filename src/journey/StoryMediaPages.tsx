@@ -1,4 +1,4 @@
-import { cloneElement, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type Ref, type VideoHTMLAttributes } from "react";
+import { cloneElement, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type ReactNode, type Ref, type VideoHTMLAttributes } from "react";
 import { flushSync } from "react-dom";
 import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackClip, mediaStackOpacity, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
@@ -54,7 +54,27 @@ type Props = {
   currentId: string | null;
   incomingId: string | null;
   pendingId: string | null;
+  /** The cover's ASSET id, compared against each page's asset. */
   coverId?: string | null;
+  /**
+   * #555: pages are identified by presentation, not by asset, so the same
+   * asset can be two pages (the Journey cover opening and the canonical cover).
+   * Every id this stage takes or reports (`media[].id`, `currentId`,
+   * `incomingId`, `pendingId`, `videoAssetId`, `warmIds`, `reads` keys and the
+   * callbacks) is a page id. This maps a page id to its asset id where they
+   * differ; the DOM's `data-media-page-id` and `data-shared-media-id` keep
+   * naming the asset, and `data-media-presentation-id` names the page.
+   */
+  pageAssetIds?: ReadonlyMap<string, string>;
+  /**
+   * #555: something painted over exactly one page - the Journey cover
+   * opening's reveal. While it is mounted on the current page that page does
+   * not report playback readiness, so autoplay and the rest of the sequence
+   * wait until the reveal has settled on the canonical bytes. The page's own
+   * `data-media-page-ready` and shared-media identity are left alone: they
+   * describe the canonical picture underneath, which a morph may land on.
+   */
+  pageOverlay?: { pageId: string; node: ReactNode } | null;
   direction?: -1 | 1;
   reads: Record<string, Read>;
   wrap: boolean;
@@ -167,6 +187,7 @@ function FrameCanvas({ frame, sharedId }: { frame: HTMLCanvasElement | undefined
 
 /** Three fixed pages and one persistent, gesture-authorized video transport. */
 export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function StoryMediaPages({ active = true, ...props }, stageRef) {
+  const assetIdOf = (pageId: string) => props.pageAssetIds?.get(pageId) ?? pageId;
   const latest = useRef({ ...props, active });
   latest.current = { ...props, active };
   const root = useRef<HTMLDivElement>(null);
@@ -267,6 +288,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   // image still shows another asset is hidden rather than exposing that old
   // neighbour under the new identity (#489 section 5).
   const paintedImages = useRef<Array<string | null>>([null, null, null]);
+  // #555: the URL each physical page's <img> last decoded. Two pages can paint
+  // one asset (the Journey cover opening and the canonical cover); when a page
+  // takes over a slot already showing that exact URL the browser fires no new
+  // load, so the slot's own decode is what proves it can take the stage.
+  const decodedSlotUrls = useRef<Array<string | null>>([null, null, null]);
 
   const rememberLiveFrame = useCallback(() => {
     const source = bindingRef.current;
@@ -417,7 +443,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   }, [active, props.currentId, binding.id, binding.src, binding.generation, revision]);
   const reportImageError = (image: HTMLImageElement, id: string, url: string) => {
     const read = latest.current.reads[id];
-    if (!image.isConnected || image.parentElement?.dataset.mediaPageId !== id
+    if (!image.isConnected || image.parentElement?.dataset.mediaPresentationId !== id
       || image.getAttribute("src") !== url || read?.status !== "ready" || read.url !== url) return;
     if (latest.current.active && (id === latest.current.currentId || id === latest.current.incomingId)) {
       latest.current.onMediaError(id, "图片暂时无法载入，请重试。");
@@ -448,8 +474,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     }
     // The warm decode belongs to the asset, but a recycled physical page may still
     // paint its previous src. Only that page's loaded image can take the stage.
-    const image = imageNodes.current[assigned.indexOf(id)];
-    return decodedImages.current.get(id) === read.url
+    const slot = assigned.indexOf(id);
+    const image = imageNodes.current[slot];
+    return (decodedImages.current.get(id) === read.url
+      || (slot >= 0 && decodedSlotUrls.current[slot] === read.url))
       && Boolean(image && image.getAttribute("src") === read.url
         && image.currentSrc === image.src && image.complete && image.naturalWidth > 0);
   };
@@ -549,7 +577,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   }, [active, presentedId]);
   const currentVideo = props.media.find((asset) => asset.id === props.currentId)?.mimeType.startsWith("video/");
   const playbackReady = currentReady && !props.incomingId && !movingId
-    && (!currentVideo || (binding.id === props.currentId && liveReady === liveKey));
+    && (!currentVideo || (binding.id === props.currentId && liveReady === liveKey))
+    && !(props.pageOverlay && props.pageOverlay.pageId === props.currentId);
   useLayoutEffect(() => {
     props.onPlaybackReady(playbackReady ? props.currentId : null);
   }, [playbackReady, props.currentId, props.onPlaybackReady]);
@@ -639,7 +668,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     // The pointer owns the current page and the neighbor it reveals. Every
     // other retained page returns to rest under this same stage owner.
     motionHandles.current = pageNodes.current.flatMap((node) => {
-      const id = node?.dataset.mediaPageId;
+      const id = node?.dataset.mediaPresentationId;
       if (!node || !id || id === latest.current.currentId || id === neighborId) return [];
       const depth = Number(node.style.getPropertyValue("--stack-depth")) || 1;
       const spring = springElementTo(node, {
@@ -661,7 +690,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     return value.generation === gestureGeneration.current
       && latest.current.active && latest.current.scopeKey === value.scopeKey
       && (latest.current.currentId === value.baseId || presentedIdRef.current === value.baseId)
-      && value.base.isConnected && value.base.dataset.mediaPageId === value.baseId;
+      && value.base.isConnected && value.base.dataset.mediaPresentationId === value.baseId;
   }
 
   function releaseCapture(value: MediaDrag) {
@@ -697,12 +726,12 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     // A cancelled gesture has no later animation event to restore apertures.
     // Reclaim the rest layout now, including after a pointercancel or Back.
     if (ownedPageMotion && !latest.current.incomingId) {
-      const front = pageNodes.current.find((node) => node?.dataset.mediaPageId === latest.current.currentId) ?? null;
+      const front = pageNodes.current.find((node) => node?.dataset.mediaPresentationId === latest.current.currentId) ?? null;
       pageNodes.current.forEach((node, slot) => {
         if (!node) return;
         const [y, x] = mediaStackClip(node, front);
         node.style.clipPath = `inset(${y}% ${x}%)`;
-        clipOwners.current[slot] = node.dataset.mediaPageId ?? null;
+        clipOwners.current[slot] = node.dataset.mediaPresentationId ?? null;
       });
     }
   }
@@ -773,7 +802,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
 
   function peekFor(id: string | null) {
     if (!id) return null;
-    return pageNodes.current.find((node) => node?.dataset.mediaPageId === id
+    return pageNodes.current.find((node) => node?.dataset.mediaPresentationId === id
       && node.dataset.mediaPageReady === "true") ?? null;
   }
 
@@ -796,7 +825,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     const prior = settle.current;
     if (prior) prior.finishForTakeover();
     const base = pageNodes.current.find((node) => node?.dataset.mediaPresented === "true");
-    const baseId = base?.dataset.mediaPageId;
+    const baseId = base?.dataset.mediaPresentationId;
     if (!base || !baseId) return;
     const originTransform = getComputedStyle(base).transform;
     root.current?.style.setProperty("--story-live-transform", originTransform);
@@ -855,7 +884,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     if (value.neighborId !== (neighbor?.id ?? null) || value.peek !== peek) {
       value.neighborId = neighbor?.id ?? null;
       value.peek = peek;
-      setGestureFrontId(peek?.dataset.mediaPageId ?? null);
+      setGestureFrontId(peek?.dataset.mediaPresentationId ?? null);
       grabPages(value.neighborId);
     }
     applyDrag(value);
@@ -874,14 +903,14 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     const targetId = commit ? value.neighborId : null;
     const targetRead = targetId ? latest.current.reads[targetId] : null;
     const readyToLand = Boolean(targetId && value.peek && targetRead?.status === "ready"
-      && value.peek.dataset.mediaPageId === targetId
+      && value.peek.dataset.mediaPresentationId === targetId
       && value.peek.dataset.mediaPageReady === "true");
     if (targetId && !readyToLand) latest.current.onGesturePrepare(targetId);
     let allowTapAfterSettle = tapAfterSettle;
     const complete = () => {
       if (!gestureIsCurrent(value)) { clearDragPresentation(value); return; }
       const targetStillReady = readyToLand && targetId && value.peek?.isConnected
-        && value.peek.dataset.mediaPageId === targetId
+        && value.peek.dataset.mediaPresentationId === targetId
         && value.peek.dataset.mediaPageReady === "true"
         && latest.current.media.some((asset) => asset.id === targetId)
         && latest.current.reads[targetId]?.status === "ready";
@@ -893,7 +922,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     };
     if (prefersReducedMotion()) { complete(); return; }
     setGesturePhase("settling");
-    setGestureFrontId(readyToLand ? targetId : value.peek?.dataset.mediaPageId ?? null);
+    setGestureFrontId(readyToLand ? targetId : value.peek?.dataset.mediaPresentationId ?? null);
     const rearDepth = readyToLand ? (value.dx < 0 ? 2 : 1) : 0;
     const targetTransform = mediaStackRest(rearDepth);
     const sampleSeconds = 1 / 120;
@@ -919,14 +948,14 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         transform: mediaStackRest(readyToLand ? 0 : depth),
         opacity: readyToLand ? 1 : mediaStackOpacity(depth),
         clipInset: mediaStackClip(value.peek, front),
-      }, { owner: value.peek.dataset.mediaPageId }));
+      }, { owner: value.peek.dataset.mediaPresentationId }));
     }
     for (const page of pageNodes.current) {
-      if (!page?.dataset.mediaPageId || page === value.base || page === value.peek) continue;
+      if (!page?.dataset.mediaPresentationId || page === value.base || page === value.peek) continue;
       springs.push(springElementTo(page, {
         transform: getComputedStyle(page).transform,
         clipInset: mediaStackClip(page, front),
-      }, { owner: page.dataset.mediaPageId }));
+      }, { owner: page.dataset.mediaPresentationId }));
     }
     dragSprings.current = springs;
     let pending = true;
@@ -942,13 +971,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       allowTapAfterSettle = false;
       // A new pointer claims the painted pixels. Commit the identity first,
       // then restore the measured pose on still-owned physical slots.
-      const painted = pageNodes.current.flatMap((node) => node?.dataset.mediaPageId
-        ? [{ node, id: node.dataset.mediaPageId, transform: getComputedStyle(node).transform,
+      const painted = pageNodes.current.flatMap((node) => node?.dataset.mediaPresentationId
+        ? [{ node, id: node.dataset.mediaPresentationId, transform: getComputedStyle(node).transform,
           opacity: getComputedStyle(node).opacity, clipPath: getComputedStyle(node).clipPath }] : []);
       for (const spring of springs) spring.cancel();
       finish();
       for (const { node, id, transform, opacity, clipPath } of painted) {
-        if (node.dataset.mediaPageId !== id) continue;
+        if (node.dataset.mediaPresentationId !== id) continue;
         node.style.transform = transform;
         node.style.opacity = opacity;
         node.style.clipPath = clipPath;
@@ -1182,14 +1211,17 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       return <div key={slot} ref={(element) => { pageNodes.current[slot] = element; }}
         className="story-media-pages__page"
         data-media-page={current ? "current" : offsets[slot] < 0 ? "previous" : "next"}
-        data-media-page-id={id ?? undefined} data-media-page-ready={pageReady ? "true" : "false"}
+        data-media-page-id={id === null ? undefined : assetIdOf(id)}
+        data-media-presentation-id={id ?? undefined}
+        data-media-page-ready={pageReady ? "true" : "false"}
         data-media-read-state={read?.status ?? "missing"}
         data-media-read-generation={read?.status === "ready" ? read.generation : undefined}
         data-media-layer={layer?.kind}
-        data-media-preview-asset={layer?.kind === "preview" ? layer.assetId : undefined}
+        data-media-preview-asset={layer?.kind === "preview" ? assetIdOf(layer.assetId) : undefined}
         data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}
         data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
         data-media-incoming={id !== null && id === props.incomingId ? "true" : undefined}
+        data-media-overlay-hold={id !== null && id === props.pageOverlay?.pageId ? "true" : undefined}
         data-media-presented={presented ? "true" : undefined}
         aria-hidden={!presented} style={{
           "--page-offset": offsets[slot], "--stack-depth": depths[slot],
@@ -1223,14 +1255,15 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
             ? `${asset?.fileName ?? "照片"}。左侧上一张，右侧下一张，方向键切换`
             : presented && props.onImageClick ? `沉浸查看：${asset?.fileName ?? "照片"}` : undefined}
           aria-keyshortcuts={presented && canNavigate ? "ArrowLeft ArrowRight" : undefined}
-          data-shared-media-id={id !== null && id === foregroundId && !isVideo && pageReady ? id : undefined}
-          data-shared-journey-cover={id !== null && id === foregroundId && !isVideo && pageReady && id === props.coverId ? "true" : undefined}
+          data-shared-media-id={id !== null && id === foregroundId && !isVideo && pageReady ? assetIdOf(id) : undefined}
+          data-shared-journey-cover={id !== null && id === foregroundId && !isVideo && pageReady && assetIdOf(id) === props.coverId ? "true" : undefined}
           onLoad={(event) => {
             const image = event.currentTarget;
             if (!id || !url) return;
             const mark = () => {
               if (!image.isConnected || image.getAttribute("src") !== url || !image.naturalWidth) return;
               decodedImages.current.set(id, url);
+              decodedSlotUrls.current[slot] = url;
               paintedImages.current[slot] = id;
               updateRevision((value) => value + 1);
             };
@@ -1256,7 +1289,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           } : undefined} />
         <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined}
           sharedId={isVideo && id !== null && id === foregroundId && pageReady
-            && (!videoVisible || id !== props.currentId) ? id : undefined} />
+            && (!videoVisible || id !== props.currentId) ? assetIdOf(id) : undefined} />
+        {id !== null && id === props.pageOverlay?.pageId ? (
+          <div className="story-media-pages__overlay" data-media-overlay-for={id}>{props.pageOverlay.node}</div>
+        ) : null}
       </div>;
     })}
     {/* #489 A1: a photograph's stationary click surface must never cover the
@@ -1287,8 +1323,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         // Only the presented video is a shared-element target. Priming and
         // adjacent preparation never masquerade as a viewed media asset.
         ...{
-          "data-shared-media-id": videoVisible && binding.id === props.currentId ? binding.id : undefined,
-          "data-shared-journey-cover": videoVisible && binding.id === props.currentId && binding.id === props.coverId ? "true" : undefined,
+          "data-shared-media-id": videoVisible && binding.id && binding.id === props.currentId ? assetIdOf(binding.id) : undefined,
+          "data-shared-journey-cover": videoVisible && binding.id && binding.id === props.currentId && assetIdOf(binding.id) === props.coverId ? "true" : undefined,
           "data-story-read-generation": videoVisible ? binding.generation : undefined,
         },
         onLoadedMetadata: recordLiveReady, onLoadedData: recordLiveReady,

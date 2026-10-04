@@ -253,3 +253,38 @@ export function mountedCoverRevealOpening<T extends { identity: string }>(
   if (opening === null || !enabled || coverPin === null) return null;
   return opening.identity === coverPin ? opening : null;
 }
+
+/** #555: why Story's Journey cover opening does not ask for a reveal. */
+export type StoryCoverRevealSkip =
+  | "not-opening"
+  | "no-capability"
+  | "no-cover"
+  | "video-cover"
+  | "stage-not-settled";
+
+/**
+ * #555: whether Story's cursor position may own the cover reveal.
+ *
+ * The reveal belongs to the Journey cover presentation role only. The same
+ * asset reached later as ordinary canonical media (also when it is canonical
+ * entry 0), and any open that presents no opening at all (a Route Point or
+ * asset deep link, a Playback return), never reveals, and neither does the
+ * Atlas card, which shows the canonical cover. V1 is owner-only, and a video
+ * cover has no reveal. The opening page must also be settled on its canonical
+ * bytes with the Atlas -> Story shared-element morph landed, so the reveal
+ * never plays under a clone in flight. When this answers `enabled`, `planCoverRevealOpening` still owns
+ * the derivative decision: ready, stale, unusable, spent and Reduced Motion.
+ */
+export function storyCoverRevealGate(input: {
+  entryRole: "journey-cover" | "media" | null;
+  canManageMedia: boolean;
+  cover: Pick<JourneyMediaAsset, "mimeType"> | null;
+  stageSettled: boolean;
+}): { enabled: true } | { enabled: false; reason: StoryCoverRevealSkip } {
+  if (input.entryRole !== "journey-cover") return { enabled: false, reason: "not-opening" };
+  if (!input.canManageMedia) return { enabled: false, reason: "no-capability" };
+  if (!input.cover) return { enabled: false, reason: "no-cover" };
+  if (input.cover.mimeType.startsWith("video/")) return { enabled: false, reason: "video-cover" };
+  if (!input.stageSettled) return { enabled: false, reason: "stage-not-settled" };
+  return { enabled: true };
+}
