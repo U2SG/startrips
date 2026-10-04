@@ -524,7 +524,7 @@ const storyQaDesktopChapterNoMediaJourney: Journey = { ...storyQaDesktopChapterJ
 
 // #595: grouping changes the chapter, never who owns a note. Stop S has its own
 // note and media; A (short note + media), B (note only) and C (long note, a
-// video) are grouped under S; T is a Stop with media; V is an ungrouped
+// photo then a video) are grouped under S; T is a Stop with media; V is an ungrouped
 // note-only via (a transit beat, #514); U closes the Journey.
 const GROUPED_NOTES_JOURNEY_ID = "00000000-0000-4000-8000-000000005950";
 const GROUPED_NOTES_LONG_NOTE = Array.from({ length: 6 }, (_, index) => (
@@ -557,7 +557,8 @@ const storyQaGroupedNotesJourney: Journey = {
   media: [
     { id: "nb-media-s1", routePointId: "nb-point-s", mimeType: "image/jpeg" },
     { id: "nb-media-a1", routePointId: "nb-point-a", mimeType: "image/jpeg" },
-    { id: "nb-media-c1", routePointId: "nb-point-c", mimeType: "video/webm" },
+    { id: "nb-media-c1", routePointId: "nb-point-c", mimeType: "image/jpeg" },
+    { id: "nb-media-c2", routePointId: "nb-point-c", mimeType: "video/webm" },
     { id: "nb-media-t1", routePointId: "nb-point-t", mimeType: "image/jpeg" },
     { id: "nb-media-u1", routePointId: "nb-point-u", mimeType: "image/jpeg" },
   ].map((asset, index) => ({

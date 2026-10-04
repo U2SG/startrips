@@ -6,11 +6,11 @@
  * over the grouped-notes fixture (ProductQaPreview `qaMode=grouped-notes`):
  *
  *   S  Stop, own note + photo          A  grouped, short note + photo
- *   B  grouped, note only              C  grouped, long note + video
+ *   B  grouped, note only              C  grouped, long note + photo + video
  *   T  Stop, photo                     V  ungrouped via, note only
  *   U  Stop, photo
  *
- * Story order: s1, a1, note:B, c1, t1, note:V, u1.
+ * Story order: s1, a1, note:B, c1, c2, t1, note:V, u1.
  *
  * Everything is real browser input (keyboard on the stage, mouse and touch
  * drags, button clicks and taps) read back from the product's own DOM state.
@@ -26,6 +26,7 @@ const STAGE = ".journey-story__media";
 const S1 = "nb-media-s1";
 const A1 = "nb-media-a1";
 const C1 = "nb-media-c1";
+const C2 = "nb-media-c2";
 const T1 = "nb-media-t1";
 const U1 = "nb-media-u1";
 const NOTE_B = "note:nb-point-b";
@@ -33,7 +34,8 @@ const NOTE_V = "note:nb-point-v";
 const ASSET_URLS = {
   [S1]: "/artworks/china-handscroll.jpg",
   [A1]: "/artworks/mughal-akbarnama.jpg",
-  [C1]: "/demo-media/east-star-orbit.webm",
+  [C1]: "/artworks/egypt-coffin.jpg",
+  [C2]: "/demo-media/east-star-orbit.webm",
   [T1]: "/artworks/hokusai-wave.jpg",
   [U1]: "/artworks/monet-water-lilies.jpg",
 };
@@ -150,6 +152,17 @@ async function storyState(page) {
   }, STAGE);
 }
 
+async function markBlock(page) {
+  await page.evaluate(() => {
+    const block = document.querySelector(".story-point-note");
+    if (block) block.dataset.qaKept = "true";
+  });
+}
+
+async function blockKept(page) {
+  return await page.evaluate(() => document.querySelector(".story-point-note")?.dataset.qaKept === "true");
+}
+
 async function waitForCurrent(page, id, timeout = 10_000) {
   await page.waitForFunction(({ selector, expected }) => {
     const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
@@ -190,7 +203,8 @@ async function tapSelector(session, selector) {
     const target = document.querySelector(query);
     return Boolean(target?.contains(document.elementFromPoint(x, y)));
   }, { query: selector, x: box.x + box.width / 2, y: box.y + box.height / 2 });
-  await session.pointer.tap(box.x + box.width / 2, box.y + box.height / 2);
+  if (session.pointer.kind === "touch") await session.page.locator(selector).tap();
+  else await session.pointer.tap(box.x + box.width / 2, box.y + box.height / 2);
   return { hit, width: box.width, height: box.height };
 }
 
@@ -252,16 +266,26 @@ try {
       await waitForCurrent(page, C1);
       progress.c1 = await storyState(page);
       progress.toggle = await toggleLongNote(session);
-      // A swipe after the toggle still pages the stage.
+      // A swipe after the toggle still pages the stage, and the block stays
+      // mounted (not replayed) while the cursor stays on C.
+      await markBlock(page);
       await swipe(session, 1);
+      await waitForCurrent(page, C2);
+      progress.c2 = await storyState(page);
+      progress.blockKeptAcrossC = await blockKept(page);
+      // On the video the toggle must not seek or restart the transport.
+      progress.videoToggle = await toggleLongNote(session);
+      await page.locator('.journey-story__media-nav [data-video-step="next"]').click();
       await waitForCurrent(page, T1);
-      progress.afterToggleSwipe = await storyState(page);
+      progress.afterToggle = await storyState(page);
       await pressOnStage(page, "ArrowRight");
       await waitForCurrent(page, NOTE_V);
       progress.noteV = await storyState(page);
       // Back across the note pages by swipe and keyboard.
       await swipe(session, -1);
       await waitForCurrent(page, T1);
+      await pressOnStage(page, "ArrowLeft");
+      await waitForCurrent(page, C2);
       await pressOnStage(page, "ArrowLeft");
       await waitForCurrent(page, C1);
       await pressOnStage(page, "ArrowLeft");
@@ -286,6 +310,8 @@ try {
           || progress.noteBReads.length > 0
           || progress.c1.blockOwner !== "nb-point-c"
           || progress.toggle.failed
+          || progress.c2.blockOwner !== "nb-point-c" || !progress.blockKeptAcrossC
+          || progress.c2.kind !== "video" || progress.videoToggle.failed
           || progress.noteV.kind !== "note" || !progress.noteV.noteText?.includes(V_NOTE)
           || progress.back.currentId !== A1
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
@@ -356,9 +382,11 @@ try {
       await waitForCurrent(page, C1);
       progress.c1 = await storyState(page);
       progress.toggle = await toggleLongNote(session);
+      await markBlock(page);
       await swipe(session, 1);
-      await waitForCurrent(page, T1);
+      await waitForCurrent(page, C2);
       progress.afterToggleSwipe = await storyState(page);
+      progress.blockKeptAcrossC = await blockKept(page);
       const firstScreen = (state) => Boolean(state.pagesRect && state.blockRect
         && state.blockRect.top >= 0 && state.blockRect.bottom <= state.pagesRect.top + 1
         && state.pagesRect.bottom <= state.viewport.height + 0.5 && state.pagesRect.height >= 120);
@@ -370,7 +398,7 @@ try {
           || progress.toggle.failed
           || progress.toggle.expanded.sheetRect === null
           || progress.toggle.expanded.sheetRect.bottom > viewport.height + 0.5
-          || progress.afterToggleSwipe.currentId !== T1
+          || progress.afterToggleSwipe.currentId !== C2 || !progress.blockKeptAcrossC
           || session.pageErrors.length > 0,
       });
     } catch (error) {
@@ -452,8 +480,8 @@ try {
         }
         throw new Error(`Playback did not reach step ${step}`);
       };
-      // Steps: 0 intro, 1 stop S, 2 s1, 3 a1, 4 note B, 5 note C, 6 c1,
-      // 7 travel, 8 stop T, 9 t1, 10 note V, 11 travel, 12 stop U, 13 u1, 14 outro.
+      // Steps: 0 intro, 1 stop S, 2 s1, 3 a1, 4 note B, 5 note C, 6 c1, 7 c2,
+      // 8 travel, 9 stop T, 10 t1, 11 note V, 12 travel, 13 stop U, 14 u1, 15 outro.
       await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click({ timeout: 3_000 }).catch(() => undefined);
       await stepTo(2);
       progress.s1 = await readBeat();
@@ -463,7 +491,7 @@ try {
       progress.noteB = await readBeat();
       await stepTo(5);
       progress.noteC = await readBeat();
-      await stepTo(10);
+      await stepTo(11);
       progress.noteV = await readBeat();
       await stepTo(4);
       await page.locator(".journey-playback__close").click();
