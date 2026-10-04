@@ -174,7 +174,12 @@ describe("Story cursor stepping with the one-way opening (#555)", () => {
   });
 
   it("leaves the opening of a single-media Journey and then stops", () => {
-    const single: Journey = { ...journey, media: [asset("b1", "B", 0)] };
+    // #595: A's note would be a note entry of its own; this case is about one media.
+    const single: Journey = {
+      ...journey,
+      routePoints: journey.routePoints.map((candidate) => ({ ...candidate, note: null })),
+      media: [asset("b1", "B", 0)],
+    };
     const one = storyCursorForJourney(single, true);
     expect(one.entries.map((entry) => entry.role)).toEqual(["journey-cover", "media"]);
     expect(storyCursorNeighbourEntry(one, 0, 1, true)).toBe(1);
@@ -297,7 +302,8 @@ describe("storyStagePages (#555)", () => {
 
   it("returns the canonical media itself when there is no opening", () => {
     const cursor = storyCursorForJourney(journey, false);
-    expect(storyStagePages(cursor, 0)).toBe(cursor.assets);
+    expect(storyStagePages(cursor, 0)).toBe(cursor.pages);
+    expect(cursor.pages).toEqual(cursor.assets);
   });
 
   it("holds the cover twice when it is canonical entry 0, so the step off the opening is a real page", () => {

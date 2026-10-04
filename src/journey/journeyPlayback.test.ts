@@ -703,6 +703,8 @@ describe("Journey cover presentation entry (#555)", () => {
       asset: target.media[1],
       // Journey-level context: it must not inherit the cover's own Route Point.
       routePointId: null,
+      // #595: nor its chapter.
+      chapterRoutePointId: null,
       contextOwner: "journey",
     });
     // Canonical media follow in full, so nothing before the cover is skipped.

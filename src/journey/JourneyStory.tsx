@@ -2990,7 +2990,15 @@ export function JourneyStory({
   // grouped child's note stays its own beside its Stop's. One owner per note per
   // surface: `note-overlay` keeps its overlay, a note entry its text page, and
   // the copy column says the note only when neither of these does.
-  const pointNoteOwner = mediaPresentation !== "note-overlay" && !overview
+  // The block's slot is reserved for the whole Journey whenever any media
+  // Route Point has a note, so the stage keeps one rect across Route Point
+  // boundaries instead of resizing (and cancelling a swipe) as the block comes
+  // and goes. Editing and the media overview keep their own layouts, where the
+  // copy column (or its notes editor) says the note.
+  const pointNoteSlot = scopedMedia.length > 0 && mediaPresentation !== "note-overlay" && !overview && !mediaEditing
+    && journey.routePoints.some((point) => Boolean(point.note?.trim())
+      && scopedMediaIndex.ownerIds.has(point.id));
+  const pointNoteOwner = pointNoteSlot
     && activeEntry?.role === "media" && activeChapterRoutePoint?.note?.trim()
     ? activeChapterRoutePoint : null;
   const pointNote = pointNoteOwner ? {
@@ -2998,13 +3006,6 @@ export function JourneyStory({
     text: pointNoteOwner.note!.trim(),
     label: routePointProvenanceLabel(journey, pointNoteOwner.id, activeEntry?.chapterRoutePointId ?? null) ?? "",
   } : null;
-  // The block's slot is reserved for the whole Journey whenever any media
-  // Route Point has a note, so the stage keeps one rect across Route Point
-  // boundaries instead of resizing (and cancelling a swipe) as the block comes
-  // and goes.
-  const pointNoteSlot = mediaPresentation !== "note-overlay" && !overview
-    && journey.routePoints.some((point) => Boolean(point.note?.trim())
-      && scopedMediaIndex.ownerIds.has(point.id));
   const copyColumnOwnsPointNote = !pointNote && !onNoteEntry;
   // These are semantic identities; StoryMediaPages retains the physical pages.
   // #555: they are page ids; each resolves to the asset its entry paints.

@@ -385,16 +385,23 @@ export function isPlaybackTransitRoutePoint(
  * of the Route Point that owns it.
  */
 export function playbackNoteBeatRoutePointIds(journey: Journey): Set<string> {
-  const ownsVisualMedia = new Set<string>();
-  for (const asset of journey.media) {
-    if (asset.routePointId !== null && isVisualMediaAsset(asset)) ownsVisualMedia.add(asset.routePointId);
-  }
   const ids = new Set<string>();
+  const candidates = new Map<string, string>();
   for (const point of journey.routePoints) {
     if (point.isStop) continue;
     const note = routePointNoteText(point);
-    if (!note) continue;
-    if (!ownsVisualMedia.has(point.id) || isLongNarrativeNote(note)) ids.add(point.id);
+    if (note) candidates.set(point.id, note);
+  }
+  // Most Journeys have no noted non-Stop at all; they pay no media scan here,
+  // which keeps Playback and Keepsake within their linear owner-read budget.
+  if (candidates.size === 0) return ids;
+  const ownsVisualMedia = new Set<string>();
+  for (const asset of journey.media) {
+    const owner = asset.routePointId;
+    if (owner !== null && candidates.has(owner) && isVisualMediaAsset(asset)) ownsVisualMedia.add(owner);
+  }
+  for (const [id, note] of candidates) {
+    if (!ownsVisualMedia.has(id) || isLongNarrativeNote(note)) ids.add(id);
   }
   return ids;
 }
@@ -606,6 +613,12 @@ export function buildPlaybackSteps(
       ? journey.routePoints.filter((point) => !point.isStop && noteBeats.has(point.id)
         && chapterByOwner.get(point.id) === chapterId)
       : [];
+    if (members.length === 0) {
+      for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
+        steps.push({ kind: "media", pointIndex: chapterIndex, mediaIndex });
+      }
+      return;
+    }
     let nextMember = 0;
     const pushNote = () => {
       const pointIndex = routeIndexById.get(members[nextMember].id) ?? chapterIndex;

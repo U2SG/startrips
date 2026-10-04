@@ -12,7 +12,10 @@
   --story-point-note-pad: 10px;
   --story-point-note-slot: calc(var(--story-point-note-lines) * var(--story-point-note-line) * var(--story-point-note-size) + 2 * var(--story-point-note-pad));
 }
-.journey-story__media[data-point-note-slot="true"] > .story-media-pages {
+.journey-story__media[data-point-note-slot="true"] > :is(.story-media-pages, .journey-story__mobile-media-actions) {
+  /* The stage and the controls laid over it start below the note slot, so the
+     block never covers a control and the controls keep their place on the
+     stage. */
   top: var(--story-point-note-slot);
 }
 
