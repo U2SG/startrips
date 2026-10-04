@@ -375,9 +375,11 @@
   outline-offset: 3px;
 }
 
-.auth-primary:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 28px rgba(232, 200, 122, 0.12);
+@media (hover: hover) and (pointer: fine) {
+  .auth-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 28px rgba(232, 200, 122, 0.12);
+  }
 }
 
 .auth-primary:active:not(:disabled) {

@@ -35,9 +35,14 @@
     transform var(--motion-ui) var(--motion-ease-out);
 }
 
-.living-atlas .living-atlas__journey-rail button:hover,
 .living-atlas .living-atlas__journey-rail button.is-active {
   transform: translateX(3px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas .living-atlas__journey-rail button:hover {
+    transform: translateX(3px);
+  }
 }
 
 .living-atlas .living-atlas__journey-rail button.is-active::before {
@@ -81,9 +86,11 @@
   transition: transform var(--motion-content) var(--motion-ease-out);
 }
 
-.living-atlas .living-atlas__active:hover .living-atlas__active-media img,
-.living-atlas .living-atlas__active:hover .living-atlas__active-media video {
-  transform: scale(1.035);
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas .living-atlas__active:hover .living-atlas__active-media img,
+  .living-atlas .living-atlas__active:hover .living-atlas__active-media video {
+    transform: scale(1.035);
+  }
 }
 
 .living-atlas .living-atlas__active-hit-area:focus-visible {
@@ -100,8 +107,10 @@
     color var(--motion-ui) ease;
 }
 
-.living-atlas .living-atlas__active-actions button:hover:not(:disabled) {
-  transform: translateY(-1px);
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas .living-atlas__active-actions button:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
 }
 
 .living-atlas .living-atlas__active-actions button:active:not(:disabled) {

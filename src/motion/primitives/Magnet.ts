@@ -1,22 +1,24 @@
-import { useRef, type MouseEvent } from "react";
+import { useRef, type PointerEvent } from "react";
 import { prefersReducedMotion } from "../preferences";
 
 /**
  * ML-13 Magnet (React Bits adaptation).
  *
  * Attaches a subtle magnetic pull to any element: the element drifts toward
- * the cursor while hovered and springs back on leave. Works on touch
- * devices (no pointermove) and honors reduced motion. The element must
- * carry a `transition: transform ...` for the spring-back; handlers are
- * meant to be spread onto the element itself:
+ * the cursor while hovered and springs back on leave. Only mouse pointers
+ * pull; touch and pen input are ignored so a tap never leaves the element
+ * displaced. Honors reduced motion. The element must carry a
+ * `transition: transform ...` for the spring-back; handlers are meant to be
+ * spread onto the element itself:
  *
- *   const { ref, onMouseMove, onMouseLeave } = useMagnet(16);
- *   <button ref={ref} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
+ *   const { ref, onPointerMove, onPointerLeave } = useMagnet(16);
+ *   <button ref={ref} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}>
  */
 export function useMagnet<T extends HTMLElement>(strength = 16) {
   const ref = useRef<T | null>(null);
 
-  const onMouseMove = (event: MouseEvent<T>) => {
+  const onPointerMove = (event: PointerEvent<T>) => {
+    if (event.pointerType !== "mouse") return;
     const element = ref.current;
     if (!element || prefersReducedMotion()) return;
     const bounds = element.getBoundingClientRect();
@@ -27,10 +29,10 @@ export function useMagnet<T extends HTMLElement>(strength = 16) {
       `translate(${(x * strength).toFixed(2)}px, ${(y * strength).toFixed(2)}px)`;
   };
 
-  const onMouseLeave = () => {
+  const onPointerLeave = () => {
     const element = ref.current;
     if (element) element.style.transform = "";
   };
 
-  return { ref, onMouseMove, onMouseLeave };
+  return { ref, onPointerMove, onPointerLeave };
 }
