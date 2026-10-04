@@ -35,3 +35,16 @@ export function isFirstJourneyMedia({
 }): boolean {
   return !retry && mediaCountBeforeUpload === 0 && uploadedCount > 0;
 }
+
+let arrivalBloomScopeSequence = 0;
+
+/**
+ * The persistent globe outlives every Atlas owner mount (organization switch,
+ * gateway revision, account switch), while each owner restarts its bloom
+ * revisions. A per-mount scope keeps one owner's consumed bloom from
+ * swallowing the next owner's first arrival.
+ */
+export function createArrivalBloomScope(): string {
+  arrivalBloomScopeSequence += 1;
+  return `atlas-owner-${arrivalBloomScopeSequence}`;
+}

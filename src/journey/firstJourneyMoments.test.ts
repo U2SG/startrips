@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isFirstJourneyArrival, isFirstJourneyMedia } from "./firstJourneyMoments";
+import { createArrivalBloomScope, isFirstJourneyArrival, isFirstJourneyMedia } from "./firstJourneyMoments";
 
 describe("isFirstJourneyArrival", () => {
   it("is true only for an arrival into an empty Atlas", () => {
@@ -30,5 +30,11 @@ describe("isFirstJourneyMedia", () => {
 
   it("is false for a retry", () => {
     expect(isFirstJourneyMedia({ mediaCountBeforeUpload: 0, uploadedCount: 1, retry: true })).toBe(false);
+  });
+});
+
+describe("createArrivalBloomScope", () => {
+  it("gives every Atlas owner mount its own scope", () => {
+    expect(createArrivalBloomScope()).not.toBe(createArrivalBloomScope());
   });
 });

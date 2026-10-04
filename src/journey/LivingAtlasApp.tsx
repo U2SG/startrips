@@ -29,6 +29,7 @@ import { ScrambledText } from "../motion/primitives/ScrambledText";
 import { ShinyText } from "../motion/primitives/ShinyText";
 import { morphJourneyCard, runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { LivingAtlasGlobe, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
+import type { RouteArrivalBloomRequest } from "../scene/ParticleEarthScene";
 import { JourneyComposer } from "./JourneyComposer";
 import { ItineraryImportPanel } from "./ItineraryImportPanel";
 import type { GlobePointPick, RouteDraftPoint } from "./routeDraft";
@@ -43,7 +44,7 @@ import {
   type JourneySaveResult,
   type UnknownJourneyCreateAttempt,
 } from "./journeySaveRecovery";
-import { isFirstJourneyArrival } from "./firstJourneyMoments";
+import { createArrivalBloomScope, isFirstJourneyArrival } from "./firstJourneyMoments";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import { classifyHomeBasePeriodWrite, type HomeBasePeriod } from "./homeBase";
@@ -1409,10 +1410,8 @@ export function LivingAtlasApp({
   // One-shot globe bloom for the first Journey of an empty Atlas. It lives no
   // longer than the arrival it belongs to; the revision lets the scene play it
   // at most once per request.
-  const [firstArrivalBloom, setFirstArrivalBloom] = useState<{
-    routeId: string;
-    revision: number;
-  } | null>(null);
+  const [firstArrivalBloom, setFirstArrivalBloom] = useState<RouteArrivalBloomRequest | null>(null);
+  const [firstArrivalBloomScope] = useState(createArrivalBloomScope);
   const firstArrivalBloomRevision = useRef(0);
   const [notice, setNotice] = useState<AtlasNotice | null>(null);
   const [undoJourney, setUndoJourney] = useState<Journey | null>(null);
@@ -2683,6 +2682,7 @@ export function LivingAtlasApp({
       if (firstArrival && !reduceMotion) {
         firstArrivalBloomRevision.current += 1;
         setFirstArrivalBloom({
+          scope: firstArrivalBloomScope,
           routeId: arrivalHandoff,
           revision: firstArrivalBloomRevision.current,
         });

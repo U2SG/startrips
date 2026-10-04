@@ -236,20 +236,29 @@ describe("route focus choreography phase", () => {
 });
 
 describe("first-arrival route bloom arming", () => {
-  const request = { routeId: "j1", revision: 1 };
+  const request = { scope: "atlas-a", routeId: "j1", revision: 1 };
 
   it("arms a fresh request for the route being flown to", () => {
-    expect(shouldArmRouteArrivalBloom(request, 0, "j1")).toBe(true);
+    expect(shouldArmRouteArrivalBloom(request, null, "j1")).toBe(true);
   });
 
-  it("never replays a consumed revision", () => {
-    expect(shouldArmRouteArrivalBloom(request, 1, "j1")).toBe(false);
+  it("never replays a consumed revision of the same Atlas owner", () => {
+    expect(shouldArmRouteArrivalBloom(request, { scope: "atlas-a", revision: 1 }, "j1")).toBe(false);
+    expect(shouldArmRouteArrivalBloom({ ...request, revision: 2 }, { scope: "atlas-a", revision: 1 }, "j1")).toBe(true);
+  });
+
+  it("plays revision 1 of a new Atlas owner after the previous owner consumed revision 1", () => {
+    expect(shouldArmRouteArrivalBloom(
+      { scope: "atlas-b", routeId: "j9", revision: 1 },
+      { scope: "atlas-a", revision: 1 },
+      "j9",
+    )).toBe(true);
   });
 
   it("ignores flights to other routes, point flights and absent requests", () => {
-    expect(shouldArmRouteArrivalBloom(request, 0, "j2")).toBe(false);
-    expect(shouldArmRouteArrivalBloom(request, 0, null)).toBe(false);
-    expect(shouldArmRouteArrivalBloom(null, 0, "j1")).toBe(false);
+    expect(shouldArmRouteArrivalBloom(request, null, "j2")).toBe(false);
+    expect(shouldArmRouteArrivalBloom(request, null, null)).toBe(false);
+    expect(shouldArmRouteArrivalBloom(null, null, "j1")).toBe(false);
   });
 });
 

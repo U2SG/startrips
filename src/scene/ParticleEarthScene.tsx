@@ -1004,26 +1004,29 @@ export type RouteFocusPhase = "idle" | "flying" | "settled" | "releasing";
 
 /**
  * A one-shot request to bloom a route's final rendered Route Point once the
- * camera flight to that route settles. `revision` makes it an event: one
- * revision plays at most once.
+ * camera flight to that route settles. `(scope, revision)` makes it an event:
+ * one pair plays at most once. The scene outlives Atlas switches, so `scope`
+ * names the Atlas owner that issued the request; a new owner restarts its
+ * revisions without inheriting the previous owner's consumed state.
  */
 export type RouteArrivalBloomRequest = {
+  scope: string;
   routeId: string;
   revision: number;
 };
 
+export type ConsumedRouteArrivalBloom = { scope: string; revision: number } | null;
+
 /** Arms a bloom only for a fresh request whose route is the one being flown to. */
 export function shouldArmRouteArrivalBloom(
   request: RouteArrivalBloomRequest | null | undefined,
-  consumedRevision: number,
+  consumed: ConsumedRouteArrivalBloom,
   flightRouteId: string | null | undefined,
 ): request is RouteArrivalBloomRequest {
-  return Boolean(
-    request
-    && request.revision > consumedRevision
-    && flightRouteId
-    && request.routeId === flightRouteId,
-  );
+  if (!request || !flightRouteId || request.routeId !== flightRouteId) return false;
+  return !consumed
+    || consumed.scope !== request.scope
+    || request.revision > consumed.revision;
 }
 
 export function getRouteFocusPhase(
@@ -2417,7 +2420,7 @@ export function ParticleEarthScene({
     host.style.setProperty("--route-glow-idle-opacity", String(motionTokens.glow.idleOpacity));
     host.style.setProperty("--route-glow-core-opacity", String(motionTokens.glow.coreOpacity));
     host.style.setProperty("--route-glow-halo-opacity", String(motionTokens.glow.haloOpacity));
-    let consumedArrivalBloomRevision = 0;
+    let consumedArrivalBloom: ConsumedRouteArrivalBloom = null;
     let armedArrivalBloom: { routeId: string; focusRevision: number } | null = null;
     let arrivalBloomElement: SVGElement | null = null;
     let arrivalBloomTimer = 0;
@@ -6537,8 +6540,8 @@ export function ParticleEarthScene({
         activeFocusRevision = revision;
         const flightRouteId = intent?.kind === "route" ? intent.route?.id ?? null : null;
         const bloomRequest = latestRouteArrivalBloom.current;
-        if (shouldArmRouteArrivalBloom(bloomRequest, consumedArrivalBloomRevision, flightRouteId)) {
-          consumedArrivalBloomRevision = bloomRequest.revision;
+        if (shouldArmRouteArrivalBloom(bloomRequest, consumedArrivalBloom, flightRouteId)) {
+          consumedArrivalBloom = { scope: bloomRequest.scope, revision: bloomRequest.revision };
           armedArrivalBloom = { routeId: bloomRequest.routeId, focusRevision: revision };
         } else if (armedArrivalBloom && armedArrivalBloom.routeId === flightRouteId) {
           // A re-plan of the same route flight (e.g. refreshed route data)
