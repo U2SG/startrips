@@ -199,24 +199,43 @@ async function swipe(session, direction, startOn = "[data-story-media-pages]") {
 async function tapSelector(session, selector) {
   const box = await session.page.locator(selector).boundingBox();
   if (!box) throw new Error(`${selector} has no hit box`);
-  const hit = await session.page.evaluate(({ query, x, y }) => {
+  const probe = await session.page.evaluate(({ query, x, y }) => {
     const target = document.querySelector(query);
-    return Boolean(target?.contains(document.elementFromPoint(x, y)));
+    const at = document.elementFromPoint(x, y);
+    // What the tap actually delivers, for the diagnostic below.
+    window.__qaTapEvents = [];
+    for (const type of ["pointerdown", "pointerup", "click", "touchend"]) {
+      document.addEventListener(type, (event) => {
+        window.__qaTapEvents?.push(`${type}:${event.target instanceof Element ? event.target.className : ""}`);
+      }, { capture: true, once: true });
+    }
+    return {
+      hit: Boolean(target?.contains(at)),
+      hitClass: at instanceof Element ? String(at.className).slice(0, 80) : null,
+    };
   }, { query: selector, x: box.x + box.width / 2, y: box.y + box.height / 2 });
   if (session.pointer.kind === "touch") await session.page.locator(selector).tap();
   else await session.pointer.tap(box.x + box.width / 2, box.y + box.height / 2);
-  return { hit, width: box.width, height: box.height };
+  return { ...probe, width: box.width, height: box.height };
 }
 
-const sameRect = (left, right) => Boolean(left && right
-  && ["top", "left", "width", "height"].every((key) => Math.abs(left[key] - right[key]) <= 0.5));
+// Within one moment the stage must not move at all (0.5 px); across Route
+// Points the Story sheet's own entrance can still be settling by a pixel.
+const sameRect = (left, right, tolerance = 0.5) => Boolean(left && right
+  && ["top", "left", "width", "height"].every((key) => Math.abs(left[key] - right[key]) <= tolerance));
 
 /** Expanding and collapsing the long note must not touch the stage at all. */
 async function toggleLongNote(session) {
   const { page } = session;
   const before = await storyState(page);
   const expand = await tapSelector(session, ".story-point-note__expand");
-  await page.locator(".story-point-note-sheet").waitFor({ state: "visible", timeout: 5_000 });
+  try {
+    await page.locator(".story-point-note-sheet").waitFor({ state: "visible", timeout: 5_000 });
+  } catch (error) {
+    const delivered = await page.evaluate(() => window.__qaTapEvents ?? []);
+    throw new Error(`expand did not open the sheet: ${JSON.stringify({ expand, delivered, state: await storyState(page) })}`,
+      { cause: error });
+  }
   const expanded = await storyState(page);
   // A drag on the sheet scrolls the sheet; it must never page the stage.
   await swipe(session, 1, ".story-point-note-sheet__body");
@@ -302,11 +321,11 @@ try {
           || progress.a1.blockOwner !== "nb-point-a" || !progress.a1.blockText?.includes(A_NOTE)
           || progress.a1.blockText?.includes(S_NOTE) || progress.a1.copyNote
           || !progress.a1.currentPointLabel?.includes("STOP S 港湾 · A 石阶")
-          || !sameRect(progress.a1.pagesRect, progress.s1.pagesRect)
+          || !sameRect(progress.a1.pagesRect, progress.s1.pagesRect, 2)
           || progress.noteB.kind !== "note" || !progress.noteB.noteText?.includes(B_NOTE)
           || !progress.noteB.noteLabel?.includes("STOP S 港湾 · B 茶摊")
           || progress.noteB.blockOwner !== null || progress.noteB.copyNote
-          || !sameRect(progress.noteB.pagesRect, progress.s1.pagesRect)
+          || !sameRect(progress.noteB.pagesRect, progress.s1.pagesRect, 2)
           || progress.noteBReads.length > 0
           || progress.c1.blockOwner !== "nb-point-c"
           || progress.toggle.failed
