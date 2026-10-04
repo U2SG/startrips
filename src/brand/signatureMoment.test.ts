@@ -36,9 +36,12 @@ describe("Startrips signature moment", () => {
 
   it("renders the wordmark as a labelled button with no clip mounted at rest", () => {
     const markup = renderToStaticMarkup(createElement(StartripsWordmarkSignatureButton, { size: 34, state: "travel" }));
-    expect(markup.startsWith("<button")).toBe(true);
-    expect(markup).toContain('type="button"');
-    expect(markup).toContain('aria-label="播放 Startrips 动画"');
+    // React 19 server rendering may hoist an image preload <link> ahead of the
+    // tree, so assert on the button element itself rather than the first tag.
+    const button = markup.match(/<button[^>]*>/)?.[0] ?? "";
+    expect(button).toContain('type="button"');
+    expect(button).toContain('class="startrips-signature-trigger"');
+    expect(button).toContain('aria-label="播放 Startrips 动画"');
     expect(markup).toContain('data-brand-state="travel"');
     expect(markup).toContain("/brand/startrips-v12-wordmark.svg");
     expect(markup).not.toContain("startrips-signature-motion");
