@@ -4480,7 +4480,8 @@ export function JourneyStory({
         onWheel={scrollCopyFromMedia}
         onTransitionEnd={(event) => {
           if (event.target !== event.currentTarget) return;
-          if (event.propertyName === "height" || event.propertyName === "max-height") {
+          // The sheet slides on `translate`; collapsing also ends a delayed height commit.
+          if (event.propertyName === "translate" || event.propertyName === "height" || event.propertyName === "max-height") {
             setMobileStoryCoverTransitionActive(false);
           }
         }}

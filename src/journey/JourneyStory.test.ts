@@ -237,6 +237,35 @@ describe("Story shared-element ownership", () => {
   });
 });
 
+describe("mobile Story sheet expand motion", () => {
+  function cssRule(css: string, selector: string) {
+    const start = css.indexOf(`${selector} {`);
+    expect(start, selector).toBeGreaterThan(0);
+    return css.slice(start, css.indexOf("}", start));
+  }
+
+  it("slides on translate and never animates the sheet's height", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const collapsed = cssRule(css, "  .journey-story");
+    const offset = cssRule(css, '  .journey-story[data-story-layout="mobile"]');
+    const expanded = cssRule(css, "  .journey-story-backdrop.is-story-expanded .journey-story");
+
+    expect(collapsed).toContain("height: var(--journey-story-sheet-extent);");
+    expect(collapsed).toContain("translate var(--motion-content, 560ms)");
+    expect(collapsed).toContain("height 0s linear var(--motion-content, 560ms)");
+    expect(collapsed).not.toMatch(/height var\(--motion/);
+    expect(offset).toContain("translate: 0 calc(100% - var(--journey-story-sheet-extent) - 1px);");
+    expect(expanded).toContain("translate: none;");
+    expect(expanded).toContain("transition: translate var(--motion-content, 560ms)");
+    expect(expanded).not.toContain("height var(");
+  });
+
+  it("releases the cover hold when the translate slide ends", () => {
+    const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
+    expect(source).toContain('event.propertyName === "translate"');
+  });
+});
+
 describe("Quick Recap fallback focus ownership", () => {
   it("resolves the live Full Playback action after the responsive handoff frame", () => {
     const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
