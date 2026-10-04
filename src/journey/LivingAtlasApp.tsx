@@ -43,6 +43,7 @@ import {
   type JourneySaveResult,
   type UnknownJourneyCreateAttempt,
 } from "./journeySaveRecovery";
+import { isFirstJourneyArrival } from "./firstJourneyMoments";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import { classifyHomeBasePeriodWrite, type HomeBasePeriod } from "./homeBase";
@@ -1405,6 +1406,14 @@ export function LivingAtlasApp({
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
   const [arrivalIsSwitch, setArrivalIsSwitch] = useState(false);
+  // One-shot globe bloom for the first Journey of an empty Atlas. It lives no
+  // longer than the arrival it belongs to; the revision lets the scene play it
+  // at most once per request.
+  const [firstArrivalBloom, setFirstArrivalBloom] = useState<{
+    routeId: string;
+    revision: number;
+  } | null>(null);
+  const firstArrivalBloomRevision = useRef(0);
   const [notice, setNotice] = useState<AtlasNotice | null>(null);
   const [undoJourney, setUndoJourney] = useState<Journey | null>(null);
   const showNotice = useCallback((message: string) => {
@@ -2263,7 +2272,10 @@ export function LivingAtlasApp({
   useEffect(() => {
     if (!arrivalJourneyId) return;
     const timeout = globalThis.setTimeout(
-      () => setArrivalJourneyId(null),
+      () => {
+        setArrivalJourneyId(null);
+        setFirstArrivalBloom(null);
+      },
       reduceMotion ? 500 : 2600,
     );
     return () => globalThis.clearTimeout(timeout);
@@ -2659,11 +2671,22 @@ export function LivingAtlasApp({
       editingJourneyId,
       callbackScope,
     });
+    const firstArrival = isFirstJourneyArrival({
+      journeyCountBeforeSave: journeys.length,
+      arrivalJourneyId: arrivalHandoff,
+    });
     setJourneys((current) => mergeJourney(current, result.journey));
     if (callbackScope === "initial-save" && !reduceMotion) setBrandMoment("arrived");
     if (arrivalHandoff) {
       setArrivalIsSwitch(false);
       setArrivalJourneyId(arrivalHandoff);
+      if (firstArrival && !reduceMotion) {
+        firstArrivalBloomRevision.current += 1;
+        setFirstArrivalBloom({
+          routeId: arrivalHandoff,
+          revision: firstArrivalBloomRevision.current,
+        });
+      }
     }
     setDraftRoute(null);
     setUndoJourney(null);
@@ -3424,6 +3447,7 @@ export function LivingAtlasApp({
               }));
             }}
             visibleRoutePointIds={visibleRoutePointIds}
+            routeArrivalBloom={firstArrivalBloom}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
             selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}
             narrativeJourneyRoutePoint={draftRoute ? null : narrativeJourneyRoutePoint}

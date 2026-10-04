@@ -52,7 +52,11 @@ import {
   initialGlobeGestureHintState,
   resolveGlobeGestureHint,
 } from "./globeGestureHint";
-import { ParticleEarthScene, type ParticleEarthBackend } from "./ParticleEarthScene";
+import {
+  ParticleEarthScene,
+  type ParticleEarthBackend,
+  type RouteArrivalBloomRequest,
+} from "./ParticleEarthScene";
 import { GLOBE_MODE_CONFIG } from "./globeMode";
 import {
   GLOBE_SEMANTIC_ZOOM_CEILING,
@@ -199,6 +203,8 @@ export type LivingAtlasGlobeProps = {
   journeyRoutes: readonly JourneyRoute[];
   /** Marker disclosure only; route geometry always uses all Journey Route Points. */
   visibleRoutePointIds?: ReadonlySet<string>;
+  /** One-shot final Route Point bloom once the first Journey arrival settles. */
+  routeArrivalBloom?: RouteArrivalBloomRequest | null;
   activeJourneyRouteId?: string | null;
   selectedJourneyRoutePoint?: {
     journeyId: string;
@@ -277,6 +283,7 @@ type AtlasEarthPresentation = Pick<
   | "focusColor"
   | "journeyRoutes"
   | "visibleRoutePointIds"
+  | "routeArrivalBloom"
   | "activeJourneyRouteId"
   | "selectedJourneyRoutePoint"
   | "narrativeJourneyRoutePoint"
@@ -387,6 +394,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   centerFocusPoint={Boolean(atlas)}
                   journeyRoutes={atlas?.journeyRoutes ?? []}
                   visibleRoutePointIds={atlas?.visibleRoutePointIds}
+                  routeArrivalBloom={atlas?.routeArrivalBloom ?? null}
                   activeJourneyRouteId={atlas?.activeJourneyRouteId}
                   selectedJourneyRoutePoint={atlas?.selectedJourneyRoutePoint}
                   narrativeJourneyRoutePoint={atlas?.narrativeJourneyRoutePoint}
@@ -460,6 +468,7 @@ export function LivingAtlasGlobe({
   focusColor,
   journeyRoutes,
   visibleRoutePointIds,
+  routeArrivalBloom,
   activeJourneyRouteId,
   selectedJourneyRoutePoint,
   narrativeJourneyRoutePoint,
@@ -1129,6 +1138,7 @@ export function LivingAtlasGlobe({
       focusColor,
       journeyRoutes,
       visibleRoutePointIds,
+      routeArrivalBloom,
       activeJourneyRouteId,
       selectedJourneyRoutePoint,
       narrativeJourneyRoutePoint,
@@ -1180,6 +1190,7 @@ export function LivingAtlasGlobe({
     homeBaseLayer,
     journeyRoutes,
     visibleRoutePointIds,
+    routeArrivalBloom,
     zoomIntent,
     onGlobePointPick,
     handleManualCameraInteraction,

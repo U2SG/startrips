@@ -69,6 +69,8 @@
 .journey-save-complete,
 .journey-save-partial__heading { display: flex; align-items: center; gap: 8px; }
 .journey-save-complete .startrips-journey-cue { flex: 0 0 auto; }
+.journey-story__upload-message.has-cue { display: flex; align-items: center; gap: 8px; }
+.journey-story__upload-message.has-cue .startrips-journey-cue { flex: 0 0 auto; }
 .journey-composer__footer > button { min-width: 132px; }
 .journey-composer__footer .startrips-journey-cue { margin: -8px 0; }
 .journey-timeline__future > .startrips-journey-cue { margin-bottom: 12px; }

@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LivingAtlasGlobe, LivingAtlasGlobeControls, PersistentEarthProvider, particleAnchorFramesEqual, resolveLivingAtlasHomeBaseLayer } from "./LivingAtlasGlobe";
-import { getRouteFocusPhase } from "./ParticleEarthScene";
+import { getRouteFocusPhase, shouldArmRouteArrivalBloom } from "./ParticleEarthScene";
 import type { HomeBasePeriod } from "../journey/homeBase";
 import { resolveHomeBasePresence } from "../journey/homeBasePresence";
 import { readFileSync } from "node:fs";
@@ -232,6 +232,24 @@ describe("route focus choreography phase", () => {
   it("keeps zoom release distinct from the idle state", () => {
     expect(getRouteFocusPhase(false, false, true)).toBe("releasing");
     expect(getRouteFocusPhase(false, false, false)).toBe("idle");
+  });
+});
+
+describe("first-arrival route bloom arming", () => {
+  const request = { routeId: "j1", revision: 1 };
+
+  it("arms a fresh request for the route being flown to", () => {
+    expect(shouldArmRouteArrivalBloom(request, 0, "j1")).toBe(true);
+  });
+
+  it("never replays a consumed revision", () => {
+    expect(shouldArmRouteArrivalBloom(request, 1, "j1")).toBe(false);
+  });
+
+  it("ignores flights to other routes, point flights and absent requests", () => {
+    expect(shouldArmRouteArrivalBloom(request, 0, "j2")).toBe(false);
+    expect(shouldArmRouteArrivalBloom(request, 0, null)).toBe(false);
+    expect(shouldArmRouteArrivalBloom(null, 0, "j1")).toBe(false);
   });
 });
 
