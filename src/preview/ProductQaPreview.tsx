@@ -835,6 +835,8 @@ function JourneyStoryQaPreview() {
         <JourneyStory
           journeys={journeys}
           journeyId={initialJourney.id}
+          // #595: a Playback return or a deep link names a Route Point.
+          routePointId={new URLSearchParams(window.location.search).get("qaRoutePoint")}
           presentJourneyCoverOpening={coverOpeningMode}
           onObservationChange={(next) => setObservation((current) => {
             if (current?.assetId === next?.assetId && current?.routePointId === next?.routePointId) return current;

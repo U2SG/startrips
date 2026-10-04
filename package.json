@@ -43,6 +43,7 @@
     "qa:composer": "node scripts/capture-journey-composer.mjs",
     "qa:story": "node scripts/qa-journey-story.mjs",
     "qa:story-media-handoff": "node scripts/qa-story-media-handoff.mjs",
+    "qa:story-note-beats": "node scripts/qa-story-note-beats.mjs",
     "qa:soundtrack-ducking": "node scripts/qa-soundtrack-ducking.mjs",
     "qa:journey-book-3d": "node scripts/qa-journey-book-3d.mjs",
     "qa:media-motion-lab": "node scripts/qa-media-motion-lab.mjs",

@@ -1979,10 +1979,15 @@ try {
   const projectedFullSteps = Number(await projectionPlayback.getAttribute("data-playback-steps"));
   const expectedProjectionChapters = projectionRoutePoints.filter((point) => point.isStop
     || projectionJourney.media.some((asset) => asset.routePointId === point.id));
+  // #595: an ungrouped note-only via is a transit note beat - one step, never
+  // an arrival and never a chapter of its own.
+  const expectedProjectionNoteBeats = projectionRoutePoints.filter((point) => !point.isStop
+    && point.note.trim() && !projectionJourney.media.some((asset) => asset.routePointId === point.id)).length;
   const expectedProjectionPlaybackSteps = 2
     + (expectedProjectionChapters.length - 1)
     + projectionRoutePoints.filter((point) => point.isStop).length
-    + projectionJourney.media.length;
+    + projectionJourney.media.length
+    + expectedProjectionNoteBeats;
   record("Full Playback keeps route travel and owned media without promoting non-stops to arrivals", {
     projectedFullSteps, expectedProjectionPlaybackSteps,
   }, projectedFullSteps === expectedProjectionPlaybackSteps);
@@ -2052,11 +2057,25 @@ try {
     && await projectionPlayback.getAttribute("data-camera-follow") === "free"
     && await projectionPlayback.locator('.journey-playback__chapter[data-chapter-point="2"]').count() === 1);
   await projectionPage.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
+  // #595: B is followed by the note-only via's transit beat, with no arrival
+  // and no STOP caption, before the leg to the media via.
+  const transitNoteBeat = await projectionPage.waitForFunction((ids) => {
+    const playback = document.querySelector(".journey-playback");
+    const beat = playback?.querySelector(".journey-playback__note-beat");
+    return playback?.getAttribute("data-playback-phase") === "note"
+      && playback.getAttribute("data-playback-step") === "4"
+      && beat?.getAttribute("data-playback-note-beat") === ids.note
+      && beat.getAttribute("data-playback-transit-note") === "true"
+      && !beat.textContent?.includes("STOP")
+      && beat.textContent?.includes("这段途经留下了一句话。")
+      && !playback.querySelector(".journey-playback__stop") ? true : false;
+  }, projectionPointIds).then(() => true, () => false);
+  record("transit note beat plays between B and the media via without an arrival", { transitNoteBeat }, transitNoteBeat);
   await projectionPage.waitForFunction((ids) => {
     const playback = document.querySelector(".journey-playback");
     const media = document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.media}"]`);
     return playback?.getAttribute("data-camera-follow") === "free"
-      && playback.getAttribute("data-playback-step") === "4"
+      && playback.getAttribute("data-playback-step") === "5"
       && playback.getAttribute("data-playback-phase") === "travel"
       && media?.getAttribute("data-attention-role") === "narrative-current"
       && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.note}"]`)
