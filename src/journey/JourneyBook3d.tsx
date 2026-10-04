@@ -523,6 +523,29 @@ export function JourneyBook3d({
     });
   }, [faceCount, liveFace, orientation, settled, stageSize]);
 
+  // QA: publish where the settled faces lie, so browser QA can sample the
+  // rendered paper against them. DEV only; a production build writes nothing.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const stage = stageRef.current;
+    const scene = sceneRef.current;
+    if (!stage) return;
+    if (!scene || !settled) {
+      delete stage.dataset.qaBook;
+      return;
+    }
+    const at = Math.round(scene.progress);
+    const sides = at <= 0 ? ["closed-front"] as const : at >= scene.sheets ? ["closed-back"] as const : ["left", "right"] as const;
+    stage.dataset.qaBook = JSON.stringify({
+      spread: at,
+      sheets: scene.sheets,
+      orientation,
+      pixelsPerUnit: scene.pixelsPerUnit,
+      spineX: scene.spineX,
+      rects: Object.fromEntries(sides.map((side) => [side, scene.faceRect(side)])),
+    });
+  }, [face, faceCount, orientation, settled, stageSize]);
+
   // A turn pauses the live video; the turning page shows its poster or still.
   // The player is not in CORS mode (deploy/README.md), so its frame cannot be
   // copied onto the page.
@@ -616,15 +639,21 @@ export function JourneyBook3d({
       // Lifting an edge unsettles the book, which would pause a playing video.
       if (videoRef.current && !videoRef.current.paused) return;
       if (!scene.isSettled() && !scene.hasEdge) return;
+      const spreadNow = Math.round(scene.progress);
+      const pointerX = event.clientX - stage.left;
+      // Under the tilt each side rests at its own height on screen.
+      const page = scene.faceRect(spreadNow <= 0 ? "closed-front"
+        : spreadNow >= scene.sheets ? "closed-back"
+          : pointerX < scene.spineX ? "left" : "right");
       scene.hoverEdge(edgePreviewDirection({
-        spread: Math.round(scene.progress),
+        spread: spreadNow,
         sheets: scene.sheets,
-        pointerX: event.clientX - stage.left,
+        pointerX,
         pointerY: event.clientY - stage.top,
         spineX: scene.spineX,
-        centerY: stage.height / 2,
+        centerY: page.top + page.height / 2,
         pageWidth: scene.pageWidthPx,
-        pageHeight: scene.pageHeightPx,
+        pageHeight: page.height,
         edgeZone: EDGE_ZONE_PX,
       }));
       return;

@@ -1,8 +1,13 @@
+import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import {
+  BOOK_CAMERA_TILT,
   BOOK_SHEET_SPACING,
+  bookFrame,
   bookTableHeight,
-  cameraHalfHeight,
+  faceScreenRect,
+  restingPageHeight,
+  stackSheets,
   dragFraction,
   dragTurnDirection,
   edgePreviewDirection,
@@ -60,17 +65,69 @@ describe("stepping", () => {
 });
 
 describe("camera fit", () => {
+  const cos = Math.cos(BOOK_CAMERA_TILT);
+  const sin = Math.sin(BOOK_CAMERA_TILT);
+
   it("fits the spread width on a narrow stage and the page height on a wide one", () => {
-    const narrow = cameraHalfHeight(0.5, 0.8, "landscape");
-    expect(narrow * 2 * 0.5).toBeGreaterThanOrEqual(1.6);
-    const wide = cameraHalfHeight(3, 0.8, "landscape");
-    expect(wide * 2).toBeGreaterThanOrEqual(1);
+    const narrow = bookFrame(0.5, 0.8, "landscape", 4);
+    expect(narrow.halfWidth * 2).toBeGreaterThanOrEqual(1.6);
+    expect((narrow.halfWidth * 2) / (narrow.top - narrow.bottom)).toBeCloseTo(0.5);
+    const wide = bookFrame(3, 0.8, "landscape", 4);
+    expect(wide.top - wide.bottom).toBeGreaterThanOrEqual(cos);
+    expect((wide.halfWidth * 2) / (wide.top - wide.bottom)).toBeCloseTo(3);
   });
 
   it("frames one page in portrait", () => {
-    const half = cameraHalfHeight(0.6, 0.8, "portrait");
-    expect(half * 2 * 0.6).toBeGreaterThanOrEqual(0.8);
-    expect(half * 2).toBeGreaterThanOrEqual(1);
+    const frame = bookFrame(0.6, 0.8, "portrait", 4);
+    expect(frame.halfWidth * 2).toBeGreaterThanOrEqual(0.8);
+    expect(frame.top - frame.bottom).toBeGreaterThanOrEqual(cos);
+  });
+
+  it("holds a page standing mid-turn and the whole stack thickness on any stage", () => {
+    for (const orientation of ["landscape", "portrait"] as const) {
+      for (const aspect of [0.5, 0.6, 1, 1.9, 3]) {
+        for (const sheets of [1, 40, 200]) {
+          const frame = bookFrame(aspect, 0.8, orientation, sheets);
+          // The far top corner of an upright page in flight.
+          expect(frame.top).toBeGreaterThanOrEqual(sin + cos / 2);
+          // The near edge of the deepest sheet, below the near page edge.
+          expect(frame.bottom).toBeLessThanOrEqual(-cos / 2 - BOOK_SHEET_SPACING * sheets * sin);
+        }
+      }
+    }
+  });
+
+  it("places settled faces where a tilted orthographic camera renders them", () => {
+    const sheets = 40;
+    const frame = bookFrame(1.9, 0.8, "landscape", sheets);
+    const cssHeight = 680;
+    const cssWidth = cssHeight * 1.9;
+    const pixelsPerUnit = cssHeight / (frame.top - frame.bottom);
+    const camera = new THREE.OrthographicCamera(-frame.halfWidth, frame.halfWidth, frame.top, frame.bottom, 0.1, 20);
+    camera.position.set(0, 5 * cos, 5 * sin);
+    camera.up.set(0, 0, -1);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+    const toScreen = (x: number, y: number, z: number) => {
+      const point = new THREE.Vector3(x, y, z).project(camera);
+      return { x: ((point.x + 1) / 2) * cssWidth, y: ((1 - point.y) / 2) * cssHeight };
+    };
+    for (const spread of [1, 20, 39]) {
+      for (const side of ["left", "right"] as const) {
+        const rect = faceScreenRect({ side, spread, sheets, frame, pixelsPerUnit, spineX: cssWidth / 2, pageWidth: 0.8 });
+        const y = restingPageHeight(side, spread, sheets);
+        const outer = side === "left" ? -0.8 : 0.8;
+        const far = toScreen(outer, y, -0.5);
+        const near = toScreen(outer, y, 0.5);
+        expect(rect.top).toBeCloseTo(far.y, 6);
+        expect(rect.top + rect.height).toBeCloseTo(near.y, 6);
+        expect(side === "left" ? rect.left : rect.left + rect.width).toBeCloseTo(far.x, 6);
+      }
+    }
+    // A deep book: at the first spread the left page lies a whole stack lower.
+    const left = faceScreenRect({ side: "left", spread: 1, sheets, frame, pixelsPerUnit, spineX: 0, pageWidth: 0.8 });
+    const right = faceScreenRect({ side: "right", spread: 1, sheets, frame, pixelsPerUnit, spineX: 0, pageWidth: 0.8 });
+    expect(left.top - right.top).toBeCloseTo(BOOK_SHEET_SPACING * sheets * sin * pixelsPerUnit, 6);
   });
 });
 
@@ -86,6 +143,22 @@ describe("table under the stack", () => {
   it("leaves small books at the original table height", () => {
     expect(bookTableHeight(0)).toBe(-0.035);
     expect(bookTableHeight(20)).toBe(-0.035);
+  });
+
+  it("finds the top sheet of each stack where quick_flipbook rests it", () => {
+    expect(restingPageHeight("closed-front", 0, 40)).toBeCloseTo(0);
+    expect(restingPageHeight("right", 1, 40)).toBeCloseTo(-BOOK_SHEET_SPACING);
+    expect(restingPageHeight("left", 1, 40)).toBeCloseTo(-BOOK_SHEET_SPACING * 40);
+    expect(restingPageHeight("left", 39, 40)).toBeCloseTo(-BOOK_SHEET_SPACING * 2);
+    expect(restingPageHeight("closed-back", 40, 40)).toBeCloseTo(-BOOK_SHEET_SPACING);
+  });
+
+  it("counts the sheets lying in each stack, leaving out a sheet in flight", () => {
+    expect(stackSheets(0, 40)).toEqual({ left: 0, right: 40, inFlight: false });
+    expect(stackSheets(3, 40)).toEqual({ left: 3, right: 37, inFlight: false });
+    expect(stackSheets(3.4, 40)).toEqual({ left: 3, right: 36, inFlight: true });
+    expect(stackSheets(2.96, 40)).toEqual({ left: 2, right: 37, inFlight: true });
+    expect(stackSheets(40, 40)).toEqual({ left: 40, right: 0, inFlight: false });
   });
 });
 
