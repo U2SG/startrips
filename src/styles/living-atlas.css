@@ -799,10 +799,16 @@
   transition: opacity var(--motion-micro) ease, transform var(--motion-micro) var(--motion-ease-out);
 }
 
-.living-atlas__journey-rail button:hover .living-atlas__journey-arrow,
 .living-atlas__journey-rail button.is-active .living-atlas__journey-arrow {
   opacity: 1;
   transform: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__journey-rail button:hover .living-atlas__journey-arrow {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .living-atlas__journey-scroll-hint {
@@ -1360,10 +1366,16 @@
   transition: border-color var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease), transform var(--motion-instant, 120ms) var(--motion-ease-out-soft, ease), box-shadow var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
 }
 
-.journey-timeline__card:hover,
 .journey-timeline__card.is-active {
   border-color: var(--journey-color);
   transform: translateY(-2px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-timeline__card:hover {
+    border-color: var(--journey-color);
+    transform: translateY(-2px);
+  }
 }
 
 /* Focus ring follows the card's real border radius via a pseudo-element, so
@@ -1907,10 +1919,16 @@
   transition: opacity var(--motion-instant, 120ms) ease, transform var(--motion-instant, 120ms) ease;
 }
 
-.icon-action-button:hover::after,
 .icon-action-button:focus-visible::after {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .icon-action-button:hover::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 /* Story's current-media actions sit against the top edge of an overflow-hidden
@@ -1921,9 +1939,14 @@
   transform: translate(-50%, -4px);
 }
 
-.journey-story__media-actions .icon-action-button:hover::after,
 .journey-story__media-actions .icon-action-button:focus-visible::after {
   transform: translate(-50%, 0);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__media-actions .icon-action-button:hover::after {
+    transform: translate(-50%, 0);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -6342,9 +6365,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     box-shadow var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
 }
 
-.motion-lift:hover {
-  transform: translateY(-3px);
-  filter: brightness(1.04);
+@media (hover: hover) and (pointer: fine) {
+  .motion-lift:hover {
+    transform: translateY(-3px);
+    filter: brightness(1.04);
+  }
 }
 
 .motion-lift:active {

@@ -35,10 +35,12 @@
     transform var(--motion-micro, 240ms) ease;
 }
 
-.globe-time-scrubber__play:hover {
-  border-color: rgba(118, 227, 211, 0.62);
-  background: rgba(118, 227, 211, 0.08);
-  transform: scale(1.06);
+@media (hover: hover) and (pointer: fine) {
+  .globe-time-scrubber__play:hover {
+    border-color: rgba(118, 227, 211, 0.62);
+    background: rgba(118, 227, 211, 0.08);
+    transform: scale(1.06);
+  }
 }
 
 .globe-time-scrubber__play:active {
@@ -113,10 +115,16 @@
     border-color var(--motion-ui, 260ms) ease;
 }
 
-.globe-time-scrubber__track:hover .globe-time-scrubber__cursor,
 .globe-time-scrubber__track:focus-visible .globe-time-scrubber__cursor {
   border-color: #aef2e4;
   transform: translate(-50%, -50%) scale(1.14);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .globe-time-scrubber__track:hover .globe-time-scrubber__cursor {
+    border-color: #aef2e4;
+    transform: translate(-50%, -50%) scale(1.14);
+  }
 }
 
 .globe-time-scrubber__ticks {
