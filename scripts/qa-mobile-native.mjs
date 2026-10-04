@@ -107,6 +107,9 @@ try {
           themeColors,
           htmlOverscroll: getComputedStyle(document.documentElement).overscrollBehaviorY,
           bodyOverscroll: getComputedStyle(document.body).overscrollBehaviorY,
+          // The horizontal axis stays free for the back/forward history gesture.
+          htmlOverscrollX: getComputedStyle(document.documentElement).overscrollBehaviorX,
+          bodyOverscrollX: getComputedStyle(document.body).overscrollBehaviorX,
         };
       });
       record({
@@ -135,7 +138,10 @@ try {
         name: "root/no-pull-to-refresh",
         html: platform.htmlOverscroll,
         body: platform.bodyOverscroll,
-        failed: platform.htmlOverscroll !== "none" || platform.bodyOverscroll !== "none",
+        htmlX: platform.htmlOverscrollX,
+        bodyX: platform.bodyOverscrollX,
+        failed: platform.htmlOverscroll !== "none" || platform.bodyOverscroll !== "none"
+          || platform.htmlOverscrollX !== "auto" || platform.bodyOverscrollX !== "auto",
       });
 
       // Sticky hover: the toggle's tap changes the password field type, not
