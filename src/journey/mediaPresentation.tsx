@@ -9,6 +9,7 @@ import "../styles/journey-reader.css";
  *   over the picture instead of below it.
  * - `book`: the Journey Book reader, which opens in place of Story.
  * - `stream`: the Journey Stream reader (after Undertow), in place of Story.
+ * - `book-3d`: the Journey Book with real bending paper (Three.js).
  *
  * This is a per-device trial switch, not an account preference: it lives in
  * this browser only so the variants can be compared on a real device and
@@ -19,9 +20,9 @@ import "../styles/journey-reader.css";
  * on this device. It is the only way to switch where the account menu is not
  * available, such as a guest share link.
  */
-export type MediaPresentationStyle = "classic" | "note-overlay" | "book" | "stream";
+export type MediaPresentationStyle = "classic" | "note-overlay" | "book" | "book-3d" | "stream";
 
-export const MEDIA_PRESENTATION_STYLES: readonly MediaPresentationStyle[] = ["classic", "note-overlay", "book", "stream"];
+export const MEDIA_PRESENTATION_STYLES: readonly MediaPresentationStyle[] = ["classic", "note-overlay", "book", "book-3d", "stream"];
 
 const STORAGE_KEY = "startrips.media-presentation";
 export const MEDIA_PRESENTATION_QUERY = "mediaPresentation";
@@ -49,6 +50,7 @@ export function nextMediaPresentationStyle(style: MediaPresentationStyle): Media
 export function mediaPresentationLabel(style: MediaPresentationStyle): string {
   if (style === "note-overlay") return "图上感想";
   if (style === "book") return "旅程之书";
+  if (style === "book-3d") return "立体之书";
   if (style === "stream") return "旅程之流";
   return "默认";
 }

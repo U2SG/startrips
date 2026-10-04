@@ -1,0 +1,135 @@
+/*
+ * #393 3D Journey Book. Built on journey-book.css (header, controls, TOC);
+ * the book itself is a WebGL canvas filling the stage.
+ */
+.journey-book-3d__stage {
+  /* Horizontal drags turn pages; vertical ones stay with the browser. */
+  touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.journey-book-3d__canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The one live video, laid over its settled page's plate. */
+.journey-book-3d__video {
+  position: absolute;
+  z-index: 2;
+  object-fit: contain;
+  background: #16181a;
+  touch-action: pan-y;
+}
+
+.journey-book-3d__full-note {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 3;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--startrips-line);
+  background: rgb(2 7 6 / 0.72);
+  color: var(--startrips-starlight);
+  font: 400 13px/1 var(--archive-sans);
+  translate: -50% 0;
+  cursor: pointer;
+}
+
+.journey-book-3d__journeys {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+  translate: -50% 0;
+}
+
+.journey-book-3d__journeys button {
+  display: grid;
+  gap: 4px;
+  min-height: 44px;
+  max-width: 44vw;
+  padding: 8px 14px;
+  border: 1px solid var(--startrips-line);
+  background: rgb(2 7 6 / 0.72);
+  color: var(--startrips-starlight);
+  font: 400 14px/1.3 var(--archive-serif);
+  text-align: left;
+  cursor: pointer;
+}
+
+.journey-book-3d__journeys small {
+  font: 400 11px/1.4 var(--archive-sans);
+  letter-spacing: 0.08em;
+  color: var(--startrips-muted);
+}
+
+.journey-book-3d__failure {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  font: 400 14px/1.6 var(--archive-sans);
+  color: var(--startrips-muted);
+  text-align: center;
+}
+
+.journey-book-3d__failure p { margin: 0; }
+
+.journey-book-3d__failure-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* What the visible pages say, for assistive technology; the pages
+   themselves are pixels. */
+.journey-book-3d__readable {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.journey-book-3d__note-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  background: rgb(2 7 6 / 0.88);
+}
+
+.journey-book-3d__note-sheet > div {
+  display: grid;
+  gap: 16px;
+  justify-items: end;
+  width: min(36em, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 24px;
+  background: #f7f6f0;
+  color: #292c26;
+}
+
+.journey-book-3d__note-sheet p {
+  margin: 0;
+  font: 400 17px/1.85 var(--archive-serif);
+  white-space: pre-wrap;
+}
+
+.journey-book-3d__note-sheet .journey-book__text-action { color: #292c26; }
