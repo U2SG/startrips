@@ -6065,7 +6065,7 @@ export function ParticleEarthScene({
           dayNightModeWeight(currentMode),
         );
         dayNightStrength = dayNightModeStrength
-          * dayNightDiveFactor(semanticZoomState.snapshot.localProgress);
+          * dayNightDiveFactor(semanticZoomState.snapshot.zoom);
         atmosphereMaterial.uniforms.uSunDirection.value.copy(sunDirection);
         atmosphereMaterial.uniforms.uDayNightStrength.value = dayNightStrength;
         // Line materials have one opacity, so coastlines follow the night

@@ -2,6 +2,7 @@ import type { Vector3 } from "three";
 import { EARTH_DIVE_BLEND_ENTER_PROGRESS } from "./earthDive";
 import { latLonToVector3 } from "./geo";
 import type { GlobeMode } from "./globeMode";
+import { localBandProgress } from "./semanticZoom";
 
 const DEG = Math.PI / 180;
 const MS_PER_DAY = 86_400_000;
@@ -88,12 +89,15 @@ export function dayNightModeWeight(mode: GlobeMode) {
 }
 
 /**
- * Applied without easing: local-band progress is already smoothed zoom, so the
- * strength is exactly 0 on every frame past the release point and no
- * terminator can sweep across the reveal anchor into the detail map.
+ * Applied without easing, from the continuous canonical zoom. The published
+ * `localProgress` cannot be used: it is 0 until the band opens with hysteresis
+ * and then starts at ~0.18, which would pop the night side in one frame. The
+ * same band-depth reading of the raw zoom starts at 1 exactly at the band edge
+ * and is never smaller than `localProgress`, so the strength is still exactly 0
+ * before the Dive blend can start and no terminator sweeps the reveal anchor.
  */
-export function dayNightDiveFactor(localProgress: number) {
-  return 1 - clamp01(localProgress / DAY_NIGHT_DIVE_RELEASE_PROGRESS);
+export function dayNightDiveFactor(zoom: number) {
+  return 1 - clamp01(localBandProgress(zoom) / DAY_NIGHT_DIVE_RELEASE_PROGRESS);
 }
 
 /** CPU mirror of the shader term: 0 on the day side, 1 deep on the night side. */

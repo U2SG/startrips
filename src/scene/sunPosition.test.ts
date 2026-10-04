@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { EARTH_DIVE_BLEND_ENTER_PROGRESS } from "./earthDive";
 import { latLonToVector3 } from "./geo";
 import {
+  GLOBE_SEMANTIC_ZOOM_CEILING,
+  GLOBE_SEMANTIC_ZOOM_FLOOR,
+  LOCAL_BAND_ENTRY_ZOOM,
+  resolveGlobeSemanticZoom,
+} from "./semanticZoom";
+import {
   DAY_NIGHT_DIVE_RELEASE_PROGRESS,
   DAY_NIGHT_NIGHT_BRIGHTNESS,
   dayNightBrightness,
@@ -68,12 +74,35 @@ describe("day/night controls", () => {
     expect(dayNightModeWeight("surfaceEarth")).toBe(0);
   });
 
-  it("releases the Dive before the blend starts", () => {
-    expect(dayNightDiveFactor(0)).toBe(1);
-    expect(dayNightDiveFactor(DAY_NIGHT_DIVE_RELEASE_PROGRESS)).toBe(0);
+  it("ramps continuously across the local band entry", () => {
+    const epsilon = 1e-4;
+    // The geometric edge and the hysteresis edge where the band really opens.
+    for (const edge of [LOCAL_BAND_ENTRY_ZOOM, LOCAL_BAND_ENTRY_ZOOM + 0.08]) {
+      expect(Math.abs(dayNightDiveFactor(edge - epsilon) - dayNightDiveFactor(edge + epsilon)))
+        .toBeLessThan(0.01);
+    }
+    expect(dayNightDiveFactor(GLOBE_SEMANTIC_ZOOM_FLOOR)).toBe(1);
+    expect(dayNightDiveFactor(LOCAL_BAND_ENTRY_ZOOM)).toBe(1);
+    // Regression: the first `local` frame (zoom 2.63, localProgress ~0.178)
+    // used to jump from 1 to ~0.51; it is now reached gradually from 2.55.
+    const opened = resolveGlobeSemanticZoom({ zoom: 2.63, previous: "regional" }).snapshot;
+    expect(opened.level).toBe("local");
+    expect(dayNightDiveFactor(opened.zoom)).toBeGreaterThan(0.5);
+    expect(dayNightDiveFactor(2.629)).toBeCloseTo(dayNightDiveFactor(opened.zoom), 2);
+  });
+
+  it("is fully released at and after the Dive blend threshold", () => {
     expect(DAY_NIGHT_DIVE_RELEASE_PROGRESS).toBeLessThan(EARTH_DIVE_BLEND_ENTER_PROGRESS);
-    expect(dayNightDiveFactor(EARTH_DIVE_BLEND_ENTER_PROGRESS)).toBe(0);
-    expect(dayNightDiveFactor(1)).toBe(0);
+    for (let zoom = GLOBE_SEMANTIC_ZOOM_FLOOR; zoom <= GLOBE_SEMANTIC_ZOOM_CEILING; zoom += 0.005) {
+      const snapshot = resolveGlobeSemanticZoom({ zoom, previous: "local" }).snapshot;
+      if (snapshot.localProgress >= DAY_NIGHT_DIVE_RELEASE_PROGRESS) {
+        expect(dayNightDiveFactor(snapshot.zoom)).toBe(0);
+      }
+    }
+    const blendZoom = LOCAL_BAND_ENTRY_ZOOM
+      + EARTH_DIVE_BLEND_ENTER_PROGRESS * (GLOBE_SEMANTIC_ZOOM_CEILING - LOCAL_BAND_ENTRY_ZOOM);
+    expect(dayNightDiveFactor(blendZoom)).toBe(0);
+    expect(dayNightDiveFactor(GLOBE_SEMANTIC_ZOOM_CEILING)).toBe(0);
   });
 
   it("only darkens: day is exactly 1 and night never falls below the floor", () => {
