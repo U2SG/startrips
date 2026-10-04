@@ -14,8 +14,8 @@
 //   Tier 2 — content transition  (card -> story / tile -> fullscreen) 450–700ms
 //   Tier 3 — journey / globe narrative (camera fly-to / route draw) 700–1600ms
 //
-// Everything else is composed from the five primitives in
-// `src/motion/primitives/` plus these tokens — no per-feature magic numbers.
+// Everything else is composed from the motion primitives listed in
+// docs/motion-language.md plus these tokens — no per-feature magic numbers.
 
 export const motionTokens = {
   /** Unit-mass spring response shared by DOM motion and its scalar integrator. */
@@ -31,15 +31,6 @@ export const motionTokens = {
     /** Tier 3: journey / globe narrative — slow start, steady cruise, soft settle. */
     journey: 980,
   },
-  /** Named paces kept for legacy call sites; prefer the tier above. */
-  durations: {
-    microReveal: 240,
-    panelEntry: 560,
-    morph: 760,
-    clusterPulse: 1900,
-    arrival: 2400,
-    kenburns: 5200,
-  },
   easings: {
     // Long ease-out tails for spatial motion (Tier 1–2).
     easeOut: "cubic-bezier(0.16, 1, 0.3, 1)",
@@ -49,37 +40,10 @@ export const motionTokens = {
     // #17 spec: spatial in-out for journey camera and route drawing (Tier 3).
     easeInOutSpatial: "cubic-bezier(0.65, 0, 0.35, 1)",
   },
-  stagger: {
-    base: 140,
-  },
-  parallax: {
-    cardOriginScale: 0.94,
-    cardTravelX: 22,
-    cardTravelY: 26,
-  },
-  /** Interaction surface movement budget (Tier 0) — stays within 2–4px. */
-  lift: {
-    hover: 3,
-    press: 1,
-  },
   /** Glow is a state, not a decorative border: active core + halo, idle near-zero. */
   glow: {
     coreOpacity: 0.9,
     haloOpacity: 0.35,
     idleOpacity: 0.08,
   },
-} as const;
-
-/** The five motion primitives, as stable CSS class names. */
-export const motionPrimitiveClass = {
-  /** Small state replacement (Tier 1–2): crossfade, content carries the change. */
-  fadeThrough: "motion-fade-through",
-  /** Card/interactive surface spatial feedback (Tier 0–1): lift, stable hit area. */
-  lift: "motion-lift",
-  /** Thumbnail/card expands into story/fullscreen (Tier 2). */
-  sharedExpand: "motion-shared-expand",
-  /** Route/light trail grows from 0 -> 1 (Tier 3). */
-  draw: "motion-draw",
-  /** Globe camera flies from global view to a place (Tier 3). */
-  focusFlight: "motion-focus-flight",
 } as const;

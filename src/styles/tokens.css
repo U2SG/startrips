@@ -11,12 +11,11 @@
   --archive-line: rgba(136, 188, 172, 0.16);
   --archive-cyan: #74e7d0;
   --archive-green: #c8ff3d;
-  --archive-purple: #6256ef;
   --archive-edge: clamp(24px, 3vw, 40px);
-  --archive-log-height: 76px;
   --archive-serif: Georgia, "Songti SC", "STSong", serif;
   --archive-sans: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  /* Shared motion language tokens. Keep in sync with src/motion/tokens.ts. */
+  /* Shared motion language tokens. Tiers and easings mirror src/motion/tokens.ts;
+     the named paces (micro / panel / morph / stagger) are CSS-only. */
   --motion-instant: 120ms;
   --motion-ui: 260ms;
   --motion-content: 560ms;
@@ -24,8 +23,6 @@
   --motion-micro: 240ms;
   --motion-panel: 560ms;
   --motion-morph: 760ms;
-  --motion-pulse: 1900ms;
-  --motion-arrival: 2400ms;
   --motion-stagger: 140ms;
   --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-ease-soft: cubic-bezier(0.2, 0.75, 0.15, 1);
