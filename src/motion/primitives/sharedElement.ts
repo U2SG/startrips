@@ -1,5 +1,6 @@
 import { flushSync } from "react-dom";
 import { onMotionPreferenceChange, prefersReducedMotion } from "../preferences";
+import { motionTokens } from "../tokens";
 
 type ViewTransitionHandle = {
   ready: Promise<void>;
@@ -374,7 +375,7 @@ export function runSharedElementMorph({
       ];
     try {
       animation = clone.animate(framesFor(targetRect), {
-        duration: durationMs, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards",
+        duration: durationMs, easing: motionTokens.easings.easeOut, fill: "forwards",
       });
       void animation.finished.then(cleanup, cleanup);
     } catch {

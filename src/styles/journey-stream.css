@@ -44,9 +44,9 @@
   transform-origin: top;
   animation: journey-stream-pour var(--motion-content) var(--motion-ease-out) forwards;
   transition:
-    left 620ms cubic-bezier(0.6, 0, 0.4, 1),
+    left 620ms var(--motion-ease-in-out-spatial),
     opacity var(--motion-morph) ease,
-    transform 600ms cubic-bezier(0.6, 0, 0.4, 1);
+    transform 600ms var(--motion-ease-in-out-spatial);
   pointer-events: none;
 }
 
@@ -59,7 +59,7 @@
 .journey-stream[data-phase="unfolded"] .journey-stream__thread { opacity: 0.32; }
 .journey-stream[data-phase="closing"] .journey-stream__thread {
   left: var(--pour-x);
-  animation: journey-stream-retract 600ms cubic-bezier(0.6, 0, 0.4, 1) forwards;
+  animation: journey-stream-retract 600ms var(--motion-ease-in-out-spatial) forwards;
 }
 
 @keyframes journey-stream-retract {
@@ -113,12 +113,12 @@
   overflow: hidden;
   background: #0a0c0b;
   clip-path: inset(50% 0 50% 0);
-  transition: clip-path 900ms cubic-bezier(0.2, 0.75, 0.15, 1) var(--unfold-delay, 0ms);
+  transition: clip-path 900ms var(--motion-ease-soft) var(--unfold-delay, 0ms);
 }
 
 .journey-stream[data-phase="unfolded"] .journey-stream__frame { clip-path: inset(0); }
 .journey-stream[data-phase="closing"] .journey-stream__frame {
-  transition: clip-path 450ms cubic-bezier(0.6, 0, 0.4, 1);
+  transition: clip-path 450ms var(--motion-ease-in-out-spatial);
 }
 
 .journey-stream__shot {
