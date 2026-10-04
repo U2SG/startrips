@@ -18,6 +18,7 @@ import { isReadOnlyAtlasView, useAtlasView, type AtlasMediaRead } from "./atlasV
 import { useCoverRevealOpening, type CoverRevealOpening } from "./useCoverRevealOpening";
 import { StartripsBrandLoader, StartripsWordmark } from "../brand/StartripsBrandMark";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
+import { atlasBrandMomentDuration, resolveAtlasBrandState, type AtlasBrandMoment } from "./atlasBrandState";
 import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
@@ -1562,6 +1563,29 @@ export function LivingAtlasApp({
   const loadRevision = useRef(0);
   const globePickAccept = useRef<((point: GlobePointPick) => void) | null>(null);
   const reduceMotion = useMemo(preferredReducedMotion, []);
+  // The wordmark moves only at a few meaningful nodes: entering the Atlas
+  // once, waiting on a Journey mutation, and arriving after a save/restore.
+  // The shell is not rendered while loading, so the first shell paint mounts
+  // with `travel` already applied.
+  const [brandMoment, setBrandMoment] = useState<AtlasBrandMoment | null>(
+    () => reduceMotion ? null : "travel",
+  );
+  const [composerMutationPending, setComposerMutationPending] = useState(false);
+  const [journeyMutationPending, setJourneyMutationPending] = useState(false);
+  const brandMutationPending = composerMutationPending || journeyMutationPending;
+  const brandState = resolveAtlasBrandState({
+    reduceMotion,
+    pending: brandMutationPending,
+    moment: brandMoment,
+  });
+  useEffect(() => {
+    if (!brandMoment || brandMutationPending || status !== "ready") return;
+    const timeout = globalThis.setTimeout(
+      () => setBrandMoment(null),
+      atlasBrandMomentDuration(brandMoment),
+    );
+    return () => globalThis.clearTimeout(timeout);
+  }, [brandMoment, brandMutationPending, status]);
   const createMagnet = useMagnet<HTMLButtonElement>(14);
   const storyMagnet = useMagnet<HTMLButtonElement>(14);
 
@@ -2689,6 +2713,7 @@ export function LivingAtlasApp({
       callbackScope,
     });
     setJourneys((current) => mergeJourney(current, result.journey));
+    if (callbackScope === "initial-save" && !reduceMotion) setBrandMoment("arrived");
     if (arrivalHandoff) {
       setArrivalIsSwitch(false);
       setArrivalJourneyId(arrivalHandoff);
@@ -2750,7 +2775,12 @@ export function LivingAtlasApp({
   async function removeJourney(journeyId: string) {
     if (!mutations) return;
     const removed = journeys.find((journey) => journey.id === journeyId) ?? null;
-    await mutations.deleteJourney(journeyId);
+    setJourneyMutationPending(true);
+    try {
+      await mutations.deleteJourney(journeyId);
+    } finally {
+      setJourneyMutationPending(false);
+    }
     const remaining = journeys.filter((journey) => journey.id !== journeyId);
     setJourneys(remaining);
     setStoryJourneyId(null);
@@ -2762,15 +2792,19 @@ export function LivingAtlasApp({
 
   async function undoRemovedJourney() {
     if (!undoJourney || !mutations) return;
+    setJourneyMutationPending(true);
     try {
       const restored = await mutations.restoreJourney(undoJourney.id);
       setJourneys((current) => mergeJourney(current, restored));
+      if (!reduceMotion) setBrandMoment("arrived");
       setArrivalIsSwitch(false);
       setArrivalJourneyId(restored.id);
       setUndoJourney(null);
       showNotice("旅程已恢复到图谱。");
     } catch (error) {
       showNotice(error instanceof Error ? error.message : "无法恢复这段旅程");
+    } finally {
+      setJourneyMutationPending(false);
     }
   }
 
@@ -3502,7 +3536,7 @@ export function LivingAtlasApp({
 
       {isMobileV2 ? (
         <header className="mobile-v2__header">
-          <div className="mobile-v2__brand"><StartripsWordmark size={27} /></div>
+          <div className="mobile-v2__brand"><StartripsWordmark size={27} state={brandState} /></div>
           <nav aria-label="移动端旅程操作">
             {canManageAtlas ? <MobileAccountActionSlot /> : null}
             {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
@@ -3527,7 +3561,7 @@ export function LivingAtlasApp({
         </header>
       ) : (
         <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
-          <div className="living-atlas__brand"><StartripsWordmark size={34} /><div><p>PRIVATE JOURNEY ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
+          <div className="living-atlas__brand"><StartripsWordmark size={34} state={brandState} /><div><p>PRIVATE JOURNEY ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
           <nav aria-label="图谱视图">
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
@@ -4443,6 +4477,7 @@ export function LivingAtlasApp({
             setInitialImport(null);
           }}
           onSaved={handleSaved}
+          onMutationPendingChange={setComposerMutationPending}
           onGlobePickRequest={startGlobePick}
           onGlobePickCancel={cancelGlobePick}
           onRoutePreviewChange={setDraftRoute}

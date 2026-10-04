@@ -194,6 +194,8 @@ type JourneyComposerProps = {
   onPlaybackPreview?: (snapshot: DraftPlaybackPreviewSnapshot) => void;
   playbackPreviewActive?: boolean;
   playbackPreviewPreparing?: boolean;
+  /** Reports an in-flight save or media retry, so the Atlas wordmark can wait with it. */
+  onMutationPendingChange?: (pending: boolean) => void;
 };
 
 type PlaybackPreviewReturnFocusKind = "editor" | "route-point" | "none";
@@ -390,6 +392,7 @@ export function JourneyComposer({
   onPlaybackPreview,
   playbackPreviewActive = false,
   playbackPreviewPreparing = false,
+  onMutationPendingChange,
 }: JourneyComposerProps) {
   const recoveryInput = !journey ? initialUnknownCreateAttempt?.input : undefined;
   const recoveryRoutePoints = !journey ? initialUnknownCreateAttempt?.routePoints : undefined;
@@ -485,6 +488,11 @@ export function JourneyComposer({
     return unknownCreateRecheckMessage(hasPendingMedia);
   });
   const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!saving) return;
+    onMutationPendingChange?.(true);
+    return () => onMutationPendingChange?.(false);
+  }, [onMutationPendingChange, saving]);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [savedResult, setSavedResult] = useState<JourneySaveResult | null>(null);
   const [unknownCreateAttempt, setUnknownCreateAttempt] = useState<UnknownJourneyCreateAttempt | null>(
