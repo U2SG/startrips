@@ -14,6 +14,7 @@ import {
   journeyCover,
   resolveJourneyRouteSegmentProvenance,
 } from "./journeyModel";
+import { isLongNarrativeNote } from "./narrativeTiming";
 import type { Journey, JourneyMediaAsset, JourneyRoute, RoutePoint } from "./types";
 
 export type JourneyPlaybackPhase =
@@ -22,6 +23,7 @@ export type JourneyPlaybackPhase =
   | { type: "travel"; from: number; to: number }
   | { type: "stop"; pointIndex: number }
   | { type: "media"; pointIndex: number; mediaIndex: number }
+  | { type: "note"; pointIndex: number }
   | { type: "home-epilogue"; homeBaseId: string }
   | { type: "outro" }
   | { type: "completed" }
@@ -104,6 +106,13 @@ export function playbackMediaByOwner(
 export type PlaybackJourney = Journey & {
   /** Runtime chapter placement; media objects keep their canonical owner/order. */
   chapterMedia?: ReadonlyMap<string | null, readonly JourneyMediaAsset[]>;
+  /**
+   * #595: the Route Points that present a note beat, decided on the canonical
+   * Journey. A projection that drops media (Quick Recap) carries the canonical
+   * answer here, so a Route Point whose media the projection left out does not
+   * turn into an extra, unbudgeted note beat.
+   */
+  noteBeatRoutePointIds?: ReadonlySet<string>;
 };
 
 /**
@@ -211,6 +220,13 @@ export type StorySequenceEntry = {
   role: "journey-cover" | "media" | "note";
   asset: JourneyMediaAsset | null;
   routePointId: string | null;
+  /**
+   * #595: the Route Point whose chapter this entry presents inside. It differs
+   * from `routePointId` only for a Route Point grouped under a Stop: grouping
+   * changes the chapter, never who owns the note or the media. Null for
+   * Journey-level entries.
+   */
+  chapterRoutePointId: string | null;
   contextOwner: "journey" | "route-point";
   note?: string;
 };
@@ -236,6 +252,7 @@ function journeyCoverEntry(journey: Journey): StorySequenceEntry | null {
     role: "journey-cover",
     asset: cover,
     routePointId: null,
+    chapterRoutePointId: null,
     contextOwner: "journey",
   };
 }
@@ -245,12 +262,17 @@ function routePointNoteText(point: RoutePoint | undefined): string | null {
   return note ? note : null;
 }
 
-function storyMediaEntry(asset: JourneyMediaAsset, routePointId: string | null): StorySequenceEntry {
+function storyMediaEntry(
+  asset: JourneyMediaAsset,
+  routePointId: string | null,
+  chapterRoutePointId: string | null,
+): StorySequenceEntry {
   return {
     presentationId: `media:${asset.id}`,
     role: "media",
     asset,
     routePointId,
+    chapterRoutePointId,
     contextOwner: routePointId === null ? "journey" : "route-point",
   };
 }
@@ -292,7 +314,7 @@ export function storySequenceForJourney(
   // sequence. The canonical media still follows in full, which is what leaves the
   // original cover appearing again later at its own canonical position.
   const entries: StorySequenceEntry[] = (mediaByOwner.get(null) ?? [])
-    .map((asset) => storyMediaEntry(asset, null));
+    .map((asset) => storyMediaEntry(asset, null, null));
   if (opening) entries.unshift(opening);
   for (const point of journey.routePoints) {
     // A Route Point grouped under a Stop presents inside that Stop's chapter,
@@ -311,11 +333,12 @@ export function storySequenceForJourney(
           role: "note",
           asset: null,
           routePointId: member.id,
+          chapterRoutePointId: chapterId,
           contextOwner: "route-point",
           note,
         });
       }
-      for (const asset of media) entries.push(storyMediaEntry(asset, member.id));
+      for (const asset of media) entries.push(storyMediaEntry(asset, member.id, chapterId));
     }
   }
   return entries;
@@ -351,12 +374,73 @@ export function isPlaybackTransitRoutePoint(
   return point.isStop === false;
 }
 
+/**
+ * #595: the Route Points whose note is a narrative beat of its own in Journey
+ * Playback.
+ *
+ * A Stop never is: its note belongs to its arrival beat. Any other Route Point
+ * with a note is one when it has no visual media of its own (the note IS its
+ * content, so grouping it under a Stop must not make it vanish), or when the
+ * note is too long to sit over its media. A shorter note rides with the media
+ * of the Route Point that owns it.
+ */
+export function playbackNoteBeatRoutePointIds(journey: Journey): Set<string> {
+  const ownsVisualMedia = new Set<string>();
+  for (const asset of journey.media) {
+    if (asset.routePointId !== null && isVisualMediaAsset(asset)) ownsVisualMedia.add(asset.routePointId);
+  }
+  const ids = new Set<string>();
+  for (const point of journey.routePoints) {
+    if (point.isStop) continue;
+    const note = routePointNoteText(point);
+    if (!note) continue;
+    if (!ownsVisualMedia.has(point.id) || isLongNarrativeNote(note)) ids.add(point.id);
+  }
+  return ids;
+}
+
+function noteBeatRoutePointIdsFor(journey: PlaybackJourney): ReadonlySet<string> {
+  return journey.noteBeatRoutePointIds ?? playbackNoteBeatRoutePointIds(journey);
+}
+
+function routePointLabelAt(journey: Journey, routePointId: string): string | null {
+  const index = journey.routePoints.findIndex((point) => point.id === routePointId);
+  if (index < 0) return null;
+  return journey.routePoints[index].label || `途径点 ${index + 1}`;
+}
+
+/**
+ * #595: the place label a Route Point's content is presented under.
+ *
+ * Grouping changes the chapter, not the owner, so a grouped Route Point keeps
+ * its own name next to the Stop that holds its chapter: "Stop · child". Story's
+ * current-point line and the Playback caption both read this one rule.
+ */
+export function routePointProvenanceLabel(
+  journey: Journey,
+  routePointId: string | null,
+  chapterRoutePointId: string | null,
+): string | null {
+  if (routePointId === null) return null;
+  const own = routePointLabelAt(journey, routePointId);
+  if (own === null) return null;
+  if (chapterRoutePointId === null || chapterRoutePointId === routePointId) return own;
+  const chapter = routePointLabelAt(journey, chapterRoutePointId);
+  return chapter === null ? own : `${chapter} · ${own}`;
+}
+
 export type PlaybackStep =
   | { kind: "home-prelude"; cameraTarget: HomeNarrativeCameraTarget }
   | { kind: "intro" }
   | { kind: "travel"; to: number; from?: number }
   | { kind: "stop"; pointIndex: number; media: JourneyMediaAsset[] }
   | { kind: "media"; pointIndex: number; mediaIndex: number }
+  /**
+   * #595: a Route Point's note as a beat of its own. `pointIndex` is the Route
+   * Point that owns the note. `chapterPointIndex` is the Stop whose chapter it
+   * plays inside, or null for a transit beat that has no Stop arrival (#514).
+   */
+  | { kind: "note"; pointIndex: number; chapterPointIndex: number | null }
   | { kind: "home-epilogue"; cameraTarget: HomeNarrativeCameraTarget }
   | { kind: "outro"; cameraTarget?: HomeNarrativeCameraTarget };
 
@@ -477,6 +561,10 @@ export function playbackCameraTargetForStep(
     case "stop":
     case "media":
       return { kind: "point", pointIndex: step.pointIndex };
+    case "note":
+      // A grouped note stays inside its Stop's chapter, like that chapter's
+      // media; only a transit note points the camera at its own Route Point.
+      return { kind: "point", pointIndex: step.chapterPointIndex ?? step.pointIndex };
   }
 }
 
@@ -491,11 +579,51 @@ export function playbackCameraTargetKey(target: PlaybackCameraTarget) {
  * chapters; pure shaping points stay in travel geometry without an arrival.
  */
 export function buildPlaybackSteps(
-  journey: Journey,
+  journey: PlaybackJourney,
   homeContext?: HomeNarrativeContext | null,
 ): PlaybackStep[] {
   const byChapter = playbackMediaByChapter(journey);
+  // #595: note beats are added around the existing beats and never move or
+  // replace one. Travel, arrival and media beats keep the exact order, indexes
+  // and `from` / `to` they had before, which is what keeps Keepsake (it skips
+  // note beats) byte-identical and Quick Recap's travel budget unchanged.
+  const noteBeats = noteBeatRoutePointIdsFor(journey);
+  const chapterByOwner = noteBeats.size > 0 ? playbackChapterByOwner(journey) : null;
+  const routeIndexById = new Map(journey.routePoints.map((point, index) => [point.id, index]));
   const steps: PlaybackStep[] = [];
+  /**
+   * One chapter's media beats with its note beats in canonical member order:
+   * a note-only member lands between the media of its route neighbours, and a
+   * long note lands right before its own Route Point's first media.
+   */
+  const pushChapterBeats = (
+    chapterIndex: number,
+    media: readonly JourneyMediaAsset[],
+    chapterPointIndex: number | null,
+  ) => {
+    const chapterId = journey.routePoints[chapterIndex].id;
+    const members = chapterByOwner
+      ? journey.routePoints.filter((point) => !point.isStop && noteBeats.has(point.id)
+        && chapterByOwner.get(point.id) === chapterId)
+      : [];
+    let nextMember = 0;
+    const pushNote = () => {
+      const pointIndex = routeIndexById.get(members[nextMember].id) ?? chapterIndex;
+      steps.push({ kind: "note", pointIndex, chapterPointIndex });
+      nextMember += 1;
+    };
+    for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
+      const ownerId = media[mediaIndex].routePointId;
+      const ownerIndex = ownerId === null ? -1 : routeIndexById.get(ownerId) ?? -1;
+      while (nextMember < members.length
+        && ((routeIndexById.get(members[nextMember].id) ?? -1) < ownerIndex
+          || members[nextMember].id === ownerId)) {
+        pushNote();
+      }
+      steps.push({ kind: "media", pointIndex: chapterIndex, mediaIndex });
+    }
+    while (nextMember < members.length) pushNote();
+  };
   if (homeContext?.prelude.eligible) {
     steps.push({ kind: "home-prelude", cameraTarget: homeContext.prelude.cameraTarget });
   }
@@ -504,7 +632,15 @@ export function buildPlaybackSteps(
   for (let pointIndex = 0; pointIndex < journey.routePoints.length; pointIndex += 1) {
     const routePoint = journey.routePoints[pointIndex];
     const media = byChapter.get(routePoint.id) ?? [];
-    if (!routePoint.isStop && media.length === 0) continue;
+    if (!routePoint.isStop && media.length === 0) {
+      // #595 + #514: an ungrouped note-only via is a transit note beat. It owns
+      // no arrival and no chapter, so it does not split the travel leg either:
+      // the leg from the previous chapter still flies to the next one.
+      if (noteBeats.has(routePoint.id) && chapterByOwner?.get(routePoint.id) === routePoint.id) {
+        steps.push({ kind: "note", pointIndex, chapterPointIndex: null });
+      }
+      continue;
+    }
     if (pointIndex > 0) steps.push(previousChapterIndex === pointIndex - 1
       ? { kind: "travel", to: pointIndex }
       : { kind: "travel", from: previousChapterIndex, to: pointIndex });
@@ -512,15 +648,11 @@ export function buildPlaybackSteps(
     // An ungrouped media-bearing via has content beats without a Stop arrival.
     // Grouped via media already belongs to its Stop-backed chapter above.
     if (isPlaybackTransitRoutePoint(routePoint)) {
-      for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
-        steps.push({ kind: "media", pointIndex, mediaIndex });
-      }
+      pushChapterBeats(pointIndex, media, null);
       continue;
     }
     steps.push({ kind: "stop", pointIndex, media });
-    for (let mediaIndex = 0; mediaIndex < media.length; mediaIndex += 1) {
-      steps.push({ kind: "media", pointIndex, mediaIndex });
-    }
+    pushChapterBeats(pointIndex, media, pointIndex);
   }
   const epilogueCameraTarget = homeContext?.epilogue.eligible
     ? homeContext.epilogue.cameraTarget
@@ -560,6 +692,8 @@ export function playbackStepIdentity(journey: Journey, step: PlaybackStep): stri
       const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
       return `media:${asset?.id ?? `${step.pointIndex}:${step.mediaIndex}`}`;
     }
+    case "note":
+      return `note:${journey.routePoints[step.pointIndex]?.id ?? step.pointIndex}`;
   }
 }
 
@@ -604,6 +738,14 @@ export function committedPlaybackPosition(
       const routePointId = asset ? asset.routePointId : journey.routePoints[committedStep.pointIndex]?.id ?? null;
       return { journeyId: journey.id, routePointId, assetId: asset?.id ?? null };
     }
+    case "note":
+      // The note belongs to its own Route Point, not to the Stop whose chapter
+      // it played in, so a return reopens Story on that Route Point.
+      return {
+        journeyId: journey.id,
+        routePointId: journey.routePoints[committedStep.pointIndex]?.id ?? null,
+        assetId: null,
+      };
   }
 }
 
@@ -671,6 +813,7 @@ export function isMeaningfulPlaybackStep(step: PlaybackStep | undefined): boolea
   if (!step) return false;
   if (step.kind === "travel") return false;
   if (step.kind === "stop") return chapterDensityForMedia(step.media) === "empty";
+  // Media and #595 note beats are content the viewer can land on.
   return true;
 }
 
@@ -790,6 +933,8 @@ export function phaseForStep(step: PlaybackStep): JourneyPlaybackPhase {
       return { type: "stop", pointIndex: step.pointIndex };
     case "media":
       return { type: "media", pointIndex: step.pointIndex, mediaIndex: step.mediaIndex };
+    case "note":
+      return { type: "note", pointIndex: step.pointIndex };
     case "home-epilogue":
       return { type: "home-epilogue", homeBaseId: step.cameraTarget.homeBaseId };
     case "outro":
@@ -818,4 +963,58 @@ export function playbackMediaForStep(
 ): JourneyMediaAsset | null {
   if (step?.kind !== "media") return null;
   return playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex] ?? null;
+}
+
+/**
+ * #595: what the Playback caption says on a place beat.
+ *
+ * - `stop`: the Stop's own label and note; the arrival owns that note.
+ * - `media`: the label and note of the Route Point that OWNS the media, never
+ *   the chapter Stop's. A grouped child's media therefore carries the child's
+ *   note, and the Stop's note is not repeated over it. A long note had its own
+ *   beat before the media, so it does not ride with the media as well.
+ * - `note`: the owner's full note under its provenance label.
+ */
+export type PlaybackStepCaption = {
+  routePointId: string;
+  label: string;
+  note: string | null;
+};
+
+export function playbackStepCaption(
+  journey: Journey,
+  step: PlaybackStep | undefined,
+): PlaybackStepCaption | null {
+  if (!step) return null;
+  if (step.kind === "stop") {
+    const point = journey.routePoints[step.pointIndex];
+    if (!point) return null;
+    return {
+      routePointId: point.id,
+      label: routePointProvenanceLabel(journey, point.id, null) ?? "",
+      note: routePointNoteText(point),
+    };
+  }
+  if (step.kind === "note") {
+    const point = journey.routePoints[step.pointIndex];
+    if (!point) return null;
+    const chapterId = step.chapterPointIndex === null
+      ? null : journey.routePoints[step.chapterPointIndex]?.id ?? null;
+    return {
+      routePointId: point.id,
+      label: routePointProvenanceLabel(journey, point.id, chapterId) ?? "",
+      note: routePointNoteText(point),
+    };
+  }
+  if (step.kind !== "media") return null;
+  const chapter = journey.routePoints[step.pointIndex];
+  if (!chapter) return null;
+  const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
+  const owner = journey.routePoints.find((point) => point.id === asset?.routePointId) ?? chapter;
+  const note = routePointNoteText(owner);
+  return {
+    routePointId: owner.id,
+    label: routePointProvenanceLabel(journey, owner.id, chapter.id) ?? "",
+    note: note && !isLongNarrativeNote(note) ? note : null,
+  };
 }

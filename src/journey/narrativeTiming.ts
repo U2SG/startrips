@@ -213,6 +213,37 @@ export const NARRATIVE_TIMING_PROFILES: Record<
  */
 export const UNMEASURED_VIDEO_DURATION_MS = 6_000;
 
+/**
+ * #595: a Route Point note longer than this is a text beat of its own in
+ * Journey Playback, presented before that Route Point's media. A shorter note
+ * rides with the media it belongs to. Story uses the same number nowhere: its
+ * note block is bounded by rendered height instead.
+ */
+export const NOTE_BEAT_LONG_NOTE_CHARS = 140;
+
+const NOTE_BEAT_BASE_MS = 3_500;
+const NOTE_BEAT_PER_CHAR_MS = 18;
+const NOTE_BEAT_MAX_MS = 9_000;
+
+/** Whether a note is long enough to be presented as its own Playback beat. */
+export function isLongNarrativeNote(note: string | null | undefined): boolean {
+  return (note?.trim().length ?? 0) > NOTE_BEAT_LONG_NOTE_CHARS;
+}
+
+/**
+ * #595: how long one note beat holds the screen, in whole milliseconds.
+ *
+ * The one dwell for a note beat on every surface that advances by itself:
+ * Story autoplay over a note-only entry and Journey Playback (full and Quick
+ * Recap) over a `note` step both read it, so the same note reads for the same
+ * time wherever it plays. It is a reading time rather than a tempo value, so it
+ * does not change with tempo.
+ */
+export function resolveNoteBeatDwellMs(noteLength: number): number {
+  const length = Number.isFinite(noteLength) && noteLength > 0 ? noteLength : 0;
+  return Math.round(Math.min(NOTE_BEAT_MAX_MS, NOTE_BEAT_BASE_MS + length * NOTE_BEAT_PER_CHAR_MS));
+}
+
 function nonNegativeTerm(value: number | undefined) {
   if (value === undefined || !Number.isFinite(value) || value <= 0) return 0;
   return value;
