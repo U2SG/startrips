@@ -1,9 +1,14 @@
 import type { WebGLRenderer } from "three";
 import { describe, expect, it } from "vitest";
+import { GLOBE_MODE_CONFIG } from "./globeMode";
 import {
+  ATMOSPHERE_DAY_NIGHT_CHUNK,
   PARTICLE_CLIP_DEPTH_BIAS_CHUNK,
+  PARTICLE_DAY_NIGHT_CHUNK,
+  createAtmosphereMaterial,
   createParticleEarthMaterial,
 } from "./particleEarthMaterial";
+import { DAY_NIGHT_NIGHT_BRIGHTNESS } from "./sunPosition";
 
 function rendererWithPixelRatio(ratio: number) {
   // Only this renderer capability is consumed; these tests allocate no WebGL context.
@@ -52,6 +57,61 @@ describe("particle earth material", () => {
       expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("1.0");
       expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).not.toMatch(/gl_Position\.(x|y|w)\s*[-+*\/]?=/);
     } finally { plain.dispose(); biased.dispose(); }
+  });
+
+  it("compiles day/night uniforms only when the option is on", () => {
+    const options = { color: 0xffffff, opacity: 1, size: 8, terrainRelief: true, visitedImprint: true };
+    const plain = createParticleEarthMaterial(options);
+    const lit = createParticleEarthMaterial({ ...options, dayNight: true });
+    const atmosphere = createAtmosphereMaterial();
+    const litAtmosphere = createAtmosphereMaterial({ dayNight: true });
+    try {
+      for (const material of [plain, atmosphere]) {
+        expect(material.uniforms.uSunDirection).toBeUndefined();
+        expect(material.uniforms.uDayNightStrength).toBeUndefined();
+        expect(material.vertexShader + material.fragmentShader).not.toContain("uSunDirection");
+      }
+      expect(plain.vertexShader).not.toContain(PARTICLE_DAY_NIGHT_CHUNK);
+      expect(atmosphere.fragmentShader).not.toContain(ATMOSPHERE_DAY_NIGHT_CHUNK);
+
+      expect(lit.uniforms.uDayNightStrength.value).toBe(0);
+      expect(lit.uniforms.uSunDirection.value.length()).toBeCloseTo(1, 10);
+      expect(lit.vertexShader).toContain("uniform vec3 uSunDirection;");
+      expect(lit.vertexShader).toContain(PARTICLE_DAY_NIGHT_CHUNK);
+      expect(litAtmosphere.uniforms.uDayNightStrength.value).toBe(0);
+      expect(litAtmosphere.fragmentShader).toContain(ATMOSPHERE_DAY_NIGHT_CHUNK);
+
+      // Appearance only: the projection stays byte-identical.
+      const positionAssignments = (shader: string) => shader.match(
+        /\b(?:transformed|mvPosition|gl_Position)(?:\.[xyzwrgba]+)?\s*(?:[+*/-]?=)\s*[^;]+;/g,
+      );
+      expect(positionAssignments(lit.vertexShader)).toEqual(positionAssignments(plain.vertexShader));
+      // Uses the geographic direction (shared by both LOD layers), releases
+      // with the burst morph, and only ever multiplies brightness down.
+      expect(PARTICLE_DAY_NIGHT_CHUNK).toContain("normalize(position)");
+      expect(PARTICLE_DAY_NIGHT_CHUNK).toContain("(1.0 - uMorph)");
+      expect(PARTICLE_DAY_NIGHT_CHUNK).toContain("vDimBrightness *= mix(");
+      expect(PARTICLE_DAY_NIGHT_CHUNK).toMatch(
+        new RegExp(`mix\\(\\s*1\\.0,\\s*${DAY_NIGHT_NIGHT_BRIGHTNESS.toFixed(2).replace(".", "\\.")},`),
+      );
+      expect(ATMOSPHERE_DAY_NIGHT_CHUNK).toContain("rim *= mix(");
+    } finally {
+      plain.dispose(); lit.dispose(); atmosphere.dispose(); litAtmosphere.dispose();
+    }
+  });
+
+  it("keeps the faintest night-side particle above the discard threshold", () => {
+    // Particle centre alpha = (0.84 + 0.32) * opacity * strength * twinkle
+    // * dim * terrain. Worst case on the default home globe: the refinement
+    // layer (half base opacity), darkest twinkle (0.78), and the darkest
+    // combined journey dim (max 0.86 -> 0.536) with its capped terrain
+    // emphasis (0.295 -> 0.917).
+    const refinementOpacity = GLOBE_MODE_CONFIG.particleSphere.particleOpacity * 0.5;
+    const dim = 1 + (0.46 - 1) * 0.86;
+    const terrain = 1 - 0.28 * (1 + (0.18 - 1) * 0.86);
+    const faintest = 1.16 * refinementOpacity * 0.78 * dim * terrain;
+    expect(faintest).toBeGreaterThan(0.015);
+    expect(faintest * DAY_NIGHT_NIGHT_BRIGHTNESS).toBeGreaterThan(0.015);
   });
 
   it("can disable world-space radial pulse for geographic signals", () => {

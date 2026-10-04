@@ -11,6 +11,12 @@ import {
   VISITED_IMPRINT_GAIN_CAP,
   VISITED_IMPRINT_STABILITY_WEIGHT,
 } from "./visitedImprint";
+import {
+  DAY_NIGHT_ATMOSPHERE_NIGHT_WEIGHT,
+  DAY_NIGHT_NIGHT_BRIGHTNESS,
+  DAY_NIGHT_TERMINATOR_END,
+  DAY_NIGHT_TERMINATOR_START,
+} from "./sunPosition";
 
 export const PARTICLE_DIM_POINT_LIMIT = 24;
 export const PARTICLE_ACTIVE_DIM_POINT_LIMIT = 12;
@@ -29,6 +35,31 @@ export const PARTICLE_CLIP_DEPTH_BIAS_CHUNK = `
     1.0
   );
   gl_Position.z -= uClipDepthBias * particleDepthFacing * gl_Position.w;
+`;
+
+const DAY_NIGHT_UNIFORMS_CHUNK = `
+      uniform vec3 uSunDirection;
+      uniform float uDayNightStrength;
+`;
+
+/**
+ * Exported for assertion: opt-in real-time day/night may only darken. The
+ * geographic `position` direction keeps both LOD layers on one terminator; the
+ * burst morph releases it so archive bursts never carry a lit hemisphere.
+ * The night floor keeps the faintest refinement particle above the fragment
+ * discard threshold (see the material test), so night never opens holes.
+ */
+export const PARTICLE_DAY_NIGHT_CHUNK = `
+        float dayNightNight = 1.0 - smoothstep(
+          ${DAY_NIGHT_TERMINATOR_START.toFixed(2)},
+          ${DAY_NIGHT_TERMINATOR_END.toFixed(2)},
+          dot(normalize(position), uSunDirection)
+        );
+        vDimBrightness *= mix(
+          1.0,
+          ${DAY_NIGHT_NIGHT_BRIGHTNESS.toFixed(2)},
+          dayNightNight * clamp(uDayNightStrength, 0.0, 1.0) * (1.0 - uMorph)
+        );
 `;
 
 /**
@@ -55,6 +86,7 @@ interface ParticleMaterialOptions {
   terrainRelief?: boolean;
   clipDepthBias?: number;
   visitedImprint?: boolean;
+  dayNight?: boolean;
 }
 
 export function createParticleEarthMaterial({
@@ -66,6 +98,7 @@ export function createParticleEarthMaterial({
   terrainRelief = false,
   clipDepthBias = 0,
   visitedImprint = false,
+  dayNight = false,
 }: ParticleMaterialOptions) {
   return new ParticleEarthMaterial({
     transparent: true,
@@ -101,6 +134,10 @@ export function createParticleEarthMaterial({
         uVisitedImprintGainCap: { value: VISITED_IMPRINT_GAIN_CAP },
         uVisitedImprintAttenuation: { value: 1 },
       } : {}),
+      ...(dayNight ? {
+        uSunDirection: { value: new Vector3(1, 0, 0) },
+        uDayNightStrength: { value: 0 },
+      } : {}),
       // Angular falloff is evaluated with dot products so attenuation stays
       // stable across zoom, DPR and screen size. 0.978 ~= 12°, 0.994 ~= 6°.
       uDimOuterCos: { value: 0.978 },
@@ -133,6 +170,7 @@ export function createParticleEarthMaterial({
       uniform float uVisitedImprintGainCap;
       uniform float uVisitedImprintAttenuation;
       ` : ""}
+      ${dayNight ? DAY_NIGHT_UNIFORMS_CHUNK : ""}
       varying float vStrength;
       varying float vTwinkle;
       varying float vDimBrightness;
@@ -257,6 +295,7 @@ export function createParticleEarthMaterial({
         vDimBrightness = mix(1.0, 0.46, dimAmount)
           * terrainBrightness
           * (1.0 + visitedImprintGain);
+        ${dayNight ? PARTICLE_DAY_NIGHT_CHUNK : ""}
         ${spatialLod
           ? "vLodAlpha = smoothstep(lodThreshold - 0.035, lodThreshold + 0.015, uLodProgress);"
           : "vLodAlpha = 1.0;"}
@@ -294,7 +333,7 @@ export function createParticleEarthMaterial({
   });
 }
 
-export function createAtmosphereMaterial() {
+export function createAtmosphereMaterial({ dayNight = false }: { dayNight?: boolean } = {}) {
   return new ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -303,28 +342,54 @@ export function createAtmosphereMaterial() {
     uniforms: {
       uColor: { value: new Color(0x39d7cf) },
       uOpacity: { value: 0.42 },
+      ...(dayNight ? {
+        uSunDirection: { value: new Vector3(1, 0, 0) },
+        uDayNightStrength: { value: 0 },
+      } : {}),
     },
     vertexShader: `
       varying vec3 vNormal;
       varying vec3 vViewPosition;
+      ${dayNight ? "varying vec3 vGeoDirection;" : ""}
 
       void main() {
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
         vNormal = normalize(normalMatrix * normal);
         vViewPosition = normalize(-mvPosition.xyz);
+        ${dayNight ? "vGeoDirection = normalize(position);" : ""}
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
     fragmentShader: `
       uniform vec3 uColor;
       uniform float uOpacity;
+      ${dayNight ? `${DAY_NIGHT_UNIFORMS_CHUNK}
+      varying vec3 vGeoDirection;` : ""}
       varying vec3 vNormal;
       varying vec3 vViewPosition;
 
       void main() {
         float rim = pow(1.0 - abs(dot(vNormal, vViewPosition)), 2.3);
+        ${dayNight ? ATMOSPHERE_DAY_NIGHT_CHUNK : ""}
         gl_FragColor = vec4(uColor, rim * uOpacity);
       }
     `,
   });
 }
+
+/**
+ * Exported for assertion: the rim is weighted toward the day side by dimming
+ * the night side only, so its peak never exceeds the existing opacity.
+ */
+export const ATMOSPHERE_DAY_NIGHT_CHUNK = `
+        float atmosphereDay = smoothstep(
+          ${DAY_NIGHT_TERMINATOR_START.toFixed(2)},
+          ${DAY_NIGHT_TERMINATOR_END.toFixed(2)},
+          dot(normalize(vGeoDirection), uSunDirection)
+        );
+        rim *= mix(
+          1.0,
+          mix(${DAY_NIGHT_ATMOSPHERE_NIGHT_WEIGHT.toFixed(2)}, 1.0, atmosphereDay),
+          clamp(uDayNightStrength, 0.0, 1.0)
+        );
+`;
