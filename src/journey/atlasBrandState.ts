@@ -13,6 +13,18 @@ export function atlasBrandMomentDuration(moment: AtlasBrandMoment) {
 }
 
 /**
+ * The opening `travel` plays at most once per Atlas mount: a mutation that
+ * pre-empts it spends it, so the wordmark goes on to `arrived` or `rest`,
+ * never back to `travel`. An `arrived` set mid-mutation is kept.
+ */
+export function consumeAtlasBrandMoment(
+  moment: AtlasBrandMoment | null,
+  pending: boolean,
+): AtlasBrandMoment | null {
+  return pending && moment === "travel" ? null : moment;
+}
+
+/**
  * Reduced motion keeps the wordmark at rest. An in-flight Journey mutation
  * breathes; a one-shot moment plays only once nothing is pending, so a slow
  * refresh after a save cannot swallow the arrive motion.

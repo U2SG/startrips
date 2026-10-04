@@ -18,7 +18,12 @@ import { isReadOnlyAtlasView, useAtlasView, type AtlasMediaRead } from "./atlasV
 import { useCoverRevealOpening, type CoverRevealOpening } from "./useCoverRevealOpening";
 import { StartripsBrandLoader, StartripsWordmark } from "../brand/StartripsBrandMark";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
-import { atlasBrandMomentDuration, resolveAtlasBrandState, type AtlasBrandMoment } from "./atlasBrandState";
+import {
+  atlasBrandMomentDuration,
+  consumeAtlasBrandMoment,
+  resolveAtlasBrandState,
+  type AtlasBrandMoment,
+} from "./atlasBrandState";
 import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
@@ -1579,7 +1584,11 @@ export function LivingAtlasApp({
     moment: brandMoment,
   });
   useEffect(() => {
-    if (!brandMoment || brandMutationPending || status !== "ready") return;
+    if (brandMutationPending) {
+      setBrandMoment((current) => consumeAtlasBrandMoment(current, true));
+      return;
+    }
+    if (!brandMoment || status !== "ready") return;
     const timeout = globalThis.setTimeout(
       () => setBrandMoment(null),
       atlasBrandMomentDuration(brandMoment),
