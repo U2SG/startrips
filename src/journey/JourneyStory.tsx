@@ -4292,7 +4292,8 @@ export function JourneyStory({
     mobileLayout,
     overview,
     mobileManageMode,
-    scopedMediaCount: scopedMedia.length,
+    // #595: note entries are steps of the same cursor, so they count too.
+    scopedMediaCount: scopedMedia.length + storyCursor.notePageIds.size,
   });
   const quickRecapLabel = quickRecap?.state === "preparing" ? "正在准备配乐…"
     : quickRecap?.state === "ready" ? (quickRecap.mode === "full" ? "继续完整播放" : "继续快速回顾")
