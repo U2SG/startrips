@@ -1,8 +1,6 @@
 import {
   type StoryLogicalObservation,
   storyLogicalObservation,
-  storyMediaNeighborIndex,
-  storyAssetIndexForId,
   indexStoryMedia,
   storyMediaInOptimisticOrder,
   storyAutoplayVideoCandidate,
@@ -15,9 +13,20 @@ import {
   storyAutoplayAdvance,
   storyMediaAvailability,
   storyAutoplayWaitsForVideoEnd,
-  storyUploadedAssetIndex,
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
+  storyInitialCursorSelection,
+  storyCursorForJourney,
+  storyCursorOnJourneyCover,
+  storyCursorMediaIndex,
+  storyCursorClampEntry,
+  storyCursorEntryForMediaIndex,
+  storyCursorEntryForAssetId,
+  storyCursorNeighbourEntry,
+  storyUploadedEntryIndex,
+  storyStageMedia,
+  storyStepAvailability,
+  storyObservedAssetId,
   storyInitialNoteBeatRoutePointId,
   storyActiveChapterRoutePointId,
   storyNoteBeatNeighbourMediaIndexes,
@@ -216,6 +225,12 @@ type JourneyStoryProps = {
   routePointId?: string | null;
   initialAssetId?: string | null;
   initialSnapState?: "in-context" | "expanded";
+  /**
+   * #555: this open is a genuine "open the whole Journey" entry, so Story
+   * starts on the Journey cover opening. It is explicit on purpose: a Playback
+   * return can also name no Route Point and no asset, and must not replay it.
+   */
+  presentJourneyCoverOpening?: boolean;
   focusVisibleControlOnOpen?: boolean;
   onObservationChange?: (observation: StoryLogicalObservation | null) => void;
   onGlobeCoverChange?: (state: StoryGlobeCoverState) => void;
@@ -712,6 +727,7 @@ export function JourneyStory({
   routePointId = null,
   initialAssetId = null,
   initialSnapState = "in-context",
+  presentJourneyCoverOpening = false,
   focusVisibleControlOnOpen = false,
   onObservationChange,
   onGlobeCoverChange,
@@ -740,11 +756,20 @@ export function JourneyStory({
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
   const initialMediaSelection = storyInitialMediaSelection(journey, routePointId, initialAssetId);
+  // #555: the cursor is an entry index. Whether this open carries the Journey
+  // cover opening is decided once, here and in the re-seek below, and only an
+  // explicit whole-Journey open asks for it.
+  const initialCursorSelection = storyInitialCursorSelection(journey, initialMediaSelection, {
+    routePointId, assetId: initialAssetId, presentJourneyCoverOpening,
+  });
   // The compositor can hold B in front while A is still the committed index
   // and C waits for a read. Close/Back must return from B's observation.
-  const foregroundMediaIdRef = useRef<string | null>(initialMediaSelection.assetId);
+  const foregroundMediaIdRef = useRef<string | null>(initialCursorSelection.assetId);
   const quickRecapFullActionRef = useRef<HTMLButtonElement | null>(null);
-  const [assetIndex, setAssetIndex] = useState(initialMediaSelection.assetIndex);
+  const [entryIndex, setEntryIndex] = useState(initialCursorSelection.entryIndex);
+  const [journeyCoverOpeningActive, setJourneyCoverOpeningActive] = useState(
+    initialCursorSelection.withJourneyCoverOpening,
+  );
   const [selectedRoutePointId, setSelectedRoutePointId] = useState<string | null>(
     initialMediaSelection.routePointId,
   );
@@ -1726,7 +1751,18 @@ export function JourneyStory({
     cancelPendingMediaDragSettle();
 
     const nextInitialMedia = storyInitialMediaSelection(journey, routePointId, initialAssetId);
-    setAssetIndex(nextInitialMedia.assetIndex);
+    // #555: this effect runs only for a new open intent (Journey, Route Point,
+    // asset or snap state changed), never for an upload refresh or a revision
+    // bump, so it is the one place besides mount that may present the opening.
+    const nextInitialCursor = storyInitialCursorSelection(journey, nextInitialMedia, {
+      routePointId, assetId: initialAssetId, presentJourneyCoverOpening,
+    });
+    setJourneyCoverOpeningActive(nextInitialCursor.withJourneyCoverOpening);
+    setEntryIndex(nextInitialCursor.entryIndex);
+    // The note beat belongs to the open that requested it; a new open (for
+    // example switching Journey inside Story) must not inherit the last one's.
+    setNoteBeatRoutePointId(storyInitialNoteBeatRoutePointId(journey, routePointId, initialAssetId));
+    foregroundMediaIdRef.current = nextInitialCursor.assetId;
     setSelectedRoutePointId(nextInitialMedia.routePointId);
     setUploadState({ status: "idle" });
     setRetryFiles([]);
@@ -2054,7 +2090,34 @@ export function JourneyStory({
     [localMediaOrder, scopedMedia],
   );
   const soundtrack = journey ? journeySoundtrack(journey) : null;
-  const activeAsset = scopedMedia[assetIndex] ?? null;
+  // #555: the cursor. `entryIndex` is the position; the entries are the
+  // canonical media plus, for an open that presents it, the Journey cover
+  // opening in front. `assetIndex` is only the canonical media index of what the
+  // current entry paints, for the grid, the tiles and "i of n".
+  const storyCursor = useMemo(
+    () => storyCursorForJourney(journey, journeyCoverOpeningActive),
+    [journey, journeyCoverOpeningActive],
+  );
+  const storyCursorRef = useRef(storyCursor);
+  storyCursorRef.current = storyCursor;
+  const onJourneyCoverOpening = storyCursorOnJourneyCover(storyCursor, entryIndex);
+  const assetIndex = Math.max(0, storyCursorMediaIndex(storyCursor, entryIndex));
+  const activeAsset = storyCursor.entries[entryIndex]?.asset ?? null;
+  const journeyCoverOpeningAssetId = onJourneyCoverOpening ? activeAsset?.id ?? null : null;
+  // Media index -> its canonical entry. Tiles, Route Point jumps, reorder and
+  // the note beat's neighbours all name canonical media, never the opening.
+  const setCursorMediaIndex = (mediaIndex: number) => {
+    setEntryIndex(storyCursorEntryForMediaIndex(storyCursorRef.current, mediaIndex));
+  };
+  // The stage keys pages by asset id; see `storyStageMedia`.
+  const stageMedia = useMemo(
+    () => storyStageMedia(storyCursor, entryIndex, scopedMedia),
+    [storyCursor, entryIndex, scopedMedia],
+  );
+  const stageMediaIndex = useMemo(
+    () => stageMedia === scopedMedia ? scopedMediaIndex : indexStoryMedia(stageMedia),
+    [stageMedia, scopedMedia, scopedMediaIndex],
+  );
   useLayoutEffect(() => {
     const handoff = videoHandoffRef.current;
     if (!handoff) return;
@@ -2071,8 +2134,10 @@ export function JourneyStory({
   if (incomingAssetId === null && pendingTargetRef.current === null) {
     requestedMediaRef.current = activeAsset?.id ?? null;
   }
-  const requestedMediaIndex = storyAssetIndexForId(scopedMedia, pendingMediaId ?? incomingAssetId, assetIndex, scopedMediaIndex.indexById);
-  const autoplayVideoCandidate = storyAutoplayVideoCandidate(scopedMedia, assetIndex);
+  const requestedEntryIndex = storyCursorEntryForAssetId(storyCursor, pendingMediaId ?? incomingAssetId, entryIndex);
+  const autoplayVideoCandidate = storyAutoplayVideoCandidate(
+    storyCursor.assets, entryIndex, storyCursor.firstCanonicalEntry,
+  );
   const autoplayVideoCandidateRead = autoplayVideoCandidate
     ? mediaReads[autoplayVideoCandidate.id]
     : null;
@@ -2104,28 +2169,37 @@ export function JourneyStory({
       // #76 P1 + #595: while a media-free Route Point is the presented chapter,
       // the nearest media must not speak for it. Publishing that asset would
       // send the map back to a neighbouring Route Point when Story closes.
+      // #555: the Journey cover opening speaks for the whole Journey, so its
+      // asset must not name the Route Point that owns the cover either.
       journey,
       selectedRoutePointId,
-      noteBeatRoutePointId === null ? id : null,
+      storyObservedAssetId(id, noteBeatRoutePointId, journeyCoverOpeningAssetId),
       mobileLayout,
       mobileStoryExpanded,
     ));
-  }, [journey, selectedRoutePointId, noteBeatRoutePointId, mobileLayout, mobileStoryExpanded, onObservationChange]);
+  }, [journey, selectedRoutePointId, noteBeatRoutePointId, journeyCoverOpeningAssetId, mobileLayout, mobileStoryExpanded, onObservationChange]);
   useEffect(() => {
     if (!journey) return;
     const foregroundId = foregroundMediaIdRef.current;
     onObservationChange?.(storyLogicalObservation(
       journey,
       selectedRoutePointId,
-      noteBeatRoutePointId !== null
-        ? null
-        : foregroundId && scopedMediaIndex.byId.has(foregroundId)
+      storyObservedAssetId(
+        foregroundId && scopedMediaIndex.byId.has(foregroundId)
           ? foregroundId : shownAssetId ?? activeAsset?.id ?? null,
+        noteBeatRoutePointId,
+        journeyCoverOpeningAssetId,
+      ),
       mobileLayout,
       mobileStoryExpanded,
     ));
   }, [
     activeAsset?.id,
+    // #555: leaving the opening for canonical entry 0 can keep the same asset
+    // on screen (the cover is often canonical media 0), and then the stage
+    // reports no foreground change. The entry change itself must republish.
+    entryIndex,
+    journeyCoverOpeningAssetId,
     journey,
     noteBeatRoutePointId,
     mobileLayout,
@@ -2144,8 +2218,8 @@ export function JourneyStory({
   }
 
   // Media duration begins once the requested page has become visible.
-  const navigateToMediaRef = useRef<(index: number) => void>(() => undefined);
-  navigateToMediaRef.current = navigateToMedia;
+  const navigateToEntryRef = useRef<(index: number) => void>(() => undefined);
+  navigateToEntryRef.current = navigateToEntry;
   const navigateMediaStepRef = useRef<(direction: -1 | 1, wrap: boolean) => void>(() => undefined);
   navigateMediaStepRef.current = navigateMediaStep;
   useLayoutEffect(() => {
@@ -2156,12 +2230,14 @@ export function JourneyStory({
     // #76 P1: one Journey-wide cursor. There is no whole-journey mode flag here -
     // the sequence IS the whole Journey, so autoplay returns to the first
     // playable media at the Journey boundary instead of stopping at the end.
-    const advance = storyAutoplayAdvance(assetIndex, scopedMedia.length);
+    // #555: it walks the cursor entries, and the wrap lands on canonical entry
+    // 0, never back on the Journey cover opening.
+    const advance = storyAutoplayAdvance(entryIndex, storyCursor.entries.length, storyCursor.firstCanonicalEntry);
     if (advance.kind === "stop") {
       setPlaying(false);
       return;
     }
-    const finishStep = () => navigateToMediaRef.current(advance.nextIndex);
+    const finishStep = () => navigateToEntryRef.current(advance.nextIndex);
     // #199 review: a video step must last as long as the video, not 5.2s.
     // Only the settled element of this exact asset can report `ended`.
     const video = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
@@ -2221,11 +2297,12 @@ export function JourneyStory({
   }, [
     activeAsset?.id,
     activeRead?.status,
-    assetIndex,
+    entryIndex,
     fullscreen,
     playing,
     mediaGestureHolding,
-    scopedMedia.length,
+    storyCursor.entries.length,
+    storyCursor.firstCanonicalEntry,
     selectedRoutePointId,
     shownAssetId,
     incomingAssetId,
@@ -2372,7 +2449,7 @@ export function JourneyStory({
       }
       window.clearTimeout(idleTimer);
     };
-  }, [fullscreen, assetIndex, scopedMedia.length, mobileLayout, selectedRoutePointId]);
+  }, [fullscreen, entryIndex, scopedMedia.length, mobileLayout, selectedRoutePointId]);
 
   // Review P2: the fullscreen overlay is its own focus trap. The story
   // dialog's useModalFocus redirects Tab into the article; when fullscreen is
@@ -2437,13 +2514,16 @@ export function JourneyStory({
     // the settled media identity stable and rebase its index onto the new
     // sequence instead of silently switching to whichever asset inherited the
     // previous numeric index.
-    setAssetIndex((current) => storyAssetIndexForId(scopedMedia, shownAssetId, current, scopedMediaIndex.indexById));
+    // #555: the current entry wins when it paints the settled asset, so a
+    // revision bump keeps a viewer on the opening there and never moves anyone
+    // else back onto it.
+    setEntryIndex((current) => storyCursorEntryForAssetId(storyCursor, shownAssetId, current));
     if (shownAssetId && !scopedMediaIndex.byId.has(shownAssetId)) {
       setShownAssetId(null);
       setIncomingAssetId(null);
       setPendingMediaTarget(null);
     }
-  }, [scopedMedia, scopedMediaIndex, shownAssetId]);
+  }, [storyCursor, scopedMediaIndex, shownAssetId]);
 
   useEffect(() => {
     mediaReadsRef.current = mediaReads;
@@ -2551,23 +2631,30 @@ export function JourneyStory({
     // wrap: the painted stack is a bounded rendering concern, and wrapping it
     // pins the far end of the Journey into the warm window as an index "beyond"
     // the three-ahead budget.
+    // #555: indices are in the stage list, which on the Journey cover opening
+    // is the opening followed by the canonical sequence.
     return mediaStackNeighbors(
-      anchorId === undefined ? -1 : scopedMediaIndex.indexById.get(anchorId) ?? -1,
-      scopedMedia.length,
+      anchorId === undefined ? -1 : stageMediaIndex.indexById.get(anchorId) ?? -1,
+      stageMedia.length,
       false,
     );
-  }, [shownAssetId, activeAsset?.id, scopedMedia, scopedMediaIndex]);
+  }, [shownAssetId, activeAsset?.id, stageMedia, stageMediaIndex]);
 
   // #489 (ST-159): one bounded, tiered warm window behind the three physical
   // pages -- reads widest, decoded pictures narrower, one live transport --
   // anchored on the latest requested media so rapid browsing warms ahead of
   // an intent that has not landed yet. Tier sizes live in `storyWarmWindow`.
   // The painted stack neighbours count inside the same tier caps.
-  const shownMediaIndex = shownAssetId === null ? -1 : scopedMediaIndex.indexById.get(shownAssetId) ?? -1;
+  // #555: anchored in the stage list, so on the opening the window warms
+  // canonical entry 0 onwards rather than the cover's canonical neighbours.
+  const stageIndexFor = (assetId: string | null | undefined) => assetId
+    ? stageMediaIndex.indexById.get(assetId) ?? -1 : -1;
+  const shownStageIndex = stageIndexFor(shownAssetId);
+  const requestedStageIndex = stageIndexFor(pendingMediaId ?? incomingAssetId ?? activeAsset?.id);
   const warmWindow = storyWarmWindow({
-    shownIndex: shownMediaIndex >= 0 ? shownMediaIndex : assetIndex,
-    requestedIndex: scopedMedia.length > 0 ? requestedMediaIndex : -1,
-    length: scopedMedia.length,
+    shownIndex: shownStageIndex >= 0 ? shownStageIndex : Math.max(0, stageIndexFor(activeAsset?.id)),
+    requestedIndex: stageMedia.length > 0 ? Math.max(0, requestedStageIndex) : -1,
+    length: stageMedia.length,
     direction: mediaNavigationDirection.current,
     // #76 P1: the warm window follows the Journey cursor forward, so it prepares
     // the next Route Point rather than the current Route Point's own media. It
@@ -2579,7 +2666,7 @@ export function JourneyStory({
     pinned: stackNeighborIndices,
   });
   const warmIdsFor = (indices: readonly number[]) => indices
-    .map((index) => scopedMedia[index]?.id)
+    .map((index) => stageMedia[index]?.id)
     .filter((id): id is string => id !== undefined);
   const warmReadIds = warmIdsFor(warmWindow.reads);
   const warmDecodeIds = warmIdsFor(warmWindow.decode);
@@ -2656,13 +2743,15 @@ export function JourneyStory({
       setPendingMediaTarget(null);
       setIncomingAssetId(null);
       setShownAssetId(target.id);
-      setAssetIndex(pendingIndex);
+      setCursorMediaIndex(pendingIndex);
       return;
     }
     if (disposition !== "ready") return;
     setPendingMediaTarget(null);
     setIncomingAssetId(target.id);
-    setAssetIndex(pendingIndex);
+    // #555: a navigation target is never the Journey cover opening, so it
+    // lands on the target's canonical entry.
+    setCursorMediaIndex(pendingIndex);
   }, [decodeSettleRevision, mediaReads, scopedMedia, scopedMediaIndex, activeAsset?.id, playing, pendingMediaId, mediaGestureHolding, setPendingMediaTarget, reportStageMediaError]);
 
   useEffect(() => {
@@ -2695,6 +2784,9 @@ export function JourneyStory({
   // point visible after the cursor crossed into another Route Point.
   const activeChapterRoutePointId = storyActiveChapterRoutePointId(
     noteBeatRoutePointId, activeAsset, scopedMedia.length > 0, selectedRoutePointId,
+    // #555: the opening names no chapter, so "全部" is the pressed chip, no
+    // Route Point note shows and the Journey note does.
+    onJourneyCoverOpening,
   );
   useLayoutEffect(() => {
     if (mobileLayout) return;
@@ -2771,10 +2863,13 @@ export function JourneyStory({
   // at the last media, activating must fall back to the previous one rather than
   // jump back to the very start. The cursor itself still wraps at the Journey
   // boundary - that is decided in `navigateMediaStep`, not here.
-  const canStepPrevious = !mutationPending && scopedMedia.length > 1
-    && requestedMediaIndex > 0;
-  const canStepNext = !mutationPending && scopedMedia.length > 1
-    && requestedMediaIndex < scopedMedia.length - 1;
+  // #555: measured on the cursor entries. The opening has nothing before it,
+  // and nothing canonical has the opening before it.
+  const stepAvailability = storyStepAvailability(
+    requestedEntryIndex, storyCursor.entries.length, storyCursor.firstCanonicalEntry,
+  );
+  const canStepPrevious = !mutationPending && stepAvailability.previous;
+  const canStepNext = !mutationPending && stepAvailability.next;
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
   const heldRenewalError = renewalError?.id === shownAsset?.id && shownRead?.status === "ready"
     ? renewalError : null;
@@ -3002,22 +3097,27 @@ export function JourneyStory({
     setIncomingAssetId(null);
     setPendingMediaTarget(null);
     requestedMediaRef.current = currentId;
-    setAssetIndex(storyAssetIndexForId(scopedMedia, currentId, assetIndex, scopedMediaIndex.indexById));
+    // #555: the gesture's base is the page on screen; the current entry keeps
+    // it when it paints that asset (the opening stays the opening).
+    setEntryIndex(storyCursorEntryForAssetId(storyCursor, currentId, entryIndex));
     setShownAssetId(currentId);
   }
 
   function commitStoryMediaGesture(targetId: string) {
-    const index = scopedMediaIndex.indexById.get(targetId);
-    if (index === undefined) return;
+    if (!scopedMediaIndex.byId.has(targetId)) return;
+    // #555: a swipe target is a page neighbour of the settled entry, so it is
+    // resolved like every other asset id: the current entry when it paints it,
+    // otherwise the canonical entry. It is never the opening.
+    const index = storyCursorEntryForAssetId(storyCursor, targetId, entryIndex);
     // A swipe is the latest navigation direction for the warm window too.
     // #76 P1: a swipe follows the Journey cursor, so the direction is measured
     // against the next media across the whole Journey.
-    const from = storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById);
-    mediaNavigationDirection.current = storyMediaNeighborIndex(from, scopedMedia.length, 1, true) === index ? 1 : -1;
+    const from = storyCursorEntryForAssetId(storyCursor, shownAssetId, entryIndex);
+    mediaNavigationDirection.current = storyCursorNeighbourEntry(storyCursor, from, 1, true) === index ? 1 : -1;
     requestedMediaRef.current = targetId;
     setPendingMediaTarget(null);
     setIncomingAssetId(null);
-    setAssetIndex(index);
+    setEntryIndex(index);
     setShownAssetId(targetId);
   }
 
@@ -3114,16 +3214,19 @@ export function JourneyStory({
         const refreshedJourney = await onMediaAdded(journey.id);
         // #76 P1: the index lands on the Journey-wide cursor, so it is resolved in the
         // Journey sequence rather than in a Route Point-scoped list.
-        const refreshedMedia = refreshedJourney
-          ? playbackStoryMedia(refreshedJourney)
-          : [];
-        const uploadedAssetIndex = storyUploadedAssetIndex(
-          refreshedMedia,
+        // #555: it lands on the upload's canonical entry, never on the Journey
+        // cover opening, even when the opening is still part of this open.
+        const refreshedCursor = storyCursorForJourney(
+          refreshedJourney ?? undefined,
+          journeyCoverOpeningActive,
+        );
+        const uploadedEntryIndex = storyUploadedEntryIndex(
+          refreshedCursor,
           result.assets.map((asset) => asset.id),
         );
-        if (uploadedAssetIndex !== null) {
-          setAssetIndex(uploadedAssetIndex);
-          setShownAssetId(refreshedMedia[uploadedAssetIndex].id);
+        if (uploadedEntryIndex !== null) {
+          setEntryIndex(uploadedEntryIndex);
+          setShownAssetId(refreshedCursor.entries[uploadedEntryIndex].asset.id);
           setIncomingAssetId(null);
           setPendingMediaTarget(null);
         } else {
@@ -3280,7 +3383,12 @@ export function JourneyStory({
             if (!selection) {
               refreshFailed = true;
             } else {
-              setAssetIndex(selection.assetIndex);
+              // #555: the selection names canonical media; its entry is the
+              // canonical one in the refreshed cursor, never the opening.
+              setEntryIndex(storyCursorEntryForMediaIndex(
+                storyCursorForJourney(refreshedJourney, journeyCoverOpeningActive),
+                selection.assetIndex,
+              ));
               setShownAssetId(selection.assetId);
               setIncomingAssetId(null);
               setPendingMediaTarget(null);
@@ -3428,12 +3536,14 @@ export function JourneyStory({
     // keeps playing past it in either direction. A Route Point with neither
     // media nor a note has nothing to present, so it must not blank the stage.
     const presentsOwnNote = routePointPresentsNote(journey, scopedMedia, routePointId);
+    // #555: the jump names canonical media, so "全部" (null) lands on
+    // canonical entry 0 and never goes back to the Journey cover opening.
     if (presentsOwnNote) {
       setNoteBeatRoutePointId(routePointId);
-      setAssetIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
+      setCursorMediaIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
     } else {
       setNoteBeatRoutePointId(null);
-      setAssetIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
+      setCursorMediaIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
     }
     setShownAssetId(null);
     setIncomingAssetId(null);
@@ -3457,13 +3567,17 @@ export function JourneyStory({
       const neighbours = storyNoteBeatNeighbourMediaIndexes(journey, noteBeatRoutePointId, wrap);
       const index = direction < 0 ? neighbours.previousIndex : neighbours.nextIndex;
       if (index !== null && index >= 0 && index < scopedMedia.length) {
-        navigateToMedia(index, direction);
+        // #555: the neighbours are canonical media; step to their entries.
+        navigateToEntry(storyCursorEntryForMediaIndex(storyCursor, index), direction);
       }
       return;
     }
-    const anchorIndex = storyAssetIndexForId(scopedMedia, requestedMediaRef.current, assetIndex, scopedMediaIndex.indexById);
-    const index = storyMediaNeighborIndex(anchorIndex, scopedMedia.length, direction, wrap);
-    if (index !== null) navigateToMedia(index, direction);
+    // #555: the anchor is the latest requested entry. While the cursor is on
+    // the Journey cover opening its asset resolves to the opening itself, so
+    // Previous goes nowhere and Next enters canonical entry 0.
+    const anchorIndex = storyCursorEntryForAssetId(storyCursor, requestedMediaRef.current, entryIndex);
+    const index = storyCursorNeighbourEntry(storyCursor, anchorIndex, direction, wrap);
+    if (index !== null) navigateToEntry(index, direction);
   }
 
   function mediaButtonInput(key: "previous" | "next" | "play" | "quick-recap" | "fullscreen", activate: () => void) {
@@ -3526,27 +3640,31 @@ export function JourneyStory({
       () => navigateMediaStep(direction, true));
   }
 
-  function navigateToMedia(index: number, direction?: -1 | 1) {
-    if (index < 0 || index >= scopedMedia.length) return;
+  // #555: `index` is a cursor entry. Its asset is only what gets painted,
+  // signed and decoded; the entry is what the cursor moves to.
+  function navigateToEntry(index: number, direction?: -1 | 1) {
+    if (index < 0 || index >= storyCursor.entries.length) return;
     cancelPendingMediaDragSettle();
-    const target = scopedMedia[index];
+    const target = storyCursor.entries[index]?.asset;
     if (!target) return;
     // #76 P1 + #595: the cursor is back on media, so the media-free Route Point
     // stops being the presented chapter.
     setNoteBeatRoutePointId(null);
     mediaNavigationDirection.current = direction
-      ?? (index < storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById) ? -1 : 1);
+      ?? (index < storyCursorEntryForAssetId(storyCursor, shownAssetId, entryIndex) ? -1 : 1);
     requestedMediaRef.current = target.id;
     // Reversing an in-flight transition back to the visible base needs no new
     // incoming layer (it would equal shownAssetId and never emit animationend).
+    // #555: this is also the Journey cover opening -> canonical entry 0 step
+    // when that entry is the cover itself: the same picture, its own context.
     if (target.id === shownAssetId) {
       setPendingMediaTarget(null);
       setIncomingAssetId(null);
-      setAssetIndex(index);
+      setEntryIndex(index);
       return;
     }
     // A reverse input can cancel a cold next-frame request while staying here.
-    if (index === assetIndex) {
+    if (index === entryIndex) {
       setPendingMediaTarget(null);
       return;
     }
@@ -3560,18 +3678,18 @@ export function JourneyStory({
       setPendingMediaTarget(null);
       setIncomingAssetId(null);
       setShownAssetId(target.id);
-      setAssetIndex(index);
+      setEntryIndex(index);
     } else if (disposition === "ready") {
       setPendingMediaTarget(null);
       setIncomingAssetId(target.id);
-      setAssetIndex(index);
+      setEntryIndex(index);
     } else {
       // Review P1: even when the read is already ready, a pending target
       // must start its decode; otherwise it can sit forever with a decoded
       // image that never triggers a re-check.
       setPendingMediaTarget(target.id);
       setIncomingAssetId(null);
-      setAssetIndex(storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex, scopedMediaIndex.indexById));
+      setEntryIndex(storyCursorEntryForAssetId(storyCursor, shownAssetId, entryIndex));
       if (targetRead?.status !== "ready") {
         loadMediaRead(target.id);
       } else if (target.mimeType.startsWith("image/")) {
@@ -3596,13 +3714,13 @@ export function JourneyStory({
         if (targetRead?.status === "ready") {
           setPendingMediaTarget(null);
           setIncomingAssetId(null);
-          setAssetIndex(index);
+          setCursorMediaIndex(index);
           setShownAssetId(target.id);
           if (target.mimeType.startsWith("image/")) {
             decodeRegistryRef.current.ensure(target.id, targetRead.url);
           }
         } else {
-          navigateToMedia(index);
+          navigateToEntry(storyCursorEntryForMediaIndex(storyCursor, index));
         }
         setOverview(false);
       },
@@ -3696,13 +3814,13 @@ export function JourneyStory({
         const refreshedJourney = await onMediaAdded(journey.id);
         if (refreshedJourney) {
           const refreshedScoped = scopedVisualMedia(refreshedJourney);
-          setAssetIndex((current) => Math.min(current, Math.max(0, refreshedScoped.length - 1)));
+          setEntryIndex((current) => storyCursorClampEntry(storyCursorRef.current, Math.min(current, refreshedScoped.length)));
           setShownAssetId(null);
           setIncomingAssetId(null);
           setPendingMediaTarget(null);
         }
       }
-      setAssetIndex(Math.max(0, nextAssetIndex));
+      setCursorMediaIndex(Math.max(0, nextAssetIndex));
     } catch (error) {
       setOrderMessage(error instanceof Error ? error.message : "顺序调整失败，请稍后重试。");
       // Rollback: drop the optimistic order; the grid returns to server truth.
@@ -4311,7 +4429,7 @@ export function JourneyStory({
               active={!fullscreen}
               gestureEnabled={!mutationPending && !videoHandoffRef.current}
               mobileLayout={mobileLayout}
-              media={scopedMedia}
+              media={stageMedia}
               currentId={shownAsset?.id ?? null}
               coverId={cover?.id ?? null}
               incomingId={incoming?.id ?? null}
@@ -4666,7 +4784,7 @@ export function JourneyStory({
               requestedId={pendingMediaId ?? incomingAssetId}
               reads={mediaReads}
               disabled={mutationPending}
-              onSelect={navigateToMedia}
+              onSelect={(index) => navigateToEntry(storyCursorEntryForMediaIndex(storyCursor, index))}
               onOrganize={manageMedia ? () => {
                 if (mobileLayout) enterMobileManageMode();
                 setPlaying(false);
@@ -5005,7 +5123,7 @@ export function JourneyStory({
             gestureEnabled={!mutationPending && !videoHandoffRef.current}
             mobileLayout={mobileLayout}
             fullscreen
-            media={scopedMedia}
+            media={stageMedia}
             currentId={shownAsset?.id ?? null}
             coverId={cover?.id ?? null}
             incomingId={incoming?.id ?? null}

@@ -1192,6 +1192,11 @@ export function LivingAtlasApp({
   const [storyJourneyId, setStoryJourneyId] = useState<string | null>(null);
   const [storyRoutePointId, setStoryRoutePointId] = useState<string | null>(null);
   const [storyInitialAssetId, setStoryInitialAssetId] = useState<string | null>(null);
+  // #555: set only by a genuine "open the whole Journey" entry. Story then
+  // starts on the Journey cover opening. Every other open path (Route Point or
+  // asset deep links, Playback return, the classic-reader handoff) clears it,
+  // because a Playback return can also name no Route Point and no asset.
+  const [storyPresentsJourneyCoverOpening, setStoryPresentsJourneyCoverOpening] = useState(false);
   const [storyInitialSnapState, setStoryInitialSnapState] = useState<Exclude<StorySnapState, "closed">>("in-context");
   const [storyFocusVisibleControlOnOpen, setStoryFocusVisibleControlOnOpen] = useState(false);
   const [storyGlobeCover, setStoryGlobeCover] = useState({ opaqueMediaCover: false, coverTransitionActive: false });
@@ -2649,6 +2654,7 @@ export function LivingAtlasApp({
     timeCursor.selectJourney(resolution.journeyId);
     setStoryRoutePointId(resolution.routePointId);
     setStoryInitialAssetId(resolution.assetId);
+    setStoryPresentsJourneyCoverOpening(false);
     setStoryInitialSnapState(
       resolution.storySnapState === "expanded" ? "expanded" : "in-context",
     );
@@ -2908,7 +2914,11 @@ export function LivingAtlasApp({
   // Journey cover or a Route Point. Route Point entry gets one short-lived
   // observation aperture beside the CURRENT projected marker; no geographic
   // coordinate is persisted in React state.
-  function openJourneyStory(journeyId: string, routePointId: string | null) {
+  function openJourneyStory(
+    journeyId: string,
+    routePointId: string | null,
+    presentJourneyCoverOpening = false,
+  ) {
     claimPlaybackReturnIntent();
     setStoryInitialSnapState("in-context");
     setStoryFocusVisibleControlOnOpen(false);
@@ -2947,6 +2957,7 @@ export function LivingAtlasApp({
       update: () => {
         timeCursor.selectJourney(journeyId);
         setStoryRoutePointId(routePointId);
+        setStoryPresentsJourneyCoverOpening(presentJourneyCoverOpening && routePointId === null);
         setStoryJourneyId(journeyId);
       },
       // Same-asset identity is mandatory. An image/video element is the best
@@ -3004,6 +3015,7 @@ export function LivingAtlasApp({
   function openClassicStory(target: { routePointId: string | null; assetId: string | null }) {
     setStoryRoutePointId(target.routePointId);
     setStoryInitialAssetId(target.assetId);
+    setStoryPresentsJourneyCoverOpening(false);
     setStoryInitialSnapState("in-context");
     setStoryClassicFor(storyJourneyId);
   }
@@ -3013,6 +3025,10 @@ export function LivingAtlasApp({
     timeCursor.selectJourney(id);
     setStoryRoutePointId(null);
     setStoryInitialAssetId(null);
+    // #555: switching to another Journey inside Story opens that whole Journey
+    // from its start, exactly like opening it from its card, so it presents
+    // that Journey's cover opening.
+    setStoryPresentsJourneyCoverOpening(true);
     setStoryInitialSnapState("in-context");
     setStoryFocusVisibleControlOnOpen(false);
     setStoryJourneyId(id);
@@ -3366,6 +3382,7 @@ export function LivingAtlasApp({
     }
     setStoryRoutePointId(resolution.routePointId);
     setStoryInitialAssetId(resolution.assetId);
+    setStoryPresentsJourneyCoverOpening(false);
     setStoryInitialSnapState(
       resolution.storySnapState === "expanded" ? "expanded" : "in-context",
     );
@@ -3651,6 +3668,7 @@ export function LivingAtlasApp({
             timeCursor.selectJourney(id);
             setStoryRoutePointId(null);
             setStoryInitialAssetId(null);
+            setStoryPresentsJourneyCoverOpening(true);
             setStoryInitialSnapState("in-context");
             setStoryFocusVisibleControlOnOpen(false);
             setStoryJourneyId(id);
@@ -3736,7 +3754,7 @@ export function LivingAtlasApp({
               type="button"
               className="living-atlas__active-hit-area"
               aria-label={`打开旅程：${activeJourney.title}`}
-              onClick={() => openJourneyStory(activeJourney.id, null)}
+              onClick={() => openJourneyStory(activeJourney.id, null, true)}
             />
             <div className="living-atlas__active-content" aria-hidden="true">
               <p>{activeJourney.startedOn}{activeJourney.endedOn ? ` — ${activeJourney.endedOn}` : ""}</p>
@@ -3756,7 +3774,7 @@ export function LivingAtlasApp({
             </div>
           </div>
           <div className="living-atlas__active-actions">
-            <button ref={storyMagnet.ref} onPointerMove={storyMagnet.onPointerMove} onPointerLeave={storyMagnet.onPointerLeave} type="button" onClick={() => openJourneyStory(activeJourney.id, null)}>
+            <button ref={storyMagnet.ref} onPointerMove={storyMagnet.onPointerMove} onPointerLeave={storyMagnet.onPointerLeave} type="button" onClick={() => openJourneyStory(activeJourney.id, null, true)}>
               <span>打开故事</span>
               <span className="living-atlas__active-action-icon" aria-hidden="true"><IconArrowRight size={17} stroke={1.35} /></span>
             </button>
@@ -3971,7 +3989,7 @@ export function LivingAtlasApp({
                 type="button"
                 className="is-primary"
                 onClick={() => {
-                  openJourneyStory(mobileSheetJourney.id, null);
+                  openJourneyStory(mobileSheetJourney.id, null, true);
                 }}
               >打开故事 <IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
               {canEditJourney ? (
@@ -4558,6 +4576,7 @@ export function LivingAtlasApp({
           routePointId={storyRoutePointId}
           initialAssetId={storyInitialAssetId}
           initialSnapState={storyInitialSnapState}
+          presentJourneyCoverOpening={storyPresentsJourneyCoverOpening}
           focusVisibleControlOnOpen={storyFocusVisibleControlOnOpen}
           onObservationChange={handleStoryObservationChange}
           onGlobeCoverChange={setStoryGlobeCover}
