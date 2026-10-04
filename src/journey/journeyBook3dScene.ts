@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { FlipBook } from "quick_flipbook";
 import type { JourneyBookOrientation } from "./journeyBookLayout";
-import { cameraHalfHeight } from "./journeyBook3dModel";
+import { BOOK_SHEET_SPACING, bookTableHeight, cameraHalfHeight } from "./journeyBook3dModel";
 
 /**
  * #393 3D Journey Book: the Three.js stage around Quick FlipBook
@@ -28,6 +28,7 @@ export class JourneyBook3dScene {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 20);
   private readonly book: FlipBook;
+  private readonly table: THREE.Mesh;
   private readonly blank: THREE.MeshStandardMaterial;
   private readonly faceMaterials: THREE.MeshStandardMaterial[] = [];
   private readonly dirtySheets = new Set<{ page: THREE.Mesh }>();
@@ -71,19 +72,19 @@ export class JourneyBook3dScene {
     rim.position.set(2.5, 1.8, -2.4);
     this.scene.add(rim);
 
-    const table = new THREE.Mesh(
+    this.table = new THREE.Mesh(
       new THREE.PlaneGeometry(18, 18),
       new THREE.MeshStandardMaterial({ color: background, roughness: 1, metalness: 0 }),
     );
-    table.rotation.x = -Math.PI / 2;
-    table.position.y = -0.035;
-    table.receiveShadow = true;
-    this.scene.add(table);
+    this.table.rotation.x = -Math.PI / 2;
+    this.table.position.y = bookTableHeight(0);
+    this.table.receiveShadow = true;
+    this.scene.add(this.table);
 
     this.blank = this.paperMaterial(null);
     this.book = new FlipBook({
       flipDuration: reduced ? 0.001 : FLIP_SECONDS,
-      yBetweenPages: 0.0012,
+      yBetweenPages: BOOK_SHEET_SPACING,
       pageSubdivisions: PAGE_SUBDIVISIONS,
     });
     this.book.scale.x = pageWidth;
@@ -102,6 +103,7 @@ export class JourneyBook3dScene {
     this.faceMaterials.length = 0;
     for (let face = 0; face < count; face += 1) this.faceMaterials.push(this.paperMaterial(null));
     this.book.setPages([...this.faceMaterials]);
+    this.table.position.y = bookTableHeight(this.sheets);
     // Quick FlipBook assigns supplied materials through a promise chain;
     // assigning them directly makes the book complete in this frame.
     let index = 0;

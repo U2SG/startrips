@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOOK_SHEET_SPACING,
+  bookTableHeight,
   cameraHalfHeight,
   dragFraction,
   dragTurnDirection,
@@ -69,6 +71,21 @@ describe("camera fit", () => {
     const half = cameraHalfHeight(0.6, 0.8, "portrait");
     expect(half * 2 * 0.6).toBeGreaterThanOrEqual(0.8);
     expect(half * 2).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("table under the stack", () => {
+  it("keeps the deepest sheet above the table on any book size", () => {
+    // quick_flipbook rests a sheet up to `sheets` gaps below the spine; a page
+    // below the table plane is hidden from its outer edge inwards.
+    for (const sheets of [1, 4, 29, 30, 36, 80, 200]) {
+      expect(-BOOK_SHEET_SPACING * sheets).toBeGreaterThan(bookTableHeight(sheets));
+    }
+  });
+
+  it("leaves small books at the original table height", () => {
+    expect(bookTableHeight(0)).toBe(-0.035);
+    expect(bookTableHeight(20)).toBe(-0.035);
   });
 });
 
