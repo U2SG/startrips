@@ -6886,18 +6886,38 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     pointer-events: auto;
   }
 
+  /* Expand/collapse is a FLIP on `translate` (compositor-only), never a
+     height transition: the real height commits once and the sheet slides.
+     `translate`, not `transform`: `atlasViewIn` fills `transform` forever.
+     The collapsed offset is `100% - extent - 1px` of the sheet's own box
+     (the 1px is the content-box `border-top`; there is no vertical padding),
+     so it resolves to 0 at rest and to the inverse offset whenever the box is
+     taller. Expanding commits 100dvh instantly and slides up from that
+     offset; collapsing keeps the tall box (delayed height) while sliding down,
+     then commits the collapsed height under an offset that is again 0. A
+     reversal mid-way is an ordinary transition from the current position. */
   .journey-story {
+    --journey-story-sheet-extent: min(72svh, 680px);
     position: relative;
     display: block;
-    height: min(72svh, 680px);
-    max-height: min(72svh, 680px);
+    height: var(--journey-story-sheet-extent);
+    max-height: var(--journey-story-sheet-extent);
     overflow-y: auto;
     border: 1px solid rgba(118, 198, 188, 0.2);
     border-bottom: 0;
     border-radius: 24px 24px 0 0;
     background: rgba(2, 8, 9, 0.97);
     box-shadow: 0 -24px 72px rgba(0, 0, 0, 0.42);
-    transition: height var(--motion-content, 560ms) var(--motion-ease-out, ease), max-height var(--motion-content, 560ms) var(--motion-ease-out, ease);
+    transition:
+      translate var(--motion-content, 560ms) var(--motion-ease-out, ease),
+      height 0s linear var(--motion-content, 560ms),
+      max-height 0s linear var(--motion-content, 560ms);
+  }
+
+  /* Scoped to the mobile layout so a desktop-layout Story under this query
+     (one frame across a resize) never inherits an offset sized for the sheet. */
+  .journey-story[data-story-layout="mobile"] {
+    translate: 0 calc(100% - var(--journey-story-sheet-extent) - 1px);
   }
 
   .journey-story-backdrop.is-story-expanded .journey-story {
@@ -6907,6 +6927,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     max-height: 100dvh;
     border-radius: 0;
     background: #020809;
+    translate: none;
+    transition: translate var(--motion-content, 560ms) var(--motion-ease-out, ease);
   }
 
   /* viewport-fit=cover: the expanded sheet reaches the top edge, so its first
@@ -6984,8 +7006,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
      fold; `min-height: 0` is what retires the floor that did. */
   @media (max-height: 480px) {
     .journey-story {
-      height: min(92svh, 680px);
-      max-height: min(92svh, 680px);
+      --journey-story-sheet-extent: min(92svh, 680px);
     }
 
     .journey-story__media,
@@ -8519,6 +8540,13 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   .journey-story__mobile-media-sheet,
   .journey-story__mobile-media-sheet-backdrop {
     animation: none;
+  }
+
+  /* The sheet snaps between collapsed and expanded. A near-zero duration, not
+     `none`, so transitionend still releases the globe cover hold. */
+  .journey-story[data-story-layout="mobile"] {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
   }
 }
 
