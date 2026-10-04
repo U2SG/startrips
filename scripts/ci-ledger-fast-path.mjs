@@ -63,6 +63,22 @@ export function classifyLedgerOnlyFinal({ eventName, prNumber, headSha, baseSha,
   return { fastPath: true, sourceSha: entry.sourceHead, reason: "single-ledger-only-final" };
 }
 
+// A matrix job cancelled before expansion keeps its literal `${{ matrix.* }}` name.
+// It is superseded only when a later attempt of the same run expanded that matrix.
+function isSupersededMatrixPlaceholder(job, jobs, run) {
+  const marker = job.name.indexOf("${{");
+  if (marker < 0) return false;
+  const prefix = job.name.slice(0, marker);
+  if (!prefix.endsWith(" / ")) return false;
+  if (!Number.isInteger(job.run_attempt) || !Number.isInteger(run.run_attempt)) return false;
+  if (job.run_attempt >= run.run_attempt) return false;
+  return jobs.some((other) => typeof other?.name === "string"
+    && other.name.startsWith(prefix)
+    && !other.name.includes("${{")
+    && Number.isInteger(other.run_attempt)
+    && other.run_attempt > job.run_attempt);
+}
+
 export function classifySourceCi(run, jobs) {
   if (!run || run.status !== "completed" || !["success", "failure"].includes(run.conclusion)) {
     return { green: false, reason: "source-run-not-terminal" };
@@ -73,6 +89,7 @@ export function classifySourceCi(run, jobs) {
     if (typeof job?.name !== "string" || !Number.isInteger(job?.id)) {
       return { green: false, reason: "source-job-identity-missing" };
     }
+    if (isSupersededMatrixPlaceholder(job, jobs, run)) continue;
     const prior = latest.get(job.name);
     if (!prior || job.id > prior.id) latest.set(job.name, job);
   }

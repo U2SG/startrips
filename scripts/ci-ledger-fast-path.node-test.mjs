@@ -162,3 +162,55 @@ test("rejects Source reuse when ledger failed for a reason other than missing fi
   assert.equal(result.green, false);
   assert.equal(result.reason, "source-ledger-failure-not-expected-pre-seal-gap");
 });
+
+// Mirrors Source run 37169686820: attempt 1 was cancelled before the browser-qa
+// matrix expanded; attempt 2 re-ran every job and expanded the real lanes.
+function rerunJobs({ placeholderAttempt = 1, lanesAttempt = 2, laneConclusion = "success" } = {}) {
+  const job = (id, attempt, name, conclusion, steps = []) => (
+    { id, run_attempt: attempt, name, status: "completed", conclusion, steps }
+  );
+  return [
+    job(11, 1, "quick-checks", "cancelled"),
+    job(12, 1, "ledger", "cancelled"),
+    job(13, 1, "verify", "failure"),
+    job(14, 1, "core", "cancelled"),
+    job(15, 1, "keepsake-render", "cancelled"),
+    job(16, placeholderAttempt, "browser-qa / ${{ matrix.name }}", "cancelled"),
+    job(21, 2, "ledger", "failure", [{ name: "Validate current PR ledger", conclusion: "failure" }]),
+    job(22, 2, "quick-checks", "success"),
+    job(23, 2, "core", "success"),
+    job(24, 2, "keepsake-render", "success"),
+    job(25, lanesAttempt, "browser-qa / route-home-share", laneConclusion),
+    job(26, 2, "browser-qa / story-media", "success"),
+    job(27, 2, "verify", "failure"),
+  ];
+}
+
+const rerun = { status: "completed", conclusion: "failure", run_attempt: 2 };
+
+test("ignores an unexpanded matrix placeholder superseded by a later attempt", () => {
+  assert.deepEqual(classifySourceCi(rerun, rerunJobs()), {
+    green: true,
+    reason: "source-product-lanes-green",
+  });
+});
+
+test("rejects an unexpanded matrix placeholder in the latest attempt", () => {
+  const result = classifySourceCi(rerun, rerunJobs({ placeholderAttempt: 2 }));
+  assert.equal(result.green, false);
+  assert.equal(result.reason, "source-product-not-green:browser-qa / ${{ matrix.name }}");
+});
+
+test("rejects a placeholder when no later attempt expanded the matrix", () => {
+  const result = classifySourceCi(rerun, rerunJobs({ lanesAttempt: 1 }).filter(
+    (job) => job.name !== "browser-qa / story-media",
+  ));
+  assert.equal(result.green, false);
+  assert.match(result.reason, /browser-qa \/ \$\{\{ matrix\.name \}\}/);
+});
+
+test("rejects a cancelled real lane with no later success", () => {
+  const result = classifySourceCi(rerun, rerunJobs({ laneConclusion: "cancelled" }));
+  assert.equal(result.green, false);
+  assert.equal(result.reason, "source-product-not-green:browser-qa / route-home-share");
+});
