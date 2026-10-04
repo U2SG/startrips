@@ -1,4 +1,4 @@
-import { cloneElement, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type Ref, type VideoHTMLAttributes } from "react";
+import { cloneElement, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type ReactNode, type Ref, type VideoHTMLAttributes } from "react";
 import { flushSync } from "react-dom";
 import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackClip, mediaStackOpacity, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
@@ -66,6 +66,15 @@ type Props = {
    * naming the asset, and `data-media-presentation-id` names the page.
    */
   pageAssetIds?: ReadonlyMap<string, string>;
+  /**
+   * #555: something painted over exactly one page - the Journey cover
+   * opening's reveal. While it is mounted on the current page that page does
+   * not report playback readiness, so autoplay and the rest of the sequence
+   * wait until the reveal has settled on the canonical bytes. The page's own
+   * `data-media-page-ready` and shared-media identity are left alone: they
+   * describe the canonical picture underneath, which a morph may land on.
+   */
+  pageOverlay?: { pageId: string; node: ReactNode } | null;
   direction?: -1 | 1;
   reads: Record<string, Read>;
   wrap: boolean;
@@ -568,7 +577,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   }, [active, presentedId]);
   const currentVideo = props.media.find((asset) => asset.id === props.currentId)?.mimeType.startsWith("video/");
   const playbackReady = currentReady && !props.incomingId && !movingId
-    && (!currentVideo || (binding.id === props.currentId && liveReady === liveKey));
+    && (!currentVideo || (binding.id === props.currentId && liveReady === liveKey))
+    && !(props.pageOverlay && props.pageOverlay.pageId === props.currentId);
   useLayoutEffect(() => {
     props.onPlaybackReady(playbackReady ? props.currentId : null);
   }, [playbackReady, props.currentId, props.onPlaybackReady]);
@@ -1211,6 +1221,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}
         data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
         data-media-incoming={id !== null && id === props.incomingId ? "true" : undefined}
+        data-media-overlay-hold={id !== null && id === props.pageOverlay?.pageId ? "true" : undefined}
         data-media-presented={presented ? "true" : undefined}
         aria-hidden={!presented} style={{
           "--page-offset": offsets[slot], "--stack-depth": depths[slot],
@@ -1279,6 +1290,9 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined}
           sharedId={isVideo && id !== null && id === foregroundId && pageReady
             && (!videoVisible || id !== props.currentId) ? assetIdOf(id) : undefined} />
+        {id !== null && id === props.pageOverlay?.pageId ? (
+          <div className="story-media-pages__overlay" data-media-overlay-for={id}>{props.pageOverlay.node}</div>
+        ) : null}
       </div>;
     })}
     {/* #489 A1: a photograph's stationary click surface must never cover the

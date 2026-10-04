@@ -88,6 +88,10 @@ import { StoryMediaPages, type StoryMediaGestureCancel, type StoryMediaPagesHand
 import { StoryMediaOrganizer } from "./StoryMediaOrganizer";
 import { StoryNotesEditor, type StoryNotesSaveState } from "./StoryNotesEditor";
 import { CoverRevealRequest } from "./CoverRevealRequest";
+import { CoverRevealStage } from "../reveal/CoverRevealStage";
+import type { CoverRevealImagePair } from "../reveal/coverRevealFlow";
+import { useCoverRevealOpening } from "./useCoverRevealOpening";
+import { holdCoverRevealOpeningPair, storyCoverRevealGate, type HeldCoverRevealPair } from "./coverRevealOpening";
 import { MEDIA_STACK_DURATION, mediaStackNeighbors } from "./mediaStackMotion";
 import "../styles/starlight-media.css";
 import "../styles/story-experience.css";
@@ -263,6 +267,12 @@ type JourneyStoryProps = {
     journeyId: string,
     assetIds: readonly string[],
   ) => Journey | Promise<Journey>;
+  /**
+   * #555: the once-per-cover-revision ledger of the Journey cover opening's
+   * reveal. Kept by the Atlas shell so it outlives one Story mount: reopening
+   * Story, or returning to it, never replays a reveal already taken.
+   */
+  coverRevealPlayed?: { current: Set<string> };
 };
 
 type PendingPlacementReview = {
@@ -743,6 +753,7 @@ export function JourneyStory({
   onMediaAdded,
   onMediaDelete,
   onMediaReorder,
+  coverRevealPlayed,
 }: JourneyStoryProps) {
   // #200 phase D. `mutations` is null in shared mode, so `manageMedia` below
   // is null too and every media write in this component has nothing to call.
@@ -2192,6 +2203,79 @@ export function JourneyStory({
   // media by sortOrder, else null. Cards/story use it as the representative
   // image; it is independent of slideshow order.
   const cover = journey ? journeyCover(journey) : null;
+
+  // #555 + #379: the Cover Reveal belongs to the Journey cover presentation
+  // role. It is asked for only while the cursor is on the opening AND that page
+  // is settled on its canonical bytes with no Atlas -> Story morph in flight,
+  // so the two surfaces never run a reveal over the same picture at once.
+  const [openingStageSettled, setOpeningStageSettled] = useState(false);
+  const openingPageSettled = onJourneyCoverOpening && activePageId !== null
+    && shownPageId === activePageId && incomingPageId === null && pendingPageId === null;
+  useEffect(() => {
+    if (!openingPageSettled || openingStageSettled) return undefined;
+    let frame = 0;
+    const check = () => {
+      const stage = dialogRef.current?.querySelector(".journey-story__media [data-story-media-pages]");
+      const current = stage?.querySelector<HTMLElement>('[data-media-page="current"]');
+      if (!document.querySelector("[data-shared-element-clone]")
+        && current?.dataset.mediaPresentationId === activePageId
+        && current.dataset.mediaPageReady === "true") {
+        setOpeningStageSettled(true);
+        return;
+      }
+      frame = window.requestAnimationFrame(check);
+    };
+    frame = window.requestAnimationFrame(check);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activePageId, openingPageSettled, openingStageSettled]);
+  useEffect(() => {
+    if (!onJourneyCoverOpening) setOpeningStageSettled(false);
+  }, [onJourneyCoverOpening]);
+  const ownCoverRevealPlayed = useRef<Set<string>>(new Set());
+  const storyReducedMotion = useMemo(prefersReducedMotion, []);
+  const storyCoverRevealAllowed = storyCoverRevealGate({
+    entryRole: storyCursor.entries[entryIndex]?.role ?? null,
+    canManageMedia: capabilities.canManageMedia,
+    cover: activeAsset,
+    stageSettled: openingStageSettled && openingPageSettled,
+  }).enabled;
+  const storyCoverReveal = useCoverRevealOpening({
+    journey: journeyCoverOpeningActive ? journey ?? null : null,
+    enabled: storyCoverRevealAllowed,
+    reducedMotion: storyReducedMotion,
+    played: coverRevealPlayed ?? ownCoverRevealPlayed,
+  });
+  const coverRevealOriginalRead = activeAsset ? mediaReads[activeAsset.id] : undefined;
+  const heldCoverRevealPair = useRef<HeldCoverRevealPair | null>(null);
+  const coverRevealPair = ((): CoverRevealImagePair | null => {
+    const held = holdCoverRevealOpeningPair(
+      heldCoverRevealPair.current,
+      storyCoverRevealAllowed ? storyCoverReveal.opening : null,
+      coverRevealOriginalRead?.status === "ready" ? coverRevealOriginalRead.url : null,
+    );
+    heldCoverRevealPair.current = held;
+    return held?.pair ?? null;
+  })();
+  const coverRevealOverlay = coverRevealPair && storyCoverReveal.opening && activePageId ? {
+    pageId: activePageId,
+    node: (
+      <CoverRevealStage
+        // A fresh mount per cover revision, never keyed by the asset: the
+        // canonical cover page paints the same asset and must not host it.
+        key={`${activePageId}:${storyCoverReveal.opening.identity}`}
+        className="journey-story__cover-reveal"
+        pair={coverRevealPair}
+        preset={storyCoverReveal.opening.preset}
+        revision={1}
+        // The Story page paints its picture contained, so the reveal composes
+        // the same box and settles onto the same pixels.
+        fit="contain"
+        onStateChange={(state) => {
+          if (state.phase === "settled") storyCoverReveal.dismiss();
+        }}
+      />
+    ),
+  } : null;
 
   const reportForegroundMedia = useCallback((id: string | null) => {
     foregroundPageIdRef.current = id;
@@ -4492,6 +4576,7 @@ export function JourneyStory({
               coverId={cover?.id ?? null}
               incomingId={stageIncomingPageId}
               pageAssetIds={storyCursor.pageAssetIds}
+              pageOverlay={coverRevealOverlay}
               pendingId={pendingPageId}
               direction={mediaNavigationDirection.current}
               reads={stageReads}

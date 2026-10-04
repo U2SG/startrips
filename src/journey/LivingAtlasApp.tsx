@@ -1197,6 +1197,11 @@ export function LivingAtlasApp({
   // asset deep links, Playback return, the classic-reader handoff) clears it,
   // because a Playback return can also name no Route Point and no asset.
   const [storyPresentsJourneyCoverOpening, setStoryPresentsJourneyCoverOpening] = useState(false);
+  // #555: Story's Journey cover opening owns its own once-per-cover-revision
+  // reveal ledger, separate from the Atlas card's (#379): the card reveal yields
+  // when Story opens, and the opening then plays the reveal as the Journey
+  // cover presentation. Kept here so reopening Story never replays it.
+  const storyCoverRevealPlayed = useRef<Set<string>>(new Set());
   const [storyInitialSnapState, setStoryInitialSnapState] = useState<Exclude<StorySnapState, "closed">>("in-context");
   const [storyFocusVisibleControlOnOpen, setStoryFocusVisibleControlOnOpen] = useState(false);
   const [storyGlobeCover, setStoryGlobeCover] = useState({ opaqueMediaCover: false, coverTransitionActive: false });
@@ -4577,6 +4582,7 @@ export function LivingAtlasApp({
           initialAssetId={storyInitialAssetId}
           initialSnapState={storyInitialSnapState}
           presentJourneyCoverOpening={storyPresentsJourneyCoverOpening}
+          coverRevealPlayed={storyCoverRevealPlayed}
           focusVisibleControlOnOpen={storyFocusVisibleControlOnOpen}
           onObservationChange={handleStoryObservationChange}
           onGlobeCoverChange={setStoryGlobeCover}

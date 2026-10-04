@@ -46,6 +46,7 @@ export function useCoverRevealOpening({
   enabled,
   reducedMotion,
   readDisplay = readCoverRevealDisplay,
+  played: sharedPlayed,
 }: {
   /** The Journey whose cover surface is on screen, or null when none is. */
   journey: Journey | null;
@@ -56,6 +57,12 @@ export function useCoverRevealOpening({
   enabled: boolean;
   reducedMotion: boolean;
   readDisplay?: ReadDisplay;
+  /**
+   * #555: the once-per-cover-revision ledger, when it has to outlive this
+   * hook's own mount. Story's Journey cover opening mounts and unmounts with
+   * Story, so the Atlas shell keeps its ledger; reopening Story must not replay.
+   */
+  played?: { current: Set<string> };
 }): CoverRevealOpeningControls {
   const [opening, setOpening] = useState<CoverRevealOpening | null>(null);
   // True from the moment the display read leaves until it resolves. The
@@ -66,7 +73,8 @@ export function useCoverRevealOpening({
   // Session-scoped on purpose: "once per cover revision" is a rule about one
   // visit, and persisting it would invent a storage contract #379 never asked
   // for. A reload is a new visit and may open again.
-  const played = useRef<Set<string>>(new Set());
+  const ownPlayed = useRef<Set<string>>(new Set());
+  const played = sharedPlayed ?? ownPlayed;
   /**
    * Monotonic count of viewer intents, so a read in flight can tell whether
    * the viewer it was started for is still the current one. A ref rather than
