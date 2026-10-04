@@ -738,6 +738,34 @@ const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
 // re-key and remount rather than swapping the node behind React's back.
 const QA_SOUNDTRACK_ALTERNATE_ID = "00000000-0000-4000-8000-000000000901";
 
+// #595: a Journey with no visual media at all. Q (grouped under Stop P), Stop R
+// and the ungrouped via W only have notes; P and X have neither.
+const NOTES_ONLY_JOURNEY_ID = "00000000-0000-4000-8000-000000005951";
+const storyQaNotesOnlyJourney: Journey = {
+  ...storyQaJourney,
+  id: NOTES_ONLY_JOURNEY_ID,
+  title: "QA · NOTES ONLY",
+  note: "",
+  coverMediaAssetId: null,
+  routePoints: [
+    { id: "no-point-p", label: "STOP P 渡口", isStop: true, note: null },
+    { id: "no-point-q", label: "Q 码头", isStop: false, stayAnchorRoutePointId: "no-point-p", note: "Q 的感想：船晚了半小时。" },
+    { id: "no-point-r", label: "STOP R 山顶", isStop: true, note: "R 的感想：风很大，什么也没拍。" },
+    { id: "no-point-w", label: "W 隧道口", isStop: false, note: "W 的感想：隧道里很凉。" },
+    { id: "no-point-x", label: "STOP X 终点", isStop: true, note: null },
+  ].map((point, index) => ({
+    stayAnchorRoutePointId: null,
+    ...point,
+    journeyId: NOTES_ONLY_JOURNEY_ID,
+    sortOrder: index,
+    latitude: 22.3 + index * 0.012,
+    longitude: 114.2 + index * 0.014,
+    occurredAt: null,
+    createdAt: "2026-10-04T00:00:00.000Z",
+  })),
+  media: [],
+};
+
 function JourneyStoryQaPreview() {
   const qaMode = new URLSearchParams(window.location.search).get("qaMode");
   const mixedMediaMode = qaMode === "mixed-media";
@@ -747,12 +775,15 @@ function JourneyStoryQaPreview() {
   const desktopChapterNoMediaMode = qaMode === "desktop-chapter-rail-no-media";
   const routeBoundaryMode = qaMode === "route-boundary";
   const groupedNotesMode = qaMode === "grouped-notes";
+  const notesOnlyMode = qaMode === "notes-only";
   // #555: the only preview mode that opens as a genuine whole-Journey entry.
   // Every other mode keeps its current starting state (no opening).
   const coverOpeningLeadingMode = qaMode === "journey-cover-opening-leading";
   const coverOpeningIntroMode = qaMode === "journey-cover-opening-intro";
   const coverOpeningMode = qaMode === "journey-cover-opening" || coverOpeningLeadingMode || coverOpeningIntroMode;
-  const initialJourney = groupedNotesMode
+  const initialJourney = notesOnlyMode
+    ? storyQaNotesOnlyJourney
+    : groupedNotesMode
     ? storyQaGroupedNotesJourney
     : coverOpeningIntroMode
     ? storyQaCoverOpeningIntroJourney
@@ -1243,6 +1274,7 @@ function JourneyPlaybackChapterMembershipQaPreview() {
 // #595: Journey Playback over the grouped-notes Journey. Close records the
 // committed return position, so the lane can reopen Story on it.
 function JourneyPlaybackGroupedNotesQaPreview() {
+  const notesOnly = new URLSearchParams(window.location.search).get("qaNotesOnly") === "1";
   const [handoff, setHandoff] = useState<{ routePointId: string | null; assetId: string | null; reason: string } | null>(null);
   return (
     <main className="living-atlas" data-qa-grouped-notes
@@ -1252,7 +1284,7 @@ function JourneyPlaybackGroupedNotesQaPreview() {
     >
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       {handoff ? null : <JourneyPlaybackOverlay
-        journey={storyQaGroupedNotesJourney}
+        journey={notesOnly ? storyQaNotesOnlyJourney : storyQaGroupedNotesJourney}
         onClose={({ position, reason }) => setHandoff({
           routePointId: position?.routePointId ?? null, assetId: position?.assetId ?? null, reason,
         })}

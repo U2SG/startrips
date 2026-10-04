@@ -21,6 +21,13 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const STORY_PATH = "/?qaState=journey-story&qaMode=grouped-notes";
 const PLAYBACK_PATH = "/?qaState=journey-playback&qaMode=grouped-notes";
+const NOTES_ONLY_STORY_PATH = "/?qaState=journey-story&qaMode=notes-only";
+const NOTE_Q = "note:no-point-q";
+const NOTE_R = "note:no-point-r";
+const NOTE_W = "note:no-point-w";
+const Q_NOTE = "Q 的感想";
+const R_NOTE = "R 的感想";
+const W_NOTE = "W 的感想";
 const STAGE = ".journey-story__media";
 
 const S1 = "nb-media-s1";
@@ -448,6 +455,148 @@ try {
         failed: progress.opened.kind !== "note" || !progress.opened.noteText?.includes(B_NOTE)
           || progress.observation.routePoint !== "nb-point-b" || progress.observation.asset !== null
           || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  // ---------------------------------------------------------------- Notes-only Journey
+  // A Journey with no visual media: its three note-only Route Points (Q grouped
+  // under Stop P, Stop R, the ungrouped via W) are its Story, as text pages.
+  for (const mobile of [false, true]) {
+    const name = mobile ? "story-notes-only-touch-390" : "story-notes-only-desktop";
+    const session = await openPage({
+      path: NOTES_ONLY_STORY_PATH,
+      viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
+      mobile,
+    });
+    const progress = { visited: [] };
+    try {
+      const { page } = session;
+      const visit = async (id) => {
+        await waitForCurrent(page, id);
+        const state = await storyState(page);
+        progress.visited.push({ id, kind: state.kind, noteText: state.noteText, noteLabel: state.noteLabel,
+          counter: await page.locator("[data-story-media-counter]").count(),
+          inViewport: Boolean(state.pagesRect && state.pagesRect.top >= 0
+            && state.pagesRect.bottom <= state.viewport.height + 0.5) });
+        return state;
+      };
+      await visit(NOTE_Q);
+      if (mobile) {
+        await swipe(session, 1);
+        await visit(NOTE_R);
+        await swipe(session, 1);
+        await visit(NOTE_W);
+        await swipe(session, -1);
+        await visit(NOTE_R);
+        await swipe(session, -1);
+        await visit(NOTE_Q);
+      } else {
+        await page.locator('.journey-story__media-nav [data-video-step="next"]').click();
+        await visit(NOTE_R);
+        await pressOnStage(page, "ArrowRight");
+        await visit(NOTE_W);
+        await swipe(session, -1);
+        await visit(NOTE_R);
+        await page.locator('.journey-story__media-nav [data-video-step="previous"]').click();
+        await visit(NOTE_Q);
+      }
+      // Autoplay walks all three in order and wraps at the Journey boundary.
+      const play = mobile ? ".journey-story__mobile-media-play" : ".journey-story__media-autobrowse";
+      if (mobile) await page.locator(play).tap();
+      else await page.locator(play).click();
+      const started = Date.now();
+      await waitForCurrent(page, NOTE_R, 12_000);
+      progress.firstDwellMs = Date.now() - started;
+      await waitForCurrent(page, NOTE_W, 12_000);
+      await waitForCurrent(page, NOTE_Q, 12_000);
+      progress.wrapped = true;
+      if (mobile) await page.locator(play).tap();
+      else await page.locator(play).click();
+      progress.fullscreenEntries = await page.locator(
+        ".journey-story__fullscreen-entry, .journey-story__mobile-media-fullscreen, .journey-story-fullscreen",
+      ).count();
+      // #616: a chip on a Route Point with nothing to say keeps the truthful
+      // empty chapter; a chip on a note-only one lands on its note page.
+      const chip = (id) => page.locator(`.journey-story button[data-route-point-id="${id}"]`);
+      if (mobile) await chip("no-point-x").tap(); else await chip("no-point-x").click();
+      await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-has-media") === "false",
+        null, { timeout: 5_000 });
+      progress.emptyChip = {
+        pressed: await chip("no-point-x").getAttribute("aria-pressed"),
+        stage: await page.locator(".journey-story__media").count(),
+      };
+      if (mobile) await chip("no-point-w").tap(); else await chip("no-point-w").click();
+      await visit(NOTE_W);
+      progress.noteChipPressed = await chip("no-point-w").getAttribute("aria-pressed");
+      const order = progress.visited.map((entry) => entry.id);
+      record({ name,
+        claim: "a Journey with no media presents its three note-only Route Points as Story text pages: buttons/keyboard/swipe (desktop) or touch swipe (390) and autoplay step through them in canonical order with the shared dwell and wrap at the boundary, the counter stays hidden, fullscreen is not offered, an empty Route Point keeps the #616 empty chapter and a note-only chip lands on its page",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: order.join() !== [NOTE_Q, NOTE_R, NOTE_W, NOTE_R, NOTE_Q, NOTE_W].join()
+          || progress.visited.some((entry) => entry.kind !== "note" || entry.counter !== 0 || !entry.inViewport)
+          || !progress.visited[0].noteText?.includes(Q_NOTE)
+          || !progress.visited[0].noteLabel?.includes("STOP P 渡口 · Q 码头")
+          || !progress.visited[1].noteText?.includes(R_NOTE)
+          || !progress.visited[2].noteText?.includes(W_NOTE)
+          || progress.firstDwellMs < 3_000 || progress.firstDwellMs > 9_500
+          || progress.fullscreenEntries !== 0
+          || progress.emptyChip.pressed !== "true" || progress.emptyChip.stage !== 0
+          || progress.noteChipPressed !== "true"
+          || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
+
+  {
+    const name = "playback-notes-only";
+    const session = await openPage({ path: `${PLAYBACK_PATH}&qaNotesOnly=1`, viewport: { width: 1280, height: 800 } });
+    const progress = { beats: [] };
+    try {
+      const { page } = session;
+      const root = page.locator(".journey-playback");
+      await root.waitFor({ state: "visible", timeout: 10_000 });
+      await page.locator('.journey-playback__controls button[aria-label="暂停播放"]').click({ timeout: 3_000 }).catch(() => undefined);
+      // Steps: 0 intro, 1 stop P, 2 note Q, 3 travel, 4 stop R, 5 note W, 6 travel, 7 stop X, 8 outro.
+      for (let index = 0; index < 8; index += 1) {
+        const step = Number(await root.getAttribute("data-playback-step"));
+        progress.beats.push(await page.evaluate(() => {
+          const playback = document.querySelector(".journey-playback");
+          const beat = playback?.querySelector(".journey-playback__note-beat");
+          return {
+            step: playback?.getAttribute("data-playback-step"),
+            phase: playback?.getAttribute("data-playback-phase"),
+            beatOwner: beat?.getAttribute("data-playback-note-beat") ?? null,
+            transit: beat?.getAttribute("data-playback-transit-note") === "true",
+            beatText: beat?.textContent ?? null,
+            captionNote: playback?.querySelector(".journey-playback__stop blockquote")?.textContent ?? null,
+          };
+        }));
+        await root.focus();
+        await page.keyboard.press("ArrowRight");
+        await page.waitForFunction((previous) => (
+          document.querySelector(".journey-playback")?.getAttribute("data-playback-step") !== String(previous)
+        ), step, { timeout: 5_000 }).catch(() => undefined);
+      }
+      const notes = progress.beats.filter((beat) => beat.phase === "note");
+      const stopR = progress.beats.find((beat) => beat.captionNote?.includes(R_NOTE));
+      record({ name,
+        claim: "full Playback of a Journey with no media plays the grouped note as a note beat inside its Stop chapter, Stop R's note on its arrival, and the ungrouped via as a transit note beat",
+        ...progress, pageErrors: session.pageErrors,
+        failed: notes.map((beat) => beat.beatOwner).join() !== "no-point-q,no-point-w"
+          || notes[0].transit || !notes[0].beatText?.includes(Q_NOTE) || !notes[0].beatText?.includes("STOP 1")
+          || !notes[1].transit || notes[1].beatText?.includes("STOP") || !notes[1].beatText?.includes(W_NOTE)
+          || !stopR || session.pageErrors.length > 0,
       });
     } catch (error) {
       record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
