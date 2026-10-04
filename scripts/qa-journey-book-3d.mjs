@@ -49,6 +49,10 @@ const PHOTOS = [
   "/artworks/greek-amphora.jpg",
 ];
 const FIRST_ASSET = 5000;
+// SwiftShader renders a frame of the book in hundreds of milliseconds and the
+// scene advances a turn by at most 40 ms per frame, so one turn can take tens
+// of seconds on a CI runner.
+const SETTLE_TIMEOUT_MS = 120_000;
 
 const checks = [];
 let failed = false;
@@ -135,7 +139,7 @@ async function openSession(browser, name, contextOptions) {
     await page.waitForFunction((want) => {
       const raw = document.querySelector(".journey-book-3d__stage")?.dataset.qaBook;
       return raw ? JSON.parse(raw).face === want : false;
-    }, face, { timeout: 30_000 });
+    }, face, { timeout: SETTLE_TIMEOUT_MS });
     // Let pictures near the spread land so the evidence shows real pages; the
     // sampled margins are paper either way.
     await page.waitForTimeout(1_200);
@@ -255,6 +259,9 @@ async function desktopSession(browser) {
 async function phoneSession(browser) {
   const session = await openSession(browser, "phone", {
     viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true,
+    // Turns and pans settle in one frame, so a DPR 3 SwiftShader canvas stays
+    // within budget; the drag itself is still driven by real touch moves.
+    reducedMotion: "reduce",
   });
   const { page } = session;
   const cdp = await page.context().newCDPSession(page);
