@@ -5897,7 +5897,7 @@ try {
         const neighbor = stage?.querySelector('.story-media-pages__page:not([data-media-page="current"])[data-media-page-id]');
         const picture = current?.querySelector('img');
         const note = copy?.querySelector('.journey-story__point-note');
-        const active = rail?.querySelector('button.is-chapter-active');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!story || !rail || !copy || !stage || !pages || !current || !neighbor || !picture || !note || !active) {
           throw new Error("desktop chapter fixture did not render its presented Story");
         }
@@ -5956,7 +5956,7 @@ try {
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.waitForFunction(() => {
         const rail = document.querySelector('header .journey-story__route-points');
-        const active = rail?.querySelector('button.is-chapter-active');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!rail || !active) return false;
         const railBounds = rail.getBoundingClientRect();
         const activeBounds = active.getBoundingClientRect();
@@ -5964,7 +5964,7 @@ try {
       }, null, { polling: 'raf', timeout: 3_000 });
       progress.resized = await page.evaluate(() => {
         const rail = document.querySelector('header .journey-story__route-points');
-        const active = rail?.querySelector('button.is-chapter-active');
+        const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!rail || !active) throw new Error("resized chapter rail lost its active chapter");
         const railRect = rail.getBoundingClientRect();
         const activeRect = active.getBoundingClientRect();
@@ -6054,14 +6054,64 @@ try {
           return bounds.left >= railBounds.left - 2 && bounds.right <= railBounds.right + 2;
         }, index, { polling: 'raf', timeout: 3_000 });
         progress.tabEnter.visited.push(await button.getAttribute('data-route-point-id') ?? 'all');
+        // #76: the rail names the CURRENT chapter, which follows the media on
+        // screen. In this fixture only Route Points 04 (303) and 17 (316) own
+        // media. Activating either makes it current; activating a media-free,
+        // note-free Route Point lands on the nearest media along the route, and
+        // the whole-Journey chip lands on the first media of the Journey (303,
+        // there is no Journey-level media). Expected chapters are spelled out
+        // rather than derived, so drift in the nearest-media rule is caught.
+        const expectedChapterId = index <= 10
+          ? "00000000-0000-4000-8000-000000000303"
+          : "00000000-0000-4000-8000-000000000316";
         await page.keyboard.press('Enter');
-        await page.waitForFunction((buttonIndex) => {
-          const buttons = document.querySelectorAll('header .journey-story__route-points button');
-          return buttons[buttonIndex]?.getAttribute('aria-pressed') === 'true';
-        }, index, { polling: 'raf', timeout: 3_000 });
+        try {
+          await page.waitForFunction((expectedId) => {
+            const railElement = document.querySelector('header .journey-story__route-points');
+            const pressed = railElement?.querySelectorAll('button[aria-pressed="true"]') ?? [];
+            // Exactly one chapter is current at any time.
+            return pressed.length === 1 && pressed[0].getAttribute('data-route-point-id') === expectedId;
+          }, expectedChapterId, { polling: 'raf', timeout: 3_000 });
+        } catch (error) {
+          progress.tabEnter.mismatch = {
+            index,
+            expectedChapterId,
+            pressed: await rail.evaluate((element) => [...element.querySelectorAll('button[aria-pressed="true"]')]
+              .map((pressed) => pressed.getAttribute('data-route-point-id') ?? 'all')),
+          };
+          throw error;
+        }
         progress.tabEnter.activated += 1;
         if (index + 1 < chapterButtonCount) await page.keyboard.press('Tab');
       }
+      // #76: the loop ends with Route Point 20 selected and the cursor on 17's
+      // media. Stepping back crosses into Route Point 04's media while 20 stays
+      // selected; the rail must scroll the current chapter into view, not keep
+      // the selected entry point there.
+      await page.evaluate((selector) => (
+        document.querySelector(selector)?.querySelector('[data-story-media-pages]')?.focus()
+      ), STAGE);
+      await page.keyboard.press('ArrowLeft');
+      await waitForSettledAsset(page, I1);
+      await page.waitForFunction(() => {
+        const railElement = document.querySelector('header .journey-story__route-points');
+        const active = railElement?.querySelector('button[aria-pressed="true"]');
+        if (!railElement || !active) return false;
+        const railBounds = railElement.getBoundingClientRect();
+        const bounds = active.getBoundingClientRect();
+        return bounds.left >= railBounds.left - 2 && bounds.right <= railBounds.right + 2;
+      }, null, { polling: 'raf', timeout: 3_000 }).catch(() => null);
+      progress.crossed = await rail.evaluate((element) => {
+        const active = element.querySelector('button[aria-pressed="true"]');
+        const railBounds = element.getBoundingClientRect();
+        const bounds = active?.getBoundingClientRect();
+        return {
+          activeRoutePointId: active?.getAttribute('data-route-point-id') ?? null,
+          activeVisible: Boolean(bounds && bounds.left >= railBounds.left - 2
+            && bounds.right <= railBounds.right + 2),
+          scrollLeft: element.scrollLeft,
+        };
+      });
       record({ name,
         claim: "at 1920x1080 twenty Route Points stay on one bounded keyboard-reachable rail above a materially larger uncropped portrait, while the current note remains in the initial viewport and changing chapter updates context without a layout jump",
         ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
@@ -6091,6 +6141,8 @@ try {
           || !progress.home.focusedAll || progress.home.scrollLeft > 2
           || progress.tabEnter.visited.length !== 21 || progress.tabEnter.activated !== 21
           || new Set(progress.tabEnter.visited).size !== 21
+          || progress.crossed.activeRoutePointId !== "00000000-0000-4000-8000-000000000303"
+          || !progress.crossed.activeVisible
           || progress.switched.activeRoutePointId !== "00000000-0000-4000-8000-000000000303"
           || !progress.switched.activeVisible || !progress.switched.currentPointLabel?.includes("04")
           || !progress.switched.noteText?.includes("海风转凉") || !progress.switched.noteVisible

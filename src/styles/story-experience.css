@@ -133,7 +133,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.journey-story[data-story-layout="desktop"] > header .journey-story__route-points button:is(.is-active, .is-chapter-active) {
+.journey-story[data-story-layout="desktop"] > header .journey-story__route-points button.is-active {
   color: var(--startrips-starlight);
   text-decoration: underline;
   text-underline-offset: 7px;

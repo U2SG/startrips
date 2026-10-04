@@ -14,12 +14,16 @@ import {
   storyAutoplayAdvance,
   storyMediaAvailability,
   storyAutoplayWaitsForVideoEnd,
-  shouldHoldWholeJourneyTerminalFrame,
+  storyRoutePointEntryIndex,
+  storyNoteBeatNeighbourMediaIndexes,
   storyUploadedAssetIndex,
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
+  storyInitialNoteBeatRoutePointId,
+  storyActiveChapterRoutePointId,
+  routePointPresentsNote,
 } from "./storyMediaPolicy";
-import { storyMediaForScope } from "./journeyPlayback";
+import { storyMediaForScope, storySequenceForJourney, storySequenceMedia } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 const journey: Journey = {
@@ -79,6 +83,26 @@ describe("groupedPlacementRefreshSelection (#112 review)", () => {
   it("treats a null refresh or a stale refresh missing the uploaded asset as failure", () => {
     expect(groupedPlacementRefreshSelection(null, "point-1", ["uploaded"])).toBeNull();
     expect(groupedPlacementRefreshSelection(journey, null, ["missing"])).toBeNull();
+  });
+
+  it("resolves the uploaded index in the Journey sequence, not the Route Point's (#76 P1)", () => {
+    // The index is assigned to Story's Journey-wide cursor, so media ahead of
+    // the upload target must count. Resolving inside the Route Point's own list
+    // would report 1 here and land on "earlier" instead of "uploaded".
+    const refreshed: Journey = {
+      ...journey,
+      routePoints: [
+        { id: "point-1", journeyId: journey.id, sortOrder: 0, label: "Point 1", latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+        { id: "point-2", journeyId: journey.id, sortOrder: 1, label: "Point 2", latitude: 2, longitude: 2, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+      ],
+      media: [
+        { ...asset("opening", "image/jpeg", 0), routePointId: null },
+        { ...asset("earlier", "image/jpeg", 1), routePointId: "point-1" },
+        { ...asset("uploaded", "image/jpeg", 2), routePointId: "point-2" },
+      ],
+    };
+    expect(groupedPlacementRefreshSelection(refreshed, "point-2", ["uploaded"]))
+      .toMatchObject({ assetIndex: 2, assetId: "uploaded" });
   });
 });
 
@@ -185,51 +209,46 @@ describe("storyInitialMediaSelection (#18 follow-up)", () => {
       assetIndex: 2,
       assetId: pointCover.id,
     });
+    // #76 P1: opening on a Route Point is a position in the Journey-wide
+    // sequence, not an index into that Route Point's own truncated list. The
+    // journey-level media ahead of it still counts, so the previous step from
+    // here reaches journey-level media rather than dead-ending.
     expect(storyInitialMediaSelection(withPointCover, "point-1")).toEqual({
       routePointId: "point-1",
-      assetIndex: 0,
+      assetIndex: 1,
       assetId: pointFirst.id,
     });
   });
 });
 
-describe("storyMediaNeighborIndex (#76)", () => {
-  it("does not wrap the whole-Journey narrative at either end", () => {
+describe("storyMediaNeighborIndex (#76 P1)", () => {
+  it("crosses Route Point boundaries in one Journey-wide sequence", () => {
+    // #76 P1: there is no longer a "whole journey" mode whose edges stop and a
+    // "route point" mode that wraps. One cursor wraps at the Journey boundary.
+    expect(storyMediaNeighborIndex(0, 5, -1, true)).toBe(4);
+    expect(storyMediaNeighborIndex(4, 5, 1, true)).toBe(0);
+    expect(storyMediaNeighborIndex(1, 5, 1, true)).toBe(2);
+  });
+
+  it("can still be asked not to wrap, for a bounded management scope", () => {
     expect(storyMediaNeighborIndex(0, 4, -1, false)).toBeNull();
     expect(storyMediaNeighborIndex(3, 4, 1, false)).toBeNull();
     expect(storyMediaNeighborIndex(1, 4, 1, false)).toBe(2);
   });
-
-  it("preserves the existing wrap behavior for a route-point browse scope", () => {
-    expect(storyMediaNeighborIndex(0, 4, -1, true)).toBe(3);
-    expect(storyMediaNeighborIndex(3, 4, 1, true)).toBe(0);
-  });
 });
 
-describe("storyAutoplayNextIndex (#76)", () => {
-  it("stops at the end of the whole-Journey narrative", () => {
-    expect(storyAutoplayNextIndex(0, 3, true)).toBe(1);
-    expect(storyAutoplayNextIndex(2, 3, true)).toBeNull();
-    expect(storyAutoplayNextIndex(0, 1, true)).toBeNull();
+describe("storyAutoplayNextIndex (#76 P1)", () => {
+  it("returns to the first playable media at the Journey boundary", () => {
+    expect(storyAutoplayNextIndex(0, 3)).toBe(1);
+    expect(storyAutoplayNextIndex(1, 3)).toBe(2);
+    // A Route Point with one media can no longer loop on itself while the
+    // Journey still has later playable media.
+    expect(storyAutoplayNextIndex(2, 3)).toBe(0);
   });
 
-  it("preserves route-point autoplay looping", () => {
-    expect(storyAutoplayNextIndex(0, 3, false)).toBe(1);
-    expect(storyAutoplayNextIndex(2, 3, false)).toBe(0);
-    expect(storyAutoplayNextIndex(0, 1, false)).toBeNull();
-  });
-});
-
-describe("shouldHoldWholeJourneyTerminalFrame (#76 review)", () => {
-  it("keeps the final whole-Journey frame playing for its terminal interval", () => {
-    expect(shouldHoldWholeJourneyTerminalFrame(2, 3, true)).toBe(true);
-    expect(shouldHoldWholeJourneyTerminalFrame(0, 1, true)).toBe(true);
-  });
-
-  it("does not turn route-point or non-terminal frames into delayed stops", () => {
-    expect(shouldHoldWholeJourneyTerminalFrame(1, 3, true)).toBe(false);
-    expect(shouldHoldWholeJourneyTerminalFrame(2, 3, false)).toBe(false);
-    expect(shouldHoldWholeJourneyTerminalFrame(0, 0, true)).toBe(false);
+  it("has nothing to advance to when the Journey holds a single media", () => {
+    expect(storyAutoplayNextIndex(0, 1)).toBeNull();
+    expect(storyAutoplayNextIndex(0, 0)).toBeNull();
   });
 });
 
@@ -239,16 +258,17 @@ describe("storyAutoplayVideoCandidate (#204 final review)", () => {
   const video = asset("video-1", "video/mp4", 2, "clip.mp4");
 
   it("prepares the first future video while autoplay is still on an image", () => {
-    expect(storyAutoplayVideoCandidate([imageA, imageB, video], 0, true)?.id).toBe("video-1");
+    expect(storyAutoplayVideoCandidate([imageA, imageB, video], 0)?.id).toBe("video-1");
   });
 
   it("keeps the current video as the stable authorized element", () => {
-    expect(storyAutoplayVideoCandidate([imageA, video], 1, true)?.id).toBe("video-1");
+    expect(storyAutoplayVideoCandidate([imageA, video], 1)?.id).toBe("video-1");
   });
 
-  it("only wraps for a route-point autoplay loop", () => {
-    expect(storyAutoplayVideoCandidate([video, imageA, imageB], 2, true)).toBeNull();
-    expect(storyAutoplayVideoCandidate([video, imageA, imageB], 2, false)?.id).toBe("video-1");
+  it("warms the video that comes after the Journey boundary (#76 P1)", () => {
+    // The lookahead follows the Journey cursor, so the video waiting after the
+    // wrap is prepared instead of the run stalling with nothing warmed.
+    expect(storyAutoplayVideoCandidate([video, imageA, imageB], 2)?.id).toBe("video-1");
   });
 });
 
@@ -287,17 +307,213 @@ describe("storyStageVideoOwner (#204 CFAA)", () => {
   });
 });
 
-describe("storyAutoplayAdvance (#199 review)", () => {
-  it("names what ends each step: next asset, terminal hold, or stop", () => {
-    expect(storyAutoplayAdvance(0, 3, true)).toEqual({ kind: "advance", nextIndex: 1 });
-    expect(storyAutoplayAdvance(2, 3, true)).toEqual({ kind: "hold-terminal" });
-    expect(storyAutoplayAdvance(2, 3, false)).toEqual({ kind: "advance", nextIndex: 0 });
-    expect(storyAutoplayAdvance(0, 1, false)).toEqual({ kind: "stop" });
-    expect(storyAutoplayAdvance(0, 0, true)).toEqual({ kind: "stop" });
+describe("storyAutoplayAdvance (#76 P1)", () => {
+  it("advances through the Journey and returns to its first media at the boundary", () => {
+    expect(storyAutoplayAdvance(0, 3)).toEqual({ kind: "advance", nextIndex: 1 });
+    expect(storyAutoplayAdvance(1, 3)).toEqual({ kind: "advance", nextIndex: 2 });
+    // #76 P1: the run no longer dead-ends on a held final frame; the Journey
+    // continues by returning to its first playable media.
+    expect(storyAutoplayAdvance(2, 3)).toEqual({ kind: "advance", nextIndex: 0 });
   });
 
-  it("keeps the single whole-Journey asset on its terminal hold", () => {
-    expect(storyAutoplayAdvance(0, 1, true)).toEqual({ kind: "hold-terminal" });
+  it("stops only when there is nothing left to present", () => {
+    expect(storyAutoplayAdvance(0, 1)).toEqual({ kind: "stop" });
+    expect(storyAutoplayAdvance(0, 0)).toEqual({ kind: "stop" });
+  });
+});
+
+describe("storyRoutePointEntryIndex (#76 P1)", () => {
+  const a1 = { ...asset("a1", "image/jpeg", 0, "a1.jpg"), routePointId: "A" };
+  const a2 = { ...asset("a2", "image/jpeg", 1, "a2.jpg"), routePointId: "A" };
+  const b1 = { ...asset("b1", "image/jpeg", 2, "b1.jpg"), routePointId: "B" };
+  const d1 = { ...asset("d1", "image/jpeg", 3, "d1.jpg"), routePointId: "D" };
+  const d2 = { ...asset("d2", "image/jpeg", 4, "d2.jpg"), routePointId: "D" };
+  const journeyMedia = [a1, a2, b1, d1, d2];
+  // A holds 2, B holds 1, C holds none, D holds 2.
+  const routeOrder = ["A", "B", "C", "D"];
+
+  it("jumps to the Route Point's own media inside the Journey sequence", () => {
+    expect(storyRoutePointEntryIndex(journeyMedia, "A", routeOrder)).toBe(0);
+    expect(storyRoutePointEntryIndex(journeyMedia, "B", routeOrder)).toBe(2);
+    expect(storyRoutePointEntryIndex(journeyMedia, "D", routeOrder)).toBe(3);
+  });
+
+  it("lands an empty Route Point on the nearest playable media, keeping route order", () => {
+    // C has no media at all; stepping over it must not skip B or jump past D.
+    expect(storyRoutePointEntryIndex(journeyMedia, "C", routeOrder)).toBe(2);
+  });
+
+  it("agrees with the empty-entry fallback a direct open must use (#76 P1 review)", () => {
+    // A direct open on an empty Route Point and clicking it after Story opens
+    // must resolve the same way, or entering at C would land somewhere the
+    // click could never reach.
+    const empty: Journey = {
+      ...journey,
+      routePoints: [
+        { id: "A", journeyId: journey.id, sortOrder: 0, label: "A", latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+        { id: "B", journeyId: journey.id, sortOrder: 1, label: "B", latitude: 2, longitude: 2, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+        { id: "C", journeyId: journey.id, sortOrder: 2, label: "C", latitude: 3, longitude: 3, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+        { id: "D", journeyId: journey.id, sortOrder: 3, label: "D", latitude: 4, longitude: 4, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+      ],
+      media: journeyMedia,
+    };
+    const opened = storyInitialMediaSelection(empty, "C");
+    expect(opened.assetIndex).toBe(storyRoutePointEntryIndex(journeyMedia, "C", ["A", "B", "C", "D"]));
+    // B holds the one media nearest C, so neither path may land on A.
+    expect(opened.assetId).toBe("b1");
+  });
+
+  it("starts at the beginning for the whole Journey and for unknown points", () => {
+    expect(storyRoutePointEntryIndex(journeyMedia, null, routeOrder)).toBe(0);
+    expect(storyRoutePointEntryIndex(journeyMedia, "missing", routeOrder)).toBe(0);
+    expect(storyRoutePointEntryIndex([], "A", routeOrder)).toBe(0);
+  });
+});
+
+describe("storyInitialNoteBeatRoutePointId (#76 P1 + #595)", () => {
+  const withMedia = { ...asset("b1-media", "image/jpeg", 0, "b1.jpg"), routePointId: "B" };
+  const base = (media: JourneyMediaAsset[], note: string | null = "这一站只留下了一句话"): Journey => ({
+    ...journey,
+    routePoints: [
+      { id: "A", journeyId: journey.id, sortOrder: 0, label: "A", latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+      { id: "B", journeyId: journey.id, sortOrder: 1, label: "B", latitude: 2, longitude: 2, occurredAt: null, note, isStop: true, createdAt: journey.createdAt },
+    ],
+    media,
+  });
+
+  it("presents a Route Point with no media of its own as its own note chapter", () => {
+    // "Empty is a valid chapter": entering B with no media shows B's note with
+    // no media stage, rather than borrowing A's media.
+    expect(storyInitialNoteBeatRoutePointId(base([withMedia]), "B")).toBeNull();
+    expect(storyInitialNoteBeatRoutePointId(base([]), "B")).toBe("B");
+  });
+
+  it("does not blank the media stage for a Route Point with neither media nor note", () => {
+    // Presenting a chapter with nothing to show would drop the media stage and
+    // strand a deferred fullscreen already scheduled over it.
+    expect(storyInitialNoteBeatRoutePointId(base([], null), "B")).toBeNull();
+    expect(routePointPresentsNote(base([], null), [], "B")).toBe(false);
+    expect(routePointPresentsNote(base([]), [], "B")).toBe(true);
+    expect(routePointPresentsNote(base([]), [], null)).toBe(false);
+    expect(routePointPresentsNote(base([]), [withMedia], "B")).toBe(false);
+    expect(routePointPresentsNote(null, [], "B")).toBe(false);
+  });
+
+  it("does not take over a Journey entry, an unknown point, or an explicit asset", () => {
+    expect(storyInitialNoteBeatRoutePointId(base([]), null)).toBeNull();
+    // A Route Point that is not part of this Journey cannot be presented as a
+    // chapter: treating it as media-free would hide the media stage behind
+    // `hasStoryMedia === false` and leave a stale id with nothing on screen.
+    expect(storyInitialNoteBeatRoutePointId(base([]), "missing")).toBeNull();
+    // Newest explicit intent wins: a named asset is an exact observation.
+    expect(storyInitialNoteBeatRoutePointId(base([]), "B", "b1-media")).toBeNull();
+    expect(storyInitialNoteBeatRoutePointId(undefined, "B")).toBeNull();
+  });
+
+  it("steps back onto the media before an empty Route Point instead of skipping it", () => {
+    // A(2) -> B(1) -> C(0) -> D(2). C is a note beat between B1 and D1.
+    const media = (id: string, owner: string, sortOrder: number): JourneyMediaAsset => ({
+      ...asset(id, "image/jpeg", sortOrder, `${id}.jpg`),
+      routePointId: owner,
+    });
+    const gap: Journey = {
+      ...journey,
+      routePoints: ["A", "B", "C", "D"].map((id, index) => ({
+        id,
+        journeyId: journey.id,
+        sortOrder: index,
+        label: id,
+        latitude: index,
+        longitude: index,
+        occurredAt: null,
+        note: id === "C" ? "这一站只留下了一句话" : null,
+        isStop: true,
+        createdAt: journey.createdAt,
+      })),
+      media: [
+        media("a1", "A", 0), media("a2", "A", 1),
+        media("b1", "B", 2),
+        media("d1", "D", 3), media("d2", "D", 4),
+      ],
+    };
+
+    expect(storySequenceMedia(storySequenceForJourney(gap)).map((item) => item.id))
+      .toEqual(["a1", "a2", "b1", "d1", "d2"]);
+
+    // Previous from C must land on B1, the photo before the empty Route Point.
+    // A neighbour search anchored on C's hidden cursor (which rests on B1) would
+    // step back past it to A2, making previous and next asymmetric.
+    expect(storyNoteBeatNeighbourMediaIndexes(gap, "C")).toEqual({
+      previousIndex: 2,
+      nextIndex: 3,
+    });
+  });
+
+  it("wraps a note beat at either end of the Journey like the cursor does", () => {
+    const media = (id: string, owner: string, sortOrder: number): JourneyMediaAsset => ({
+      ...asset(id, "image/jpeg", sortOrder, `${id}.jpg`),
+      routePointId: owner,
+    });
+    // A(0, note) -> B(2) -> C(0, note). A and C are note beats at the ends.
+    const edges: Journey = {
+      ...journey,
+      routePoints: ["A", "B", "C"].map((id, index) => ({
+        id,
+        journeyId: journey.id,
+        sortOrder: index,
+        label: id,
+        latitude: index,
+        longitude: index,
+        occurredAt: null,
+        note: id === "B" ? null : `${id} 只留下了一句话`,
+        isStop: true,
+        createdAt: journey.createdAt,
+      })),
+      media: [media("b1", "B", 0), media("b2", "B", 1)],
+    };
+
+    // Bounded, the ends have nothing beyond them.
+    expect(storyNoteBeatNeighbourMediaIndexes(edges, "A"))
+      .toEqual({ previousIndex: null, nextIndex: 0 });
+    expect(storyNoteBeatNeighbourMediaIndexes(edges, "C"))
+      .toEqual({ previousIndex: 1, nextIndex: null });
+    // Wrapping, Previous from the first beat reaches the Journey's last media
+    // and Next from the last beat reaches its first.
+    expect(storyNoteBeatNeighbourMediaIndexes(edges, "A", true))
+      .toEqual({ previousIndex: 1, nextIndex: 0 });
+    expect(storyNoteBeatNeighbourMediaIndexes(edges, "C", true))
+      .toEqual({ previousIndex: 1, nextIndex: 0 });
+    // Wrapping never invents media where the Journey has none.
+    expect(storyNoteBeatNeighbourMediaIndexes({ ...edges, media: [] }, "A", true))
+      .toEqual({ previousIndex: null, nextIndex: null });
+  });
+
+  it("has no media either side of a note beat that is not in the sequence", () => {
+    expect(storyNoteBeatNeighbourMediaIndexes(base([]), "missing"))
+      .toEqual({ previousIndex: null, nextIndex: null });
+  });
+
+  it("does not treat a soundtrack as this Route Point's media", () => {
+    const audio = { ...asset("track", "audio/mpeg", 0, "track.mp3"), routePointId: "B" };
+    expect(storyInitialNoteBeatRoutePointId(base([audio]), "B")).toBe("B");
+  });});
+
+describe("storyActiveChapterRoutePointId (#76 P1)", () => {
+  const owned = { ...asset("b1", "image/jpeg", 0, "b1.jpg"), routePointId: "B" };
+  const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
+
+  it("lets a note beat name the chapter over the hidden cursor", () => {
+    expect(storyActiveChapterRoutePointId("C", owned, true, "A")).toBe("C");
+  });
+
+  it("follows the media on screen, so Journey-level media names no Route Point", () => {
+    expect(storyActiveChapterRoutePointId(null, owned, true, "A")).toBe("B");
+    expect(storyActiveChapterRoutePointId(null, intro, true, "A")).toBeNull();
+  });
+
+  it("names the selected Route Point when the Journey has no visual media", () => {
+    expect(storyActiveChapterRoutePointId(null, null, false, "D")).toBe("D");
+    expect(storyActiveChapterRoutePointId(null, null, false, null)).toBeNull();
   });
 });
 
