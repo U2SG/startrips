@@ -15,7 +15,7 @@ import {
   storyCursorOnJourneyCover,
   storyInitialCursorSelection,
   storyInitialMediaSelection,
-  storyObservedAssetId,
+  storyObservedTarget,
   storyStagePages,
   storyStepAvailability,
   storyUploadedEntryIndex,
@@ -87,7 +87,7 @@ function initialCursor(
 describe("storyCursorForJourney (#555)", () => {
   it("puts the opening in front of the full canonical sequence and maps entries to canonical media", () => {
     const cursor = storyCursorForJourney(journey, true);
-    expect(cursor.entries.map((entry) => `${entry.role}:${entry.asset.id}`)).toEqual([
+    expect(cursor.entries.map((entry) => `${entry.role}:${entry.asset?.id}`)).toEqual([
       "journey-cover:b1", "media:a1", "media:b1", "media:b2", "media:c1",
     ]);
     expect(cursor.entries[0]).toMatchObject({ routePointId: null, contextOwner: "journey" });
@@ -105,7 +105,7 @@ describe("storyCursorForJourney (#555)", () => {
 
   it("is the canonical sequence when the opening is not active for this open", () => {
     const cursor = storyCursorForJourney(journey, false);
-    expect(cursor.entries.map((entry) => entry.asset.id)).toEqual(["a1", "b1", "b2", "c1"]);
+    expect(cursor.entries.map((entry) => entry.asset?.id)).toEqual(["a1", "b1", "b2", "c1"]);
     expect(cursor.firstCanonicalEntry).toBe(0);
     expect(storyCursorEntryForMediaIndex(cursor, 2)).toBe(2);
   });
@@ -258,18 +258,29 @@ describe("Journey context on the opening (#555)", () => {
   const cursor = storyCursorForJourney(journey, true);
 
   it("names no chapter on the opening, and the cover's Route Point on its own entry", () => {
-    expect(storyActiveChapterRoutePointId(null, cover, true, null, true)).toBeNull();
-    expect(storyActiveChapterRoutePointId(null, cover, true, null, false)).toBe("B");
+    expect(storyActiveChapterRoutePointId({ routePointId: cover.routePointId }, true, null, true)).toBeNull();
+    expect(storyActiveChapterRoutePointId({ routePointId: cover.routePointId }, true, null, false)).toBe("B");
   });
 
   it("publishes no asset for the opening page, so closing Story does not move the map to the cover's Route Point", () => {
-    expect(storyObservedAssetId(cursor, "journey-cover:journey-1:b1", null)).toBeNull();
+    expect(storyObservedTarget(cursor, "journey-cover:journey-1:b1")).toEqual({ assetId: null, noteRoutePointId: null });
     // The canonical cover page is the same asset and does speak for its Route Point.
-    expect(storyObservedAssetId(cursor, "b1", null)).toBe("b1");
+    expect(storyObservedTarget(cursor, "b1").assetId).toBe("b1");
     // Mid-handoff the foreground can already be the next page; that one speaks.
-    expect(storyObservedAssetId(cursor, "a1", null)).toBe("a1");
-    expect(storyObservedAssetId(cursor, "b1", "A")).toBeNull();
-    expect(storyObservedAssetId(cursor, null, null)).toBeNull();
+    expect(storyObservedTarget(cursor, "a1").assetId).toBe("a1");
+    expect(storyObservedTarget(cursor, null)).toEqual({ assetId: null, noteRoutePointId: null });
+  });
+
+  it("publishes a note page as its own Route Point with no asset (#595)", () => {
+    const withNoteOnly: Journey = {
+      ...journey,
+      routePoints: [...journey.routePoints, point("D", 3, "D only has words")],
+    };
+    const noteCursor = storyCursorForJourney(withNoteOnly, false);
+    expect(noteCursor.pageIds.at(-1)).toBe("note:D");
+    // A note page never borrows a neighbouring media's owner for the return.
+    expect(storyObservedTarget(noteCursor, "note:D")).toEqual({ assetId: null, noteRoutePointId: "D" });
+    expect(storyCursorAssetIdForPage(noteCursor, "note:D")).toBeNull();
   });
 });
 

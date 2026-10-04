@@ -28,12 +28,12 @@ import {
   storyUploadedEntryIndex,
   storyStagePages,
   storyStepAvailability,
-  storyObservedAssetId,
-  storyInitialNoteBeatRoutePointId,
+  storyObservedTarget,
   storyActiveChapterRoutePointId,
-  storyNoteBeatNeighbourMediaIndexes,
-  routePointPresentsNote,
-  storyRoutePointEntryIndex,
+  storyRoutePointCursorEntry,
+  storyCursorOnNote,
+  storyAutoplayStepMs,
+  storyWarmMediaPages,
 } from "./storyMediaPolicy";
 import {
   mobileStoryExpandedForLayout,
@@ -126,8 +126,14 @@ import {
   validateJourneyFiles,
   validateJourneySoundtrack,
 } from "./journeyModel";
-import { playbackIntroMedia, playbackStoryMedia, storyMediaForScope } from "./journeyPlayback";
+import {
+  playbackIntroMedia,
+  playbackStoryMedia,
+  routePointProvenanceLabel,
+  storyMediaForScope,
+} from "./journeyPlayback";
 import { isFirstJourneyMedia } from "./firstJourneyMoments";
+import { StoryPointNote } from "./StoryPointNote";
 import type {
   Journey,
   JourneyInput,
@@ -789,13 +795,6 @@ export function JourneyStory({
   );
   const selectedRoutePointIdRef = useRef(selectedRoutePointId);
   selectedRoutePointIdRef.current = selectedRoutePointId;
-  // #76 P1 + #595: a Route Point with no media of its own is still a chapter.
-  // Landing on one presents that Route Point's note with no media stage, rather
-  // than borrowing a neighbour's media or blanking the Journey. It is a beat of
-  // the same cursor, not a second one: any navigation to media clears it.
-  const [noteBeatRoutePointId, setNoteBeatRoutePointId] = useState<string | null>(
-    storyInitialNoteBeatRoutePointId(journey, routePointId, initialAssetId),
-  );
   const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState & { generation?: number }>>({});
   // A re-signed read can carry the same URL (for example two requests in one
   // signing second). Presentation still needs a new resource generation.
@@ -1783,9 +1782,6 @@ export function JourneyStory({
     });
     setJourneyCoverOpeningActive(nextInitialCursor.withJourneyCoverOpening);
     setEntryIndex(nextInitialCursor.entryIndex);
-    // The note beat belongs to the open that requested it; a new open (for
-    // example switching Journey inside Story) must not inherit the last one's.
-    setNoteBeatRoutePointId(storyInitialNoteBeatRoutePointId(journey, routePointId, initialAssetId));
     foregroundPageIdRef.current = nextInitialCursor.pageId;
     setSelectedRoutePointId(nextInitialMedia.routePointId);
     setUploadState({ status: "idle" });
@@ -2125,15 +2121,33 @@ export function JourneyStory({
   const storyCursorRef = useRef(storyCursor);
   storyCursorRef.current = storyCursor;
   const onJourneyCoverOpening = storyCursorOnJourneyCover(storyCursor, entryIndex);
+  // #595: a Route Point's note entry is a real cursor stop with no asset. It
+  // paints a text page on the stage and counts as no media ("i / n").
+  const onNoteEntry = storyCursorOnNote(storyCursor, entryIndex);
   const assetIndex = Math.max(0, storyCursorMediaIndex(storyCursor, entryIndex));
-  const activeAsset = storyCursor.entries[entryIndex]?.asset ?? null;
+  const activeEntry = storyCursor.entries[entryIndex] ?? null;
+  const activeAsset = activeEntry?.asset ?? null;
   // The stage page of the current entry: its presentation identity.
   const activePageId = storyCursor.pageIds[entryIndex] ?? null;
-  // Media index -> its canonical entry. Tiles, Route Point jumps, reorder and
-  // the note beat's neighbours all name canonical media, never the opening.
+  // Media index -> its canonical entry. Tiles, reorder and uploads name
+  // canonical media, never the opening or a note entry.
   const setCursorMediaIndex = (mediaIndex: number) => {
     setEntryIndex(storyCursorEntryForMediaIndex(storyCursorRef.current, mediaIndex));
   };
+  // #595: what each note page says, keyed by page id, under its provenance label.
+  const stageNotePages = useMemo(() => {
+    const pages = new Map<string, { text: string; label: string; routePointId: string | null }>();
+    if (!journey) return pages;
+    storyCursor.entries.forEach((entry, index) => {
+      if (entry.role !== "note") return;
+      pages.set(storyCursor.pageIds[index], {
+        text: entry.note,
+        label: routePointProvenanceLabel(journey, entry.routePointId, entry.chapterRoutePointId) ?? "",
+        routePointId: entry.routePointId,
+      });
+    });
+    return pages;
+  }, [journey, storyCursor]);
   // The stage keys pages by presentation; see `storyStagePages`. Its list follows
   // the SETTLED entry: while an incoming page is handing off, the list it
   // started from stays, so leaving the opening does not reshuffle the painted
@@ -2279,48 +2293,36 @@ export function JourneyStory({
     ),
   } : null;
 
+  // #76 P1 + #595: a note page publishes no asset and names the Route Point
+  // that owns the note, so closing Story on it returns to that Route Point
+  // rather than to a neighbouring media's owner. #555: the Journey cover
+  // opening speaks for the whole Journey, so its asset must not name the Route
+  // Point that owns the cover either.
+  const observeStoryPage = useCallback((pageId: string | null) => {
+    if (!journey) return;
+    const target = storyObservedTarget(storyCursor, pageId);
+    onObservationChange?.(storyLogicalObservation(
+      journey,
+      target.noteRoutePointId ?? selectedRoutePointId,
+      target.assetId,
+      mobileLayout,
+      mobileStoryExpanded,
+    ));
+  }, [journey, selectedRoutePointId, storyCursor, mobileLayout, mobileStoryExpanded, onObservationChange]);
   const reportForegroundMedia = useCallback((id: string | null) => {
     foregroundPageIdRef.current = id;
-    if (!journey) return;
-    onObservationChange?.(storyLogicalObservation(
-      // #76 P1 + #595: while a media-free Route Point is the presented chapter,
-      // the nearest media must not speak for it. Publishing that asset would
-      // send the map back to a neighbouring Route Point when Story closes.
-      // #555: the Journey cover opening speaks for the whole Journey, so its
-      // asset must not name the Route Point that owns the cover either.
-      journey,
-      selectedRoutePointId,
-      storyObservedAssetId(storyCursor, id, noteBeatRoutePointId),
-      mobileLayout,
-      mobileStoryExpanded,
-    ));
-  }, [journey, selectedRoutePointId, noteBeatRoutePointId, storyCursor, mobileLayout, mobileStoryExpanded, onObservationChange]);
+    observeStoryPage(id);
+  }, [observeStoryPage]);
   useEffect(() => {
-    if (!journey) return;
     const foregroundId = foregroundPageIdRef.current;
-    onObservationChange?.(storyLogicalObservation(
-      journey,
-      selectedRoutePointId,
-      storyObservedAssetId(
-        storyCursor,
-        foregroundId && storyCursor.entryByPageId.has(foregroundId)
-          ? foregroundId : shownPageId ?? activePageId,
-        noteBeatRoutePointId,
-      ),
-      mobileLayout,
-      mobileStoryExpanded,
-    ));
+    observeStoryPage(foregroundId && storyCursor.entryByPageId.has(foregroundId)
+      ? foregroundId : shownPageId ?? activePageId);
   }, [
     activeAsset?.id,
     activePageId,
     entryIndex,
-    journey,
-    noteBeatRoutePointId,
-    mobileLayout,
-    mobileStoryExpanded,
-    onObservationChange,
+    observeStoryPage,
     storyCursor,
-    selectedRoutePointId,
     shownPageId,
   ]);
   function visualMediaCount(pointId: string | null) {
@@ -2336,10 +2338,13 @@ export function JourneyStory({
   navigateToEntryRef.current = navigateToEntry;
   const navigateMediaStepRef = useRef<(direction: -1 | 1, wrap: boolean) => void>(() => undefined);
   navigateMediaStepRef.current = navigateMediaStep;
+  // #595: a note entry reads for the shared note-beat dwell, the same number
+  // Journey Playback gives that note; media keeps the slide timer.
+  const autoplayStepMs = storyAutoplayStepMs(activeEntry);
   useLayoutEffect(() => {
     if (!playing || mediaGestureHolding || incomingPageId !== null || pendingPageId !== null) return;
-    if (videoHandoffRef.current?.id === activeAsset?.id
-      && videoHandoffRef.current.toFullscreen === fullscreen) return;
+    const handoff = videoHandoffRef.current;
+    if (handoff && handoff.id === activeAsset?.id && handoff.toFullscreen === fullscreen) return;
     if (activeRead?.status !== "error" && activeStagePlaybackReadyId !== activePageId) return;
     // #76 P1: one Journey-wide cursor. There is no whole-journey mode flag here -
     // the sequence IS the whole Journey, so autoplay returns to the first
@@ -2361,7 +2366,7 @@ export function JourneyStory({
       video !== null && (shownPageId ?? activePageId) === activePageId,
     );
     if (!video || !waitsForVideoEnd) {
-      const timer = window.setTimeout(finishStep, STORY_AUTOPLAY_STEP_MS);
+      const timer = window.setTimeout(finishStep, autoplayStepMs);
       return () => window.clearTimeout(timer);
     }
     // A browser that refuses to play, or an element that errors, must not
@@ -2411,6 +2416,7 @@ export function JourneyStory({
   }, [
     activeAsset?.id,
     activeRead?.status,
+    autoplayStepMs,
     entryIndex,
     fullscreen,
     playing,
@@ -2738,6 +2744,13 @@ export function JourneyStory({
     if (autoplayVideoCandidate) loadMediaRead(autoplayVideoCandidate.id);
   }, [autoplayVideoCandidate?.id, loadMediaRead]);
 
+  // #595: the warm window counts media only. Note pages sit in the stage list
+  // but have nothing to read or decode, so the window runs over the media pages
+  // and a note page anchors on the media that follows it.
+  const warmMediaPages = useMemo(
+    () => storyWarmMediaPages(stageMedia, storyCursor.notePageIds),
+    [stageMedia, storyCursor.notePageIds],
+  );
   const stackNeighborIndices = useMemo(() => {
     const anchorId = shownPageId ?? activePageId ?? undefined;
     // #76 P1: neighbours are taken across the Journey boundary, so the warm
@@ -2751,8 +2764,9 @@ export function JourneyStory({
       anchorId === undefined ? -1 : stageMediaIndex.indexById.get(anchorId) ?? -1,
       stageMedia.length,
       false,
-    );
-  }, [shownPageId, activePageId, stageMedia, stageMediaIndex]);
+    ).map((stageIndex) => warmMediaPages.indexOfStageIndex(stageIndex, 1))
+      .filter((index, position, all) => index >= 0 && all.indexOf(index) === position);
+  }, [shownPageId, activePageId, stageMedia, stageMediaIndex, warmMediaPages]);
 
   // #489 (ST-159): one bounded, tiered warm window behind the three physical
   // pages -- reads widest, decoded pictures narrower, one live transport --
@@ -2761,15 +2775,15 @@ export function JourneyStory({
   // The painted stack neighbours count inside the same tier caps.
   // #555: anchored in the stage list, so on the opening the window warms
   // canonical entry 0 onwards rather than the cover's canonical neighbours.
-  const stageIndexFor = (pageId: string | null | undefined) => pageId
-    ? stageMediaIndex.indexById.get(pageId) ?? -1 : -1;
-  const shownStageIndex = stageIndexFor(shownPageId);
-  const requestedStageIndex = stageIndexFor(pendingPageId ?? incomingPageId ?? activePageId);
+  const warmDirection = mediaNavigationDirection.current;
+  const shownStageIndex = warmMediaPages.indexOfPage(shownPageId, warmDirection);
+  const requestedStageIndex = warmMediaPages.indexOfPage(pendingPageId ?? incomingPageId ?? activePageId, warmDirection);
   const warmWindow = storyWarmWindow({
-    shownIndex: shownStageIndex >= 0 ? shownStageIndex : Math.max(0, stageIndexFor(activePageId)),
-    requestedIndex: stageMedia.length > 0 ? Math.max(0, requestedStageIndex) : -1,
-    length: stageMedia.length,
-    direction: mediaNavigationDirection.current,
+    shownIndex: shownStageIndex >= 0 ? shownStageIndex
+      : Math.max(0, warmMediaPages.indexOfPage(activePageId, warmDirection)),
+    requestedIndex: warmMediaPages.media.length > 0 ? Math.max(0, requestedStageIndex) : -1,
+    length: warmMediaPages.media.length,
+    direction: warmDirection,
     // #76 P1: the warm window follows the Journey cursor forward, so it prepares
     // the next Route Point rather than the current Route Point's own media. It
     // stays a bounded lookahead: the Journey sequence is already continuous, so
@@ -2781,13 +2795,14 @@ export function JourneyStory({
   });
   // Page ids for the stage; reads and decode are owned by asset.
   const warmIdsFor = (indices: readonly number[]) => indices
-    .map((index) => stageMedia[index]?.id)
+    .map((index) => warmMediaPages.media[index]?.id)
     .filter((id): id is string => id !== undefined);
+  const assetIdsOfPages = (pageIds: readonly string[]) => [...new Set(pageIds
+    .map((pageId) => storyCursorAssetIdForPage(storyCursor, pageId))
+    .filter((assetId): assetId is string => assetId !== null))];
   const warmDecodePageIds = warmIdsFor(warmWindow.decode);
-  const warmReadIds = [...new Set(warmIdsFor(warmWindow.reads)
-    .map((pageId) => storyCursorAssetIdForPage(storyCursor, pageId)))];
-  const warmDecodeIds = [...new Set(warmDecodePageIds
-    .map((pageId) => storyCursorAssetIdForPage(storyCursor, pageId)))];
+  const warmReadIds = assetIdsOfPages(warmIdsFor(warmWindow.reads));
+  const warmDecodeIds = assetIdsOfPages(warmDecodePageIds);
   const warmReadKey = warmReadIds.join("|");
   const warmDecodeKey = warmDecodeIds.join("|");
   useEffect(() => {
@@ -2900,7 +2915,7 @@ export function JourneyStory({
   // pressed. Preferring the Route Point Story was opened on kept that entry
   // point visible after the cursor crossed into another Route Point.
   const activeChapterRoutePointId = storyActiveChapterRoutePointId(
-    noteBeatRoutePointId, activeAsset, scopedMedia.length > 0, selectedRoutePointId,
+    activeEntry, scopedMedia.length > 0, selectedRoutePointId,
     // #555: the opening names no chapter, so "全部" is the pressed chip, no
     // Route Point note shows and the Journey note does.
     onJourneyCoverOpening,
@@ -2959,7 +2974,9 @@ export function JourneyStory({
   const overlayNoteOwner = activeChapterRoutePoint?.note?.trim()
     ? activeChapterRoutePoint
     : null;
-  const overlayNote = mediaPresentation !== "note-overlay" ? null
+  // #595: on a note entry the stage's text page is the one owner of the note,
+  // so the overlay says nothing over it.
+  const overlayNote = mediaPresentation !== "note-overlay" || onNoteEntry ? null
     : overlayNoteOwner ? { key: overlayNoteOwner.id, text: overlayNoteOwner.note!.trim() }
       // #76 P1: the Journey note belongs on Journey-level media, decided by the
       // on-screen chapter being Journey-level. Gating it on the Route Point that
@@ -2967,6 +2984,28 @@ export function JourneyStory({
       // that Route Point stayed selected as the management target.
       : journey.note?.trim() && !activeChapterRoutePointId
         ? { key: "journey", text: journey.note.trim() } : null;
+  // #595: the note of the Route Point whose media is on screen, said in a
+  // bounded block above the stage. Keyed by the owner, so the block stays (and
+  // does not replay) while the cursor walks that Route Point's media, and a
+  // grouped child's note stays its own beside its Stop's. One owner per note per
+  // surface: `note-overlay` keeps its overlay, a note entry its text page, and
+  // the copy column says the note only when neither of these does.
+  const pointNoteOwner = mediaPresentation !== "note-overlay" && !overview
+    && activeEntry?.role === "media" && activeChapterRoutePoint?.note?.trim()
+    ? activeChapterRoutePoint : null;
+  const pointNote = pointNoteOwner ? {
+    key: pointNoteOwner.id,
+    text: pointNoteOwner.note!.trim(),
+    label: routePointProvenanceLabel(journey, pointNoteOwner.id, activeEntry?.chapterRoutePointId ?? null) ?? "",
+  } : null;
+  // The block's slot is reserved for the whole Journey whenever any media
+  // Route Point has a note, so the stage keeps one rect across Route Point
+  // boundaries instead of resizing (and cancelling a swipe) as the block comes
+  // and goes.
+  const pointNoteSlot = mediaPresentation !== "note-overlay" && !overview
+    && journey.routePoints.some((point) => Boolean(point.note?.trim())
+      && scopedMediaIndex.ownerIds.has(point.id));
+  const copyColumnOwnsPointNote = !pointNote && !onNoteEntry;
   // These are semantic identities; StoryMediaPages retains the physical pages.
   // #555: they are page ids; each resolves to the asset its entry paints.
   const assetOfPage = (pageId: string) => {
@@ -2983,7 +3022,11 @@ export function JourneyStory({
   const videoNeedsResume = Boolean(videoResumeBlocked
     && videoResumeBlocked.id === shownAsset?.id
     && videoResumeBlocked.toFullscreen === fullscreen);
-  const videoNavigationVisible = Boolean(shownAsset?.mimeType.startsWith("video/") && scopedMedia.length > 1);
+  // #595: a note page has no picture to click either, so it carries the same
+  // explicit previous/next buttons a video does.
+  const shownNotePage = storyCursor.notePageIds.has(shownStagePageId ?? "");
+  const videoNavigationVisible = Boolean((shownAsset?.mimeType.startsWith("video/") || shownNotePage)
+    && scopedMedia.length + storyCursor.notePageIds.size > 1);
   // #76 P1: these answer "is there content strictly before/after this one in the
   // Journey", which is what the picture's activation uses to choose a direction:
   // at the last media, activating must fall back to the previous one rather than
@@ -2999,10 +3042,10 @@ export function JourneyStory({
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
   const heldRenewalError = renewalError?.id === shownAsset?.id && shownRead?.status === "ready"
     ? renewalError : null;
-  const incoming = incomingPageId && incomingPageId !== shownPageId
-    ? assetOfPage(incomingPageId)
-    : null;
-  const stageIncomingPageId = incoming ? incomingPageId : null;
+  // #595: a note page is a real incoming page even though it paints no asset.
+  const stageIncomingPageId = incomingPageId && incomingPageId !== shownPageId
+    && storyCursor.entryByPageId.has(incomingPageId) ? incomingPageId : null;
+  const incoming = stageIncomingPageId ? assetOfPage(stageIncomingPageId) : null;
   const pendingTarget = pendingTargetRef.current !== null
     ? assetOfPage(pendingTargetRef.current)
     : null;
@@ -3012,7 +3055,8 @@ export function JourneyStory({
   // source is really drawable. A stage-level waiting cue over it is the
   // "loading flash" the issue forbids, so the cue belongs to a stage no page
   // owns yet (cold open, or a shown asset whose own read is still loading).
-  const stageOwnedByPage = shownRead?.status === "ready";
+  // #595: a note page owns the stage the moment it is shown; it has no read.
+  const stageOwnedByPage = shownRead?.status === "ready" || shownNotePage;
   const mediaStageWaiting = !stageOwnedByPage && Boolean(
     (shownAsset && (!shownRead || shownRead.status === "loading"))
     || (
@@ -3195,7 +3239,8 @@ export function JourneyStory({
   }
 
   function scrollCopyFromMedia(event: ReactWheelEvent<HTMLElement>) {
-    if ((event.target as Element).closest(".journey-story__copy, .journey-story__route-points")) return;
+    // #595: the point note block and its sheet scroll themselves.
+    if ((event.target as Element).closest(".journey-story__copy, .journey-story__route-points, .story-point-note, .story-point-note-sheet")) return;
     const copy = copyRef.current;
     if (!copy || copy.scrollHeight <= copy.clientHeight) return;
     copy.scrollTop += event.deltaY;
@@ -3668,20 +3713,13 @@ export function JourneyStory({
     invalidatePlacementAnalysis();
     setSelectedRoutePointId(routePointId);
     // #76 P1 + #595: picking a Route Point jumps the Journey cursor to that
-    // Route Point. A Route Point that presents its own note becomes the chapter;
-    // anything else starts on its own media inside the Journey sequence, which
-    // keeps playing past it in either direction. A Route Point with neither
-    // media nor a note has nothing to present, so it must not blank the stage.
-    const presentsOwnNote = routePointPresentsNote(journey, scopedMedia, routePointId);
-    // #555: the jump names canonical media, so "全部" (null) lands on
-    // canonical entry 0 and never goes back to the Journey cover opening.
-    if (presentsOwnNote) {
-      setNoteBeatRoutePointId(routePointId);
-      setCursorMediaIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
-    } else {
-      setNoteBeatRoutePointId(null);
-      setCursorMediaIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
-    }
+    // Route Point. A Route Point with a note entry of its own lands on that
+    // entry; anything else starts on its own media inside the Journey sequence,
+    // which keeps playing past it in either direction. A Route Point with
+    // neither lands on the nearest media rather than blanking the stage.
+    // #555: "全部" (null) lands on canonical entry 0 and never goes back to
+    // the Journey cover opening.
+    setEntryIndex(storyRoutePointCursorEntry(storyCursor, scopedMedia, routePointId, routePointIdsInOrder));
     setShownPageId(null);
     setIncomingPageId(null);
     setPendingMediaTarget(null);
@@ -3696,19 +3734,8 @@ export function JourneyStory({
 
   // Buttons, keyboard and automatic advance share the same readiness gate.
   function navigateMediaStep(direction: -1 | 1, wrap = false) {
-    // #76 P1 + #595: while a media-free Route Point is presented as its own note
-    // beat, stepping has to follow the sequence around that beat. The hidden
-    // cursor sits on the nearest media, so a plain neighbour search would step
-    // back past it and skip one photo, making previous and next asymmetric.
-    if (noteBeatRoutePointId !== null && journey) {
-      const neighbours = storyNoteBeatNeighbourMediaIndexes(journey, noteBeatRoutePointId, wrap);
-      const index = direction < 0 ? neighbours.previousIndex : neighbours.nextIndex;
-      if (index !== null && index >= 0 && index < scopedMedia.length) {
-        // #555: the neighbours are canonical media; step to their entries.
-        navigateToEntry(storyCursorEntryForMediaIndex(storyCursor, index), direction);
-      }
-      return;
-    }
+    // #595: note entries are ordinary cursor entries, so stepping onto and off
+    // a note-only Route Point follows the same neighbour rule as media.
     // #555: the anchor is the latest requested entry. While the cursor is on
     // the Journey cover opening its asset resolves to the opening itself, so
     // Previous goes nowhere and Next enters canonical entry 0.
@@ -3782,12 +3809,9 @@ export function JourneyStory({
   function navigateToEntry(index: number, direction?: -1 | 1) {
     if (index < 0 || index >= storyCursor.entries.length) return;
     cancelPendingMediaDragSettle();
-    const target = storyCursor.entries[index]?.asset;
+    const targetEntry = storyCursor.entries[index];
     const targetPageId = storyCursor.pageIds[index];
-    if (!target || !targetPageId) return;
-    // #76 P1 + #595: the cursor is back on media, so the media-free Route Point
-    // stops being the presented chapter.
-    setNoteBeatRoutePointId(null);
+    if (!targetEntry || !targetPageId) return;
     mediaNavigationDirection.current = direction
       ?? (index < storyCursorEntryForPageId(storyCursor, shownPageId, entryIndex) ? -1 : 1);
     requestedPageRef.current = targetPageId;
@@ -3804,6 +3828,15 @@ export function JourneyStory({
     // A reverse input can cancel a cold next-frame request while staying here.
     if (index === entryIndex) {
       setPendingMediaTarget(null);
+      return;
+    }
+    // #595: a note page has nothing to read or decode, so it is always ready
+    // to hand off; the stage paints its text the moment it is requested.
+    const target = targetEntry.asset;
+    if (target === null) {
+      setPendingMediaTarget(null);
+      setIncomingPageId(targetPageId);
+      setEntryIndex(index);
       return;
     }
     const targetRead = mediaReads[target.id];
@@ -4308,10 +4341,11 @@ export function JourneyStory({
     setDeleteMessage("");
   }
 
-  // #76 P1: the media stage is hidden only while a media-free Route Point is being
-  // presented as its own note beat. Every other position in the Journey shows
-  // media, because the cursor is no longer truncated to one Route Point.
-  const hasStoryMedia = scopedMedia.length > 0 && noteBeatRoutePointId === null;
+  // #76 P1 + #595: the media stage shows whenever the Journey has media. A
+  // note-only Route Point is a text page on that stage, not a hidden stage.
+  const hasStoryMedia = scopedMedia.length > 0;
+  // #595: what the cursor can step through - media and note entries alike.
+  const browsableEntryCount = scopedMedia.length + storyCursor.notePageIds.size;
   const showDesktopChapterRail = !mobileLayout && visualMedia.length > 0;
   const canEditStory = Boolean(manageMedia || updateJourneyNotes || canEditJourney || canShareJourney || onDelete);
   const showSoundtrack = Boolean(soundtrack || (manageMedia && mediaEditing));
@@ -4484,6 +4518,7 @@ export function JourneyStory({
             className={`journey-story__media${overview && manageMedia ? " is-organizing" : ""}`}
             aria-label="旅程媒体"
             data-mobile-layout={mobileLayout ? "true" : undefined}
+            data-point-note-slot={pointNoteSlot ? "true" : undefined}
             data-media-requested={/* #489: the media the viewer last asked for,
               cold targets included. Without it a stage that has silently
               dropped a navigation looks identical to one nobody navigated. */
@@ -4574,6 +4609,12 @@ export function JourneyStory({
               </p>
             ) : null}
             {!overview && !fullscreen ? mediaStageStatus : null}
+            {pointNote ? <StoryPointNote
+              key={pointNote.key}
+              routePointId={pointNote.key}
+              label={pointNote.label}
+              text={pointNote.text}
+            /> : null}
             {!overview ? <StoryMediaPages
               ref={inlineStageRef}
               scopeKey={`${journeyId}:${selectedRoutePointId ?? ""}`}
@@ -4586,6 +4627,7 @@ export function JourneyStory({
               incomingId={stageIncomingPageId}
               pageAssetIds={storyCursor.pageAssetIds}
               pageOverlay={coverRevealOverlay}
+              notePages={stageNotePages}
               pendingId={pendingPageId}
               direction={mediaNavigationDirection.current}
               reads={stageReads}
@@ -4621,7 +4663,7 @@ export function JourneyStory({
               text={overlayNote.text}
               className={shownAsset?.mimeType.startsWith("video/") ? "is-passive is-top" : "is-passive"}
             /> : null}
-            {!mobileLayout && !overview && asset ? (
+            {!mobileLayout && !overview && activeEntry ? (
               <div className="journey-story__media-controls">
                 <nav className="journey-story__media-nav" aria-label="媒体导航">
                 <IconActionButton
@@ -4650,7 +4692,7 @@ export function JourneyStory({
                   disabled={
                     mutationPending
                     || (quickRecap && quickRecap.state !== "idle")
-                    || (scopedMedia.length < 2 && !asset.mimeType.startsWith("video/"))
+                    || (browsableEntryCount < 2 && !asset?.mimeType.startsWith("video/"))
                     || (!playing && !storyAutoplayCanStart(
                       autoplayVideoCandidate,
                       storyMediaAvailability(autoplayVideoCandidateRead?.status),
@@ -4672,7 +4714,7 @@ export function JourneyStory({
               </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
-            {mobileLayout && !overview && asset ? (
+            {mobileLayout && !overview && activeEntry ? (
               <div className={`journey-story__mobile-media-actions${quickRecap ? " has-quick-recap" : ""}`}>
                 {videoNavigationVisible && !mobileManageMode && mediaDeleteState === "idle" ? <nav className="journey-story__mobile-video-nav" aria-label="视频媒体导航">
                   <button type="button" data-video-step="previous" disabled={!canStepPrevious}
@@ -4688,7 +4730,7 @@ export function JourneyStory({
                   mobileLayout,
                   overview,
                   mobileManageMode,
-                  hasAsset: Boolean(asset),
+                  hasAsset: Boolean(activeEntry),
                 }) ? (
                   /* `is-compact` closes the row when a single-asset scope
                      renders no play control. The entry is playback-transparent:
@@ -4767,7 +4809,7 @@ export function JourneyStory({
                 >
                   <IconDots size={19} stroke={1.5} aria-hidden="true" />
                 </IconActionButton> : null}
-                {mobileManageMode && mobileMediaMenuOpen && mediaDeleteState === "idle" ? (
+                {mobileManageMode && mobileMediaMenuOpen && mediaDeleteState === "idle" && asset ? (
                   <>
                     <button
                       type="button"
@@ -4902,9 +4944,11 @@ export function JourneyStory({
               <h2 id="journey-story-title">{journey.title}</h2>
             </div> : null}
             {!mobileLayout && activeChapterRoutePoint ? (
-              <p className="journey-story__current-point">{activeChapterRoutePoint.label || `途径点 ${activeChapterRoutePoint.sortOrder + 1}`}</p>
+              <p className="journey-story__current-point">{(activeEntry && activeEntry.routePointId === activeChapterRoutePoint.id
+                ? routePointProvenanceLabel(journey, activeEntry.routePointId, activeEntry.chapterRoutePointId)
+                : null) || activeChapterRoutePoint.label || `途径点 ${activeChapterRoutePoint.sortOrder + 1}`}</p>
             ) : null}
-            {quickRecap && (!asset || overview) ? <div
+            {quickRecap && (!activeEntry || overview) ? <div
               className="journey-story__playback-entry journey-story__playback-entry--empty"
               data-story-playback-entry="empty"
             >
@@ -4915,7 +4959,7 @@ export function JourneyStory({
               </button>}
               {quickRecapStatus}
             </div> : null}
-            {mobileLayout && !overview && !asset && !mobileManageMode ? (
+            {mobileLayout && !overview && !activeEntry && !mobileManageMode ? (
               <div className="journey-story__mobile-media-actions">
                 {manageMedia ? <IconActionButton
                   type="button"
@@ -4979,7 +5023,7 @@ export function JourneyStory({
               />
             ) : (
               <>
-                {mediaPresentation !== "note-overlay" && (!desktopEditing || mobileLayout) && activeChapterRoutePoint && activeChapterRoutePoint.note ? (
+                {mediaPresentation !== "note-overlay" && copyColumnOwnsPointNote && (!desktopEditing || mobileLayout) && activeChapterRoutePoint && activeChapterRoutePoint.note ? (
                   <blockquote className="journey-story__point-note">{activeChapterRoutePoint.note}</blockquote>
                 ) : null}
                 {journey.note && !(overlayNote?.key === "journey") && (!desktopEditing || mobileLayout) && (mobileLayout || !activeChapterRoutePoint?.note) ? <p className="journey-story__note">{journey.note}</p> : null}
@@ -5254,7 +5298,7 @@ export function JourneyStory({
         </footer>
       </article>
 
-      {asset ? (
+      {activeEntry ? (
         <div
           ref={fullscreenRef}
           hidden={!fullscreen}
@@ -5288,6 +5332,7 @@ export function JourneyStory({
             coverId={cover?.id ?? null}
             incomingId={stageIncomingPageId}
             pageAssetIds={storyCursor.pageAssetIds}
+            notePages={stageNotePages}
             pendingId={pendingPageId}
             direction={mediaNavigationDirection.current}
             reads={stageReads}
@@ -5320,7 +5365,7 @@ export function JourneyStory({
             text={overlayNote.text}
             className={shownAsset?.mimeType.startsWith("video/") ? "is-passive is-top" : "is-passive"}
           /> : null}
-          {scopedMedia.length > 1 || !mobileLayout ? (
+          {browsableEntryCount > 1 || !mobileLayout ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
               {mobileLayout || videoNavigationVisible ? <button
                 type="button"
@@ -5334,7 +5379,7 @@ export function JourneyStory({
               <button
                 type="button"
                 className={playing ? "is-active" : ""}
-                disabled={mutationPending || (scopedMedia.length < 2 && !asset.mimeType.startsWith("video/")) || (!playing && !storyAutoplayCanStart(
+                disabled={mutationPending || (browsableEntryCount < 2 && !asset?.mimeType.startsWith("video/")) || (!playing && !storyAutoplayCanStart(
                   autoplayVideoCandidate,
                   storyMediaAvailability(autoplayVideoCandidateRead?.status),
                 ))}
@@ -5348,7 +5393,7 @@ export function JourneyStory({
               </button>
               {/* #555: the Journey cover opening is not a numbered media step, so
                   the canonical "i / n" count starts at 1 on canonical entry 0. */}
-              {mobileLayout && !onJourneyCoverOpening ? <span data-story-media-counter>{assetIndex + 1} / {scopedMedia.length}</span> : null}
+              {mobileLayout && !onJourneyCoverOpening && !onNoteEntry ? <span data-story-media-counter>{assetIndex + 1} / {scopedMedia.length}</span> : null}
               {mobileLayout || videoNavigationVisible ? <button
                 type="button"
                 data-video-step="next"

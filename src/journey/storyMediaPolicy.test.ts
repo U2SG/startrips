@@ -15,13 +15,14 @@ import {
   storyMediaAvailability,
   storyAutoplayWaitsForVideoEnd,
   storyRoutePointEntryIndex,
-  storyNoteBeatNeighbourMediaIndexes,
   storyUploadedAssetIndex,
   groupedPlacementRefreshSelection,
   storyInitialMediaSelection,
-  storyInitialNoteBeatRoutePointId,
   storyActiveChapterRoutePointId,
-  routePointPresentsNote,
+  storyCursorForJourney,
+  storyCursorNeighbourEntry,
+  storyInitialCursorSelection,
+  storyRoutePointCursorEntry,
 } from "./storyMediaPolicy";
 import { storyMediaForScope, storySequenceForJourney, storySequenceMedia } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
@@ -370,150 +371,145 @@ describe("storyRoutePointEntryIndex (#76 P1)", () => {
   });
 });
 
-describe("storyInitialNoteBeatRoutePointId (#76 P1 + #595)", () => {
-  const withMedia = { ...asset("b1-media", "image/jpeg", 0, "b1.jpg"), routePointId: "B" };
-  const base = (media: JourneyMediaAsset[], note: string | null = "这一站只留下了一句话"): Journey => ({
+describe("Story note entries on the one cursor (#76 P1 + #595)", () => {
+  const media = (id: string, owner: string | null, sortOrder: number, mimeType = "image/jpeg"): JourneyMediaAsset => ({
+    ...asset(id, mimeType, sortOrder, `${id}.jpg`),
+    routePointId: owner,
+  });
+  const points = (notes: Record<string, string | null>): Journey["routePoints"] => Object.keys(notes)
+    .map((id, index) => ({
+      id,
+      journeyId: journey.id,
+      sortOrder: index,
+      label: id,
+      latitude: index,
+      longitude: index,
+      occurredAt: null,
+      note: notes[id],
+      isStop: true,
+      createdAt: journey.createdAt,
+    }));
+  // A(2) -> B(1) -> C(0, note) -> D(2). C is a note entry between b1 and d1.
+  const gap: Journey = {
     ...journey,
-    routePoints: [
-      { id: "A", journeyId: journey.id, sortOrder: 0, label: "A", latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
-      { id: "B", journeyId: journey.id, sortOrder: 1, label: "B", latitude: 2, longitude: 2, occurredAt: null, note, isStop: true, createdAt: journey.createdAt },
+    coverMediaAssetId: null,
+    routePoints: points({ A: null, B: null, C: "这一站只留下了一句话", D: null }),
+    media: [
+      media("a1", "A", 0), media("a2", "A", 1),
+      media("b1", "B", 2),
+      media("d1", "D", 3), media("d2", "D", 4),
     ],
-    media,
-  });
+  };
+  const route = gap.routePoints.map((point) => point.id);
+  const ids = (cursor: ReturnType<typeof storyCursorForJourney>) => cursor.pageIds;
 
-  it("presents a Route Point with no media of its own as its own note chapter", () => {
-    // "Empty is a valid chapter": entering B with no media shows B's note with
-    // no media stage, rather than borrowing A's media.
-    expect(storyInitialNoteBeatRoutePointId(base([withMedia]), "B")).toBeNull();
-    expect(storyInitialNoteBeatRoutePointId(base([]), "B")).toBe("B");
-  });
-
-  it("does not blank the media stage for a Route Point with neither media nor note", () => {
-    // Presenting a chapter with nothing to show would drop the media stage and
-    // strand a deferred fullscreen already scheduled over it.
-    expect(storyInitialNoteBeatRoutePointId(base([], null), "B")).toBeNull();
-    expect(routePointPresentsNote(base([], null), [], "B")).toBe(false);
-    expect(routePointPresentsNote(base([]), [], "B")).toBe(true);
-    expect(routePointPresentsNote(base([]), [], null)).toBe(false);
-    expect(routePointPresentsNote(base([]), [withMedia], "B")).toBe(false);
-    expect(routePointPresentsNote(null, [], "B")).toBe(false);
-  });
-
-  it("does not take over a Journey entry, an unknown point, or an explicit asset", () => {
-    expect(storyInitialNoteBeatRoutePointId(base([]), null)).toBeNull();
-    // A Route Point that is not part of this Journey cannot be presented as a
-    // chapter: treating it as media-free would hide the media stage behind
-    // `hasStoryMedia === false` and leave a stale id with nothing on screen.
-    expect(storyInitialNoteBeatRoutePointId(base([]), "missing")).toBeNull();
-    // Newest explicit intent wins: a named asset is an exact observation.
-    expect(storyInitialNoteBeatRoutePointId(base([]), "B", "b1-media")).toBeNull();
-    expect(storyInitialNoteBeatRoutePointId(undefined, "B")).toBeNull();
-  });
-
-  it("steps back onto the media before an empty Route Point instead of skipping it", () => {
-    // A(2) -> B(1) -> C(0) -> D(2). C is a note beat between B1 and D1.
-    const media = (id: string, owner: string, sortOrder: number): JourneyMediaAsset => ({
-      ...asset(id, "image/jpeg", sortOrder, `${id}.jpg`),
-      routePointId: owner,
-    });
-    const gap: Journey = {
-      ...journey,
-      routePoints: ["A", "B", "C", "D"].map((id, index) => ({
-        id,
-        journeyId: journey.id,
-        sortOrder: index,
-        label: id,
-        latitude: index,
-        longitude: index,
-        occurredAt: null,
-        note: id === "C" ? "这一站只留下了一句话" : null,
-        isStop: true,
-        createdAt: journey.createdAt,
-      })),
-      media: [
-        media("a1", "A", 0), media("a2", "A", 1),
-        media("b1", "B", 2),
-        media("d1", "D", 3), media("d2", "D", 4),
-      ],
-    };
-
+  it("puts a note-only Route Point between its media neighbours as a real entry", () => {
+    const cursor = storyCursorForJourney(gap, false);
+    expect(ids(cursor)).toEqual(["a1", "a2", "b1", "note:C", "d1", "d2"]);
+    expect(cursor.entries[3]).toMatchObject({ role: "note", asset: null, routePointId: "C", note: "这一站只留下了一句话" });
+    // "i / n" counts media only: the note entry paints no media.
+    expect(cursor.mediaIndexByEntry).toEqual([0, 1, 2, -1, 3, 4]);
+    expect(cursor.entryIndexByMediaIndex).toEqual([0, 1, 2, 4, 5]);
+    expect([...cursor.notePageIds]).toEqual(["note:C"]);
+    // Canonical media is unchanged, so keepsake and the grid never see it.
     expect(storySequenceMedia(storySequenceForJourney(gap)).map((item) => item.id))
       .toEqual(["a1", "a2", "b1", "d1", "d2"]);
-
-    // Previous from C must land on B1, the photo before the empty Route Point.
-    // A neighbour search anchored on C's hidden cursor (which rests on B1) would
-    // step back past it to A2, making previous and next asymmetric.
-    expect(storyNoteBeatNeighbourMediaIndexes(gap, "C")).toEqual({
-      previousIndex: 2,
-      nextIndex: 3,
-    });
   });
 
-  it("wraps a note beat at either end of the Journey like the cursor does", () => {
-    const media = (id: string, owner: string, sortOrder: number): JourneyMediaAsset => ({
-      ...asset(id, "image/jpeg", sortOrder, `${id}.jpg`),
-      routePointId: owner,
-    });
-    // A(0, note) -> B(2) -> C(0, note). A and C are note beats at the ends.
+  it("steps onto the note and off it in both directions, with no skipped photo", () => {
+    const cursor = storyCursorForJourney(gap, false);
+    expect(storyCursorNeighbourEntry(cursor, 2, 1, false)).toBe(3);
+    expect(storyCursorNeighbourEntry(cursor, 3, 1, false)).toBe(4);
+    expect(storyCursorNeighbourEntry(cursor, 3, -1, false)).toBe(2);
+    expect(storyCursorNeighbourEntry(cursor, 4, -1, false)).toBe(3);
+  });
+
+  it("lets autoplay walk through the note and keep going across the Journey", () => {
+    const cursor = storyCursorForJourney(gap, false);
+    const visited: string[] = [];
+    let index = 0;
+    for (let step = 0; step < cursor.entries.length; step += 1) {
+      visited.push(cursor.pageIds[index]);
+      const advance = storyAutoplayAdvance(index, cursor.entries.length, cursor.firstCanonicalEntry);
+      if (advance.kind === "stop") break;
+      index = advance.nextIndex;
+    }
+    expect(visited).toEqual(["a1", "a2", "b1", "note:C", "d1", "d2"]);
+    // #76: the Journey boundary returns to the first entry, never loops C.
+    expect(index).toBe(0);
+  });
+
+  it("wraps a note entry at either end of the Journey like any other entry", () => {
+    // A(0, note) -> B(2) -> C(0, note).
     const edges: Journey = {
       ...journey,
-      routePoints: ["A", "B", "C"].map((id, index) => ({
-        id,
-        journeyId: journey.id,
-        sortOrder: index,
-        label: id,
-        latitude: index,
-        longitude: index,
-        occurredAt: null,
-        note: id === "B" ? null : `${id} 只留下了一句话`,
-        isStop: true,
-        createdAt: journey.createdAt,
-      })),
+      coverMediaAssetId: null,
+      routePoints: points({ A: "A 只留下了一句话", B: null, C: "C 只留下了一句话" }),
       media: [media("b1", "B", 0), media("b2", "B", 1)],
     };
-
-    // Bounded, the ends have nothing beyond them.
-    expect(storyNoteBeatNeighbourMediaIndexes(edges, "A"))
-      .toEqual({ previousIndex: null, nextIndex: 0 });
-    expect(storyNoteBeatNeighbourMediaIndexes(edges, "C"))
-      .toEqual({ previousIndex: 1, nextIndex: null });
-    // Wrapping, Previous from the first beat reaches the Journey's last media
-    // and Next from the last beat reaches its first.
-    expect(storyNoteBeatNeighbourMediaIndexes(edges, "A", true))
-      .toEqual({ previousIndex: 1, nextIndex: 0 });
-    expect(storyNoteBeatNeighbourMediaIndexes(edges, "C", true))
-      .toEqual({ previousIndex: 1, nextIndex: 0 });
-    // Wrapping never invents media where the Journey has none.
-    expect(storyNoteBeatNeighbourMediaIndexes({ ...edges, media: [] }, "A", true))
-      .toEqual({ previousIndex: null, nextIndex: null });
+    const cursor = storyCursorForJourney(edges, false);
+    expect(ids(cursor)).toEqual(["note:A", "b1", "b2", "note:C"]);
+    // The canonical sequence starts at the leading note, so Previous and the
+    // wrap treat it as canonical rather than as a one-way opening.
+    expect(cursor.firstCanonicalEntry).toBe(0);
+    expect(storyCursorNeighbourEntry(cursor, 0, -1, false)).toBeNull();
+    expect(storyCursorNeighbourEntry(cursor, 3, 1, false)).toBeNull();
+    expect(storyCursorNeighbourEntry(cursor, 0, -1, true)).toBe(3);
+    expect(storyCursorNeighbourEntry(cursor, 3, 1, true)).toBe(0);
   });
 
-  it("has no media either side of a note beat that is not in the sequence", () => {
-    expect(storyNoteBeatNeighbourMediaIndexes(base([]), "missing"))
-      .toEqual({ previousIndex: null, nextIndex: null });
+  it("keeps a Journey without media free of note entries", () => {
+    const empty: Journey = { ...gap, media: [] };
+    expect(storyCursorForJourney(empty, false).entries).toEqual([]);
   });
 
-  it("does not treat a soundtrack as this Route Point's media", () => {
-    const audio = { ...asset("track", "audio/mpeg", 0, "track.mp3"), routePointId: "B" };
-    expect(storyInitialNoteBeatRoutePointId(base([audio]), "B")).toBe("B");
-  });});
-
-describe("storyActiveChapterRoutePointId (#76 P1)", () => {
-  const owned = { ...asset("b1", "image/jpeg", 0, "b1.jpg"), routePointId: "B" };
-  const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
-
-  it("lets a note beat name the chapter over the hidden cursor", () => {
-    expect(storyActiveChapterRoutePointId("C", owned, true, "A")).toBe("C");
+  it("does not treat a soundtrack as the Route Point's media", () => {
+    const withTrack: Journey = { ...gap, media: [...gap.media, media("track", "C", 9, "audio/mpeg")] };
+    expect(ids(storyCursorForJourney(withTrack, false))).toContain("note:C");
   });
 
-  it("follows the media on screen, so Journey-level media names no Route Point", () => {
-    expect(storyActiveChapterRoutePointId(null, owned, true, "A")).toBe("B");
-    expect(storyActiveChapterRoutePointId(null, intro, true, "A")).toBeNull();
+  it("opens a direct entry, a chip and a Playback return on the note entry", () => {
+    const cursor = storyCursorForJourney(gap, false);
+    const request = { routePointId: "C", assetId: null, presentJourneyCoverOpening: false };
+    const opened = storyInitialCursorSelection(gap, storyInitialMediaSelection(gap, "C"), request);
+    expect(opened).toEqual({ withJourneyCoverOpening: false, entryIndex: 3, assetId: null, pageId: "note:C" });
+    expect(storyRoutePointCursorEntry(cursor, storySequenceMedia(storySequenceForJourney(gap)), "C", route)).toBe(3);
+    // A Route Point with media still lands on its own first media.
+    expect(storyRoutePointCursorEntry(cursor, storySequenceMedia(storySequenceForJourney(gap)), "D", route)).toBe(4);
+  });
+
+  it("lets an explicit asset win over a Route Point's note entry", () => {
+    const opened = storyInitialCursorSelection(
+      gap,
+      storyInitialMediaSelection(gap, "C", "d2"),
+      { routePointId: "C", assetId: "d2", presentJourneyCoverOpening: false },
+    );
+    expect(opened.pageId).toBe("d2");
+  });
+
+  it("does not land an unknown Route Point on a note entry", () => {
+    const opened = storyInitialCursorSelection(
+      gap,
+      storyInitialMediaSelection(gap, "missing"),
+      { routePointId: "missing", assetId: null, presentJourneyCoverOpening: false },
+    );
+    expect(opened.pageId).toBe("a1");
+  });
+});
+
+describe("storyActiveChapterRoutePointId (#76 P1 + #595)", () => {
+  it("names the Route Point that owns the entry on screen, note entries included", () => {
+    expect(storyActiveChapterRoutePointId({ routePointId: "C" }, true, "A")).toBe("C");
+    expect(storyActiveChapterRoutePointId({ routePointId: "B" }, true, "A")).toBe("B");
+  });
+
+  it("names no Route Point for Journey-level media", () => {
+    expect(storyActiveChapterRoutePointId({ routePointId: null }, true, "A")).toBeNull();
   });
 
   it("names the selected Route Point when the Journey has no visual media", () => {
-    expect(storyActiveChapterRoutePointId(null, null, false, "D")).toBe("D");
-    expect(storyActiveChapterRoutePointId(null, null, false, null)).toBeNull();
+    expect(storyActiveChapterRoutePointId(null, false, "D")).toBe("D");
+    expect(storyActiveChapterRoutePointId(null, false, null)).toBeNull();
   });
 });
 

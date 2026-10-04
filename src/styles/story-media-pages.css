@@ -95,6 +95,41 @@
 .story-media-pages__page[data-media-page="current"] > img { cursor: zoom-in; }
 .story-media-pages__page > img:focus-visible { outline: 1px solid currentColor; outline-offset: 8px; }
 .journey-story-fullscreen .story-media-pages__page > img { cursor: default; }
+/* #595: a Route Point's note as its own page. It sits in the same aperture as
+   the pictures around it and keeps the stage's swipe (no touch-action of its
+   own); only its words opt back into selection. */
+.story-media-pages__note {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  padding: clamp(20px, 6%, 64px) clamp(20px, 9%, 96px);
+  overflow: hidden;
+}
+.story-media-pages__note-label {
+  margin: 0;
+  color: var(--startrips-muted);
+  font: 400 12px/1.5 var(--archive-sans);
+  letter-spacing: .04em;
+}
+.story-media-pages__note-text {
+  max-width: 34em;
+  max-height: 100%;
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: rgb(255 248 231 / 88%);
+  font: 400 clamp(17px, 1.9vw, 24px)/1.85 var(--archive-serif);
+  letter-spacing: .015em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.story-media-pages[data-current-media-kind="note"]:focus-visible { outline: 1px solid rgb(255 248 231 / 40%); outline-offset: -4px; }
 .story-media-pages[data-click-navigation="true"] .story-media-pages__page > img { cursor: default; }
 .story-media-pages[data-click-direction="previous"] :is(.story-media-pages__hit-surface, .story-media-pages__page[data-media-page="current"] > img) {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M24 16H8m7-7-7 7 7 7' fill='none' stroke='%230b1113' stroke-width='4'/%3E%3Cpath d='M24 16H8m7-7-7 7 7 7' fill='none' stroke='white' stroke-width='1.5'/%3E%3C/svg%3E") 16 16, w-resize;
