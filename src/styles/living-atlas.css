@@ -831,9 +831,7 @@
   backdrop-filter: blur(22px);
 }
 
-/* ML-12 Border Glow: a soft arc of journey-colored light rotates around the
-   active card's border. Without @property support the ring stays static,
-   which still reads as a subtle glow. */
+/* ML-12 Border Glow: a soft, static arc of journey-colored light marks the active card (glow is a state, not a loop). */
 .living-atlas__active::after {
   content: "";
   position: absolute;
@@ -855,17 +853,12 @@
     linear-gradient(#000 0 0);
   mask-composite: exclude;
   pointer-events: none;
-  animation: atlasBorderSpin 6s linear infinite;
 }
 
 @property --atlas-border-angle {
   syntax: "<angle>";
   initial-value: 0deg;
   inherits: false;
-}
-
-@keyframes atlasBorderSpin {
-  to { --atlas-border-angle: 360deg; }
 }
 
 .living-atlas__active-content > p:first-child {
@@ -5763,10 +5756,6 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 
   .living-atlas-ambience__blob {
-    animation: none;
-  }
-
-  .living-atlas__active::after {
     animation: none;
   }
 

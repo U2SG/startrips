@@ -1438,6 +1438,7 @@ export function LivingAtlasApp({
   const [unknownCreateObservationOwnership, setUnknownCreateObservationOwnership] = useState<UnknownCreateObservationOwnership | null>(null);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
+  const [arrivalIsSwitch, setArrivalIsSwitch] = useState(false);
   const [notice, setNotice] = useState<AtlasNotice | null>(null);
   const [undoJourney, setUndoJourney] = useState<Journey | null>(null);
   const showNotice = useCallback((message: string) => {
@@ -2687,7 +2688,10 @@ export function LivingAtlasApp({
       callbackScope,
     });
     setJourneys((current) => mergeJourney(current, result.journey));
-    if (arrivalHandoff) setArrivalJourneyId(arrivalHandoff);
+    if (arrivalHandoff) {
+      setArrivalIsSwitch(false);
+      setArrivalJourneyId(arrivalHandoff);
+    }
     setDraftRoute(null);
     setUndoJourney(null);
     showNotice(callbackScope === "media-retry"
@@ -2760,6 +2764,7 @@ export function LivingAtlasApp({
     try {
       const restored = await mutations.restoreJourney(undoJourney.id);
       setJourneys((current) => mergeJourney(current, restored));
+      setArrivalIsSwitch(false);
       setArrivalJourneyId(restored.id);
       setUndoJourney(null);
       showNotice("旅程已恢复到图谱。");
@@ -2772,8 +2777,10 @@ export function LivingAtlasApp({
     claimPlaybackReturnIntent();
     clearHomeBaseContext();
     clearRoutePointContext();
-    morphJourneyCard(source ?? null, activeJourneyId !== null, () => {
+    const switching = activeJourneyId !== null;
+    morphJourneyCard(source ?? null, switching, () => {
       timeCursor.selectJourney(journeyId);
+      setArrivalIsSwitch(switching);
       setArrivalJourneyId(journeyId);
       if (view === "timeline") setView("planet");
     });
@@ -3668,7 +3675,7 @@ export function LivingAtlasApp({
 
       {!isMobileV2 && view === "planet" && activeJourney ? (
         <aside
-          className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}${playbackModeMenuJourneyId === activeJourney.id ? " has-playback-menu" : ""}`}
+          className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id && !arrivalIsSwitch ? " is-arriving" : ""}${playbackModeMenuJourneyId === activeJourney.id ? " has-playback-menu" : ""}`}
           hidden={routePointContextVisible}
           aria-hidden={routePointContextVisible || undefined}
           inert={routePointContextVisible || globeFocusMode || globePickActive || playbackActive || undefined}
