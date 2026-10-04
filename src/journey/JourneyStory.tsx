@@ -34,6 +34,7 @@ import {
   storyCursorOnNote,
   storyAutoplayStepMs,
   storyWarmMediaPages,
+  storyEmptyChapterRoutePointId,
 } from "./storyMediaPolicy";
 import {
   mobileStoryExpandedForLayout,
@@ -795,6 +796,12 @@ export function JourneyStory({
   );
   const selectedRoutePointIdRef = useRef(selectedRoutePointId);
   selectedRoutePointIdRef.current = selectedRoutePointId;
+  // #595 + #616: in a Journey without visual media, a Route Point with no note
+  // of its own has nothing to present. Choosing it (a chip, a direct open)
+  // shows the truthful empty chapter instead of a neighbour's note page.
+  const [emptyChapterRoutePointId, setEmptyChapterRoutePointId] = useState<string | null>(
+    () => storyEmptyChapterRoutePointId(storyCursorForJourney(journey, false), journey, routePointId),
+  );
   const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState & { generation?: number }>>({});
   // A re-signed read can carry the same URL (for example two requests in one
   // signing second). Presentation still needs a new resource generation.
@@ -1784,6 +1791,9 @@ export function JourneyStory({
     setEntryIndex(nextInitialCursor.entryIndex);
     foregroundPageIdRef.current = nextInitialCursor.pageId;
     setSelectedRoutePointId(nextInitialMedia.routePointId);
+    setEmptyChapterRoutePointId(storyEmptyChapterRoutePointId(
+      storyCursorForJourney(journey, false), journey, routePointId,
+    ));
     setUploadState({ status: "idle" });
     setRetryFiles([]);
     setRetryRoutePointId(null);
@@ -2124,6 +2134,10 @@ export function JourneyStory({
   // #595: a Route Point's note entry is a real cursor stop with no asset. It
   // paints a text page on the stage and counts as no media ("i / n").
   const onNoteEntry = storyCursorOnNote(storyCursor, entryIndex);
+  // #595: the stage is presented whenever the cursor has an entry: media, or a
+  // note-only Route Point's text page, also in a Journey with no media at all.
+  // Only a Journey with neither, or #616's empty chapter, has no stage.
+  const stagePresented = storyCursor.entries.length > 0 && emptyChapterRoutePointId === null;
   const assetIndex = Math.max(0, storyCursorMediaIndex(storyCursor, entryIndex));
   const activeEntry = storyCursor.entries[entryIndex] ?? null;
   const activeAsset = activeEntry?.asset ?? null;
@@ -2300,7 +2314,10 @@ export function JourneyStory({
   // Point that owns the cover either.
   const observeStoryPage = useCallback((pageId: string | null) => {
     if (!journey) return;
-    const target = storyObservedTarget(storyCursor, pageId);
+    // #616: an empty chapter has no page on screen; it speaks for itself.
+    const target = emptyChapterRoutePointId !== null
+      ? { assetId: null, noteRoutePointId: emptyChapterRoutePointId }
+      : storyObservedTarget(storyCursor, pageId);
     onObservationChange?.(storyLogicalObservation(
       journey,
       target.noteRoutePointId ?? selectedRoutePointId,
@@ -2308,7 +2325,7 @@ export function JourneyStory({
       mobileLayout,
       mobileStoryExpanded,
     ));
-  }, [journey, selectedRoutePointId, storyCursor, mobileLayout, mobileStoryExpanded, onObservationChange]);
+  }, [journey, selectedRoutePointId, emptyChapterRoutePointId, storyCursor, mobileLayout, mobileStoryExpanded, onObservationChange]);
   const reportForegroundMedia = useCallback((id: string | null) => {
     foregroundPageIdRef.current = id;
     observeStoryPage(id);
@@ -2915,7 +2932,7 @@ export function JourneyStory({
   // pressed. Preferring the Route Point Story was opened on kept that entry
   // point visible after the cursor crossed into another Route Point.
   const activeChapterRoutePointId = storyActiveChapterRoutePointId(
-    activeEntry, scopedMedia.length > 0, selectedRoutePointId,
+    activeEntry, stagePresented, selectedRoutePointId,
     // #555: the opening names no chapter, so "全部" is the pressed chip, no
     // Route Point note shows and the Journey note does.
     onJourneyCoverOpening,
@@ -2976,7 +2993,7 @@ export function JourneyStory({
     : null;
   // #595: on a note entry the stage's text page is the one owner of the note,
   // so the overlay says nothing over it.
-  const overlayNote = mediaPresentation !== "note-overlay" || onNoteEntry ? null
+  const overlayNote = mediaPresentation !== "note-overlay" || (onNoteEntry && stagePresented) ? null
     : overlayNoteOwner ? { key: overlayNoteOwner.id, text: overlayNoteOwner.note!.trim() }
       // #76 P1: the Journey note belongs on Journey-level media, decided by the
       // on-screen chapter being Journey-level. Gating it on the Route Point that
@@ -3006,7 +3023,8 @@ export function JourneyStory({
     text: pointNoteOwner.note!.trim(),
     label: routePointProvenanceLabel(journey, pointNoteOwner.id, activeEntry?.chapterRoutePointId ?? null) ?? "",
   } : null;
-  const copyColumnOwnsPointNote = !pointNote && !onNoteEntry;
+  const onPresentedNote = onNoteEntry && stagePresented;
+  const copyColumnOwnsPointNote = !pointNote && !onPresentedNote;
   // These are semantic identities; StoryMediaPages retains the physical pages.
   // #555: they are page ids; each resolves to the asset its entry paints.
   const assetOfPage = (pageId: string) => {
@@ -3720,6 +3738,7 @@ export function JourneyStory({
     // neither lands on the nearest media rather than blanking the stage.
     // #555: "全部" (null) lands on canonical entry 0 and never goes back to
     // the Journey cover opening.
+    setEmptyChapterRoutePointId(storyEmptyChapterRoutePointId(storyCursor, journey, routePointId));
     setEntryIndex(storyRoutePointCursorEntry(storyCursor, scopedMedia, routePointId, routePointIdsInOrder));
     setShownPageId(null);
     setIncomingPageId(null);
@@ -4343,9 +4362,12 @@ export function JourneyStory({
     setDeleteMessage("");
   }
 
-  // #76 P1 + #595: the media stage shows whenever the Journey has media. A
-  // note-only Route Point is a text page on that stage, not a hidden stage.
-  const hasStoryMedia = scopedMedia.length > 0;
+  // #76 P1 + #595: the stage shows whenever the cursor has an entry; a
+  // note-only Route Point is a text page on it, not a hidden stage.
+  const hasStoryMedia = stagePresented;
+  // Fullscreen stays an immersive MEDIA viewer: a Journey without media has
+  // none to enter.
+  const fullscreenAvailable = scopedMedia.length > 0;
   // #595: what the cursor can step through - media and note entries alike.
   const browsableEntryCount = scopedMedia.length + storyCursor.notePageIds.size;
   const showDesktopChapterRail = !mobileLayout && visualMedia.length > 0;
@@ -4668,14 +4690,14 @@ export function JourneyStory({
             {!mobileLayout && !overview && activeEntry ? (
               <div className="journey-story__media-controls">
                 <nav className="journey-story__media-nav" aria-label="媒体导航">
-                <IconActionButton
+                {fullscreenAvailable ? <IconActionButton
                   type="button"
                   className="journey-story__fullscreen-entry"
                   label="全屏查看媒体"
                   disabled={mutationPending || Boolean(shownAsset?.mimeType.startsWith("video/")
                     && stagePlaybackReady.inline !== shownStagePageId)}
                   onClick={() => enterFullscreen(mobileStoryImmersiveKeepsPlaying)}
-                ><IconMaximize size={19} stroke={1.35} aria-hidden="true" /></IconActionButton>
+                ><IconMaximize size={19} stroke={1.35} aria-hidden="true" /></IconActionButton> : null}
                 {videoNavigationVisible ? <button type="button" data-video-step="previous"
                   disabled={!canStepPrevious} {...videoStepButtonInput(-1)}
                   aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button> : null}
@@ -4732,7 +4754,7 @@ export function JourneyStory({
                   mobileLayout,
                   overview,
                   mobileManageMode,
-                  hasAsset: Boolean(activeEntry),
+                  hasAsset: Boolean(activeEntry) && fullscreenAvailable,
                 }) ? (
                   /* `is-compact` closes the row when a single-asset scope
                      renders no play control. The entry is playback-transparent:
@@ -4950,7 +4972,7 @@ export function JourneyStory({
                 ? routePointProvenanceLabel(journey, activeEntry.routePointId, activeEntry.chapterRoutePointId)
                 : null) || activeChapterRoutePoint.label || `途径点 ${activeChapterRoutePoint.sortOrder + 1}`}</p>
             ) : null}
-            {quickRecap && (!activeEntry || overview) ? <div
+            {quickRecap && (!stagePresented || overview) ? <div
               className="journey-story__playback-entry journey-story__playback-entry--empty"
               data-story-playback-entry="empty"
             >
@@ -4961,7 +4983,7 @@ export function JourneyStory({
               </button>}
               {quickRecapStatus}
             </div> : null}
-            {mobileLayout && !overview && !activeEntry && !mobileManageMode ? (
+            {mobileLayout && !overview && !stagePresented && !mobileManageMode ? (
               <div className="journey-story__mobile-media-actions">
                 {manageMedia ? <IconActionButton
                   type="button"
@@ -5300,7 +5322,7 @@ export function JourneyStory({
         </footer>
       </article>
 
-      {activeEntry ? (
+      {activeEntry && fullscreenAvailable ? (
         <div
           ref={fullscreenRef}
           hidden={!fullscreen}

@@ -342,13 +342,14 @@ export function groupedPlacementRefreshSelection(
  * It follows the cursor entry on screen: a media entry names the Route Point
  * that owns the media, a #595 note entry names the Route Point that owns the
  * note, and Journey-level intro media names no Route Point even while one stays
- * selected as the management target. A Journey with no visual media has no
- * cursor to follow, so the selected Route Point is the chapter, exactly as
- * before the cursor became Journey-wide.
+ * selected as the management target. When no stage is presented - a Journey
+ * with neither media nor notes, or #616's chip on a Route Point that has no
+ * entry of its own in a Journey without media - there is no cursor to follow,
+ * so the selected Route Point is the chapter.
  */
 export function storyActiveChapterRoutePointId(
   activeEntry: Pick<StoryCursorEntry, "routePointId"> | null | undefined,
-  hasVisualMedia: boolean,
+  stagePresented: boolean,
   selectedRoutePointId: string | null,
   onJourneyCoverOpening = false,
 ): string | null {
@@ -356,7 +357,7 @@ export function storyActiveChapterRoutePointId(
   // is owned by some Route Point, but that Route Point is not the chapter until
   // the cursor reaches the cover's own canonical entry.
   if (onJourneyCoverOpening) return null;
-  if (!hasVisualMedia) return selectedRoutePointId;
+  if (!stagePresented) return selectedRoutePointId;
   return activeEntry?.routePointId ?? null;
 }
 
@@ -536,9 +537,9 @@ function storyNotePage(pageId: string, entry: StoryCursorEntry): JourneyMediaAss
  * (see `storyInitialCursorSelection`), never re-derived from the current
  * position, so the opening is part of exactly the open that presented it.
  *
- * #595: note entries join the cursor only when the Journey has media to
- * present. A Journey without visual media keeps its media-free Story, where the
- * selected Route Point's note stays in the copy column.
+ * #595: note entries are always part of the cursor, also in a Journey with no
+ * visual media at all: its note-only Route Points are then the whole Story, as
+ * text pages. Only a Journey with neither media nor notes has no entries.
  */
 export function storyCursorForJourney(
   journey: Journey | undefined,
@@ -553,10 +554,9 @@ export function storyCursorForJourney(
   const sequence = journey
     ? storySequenceForJourney(journey, { withJourneyCoverOpening })
     : [];
-  const hasCanonicalMedia = sequence.some((entry) => entry.role === "media" && entry.asset !== null);
   for (const entry of sequence) {
     if (entry.role === "note") {
-      if (!hasCanonicalMedia || !entry.note) continue;
+      if (!entry.note) continue;
       mediaIndexByEntry.push(-1);
       entries.push({ ...entry, role: "note", asset: null, note: entry.note });
       continue;
@@ -678,6 +678,24 @@ export function storyCursorEntryForMediaIndex(cursor: StoryCursor, mediaIndex: n
  * entry; any other one on its own first media, or the nearest media for a
  * Route Point with neither (`storyRoutePointEntryIndex`).
  */
+/**
+ * #595 + #616: in a Journey without visual media, a Route Point that has no
+ * cursor entry of its own (no note) has nothing to present. Choosing it keeps
+ * the truthful empty chapter instead of borrowing a neighbour's note page, so
+ * this answers the Route Point the empty chapter names, or null.
+ */
+export function storyEmptyChapterRoutePointId(
+  cursor: StoryCursor,
+  journey: Pick<Journey, "routePoints"> | undefined,
+  routePointId: string | null,
+): string | null {
+  if (!journey || routePointId === null) return null;
+  if (cursor.entryIndexByMediaIndex.length > 0) return null;
+  if (!journey.routePoints.some((point) => point.id === routePointId)) return null;
+  const ownsEntry = cursor.entries.some((entry) => entry.routePointId === routePointId);
+  return ownsEntry ? null : routePointId;
+}
+
 export function storyRoutePointCursorEntry(
   cursor: StoryCursor,
   media: readonly JourneyMediaAsset[],

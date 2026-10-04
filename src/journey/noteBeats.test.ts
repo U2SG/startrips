@@ -261,6 +261,37 @@ describe("Story and Playback agree on note semantics (#595)", () => {
   });
 });
 
+describe("A Journey with no media still plays its notes (#595)", () => {
+  const noMedia: Journey = {
+    ...notesJourney,
+    routePoints: [
+      point("S", 0, "Stop 自己的感想"),
+      point("A", 1, "A 只有一句话", grouped("S")),
+      point("V", 2, "路过 V 时想到的", { isStop: false }),
+      point("U", 3, null),
+    ],
+    media: [],
+  };
+
+  it("keeps the grouped and transit note beats in Playback", () => {
+    const noMediaSteps = buildPlaybackSteps(noMedia);
+    const name = (step: PlaybackStep) => step.kind === "note" || step.kind === "stop"
+      ? `${step.kind}:${noMedia.routePoints[step.pointIndex].id}`
+      : step.kind === "travel" ? `travel:${step.from ?? step.to - 1}->${step.to}` : step.kind;
+    expect(noMediaSteps.map(name)).toEqual([
+      "intro", "stop:S", "note:A", "note:V", "travel:0->3", "stop:U", "outro",
+    ]);
+    // Quick Recap has no visual media to recap and falls back to full Playback,
+    // which is the projection above.
+    expect(prepareQuickRecapPlaybackResult(noMedia, { generatedAt: createdAt }).fallbackReason)
+      .toBe("no-visual-media");
+  });
+
+  it("presents the same notes as Story text pages in the same order", () => {
+    expect(storyCursorForJourney(noMedia, false).pageIds).toEqual(["note:S", "note:A", "note:V"]);
+  });
+});
+
 describe("Keepsake stays byte-identical with note beats (#595)", () => {
   it("adds no scene and changes no byte of the manifest", () => {
     expect(steps.some((step) => step.kind === "note")).toBe(true);

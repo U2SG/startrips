@@ -136,10 +136,17 @@ describe("storyInitialCursorSelection (#555)", () => {
 
   it("presents no opening when the Journey has no visual media", () => {
     const silent: Journey = { ...journey, coverMediaAssetId: null, media: [asset("track", null, 0, "audio/mpeg")] };
+    // #595: A and B still have notes, so the Story is their note pages - but
+    // with no visual media there is nothing to open on a cover.
     expect(initialCursor(silent, freshOpen)).toEqual({
+      withJourneyCoverOpening: false, entryIndex: 0, assetId: null, pageId: "note:A",
+    });
+    expect(storyCursorForJourney(silent, true).pageIds).toEqual(["note:A", "note:B"]);
+    const empty: Journey = { ...silent, routePoints: silent.routePoints.map((candidate) => ({ ...candidate, note: null })) };
+    expect(initialCursor(empty, freshOpen)).toEqual({
       withJourneyCoverOpening: false, entryIndex: 0, assetId: null, pageId: null,
     });
-    expect(storyCursorForJourney(silent, true).entries).toEqual([]);
+    expect(storyCursorForJourney(empty, true).entries).toEqual([]);
   });
 });
 

@@ -23,7 +23,10 @@ import {
   storyCursorNeighbourEntry,
   storyInitialCursorSelection,
   storyRoutePointCursorEntry,
+  storyEmptyChapterRoutePointId,
+  storyAutoplayStepMs,
 } from "./storyMediaPolicy";
+import { resolveNoteBeatDwellMs } from "./narrativeTiming";
 import { storyMediaForScope, storySequenceForJourney, storySequenceMedia } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 
@@ -458,9 +461,47 @@ describe("Story note entries on the one cursor (#76 P1 + #595)", () => {
     expect(storyCursorNeighbourEntry(cursor, 3, 1, true)).toBe(0);
   });
 
-  it("keeps a Journey without media free of note entries", () => {
-    const empty: Journey = { ...gap, media: [] };
-    expect(storyCursorForJourney(empty, false).entries).toEqual([]);
+  it("presents a Journey with no media as its note pages, in order, wrapping and dwelling like any entry", () => {
+    // A (grouped under S), S and C carry notes; nothing has media.
+    const notesOnly: Journey = {
+      ...journey,
+      coverMediaAssetId: null,
+      routePoints: [
+        { ...points({ S: "S 的一句话" })[0], sortOrder: 0 },
+        { ...points({ A: "A 的一句话" })[0], sortOrder: 1, isStop: false, stayAnchorRoutePointId: "S" },
+        { ...points({ B: null })[0], sortOrder: 2 },
+        { ...points({ C: "C 的一句话" })[0], sortOrder: 3 },
+      ],
+      media: [media("track", null, 0, "audio/mpeg")],
+    };
+    const cursor = storyCursorForJourney(notesOnly, true);
+    expect(cursor.pageIds).toEqual(["note:S", "note:A", "note:C"]);
+    expect(cursor.entries.map((entry) => entry.chapterRoutePointId)).toEqual(["S", "S", "C"]);
+    expect(cursor.firstCanonicalEntry).toBe(0);
+    expect(cursor.mediaIndexByEntry).toEqual([-1, -1, -1]);
+    expect(storyCursorNeighbourEntry(cursor, 0, 1, false)).toBe(1);
+    expect(storyCursorNeighbourEntry(cursor, 2, 1, true)).toBe(0);
+    expect(storyCursorNeighbourEntry(cursor, 0, -1, true)).toBe(2);
+    expect(storyAutoplayAdvance(2, cursor.entries.length, cursor.firstCanonicalEntry))
+      .toEqual({ kind: "advance", nextIndex: 0 });
+    expect(storyAutoplayStepMs(cursor.entries[1])).toBe(resolveNoteBeatDwellMs("A 的一句话".length));
+    // A chip on a note-only point lands on its page; one with nothing to say
+    // keeps #616's empty chapter instead of borrowing a neighbour's note.
+    expect(storyRoutePointCursorEntry(cursor, [], "C", ["S", "A", "B", "C"])).toBe(2);
+    expect(storyEmptyChapterRoutePointId(cursor, notesOnly, "C")).toBeNull();
+    expect(storyEmptyChapterRoutePointId(cursor, notesOnly, "B")).toBe("B");
+    expect(storyEmptyChapterRoutePointId(cursor, notesOnly, "missing")).toBeNull();
+    // With media in the Journey there is never an empty chapter (#76 nearest media).
+    expect(storyEmptyChapterRoutePointId(storyCursorForJourney(gap, false), gap, "A")).toBeNull();
+    const opened = storyInitialCursorSelection(notesOnly, storyInitialMediaSelection(notesOnly, null),
+      { routePointId: null, assetId: null, presentJourneyCoverOpening: true });
+    expect(opened).toEqual({ withJourneyCoverOpening: false, entryIndex: 0, assetId: null, pageId: "note:S" });
+  });
+
+  it("keeps a Journey with neither media nor notes free of entries", () => {
+    const empty: Journey = { ...gap, media: [], routePoints: points({ A: null, B: null }) };
+    expect(storyCursorForJourney(empty, true).entries).toEqual([]);
+    expect(storyEmptyChapterRoutePointId(storyCursorForJourney(empty, false), empty, "A")).toBe("A");
   });
 
   it("does not treat a soundtrack as the Route Point's media", () => {
