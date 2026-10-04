@@ -30,6 +30,7 @@ import {
   stepFace,
 } from "./journeyBook3dModel";
 import { PLATE, noteCharacterCount, paintFace, type PageSource } from "./journeyBook3dPainter";
+import { loadPictureChain } from "./journeyBook3dPictures";
 import { JourneyBook3dScene } from "./journeyBook3dScene";
 import {
   isVideoAsset,
@@ -217,7 +218,6 @@ export function JourneyBook3d({
   const [stageSize, setStageSize] = useState("");
   const lastSettledRef = useRef(true);
   const stageRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const sceneRef = useRef<JourneyBook3dScene | null>(null);
   const surfacesRef = useRef(new Map<number, FaceSurface>());
@@ -240,12 +240,19 @@ export function JourneyBook3d({
 
   // ── the scene ─────────────────────────────────────────────────────────
   useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || faceCount === 0) return;
+    const stage = stageRef.current;
+    if (!stage || faceCount === 0) return;
+    // Every scene gets a fresh canvas: dispose() forces the old context lost,
+    // and a canvas keeps returning its lost context, so it cannot be reused.
+    const canvas = document.createElement("canvas");
+    canvas.className = "journey-book-3d__canvas";
+    canvas.setAttribute("aria-hidden", "true");
+    stage.prepend(canvas);
     let scene: JourneyBook3dScene;
     try {
       scene = new JourneyBook3dScene(canvas, BOOK_PAGE_RATIO, reduced, STAGE_BACKGROUND);
     } catch {
+      canvas.remove();
       setFailure("这台设备暂时无法显示立体之书。");
       return;
     }
@@ -266,6 +273,7 @@ export function JourneyBook3d({
       surfaces.clear();
       sceneRef.current = null;
       scene.dispose();
+      canvas.remove();
     };
   }, [faceCount, reduced]);
 
@@ -338,31 +346,21 @@ export function JourneyBook3d({
       const key = urls.join("|");
       if (!urls.length || pictureUrlsRef.current.get(asset.id) === key) continue;
       pictureUrlsRef.current.set(asset.id, key);
-      void (async () => {
-        for (const [index, url] of urls.entries()) {
-          try {
-            const canvas = await loadPicture(url);
-            if (pictureUrlsRef.current.get(asset.id) !== key) return;
-            setPictures((previous) => ({
-              ...previous,
-              [asset.id]: { status: "ready", image: canvas, width: canvas.width, height: canvas.height },
-            }));
-            if (index === urls.length - 1) clearRetry(asset.id);
-          } catch {
-            if (pictureUrlsRef.current.get(asset.id) !== key) return;
-            // A failed preview still leaves the original to try.
-            if (index < urls.length - 1) continue;
-            if (await loadsWithoutCors(url)) {
-              setCorsRefused(true);
-              return;
-            }
-            if (pictureUrlsRef.current.get(asset.id) !== key) return;
-            pictureUrlsRef.current.delete(asset.id);
-            expireRead(asset.id);
-            return;
-          }
-        }
-      })();
+      void loadPictureChain(urls, {
+        load: loadPicture,
+        loadsWithoutCors,
+        isLive: () => pictureUrlsRef.current.get(asset.id) === key,
+        present: (canvas) => setPictures((previous) => ({
+          ...previous,
+          [asset.id]: { status: "ready", image: canvas, width: canvas.width, height: canvas.height },
+        })),
+        onComplete: () => clearRetry(asset.id),
+        onCorsRefused: () => setCorsRefused(true),
+        onExpire: () => {
+          pictureUrlsRef.current.delete(asset.id);
+          expireRead(asset.id);
+        },
+      });
     }
     // Pictures far from the reader are released.
     for (const assetId of pictureUrlsRef.current.keys()) {
@@ -375,6 +373,12 @@ export function JourneyBook3d({
         : Object.fromEntries(kept.map((assetId) => [assetId, previous[assetId]]));
     });
   }, [wantedAssets, reads, stills, soundtrack, expireRead, clearRetry, pictures]);
+
+  // Loads still in flight when the book closes report nothing.
+  useEffect(() => {
+    const pictureUrls = pictureUrlsRef.current;
+    return () => pictureUrls.clear();
+  }, []);
 
   // ── painting ──────────────────────────────────────────────────────────
   const visibleFaces = useMemo(() => {
@@ -814,7 +818,6 @@ export function JourneyBook3d({
         onPointerCancel={(event) => onPointerUp(event, true)}
         onPointerLeave={onPointerLeave}
       >
-        <canvas ref={canvasRef} className="journey-book-3d__canvas" aria-hidden="true" />
         {failure || corsRefused ? (
           <div className="journey-book-3d__failure" role="status">
             <p>{failure ?? "媒体存储不允许跨域读取，立体之书无法显示照片。"}</p>
