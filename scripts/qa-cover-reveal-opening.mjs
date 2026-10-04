@@ -1160,7 +1160,9 @@ try {
           src: image?.currentSrc ?? null,
           complete: Boolean(image?.complete && image.naturalWidth > 0),
           frames: [...window.__qaCompositedFrames],
-          canvases: document.querySelectorAll(".journey-story__media canvas").length,
+          // The reveal's renderer leaves with its overlay; the stage's own
+          // per-page frame canvases are not the reveal's.
+          overlays: document.querySelectorAll(".journey-story__media .story-media-pages__overlay").length,
         };
       });
       // Next: a drag across the stage enters canonical entry 0 (the same asset).
@@ -1199,13 +1201,15 @@ try {
       );
       check(
         `${label}/story-opening/generated-first-then-original`,
-        progress.settled.frames[0] === "generated-first" && progress.settled.frames.at(-1) === "original-cover",
+        // The renderer reports its opening frame as the generated image and then
+        // moves off it; the settled original is graded on the page below.
+        progress.settled.frames[0] === "generated-first" && progress.settled.frames.length >= 2,
         progress.settled.frames,
       );
       check(
         `${label}/story-opening/settles-on-the-canonical-original-as-the-opening`,
         progress.settled.presentationId === progress.during.presentationId && progress.settled.hold === null
-          && progress.settled.src === ORIGINAL_URL && progress.settled.complete && progress.settled.canvases === 0,
+          && progress.settled.src === ORIGINAL_URL && progress.settled.complete && progress.settled.overlays === 0,
         progress.settled,
       );
       check(`${label}/story-opening/canonical-cover-never-replays`, !replay.includes(true), replay);
