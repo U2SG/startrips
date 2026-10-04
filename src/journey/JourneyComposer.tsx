@@ -1568,6 +1568,7 @@ export function JourneyComposer({
                       <li key={`${media.file.name}-${media.file.lastModified}-${index}`}>
                         <span>{media.file.name}<small>{formatBytes(media.file.size)}</small></span>
                         <select
+                          className="st-select"
                           aria-label={`${media.file.name} 的媒体归属`}
                           value={media.routePointDraftId ?? ""}
                           onChange={(event) => assignPendingMedia(index, event.target.value || null)}
@@ -2232,7 +2233,7 @@ export function JourneyComposer({
                   <label className="journey-coordinate-fields__label"><span>地点名称</span><input maxLength={120} value={pointLabel} onChange={(event) => setPointLabel(event.target.value)} placeholder="可精确到建筑、景点或沿途位置" /></label>
                   <label><span>纬度</span><input inputMode="decimal" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="31.2304" /></label>
                   <label><span>经度</span><input inputMode="decimal" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="121.4737" /></label>
-                  <label className="journey-checkbox"><input type="checkbox" checked={pointIsStop} onChange={(event) => setPointIsStop(event.target.checked)} />这是一个停留地点</label>
+                  <label className="journey-checkbox"><input className="st-check" type="checkbox" checked={pointIsStop} onChange={(event) => setPointIsStop(event.target.checked)} />这是一个停留地点</label>
                   <button type="button" onClick={addManualPoint}><IconPlus size={16} stroke={1.4} aria-hidden="true" />添加精确位置</button>
                 </div>
               </details>
@@ -2332,11 +2333,12 @@ export function JourneyComposer({
                         <small>{composerTaskSummary(task.id)}</small>
                       </button>
                     ))}
-                    <button
+                    <IconActionButton
                       type="button"
                       className="journey-composer__task-more"
+                      label="更多"
                       data-composer-task-entry="more"
-                      ref={(node) => {
+                      buttonRef={(node) => {
                         if (node) taskEntryRefs.current.set("more", node);
                         else taskEntryRefs.current.delete("more");
                       }}
@@ -2345,8 +2347,7 @@ export function JourneyComposer({
                       onClick={() => setMoreMenuOpen((current) => !current)}
                     >
                       <IconDots size={18} stroke={1.45} aria-hidden="true" />
-                      <span>更多</span>
-                    </button>
+                    </IconActionButton>
                     {moreMenuOpen ? (
                       <div id="journey-composer-more-menu" className="journey-composer__more-menu" role="menu">
                         {COMPOSER_MOBILE_TASKS.filter((task) => task.behindMore).map((task) => (

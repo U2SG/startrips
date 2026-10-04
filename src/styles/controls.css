@@ -1,0 +1,324 @@
+/* One control family for the Atlas.
+
+   Text buttons are pills and icon buttons are circles. A surface has one acid
+   primary, a selected state is always cyan, and destructive actions are
+   text-forward in the shared danger tint. Every primitive reads its shape from
+   --control-radius and keeps a 44px box: a smaller look is an inset inside it.
+   Feedback fires on pointer-down, hover is limited to fine pointers, and
+   reduced motion keeps colour changes while dropping the press scale.
+
+   Surfaces that predate these classes consume the same tokens from their own
+   selectors in living-atlas.css. The classes are for markup with no hook. */
+
+:root {
+  color-scheme: dark;
+  /* Shapes only: a mask takes its colour from background-color, so no ink is
+     baked into the image. */
+  --control-check-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.4l3 3 6-6.8' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --control-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%238a9e98' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.st-btn,
+.st-icon-btn,
+.st-chip,
+.st-segmented__item {
+  min-height: var(--control-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--control-gap);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
+}
+
+.st-btn {
+  padding: 0 var(--control-pad-x);
+}
+
+.st-btn--block {
+  display: flex;
+  width: 100%;
+}
+
+.st-btn--primary {
+  border-color: var(--control-primary);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
+  font-weight: 600;
+}
+
+.st-btn--quiet,
+.st-icon-btn--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--control-muted);
+}
+
+/* Text-forward: the tint is the signal, never a filled block. */
+.st-btn--danger {
+  border-color: color-mix(in srgb, var(--control-danger) 45%, transparent);
+  background: transparent;
+  color: var(--control-danger);
+}
+
+.st-icon-btn {
+  width: var(--control-height);
+  min-width: var(--control-height);
+  height: var(--control-height);
+  padding: 0;
+  color: var(--control-muted);
+}
+
+/* Single choice draws a round radio dot; `--check` draws a square box with a
+   check mark for multi-select. */
+.st-chip {
+  position: relative;
+  padding: 0 14px 0 12px;
+  color: var(--control-muted);
+}
+
+.st-chip::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  flex: none;
+  padding: 2px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background-clip: content-box;
+}
+
+.st-chip--check::before {
+  padding: 0;
+  border-radius: 3px;
+}
+
+.st-chip--check::after {
+  content: "";
+  position: absolute;
+  top: calc(50% - 6px);
+  left: 12px;
+  width: 12px;
+  height: 12px;
+  background-color: var(--control-primary-ink);
+  opacity: 0;
+  -webkit-mask: var(--control-check-mask) center / 10px no-repeat;
+  mask: var(--control-check-mask) center / 10px no-repeat;
+}
+
+.st-chip:is([aria-pressed="true"], [aria-checked="true"], .is-selected) {
+  border-color: var(--control-select);
+  background-color: color-mix(in srgb, var(--control-select) 12%, transparent);
+  color: var(--control-select);
+}
+
+.st-chip:is([aria-pressed="true"], [aria-checked="true"], .is-selected)::before {
+  background-color: currentColor;
+}
+
+.st-chip--check:is([aria-pressed="true"], [aria-checked="true"], .is-selected)::after {
+  opacity: 1;
+}
+
+.st-segmented {
+  max-width: 100%;
+  display: inline-flex;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+}
+
+/* The selected fill is an inset inside the full 44px item box. */
+.st-segmented__item {
+  flex: 1 1 0;
+  min-width: var(--control-height);
+  padding: 0 14px;
+  border: 3px solid transparent;
+  background: transparent;
+  background-clip: padding-box;
+  color: inherit;
+}
+
+.st-segmented__item:is([aria-pressed="true"], [aria-checked="true"], [aria-selected="true"], .is-selected) {
+  background-color: color-mix(in srgb, var(--control-select) 14%, transparent);
+  color: var(--control-select);
+}
+
+.st-select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  min-height: var(--control-height);
+  padding: 0 40px 0 16px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill) var(--control-chevron) no-repeat right 16px center / 12px 12px;
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+  text-overflow: ellipsis;
+  color-scheme: dark;
+  cursor: pointer;
+  transition: border-color var(--motion-instant) ease-out, background-color var(--motion-instant) ease-out;
+}
+
+.st-select option {
+  background-color: #051011;
+  color: var(--control-ink);
+}
+
+/* Multi-select: a square box that fills with the selection colour and shows a
+   check mark. The 44px target is the label row around it. */
+.st-check {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: inline-grid;
+  place-content: center;
+  margin: 0;
+  border: 1.5px solid var(--control-line-strong);
+  border-radius: min(5px, var(--control-radius));
+  background: var(--control-fill);
+  cursor: pointer;
+  transition: background-color var(--motion-instant) ease-out, border-color var(--motion-instant) ease-out;
+}
+
+.st-check::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  background-color: var(--control-primary-ink);
+  opacity: 0;
+  -webkit-mask: var(--control-check-mask) center / contain no-repeat;
+  mask: var(--control-check-mask) center / contain no-repeat;
+}
+
+.st-check:checked {
+  border-color: var(--control-select);
+  background-color: var(--control-select);
+}
+
+.st-check:checked::before {
+  opacity: 1;
+}
+
+.st-field {
+  width: 100%;
+  min-height: var(--control-height);
+  padding: 10px 14px;
+  border: 1px solid var(--control-line);
+  border-radius: min(var(--radius-field), var(--control-radius));
+  background: var(--control-fill);
+  color: var(--control-ink);
+  color-scheme: dark;
+  transition: border-color var(--motion-instant) ease-out;
+}
+
+.st-field::placeholder {
+  color: var(--control-muted);
+}
+
+.st-field:focus {
+  border-color: var(--control-line-strong);
+}
+
+:is(.st-btn, .st-icon-btn, .st-chip, .st-segmented__item, .st-select, .st-check, .st-field):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+:is(.st-btn, .st-icon-btn, .st-chip, .st-segmented__item, .st-select, .st-check, .st-field):disabled {
+  opacity: var(--control-disabled-opacity);
+  cursor: not-allowed;
+}
+
+:is(.st-btn:not(.st-btn--primary), .st-icon-btn, .st-chip):active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :is(.st-btn, .st-icon-btn, .st-chip, .st-segmented__item):active:not(:disabled) {
+    scale: 0.97;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :is(
+    .st-btn:not(.st-btn--primary, .st-btn--danger),
+    .st-icon-btn:not(.st-icon-btn--danger),
+    .st-chip:not([aria-pressed="true"], [aria-checked="true"], .is-selected),
+    .st-select,
+    .st-field
+  ):hover:not(:disabled) {
+    border-color: var(--control-line-strong);
+  }
+
+  :is(
+    .st-btn--quiet,
+    .st-icon-btn,
+    .st-segmented__item:not([aria-pressed="true"], [aria-checked="true"], [aria-selected="true"], .is-selected)
+  ):hover:not(:disabled) {
+    color: var(--control-ink);
+  }
+
+  .st-btn--primary:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  :is(.st-btn--danger, .st-icon-btn--danger):hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--control-danger) 70%, transparent);
+    color: var(--control-danger);
+  }
+}
+
+.st-icon-btn--danger:focus-visible {
+  color: var(--control-danger);
+}
+
+/* #34 IconActionButton has no look of its own, so it rendered as whatever its
+   parent made of a <button>. Inside the Atlas shell and the Composer it is now
+   a 44px icon circle by default; :where() keeps every surface rule above it.
+   Journey Story is portaled to <body>, outside both scopes, so its icon
+   actions are unchanged. Position and the tooltip ::after stay in
+   living-atlas.css. */
+:where(.living-atlas, .journey-composer) :where(.icon-action-button) {
+  width: var(--control-height);
+  min-width: var(--control-height);
+  height: var(--control-height);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
+  cursor: pointer;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :where(.living-atlas, .journey-composer) :where(.icon-action-button:active:not(:disabled)) {
+    scale: 0.97;
+  }
+}

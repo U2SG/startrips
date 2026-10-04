@@ -46,17 +46,20 @@
   pointer-events: auto;
 }
 
-.living-atlas button,
+/* The family primitives in controls.css bring their own type, ink and focus
+   ring. :where() keeps these shell defaults at their old specificity for every
+   other control, so only a primitive stops inheriting. */
+.living-atlas button:where(:not(.st-btn, .st-icon-btn, .st-chip, .st-segmented__item)),
 .living-atlas input,
 .living-atlas textarea {
   font: inherit;
 }
 
-.living-atlas button {
+.living-atlas button:where(:not(.st-btn, .st-icon-btn, .st-chip, .st-segmented__item)) {
   color: inherit;
 }
 
-.living-atlas button:focus-visible,
+.living-atlas button:where(:not(.st-btn, .st-icon-btn, .st-chip, .st-segmented__item)):focus-visible,
 .living-atlas input:focus-visible,
 .living-atlas textarea:focus-visible {
   outline: 1px solid var(--atlas-acid);
@@ -65,7 +68,7 @@
 
 .living-atlas button:disabled {
   cursor: not-allowed;
-  opacity: 0.38;
+  opacity: var(--control-disabled-opacity);
 }
 
 .living-atlas__globe {
@@ -224,9 +227,23 @@
   pointer-events: none;
 }
 
+/* The editor box stays click-through: only its launcher or panel takes input,
+   so a full-width compact editor never blocks the map beside the launcher. */
 .route-candidate-editor[data-route-editor-positioned="true"] {
   visibility: visible;
+}
+
+.route-candidate-editor[data-route-editor-positioned="true"] > * {
   pointer-events: auto;
+}
+
+/* Compact: full width between the safe-area edges. place() leaves left and
+   width to this rule and still measures the header and dock for the vertical
+   band, so a long panel scrolls inside it. */
+.living-atlas[data-mobile-v2="on"] .route-candidate-editor {
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  left: calc(12px + env(safe-area-inset-left, 0px));
+  width: auto;
 }
 
 .route-candidate-editor__panel {
@@ -237,9 +254,10 @@
   padding: 16px;
   display: grid;
   gap: 12px;
-  border: 1px solid rgba(118, 198, 188, 0.26);
-  background: rgba(3, 12, 13, 0.94);
-  box-shadow: 0 12px 42px rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-surface);
+  background: var(--atlas-panel);
+  box-shadow: var(--elev-2);
   backdrop-filter: blur(16px);
 }
 
@@ -265,31 +283,22 @@
 .route-candidate-editor p { margin: 0; color: var(--atlas-muted); line-height: 1.5; }
 .route-candidate-editor label { display: grid; gap: 6px; color: var(--atlas-muted); }
 .route-candidate-editor__profile { display: grid; gap: 6px; color: var(--atlas-muted); }
-.route-candidate-editor__profiles { display: flex; gap: 8px; flex-wrap: wrap; }
-.route-candidate-editor__profiles button { flex: 1 0 64px; min-width: 44px; }
-.route-candidate-editor select {
-  min-height: 44px;
-  width: 100%;
-  padding: 8px;
-  color: var(--atlas-text);
-  border: 1px solid rgba(118, 198, 188, 0.28);
-  background: #0a1718;
-}
 .route-candidate-editor__shapes > .route-shape-picker { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 100%; }
 .route-shape-picker form { display: grid; gap: 8px; }
 .route-shape-picker input {
-  min-height: 44px;
+  min-height: var(--control-height);
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  padding: 8px;
+  padding: 8px 14px;
   color: var(--atlas-text);
-  border: 1px solid var(--atlas-line);
-  background: var(--atlas-panel-solid);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-field);
+  background: var(--control-fill);
 }
 .route-shape-picker summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
 .route-shape-picker__results { padding: 0; margin: 0; list-style: none; display: grid; gap: 8px; }
-.route-shape-picker__results button { display: grid; gap: 4px; width: 100%; text-align: left; overflow-wrap: anywhere; }
+.route-shape-picker__results button { display: grid; gap: 4px; width: 100%; border-radius: var(--radius-tile); text-align: left; overflow-wrap: anywhere; }
 .route-shape-picker a { color: var(--atlas-text); overflow-wrap: anywhere; }
 .route-candidate-editor__shape { padding-block: 8px; border-top: 1px solid var(--atlas-line); }
 .route-candidate-editor__shape > span { display: grid; gap: 4px; min-width: 0; width: 100%; overflow-wrap: anywhere; }
@@ -297,21 +306,31 @@
 .route-candidate-editor__offsets { display: grid; gap: 8px; }
 .route-candidate-editor__offsets ul { margin: 0; padding-left: 20px; color: var(--atlas-muted); line-height: 1.5; }
 .route-candidate-editor button {
-  min-height: 44px;
-  padding: 8px 12px;
-  color: var(--atlas-text);
-  border: 1px solid rgba(118, 198, 188, 0.3);
-  background: rgba(20, 48, 47, 0.95);
+  min-height: var(--control-height);
+  padding: 8px 14px;
+  color: var(--control-ink);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
   cursor: pointer;
 }
-.route-candidate-editor button[aria-pressed="true"] { border-color: rgba(166, 224, 204, 0.75); }
-@media (hover: hover) and (pointer: fine) {
-  .route-candidate-editor button:hover { border-color: rgba(166, 224, 204, 0.75); }
+/* The closed launcher floats over the map, so it carries its own dark glass. */
+.route-candidate-editor > button {
+  background: rgba(2, 10, 11, 0.66);
+  backdrop-filter: blur(14px);
 }
-.route-candidate-editor button:disabled { opacity: 0.45; cursor: default; }
-.route-candidate-editor button:focus-visible,
-.route-candidate-editor select:focus-visible,
-.route-shape-handle:focus-visible { outline: 2px solid #b8dcca; outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .route-candidate-editor button:not(.is-primary, [aria-pressed]):hover:not(:disabled) { border-color: var(--control-line-strong); }
+}
+/* One acid primary at a time: 查看候选, then 就是这条 or 保存修正点. */
+.route-candidate-editor button.is-primary {
+  border-color: var(--control-primary);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
+  font-weight: 600;
+}
+.route-candidate-editor button:disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
+.route-shape-handle:focus-visible { outline: 2px solid var(--control-focus); outline-offset: 2px; }
 .route-shape-handle {
   width: 44px;
   height: 44px;
@@ -322,20 +341,17 @@
 }
 .route-shape-handle:active { cursor: grabbing; }
 
-.route-candidate-editor__ferry { display: flex !important; align-items: center; min-height: 44px; }
+.route-candidate-editor__ferry { display: flex !important; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
 .route-candidate-editor__access { display: grid; gap: 8px; }
 .route-candidate-editor__access summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
 .nearby-route-points { display: grid; gap: 8px; padding-block: 12px; border-block: 1px solid var(--atlas-line); }
 .nearby-route-points p { margin: 0; color: var(--atlas-muted); line-height: 1.5; }
-.nearby-route-points__modes { display: flex; gap: 8px; }
-.nearby-route-points__modes button { flex: 1; }
 .nearby-route-points ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.nearby-route-points button { min-height: 44px; padding: 8px 12px; color: var(--atlas-text); background: var(--atlas-panel-solid); border: 1px solid var(--atlas-line); cursor: pointer; }
-.nearby-route-points li button { display: grid; gap: 4px; width: 100%; text-align: left; overflow-wrap: anywhere; }
+.nearby-route-points button { min-height: var(--control-height); padding: 8px 14px; color: var(--control-ink); background: var(--control-fill); border: 1px solid var(--control-line); border-radius: var(--control-radius); cursor: pointer; }
+.nearby-route-points li button { display: grid; gap: 4px; width: 100%; border-radius: var(--radius-tile); text-align: left; overflow-wrap: anywhere; }
 .nearby-route-points span, .nearby-route-points small { color: var(--atlas-muted); }
-.nearby-route-points button[aria-pressed="true"] { border-color: var(--atlas-cyan); }
-.nearby-route-points button:focus-visible, .route-nearby-handle:focus-visible { outline: 2px solid var(--atlas-cyan); outline-offset: 2px; }
-.nearby-route-points button:disabled { opacity: 0.45; cursor: default; }
+.route-nearby-handle:focus-visible { outline: 2px solid var(--control-focus); outline-offset: 2px; }
+.nearby-route-points button:disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
 .route-nearby-origin { width: 20px; height: 20px; border: 2px dashed var(--atlas-muted); border-radius: 50%; background: var(--atlas-panel-solid); }
 .route-nearby-handle { width: 44px; height: 44px; border: 1px solid var(--atlas-cyan); border-radius: 50%; color: var(--atlas-text); background: var(--atlas-panel-solid); cursor: pointer; }
 
@@ -630,11 +646,15 @@
   letter-spacing: 0.08em;
 }
 
+/* Six labelled items are about 573px wide, so the nav takes its content width
+   and never wraps a label. Centred, it clears the 189px wordmark from 981px
+   and the 344px brand block once that block shows from 1301px (starlight-
+   experience.css); the 60px account dock stays to its right up to 2560px. */
 .living-atlas__header nav {
   position: absolute;
   top: 14px;
   left: 50%;
-  width: 460px;
+  width: max-content;
   height: 54px;
   display: flex;
   align-items: center;
@@ -651,17 +671,19 @@
 
 .living-atlas__header nav button {
   position: relative;
+  flex: none;
   min-height: 44px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 0 16px;
+  padding: 0 14px;
   border: 0;
   background: transparent;
   color: #728781;
   cursor: pointer;
   font-size: 10px;
   letter-spacing: 0.1em;
+  white-space: nowrap;
 }
 
 .living-atlas__header nav button.is-active {
@@ -677,9 +699,9 @@
 .living-atlas__header nav button.is-active::after {
   content: "";
   position: absolute;
-  right: 16px;
+  right: 14px;
   bottom: 0;
-  left: 16px;
+  left: 14px;
   height: 1px;
   background: var(--atlas-cyan);
 }
@@ -3358,24 +3380,25 @@
 }
 
 .journey-composer__discard-guard-actions button {
-  min-height: 44px;
+  min-height: var(--control-height);
   padding: 0 20px;
-  border: 1px solid var(--atlas-line);
-  border-radius: 2px;
-  background: transparent;
-  color: var(--atlas-text);
-  font-size: 12px;
-  letter-spacing: 0.04em;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
 .journey-composer__discard-guard-actions button[data-composer-discard-confirm] {
-  border-color: var(--atlas-line-strong);
-  background: var(--atlas-panel-solid);
+  border-color: color-mix(in srgb, var(--control-danger) 45%, transparent);
+  background: transparent;
+  color: var(--control-danger);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .journey-composer__discard-guard-actions button:hover {
-    border-color: var(--atlas-line-strong);
+  .journey-composer__discard-guard-actions button:not([data-composer-discard-confirm]):hover {
+    border-color: var(--control-line-strong);
   }
 }
 
@@ -3423,15 +3446,16 @@
 
 .journey-location-search > button,
 .journey-coordinate-fields > button {
-  min-height: 42px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
   padding: 0 12px;
-  border: 1px solid var(--atlas-line-strong);
-  background: rgba(19, 48, 41, 0.35);
-  color: #c5d8d3;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
   font-size: 10px;
 }
@@ -3539,28 +3563,9 @@
   gap: 16px;
 }
 
-.journey-itinerary-import__modes {
-  display: flex;
-  gap: 8px;
-}
-
-.journey-itinerary-import__modes > button {
-  /* #512: every import control is a real touch target, like the rest of the
-     mobile-primary Composer. A mode switch is not smaller because it is small. */
-  min-height: var(--mobile-control-hit-size, 44px);
-  padding: 0 14px;
-  border: 1px solid rgba(122, 244, 237, 0.16);
-  background: transparent;
-  color: #849994;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.journey-itinerary-import__modes > button[aria-pressed="true"] {
-  border-color: var(--atlas-acid);
-  color: #dcece8;
-}
-
+/* #512: every import control is a real touch target, like the rest of the
+   mobile-primary Composer. The mode switch is a segmented track; see the
+   control family section at the end of this file. */
 .journey-itinerary-import__field {
   display: grid;
   gap: 10px;
@@ -3590,26 +3595,53 @@
   font-size: 12px;
 }
 
-.journey-itinerary-import__position select {
-  width: 100%;
-  padding: 0 30px 0 10px;
-  border: 1px solid rgba(122, 244, 237, 0.2);
-  border-radius: 0;
-  background: #071713;
-  color: #a9bbb5;
-  font: 500 11px/1.3 var(--archive-sans);
-  color-scheme: dark;
-}
-
-.journey-itinerary-import__position select:focus-visible {
-  border-color: var(--atlas-acid);
-  outline: 1px solid var(--atlas-acid);
-  outline-offset: 2px;
-}
-
 .journey-itinerary-import__file {
   display: grid;
   gap: 10px;
+}
+
+/* A visually quiet file input: the pill is the visible control and the real
+   input lies transparent over exactly that box, so it keeps its 44px target,
+   its keyboard focus and its label. Two classes outrank the Composer's
+   `label > span` caption rules. */
+.journey-itinerary-import__file > .journey-itinerary-import__file-button,
+.journey-recorded-tracks__import .journey-recorded-tracks__file-button {
+  position: relative;
+  min-height: var(--control-height);
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: var(--control-gap);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+  cursor: pointer;
+}
+
+.journey-itinerary-import__file-button input[type="file"],
+.journey-recorded-tracks__file-button input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.journey-itinerary-import__file-button:has(input:focus-visible),
+.journey-recorded-tracks__file-button:has(input:focus-visible) {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+.journey-itinerary-import__file-button:has(input:disabled),
+.journey-recorded-tracks__file-button:has(input:disabled) {
+  opacity: var(--control-disabled-opacity);
+  cursor: not-allowed;
 }
 
 .journey-itinerary-import__pages {
@@ -3644,9 +3676,10 @@
   flex: 0 0 var(--mobile-control-hit-size, 44px);
   min-width: var(--mobile-control-hit-size, 44px);
   min-height: var(--mobile-control-hit-size, 44px);
-  border: 1px solid rgba(122, 244, 237, 0.16);
-  background: transparent;
-  color: #849994;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
   cursor: pointer;
 }
 
@@ -3699,8 +3732,10 @@
   max-height: min(900px, 92dvh);
   overflow-y: auto;
   padding: clamp(18px, 4vw, 32px);
-  border: 1px solid var(--atlas-line);
-  background: #071111;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-surface);
+  background: var(--atlas-panel-solid);
+  box-shadow: var(--elev-2);
   color: var(--atlas-text);
 }
 
@@ -3724,12 +3759,16 @@
 }
 
 .living-atlas__import-dialog > header button {
-  flex: 0 0 44px;
-  width: 44px;
-  height: 44px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-text);
+  flex: 0 0 var(--control-height);
+  width: var(--control-height);
+  height: var(--control-height);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
   cursor: pointer;
 }
 
@@ -3751,28 +3790,32 @@
   align-items: end;
   gap: 10px;
   padding: 12px;
-  border: 1px solid rgba(122, 244, 237, 0.24);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-tile);
   background: var(--atlas-panel-soft);
 }
 
+/* 添加 N 个地点 is the import's one acid primary; the Composer's shortcut
+   reuses the geometry and turns secondary further down. */
 .journey-itinerary-import__actions > button,
 .journey-composer__import-shortcut {
   min-height: var(--mobile-control-hit-size, 44px);
-  padding: 0 16px;
+  padding: 0 var(--control-pad-x);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 1px solid var(--atlas-acid);
-  background: var(--atlas-acid);
-  color: #071512;
+  border: 1px solid var(--control-primary);
+  border-radius: var(--control-radius);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
 
 .journey-itinerary-import__actions > button:disabled {
-  opacity: 0.45;
+  opacity: var(--control-disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -3786,7 +3829,8 @@
   display: grid;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid rgba(122, 244, 237, 0.2);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-tile);
   color: #dcece8;
   font-size: 12px;
 }
@@ -3859,14 +3903,28 @@
   font-size: 11px;
 }
 
+/* The import's secondary actions (自动整理, 停止整理, 查找位置, 更换位置, 搜索
+   and 更换导入来源) are one dark-glass pill instead of browser buttons. */
+.journey-itinerary-import__field > button,
+.journey-itinerary-import__busy button,
+.journey-itinerary-import__entry-main > button,
+.journey-itinerary-import__entry-details-body > button,
+.journey-itinerary-import__search > button,
 .journey-itinerary-import__source-reopen,
 .journey-itinerary-import__cancel {
   min-height: var(--mobile-control-hit-size, 44px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   justify-self: start;
-  padding: 0 12px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-text);
+  gap: var(--control-gap);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
   cursor: pointer;
 }
 
@@ -3930,20 +3988,6 @@
   gap: 6px;
 }
 
-.journey-itinerary-import__organization button {
-  padding: 0 12px;
-  border: 1px solid rgba(122, 244, 237, 0.16);
-  background: transparent;
-  color: #9fb5af;
-  cursor: pointer;
-}
-
-.journey-itinerary-import__organization button[aria-pressed="true"] {
-  border-color: rgba(122, 244, 237, 0.44);
-  color: #d0eeea;
-  background: rgba(122, 244, 237, 0.08);
-}
-
 @media (max-width: 640px) {
   .journey-itinerary-import__entry-details-body {
     padding-left: 0;
@@ -3977,7 +4021,8 @@
   width: 100%;
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid rgba(122, 244, 237, 0.16);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-tile);
   background: transparent;
   color: #bacbc6;
   font-size: 12px;
@@ -4004,22 +4049,16 @@
   grid-column: 1 / -1;
 }
 
+/* The box is .st-check (controls.css); the label row is the 44px target. */
 .journey-checkbox {
-  min-height: 34px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   color: var(--atlas-muted);
   font-size: 9px;
   letter-spacing: 0.06em;
   cursor: pointer;
-}
-
-.journey-checkbox input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--atlas-acid);
 }
 
 .journey-route-draft {
@@ -4150,13 +4189,17 @@
   font: 500 10px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
-.journey-route-draft__replace-trigger {
-  min-height: 44px;
-  padding: 0 14px;
-  border: 1px solid rgba(122, 244, 237, 0.28);
-  background: rgba(8, 31, 28, 0.36);
-  color: var(--atlas-cyan);
-  text-align: left;
+/* 附近可达点 and 更换这个地点 (.journey-route-draft__replace-trigger). */
+.journey-route-draft__expanded > button {
+  min-height: var(--control-height);
+  justify-self: start;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
   cursor: pointer;
 }
 
@@ -4175,16 +4218,22 @@
   gap: 10px;
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid rgba(122, 244, 237, 0.2);
-  background: rgba(5, 17, 16, 0.58);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-tile);
+  background: var(--control-fill);
   color: var(--atlas-text);
   text-align: left;
   cursor: pointer;
+  transition: background-color var(--motion-instant) ease-out, border-color var(--motion-instant) ease-out;
 }
 
 .journey-route-draft__stop-toggle.is-stop {
-  border-color: rgba(122, 244, 237, 0.48);
-  background: rgba(16, 55, 50, 0.54);
+  border-color: var(--control-select);
+  background: color-mix(in srgb, var(--control-select) 12%, transparent);
+}
+
+.journey-route-draft__stop-toggle.is-stop > svg {
+  color: var(--control-select);
 }
 
 .journey-route-draft__stop-toggle > span,
@@ -4219,21 +4268,10 @@
   gap: 6px;
 }
 
+/* Stay ownership is a single choice: radio-dot chips, see the control family
+   section at the end of this file. */
 .journey-route-draft__stay-ownership button {
-  min-height: 44px;
   max-width: 100%;
-  padding: 7px 10px;
-  border: 1px solid rgba(122, 244, 237, 0.2);
-  background: rgba(2, 8, 8, 0.45);
-  color: #a8bcb6;
-  font: inherit;
-  cursor: pointer;
-}
-
-.journey-route-draft__stay-ownership button[aria-pressed="true"] {
-  border-color: rgba(122, 244, 237, 0.58);
-  background: rgba(16, 55, 50, 0.62);
-  color: var(--atlas-cyan);
 }
 
 .journey-route-draft__stay-ownership[data-stay-ownership-correction="true"] > small {
@@ -4315,17 +4353,18 @@
 }
 
 .journey-route-draft__position-editor button {
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-cyan);
+  min-height: var(--control-height);
+  padding: 0 14px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
 }
 
 .journey-route-draft__position-editor button:disabled {
-  opacity: 0.5;
-  cursor: default;
+  opacity: var(--control-disabled-opacity);
+  cursor: not-allowed;
 }
 
 .journey-route-draft__position-results {
@@ -4345,6 +4384,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 3px 10px;
   padding: 9px 12px;
+  border-radius: var(--radius-tile);
   text-align: left;
 }
 
@@ -4398,14 +4438,15 @@
 }
 
 .journey-route-draft__menu > button {
-  min-height: 44px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 0 14px;
-  border: 1px solid rgba(255, 118, 118, 0.24);
-  background: rgba(30, 8, 8, 0.35);
-  color: #dba4a4;
+  border: 1px solid color-mix(in srgb, var(--control-danger) 45%, transparent);
+  border-radius: var(--control-radius);
+  background: transparent;
+  color: var(--control-danger);
 }
 
 .journey-route-draft li > .journey-route-draft__main {
@@ -4464,20 +4505,21 @@
 }
 
 .journey-route-draft__actions button {
-  width: 44px;
-  height: 44px;
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-muted);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
   cursor: pointer;
 }
 
 .journey-route-draft__actions button:disabled {
-  cursor: default;
-  opacity: 0.34;
+  cursor: not-allowed;
+  opacity: var(--control-disabled-opacity);
 }
 
 .journey-story-fields,
@@ -4517,17 +4559,22 @@
   margin-bottom: 14px;
 }
 
+/* The swatch is a circle inset in a 44px target; the selection is a cyan ring
+   at the target's edge, clear of the colour itself. */
 .journey-light-colors button {
-  width: 32px;
-  height: 32px;
+  width: var(--control-height);
+  height: var(--control-height);
   padding: 0;
-  border: 3px solid #020708;
-  outline: 1px solid transparent;
+  border: 6px solid transparent;
+  border-radius: 50%;
+  background-clip: padding-box;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
   cursor: pointer;
 }
 
 .journey-light-colors button.is-selected {
-  outline-color: var(--atlas-text);
+  outline-color: var(--control-select);
 }
 
 .journey-media-picker {
@@ -4536,6 +4583,7 @@
   justify-items: center;
   padding: 28px;
   border: 1px dashed var(--atlas-line-strong);
+  border-radius: var(--radius-tile);
   color: var(--atlas-cyan);
   text-align: center;
   cursor: pointer;
@@ -4597,9 +4645,9 @@
 .journey-media-fields li button {
   min-height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-muted);
+  border: 1px solid var(--control-line);
+  background: var(--control-fill);
+  color: var(--control-muted);
   cursor: pointer;
   font-size: 9px;
 }
@@ -4713,15 +4761,16 @@
 }
 
 .journey-save-partial > button {
-  min-height: 42px;
+  min-height: var(--control-height);
   margin-top: 14px;
-  padding: 0 13px;
-  border: 1px solid rgba(200, 255, 61, 0.42);
-  background: rgba(48, 69, 28, 0.38);
-  color: #dce9e1;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
 .journey-composer__message {
@@ -4746,38 +4795,48 @@
 
 .journey-composer__footer button {
   min-width: 120px;
-  min-height: 42px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 0 14px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: #9aafa9;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
   font-size: 10px;
   letter-spacing: 0.08em;
 }
 
+/* Save / 完成: the Composer's one acid primary. */
 .journey-composer__footer button:last-child {
-  border-color: rgba(200, 255, 61, 0.46);
-  background: rgba(48, 69, 28, 0.38);
-  color: #dce9e1;
+  border-color: var(--control-primary);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
+  font-weight: 600;
 }
 
 /* Single-surface composer */
 
+/* Centred on desktop it is a floating glass surface over the modal scrim. The
+   panel needs no backdrop blur here: the scrim already separates it, and a
+   filter would re-parent the absolutely placed discard guard. */
 .journey-composer {
   width: min(1260px, 100%);
   height: min(860px, 100%);
   max-height: 100%;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  border-color: rgba(122, 244, 237, 0.24);
-  background:
-    linear-gradient(130deg, rgba(8, 22, 21, 0.98), rgba(1, 7, 8, 0.99) 44%),
-    #020708;
-  box-shadow: 0 34px 120px rgba(0, 0, 0, 0.72);
+  overflow: hidden;
+  border-color: var(--control-line);
+  border-radius: var(--radius-surface);
+  background: var(--atlas-panel);
+  box-shadow: var(--elev-2);
+}
+
+.journey-composer[data-mobile-layout="true"] {
+  border-radius: 0;
 }
 
 .journey-composer__header {
@@ -4807,9 +4866,13 @@
 }
 
 .journey-composer__header > button {
-  flex-basis: 46px;
-  width: 46px;
-  height: 46px;
+  flex-basis: var(--control-height);
+  width: var(--control-height);
+  height: var(--control-height);
+  border-color: var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
 }
 
 .journey-composer__body {
@@ -4978,18 +5041,8 @@
 
 .journey-recorded-tracks__import label {
   display: grid;
+  justify-self: start;
   gap: 7px;
-}
-
-.journey-recorded-tracks__import input[type="file"] {
-  min-height: 44px;
-  max-width: 100%;
-  color: #a7bbb5;
-  font-size: 12px;
-}
-
-.journey-recorded-tracks__import input[type="file"]::file-selector-button {
-  min-height: 44px;
 }
 
 .journey-recorded-tracks__selection {
@@ -5009,20 +5062,28 @@
 .journey-recorded-tracks__import-button,
 .journey-recorded-tracks__withdraw,
 .journey-recorded-tracks__confirm button {
-  min-height: 44px;
-  padding: 8px 12px;
-  border: 1px solid rgba(122, 244, 237, 0.2);
-  border-radius: 4px;
-  background: rgba(5, 31, 30, 0.5);
-  color: #c9dad5;
+  min-height: var(--control-height);
+  justify-self: start;
+  padding: 8px var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   font-size: 11px;
+}
+
+/* 撤回此记录 opens a destructive confirmation, so it reads in the danger tint. */
+.journey-recorded-tracks__withdraw {
+  border-color: color-mix(in srgb, var(--control-danger) 45%, transparent);
+  background: transparent;
+  color: var(--control-danger);
 }
 
 .journey-recorded-tracks__import-button:disabled,
 .journey-recorded-tracks__withdraw:disabled,
 .journey-recorded-tracks__confirm button:disabled {
-  cursor: default;
-  opacity: 0.46;
+  cursor: not-allowed;
+  opacity: var(--control-disabled-opacity);
 }
 
 .journey-recorded-tracks__list {
@@ -5093,8 +5154,9 @@
 }
 
 .journey-recorded-tracks__confirm .is-destructive {
-  border-color: rgba(225, 128, 112, 0.28);
-  color: #e5a496;
+  border-color: color-mix(in srgb, var(--control-danger) 45%, transparent);
+  background: transparent;
+  color: var(--control-danger);
 }
 
 .journey-recorded-tracks__message {
@@ -5109,12 +5171,6 @@
 .journey-light-colors {
   gap: 12px;
   padding-top: 20px;
-}
-
-.journey-light-colors button {
-  width: 36px;
-  height: 36px;
-  border-width: 4px;
 }
 
 .journey-light-colors {
@@ -5135,7 +5191,7 @@
 }
 
 .journey-light-colors .journey-light-color-list button {
-  flex: 0 0 36px;
+  flex: 0 0 var(--control-height);
 }
 
 .journey-light-effects {
@@ -5240,6 +5296,7 @@
   overflow: hidden;
   padding: 10px;
   border: 1px solid var(--atlas-line);
+  border-radius: var(--radius-tile);
   background: rgba(7, 25, 23, 0.5);
   color: var(--atlas-text);
   text-align: left;
@@ -5263,11 +5320,10 @@
   }
 }
 
+/* The tile's gradient is the effect itself; the selection is the shared cyan. */
 .journey-light-effect-list button.is-selected {
-  border-color: var(--journey-light-color);
-  box-shadow:
-    0 0 0 1px var(--journey-light-color),
-    0 0 22px color-mix(in srgb, var(--journey-light-color) 25%, transparent);
+  border-color: var(--control-select);
+  box-shadow: 0 0 0 1px var(--control-select);
 }
 
 .journey-light-effect-list button.is-selected::before {
@@ -5329,8 +5385,8 @@
 }
 
 .journey-media-picker:focus-within {
-  outline: 1px solid var(--atlas-acid);
-  outline-offset: 3px;
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
 }
 
 .journey-media-fields > ul li {
@@ -5344,24 +5400,7 @@
   font-size: 13px;
 }
 
-.journey-media-fields li select {
-  width: 100%;
-  min-height: 36px;
-  padding: 0 30px 0 10px;
-  border: 1px solid rgba(122, 244, 237, 0.2);
-  border-radius: 0;
-  background: #071713;
-  color: #a9bbb5;
-  font: 500 11px/1.3 var(--archive-sans);
-  color-scheme: dark;
-}
-
-.journey-media-fields li select:focus-visible {
-  border-color: var(--atlas-acid);
-  outline: 1px solid var(--atlas-acid);
-  outline-offset: 2px;
-}
-
+/* The media-ownership select is .st-select (controls.css). */
 .journey-media-fields li button {
   min-height: 36px;
   font-size: 11px;
@@ -5381,10 +5420,10 @@
 }
 
 .journey-media-fields__actions .icon-action-button {
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
-  min-height: 40px;
+  width: var(--control-height);
+  min-width: var(--control-height);
+  height: var(--control-height);
+  min-height: var(--control-height);
   display: inline-grid;
   place-items: center;
   padding: 0;
@@ -5440,8 +5479,9 @@
   gap: 12px;
   margin-top: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(122, 244, 237, 0.2);
-  background: rgba(8, 31, 28, 0.36);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-tile);
+  background: var(--control-fill);
   color: var(--atlas-cyan);
   text-align: left;
   cursor: pointer;
@@ -5533,12 +5573,14 @@
   grid-column: 1 / -1;
 }
 
+/* A full-width secondary pill: Save stays the Composer's only acid action. */
 .journey-composer__import-shortcut {
   width: 100%;
   margin-bottom: 12px;
-  border-color: var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-text);
+  border-color: var(--control-line);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font-weight: 500;
 }
 
 .journey-itinerary-import-panel {
@@ -5694,8 +5736,11 @@
   gap: 13px;
   width: min(540px, calc(100vw - 32px));
   padding: 10px 10px 10px 16px;
-  border: 1px solid var(--atlas-line-strong);
-  background: #071313;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-surface);
+  background: var(--atlas-panel);
+  box-shadow: var(--elev-1);
+  backdrop-filter: blur(16px);
   color: var(--atlas-cyan);
   pointer-events: auto;
   transform: translateX(-50%);
@@ -5719,16 +5764,22 @@
 }
 
 .journey-globe-pick-hint button {
-  min-height: 40px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-muted);
+  padding: 0 14px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
-  font-size: 9px;
+  font-size: var(--control-font-size);
+}
+
+.journey-globe-pick-hint button > span {
+  color: inherit;
+  font-size: inherit;
 }
 
 .living-atlas > .journey-composer-backdrop.is-globe-picking {
@@ -7681,11 +7732,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     justify-self: start;
     width: auto;
     max-width: 100%;
-    min-height: 32px;
+    min-height: var(--control-height);
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 0 9px;
+    padding: 0 12px;
     overflow: hidden;
     border: 1px solid rgba(118, 227, 211, 0.14);
     border-radius: 999px;
@@ -7750,7 +7801,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     padding: 10px calc(14px + env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom) + 14px) calc(14px + env(safe-area-inset-left, 0px));
     border: 1px solid rgba(118, 227, 211, 0.16);
     border-bottom: 0;
-    border-radius: 22px 22px 0 0;
+    border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
     background: linear-gradient(180deg, rgba(5, 22, 21, 0.99), rgba(1, 8, 9, 0.995));
     box-shadow: 0 -24px 58px rgba(0, 0, 0, 0.44);
   }
@@ -7795,16 +7846,16 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .journey-media-mobile-sheet > button.is-current {
-    border-color: rgba(200, 255, 61, 0.34);
-    background: rgba(200, 255, 61, 0.07);
-    color: rgba(230, 246, 220, 0.94);
+    border-color: var(--control-select);
+    background: color-mix(in srgb, var(--control-select) 12%, transparent);
+    color: var(--control-select);
   }
 
   .journey-media-mobile-sheet > button.is-destructive,
   .journey-media-mobile-sheet__confirm-actions > button.is-destructive {
-    border-color: rgba(194, 142, 120, 0.28);
-    background: rgba(68, 30, 24, 0.28);
-    color: #d7a28c;
+    border-color: color-mix(in srgb, var(--control-danger) 45%, transparent);
+    background: transparent;
+    color: var(--control-danger);
   }
 
   .journey-media-mobile-sheet__order,
@@ -9435,17 +9486,20 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 0 10px 0 6px;
-  border: 1px solid var(--atlas-line);
-  background: rgba(2, 13, 13, 0.72);
-  color: #93aaa4;
+  padding: 0 14px 0 10px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   font-size: 11px;
 }
 
+/* Two summary tiles, then the "…" circle that opens the rest. */
 .journey-composer--focused .journey-composer__task-entries {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: center;
   gap: 8px;
   margin: 16px 0 26px;
 }
@@ -9456,8 +9510,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   align-content: center;
   gap: 3px;
   padding: 8px 12px;
-  border: 1px solid var(--atlas-line);
-  background: rgba(2, 13, 13, 0.72);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-tile);
+  background: var(--control-fill);
   color: #cfe2dc;
   font-size: 12px;
   text-align: left;
@@ -9471,13 +9526,15 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   white-space: nowrap;
 }
 
-.journey-composer--focused .journey-composer__task-more {
-  grid-column: 1 / -1;
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
+.journey-composer--focused .journey-composer__task-entries > .journey-composer__task-more {
+  width: var(--control-height);
+  height: var(--control-height);
+  min-height: var(--control-height);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border-radius: var(--control-radius);
+  color: var(--control-muted);
 }
 
 .journey-composer--focused .journey-composer__more-menu {
@@ -9490,10 +9547,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   padding: 8px;
-  border: 1px solid var(--atlas-line);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-surface);
   background: rgba(1, 9, 10, 0.98);
-  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.55);
-  transform-origin: top center;
+  box-shadow: var(--elev-2);
+  transform-origin: top right;
   animation: atlasMenuIn 180ms var(--motion-ease-out) backwards;
 }
 
@@ -9504,7 +9562,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   gap: 3px;
   padding: 8px 10px;
   border: 1px solid transparent;
-  background: rgba(2, 13, 13, 0.72);
+  border-radius: var(--radius-tile);
+  background: var(--control-fill);
   color: #cfe2dc;
   font-size: 12px;
   text-align: left;
@@ -9567,13 +9626,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .journey-composer--focused .journey-composer__task-entries {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin: 24px 0 32px;
-}
-
-.journey-composer--focused .journey-composer__task-more {
-  grid-column: auto;
 }
 
 .journey-composer--focused .journey-route-draft > li:not(.is-empty) {
@@ -9592,9 +9646,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .journey-composer--focused .journey-route-draft__menu > button:not(.is-destructive-secondary) {
-  border-color: var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-text);
+  border-color: var(--control-line);
+  background: var(--control-fill);
+  color: var(--control-ink);
 }
 
 .journey-itinerary-import__result-heading,
@@ -9736,30 +9790,32 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     padding-right: 16px;
     padding-left: 16px;
   }
-  .journey-composer--focused .journey-composer__task-entries {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .journey-composer--focused .journey-composer__task-more {
-    grid-column: 1 / -1;
-  }
   .journey-itinerary-import__day > summary {
     flex-wrap: wrap;
     gap: 8px;
   }
 }
 
-/* #375: media belongs to the Route Point it was taken at. */
+/* #375: media belongs to the Route Point it was taken at. A full-width
+   secondary pill whose transparent file input covers the whole pill. */
 .journey-route-draft__media-upload {
   position: relative;
-  min-height: 44px;
+  min-height: var(--control-height);
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 10px;
-  padding: 0 12px;
-  border: 1px dashed rgba(122, 244, 237, 0.24);
-  color: #93aaa4;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   font-size: 11px;
+}
+
+.journey-route-draft__media-upload:has(input:focus-visible) {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
 }
 
 .journey-route-draft__media-upload input {
@@ -9810,4 +9866,169 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .journey-composer[data-composer-posture="constrained"] .journey-composer__task {
   padding: 12px 18px 16px;
+}
+
+/* ── One control family: Composer, route editor and itinerary import ───────
+   The tokens and primitives live in tokens.css and controls.css. These rules
+   give the migrated surfaces the shared selection, focus and press states;
+   they sit last so they settle any tie with the surface rules above. */
+
+/* Segmented: a pill track whose selected item is an inset cyan fill inside
+   the item's full 44px box. */
+:is(.route-candidate-editor__profiles, .nearby-route-points__modes, .journey-itinerary-import__modes) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+}
+
+:is(.route-candidate-editor__profiles, .nearby-route-points__modes, .journey-itinerary-import__modes) > button[type] {
+  flex: 1 0 64px;
+  min-width: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 12px;
+  border: 3px solid transparent;
+  border-radius: var(--control-radius);
+  background: transparent;
+  background-clip: padding-box;
+  color: var(--control-muted);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+  cursor: pointer;
+}
+
+:is(.route-candidate-editor__profiles, .nearby-route-points__modes, .journey-itinerary-import__modes) > button[aria-pressed="true"] {
+  background-color: color-mix(in srgb, var(--control-select) 14%, transparent);
+  color: var(--control-select);
+}
+
+/* Chips: a single choice draws a round radio dot that fills when chosen. */
+:is(.route-candidate-editor__candidates, .journey-route-draft__stay-ownership, .journey-itinerary-import__organization) button[aria-pressed] {
+  min-height: var(--control-height);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--control-gap);
+  padding: 0 14px 0 12px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
+  font-size: var(--control-font-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+:is(.route-candidate-editor__candidates, .journey-route-draft__stay-ownership, .journey-itinerary-import__organization) button[aria-pressed]::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  flex: none;
+  padding: 2px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background-clip: content-box;
+}
+
+:is(.route-candidate-editor__candidates, .journey-route-draft__stay-ownership, .journey-itinerary-import__organization) button[aria-pressed="true"] {
+  border-color: var(--control-select);
+  background-color: color-mix(in srgb, var(--control-select) 12%, transparent);
+  color: var(--control-select);
+}
+
+:is(.route-candidate-editor__candidates, .journey-route-draft__stay-ownership, .journey-itinerary-import__organization) button[aria-pressed="true"]::before {
+  background-color: currentColor;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :is(.route-candidate-editor__candidates, .journey-route-draft__stay-ownership, .journey-itinerary-import__organization) button[aria-pressed="false"]:hover:not(:disabled) {
+    border-color: var(--control-line-strong);
+    color: var(--control-ink);
+  }
+
+  :is(.route-candidate-editor__profiles, .nearby-route-points__modes, .journey-itinerary-import__modes) > button[aria-pressed="false"]:hover:not(:disabled) {
+    color: var(--control-ink);
+  }
+}
+
+/* One focus ring for every control on these surfaces. */
+:is(.journey-composer, .journey-globe-pick-hint, .route-candidate-editor, .living-atlas__import-dialog) :is(button, select, summary, input, textarea):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+/* Pills and circles answer on pointer-down with a small scale; :where() keeps
+   any transition a surface already names. Reduced motion keeps the colour
+   states and drops the scale. */
+:where(
+  .journey-composer__header > button,
+  .journey-composer__discard-guard-actions button,
+  .journey-composer__footer button,
+  .journey-composer__task-back,
+  .journey-composer__import-shortcut,
+  .journey-composer .icon-action-button,
+  .journey-location-search > button,
+  .journey-coordinate-fields > button,
+  .journey-route-draft__expanded > button,
+  .journey-route-draft__menu > button,
+  .journey-route-draft__stay-ownership button,
+  .journey-route-draft__position-editor button:not(li button),
+  .journey-light-colors button,
+  .journey-save-partial > button,
+  .journey-recorded-tracks button,
+  .journey-globe-pick-hint button,
+  .living-atlas__import-dialog > header button,
+  .journey-itinerary-import button:not(.journey-itinerary-import__candidates button),
+  .route-candidate-editor button:not(li button),
+  .nearby-route-points button:not(li button)
+) {
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :where(
+    .journey-composer__header > button,
+    .journey-composer__discard-guard-actions button,
+    .journey-composer__footer button,
+    .journey-composer__task-back,
+    .journey-composer__import-shortcut,
+    .journey-composer .icon-action-button,
+    .journey-location-search > button,
+    .journey-coordinate-fields > button,
+    .journey-route-draft__expanded > button,
+    .journey-route-draft__menu > button,
+    .journey-route-draft__stay-ownership button,
+    .journey-route-draft__position-editor button:not(li button),
+    .journey-light-colors button,
+    .journey-save-partial > button,
+    .journey-recorded-tracks button,
+    .journey-globe-pick-hint button,
+    .living-atlas__import-dialog > header button,
+    .journey-itinerary-import button:not(.journey-itinerary-import__candidates button),
+    .route-candidate-editor button:not(li button),
+    .nearby-route-points button:not(li button)
+  ):active:not(:disabled) {
+    scale: 0.97;
+  }
+}
+
+/* Rows and tiles answer with a tint instead of a scale. */
+:is(
+  .journey-composer--focused .journey-composer__task-entries > button:not(.journey-composer__task-more),
+  .journey-composer__more-menu button,
+  .journey-route-draft__summary,
+  .journey-route-draft__stop-toggle,
+  .journey-location-results button,
+  .journey-route-draft__position-results button,
+  .journey-globe-pick-button,
+  .nearby-route-points li button,
+  .route-shape-picker__results button,
+  .journey-itinerary-import__candidates button
+):active:not(:disabled) {
+  background-color: var(--control-fill-press);
 }
