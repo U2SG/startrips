@@ -590,6 +590,19 @@ const storyQaRouteBoundaryJourney: Journey = {
   ],
 };
 
+// #555: the Journey cover opening. The explicit cover is the LAST media of
+// the second Route Point, so the opening, canonical entry 0 and the cover's own
+// canonical entry are three different positions with three different contexts:
+// entries are [cover(103) opening, 100, 101, 102, 103].
+const storyQaCoverOpeningJourney: Journey = {
+  ...storyQaRouteBoundaryJourney,
+  coverMediaAssetId: "00000000-0000-4000-8000-000000000103",
+  routePoints: storyQaRouteBoundaryJourney.routePoints.map((point, index) => ({
+    ...point,
+    note: index === 0 ? "美术馆台阶上的第一站。" : "福康宁山的树影里，我们停了很久。",
+  })),
+};
+
 const STORY_QA_MIXED_VIDEO_ASSET_ID = "00000000-0000-4000-8000-000000000152";
 const storyQaMixedJourney: Journey = {
   ...storyQaJourney,
@@ -653,7 +666,12 @@ function JourneyStoryQaPreview() {
   const desktopChapterMode = qaMode === "desktop-chapter-rail";
   const desktopChapterNoMediaMode = qaMode === "desktop-chapter-rail-no-media";
   const routeBoundaryMode = qaMode === "route-boundary";
-  const initialJourney = desktopChapterNoMediaMode
+  // #555: the only preview mode that opens as a genuine whole-Journey entry.
+  // Every other mode keeps its current starting state (no opening).
+  const coverOpeningMode = qaMode === "journey-cover-opening";
+  const initialJourney = coverOpeningMode
+    ? storyQaCoverOpeningJourney
+    : desktopChapterNoMediaMode
     ? storyQaDesktopChapterNoMediaJourney
     : desktopChapterMode
     ? storyQaDesktopChapterJourney
@@ -729,6 +747,7 @@ function JourneyStoryQaPreview() {
         <JourneyStory
           journeys={journeys}
           journeyId={initialJourney.id}
+          presentJourneyCoverOpening={coverOpeningMode}
           onObservationChange={(next) => setObservation((current) => {
             if (current?.assetId === next?.assetId && current?.routePointId === next?.routePointId) return current;
             return next ? { assetId: next.assetId, routePointId: next.routePointId } : null;

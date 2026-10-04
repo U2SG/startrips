@@ -6224,6 +6224,131 @@ try {
       await session.page.close();
     }
   }
+  {
+    // #555: the Journey cover opening. The fixture's explicit cover (103) is
+    // the last media of Route Point 0005, so the cursor entries are
+    // [103 opening, 100, 101, 102, 103]: the opening, canonical entry 0 and the
+    // cover's own canonical entry are three different positions and contexts.
+    const name = "story-journey-cover-opening";
+    const POINT_A = "00000000-0000-4000-8000-000000000004";
+    const POINT_B = "00000000-0000-4000-8000-000000000005";
+    const SECOND = "00000000-0000-4000-8000-000000000101";
+    const JOURNEY_NOTE = "灯光沿着海岸";
+    const POINT_A_NOTE = "美术馆台阶上的第一站";
+    const POINT_B_NOTE = "福康宁山的树影里";
+    const session = await createStoryPage({
+      viewport: { width: 1280, height: 800 },
+      path: "/?qaState=journey-story&qaMode=journey-cover-opening",
+    });
+    const progress = {};
+    try {
+      const { page } = session;
+      const readContext = () => page.evaluate(({ selector, notes }) => {
+        const story = document.querySelector(".journey-story");
+        const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const current = pages?.querySelector('[data-media-page="current"]');
+        const pressed = [...(story?.querySelectorAll('.journey-story__route-points button[aria-pressed="true"]') ?? [])];
+        const visibleText = (text) => [...(story?.querySelectorAll("p, blockquote, span, div") ?? [])]
+          .some((element) => element.children.length === 0 && element.textContent?.includes(text)
+            && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+        const main = document.querySelector("main.living-atlas");
+        return {
+          assetId: current?.getAttribute("data-media-page-id") ?? null,
+          pressed: pressed.map((button) => button.getAttribute("data-route-point-id") ?? "all"),
+          pointNote: story?.querySelector(".journey-story__point-note")?.textContent ?? null,
+          journeyNoteVisible: visibleText(notes.journey),
+          pointANoteVisible: visibleText(notes.pointA),
+          pointBNoteVisible: visibleText(notes.pointB),
+          observationAsset: main?.getAttribute("data-qa-story-observation-asset") ?? null,
+          observationRoutePoint: main?.getAttribute("data-qa-story-observation-route-point") ?? null,
+        };
+      }, { selector: STAGE, notes: { journey: JOURNEY_NOTE, pointA: POINT_A_NOTE, pointB: POINT_B_NOTE } });
+      const waitForChapter = (assetId, chapter) => page.waitForFunction(({ selector, expectedAsset, expectedChapter }) => {
+        const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+        const current = pages?.querySelector('[data-media-page="current"]');
+        const pressed = [...document.querySelectorAll('.journey-story .journey-story__route-points button[aria-pressed="true"]')];
+        return current?.getAttribute("data-media-page-id") === expectedAsset
+          && current?.getAttribute("data-media-page-ready") === "true"
+          && pages?.getAttribute("data-media-presentation") === "settled"
+          && pressed.length === 1
+          && (pressed[0].getAttribute("data-route-point-id") ?? "all") === expectedChapter;
+      }, { selector: STAGE, expectedAsset: assetId, expectedChapter: chapter }, { polling: "raf", timeout: 10_000 });
+      const press = async (key) => {
+        await page.evaluate((selector) => (
+          document.querySelector(selector)?.querySelector("[data-story-media-pages]")?.focus()
+        ), STAGE);
+        await page.keyboard.press(key);
+      };
+
+      // 1. A whole-Journey open starts on the opening: the cover, with the
+      // whole Journey as the chapter and nothing published for the map.
+      await waitForChapter(I3, "all");
+      progress.opening = await readContext();
+      await mkdir("artifacts/story-media", { recursive: true });
+      await page.screenshot({ path: "artifacts/story-media/journey-cover-opening.png" });
+
+      // 2. Previous does nothing on the opening: no wrap to the end.
+      await press("ArrowLeft");
+      await page.waitForTimeout(700);
+      progress.afterPrevious = await readContext();
+
+      // 3. Next enters canonical entry 0 with its own Route Point context.
+      await press("ArrowRight");
+      await waitForChapter(I1, POINT_A);
+      progress.entryZero = await readContext();
+
+      // 4. The cover appears again later, inside its own Route Point.
+      await press("ArrowRight");
+      await waitForChapter(SECOND, POINT_A);
+      await press("ArrowRight");
+      await waitForChapter(I2, POINT_B);
+      await press("ArrowRight");
+      await waitForChapter(I3, POINT_B);
+      progress.coverInPoint = await readContext();
+
+      // 5. The Journey boundary wraps onto canonical entry 0, never the opening.
+      await press("ArrowRight");
+      await waitForChapter(I1, POINT_A);
+      progress.wrapped = await readContext();
+
+      // 6. Previous from canonical entry 0 still wraps to the end.
+      await press("ArrowLeft");
+      await waitForChapter(I3, POINT_B);
+      progress.wrappedBack = await readContext();
+
+      // 7. The whole-Journey chip after leaving the opening goes to canonical
+      // entry 0, not back to the opening.
+      await page.locator(".journey-story .journey-story__route-points button:not([data-route-point-id])").first().click();
+      await waitForChapter(I1, POINT_A);
+      progress.allChip = await readContext();
+
+      const opening = progress.opening;
+      record({ name,
+        claim: "a whole-Journey open starts on a Journey-level cover opening (whole-Journey chip pressed, Journey note, no Point note, no map observation); Previous does nothing there; Next enters canonical entry 0 with its own Route Point; the cover reappears in its own Route Point; the Journey boundary wrap and the whole-Journey chip land on canonical entry 0, never the opening",
+        ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: opening.assetId !== I3 || opening.pressed.join() !== "all"
+          || opening.pointNote !== null || !opening.journeyNoteVisible
+          || opening.pointANoteVisible || opening.pointBNoteVisible
+          || opening.observationAsset !== null || opening.observationRoutePoint !== null
+          || progress.afterPrevious.assetId !== I3 || progress.afterPrevious.pressed.join() !== "all"
+          || progress.afterPrevious.observationAsset !== null
+          || progress.entryZero.assetId !== I1 || !progress.entryZero.pointANoteVisible
+          || progress.entryZero.observationAsset !== I1 || progress.entryZero.observationRoutePoint !== POINT_A
+          || progress.coverInPoint.assetId !== I3 || !progress.coverInPoint.pointBNoteVisible
+          || progress.coverInPoint.observationAsset !== I3 || progress.coverInPoint.observationRoutePoint !== POINT_B
+          || progress.wrapped.assetId !== I1 || progress.wrapped.pressed.join() !== POINT_A
+          || progress.wrapped.observationAsset !== I1
+          || progress.wrappedBack.assetId !== I3 || progress.wrappedBack.pressed.join() !== POINT_B
+          || progress.allChip.assetId !== I1 || progress.allChip.pressed.join() !== POINT_A
+          || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally {
+      await session.page.close();
+    }
+  }
 } catch (error) {
   // The accumulated checks are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439).
