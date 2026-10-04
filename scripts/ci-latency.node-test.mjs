@@ -7,7 +7,7 @@ const ci = read(".github/workflows/ci.yml");
 const reproduction = read(".github/workflows/story-autoplay-reproduction.yml");
 const job = (name) => ci.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0];
 
-test("all 33 suite commands are retained exactly once across at most eight shards", () => {
+test("all 34 suite commands are retained exactly once across at most eight shards", () => {
   const browser = job("browser-qa");
   const matrix = browser.slice(browser.indexOf("      matrix:"), browser.indexOf("\n    steps:"));
   const names = [...matrix.matchAll(/^          - name: (.+)$/gm)].map((m) => m[1]);
