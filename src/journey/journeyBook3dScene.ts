@@ -378,8 +378,11 @@ export class JourneyBook3dScene {
   }
 
   isSettled() {
+    // A turn's first frame can leave progress on the old spread; the book has
+    // settled only once it rests on the spread it was sent to.
     return !this.dragging && this.edge === null
       && Math.abs(this.book.progress - Math.round(this.book.progress)) < SETTLED_EPSILON
+      && Math.ceil(this.book.currentPage / 2) === Math.round(this.book.progress)
       && Math.abs(this.focus - this.focusTarget) < SETTLED_EPSILON;
   }
 
