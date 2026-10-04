@@ -44,7 +44,12 @@ import {
   resolveEarthDiveAlignment,
   type EarthDiveScreenFrame,
 } from "./earthDiveAlignment";
-import { resolveEarthDiveRevealGeometry } from "./earthDiveReveal";
+import {
+  formatEarthDiveRevealStyle,
+  resolveEarthDiveRevealGeometry,
+  writeChangedEarthDiveRevealStyle,
+  type EarthDiveRevealBounds,
+} from "./earthDiveReveal";
 import {
   GLOBE_GESTURE_HINT_DWELL_MS,
   globeGestureHintVisible,
@@ -76,6 +81,12 @@ function readDetailedEarthScreenFrame(layer: HTMLElement | null): EarthDiveScree
   const scale = Number(host.dataset.handoffScale);
   if (!Number.isFinite(x) || !Number.isFinite(y) || !(scale > 0)) return null;
   return { screen: { x, y }, pxPerDegreeLat: scale };
+}
+
+// Per-frame reveal writes skip identical values: re-setting an attribute still
+// invalidates style under the full-viewport mask during the GPU-heaviest moment.
+function setLayerData(layer: HTMLElement, key: string, value: string) {
+  if (layer.dataset[key] !== value) layer.dataset[key] = value;
 }
 
 const PARTICLE_ANCHOR_SCREEN_SETTLE_PX = 0.75;
@@ -563,10 +574,6 @@ export function LivingAtlasGlobe({
   // the snapshot has to reach React — but only while a map exists, and only on
   // a move large enough to matter.
   const [handoffSnapshot, setHandoffSnapshot] = useState<SemanticZoomSnapshot | null>(null);
-  // What the particle Earth is showing at the focused place. The detail surface
-  // solves its own camera to this, so it only has to reach React while a map
-  // exists and only when it has moved enough to change that solution.
-  const [particleFrame, setParticleFrame] = useState<ParticleAnchorFrame | null>(null);
   const [particleOnlyZoomedIn, setParticleOnlyZoomedIn] = useState(false);
   const [zoomIntent, setZoomIntent] = useState<{
     zoom: number;
@@ -592,6 +599,18 @@ export function LivingAtlasGlobe({
     mode?: "sync" | "retry",
   ) => void) | null>(null);
   const particleFrameRef = useRef<ParticleAnchorFrame | null>(null);
+  // What the particle Earth is showing at the focused place, as the detail
+  // surface may see it: written only while a map exists and particle owns the
+  // camera. The map reads it imperatively (mount, calibration), so it is a ref
+  // rather than React state - a per-frame state update here re-rendered the
+  // globe and the map on every camera frame of prewarm/blend (motion-language
+  // principle 4).
+  const detailHandoffFrameRef = useRef<ParticleAnchorFrame | null>(null);
+  // Viewport rect of the detail layer for the spatial reveal. Refreshed by a
+  // ResizeObserver and invalidated on window resize/scroll, so the per-frame
+  // reveal does not force a synchronous layout after its own style writes.
+  const detailLayerRectRef = useRef<EarthDiveRevealBounds | null>(null);
+  const detailLayerObserverRef = useRef<ResizeObserver | null>(null);
   const snapshotRef = useRef<SemanticZoomSnapshot>({ level: "planet", zoom: 1, localProgress: 0 });
   const readinessRef = useRef<DetailReadiness>("unavailable");
   const reduceMotionRef = useRef(Boolean(reduceMotion));
@@ -660,14 +679,23 @@ export function LivingAtlasGlobe({
   ) => {
     const layer = detailLayerRef.current;
     if (!layer) return;
+    const readLayerBounds = (): EarthDiveRevealBounds => {
+      const cached = detailLayerRectRef.current;
+      if (cached) return cached;
+      const rect = layer.getBoundingClientRect();
+      const bounds = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+      // Only an observed layer can be told when its cached rect goes stale.
+      if (detailLayerObserverRef.current) detailLayerRectRef.current = bounds;
+      return bounds;
+    };
     const mapHost = layer.querySelector<HTMLElement>(".detailed-earth-map");
     if (stage === "blending" && mapHost?.dataset.mapRevealStage !== "blending") {
       // #355: style load and even correct canvas dimensions do not prove that
       // the hidden/prewarmed MapLibre surface committed a frame for its current
       // visible geometry. Hold the existing reveal boundary until the map says
       // the current blending revision rendered after geometry sync/repaint.
-      layer.dataset.earthDiveSpatialReveal = "holding";
-      layer.dataset.earthDiveRevealSync = mapHost?.dataset.mapRevealSync ?? "pending";
+      setLayerData(layer, "earthDiveSpatialReveal", "holding");
+      setLayerData(layer, "earthDiveRevealSync", mapHost?.dataset.mapRevealSync ?? "pending");
       delete layer.dataset.earthDiveAlignment;
       delete layer.dataset.earthDiveAnchorDelta;
       delete layer.dataset.earthDiveScaleError;
@@ -676,7 +704,7 @@ export function LivingAtlasGlobe({
     }
     delete layer.dataset.earthDiveRevealSync;
     if (reduceMotionRef.current || stage !== "blending") {
-      layer.dataset.earthDiveSpatialReveal = "off";
+      setLayerData(layer, "earthDiveSpatialReveal", "off");
       delete layer.dataset.earthDiveAlignment;
       delete layer.dataset.earthDiveAnchorDelta;
       delete layer.dataset.earthDiveScaleError;
@@ -689,7 +717,7 @@ export function LivingAtlasGlobe({
       // the detail renderer cannot reproduce a planet-scale particle view at
       // its minimum zoom anyway. Preserve the pre-existing full-frame opacity
       // blend/readiness gate; local wheel/pinch remains strictly calibrated.
-      layer.dataset.earthDiveSpatialReveal = "fallback";
+      setLayerData(layer, "earthDiveSpatialReveal", "fallback");
       delete layer.dataset.earthDiveAlignment;
       delete layer.dataset.earthDiveAnchorDelta;
       delete layer.dataset.earthDiveScaleError;
@@ -700,21 +728,24 @@ export function LivingAtlasGlobe({
     const detailFrame = readDetailedEarthScreenFrame(layer);
     const frameMatchesZoom = particleAnchorFrameMatchesSemanticZoom(frame, snapshot);
     const alignment = frameMatchesZoom ? resolveEarthDiveAlignment(frame, detailFrame) : null;
+    // Principle 4: the one layout read happens before this frame's writes, and
+    // normally hits the cached rect instead of forcing a synchronous layout.
+    const bounds = frame && alignment?.aligned ? readLayerBounds() : null;
     if (frame) {
       if (!frameMatchesZoom) {
-        layer.dataset.earthDiveAlignment = "stale-frame";
-        layer.dataset.earthDiveSpatialReveal = "holding";
+        setLayerData(layer, "earthDiveAlignment", "stale-frame");
+        setLayerData(layer, "earthDiveSpatialReveal", "holding");
         delete layer.dataset.earthDiveAnchorDelta;
         delete layer.dataset.earthDiveScaleError;
         layer.style.removeProperty("--earth-dive-reveal-progress");
         return;
       }
       if (alignment) {
-        layer.dataset.earthDiveAlignment = alignment.aligned ? "aligned" : "pending";
-        layer.dataset.earthDiveAnchorDelta = alignment.anchorDeltaPx.toFixed(3);
-        layer.dataset.earthDiveScaleError = alignment.localScaleError.toFixed(5);
+        setLayerData(layer, "earthDiveAlignment", alignment.aligned ? "aligned" : "pending");
+        setLayerData(layer, "earthDiveAnchorDelta", alignment.anchorDeltaPx.toFixed(3));
+        setLayerData(layer, "earthDiveScaleError", alignment.localScaleError.toFixed(5));
       } else {
-        layer.dataset.earthDiveAlignment = "pending";
+        setLayerData(layer, "earthDiveAlignment", "pending");
         delete layer.dataset.earthDiveAnchorDelta;
         delete layer.dataset.earthDiveScaleError;
       }
@@ -722,40 +753,46 @@ export function LivingAtlasGlobe({
         // Never expose a second renderer while it is still visibly correcting
         // towards the particle camera. The existing opacity transition begins
         // only after both renderers agree.
-        layer.dataset.earthDiveSpatialReveal = "holding";
+        setLayerData(layer, "earthDiveSpatialReveal", "holding");
         layer.style.removeProperty("--earth-dive-reveal-progress");
         return;
       }
     } else {
       // An unfocused fallback has no shared screen-space anchor to grade. Keep
       // the old full-frame blend rather than blocking semantic navigation.
-      layer.dataset.earthDiveSpatialReveal = "fallback";
+      setLayerData(layer, "earthDiveSpatialReveal", "fallback");
       delete layer.dataset.earthDiveAlignment;
       layer.style.removeProperty("--earth-dive-reveal-progress");
       return;
     }
 
-    const rect = layer.getBoundingClientRect();
-    const geometry = resolveEarthDiveRevealGeometry(
-      frame,
-      { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-      stage,
-      snapshot,
-    );
+    const geometry = bounds
+      ? resolveEarthDiveRevealGeometry(frame, bounds, stage, snapshot)
+      : null;
     if (!geometry) {
-      layer.dataset.earthDiveSpatialReveal = "fallback";
+      setLayerData(layer, "earthDiveSpatialReveal", "fallback");
       layer.style.removeProperty("--earth-dive-reveal-progress");
       return;
     }
-    layer.dataset.earthDiveSpatialReveal = "on";
-    layer.style.setProperty("--earth-dive-reveal-x", `${geometry.anchorX.toFixed(2)}px`);
-    layer.style.setProperty("--earth-dive-reveal-y", `${geometry.anchorY.toFixed(2)}px`);
-    layer.style.setProperty("--earth-dive-reveal-core-radius", `${geometry.coreRadius.toFixed(2)}px`);
-    layer.style.setProperty("--earth-dive-reveal-edge-radius", `${geometry.edgeRadius.toFixed(2)}px`);
-    layer.style.setProperty("--earth-dive-reveal-progress", geometry.progress.toFixed(3));
+    setLayerData(layer, "earthDiveSpatialReveal", "on");
+    writeChangedEarthDiveRevealStyle(layer.style, formatEarthDiveRevealStyle(geometry));
   }, []);
 
   const bindDetailLayer = useCallback((element: HTMLDivElement | null) => {
+    if (detailLayerRef.current !== element) {
+      detailLayerObserverRef.current?.disconnect();
+      detailLayerObserverRef.current = null;
+      detailLayerRectRef.current = null;
+      if (element && typeof ResizeObserver === "function") {
+        // Observer callbacks run after layout, so this read is not forced.
+        const observer = new ResizeObserver(() => {
+          const rect = element.getBoundingClientRect();
+          detailLayerRectRef.current = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+        });
+        observer.observe(element);
+        detailLayerObserverRef.current = observer;
+      }
+    }
     detailLayerRef.current = element;
     if (element) syncDetailSpatialReveal();
     scheduleDiveTick();
@@ -803,7 +840,7 @@ export function LivingAtlasGlobe({
     }
     syncDetailSpatialReveal(diveRef.current.stage, snapshotRef.current, frame);
     if (diveRef.current.stage === "particle") return;
-    setParticleFrame(frame);
+    detailHandoffFrameRef.current = frame;
   }, [scheduleDiveTick, syncDetailSpatialReveal]);
 
   const handleHomeBasePresenceFrame = useCallback((frame: readonly ProjectedHomeBasePresence[]) => {
@@ -865,7 +902,7 @@ export function LivingAtlasGlobe({
     commandRequestedRef.current = false;
     releaseRequestedRef.current = false;
     setHandoffSnapshot(null);
-    setParticleFrame(null);
+    detailHandoffFrameRef.current = null;
   }, [earthExperiencePolicy]);
 
   // Handing the camera home: ownership ends and the zoom authority is set back
@@ -942,11 +979,13 @@ export function LivingAtlasGlobe({
       const revealProgress = layer
         ? Number.parseFloat(layer.style.getPropertyValue("--earth-dive-reveal-progress"))
         : Number.NaN;
-      const opacityPresented = previous.stage !== "blending"
+      // The computed opacity is only consulted off the spatial path; reading it
+      // right after the reveal writes would force a style recalc every frame.
+      const opacityPresented = () => previous.stage !== "blending"
         || !layer || Number(window.getComputedStyle(layer).opacity) >= 0.99;
       const spatialRevealPresented = revealMode === "on"
         ? Number.isFinite(revealProgress) && revealProgress >= 0.999
-        : opacityPresented;
+        : opacityPresented();
       const particleFrameMatchesZoom = particleAnchorFrameMatchesSemanticZoom(
         particleFrameRef.current,
         snapshotRef.current,
@@ -1039,12 +1078,12 @@ export function LivingAtlasGlobe({
         readinessRef.current = "unavailable";
         commandRequestedRef.current = false;
         setHandoffSnapshot(null);
-        setParticleFrame(null);
+        detailHandoffFrameRef.current = null;
       } else if (previous.stage === "particle" && particleFrameRef.current) {
         // Reuse the most recently published particle frame immediately on
         // prewarm; do not wait for camera motion to cross the publisher's
         // sub-pixel threshold before the hidden map can align itself.
-        setParticleFrame(particleFrameRef.current);
+        detailHandoffFrameRef.current = particleFrameRef.current;
       }
       // Do not clear the blending presentation speculatively before React has
       // committed detail ownership. In particular, the keyboard fallback must
@@ -1085,6 +1124,23 @@ export function LivingAtlasGlobe({
     // speculative resolver step that precedes the React ownership commit.
     syncDetailSpatialReveal("detail", snapshotRef.current, particleFrameRef.current);
   }, [dive.stage, syncDetailSpatialReveal]);
+
+  // The cached reveal rect is re-measured once per Dive stage and whenever the
+  // viewport moves the layer without resizing it.
+  useEffect(() => {
+    detailLayerRectRef.current = null;
+  }, [dive.stage]);
+  useEffect(() => {
+    const invalidate = () => {
+      detailLayerRectRef.current = null;
+    };
+    window.addEventListener("resize", invalidate, { passive: true });
+    window.addEventListener("scroll", invalidate, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener("resize", invalidate);
+      window.removeEventListener("scroll", invalidate, { capture: true });
+    };
+  }, []);
 
   // #253: entering focus mode arms the hint, leaving retires it and bumps the
   // ordering token so this visit's dwell timer cannot speak for the next one.
@@ -1251,7 +1307,7 @@ export function LivingAtlasGlobe({
               diveStage={effectiveDive.stage}
               diveOwner={effectiveDive.owner}
               diveSnapshot={handoffSnapshot ?? snapshotRef.current}
-              particleFrame={particleFrame}
+              particleFrameSource={detailHandoffFrameRef}
               focusPoint={focusPoint}
               focusRoute={focusRoute}
               journeyOverlay={detailedEarthJourneyOverlay}

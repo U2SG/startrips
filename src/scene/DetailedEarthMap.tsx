@@ -248,8 +248,12 @@ type DetailedEarthMapProps = {
    * What the particle Earth is showing at the focused place, in viewport CSS
    * pixels. This map solves its own camera to it, so the two renderers are
    * known to agree in screen space rather than assumed to.
+   *
+   * Passed as a live ref, not a value: the frame changes on every camera frame
+   * of prewarm/blend and is only read imperatively (mount, calibration), so a
+   * prop would re-render this map per frame for nothing.
    */
-  particleFrame?: ParticleAnchorFrame | null;
+  particleFrameSource?: { readonly current: ParticleAnchorFrame | null };
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
   /** Active authorized Journey projected from the same Route consumed by Particle Earth. */
@@ -328,7 +332,7 @@ export default function DetailedEarthMap({
   diveStage = "detail",
   diveOwner = "detail",
   diveSnapshot = { level: "local", zoom: Number.NaN, localProgress: 1 },
-  particleFrame = null,
+  particleFrameSource,
   focusPoint,
   focusRoute,
   journeyOverlay,
@@ -380,7 +384,9 @@ export default function DetailedEarthMap({
   const diveStageRef = useRef(diveStage);
   const diveOwnerRef = useRef(diveOwner);
   const diveSnapshotRef = useRef(diveSnapshot);
-  const particleFrameRef = useRef(particleFrame);
+  const ownParticleFrameRef = useRef<ParticleAnchorFrame | null>(null);
+  // The parent owns the ref object and keeps it stable for the map's lifetime.
+  const particleFrameRef = particleFrameSource ?? ownParticleFrameRef;
   const focusRevisionRef = useRef(focusRevision);
   const cameraIntentRevisionRef = useRef(0);
   const focusFlightActiveRef = useRef(false);
@@ -393,7 +399,6 @@ export default function DetailedEarthMap({
   diveStageRef.current = diveStage;
   diveOwnerRef.current = diveOwner;
   diveSnapshotRef.current = diveSnapshot;
-  particleFrameRef.current = particleFrame;
   languageRef.current = language;
   focusPointRef.current = focusPoint;
   focusRouteRef.current = focusRoute;

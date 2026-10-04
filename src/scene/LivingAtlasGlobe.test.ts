@@ -158,6 +158,24 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(detail).not.toContain("[diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute, particleFrame]");
   });
 
+  it("keeps per-frame Dive handoff values off React state and out of forced layout", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    expect(globe).not.toContain("setParticleFrame");
+    expect(globe).not.toContain("particleFrame={particleFrame}");
+    expect(globe).toContain("particleFrameSource={detailHandoffFrameRef}");
+    expect(detail).not.toContain("particleFrameRef.current = particleFrame;");
+    const start = globe.indexOf("const syncDetailSpatialReveal = useCallback((");
+    const end = globe.indexOf("const bindDetailLayer = useCallback(", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const reveal = globe.slice(start, end);
+    expect(reveal).toContain("writeChangedEarthDiveRevealStyle(layer.style, formatEarthDiveRevealStyle(geometry))");
+    expect(reveal).not.toContain("layer.style.setProperty(");
+    expect(reveal.indexOf("readLayerBounds()")).toBeLessThan(reveal.indexOf('setLayerData(layer, "earthDiveAlignment"'));
+    expect(globe).toContain("new ResizeObserver(");
+  });
+
   it("keeps the resolver mirror and release latch on committed Dive presentation state", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     expect(globe).toMatch(/useEffect\(\(\) => \{\s*diveRef\.current = dive;[\s\S]*?\}, \[dive, scheduleDiveTick\]\);/);
