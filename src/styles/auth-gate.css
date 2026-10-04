@@ -29,7 +29,7 @@
   position: absolute;
   z-index: var(--z-content-4);
   top: max(24px, env(safe-area-inset-top));
-  left: clamp(24px, 4vw, 58px);
+  left: max(clamp(24px, 4vw, 58px), env(safe-area-inset-left));
   display: flex;
   align-items: baseline;
   gap: 14px;
@@ -896,8 +896,8 @@
 
   .auth-v3-brand {
     top: max(16px, env(safe-area-inset-top));
-    left: 18px;
-    right: 18px;
+    left: max(18px, env(safe-area-inset-left));
+    right: max(18px, env(safe-area-inset-right));
     justify-content: space-between;
     gap: 8px;
   }

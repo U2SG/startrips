@@ -19,12 +19,13 @@ body,
   overflow: hidden;
 }
 
-/* An app shell, not a document: a drag that reaches the root must not start
-   pull-to-refresh or rubber-band the whole page. Inner scrollers keep their
-   own `overscroll-behavior: contain`. */
+/* An app shell, not a document: a vertical drag that reaches the root must not
+   start pull-to-refresh or rubber-band the whole page. Only the block axis is
+   held, so the horizontal back/forward history gesture keeps working. Inner
+   scrollers keep their own `overscroll-behavior: contain`. */
 html,
 body {
-  overscroll-behavior: none;
+  overscroll-behavior-y: none;
 }
 
 button {
