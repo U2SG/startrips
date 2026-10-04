@@ -449,6 +449,45 @@ describe("storyInitialNoteBeatRoutePointId (#76 P1 + #595)", () => {
     });
   });
 
+  it("wraps a note beat at either end of the Journey like the cursor does", () => {
+    const media = (id: string, owner: string, sortOrder: number): JourneyMediaAsset => ({
+      ...asset(id, "image/jpeg", sortOrder, `${id}.jpg`),
+      routePointId: owner,
+    });
+    // A(0, note) -> B(2) -> C(0, note). A and C are note beats at the ends.
+    const edges: Journey = {
+      ...journey,
+      routePoints: ["A", "B", "C"].map((id, index) => ({
+        id,
+        journeyId: journey.id,
+        sortOrder: index,
+        label: id,
+        latitude: index,
+        longitude: index,
+        occurredAt: null,
+        note: id === "B" ? null : `${id} 只留下了一句话`,
+        isStop: true,
+        createdAt: journey.createdAt,
+      })),
+      media: [media("b1", "B", 0), media("b2", "B", 1)],
+    };
+
+    // Bounded, the ends have nothing beyond them.
+    expect(storyNoteBeatNeighbourMediaIndexes(edges, "A"))
+      .toEqual({ previousIndex: null, nextIndex: 0 });
+    expect(storyNoteBeatNeighbourMediaIndexes(edges, "C"))
+      .toEqual({ previousIndex: 1, nextIndex: null });
+    // Wrapping, Previous from the first beat reaches the Journey's last media
+    // and Next from the last beat reaches its first.
+    expect(storyNoteBeatNeighbourMediaIndexes(edges, "A", true))
+      .toEqual({ previousIndex: 1, nextIndex: 0 });
+    expect(storyNoteBeatNeighbourMediaIndexes(edges, "C", true))
+      .toEqual({ previousIndex: 1, nextIndex: 0 });
+    // Wrapping never invents media where the Journey has none.
+    expect(storyNoteBeatNeighbourMediaIndexes({ ...edges, media: [] }, "A", true))
+      .toEqual({ previousIndex: null, nextIndex: null });
+  });
+
   it("has no media either side of a note beat that is not in the sequence", () => {
     expect(storyNoteBeatNeighbourMediaIndexes(base([]), "missing"))
       .toEqual({ previousIndex: null, nextIndex: null });

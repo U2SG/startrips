@@ -3452,7 +3452,7 @@ export function JourneyStory({
     // cursor sits on the nearest media, so a plain neighbour search would step
     // back past it and skip one photo, making previous and next asymmetric.
     if (noteBeatRoutePointId !== null && journey) {
-      const neighbours = storyNoteBeatNeighbourMediaIndexes(journey, noteBeatRoutePointId);
+      const neighbours = storyNoteBeatNeighbourMediaIndexes(journey, noteBeatRoutePointId, wrap);
       const index = direction < 0 ? neighbours.previousIndex : neighbours.nextIndex;
       if (index !== null && index >= 0 && index < scopedMedia.length) {
         navigateToMedia(index, direction);

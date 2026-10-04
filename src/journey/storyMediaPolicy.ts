@@ -338,10 +338,14 @@ export function storyInitialNoteBeatRoutePointId(
 // The note beat is a stop in the canonical sequence, not a hidden cursor parked
 // on the nearest media. Stepping back from it must land on the media BEFORE the
 // Route Point, which a neighbour search anchored on that nearest media would
-// skip by one. These are resolved from the sequence itself.
+// skip by one. These are resolved from the sequence itself. With `wrap`, a
+// note beat at either end of the Journey follows the cursor's Journey-boundary
+// rule: Previous from the first beat reaches the last media, and Next from the
+// last beat reaches the first.
 export function storyNoteBeatNeighbourMediaIndexes(
   journey: Journey,
   noteBeatRoutePointId: string,
+  wrap = false,
 ): { previousIndex: number | null; nextIndex: number | null } {
   const entries = storySequenceForJourney(journey);
   const beatIndex = entries.findIndex(
@@ -354,9 +358,14 @@ export function storyNoteBeatNeighbourMediaIndexes(
     }
     return null;
   };
+  const previousIndex = mediaIndexNear(beatIndex - 1, -1);
+  const nextIndex = mediaIndexNear(beatIndex + 1, 1);
+  if (!wrap) return { previousIndex, nextIndex };
+  const mediaCount = storySequenceMedia(entries).length;
+  if (mediaCount === 0) return { previousIndex: null, nextIndex: null };
   return {
-    previousIndex: mediaIndexNear(beatIndex - 1, -1),
-    nextIndex: mediaIndexNear(beatIndex + 1, 1),
+    previousIndex: previousIndex ?? mediaCount - 1,
+    nextIndex: nextIndex ?? 0,
   };
 }
 
