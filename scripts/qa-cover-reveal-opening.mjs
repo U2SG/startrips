@@ -1103,6 +1103,9 @@ try {
     );
 
     const callsBeforeReplacement = run.state.calls.length;
+    // The first Story open above already played this page's previous opening,
+    // so only frames composited after this point belong to the new revision.
+    const framesBeforeNewOpening = await page.evaluate(() => window.__qaCompositedFrames?.length ?? 0);
     await openStory(page, viewport);
     // The new revision buys its own opening: a different identity, so the
     // once-per-revision ledger does not suppress it.
@@ -1127,8 +1130,13 @@ try {
       if (stage === null) break;
       samples.push(classify(await compositedColor(page, REVEAL_PROBE)));
     }
+    // The opening's first frame is judged on what the renderer reported it
+    // composited, not on a screenshot: by the time the phase wait and the read
+    // check above return, a screenshot can already land mid-blend (#454).
+    const newOpeningFrames = (await page.evaluate(() => window.__qaCompositedFrames ?? []))
+      .slice(framesBeforeNewOpening);
     check("cover-revision-change/the-new-opening-starts-on-its-own-derivative",
-      samples[0] === "derivative", samples);
+      newOpeningFrames[0] === "generated-first", { composited: newOpeningFrames, samples });
     check(
       "cover-revision-change/the-previous-cover-bytes-never-appear",
       !samples.includes("original-cover"),
