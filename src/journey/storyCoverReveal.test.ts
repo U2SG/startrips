@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   coverRevealOpeningIdentity,
@@ -168,5 +169,28 @@ describe("Journey-level cover context (#555)", () => {
     expect(storyObservedAssetId(cursor, cursor.pageIds[0], null)).toBeNull();
     expect(storyObservedAssetId(cursor, cursor.pageIds[1], null)).toBe("cover");
     expect(cursor.pageIds[0]).not.toBe(cursor.pageIds[1]);
+  });
+});
+
+describe("the Atlas card never reveals (#555)", () => {
+  it("leaves the Cover Reveal to Story's Journey cover opening alone", () => {
+    // Owner decision on #555: the Atlas/planet card shows the canonical cover
+    // directly. It mounts no reveal hook, no reveal stage and no derivative read.
+    const withoutComments = (name: string) => readFileSync(new URL(name, import.meta.url), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const app = withoutComments("LivingAtlasApp.tsx");
+    expect(app).not.toContain("useCoverRevealOpening");
+    expect(app).not.toContain("CoverRevealStage");
+    expect(app).not.toContain("readCoverRevealDisplay");
+    expect(app).not.toContain("onOpeningSettled");
+    // Story is the one owner.
+    const story = withoutComments("JourneyStory.tsx");
+    expect(story).toContain("useCoverRevealOpening(");
+    expect(story).toContain("<CoverRevealStage");
+    // And anything that is not Story's opening entry has no reveal role.
+    expect(storyCoverRevealGate({
+      entryRole: null, canManageMedia: true, cover: { mimeType: "image/jpeg" }, stageSettled: true,
+    })).toEqual({ enabled: false, reason: "not-opening" });
   });
 });

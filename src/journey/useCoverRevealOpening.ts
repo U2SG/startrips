@@ -11,15 +11,15 @@ import {
 import type { Journey } from "./types";
 
 /**
- * #379: the Journey cover opening, as one thing the Atlas owns.
+ * #379 + #555: the Cover Reveal of Story's Journey cover opening.
  *
- * The ledger of spent opportunities lives HERE rather than inside the cover
- * component, because the cover has two mount sites — the desktop active panel
- * and the mobile sheet — and a ledger inside either of them would let crossing
- * a breakpoint replay an opening the viewer has already seen.
+ * It belongs only to that presentation role: the Atlas card shows the
+ * canonical cover and never reveals. The ledger of spent opportunities is
+ * passed in from the Atlas shell, so it outlives one Story mount and reopening
+ * Story never replays a revision already taken.
  *
  * Everything this hook returns is additive. The canonical original cover is
- * read, shown and refreshed by `JourneyCardMedia` exactly as before; a missing,
+ * read, shown and refreshed by Story's own stage exactly as before; a missing,
  * pending, stale, failed or unreadable derivative simply produces no opening,
  * silently, with the original already on screen.
  */

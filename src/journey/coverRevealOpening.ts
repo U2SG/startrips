@@ -268,11 +268,11 @@ export type StoryCoverRevealSkip =
  * The reveal belongs to the Journey cover presentation role only. The same
  * asset reached later as ordinary canonical media (also when it is canonical
  * entry 0), and any open that presents no opening at all (a Route Point or
- * asset deep link, a Playback return), never reveals. Like the Atlas cover,
- * V1 is owner-only, and a video cover has no reveal. The opening page must
- * also be settled on its canonical bytes with no shared-element morph in
- * flight, so the Atlas -> Story handoff and the reveal never fight over one
- * picture. When this answers `enabled`, `planCoverRevealOpening` still owns
+ * asset deep link, a Playback return), never reveals, and neither does the
+ * Atlas card, which shows the canonical cover. V1 is owner-only, and a video
+ * cover has no reveal. The opening page must also be settled on its canonical
+ * bytes with the Atlas -> Story shared-element morph landed, so the reveal
+ * never plays under a clone in flight. When this answers `enabled`, `planCoverRevealOpening` still owns
  * the derivative decision: ready, stale, unusable, spent and Reduced Motion.
  */
 export function storyCoverRevealGate(input: {

@@ -2206,8 +2206,9 @@ export function JourneyStory({
 
   // #555 + #379: the Cover Reveal belongs to the Journey cover presentation
   // role. It is asked for only while the cursor is on the opening AND that page
-  // is settled on its canonical bytes with no Atlas -> Story morph in flight,
-  // so the two surfaces never run a reveal over the same picture at once.
+  // is settled on its canonical bytes, after the Atlas -> Story morph has
+  // landed, so the reveal never runs under a shared-element clone in flight.
+  // The Atlas card never reveals, so there is nothing of its own to cancel.
   const [openingStageSettled, setOpeningStageSettled] = useState(false);
   const openingPageSettled = onJourneyCoverOpening && activePageId !== null
     && shownPageId === activePageId && incomingPageId === null && pendingPageId === null;
