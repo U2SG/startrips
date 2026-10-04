@@ -782,3 +782,74 @@
   bottom: calc(88px + env(safe-area-inset-bottom, 0px));
   width: min(180px, 36vw);
 }
+
+/* #595: a Route Point's note as a beat of its own. It reads like the arrival
+   caption (same eyebrow, serif heading and note) but carries no arrival cue;
+   a transit note (`is-transit`) has no STOP eyebrow either (#514). The note
+   scrolls inside its own band and stays selectable. */
+.journey-playback__note-beat {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  max-width: min(36em, 100%);
+  max-height: 100%;
+  min-height: 0;
+  animation: playback-note-beat-in var(--motion-content, 420ms) var(--motion-ease-out-soft, ease-out) both;
+}
+.journey-playback__note-beat p {
+  margin: 0;
+  color: var(--atlas-acid);
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.22em;
+}
+.journey-playback__note-beat h3 {
+  margin: 0;
+  font-family: var(--archive-serif);
+  font-size: clamp(20px, 3.4vw, 32px);
+  font-weight: 400;
+}
+.journey-playback__note-beat blockquote,
+.journey-playback__transit-note blockquote {
+  max-width: 34em;
+  max-height: min(52dvh, 26em);
+  margin: 4px auto 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: #cdd9d5;
+  font-family: var(--archive-serif);
+  font-size: 17px;
+  font-style: normal;
+  line-height: 2.05;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.journey-playback__transit-note {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
+.journey-playback__transit-note p {
+  margin: 0;
+  color: var(--atlas-muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.journey-playback__transit-note blockquote {
+  max-height: min(18dvh, 8em);
+  font-size: 15px;
+  line-height: 1.85;
+}
+@keyframes playback-note-beat-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .journey-playback__note-beat { animation: none; }
+}
+:where(.journey-playback[data-mobile-v2="on"]) .journey-playback__note-beat blockquote {
+  font-size: 15px;
+  line-height: 1.9;
+  padding-bottom: env(safe-area-inset-bottom);
+}
