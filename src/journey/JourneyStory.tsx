@@ -4736,7 +4736,7 @@ export function JourneyStory({
               {mobileLayout ? <div>
                 <p>PRIVATE MEDIA</p>
                 <strong>{selectedRoutePoint
-                  ? `${scopedMedia.length} 个媒体片段 · ${selectedRoutePoint.label || `途径点 ${selectedRoutePoint.sortOrder + 1}`}`
+                  ? `${visualMediaCount(selectedRoutePoint.id)} 个媒体片段 · ${selectedRoutePoint.label || `途径点 ${selectedRoutePoint.sortOrder + 1}`}`
                   : `${playbackIntroMedia(journey).length} 个媒体片段 · 旅程级媒体 / 开场章节`}</strong>
               </div> : null}
               <input
