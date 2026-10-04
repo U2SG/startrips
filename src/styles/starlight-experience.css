@@ -41,7 +41,9 @@
   transition: transform var(--motion-instant) var(--motion-ease-out), box-shadow var(--motion-instant) var(--motion-ease-out);
 }
 .auth-primary:active:not(:disabled) { transform: translateY(0); }
-.auth-primary:hover:not(:disabled) { box-shadow: 0 8px 28px rgb(255 248 231 / 0.12); }
+@media (hover: hover) and (pointer: fine) {
+  .auth-primary:hover:not(:disabled) { box-shadow: 0 8px 28px rgb(255 248 231 / 0.12); }
+}
 .auth-primary:focus-visible { outline: 2px solid var(--startrips-aurora); }
 .auth-card input:focus,
 .auth-card textarea:focus { border-color: var(--startrips-aurora); }

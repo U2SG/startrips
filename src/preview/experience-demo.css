@@ -44,9 +44,14 @@
   pointer-events: auto;
 }
 
-.experience-demo-notice__reset:hover,
 .experience-demo-notice__reset:focus-visible {
   color: var(--startrips-starlight);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .experience-demo-notice__reset:hover {
+    color: var(--startrips-starlight);
+  }
 }
 
 .experience-demo-notice__reset:focus-visible {

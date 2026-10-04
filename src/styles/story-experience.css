@@ -46,9 +46,11 @@
   font: 400 12px/1 var(--archive-sans);
   letter-spacing: .04em;
 }
-.journey-story[data-story-layout="desktop"] > header > button:hover {
-  color: var(--startrips-starlight);
-  background: transparent;
+@media (hover: hover) and (pointer: fine) {
+  .journey-story[data-story-layout="desktop"] > header > button:hover {
+    color: var(--startrips-starlight);
+    background: transparent;
+  }
 }
 .journey-story[data-story-layout="desktop"] .journey-story__layout {
   grid-template-columns: minmax(0, 1fr) clamp(200px, 21vw, 272px);
@@ -189,7 +191,9 @@
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav .journey-story__quick-recap-action {
   color: var(--startrips-starlight);
 }
-.journey-story[data-story-layout="desktop"] .journey-story__media-nav button:hover:not(:disabled) { color: var(--startrips-starlight); }
+@media (hover: hover) and (pointer: fine) {
+  .journey-story[data-story-layout="desktop"] .journey-story__media-nav button:hover:not(:disabled) { color: var(--startrips-starlight); }
+}
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav button:disabled { opacity: .3; cursor: default; }
 .journey-story-fullscreen:not([data-mobile-layout="true"]) .journey-story-fullscreen__nav {
   display: flex;

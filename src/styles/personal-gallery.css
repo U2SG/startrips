@@ -65,13 +65,20 @@
   justify-self: end;
 }
 
-.personal-gallery-header button:hover,
 .personal-gallery-header button:focus-visible,
-.personal-moment-detail__header button:hover,
 .personal-moment-detail__header button:focus-visible {
   border-color: var(--archive-cyan);
   color: var(--archive-ink);
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .personal-gallery-header button:hover,
+  .personal-moment-detail__header button:hover {
+    border-color: var(--archive-cyan);
+    color: var(--archive-ink);
+    outline: none;
+  }
 }
 
 .personal-gallery-empty {
@@ -142,10 +149,16 @@
   font-size: 8px;
 }
 
-.personal-point-entry:hover,
 .personal-point-entry:focus-visible {
   border-color: var(--archive-cyan);
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .personal-point-entry:hover {
+    border-color: var(--archive-cyan);
+    outline: none;
+  }
 }
 
 .personal-point-entry.is-focusing {

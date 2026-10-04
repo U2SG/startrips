@@ -243,10 +243,11 @@ jobs:
               media-motion-lab::pnpm qa:media-motion-lab
               soundtrack-ducking::pnpm qa:soundtrack-ducking
           - name: labels-recovery
-            suites: "|city-label-anchoring|recovery-surfaces|"
+            suites: "|city-label-anchoring|recovery-surfaces|mobile-native|"
             commands: |
               city-label-anchoring::pnpm qa:city-label-anchoring
               recovery-surfaces::pnpm qa:recovery-surfaces
+              mobile-native::pnpm qa:mobile-native
           - name: reveal-share
             suites: "|cover-reveal-opening|cover-reveal|owner-share|playback-map-bridge|"
             commands: |

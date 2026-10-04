@@ -1615,8 +1615,8 @@ describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
       css.indexOf('.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion h2'),
     );
     expect(mobileRule).toContain("bottom: calc(env(safe-area-inset-bottom) + 142px)");
-    expect(mobileRule).toContain("left: 12px");
-    expect(mobileRule).toContain("right: 12px");
+    expect(mobileRule).toContain("left: calc(12px + env(safe-area-inset-left, 0px))");
+    expect(mobileRule).toContain("right: calc(12px + env(safe-area-inset-right, 0px))");
     expect(mobileRule).not.toContain("position: fixed");
   });
 

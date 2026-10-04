@@ -304,8 +304,10 @@
   background: rgba(20, 48, 47, 0.95);
   cursor: pointer;
 }
-.route-candidate-editor button:hover,
 .route-candidate-editor button[aria-pressed="true"] { border-color: rgba(166, 224, 204, 0.75); }
+@media (hover: hover) and (pointer: fine) {
+  .route-candidate-editor button:hover { border-color: rgba(166, 224, 204, 0.75); }
+}
 .route-candidate-editor button:disabled { opacity: 0.45; cursor: default; }
 .route-candidate-editor button:focus-visible,
 .route-candidate-editor select:focus-visible,
@@ -465,11 +467,17 @@
   border-left: 1px solid rgba(118, 198, 188, 0.16);
 }
 
-.living-atlas-globe__language button:hover,
 .living-atlas-globe__language button:focus-visible,
 .living-atlas-globe__language button.is-active {
   background: rgba(200, 255, 61, 0.1);
   color: var(--atlas-acid);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas-globe__language button:hover {
+    background: rgba(200, 255, 61, 0.1);
+    color: var(--atlas-acid);
+  }
 }
 
 /* ML-11 Ambience: a soft aurora field behind the transparent particle
@@ -548,10 +556,16 @@
   letter-spacing: 0.08em;
 }
 
-.living-atlas-globe__pick:hover,
 .living-atlas-globe__pick:focus-visible {
   background: rgba(200, 255, 61, 0.1);
   color: var(--atlas-acid);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas-globe__pick:hover {
+    background: rgba(200, 255, 61, 0.1);
+    color: var(--atlas-acid);
+  }
 }
 
 .living-atlas-globe__pick-label-compact {
@@ -655,9 +669,14 @@
   letter-spacing: 0.1em;
 }
 
-.living-atlas__header nav button:hover,
 .living-atlas__header nav button.is-active {
   color: var(--atlas-text);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__header nav button:hover {
+    color: var(--atlas-text);
+  }
 }
 
 .living-atlas__header nav button.is-active::after {
@@ -683,9 +702,11 @@
   color: var(--atlas-acid);
 }
 
-.living-atlas__header nav .living-atlas__create:hover {
-  border-left-color: rgba(200, 255, 61, 0.44);
-  background: rgba(200, 255, 61, 0.07);
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__header nav .living-atlas__create:hover {
+    border-left-color: rgba(200, 255, 61, 0.44);
+    background: rgba(200, 255, 61, 0.07);
+  }
 }
 
 .living-atlas__journey-rail {
@@ -698,7 +719,7 @@
   top: clamp(152px, 17vh, 184px);
   left: clamp(24px, 3vw, 48px);
   width: min(300px, 23vw);
-  max-height: calc(100vh - clamp(186px, 25vh, 262px));
+  max-height: calc(100svh - clamp(186px, 25svh, 262px));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
@@ -758,12 +779,20 @@
   backdrop-filter: blur(10px);
 }
 
-.living-atlas__journey-rail button:hover,
 .living-atlas__journey-rail button.is-active {
   border-color: color-mix(in srgb, var(--journey-color) 48%, transparent);
   background: rgba(6, 20, 18, 0.76);
   color: var(--atlas-text);
   box-shadow: inset 0 0 24px color-mix(in srgb, var(--journey-color) 8%, transparent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__journey-rail button:hover {
+    border-color: color-mix(in srgb, var(--journey-color) 48%, transparent);
+    background: rgba(6, 20, 18, 0.76);
+    color: var(--atlas-text);
+    box-shadow: inset 0 0 24px color-mix(in srgb, var(--journey-color) 8%, transparent);
+  }
 }
 
 .living-atlas__journey-rail button > span {
@@ -1065,10 +1094,16 @@
   letter-spacing: 0.1em;
 }
 
-.living-atlas__active .living-atlas__active-play:hover,
 .living-atlas__active .living-atlas__active-play:focus-visible {
   border-color: var(--atlas-cyan);
   color: var(--atlas-cyan);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__active .living-atlas__active-play:hover {
+    border-color: var(--atlas-cyan);
+    color: var(--atlas-cyan);
+  }
 }
 
 .living-atlas__active .living-atlas__active-play svg {
@@ -1105,10 +1140,16 @@
   text-align: left;
 }
 
-.living-atlas__playback-mode-menu button:hover,
 .living-atlas__playback-mode-menu button:focus-visible {
   border-color: rgba(118, 198, 188, 0.7);
   background: rgba(10, 31, 33, 0.96);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__playback-mode-menu button:hover {
+    border-color: rgba(118, 198, 188, 0.7);
+    background: rgba(10, 31, 33, 0.96);
+  }
 }
 
 .living-atlas__playback-mode-menu strong {
@@ -1194,7 +1235,7 @@
   position: absolute;
   z-index: var(--z-chrome-70);
   left: 50%;
-  bottom: 24px;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
   min-height: 44px;
   display: flex;
   align-items: center;
@@ -1614,11 +1655,18 @@
   padding-inline: 13px;
 }
 
-.journey-story > header > .journey-story__close:hover,
 .journey-story > header > .journey-story__close:focus-visible {
   border-color: rgba(203, 241, 193, 0.54);
   background: rgba(203, 241, 193, 0.07);
   color: #eef7f3;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story > header > .journey-story__close:hover {
+    border-color: rgba(203, 241, 193, 0.54);
+    background: rgba(203, 241, 193, 0.07);
+    color: #eef7f3;
+  }
 }
 
 .journey-story__layout {
@@ -1707,10 +1755,12 @@
   margin: 12px 0;
 }
 
-.journey-story__quick-recap-status button:hover,
 .journey-story__quick-recap-status button:focus-visible,
-.journey-story__quick-recap-empty:hover,
 .journey-story__quick-recap-empty:focus-visible { border-color: var(--atlas-cyan); }
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__quick-recap-status button:hover,
+  .journey-story__quick-recap-empty:hover { border-color: var(--atlas-cyan); }
+}
 .journey-story__quick-recap-empty:disabled { opacity: 0.55; cursor: default; }
 
 .journey-story__media {
@@ -1772,9 +1822,14 @@
   letter-spacing: 0.09em;
 }
 
-.journey-story__media-overview:hover,
 .journey-story__media-overview:focus-visible {
   border-color: rgba(200, 255, 61, 0.5);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__media-overview:hover {
+    border-color: rgba(200, 255, 61, 0.5);
+  }
 }
 
 .journey-story__media-overview.is-active {
@@ -1859,9 +1914,14 @@
   letter-spacing: 0.09em;
 }
 
-.journey-story__fullscreen-entry:hover,
 .journey-story__fullscreen-entry:focus-visible {
   border-color: rgba(200, 255, 61, 0.6);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__fullscreen-entry:hover {
+    border-color: rgba(200, 255, 61, 0.6);
+  }
 }
 
 /* The native control panel can change size across browsers. Reserve the
@@ -1955,10 +2015,16 @@
   }
 }
 
-.icon-action-button.is-destructive-secondary:hover:not(:disabled),
 .icon-action-button.is-destructive-secondary:focus-visible {
   color: #c28e78;
   border-color: rgba(194, 142, 120, 0.55);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .icon-action-button.is-destructive-secondary:hover:not(:disabled) {
+    color: #c28e78;
+    border-color: rgba(194, 142, 120, 0.55);
+  }
 }
 
 .journey-story__media-grid > li {
@@ -1997,9 +2063,14 @@
   cursor: pointer;
 }
 
-.journey-story__media-grid button:hover:not(:disabled),
 .journey-story__media-grid button:focus-visible {
   border-color: rgba(200, 255, 61, 0.45);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__media-grid button:hover:not(:disabled) {
+    border-color: rgba(200, 255, 61, 0.45);
+  }
 }
 
 .journey-story__media-grid button.is-current {
@@ -2122,10 +2193,16 @@
   cursor: pointer;
 }
 
-.journey-story__media-order button:hover:not(:disabled),
 .journey-story__media-order button:focus-visible {
   border-color: rgba(118, 227, 211, 0.48);
   color: var(--atlas-cyan);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__media-order button:hover:not(:disabled) {
+    border-color: rgba(118, 227, 211, 0.48);
+    color: var(--atlas-cyan);
+  }
 }
 
 .journey-story__media-nav button {
@@ -2333,10 +2410,16 @@
   cursor: pointer;
 }
 
-.journey-story__media-remove > button:hover:not(:disabled),
 .journey-story__media-remove > button:focus-visible {
   color: #c28e78;
   border-color: rgba(194, 142, 120, 0.55);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__media-remove > button:hover:not(:disabled) {
+    color: #c28e78;
+    border-color: rgba(194, 142, 120, 0.55);
+  }
 }
 
 .journey-story__media-remove > button:disabled {
@@ -2393,9 +2476,14 @@
   letter-spacing: 0.08em;
 }
 
-.journey-story__media-set-cover:hover:not(:disabled),
 .journey-story__media-set-cover:focus-visible {
   border-color: rgba(200, 255, 61, 0.6);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__media-set-cover:hover:not(:disabled) {
+    border-color: rgba(200, 255, 61, 0.6);
+  }
 }
 
 .journey-story__media-set-cover:disabled {
@@ -2461,14 +2549,24 @@
   opacity: 0.68;
 }
 
-.journey-story__media-remove__confirm > button:hover:not(:disabled),
 .journey-story__media-remove__confirm > button:focus-visible {
   border-color: rgba(203, 241, 193, 0.5);
 }
 
-.journey-story__media-remove__confirm > button.is-destructive:hover:not(:disabled),
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__media-remove__confirm > button:hover:not(:disabled) {
+    border-color: rgba(203, 241, 193, 0.5);
+  }
+}
+
 .journey-story__media-remove__confirm > button.is-destructive:focus-visible {
   border-color: rgba(194, 142, 120, 0.75);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__media-remove__confirm > button.is-destructive:hover:not(:disabled) {
+    border-color: rgba(194, 142, 120, 0.75);
+  }
 }
 
 .journey-story__media-remove__error {
@@ -2526,10 +2624,16 @@
   background: transparent;
 }
 
-.journey-story__route-points button:hover,
 .journey-story__route-points button:focus-visible {
   border-color: rgba(203, 241, 193, 0.34);
   color: #edf6f2;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__route-points button:hover {
+    border-color: rgba(203, 241, 193, 0.34);
+    color: #edf6f2;
+  }
 }
 
 .journey-story__route-points button:disabled {
@@ -2763,10 +2867,16 @@
   letter-spacing: 0.09em;
 }
 
-.journey-story__media-add > button:hover:not(:disabled),
 .journey-story__media-add > button:focus-visible {
   border-color: rgba(203, 241, 193, 0.6);
   background: rgba(203, 241, 193, 0.12);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__media-add > button:hover:not(:disabled) {
+    border-color: rgba(203, 241, 193, 0.6);
+    background: rgba(203, 241, 193, 0.12);
+  }
 }
 
 .journey-story__media-add > button:disabled {
@@ -2849,10 +2959,16 @@
   font-size: 9px;
 }
 
-.journey-story__placement-actions button:hover,
 .journey-story__placement-actions button:focus-visible {
   border-color: rgba(203, 241, 193, 0.58);
   background: rgba(203, 241, 193, 0.13);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__placement-actions button:hover {
+    border-color: rgba(203, 241, 193, 0.58);
+    background: rgba(203, 241, 193, 0.13);
+  }
 }
 
 .journey-story__placement-actions button.is-secondary {
@@ -3047,10 +3163,16 @@
   letter-spacing: 0.09em;
 }
 
-.journey-story__soundtrack-actions button:hover:not(:disabled),
 .journey-story__soundtrack-actions button:focus-visible {
   border-color: rgba(203, 241, 193, 0.6);
   background: rgba(203, 241, 193, 0.12);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-story__soundtrack-actions button:hover:not(:disabled) {
+    border-color: rgba(203, 241, 193, 0.6);
+    background: rgba(203, 241, 193, 0.12);
+  }
 }
 
 .journey-story__soundtrack-actions button.is-destructive {
@@ -3264,8 +3386,10 @@
   background: var(--atlas-panel-solid);
 }
 
-.journey-composer__discard-guard-actions button:hover {
-  border-color: var(--atlas-line-strong);
+@media (hover: hover) and (pointer: fine) {
+  .journey-composer__discard-guard-actions button:hover {
+    border-color: var(--atlas-line-strong);
+  }
 }
 
 .journey-composer__discard-guard:focus {
@@ -3413,8 +3537,10 @@
   text-decoration: none;
 }
 
-.journey-location-attribution:hover {
-  color: var(--atlas-cyan);
+@media (hover: hover) and (pointer: fine) {
+  .journey-location-attribution:hover {
+    color: var(--atlas-cyan);
+  }
 }
 
 /* #512: reviewing an imported plan. The data layer stays sharp and flat —
@@ -5572,7 +5698,7 @@
 .journey-globe-pick-hint {
   position: fixed;
   z-index: var(--z-overlay-260);
-  top: 86px;
+  top: calc(86px + env(safe-area-inset-top, 0px));
   left: 50%;
   min-height: 62px;
   display: grid;
@@ -5743,8 +5869,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   cursor: pointer;
 }
 
-.particle-earth-city:hover {
-  fill: var(--atlas-acid);
+@media (hover: hover) and (pointer: fine) {
+  .particle-earth-city:hover {
+    fill: var(--atlas-acid);
+  }
 }
 
 /* Route travel motion now lives in the normalized Quiet Core leader in
@@ -5926,10 +6054,16 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   cursor: pointer;
 }
 
-.living-atlas__route-point-context-close:hover,
 .living-atlas__route-point-context-close:focus-visible {
   background: rgba(255, 255, 255, 0.06);
   color: var(--atlas-text);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__route-point-context-close:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--atlas-text);
+  }
 }
 
 .living-atlas__route-point-context > header p,
@@ -6553,13 +6687,13 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .detailed-earth-map .maplibregl-ctrl-bottom-right {
-    right: 4px;
-    bottom: 94px;
+    right: calc(4px + env(safe-area-inset-right, 0px));
+    bottom: calc(94px + env(safe-area-inset-bottom, 0px));
   }
 
   .detailed-earth-map .maplibregl-ctrl-bottom-left {
-    left: 4px;
-    bottom: 74px;
+    left: calc(4px + env(safe-area-inset-left, 0px));
+    bottom: calc(74px + env(safe-area-inset-bottom, 0px));
   }
 
   .living-atlas__header {
@@ -6713,8 +6847,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .living-atlas__notice {
-    bottom: 12px;
-    width: calc(100vw - 20px);
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    width: calc(100vw - 20px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
   }
 
   .living-atlas__notice button,
@@ -6768,6 +6902,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .journey-story-backdrop.is-mobile-context {
+    /* Landscape: keep the sheet clear of the notch side. */
+    padding-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px);
     display: flex;
     align-items: flex-end;
     justify-content: stretch;
@@ -6802,6 +6938,17 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     max-height: 100dvh;
     border-radius: 0;
     background: #020809;
+  }
+
+  /* viewport-fit=cover: the expanded sheet reaches the top edge, so its first
+     sticky row, the handle, absorbs the top inset and the header follows it. */
+  .journey-story-backdrop.is-story-expanded .journey-story__sheet-handle {
+    height: calc(44px + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .journey-story-backdrop.is-story-expanded .journey-story > header {
+    top: calc(44px + env(safe-area-inset-top, 0px));
   }
 
   .journey-story__sheet-handle {
@@ -6860,7 +7007,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
      the media region is sized to what is left above the fold rather than to a
      floor the viewport cannot honour. 106px is this block's own sticky sheet
      handle (44px) plus header (62px); the one later rule that changes either --
-     `.living-atlas.is-mobile-v2 .journey-story > header`, 56px + safe area --
+     `.living-atlas.is-mobile-v2 .journey-story > header`, 56px --
      only makes the header shorter, and its `.journey-story__media` height of
      54svh is already inside the budget below. `max-height` carries the fit
      independently of `height`, so a later, more specific height (that one, or
@@ -6969,9 +7116,16 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     cursor: default;
   }
 
-  .journey-story__mobile-video-nav button:is(:hover, :focus-visible):not(:disabled) {
+  .journey-story__mobile-video-nav button:focus-visible:not(:disabled) {
     border-color: rgba(118, 227, 211, 0.56);
     color: #eef7f3;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .journey-story__mobile-video-nav button:hover:not(:disabled) {
+      border-color: rgba(118, 227, 211, 0.56);
+      color: #eef7f3;
+    }
   }
 
   .journey-story__mobile-media-menu-trigger,
@@ -7274,7 +7428,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story-fullscreen[data-mobile-layout="true"] .journey-story-fullscreen__close {
     top: calc(env(safe-area-inset-top) + 12px);
-    right: 12px;
+    right: calc(12px + env(safe-area-inset-right, 0px));
     width: var(--mobile-control-hit-size, 44px);
     height: var(--mobile-control-hit-size, 44px);
     border-radius: var(--mobile-control-radius, 999px);
@@ -7624,7 +7778,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     overflow-y: auto;
     display: grid;
     gap: 7px;
-    padding: 10px 14px calc(env(safe-area-inset-bottom) + 14px);
+    padding: 10px calc(14px + env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom) + 14px) calc(14px + env(safe-area-inset-left, 0px));
     border: 1px solid rgba(118, 227, 211, 0.16);
     border-bottom: 0;
     border-radius: 22px 22px 0 0;
@@ -7787,7 +7941,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .journey-globe-pick-hint {
-    top: 72px;
+    top: calc(72px + env(safe-area-inset-top, 0px));
   }
 }
 
@@ -7804,7 +7958,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  padding: calc(env(safe-area-inset-top) + 10px) 14px 8px;
+  padding: calc(env(safe-area-inset-top) + 10px) calc(14px + env(safe-area-inset-right, 0px)) 8px calc(14px + env(safe-area-inset-left, 0px));
   pointer-events: none;
 }
 
@@ -7842,9 +7996,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 .mobile-v2__chrome {
   position: absolute;
   z-index: var(--z-chrome-90);
-  right: 12px;
+  right: calc(12px + env(safe-area-inset-right, 0px));
   bottom: calc(env(safe-area-inset-bottom) + 8px);
-  left: 12px;
+  left: calc(12px + env(safe-area-inset-left, 0px));
   height: 118px;
   display: grid;
   grid-template-rows: 62px 50px;
@@ -8015,7 +8169,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   z-index: var(--z-content-1);
   max-height: min(72svh, 640px);
   overflow-y: auto;
-  padding: 8px 16px calc(env(safe-area-inset-bottom) + 16px);
+  padding: 8px calc(16px + env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom) + 16px) calc(16px + env(safe-area-inset-left, 0px));
   border: 1px solid rgba(118, 198, 188, 0.16);
   border-bottom: 0;
   border-radius: 24px 24px 0 0;
@@ -8157,7 +8311,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 .mobile-v2__picker {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  padding: env(safe-area-inset-top) 14px env(safe-area-inset-bottom);
+  padding: env(safe-area-inset-top) calc(14px + env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom) calc(14px + env(safe-area-inset-left, 0px));
 }
 
 .mobile-v2__picker > header {
@@ -8277,9 +8431,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   .living-atlas.is-mobile-v2 .living-atlas__empty {
     z-index: var(--z-chrome-88);
     top: auto;
-    right: 24px;
+    right: calc(24px + env(safe-area-inset-right, 0px));
     bottom: calc(env(safe-area-inset-bottom) + 38px);
-    left: 24px;
+    left: calc(24px + env(safe-area-inset-left, 0px));
     width: auto;
     display: grid;
     justify-items: center;
@@ -8331,8 +8485,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .living-atlas.is-mobile-v2 .journey-story > header {
-    height: calc(56px + env(safe-area-inset-top));
-    padding-top: env(safe-area-inset-top);
+    /* The top inset belongs to the expanded sheet handle above this row; a
+       collapsed sheet does not touch the top edge at all. */
+    height: 56px;
     background: linear-gradient(180deg, rgba(1, 7, 8, 0.96), rgba(1, 7, 8, 0.72));
     backdrop-filter: blur(16px);
   }
@@ -8398,7 +8553,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   inset: 0;
   display: grid;
   place-items: center;
-  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left, 0px));
 }
 
 .journey-share__backdrop {
@@ -8854,9 +9009,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .living-atlas[data-mobile-v2="on"] .living-atlas__home-base-context {
-  right: 12px;
+  right: calc(12px + env(safe-area-inset-right, 0px));
   bottom: calc(env(safe-area-inset-bottom) + 142px);
-  left: 12px;
+  left: calc(12px + env(safe-area-inset-left, 0px));
   width: auto;
   border-radius: 16px;
   max-height: calc(100dvh - env(safe-area-inset-bottom) - 166px);
@@ -8931,8 +9086,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .living-atlas[data-mobile-v2="on"] .living-atlas__everyday-context {
   top: calc(env(safe-area-inset-top) + 70px);
-  right: 12px;
-  left: 12px;
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  left: calc(12px + env(safe-area-inset-left, 0px));
   width: auto;
   max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 154px);
   border-radius: 16px;
@@ -9204,9 +9359,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    directly interactive everywhere outside the card. */
 .living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion {
   z-index: var(--z-chrome-85);
-  right: 12px;
+  right: calc(12px + env(safe-area-inset-right, 0px));
   bottom: calc(env(safe-area-inset-bottom) + 142px);
-  left: 12px;
+  left: calc(12px + env(safe-area-inset-left, 0px));
   width: auto;
   max-height: min(48svh, 360px);
   overflow-y: auto;
@@ -9383,6 +9538,13 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 /* The precise-location panel is the task itself, so it opens with it. */
 .journey-composer[data-mobile-layout="true"] .journey-precise-location > summary {
   display: none;
+}
+
+/* viewport-fit=cover: the phone Composer fills the screen; its own background
+   paints under the status bar and notch while content starts inside them.
+   The footer already pads the bottom inset. */
+.journey-composer[data-mobile-layout="true"] {
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
 }
 
 .journey-composer[data-mobile-layout="true"] .journey-composer__footer {
