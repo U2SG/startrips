@@ -6306,17 +6306,17 @@ try {
       await waitForChapter(I3, POINT_B);
       progress.coverInPoint = await readContext();
 
-      // 5. The Journey boundary wraps onto canonical entry 0, never the opening.
-      await press("ArrowRight");
+      // 5. The Journey boundary wraps onto canonical entry 0, never the
+      // opening. On the inline stage the arrows answer "is there content after
+      // this one" and stop at the last media; the cursor's wrap is reached by
+      // autoplay, whose timer step here crosses the Journey boundary. (Previous
+      // from canonical entry 0 wrapping to the end is a unit-test case.)
+      await page.locator('.journey-story__media-nav button[aria-pressed="false"]').click();
       await waitForChapter(I1, POINT_A);
       progress.wrapped = await readContext();
+      await page.locator('.journey-story__media-nav button[aria-pressed="true"]').click();
 
-      // 6. Previous from canonical entry 0 still wraps to the end.
-      await press("ArrowLeft");
-      await waitForChapter(I3, POINT_B);
-      progress.wrappedBack = await readContext();
-
-      // 7. The whole-Journey chip after leaving the opening goes to canonical
+      // 6. The whole-Journey chip after leaving the opening goes to canonical
       // entry 0, not back to the opening.
       await page.locator(".journey-story .journey-story__route-points button:not([data-route-point-id])").first().click();
       await waitForChapter(I1, POINT_A);
@@ -6338,7 +6338,6 @@ try {
           || progress.coverInPoint.observationAsset !== I3 || progress.coverInPoint.observationRoutePoint !== POINT_B
           || progress.wrapped.assetId !== I1 || progress.wrapped.pressed.join() !== POINT_A
           || progress.wrapped.observationAsset !== I1
-          || progress.wrappedBack.assetId !== I3 || progress.wrappedBack.pressed.join() !== POINT_B
           || progress.allChip.assetId !== I1 || progress.allChip.pressed.join() !== POINT_A
           || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
