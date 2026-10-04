@@ -6436,6 +6436,106 @@ try {
       for (const session of sessions) await session.page.close();
     }
   }
+  {
+    // #555: the cover is Journey-level media (routePointId null), so it is also
+    // canonical entry 0, in its intro role. Entries are [104 opening, 104, 100,
+    // 101, 102, 103]. Neither the opening nor entry 0 names a Route Point, so the
+    // whole-Journey chip stays pressed and the Journey note shows on both; what
+    // changes is the page, the map observation (none -> the intro asset) and the
+    // counter (absent -> "1 / 5").
+    const name = "story-journey-cover-opening-journey-level";
+    const POINT_A = "00000000-0000-4000-8000-000000000004";
+    const INTRO = "00000000-0000-4000-8000-000000000104";
+    const OPENING = `journey-cover:00000000-0000-4000-8000-000000000001:${INTRO}`;
+    const JOURNEY_NOTE = "灯光沿着海岸";
+    const POINT_A_NOTE = "美术馆台阶上的第一站";
+    const path = "/?qaState=journey-story&qaMode=journey-cover-opening-intro";
+    const progress = {};
+    const sessions = [];
+    const readPage = (page) => page.evaluate(({ selector, notes }) => {
+      const story = document.querySelector(".journey-story");
+      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      const pressed = [...(story?.querySelectorAll('.journey-story__route-points button[aria-pressed="true"]') ?? [])];
+      const visibleText = (text) => [...(story?.querySelectorAll("p, blockquote, span, div") ?? [])]
+        .some((element) => element.children.length === 0 && element.textContent?.includes(text)
+          && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+      const main = document.querySelector("main.living-atlas");
+      return {
+        presentationId: current?.getAttribute("data-media-presentation-id") ?? null,
+        assetId: current?.getAttribute("data-media-page-id") ?? null,
+        pressed: pressed.map((button) => button.getAttribute("data-route-point-id") ?? "all"),
+        pointNote: story?.querySelector(".journey-story__point-note")?.textContent ?? null,
+        journeyNoteVisible: visibleText(notes.journey),
+        pointANoteVisible: visibleText(notes.pointA),
+        counter: document.querySelector("[data-story-media-counter]")?.textContent?.trim() ?? null,
+        observationAsset: main?.getAttribute("data-qa-story-observation-asset") ?? null,
+        observationRoutePoint: main?.getAttribute("data-qa-story-observation-route-point") ?? null,
+      };
+    }, { selector: STAGE, notes: { journey: JOURNEY_NOTE, pointA: POINT_A_NOTE } });
+    const waitForPage = (page, presentationId, chapter) => page.waitForFunction(({ selector, expected, expectedChapter }) => {
+      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      const pressed = [...document.querySelectorAll('.journey-story .journey-story__route-points button[aria-pressed="true"]')];
+      return current?.getAttribute("data-media-presentation-id") === expected
+        && current?.getAttribute("data-media-page-ready") === "true"
+        && pages?.getAttribute("data-media-presentation") === "settled"
+        && pressed.length === 1
+        && (pressed[0].getAttribute("data-route-point-id") ?? "all") === expectedChapter;
+    }, { selector: STAGE, expected: presentationId, expectedChapter: chapter }, { polling: "raf", timeout: 10_000 });
+    const press = async (page, key) => {
+      await page.evaluate((selector) => (
+        document.querySelector(selector)?.querySelector("[data-story-media-pages]")?.focus()
+      ), STAGE);
+      await page.keyboard.press(key);
+    };
+    try {
+      const desktop = await createStoryPage({ viewport: { width: 1280, height: 800 }, path });
+      sessions.push(desktop);
+      await waitForPage(desktop.page, OPENING, "all");
+      progress.opening = await readPage(desktop.page);
+      await press(desktop.page, "ArrowLeft");
+      await desktop.page.waitForTimeout(700);
+      progress.afterPrevious = await readPage(desktop.page);
+      await press(desktop.page, "ArrowRight");
+      await waitForPage(desktop.page, INTRO, "all");
+      progress.entryZero = await readPage(desktop.page);
+      await press(desktop.page, "ArrowRight");
+      await waitForPage(desktop.page, I1, POINT_A);
+      progress.pointA = await readPage(desktop.page);
+
+      const mobile = await createStoryPage({ mobile: true, path });
+      sessions.push(mobile);
+      await waitForPage(mobile.page, OPENING, "all");
+      progress.mobileOpening = await readPage(mobile.page);
+      progress.mobileSwipeInput = await swipeStage(mobile.page, STAGE, 1);
+      await waitForPage(mobile.page, INTRO, "all");
+      progress.mobileEntryZero = await readPage(mobile.page);
+
+      const errors = sessions.flatMap((session) => [...session.consoleErrors, ...session.pageErrors]);
+      const { opening, entryZero } = progress;
+      record({ name,
+        claim: "a cover from Journey-level media opens on a Journey-level opening (whole-Journey chip, Journey note, no Point note, no observation, no counter); Previous does nothing; Next is a page change to canonical entry 0, the same intro asset, which keeps the whole-Journey chip and Journey note but now publishes its asset and reads 1 / 5; the next step reaches Point A",
+        ...progress, errors,
+        failed: opening.presentationId !== OPENING || opening.assetId !== INTRO
+          || opening.pressed.join() !== "all" || opening.pointNote !== null || !opening.journeyNoteVisible
+          || opening.observationAsset !== null || opening.observationRoutePoint !== null
+          || progress.afterPrevious.presentationId !== OPENING
+          || entryZero.presentationId !== INTRO || entryZero.assetId !== INTRO
+          || entryZero.pressed.join() !== "all" || entryZero.pointNote !== null || !entryZero.journeyNoteVisible
+          || entryZero.observationAsset !== INTRO || entryZero.observationRoutePoint !== null
+          || progress.pointA.presentationId !== I1 || !progress.pointA.pointANoteVisible
+          || progress.mobileOpening.presentationId !== OPENING || progress.mobileOpening.counter !== null
+          || progress.mobileEntryZero.presentationId !== INTRO || progress.mobileEntryZero.counter !== "1 / 5"
+          || errors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        errors: sessions.flatMap((session) => [...session.consoleErrors, ...session.pageErrors]), failed: true });
+    } finally {
+      for (const session of sessions) await session.page.close();
+    }
+  }
 } catch (error) {
   // The accumulated checks are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439).

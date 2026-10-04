@@ -612,6 +612,25 @@ const storyQaCoverOpeningLeadingJourney: Journey = {
   coverMediaAssetId: "00000000-0000-4000-8000-000000000100",
 };
 
+// #555: a cover sourced from Journey-level media (routePointId null). It sorts
+// into the intro, so it is also canonical entry 0, in its Journey role rather
+// than any Route Point's: entries are [104 opening, 104, 100, 101, 102, 103].
+const storyQaCoverOpeningIntroJourney: Journey = {
+  ...storyQaCoverOpeningJourney,
+  coverMediaAssetId: "00000000-0000-4000-8000-000000000104",
+  media: [
+    ...storyQaCoverOpeningJourney.media,
+    {
+      ...storyQaCoverOpeningJourney.media[0],
+      id: "00000000-0000-4000-8000-000000000104",
+      storageKey: "qa/story-seed-4",
+      fileName: "seed-4.png",
+      sortOrder: 4,
+      routePointId: null,
+    },
+  ],
+};
+
 const STORY_QA_MIXED_VIDEO_ASSET_ID = "00000000-0000-4000-8000-000000000152";
 const storyQaMixedJourney: Journey = {
   ...storyQaJourney,
@@ -678,8 +697,11 @@ function JourneyStoryQaPreview() {
   // #555: the only preview mode that opens as a genuine whole-Journey entry.
   // Every other mode keeps its current starting state (no opening).
   const coverOpeningLeadingMode = qaMode === "journey-cover-opening-leading";
-  const coverOpeningMode = qaMode === "journey-cover-opening" || coverOpeningLeadingMode;
-  const initialJourney = coverOpeningLeadingMode
+  const coverOpeningIntroMode = qaMode === "journey-cover-opening-intro";
+  const coverOpeningMode = qaMode === "journey-cover-opening" || coverOpeningLeadingMode || coverOpeningIntroMode;
+  const initialJourney = coverOpeningIntroMode
+    ? storyQaCoverOpeningIntroJourney
+    : coverOpeningLeadingMode
     ? storyQaCoverOpeningLeadingJourney
     : coverOpeningMode
     ? storyQaCoverOpeningJourney

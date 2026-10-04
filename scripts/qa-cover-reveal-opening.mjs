@@ -1105,6 +1105,124 @@ try {
     check("cover-revision-change/no-page-errors", run.pageErrors.length === 0, run.pageErrors);
     await run.context.close();
   }
+  // 10. #555: Story's Journey cover opening owns the reveal. The card's own
+  //     opening plays and settles first (the default flow), then 打开故事: the
+  //     opening page reveals generated -> original and settles on the canonical
+  //     bytes, and the canonical cover entry reached next never replays it.
+  //     The fixture's cover is Journey-level media, so canonical entry 0 is
+  //     that same asset in its intro role. Desktop and phone layouts.
+  for (const viewport of VIEWPORTS) {
+    const label = viewport.name;
+    const run = await openCase(viewport);
+    const { page } = run;
+    const progress = {};
+    try {
+      await page.waitForFunction(
+        () => document.querySelector(".living-atlas__active-media-reveal")
+          ?.getAttribute("data-cover-reveal-phase") === "revealing",
+        undefined,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        () => document.querySelector(".living-atlas__active-media-reveal") === null,
+        undefined,
+        { timeout: 40_000 },
+      );
+      await page.getByRole("button", { name: /打开故事/ }).first().click();
+      await page.locator(".journey-story").waitFor({ timeout: 20_000 });
+      await page.evaluate(() => { window.__qaCompositedFrames.length = 0; });
+      await page.waitForFunction(
+        () => document.querySelector(".journey-story .journey-story__cover-reveal")
+          ?.getAttribute("data-cover-reveal-phase") === "revealing",
+        undefined,
+        { timeout: 20_000 },
+      );
+      progress.during = await page.evaluate(() => {
+        const current = document.querySelector('.journey-story__media [data-media-page="current"]');
+        return {
+          presentationId: current?.getAttribute("data-media-presentation-id") ?? null,
+          hold: current?.getAttribute("data-media-overlay-hold") ?? null,
+          overlayOnCurrent: Boolean(current?.querySelector(".journey-story__cover-reveal")),
+          cardStage: Boolean(document.querySelector(".living-atlas__active-media-reveal")),
+        };
+      });
+      await page.waitForFunction(
+        () => document.querySelector(".journey-story .journey-story__cover-reveal") === null,
+        undefined,
+        { timeout: 40_000 },
+      );
+      progress.settled = await page.evaluate(() => {
+        const current = document.querySelector('.journey-story__media [data-media-page="current"]');
+        const image = current?.querySelector("img");
+        return {
+          presentationId: current?.getAttribute("data-media-presentation-id") ?? null,
+          hold: current?.getAttribute("data-media-overlay-hold") ?? null,
+          src: image?.currentSrc ?? null,
+          complete: Boolean(image?.complete && image.naturalWidth > 0),
+          frames: [...window.__qaCompositedFrames],
+          canvases: document.querySelectorAll(".journey-story__media canvas").length,
+        };
+      });
+      // Next: a drag across the stage enters canonical entry 0 (the same asset).
+      const box = await page.locator(".journey-story__media [data-story-media-pages]").boundingBox();
+      if (!box) throw new Error("Story stage has no box");
+      const y = box.y + box.height * 0.35;
+      await page.mouse.move(box.x + box.width * 0.75, y);
+      await page.mouse.down();
+      for (let step = 1; step <= 10; step += 1) {
+        await page.mouse.move(box.x + box.width * (0.75 - 0.045 * step), y);
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+      }
+      await page.mouse.up();
+      await page.waitForFunction(
+        (expected) => document.querySelector('.journey-story__media [data-media-page="current"]')
+          ?.getAttribute("data-media-presentation-id") === expected
+          && document.querySelector(".journey-story__media [data-story-media-pages]")
+            ?.getAttribute("data-media-presentation") === "settled",
+        COVER_ASSET_ID,
+        { timeout: 10_000 },
+      );
+      const replay = [];
+      for (let sample = 0; sample < 10; sample += 1) {
+        await page.waitForTimeout(150);
+        replay.push(await page.evaluate(() => Boolean(
+          document.querySelector(".journey-story [data-cover-reveal-phase]"),
+        )));
+      }
+      progress.replay = replay;
+      check(`${label}/story-opening/card-stage-gone-while-story-reveals`, progress.during.cardStage === false, progress.during);
+      check(
+        `${label}/story-opening/reveal-runs-on-the-opening-page`,
+        progress.during.presentationId?.startsWith("journey-cover:") === true
+          && progress.during.overlayOnCurrent && progress.during.hold === "true",
+        progress.during,
+      );
+      check(
+        `${label}/story-opening/generated-first-then-original`,
+        progress.settled.frames[0] === "generated-first" && progress.settled.frames.at(-1) === "original-cover",
+        progress.settled.frames,
+      );
+      check(
+        `${label}/story-opening/settles-on-the-canonical-original-as-the-opening`,
+        progress.settled.presentationId === progress.during.presentationId && progress.settled.hold === null
+          && progress.settled.src === ORIGINAL_URL && progress.settled.complete && progress.settled.canvases === 0,
+        progress.settled,
+      );
+      check(`${label}/story-opening/canonical-cover-never-replays`, !replay.includes(true), replay);
+      check(`${label}/story-opening/no-page-errors`, run.pageErrors.length === 0, run.pageErrors);
+    } catch (error) {
+      check(`${label}/story-opening/completed`, false, {
+        error: error instanceof Error ? error.message : String(error),
+        progress,
+        frames: await page.evaluate(() => [...(window.__qaCompositedFrames ?? [])]).catch(() => null),
+        phase: await page.evaluate(() => document.querySelector(".journey-story [data-cover-reveal-phase]")
+          ?.getAttribute("data-cover-reveal-phase") ?? null).catch(() => null),
+      });
+    } finally {
+      await run.context.close();
+    }
+  }
+
 } catch (error) {
   // The evidence for everything that DID run still has to reach the artifact,
   // so the throw is recorded and re-raised after the file is written.
