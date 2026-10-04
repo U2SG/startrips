@@ -481,7 +481,11 @@
 }
 
 /* ML-11 Ambience: a soft aurora field behind the transparent particle
-   globe. Blobs are GPU-composited transforms, never layout. */
+   globe. Blobs are GPU-composited transforms, never layout.
+   The softness is an eased `closest-side` radial falloff rather than a
+   `filter: blur()`: a 90px blur on three ~46vmax promoted layers was
+   re-rasterised during the drift next to the WebGL loop. Every layer reaches
+   transparent inside its own box, so no box edge or clip shows as a seam. */
 .living-atlas-ambience {
   position: absolute;
   z-index: var(--z-content-0);
@@ -494,18 +498,29 @@
   position: absolute;
   width: 46vmax;
   height: 46vmax;
-  border-radius: 50%;
-  filter: blur(90px);
   opacity: 0.34;
-  will-change: transform;
 }
 
 .living-atlas-ambience__blob-a {
   top: -18vmax;
   left: -12vmax;
   background:
-    radial-gradient(circle at 32% 38%, rgba(116, 231, 208, 0.5), transparent 62%),
-    radial-gradient(circle at 68% 60%, rgba(98, 86, 239, 0.34), transparent 60%);
+    radial-gradient(
+      circle closest-side at 42% 44%,
+      rgba(116, 231, 208, 0.5) 0,
+      rgba(116, 231, 208, 0.32) 30%,
+      rgba(116, 231, 208, 0.15) 55%,
+      rgba(116, 231, 208, 0.05) 78%,
+      transparent 100%
+    ),
+    radial-gradient(
+      circle closest-side at 58% 56%,
+      rgba(98, 86, 239, 0.34) 0,
+      rgba(98, 86, 239, 0.22) 30%,
+      rgba(98, 86, 239, 0.1) 55%,
+      rgba(98, 86, 239, 0.03) 78%,
+      transparent 100%
+    );
   animation: ambienceDriftA 26s ease-in-out infinite alternate;
 }
 
@@ -513,8 +528,22 @@
   right: -16vmax;
   bottom: -14vmax;
   background:
-    radial-gradient(circle at 40% 34%, rgba(200, 255, 61, 0.26), transparent 58%),
-    radial-gradient(circle at 62% 66%, rgba(116, 231, 208, 0.32), transparent 60%);
+    radial-gradient(
+      circle closest-side at 44% 42%,
+      rgba(200, 255, 61, 0.26) 0,
+      rgba(200, 255, 61, 0.17) 30%,
+      rgba(200, 255, 61, 0.08) 55%,
+      rgba(200, 255, 61, 0.03) 78%,
+      transparent 100%
+    ),
+    radial-gradient(
+      circle closest-side at 56% 58%,
+      rgba(116, 231, 208, 0.32) 0,
+      rgba(116, 231, 208, 0.2) 30%,
+      rgba(116, 231, 208, 0.1) 55%,
+      rgba(116, 231, 208, 0.03) 78%,
+      transparent 100%
+    );
   animation: ambienceDriftB 32s ease-in-out infinite alternate;
 }
 
@@ -524,9 +553,29 @@
   width: 30vmax;
   height: 30vmax;
   background:
-    radial-gradient(circle at 50% 50%, rgba(98, 86, 239, 0.22), transparent 60%),
-    radial-gradient(circle at 50% 50%, rgba(232, 168, 124, 0.14), transparent 66%);
+    radial-gradient(
+      circle closest-side at 50% 50%,
+      rgba(98, 86, 239, 0.22) 0,
+      rgba(98, 86, 239, 0.14) 30%,
+      rgba(98, 86, 239, 0.07) 55%,
+      rgba(98, 86, 239, 0.02) 78%,
+      transparent 100%
+    ),
+    radial-gradient(
+      circle closest-side at 50% 50%,
+      rgba(232, 168, 124, 0.14) 0,
+      rgba(232, 168, 124, 0.09) 30%,
+      rgba(232, 168, 124, 0.04) 55%,
+      rgba(232, 168, 124, 0.01) 78%,
+      transparent 100%
+    );
   animation: ambienceDriftC 22s ease-in-out infinite alternate;
+}
+
+/* Once the opaque detail map owns the view the field is fully covered, so the
+   drift pauses in place (no snap back to the first frame on return). */
+.living-atlas-globe[data-earth-dive="detail"] .living-atlas-ambience__blob {
+  animation-play-state: paused;
 }
 
 @keyframes ambienceDriftA {
