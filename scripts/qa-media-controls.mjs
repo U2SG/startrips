@@ -1874,8 +1874,7 @@ try {
       pages, hitSurface: hit?.hasAttribute("data-story-hit-surface"),
       hitImage: hit === image && image.getAttribute("role") === "button",
       clickTarget: hit?.getAttribute("aria-label") ?? hit?.className ?? null,
-      apertureWidth, apertureHeight, paintPoints,
-      dragX: stage.style.getPropertyValue("--story-drag-x") };
+      apertureWidth, apertureHeight, paintPoints };
     }, surfaceSelector);
     if (!observation) return null;
     // Sample the composited browser frame as well as each decoded source.
@@ -2060,10 +2059,13 @@ try {
     await page.mouse.move(point.x - 180, point.y, { steps: 8 });
     const held = await page.evaluate(() => {
       const stage = document.querySelector(".journey-story__media [data-story-media-pages]");
+      // The swipe pulls the presented page on each pointermove; at rest it sits at depth 0.
+      const presented = stage?.querySelector('[data-media-presented="true"]');
+      const transform = presented ? getComputedStyle(presented).transform : "none";
       return {
         current: stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
         presentation: stage?.getAttribute("data-media-presentation") ?? null,
-        dragX: stage?.style.getPropertyValue("--story-drag-x") ?? null,
+        dragX: transform && transform !== "none" ? new DOMMatrixReadOnly(transform).m41 : 0,
         nextReady: stage?.querySelector('[data-media-page="next"]')?.getAttribute("data-media-page-ready") === "true",
       };
     });
@@ -2105,7 +2107,7 @@ try {
     const freshClicks = await page.evaluate((start) => window.__qaHeldResize.clicks.slice(start), freshClickCount);
     const heldResizeFailed = !stagePaintValid(before, first, true)
       || held.current !== first || held.presentation !== "dragging"
-      || !held.dragX || held.dragX === "0px" || !held.nextReady
+      || !(Math.abs(held.dragX) > 1) || !held.nextReady
       || !canceledBeforeRelease
       || !stagePaintValid(afterRelease, first, true)
       || !stagePaintValid(afterOldSettle, first, true)
@@ -2243,7 +2245,9 @@ try {
       || !returningClone.ready || !returningClone.animated || !returningClone.visible
       || !returningScreenPixel || cloneBlackDistance <= 0 || clonePaintDistance >= cloneBlackDistance / 2
       || !beforeBack.hitImage || !returned.hitImage
-      || returned.dragX !== "" || frontPixels(returned) === frontPixels(beforeBack);
+      // The interrupted gesture's presentation is cleared with its phase.
+      || returned.presentation === "dragging" || returned.presentation === "settling"
+      || frontPixels(returned) === frontPixels(beforeBack);
     checks.push({ name: "story-stage-owner-back-during-settle", beforeBack, returningClone,
       returningScreenPixel, clonePaintDistance, cloneBlackDistance, returned,
       consoleErrors: stageOwnerBack.consoleErrors, pageErrors: stageOwnerBack.pageErrors,
@@ -3313,9 +3317,6 @@ try {
           nextTransform,
           currentTransformActive: Boolean(currentTransform && currentTransform !== "none"),
           nextTransformActive: Boolean(nextTransform && nextTransform !== "none"),
-          dragOffset: getComputedStyle(root).getPropertyValue("--story-drag-x").trim(),
-          dragOffsetActive: getComputedStyle(root).getPropertyValue("--story-drag-x").trim() !== ""
-            && getComputedStyle(root).getPropertyValue("--story-drag-x").trim() !== "0px",
           nextImageSameNode: !window.__qaStoryNextImageNode || window.__qaStoryNextImageNode === nextImage,
           nextImageMounted: Boolean(nextImage),
           animationCount: typeof root.getAnimations === "function" ? root.getAnimations({ subtree: true }).length : null,
@@ -3397,9 +3398,8 @@ try {
           };
         }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector }))
         .catch(() => null);
-      const dragOffsetActive = Boolean(dragState?.dragOffsetActive);
       const transformFollowedPointer = Boolean(
-        dragState?.currentTransformActive || dragState?.nextTransformActive || dragOffsetActive,
+        dragState?.currentTransformActive || dragState?.nextTransformActive,
       );
       const initialRailShapeValid = Boolean(
         initialRailState
@@ -3437,7 +3437,6 @@ try {
         initialRail: initialRailState,
         blocked: blockedState,
         drag: dragState,
-        dragOffsetActive,
         transformFollowedPointer,
         settled: settledState,
         consoleErrors: mobileContinuity.consoleErrors,
@@ -4163,16 +4162,12 @@ try {
                 const base = document.querySelector(currentMediaSelector);
                 const transform = current ? getComputedStyle(current).transform : "";
                 const transformX = transform && transform !== "none" ? new DOMMatrixReadOnly(transform).e : 0;
-                const dragOffset = getComputedStyle(root).getPropertyValue("--story-drag-x").trim();
-                const dragOffsetX = Number.parseFloat(dragOffset) || 0;
-                return base && current && (Math.abs(transformX) > 1 || Math.abs(dragOffsetX) > 1)
+                return base && current && Math.abs(transformX) > 1
                   ? {
                     alt: base.getAttribute("alt"),
                     id: current.getAttribute("data-media-page-id"),
                     transform,
                     transformX,
-                    dragOffset,
-                    dragOffsetX,
                   }
                   : false;
               }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector }, { polling: "raf", timeout: 1_500 });
@@ -4189,12 +4184,12 @@ try {
             const base = document.querySelector(currentMediaSelector);
             const transform = current ? getComputedStyle(current).transform : "";
             const transformX = transform && transform !== "none" ? new DOMMatrixReadOnly(transform).e : 0;
-            const dragOffset = Number.parseFloat(getComputedStyle(root).getPropertyValue("--story-drag-x")) || 0;
+            const gesturePhase = root?.getAttribute("data-media-presentation");
             return current?.getAttribute("data-media-page-id") === "00000000-0000-4000-8000-000000000100"
               && base?.getAttribute("data-shared-media-id") === "00000000-0000-4000-8000-000000000100"
               && base?.getAttribute("alt") === "seed-0.png"
               && Math.abs(transformX) < 1
-              && Math.abs(dragOffset) < 1
+              && gesturePhase !== "dragging" && gesturePhase !== "settling"
               && (root?.querySelectorAll(".journey-story__media-incoming").length ?? 0) === 0;
           }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector }, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false);
         }
