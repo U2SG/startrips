@@ -51,6 +51,23 @@ export function focusX(face: number, faceCount: number, pageWidth: number, orien
  * (width / height): a spread in landscape, one page in portrait, with a
  * margin. World page height is 1.
  */
+/** Vertical gap quick_flipbook leaves between stacked sheets (world units). */
+export const BOOK_SHEET_SPACING = 0.0012;
+
+/**
+ * Height of the table plane under a book of `sheets` sheets.
+ *
+ * quick_flipbook stacks each sheet `BOOK_SHEET_SPACING` lower than the one
+ * above it, so the page on top of a deep stack lies up to `sheets` gaps below
+ * the spine. A fixed table height hid the outer part of that page on large
+ * books (the first spreads' left page, the last spreads' right page). The table
+ * stays at its original height for small books and sinks below the deepest
+ * sheet otherwise.
+ */
+export function bookTableHeight(sheets: number): number {
+  return Math.min(-0.035, -BOOK_SHEET_SPACING * (Math.max(0, sheets) + 1) - 0.005);
+}
+
 export function cameraHalfHeight(aspect: number, pageWidth: number, orientation: JourneyBookOrientation): number {
   const padding = 1.08;
   const width = (orientation === "landscape" ? pageWidth * 2 : pageWidth) * padding;
