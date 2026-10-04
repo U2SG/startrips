@@ -2727,11 +2727,12 @@ async function verifyFinalAcceptanceMobileFlow() {
       // existing keyboard owner rather than forcing a hidden button actionable.
       // #555: the sheet's "打开故事" is a whole-Journey open, so Story starts on
       // the Journey cover opening. Its cover (fa-image-1) is also canonical
-      // entry 0, so the first Next is the context-only step into Route Point 1
-      // with the same picture, and the second reaches image 2.
+      // entry 0, so the first Next is a page change between two pages of that
+      // picture, into Route Point 1, and the second reaches image 2.
       await page.keyboard.press("ArrowRight");
       await page.waitForFunction(() => Boolean(
-        document.querySelector('.journey-story__route-points button[data-route-point-id="fa-point-1"][aria-pressed="true"]'),
+        document.querySelector('.journey-story__route-points button[data-route-point-id="fa-point-1"][aria-pressed="true"]')
+        && document.querySelector('.journey-story-fullscreen [data-media-page="current"][data-media-presentation-id="fa-image-1"]'),
       ), null, { timeout: 5_000 });
       await page.keyboard.press("ArrowRight");
       await page.waitForFunction(() => Boolean(

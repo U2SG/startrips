@@ -6348,6 +6348,94 @@ try {
       await session.page.close();
     }
   }
+  {
+    // #555: the cover IS canonical entry 0 (asset 100, first media of Route
+    // Point 0004), so the opening and canonical entry 0 are two pages of one
+    // asset. Stepping off the opening must still be a real page change into
+    // entry 0's Route Point, by swipe, by the picture's Next activation and on
+    // compact mobile, where the "i / n" counter only appears off the opening.
+    const name = "story-journey-cover-opening-leading";
+    const POINT_A = "00000000-0000-4000-8000-000000000004";
+    const OPENING = "journey-cover:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000100";
+    const POINT_A_NOTE = "美术馆台阶上的第一站";
+    const path = "/?qaState=journey-story&qaMode=journey-cover-opening-leading";
+    const progress = {};
+    const sessions = [];
+    const readPage = (page) => page.evaluate(({ selector, note }) => {
+      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      const pressed = [...document.querySelectorAll('.journey-story .journey-story__route-points button[aria-pressed="true"]')];
+      return {
+        presentationId: current?.getAttribute("data-media-presentation-id") ?? null,
+        assetId: current?.getAttribute("data-media-page-id") ?? null,
+        pressed: pressed.map((button) => button.getAttribute("data-route-point-id") ?? "all"),
+        pointNote: document.querySelector(".journey-story .journey-story__point-note")?.textContent?.includes(note) ?? false,
+        counter: document.querySelector("[data-story-media-counter]")?.textContent?.trim() ?? null,
+        observationAsset: document.querySelector("main.living-atlas")?.getAttribute("data-qa-story-observation-asset") ?? null,
+      };
+    }, { selector: STAGE, note: POINT_A_NOTE });
+    const waitForPage = (page, presentationId, chapter) => page.waitForFunction(({ selector, expected, expectedChapter }) => {
+      const pages = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      const pressed = [...document.querySelectorAll('.journey-story .journey-story__route-points button[aria-pressed="true"]')];
+      return current?.getAttribute("data-media-presentation-id") === expected
+        && current?.getAttribute("data-media-page-ready") === "true"
+        && pages?.getAttribute("data-media-presentation") === "settled"
+        && pressed.length === 1
+        && (pressed[0].getAttribute("data-route-point-id") ?? "all") === expectedChapter;
+    }, { selector: STAGE, expected: presentationId, expectedChapter: chapter }, { polling: "raf", timeout: 10_000 });
+    try {
+      // Desktop: the picture's Next activation (its right half) steps off the opening.
+      const desktop = await createStoryPage({ viewport: { width: 1280, height: 800 }, path });
+      sessions.push(desktop);
+      await waitForPage(desktop.page, OPENING, "all");
+      progress.desktopOpening = await readPage(desktop.page);
+      const nextPoint = await photoClickPoint(desktop.page, STAGE, 1);
+      await desktop.page.mouse.click(nextPoint.x, nextPoint.y);
+      await waitForPage(desktop.page, I1, POINT_A);
+      progress.desktopNext = await readPage(desktop.page);
+
+      // Desktop: a swipe from the opening lands on canonical entry 0 too.
+      const swiped = await createStoryPage({ viewport: { width: 1280, height: 800 }, path });
+      sessions.push(swiped);
+      await waitForPage(swiped.page, OPENING, "all");
+      progress.desktopSwipeInput = await swipeStage(swiped.page, STAGE, 1);
+      await waitForPage(swiped.page, I1, POINT_A);
+      progress.desktopSwipe = await readPage(swiped.page);
+
+      // Compact mobile: touch swipe, and the counter starts at 1 off the opening.
+      const mobile = await createStoryPage({ mobile: true, path });
+      sessions.push(mobile);
+      await waitForPage(mobile.page, OPENING, "all");
+      progress.mobileOpening = await readPage(mobile.page);
+      progress.mobileSwipeInput = await swipeStage(mobile.page, STAGE, 1);
+      await waitForPage(mobile.page, I1, POINT_A);
+      progress.mobileSwipe = await readPage(mobile.page);
+
+      const errors = sessions.flatMap((session) => [...session.consoleErrors, ...session.pageErrors]);
+      record({ name,
+        claim: "with the cover as canonical entry 0, the opening and entry 0 are two pages of one asset: the picture's Next, a desktop swipe and a mobile touch swipe each change the current page from the opening to entry 0 with its Route Point context, and the i / n counter is absent on the opening and reads 1 / 4 on entry 0",
+        ...progress, errors,
+        failed: progress.desktopOpening.presentationId !== OPENING || progress.desktopOpening.assetId !== I1
+          || progress.desktopOpening.pressed.join() !== "all" || progress.desktopOpening.pointNote
+          || progress.desktopOpening.observationAsset !== null
+          || progress.desktopNext.presentationId !== I1 || progress.desktopNext.assetId !== I1
+          || progress.desktopNext.pressed.join() !== POINT_A || !progress.desktopNext.pointNote
+          || progress.desktopNext.observationAsset !== I1
+          || progress.desktopSwipe.presentationId !== I1 || progress.desktopSwipe.pressed.join() !== POINT_A
+          || !progress.desktopSwipe.pointNote
+          || progress.mobileOpening.presentationId !== OPENING || progress.mobileOpening.counter !== null
+          || progress.mobileSwipe.presentationId !== I1 || progress.mobileSwipe.pressed.join() !== POINT_A
+          || progress.mobileSwipe.counter !== "1 / 4"
+          || errors.length > 0,
+      });
+    } catch (error) {
+      record({ name, ...progress, error: error instanceof Error ? error.message : String(error),
+        errors: sessions.flatMap((session) => [...session.consoleErrors, ...session.pageErrors]), failed: true });
+    } finally {
+      for (const session of sessions) await session.page.close();
+    }
+  }
 } catch (error) {
   // The accumulated checks are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439).

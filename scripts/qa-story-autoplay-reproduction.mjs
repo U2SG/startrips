@@ -291,13 +291,15 @@ try {
       // #555: the card is a whole-Journey open, so Story starts on the Journey
       // cover opening. This reproduction measures autoplay from canonical entry
       // 0, which here is the same cover picture inside Route Point 1, so enter it
-      // first: a context-only step that requests no new media. Focus is released
-      // again before anything is observed or captured.
+      // first: a page change between two pages of one asset that requests no new
+      // media read. Focus is released again before anything is observed.
       await page.evaluate(() => document.querySelector(".journey-story__media [data-story-media-pages]")?.focus());
       await page.keyboard.press("ArrowRight");
-      await page.waitForFunction(() => Boolean(document.querySelector(
-        '.journey-story__route-points button[data-route-point-id="qa-r3-point-0"][aria-pressed="true"]')),
-      null, { polling: "raf", timeout: 8_000 });
+      await page.waitForFunction((expected) => Boolean(document.querySelector(
+        '.journey-story__route-points button[data-route-point-id="qa-r3-point-0"][aria-pressed="true"]'))
+        && document.querySelector('.journey-story__media [data-media-page="current"]')
+          ?.getAttribute("data-media-presentation-id") === expected,
+      ids[0], { polling: "raf", timeout: 8_000 });
       await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
       await settled(ids[0]);
       record.environment = await page.evaluate(() => ({ userAgent: navigator.userAgent, viewport: [innerWidth, innerHeight],

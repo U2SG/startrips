@@ -603,6 +603,15 @@ const storyQaCoverOpeningJourney: Journey = {
   })),
 };
 
+// #555: the same Journey with its cover as canonical entry 0 (the first media
+// of the first Route Point), which is also what `journeyCover` falls back to
+// without an explicit cover. Entries are [100 opening, 100, 101, 102, 103]: the
+// step off the opening is a page change between two pages of one asset.
+const storyQaCoverOpeningLeadingJourney: Journey = {
+  ...storyQaCoverOpeningJourney,
+  coverMediaAssetId: "00000000-0000-4000-8000-000000000100",
+};
+
 const STORY_QA_MIXED_VIDEO_ASSET_ID = "00000000-0000-4000-8000-000000000152";
 const storyQaMixedJourney: Journey = {
   ...storyQaJourney,
@@ -668,8 +677,11 @@ function JourneyStoryQaPreview() {
   const routeBoundaryMode = qaMode === "route-boundary";
   // #555: the only preview mode that opens as a genuine whole-Journey entry.
   // Every other mode keeps its current starting state (no opening).
-  const coverOpeningMode = qaMode === "journey-cover-opening";
-  const initialJourney = coverOpeningMode
+  const coverOpeningLeadingMode = qaMode === "journey-cover-opening-leading";
+  const coverOpeningMode = qaMode === "journey-cover-opening" || coverOpeningLeadingMode;
+  const initialJourney = coverOpeningLeadingMode
+    ? storyQaCoverOpeningLeadingJourney
+    : coverOpeningMode
     ? storyQaCoverOpeningJourney
     : desktopChapterNoMediaMode
     ? storyQaDesktopChapterNoMediaJourney
