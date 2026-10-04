@@ -186,9 +186,9 @@ async function clickLabel(page, label) {
 /**
  * Click a control by whichever way this viewport names it.
  *
- * The share entries are labelled buttons in the desktop header and icon-only
- * buttons in the compact mobile header, so the accessible name is the stable
- * identity across viewports while the visible text is not.
+ * A control may carry its name as visible text or only as an `aria-label`, so
+ * either match counts. The multi-Journey share entry is a labelled button in
+ * the desktop header and a row of the 更多 sheet on a compact header.
  */
 async function clickNamed(page, name) {
   const clicked = await page.evaluate((wanted) => {
@@ -203,6 +203,17 @@ async function clickNamed(page, name) {
   }, name);
   if (!clicked) throw new Error(`no control named ${name}`);
   await page.waitForTimeout(180);
+}
+
+const ATLAS_MORE_TRIGGER = '.mobile-v2__header [data-atlas-more-trigger="true"]';
+
+/**
+ * A compact header keeps the multi-Journey share entry as a row of its 更多
+ * sheet, so on a phone that sheet is opened first.
+ */
+async function openAtlasMore(page) {
+  await page.locator(ATLAS_MORE_TRIGGER).click();
+  await page.locator(".mobile-v2__more-sheet").waitFor({ state: "visible", timeout: 10_000 });
 }
 
 async function clickText(page, text) {
@@ -230,7 +241,10 @@ async function openCollapsedMobileStory(page) {
 }
 
 async function shareFromCollapsedMobileStory(page, repeatIntent = false) {
-  const atlasTrigger = page.locator('[data-atlas-share-trigger="true"]');
+  // The Atlas multi-share entry is a 更多 row on a compact header. While Story
+  // owns the surface the 更多 trigger itself is disabled: the collapsed Story is
+  // portaled above the whole Atlas, so the sheet could only open under it.
+  const atlasTrigger = page.locator(ATLAS_MORE_TRIGGER);
   const disabled = await atlasTrigger.isDisabled();
   await page.getByRole("button", { name: "管理旅程", exact: true }).first().click();
   await page.waitForFunction(() => (
@@ -261,6 +275,7 @@ async function surfaceState(page) {
       share: Boolean(share),
       modalCount: modals.length,
       activeAtlasShareTrigger: active?.dataset.atlasShareTrigger === "true",
+      activeAtlasMoreTrigger: active?.dataset.atlasMoreTrigger === "true",
       atlasInert: Boolean(document.querySelector(".living-atlas [inert], .living-atlas[inert]")),
     };
   });
@@ -420,6 +435,7 @@ try {
     );
 
     // --- Entry path B: several Journeys, one link. -------------------------
+    if (viewport.compact) await openAtlasMore(page);
     await clickNamed(page, "分享多段旅程");
     await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
     check(`${viewport.name}/multi-entry-reachable`, true);
@@ -569,6 +585,14 @@ try {
     );
 
     await closeShareAndWaitForHistoryReconcile(page, viewport.compact);
+    if (viewport.compact) {
+      // The row that opened Share left with its sheet; focus comes back to
+      // 更多, the header control it lives behind.
+      const afterMultiClose = await surfaceState(page);
+      check(`${viewport.name}/multi-share-close-restores-more-focus`,
+        afterMultiClose.activeAtlasMoreTrigger,
+        afterMultiClose);
+    }
 
     // --- Entry path A: exactly one Journey. --------------------------------
     // Reached from the surface each viewport actually offers: the mobile sheet
@@ -734,8 +758,26 @@ try {
     // Reopen immediately while the cleanup-owned history traversal may still
     // be in flight. The token write must wait for that traversal, but Back
     // ownership must exist immediately: if a create becomes pending in this
-    // window, Browser Back cannot consume underlying navigation.
-    await page.locator('[data-atlas-share-trigger="true"]').click();
+    // window, Browser Back cannot consume underlying navigation. The compact
+    // entry is the 更多 row, so 更多 and the row are pressed back to back in
+    // one browser task: the extra hop must not let the traversal settle first.
+    const reopened = await page.evaluate(async (moreSelector) => {
+      const more = document.querySelector(moreSelector);
+      if (!(more instanceof HTMLButtonElement)) return "no-more-trigger";
+      more.click();
+      const row = () => document.querySelector('.mobile-v2__more-sheet [data-atlas-share-trigger="true"]');
+      for (let tick = 0; tick < 20 && !row(); tick += 1) await Promise.resolve();
+      for (let frame = 0; frame < 30 && !row(); frame += 1) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      const target = row();
+      if (!(target instanceof HTMLButtonElement)) return "no-share-row";
+      target.click();
+      return "pressed";
+    }, ATLAS_MORE_TRIGGER);
+    if (reopened !== "pressed") {
+      throw new Error(`${viewport.name}/rapid-reopen could not reach the 更多 share row: ${reopened}`);
+    }
     await page.locator(".journey-share__dialog").waitFor({ state: "visible", timeout: 10_000 });
     const rapidReopen = await surfaceState(page);
     check(`${viewport.name}/rapid-reopen-survives-history-reconcile`,
@@ -792,7 +834,8 @@ try {
     await page.waitForTimeout(100);
 
     // Same-document Back closes Share and must not reveal the replaced Story
-    // token. Focus may return only to the still-connected Atlas trigger.
+    // token. Focus may return only to the still-connected Atlas trigger, which
+    // on a compact header is 更多 (the multi-share entry is one of its rows).
     await page.evaluate(() => window.history.back());
     await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
     await page.waitForFunction(() => {
@@ -808,7 +851,7 @@ try {
       !afterBack.story && !afterBack.share && afterBack.modalCount === 0,
       { ...afterBack, backCapture });
     check(`${viewport.name}/share-close-restores-legal-atlas-focus`,
-      afterBack.activeAtlasShareTrigger,
+      afterBack.activeAtlasMoreTrigger,
       afterBack);
 
     await context.close();

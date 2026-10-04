@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
   atlasEverydayEntryAvailable,
+  compactHeaderOverflow,
   synchronizeJourneyRailVisibility,
   journeyRailIsolation,
   captureUnknownCreateObservationOwnership,
@@ -115,6 +116,43 @@ describe("Atlas Everyday entry (#496)", () => {
     const shared = readFileSync(new URL("./SharedAtlasView.tsx", import.meta.url), "utf8");
     expect(shared).not.toContain("EverydayFragments");
     expect(shared).not.toContain("/api/everyday-fragments");
+  });
+});
+
+describe("compact header overflow", () => {
+  const owner = { readOnly: false, journeyCount: 4, everydayAvailable: true, canImport: true, canShare: true };
+
+  it("puts an owner's Atlas actions behind 更多 in the order their header icons had", () => {
+    expect(compactHeaderOverflow(owner)).toEqual({
+      trigger: "more",
+      actions: ["journeys", "everyday", "import", "share"],
+    });
+  });
+
+  it("offers each row under the condition its header icon had", () => {
+    expect(compactHeaderOverflow({ ...owner, everydayAvailable: false }).actions)
+      .toEqual(["journeys", "import", "share"]);
+    expect(compactHeaderOverflow({ ...owner, canShare: false }).actions)
+      .toEqual(["journeys", "everyday", "import"]);
+    // 全部旅程 and multi-Journey share both need a Journey to exist.
+    expect(compactHeaderOverflow({ ...owner, journeyCount: 0 }).actions)
+      .toEqual(["everyday", "import"]);
+  });
+
+  it("keeps 更多 in an owner's header while rows come and go", () => {
+    expect(compactHeaderOverflow({ ...owner, journeyCount: 0, everydayAvailable: false }))
+      .toEqual({ trigger: "more", actions: ["import"] });
+  });
+
+  it("keeps a read-only view on its single 全部旅程 icon", () => {
+    const guest = { readOnly: true, journeyCount: 3, everydayAvailable: false, canImport: false, canShare: false };
+    expect(compactHeaderOverflow(guest)).toEqual({ trigger: "journeys", actions: [] });
+    expect(compactHeaderOverflow({ ...guest, journeyCount: 0 })).toEqual({ trigger: null, actions: [] });
+  });
+
+  it("registers the 更多 sheet's Back entry only in the compact layout (#586)", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain('isMobileV2 && mobileMoreOpen,\n    "atlas-more"');
   });
 });
 

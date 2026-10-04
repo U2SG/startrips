@@ -181,6 +181,12 @@ async function verifyAtlasShell() {
             mobileTimeline: document.querySelectorAll(".mobile-v2__timeline").length,
             chromeHeight: chromeRect ? Math.round(chromeRect.height) : null,
             minPrimaryTouchTarget: primaryTouchTargets.length > 0 ? Math.min(...primaryTouchTargets) : null,
+            // Beside the wordmark an owner's compact header holds at most three
+            // icon controls (account, 记录新旅程, 更多); every other Atlas action
+            // lives in the 更多 sheet. This fixture has no account slot, so the
+            // count here is 2; the account lane below measures the real 3.
+            headerIconControls: document.querySelectorAll(".mobile-v2__header nav button").length,
+            headerMoreTriggers: document.querySelectorAll('.mobile-v2__header nav [data-atlas-more-trigger="true"]').length,
           };
         });
         record(`atlas-${label}-earth-first`, await scanButtons(page, ".living-atlas"), {
@@ -194,7 +200,51 @@ async function verifyAtlasShell() {
             || mobileShell.chromeHeight === null
             || mobileShell.chromeHeight > 125
             || mobileShell.minPrimaryTouchTarget === null
-            || mobileShell.minPrimaryTouchTarget < 44,
+            || mobileShell.minPrimaryTouchTarget < 44
+            || mobileShell.headerIconControls > 3
+            || mobileShell.headerMoreTriggers !== 1,
+        });
+
+        // The 更多 sheet fits this viewport: inside it, no sideways scroll, a
+        // 44px handle and >=44px rows in the order the header icons had.
+        const moreSheet = page.locator(".mobile-v2__more-sheet");
+        await page.locator('.mobile-v2__header [data-atlas-more-trigger="true"]').click();
+        await moreSheet.waitFor({ state: "visible" });
+        const moreGeometry = await moreSheet.evaluate((sheet) => {
+          const rect = sheet.getBoundingClientRect();
+          const handle = sheet.querySelector(".mobile-v2__more-handle")?.getBoundingClientRect();
+          const rows = [...sheet.querySelectorAll(".mobile-v2__more-actions button")].map((row) => {
+            const box = row.getBoundingClientRect();
+            return {
+              action: row.getAttribute("data-atlas-more-action"),
+              width: Math.round(box.width),
+              height: Math.round(box.height),
+            };
+          });
+          return {
+            viewportOverflowX: Math.max(0, Math.round(rect.right - innerWidth)) + Math.max(0, Math.round(-rect.left)),
+            viewportOverflowY: Math.max(0, Math.round(rect.bottom - innerHeight)) + Math.max(0, Math.round(-rect.top)),
+            overflowX: sheet.scrollWidth - sheet.clientWidth,
+            overflowY: sheet.scrollHeight - sheet.clientHeight,
+            handleHeight: handle ? Math.round(handle.height) : 0,
+            rowOrder: rows.map((row) => row.action).join(","),
+            rows,
+          };
+        });
+        const moreFailed = moreGeometry.viewportOverflowX > 0
+          || moreGeometry.viewportOverflowY > 0
+          || moreGeometry.overflowX > 0
+          || moreGeometry.overflowY > 0
+          || moreGeometry.handleHeight < 44
+          || moreGeometry.rowOrder !== "journeys,everyday,import,share"
+          || moreGeometry.rows.some((row) => row.height < 44);
+        results.push({ name: `atlas-${label}-more-sheet`, ...moreGeometry, failed: moreFailed });
+        if (moreFailed) failed = true;
+        await page.keyboard.press("Escape");
+        await moreSheet.waitFor({ state: "detached" });
+        await page.waitForFunction(() => {
+          const stack = window.history.state?.__startripsMobileSurfaceStack;
+          return !Array.isArray(stack) || stack.length === 0;
         });
         continue;
       }
@@ -279,28 +329,76 @@ async function verifyMobileV2InteractionContract() {
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
     const chip = page.locator(".mobile-v2__journey-chip");
     await chip.waitFor({ state: "visible" });
+    const historyStackDepth = () => page.evaluate(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return Array.isArray(stack) ? stack.length : 0;
+    });
+    const waitForEmptyHistoryStack = () => page.waitForFunction(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return !Array.isArray(stack) || stack.length === 0;
+    });
 
-    const pickerTrigger = page.getByRole("button", { name: "打开全部旅程" });
-    await pickerTrigger.click();
+    // An owner reaches 全部旅程 through the header's 更多 sheet. The sheet is a
+    // modal like the picker: it takes focus, inerts the header, owns one
+    // history entry and gives focus back to 更多 on Escape, Back or its handle.
+    const moreTrigger = page.locator('.mobile-v2__header [data-atlas-more-trigger="true"]');
+    const moreSheet = page.locator(".mobile-v2__more-sheet");
+    await moreTrigger.click();
+    await moreSheet.waitFor({ state: "visible" });
+    const moreRootFocused = await moreSheet.evaluate((element) => document.activeElement === element);
+    const moreBackgroundInert = await page.locator(".mobile-v2__header").evaluate((element) => element.inert);
+    await page.waitForFunction(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return Array.isArray(stack) && stack.length >= 1;
+    }, null, { timeout: 2_000 }).catch(() => undefined);
+    const moreStackDepth = await historyStackDepth();
+    await page.keyboard.press("Escape");
+    await moreSheet.waitFor({ state: "detached" });
+    await waitForEmptyHistoryStack();
+    const moreFocusRestored = await moreTrigger.evaluate((element) => document.activeElement === element);
+    await moreTrigger.click();
+    await moreSheet.waitFor({ state: "visible" });
+    await page.evaluate(() => window.history.back());
+    await moreSheet.waitFor({ state: "detached" });
+    await waitForEmptyHistoryStack();
+    const moreBackFocusRestored = await moreTrigger.evaluate((element) => document.activeElement === element);
+    await moreTrigger.click();
+    await moreSheet.waitFor({ state: "visible" });
+    await moreSheet.locator(".mobile-v2__more-handle").click();
+    await moreSheet.waitFor({ state: "detached" });
+    await waitForEmptyHistoryStack();
+    const moreHandleClosed = await moreSheet.count() === 0;
+
+    // A row closes 更多 and opens its surface in one step: the picker takes over
+    // the sheet's history entry rather than stacking a second one, and closing
+    // the picker returns focus to 更多.
+    const openPickerFromMore = async () => {
+      await moreTrigger.click();
+      await moreSheet.waitFor({ state: "visible" });
+      await moreSheet.locator('[data-atlas-more-action="journeys"]').click();
+    };
+    await openPickerFromMore();
     const picker = page.locator(".mobile-v2__picker");
     await picker.waitFor({ state: "visible" });
+    const pickerReplacedMore = await moreSheet.count() === 0;
+    // Give a deferred token write time to land; the depth read below still
+    // records the real value, so a missing or stacked entry fails.
+    await page.waitForFunction(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return Array.isArray(stack) && stack.length >= 1;
+    }, null, { timeout: 2_000 }).catch(() => undefined);
+    const pickerStackDepth = await historyStackDepth();
     const pickerRootFocused = await picker.evaluate((element) => document.activeElement === element);
     const pickerCloseBox = await picker.locator(":scope > header button").boundingBox();
     const pickerCloseTouchTarget = pickerCloseBox ? Math.min(pickerCloseBox.width, pickerCloseBox.height) : 0;
     const pickerBackgroundInert = await page.locator(".mobile-v2__header").evaluate((element) => element.inert);
     await page.keyboard.press("Escape");
     await picker.waitFor({ state: "detached" });
-    await page.waitForFunction(() => {
-      const stack = window.history.state?.__startripsMobileSurfaceStack;
-      return !Array.isArray(stack) || stack.length === 0;
-    });
-    const pickerCloseStackDepth = await page.evaluate(() => {
-      const stack = window.history.state?.__startripsMobileSurfaceStack;
-      return Array.isArray(stack) ? stack.length : 0;
-    });
-    const pickerFocusRestored = await pickerTrigger.evaluate((element) => document.activeElement === element);
+    await waitForEmptyHistoryStack();
+    const pickerCloseStackDepth = await historyStackDepth();
+    const pickerFocusRestored = await moreTrigger.evaluate((element) => document.activeElement === element);
 
-    await pickerTrigger.click();
+    await openPickerFromMore();
     await picker.waitFor({ state: "visible" });
     const journeyButtons = picker.locator("ol li button");
     await journeyButtons.last().click();
@@ -333,10 +431,6 @@ async function verifyMobileV2InteractionContract() {
 
     await chip.click();
     await sheet.waitFor({ state: "visible" });
-    const historyStackDepth = () => page.evaluate(() => {
-      const stack = window.history.state?.__startripsMobileSurfaceStack;
-      return Array.isArray(stack) ? stack.length : 0;
-    });
     const retiredMobileMapChrome = await page.evaluate(() => ({
       triggerCount: document.querySelectorAll("[data-mobile-map-trigger]").length,
       dialogCount: document.querySelectorAll(".mobile-v2__real-map").length,
@@ -410,6 +504,14 @@ async function verifyMobileV2InteractionContract() {
 
     const interaction = {
       name: "mobile-v2-playback-modal-contract",
+      moreRootFocused,
+      moreBackgroundInert,
+      moreStackDepth,
+      moreFocusRestored,
+      moreBackFocusRestored,
+      moreHandleClosed,
+      pickerReplacedMore,
+      pickerStackDepth,
       pickerRootFocused,
       pickerCloseTouchTarget,
       pickerBackgroundInert,
@@ -440,7 +542,15 @@ async function verifyMobileV2InteractionContract() {
       breakpointStayedInDocument,
       breakpointUrlBefore,
       breakpointUrlAfter,
-      failed: !pickerRootFocused
+      failed: !moreRootFocused
+        || !moreBackgroundInert
+        || moreStackDepth !== 1
+        || !moreFocusRestored
+        || !moreBackFocusRestored
+        || !moreHandleClosed
+        || !pickerReplacedMore
+        || pickerStackDepth !== 1
+        || !pickerRootFocused
         || pickerCloseTouchTarget < 44
         || !pickerBackgroundInert
         || !pickerFocusRestored
@@ -1608,9 +1718,27 @@ async function verifyAccountDock() {
         const nav = document.querySelector(".living-atlas__header nav")?.getBoundingClientRect();
         return nav ? overlapArea(nav) : -1;
       }, { selector: accountTriggerSelector, isMobile: mobile });
+      // The full owner header (account, 记录新旅程, 更多) at its narrowest:
+      // at most three icon controls beside the wordmark, none under 44px.
+      const compactHeader = mobile ? await page.evaluate(() => {
+        const targets = [...document.querySelectorAll(".mobile-v2__header button")].map((element) => {
+          const rect = element.getBoundingClientRect();
+          return Math.min(rect.width, rect.height);
+        });
+        return {
+          headerIconControls: document.querySelectorAll(".mobile-v2__header nav button").length,
+          headerMinTouchTarget: targets.length > 0 ? Math.min(...targets) : null,
+        };
+      }) : null;
       record(`account-${label}-closed`, await scanButtons(page, ".living-atlas"), {
         tabNavOverlap,
-        failed: tabNavOverlap !== 0,
+        ...(compactHeader ?? {}),
+        failed: tabNavOverlap !== 0
+          || (compactHeader !== null && (
+            compactHeader.headerIconControls > 3
+            || compactHeader.headerMinTouchTarget === null
+            || compactHeader.headerMinTouchTarget < 44
+          )),
       });
 
       await page.locator(accountTriggerSelector).click();
@@ -2683,8 +2811,18 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error(`Final acceptance persistent Earth missing before Mobile V2 flow: ${JSON.stringify(persistentBeforeResponsive)}`);
       }
 
-      const pickerTrigger = page.locator('.mobile-v2__header button[aria-label="打开全部旅程"]');
-      await activateControl(pickerTrigger, "Mobile V2 journey picker control");
+      // An owner's header keeps 全部旅程 in the 更多 sheet; both controls are
+      // held to the same actionability contract as every other step.
+      await activateControl(
+        page.locator('.mobile-v2__header [data-atlas-more-trigger="true"]'),
+        "Mobile V2 more control",
+      );
+      const moreSheet = page.locator(".mobile-v2__more-sheet");
+      await moreSheet.waitFor({ state: "visible" });
+      await activateControl(
+        moreSheet.locator('[data-atlas-more-action="journeys"]'),
+        "Mobile V2 journey picker row",
+      );
       const picker = page.locator(".mobile-v2__picker");
       await picker.waitFor({ state: "visible" });
       await activateControl(
