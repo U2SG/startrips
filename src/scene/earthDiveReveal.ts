@@ -93,3 +93,43 @@ export function resolveEarthDiveRevealGeometry(
   const coreRadius = Math.max(0, edgeRadius - Math.max(0, featherPx));
   return { anchorX, anchorY, coreRadius, edgeRadius, progress };
 }
+
+/** The inline custom properties the spatial reveal mask reads. */
+export type EarthDiveRevealStyle = readonly (readonly [name: string, value: string])[];
+
+/**
+ * Serialise reveal geometry exactly as the mask consumes it. The fixed
+ * precision is also the change threshold: a frame whose strings match the
+ * previous frame's is not a visual change and is not written again.
+ */
+export function formatEarthDiveRevealStyle(geometry: EarthDiveRevealGeometry): EarthDiveRevealStyle {
+  return [
+    ["--earth-dive-reveal-x", `${geometry.anchorX.toFixed(2)}px`],
+    ["--earth-dive-reveal-y", `${geometry.anchorY.toFixed(2)}px`],
+    ["--earth-dive-reveal-core-radius", `${geometry.coreRadius.toFixed(2)}px`],
+    ["--earth-dive-reveal-edge-radius", `${geometry.edgeRadius.toFixed(2)}px`],
+    ["--earth-dive-reveal-progress", geometry.progress.toFixed(3)],
+  ];
+}
+
+type InlineStyleTarget = Pick<CSSStyleDeclaration, "getPropertyValue" | "setProperty">;
+
+/**
+ * Write only the custom properties whose value changed. Reading an inline
+ * property does not force style or layout, while every `setProperty` dirties
+ * the full-viewport mask over the live MapLibre canvas. Comparing against the
+ * element itself (not a side cache) stays truthful across `removeProperty`
+ * branches and layer remounts. Returns how many properties were written.
+ */
+export function writeChangedEarthDiveRevealStyle(
+  style: InlineStyleTarget,
+  entries: EarthDiveRevealStyle,
+): number {
+  let written = 0;
+  for (const [name, value] of entries) {
+    if (style.getPropertyValue(name) === value) continue;
+    style.setProperty(name, value);
+    written += 1;
+  }
+  return written;
+}
