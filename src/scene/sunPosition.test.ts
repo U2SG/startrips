@@ -75,20 +75,28 @@ describe("day/night controls", () => {
   });
 
   it("ramps continuously across the local band entry", () => {
-    const epsilon = 1e-4;
-    // The geometric edge and the hysteresis edge where the band really opens.
+    // The ramp is linear in zoom, so a jump across an edge must shrink with
+    // the step: it is bounded by the slope times 2ε, never a fixed amount.
+    const slope = 1 / (
+      DAY_NIGHT_DIVE_RELEASE_PROGRESS * (GLOBE_SEMANTIC_ZOOM_CEILING - LOCAL_BAND_ENTRY_ZOOM)
+    );
+    // The geometric edge, and the hysteresis edge where `local` really opens.
     for (const edge of [LOCAL_BAND_ENTRY_ZOOM, LOCAL_BAND_ENTRY_ZOOM + 0.08]) {
-      expect(Math.abs(dayNightDiveFactor(edge - epsilon) - dayNightDiveFactor(edge + epsilon)))
-        .toBeLessThan(0.01);
+      for (const epsilon of [1e-2, 1e-4, 1e-6]) {
+        const jump = Math.abs(dayNightDiveFactor(edge - epsilon) - dayNightDiveFactor(edge + epsilon));
+        expect(jump).toBeLessThanOrEqual(slope * 2 * epsilon + 1e-12);
+      }
     }
     expect(dayNightDiveFactor(GLOBE_SEMANTIC_ZOOM_FLOOR)).toBe(1);
     expect(dayNightDiveFactor(LOCAL_BAND_ENTRY_ZOOM)).toBe(1);
     // Regression: the first `local` frame (zoom 2.63, localProgress ~0.178)
-    // used to jump from 1 to ~0.51; it is now reached gradually from 2.55.
+    // used to jump from 1 to ~0.51 in one frame. The same frame now reads
+    // ~0.51 after a gradual ramp that began at 2.55.
     const opened = resolveGlobeSemanticZoom({ zoom: 2.63, previous: "regional" }).snapshot;
     expect(opened.level).toBe("local");
+    expect(opened.localProgress).toBeGreaterThan(0.17);
     expect(dayNightDiveFactor(opened.zoom)).toBeGreaterThan(0.5);
-    expect(dayNightDiveFactor(2.629)).toBeCloseTo(dayNightDiveFactor(opened.zoom), 2);
+    expect(dayNightDiveFactor(opened.zoom)).toBeLessThan(1);
   });
 
   it("is fully released at and after the Dive blend threshold", () => {
