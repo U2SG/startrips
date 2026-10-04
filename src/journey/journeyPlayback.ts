@@ -1025,9 +1025,14 @@ export function playbackStepCaption(
   const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
   const owner = journey.routePoints.find((point) => point.id === asset?.routePointId) ?? chapter;
   const note = routePointNoteText(owner);
+  // The chapter's own caption stays across its own media (#456 Q3), whatever
+  // the note's length: a long Stop note scrolls inside that band. Only a note
+  // that already had its own beat - a grouped or transit Route Point's long
+  // note - does not ride with the media as well.
+  const rides = (owner.id === chapter.id && owner.isStop) || !note || !isLongNarrativeNote(note);
   return {
     routePointId: owner.id,
     label: routePointProvenanceLabel(journey, owner.id, chapter.id) ?? "",
-    note: note && !isLongNarrativeNote(note) ? note : null,
+    note: rides ? note : null,
   };
 }

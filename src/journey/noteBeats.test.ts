@@ -170,6 +170,21 @@ describe("Playback note beats (#595)", () => {
     expect(playbackStepCaption(notesJourney, steps.find((step) => step.kind === "stop"))?.note).toBe("Stop 自己的感想");
   });
 
+  it("keeps a Stop's own long note on its arrival and its own media, never as an extra beat", () => {
+    const longStop: Journey = {
+      ...notesJourney,
+      routePoints: notesJourney.routePoints.map((candidate) => (
+        candidate.id === "S" ? { ...candidate, note: LONG_NOTE } : candidate
+      )),
+    };
+    const longSteps = buildPlaybackSteps(longStop);
+    expect(longSteps.filter((step) => step.kind === "note")
+      .map((step) => longStop.routePoints[step.pointIndex].id)).toEqual(["B", "C", "V"]);
+    const s1 = longSteps.find((step) => step.kind === "media"
+      && playbackMediaForPoint(longStop, step.pointIndex)[step.mediaIndex]?.id === "s1");
+    expect(playbackStepCaption(longStop, s1)?.note).toBe(LONG_NOTE);
+  });
+
   it("handles a note beat in every step-kind switch", () => {
     const b = noteStep("B");
     const v = noteStep("V");

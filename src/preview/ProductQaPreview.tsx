@@ -522,6 +522,57 @@ const storyQaDesktopChapterJourney: Journey = {
 
 const storyQaDesktopChapterNoMediaJourney: Journey = { ...storyQaDesktopChapterJourney, media: [] };
 
+// #595: grouping changes the chapter, never who owns a note. Stop S has its own
+// note and media; A (short note + media), B (note only) and C (long note, a
+// video) are grouped under S; T is a Stop with media; V is an ungrouped
+// note-only via (a transit beat, #514); U closes the Journey.
+const GROUPED_NOTES_JOURNEY_ID = "00000000-0000-4000-8000-000000005950";
+const GROUPED_NOTES_LONG_NOTE = Array.from({ length: 6 }, (_, index) => (
+  `第 ${index + 1} 段：雨停以后我们沿着旧码头走到尽头，灯一盏一盏亮起来，风里有海盐和桂花的味道，谁都没有说话。`
+)).join("\n");
+const storyQaGroupedNotesJourney: Journey = {
+  ...storyQaJourney,
+  id: GROUPED_NOTES_JOURNEY_ID,
+  title: "QA · GROUPED NOTES",
+  note: "",
+  coverMediaAssetId: null,
+  routePoints: [
+    { id: "nb-point-s", label: "STOP S 港湾", isStop: true, note: "停靠点 S 自己的感想：先在港湾坐了一会儿。" },
+    { id: "nb-point-a", label: "A 石阶", isStop: false, stayAnchorRoutePointId: "nb-point-s", note: "A 的感想：石阶上的青苔。" },
+    { id: "nb-point-b", label: "B 茶摊", isStop: false, stayAnchorRoutePointId: "nb-point-s", note: "B 只留下了一句话：茶摊老板记得我们。" },
+    { id: "nb-point-c", label: "C 灯塔", isStop: false, stayAnchorRoutePointId: "nb-point-s", note: GROUPED_NOTES_LONG_NOTE },
+    { id: "nb-point-t", label: "STOP T 山路", isStop: true, note: null },
+    { id: "nb-point-v", label: "V 隧道口", isStop: false, note: "路过 V 时想到的：隧道里很凉。" },
+    { id: "nb-point-u", label: "STOP U 终点", isStop: true, note: null },
+  ].map((point, index) => ({
+    stayAnchorRoutePointId: null,
+    ...point,
+    journeyId: GROUPED_NOTES_JOURNEY_ID,
+    sortOrder: index,
+    latitude: 22.28 + index * 0.012,
+    longitude: 114.15 + index * 0.014,
+    occurredAt: null,
+    createdAt: "2026-10-04T00:00:00.000Z",
+  })),
+  media: [
+    { id: "nb-media-s1", routePointId: "nb-point-s", mimeType: "image/jpeg" },
+    { id: "nb-media-a1", routePointId: "nb-point-a", mimeType: "image/jpeg" },
+    { id: "nb-media-c1", routePointId: "nb-point-c", mimeType: "video/webm" },
+    { id: "nb-media-t1", routePointId: "nb-point-t", mimeType: "image/jpeg" },
+    { id: "nb-media-u1", routePointId: "nb-point-u", mimeType: "image/jpeg" },
+  ].map((asset, index) => ({
+    ...asset,
+    journeyId: GROUPED_NOTES_JOURNEY_ID,
+    storageDriver: "qa",
+    storageKey: `qa/${asset.id}`,
+    fileName: `${asset.id}.${asset.mimeType === "video/webm" ? "webm" : "jpg"}`,
+    bytes: 68,
+    sortOrder: index,
+    uploadedByUserId: storyQaJourney.createdByUserId,
+    createdAt: "2026-10-04T00:00:00.000Z",
+  })),
+};
+
 const composerRoutePointsQaJourney: Journey = {
   ...storyQaJourney,
   title: "Composer Route Point QA",
@@ -694,12 +745,15 @@ function JourneyStoryQaPreview() {
   const desktopChapterMode = qaMode === "desktop-chapter-rail";
   const desktopChapterNoMediaMode = qaMode === "desktop-chapter-rail-no-media";
   const routeBoundaryMode = qaMode === "route-boundary";
+  const groupedNotesMode = qaMode === "grouped-notes";
   // #555: the only preview mode that opens as a genuine whole-Journey entry.
   // Every other mode keeps its current starting state (no opening).
   const coverOpeningLeadingMode = qaMode === "journey-cover-opening-leading";
   const coverOpeningIntroMode = qaMode === "journey-cover-opening-intro";
   const coverOpeningMode = qaMode === "journey-cover-opening" || coverOpeningLeadingMode || coverOpeningIntroMode;
-  const initialJourney = coverOpeningIntroMode
+  const initialJourney = groupedNotesMode
+    ? storyQaGroupedNotesJourney
+    : coverOpeningIntroMode
     ? storyQaCoverOpeningIntroJourney
     : coverOpeningLeadingMode
     ? storyQaCoverOpeningLeadingJourney
@@ -1059,7 +1113,9 @@ function buildContinuityQaJourney(mediaCounts: readonly number[]): Journey {
     note: pointIndex === 0
       ? "没有照片的一站，地点本身就是完整章节。"
       : pointIndex === 1
-        ? Array.from({ length: 18 }, () => "这是一段用于验证窄屏长笔记仍为媒体保留稳定画面空间的 Route Point 记录。").join("\n")
+        // #595: real notes are capped at 500 characters (journeyModel); eleven
+        // lines is 472, still far longer than the caption band.
+        ? Array.from({ length: 11 }, () => "这是一段用于验证窄屏长笔记仍为媒体保留稳定画面空间的 Route Point 记录。").join("\n")
         : null,
     createdAt: "2026-09-20T00:00:00.000Z",
   }));
@@ -1175,6 +1231,30 @@ function JourneyPlaybackChapterMembershipQaPreview() {
         onTempoChange={setTempo}
         stepDurationResolver={prepared ? resolveDuration : undefined}
         playbackMode={prepared ? "quick-recap" : "full"}
+        reduceMotion
+      />}
+    </main>
+  );
+}
+
+// #595: Journey Playback over the grouped-notes Journey. Close records the
+// committed return position, so the lane can reopen Story on it.
+function JourneyPlaybackGroupedNotesQaPreview() {
+  const [handoff, setHandoff] = useState<{ routePointId: string | null; assetId: string | null; reason: string } | null>(null);
+  return (
+    <main className="living-atlas" data-qa-grouped-notes
+      data-qa-return-route-point={handoff?.routePointId ?? undefined}
+      data-qa-return-asset={handoff?.assetId ?? undefined}
+      data-qa-return-reason={handoff?.reason ?? undefined}
+    >
+      <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
+      {handoff ? null : <JourneyPlaybackOverlay
+        journey={storyQaGroupedNotesJourney}
+        onClose={({ position, reason }) => setHandoff({
+          routePointId: position?.routePointId ?? null, assetId: position?.assetId ?? null, reason,
+        })}
+        onCameraTargetChange={() => undefined}
+        playbackMode="full"
         reduceMotion
       />}
     </main>
@@ -1400,7 +1480,9 @@ const Experience = qaState === "journey-composer"
           ? JourneyPlaybackChapterMembershipQaPreview
           : new URLSearchParams(window.location.search).get("qaMode") === "continuity"
             ? JourneyPlaybackContinuityQaPreview
-            : JourneyPlaybackQaPreview)
+            : new URLSearchParams(window.location.search).get("qaMode") === "grouped-notes"
+              ? JourneyPlaybackGroupedNotesQaPreview
+              : JourneyPlaybackQaPreview)
   : (qaState === "globe-controls" || qaState === "globe-controls-gateway")
     ? LivingAtlasGlobeControlsQaPreview
   : qaState === "earth-dive"
