@@ -67,6 +67,14 @@ const EDGE_ZONE_PX = 28;
 /** The bottom of the live video belongs to its native controls. */
 const VIDEO_CONTROLS_BAND_PX = 52;
 
+let fineHoverQuery: MediaQueryList | null = null;
+/** Whether the primary pointer can hover precisely (a desktop mouse or trackpad). */
+function canHoverFinely(): boolean {
+  if (typeof window.matchMedia !== "function") return false;
+  fineHoverQuery ??= window.matchMedia("(hover: hover) and (pointer: fine)");
+  return fineHoverQuery.matches;
+}
+
 type FaceSurface = { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; signature: string };
 type Gesture = {
   pointerId: number;
@@ -459,8 +467,15 @@ export function JourneyBook3d({
   // a turn settles any note still arriving.
   useEffect(() => {
     if (!settled) {
-      for (const [target, state] of revealRef.current) if (state !== "done") revealRef.current.set(target, "done");
-      setRepaintTick((tick) => tick + 1);
+      // Repaint only when a note actually settled: `paint` changes with the
+      // tick, so an unconditional bump would re-run this effect for ever.
+      let changed = false;
+      for (const [target, state] of revealRef.current) {
+        if (state === "done") continue;
+        revealRef.current.set(target, "done");
+        changed = true;
+      }
+      if (changed) setRepaintTick((tick) => tick + 1);
       return;
     }
     const arriving: number[] = [];
@@ -538,6 +553,7 @@ export function JourneyBook3d({
     const sides = at <= 0 ? ["closed-front"] as const : at >= scene.sheets ? ["closed-back"] as const : ["left", "right"] as const;
     stage.dataset.qaBook = JSON.stringify({
       spread: at,
+      face,
       sheets: scene.sheets,
       orientation,
       pixelsPerUnit: scene.pixelsPerUnit,
@@ -635,7 +651,9 @@ export function JourneyBook3d({
     const gesture = gestureRef.current;
     const stage = stageRef.current!.getBoundingClientRect();
     if (!gesture) {
-      if (event.pointerType !== "mouse" || reduced || orientationRef.current !== "landscape") return;
+      // The edge lift is a hover affordance: only for a fine pointer that can
+      // hover, so a tap (or a touch-emulated mouse event) never leaves it up.
+      if (event.pointerType !== "mouse" || !canHoverFinely() || reduced || orientationRef.current !== "landscape") return;
       // Lifting an edge unsettles the book, which would pause a playing video.
       if (videoRef.current && !videoRef.current.paused) return;
       if (!scene.isSettled() && !scene.hasEdge) return;
