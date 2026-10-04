@@ -236,7 +236,8 @@ export function runSharedElementMorph({
     for (const element of nodes ? (nodes instanceof HTMLElement ? [nodes] : nodes) : []) {
       if (!element.isConnected) continue;
       if (!claimed.has(element)) claimed.set(element, {
-        opacity: element.style.opacity, pageId: element.dataset.mediaPageId,
+        // #555: a page is identified by presentation; one asset can be two pages.
+        opacity: element.style.opacity, pageId: element.dataset.mediaPresentationId ?? element.dataset.mediaPageId,
       });
       if (element.style.opacity !== "0") element.style.opacity = "0";
     }
@@ -244,7 +245,7 @@ export function runSharedElementMorph({
   claimNodes(claimSource?.());
   const releaseClaim = () => {
     for (const [element, original] of claimed) {
-      if (element.dataset.mediaPageId === original.pageId) element.style.opacity = original.opacity;
+      if ((element.dataset.mediaPresentationId ?? element.dataset.mediaPageId) === original.pageId) element.style.opacity = original.opacity;
       else element.style.removeProperty("opacity");
     }
     claimed.clear();
@@ -367,7 +368,7 @@ export function runSharedElementMorph({
     afterUpdate?.();
     observer = new MutationObserver(advance);
     observer.observe(document.body, { childList: true, subtree: true, attributes: true,
-      attributeFilter: ["data-shared-media-id", "data-media-page-id", "data-media-page-ready", "data-media-incoming", "data-video-handoff-ready", "role", "hidden", "aria-hidden", "src", "style", "class"] });
+      attributeFilter: ["data-shared-media-id", "data-media-page-id", "data-media-presentation-id", "data-media-page-ready", "data-media-incoming", "data-video-handoff-ready", "role", "hidden", "aria-hidden", "src", "style", "class"] });
     advance();
   } catch (error) {
     cleanup();

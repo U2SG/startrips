@@ -2733,7 +2733,21 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.waitForFunction(() => Boolean(
         document.querySelector('.journey-story__route-points button[data-route-point-id="fa-point-1"][aria-pressed="true"]')
         && document.querySelector('.journey-story-fullscreen [data-media-page="current"][data-media-presentation-id="fa-image-1"]'),
-      ), null, { timeout: 5_000 });
+      ), null, { timeout: 5_000 }).catch(async (error) => {
+        // #555 diagnostic: what the fullscreen stage holds when the step off the
+        // Journey cover opening does not land.
+        const stage = await page.evaluate(() => ({
+          pressed: [...document.querySelectorAll('.journey-story__route-points button[aria-pressed="true"]')]
+            .map((button) => button.getAttribute("data-route-point-id") ?? "all"),
+          presentation: document.querySelector(".journey-story-fullscreen [data-story-media-pages]")
+            ?.getAttribute("data-media-presentation") ?? null,
+          pages: [...document.querySelectorAll(".journey-story-fullscreen .story-media-pages__page")]
+            .map((node) => [node.getAttribute("data-media-page"), node.getAttribute("data-media-presentation-id"),
+              node.getAttribute("data-media-page-ready"), node.getAttribute("data-media-incoming")].join("/")),
+          requested: document.querySelector(".journey-story__media")?.getAttribute("data-media-requested") ?? null,
+        }));
+        throw new Error(`${error instanceof Error ? error.message : String(error)} :: ${JSON.stringify(stage)}`);
+      });
       await page.keyboard.press("ArrowRight");
       await page.waitForFunction(() => Boolean(
         document.querySelector('.journey-story-fullscreen [data-shared-media-id="fa-image-2"]'),

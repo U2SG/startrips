@@ -279,6 +279,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   // image still shows another asset is hidden rather than exposing that old
   // neighbour under the new identity (#489 section 5).
   const paintedImages = useRef<Array<string | null>>([null, null, null]);
+  // #555: the URL each physical page's <img> last decoded. Two pages can paint
+  // one asset (the Journey cover opening and the canonical cover); when a page
+  // takes over a slot already showing that exact URL the browser fires no new
+  // load, so the slot's own decode is what proves it can take the stage.
+  const decodedSlotUrls = useRef<Array<string | null>>([null, null, null]);
 
   const rememberLiveFrame = useCallback(() => {
     const source = bindingRef.current;
@@ -460,8 +465,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     }
     // The warm decode belongs to the asset, but a recycled physical page may still
     // paint its previous src. Only that page's loaded image can take the stage.
-    const image = imageNodes.current[assigned.indexOf(id)];
-    return decodedImages.current.get(id) === read.url
+    const slot = assigned.indexOf(id);
+    const image = imageNodes.current[slot];
+    return (decodedImages.current.get(id) === read.url
+      || (slot >= 0 && decodedSlotUrls.current[slot] === read.url))
       && Boolean(image && image.getAttribute("src") === read.url
         && image.currentSrc === image.src && image.complete && image.naturalWidth > 0);
   };
@@ -1245,6 +1252,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
             const mark = () => {
               if (!image.isConnected || image.getAttribute("src") !== url || !image.naturalWidth) return;
               decodedImages.current.set(id, url);
+              decodedSlotUrls.current[slot] = url;
               paintedImages.current[slot] = id;
               updateRevision((value) => value + 1);
             };

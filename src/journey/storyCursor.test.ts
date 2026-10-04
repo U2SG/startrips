@@ -114,30 +114,30 @@ describe("storyCursorForJourney (#555)", () => {
 describe("storyInitialCursorSelection (#555)", () => {
   it("opens a genuine whole-Journey entry on the opening", () => {
     expect(initialCursor(journey, freshOpen)).toEqual({
-      withJourneyCoverOpening: true, entryIndex: 0, assetId: "b1",
+      withJourneyCoverOpening: true, entryIndex: 0, assetId: "b1", pageId: "journey-cover:journey-1:b1",
     });
   });
 
   it("never presents the opening for a deep link or a Playback return", () => {
     // A Route Point deep link starts on that Route Point's canonical media.
     expect(initialCursor(journey, { ...freshOpen, routePointId: "C" })).toEqual({
-      withJourneyCoverOpening: false, entryIndex: 3, assetId: "c1",
+      withJourneyCoverOpening: false, entryIndex: 3, assetId: "c1", pageId: "c1",
     });
     // An asset deep link starts on that asset's canonical entry.
     expect(initialCursor(journey, { ...freshOpen, routePointId: "B", assetId: "b2" })).toEqual({
-      withJourneyCoverOpening: false, entryIndex: 2, assetId: "b2",
+      withJourneyCoverOpening: false, entryIndex: 2, assetId: "b2", pageId: "b2",
     });
     // A Playback return can resolve to null/null; without the explicit signal it
     // lands on the canonical cover entry, exactly as before.
     expect(initialCursor(journey, { ...freshOpen, presentJourneyCoverOpening: false })).toEqual({
-      withJourneyCoverOpening: false, entryIndex: 1, assetId: "b1",
+      withJourneyCoverOpening: false, entryIndex: 1, assetId: "b1", pageId: "b1",
     });
   });
 
   it("presents no opening when the Journey has no visual media", () => {
     const silent: Journey = { ...journey, coverMediaAssetId: null, media: [asset("track", null, 0, "audio/mpeg")] };
     expect(initialCursor(silent, freshOpen)).toEqual({
-      withJourneyCoverOpening: false, entryIndex: 0, assetId: null,
+      withJourneyCoverOpening: false, entryIndex: 0, assetId: null, pageId: null,
     });
     expect(storyCursorForJourney(silent, true).entries).toEqual([]);
   });
