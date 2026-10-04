@@ -277,6 +277,13 @@
   justify-content: space-between;
   background: var(--atlas-panel-solid);
 }
+
+/* The head stays pinned while the panel scrolls, so whatever is scrolled into
+   view (a focused control, or one reached from further down) stops below it
+   instead of behind it: its 44px row plus the panel gap. */
+.route-candidate-editor__panel {
+  scroll-padding-top: 56px;
+}
 .route-candidate-editor__shapes,
 .route-candidate-editor__candidates { display: grid; gap: 8px; }
 .route-candidate-editor__shapes > div { justify-content: space-between; }
