@@ -3454,6 +3454,20 @@ export function LivingAtlasApp({
   }
 
   const railIsolation = journeyRailIsolation(playbackActive, globePickActive, globeFocusMode);
+  // The two context cards render from these exact conditions below, so the
+  // compact empty-state hero can yield to them without a second copy.
+  const homeBaseContextSurfaceVisible = Boolean(
+    view === "planet" && homeBaseContext && !storyJourneyId && !playbackActive && !routePointContextSelection.context,
+  );
+  const atlasEverydaySurfaceVisible = Boolean(
+    atlasEverydayMode !== null && atlasEverydayAvailable && everydayFragments && !homeBaseContext,
+  );
+  // Compact mobile has one band between the header and the dock. The empty
+  // hero and its CTA share it with every context card, so while any card is
+  // open the hero is not rendered at all: its CTA can never sit over or under
+  // a card's controls.
+  const compactContextSurfaceOpen = isMobileV2
+    && (homeBaseContextSurfaceVisible || atlasEverydaySurfaceVisible || routePointContextVisible);
 
   return (
     <main
@@ -3761,7 +3775,7 @@ export function LivingAtlasApp({
         </aside>
       ) : null}
 
-      {view === "planet" && journeys.length === 0 ? (
+      {view === "planet" && journeys.length === 0 && !compactContextSurfaceOpen ? (
         <StartripsRecoverySurface
           kind="empty"
           className="living-atlas__empty"
@@ -4201,7 +4215,7 @@ export function LivingAtlasApp({
         </div>
       ) : null}
 
-      {atlasEverydayMode !== null && atlasEverydayAvailable && everydayFragments && !homeBaseContext ? (
+      {atlasEverydaySurfaceVisible && everydayFragments ? (
         <aside
           className="living-atlas__everyday-context motion-fade-through"
           data-atlas-everyday-context
@@ -4235,7 +4249,7 @@ export function LivingAtlasApp({
         </div>
       ) : null}
 
-      {view === "planet" && homeBaseContext && !storyJourneyId && !playbackActive && !routePointContextSelection.context ? (
+      {homeBaseContextSurfaceVisible && homeBaseContext ? (
         <aside
           id="home-base-context"
           className="living-atlas__home-base-context motion-fade-through"
@@ -4466,16 +4480,6 @@ export function LivingAtlasApp({
             <div className="living-atlas__route-point-context-facts">
               <span>{context.resolvedDate ? context.resolvedDate.slice(0, 10) : "日期未记录"}</span>
               <span>{context.visualMediaCount > 0 ? `${context.visualMediaCount} 项影像` : "仅文字记录"}</span>
-              <span>路线点定位 · {context.location.latitude.toFixed(4)}, {context.location.longitude.toFixed(4)}</span>
-              {context.location.precision.kind === "recorded-media-coordinate" ? (
-                <span data-route-point-media-location-precision>
-                  媒体记录坐标 · {context.location.precision.source === "exif"
-                    ? "EXIF"
-                    : context.location.precision.source === "container-metadata"
-                      ? "媒体元数据"
-                      : "导入记录"} · {formatRoutePointMediaAccuracy(context.location.precision.accuracyMeters)}
-                </span>
-              ) : null}
             </div>
             {context.notePresent && context.note ? <blockquote>{context.note}</blockquote> : null}
             <RoutePointContextRepresentative
@@ -4485,6 +4489,24 @@ export function LivingAtlasApp({
               intent={intent}
               readMedia={readMedia}
             />
+            {/* Coordinates and their provenance are reference detail, not the
+                reading of the point: one closed disclosure keeps them a tap
+                away while the card leads with what the point is. */}
+            <details className="living-atlas__route-point-context-location">
+              <summary>位置详情</summary>
+              <div className="living-atlas__route-point-context-location-facts">
+                <span>路线点定位 · {context.location.latitude.toFixed(4)}, {context.location.longitude.toFixed(4)}</span>
+                {context.location.precision.kind === "recorded-media-coordinate" ? (
+                  <span data-route-point-media-location-precision>
+                    媒体记录坐标 · {context.location.precision.source === "exif"
+                      ? "EXIF"
+                      : context.location.precision.source === "container-metadata"
+                        ? "媒体元数据"
+                        : "导入记录"} · {formatRoutePointMediaAccuracy(context.location.precision.accuracyMeters)}
+                  </span>
+                ) : null}
+              </div>
+            </details>
             <button
               type="button"
               className="living-atlas__route-point-context-entry"

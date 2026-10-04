@@ -14,6 +14,9 @@ const captureDir = "artifacts/home-base-suggestion";
 mkdirSync(captureDir, { recursive: true });
 
 const SHENZHEN = { latitude: 22.5431, longitude: 114.0579 };
+// `--mobile-surface-gap`: a compact surface keeps this much room from the
+// header block above it and from the dock below it.
+const COMPACT_SURFACE_GAP = 8;
 
 function isoDaysAgo(days) {
   const date = new Date(Date.now() - days * 86_400_000);
@@ -245,30 +248,39 @@ try {
   const mobilePage = mobileRun.page;
   const mobileSuggestion = mobilePage.locator(card);
   await mobileSuggestion.waitFor({ state: "visible", timeout: 15_000 });
-  const mobilePlacement = await mobilePage.evaluate(() => {
+  const mobilePlacement = await mobilePage.evaluate((gap) => {
     const node = document.querySelector("[data-home-base-suggestion]");
     const chrome = document.querySelector(".mobile-v2__chrome");
+    const header = document.querySelector(".mobile-v2__header");
     const atlas = document.querySelector(".living-atlas");
-    if (!node || !chrome || !atlas) return null;
+    if (!node || !chrome || !header || !atlas) return null;
     const cardRect = node.getBoundingClientRect();
     const chromeRect = chrome.getBoundingClientRect();
+    const headerRect = header.getBoundingClientRect();
     return {
       mobileMode: atlas.getAttribute("data-mobile-v2"),
       surface: node.getAttribute("data-home-base-surface"),
+      cardTop: cardRect.top,
       cardBottom: cardRect.bottom,
+      headerBottom: headerRect.bottom,
       chromeTop: chromeRect.top,
       noChromeOverlap: cardRect.bottom <= chromeRect.top,
+      // Every compact surface keeps one surface gap from both persistent bands.
+      clearsDockByGap: cardRect.bottom <= chromeRect.top - gap + 0.5,
+      clearsHeaderByGap: cardRect.top >= headerRect.bottom + gap - 0.5,
       dialogCount: document.querySelectorAll("[role=\"dialog\"], [aria-modal=\"true\"]").length,
       actions: [...node.querySelectorAll("[data-home-base-suggestion-action]")]
         .map((button) => button.getBoundingClientRect().height),
     };
-  });
+  }, COMPACT_SURFACE_GAP);
   await mobilePage.screenshot({ path: `${captureDir}/01b-card-mobile-atlas.png`, fullPage: false });
   record("compact mobile Atlas exposes the same quiet Home Base answer above native chrome", { mobilePlacement }, Boolean(
     mobilePlacement
     && mobilePlacement.mobileMode === "on"
     && mobilePlacement.surface === "mobile-atlas"
     && mobilePlacement.noChromeOverlap
+    && mobilePlacement.clearsDockByGap
+    && mobilePlacement.clearsHeaderByGap
     && mobilePlacement.dialogCount === 0
     && mobilePlacement.actions.length === 3
     && mobilePlacement.actions.every((height) => height >= 44)

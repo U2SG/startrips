@@ -76,6 +76,10 @@ const journeys = [
 // than coupling keyboard reachability to an unrelated Journey focus flight.
 const mobileJourneys = [];
 
+// `--mobile-surface-gap`: a compact surface keeps this much room from the
+// header block above it and from the dock (or the bottom edge) below it.
+const SURFACE_GAP = 8;
+
 const browser = await launchQaBrowser({
   headless: true,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
@@ -195,8 +199,10 @@ async function installOwnerApi(page, journeyRows = journeys, homePeriods = [HIST
   return fragments;
 }
 
-async function openOwner(viewport, { journeyRows = journeys, homePeriods = [HISTORICAL_HOME, CURRENT_HOME], hasTouch = false } = {}) {
-  const page = await browser.newPage({ viewport, hasTouch });
+async function openOwner(viewport, { journeyRows = journeys, homePeriods = [HISTORICAL_HOME, CURRENT_HOME], touch = false } = {}) {
+  // A phone held sideways (844x390) is compact only with a coarse pointer, so
+  // `touch` gives the page a phone's touch input as well as its size.
+  const page = await browser.newPage({ viewport, hasTouch: touch, isMobile: touch });
   // This script runs Playwright directly rather than through @playwright/test,
   // so locator/action waits otherwise have no bounded default and a missing UI
   // transition can consume the whole GitHub job timeout without a useful stack.
@@ -466,6 +472,56 @@ async function closeContext(page) {
     await context.getByRole("button", { name: "关闭常住地信息" }).click();
     await context.waitFor({ state: "detached", timeout: 5_000 });
   }
+}
+
+/**
+ * Where a compact context surface sits relative to the two persistent bands
+ * and to the empty-state hero. The header block bounds it from above; the
+ * dock bounds it from below, and an Atlas with no dock (no Journeys yet) is
+ * not a pass by default: the card then has to clear the bottom edge by the
+ * same gap. The card must also own the pointer at its top, middle and bottom,
+ * so nothing (the hero's CTA included) can sit over its controls.
+ */
+async function compactSurfacePlacement(page, selector) {
+  return page.evaluate(({ wanted, gap }) => {
+    const node = document.querySelector(wanted);
+    if (!(node instanceof HTMLElement)) return null;
+    const rect = node.getBoundingClientRect();
+    const header = document.querySelector(".mobile-v2__header")?.getBoundingClientRect() ?? null;
+    const dock = document.querySelector(".mobile-v2__chrome")?.getBoundingClientRect() ?? null;
+    const hero = document.querySelector(".living-atlas__empty");
+    const heroRect = hero?.getBoundingClientRect() ?? null;
+    const middle = rect.left + rect.width / 2;
+    const ownsHit = (y) => document.elementFromPoint(middle, y)?.closest(wanted) === node;
+    return {
+      mobileMode: document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") ?? null,
+      viewport: { width: innerWidth, height: innerHeight },
+      rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+      headerBottom: header?.bottom ?? null,
+      dockTop: dock?.top ?? null,
+      inViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
+      clearsHeader: Boolean(header) && rect.top >= header.bottom + gap - 0.5,
+      clearsDock: rect.bottom <= (dock ? dock.top : innerHeight) - gap + 0.5,
+      heroPresent: Boolean(hero),
+      heroOverlap: Boolean(heroRect
+        && heroRect.left < rect.right && heroRect.right > rect.left
+        && heroRect.top < rect.bottom && heroRect.bottom > rect.top),
+      ownsItsArea: ownsHit(rect.top + 6) && ownsHit(rect.top + rect.height / 2) && ownsHit(rect.bottom - 6),
+    };
+  }, { wanted: selector, gap: SURFACE_GAP });
+}
+
+/** The empty-state hero of an Atlas with no Journeys, and its CTA. */
+async function heroState(page) {
+  return page.evaluate(() => {
+    const hero = document.querySelector(".living-atlas__empty");
+    const rect = hero?.getBoundingClientRect();
+    return {
+      present: Boolean(hero),
+      visible: Boolean(rect && rect.width > 0 && rect.height > 0),
+      action: Boolean(hero?.querySelector("button")),
+    };
+  });
 }
 
 async function homeMarkerCenter(marker) {
@@ -795,12 +851,14 @@ try {
   // target while Route Point pointer precedence remains independently covered.
   const mobile = await openOwner({ width: 390, height: 844 }, { journeyRows: mobileJourneys });
   const mobilePage = mobile.page;
+  // No Journeys: the empty-state hero owns the band until a card opens.
+  const heroBeforeMobileContext = await heroState(mobilePage);
   const mobileMarker = await currentHomeMarker(mobilePage);
   await mobileMarker.focus();
   await mobilePage.keyboard.press("Enter");
   const mobileContext = mobilePage.locator("[data-home-base-context]");
   await mobileContext.waitFor({ state: "visible", timeout: 5_000 });
-  const mobilePlacement = await mobilePage.evaluate(() => {
+  const mobilePlacement = await mobilePage.evaluate((gap) => {
     const node = document.querySelector("[data-home-base-context]");
     const chrome = document.querySelector(".mobile-v2__chrome");
     const marker = document.querySelector('[data-home-base-presence="current"]');
@@ -811,13 +869,20 @@ try {
     return {
       mobileMode: document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2"),
       inViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
-      aboveChrome: chromeRect ? rect.bottom <= chromeRect.top + 1 : true,
+      // This fixture has no Journeys, so it has no dock. That is asserted, and
+      // a missing dock is not a pass by default: the card then clears the
+      // bottom edge by the same surface gap it would keep from a dock.
+      dockPresent: Boolean(chromeRect),
+      aboveChrome: chromeRect
+        ? rect.bottom <= chromeRect.top - gap + 0.5
+        : rect.bottom <= innerHeight - gap + 0.5,
       markerHit: Math.min(markerRect.width, markerRect.height),
       permanentHomeTabs: [...document.querySelectorAll("button")]
         .filter((button) => /Home Base|常住地/.test(button.textContent ?? "") && !button.matches(".living-atlas-globe__home-base")).length,
       suggestionsWhileContextOpen: document.querySelectorAll(".living-atlas__home-base-suggestion").length,
     };
-  });
+  }, SURFACE_GAP);
+  const mobileBounds = await compactSurfacePlacement(mobilePage, "[data-home-base-context]");
   await mobilePage.screenshot({ path: `${captureDir}/03-mobile-current-context.png`, fullPage: false });
   record("compact mobile keyboard activation opens the same context above native chrome with no permanent Home tab", {
     mobilePlacement,
@@ -825,14 +890,84 @@ try {
     mobilePlacement
     && mobilePlacement.mobileMode === "on"
     && mobilePlacement.inViewport
+    && mobilePlacement.dockPresent === false
     && mobilePlacement.aboveChrome
     && mobilePlacement.markerHit >= 44
     && mobilePlacement.permanentHomeTabs === 0
     && mobilePlacement.suggestionsWhileContextOpen === 0
   ));
+  record("390x844: the Home context stays between the header block and the bottom edge, clear of the hero", {
+    heroBeforeMobileContext, mobileBounds,
+  }, Boolean(
+    heroBeforeMobileContext.visible
+    && heroBeforeMobileContext.action
+    && mobileBounds
+    && mobileBounds.mobileMode === "on"
+    && mobileBounds.dockTop === null
+    && mobileBounds.inViewport
+    && mobileBounds.clearsHeader
+    && mobileBounds.clearsDock
+    && !mobileBounds.heroPresent
+    && !mobileBounds.heroOverlap
+    && mobileBounds.ownsItsArea
+  ));
   await fragmentQa(mobile, "mobile");
   await closeContext(mobilePage);
+  const heroAfterMobileContext = await heroState(mobilePage);
+
+  // The Atlas-level Everyday panel is the other card of an empty Atlas: the
+  // hero yields to it the same way and returns once it closes.
+  const mobileEverydayTrigger = mobilePage.locator("[data-atlas-everyday-trigger]");
+  await mobileEverydayTrigger.click();
+  const emptyAtlasEveryday = mobilePage.locator("[data-atlas-everyday-context]");
+  await emptyAtlasEveryday.waitFor({ state: "visible" });
+  const emptyAtlasEverydayBounds = await compactSurfacePlacement(mobilePage, "[data-atlas-everyday-context]");
+  await emptyAtlasEveryday.getByRole("button", { name: "关闭日常", exact: true }).click();
+  await emptyAtlasEveryday.waitFor({ state: "detached" });
+  const heroAfterMobileEveryday = await heroState(mobilePage);
+  record("390x844: the empty-state hero yields to Atlas Everyday and returns after both cards close", {
+    heroAfterMobileContext, emptyAtlasEverydayBounds, heroAfterMobileEveryday,
+  }, Boolean(
+    heroAfterMobileContext.visible
+    && emptyAtlasEverydayBounds
+    && emptyAtlasEverydayBounds.inViewport
+    && emptyAtlasEverydayBounds.clearsHeader
+    && emptyAtlasEverydayBounds.clearsDock
+    && !emptyAtlasEverydayBounds.heroPresent
+    && !emptyAtlasEverydayBounds.heroOverlap
+    && emptyAtlasEverydayBounds.ownsItsArea
+    && heroAfterMobileEveryday.visible
+    && heroAfterMobileEveryday.action
+  ));
   await mobilePage.close();
+
+  // The same Home context on a phone held sideways, still with no Journeys.
+  const mobileLandscape = await openOwner({ width: 844, height: 390 }, { journeyRows: mobileJourneys, touch: true });
+  const mobileLandscapePage = mobileLandscape.page;
+  const heroBeforeLandscapeContext = await heroState(mobileLandscapePage);
+  await (await currentHomeMarker(mobileLandscapePage)).focus();
+  await mobileLandscapePage.keyboard.press("Enter");
+  await mobileLandscapePage.locator("[data-home-base-context]").waitFor({ state: "visible", timeout: 5_000 });
+  const landscapeBounds = await compactSurfacePlacement(mobileLandscapePage, "[data-home-base-context]");
+  await mobileLandscapePage.screenshot({ path: `${captureDir}/04-mobile-landscape-context.png`, fullPage: false });
+  await closeContext(mobileLandscapePage);
+  const heroAfterLandscapeContext = await heroState(mobileLandscapePage);
+  record("844x390: the Home context stays between the header block and the bottom edge, clear of the hero", {
+    heroBeforeLandscapeContext, landscapeBounds, heroAfterLandscapeContext,
+  }, Boolean(
+    heroBeforeLandscapeContext.visible
+    && landscapeBounds
+    && landscapeBounds.mobileMode === "on"
+    && landscapeBounds.dockTop === null
+    && landscapeBounds.inViewport
+    && landscapeBounds.clearsHeader
+    && landscapeBounds.clearsDock
+    && !landscapeBounds.heroPresent
+    && !landscapeBounds.heroOverlap
+    && landscapeBounds.ownsItsArea
+    && heroAfterLandscapeContext.visible
+  ));
+  await mobileLandscapePage.close();
 
   // #496: Everyday remains reachable from the Atlas even when Home history is
   // empty. The create payload keeps the fragment independent instead of
@@ -903,6 +1038,18 @@ try {
     triggerHit: mobileEverydayHit,
     surface: mobileEverydayPlacement,
   }, mobileEverydayHit >= 44 && mobileEverydayPlacement.inViewport);
+  // This Atlas has Journeys, so the dock is there and the panel stops one gap
+  // above it.
+  const mobileEverydayBounds = await compactSurfacePlacement(noHomeMobile.page, "[data-atlas-everyday-context]");
+  record("390x844: Atlas Everyday stays between the header block and the dock", { mobileEverydayBounds }, Boolean(
+    mobileEverydayBounds
+    && mobileEverydayBounds.mobileMode === "on"
+    && mobileEverydayBounds.dockTop !== null
+    && mobileEverydayBounds.clearsHeader
+    && mobileEverydayBounds.clearsDock
+    && !mobileEverydayBounds.heroPresent
+    && mobileEverydayBounds.ownsItsArea
+  ));
   await noHomeMobileSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
   await noHomeMobileSurface.waitFor({ state: "detached" });
   record("zero-Home mobile Everyday close returns focus to 更多", {},
@@ -911,9 +1058,9 @@ try {
 
   // Without touch, 844x390 misses the compact query (its landscape clause
   // needs `any-pointer: coarse`) and renders the desktop header, so this case
-  // never measured a phone in landscape. `hasTouch` makes it one. Desktop
+  // never measured a phone in landscape. `touch` makes it one. Desktop
   // Everyday stays covered at 1280x800 above.
-  const noHomeLandscape = await openOwner({ width: 844, height: 390 }, { homePeriods: [], hasTouch: true });
+  const noHomeLandscape = await openOwner({ width: 844, height: 390 }, { homePeriods: [], touch: true });
   const landscapeMode = await noHomeLandscape.page.locator(".living-atlas").getAttribute("data-mobile-v2");
   const { more: noHomeLandscapeMore, hit: landscapeEverydayHit } = await openCompactEveryday(noHomeLandscape.page);
   const noHomeLandscapeSurface = noHomeLandscape.page.locator("[data-atlas-everyday-context]");
@@ -942,11 +1089,13 @@ try {
   record("owner browser pages have no page errors", {
     desktop: desktop.pageErrors,
     mobile: mobile.pageErrors,
+    mobileLandscape: mobileLandscape.pageErrors,
     noHome: noHome.pageErrors,
     noHomeMobile: noHomeMobile.pageErrors,
     noHomeLandscape: noHomeLandscape.pageErrors,
   }, desktop.pageErrors.length === 0
     && mobile.pageErrors.length === 0
+    && mobileLandscape.pageErrors.length === 0
     && noHome.pageErrors.length === 0
     && noHomeMobile.pageErrors.length === 0
     && noHomeLandscape.pageErrors.length === 0);
