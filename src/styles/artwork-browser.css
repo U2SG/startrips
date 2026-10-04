@@ -107,11 +107,18 @@
   transform: translate(-50%, -50%);
 }
 
-.artwork-browser-card:hover,
 .artwork-browser-card:focus-visible {
   border-color: var(--archive-cyan);
   opacity: 1;
   outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .artwork-browser-card:hover {
+    border-color: var(--archive-cyan);
+    opacity: 1;
+    outline: none;
+  }
 }
 
 .artwork-browser-instruction,
