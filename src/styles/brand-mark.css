@@ -110,6 +110,45 @@
   pointer-events: none;
 }
 
+/* Brand-node trigger: the wordmark itself is the control. The hit area grows
+   to 44px around the unchanged art; the `full` clip plays in place over the
+   same geometry (shared v12 viewBox) and fades back to the identical rest pose. */
+.startrips-signature-trigger {
+  position: relative;
+  display: inline-flex;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.startrips-signature-trigger__art {
+  position: relative;
+  display: inline-flex;
+}
+
+.startrips-signature-trigger.is-signature-playing .startrips-v12-wordmark__art {
+  visibility: hidden;
+}
+
+.startrips-signature-moment {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  line-height: 0;
+  pointer-events: none;
+}
+
+.startrips-signature-moment.is-leaving {
+  opacity: 0;
+  transition: opacity var(--motion-ui) var(--motion-ease-soft);
+}
+
 .startrips-brand-loader {
   position: relative;
   display: grid;
@@ -164,5 +203,9 @@
     animation: none !important;
     opacity: 1;
     transform: none;
+  }
+
+  .startrips-signature-moment.is-leaving {
+    transition: none;
   }
 }

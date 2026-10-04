@@ -15,7 +15,8 @@ import {
 } from "@tabler/icons-react";
 import { MobileAccountActionSlot, useAtlasCinematicIsolation } from "../auth/AuthGateway";
 import { isReadOnlyAtlasView, useAtlasView, type AtlasMediaRead } from "./atlasView";
-import { StartripsBrandLoader, StartripsWordmark } from "../brand/StartripsBrandMark";
+import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
+import { StartripsWordmarkSignatureButton } from "../brand/StartripsSignatureMoment";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
 import {
   atlasBrandMomentDuration,
@@ -3494,7 +3495,7 @@ export function LivingAtlasApp({
 
       {isMobileV2 ? (
         <header className="mobile-v2__header">
-          <div className="mobile-v2__brand"><StartripsWordmark size={27} state={brandState} /></div>
+          <div className="mobile-v2__brand"><StartripsWordmarkSignatureButton size={27} state={brandState} /></div>
           <nav aria-label="移动端旅程操作">
             {canManageAtlas ? <MobileAccountActionSlot /> : null}
             {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
@@ -3519,7 +3520,7 @@ export function LivingAtlasApp({
         </header>
       ) : (
         <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
-          <div className="living-atlas__brand"><StartripsWordmark size={34} state={brandState} /><div><p>PRIVATE JOURNEY ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
+          <div className="living-atlas__brand"><StartripsWordmarkSignatureButton size={34} state={brandState} /><div><p>PRIVATE JOURNEY ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
           <nav aria-label="图谱视图">
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>

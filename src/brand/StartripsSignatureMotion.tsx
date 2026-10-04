@@ -1,6 +1,8 @@
 import { useEffect, useRef, type CSSProperties } from "react";
 import { getStartripsSignatureClip, type StartripsSignatureClipName, type StartripsSignaturePose } from "./startripsSignatureTimeline";
-import { createStartripsSignatureRuntime } from "./startripsSignatureRuntime";
+import { createStartripsSignatureRuntime, type StartripsSignatureRuntimeState } from "./startripsSignatureRuntime";
+
+export type StartripsSignatureEndStatus = Exclude<StartripsSignatureRuntimeState["status"], "running" | "suspended">;
 
 const WORDMARK_ASSET = "/brand/startrips-v12-wordmark.svg";
 const VIEWBOX = "0 -125 780 176";
@@ -41,13 +43,18 @@ export function StartripsSignatureMotion({
   size = 52,
   className = "",
   title = "Startrips",
+  onEnd,
 }: {
   clip?: StartripsSignatureClipName;
   size?: number;
   className?: string;
   title?: string;
+  /** Called once when the clip settles, is interrupted, or is reduced. */
+  onEnd?: (status: StartripsSignatureEndStatus) => void;
 }) {
   const rootRef = useRef<HTMLSpanElement>(null);
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
 
   useEffect(() => {
     const root = rootRef.current;
@@ -55,6 +62,7 @@ export function StartripsSignatureMotion({
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     let inViewport = true;
     let visible = !document.hidden;
+    let ended = false;
 
     const runtime = createStartripsSignatureRuntime({
       clip,
@@ -72,6 +80,10 @@ export function StartripsSignatureMotion({
         root.dataset.signatureCycle = String(state.cycle);
         root.dataset.signatureElapsedMs = state.elapsedMs.toFixed(1);
         root.dataset.signatureClipDurationMs = String(getStartripsSignatureDuration(clip));
+        if (state.status !== "running" && state.status !== "suspended" && !ended) {
+          ended = true;
+          onEndRef.current?.(state.status);
+        }
       },
     });
 
