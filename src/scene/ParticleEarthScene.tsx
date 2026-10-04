@@ -99,6 +99,7 @@ import {
 import {
   canTrackGlobePointer,
   clampGlobeZoom,
+  GLOBE_WHEEL_ZOOM_SPEED,
   getGlobeInertiaSpeedLimit,
   isGlobeDrag,
   isPrimaryPointerActivation,
@@ -117,6 +118,16 @@ import {
   PARTICLE_ACTIVE_DIM_POINT_LIMIT,
   PARTICLE_DIM_POINT_LIMIT,
 } from "./particleEarthMaterial";
+import {
+  DAY_NIGHT_REFRESH_MS,
+  dayNightBrightness,
+  dayNightDiveCap,
+  dayNightModeWeight,
+  dayNightZoomFade,
+  parseSunTimeOverride,
+  subsolarPoint,
+  sunDirectionAt,
+} from "./sunPosition";
 import {
   COASTLINE_SPATIAL_CACHE_LIMIT,
   RefinementCache,
@@ -683,7 +694,6 @@ export const GLOBE_IDLE_ALIGNMENT_SPEED = (Math.PI * 15) / 180;
 
 export const GLOBE_DRAG_MAPPING_MODE = "projected-surface-linear";
 const GLOBE_INERTIA_FRICTION = 5.2;
-const GLOBE_WHEEL_ZOOM_SPEED = 0.0012;
 const JOURNEY_ROUTE_LINE_REFERENCE_SCALE = 1.15;
 const JOURNEY_ROUTE_LINE_SCALE_MIN = 0.72;
 const JOURNEY_ROUTE_LINE_SCALE_MAX = 2.4;
@@ -2393,6 +2403,25 @@ export function ParticleEarthScene({
     const reliefExperimentEnabled = new URLSearchParams(window.location.search)
       .get("terrainRelief") === "1";
     host.dataset.reliefExperiment = reliefExperimentEnabled ? "on" : "off";
+    // Opt-in real-time day/night (`?dayNight=1`, optional `?sunTime=<ISO>`).
+    // Off compiles the exact existing shaders; on adds two uniforms only.
+    const dayNightEnabled = new URLSearchParams(window.location.search)
+      .get("dayNight") === "1";
+    const sunTimeOverride = dayNightEnabled ? parseSunTimeOverride(window.location.search) : null;
+    host.dataset.dayNight = dayNightEnabled ? "on" : "off";
+    const sunDirection = new Vector3(1, 0, 0);
+    const dayNightViewDirection = new Vector3();
+    let sunDirectionUpdatedAt = Number.NEGATIVE_INFINITY;
+    let dayNightEasedStrength = 0;
+    let dayNightStrength = 0;
+    const refreshSunDirection = (now: number) => {
+      const sunDate = sunTimeOverride ?? new Date();
+      sunDirectionAt(sunDate, sunDirection);
+      sunDirectionUpdatedAt = now;
+      const subsolar = subsolarPoint(sunDate);
+      host.dataset.dayNightSubsolar = `${subsolar.lat.toFixed(2)},${subsolar.lon.toFixed(2)}`;
+    };
+    if (dayNightEnabled) refreshSunDirection(performance.now());
     const reliefMaterial = new MeshPhongMaterial({
       color: 0x07100f,
       emissive: 0x010302,
@@ -2437,7 +2466,7 @@ export function ParticleEarthScene({
     nearCoastlines.renderOrder = GLOBE_RENDER_ORDER.coastline;
     globe.add(midCoastlines, nearCoastlines);
 
-    const atmosphereMaterial = createAtmosphereMaterial();
+    const atmosphereMaterial = createAtmosphereMaterial({ dayNight: dayNightEnabled });
     const atmosphere = new Mesh(sphereGeometry, atmosphereMaterial);
     atmosphere.scale.setScalar(1.07);
     globe.add(atmosphere);
@@ -4857,6 +4886,7 @@ export function ParticleEarthScene({
       radialPulseScale: 0,
       terrainRelief: true,
       visitedImprint: true,
+      dayNight: dayNightEnabled,
     });
     particleDimmingMaterials.push(particleMaterial);
     attachVisitedImprintMaterial(particleMaterial);
@@ -4974,6 +5004,8 @@ export function ParticleEarthScene({
         radialPulseScale: 0,
         terrainRelief: true,
         visitedImprint: true,
+        // Must match the base layer, or the LOD handoff shows a seam.
+        dayNight: dayNightEnabled,
       });
       material.uniforms.uViewportHeight.value = targetSize.y;
       attachVisitedImprintMaterial(material);
@@ -5336,6 +5368,10 @@ export function ParticleEarthScene({
       material.uniforms.uTime.value = time;
       material.uniforms.uTerrainReliefMap.value = reliefTexture;
       material.uniforms.uTerrainReliefEmphasis.value = particleTerrainRelief;
+      if (dayNightEnabled) {
+        material.uniforms.uSunDirection.value.copy(sunDirection);
+        material.uniforms.uDayNightStrength.value = dayNightStrength;
+      }
     };
 
     const texture = new TextureLoader().load(
@@ -6014,6 +6050,39 @@ export function ParticleEarthScene({
       host.dataset.semanticZoom = semanticZoomState.state;
       host.dataset.cityLod = semanticZoomState.cityTier;
       host.dataset.localProgress = semanticZoomState.snapshot.localProgress.toFixed(3);
+      let coastlineDayNight = 1;
+      if (dayNightEnabled) {
+        // Real time, no interpolation: the terminator moves 0.25° a minute.
+        // Reduced motion and a pinned `sunTime` keep the first direction.
+        if (
+          !sunTimeOverride
+          && !reduceMotion
+          && now - sunDirectionUpdatedAt >= DAY_NIGHT_REFRESH_MS
+        ) {
+          refreshSunDirection(now);
+        }
+        // Wheel zoom lands a whole notch per event, so the zoom fade is eased
+        // too; the un-eased cap still guarantees 0 before the Dive blend.
+        dayNightEasedStrength = interpolate(
+          dayNightEasedStrength,
+          dayNightModeWeight(currentMode)
+            * dayNightZoomFade(semanticZoomState.snapshot.zoom),
+        );
+        dayNightStrength = Math.min(
+          dayNightEasedStrength,
+          dayNightDiveCap(semanticZoomState.snapshot.zoom),
+        );
+        atmosphereMaterial.uniforms.uSunDirection.value.copy(sunDirection);
+        atmosphereMaterial.uniforms.uDayNightStrength.value = dayNightStrength;
+        // Line materials have one opacity, so coastlines follow the night
+        // amount at the view center: exact when near, an average when global.
+        globe.worldToLocal(dayNightViewDirection.copy(camera.position)).normalize();
+        coastlineDayNight = dayNightBrightness(
+          dayNightViewDirection.dot(sunDirection),
+          dayNightStrength,
+        );
+        host.dataset.dayNightStrength = dayNightStrength.toFixed(3);
+      }
       const visitedImprintAttenuation = visitedImprintZoomAttenuation(
         semanticZoomState.state,
         semanticZoomState.snapshot.localProgress,
@@ -6039,9 +6108,10 @@ export function ParticleEarthScene({
       updateCoastlineRefinement(now);
       const coastlineWeights = semanticZoomState.coastlineWeights;
       const coastlineLod = semanticZoomState.coastlineLod;
-      coastlineMaterial.opacity = interpolate(coastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.far);
-      midCoastlineMaterial.opacity = interpolate(midCoastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.mid);
-      nearCoastlineMaterial.opacity = interpolate(nearCoastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.near);
+      const coastlineOpacity = target.coastlineOpacity * coastlineDayNight;
+      coastlineMaterial.opacity = interpolate(coastlineMaterial.opacity, coastlineOpacity * coastlineWeights.far);
+      midCoastlineMaterial.opacity = interpolate(midCoastlineMaterial.opacity, coastlineOpacity * coastlineWeights.mid);
+      nearCoastlineMaterial.opacity = interpolate(nearCoastlineMaterial.opacity, coastlineOpacity * coastlineWeights.near);
       coastlines.visible = coastlineWeights.far > 0.001 || coastlineMaterial.opacity > 0.001;
       midCoastlines.visible = coastlineWeights.mid > 0.001 || midCoastlineMaterial.opacity > 0.001;
       nearCoastlines.visible = coastlineWeights.near > 0.001 || nearCoastlineMaterial.opacity > 0.001;

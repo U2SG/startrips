@@ -3,6 +3,10 @@ export type ScreenPoint = { x: number; y: number };
 export const GLOBE_DRAG_THRESHOLD_PX = 6;
 export const GLOBE_ZOOM_MIN = 0.72;
 export const GLOBE_ZOOM_MAX = 3.0;
+/** Wheel zoom is multiplicative: zoom *= exp(-deltaY * speed), applied unsmoothed. */
+export const GLOBE_WHEEL_ZOOM_SPEED = 0.0012;
+/** A standard mouse wheel notch. */
+export const GLOBE_WHEEL_NOTCH_DELTA_Y = 100;
 export const GLOBE_MAX_INERTIA_SCREEN_SPEED_PX_PER_SECOND = 640;
 
 export function isGlobeDrag(distance: number) {
