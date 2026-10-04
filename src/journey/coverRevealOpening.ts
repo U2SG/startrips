@@ -276,7 +276,7 @@ export type StoryCoverRevealSkip =
  * the derivative decision: ready, stale, unusable, spent and Reduced Motion.
  */
 export function storyCoverRevealGate(input: {
-  entryRole: "journey-cover" | "media" | null;
+  entryRole: "journey-cover" | "media" | "note" | null;
   canManageMedia: boolean;
   cover: Pick<JourneyMediaAsset, "mimeType"> | null;
   stageSettled: boolean;

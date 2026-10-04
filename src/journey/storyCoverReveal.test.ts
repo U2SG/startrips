@@ -12,7 +12,7 @@ import {
   storyCursorForJourney,
   storyInitialCursorSelection,
   storyInitialMediaSelection,
-  storyObservedAssetId,
+  storyObservedTarget,
 } from "./storyMediaPolicy";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -134,7 +134,7 @@ describe("Story cover reveal ownership (#555)", () => {
     // A Journey-level cover sorts into the intro, ahead of every Route Point.
     const target = journeyWith("cover", null);
     const cursor = storyCursorForJourney(target, true);
-    expect(cursor.entries.map((entry) => `${entry.role}:${entry.asset.id}`))
+    expect(cursor.entries.map((entry) => `${entry.role}:${entry.asset?.id}`))
       .toEqual(["journey-cover:cover", "media:cover", "media:a1", "media:b1"]);
     expect(storyReveal(target, fresh, 0, ready("cover"))).toBe("reveal");
     expect(storyReveal(target, fresh, 1, ready("cover"))).toBe("not-opening");
@@ -159,15 +159,14 @@ describe("Journey-level cover context (#555)", () => {
   it("keeps Journey context on both the opening and the intro media it duplicates", () => {
     expect(cursor.entries[0]).toMatchObject({ role: "journey-cover", contextOwner: "journey", routePointId: null });
     expect(cursor.entries[1]).toMatchObject({ role: "media", contextOwner: "journey", routePointId: null });
-    const coverAsset = cursor.entries[1].asset;
     // Neither names a Route Point, so the whole-Journey chip stays pressed.
-    expect(storyActiveChapterRoutePointId(null, coverAsset, true, null, true)).toBeNull();
-    expect(storyActiveChapterRoutePointId(null, coverAsset, true, null, false)).toBeNull();
+    expect(storyActiveChapterRoutePointId(cursor.entries[0], true, null, true)).toBeNull();
+    expect(storyActiveChapterRoutePointId(cursor.entries[1], true, null, false)).toBeNull();
   });
 
   it("publishes no asset on the opening and the asset on canonical entry 0", () => {
-    expect(storyObservedAssetId(cursor, cursor.pageIds[0], null)).toBeNull();
-    expect(storyObservedAssetId(cursor, cursor.pageIds[1], null)).toBe("cover");
+    expect(storyObservedTarget(cursor, cursor.pageIds[0]).assetId).toBeNull();
+    expect(storyObservedTarget(cursor, cursor.pageIds[1]).assetId).toBe("cover");
     expect(cursor.pageIds[0]).not.toBe(cursor.pageIds[1]);
   });
 });
