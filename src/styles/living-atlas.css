@@ -6687,13 +6687,13 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .detailed-earth-map .maplibregl-ctrl-bottom-right {
-    right: 4px;
-    bottom: 94px;
+    right: calc(4px + env(safe-area-inset-right, 0px));
+    bottom: calc(94px + env(safe-area-inset-bottom, 0px));
   }
 
   .detailed-earth-map .maplibregl-ctrl-bottom-left {
-    left: 4px;
-    bottom: 74px;
+    left: calc(4px + env(safe-area-inset-left, 0px));
+    bottom: calc(74px + env(safe-area-inset-bottom, 0px));
   }
 
   .living-atlas__header {
@@ -7778,7 +7778,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     overflow-y: auto;
     display: grid;
     gap: 7px;
-    padding: 10px 14px calc(env(safe-area-inset-bottom) + 14px);
+    padding: 10px calc(14px + env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom) + 14px) calc(14px + env(safe-area-inset-left, 0px));
     border: 1px solid rgba(118, 227, 211, 0.16);
     border-bottom: 0;
     border-radius: 22px 22px 0 0;
@@ -8431,9 +8431,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   .living-atlas.is-mobile-v2 .living-atlas__empty {
     z-index: var(--z-chrome-88);
     top: auto;
-    right: 24px;
+    right: calc(24px + env(safe-area-inset-right, 0px));
     bottom: calc(env(safe-area-inset-bottom) + 38px);
-    left: 24px;
+    left: calc(24px + env(safe-area-inset-left, 0px));
     width: auto;
     display: grid;
     justify-items: center;
@@ -9009,9 +9009,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .living-atlas[data-mobile-v2="on"] .living-atlas__home-base-context {
-  right: 12px;
+  right: calc(12px + env(safe-area-inset-right, 0px));
   bottom: calc(env(safe-area-inset-bottom) + 142px);
-  left: 12px;
+  left: calc(12px + env(safe-area-inset-left, 0px));
   width: auto;
   border-radius: 16px;
   max-height: calc(100dvh - env(safe-area-inset-bottom) - 166px);
@@ -9086,8 +9086,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .living-atlas[data-mobile-v2="on"] .living-atlas__everyday-context {
   top: calc(env(safe-area-inset-top) + 70px);
-  right: 12px;
-  left: 12px;
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  left: calc(12px + env(safe-area-inset-left, 0px));
   width: auto;
   max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 154px);
   border-radius: 16px;
@@ -9359,9 +9359,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    directly interactive everywhere outside the card. */
 .living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion {
   z-index: var(--z-chrome-85);
-  right: 12px;
+  right: calc(12px + env(safe-area-inset-right, 0px));
   bottom: calc(env(safe-area-inset-bottom) + 142px);
-  left: 12px;
+  left: calc(12px + env(safe-area-inset-left, 0px));
   width: auto;
   max-height: min(48svh, 360px);
   overflow-y: auto;
