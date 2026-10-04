@@ -1514,14 +1514,17 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
             <IconChevronDown className="account-dock__tab-chevron" size={14} stroke={1.35} aria-hidden="true" />
           </button>
           <div id="account-dock-panel" className="account-dock__panel">
-            <span className="account-dock__identity"><strong>{gate.atlas.title}</strong> · {userName}</span>
-            {message ? <small>{message}</small> : null}
+            <header className="account-sheet__identity">
+              <IconUserCircle size={24} stroke={1.2} aria-hidden="true" />
+              <div><p>PRIVATE ATLAS</p><h2>{gate.atlas.title}</h2><span>{userName}</span></div>
+            </header>
+            {message ? <p className="account-sheet__message" role="status">{message}</p> : null}
             <div className="account-dock__actions">
-              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
-              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
-              <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}>账户密码</button>
-              <button type="button" onClick={() => { if (emailChangeOpen) { setEmailChangeOpen(false); setMessage(""); return; } openAccountEmailChange(); }}>修改邮箱</button>
-              <button type="button" onClick={() => { setInviteOpen(false); setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setMessage(""); setIdentityOpen((value) => !value); }}>登录方式</button>
+              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setInviteOpen((value) => !value); }}><span>邀请另一位</span><small>发送私人图谱邀请</small></button> : null}
+              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}><span>编辑图谱</span><small>修改名称与题词</small></button>
+              <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}><span>账户密码</span><small>修改或设置登录密码</small></button>
+              <button type="button" onClick={() => { if (emailChangeOpen) { setEmailChangeOpen(false); setMessage(""); return; } openAccountEmailChange(); }}><span>修改邮箱</span><small>查看、发起或取消邮箱换绑</small></button>
+              <button type="button" onClick={() => { setInviteOpen(false); setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setMessage(""); setIdentityOpen((value) => !value); }}><span>登录方式</span><small>绑定或解绑第三方登录</small></button>
               <EarthExperienceMenuEntry
                 surface="dock"
                 policy={earthExperience.policy}
@@ -1532,21 +1535,21 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
               <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
             </div>
             {inviteOpen ? (
-              <form onSubmit={invite}>
+              <form className="account-sheet__form" onSubmit={invite}>
                 <label><span>对方邮箱</span><input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
                 <button type="submit" disabled={pending}>发送邀请</button>
               </form>
             ) : null}
             {editAtlasOpen ? (
-              <form onSubmit={saveAtlas}>
+              <form className="account-sheet__form" onSubmit={saveAtlas}>
                 <label><span>图谱名称</span><input required maxLength={80} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
                 <label><span>题词（可选）</span><textarea rows={2} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
                 <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
               </form>
             ) : null}
-            {identityOpen ? <AccountIdentityPanel pendingReturn={bindReturn} onReturnConsumed={() => setBindReturn(null)} /> : null}
-            {passwordOpen ? <AccountPasswordPanel state={passwordState} surface={passwordSurface} onSurface={applyPasswordSurface} email={passwordEmail} /> : null}
-            {emailChangeOpen ? <AccountEmailChangePanel surface={emailChangeSurface} onSurface={applyEmailChangeSurface} currentEmail={userEmail} /> : null}
+            {identityOpen ? <AccountIdentityPanel className="account-sheet__form" pendingReturn={bindReturn} onReturnConsumed={() => setBindReturn(null)} /> : null}
+            {passwordOpen ? <AccountPasswordPanel state={passwordState} surface={passwordSurface} onSurface={applyPasswordSurface} email={passwordEmail} className="account-sheet__form" /> : null}
+            {emailChangeOpen ? <AccountEmailChangePanel surface={emailChangeSurface} onSurface={applyEmailChangeSurface} currentEmail={userEmail} className="account-sheet__form" /> : null}
           </div>
         </aside>
       ) : null}

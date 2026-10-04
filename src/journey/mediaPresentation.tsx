@@ -123,9 +123,7 @@ export function MediaPresentationMenuEntry({ surface }: { surface: "dock" | "she
       data-media-presentation-value={style}
       onClick={() => writeMediaPresentationStyle(nextMediaPresentationStyle(style))}
     >
-      {surface === "sheet"
-        ? <><span>媒体呈现</span><small>{label}（本机试用）</small></>
-        : <>媒体呈现：{label}</>}
+      <span>媒体呈现</span><small>{label}（本机试用）</small>
     </button>
   );
 }
