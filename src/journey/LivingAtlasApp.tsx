@@ -2914,11 +2914,7 @@ export function LivingAtlasApp({
   // Journey cover or a Route Point. Route Point entry gets one short-lived
   // observation aperture beside the CURRENT projected marker; no geographic
   // coordinate is persisted in React state.
-  function openJourneyStory(
-    journeyId: string,
-    routePointId: string | null,
-    presentJourneyCoverOpening = false,
-  ) {
+  function openJourneyStory(journeyId: string, routePointId: string | null, presentJourneyCoverOpening = false) {
     claimPlaybackReturnIntent();
     setStoryInitialSnapState("in-context");
     setStoryFocusVisibleControlOnOpen(false);
