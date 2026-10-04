@@ -1103,9 +1103,13 @@ try {
     );
 
     const callsBeforeReplacement = run.state.calls.length;
-    // The first Story open above already played this page's previous opening,
-    // so only frames composited after this point belong to the new revision.
-    const framesBeforeNewOpening = await page.evaluate(() => window.__qaCompositedFrames?.length ?? 0);
+    // The first Story open above already played this page's previous opening
+    // and wrote its write-once opening pixel. Clear it so the new revision's
+    // reveal canvas records its own first drawn frame.
+    const framesBeforeNewOpening = await page.evaluate(() => {
+      window.__qaOpeningPixel = undefined;
+      return window.__qaCompositedFrames?.length ?? 0;
+    });
     await openStory(page, viewport);
     // The new revision buys its own opening: a different identity, so the
     // once-per-revision ledger does not suppress it.
@@ -1130,13 +1134,21 @@ try {
       if (stage === null) break;
       samples.push(classify(await compositedColor(page, REVEAL_PROBE)));
     }
-    // The opening's first frame is judged on what the renderer reported it
-    // composited, not on a screenshot: by the time the phase wait and the read
-    // check above return, a screenshot can already land mid-blend (#454).
+    // The opening's first frame is judged on the pixel the renderer drew in it,
+    // read off the drawing buffer in that same draw (recordOpeningFramePixel),
+    // exactly as the opening case does. A screenshot can land mid-blend after
+    // the phase wait (#454), and the composited-identity record can miss the
+    // first identity when the stage mounts already carrying it, so neither is
+    // the verdict; both stay as detail.
+    const newOpeningPixel = await page.evaluate(() => window.__qaOpeningPixel ?? null);
+    const newOpeningImage = newOpeningPixel !== null && newOpeningPixel.error === undefined
+      ? classify(newOpeningPixel)
+      : "unobserved";
     const newOpeningFrames = (await page.evaluate(() => window.__qaCompositedFrames ?? []))
       .slice(framesBeforeNewOpening);
     check("cover-revision-change/the-new-opening-starts-on-its-own-derivative",
-      newOpeningFrames[0] === "generated-first", { composited: newOpeningFrames, samples });
+      newOpeningImage === "derivative",
+      { openingPixel: newOpeningPixel, openingImage: newOpeningImage, composited: newOpeningFrames, samples });
     check(
       "cover-revision-change/the-previous-cover-bytes-never-appear",
       !samples.includes("original-cover"),
