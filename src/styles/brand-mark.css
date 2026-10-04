@@ -4,7 +4,7 @@
 .startrips-brand-mark,
 .startrips-wordmark,
 .startrips-v12-mark {
-  --startrips-v12-motion: var(--motion-content, 420ms);
+  --startrips-v12-motion: var(--motion-content, 560ms);
   color: var(--startrips-starlight, #fff8e7);
 }
 
