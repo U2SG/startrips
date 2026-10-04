@@ -21,10 +21,12 @@ import {
   storyCursorMediaIndex,
   storyCursorClampEntry,
   storyCursorEntryForMediaIndex,
-  storyCursorEntryForAssetId,
+  storyCursorEntryForPageId,
+  storyCursorAssetIdForPage,
+  storyAutoplayVideoCandidateIndex,
   storyCursorNeighbourEntry,
   storyUploadedEntryIndex,
-  storyStageMedia,
+  storyStagePages,
   storyStepAvailability,
   storyObservedAssetId,
   storyInitialNoteBeatRoutePointId,
@@ -764,7 +766,7 @@ export function JourneyStory({
   });
   // The compositor can hold B in front while A is still the committed index
   // and C waits for a read. Close/Back must return from B's observation.
-  const foregroundMediaIdRef = useRef<string | null>(initialCursorSelection.assetId);
+  const foregroundPageIdRef = useRef<string | null>(initialCursorSelection.pageId);
   const quickRecapFullActionRef = useRef<HTMLButtonElement | null>(null);
   const [entryIndex, setEntryIndex] = useState(initialCursorSelection.entryIndex);
   const [journeyCoverOpeningActive, setJourneyCoverOpeningActive] = useState(
@@ -797,21 +799,29 @@ export function JourneyStory({
   useEffect(() => decodeRegistryRef.current.onSettle(
     () => setDecodeSettleRevision((current) => current + 1),
   ), []);
+  // #555: these identities are stage PAGE ids (`storyCursorPageId`), not asset
+  // ids: the Journey cover opening and the canonical cover are two pages of one
+  // asset. `assetIdOfPage` turns one into the asset for reads, decode and video.
   // The semantic current/requested/ready identities are independent of the
   // three persistent presentation pages. A ready neighbor becomes current
   // after its horizontal handoff; no image changes compositor at that seam.
-  const [shownAssetId, setShownAssetId] = useState<string | null>(null);
-  const [incomingAssetId, setIncomingAssetId] = useState<string | null>(null);
+  const [shownPageId, setShownPageId] = useState<string | null>(null);
+  const [incomingPageId, setIncomingPageId] = useState<string | null>(null);
   const pendingTargetRef = useRef<string | null>(null);
-  const [pendingMediaId, setPendingMediaId] = useState<string | null>(null);
-  const requestedMediaRef = useRef<string | null>(null);
+  const [pendingPageId, setPendingPageId] = useState<string | null>(null);
+  const requestedPageRef = useRef<string | null>(null);
   const mediaNavigationDirection = useRef<-1 | 1>(1);
-  const incomingMediaRef = useRef(incomingAssetId);
-  incomingMediaRef.current = incomingAssetId;
-  const setPendingMediaTarget = useCallback((assetId: string | null) => {
-    pendingTargetRef.current = assetId;
-    setPendingMediaId(assetId);
+  const incomingPageRef = useRef(incomingPageId);
+  incomingPageRef.current = incomingPageId;
+  const setPendingMediaTarget = useCallback((pageId: string | null) => {
+    pendingTargetRef.current = pageId;
+    setPendingPageId(pageId);
   }, []);
+  // #555: a stage page id -> the asset it paints. Called from callbacks and
+  // after the cursor is built, never before it during render.
+  function assetIdOfPage(pageId: string | null): string | null {
+    return pageId === null ? null : storyCursorAssetIdForPage(storyCursorRef.current, pageId);
+  }
   const [uploadState, setUploadState] = useState<MediaUploadState>({ status: "idle" });
   const [retryFiles, setRetryFiles] = useState<File[]>([]);
   const [retryRoutePointId, setRetryRoutePointId] = useState<string | null>(null);
@@ -980,7 +990,7 @@ export function JourneyStory({
   }, []);
   const activeStagePlaybackReadyId = fullscreen ? stagePlaybackReady.fullscreen : stagePlaybackReady.inline;
   useEffect(() => {
-    if (!renewalError || activeStagePlaybackReadyId !== renewalError.id) return;
+    if (!renewalError || assetIdOfPage(activeStagePlaybackReadyId) !== renewalError.id) return;
     const read = mediaReads[renewalError.id];
     const video = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
     if (read?.status === "ready" && read.generation !== undefined
@@ -1315,8 +1325,8 @@ export function JourneyStory({
       const read = mediaReadsRef.current[videoHandoff.id];
       const sourceCurrent = handoffCurrent()
         && videoHandoff.scopeKey === `${journeyId}:${selectedRoutePointIdRef.current ?? ""}`
-        && requestedMediaRef.current === videoHandoff.id
-        && incomingMediaRef.current === null
+        && assetIdOfPage(requestedPageRef.current) === videoHandoff.id
+        && incomingPageRef.current === null
         && pendingTargetRef.current === null
         && sourceVideo.isConnected
         && (nextFullscreen ? storyVideoRef.current : fullscreenVideoRef.current) === sourceVideo
@@ -1346,7 +1356,7 @@ export function JourneyStory({
           if (videoHandoffGenerationRef.current !== restoredGeneration
             || storyScopeRevisionRef.current !== scopeRevision
             || selectedRoutePointIdRef.current !== selectedRoutePointId
-            || requestedMediaRef.current !== videoHandoff.id
+            || assetIdOfPage(requestedPageRef.current) !== videoHandoff.id
             || currentRead?.status !== "ready"
             || new URL(currentRead.url, document.baseURI).href !== videoHandoff.src
             || !sourceVideo.isConnected
@@ -1464,7 +1474,9 @@ export function JourneyStory({
       claimDestination: () => {
         const stage = targetRoot();
         if (!mediaId || !stage) return null;
+        // #555: one asset can be two pages; the presented one is the target.
         const page = [...stage.querySelectorAll<HTMLElement>("[data-media-page-id]")]
+          .sort((a, b) => Number(b.dataset.mediaPresented === "true") - Number(a.dataset.mediaPresented === "true"))
           .find((node) => node.dataset.mediaPageId === mediaId);
         const destinationVideo = videoHandoff
           ? nextFullscreen ? fullscreenVideoRef.current : storyVideoRef.current
@@ -1762,7 +1774,7 @@ export function JourneyStory({
     // The note beat belongs to the open that requested it; a new open (for
     // example switching Journey inside Story) must not inherit the last one's.
     setNoteBeatRoutePointId(storyInitialNoteBeatRoutePointId(journey, routePointId, initialAssetId));
-    foregroundMediaIdRef.current = nextInitialCursor.assetId;
+    foregroundPageIdRef.current = nextInitialCursor.pageId;
     setSelectedRoutePointId(nextInitialMedia.routePointId);
     setUploadState({ status: "idle" });
     setRetryFiles([]);
@@ -1810,8 +1822,8 @@ export function JourneyStory({
     setMediaReads({});
     setRenewalError(null);
     decodeRegistryRef.current.reset();
-    setShownAssetId(null);
-    setIncomingAssetId(null);
+    setShownPageId(null);
+    setIncomingPageId(null);
     setPendingMediaTarget(null);
     audioSamplerRef.current.stop();
     resetAudioAtmosphereEnergy();
@@ -2103,47 +2115,60 @@ export function JourneyStory({
   const onJourneyCoverOpening = storyCursorOnJourneyCover(storyCursor, entryIndex);
   const assetIndex = Math.max(0, storyCursorMediaIndex(storyCursor, entryIndex));
   const activeAsset = storyCursor.entries[entryIndex]?.asset ?? null;
-  const journeyCoverOpeningAssetId = onJourneyCoverOpening ? activeAsset?.id ?? null : null;
+  // The stage page of the current entry: its presentation identity.
+  const activePageId = storyCursor.pageIds[entryIndex] ?? null;
   // Media index -> its canonical entry. Tiles, Route Point jumps, reorder and
   // the note beat's neighbours all name canonical media, never the opening.
   const setCursorMediaIndex = (mediaIndex: number) => {
     setEntryIndex(storyCursorEntryForMediaIndex(storyCursorRef.current, mediaIndex));
   };
-  // The stage keys pages by asset id; see `storyStageMedia`. Its list follows
+  // The stage keys pages by presentation; see `storyStagePages`. Its list follows
   // the SETTLED entry: while an incoming page is handing off, the list it
   // started from stays, so leaving the opening does not reshuffle the painted
   // neighbours (and their stack depth) mid-transition.
   const stageEntryIndexRef = useRef(entryIndex);
-  if (incomingAssetId === null) stageEntryIndexRef.current = entryIndex;
+  if (incomingPageId === null) stageEntryIndexRef.current = entryIndex;
   const stageEntryIndex = stageEntryIndexRef.current;
   const stageMedia = useMemo(
-    () => storyStageMedia(storyCursor, stageEntryIndex, scopedMedia),
-    [storyCursor, stageEntryIndex, scopedMedia],
+    () => storyStagePages(storyCursor, stageEntryIndex),
+    [storyCursor, stageEntryIndex],
   );
-  const stageMediaIndex = useMemo(
-    () => stageMedia === scopedMedia ? scopedMediaIndex : indexStoryMedia(stageMedia),
-    [stageMedia, scopedMedia, scopedMediaIndex],
-  );
+  const stageMediaIndex = useMemo(() => indexStoryMedia(stageMedia), [stageMedia]);
+  // Signed reads stay keyed by asset; the stage reads them by page id, so a
+  // page whose id is not its asset id borrows its asset's read.
+  const stageReads = useMemo(() => {
+    if (storyCursor.pageAssetIds.size === 0) return mediaReads;
+    const reads = { ...mediaReads };
+    for (const [pageId, assetId] of storyCursor.pageAssetIds) {
+      const read = mediaReads[assetId];
+      if (read) reads[pageId] = read;
+    }
+    return reads;
+  }, [mediaReads, storyCursor.pageAssetIds]);
   useLayoutEffect(() => {
     const handoff = videoHandoffRef.current;
     if (!handoff) return;
     const read = mediaReads[handoff.id];
-    if (handoff.id === requestedMediaRef.current
-      && handoff.id === (shownAssetId ?? activeAsset?.id)
+    if (handoff.id === assetIdOfPage(requestedPageRef.current)
+      && handoff.id === (assetIdOfPage(shownPageId) ?? activeAsset?.id)
       && handoff.toFullscreen === fullscreen
       && handoff.scopeKey === `${journeyId}:${selectedRoutePointId ?? ""}`
       && read?.status === "ready"
       && new URL(read.url, document.baseURI).href === handoff.src) return;
     handoff.cancelMorph?.();
     handoff.dispose();
-  }, [activeAsset?.id, fullscreen, incomingAssetId, journeyId, mediaReads, selectedRoutePointId, shownAssetId]);
-  if (incomingAssetId === null && pendingTargetRef.current === null) {
-    requestedMediaRef.current = activeAsset?.id ?? null;
+  }, [activeAsset?.id, fullscreen, incomingPageId, journeyId, mediaReads, selectedRoutePointId, shownPageId]);
+  if (incomingPageId === null && pendingTargetRef.current === null) {
+    requestedPageRef.current = activePageId;
   }
-  const requestedEntryIndex = storyCursorEntryForAssetId(storyCursor, pendingMediaId ?? incomingAssetId, entryIndex);
-  const autoplayVideoCandidate = storyAutoplayVideoCandidate(
+  const requestedEntryIndex = storyCursorEntryForPageId(storyCursor, pendingPageId ?? incomingPageId, entryIndex);
+  const autoplayVideoCandidateIndex = storyAutoplayVideoCandidateIndex(
     storyCursor.assets, entryIndex, storyCursor.firstCanonicalEntry,
   );
+  const autoplayVideoCandidate = autoplayVideoCandidateIndex === null
+    ? null : storyCursor.assets[autoplayVideoCandidateIndex] ?? null;
+  const autoplayVideoCandidatePageId = autoplayVideoCandidateIndex === null
+    ? null : storyCursor.pageIds[autoplayVideoCandidateIndex] ?? null;
   const autoplayVideoCandidateRead = autoplayVideoCandidate
     ? mediaReads[autoplayVideoCandidate.id]
     : null;
@@ -2169,7 +2194,7 @@ export function JourneyStory({
   const cover = journey ? journeyCover(journey) : null;
 
   const reportForegroundMedia = useCallback((id: string | null) => {
-    foregroundMediaIdRef.current = id;
+    foregroundPageIdRef.current = id;
     if (!journey) return;
     onObservationChange?.(storyLogicalObservation(
       // #76 P1 + #595: while a media-free Route Point is the presented chapter,
@@ -2179,41 +2204,38 @@ export function JourneyStory({
       // asset must not name the Route Point that owns the cover either.
       journey,
       selectedRoutePointId,
-      storyObservedAssetId(id, noteBeatRoutePointId, journeyCoverOpeningAssetId),
+      storyObservedAssetId(storyCursor, id, noteBeatRoutePointId),
       mobileLayout,
       mobileStoryExpanded,
     ));
-  }, [journey, selectedRoutePointId, noteBeatRoutePointId, journeyCoverOpeningAssetId, mobileLayout, mobileStoryExpanded, onObservationChange]);
+  }, [journey, selectedRoutePointId, noteBeatRoutePointId, storyCursor, mobileLayout, mobileStoryExpanded, onObservationChange]);
   useEffect(() => {
     if (!journey) return;
-    const foregroundId = foregroundMediaIdRef.current;
+    const foregroundId = foregroundPageIdRef.current;
     onObservationChange?.(storyLogicalObservation(
       journey,
       selectedRoutePointId,
       storyObservedAssetId(
-        foregroundId && scopedMediaIndex.byId.has(foregroundId)
-          ? foregroundId : shownAssetId ?? activeAsset?.id ?? null,
+        storyCursor,
+        foregroundId && storyCursor.entryByPageId.has(foregroundId)
+          ? foregroundId : shownPageId ?? activePageId,
         noteBeatRoutePointId,
-        journeyCoverOpeningAssetId,
       ),
       mobileLayout,
       mobileStoryExpanded,
     ));
   }, [
     activeAsset?.id,
-    // #555: leaving the opening for canonical entry 0 can keep the same asset
-    // on screen (the cover is often canonical media 0), and then the stage
-    // reports no foreground change. The entry change itself must republish.
+    activePageId,
     entryIndex,
-    journeyCoverOpeningAssetId,
     journey,
     noteBeatRoutePointId,
     mobileLayout,
     mobileStoryExpanded,
     onObservationChange,
-    scopedMediaIndex,
+    storyCursor,
     selectedRoutePointId,
-    shownAssetId,
+    shownPageId,
   ]);
   function visualMediaCount(pointId: string | null) {
     return visualMedia.filter((asset) => asset.routePointId === pointId).length;
@@ -2229,10 +2251,10 @@ export function JourneyStory({
   const navigateMediaStepRef = useRef<(direction: -1 | 1, wrap: boolean) => void>(() => undefined);
   navigateMediaStepRef.current = navigateMediaStep;
   useLayoutEffect(() => {
-    if (!playing || mediaGestureHolding || incomingAssetId !== null || pendingMediaId !== null) return;
+    if (!playing || mediaGestureHolding || incomingPageId !== null || pendingPageId !== null) return;
     if (videoHandoffRef.current?.id === activeAsset?.id
       && videoHandoffRef.current.toFullscreen === fullscreen) return;
-    if (activeRead?.status !== "error" && activeStagePlaybackReadyId !== activeAsset?.id) return;
+    if (activeRead?.status !== "error" && activeStagePlaybackReadyId !== activePageId) return;
     // #76 P1: one Journey-wide cursor. There is no whole-journey mode flag here -
     // the sequence IS the whole Journey, so autoplay returns to the first
     // playable media at the Journey boundary instead of stopping at the end.
@@ -2250,7 +2272,7 @@ export function JourneyStory({
     const waitsForVideoEnd = storyAutoplayWaitsForVideoEnd(
       activeAsset,
       storyMediaAvailability(activeRead?.status),
-      video !== null && (shownAssetId ?? activeAsset?.id ?? null) === activeAsset?.id,
+      video !== null && (shownPageId ?? activePageId) === activePageId,
     );
     if (!video || !waitsForVideoEnd) {
       const timer = window.setTimeout(finishStep, STORY_AUTOPLAY_STEP_MS);
@@ -2310,9 +2332,9 @@ export function JourneyStory({
     storyCursor.entries.length,
     storyCursor.firstCanonicalEntry,
     selectedRoutePointId,
-    shownAssetId,
-    incomingAssetId,
-    pendingMediaId,
+    shownPageId,
+    incomingPageId,
+    pendingPageId,
     activeStagePlaybackReadyId,
     videoHandoffRevision,
   ]);
@@ -2520,16 +2542,15 @@ export function JourneyStory({
     // the settled media identity stable and rebase its index onto the new
     // sequence instead of silently switching to whichever asset inherited the
     // previous numeric index.
-    // #555: the current entry wins when it paints the settled asset, so a
-    // revision bump keeps a viewer on the opening there and never moves anyone
-    // else back onto it.
-    setEntryIndex((current) => storyCursorEntryForAssetId(storyCursor, shownAssetId, current));
-    if (shownAssetId && !scopedMediaIndex.byId.has(shownAssetId)) {
-      setShownAssetId(null);
-      setIncomingAssetId(null);
+    // #555: the settled identity is a page, so a revision bump keeps a viewer
+    // on the opening there and never moves anyone else back onto it.
+    setEntryIndex((current) => storyCursorEntryForPageId(storyCursor, shownPageId, current));
+    if (shownPageId && !storyCursor.entryByPageId.has(shownPageId)) {
+      setShownPageId(null);
+      setIncomingPageId(null);
       setPendingMediaTarget(null);
     }
-  }, [storyCursor, scopedMediaIndex, shownAssetId]);
+  }, [storyCursor, shownPageId]);
 
   useEffect(() => {
     mediaReadsRef.current = mediaReads;
@@ -2591,14 +2612,15 @@ export function JourneyStory({
   }, [protectedVideoRead]);
 
   // Presentation commits only the latest requested asset after it is ready.
-  const settleIncoming = useCallback((assetId: string) => {
+  const settleIncoming = useCallback((pageId: string) => {
     // A late handoff from an abandoned request cannot replace the latest frame.
-    if (incomingMediaRef.current !== assetId) return;
-    setShownAssetId((current) => current === assetId ? current : assetId);
-    setIncomingAssetId((current) => current === assetId ? null : current);
+    if (incomingPageRef.current !== pageId) return;
+    setShownPageId((current) => current === pageId ? current : pageId);
+    setIncomingPageId((current) => current === pageId ? null : current);
   }, []);
 
-  const reportStageMediaError = useCallback((assetId: string, message: string, retainedVideoFrame = false) => {
+  const reportStageMediaError = useCallback((pageId: string, message: string, retainedVideoFrame = false) => {
+    const assetId = assetIdOfPage(pageId) ?? pageId;
     const currentRead = mediaReadsRef.current[assetId];
     if (retainedVideoFrame && currentRead?.status === "ready") {
       setRenewalError({ id: assetId, sourceGeneration: currentRead.generation,
@@ -2607,9 +2629,9 @@ export function JourneyStory({
     }
     setMediaReads((current) => ({ ...current, [assetId]: { status: "error", message } }));
     // Failed targets still own an unavailable interval in Story autoplay.
-    if (incomingMediaRef.current === assetId) {
-      setShownAssetId(assetId);
-      setIncomingAssetId(null);
+    if (incomingPageRef.current === pageId) {
+      setShownPageId(pageId);
+      setIncomingPageId(null);
     }
   }, []);
 
@@ -2631,7 +2653,7 @@ export function JourneyStory({
   }, [autoplayVideoCandidate?.id, loadMediaRead]);
 
   const stackNeighborIndices = useMemo(() => {
-    const anchorId = shownAssetId ?? activeAsset?.id;
+    const anchorId = shownPageId ?? activePageId ?? undefined;
     // #76 P1: neighbours are taken across the Journey boundary, so the warm
     // window follows the cursor into the next Route Point. They still do NOT
     // wrap: the painted stack is a bounded rendering concern, and wrapping it
@@ -2644,7 +2666,7 @@ export function JourneyStory({
       stageMedia.length,
       false,
     );
-  }, [shownAssetId, activeAsset?.id, stageMedia, stageMediaIndex]);
+  }, [shownPageId, activePageId, stageMedia, stageMediaIndex]);
 
   // #489 (ST-159): one bounded, tiered warm window behind the three physical
   // pages -- reads widest, decoded pictures narrower, one live transport --
@@ -2653,12 +2675,12 @@ export function JourneyStory({
   // The painted stack neighbours count inside the same tier caps.
   // #555: anchored in the stage list, so on the opening the window warms
   // canonical entry 0 onwards rather than the cover's canonical neighbours.
-  const stageIndexFor = (assetId: string | null | undefined) => assetId
-    ? stageMediaIndex.indexById.get(assetId) ?? -1 : -1;
-  const shownStageIndex = stageIndexFor(shownAssetId);
-  const requestedStageIndex = stageIndexFor(pendingMediaId ?? incomingAssetId ?? activeAsset?.id);
+  const stageIndexFor = (pageId: string | null | undefined) => pageId
+    ? stageMediaIndex.indexById.get(pageId) ?? -1 : -1;
+  const shownStageIndex = stageIndexFor(shownPageId);
+  const requestedStageIndex = stageIndexFor(pendingPageId ?? incomingPageId ?? activePageId);
   const warmWindow = storyWarmWindow({
-    shownIndex: shownStageIndex >= 0 ? shownStageIndex : Math.max(0, stageIndexFor(activeAsset?.id)),
+    shownIndex: shownStageIndex >= 0 ? shownStageIndex : Math.max(0, stageIndexFor(activePageId)),
     requestedIndex: stageMedia.length > 0 ? Math.max(0, requestedStageIndex) : -1,
     length: stageMedia.length,
     direction: mediaNavigationDirection.current,
@@ -2671,11 +2693,15 @@ export function JourneyStory({
     autoplay: playing,
     pinned: stackNeighborIndices,
   });
+  // Page ids for the stage; reads and decode are owned by asset.
   const warmIdsFor = (indices: readonly number[]) => indices
     .map((index) => stageMedia[index]?.id)
     .filter((id): id is string => id !== undefined);
-  const warmReadIds = warmIdsFor(warmWindow.reads);
-  const warmDecodeIds = warmIdsFor(warmWindow.decode);
+  const warmDecodePageIds = warmIdsFor(warmWindow.decode);
+  const warmReadIds = [...new Set(warmIdsFor(warmWindow.reads)
+    .map((pageId) => storyCursorAssetIdForPage(storyCursor, pageId)))];
+  const warmDecodeIds = [...new Set(warmDecodePageIds
+    .map((pageId) => storyCursorAssetIdForPage(storyCursor, pageId)))];
   const warmReadKey = warmReadIds.join("|");
   const warmDecodeKey = warmDecodeIds.join("|");
   useEffect(() => {
@@ -2708,9 +2734,9 @@ export function JourneyStory({
 
   // Initial selection has no prior page to preserve.
   useEffect(() => {
-    if (incomingAssetId !== null || shownAssetId !== null) return;
-    if (activeAsset) setShownAssetId(activeAsset.id);
-  }, [activeAsset?.id, incomingAssetId, shownAssetId]);
+    if (incomingPageId !== null || shownPageId !== null) return;
+    if (activePageId) setShownPageId(activePageId);
+  }, [activePageId, incomingPageId, shownPageId]);
 
   // A requested target waits for its read and decode while the current page
   // remains visible. Only then may the presentation pages start their handoff.
@@ -2723,8 +2749,9 @@ export function JourneyStory({
     if (mediaGestureHolding) return;
     const pendingId = pendingTargetRef.current;
     if (pendingId === null) return;
-    const pendingIndex = scopedMediaIndex.indexById.get(pendingId) ?? -1;
-    const target = scopedMedia[pendingIndex];
+    // #555: the pending target is a page, so it names its own entry.
+    const pendingEntry = storyCursor.entryByPageId.get(pendingId) ?? -1;
+    const target = storyCursor.entries[pendingEntry]?.asset;
     if (!target) {
       setPendingMediaTarget(null);
       return;
@@ -2733,7 +2760,7 @@ export function JourneyStory({
     if (targetRead?.status === "ready" && target.mimeType.startsWith("image/")) {
       const readiness = decodeRegistryRef.current.ensure(target.id, targetRead.url);
       if (readiness.status === "error") {
-        reportStageMediaError(target.id, readiness.message);
+        reportStageMediaError(pendingId, readiness.message);
         return;
       }
     }
@@ -2747,18 +2774,16 @@ export function JourneyStory({
       // it so Story autoplay can own the unavailable-media interval and move
       // on, instead of leaving the prior frame pending forever.
       setPendingMediaTarget(null);
-      setIncomingAssetId(null);
-      setShownAssetId(target.id);
-      setCursorMediaIndex(pendingIndex);
+      setIncomingPageId(null);
+      setShownPageId(pendingId);
+      setEntryIndex(pendingEntry);
       return;
     }
     if (disposition !== "ready") return;
     setPendingMediaTarget(null);
-    setIncomingAssetId(target.id);
-    // #555: a navigation target is never the Journey cover opening, so it
-    // lands on the target's canonical entry.
-    setCursorMediaIndex(pendingIndex);
-  }, [decodeSettleRevision, mediaReads, scopedMedia, scopedMediaIndex, activeAsset?.id, playing, pendingMediaId, mediaGestureHolding, setPendingMediaTarget, reportStageMediaError]);
+    setIncomingPageId(pendingId);
+    setEntryIndex(pendingEntry);
+  }, [decodeSettleRevision, mediaReads, storyCursor, activeAsset?.id, playing, pendingPageId, mediaGestureHolding, setPendingMediaTarget, reportStageMediaError]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -2782,8 +2807,8 @@ export function JourneyStory({
     [journey],
   );
   useEffect(() => {
-    if (renewalError && renewalError.id !== (shownAssetId ?? activeAsset?.id)) setRenewalError(null);
-  }, [renewalError, shownAssetId, activeAsset?.id]);
+    if (renewalError && renewalError.id !== (assetIdOfPage(shownPageId) ?? activeAsset?.id)) setRenewalError(null);
+  }, [renewalError, shownPageId, activeAsset?.id]);
 
   // #76 P1: the rail keeps the CURRENT chapter in view, the same one it marks
   // pressed. Preferring the Route Point Story was opened on kept that entry
@@ -2857,8 +2882,13 @@ export function JourneyStory({
       : journey.note?.trim() && !activeChapterRoutePointId
         ? { key: "journey", text: journey.note.trim() } : null;
   // These are semantic identities; StoryMediaPages retains the physical pages.
-  const shownAsset = shownAssetId
-    ? scopedMediaIndex.byId.get(shownAssetId) ?? null
+  // #555: they are page ids; each resolves to the asset its entry paints.
+  const assetOfPage = (pageId: string) => {
+    const pageEntry = storyCursor.entryByPageId.get(pageId);
+    return pageEntry === undefined ? null : storyCursor.entries[pageEntry].asset;
+  };
+  const shownAsset = shownPageId
+    ? assetOfPage(shownPageId)
     : asset;
   const videoNeedsResume = Boolean(videoResumeBlocked
     && videoResumeBlocked.id === shownAsset?.id
@@ -2879,11 +2909,12 @@ export function JourneyStory({
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
   const heldRenewalError = renewalError?.id === shownAsset?.id && shownRead?.status === "ready"
     ? renewalError : null;
-  const incoming = incomingAssetId && incomingAssetId !== shownAssetId
-    ? scopedMediaIndex.byId.get(incomingAssetId) ?? null
+  const incoming = incomingPageId && incomingPageId !== shownPageId
+    ? assetOfPage(incomingPageId)
     : null;
+  const stageIncomingPageId = incoming ? incomingPageId : null;
   const pendingTarget = pendingTargetRef.current !== null
-    ? scopedMediaIndex.byId.get(pendingTargetRef.current) ?? null
+    ? assetOfPage(pendingTargetRef.current)
     : null;
   const pendingTargetRead = pendingTarget ? mediaReads[pendingTarget.id] : null;
   // #489 B/acceptance 3: once a page owns the stage the handoff is hidden by
@@ -2965,6 +2996,12 @@ export function JourneyStory({
     incoming,
     autoplayVideoCandidate,
   );
+  // #555: the stage binds its one transport to a PAGE; this is the page of the
+  // owner chosen above (incoming, then shown, then the autoplay candidate).
+  const storyStageVideoPageId = !storyStageVideoAsset ? null
+    : incoming === storyStageVideoAsset ? stageIncomingPageId
+      : shownAsset === storyStageVideoAsset ? shownPageId ?? activePageId
+        : autoplayVideoCandidatePageId;
   const storyStageVideoRead = storyStageVideoAsset ? mediaReads[storyStageVideoAsset.id] : null;
   const storyStageVideoSettled = Boolean(
     shownAsset
@@ -3100,39 +3137,37 @@ export function JourneyStory({
   function claimStoryMediaGesture(currentId: string) {
     // The stage owns the paint and pointer. Story only reclaims its latest
     // semantic request when a horizontal gesture actually takes ownership.
-    setIncomingAssetId(null);
+    setIncomingPageId(null);
     setPendingMediaTarget(null);
-    requestedMediaRef.current = currentId;
-    // #555: the gesture's base is the page on screen; the current entry keeps
-    // it when it paints that asset (the opening stays the opening).
-    setEntryIndex(storyCursorEntryForAssetId(storyCursor, currentId, entryIndex));
-    setShownAssetId(currentId);
+    requestedPageRef.current = currentId;
+    // #555: the gesture's base is the page on screen, and a page names its entry.
+    setEntryIndex(storyCursorEntryForPageId(storyCursor, currentId, entryIndex));
+    setShownPageId(currentId);
   }
 
   function commitStoryMediaGesture(targetId: string) {
-    if (!scopedMediaIndex.byId.has(targetId)) return;
-    // #555: a swipe target is a page neighbour of the settled entry, so it is
-    // resolved like every other asset id: the current entry when it paints it,
-    // otherwise the canonical entry. It is never the opening.
-    const index = storyCursorEntryForAssetId(storyCursor, targetId, entryIndex);
+    // #555: a swipe target is a stage page, so it names its own entry, also when
+    // it paints the same asset as the page it leaves (opening -> canonical cover).
+    const index = storyCursor.entryByPageId.get(targetId);
+    if (index === undefined) return;
     // A swipe is the latest navigation direction for the warm window too.
     // #76 P1: a swipe follows the Journey cursor, so the direction is measured
     // against the next media across the whole Journey.
-    const from = storyCursorEntryForAssetId(storyCursor, shownAssetId, entryIndex);
+    const from = storyCursorEntryForPageId(storyCursor, shownPageId, entryIndex);
     mediaNavigationDirection.current = storyCursorNeighbourEntry(storyCursor, from, 1, true) === index ? 1 : -1;
-    requestedMediaRef.current = targetId;
+    requestedPageRef.current = targetId;
     setPendingMediaTarget(null);
-    setIncomingAssetId(null);
+    setIncomingPageId(null);
     setEntryIndex(index);
-    setShownAssetId(targetId);
+    setShownPageId(targetId);
   }
 
-  function prepareStoryMediaGestureTarget(targetId: string) {
-    const asset = scopedMediaIndex.byId.get(targetId);
+  function prepareStoryMediaGestureTarget(targetPageId: string) {
+    const asset = assetOfPage(targetPageId);
     if (!asset) return;
-    const read = mediaReads[targetId];
-    if (read?.status !== "ready") loadMediaRead(targetId);
-    else if (asset.mimeType.startsWith("image/")) decodeRegistryRef.current.ensure(targetId, read.url);
+    const read = mediaReads[asset.id];
+    if (read?.status !== "ready") loadMediaRead(asset.id);
+    else if (asset.mimeType.startsWith("image/")) decodeRegistryRef.current.ensure(asset.id, read.url);
   }
 
   function openFullscreenAfterStoryGesture() {
@@ -3232,8 +3267,8 @@ export function JourneyStory({
         );
         if (uploadedEntryIndex !== null) {
           setEntryIndex(uploadedEntryIndex);
-          setShownAssetId(refreshedCursor.entries[uploadedEntryIndex].asset.id);
-          setIncomingAssetId(null);
+          setShownPageId(refreshedCursor.pageIds[uploadedEntryIndex]);
+          setIncomingPageId(null);
           setPendingMediaTarget(null);
         } else {
           refreshFailed = true;
@@ -3391,12 +3426,11 @@ export function JourneyStory({
             } else {
               // #555: the selection names canonical media; its entry is the
               // canonical one in the refreshed cursor, never the opening.
-              setEntryIndex(storyCursorEntryForMediaIndex(
-                storyCursorForJourney(refreshedJourney, journeyCoverOpeningActive),
-                selection.assetIndex,
-              ));
-              setShownAssetId(selection.assetId);
-              setIncomingAssetId(null);
+              const refreshedCursor = storyCursorForJourney(refreshedJourney, journeyCoverOpeningActive);
+              const selectedEntry = storyCursorEntryForMediaIndex(refreshedCursor, selection.assetIndex);
+              setEntryIndex(selectedEntry);
+              setShownPageId(refreshedCursor.pageIds[selectedEntry] ?? selection.assetId);
+              setIncomingPageId(null);
               setPendingMediaTarget(null);
             }
           }
@@ -3551,8 +3585,8 @@ export function JourneyStory({
       setNoteBeatRoutePointId(null);
       setCursorMediaIndex(storyRoutePointEntryIndex(scopedMedia, routePointId, routePointIdsInOrder));
     }
-    setShownAssetId(null);
-    setIncomingAssetId(null);
+    setShownPageId(null);
+    setIncomingPageId(null);
     setPendingMediaTarget(null);
     setLocalMediaOrder(null);
     setOverview(false);
@@ -3581,7 +3615,7 @@ export function JourneyStory({
     // #555: the anchor is the latest requested entry. While the cursor is on
     // the Journey cover opening its asset resolves to the opening itself, so
     // Previous goes nowhere and Next enters canonical entry 0.
-    const anchorIndex = storyCursorEntryForAssetId(storyCursor, requestedMediaRef.current, entryIndex);
+    const anchorIndex = storyCursorEntryForPageId(storyCursor, requestedPageRef.current, entryIndex);
     const index = storyCursorNeighbourEntry(storyCursor, anchorIndex, direction, wrap);
     if (index !== null) navigateToEntry(index, direction);
   }
@@ -3652,20 +3686,21 @@ export function JourneyStory({
     if (index < 0 || index >= storyCursor.entries.length) return;
     cancelPendingMediaDragSettle();
     const target = storyCursor.entries[index]?.asset;
-    if (!target) return;
+    const targetPageId = storyCursor.pageIds[index];
+    if (!target || !targetPageId) return;
     // #76 P1 + #595: the cursor is back on media, so the media-free Route Point
     // stops being the presented chapter.
     setNoteBeatRoutePointId(null);
     mediaNavigationDirection.current = direction
-      ?? (index < storyCursorEntryForAssetId(storyCursor, shownAssetId, entryIndex) ? -1 : 1);
-    requestedMediaRef.current = target.id;
+      ?? (index < storyCursorEntryForPageId(storyCursor, shownPageId, entryIndex) ? -1 : 1);
+    requestedPageRef.current = targetPageId;
     // Reversing an in-flight transition back to the visible base needs no new
-    // incoming layer (it would equal shownAssetId and never emit animationend).
-    // #555: this is also the Journey cover opening -> canonical entry 0 step
-    // when that entry is the cover itself: the same picture, its own context.
-    if (target.id === shownAssetId) {
+    // incoming layer (it would equal shownPageId and never emit animationend).
+    // #555: compared by PAGE, so the opening -> canonical cover step (one
+    // asset, two pages) is a real page change, not this reversal.
+    if (targetPageId === shownPageId) {
       setPendingMediaTarget(null);
-      setIncomingAssetId(null);
+      setIncomingPageId(null);
       setEntryIndex(index);
       return;
     }
@@ -3682,20 +3717,20 @@ export function JourneyStory({
     );
     if (disposition === "failed") {
       setPendingMediaTarget(null);
-      setIncomingAssetId(null);
-      setShownAssetId(target.id);
+      setIncomingPageId(null);
+      setShownPageId(targetPageId);
       setEntryIndex(index);
     } else if (disposition === "ready") {
       setPendingMediaTarget(null);
-      setIncomingAssetId(target.id);
+      setIncomingPageId(targetPageId);
       setEntryIndex(index);
     } else {
       // Review P1: even when the read is already ready, a pending target
       // must start its decode; otherwise it can sit forever with a decoded
       // image that never triggers a re-check.
-      setPendingMediaTarget(target.id);
-      setIncomingAssetId(null);
-      setEntryIndex(storyCursorEntryForAssetId(storyCursor, shownAssetId, entryIndex));
+      setPendingMediaTarget(targetPageId);
+      setIncomingPageId(null);
+      setEntryIndex(storyCursorEntryForPageId(storyCursor, shownPageId, entryIndex));
       if (targetRead?.status !== "ready") {
         loadMediaRead(target.id);
       } else if (target.mimeType.startsWith("image/")) {
@@ -3719,9 +3754,10 @@ export function JourneyStory({
       update: () => {
         if (targetRead?.status === "ready") {
           setPendingMediaTarget(null);
-          setIncomingAssetId(null);
-          setCursorMediaIndex(index);
-          setShownAssetId(target.id);
+          setIncomingPageId(null);
+          const targetEntry = storyCursorEntryForMediaIndex(storyCursor, index);
+          setEntryIndex(targetEntry);
+          setShownPageId(storyCursor.pageIds[targetEntry] ?? target.id);
           if (target.mimeType.startsWith("image/")) {
             decodeRegistryRef.current.ensure(target.id, targetRead.url);
           }
@@ -3741,7 +3777,19 @@ export function JourneyStory({
       const tile = dialogRef.current?.querySelector<HTMLButtonElement>(
         `:is(.journey-story__media-grid, .story-media-organizer__grid) [data-media-tile-index="${assetIndex}"]`,
       );
-      if (tile) {
+      if (tile && onJourneyCoverOpening) {
+        // #555: the viewer opened the overview from the Journey cover opening
+        // and picked nothing, so closing it returns to the opening. Picking a
+        // tile (`selectMediaIndex`) is newer intent and moves the cursor there.
+        runSharedElementMorph({
+          source: tile.querySelector<HTMLElement>("img") ?? tile,
+          name: `story-media-${activeAsset?.id ?? "current"}`,
+          update: () => setOverview(false),
+          resolveTarget: () => dialogRef.current?.querySelector<HTMLElement>(
+            ".journey-story__media [data-shared-media-id]",
+          ) ?? null,
+        });
+      } else if (tile) {
         selectMediaIndex(assetIndex, tile);
       } else {
         setOverview(false);
@@ -3821,8 +3869,8 @@ export function JourneyStory({
         if (refreshedJourney) {
           const refreshedScoped = scopedVisualMedia(refreshedJourney);
           setEntryIndex((current) => storyCursorClampEntry(storyCursorRef.current, Math.min(current, refreshedScoped.length)));
-          setShownAssetId(null);
-          setIncomingAssetId(null);
+          setShownPageId(null);
+          setIncomingPageId(null);
           setPendingMediaTarget(null);
         }
       }
@@ -3981,8 +4029,8 @@ export function JourneyStory({
       : fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
     if (willPlay && gestureVideo && autoplayVideoCandidate && !transferringVideo) {
       const currentVideoIsSettled = activeAsset?.mimeType.startsWith("video/")
-        && (shownAssetId ?? activeAsset.id) === activeAsset.id
-        && (targetStage === "fullscreen" ? stagePlaybackReady.fullscreen : activeStagePlaybackReadyId) === activeAsset.id;
+        && (shownPageId ?? activePageId) === activePageId
+        && (targetStage === "fullscreen" ? stagePlaybackReady.fullscreen : activeStagePlaybackReadyId) === activePageId;
       if (currentVideoIsSettled) {
         // Keep the first video.play() inside the initiating click/tap/keyboard
         // activation. The effect remains authoritative for synchronization.
@@ -4342,7 +4390,7 @@ export function JourneyStory({
             data-media-requested={/* #489: the media the viewer last asked for,
               cold targets included. Without it a stage that has silently
               dropped a navigation looks identical to one nobody navigated. */
-              pendingMediaId ?? incomingAssetId ?? undefined}
+              assetIdOfPage(pendingPageId ?? incomingPageId) ?? undefined}
           >
             {scopedMedia.length > 0 && !mobileLayout && desktopEditing ? (
               <button
@@ -4436,20 +4484,21 @@ export function JourneyStory({
               gestureEnabled={!mutationPending && !videoHandoffRef.current}
               mobileLayout={mobileLayout}
               media={stageMedia}
-              currentId={shownAsset?.id ?? null}
+              currentId={shownPageId ?? activePageId}
               coverId={cover?.id ?? null}
-              incomingId={incoming?.id ?? null}
-              pendingId={pendingMediaId}
+              incomingId={stageIncomingPageId}
+              pageAssetIds={storyCursor.pageAssetIds}
+              pendingId={pendingPageId}
               direction={mediaNavigationDirection.current}
-              reads={mediaReads}
-              warmIds={fullscreen ? undefined : warmDecodeIds}
+              reads={stageReads}
+              warmIds={fullscreen ? undefined : warmDecodePageIds}
               // #76 P1: the painted stack does NOT wrap, even though the cursor
               // does. Wrapping here makes the stage paint the Journey's last
               // media as the previous page of its first, so a settled swipe no
               // longer finds its neighbour among the painted pages. The cursor
               // wraps in `navigateMediaStep` instead.
               wrap={false}
-              videoAssetId={storyStageVideoAsset?.id ?? null}
+              videoAssetId={storyStageVideoPageId}
               onSettled={settleIncoming}
               onMediaError={reportStageMediaError}
               onPlaybackReady={inlinePlaybackReady}
@@ -4787,7 +4836,7 @@ export function JourneyStory({
             {mobileLayout && !overview ? <StoryMediaRail
               media={scopedMedia}
               currentId={shownAsset?.id ?? null}
-              requestedId={pendingMediaId ?? incomingAssetId}
+              requestedId={assetIdOfPage(pendingPageId ?? incomingPageId)}
               reads={mediaReads}
               disabled={mutationPending}
               onSelect={(index) => navigateToEntry(storyCursorEntryForMediaIndex(storyCursor, index))}
@@ -5130,17 +5179,18 @@ export function JourneyStory({
             mobileLayout={mobileLayout}
             fullscreen
             media={stageMedia}
-            currentId={shownAsset?.id ?? null}
+            currentId={shownPageId ?? activePageId}
             coverId={cover?.id ?? null}
-            incomingId={incoming?.id ?? null}
-            pendingId={pendingMediaId}
+            incomingId={stageIncomingPageId}
+            pageAssetIds={storyCursor.pageAssetIds}
+            pendingId={pendingPageId}
             direction={mediaNavigationDirection.current}
-            reads={mediaReads}
-            warmIds={fullscreen ? warmDecodeIds : undefined}
+            reads={stageReads}
+            warmIds={fullscreen ? warmDecodePageIds : undefined}
             // #76 P1: the immersive stage paints the same bounded stack as the
             // inline stage for the same reason; only the cursor wraps.
             wrap={false}
-            videoAssetId={storyStageVideoAsset?.id ?? null}
+            videoAssetId={storyStageVideoPageId}
             onSettled={settleIncoming}
             onMediaError={reportStageMediaError}
             onPlaybackReady={fullscreenPlaybackReady}
@@ -5191,7 +5241,9 @@ export function JourneyStory({
                   ? <IconPlayerPause size={22} stroke={1.35} aria-hidden="true" />
                   : <IconPlayerPlay size={22} stroke={1.35} aria-hidden="true" />}
               </button>
-              {mobileLayout ? <span>{assetIndex + 1} / {scopedMedia.length}</span> : null}
+              {/* #555: the Journey cover opening is not a numbered media step, so
+                  the canonical "i / n" count starts at 1 on canonical entry 0. */}
+              {mobileLayout && !onJourneyCoverOpening ? <span data-story-media-counter>{assetIndex + 1} / {scopedMedia.length}</span> : null}
               {mobileLayout || videoNavigationVisible ? <button
                 type="button"
                 data-video-step="next"

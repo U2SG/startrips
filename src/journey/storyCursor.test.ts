@@ -4,7 +4,10 @@ import {
   storyAutoplayAdvance,
   storyAutoplayVideoCandidate,
   storyCursorClampEntry,
-  storyCursorEntryForAssetId,
+  storyCursorEntryForPageId,
+  storyCursorAssetIdForPage,
+  storyCursorPageId,
+  storyAutoplayVideoCandidateIndex,
   storyCursorEntryForMediaIndex,
   storyCursorForJourney,
   storyCursorMediaIndex,
@@ -13,7 +16,7 @@ import {
   storyInitialCursorSelection,
   storyInitialMediaSelection,
   storyObservedAssetId,
-  storyStageMedia,
+  storyStagePages,
   storyStepAvailability,
   storyUploadedEntryIndex,
 } from "./storyMediaPolicy";
@@ -199,20 +202,31 @@ describe("Story cursor stepping with the one-way opening (#555)", () => {
   });
 });
 
-describe("asset id -> cursor position (#555)", () => {
+describe("Story stage page identity (#555)", () => {
+  const OPENING = "journey-cover:journey-1:b1";
   const cursor = storyCursorForJourney(journey, true);
 
-  it("prefers the current entry when it paints the asset, otherwise the canonical entry", () => {
-    expect(storyCursorEntryForAssetId(cursor, "b1", 0)).toBe(0);
-    expect(storyCursorEntryForAssetId(cursor, "b1", 2)).toBe(2);
-    expect(storyCursorEntryForAssetId(cursor, "b1", 4)).toBe(2);
-    expect(storyCursorEntryForAssetId(cursor, "c1", 0)).toBe(4);
+  it("gives the opening and the canonical cover two pages of one asset", () => {
+    expect(cursor.pageIds).toEqual([OPENING, "a1", "b1", "b2", "c1"]);
+    expect(storyCursorPageId(cursor.entries[0])).toBe(OPENING);
+    expect(storyCursorPageId(cursor.entries[2])).toBe("b1");
+    expect([...cursor.pageAssetIds]).toEqual([[OPENING, "b1"]]);
+    expect(storyCursorAssetIdForPage(cursor, OPENING)).toBe("b1");
+    expect(storyCursorAssetIdForPage(cursor, "b1")).toBe("b1");
+    // A canonical-only cursor needs no mapping: every page id is its asset id.
+    expect(storyCursorForJourney(journey, false).pageAssetIds.size).toBe(0);
   });
 
-  it("keeps an unknown id on the current position without moving anyone onto the opening", () => {
-    expect(storyCursorEntryForAssetId(cursor, "missing", 0)).toBe(0);
-    expect(storyCursorEntryForAssetId(cursor, null, 3)).toBe(3);
-    expect(storyCursorEntryForAssetId(cursor, "missing", 9)).toBe(4);
+  it("turns a page id back into exactly its own entry", () => {
+    expect(storyCursorEntryForPageId(cursor, OPENING, 3)).toBe(0);
+    expect(storyCursorEntryForPageId(cursor, "b1", 0)).toBe(2);
+    expect(storyCursorEntryForPageId(cursor, "c1", 0)).toBe(4);
+  });
+
+  it("keeps an unknown page on the current position without moving anyone onto the opening", () => {
+    expect(storyCursorEntryForPageId(cursor, "missing", 0)).toBe(0);
+    expect(storyCursorEntryForPageId(cursor, null, 3)).toBe(3);
+    expect(storyCursorEntryForPageId(cursor, "missing", 9)).toBe(4);
     expect(storyCursorClampEntry(cursor, -1)).toBe(1);
   });
 
@@ -228,40 +242,61 @@ describe("asset id -> cursor position (#555)", () => {
     expect(storyUploadedEntryIndex(refreshed, ["missing", "c1"])).toBe(5);
     expect(storyUploadedEntryIndex(refreshed, ["missing"])).toBeNull();
   });
+
+  it("names the page of the autoplay video candidate, not just its asset", () => {
+    const withVideo = storyCursorForJourney({
+      ...journey, media: [...journey.media, asset("v1", "C", 6, "video/mp4")],
+    }, true);
+    const index = storyAutoplayVideoCandidateIndex(withVideo.assets, 0, withVideo.firstCanonicalEntry);
+    expect(index).toBe(5);
+    expect(withVideo.pageIds[index!]).toBe("v1");
+  });
 });
 
 describe("Journey context on the opening (#555)", () => {
   const cover = { ...asset("b1", "B", 1) };
+  const cursor = storyCursorForJourney(journey, true);
 
   it("names no chapter on the opening, and the cover's Route Point on its own entry", () => {
     expect(storyActiveChapterRoutePointId(null, cover, true, null, true)).toBeNull();
     expect(storyActiveChapterRoutePointId(null, cover, true, null, false)).toBe("B");
   });
 
-  it("publishes no asset for the opening, so closing Story does not move the map to the cover's Route Point", () => {
-    expect(storyObservedAssetId("b1", null, "b1")).toBeNull();
+  it("publishes no asset for the opening page, so closing Story does not move the map to the cover's Route Point", () => {
+    expect(storyObservedAssetId(cursor, "journey-cover:journey-1:b1", null)).toBeNull();
+    // The canonical cover page is the same asset and does speak for its Route Point.
+    expect(storyObservedAssetId(cursor, "b1", null)).toBe("b1");
     // Mid-handoff the foreground can already be the next page; that one speaks.
-    expect(storyObservedAssetId("a1", null, "b1")).toBe("a1");
-    expect(storyObservedAssetId("b1", null, null)).toBe("b1");
-    expect(storyObservedAssetId("b1", "A", null)).toBeNull();
+    expect(storyObservedAssetId(cursor, "a1", null)).toBe("a1");
+    expect(storyObservedAssetId(cursor, "b1", "A")).toBeNull();
+    expect(storyObservedAssetId(cursor, null, null)).toBeNull();
   });
 });
 
-describe("storyStageMedia (#555)", () => {
+describe("storyStagePages (#555)", () => {
   it("paints the opening with no previous page and canonical entry 0 next", () => {
     const cursor = storyCursorForJourney(journey, true);
-    const canonical = playbackStoryMedia(journey);
-    expect(storyStageMedia(cursor, 0, canonical).map((item) => item.id)).toEqual(["b1", "a1", "b2", "c1"]);
-    expect(storyStageMedia(cursor, 1, canonical)).toBe(canonical);
+    const onOpening = storyStagePages(cursor, 0);
+    expect(onOpening.map((item) => item.id)).toEqual(["journey-cover:journey-1:b1", "a1", "b1", "b2", "c1"]);
+    // The opening page keeps everything about its asset except its identity.
+    expect(onOpening[0]).toMatchObject({ mimeType: "image/jpeg", routePointId: "B", fileName: "b1.bin" });
+    // Off the opening the stage cannot reach back to it.
+    expect(storyStagePages(cursor, 1).map((item) => item.id)).toEqual(["a1", "b1", "b2", "c1"]);
   });
 
-  it("keeps asset ids unique when the cover is canonical entry 0", () => {
+  it("returns the canonical media itself when there is no opening", () => {
+    const cursor = storyCursorForJourney(journey, false);
+    expect(storyStagePages(cursor, 0)).toBe(cursor.assets);
+  });
+
+  it("holds the cover twice when it is canonical entry 0, so the step off the opening is a real page", () => {
     const leading: Journey = { ...journey, coverMediaAssetId: "a1" };
     const cursor = storyCursorForJourney(leading, true);
-    const canonical = playbackStoryMedia(leading);
-    expect(storyStageMedia(cursor, 0, canonical).map((item) => item.id)).toEqual(["a1", "b1", "b2", "c1"]);
-    // Next from the opening is canonical entry 0: the same picture, its own context.
+    const pages = storyStagePages(cursor, 0);
+    expect(pages.map((item) => item.id)).toEqual(["journey-cover:journey-1:a1", "a1", "b1", "b2", "c1"]);
+    expect(storyCursorAssetIdForPage(cursor, pages[0].id)).toBe(storyCursorAssetIdForPage(cursor, pages[1].id));
     expect(storyCursorNeighbourEntry(cursor, 0, 1, true)).toBe(1);
+    expect(cursor.pageIds[1]).not.toBe(cursor.pageIds[0]);
     expect(cursor.entries[1]).toMatchObject({ role: "media", routePointId: "A" });
   });
 });

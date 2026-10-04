@@ -2966,7 +2966,10 @@ export function LivingAtlasApp({
         const direct = [...stage.querySelectorAll<HTMLElement>("[data-shared-media-id]")]
           .find((element) => element.dataset.sharedMediaId === sharedAssetId);
         if (direct) return direct;
+        // #555: one asset can be two Story pages (the Journey cover opening and
+        // the canonical cover); the current page is the destination.
         return [...stage.querySelectorAll<HTMLElement>("[data-media-page-id]")]
+          .sort((a, b) => Number(b.dataset.mediaPage === "current") - Number(a.dataset.mediaPage === "current"))
           .find((element) => element.dataset.mediaPageId === sharedAssetId
             && element.dataset.mediaPageReady === "true") ?? null;
       },
@@ -2978,6 +2981,7 @@ export function LivingAtlasApp({
         if (!sharedAssetId) return null;
         const stage = document.querySelector<HTMLElement>(".journey-story .journey-story__media");
         return [...stage?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? []]
+          .sort((a, b) => Number(b.dataset.mediaPage === "current") - Number(a.dataset.mediaPage === "current"))
           .find((element) => element.dataset.mediaPageId === sharedAssetId) ?? null;
       },
       // Signed reads/decode settle after the opening commit. Keep the source
