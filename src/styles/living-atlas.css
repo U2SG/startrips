@@ -5645,6 +5645,20 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   100% { border-color: var(--atlas-line); }
 }
 
+/* Entrance-only motion for anchored menus and bottom sheets. Consumers use
+   fill mode `backwards` so a finished entrance never pins `transform`. */
+@keyframes atlasMenuIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+}
+
+@keyframes atlasSheetIn {
+  from { transform: translateY(100%); }
+}
+
+@keyframes atlasBackdropIn {
+  from { opacity: 0; }
+}
+
 /* ML-11 Staged UI Assembly: panel children enter in hierarchy order. */
 .motion-staged > * {
   animation: motionStageIn var(--motion-panel, 560ms) var(--motion-ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
@@ -7102,6 +7116,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     border: 0;
     background: rgba(0, 0, 0, 0.22);
     pointer-events: auto;
+    animation: atlasBackdropIn var(--motion-ui) ease-out backwards;
   }
 
   .journey-story__mobile-media-sheet {
@@ -7119,6 +7134,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     box-shadow: 0 22px 54px rgba(0, 0, 0, 0.48);
     backdrop-filter: blur(18px);
     pointer-events: auto;
+    animation: atlasSheetIn var(--motion-ui) var(--motion-ease-out) backwards;
   }
 
   .journey-story__mobile-media-sheet > div:first-child {
@@ -7969,6 +7985,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   border: 0;
   background: rgba(0, 5, 6, 0.45);
   backdrop-filter: blur(2px);
+  animation: atlasBackdropIn var(--motion-ui) ease-out backwards;
 }
 
 .mobile-v2__sheet {
@@ -7983,6 +8000,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   background: linear-gradient(180deg, rgba(5, 22, 22, 0.985), rgba(1, 8, 9, 0.995));
   box-shadow: 0 -24px 60px rgba(0, 0, 0, 0.42);
   overscroll-behavior: contain;
+  animation: atlasSheetIn var(--motion-ui) var(--motion-ease-out) backwards;
 }
 
 .mobile-v2__sheet-handle {
@@ -8333,6 +8351,14 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* The Story dialog is portaled to document.body, outside `.living-atlas`. */
+@media (prefers-reduced-motion: reduce) {
+  .journey-story__mobile-media-sheet,
+  .journey-story__mobile-media-sheet-backdrop {
+    animation: none;
   }
 }
 
@@ -9307,6 +9333,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   border: 1px solid var(--atlas-line);
   background: rgba(1, 9, 10, 0.98);
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.55);
+  transform-origin: top center;
+  animation: atlasMenuIn 180ms var(--motion-ease-out) backwards;
 }
 
 .journey-composer--focused .journey-composer__more-menu button {

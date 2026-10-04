@@ -1081,7 +1081,11 @@
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
   backdrop-filter: blur(18px);
 }
-.account-dock.is-open .account-dock__panel { display: grid; }
+.account-dock.is-open .account-dock__panel {
+  display: grid;
+  transform-origin: top right;
+  animation: atlasMenuIn 180ms var(--motion-ease-out) backwards;
+}
 .account-dock.is-cinematic-hidden {
   visibility: hidden;
   opacity: 0;
@@ -1130,6 +1134,7 @@ body:has(.living-atlas) .account-dock button {
   border: 0;
   background: rgba(0, 5, 6, 0.48);
   backdrop-filter: blur(2px);
+  animation: atlasBackdropIn var(--motion-ui) ease-out backwards;
 }
 
 .account-sheet {
@@ -1148,6 +1153,7 @@ body:has(.living-atlas) .account-dock button {
   box-shadow: 0 -24px 60px rgba(0, 0, 0, 0.42);
   font-family: var(--archive-sans, Inter, ui-sans-serif, system-ui, sans-serif);
   overscroll-behavior: contain;
+  animation: atlasSheetIn var(--motion-ui) var(--motion-ease-out) backwards;
 }
 
 .account-sheet__handle {
@@ -1324,6 +1330,14 @@ body:has(.living-atlas) .account-dock button {
 
 @media (prefers-reduced-motion: reduce) {
   .auth-message {
+    animation: none;
+  }
+
+  /* The account surfaces render outside `.living-atlas`, so its global
+     reduced-motion rule does not reach them. */
+  .account-dock.is-open .account-dock__panel,
+  .account-sheet__backdrop,
+  .account-sheet {
     animation: none;
   }
 }
