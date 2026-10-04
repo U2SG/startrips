@@ -5143,9 +5143,11 @@
   transition: opacity var(--motion-instant, 120ms) ease;
 }
 
-.journey-light-effect-list button:hover {
-  border-color: color-mix(in srgb, var(--journey-light-color) 70%, var(--atlas-line));
-  transform: translateY(-2px);
+@media (hover: hover) and (pointer: fine) {
+  .journey-light-effect-list button:hover {
+    border-color: color-mix(in srgb, var(--journey-light-color) 70%, var(--atlas-line));
+    transform: translateY(-2px);
+  }
 }
 
 .journey-light-effect-list button.is-selected {
@@ -5155,9 +5157,14 @@
     0 0 22px color-mix(in srgb, var(--journey-light-color) 25%, transparent);
 }
 
-.journey-light-effect-list button.is-selected::before,
-.journey-light-effect-list button:hover::before {
+.journey-light-effect-list button.is-selected::before {
   opacity: 0.42;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-light-effect-list button:hover::before {
+    opacity: 0.42;
+  }
 }
 
 .journey-light-effect__orb,
