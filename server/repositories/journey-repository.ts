@@ -408,23 +408,33 @@ export async function updateJourneyForAtlas(
         });
       }
     }
-    const savedRoutePoints = await transaction
-      .select({ id: journeyRoutePoints.id, lat: journeyRoutePoints.latitude, lon: journeyRoutePoints.longitude })
-      .from(journeyRoutePoints)
-      .where(eq(journeyRoutePoints.journeyId, journey.id))
-      .orderBy(asc(journeyRoutePoints.sortOrder));
-    const currentSources = new Set(savedRoutePoints.slice(0, -1).map((_, index) => (
-      routeSegmentSourceKey(savedRoutePoints, index)
-    )));
-    const retainedSegments = journey.routeSegments.filter((segment) => currentSources.has(segment.sourceKey));
-    if (retainedSegments.length !== journey.routeSegments.length) {
-      await transaction.update(journeys)
-        .set({ routeSegments: retainedSegments })
-        .where(eq(journeys.id, journey.id));
-    }
+    await pruneStaleRouteSegments(transaction, journey.id, journey.routeSegments);
     return true;
   });
   return updated ? getJourneyForAtlas(journeyId, atlasId) : undefined;
+}
+
+// Saved route geometry is keyed by the legs of the current route. Any write that
+// removes or reorders Route Points drops the segments whose leg no longer exists.
+async function pruneStaleRouteSegments(
+  transaction: Transaction,
+  journeyId: string,
+  routeSegments: (typeof journeys.$inferSelect)["routeSegments"],
+) {
+  const savedRoutePoints = await transaction
+    .select({ id: journeyRoutePoints.id, lat: journeyRoutePoints.latitude, lon: journeyRoutePoints.longitude })
+    .from(journeyRoutePoints)
+    .where(eq(journeyRoutePoints.journeyId, journeyId))
+    .orderBy(asc(journeyRoutePoints.sortOrder));
+  const currentSources = new Set(savedRoutePoints.slice(0, -1).map((_, index) => (
+    routeSegmentSourceKey(savedRoutePoints, index)
+  )));
+  const retainedSegments = routeSegments.filter((segment) => currentSources.has(segment.sourceKey));
+  if (retainedSegments.length !== routeSegments.length) {
+    await transaction.update(journeys)
+      .set({ routeSegments: retainedSegments })
+      .where(eq(journeys.id, journeyId));
+  }
 }
 
 export const ROUTE_POINT_BATCH_UNDO_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -681,10 +691,13 @@ export async function applyJourneyRoutePointBatchForAtlas(
 
     const pointMappings = input.points.map((point) => ({ candidateId: point.candidateId, routePointId: randomUUID() }));
     const routePointIdByCandidate = new Map(pointMappings.map((mapping) => [mapping.candidateId, mapping.routePointId] as const));
+    const nextRoutePointSortOrder = routePoints.reduce((max, point) => Math.max(max, point.sortOrder), -1) + 1;
     const createdPoints = input.points.map((point, index) => ({
       id: routePointIdByCandidate.get(point.candidateId)!,
       journeyId,
-      sortOrder: routePoints.length + index,
+      // After a partial undo the surviving orders can have gaps, so allocate
+      // after the highest order rather than at the count.
+      sortOrder: nextRoutePointSortOrder + index,
       latitude: point.latitude,
       longitude: point.longitude,
       label: point.label,
@@ -846,6 +859,11 @@ export async function undoJourneyRoutePointBatchForAtlas(
         eq(journeyRoutePoints.journeyId, journeyId),
       ));
       removedRoutePointIds.push(point.id);
+    }
+    if (removedRoutePointIds.length > 0) {
+      const [segments] = await transaction.select({ routeSegments: journeys.routeSegments })
+        .from(journeys).where(eq(journeys.id, journeyId));
+      if (segments) await pruneStaleRouteSegments(transaction, journeyId, segments.routeSegments);
     }
 
     const changed = restoredAssetIds.length > 0 || removedRoutePointIds.length > 0;

@@ -4,6 +4,7 @@ import { count, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   atlases,
+  journeys,
   journeyRoutePointBatchOperations,
   journeyRoutePoints,
   mediaAssets,
@@ -20,7 +21,9 @@ import {
   undoJourneyRoutePointBatchForAtlas,
   updateJourneyForAtlas,
 } from "../repositories/journey-repository";
+import { writeRouteSegment } from "../repositories/route-segment-repository";
 import { moveJourneyMediaForAtlas, undoJourneyMediaMoveForAtlas } from "../services/journey-media";
+import { routeSegmentSourceKey } from "../../src/journey/journeyModel";
 
 const atlasIds: string[] = [];
 let atlasA = "";
@@ -123,7 +126,7 @@ function batch(
       isStop: true,
       occurredAt: new Date("2026-09-03T00:00:00Z"),
     }],
-    attachments: [{ ...attachment, candidateId }],
+    attachments: [{ intentionalReuse: false, ...attachment, candidateId }],
   };
 }
 
@@ -437,5 +440,68 @@ describe("Route Point batch apply and undo", () => {
     expect(partialRestored.routePointId).toBeNull();
     expect((await db.select().from(journeyRoutePoints)
       .where(eq(journeyRoutePoints.id, partialPointId!)))).toHaveLength(1);
+  });
+
+  it("allocates new points after the highest surviving order once a partial undo leaves a gap", async () => {
+    const gapJourney = await journey(atlasA, "Order gap");
+    const first = await asset({ journeyId: gapJourney.id, fileName: "first.jpg" });
+    const second = await asset({ journeyId: gapJourney.id, sortOrder: 1, fileName: "second.jpg" });
+    const twoPoints = batch("gap-apply", gapJourney.revision, { assetId: first.id }, "gap-first");
+    const applied = await applyJourneyRoutePointBatchForAtlas(gapJourney.id, atlasA, {
+      ...twoPoints,
+      points: [...twoPoints.points, { ...twoPoints.points[0], candidateId: "gap-second", latitude: 22.3 }],
+      attachments: [...twoPoints.attachments, { intentionalReuse: false, assetId: second.id, candidateId: "gap-second" }],
+    });
+    const secondPointId = applied?.receipt?.pointMappings
+      .find((mapping) => mapping.candidateId === "gap-second")?.routePointId;
+    expect(secondPointId).toBeTruthy();
+    // Later media keeps the second created point alive, so undo removes only the
+    // first one and leaves orders 0, 1, 3.
+    await asset({ journeyId: gapJourney.id, routePointId: secondPointId!, sortOrder: 50, fileName: "later.jpg" });
+    const undo = await undoJourneyRoutePointBatchForAtlas(gapJourney.id, atlasA, "gap-apply");
+    expect(undo?.outcome).toMatchObject({ status: "partial" });
+    const afterUndo = await getJourneyForAtlas(gapJourney.id, atlasA);
+    expect(afterUndo?.routePoints.map((point) => point.sortOrder)).toEqual([0, 1, 3]);
+
+    const third = await asset({ journeyId: gapJourney.id, sortOrder: 2, fileName: "third.jpg" });
+    const next = await applyJourneyRoutePointBatchForAtlas(
+      gapJourney.id,
+      atlasA,
+      batch("gap-next", afterUndo!.revision, { assetId: third.id }, "gap-third"),
+    );
+    expect(next?.receipt?.createdPoints.map((point) => point.sortOrder)).toEqual([4]);
+  });
+
+  it("drops saved route geometry for a leg the undo removes", async () => {
+    const segmentJourney = await journey(atlasA, "Segment undo");
+    const placed = await asset({ journeyId: segmentJourney.id });
+    const applied = await applyJourneyRoutePointBatchForAtlas(
+      segmentJourney.id,
+      atlasA,
+      batch("segment-apply", segmentJourney.revision, { assetId: placed.id }),
+    );
+    const createdPointId = applied?.receipt?.pointMappings[0]?.routePointId;
+    expect(createdPointId).toBeTruthy();
+    const points = await db
+      .select({ id: journeyRoutePoints.id, lat: journeyRoutePoints.latitude, lon: journeyRoutePoints.longitude })
+      .from(journeyRoutePoints)
+      .where(eq(journeyRoutePoints.journeyId, segmentJourney.id))
+      .orderBy(journeyRoutePoints.sortOrder);
+    // Saving a leg's geometry does not bump the Journey revision, so undo is
+    // still accepted afterwards.
+    await writeRouteSegment(segmentJourney.id, atlasA, points[1].id, createdPointId!, {
+      sourceKey: routeSegmentSourceKey(points, 1)!,
+      expectedRevision: 0,
+      action: "none",
+    });
+    const [withSegment] = await db.select({ routeSegments: journeys.routeSegments })
+      .from(journeys).where(eq(journeys.id, segmentJourney.id));
+    expect(withSegment.routeSegments).toHaveLength(1);
+
+    const undo = await undoJourneyRoutePointBatchForAtlas(segmentJourney.id, atlasA, "segment-apply");
+    expect(undo?.outcome).toMatchObject({ status: "undone", removedRoutePointIds: [createdPointId] });
+    const [afterUndo] = await db.select({ routeSegments: journeys.routeSegments })
+      .from(journeys).where(eq(journeys.id, segmentJourney.id));
+    expect(afterUndo.routeSegments).toEqual([]);
   });
 });
