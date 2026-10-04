@@ -99,6 +99,7 @@ import {
 import {
   canTrackGlobePointer,
   clampGlobeZoom,
+  GLOBE_WHEEL_ZOOM_SPEED,
   getGlobeInertiaSpeedLimit,
   isGlobeDrag,
   isPrimaryPointerActivation,
@@ -120,8 +121,9 @@ import {
 import {
   DAY_NIGHT_REFRESH_MS,
   dayNightBrightness,
-  dayNightDiveFactor,
+  dayNightDiveCap,
   dayNightModeWeight,
+  dayNightZoomFade,
   parseSunTimeOverride,
   subsolarPoint,
   sunDirectionAt,
@@ -692,7 +694,6 @@ export const GLOBE_IDLE_ALIGNMENT_SPEED = (Math.PI * 15) / 180;
 
 export const GLOBE_DRAG_MAPPING_MODE = "projected-surface-linear";
 const GLOBE_INERTIA_FRICTION = 5.2;
-const GLOBE_WHEEL_ZOOM_SPEED = 0.0012;
 const JOURNEY_ROUTE_LINE_REFERENCE_SCALE = 1.15;
 const JOURNEY_ROUTE_LINE_SCALE_MIN = 0.72;
 const JOURNEY_ROUTE_LINE_SCALE_MAX = 2.4;
@@ -2411,7 +2412,7 @@ export function ParticleEarthScene({
     const sunDirection = new Vector3(1, 0, 0);
     const dayNightViewDirection = new Vector3();
     let sunDirectionUpdatedAt = Number.NEGATIVE_INFINITY;
-    let dayNightModeStrength = 0;
+    let dayNightEasedStrength = 0;
     let dayNightStrength = 0;
     const refreshSunDirection = (now: number) => {
       const sunDate = sunTimeOverride ?? new Date();
@@ -6060,12 +6061,17 @@ export function ParticleEarthScene({
         ) {
           refreshSunDirection(now);
         }
-        dayNightModeStrength = interpolate(
-          dayNightModeStrength,
-          dayNightModeWeight(currentMode),
+        // Wheel zoom lands a whole notch per event, so the zoom fade is eased
+        // too; the un-eased cap still guarantees 0 before the Dive blend.
+        dayNightEasedStrength = interpolate(
+          dayNightEasedStrength,
+          dayNightModeWeight(currentMode)
+            * dayNightZoomFade(semanticZoomState.snapshot.zoom),
         );
-        dayNightStrength = dayNightModeStrength
-          * dayNightDiveFactor(semanticZoomState.snapshot.zoom);
+        dayNightStrength = Math.min(
+          dayNightEasedStrength,
+          dayNightDiveCap(semanticZoomState.snapshot.zoom),
+        );
         atmosphereMaterial.uniforms.uSunDirection.value.copy(sunDirection);
         atmosphereMaterial.uniforms.uDayNightStrength.value = dayNightStrength;
         // Line materials have one opacity, so coastlines follow the night

@@ -2,7 +2,12 @@ import type { Vector3 } from "three";
 import { EARTH_DIVE_BLEND_ENTER_PROGRESS } from "./earthDive";
 import { latLonToVector3 } from "./geo";
 import type { GlobeMode } from "./globeMode";
-import { localBandProgress } from "./semanticZoom";
+import { GLOBE_WHEEL_NOTCH_DELTA_Y, GLOBE_WHEEL_ZOOM_SPEED } from "./globePointerIntent";
+import {
+  GLOBE_SEMANTIC_ZOOM_CEILING,
+  LOCAL_BAND_ENTRY_ZOOM,
+  localBandProgress,
+} from "./semanticZoom";
 
 const DEG = Math.PI / 180;
 const MS_PER_DAY = 86_400_000;
@@ -17,8 +22,21 @@ export const DAY_NIGHT_TERMINATOR_START = -0.12;
 export const DAY_NIGHT_TERMINATOR_END = 0.1;
 /** Real time only: the terminator moves 0.25° per minute, so no interpolation. */
 export const DAY_NIGHT_REFRESH_MS = 60_000;
-/** Local-band progress at which day/night has fully released the Dive. */
+/** Local-band progress at which the eased zoom fade targets 0. */
 export const DAY_NIGHT_DIVE_RELEASE_PROGRESS = EARTH_DIVE_BLEND_ENTER_PROGRESS * 0.8;
+/** Local-band progress at which the un-eased cap is 0, still before the blend. */
+export const DAY_NIGHT_DIVE_HARD_RELEASE_PROGRESS = EARTH_DIVE_BLEND_ENTER_PROGRESS - 0.01;
+/**
+ * Wheel zoom is multiplicative and unsmoothed, so the fade is measured in log
+ * zoom and spans this many standard wheel notches; easing then smooths each one.
+ */
+export const DAY_NIGHT_FADE_WHEEL_NOTCHES = 3;
+const LOCAL_BAND_SPAN = GLOBE_SEMANTIC_ZOOM_CEILING - LOCAL_BAND_ENTRY_ZOOM;
+export const DAY_NIGHT_FADE_END_ZOOM = LOCAL_BAND_ENTRY_ZOOM
+  + DAY_NIGHT_DIVE_RELEASE_PROGRESS * LOCAL_BAND_SPAN;
+export const DAY_NIGHT_FADE_START_ZOOM = DAY_NIGHT_FADE_END_ZOOM / Math.exp(
+  DAY_NIGHT_FADE_WHEEL_NOTCHES * GLOBE_WHEEL_NOTCH_DELTA_Y * GLOBE_WHEEL_ZOOM_SPEED,
+);
 
 export type SubsolarPoint = { lat: number; lon: number };
 
@@ -89,15 +107,29 @@ export function dayNightModeWeight(mode: GlobeMode) {
 }
 
 /**
- * Applied without easing, from the continuous canonical zoom. The published
- * `localProgress` cannot be used: it is 0 until the band opens with hysteresis
- * and then starts at ~0.18, which would pop the night side in one frame. The
- * same band-depth reading of the raw zoom starts at 1 exactly at the band edge
- * and is never smaller than `localProgress`, so the strength is still exactly 0
- * before the Dive blend can start and no terminator sweeps the reveal anchor.
+ * Zoom fade target, eased by the caller. It reads the continuous canonical
+ * zoom (the published `localProgress` opens with hysteresis at ~0.18 and would
+ * pop) and is linear in log zoom, so every wheel notch removes the same share
+ * and the 1 -> 0 fade spans DAY_NIGHT_FADE_WHEEL_NOTCHES notches.
  */
-export function dayNightDiveFactor(zoom: number) {
-  return 1 - clamp01(localBandProgress(zoom) / DAY_NIGHT_DIVE_RELEASE_PROGRESS);
+export function dayNightZoomFade(zoom: number) {
+  if (!(zoom > DAY_NIGHT_FADE_START_ZOOM)) return 1;
+  return 1 - clamp01(
+    Math.log(zoom / DAY_NIGHT_FADE_START_ZOOM)
+      / Math.log(DAY_NIGHT_FADE_END_ZOOM / DAY_NIGHT_FADE_START_ZOOM),
+  );
+}
+
+/**
+ * Un-eased ceiling for the eased strength. It is 1 until the fade target is
+ * already 0, so it binds only when input outruns the easing, and it is exactly
+ * 0 before the Dive blend can start: no terminator sweeps the reveal anchor.
+ */
+export function dayNightDiveCap(zoom: number) {
+  return 1 - clamp01(
+    (localBandProgress(zoom) - DAY_NIGHT_DIVE_RELEASE_PROGRESS)
+      / (DAY_NIGHT_DIVE_HARD_RELEASE_PROGRESS - DAY_NIGHT_DIVE_RELEASE_PROGRESS),
+  );
 }
 
 /** CPU mirror of the shader term: 0 on the day side, 1 deep on the night side. */
