@@ -123,6 +123,9 @@ export function JourneyStream({
   const itemRefs = useRef<(HTMLElement | null)[]>([]);
   const centersRef = useRef<number[]>([]);
   const motionRef = useRef({ offset: 0, target: 0, velocity: 0, drift: 0, placed: false });
+  // Restarts the flow loop after it has settled; anything that moves the
+  // motion state from outside the loop calls it.
+  const wakeRef = useRef<() => void>(() => {});
   const dragRef = useRef<{ x: number; y: number; lastY: number; lastTime: number; pointerId: number; moved: boolean } | null>(null);
   const draggedRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -241,6 +244,7 @@ export function JourneyStream({
         motion.offset = motion.target = streamOffsetFor(centersRef.current[active] ?? 0, viewport.height);
         motion.placed = true;
       }
+      wakeRef.current();
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -252,21 +256,28 @@ export function JourneyStream({
   const flowing = phase === "unfolded" && !reduced && !paused && !lightbox && !hovering && !videoPlaying;
   const flowingRef = useRef(flowing);
   flowingRef.current = flowing;
+  useEffect(() => {
+    if (flowing) wakeRef.current();
+  }, [flowing]);
 
   // The flow: offset follows its target; the target drifts downward until
-  // the newest entry reaches the centre, and never past either end.
+  // the newest entry reaches the centre, and never past either end. The loop
+  // stops once everything has settled and is woken by any outside change.
   useEffect(() => {
     if (!viewport) return;
     let frame = 0;
     let last = performance.now();
+    let running = false;
     const tick = (now: number) => {
-      frame = requestAnimationFrame(tick);
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const motion = motionRef.current;
       const centers = centersRef.current;
       const known = centers.filter(Number.isFinite);
-      if (!known.length) return;
+      if (!known.length) {
+        running = false;
+        return;
+      }
       // Newest is at the top (smallest centre) — the largest offset.
       const high = streamOffsetFor(Math.min(...known), viewport.height);
       const low = streamOffsetFor(Math.max(...known), viewport.height);
@@ -294,9 +305,27 @@ export function JourneyStream({
         }
       });
       if (nearest !== activeRef.current) setActive(nearest);
+      const settled = !dragging
+        && Math.abs(motion.velocity) < 0.5
+        && Math.abs(motion.offset - motion.target) < 0.05
+        && Math.abs(motion.drift) < 0.05
+        && (!flowingRef.current || motion.target >= high);
+      if (settled) running = false;
+      else frame = requestAnimationFrame(tick);
     };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    const start = () => {
+      if (running) return;
+      running = true;
+      last = performance.now();
+      frame = requestAnimationFrame(tick);
+    };
+    wakeRef.current = start;
+    start();
+    return () => {
+      cancelAnimationFrame(frame);
+      running = false;
+      wakeRef.current = () => {};
+    };
   }, [viewport]);
 
   // Unfolding: pictures open from the top of the screen down, each note a
@@ -326,11 +355,13 @@ export function JourneyStream({
     if (center === undefined || !Number.isFinite(center)) return;
     motionRef.current.target = streamOffsetFor(center, viewportHeight);
     motionRef.current.velocity = 0;
+    wakeRef.current();
   }
 
   function onWheel(event: WheelEvent<HTMLDivElement>) {
     const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (viewport?.height ?? 800) : 1;
     motionRef.current.target -= event.deltaY * unit;
+    wakeRef.current();
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -342,6 +373,7 @@ export function JourneyStream({
     dragRef.current = { x: event.clientX, y: event.clientY, lastY: event.clientY, lastTime: performance.now(), pointerId: event.pointerId, moved: false };
     draggedRef.current = false;
     motionRef.current.velocity = 0;
+    wakeRef.current();
   }
 
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
@@ -361,6 +393,7 @@ export function JourneyStream({
     motionRef.current.velocity = damp(motionRef.current.velocity, dy / dt, 20, dt);
     drag.lastY = event.clientY;
     drag.lastTime = now;
+    wakeRef.current();
   }
 
   function onPointerUp(event: ReactPointerEvent<HTMLDivElement>, cancelled = false) {

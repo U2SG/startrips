@@ -868,6 +868,8 @@ export function JourneyPlaybackOverlay({
         strip.style.setProperty("--audio-width", String(1 + energy.mid * 0.15));
         strip.style.setProperty("--audio-brightness", String(1 + energy.overall * 0.12));
       }
+      // Decayed after a pause: the last write left the rest state; stop until the next play.
+      if (!(director.isPlaying && !paused) && Math.max(energy.low, energy.mid, energy.high, energy.overall) < 0.001) return;
       frame = window.requestAnimationFrame(drive);
     };
     frame = window.requestAnimationFrame(drive);
