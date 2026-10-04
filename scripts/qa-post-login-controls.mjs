@@ -210,6 +210,14 @@ async function verifyAtlasShell() {
         const moreSheet = page.locator(".mobile-v2__more-sheet");
         await page.locator('.mobile-v2__header [data-atlas-more-trigger="true"]').click();
         await moreSheet.waitFor({ state: "visible" });
+        // Measure the open sheet, not its entrance: `atlasSheetIn` fills
+        // backwards from translateY(100%), and even at reduced motion's 0.01ms
+        // the first frame can still hold that start position. The wait is
+        // bounded, so a stuck entrance still reaches the geometry record.
+        await moreSheet.evaluate((sheet) => Promise.race([
+          Promise.all(sheet.getAnimations().map((animation) => animation.finished.catch(() => undefined))),
+          new Promise((resolve) => setTimeout(resolve, 2_000)),
+        ]));
         const moreGeometry = await moreSheet.evaluate((sheet) => {
           const rect = sheet.getBoundingClientRect();
           const handle = sheet.querySelector(".mobile-v2__more-handle")?.getBoundingClientRect();
