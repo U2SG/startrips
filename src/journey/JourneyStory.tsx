@@ -1522,7 +1522,7 @@ export function JourneyStory({
   function enterFullscreen(autoPlay: boolean) {
     // A renewed video has a retained picture while its replacement transport
     // seeks. It cannot be a fullscreen source until that frame is committed.
-    if (shownAsset?.mimeType.startsWith("video/") && stagePlaybackReady.inline !== shownAsset.id) return;
+    if (shownAsset?.mimeType.startsWith("video/") && stagePlaybackReady.inline !== shownStagePageId) return;
     // A currently displayed video transfers its own native pause/play intent
     // after seeking. Do not start the target at zero and immediately abort it.
     setPlayingFromGesture(autoPlay, "fullscreen", Boolean(storyVideoRef.current?.dataset.sharedMediaId));
@@ -2890,6 +2890,10 @@ export function JourneyStory({
   const shownAsset = shownPageId
     ? assetOfPage(shownPageId)
     : asset;
+  // Stage playback readiness is reported per page, so it is compared with the
+  // shown page, never with the asset that page paints (#555: the cover opening
+  // and the canonical cover are two pages of one asset).
+  const shownStagePageId = shownPageId ?? activePageId;
   const videoNeedsResume = Boolean(videoResumeBlocked
     && videoResumeBlocked.id === shownAsset?.id
     && videoResumeBlocked.toFullscreen === fullscreen);
@@ -4531,7 +4535,7 @@ export function JourneyStory({
                   className="journey-story__fullscreen-entry"
                   label="全屏查看媒体"
                   disabled={mutationPending || Boolean(shownAsset?.mimeType.startsWith("video/")
-                    && stagePlaybackReady.inline !== shownAsset.id)}
+                    && stagePlaybackReady.inline !== shownStagePageId)}
                   onClick={() => enterFullscreen(mobileStoryImmersiveKeepsPlaying)}
                 ><IconMaximize size={19} stroke={1.35} aria-hidden="true" /></IconActionButton>
                 {videoNavigationVisible ? <button type="button" data-video-step="previous"
@@ -4602,7 +4606,7 @@ export function JourneyStory({
                     className={`journey-story__mobile-media-fullscreen${mobileStoryPlayControlVisible && !quickRecap ? "" : " is-compact"}`}
                     label="沉浸查看媒体"
                     disabled={mutationPending || Boolean(shownAsset?.mimeType.startsWith("video/")
-                      && stagePlaybackReady.inline !== shownAsset.id)}
+                      && stagePlaybackReady.inline !== shownStagePageId)}
                     {...mediaButtonInput("fullscreen", () => enterFullscreen(mobileStoryImmersiveKeepsPlaying))}
                   >
                     <IconMaximize size={19} stroke={1.5} aria-hidden="true" />
