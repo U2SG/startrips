@@ -123,13 +123,13 @@ function fillPaper(context: CanvasRenderingContext2D, width: number, height: num
 
 /** The inner edge darkens toward the spine; a right-hand page's spine is on its left. */
 function spineShade(context: CanvasRenderingContext2D, width: number, height: number, face: number) {
-  const span = width * 0.06;
+  const span = width * 0.1;
   const spineLeft = face % 2 === 0;
   const gradient = spineLeft
     ? context.createLinearGradient(0, 0, span, 0)
     : context.createLinearGradient(width, 0, width - span, 0);
-  gradient.addColorStop(0, "rgb(28 30 24 / 0.14)");
-  gradient.addColorStop(0.4, "rgb(28 30 24 / 0.04)");
+  gradient.addColorStop(0, "rgb(28 30 24 / 0.22)");
+  gradient.addColorStop(0.4, "rgb(28 30 24 / 0.06)");
   gradient.addColorStop(1, "rgb(28 30 24 / 0)");
   context.fillStyle = gradient;
   context.fillRect(spineLeft ? 0 : width - span, 0, span, height);
