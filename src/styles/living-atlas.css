@@ -608,11 +608,6 @@
   gap: 14px;
 }
 
-.living-atlas__brand > svg {
-  flex: 0 0 auto;
-  color: var(--atlas-cyan);
-}
-
 .living-atlas__brand p,
 .living-atlas__brand h1 {
   overflow: hidden;
@@ -5903,9 +5898,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   /* #17: Tier 2/3 become crossfades or instant states; continuous flow stops. */
-  .motion-fade-through,
-  .motion-draw,
-  .motion-focus-flight {
+  .motion-fade-through {
     animation: none !important;
     transition: none !important;
   }
@@ -6522,26 +6515,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    The content itself is the transition object; background recedes instead of
    competing. Implemented with the View Transitions API (see
    src/motion/primitives/sharedElement.ts); the keyframes live beside ML-04
-   above, where the `journey-card` view name is declared. */
+   above, where the `journey-card` view name is declared.
 
-/* 4. draw — route/light trail grows from 0 -> 1 (Tier 3). */
-.motion-draw {
-  transform-box: fill-box;
-  transform-origin: left center;
-  animation: motionDraw var(--motion-journey, 980ms) var(--motion-ease-in-out-spatial, ease) both;
-}
-
-@keyframes motionDraw {
-  from { transform: scaleX(0); opacity: 0; }
-  to { transform: scaleX(1); opacity: 1; }
-}
-
-/* 5. focus-flight — globe camera from global view to a place (Tier 3).
-   Driving JS in LivingAtlasGlobe; this class marks the moving layer so
-   reduced motion can freeze it. */
-.motion-focus-flight {
-  transition: transform var(--motion-journey, 980ms) var(--motion-ease-in-out-spatial, ease);
-}
+   4. draw and 5. focus-flight have no CSS class: the route draw and the globe
+   camera flight are driven in JS by ParticleEarthScene. */
 
 @media (max-width: 980px) {
   .living-atlas__header {

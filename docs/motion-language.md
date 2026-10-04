@@ -72,11 +72,12 @@ Everything else is a combination of these five:
 2. **lift** — card/interactive surface spatial feedback (`motion-lift`;
    hover −3px, press −1px; keep the hit region stable).
 3. **shared-expand** — thumbnail/card expands into story/fullscreen
-   (`motion-shared-expand`; View Transitions API via
+   (no CSS class; View Transitions API and the element morph in
    `src/motion/primitives/sharedElement.ts`).
-4. **draw** — route/light trail grows 0 → 1 (`motion-draw`).
+4. **draw** — route/light trail grows 0 → 1 (no CSS class; driven in JS by
+   `ParticleEarthScene`).
 5. **focus-flight** — globe camera flies from global view to a place
-   (`motion-focus-flight`; driving JS in `ParticleEarthScene`).
+   (no CSS class; driven in JS by `ParticleEarthScene`).
 
 ## Glow discipline
 
@@ -130,4 +131,4 @@ CI 验证契约，逐帧和连续播放验证手感；CI 绿色不能替代画�
 - No new `transition: all 0.3s ease` anywhere.
 - No new per-feature duration/easing/spring parameter literals.
 - New motion composes from the five primitives and shared tokens; spatial and timeline drivers follow the six principles above.
-- `motionPrimitiveClass` in `src/motion/tokens.ts` is the canonical name list.
+- The list above is the canonical primitive list; only `motion-fade-through` and `motion-lift` are CSS classes.
