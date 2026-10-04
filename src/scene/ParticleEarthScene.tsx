@@ -6062,10 +6062,7 @@ export function ParticleEarthScene({
         }
         dayNightModeStrength = interpolate(
           dayNightModeStrength,
-          dayNightModeWeight(
-            currentMode,
-            Boolean(currentVisibilityHint.earthDiveOverlapActive),
-          ),
+          dayNightModeWeight(currentMode),
         );
         dayNightStrength = dayNightModeStrength
           * dayNightDiveFactor(semanticZoomState.snapshot.localProgress);

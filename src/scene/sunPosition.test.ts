@@ -61,12 +61,11 @@ describe("day/night controls", () => {
     expect(parseSunTimeOverride("?dayNight=1")).toBeNull();
   });
 
-  it("is active on the particle globe modes and off on Surface Earth or a Dive overlap", () => {
-    expect(dayNightModeWeight("particleSphere", false)).toBe(1);
-    expect(dayNightModeWeight("focusPoint", false)).toBe(1);
-    expect(dayNightModeWeight("archiveBurst", false)).toBe(1);
-    expect(dayNightModeWeight("surfaceEarth", false)).toBe(0);
-    expect(dayNightModeWeight("particleSphere", true)).toBe(0);
+  it("is active on the particle globe modes and off on Surface Earth", () => {
+    expect(dayNightModeWeight("particleSphere")).toBe(1);
+    expect(dayNightModeWeight("focusPoint")).toBe(1);
+    expect(dayNightModeWeight("archiveBurst")).toBe(1);
+    expect(dayNightModeWeight("surfaceEarth")).toBe(0);
   });
 
   it("releases the Dive before the blend starts", () => {

@@ -78,12 +78,13 @@ export function parseSunTimeOverride(search: string): Date | null {
 }
 
 /**
- * Mode target, eased by the caller. Surface Earth never shows day/night, and
- * an Earth Dive overlap (including the keyboard Dive, which has no local-band
- * progress) fades it out under the full-frame crossfade.
+ * Mode target, eased by the caller. Surface Earth never shows day/night. The
+ * Dive overlap hint is deliberately not used: it is already true during the
+ * regional prewarm, and the keyboard Dive is a full-frame crossfade with no
+ * reveal anchor for a (static) terminator to sweep across.
  */
-export function dayNightModeWeight(mode: GlobeMode, earthDiveOverlapActive: boolean) {
-  return mode === "surfaceEarth" || earthDiveOverlapActive ? 0 : 1;
+export function dayNightModeWeight(mode: GlobeMode) {
+  return mode === "surfaceEarth" ? 0 : 1;
 }
 
 /**
