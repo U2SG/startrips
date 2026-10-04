@@ -69,7 +69,8 @@
   opacity: var(--story-live-opacity, 1);
   border: 0;
   pointer-events: none;
-  transform: var(--story-live-transform, translate3d(0, 0, 0));
+  /* A swipe writes the live transform inline on this element. */
+  transform: translate3d(0, 0, 0);
 }
 .story-media-pages__video[data-video-visible="true"] { pointer-events: auto; }
 .story-media-pages__video > video[hidden] { opacity: 0; pointer-events: none; }

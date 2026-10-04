@@ -703,13 +703,14 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   function clearDragPresentation(value: MediaDrag) {
     const element = root.current;
     const ownedPageMotion = value.axis === "x" || value.settleTakeover;
-    element?.style.removeProperty("--story-drag-x");
-    element?.style.removeProperty("--story-live-transform");
     element?.style.removeProperty("--story-live-opacity");
     element?.style.removeProperty("--story-live-z");
     element?.classList.remove("is-drag-settling");
     const shell = videoShell.current;
-    if (shell && ownedPageMotion) { shell.style.transform = ""; shell.style.opacity = ""; shell.style.clipPath = ""; }
+    // Every gesture writes the shell's live transform at pointerdown, before
+    // its axis is known, so the transform is cleared for every gesture.
+    if (shell) shell.style.transform = "";
+    if (shell && ownedPageMotion) { shell.style.opacity = ""; shell.style.clipPath = ""; }
     releaseCapture(value);
     if (ownedPageMotion) {
       for (const node of [value.base, value.peek]) {
@@ -809,9 +810,10 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   function applyDrag(value: MediaDrag) {
     const distance = value.peek ? value.dx : value.dx * 0.3;
     const transform = `${mediaStackPull(distance, value.width)} ${value.originTransform === "none" ? "" : value.originTransform}`;
+    // Write the moving elements directly. An inherited custom property on the
+    // stage root would restyle every page and picture on each pointermove.
     value.base.style.transform = transform;
-    root.current?.style.setProperty("--story-drag-x", `${distance}px`);
-    root.current?.style.setProperty("--story-live-transform", transform);
+    if (videoShell.current) videoShell.current.style.transform = transform;
     if (value.peek) {
       const depth = Number(value.peek.style.getPropertyValue("--stack-depth")) || 1;
       value.peek.style.transform = mediaStackReveal(depth, Math.abs(distance) / value.width);
@@ -828,7 +830,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     const baseId = base?.dataset.mediaPresentationId;
     if (!base || !baseId) return;
     const originTransform = getComputedStyle(base).transform;
-    root.current?.style.setProperty("--story-live-transform", originTransform);
+    if (videoShell.current) videoShell.current.style.transform = originTransform;
     root.current?.style.setProperty("--story-live-opacity", getComputedStyle(base).opacity);
     const value: MediaDrag = {
       base, baseId, peek: null, startX: event.clientX, startY: event.clientY,
@@ -864,7 +866,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       flushSync(() => latest.current.onGestureClaim(value.baseId));
       if (!gestureIsCurrent(value)) return;
       value.originTransform = getComputedStyle(value.base).transform;
-      root.current?.style.setProperty("--story-live-transform", value.originTransform);
+      if (videoShell.current) videoShell.current.style.transform = value.originTransform;
       root.current?.style.setProperty("--story-live-opacity", getComputedStyle(value.base).opacity);
       grabPages(neighborFor(dx, value.baseId)?.id ?? null);
       setGesturePhase("dragging");
