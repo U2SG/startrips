@@ -9,13 +9,14 @@ import {
 import {
   playbackMediaByChapter,
   playbackMediaForPoint,
+  playbackNoteBeatRoutePointIds,
   playbackTravelAngularDistance,
   type PlaybackStep,
   type PlaybackJourney,
 } from "./journeyPlayback";
 import type { HomeNarrativeContext, HomeNarrativeBeatDecision } from "./homeBasePrelude";
 import { isSoundtrackAsset, isVisualMediaAsset } from "./journeyModel";
-import { UNMEASURED_VIDEO_DURATION_MS, resolveNarrativeTiming } from "./narrativeTiming";
+import { UNMEASURED_VIDEO_DURATION_MS, resolveNarrativeTiming, resolveNoteBeatDwellMs } from "./narrativeTiming";
 import type { VideoTrimWindow } from "./videoTrimPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -202,6 +203,24 @@ export function quickRecapRouteGeometry(
   return geometry;
 }
 
+/**
+ * #595: the note beats a recap plays and what they cost.
+ *
+ * Decided on the canonical Journey and carried on the prepared projection, so
+ * a Route Point whose media the plan leaves out does not become an extra,
+ * unbudgeted note beat. Every one of them is paid for before media is chosen,
+ * exactly like the intro and outro, so a note is never dropped to make room:
+ * a recap that cannot fit them falls back to the over-budget choice instead.
+ */
+export function quickRecapNoteBeats(journey: Journey): { routePointIds: Set<string>; durationMs: number } {
+  const routePointIds = playbackNoteBeatRoutePointIds(journey);
+  let durationMs = 0;
+  for (const point of journey.routePoints) {
+    if (routePointIds.has(point.id)) durationMs += resolveNoteBeatDwellMs(noteLengthFor(point));
+  }
+  return { routePointIds, durationMs };
+}
+
 export function prepareQuickRecapPlaybackResult(
   journey: Journey,
   options: {
@@ -229,11 +248,13 @@ export function prepareQuickRecapPlaybackResult(
   // per-tempo intro/outro — instead of the flat 1200 + 1800 the deleted legacy
   // pacing table carried, which no mode has spent since the tempo profiles
   // landed.
+  const noteBeats = quickRecapNoteBeats(journey);
   const chapterBudgetMs = Math.max(
     1,
     requestedTargetMs
       - resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "intro" })
-      - resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "outro" }),
+      - resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "outro" })
+      - noteBeats.durationMs,
   );
   const plan = buildDeterministicQuickRecapPlan({
     journeyId: journey.id,
@@ -265,7 +286,7 @@ export function prepareQuickRecapPlaybackResult(
   const homeNarrativeContext = options.homeNarrativeContext
     ? fitHomeNarrativeContextToQuickRecapBudget(
       options.homeNarrativeContext,
-      requestedTargetMs - (plan.plannedDurationMs + introMs + outroMs),
+      requestedTargetMs - (plan.plannedDurationMs + introMs + outroMs + noteBeats.durationMs),
       tempo,
     )
     : undefined;
@@ -274,7 +295,12 @@ export function prepareQuickRecapPlaybackResult(
     fallbackReason: null,
     playback: {
       plan,
-      journey: { ...journey, media: selectedMedia, chapterMedia },
+      journey: {
+        ...journey,
+        media: selectedMedia,
+        chapterMedia,
+        noteBeatRoutePointIds: noteBeats.routePointIds,
+      },
       ...(homeNarrativeContext ? { homeNarrativeContext } : {}),
     },
   };
@@ -364,6 +390,11 @@ export function quickRecapStepDurationMs(
     return resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: step.kind });
   }
   if (step.kind === "intro" || step.kind === "outro") return undefined;
+  // #595: a note beat reads for the shared note dwell; the recap budget
+  // reserved exactly that before it chose media (`quickRecapNoteBeatsMs`).
+  if (step.kind === "note") {
+    return resolveNoteBeatDwellMs(journey.routePoints[step.pointIndex]?.note?.trim().length ?? 0);
+  }
   const pointIndex = step.kind === "travel" ? step.to : step.pointIndex;
   const point = journey.routePoints[pointIndex];
   if (!point) return undefined;

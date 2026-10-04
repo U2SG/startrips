@@ -11,6 +11,7 @@ import type { HomeNarrativeContext } from "./homeBasePrelude";
 import {
   NARRATIVE_TIMING_PROFILES,
   resolveNarrativeTiming,
+  resolveNoteBeatDwellMs,
   type NarrativeTempo,
   type NarrativeTimingProfile,
 } from "./narrativeTiming";
@@ -20,7 +21,7 @@ export type PlaybackTempo = NarrativeTempo;
 
 export type PlannedPlaybackSegment = {
   id: string;
-  kind: "home-prelude" | "intro" | "travel" | "arrival" | "media" | "home-epilogue" | "outro";
+  kind: "home-prelude" | "intro" | "travel" | "arrival" | "media" | "note" | "home-epilogue" | "outro";
   /** The index of this beat in `buildPlaybackSteps(journey)` — the same index
    * the director seeks to. The plan describes the beats that actually play. */
   stepIndex: number;
@@ -77,6 +78,9 @@ function playbackStepDuration(
     }
     case "media":
       return asset?.mimeType.startsWith("video/") ? profile.videoMs : profile.imageRoleMs.representative;
+    case "note":
+      // #595: the one note-beat dwell, shared with Story autoplay.
+      return resolveNoteBeatDwellMs(journey.routePoints[step.pointIndex]?.note?.trim().length ?? 0);
     case "home-epilogue":
     case "outro":
       return profile.outroMs;
@@ -181,6 +185,14 @@ function segmentIdentity(
         kind: "media" as const,
         routePointId: point?.id ?? null,
         ...(asset ? { assetId: asset.id } : {}),
+      };
+    }
+    case "note": {
+      const point = journey.routePoints[step.pointIndex];
+      return {
+        id: `note:${point?.id ?? step.pointIndex}`,
+        kind: "note" as const,
+        routePointId: point?.id ?? null,
       };
     }
     case "home-epilogue":

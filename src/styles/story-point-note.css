@@ -1,0 +1,149 @@
+/* #595: a Route Point's note above the media that Route Point owns.
+
+   The block lives in a slot the media section reserves for the whole Journey
+   (`data-point-note-slot`), so the stage keeps one rect whether or not the
+   current Route Point has a note, and expanding never moves it: the full text
+   opens in a sheet OVER the stage. Neither element is inside the stage's
+   pointer surface, so neither can start a stage swipe or close Story. */
+.journey-story__media {
+  --story-point-note-lines: 4;
+  --story-point-note-line: 1.6;
+  --story-point-note-size: 15px;
+  --story-point-note-pad: 10px;
+  --story-point-note-slot: calc(var(--story-point-note-lines) * var(--story-point-note-line) * var(--story-point-note-size) + 2 * var(--story-point-note-pad));
+}
+.journey-story__media[data-point-note-slot="true"] > :is(.story-media-pages, .journey-story__mobile-media-actions) {
+  /* The stage and the controls laid over it start below the note slot, so the
+     block never covers a control and the controls keep their place on the
+     stage. */
+  top: var(--story-point-note-slot);
+}
+
+.story-point-note {
+  position: absolute;
+  z-index: var(--z-content-9);
+  top: 0;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+  height: var(--story-point-note-slot);
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: var(--story-point-note-pad) clamp(16px, 4%, 48px);
+  animation: story-point-note-in var(--motion-content, 420ms) var(--motion-ease-out-soft, ease-out) both;
+}
+.story-point-note__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 100%;
+  margin: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--story-point-note-lines);
+  line-clamp: var(--story-point-note-lines);
+  color: rgb(255 248 231 / 82%);
+  font: 400 var(--story-point-note-size)/var(--story-point-note-line) var(--archive-serif);
+  letter-spacing: .015em;
+  overflow-wrap: anywhere;
+  /* The note is the member's own words: it stays selectable. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+.story-point-note__expand,
+.story-point-note-sheet__close {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--startrips-muted);
+  font: 400 12px/1 var(--archive-sans);
+  letter-spacing: .04em;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.story-point-note__expand:active,
+.story-point-note-sheet__close:active { color: var(--startrips-starlight); opacity: .72; }
+.story-point-note__expand:focus-visible,
+.story-point-note-sheet__close:focus-visible {
+  outline: 1px solid rgb(255 248 231 / 60%);
+  outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .story-point-note__expand:hover,
+  .story-point-note-sheet__close:hover { color: var(--startrips-starlight); }
+}
+
+.story-point-note-sheet {
+  position: absolute;
+  z-index: var(--z-content-10);
+  inset: 0;
+  box-sizing: border-box;
+  max-height: min(100%, 92dvh);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px clamp(16px, 5%, 56px) max(16px, env(safe-area-inset-bottom));
+  background: rgb(3 8 8 / 94%);
+  /* The sheet scrolls its own note; a scroll never reaches the page, and a
+     drag on it never becomes a stage swipe. */
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  animation: story-point-note-in var(--motion-instant, 160ms) var(--motion-ease-out, ease-out) both;
+}
+.story-point-note-sheet__label {
+  margin: 0;
+  color: var(--startrips-muted);
+  font: 400 12px/1.5 var(--archive-sans);
+  -webkit-user-select: text;
+  user-select: text;
+}
+.story-point-note-sheet__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.story-point-note-sheet__text {
+  margin: 0;
+  color: rgb(255 248 231 / 88%);
+  font: 400 clamp(15px, 1.4vw, 18px)/1.9 var(--archive-serif);
+  letter-spacing: .015em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.story-point-note-sheet__close { align-self: flex-end; }
+
+@keyframes story-point-note-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-point-note,
+  .story-point-note-sheet { animation: none; }
+}
+
+/* Narrow and phone layouts: two lines keep the stage inside the first screen. */
+.journey-story__media[data-mobile-layout="true"] {
+  --story-point-note-lines: 2;
+  --story-point-note-line: 1.55;
+  --story-point-note-size: 14px;
+  --story-point-note-pad: 6px;
+}
+@media (max-width: 480px), (max-height: 520px) {
+  .journey-story__media {
+    --story-point-note-lines: 2;
+    --story-point-note-line: 1.55;
+    --story-point-note-size: 14px;
+    --story-point-note-pad: 6px;
+  }
+}

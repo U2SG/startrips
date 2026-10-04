@@ -19,6 +19,7 @@ type VideoRenewal = {
 type RetainedVideo = Pick<VideoRenewal, "id" | "time" | "muted" | "volume" | "playbackRate"> & {
   frame: HTMLCanvasElement;
 };
+export type StoryNotePageContent = { text: string; label: string; routePointId: string | null };
 export type StoryMediaPagesHandle = {
   cancelGesture: () => void;
   heldVideo: () => RetainedVideo | null;
@@ -75,6 +76,12 @@ type Props = {
    * describe the canonical picture underneath, which a morph may land on.
    */
   pageOverlay?: { pageId: string; node: ReactNode } | null;
+  /**
+   * #595: the pages that are a Route Point's note rather than media. A note
+   * page paints its text in the same aperture, needs no read or decode, is
+   * ready the moment it is shown, and swipes like any other page.
+   */
+  notePages?: ReadonlyMap<string, StoryNotePageContent>;
   direction?: -1 | 1;
   reads: Record<string, Read>;
   wrap: boolean;
@@ -188,6 +195,10 @@ function FrameCanvas({ frame, sharedId }: { frame: HTMLCanvasElement | undefined
 /** Three fixed pages and one persistent, gesture-authorized video transport. */
 export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function StoryMediaPages({ active = true, ...props }, stageRef) {
   const assetIdOf = (pageId: string) => props.pageAssetIds?.get(pageId) ?? pageId;
+  // #595: a note page has no read; it is presentable as soon as it exists.
+  const isNotePage = (pageId: string | null | undefined) => Boolean(pageId && latest.current.notePages?.has(pageId));
+  const pageReadable = (pageId: string | null | undefined) => Boolean(pageId
+    && (isNotePage(pageId) || latest.current.reads[pageId]?.status === "ready"));
   const latest = useRef({ ...props, active });
   latest.current = { ...props, active };
   const root = useRef<HTMLDivElement>(null);
@@ -462,6 +473,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
 
   const ready = (id: string | null) => {
     if (!id) return false;
+    if (props.notePages?.has(id)) return true;
     const read = props.reads[id];
     if (read?.status !== "ready") return false;
     const asset = props.media.find((item) => item.id === id);
@@ -488,6 +500,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   const presentedId = holdingFront ? heldFrontId : props.currentId;
   const presentedAsset = props.media.find((asset) => asset.id === presentedId);
   const presentedVideo = presentedAsset?.mimeType.startsWith("video/");
+  const presentedNote = Boolean(presentedId && props.notePages?.has(presentedId));
   const presentedIdRef = useRef(presentedId);
   presentedIdRef.current = presentedId;
   const wasActive = useRef(active);
@@ -901,8 +914,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       return;
     }
     const targetId = commit ? value.neighborId : null;
-    const targetRead = targetId ? latest.current.reads[targetId] : null;
-    const readyToLand = Boolean(targetId && value.peek && targetRead?.status === "ready"
+    const readyToLand = Boolean(targetId && value.peek && pageReadable(targetId)
       && value.peek.dataset.mediaPresentationId === targetId
       && value.peek.dataset.mediaPageReady === "true");
     if (targetId && !readyToLand) latest.current.onGesturePrepare(targetId);
@@ -913,7 +925,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         && value.peek.dataset.mediaPresentationId === targetId
         && value.peek.dataset.mediaPageReady === "true"
         && latest.current.media.some((asset) => asset.id === targetId)
-        && latest.current.reads[targetId]?.status === "ready";
+        && pageReadable(targetId);
       if (targetId && targetStillReady) flushSync(() => latest.current.onGestureCommit(targetId));
       clearDragPresentation(value);
       // The stage is the only owner of this spring's completion. A later
@@ -1124,14 +1136,18 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       && Math.abs(y - (rect.top + rect.height / 2)) <= height * scale / 2;
   };
   useLayoutEffect(() => {
-    if (!active || presentedVideo || props.incomingId) delete root.current?.dataset.clickDirection;
-  }, [active, presentedVideo, props.incomingId]);
+    if (!active || presentedVideo || presentedNote || props.incomingId) delete root.current?.dataset.clickDirection;
+  }, [active, presentedVideo, presentedNote, props.incomingId]);
   // A video page has no focusable picture slot; the stage carries navigation.
-  const videoStageNavigation = Boolean(presentedVideo && canNavigate);
+  // #595: neither has a note page, so it navigates the same way.
+  const videoStageNavigation = Boolean((presentedVideo || presentedNote) && canNavigate);
+  const presentedNoteContent = presentedNote && presentedId ? props.notePages?.get(presentedId) : undefined;
   return <div ref={root} className="story-media-pages" data-story-media-pages
     tabIndex={videoStageNavigation ? 0 : -1}
     role={videoStageNavigation ? "group" : undefined}
-    aria-label={videoStageNavigation ? `${presentedAsset?.fileName ?? "视频"}。左右方向键切换媒体` : undefined}
+    aria-label={videoStageNavigation ? presentedNoteContent
+      ? `${presentedNoteContent.label || "途径点"} 的感想。左右方向键切换`
+      : `${presentedAsset?.fileName ?? "视频"}。左右方向键切换媒体` : undefined}
     aria-keyshortcuts={videoStageNavigation ? "ArrowLeft ArrowRight" : undefined}
     onPointerDownCapture={(event) => {
       if (event.isPrimary) suppressCancelledPointerClick.current = false;
@@ -1168,7 +1184,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     onClick={handleBackdropClick}
     onPointerMove={(event) => {
       updateGesture(event);
-      if (presentedVideo || props.incomingId || !props.onNavigate) {
+      if (presentedVideo || presentedNote || props.incomingId || !props.onNavigate) {
         delete event.currentTarget.dataset.clickDirection;
         return;
       }
@@ -1192,12 +1208,13 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
       }
     }}
     data-click-navigation={props.onNavigate ? "true" : undefined}
-    data-current-media-kind={presentedId ? (presentedVideo ? "video" : "image") : undefined}
+    data-current-media-kind={presentedId ? (presentedNote ? "note" : presentedVideo ? "video" : "image") : undefined}
     data-media-presentation={gesturePhase ?? (movingId ? "moving" : props.incomingId ? "waiting" : "settled")}>
     {assigned.map((id, slot) => {
       const asset = props.media.find((item) => item.id === id);
       const read = id ? props.reads[id] : undefined;
       const isVideo = asset?.mimeType.startsWith("video/");
+      const note = id ? props.notePages?.get(id) : undefined;
       const current = id !== null && id === props.currentId;
       const presented = id !== null && id === presentedId;
       const url = read?.status === "ready" ? read.url : undefined;
@@ -1214,7 +1231,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         data-media-page-id={id === null ? undefined : assetIdOf(id)}
         data-media-presentation-id={id ?? undefined}
         data-media-page-ready={pageReady ? "true" : "false"}
-        data-media-read-state={read?.status ?? "missing"}
+        data-media-read-state={note ? "note" : read?.status ?? "missing"}
+        data-story-note-page={note ? note.routePointId ?? "" : undefined}
         data-media-read-generation={read?.status === "ready" ? read.generation : undefined}
         data-media-layer={layer?.kind}
         data-media-preview-asset={layer?.kind === "preview" ? assetIdOf(layer.assetId) : undefined}
@@ -1249,8 +1267,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           hidden={isVideo || !url || (!pageReady && paintedImages.current[slot] !== id)}
           alt={presented ? asset?.fileName ?? "" : ""}
           draggable={false} decoding="async"
-          role={presented && (canNavigate || props.onImageClick) ? "button" : undefined}
-          tabIndex={presented && pageReady && (canNavigate || props.onImageClick) ? 0 : -1}
+          role={presented && !note && (canNavigate || props.onImageClick) ? "button" : undefined}
+          tabIndex={presented && !note && pageReady && (canNavigate || props.onImageClick) ? 0 : -1}
           aria-label={presented && canNavigate
             ? `${asset?.fileName ?? "照片"}。左侧上一张，右侧下一张，方向键切换`
             : presented && props.onImageClick ? `沉浸查看：${asset?.fileName ?? "照片"}` : undefined}
@@ -1287,6 +1305,15 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
             if (props.onNavigate) step(null, true);
             else props.onImageClick?.(true);
           } : undefined} />
+        {note ? (
+          /* #595: a Route Point's note as its own page, in the same aperture
+             as the media around it. It keeps the stage's pointer stream, so a
+             horizontal swipe still pages; its text stays selectable. */
+          <div className="story-media-pages__note" aria-hidden={!presented}>
+            {note.label ? <p className="story-media-pages__note-label">{note.label}</p> : null}
+            <p className="story-media-pages__note-text">{note.text}</p>
+          </div>
+        ) : null}
         <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined}
           sharedId={isVideo && id !== null && id === foregroundId && pageReady
             && (!videoVisible || id !== props.currentId) ? assetIdOf(id) : undefined} />
@@ -1299,7 +1326,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
         presented video. A clipped strip still left the transport's own picture
         behind a navigation layer, so the video keeps its whole surface and
         navigates by the separate buttons or the arrow keys the stage advertises. */}
-    {props.onNavigate && active && ready(presentedId) && !presentedVideo ? <div ref={hitSurface}
+    {props.onNavigate && active && ready(presentedId) && !presentedVideo && !presentedNote ? <div ref={hitSurface}
       className="story-media-pages__hit-surface" data-story-hit-surface aria-hidden="true"
       draggable={false}
       onClick={(event) => {

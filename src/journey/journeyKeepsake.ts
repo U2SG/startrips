@@ -151,6 +151,10 @@ function sceneForStep(
       // #235 Home context is live camera narrative only; a downloadable
       // keepsake remains a record of canonical Journey content.
       return [];
+    case "note":
+      // #595: a note beat is live Playback narrative. The keepsake an owner
+      // already holds must not change, so it contributes no scene.
+      return [];
     case "intro":
       return [{
         kind: "map",

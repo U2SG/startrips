@@ -5882,7 +5882,7 @@ try {
     try {
       const { page } = session;
       await waitForSettledAsset(page, I2);
-      await page.locator(".journey-story__point-note").waitFor({ state: "visible" });
+      await page.locator(":is(.journey-story__point-note, .story-point-note__text)").waitFor({ state: "visible" });
       await page.waitForFunction(() => {
         const copy = document.querySelector('.journey-story__copy');
         return copy && copy.getAnimations().every((animation) => animation.playState === 'finished');
@@ -5896,7 +5896,8 @@ try {
         const current = stage?.querySelector('.story-media-pages__page[data-media-page="current"]');
         const neighbor = stage?.querySelector('.story-media-pages__page:not([data-media-page="current"])[data-media-page-id]');
         const picture = current?.querySelector('img');
-        const note = copy?.querySelector('.journey-story__point-note');
+        const note = story?.querySelector(':is(.journey-story__point-note, .story-point-note__text)');
+        const noteOwners = story?.querySelectorAll(':is(.journey-story__point-note, .story-point-note__text)').length ?? 0;
         const active = rail?.querySelector('button.is-active[data-route-point-id]');
         if (!story || !rail || !copy || !stage || !pages || !current || !neighbor || !picture || !note || !active) {
           throw new Error("desktop chapter fixture did not render its presented Story");
@@ -5934,8 +5935,12 @@ try {
           noteTop: noteRect.top,
           copyScrollTop: copy.scrollTop,
           noteVisible: noteRect.top >= 0 && noteRect.bottom <= innerHeight,
+          noteOwners,
+          // #595: the block sits in a slot above the pages, never over them.
+          noteAbovePages: noteRect.bottom <= pagesRect.top + 1,
+          noteSlot: pagesRect.top - stageRect.top,
           currentPointLabel: copy.querySelector('.journey-story__current-point')?.textContent ?? null,
-          pageTopInset: pageRect.top - stageRect.top,
+          pageTopInset: pageRect.top - pagesRect.top,
           pageLeftInset: pageRect.left - stageRect.left,
           pageBottomSpace: stageRect.bottom - pageRect.bottom,
           currentPageSize: { width: current.offsetWidth, height: current.offsetHeight },
@@ -6014,7 +6019,7 @@ try {
       }));
       await rail.locator('[data-route-point-id="00000000-0000-4000-8000-000000000303"]').click();
       await waitForSettledAsset(page, I1);
-      await page.locator(".journey-story__point-note").filter({ hasText: "海风转凉" })
+      await page.locator(":is(.journey-story__point-note, .story-point-note__text)").filter({ hasText: "海风转凉" })
         .waitFor({ state: "visible" });
       await page.waitForFunction(() => {
         const copy = document.querySelector('.journey-story__copy');
@@ -6026,7 +6031,7 @@ try {
         const railRect = rail?.getBoundingClientRect();
         const activeRect = active?.getBoundingClientRect();
         const copy = document.querySelector('.journey-story__copy');
-        const note = copy?.querySelector('.journey-story__point-note');
+        const note = document.querySelector('.journey-story :is(.journey-story__point-note, .story-point-note__text)');
         const noteRect = note?.getBoundingClientRect();
         return {
           activeRoutePointId: active?.getAttribute('data-route-point-id') ?? null,
@@ -6123,6 +6128,8 @@ try {
           || !progress.resizedReveal.requiresScroll
           || progress.initial.activeRoutePointId !== "00000000-0000-4000-8000-000000000316"
           || !progress.initial.noteText?.includes("从港湾") || !progress.initial.noteVisible
+          || progress.initial.noteOwners !== 1 || !progress.initial.noteAbovePages
+          || progress.initial.noteSlot < 40 || progress.initial.noteSlot > 140
           || !progress.initial.currentPointLabel?.includes("17")
           || progress.initial.pageTopInset > 4 || progress.initial.pageLeftInset > 4
           || progress.initial.pageBottomSpace < 44 || progress.initial.pageBottomSpace > 56
@@ -6130,7 +6137,8 @@ try {
           || progress.initial.currentPaintedSize.height <= progress.initial.decorativePaintedSize.height
           || progress.initial.currentPageSize.height < progress.initial.priorPageSize.height + 40
           || progress.initial.naturalSize.width <= 0 || progress.initial.naturalSize.height <= 0
-          || !Number.isFinite(progress.initial.paintedHeight) || progress.initial.paintedHeight < 875
+          || !Number.isFinite(progress.initial.paintedHeight)
+          || progress.initial.paintedHeight < 875 - progress.initial.noteSlot
           || progress.initial.paintedHeight < progress.initial.priorPaintedHeight + 40
           || progress.initial.pictureFit !== "contain"
           || progress.resized.width !== 1280
@@ -6255,7 +6263,7 @@ try {
         return {
           assetId: current?.getAttribute("data-media-page-id") ?? null,
           pressed: pressed.map((button) => button.getAttribute("data-route-point-id") ?? "all"),
-          pointNote: story?.querySelector(".journey-story__point-note")?.textContent ?? null,
+          pointNote: story?.querySelector(":is(.journey-story__point-note, .story-point-note__text)")?.textContent ?? null,
           journeyNoteVisible: visibleText(notes.journey),
           pointANoteVisible: visibleText(notes.pointA),
           pointBNoteVisible: visibleText(notes.pointB),
@@ -6369,7 +6377,7 @@ try {
         presentationId: current?.getAttribute("data-media-presentation-id") ?? null,
         assetId: current?.getAttribute("data-media-page-id") ?? null,
         pressed: pressed.map((button) => button.getAttribute("data-route-point-id") ?? "all"),
-        pointNote: document.querySelector(".journey-story .journey-story__point-note")?.textContent?.includes(note) ?? false,
+        pointNote: document.querySelector(".journey-story :is(.journey-story__point-note, .story-point-note__text)")?.textContent?.includes(note) ?? false,
         counter: document.querySelector("[data-story-media-counter]")?.textContent?.trim() ?? null,
         observationAsset: document.querySelector("main.living-atlas")?.getAttribute("data-qa-story-observation-asset") ?? null,
       };

@@ -38,6 +38,7 @@ import {
   playbackMediaForStep,
   playbackHoldTargetMedia,
   playbackStepIdentity,
+  playbackStepCaption,
   playbackFactualRouteText,
   isPlaybackTransitRoutePoint,
   routePointChapterDensity,
@@ -1257,11 +1258,19 @@ export function JourneyPlaybackOverlay({
       activeMedia.mimeType.startsWith("image/"),
     )
     : null;
-  const activePoint = step?.kind === "stop" || step?.kind === "media"
+  const activePoint = step?.kind === "stop" || step?.kind === "media" || step?.kind === "note"
     ? journey.routePoints[step.pointIndex]
     : step?.kind === "travel"
       ? journey.routePoints[step.to]
       : null;
+  // #595: what the caption says on this beat. On a media beat the label and
+  // note are the media OWNER's, so a grouped child's note sits over its own
+  // media and the Stop's note stays on the Stop's arrival and media.
+  const stepCaption = playbackStepCaption(journey, step);
+  const noteBeat = step?.kind === "note" && stepCaption ? {
+    caption: stepCaption,
+    chapterPointIndex: step.chapterPointIndex,
+  } : null;
   const factualTravelClaim = step?.kind === "travel" && activePoint
     ? playbackFactualRouteText(
       playbackRoute,
@@ -1433,6 +1442,20 @@ export function JourneyPlaybackOverlay({
           </div>
         ) : null}
 
+        {/* #595: a Route Point's note as a beat of its own. A grouped note keeps
+            its Stop's chapter number; a transit note has no Stop at all. */}
+        {noteBeat ? (
+          <div
+            className={`journey-playback__note-beat${noteBeat.chapterPointIndex === null ? " is-transit" : ""}`}
+            data-playback-note-beat={noteBeat.caption.routePointId}
+            data-playback-transit-note={noteBeat.chapterPointIndex === null ? "true" : undefined}
+          >
+            {noteBeat.chapterPointIndex !== null ? <p>STOP {noteBeat.chapterPointIndex + 1}</p> : null}
+            <h3>{noteBeat.caption.label}</h3>
+            {noteBeat.caption.note ? <blockquote>{noteBeat.caption.note}</blockquote> : null}
+          </div>
+        ) : null}
+
         {playbackPointIndex !== null && activePoint && !arrivalPresentationPending ? (
           <div
             className={transitMediaOnly
@@ -1451,12 +1474,22 @@ export function JourneyPlaybackOverlay({
                   <StartripsJourneyCue state="arrived" size={52} />
                 </div>
                 <p>STOP {(chapterPointIndex ?? 0) + 1}</p>
-                <h3>{activePoint.label || `途径点 ${(chapterPointIndex ?? 0) + 1}`}</h3>
-                {activePoint.note ? (
-                  <blockquote>{activePoint.note}</blockquote>
+                <h3 data-playback-caption-point={stepCaption?.routePointId}>
+                  {stepCaption?.label || activePoint.label || `途径点 ${(chapterPointIndex ?? 0) + 1}`}
+                </h3>
+                {stepCaption?.note ? (
+                  <blockquote data-playback-caption-note={stepCaption.routePointId}>{stepCaption.note}</blockquote>
                 ) : null}
               </div>
             )}
+            {/* #595: media recorded on a transit via keeps no arrival or STOP
+                caption (#514), but a short note of its own still rides with it. */}
+            {transitMediaOnly && stepCaption?.note ? (
+              <div className="journey-playback__transit-note" data-playback-caption-note={stepCaption.routePointId}>
+                <p>{stepCaption.label}</p>
+                <blockquote>{stepCaption.note}</blockquote>
+              </div>
+            ) : null}
 
             {/* `empty` renders no media region at all — the place IS the memory.
                 Pure-transit media has no chapter density, so its asset renders

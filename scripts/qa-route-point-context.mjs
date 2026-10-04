@@ -1409,7 +1409,8 @@ try {
   await interactionPage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${photoAssetId}"][data-media-page-ready="true"]`).waitFor({ state: "attached", timeout: 5_000 });
   await interactionPage.locator(`.journey-story button[data-route-point-id="${textPointId}"]`).click();
   await interactionPage.locator(`.journey-story button[data-route-point-id="${textPointId}"][aria-pressed="true"]`).waitFor({ state: "attached", timeout: 5_000 });
-  await interactionPage.locator('.journey-story[data-has-media="false"]').waitFor({ state: "visible", timeout: 5_000 });
+  // #595: a note-only Route Point is a note page on the one stage, not a hidden stage.
+  await interactionPage.locator(`.journey-story__media [data-media-page="current"][data-media-presentation-id="note:${textPointId}"][data-media-page-ready="true"]`).waitFor({ state: "visible", timeout: 5_000 });
   await interactionPage.locator(".journey-story__close").click();
   await interactionPage.locator(`[data-route-point-context][data-route-point-id="${textPointId}"]`).waitFor({ state: "visible", timeout: 5_000 });
   const realReturnMarker = interactionPage.locator(`.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${textPointId}"][data-attention-role="selected"]`);
@@ -1978,10 +1979,15 @@ try {
   const projectedFullSteps = Number(await projectionPlayback.getAttribute("data-playback-steps"));
   const expectedProjectionChapters = projectionRoutePoints.filter((point) => point.isStop
     || projectionJourney.media.some((asset) => asset.routePointId === point.id));
+  // #595: an ungrouped note-only via is a transit note beat - one step, never
+  // an arrival and never a chapter of its own.
+  const expectedProjectionNoteBeats = projectionRoutePoints.filter((point) => !point.isStop
+    && point.note.trim() && !projectionJourney.media.some((asset) => asset.routePointId === point.id)).length;
   const expectedProjectionPlaybackSteps = 2
     + (expectedProjectionChapters.length - 1)
     + projectionRoutePoints.filter((point) => point.isStop).length
-    + projectionJourney.media.length;
+    + projectionJourney.media.length
+    + expectedProjectionNoteBeats;
   record("Full Playback keeps route travel and owned media without promoting non-stops to arrivals", {
     projectedFullSteps, expectedProjectionPlaybackSteps,
   }, projectedFullSteps === expectedProjectionPlaybackSteps);
@@ -2051,11 +2057,25 @@ try {
     && await projectionPlayback.getAttribute("data-camera-follow") === "free"
     && await projectionPlayback.locator('.journey-playback__chapter[data-chapter-point="2"]').count() === 1);
   await projectionPage.locator('.journey-playback__controls button[aria-label="继续播放"]').click();
+  // #595: B is followed by the note-only via's transit beat, with no arrival
+  // and no STOP caption, before the leg to the media via.
+  const transitNoteBeat = await projectionPage.waitForFunction((ids) => {
+    const playback = document.querySelector(".journey-playback");
+    const beat = playback?.querySelector(".journey-playback__note-beat");
+    return playback?.getAttribute("data-playback-phase") === "note"
+      && playback.getAttribute("data-playback-step") === "4"
+      && beat?.getAttribute("data-playback-note-beat") === ids.note
+      && beat.getAttribute("data-playback-transit-note") === "true"
+      && !beat.textContent?.includes("STOP")
+      && beat.textContent?.includes("这段途经留下了一句话。")
+      && !playback.querySelector(".journey-playback__stop") ? true : false;
+  }, projectionPointIds).then(() => true, () => false);
+  record("transit note beat plays between B and the media via without an arrival", { transitNoteBeat }, transitNoteBeat);
   await projectionPage.waitForFunction((ids) => {
     const playback = document.querySelector(".journey-playback");
     const media = document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.media}"]`);
     return playback?.getAttribute("data-camera-follow") === "free"
-      && playback.getAttribute("data-playback-step") === "4"
+      && playback.getAttribute("data-playback-step") === "5"
       && playback.getAttribute("data-playback-phase") === "travel"
       && media?.getAttribute("data-attention-role") === "narrative-current"
       && !document.querySelector(`.particle-earth-route__point[data-route-point-id="${ids.note}"]`)
@@ -2681,11 +2701,16 @@ try {
   await textReturnPage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${photoAssetId}"][data-media-page-ready="true"]`).waitFor({ state: "attached", timeout: 5_000 });
   await textReturnPage.locator(`.journey-story button[data-route-point-id="${textPointId}"]`).click();
   await textReturnPage.locator(`.journey-story button[data-route-point-id="${textPointId}"][aria-pressed="true"]`).waitFor({ state: "attached", timeout: 5_000 });
-  await textReturnPage.locator('.journey-story[data-has-media="false"]').waitFor({ state: "visible", timeout: 5_000 });
+  // #595: B presents as its note page on the stage: the current page paints
+  // no media, and the note is said exactly once, by that page.
+  await textReturnPage.locator(`.journey-story__media [data-media-page="current"][data-media-presentation-id="note:${textPointId}"][data-media-page-ready="true"]`).waitFor({ state: "visible", timeout: 5_000 });
   const emptyStoryState = await textReturnPage.locator(".journey-story").evaluate((node) => ({
     selected: node.querySelector('button[data-route-point-id][aria-pressed="true"]')?.getAttribute("data-route-point-id") ?? null,
-    mediaPageCount: node.querySelectorAll('.journey-story__media [data-media-page-id]').length,
-    text: node.textContent ?? "",
+    currentPresentation: node.querySelector('.journey-story__media [data-media-page="current"]')?.getAttribute("data-media-presentation-id") ?? null,
+    currentKind: node.querySelector(".journey-story__media [data-story-media-pages]")?.getAttribute("data-current-media-kind") ?? null,
+    currentImage: Boolean(node.querySelector('.journey-story__media [data-media-page="current"] img:not([hidden])')),
+    noteText: node.querySelector('.journey-story__media [data-media-page="current"] .story-media-pages__note-text')?.textContent ?? "",
+    copyNote: Boolean(node.querySelector(".journey-story__copy .journey-story__point-note")),
   }));
   await textReturnPage.locator(".journey-story__close").click();
   const returnedTextContext = textReturnPage.locator(`[data-route-point-context][data-route-point-id="${textPointId}"]`);
@@ -2700,16 +2725,21 @@ try {
     emptyStoryState, textReturnState,
   },
     emptyStoryState.selected === textPointId
-    && emptyStoryState.mediaPageCount === 0
-    && emptyStoryState.text.includes("这一站只留下了一句话")
+    && emptyStoryState.currentPresentation === `note:${textPointId}`
+    && emptyStoryState.currentKind === "note"
+    && !emptyStoryState.currentImage
+    && emptyStoryState.noteText.includes("这一站只留下了一句话")
+    && !emptyStoryState.copyNote
     && textReturnState.contextId === textPointId
     && textReturnState.contextText.includes("九龙海旁")
     && textReturnState.staleApertures === 0
     && textReturnState.markerVisible);
   await returnedTextContext.locator(".living-atlas__route-point-context-entry").click();
   await textReturnPage.locator(`.journey-story button[data-route-point-id="${textPointId}"][aria-pressed="true"]`).waitFor({ state: "attached", timeout: 5_000 });
-  record("returned B detail reopens the same no-media Story scope", {},
-    await textReturnPage.locator('.journey-story[data-has-media="false"]').count() === 1);
+  await textReturnPage.locator(`.journey-story__media [data-media-page="current"][data-media-presentation-id="note:${textPointId}"]`)
+    .waitFor({ state: "visible", timeout: 5_000 }).catch(() => null);
+  record("returned B detail reopens the same no-media Story scope on B's note page", {},
+    await textReturnPage.locator(`.journey-story__media [data-media-page="current"][data-media-presentation-id="note:${textPointId}"][data-media-page-ready="true"]`).count() === 1);
   record("no-media return page errors", { pageErrors: textReturnRun.pageErrors }, textReturnRun.pageErrors.length === 0);
   await textReturnPage.close();
 
