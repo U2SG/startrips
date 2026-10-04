@@ -1294,7 +1294,14 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
 }
 
 .account-sheet__form textarea { resize: vertical; }
-.account-sheet__form > button {
+.account-sheet__form input[type="checkbox"] { min-height: 0; padding: 0; }
+.account-sheet__form label:has(> input[type="checkbox"]) { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
+/* The email-change and sign-in-method panels nest their real <form> inside the
+   panel wrapper; give it the same rhythm and primary submit as a direct form.
+   Secondary type="button" actions (取消, 解绑) keep their quiet styling. */
+.account-sheet__form form { display: grid; gap: 14px; }
+.account-sheet__form > button,
+.account-sheet__form form > button[type="submit"] {
   min-height: 48px;
   border: 1px solid rgba(118, 198, 188, 0.24);
   border-radius: 12px;
