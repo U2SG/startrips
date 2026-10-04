@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LivingAtlasGlobe, LivingAtlasGlobeControls, PersistentEarthProvider, particleAnchorFramesEqual, resolveLivingAtlasHomeBaseLayer } from "./LivingAtlasGlobe";
-import { getRouteFocusPhase } from "./ParticleEarthScene";
+import { getRouteFocusPhase, shouldArmRouteArrivalBloom } from "./ParticleEarthScene";
 import type { HomeBasePeriod } from "../journey/homeBase";
 import { resolveHomeBasePresence } from "../journey/homeBasePresence";
 import { readFileSync } from "node:fs";
@@ -232,6 +232,33 @@ describe("route focus choreography phase", () => {
   it("keeps zoom release distinct from the idle state", () => {
     expect(getRouteFocusPhase(false, false, true)).toBe("releasing");
     expect(getRouteFocusPhase(false, false, false)).toBe("idle");
+  });
+});
+
+describe("first-arrival route bloom arming", () => {
+  const request = { scope: "atlas-a", routeId: "j1", revision: 1 };
+
+  it("arms a fresh request for the route being flown to", () => {
+    expect(shouldArmRouteArrivalBloom(request, null, "j1")).toBe(true);
+  });
+
+  it("never replays a consumed revision of the same Atlas owner", () => {
+    expect(shouldArmRouteArrivalBloom(request, { scope: "atlas-a", revision: 1 }, "j1")).toBe(false);
+    expect(shouldArmRouteArrivalBloom({ ...request, revision: 2 }, { scope: "atlas-a", revision: 1 }, "j1")).toBe(true);
+  });
+
+  it("plays revision 1 of a new Atlas owner after the previous owner consumed revision 1", () => {
+    expect(shouldArmRouteArrivalBloom(
+      { scope: "atlas-b", routeId: "j9", revision: 1 },
+      { scope: "atlas-a", revision: 1 },
+      "j9",
+    )).toBe(true);
+  });
+
+  it("ignores flights to other routes, point flights and absent requests", () => {
+    expect(shouldArmRouteArrivalBloom(request, null, "j2")).toBe(false);
+    expect(shouldArmRouteArrivalBloom(request, null, null)).toBe(false);
+    expect(shouldArmRouteArrivalBloom(null, null, "j1")).toBe(false);
   });
 });
 

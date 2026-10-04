@@ -127,6 +127,7 @@ import {
   validateJourneySoundtrack,
 } from "./journeyModel";
 import { playbackIntroMedia, playbackStoryMedia, storyMediaForScope } from "./journeyPlayback";
+import { isFirstJourneyMedia } from "./firstJourneyMoments";
 import type {
   Journey,
   JourneyInput,
@@ -296,7 +297,7 @@ type MediaUploadState =
       uploadedBytes: number;
       totalBytes: number;
     }
-  | { status: "complete"; message: string; tone: "success" | "error" };
+  | { status: "complete"; message: string; tone: "success" | "error"; firstMedia?: boolean };
 
 function journeyRange(journey: Journey) {
   return journey.endedOn && journey.endedOn !== journey.startedOn
@@ -3301,6 +3302,7 @@ export function JourneyStory({
     files: readonly File[],
     targetRoutePointId: string | null = selectedRoutePointId,
     placementReads?: readonly MediaPlacementReadResult[],
+    retry = false,
   ) {
     if (!manageMedia) return;
     invalidateMoveUndo();
@@ -3330,6 +3332,7 @@ export function JourneyStory({
       uploadedBytes: 0,
       totalBytes: files.reduce((sum, file) => sum + file.size, 0),
     });
+    const mediaCountBeforeUpload = playbackStoryMedia(journey).length;
     const result = await manageMedia.uploadJourneyMedia({
       journeyId: journey.id,
       routePointId: targetRoutePointId ?? undefined,
@@ -3390,6 +3393,11 @@ export function JourneyStory({
       setUploadState({
         status: "complete",
         tone: "success",
+        firstMedia: isFirstJourneyMedia({
+          mediaCountBeforeUpload,
+          uploadedCount: result.uploadedCount,
+          retry,
+        }),
         message: targetRoutePointId
           ? `\u5df2\u5c06 ${result.uploadedCount} \u4e2a\u5a92\u4f53\u6dfb\u52a0\u5230\u300c${journey.routePoints.find((point) => point.id === targetRoutePointId)?.label || "\u6240\u9009\u65c5\u7a0b\u70b9"}\u300d\u3002`
           : `\u5df2\u5c06 ${result.uploadedCount} \u4e2a\u5a92\u4f53\u6dfb\u52a0\u5230\u6574\u6bb5\u65c5\u7a0b\u3002`,
@@ -5118,7 +5126,14 @@ export function JourneyStory({
                 </div>
               ) : null}
               {uploadState.status === "complete" ? (
-                <p className={`journey-story__upload-message is-${uploadState.tone}`} role="status">{uploadState.message}</p>
+                uploadState.firstMedia ? (
+                  <p className={`journey-story__upload-message is-${uploadState.tone} has-cue`} role="status">
+                    <StartripsJourneyCue state="arrived" size={32} />
+                    <span>{uploadState.message}</span>
+                  </p>
+                ) : (
+                  <p className={`journey-story__upload-message is-${uploadState.tone}`} role="status">{uploadState.message}</p>
+                )
               ) : null}
               {placementRetryGroups.length > 0 && uploadState.status !== "uploading" ? (
                 <button className="journey-story__retry" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => void uploadPlacementGroups(placementRetryGroups)}>
@@ -5126,7 +5141,7 @@ export function JourneyStory({
                 </button>
               ) : null}
               {retryFiles.length > 0 && uploadState.status !== "uploading" ? (
-                <button className="journey-story__retry" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => void uploadFiles(retryFiles, retryRoutePointId)}>
+                <button className="journey-story__retry" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => void uploadFiles(retryFiles, retryRoutePointId, undefined, true)}>
                   重试失败的 {retryFiles.length} 个文件
                 </button>
               ) : null}

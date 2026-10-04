@@ -1012,6 +1012,33 @@ export function getJourneyRouteVisualState(
 
 export type RouteFocusPhase = "idle" | "flying" | "settled" | "releasing";
 
+/**
+ * A one-shot request to bloom a route's final rendered Route Point once the
+ * camera flight to that route settles. `(scope, revision)` makes it an event:
+ * one pair plays at most once. The scene outlives Atlas switches, so `scope`
+ * names the Atlas owner that issued the request; a new owner restarts its
+ * revisions without inheriting the previous owner's consumed state.
+ */
+export type RouteArrivalBloomRequest = {
+  scope: string;
+  routeId: string;
+  revision: number;
+};
+
+export type ConsumedRouteArrivalBloom = { scope: string; revision: number } | null;
+
+/** Arms a bloom only for a fresh request whose route is the one being flown to. */
+export function shouldArmRouteArrivalBloom(
+  request: RouteArrivalBloomRequest | null | undefined,
+  consumed: ConsumedRouteArrivalBloom,
+  flightRouteId: string | null | undefined,
+): request is RouteArrivalBloomRequest {
+  if (!request || !flightRouteId || request.routeId !== flightRouteId) return false;
+  return !consumed
+    || consumed.scope !== request.scope
+    || request.revision > consumed.revision;
+}
+
 export function getRouteFocusPhase(
   hasRouteFocus: boolean,
   routeFocusSettling: boolean,
@@ -1453,6 +1480,8 @@ interface ParticleEarthSceneProps {
   journeyRoutes?: readonly JourneyRoute[];
   /** #514: marker/hit disclosure; omitted by non-Atlas callers to keep their full route presentation. */
   visibleRoutePointIds?: ReadonlySet<string>;
+  /** First-Journey arrival: bloom the final Route Point once its flight settles. */
+  routeArrivalBloom?: RouteArrivalBloomRequest | null;
   activeJourneyRouteId?: string | null;
   selectedJourneyRoutePoint?: RoutePointSelection;
   narrativeJourneyRoutePoint?: RoutePointSelection;
@@ -1866,6 +1895,7 @@ export function ParticleEarthScene({
   onFocusPointActivate,
   journeyRoutes = [],
   visibleRoutePointIds,
+  routeArrivalBloom,
   activeJourneyRouteId,
   selectedJourneyRoutePoint,
   narrativeJourneyRoutePoint,
@@ -1967,6 +1997,10 @@ export function ParticleEarthScene({
   latestRotationYOverride.current = rotationYOverride;
   latestCompactMobileLayout.current = compactMobileLayout;
   latestVisibilityHint.current = visibilityHint;
+  const latestRouteArrivalBloom = useRef(routeArrivalBloom);
+  latestRouteArrivalBloom.current = routeArrivalBloom;
+  const latestReduceMotion = useRef(reduceMotion);
+  latestReduceMotion.current = reduceMotion;
 
   const { hostRef, controllerRef, controllerRevision } = useThreeScene((host) => {
     let disposed = false;
@@ -2388,6 +2422,54 @@ export function ParticleEarthScene({
       );
     };
     syncRouteFocusPhase();
+
+    // First-Journey arrival bloom. Armed by the route flight it belongs to and
+    // played once, only when that same flight settles on its own; a manual
+    // camera claim or a newer flight drops it. Glow levels come from the
+    // shared glow tokens; the CSS animation owns duration and easing.
+    host.style.setProperty("--route-glow-idle-opacity", String(motionTokens.glow.idleOpacity));
+    host.style.setProperty("--route-glow-core-opacity", String(motionTokens.glow.coreOpacity));
+    host.style.setProperty("--route-glow-halo-opacity", String(motionTokens.glow.haloOpacity));
+    let consumedArrivalBloom: ConsumedRouteArrivalBloom = null;
+    let armedArrivalBloom: { routeId: string; focusRevision: number } | null = null;
+    let arrivalBloomElement: SVGElement | null = null;
+    let arrivalBloomTimer = 0;
+    const releaseArrivalBloom = () => {
+      window.clearTimeout(arrivalBloomTimer);
+      arrivalBloomTimer = 0;
+      if (!arrivalBloomElement) return;
+      arrivalBloomElement.classList.remove("is-arrival-bloom");
+      arrivalBloomElement.removeEventListener("animationend", releaseArrivalBloom);
+      arrivalBloomElement.removeEventListener("animationcancel", releaseArrivalBloom);
+      arrivalBloomElement = null;
+    };
+    const playArrivalBloom = (routeId: string) => {
+      releaseArrivalBloom();
+      if (latestReduceMotion.current) return;
+      let finalPoint: SVGElement | null = null;
+      let finalIndex = -1;
+      const points = routeVectorLayer.querySelectorAll<SVGElement>(
+        ".particle-earth-route__point[data-journey-route][data-route-point-index]",
+      );
+      for (const element of Array.from(points)) {
+        if (element.dataset.journeyRoute !== routeId || element.style.display === "none") continue;
+        const index = Number(element.dataset.routePointIndex);
+        if (index > finalIndex) {
+          finalIndex = index;
+          finalPoint = element;
+        }
+      }
+      if (!finalPoint) return;
+      arrivalBloomElement = finalPoint;
+      finalPoint.addEventListener("animationend", releaseArrivalBloom);
+      finalPoint.addEventListener("animationcancel", releaseArrivalBloom);
+      finalPoint.classList.add("is-arrival-bloom");
+      // A point that rotates out of paint never reports animationend.
+      arrivalBloomTimer = window.setTimeout(
+        releaseArrivalBloom,
+        motionTokens.tiers.journey * 2,
+      );
+    };
 
     const sphereGeometry = new SphereGeometry(GLOBE_SURFACE_RADIUS, 64, 40);
     const surfaceMaterial = new MeshPhongMaterial({
@@ -4296,6 +4378,7 @@ export function ParticleEarthScene({
     const claimManualInteraction = (publishExternalOwnership = true) => {
       if (publishExternalOwnership) latestOnManualCameraInteraction.current?.();
       manualFocusRevision = latestFocusRevision.current;
+      armedArrivalBloom = null;
       pointFocusSettling = false;
       routeFocusSettling = false;
       focusTarget = null;
@@ -5799,6 +5882,11 @@ export function ParticleEarthScene({
           }
           lastGlobeInteractionAt = now;
           syncRouteFocusPhase();
+          if (armedArrivalBloom?.focusRevision === activeFocusRevision) {
+            const bloomRouteId = armedArrivalBloom.routeId;
+            armedArrivalBloom = null;
+            playArrivalBloom(bloomRouteId);
+          }
         }
       }
 
@@ -6436,6 +6524,8 @@ export function ParticleEarthScene({
     const dispose = () => {
       if (disposed) return;
       disposed = true;
+      armedArrivalBloom = null;
+      releaseArrivalBloom();
       refinementBuildGuard.dispose();
       cancelAnimationFrame(animationFrame);
       animationFrame = 0;
@@ -6518,6 +6608,18 @@ export function ParticleEarthScene({
         );
         if (!focusOwnsState) return;
         activeFocusRevision = revision;
+        const flightRouteId = intent?.kind === "route" ? intent.route?.id ?? null : null;
+        const bloomRequest = latestRouteArrivalBloom.current;
+        if (shouldArmRouteArrivalBloom(bloomRequest, consumedArrivalBloom, flightRouteId)) {
+          consumedArrivalBloom = { scope: bloomRequest.scope, revision: bloomRequest.revision };
+          armedArrivalBloom = { routeId: bloomRequest.routeId, focusRevision: revision };
+        } else if (armedArrivalBloom && armedArrivalBloom.routeId === flightRouteId) {
+          // A re-plan of the same route flight (e.g. refreshed route data)
+          // keeps the pending bloom on the flight that is still underway.
+          armedArrivalBloom = { routeId: armedArrivalBloom.routeId, focusRevision: revision };
+        } else {
+          armedArrivalBloom = null;
+        }
         const hadRouteFocus = Boolean(routeFocusFrame);
         routeFocusFrame = getSphericalRouteFocus(intent?.route?.points ?? []);
         const point = intent?.point ?? null;
