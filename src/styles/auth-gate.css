@@ -701,6 +701,20 @@
   background: transparent;
 }
 
+/* Accepted invitation: the `full` clip takes the brand loader's own slot (same
+   size, its centre sits above the loader copy) while the loader's short clip
+   steps aside, so only one goat is on screen. Decorative and click-through. */
+.auth-continuity__signature.startrips-signature-moment {
+  top: 50%;
+  left: 50%;
+  z-index: var(--z-content-6);
+  transform: translate(-50%, calc(-50% - 18px));
+}
+
+.auth-continuity.has-signature-moment .startrips-brand-loader > .startrips-signature-motion {
+  visibility: hidden;
+}
+
 .auth-continuity.is-handoff .auth-continuity__atlas {
   animation: auth-v3-atlas-enter 1.08s ease-out both;
 }

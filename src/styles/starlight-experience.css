@@ -125,7 +125,7 @@
   .auth-v3-brand > .startrips-wordmark { height: 34px; }
   .auth-v3-brand > .auth-v3-brand__caption { max-width: 15ch; line-height: 1.8; text-align: right; }
   .auth-card--login-v3 { border-radius: 20px; }
-  .mobile-v2__brand > .startrips-wordmark { margin-bottom: 3px; }
+  .mobile-v2__brand .startrips-wordmark { margin-bottom: 3px; }
 }
 @media (max-height: 540px) {
   .auth-starlight-intro { display: none; }

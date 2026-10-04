@@ -7962,6 +7962,20 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   backdrop-filter: blur(14px);
 }
 
+/* The wordmark trigger is not a round control: keep the art exactly where the
+   bottom-aligned mark sat, and only extend the hit area upward to 44px. */
+.mobile-v2__header .startrips-signature-trigger {
+  width: auto;
+  height: var(--mobile-control-hit-size, 44px);
+  display: inline-flex;
+  align-items: flex-end;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  backdrop-filter: none;
+}
+
 .mobile-v2__chrome {
   position: absolute;
   z-index: var(--z-chrome-90);

@@ -11,6 +11,7 @@ import {
 import { createPortal } from "react-dom";
 import { IconChevronDown, IconUserCircle } from "@tabler/icons-react";
 import { StartripsBrandLoader, StartripsJourneyCue, StartripsWordmark } from "../brand/StartripsBrandMark";
+import { StartripsSignatureMoment, useStartripsSignatureMoment } from "../brand/StartripsSignatureMoment";
 import { useCompactMobileLayout } from "../journey/mobileLayout";
 import { useMobileSurfaceHistory } from "../journey/useMobileSurfaceHistory";
 import { useModalFocus } from "../journey/useModalFocus";
@@ -1650,6 +1651,14 @@ export function AuthGateway({ children }: { children: ReactNode }) {
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [handoffDone, setHandoffDone] = useState(false);
   const reduceMotion = useReducedMotionPreference();
+  // An accepted invitation is a once-per-member brand node: the `full` clip
+  // plays alongside the refetch and Atlas entry, never in front of them, and
+  // fades as soon as the workspace is ready.
+  const invitationSignature = useStartripsSignatureMoment();
+  const releaseInvitationSignature = invitationSignature.release;
+  useEffect(() => {
+    if (workspaceReady) releaseInvitationSignature();
+  }, [workspaceReady, releaseInvitationSignature]);
   const searchParams = new URLSearchParams(window.location.search);
   const qaState = searchParams.get("qaState");
   const qaPhase = searchParams.get("qaPhase");
@@ -1793,6 +1802,8 @@ export function AuthGateway({ children }: { children: ReactNode }) {
         key={revision}
         invitationId={invitationId}
         onAccepted={() => {
+          setWorkspaceReady(false);
+          invitationSignature.play();
           setRevision((value) => value + 1);
           void session.refetch();
         }}
@@ -1803,7 +1814,13 @@ export function AuthGateway({ children }: { children: ReactNode }) {
   const showHandoff = handoffActive && !handoffDone;
   return (
     <AtlasCinematicContext.Provider value={setCinematicActive}>
-      <div className={`auth-continuity${showHandoff ? " is-handoff" : " is-released"}${cinematicActive ? " is-cinematic" : ""}`}>
+      <div className={`auth-continuity${showHandoff ? " is-handoff" : " is-released"}${cinematicActive ? " is-cinematic" : ""}${invitationSignature.phase !== "idle" ? " has-signature-moment" : ""}`}>
+        <StartripsSignatureMoment
+          phase={invitationSignature.phase}
+          size={52}
+          className="auth-continuity__signature"
+          onEnd={invitationSignature.end}
+        />
         {showHandoff ? (
         <AuthForm
           key="login-continuity"
