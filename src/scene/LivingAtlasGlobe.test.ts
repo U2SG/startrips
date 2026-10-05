@@ -56,6 +56,16 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(globe).toContain('useState<ParticleEarthBackend | "pending">("pending")');
   });
 
+  it("tells a lost context apart from a missing WebGL2 capability", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const scene = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(scene).toContain('export type ParticleEarthBackend = "webgl2" | "unavailable" | "lost"');
+    expect(scene).toContain('latestOnBackendChange.current?.("lost")');
+    expect(globe).toContain('particleEarthBackend === "unavailable" || particleEarthBackend === "lost"');
+    expect(globe).toContain("刷新页面即可恢复");
+    expect(globe).toContain('data-backend={particleEarthBackend}');
+  });
+
   it("does not re-arm the Dive scheduler for an unchanged published particle frame", () => {
     const frame = {
       anchor: { lat: 31.2, lon: 121.5 },

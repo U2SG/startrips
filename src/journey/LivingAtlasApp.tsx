@@ -3811,7 +3811,11 @@ export function LivingAtlasApp({
               <p>{activeJourney.startedOn}{activeJourney.endedOn ? ` — ${activeJourney.endedOn}` : ""}</p>
               <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
               <h2><ScrambledText text={activeJourney.title} /></h2>
-              <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
+              <dl className="living-atlas__active-stats">
+                <div><dt>路线点</dt><dd>{activeJourney.routePoints.length}</dd></div>
+                <div><dt>媒体</dt><dd>{journeyVisualMedia(activeJourney).length}</dd></div>
+                <div><dt>停靠</dt><dd>{activeJourney.routePoints.filter((point) => point.isStop).length}</dd></div>
+              </dl>
               <JourneyCardMedia
                 journey={activeJourney}
                 reduceMotion={reduceMotion}

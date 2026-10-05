@@ -1067,13 +1067,6 @@ button.living-atlas-globe__pick {
   letter-spacing: -0.025em;
 }
 
-.living-atlas__active-content > span {
-  color: var(--atlas-muted);
-  font-size: 10px;
-  line-height: 1.6;
-  letter-spacing: 0.08em;
-}
-
 .living-atlas__active-media {
   position: relative;
   height: 96px;
@@ -8556,7 +8549,11 @@ button.living-atlas__globe-focus-exit {
   overflow: hidden;
 }
 
-.mobile-v2__stats {
+/* One stats block for the Journey: the compact sheet centres it, the desktop
+   active card keeps it flush with its left-aligned text. Hairlines only, no
+   fill: it is a data row, not a control. */
+.mobile-v2__stats,
+.living-atlas__active-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   margin: 0 0 12px;
@@ -8564,27 +8561,45 @@ button.living-atlas__globe-focus-exit {
   border-bottom: 1px solid rgba(118, 198, 188, 0.1);
 }
 
-.mobile-v2__stats div {
+.mobile-v2__stats div,
+.living-atlas__active-stats div {
   display: grid;
   gap: 4px;
   padding: 10px 8px;
   text-align: center;
 }
 
-.mobile-v2__stats div + div {
+.mobile-v2__stats div + div,
+.living-atlas__active-stats div + div {
   border-left: 1px solid rgba(118, 198, 188, 0.09);
 }
 
-.mobile-v2__stats dt {
+.mobile-v2__stats dt,
+.living-atlas__active-stats dt {
   color: rgba(143, 179, 168, 0.55);
   font: 550 8px/1 var(--archive-sans);
   letter-spacing: 0.08em;
 }
 
-.mobile-v2__stats dd {
+.mobile-v2__stats dd,
+.living-atlas__active-stats dd {
   margin: 0;
   color: rgba(232, 244, 239, 0.92);
   font: 500 20px/1 var(--archive-serif);
+  font-variant-numeric: tabular-nums;
+}
+
+.living-atlas__active-stats {
+  margin: 0;
+}
+
+.living-atlas__active-stats div {
+  padding: 10px 10px 10px 0;
+  text-align: left;
+}
+
+.living-atlas__active-stats div + div {
+  padding-left: 12px;
 }
 
 .mobile-v2__sheet-note {
