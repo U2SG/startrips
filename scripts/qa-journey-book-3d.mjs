@@ -123,6 +123,24 @@ const GOAT_QUIET_MS = 2_500;
 const INTERRUPT_BUDGET_MS = 200;
 // ... and the goat must be gone from the screen within this of the press.
 const LET_GO_BUDGET_MS = 400;
+// The goat's grip on the cover: the muzzle as drawn may sit this far (CSS px)
+// from the projected fore-edge, and the lifted fore-edge must stay this
+// straight (its middle off the line through its ends).
+const GRIP_TOLERANCE_PX = 2;
+const EDGE_STRAIGHT_TOLERANCE_PX = 0.5;
+// The grip is sampled from the bite through both tugs and the heave (ms).
+const GRIP_SAMPLES_MS = [1400, 1500, 1600, 1700, 1800, 1950, 2100, 2250, 2400, 2525, 2650];
+// A drag that catches the cover may not jump: its first step moves the cover
+// by the pointer's travel, give or take this much progress (0.01 = 1.8 deg).
+const CATCH_TOLERANCE = 0.01;
+
+/** Distance (px) from a point to the line through two points. */
+function distanceToLine(point, from, to) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  return Math.abs(dy * (point.x - from.x) - dx * (point.y - from.y)) / length;
+}
 // A whole performance steps through about 85 book frames, each up to a second or two under SwiftShader.
 const GOAT_PLAY_TIMEOUT_MS = 240_000;
 
@@ -470,6 +488,50 @@ async function goatFilmstripSession(browser, name, contextOptions) {
     }, tug1.progress > 0.01 && tug2.progress > tug1.progress && Boolean(tug1.box && tug2.box)
       && tug2.box.top + tug2.box.height < tug1.box.top + tug1.box.height - 2);
     record(`${name} goat filmstrip: the goat is gone as the cover turns on`, { last: gone }, gone.opacity < 0.05 && gone.progress > 0.55);
+
+    // The combined staging on the rigid cover: from the bite through the
+    // heave, the muzzle as drawn (its DOM box, toward the fore-edge) lies on
+    // the board's projected fore-edge, read from the scene's cover mesh, and
+    // that edge stays straight while the board lifts.
+    const grips = [];
+    for (const ms of GRIP_SAMPLES_MS) {
+      await page.evaluate((elapsed) => window.__journeyBookGoatPull.scrub(elapsed), ms);
+      await session.waitForGoat((want) => {
+        const raw = document.querySelector(".journey-book-3d__stage")?.dataset.goatPull;
+        return raw ? JSON.parse(raw).elapsedMs === want : false;
+      }, ms, 60_000);
+      const sample = await page.evaluate(() => {
+        const stage = document.querySelector(".journey-book-3d__stage");
+        const box = stage.getBoundingClientRect();
+        const state = JSON.parse(stage.dataset.goatPull);
+        const muzzle = document.querySelector('[data-goat-place] use[href$="#frontMuzzle"]').getBoundingClientRect();
+        return {
+          progress: state.progress,
+          grip: state.grip,
+          foreEdge: state.foreEdge,
+          drawnMuzzle: { x: muzzle.right - box.left, y: muzzle.top + muzzle.height / 2 - box.top },
+        };
+      });
+      const [head, middle, foot] = sample.foreEdge ?? [];
+      const ok = Boolean(head && middle && foot && sample.grip);
+      grips.push({
+        ms,
+        angleDeg: Number((sample.progress * 180).toFixed(2)),
+        drawnOffEdgePx: ok ? Number(distanceToLine(sample.drawnMuzzle, head, foot).toFixed(2)) : null,
+        placedOffEdgePx: ok ? Number(distanceToLine(sample.grip, head, foot).toFixed(2)) : null,
+        edgeBowPx: ok ? Number(distanceToLine(middle, head, foot).toFixed(3)) : null,
+      });
+    }
+    const maxOff = Math.max(...grips.map((entry) => entry.drawnOffEdgePx ?? Infinity));
+    const maxBow = Math.max(...grips.map((entry) => entry.edgeBowPx ?? Infinity));
+    record(`${name} goat grip: the muzzle stays on the rigid cover's fore-edge through the bite, both tugs and the heave`, {
+      tolerancePx: GRIP_TOLERANCE_PX, maxOffEdgePx: maxOff, samples: grips,
+    }, Number.isFinite(maxOff) && maxOff <= GRIP_TOLERANCE_PX);
+    record(`${name} goat grip: the lifted cover's fore-edge stays a straight board edge`, {
+      tolerancePx: EDGE_STRAIGHT_TOLERANCE_PX, maxBowPx: maxBow,
+      angleDeg: grips.map((entry) => entry.angleDeg),
+    }, Number.isFinite(maxBow) && maxBow <= EDGE_STRAIGHT_TOLERANCE_PX
+      && Math.max(...grips.map((entry) => entry.angleDeg)) > 5);
   } catch (error) {
     record(`${name} goat filmstrip: session ran to completion`, { error: error instanceof Error ? error.stack ?? error.message : String(error) }, false);
   } finally {
@@ -560,7 +622,22 @@ async function goatLiveSession(browser) {
       hiddenMs, budgetMs: LET_GO_BUDGET_MS, firstFrameAfterMs: letGo?.firstFrameAfterMs ?? null,
       frameGapsBeforeMs: letGo?.frameGapsBeforeMs ?? null, visibleAfterDeadline: letGo?.visibleAfterDeadline ?? null, frames: letGo?.frames ?? null,
     }, hiddenMs !== null && hiddenMs >= 0 && hiddenMs <= LET_GO_BUDGET_MS && letGo.visibleAfterDeadline.length === 0);
-    for (let step = 1; step <= 12; step += 1) await page.mouse.move(from + ((to - from) * step) / 12, y);
+    // The press caught the cover where the goat held it: the drag starts at
+    // that angle, and its first step moves the cover by the pointer's travel.
+    const caughtAt = await page.evaluate(() => window.__journeyBook3dProgress());
+    await page.mouse.move(from + (to - from) / 12, y);
+    const firstStep = await page.evaluate(() => window.__journeyBook3dProgress());
+    const expectedStep = Math.abs(to - from) / 12 / rect.width;
+    record("desktop goat: the drag takes the cover from its current angle, without a snap", {
+      angleAtPressDeg: Number((stopped.progress * 180).toFixed(2)),
+      angleAtCatchDeg: caughtAt === null ? null : Number((caughtAt * 180).toFixed(2)),
+      angleAfterFirstStepDeg: firstStep === null ? null : Number((firstStep * 180).toFixed(2)),
+      expectedFirstStepDeg: Number((expectedStep * 180).toFixed(2)),
+      toleranceDeg: CATCH_TOLERANCE * 180,
+    }, caughtAt !== null && firstStep !== null && stopped.progress > 0.005
+      && Math.abs(caughtAt - stopped.progress) <= CATCH_TOLERANCE
+      && Math.abs(firstStep - (caughtAt + expectedStep)) <= CATCH_TOLERANCE);
+    for (let step = 2; step <= 12; step += 1) await page.mouse.move(from + ((to - from) * step) / 12, y);
     await page.mouse.up();
     await page.mouse.move(4, 4);
     const turned = await session.restingAt(2);

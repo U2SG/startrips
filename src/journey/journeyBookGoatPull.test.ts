@@ -118,6 +118,16 @@ describe("where the goat stands", () => {
     }
   });
 
+  it("hooks its muzzle on the fore-edge from the grip through the heave, at its own muzzle height", () => {
+    expect(goatPullStaging(P.walkEnd - 150, MARK).attach).toBe(0);
+    for (const t of [P.gripEnd, P.tug1Peak, P.tug2Peak, P.tug2End, P.letGo]) {
+      expect(goatPullStaging(t, MARK).attach).toBe(1);
+    }
+    const { gripV } = goatPullStaging(P.gripEnd, MARK);
+    expect(gripV).toBeLessThan(GOAT_WALK_V);
+    expect(gripV).toBeGreaterThan(COVER_PLATE_FRAME.y + COVER_PLATE_FRAME.height);
+  });
+
   it("hops off after letting go and fades out once the cover is released", () => {
     expect(goatPullStaging(P.letGo, MARK).hop).toBe(0);
     expect(goatPullStaging(P.release, MARK).hop).toBe(1);

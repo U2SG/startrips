@@ -87,6 +87,8 @@ declare global {
   interface Window {
     /** DEV QA only: scrub the cover's goat pull (`?qaState=journey-book-3d&goatPull=scrub`). */
     __journeyBookGoatPull?: GoatPullQaHook;
+    /** DEV QA only: the 3D book's current turn progress. */
+    __journeyBook3dProgress?: () => number | null;
   }
 }
 
@@ -813,6 +815,16 @@ export function JourneyBook3d({
       delete window.__journeyBookGoatPull;
     };
   }, [goatPullScrub, playGoatPull]);
+
+  // DEV QA: the book's live turn progress, so browser QA can follow a drag
+  // that catches the goat's cover from its current angle.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    window.__journeyBook3dProgress = () => sceneRef.current?.progress ?? null;
+    return () => {
+      delete window.__journeyBook3dProgress;
+    };
+  }, []);
 
   const currentPage = pages[face];
   useEffect(() => {

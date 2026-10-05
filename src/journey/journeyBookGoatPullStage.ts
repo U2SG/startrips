@@ -8,6 +8,36 @@ import { goatPullCoverProgress, goatPullStaging, type MarkFrame } from "./journe
 const MARK_UNITS_WIDE = 170;
 const MARK_UNITS_HIGH = 150;
 const MARK_CENTRE_X = 695;
+/** The goat's muzzle (the v12 `frontMuzzle` ellipse) and the pivots `applyPose` turns the head and the whole goat about. */
+const MUZZLE = { cx: 667.7509, cy: -89.0317, rx: 10.3927, ry: 7.1, rotateDeg: 3.2728 } as const;
+const HEAD_PIVOT = { x: 682, y: -88 } as const;
+const HIND_HOOF = { x: 744, y: 0 } as const;
+
+type Point = { x: number; y: number };
+
+function rotateAbout(point: Point, pivot: Point, degrees: number): Point {
+  const angle = (degrees * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const dx = point.x - pivot.x;
+  const dy = point.y - pivot.y;
+  return { x: pivot.x + dx * cos - dy * sin, y: pivot.y + dx * sin + dy * cos };
+}
+
+/**
+ * Where the posed goat's muzzle tip is, relative to the point between its
+ * hooves, in stage px: the muzzle's centre through the head turn, the lean and
+ * the root shift, then out to the ellipse's extreme in the direction the goat
+ * faces (`facing` −1 faces the fore-edge, to the right on screen).
+ */
+function muzzleOffset(pose: ReturnType<typeof sampleStartripsPullPose>, scaleX: number, scaleY: number, facing: number): Point {
+  const headed = rotateAbout({ x: MUZZLE.cx, y: MUZZLE.cy }, HEAD_PIVOT, pose.headRotateDeg);
+  const leaned = rotateAbout(headed, HIND_HOOF, pose.rootRotateDeg);
+  const angle = ((MUZZLE.rotateDeg + pose.headRotateDeg + pose.rootRotateDeg) * Math.PI) / 180;
+  const reach = Math.hypot(MUZZLE.rx * Math.cos(angle), MUZZLE.ry * Math.sin(angle));
+  const tipX = leaned.x + pose.rootX - reach;
+  return { x: scaleX * facing * (tipX - MARK_CENTRE_X), y: scaleY * (leaned.y + pose.rootY) };
+}
 const STARLIGHT = "#fff8e7";
 /** Below upright the cover lies back down when the goat is interrupted; past it, it completes the turn. */
 const UPRIGHT = 0.5;
@@ -21,6 +51,9 @@ export type GoatPullFrame = {
   frame: number;
   /** performance.now() when an input ended the performance. */
   endedAt: number | null;
+  /** DEV QA: the muzzle tip as placed, and the cover's fore-edge (head, middle, foot) this frame, in stage px. */
+  grip?: Point | null;
+  foreEdge?: Point[] | null;
 };
 
 export type GoatPull = {
@@ -75,8 +108,13 @@ export function startGoatPull(options: {
   let frame = 0;
   let endedAt: number | null = null;
   let opacity = 0;
+  let grip: Point | null = null;
 
-  const report = () => options.onFrame?.({ status, elapsedMs: elapsed, progress: scene.progress, frame, endedAt });
+  const foreEdge = () => [0, 0.5, 1].map((v) => scene.coverPoint(1, v)).filter((point): point is Point => point !== null);
+  const report = () => options.onFrame?.({
+    status, elapsedMs: elapsed, progress: scene.progress, frame, endedAt,
+    grip, foreEdge: status === "playing" ? foreEdge() : null,
+  });
 
   function stage(t: number) {
     const staging = goatPullStaging(t, mark);
@@ -86,13 +124,23 @@ export function startGoatPull(options: {
     const scaleY = (markPx / MARK_UNITS_HIGH) * staging.scale;
     const scaleX = ((scene.coverRestPoint(staging.u + mark.width / 2, staging.v).x
       - scene.coverRestPoint(staging.u - mark.width / 2, staging.v).x) / MARK_UNITS_WIDE) * staging.scale;
+    const pose = sampleStartripsPullPose(t);
     let { x, y } = scene.coverPoint(staging.u, staging.v) ?? scene.coverRestPoint(staging.u, staging.v);
+    const muzzle = muzzleOffset(pose, scaleX, scaleY, staging.facing);
+    if (staging.attach > 0) {
+      // Gripping, the muzzle hooks the board's fore-edge wherever it is: the
+      // goat is placed from the edge, read from the cover's own mesh.
+      const edge = scene.coverPoint(1, staging.gripV) ?? scene.coverRestPoint(1, staging.gripV);
+      x += (edge.x - muzzle.x - x) * staging.attach;
+      y += (edge.y - muzzle.y - y) * staging.attach;
+    }
+    grip = staging.attach >= 1 && staging.hop === 0 ? { x: x + muzzle.x, y: y + muzzle.y } : null;
     if (staging.hop > 0) {
       const land = scene.coverRestPoint(1 + mark.width, 1);
       x += (land.x - x) * staging.hop;
       y += (land.y - y) * staging.hop - staging.hopLift * markPx;
     }
-    applyPose(overlay, sampleStartripsPullPose(t));
+    applyPose(overlay, pose);
     place?.setAttribute(
       "transform",
       `translate(${x.toFixed(2)} ${y.toFixed(2)}) scale(${(scaleX * staging.facing).toFixed(4)} ${scaleY.toFixed(4)}) translate(${-MARK_CENTRE_X} 0)`,

@@ -84,6 +84,8 @@ const MUZZLE_OFFSET = (695 - 657) / 170;
 export const GOAT_HOOF_RISE = 18 / 150;
 /** The goat's horns reach this far above its hooves, as a fraction of the mark's height (at most the viewBox's 132 of 150 units). */
 export const GOAT_REACH = 132 / 150;
+/** The muzzle stands this far above the hooves, as a fraction of the mark's height (v12 muzzle centre y −89 of 150 units). */
+const MUZZLE_RISE = 89 / 150;
 /** Where the muzzle hooks the fore-edge, just inside it. */
 const GRIP_U = 0.995;
 /** The strip below the tipped-in plate where the goat walks: its hooves on this line, just inside the cover's foot. */
@@ -109,6 +111,10 @@ export type GoatPullStaging = {
   v: number;
   /** The goat's size relative to its stamp: 1 as stamped, `goatAwakeScale` once awake. */
   scale: number;
+  /** 0 standing on its hooves' point, 1 with its muzzle hooked on the fore-edge at `gripV`. */
+  attach: number;
+  /** Cover v where the muzzle hooks the fore-edge: its height above the hooves' line. */
+  gripV: number;
   /** Horizontal scale: 1 faces left as stamped, −1 faces the fore-edge; between, it is turning. */
   facing: number;
   /** 0 the stamped tone, 1 starlight. */
@@ -139,6 +145,10 @@ export function goatPullStaging(elapsedMs: number, mark: MarkFrame): GoatPullSta
     u: startU + (gripU - startU) * walk,
     v: startV + (GOAT_WALK_V - startV) * descend,
     scale: 1 + (awake - 1) * tone,
+    // It reaches for the edge as it arrives and holds it through the tugs
+    // and the heave; the hop after it lets go starts from there.
+    attach: smoothstep(P.walkEnd - 100, P.gripEnd, t),
+    gripV: GOAT_WALK_V - MUZZLE_RISE * mark.height * awake,
     facing: Math.cos(Math.PI * turn),
     tone,
     opacity: (1 - (1 - GOAT_OPACITY) * tone) * fade,
