@@ -75,12 +75,6 @@ function initialReads(media: JourneyMediaAsset[], scenario: Scenario): Record<st
   ]));
 }
 
-/** A swipe pulls the presented page off its depth-0 rest pose. */
-function pagePullX(page: HTMLElement | null) {
-  const transform = page ? getComputedStyle(page).transform : "none";
-  return transform && transform !== "none" ? new DOMMatrixReadOnly(transform).m41 : 0;
-}
-
 function stageSnapshot(stage: HTMLElement, mode: Mode): Snapshot {
   const presentation = stage.querySelector<HTMLElement>("[data-media-presentation]");
   const page = stage.querySelector<HTMLElement>('[data-media-presented="true"]');
@@ -111,7 +105,7 @@ function stageSnapshot(stage: HTMLElement, mode: Mode): Snapshot {
     phase: presentation?.dataset.mediaPresentation ?? "waiting",
     covered: Boolean(painted || preview || storyVideoPainted),
     liveVideoCount,
-    dragX: `${Math.round(pagePullX(page))}px`,
+    dragX: presentation?.style.getPropertyValue("--story-drag-x") || "0px",
   };
 }
 

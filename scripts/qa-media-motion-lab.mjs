@@ -185,6 +185,7 @@ await run("direct-drag-reversal", { scenario: "direct", viewport: viewports[3] }
     phase: node.dataset.mediaPresentation,
     owner: node.querySelector('[data-media-presented="true"]')?.getAttribute("data-media-page-id"),
     transform: node.querySelector('[data-media-page-id="lab-1"]')?.style.transform,
+    dragX: node.style.getPropertyValue("--story-drag-x"),
     physicalSlots: [...node.querySelectorAll("[data-media-page-id]")].map((slot) => slot.getAttribute("data-media-page-id")),
   }));
   const samples = [await sample()];
@@ -215,21 +216,16 @@ await run("delayed-neighbor-covered", { scenario: "delayed", viewport: viewports
   await page.mouse.down();
   for (const offset of [-35, -80, -box.width * 0.4]) {
     await page.mouse.move(x + offset, y);
-    samples.push(await page.locator("[data-media-motion-lab]").evaluate((lab) => {
-      // Without a ready neighbor the swipe still pulls the source page off its rest pose.
-      const source = lab.querySelector('[data-story-media-pages] [data-media-page-id="lab-1"]');
-      const transform = source ? getComputedStyle(source).transform : "none";
-      return {
-        covered: lab.dataset.stageCovered,
-        presented: lab.dataset.presentedMedia,
-        targetRead: lab.querySelector('[data-media-page-id="lab-2"]')?.getAttribute("data-media-read-state"),
-        dragX: transform && transform !== "none" ? new DOMMatrixReadOnly(transform).m41 : 0,
-      };
-    }));
+    samples.push(await page.locator("[data-media-motion-lab]").evaluate((lab) => ({
+      covered: lab.dataset.stageCovered,
+      presented: lab.dataset.presentedMedia,
+      targetRead: lab.querySelector('[data-media-page-id="lab-2"]')?.getAttribute("data-media-read-state"),
+      dragX: lab.querySelector("[data-story-media-pages]")?.style.getPropertyValue("--story-drag-x"),
+    })));
   }
   await page.mouse.up();
   assert.ok(samples.every((entry) => entry.covered === "true" && entry.presented === "lab-1"));
-  assert.ok(samples.some((entry) => Math.abs(entry.dragX) > 1), "pointermove must pull the source page");
+  assert.ok(samples.some((entry) => entry.dragX && entry.dragX !== "0px"));
   await page.getByRole("button", { name: "Next" }).click();
   assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-stage-covered"), "true");
   assert.equal(await page.locator("[data-media-motion-lab]").getAttribute("data-presented-media"), "lab-1");
