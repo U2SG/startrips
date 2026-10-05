@@ -10,6 +10,8 @@ import {
   faceScreenRect,
   KEY_SHADOW,
   READING_KEY,
+  sheetFlipPose,
+  sheetStiffness,
   stackSheets,
   type BookFrame,
   type FaceSide,
@@ -27,6 +29,9 @@ import {
  * rectangle while the near edge shows the thickness of the page blocks. It
  * renders only while something moves.
  */
+/** One of quick_flipbook's sheets (its `FlipPage`, which the package does not export). */
+type Sheet = FlipBook extends Iterable<infer T> ? T : never;
+
 const MAX_PIXEL_RATIO = 2;
 const PAGE_SUBDIVISIONS = 16;
 const FLIP_SECONDS = 0.78;
@@ -276,22 +281,31 @@ export class JourneyBook3dScene {
           object.receiveShadow = true;
         }
       });
-      this.memoize(sheet);
+      this.memoize(sheet, index);
       index += 1;
     }
     for (const sheet of this.book) sheet.page.geometry.computeVertexNormals();
     this.requestRender();
   }
 
-  /** Recompute normals only for sheets whose deformation changed. */
-  private memoize(sheet: { flip: (progress: number, direction: number, intensity?: number) => void; page: THREE.Mesh }) {
-    const flip = sheet.flip.bind(sheet);
+  /**
+   * Pose a sheet with `sheetFlipPose` (the covers turn as rigid boards) and
+   * recompute normals only for sheets whose deformation changed. Every turn
+   * path — `currentPage`, `progress`, the hover lift — ends in `sheet.flip`.
+   */
+  private memoize(sheet: Sheet, index: number) {
+    const stiffness = sheetStiffness(index, this.sheets);
     let previous = "";
     sheet.flip = (progress, direction, intensity = 1) => {
       const key = `${progress}:${direction}:${intensity}`;
       if (key === previous) return;
       previous = key;
-      flip(progress, direction, intensity);
+      const pose = sheetFlipPose(progress, direction, intensity, stiffness);
+      sheet.rotation.z = pose.rotationZ;
+      sheet.bend.force = pose.bendForce;
+      sheet.twist.angle = pose.twistAngle;
+      (sheet.pageCurve as { intensity: number }).intensity = pose.curveIntensity;
+      sheet.modifiers.apply();
       this.dirtySheets.add(sheet);
     };
   }

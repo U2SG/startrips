@@ -19,9 +19,10 @@
 // and navigates with the footer buttons and the keyboard. Phone (390x844, DPR 3,
 // touch) reads one page at a time in portrait: a real touch drag turns the
 // cover, the camera pans between pages, and every check is repeated on the
-// page in focus after its pan. The desktop mouse never moves over the stage,
-// so no page edge is lifted by hover while sampling; the phone session checks
-// that a tap leaves no edge lifted.
+// page in focus after its pan. The desktop mouse never moves over the stage
+// while sampling, so no page edge is lifted by hover; only afterwards does it
+// drag the front cover to save frames of its rigid turn. The phone session
+// checks that a tap leaves no edge lifted.
 //
 // Expectations are fixed by the fixture: 40 sheets, quick_flipbook's sheet
 // spacing and the camera tilt below.
@@ -243,6 +244,26 @@ async function desktopSession(browser) {
     const last = await session.settledAt(FACES - 2);
     await session.checkOuterMargin("last-spread", last, "right");
     await session.checkAlignment("last-spread", last, ["left", "right"], isPaper);
+
+    // Evidence, not a check: the front cover turning as a rigid board under a
+    // held mouse drag (cover-turn-000..004.png). While the pointer holds the
+    // cover the book's clock is paused, so each frame is a fixed pose. It runs
+    // last because the mouse enters the stage here.
+    await page.keyboard.press("Home");
+    const closed = await session.settledAt(0);
+    const coverRect = closed.rects["closed-front"];
+    const grabX = closed.stage.left + coverRect.left + coverRect.width * 0.6;
+    const grabY = closed.stage.top + coverRect.top + coverRect.height * 0.5;
+    const fractions = [0.1, 0.3, 0.5, 0.7, 0.9];
+    await page.mouse.move(grabX, grabY);
+    await page.mouse.down();
+    for (const [index, fraction] of fractions.entries()) {
+      await page.mouse.move(grabX - coverRect.width * fraction, grabY, { steps: 2 });
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await writeFile(`${artifactDir}/desktop-cover-turn-${String(index).padStart(3, "0")}.png`, await page.screenshot({ type: "png" }));
+    }
+    await page.mouse.up();
+    record("desktop cover-turn: front cover drag frames saved for review", { fractions }, true);
   } catch (error) {
     record("desktop: session ran to completion", { error: error instanceof Error ? error.stack ?? error.message : String(error) }, false);
   } finally {

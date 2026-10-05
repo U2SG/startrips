@@ -11,6 +11,8 @@ import {
   RAKING_ELEVATION,
   READING_KEY,
   restingPageHeight,
+  sheetFlipPose,
+  sheetStiffness,
   stackSheets,
   dragFraction,
   dragTurnDirection,
@@ -246,5 +248,69 @@ describe("coverKeyLight", () => {
   it("snaps between the two poses under reduced motion", () => {
     expect(coverKeyLight(0.3, true)).toEqual(coverKeyLight(0, false));
     expect(coverKeyLight(0.6, true)).toEqual(coverKeyLight(1, false));
+  });
+});
+
+describe("sheet stiffness", () => {
+  // quick_flipbook's FlipPage.flip, verbatim.
+  const library = (t: number, direction: number, s: number) => ({
+    rotationZ: Math.PI * t,
+    bendForce: Math.min(-Math.sin(Math.PI * t) / 2, -1e-4) * direction,
+    twistAngle: Math.sin(Math.PI * t) / 10,
+    curveIntensity: (-1 + 2 * t) * (-Math.sin(Math.PI * t) + 1) * s,
+  });
+  const steps = Array.from({ length: 21 }, (_, step) => step / 20);
+
+  it("makes the first and last sheet boards and every other sheet paper", () => {
+    expect([0, 1, 2, 38, 39].map((index) => sheetStiffness(index, 40))).toEqual([1, 0, 0, 0, 1]);
+    expect(sheetStiffness(0, 1)).toBe(1);
+    expect([0, 1].map((index) => sheetStiffness(index, 2))).toEqual([1, 1]);
+  });
+
+  it("turns paper exactly as quick_flipbook does", () => {
+    for (const t of steps) {
+      for (const direction of [-1, 1]) {
+        for (const s of [0, 0.4, 1]) {
+          const pose = sheetFlipPose(t, direction, s, 0);
+          const expected = library(t, direction, s);
+          expect(pose.rotationZ).toBeCloseTo(expected.rotationZ, 12);
+          expect(pose.bendForce).toBeCloseTo(expected.bendForce, 12);
+          expect(pose.twistAngle).toBeCloseTo(expected.twistAngle, 12);
+          expect(pose.curveIntensity).toBeCloseTo(expected.curveIntensity, 12);
+        }
+      }
+    }
+  });
+
+  it("swings a board about the spine without curl or twist", () => {
+    for (const t of steps) {
+      for (const direction of [-1, 1]) {
+        const pose = sheetFlipPose(t, direction, 1, 1);
+        expect(pose.rotationZ).toBeCloseTo(Math.PI * t, 12);
+        expect(pose.bendForce).toBeCloseTo(-1e-4 * direction, 12);
+        expect(pose.twistAngle).toBe(0);
+        // The spine curve only gives near the ends of the turn, never more than paper's.
+        expect(Math.abs(pose.curveIntensity)).toBeLessThanOrEqual(Math.abs(library(t, direction, 1).curveIntensity) + 1e-12);
+      }
+    }
+    // A quarter of the way over, paper still carries ~15% of its spine curve; a board ~1%.
+    expect(Math.abs(sheetFlipPose(0.25, 1, 1, 1).curveIntensity)).toBeLessThan(0.02);
+    expect(sheetFlipPose(0.5, 1, 1, 1).curveIntensity).toBe(0);
+  });
+
+  it("rests a board in exactly the shape of paper", () => {
+    for (const t of [0, 1]) {
+      for (const direction of [-1, 1]) {
+        for (const s of [0, 0.5, 1]) {
+          const board = sheetFlipPose(t, direction, s, 1);
+          const paper = sheetFlipPose(t, direction, s, 0);
+          expect(board.rotationZ).toBe(paper.rotationZ);
+          expect(board.bendForce).toBe(paper.bendForce);
+          // sin(π) is 1.2e-16 in floating point, not 0.
+          expect(board.twistAngle).toBeCloseTo(paper.twistAngle, 12);
+          expect(board.curveIntensity).toBeCloseTo(paper.curveIntensity, 12);
+        }
+      }
+    }
   });
 });
