@@ -180,6 +180,22 @@ async function waitForCurrent(page, id, timeout = 10_000) {
   }, { selector: STAGE, expected: id }, { polling: "raf", timeout });
 }
 
+// The first media can be settled while the Story dialog is still finishing
+// its opening scale, so its rect is a frame of that motion rather than the
+// resting stage. Wait until the stage reads the same box on consecutive frames.
+async function waitForStableStage(page, timeout = 5_000) {
+  await page.waitForFunction((selector) => {
+    const rect = document.querySelector(selector)?.querySelector("[data-story-media-pages]")?.getBoundingClientRect();
+    if (!rect) return false;
+    const box = [rect.left, rect.top, rect.width, rect.height].map((value) => value.toFixed(2)).join(",");
+    const state = window.__noteBeatsStageBox ?? { box: null, frames: 0 };
+    state.frames = state.box === box ? state.frames + 1 : 0;
+    state.box = box;
+    window.__noteBeatsStageBox = state;
+    return state.frames >= 3;
+  }, STAGE, { polling: "raf", timeout });
+}
+
 async function pressOnStage(page, key) {
   await page.evaluate((selector) => (
     document.querySelector(selector)?.querySelector("[data-story-media-pages]")?.focus()
@@ -278,6 +294,7 @@ try {
     try {
       const { page } = session;
       await waitForCurrent(page, S1);
+      await waitForStableStage(page);
       progress.s1 = await storyState(page);
       await pressOnStage(page, "ArrowRight");
       await waitForCurrent(page, A1);
@@ -393,6 +410,7 @@ try {
     try {
       const { page } = session;
       await waitForCurrent(page, S1);
+      await waitForStableStage(page);
       progress.s1 = await storyState(page);
       await swipe(session, 1);
       await waitForCurrent(page, A1);
