@@ -26,7 +26,7 @@ export type GoatPullFrame = {
 
 export type GoatPull = {
   /** Any input: the goat lets go and fades, the cover returns to the reader from its current angle. */
-  interrupt(): void;
+  interrupt(inputAt?: number): void;
   /** QA: hold the performance at `elapsedMs` (scrubbing performances only). */
   scrub(elapsedMs: number): void;
   /** Stop at once with nothing left behind (unmount, a new scene). */
@@ -146,7 +146,8 @@ export function startGoatPull(options: {
     return !scrubbing;
   };
 
-  function interrupt() {
+  /** `inputAt`: the input's time (performance.now() scale); the fade is timed from it. */
+  function interrupt(inputAt = performance.now()) {
     if (status !== "playing" && status !== "released") return;
     if (status === "playing") {
       if (!scrubbing && scene.progress >= UPRIGHT) {
@@ -161,14 +162,17 @@ export function startGoatPull(options: {
     scene.drive(null);
     stopListening();
     report();
-    // The goat lets go where it is and fades on the compositor, whatever the
-    // book's frame rate.
+    // The goat lets go where it is and fades on the compositor, timed from
+    // the input itself: however long the book's frames take, the goat is gone
+    // `tiers.instant` after the reader's input, never later.
     if (typeof overlay.animate === "function" && opacity > 0) {
       fading = overlay.animate([{ opacity }, { opacity: 0 }], {
         duration: motionTokens.tiers.instant,
         easing: motionTokens.easings.easeOut,
         fill: "forwards",
       });
+      // The document timeline shares performance.now()'s origin.
+      fading.startTime = Math.min(inputAt, document.timeline.currentTime === null ? inputAt : Number(document.timeline.currentTime));
       fading.onfinish = () => {
         fading = null;
         hide();
@@ -183,7 +187,7 @@ export function startGoatPull(options: {
   function onInput(event: Event) {
     if (status !== "playing" && status !== "released") return;
     options.onInterrupt?.(event);
-    interrupt();
+    interrupt(event.timeStamp);
   }
 
   window.addEventListener("pointerdown", onInput, { capture: true });

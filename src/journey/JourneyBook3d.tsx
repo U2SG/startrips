@@ -37,6 +37,8 @@ import {
   goatPullAutoEligible,
   goatPullMarkHit,
   goatPullPlayed,
+  goatPullRecordsPlay,
+  type GoatPullOrigin,
   goatPullStorage,
   markGoatPullPlayed,
 } from "./journeyBookGoatPull";
@@ -719,12 +721,13 @@ export function JourneyBook3d({
     if (stage) stage.dataset.goatPull = JSON.stringify(state);
   }, []);
 
-  const playGoatPull = useCallback((origin: "auto" | "tap" | "scrub") => {
+  const playGoatPull = useCallback((origin: GoatPullOrigin) => {
     const scene = sceneRef.current;
     const overlay = goatRef.current;
     if (!scene || !overlay || !journey || goatPullRef.current || faceRef.current !== 0 || !scene.isSettled()) return null;
     if (origin !== "scrub" && reduced) return null;
-    if (origin === "auto") {
+    // Any real performance, auto or tapped, counts: the goat never wakes again unasked.
+    if (goatPullRecordsPlay(origin)) {
       markGoatPullPlayed(goatPullStorage(), journey.id);
       setGoatPlayed(true);
     }

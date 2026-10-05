@@ -163,6 +163,18 @@ export function goatPullAutoEligible(state: GoatPullAutoState): boolean {
   return !state.reduced && !state.played && state.onClosedCover && state.markReady && !state.blocked;
 }
 
+/** How a performance began: the reader left the cover alone, tapped the mark, or QA is scrubbing it. */
+export type GoatPullOrigin = "auto" | "tap" | "scrub";
+
+/**
+ * Whether starting a performance records the Journey as played on this
+ * device: any real performance does, auto or tapped, so a reader who has seen
+ * it is never shown it again unasked. A QA scrub does not.
+ */
+export function goatPullRecordsPlay(origin: GoatPullOrigin): boolean {
+  return origin !== "scrub";
+}
+
 /** A tap on the mark replays it; the hit area is at least `minHit` px square around the mark. */
 export function goatPullMarkHit(
   point: { x: number; y: number },

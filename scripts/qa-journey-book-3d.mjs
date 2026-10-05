@@ -121,6 +121,8 @@ const FILMSTRIP_MS = [0, 400, 1000, 1600, 2200, 2800, 3400];
 const GOAT_QUIET_MS = 2_500;
 // An input must end the performance within this.
 const INTERRUPT_BUDGET_MS = 200;
+// ... and the goat must be gone from the screen within this of the press.
+const LET_GO_BUDGET_MS = 400;
 // A whole performance steps through about 85 book frames, each up to a second or two under SwiftShader.
 const GOAT_PLAY_TIMEOUT_MS = 240_000;
 
@@ -508,6 +510,17 @@ async function goatLiveSession(browser) {
     const from = cover.stage.left + rect.left + rect.width * 0.8;
     const to = cover.stage.left + rect.left + rect.width * 0.05;
     await page.mouse.move(from, y);
+    // Record every frame's start and the goat's opacity in it, from just before the press.
+    await page.evaluate(() => {
+      window.__qaGoatFrames = [];
+      const overlay = document.querySelector(".journey-book-3d__goat");
+      const sample = (t) => {
+        const visible = overlay.style.display !== "none";
+        window.__qaGoatFrames.push({ t: Number(t.toFixed(1)), opacity: visible ? Number(getComputedStyle(overlay).opacity) : 0 });
+        if (window.__qaGoatFrames.length < 400) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
     await page.mouse.down();
     const stopped = await session.goat();
     const reaction = stopped.endedAt !== null && stopped.endedAt !== undefined && stopped.pointerDownAt !== null
@@ -515,21 +528,17 @@ async function goatLiveSession(browser) {
     record("desktop goat: a press ends the performance within 200 ms", {
       status: stopped.status, reactionMs: reaction === null ? null : Number(reaction.toFixed(1)), progressAtPress: stopped.progress,
     }, stopped.status === "interrupted" && reaction !== null && reaction >= 0 && reaction <= INTERRUPT_BUDGET_MS);
-    // The goat lets go at once: its fade is a compositor animation no longer
-    // than an instant-tier step. Its progress follows the document's frames,
-    // which take a second or more under SwiftShader, so the end of the fade is
-    // awaited rather than sampled at a fixed delay.
-    const fade = await page.evaluate(() => {
-      const animation = document.querySelector(".journey-book-3d__goat")?.getAnimations()[0];
-      const timing = animation?.effect?.getTiming();
-      return animation ? { duration: Number(timing?.duration), to: animation.effect.getKeyframes().at(-1)?.opacity } : null;
-    });
-    const gone = await page.waitForFunction(() => {
-      const overlay = document.querySelector(".journey-book-3d__goat");
-      return overlay.style.display === "none" || Number(getComputedStyle(overlay).opacity) <= 0.01;
-    }, undefined, { timeout: 30_000 }).then(() => true, () => false);
-    record("desktop goat: the goat lets go and fades out within an instant-tier fade", { fade, gone },
-      Boolean(fade) && fade.duration <= 150 && Number(fade.to) === 0 && gone);
+    // The goat lets go at once: from the press to the first frame in which it
+    // is no longer visible, measured in page time (each frame's own start).
+    const frames = await page.waitForFunction((pressAt) => {
+      const seen = window.__qaGoatFrames ?? [];
+      const gone = seen.find((frame) => frame.t >= pressAt && frame.opacity <= 0.01);
+      return gone ? { pressAt, goneAt: gone.t, frames: seen.filter((frame) => frame.t >= pressAt - 50).slice(0, 12) } : false;
+    }, stopped.pointerDownAt, { timeout: 30_000 }).then((handle) => handle.jsonValue(), () => null);
+    const disappearMs = frames ? frames.goneAt - frames.pressAt : null;
+    record("desktop goat: the goat is gone within 400 ms of the press", {
+      disappearMs: disappearMs === null ? null : Number(disappearMs.toFixed(1)), frames: frames?.frames ?? null,
+    }, disappearMs !== null && disappearMs <= LET_GO_BUDGET_MS);
     for (let step = 1; step <= 12; step += 1) await page.mouse.move(from + ((to - from) * step) / 12, y);
     await page.mouse.up();
     await page.mouse.move(4, 4);

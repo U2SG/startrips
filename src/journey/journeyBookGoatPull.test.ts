@@ -16,6 +16,7 @@ import {
   goatPullCoverProgress,
   goatPullMarkHit,
   goatPullPlayed,
+  goatPullRecordsPlay,
   goatPullStaging,
   markGoatPullPlayed,
 } from "./journeyBookGoatPull";
@@ -135,6 +136,28 @@ describe("when the goat wakes", () => {
     expect(goatPullAutoEligible({ ...ready, onClosedCover: false })).toBe(false);
     expect(goatPullAutoEligible({ ...ready, markReady: false })).toBe(false);
     expect(goatPullAutoEligible({ ...ready, blocked: true })).toBe(false);
+  });
+
+  it("counts a tapped first play, so the goat never wakes again unasked, even after a reload", () => {
+    const storage = memoryStorage();
+    const journeyId = "journey-tapped";
+    const autoState = () => ({ ...ready, played: goatPullPlayed(storage, journeyId) });
+    expect(goatPullAutoEligible(autoState())).toBe(true);
+    // The reader taps the mark before the idle wait ends.
+    expect(goatPullRecordsPlay("tap")).toBe(true);
+    markGoatPullPlayed(storage, journeyId);
+    // Back on the closed cover: no auto play.
+    expect(goatPullAutoEligible(autoState())).toBe(false);
+    // A reload reads the device's list afresh: still no auto play.
+    const reloaded = { getItem: storage.getItem, setItem: storage.setItem };
+    expect(goatPullAutoEligible({ ...ready, played: goatPullPlayed(reloaded, journeyId) })).toBe(false);
+    expect(JSON.parse(storage.values.get(GOAT_PULL_PLAYED_KEY) ?? "[]")).toContain(journeyId);
+  });
+
+  it("records auto and tapped plays, never a QA scrub", () => {
+    expect(goatPullRecordsPlay("auto")).toBe(true);
+    expect(goatPullRecordsPlay("tap")).toBe(true);
+    expect(goatPullRecordsPlay("scrub")).toBe(false);
   });
 
   it("remembers each Journey on the device", () => {
