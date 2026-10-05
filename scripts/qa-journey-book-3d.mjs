@@ -112,9 +112,29 @@ function probes(state, side) {
   return { list, rect, blockPx };
 }
 
-/** One browser context, its page and the helpers that read it. */
-async function openSession(browser, name, contextOptions) {
+// The cover's goat (journeyBookGoatPull.ts): the fixture Journey, the device's
+// played list, and the filmstrip times (ms into the performance).
+const FIXTURE_JOURNEY_ID = "00000000-0000-4000-8000-000000000001";
+const GOAT_PLAYED_KEY = "startrips.journeyBook3d.goatPull.played";
+const FILMSTRIP_MS = [0, 400, 1000, 1600, 2200, 2800, 3400];
+// The goat is quiet this long after the idle threshold before "no replay" is believed.
+const GOAT_QUIET_MS = 2_500;
+// An input must end the performance within this.
+const INTERRUPT_BUDGET_MS = 200;
+
+/**
+ * One browser context, its page and the helpers that read it. `goatPlayed`
+ * marks the fixture's goat as already played on this device, so the lanes
+ * that check settled geometry are not interrupted by its performance.
+ */
+async function openSession(browser, name, contextOptions, { query = "", goatPlayed = false } = {}) {
   const context = await browser.newContext(contextOptions);
+  await context.addInitScript(({ key, id, played }) => {
+    if (played) localStorage.setItem(key, JSON.stringify([id]));
+    // In-page stamp of the latest press as it is dispatched (ahead of the
+    // book's own capture listener), for the interrupt budget.
+    window.addEventListener("pointerdown", () => { window.__qaPointerDownAt = performance.now(); }, { capture: true });
+  }, { key: GOAT_PLAYED_KEY, id: FIXTURE_JOURNEY_ID, played: goatPlayed });
   const page = await context.newPage();
   const consoleErrors = [];
   const pageErrors = [];
@@ -132,8 +152,49 @@ async function openSession(browser, name, contextOptions) {
       body: JSON.stringify({ url: PHOTOS[index % PHOTOS.length], expiresAt: new Date(Date.now() + 900_000).toISOString() }),
     });
   });
-  await page.goto(`${origin}/?qaState=journey-book-3d`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}/?qaState=journey-book-3d${query}`, { waitUntil: "domcontentloaded" });
   await page.locator(".journey-book-3d").waitFor({ state: "visible", timeout: 30_000 });
+
+  /** The book's report the moment it rests with the reader on `face` (no picture wait: the goat may wake). */
+  async function restingAt(face) {
+    await page.waitForFunction((want) => {
+      const raw = document.querySelector(".journey-book-3d__stage")?.dataset.qaBook;
+      return raw ? JSON.parse(raw).face === want : false;
+    }, face, { timeout: SETTLE_TIMEOUT_MS });
+    return page.evaluate(() => {
+      const stage = document.querySelector(".journey-book-3d__stage");
+      const box = stage.getBoundingClientRect();
+      return { ...JSON.parse(stage.dataset.qaBook), stage: { left: box.left, top: box.top, width: box.width, height: box.height } };
+    });
+  }
+
+  /** What the goat reports (`data-goat-pull`), and whether it is on screen. */
+  function goat() {
+    return page.evaluate(() => {
+      const stage = document.querySelector(".journey-book-3d__stage");
+      const overlay = document.querySelector(".journey-book-3d__goat");
+      const place = document.querySelector("[data-goat-place]");
+      const state = JSON.parse(stage?.dataset.goatPull ?? "null");
+      const shown = Boolean(overlay) && overlay.style.display !== "none" && Number(getComputedStyle(overlay).opacity) > 0.01;
+      const stageBox = stage.getBoundingClientRect();
+      const box = shown ? place.getBoundingClientRect() : null;
+      return {
+        ...state,
+        shown,
+        opacity: overlay ? Number(getComputedStyle(overlay).opacity) : 0,
+        box: box ? { left: box.left - stageBox.left, top: box.top - stageBox.top, width: box.width, height: box.height } : null,
+        pointerDownAt: window.__qaPointerDownAt ?? null,
+      };
+    });
+  }
+
+  async function waitForGoat(predicate, arg, timeout = SETTLE_TIMEOUT_MS) {
+    await page.waitForFunction(predicate, arg, { timeout });
+    return goat();
+  }
+
+  /** Two animation frames, so the last WebGL frame and overlay write are on screen. */
+  const presented = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
   /** Wait until the book has settled with the reader on `face`, then read what it reports. */
   async function settledAt(face) {
@@ -212,12 +273,12 @@ async function openSession(browser, name, contextOptions) {
       consoleErrors.length === 0 && pageErrors.length === 0);
   }
 
-  return { page, context, settledAt, checkAlignment, checkOuterMargin, recordErrors };
+  return { page, context, settledAt, restingAt, goat, waitForGoat, presented, checkAlignment, checkOuterMargin, recordErrors };
 }
 
 /** Desktop: spreads in landscape, mouse and keyboard. */
 async function desktopSession(browser) {
-  const session = await openSession(browser, "desktop", { viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+  const session = await openSession(browser, "desktop", { viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 }, { goatPlayed: true });
   const { page } = session;
   try {
     const cover = await session.settledAt(0);
@@ -298,6 +359,21 @@ async function phoneSession(browser) {
       cover.sheets === SHEETS && cover.orientation === "portrait");
     await session.checkAlignment("cover", cover, ["closed-front"], isCloth);
 
+    // Reduced motion: the cover's goat never wakes, and a tap on its mark
+    // plays nothing (it is an ordinary tap on the cover's left third).
+    await page.waitForTimeout(GOAT_QUIET_MS);
+    const quiet = await session.goat();
+    record("phone reduced motion: the goat never wakes on the closed cover", { status: quiet.status, shown: quiet.shown },
+      quiet.status === "idle" && !quiet.shown);
+    const mark = cover.goatMark;
+    await touch("touchStart", cover.stage.left + mark.left + mark.width / 2, cover.stage.top + mark.top + mark.height / 2);
+    await touch("touchEnd");
+    await page.waitForTimeout(1_500);
+    const tapped = await session.goat();
+    const stillClosed = await session.restingAt(0);
+    record("phone reduced motion: a tap on the goat mark plays nothing", { status: tapped.status, shown: tapped.shown, face: stillClosed.face },
+      tapped.status === "idle" && !tapped.shown && stillClosed.face === 0);
+
     // A touch drag from the cover's right side to its left turns the cover;
     // the reader lands on the first page (the left page of spread 1).
     const rect = cover.rects["closed-front"];
@@ -338,6 +414,142 @@ async function phoneSession(browser) {
   }
 }
 
+/**
+ * The cover's goat, frame by frame: the fixture's scrub hook holds the
+ * performance at each filmstrip time (`goatPull=scrub`; the goat never wakes by
+ * itself there), and each frame is saved for the owner's motion review.
+ */
+async function goatFilmstripSession(browser, name, contextOptions) {
+  const session = await openSession(browser, `${name}-goat-film`, contextOptions, { query: "&goatPull=scrub" });
+  const { page } = session;
+  try {
+    const cover = await session.restingAt(0);
+    const mark = cover.goatMark;
+    const frames = [];
+    for (const [index, ms] of FILMSTRIP_MS.entries()) {
+      await page.evaluate((elapsed) => window.__journeyBookGoatPull.scrub(elapsed), ms);
+      await session.waitForGoat((want) => {
+        const raw = document.querySelector(".journey-book-3d__stage")?.dataset.goatPull;
+        return raw ? JSON.parse(raw).elapsedMs === want : false;
+      }, ms, 60_000);
+      // The first frame waits for the cover's repaint without its embossed goat.
+      await page.waitForTimeout(index === 0 ? 800 : 250);
+      await session.presented();
+      const state = await session.goat();
+      frames.push({ ms, progress: Number(state.progress.toFixed(4)), opacity: Number(state.opacity.toFixed(3)), box: state.box });
+      await writeFile(`${artifactDir}/${name}-goat-pull-${String(index).padStart(3, "0")}.png`,
+        await page.screenshot({ type: "png", scale: "css" }));
+    }
+    record(`${name} goat filmstrip: ${FILMSTRIP_MS.length} frames saved`, { frames }, frames.length === FILMSTRIP_MS.length);
+
+    const [wake, , walking, tug1, tug2, , gone] = frames;
+    // Wake: the live goat stands exactly where its emboss was stamped.
+    const inside = wake.box && wake.box.left >= mark.left - 2 && wake.box.top >= mark.top - 2
+      && wake.box.left + wake.box.width <= mark.left + mark.width + 2
+      && wake.box.top + wake.box.height <= mark.top + mark.height + 2
+      && wake.box.width >= mark.width * 0.5;
+    record(`${name} goat filmstrip: the goat wakes over its embossed mark`, { mark, goat: wake.box }, Boolean(inside));
+    record(`${name} goat filmstrip: it walks toward the fore-edge`, { mark, goat: walking.box },
+      Boolean(walking.box) && walking.box.left > mark.left + mark.width);
+    record(`${name} goat filmstrip: the cover lifts under the tugs and the goat rides its edge`, {
+      tug1: tug1.progress, tug2: tug2.progress, tug1Bottom: tug1.box?.top + tug1.box?.height, tug2Bottom: tug2.box?.top + tug2.box?.height,
+    }, tug1.progress > 0.01 && tug2.progress > tug1.progress && Boolean(tug1.box && tug2.box)
+      && tug2.box.top + tug2.box.height < tug1.box.top + tug1.box.height - 2);
+    record(`${name} goat filmstrip: the goat is gone as the cover turns on`, { last: gone }, gone.opacity < 0.05 && gone.progress > 0.55);
+  } catch (error) {
+    record(`${name} goat filmstrip: session ran to completion`, { error: error instanceof Error ? error.stack ?? error.message : String(error) }, false);
+  } finally {
+    session.recordErrors();
+    await session.context.close();
+  }
+}
+
+/**
+ * The cover's goat live on a desktop: it wakes by itself on the closed cover,
+ * a press ends it at once and the drag that press began turns the cover, it
+ * does not wake again, a click on the mark replays it to the first spread,
+ * and after a reload it stays asleep.
+ */
+async function goatLiveSession(browser) {
+  const session = await openSession(browser, "desktop-goat", { viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+  const { page } = session;
+  const playing = (minElapsed) => {
+    const raw = document.querySelector(".journey-book-3d__stage")?.dataset.goatPull;
+    const state = raw ? JSON.parse(raw) : null;
+    return state?.status === "playing" && state.elapsedMs >= minElapsed;
+  };
+  try {
+    const cover = await session.restingAt(0);
+    const rect = cover.rects["closed-front"];
+    const mark = cover.goatMark;
+    const started = await session.waitForGoat(playing, 0, 60_000);
+    record("desktop goat: it wakes by itself on the closed cover", { status: started.status }, started.shown);
+
+    // Mid-tug, a press interrupts; the drag it starts turns the cover.
+    await session.waitForGoat(playing, 1_500, 60_000);
+    const y = cover.stage.top + rect.top + rect.height * 0.5;
+    const from = cover.stage.left + rect.left + rect.width * 0.8;
+    const to = cover.stage.left + rect.left + rect.width * 0.05;
+    await page.mouse.move(from, y);
+    await page.mouse.down();
+    const stopped = await session.goat();
+    const reaction = stopped.endedAt !== null && stopped.endedAt !== undefined && stopped.pointerDownAt !== null
+      ? stopped.endedAt - stopped.pointerDownAt : null;
+    record("desktop goat: a press ends the performance within 200 ms", {
+      status: stopped.status, reactionMs: reaction === null ? null : Number(reaction.toFixed(1)), progressAtPress: stopped.progress,
+    }, stopped.status === "interrupted" && reaction !== null && reaction >= 0 && reaction <= INTERRUPT_BUDGET_MS);
+    await page.waitForTimeout(400);
+    const letGo = await session.goat();
+    record("desktop goat: the goat lets go and fades at once", { shown: letGo.shown, opacity: letGo.opacity }, !letGo.shown);
+    for (let step = 1; step <= 12; step += 1) await page.mouse.move(from + ((to - from) * step) / 12, y);
+    await page.mouse.up();
+    await page.mouse.move(4, 4);
+    const turned = await session.restingAt(2);
+    const after = await session.goat();
+    record("desktop goat: the cover stays the reader's; their drag turns it to the first spread", {
+      spread: turned.spread, face: turned.face, goatShown: after.shown,
+    }, turned.spread === 1 && turned.face === 2 && !after.shown);
+
+    // Played once on this device: back on the cover it stays asleep.
+    await page.locator(".journey-book-3d").focus();
+    await page.keyboard.press("Home");
+    await session.restingAt(0);
+    await page.waitForTimeout(GOAT_QUIET_MS);
+    const asleep = await session.goat();
+    record("desktop goat: once played, it does not wake again on the cover", { status: asleep.status, shown: asleep.shown },
+      asleep.status !== "playing" && !asleep.shown);
+
+    // A click on the mark replays it, through to the first spread.
+    await page.mouse.click(cover.stage.left + mark.left + mark.width / 2, cover.stage.top + mark.top + mark.height / 2);
+    await page.mouse.move(4, 4);
+    const replay = await session.waitForGoat(playing, 0, 30_000);
+    record("desktop goat: a click on the goat mark replays it", { status: replay.status }, replay.status === "playing");
+    const done = await session.waitForGoat(() => {
+      const raw = document.querySelector(".journey-book-3d__stage")?.dataset.goatPull;
+      return raw ? JSON.parse(raw).status === "done" : false;
+    }, undefined);
+    const first = await session.settledAt(2);
+    record("desktop goat: the performance leaves the book on the first spread", {
+      status: done.status, spread: first.spread, face: first.face, goatShown: done.shown,
+    }, first.spread === 1 && first.face === 2 && !done.shown);
+    await session.checkOuterMargin("goat-first-spread", first, "left");
+    await session.checkAlignment("goat-first-spread", first, ["left", "right"], isPaper);
+
+    // Once per Journey per device: a reload does not replay it.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await session.restingAt(0);
+    await page.waitForTimeout(GOAT_QUIET_MS);
+    const reloaded = await session.goat();
+    record("desktop goat: after a reload it does not play again", { status: reloaded.status, shown: reloaded.shown },
+      reloaded.status === "idle" && !reloaded.shown);
+  } catch (error) {
+    record("desktop goat: session ran to completion", { error: error instanceof Error ? error.stack ?? error.message : String(error) }, false);
+  } finally {
+    session.recordErrors();
+    await session.context.close();
+  }
+}
+
 const browser = await launchQaBrowser({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
@@ -345,6 +557,9 @@ try {
   await mkdir(artifactDir, { recursive: true });
   await desktopSession(browser);
   await phoneSession(browser);
+  await goatFilmstripSession(browser, "desktop", { viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+  await goatFilmstripSession(browser, "phone", { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  await goatLiveSession(browser);
 } finally {
   await writeFile(`${artifactDir}/checks.json`, `${JSON.stringify(checks, null, 2)}\n`).catch(() => {});
   await browser.close();

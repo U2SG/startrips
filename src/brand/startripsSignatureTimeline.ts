@@ -116,6 +116,8 @@ export function isUniformTimelineScale(clip: StartripsSignatureClip) {
 export type StartripsSignaturePose = {
   rootX: number;
   rootY: number;
+  /** Lean of the whole goat about its hind hooves (clockwise rears up); 0 when absent. */
+  rootRotateDeg?: number;
   bodyY: number;
   headRotateDeg: number;
   eyeX: number;

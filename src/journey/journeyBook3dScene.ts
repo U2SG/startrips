@@ -3,6 +3,7 @@ import { FlipBook } from "quick_flipbook";
 import type { JourneyBookOrientation } from "./journeyBookLayout";
 import {
   BOOK_CAMERA_TILT,
+  BOOK_FLIP_SECONDS,
   BOOK_SHEET_SPACING,
   bookFrame,
   bookTableHeight,
@@ -34,7 +35,6 @@ type Sheet = FlipBook extends Iterable<infer T> ? T : never;
 
 const MAX_PIXEL_RATIO = 2;
 const PAGE_SUBDIVISIONS = 16;
-const FLIP_SECONDS = 0.78;
 const FOCUS_RATE = 9;
 const EDGE_LIFT = 0.055;
 const PAPER_ROUGHNESS = 0.88;
@@ -106,6 +106,8 @@ export class JourneyBook3dScene {
   private readonly dirtySheets = new Set<{ page: THREE.Mesh }>();
   private frame: number | null = null;
   private lastTime = 0;
+  /** True while `animate` runs: setters called from the driver must not schedule a second frame. */
+  private inFrame = false;
   private cssWidth = 1;
   private cssHeight = 1;
   private orientation: JourneyBookOrientation = "landscape";
@@ -123,6 +125,9 @@ export class JourneyBook3dScene {
   private dragging = false;
   private edge: { base: number; direction: -1 | 1; amount: number; target: number } | null = null;
   private onFrameListener: ((progress: number, settled: boolean) => void) | null = null;
+  /** A per-frame performance (the cover's goat); keeps frames coming while it returns true. */
+  private driver: ((now: number) => boolean) | null = null;
+  private readonly pointScratch = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
   readonly pageWidth: number;
 
   constructor(canvas: HTMLCanvasElement, pageWidth: number, reduced: boolean, background: string) {
@@ -168,7 +173,7 @@ export class JourneyBook3dScene {
 
     this.blank = this.paperMaterial(null);
     this.book = new FlipBook({
-      flipDuration: reduced ? 0.001 : FLIP_SECONDS,
+      flipDuration: reduced ? 0.001 : BOOK_FLIP_SECONDS,
       yBetweenPages: BOOK_SHEET_SPACING,
       pageSubdivisions: PAGE_SUBDIVISIONS,
     });
@@ -437,9 +442,14 @@ export class JourneyBook3dScene {
       && Math.abs(this.focus - this.focusTarget) < SETTLED_EPSILON;
   }
 
-  /** Turn (animated) to a spread; many sheets riffle in one turn's time. */
+  /**
+   * Turn (animated) to a spread; many sheets riffle in one turn's time. A page
+   * edge still up (a hover lift, or a cover the goat let go) turns from where
+   * it is rather than snapping down first.
+   */
   turnTo(spread: number) {
-    this.clearEdge(true);
+    this.edge = null;
+    this.dragging = false;
     this.book.currentPage = Math.max(0, Math.min(this.sheets, spread)) * 2;
     this.requestRender();
   }
@@ -456,9 +466,27 @@ export class JourneyBook3dScene {
     this.dragging = true;
   }
 
-  /** Progress while the pointer holds the page. */
-  dragTo(progress: number) {
+  /**
+   * Progress while the pointer (or the goat) holds the page. `bendForward`
+   * keeps an opening bend while progress falls back, as a lifted edge does.
+   */
+  dragTo(progress: number, bendForward = false) {
     this.book.progress = progress;
+    if (bendForward) this.bendToward(this.book.progress, 1);
+    this.requestRender();
+  }
+
+  /**
+   * Let a held page down from where it is: it settles back like a hover lift,
+   * keeping its bend, unless a drag catches it first (`takeEdge(true)`).
+   */
+  layDown() {
+    this.dragging = false;
+    const progress = this.book.progress;
+    const base = Math.floor(progress + SETTLED_EPSILON);
+    const amount = progress - base;
+    if (amount > SETTLED_EPSILON) this.edge = { base, direction: 1, amount, target: 0 };
+    else this.book.progress = base;
     this.requestRender();
   }
 
@@ -490,10 +518,13 @@ export class JourneyBook3dScene {
     return this.edge !== null;
   }
 
-  /** A drag that starts on a lifted edge takes over its pose. */
-  takeEdge(): { direction: -1 | 1; fraction: number; base: number } | null {
+  /**
+   * A drag that starts on a lifted edge takes over its pose; `catching` also
+   * takes one that is settling back (a cover the goat just let go).
+   */
+  takeEdge(catching = false): { direction: -1 | 1; fraction: number; base: number } | null {
     const edge = this.edge;
-    if (!edge || edge.target === 0) return null;
+    if (!edge || (edge.target === 0 && !catching)) return null;
     this.edge = null;
     return { direction: edge.direction, fraction: edge.amount, base: edge.base };
   }
@@ -519,25 +550,81 @@ export class JourneyBook3dScene {
       return false;
     }
     this.book.progress = edge.base + edge.direction * edge.amount;
-    if (edge.target === 0) {
-      // The engine bends by the direction progress moves; while the lift lays
-      // back down that would curl the page the wrong way, so keep its bend.
-      const progress = this.book.progress;
-      const fraction = progress - Math.floor(progress);
-      const intensity = progress < 1 ? fraction
-        : progress >= this.sheets ? 0
-          : progress >= this.sheets - 1 ? 1 - fraction : 1;
-      let index = 0;
-      const target = edge.direction === 1 ? edge.base : edge.base - 1;
-      for (const sheet of this.book) {
-        if (index === target) {
-          sheet.flip(edge.direction === 1 ? edge.amount : 1 - edge.amount, edge.direction, intensity);
-          break;
-        }
-        index += 1;
-      }
-    }
+    // The engine bends by the direction progress moves; while the lift lays
+    // back down that would curl the page the wrong way, so keep its bend.
+    if (edge.target === 0) this.bendToward(this.book.progress, edge.direction);
     return edge.amount !== edge.target;
+  }
+
+  /** Re-bend the sheet in flight at `progress` as if it were turning in `direction`. */
+  private bendToward(progress: number, direction: -1 | 1) {
+    const turned = Math.floor(progress);
+    const fraction = progress - turned;
+    if (fraction <= 0) return;
+    const intensity = progress < 1 ? fraction
+      : progress >= this.sheets ? 0
+        : progress >= this.sheets - 1 ? 1 - fraction : 1;
+    let index = 0;
+    for (const sheet of this.book) {
+      if (index === turned) {
+        sheet.flip(fraction, direction, intensity);
+        break;
+      }
+      index += 1;
+    }
+  }
+
+  /** Run `driver` in every frame, before it renders, until it returns false (or is replaced by null). */
+  drive(driver: ((now: number) => boolean) | null) {
+    this.driver = driver;
+    if (driver) this.requestRender();
+  }
+
+  /** A world point on the stage, in CSS px. */
+  private toStage(point: THREE.Vector3): { x: number; y: number } {
+    this.camera.updateMatrixWorld();
+    point.project(this.camera);
+    return { x: ((point.x + 1) / 2) * this.cssWidth, y: ((1 - point.y) / 2) * this.cssHeight };
+  }
+
+  /**
+   * Where a point of the front cover is on the stage right now, in CSS px:
+   * `u` runs from the spine (0) to the fore-edge (1), `v` from the head (0) to
+   * the foot (1). Read from the cover's deformed mesh, so it follows the lift
+   * and the bend of a turning cover exactly.
+   */
+  coverPoint(u: number, v: number): { x: number; y: number } | null {
+    const sheet = this.book[Symbol.iterator]().next().value;
+    if (!sheet) return null;
+    const page = sheet.page;
+    const position = page.geometry.getAttribute("position");
+    const n = PAGE_SUBDIVISIONS;
+    // The first of the page's two merged planes: row-major from the head, the
+    // spine at column 0.
+    const fx = Math.max(0, Math.min(1, u)) * n;
+    const fy = Math.max(0, Math.min(1, v)) * n;
+    const ix = Math.min(n - 1, Math.floor(fx));
+    const iy = Math.min(n - 1, Math.floor(fy));
+    const tx = fx - ix;
+    const ty = fy - iy;
+    const [a, b, c, d] = this.pointScratch;
+    a.fromBufferAttribute(position, iy * (n + 1) + ix);
+    b.fromBufferAttribute(position, iy * (n + 1) + ix + 1);
+    c.fromBufferAttribute(position, (iy + 1) * (n + 1) + ix);
+    d.fromBufferAttribute(position, (iy + 1) * (n + 1) + ix + 1);
+    a.lerp(b, tx);
+    c.lerp(d, tx);
+    a.lerp(c, ty);
+    page.updateWorldMatrix(true, false);
+    return this.toStage(a.applyMatrix4(page.matrixWorld));
+  }
+
+  /**
+   * Where a point of the closed front cover's footprint lies on the stage:
+   * `u`, `v` as in `coverPoint`, and may run past the edges onto the table.
+   */
+  coverRestPoint(u: number, v: number): { x: number; y: number } {
+    return this.toStage(this.pointScratch[0].set((u - 0.5) * this.pageWidth, 0, v - 0.5));
   }
 
   onFrame(listener: ((progress: number, settled: boolean) => void) | null) {
@@ -545,17 +632,21 @@ export class JourneyBook3dScene {
   }
 
   requestRender() {
-    if (this.frame !== null) return;
+    // Inside a frame the frame itself decides whether another follows.
+    if (this.frame !== null || this.inFrame) return;
     this.lastTime = performance.now();
     this.frame = requestAnimationFrame(this.animate);
   }
 
   private animate = (time: number) => {
     this.frame = null;
+    this.inFrame = true;
     const delta = Math.min((time - this.lastTime) / 1000, 0.04);
     this.lastTime = time;
     const before = this.book.progress;
     if (!this.dragging) this.book.animate(delta);
+    const driving = this.driver?.(time) ?? false;
+    if (!driving) this.driver = null;
     const edgeMoving = this.animateEdge(delta);
     const focusMoving = Math.abs(this.focus - this.focusTarget) >= SETTLED_EPSILON;
     if (focusMoving) {
@@ -573,13 +664,15 @@ export class JourneyBook3dScene {
     this.renderer.render(this.scene, this.camera);
     const turning = !this.dragging && Math.abs(before - this.book.progress) > 1e-7;
     this.onFrameListener?.(this.book.progress, this.isSettled());
-    if (turning || edgeMoving || focusMoving) this.frame = requestAnimationFrame(this.animate);
+    this.inFrame = false;
+    if (turning || edgeMoving || focusMoving || driving) this.frame = requestAnimationFrame(this.animate);
   };
 
   dispose() {
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
     this.onFrameListener = null;
+    this.driver = null;
     // Dispose everything still in the scene (including the sheets) before the
     // book detaches its sheets, which it does without disposing them.
     this.scene.traverse((object) => {

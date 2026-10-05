@@ -46,6 +46,13 @@ export function focusX(face: number, faceCount: number, pageWidth: number, orien
   return 0;
 }
 
+/**
+ * Seconds quick_flipbook takes to finish any turn it is sent on, whatever
+ * distance is left: it moves progress at a constant rate, (goal − progress)
+ * / duration.
+ */
+export const BOOK_FLIP_SECONDS = 0.78;
+
 /** Vertical gap quick_flipbook leaves between stacked sheets (world units). */
 export const BOOK_SHEET_SPACING = 0.0012;
 

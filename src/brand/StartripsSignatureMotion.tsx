@@ -26,8 +26,19 @@ export function starPoseTransform(pose: Pick<StartripsSignaturePose, "starX" | "
   return `translate(${pose.starX.toFixed(3)} ${pose.starY.toFixed(3)}) translate(${STAR_CENTER_X} ${STAR_CENTER_Y}) scale(${pose.starScale.toFixed(4)}) translate(${-STAR_CENTER_X} ${-STAR_CENTER_Y})`;
 }
 
-function applyPose(root: HTMLElement, pose: StartripsSignaturePose) {
-  transform(root.querySelector('[data-signature-part="goat-root"]'), `translate(${pose.rootX.toFixed(3)} ${pose.rootY.toFixed(3)})`);
+/** Hind-hoof contact the goat leans about (`rootRotateDeg`), in v12 mark units. */
+const HIND_HOOF_X = 744;
+const HIND_HOOF_Y = 0;
+
+function rootTransform(pose: StartripsSignaturePose) {
+  const translate = `translate(${pose.rootX.toFixed(3)} ${pose.rootY.toFixed(3)})`;
+  const lean = pose.rootRotateDeg ?? 0;
+  return lean ? `${translate} rotate(${lean.toFixed(3)} ${HIND_HOOF_X} ${HIND_HOOF_Y})` : translate;
+}
+
+/** Pose the articulated goat under `root` (any element holding a `StartripsGoatRig`). */
+export function applyPose(root: ParentNode, pose: StartripsSignaturePose) {
+  transform(root.querySelector('[data-signature-part="goat-root"]'), rootTransform(pose));
   transform(root.querySelector('[data-signature-part="body"]'), `translate(0 ${pose.bodyY.toFixed(3)})`);
   transform(root.querySelector('[data-signature-part="head"]'), `rotate(${pose.headRotateDeg.toFixed(3)} 682 -88)`);
   transform(root.querySelector('[data-signature-part="eye"]'), `translate(${pose.eyeX.toFixed(3)} ${pose.eyeY.toFixed(3)})`);
@@ -36,6 +47,31 @@ function applyPose(root: HTMLElement, pose: StartripsSignaturePose) {
   transform(root.querySelector('[data-signature-part="leg-ff"]'), `translate(0 ${pose.legFfY.toFixed(3)}) rotate(${pose.legFfRotateDeg.toFixed(3)} 702 -35)`);
   transform(root.querySelector('[data-signature-part="leg-hn"]'), `translate(0 ${pose.legHnY.toFixed(3)}) rotate(${pose.legHnRotateDeg.toFixed(3)} 746 -34)`);
   transform(root.querySelector('[data-signature-part="leg-hf"]'), `translate(0 ${pose.legHfY.toFixed(3)}) rotate(${pose.legHfRotateDeg.toFixed(3)} 741 -34)`);
+}
+
+/**
+ * The articulated v12 goat (no letters, no star), in v12 mark units, drawn
+ * from the wordmark asset's parts; `applyPose` moves it.
+ */
+export function StartripsGoatRig() {
+  return (
+    <g data-signature-part="goat-root">
+      <use href={useHref("tail")} />
+      <g data-signature-part="leg-hf"><use href={useHref("leg-hf")} /></g>
+      <g data-signature-part="leg-ff"><use href={useHref("leg-ff")} /></g>
+      <g data-signature-part="body"><use href={useHref("body")} /></g>
+      <g data-signature-part="leg-hn"><use href={useHref("leg-hn")} /></g>
+      <g data-signature-part="leg-fn"><use href={useHref("leg-fn")} /></g>
+      <use href={useHref("neck")} />
+      <g data-signature-part="head">
+        <use href={useHref("hornFar")} /><use href={useHref("earFar")} />
+        <use href={useHref("skull")} /><use href={useHref("muzzle")} /><use href={useHref("frontMuzzle")} />
+        <use href={useHref("beard")} /><use href={useHref("hornNear")} /><use href={useHref("earNear")} />
+        <g data-signature-part="eye"><use href={useHref("eyeNear")} /><use href={useHref("eyeFar")} /></g>
+        <use href={useHref("nostril")} />
+      </g>
+    </g>
+  );
 }
 
 export function StartripsSignatureMotion({
@@ -132,22 +168,7 @@ export function StartripsSignatureMotion({
       <svg className="startrips-signature-motion__svg" viewBox={VIEWBOX} aria-hidden="true" focusable="false">
         <g data-signature-part="letters"><use href={useHref("letters")} /></g>
         <g data-signature-part="star"><use href={useHref("star")} /></g>
-        <g data-signature-part="goat-root">
-          <use href={useHref("tail")} />
-          <g data-signature-part="leg-hf"><use href={useHref("leg-hf")} /></g>
-          <g data-signature-part="leg-ff"><use href={useHref("leg-ff")} /></g>
-          <g data-signature-part="body"><use href={useHref("body")} /></g>
-          <g data-signature-part="leg-hn"><use href={useHref("leg-hn")} /></g>
-          <g data-signature-part="leg-fn"><use href={useHref("leg-fn")} /></g>
-          <use href={useHref("neck")} />
-          <g data-signature-part="head">
-            <use href={useHref("hornFar")} /><use href={useHref("earFar")} />
-            <use href={useHref("skull")} /><use href={useHref("muzzle")} /><use href={useHref("frontMuzzle")} />
-            <use href={useHref("beard")} /><use href={useHref("hornNear")} /><use href={useHref("earNear")} />
-            <g data-signature-part="eye"><use href={useHref("eyeNear")} /><use href={useHref("eyeFar")} /></g>
-            <use href={useHref("nostril")} />
-          </g>
-        </g>
+        <StartripsGoatRig />
       </svg>
     </span>
   );
