@@ -1251,14 +1251,19 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
   font-size: 11px;
 }
 
+/* One action-row grammar for the account sheet, the desktop account dock and
+   the compact Atlas 更多 sheet (living-atlas.css states only its 48px scale and
+   icon column). */
 .account-sheet__actions,
-.account-dock__actions {
+.account-dock__actions,
+.mobile-v2__more-actions {
   display: grid;
   border-top: 1px solid rgba(118, 198, 188, 0.11);
 }
 
 .account-sheet__actions button,
-.account-dock__actions button {
+.account-dock__actions button,
+.mobile-v2__more-actions button {
   min-height: 58px;
   display: grid;
   gap: 4px;
@@ -1271,9 +1276,11 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
 }
 
 .account-sheet__actions button span,
-.account-dock__actions button span { font-size: 13px; }
+.account-dock__actions button span,
+.mobile-v2__more-actions button span { font-size: 13px; }
 .account-sheet__actions button small,
-.account-dock__actions button small { color: rgba(153, 184, 174, 0.56); font-size: 10px; }
+.account-dock__actions button small,
+.mobile-v2__more-actions button small { color: rgba(153, 184, 174, 0.56); font-size: 10px; }
 
 .account-sheet__drill-header {
   min-height: 54px;

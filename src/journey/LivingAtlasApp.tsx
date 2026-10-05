@@ -2,6 +2,7 @@ import { type ComponentType, lazy, Suspense, useCallback, useEffect, useLayoutEf
 import {
   IconArrowNarrowLeft,
   IconArrowRight,
+  IconDots,
   IconMapPin,
   IconPhoto,
   IconPlayerPlay,
@@ -171,6 +172,39 @@ export function atlasEverydayEntryAvailable({
   narrativeActive: boolean;
 }) {
   return hasClient && (canCreate || canEdit) && view === "planet" && !narrativeActive;
+}
+
+export type CompactMoreAction = "journeys" | "everyday" | "import" | "share";
+
+/**
+ * The compact header holds the wordmark plus at most three icon controls:
+ * account, 记录新旅程 and one overflow. The Atlas-level actions that used to
+ * sit beside them as separate icons live in the 更多 sheet, in this order,
+ * each under the same condition its icon had. Whether the overflow exists
+ * follows the view mode, not the current rows, so an owner's header keeps the
+ * same three controls in every state. A read-only view can only browse, so it
+ * keeps its single 全部旅程 icon rather than a sheet with one row.
+ */
+export function compactHeaderOverflow({
+  readOnly,
+  journeyCount,
+  everydayAvailable,
+  canImport,
+  canShare,
+}: {
+  readOnly: boolean;
+  journeyCount: number;
+  everydayAvailable: boolean;
+  canImport: boolean;
+  canShare: boolean;
+}): { trigger: "more" | "journeys" | null; actions: CompactMoreAction[] } {
+  if (readOnly) return { trigger: journeyCount > 0 ? "journeys" : null, actions: [] };
+  const actions: CompactMoreAction[] = [];
+  if (journeyCount > 0) actions.push("journeys");
+  if (everydayAvailable) actions.push("everyday");
+  if (canImport) actions.push("import");
+  if (canShare && journeyCount > 0) actions.push("share");
+  return { trigger: actions.length > 0 ? "more" : null, actions };
 }
 
 export function homeBaseContextActivationAvailable({
@@ -1441,6 +1475,11 @@ export function LivingAtlasApp({
   });
   const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
+  // The compact header's 更多 sheet. Its trigger is the one stable header
+  // control behind which the Atlas-level actions live, so it is also where focus
+  // lands again once a surface opened from the sheet closes.
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const mobileMoreTriggerRef = useRef<HTMLButtonElement | null>(null);
   // #325: the rail is released by removing the Atlas lifecycle class, and the
   // released state must not depend on restoring a property that isolation took
   // over. Isolation therefore never touches `visibility`, and every layout commit
@@ -1477,8 +1516,11 @@ export function LivingAtlasApp({
     shareWasOpenRef.current = false;
     if (!shareRestoreAtlasTriggerRef.current) return;
     shareRestoreAtlasTriggerRef.current = false;
+    // The compact header has no share control of its own: the multi-Journey
+    // entry is a row in the 更多 sheet, which is closed by now, so the 更多
+    // trigger takes focus back. Each layout renders only one of the two.
     const target = document.querySelector<HTMLElement>(
-      '[data-atlas-share-trigger="true"]:not([disabled])',
+      '[data-atlas-share-trigger="true"]:not([disabled]), [data-atlas-more-trigger="true"]:not([disabled])',
     );
     if (target?.isConnected && !target.closest("[inert]")) {
       target.focus({ preventScroll: true });
@@ -1508,6 +1550,14 @@ export function LivingAtlasApp({
     "journey-picker",
     () => setMobilePickerOpen(false),
   );
+  // A 更多 row closes the sheet and opens its surface in the same commit, so
+  // the sheet's entry is gone before the next surface writes: that surface
+  // replaces it instead of stacking on it, and owns exactly one entry.
+  useMobileSurfaceHistory(
+    isMobileV2 && mobileMoreOpen,
+    "atlas-more",
+    () => setMobileMoreOpen(false),
+  );
   useMobileSurfaceHistory(
     isMobileV2 && storyJourneyId !== null,
     "journey-story",
@@ -1526,6 +1576,11 @@ export function LivingAtlasApp({
   const mobilePickerDialogRef = useModalFocus<HTMLElement>(
     () => setMobilePickerOpen(false),
     isMobileV2 && mobilePickerOpen,
+  );
+  const mobileMoreStartY = useRef<number | null>(null);
+  const mobileMoreDialogRef = useModalFocus<HTMLElement>(
+    () => setMobileMoreOpen(false),
+    isMobileV2 && mobileMoreOpen,
   );
   const globeFocusExitRef = useRef<HTMLButtonElement | null>(null);
   const globeFocusTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -2104,6 +2159,13 @@ export function LivingAtlasApp({
       || routePointContextSelection.intent !== null
       || globePickActive,
   });
+  const compactHeader = compactHeaderOverflow({
+    readOnly: isReadOnlyAtlasView(capabilities),
+    journeyCount: journeys.length,
+    everydayAvailable: atlasEverydayAvailable,
+    canImport: canCreateJourney,
+    canShare: shareClient !== null,
+  });
   useEffect(() => {
     if (
       view !== "planet"
@@ -2116,7 +2178,11 @@ export function LivingAtlasApp({
       clearHomeBaseContext();
     }
     if (atlasEverydayMode !== null && !atlasEverydayAvailable) {
-      closeAtlasEveryday(true);
+      // A narrative or pick owner took over, and it owns focus now. The
+      // desktop 日常 trigger unmounts in this same commit, so it never took
+      // focus back here; the compact opener is the 更多 trigger, which stays
+      // mounted and would otherwise pull focus away from that new owner.
+      closeAtlasEveryday(false);
     }
   }, [
     atlasEverydayAvailable,
@@ -2143,6 +2209,7 @@ export function LivingAtlasApp({
     if (!isMobileV2) {
       setMobileSheetJourneyId(null);
       setMobilePickerOpen(false);
+      setMobileMoreOpen(false);
       return;
     }
     setView("planet");
@@ -3523,21 +3590,32 @@ export function LivingAtlasApp({
           <nav aria-label="移动端旅程操作">
             {canManageAtlas ? <MobileAccountActionSlot /> : null}
             {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
-            {atlasEverydayAvailable ? (
+            {compactHeader.trigger === "more" ? (
               <button
+                ref={mobileMoreTriggerRef}
                 type="button"
-                data-atlas-everyday-trigger
-                aria-expanded={atlasEverydayMode !== null}
-                aria-controls={atlasEverydayMode ? "atlas-everyday-fragments-list" : undefined}
-                onClick={(event) => atlasEverydayMode !== null ? closeAtlasEveryday(true) : openAtlasEveryday("list", event.currentTarget)}
-                aria-label="打开日常"
-              ><IconPhoto size={18} stroke={1.4} aria-hidden="true" /></button>
-            ) : null}
-            {canCreateJourney ? <button type="button" onClick={openImport} aria-label={importStatus.busy ? "查看正在处理的行程导入" : "导入已有行程"}><IconUpload size={18} stroke={1.4} aria-hidden="true" /></button> : null}
-            {shareClient && journeys.length > 0 ? (
-              <button type="button" data-atlas-share-trigger="true" disabled={storyJourneyId !== null} onClick={() => openShareSurface(null)} aria-label="分享多段旅程"><IconShare size={18} stroke={1.4} aria-hidden="true" /></button>
-            ) : null}
-            {journeys.length > 0 ? (
+                className="mobile-v2__more-trigger"
+                data-atlas-more-trigger="true"
+                // The collapsed Story is portaled above the whole Atlas, so a
+                // sheet opened under it would be hidden behind it. The Atlas
+                // multi-share entry was disabled for the same reason (#356).
+                disabled={storyJourneyId !== null}
+                aria-label={importStatus.busy ? "更多操作（行程导入处理中）" : "更多操作"}
+                aria-haspopup="dialog"
+                aria-expanded={mobileMoreOpen}
+                aria-controls={mobileMoreOpen ? "mobile-v2-more-sheet" : undefined}
+                onClick={(event) => {
+                  // The sheet hands focus back to whatever held it when it
+                  // opened. Safari does not focus a tapped button, so make
+                  // that this trigger on every platform.
+                  event.currentTarget.focus({ preventScroll: true });
+                  setMobileMoreOpen(true);
+                }}
+              >
+                <IconDots size={18} stroke={1.4} aria-hidden="true" />
+                {importStatus.busy ? <span className="mobile-v2__more-status" aria-hidden="true" /> : null}
+              </button>
+            ) : compactHeader.trigger === "journeys" ? (
               <button type="button" onClick={() => setMobilePickerOpen(true)} aria-label="打开全部旅程"><IconTimeline size={18} stroke={1.4} aria-hidden="true" /></button>
             ) : null}
           </nav>
@@ -4003,6 +4081,124 @@ export function LivingAtlasApp({
             }}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录新旅程</button>
           ) : null}
         </section>
+      ) : null}
+
+      {/* Every row closes the sheet and opens its surface in one handler, the
+          way 管理旅程 and the picker's create action chain today. The sheet's
+          focus trap returns focus to the 更多 trigger during that commit,
+          before the next surface records where to return focus, so closing that
+          surface lands on 更多 again. */}
+      {isMobileV2 && mobileMoreOpen ? (
+        <div className="mobile-v2__more-layer">
+          <button className="mobile-v2__more-backdrop" type="button" tabIndex={-1} aria-label="关闭更多操作" onClick={() => setMobileMoreOpen(false)} />
+          <section
+            ref={mobileMoreDialogRef}
+            id="mobile-v2-more-sheet"
+            tabIndex={-1}
+            className="mobile-v2__more-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-v2-more-title"
+          >
+            <button
+              className="mobile-v2__more-handle"
+              type="button"
+              aria-label="向下滑动或点击关闭更多操作"
+              onClick={() => setMobileMoreOpen(false)}
+              onPointerDown={(event) => {
+                mobileMoreStartY.current = event.clientY;
+              }}
+              onPointerUp={(event) => {
+                const start = mobileMoreStartY.current;
+                mobileMoreStartY.current = null;
+                if (start !== null && event.clientY - start > 64) setMobileMoreOpen(false);
+              }}
+              onPointerCancel={() => {
+                mobileMoreStartY.current = null;
+              }}
+            ><span aria-hidden="true" /></button>
+            <header className="mobile-v2__more-heading">
+              <p>MORE</p>
+              <h2 id="mobile-v2-more-title">更多操作</h2>
+            </header>
+            <div className="mobile-v2__more-actions">
+              {compactHeader.actions.map((action) => {
+                switch (action) {
+                  case "journeys":
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        data-atlas-more-action={action}
+                        onClick={() => {
+                          setMobileMoreOpen(false);
+                          setMobilePickerOpen(true);
+                        }}
+                      >
+                        <IconTimeline size={20} stroke={1.35} aria-hidden="true" />
+                        <span>全部旅程</span>
+                        <small>按时间浏览全部 {journeys.length} 段旅程</small>
+                      </button>
+                    );
+                  case "everyday":
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        data-atlas-more-action={action}
+                        data-atlas-everyday-trigger
+                        aria-expanded={atlasEverydayMode !== null}
+                        aria-controls={atlasEverydayMode ? "atlas-everyday-fragments-list" : undefined}
+                        onClick={() => {
+                          setMobileMoreOpen(false);
+                          if (atlasEverydayMode !== null) closeAtlasEveryday(true);
+                          else openAtlasEveryday("list", mobileMoreTriggerRef.current ?? undefined);
+                        }}
+                      >
+                        <IconPhoto size={20} stroke={1.35} aria-hidden="true" />
+                        <span>日常</span>
+                        <small>{atlasEverydayMode !== null ? "收起日常片段" : "查看或记录日常片段"}</small>
+                      </button>
+                    );
+                  case "import":
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        data-atlas-more-action={action}
+                        onClick={() => {
+                          setMobileMoreOpen(false);
+                          openImport();
+                        }}
+                      >
+                        <IconUpload size={20} stroke={1.35} aria-hidden="true" />
+                        <span>{importStatus.busy ? "查看正在处理的行程导入" : "导入已有行程"}</span>
+                        <small>{importStatus.busy ? "处理中，可随时回来继续" : "自动整理成可编辑的路线"}</small>
+                      </button>
+                    );
+                  case "share":
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        data-atlas-more-action={action}
+                        data-atlas-share-trigger="true"
+                        disabled={storyJourneyId !== null}
+                        onClick={() => {
+                          setMobileMoreOpen(false);
+                          openShareSurface(null);
+                        }}
+                      >
+                        <IconShare size={20} stroke={1.35} aria-hidden="true" />
+                        <span>分享多段旅程</span>
+                        <small>选择旅程，生成只读链接</small>
+                      </button>
+                    );
+                }
+              })}
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {atlasEverydayMode !== null && atlasEverydayAvailable && everydayFragments && !homeBaseContext ? (

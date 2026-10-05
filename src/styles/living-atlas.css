@@ -8001,7 +8001,12 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   pointer-events: none;
 }
 
+/* The header holds the wordmark and at most three 44px circles (account,
+   记录新旅程, 更多): 120 + 3 * 44 + 2 * 6 + 28 = 292px, inside the narrowest
+   320px phone. Neither side may shrink, so no control ever measures under its
+   hit size when space runs short. */
 .mobile-v2__brand {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -8012,6 +8017,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .mobile-v2__header nav {
+  flex: none;
   display: flex;
   gap: var(--mobile-control-cluster-gap, 6px);
   pointer-events: auto;
@@ -8020,16 +8026,58 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 .mobile-v2__account-slot { display: contents; }
 
 .mobile-v2__header button {
+  flex: none;
   width: var(--mobile-control-hit-size, 44px);
   height: var(--mobile-control-hit-size, 44px);
   display: grid;
   place-items: center;
   padding: 0;
   border: 1px solid rgba(118, 198, 188, 0.17);
-  border-radius: 50%;
+  border-radius: var(--mobile-control-radius, 999px);
   background: rgba(2, 10, 11, 0.48);
   color: rgba(225, 240, 234, 0.86);
   backdrop-filter: blur(14px);
+}
+
+.mobile-v2__header nav button {
+  transition:
+    scale var(--motion-instant, 120ms) var(--motion-ease-out),
+    border-color var(--motion-instant, 120ms) ease-out;
+}
+
+/* Feedback lands on press. Reduced motion keeps the border and drops the scale. */
+.mobile-v2__header nav button:active:not(:disabled) {
+  scale: 0.97;
+  border-color: var(--atlas-line-strong);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mobile-v2__header nav button:hover:not(:disabled) {
+    border-color: var(--atlas-line-strong);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-v2__header nav button:active:not(:disabled) {
+    scale: none;
+  }
+}
+
+.mobile-v2__more-trigger {
+  position: relative;
+}
+
+/* An import keeps running while its dialog is closed. The dot keeps that
+   visible on the header control that leads back to it. */
+.mobile-v2__more-status {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--mobile-control-radius, 999px);
+  background: var(--atlas-acid);
+  pointer-events: none;
 }
 
 /* The wordmark trigger is not a round control: keep the art exactly where the
@@ -8200,7 +8248,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   white-space: nowrap;
 }
 
-.mobile-v2__sheet-layer {
+.mobile-v2__sheet-layer,
+.mobile-v2__more-layer {
   position: fixed;
   z-index: var(--z-overlay-180);
   inset: 0;
@@ -8208,7 +8257,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   align-items: end;
 }
 
-.mobile-v2__sheet-backdrop {
+.mobile-v2__sheet-backdrop,
+.mobile-v2__more-backdrop {
   position: absolute;
   inset: 0;
   border: 0;
@@ -8217,7 +8267,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   animation: atlasBackdropIn var(--motion-ui) ease-out backwards;
 }
 
-.mobile-v2__sheet {
+.mobile-v2__sheet,
+.mobile-v2__more-sheet {
   position: relative;
   z-index: var(--z-content-1);
   max-height: min(72svh, 640px);
@@ -8232,7 +8283,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   animation: atlasSheetIn var(--motion-ui) var(--motion-ease-out) backwards;
 }
 
-.mobile-v2__sheet-handle {
+.mobile-v2__sheet-handle,
+.mobile-v2__more-handle {
   width: 70px;
   height: 30px;
   display: grid;
@@ -8244,7 +8296,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   touch-action: none;
 }
 
-.mobile-v2__sheet-handle span {
+.mobile-v2__sheet-handle span,
+.mobile-v2__more-handle span {
   width: 36px;
   height: 4px;
   border-radius: 999px;
@@ -8375,14 +8428,16 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   border-bottom: 1px solid rgba(118, 198, 188, 0.1);
 }
 
-.mobile-v2__picker > header p {
+.mobile-v2__picker > header p,
+.mobile-v2__more-heading p {
   margin: 0 0 5px;
   color: rgba(111, 226, 207, 0.62);
   font: 600 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
   letter-spacing: 0.15em;
 }
 
-.mobile-v2__picker > header h2 {
+.mobile-v2__picker > header h2,
+.mobile-v2__more-heading h2 {
   margin: 0;
   color: rgba(236, 246, 242, 0.95);
   font: 500 29px/1 var(--archive-serif);
@@ -8461,6 +8516,54 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   border-radius: 14px;
   background: rgba(6, 35, 31, 0.66);
   color: rgba(226, 244, 237, 0.94);
+}
+
+/* 更多, the compact header's overflow. Its shell, handle and heading reuse the
+   journey sheet and picker rules above, and its rows reuse the account sheet's
+   action list in auth-gate.css; only what differs is stated here. */
+.mobile-v2__more-sheet {
+  /* A few rows: let them use the height a phone has in landscape rather than
+     scroll inside the journey sheet's 72svh cap. */
+  max-height: calc(100svh - env(safe-area-inset-top, 0px) - 12px);
+  color: rgba(226, 240, 234, 0.9);
+}
+
+/* Same bar and rhythm as the journey sheet's handle, in a 44px box. */
+.mobile-v2__more-handle {
+  height: var(--mobile-control-hit-size, 44px);
+  margin: -6px auto -4px;
+}
+
+.mobile-v2__more-heading {
+  padding: 2px 2px 12px;
+}
+
+/* Icon, label and hint: the dock's 48px row scale, with the icon as a column. */
+.mobile-v2__more-actions button {
+  min-height: 48px;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-content: center;
+  column-gap: 12px;
+  padding: 8px 2px;
+  line-height: 1.25;
+  transition: background-color var(--motion-instant, 120ms) ease-out;
+}
+
+.mobile-v2__more-actions button > svg {
+  grid-row: span 2;
+  align-self: center;
+  color: var(--atlas-muted);
+}
+
+/* A row is large, so it answers a press with a tint rather than a scale. */
+.mobile-v2__more-actions button:active:not(:disabled) {
+  background: rgba(118, 198, 188, 0.08);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mobile-v2__more-actions button:hover:not(:disabled) {
+    background: rgba(118, 198, 188, 0.08);
+  }
 }
 
 @media (max-width: 760px), (max-width: 960px) and (max-height: 480px) and (any-pointer: coarse) {

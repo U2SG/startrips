@@ -195,8 +195,8 @@ async function installOwnerApi(page, journeyRows = journeys, homePeriods = [HIST
   return fragments;
 }
 
-async function openOwner(viewport, { journeyRows = journeys, homePeriods = [HISTORICAL_HOME, CURRENT_HOME] } = {}) {
-  const page = await browser.newPage({ viewport });
+async function openOwner(viewport, { journeyRows = journeys, homePeriods = [HISTORICAL_HOME, CURRENT_HOME], hasTouch = false } = {}) {
+  const page = await browser.newPage({ viewport, hasTouch });
   // This script runs Playwright directly rather than through @playwright/test,
   // so locator/action waits otherwise have no bounded default and a missing UI
   // transition can consume the whole GitHub job timeout without a useful stack.
@@ -870,13 +870,26 @@ try {
   ));
   await noHomePage.close();
 
+  // A compact header keeps 日常 in its 更多 sheet. The entry is that sheet's
+  // row, which still carries data-atlas-everyday-trigger; the Atlas action
+  // focus returns to is 更多, the header control the row lives behind.
+  const openCompactEveryday = async (page) => {
+    const more = page.locator('.mobile-v2__header [data-atlas-more-trigger="true"]');
+    const sheet = page.locator(".mobile-v2__more-sheet");
+    await more.click();
+    await sheet.waitFor({ state: "visible" });
+    const row = sheet.locator("[data-atlas-everyday-trigger]");
+    const hit = await row.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return Math.min(rect.width, rect.height);
+    });
+    await row.click();
+    await sheet.waitFor({ state: "detached" });
+    return { more, hit };
+  };
+
   const noHomeMobile = await openOwner({ width: 390, height: 844 }, { homePeriods: [] });
-  const noHomeMobileTrigger = noHomeMobile.page.locator("[data-atlas-everyday-trigger]");
-  const mobileEverydayHit = await noHomeMobileTrigger.evaluate((node) => {
-    const rect = node.getBoundingClientRect();
-    return Math.min(rect.width, rect.height);
-  });
-  await noHomeMobileTrigger.click();
+  const { more: noHomeMobileMore, hit: mobileEverydayHit } = await openCompactEveryday(noHomeMobile.page);
   const noHomeMobileSurface = noHomeMobile.page.locator("[data-atlas-everyday-context]");
   await noHomeMobileSurface.waitFor({ state: "visible" });
   const mobileEverydayPlacement = await noHomeMobileSurface.evaluate((node) => {
@@ -890,15 +903,19 @@ try {
     triggerHit: mobileEverydayHit,
     surface: mobileEverydayPlacement,
   }, mobileEverydayHit >= 44 && mobileEverydayPlacement.inViewport);
+  await noHomeMobileSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
+  await noHomeMobileSurface.waitFor({ state: "detached" });
+  record("zero-Home mobile Everyday close returns focus to 更多", {},
+    await noHomeMobileMore.evaluate((node) => document.activeElement === node));
   await noHomeMobile.page.close();
 
-  const noHomeLandscape = await openOwner({ width: 844, height: 390 }, { homePeriods: [] });
-  const noHomeLandscapeTrigger = noHomeLandscape.page.locator("[data-atlas-everyday-trigger]");
-  const landscapeEverydayHit = await noHomeLandscapeTrigger.evaluate((node) => {
-    const rect = node.getBoundingClientRect();
-    return Math.min(rect.width, rect.height);
-  });
-  await noHomeLandscapeTrigger.click();
+  // Without touch, 844x390 misses the compact query (its landscape clause
+  // needs `any-pointer: coarse`) and renders the desktop header, so this case
+  // never measured a phone in landscape. `hasTouch` makes it one. Desktop
+  // Everyday stays covered at 1280x800 above.
+  const noHomeLandscape = await openOwner({ width: 844, height: 390 }, { homePeriods: [], hasTouch: true });
+  const landscapeMode = await noHomeLandscape.page.locator(".living-atlas").getAttribute("data-mobile-v2");
+  const { more: noHomeLandscapeMore, hit: landscapeEverydayHit } = await openCompactEveryday(noHomeLandscape.page);
   const noHomeLandscapeSurface = noHomeLandscape.page.locator("[data-atlas-everyday-context]");
   await noHomeLandscapeSurface.waitFor({ state: "visible" });
   const landscapeEverydayPlacement = await noHomeLandscapeSurface.evaluate((node) => {
@@ -909,15 +926,17 @@ try {
     };
   });
   record("zero-Home phone landscape keeps a >=44px entry and bounded disclosure", {
+    mobileMode: landscapeMode,
     triggerHit: landscapeEverydayHit,
     surface: landscapeEverydayPlacement,
-  }, landscapeEverydayHit >= 44
+  }, landscapeMode === "on"
+    && landscapeEverydayHit >= 44
     && landscapeEverydayPlacement.inViewport
     && !landscapeEverydayPlacement.overflow);
   await noHomeLandscapeSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
   await noHomeLandscapeSurface.waitFor({ state: "detached" });
   record("zero-Home phone landscape restores its exact Atlas action", {},
-    await noHomeLandscapeTrigger.evaluate((node) => document.activeElement === node));
+    await noHomeLandscapeMore.evaluate((node) => document.activeElement === node));
   await noHomeLandscape.page.close();
 
   record("owner browser pages have no page errors", {
