@@ -1,3 +1,11 @@
+import { STARTRIPS_V12_MARK_MARKUP, STARTRIPS_V12_MARK_VIEWBOX } from "../brand/startripsV12Mark";
+import {
+  COVER_ROUTE_BAND,
+  COVER_ROUTE_STROKE,
+  fitCoverDateLine,
+  type CoverRouteGeometry,
+  type CoverRouteVec,
+} from "./coverRouteGeometry";
 import type { JourneyBookPage } from "./journeyBookPages";
 
 /**
@@ -73,6 +81,10 @@ export type PaintInput = {
   faceCount: number;
   title: string;
   dates: string;
+  /** The Journey's Route Points, counted on the cover. */
+  routePointCount: number;
+  /** The cover's debossed Route (`coverRouteGeometry`). */
+  route: CoverRouteGeometry;
   source: PageSource | null;
   /** Characters of the page's note shown so far; Infinity shows it all. */
   revealed: number;
@@ -81,7 +93,9 @@ export type PaintInput = {
 const PAPER = "#f7f6f0";
 const INK = "#292c26";
 const MUTED = "#73766c";
-const CLOTH = "#7d8572";
+const CLOTH = "#5f6b73";
+const PLATE_MOUNT = "#ece7d6";
+const FOIL = "#e4cf98";
 const CLOTH_INK = "#f2efdf";
 const ENDPAPER = "#e9e9dc";
 const SERIF = 'Georgia, "Songti SC", "STSong", "Noto Serif CJK SC", serif';
@@ -248,6 +262,198 @@ function drawRevealed(
   context.globalAlpha = 1;
 }
 
+/** Reference cover proportions (504 × 600), as fractions of the cover. */
+const COVER = {
+  inset: 0.095,
+  top: 0.087,
+  bottom: 0.073,
+  titleSize: 0.067,
+  titleWidth: 0.6,
+  datesGap: 0.028,
+  datesSize: 0.022,
+  mark: { width: 0.0675, height: 0.05 },
+  plate: { width: 0.3, height: 0.187, mount: 0.01 },
+} as const;
+
+/** Raster height of the mark; it is drawn at about a tenth of this. */
+const MARK_RASTER = 480;
+let markImage: HTMLImageElement | null = null;
+let markLoad: Promise<void> | null = null;
+
+/**
+ * The v12 mark rasterised once for the cover's blind emboss: one opaque tone
+ * (drawn at low alpha, so overlapping parts do not darken), cutouts in the
+ * cloth colour. Resolves when the image can be drawn.
+ */
+export function loadCoverMark(): Promise<void> {
+  if (markLoad) return markLoad;
+  const [, , viewWidth, viewHeight] = STARTRIPS_V12_MARK_VIEWBOX.split(" ").map(Number);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${STARTRIPS_V12_MARK_VIEWBOX}" `
+    + `width="${Math.round((MARK_RASTER * viewWidth) / viewHeight)}" height="${MARK_RASTER}" `
+    + `style="color:#000;--startrips-brand-cutout:${CLOTH}">`
+    + "<style>.goat-fill{fill:currentColor}.far-fill{fill:currentColor;opacity:.72}</style>"
+    + `${STARTRIPS_V12_MARK_MARKUP}</svg>`;
+  const image = new Image();
+  markLoad = new Promise<void>((resolve) => {
+    image.onload = () => {
+      markImage = image;
+      resolve();
+    };
+    // Without the mark the cover is still complete.
+    image.onerror = () => resolve();
+  });
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  return markLoad;
+}
+
+/** Whether the cover mark is ready to draw; part of a cover's repaint signature. */
+export function coverMarkReady(): boolean {
+  return markImage !== null;
+}
+
+/** Cover-fit `source` into `box`, clipped to it. */
+function drawCovered(
+  context: CanvasRenderingContext2D,
+  source: PageSource | null,
+  box: { x: number; y: number; width: number; height: number },
+  scale: number,
+) {
+  if (source?.status === "ready") {
+    const fit = Math.max(box.width / source.width, box.height / source.height);
+    const width = source.width * fit;
+    const height = source.height * fit;
+    context.save();
+    context.beginPath();
+    context.rect(box.x, box.y, box.width, box.height);
+    context.clip();
+    context.drawImage(source.image, box.x + (box.width - width) / 2, box.y + (box.height - height) / 2, width, height);
+    context.restore();
+    return;
+  }
+  const label = source?.status === "error" ? source.message : source ? "正在翻到这一页…" : "";
+  if (!label) return;
+  context.fillStyle = MUTED;
+  context.font = `${Math.round(16 * scale)}px ${SANS}`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(label, box.x + box.width / 2, box.y + box.height / 2, box.width * 0.9);
+}
+
+/** The Journey's Route, blind-debossed into the cloth: start dark, end in foil. */
+function drawCoverRoute(context: CanvasRenderingContext2D, route: CoverRouteGeometry, width: number, height: number) {
+  if (route.kind === "none") return;
+  const band = {
+    x: width * COVER_ROUTE_BAND.left,
+    y: height * COVER_ROUTE_BAND.top,
+    width: width * COVER_ROUTE_BAND.width,
+    height: height * COVER_ROUTE_BAND.height,
+  };
+  const at = (vec: CoverRouteVec) => [band.x + vec.x * band.width, band.y + vec.y * band.height] as const;
+  const square = (vec: CoverRouteVec, size: number, color: string) => {
+    const [x, y] = at(vec);
+    const side = size * width;
+    context.fillStyle = color;
+    context.fillRect(x - side / 2, y - side / 2, side, side);
+  };
+  if (route.kind === "path") {
+    const trace = (dx: number, dy: number) => {
+      context.beginPath();
+      const [startX, startY] = at(route.start);
+      context.moveTo(startX + dx, startY + dy);
+      for (const curve of route.curves) {
+        const [c1x, c1y] = at(curve.c1);
+        const [c2x, c2y] = at(curve.c2);
+        const [toX, toY] = at(curve.to);
+        context.bezierCurveTo(c1x + dx, c1y + dy, c2x + dx, c2y + dy, toX + dx, toY + dy);
+      }
+    };
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    trace(0, 0);
+    context.strokeStyle = "rgb(0 0 0 / 0.2)";
+    context.lineWidth = COVER_ROUTE_STROKE.deboss * width;
+    context.stroke();
+    const offset = -COVER_ROUTE_STROKE.highlightOffset * width;
+    trace(offset, offset);
+    context.strokeStyle = "rgb(255 255 255 / 0.07)";
+    context.lineWidth = COVER_ROUTE_STROKE.highlight * width;
+    context.stroke();
+    square(route.start, COVER_ROUTE_STROKE.start, "rgb(0 0 0 / 0.25)");
+  }
+  square(route.end, COVER_ROUTE_STROKE.end, FOIL);
+}
+
+/**
+ * The front cover, "route deboss": title and dates top left, the Route across
+ * the middle, the embossed mark and a tipped-in plate along the foot. The
+ * Journey note is on the book's first page, never on the cover.
+ */
+function paintCover(context: CanvasRenderingContext2D, width: number, height: number, input: PaintInput, scale: number): PaintResult {
+  const page = input.page as Extract<JourneyBookPage, { kind: "cover" }>;
+  const left = width * COVER.inset;
+  const top = height * COVER.top;
+  const foot = height * (1 - COVER.bottom);
+
+  context.fillStyle = CLOTH_INK;
+  const titleSize = Math.round(width * COVER.titleSize);
+  const titleBlock = fitText(context, input.title, width * COVER.titleWidth, titleSize * 1.2 * 2, titleSize, Math.round(titleSize * 0.7), 1.2);
+  context.font = `600 ${titleBlock.fontSize}px ${SERIF}`;
+  context.textAlign = "left";
+  context.textBaseline = "alphabetic";
+  titleBlock.lines.forEach((line, index) => {
+    context.fillText(line, left, top + titleBlock.lineHeight * (index + 0.8));
+  });
+
+  const datesSize = Math.round(width * COVER.datesSize);
+  context.save();
+  context.globalAlpha = 0.75;
+  context.font = `500 ${datesSize}px ${SANS}`;
+  context.letterSpacing = `${(datesSize * 0.26).toFixed(1)}px`;
+  context.textBaseline = "top";
+  const datesWidth = width * (1 - 2 * COVER.inset);
+  context.fillText(
+    fitCoverDateLine(input.dates, input.routePointCount, (line) => context.measureText(line).width <= datesWidth),
+    left,
+    top + titleBlock.lines.length * titleBlock.lineHeight + width * COVER.datesGap,
+    datesWidth,
+  );
+  context.restore();
+
+  drawCoverRoute(context, input.route, width, height);
+
+  if (markImage) {
+    const box = { x: left, y: foot - height * COVER.mark.height, width: width * COVER.mark.width, height: height * COVER.mark.height };
+    const rect = containRect(box, markImage.naturalWidth || markImage.width, markImage.naturalHeight || markImage.height);
+    context.save();
+    context.globalAlpha = 0.18;
+    context.drawImage(markImage, rect.x, box.y + box.height - rect.height, rect.width, rect.height);
+    context.restore();
+  }
+
+  if (page.asset) {
+    const plate = {
+      x: width * (1 - COVER.inset - COVER.plate.width),
+      y: foot - height * COVER.plate.height,
+      width: width * COVER.plate.width,
+      height: height * COVER.plate.height,
+    };
+    context.fillStyle = PLATE_MOUNT;
+    context.fillRect(plate.x, plate.y, plate.width, plate.height);
+    context.strokeStyle = "rgb(0 0 0 / 0.2)";
+    context.lineWidth = Math.max(1, width / 504);
+    context.strokeRect(plate.x - context.lineWidth / 2, plate.y - context.lineWidth / 2, plate.width + context.lineWidth, plate.height + context.lineWidth);
+    const mount = width * COVER.plate.mount;
+    drawCovered(context, input.source, {
+      x: plate.x + mount,
+      y: plate.y + mount,
+      width: plate.width - 2 * mount,
+      height: plate.height - 2 * mount,
+    }, scale);
+  }
+
+  return { noteLength: 0, noteOverflow: false };
+}
+
 export type PaintResult = {
   /** Number of note characters on this face, for the reveal clock. */
   noteLength: number;
@@ -274,21 +480,7 @@ export function paintFace(canvas: HTMLCanvasElement, input: PaintInput): PaintRe
       context.restore();
       return { noteLength: 0, noteOverflow: false };
     }
-    const titleBlock = fitText(context, input.title, width * 0.76, height * 0.2, Math.round(60 * scale), Math.round(36 * scale), 1.18);
-    context.fillStyle = CLOTH_INK;
-    drawRevealed(context, titleBlock, width * 0.135, height * 0.1, Infinity, "left", width * 0.76);
-    context.font = `${Math.round(20 * scale)}px ${SANS}`;
-    context.fillText(input.dates, width * 0.135, height * 0.1 + titleBlock.lines.length * titleBlock.lineHeight + 40 * scale);
-    if (page.asset) {
-      drawSource(context, input.source, { x: width * 0.135, y: height * 0.36, width: width * 0.6, height: height * 0.32 }, page.asset.mimeType.startsWith("video/"), scale);
-    }
-    let result: PaintResult = { noteLength: 0, noteOverflow: false };
-    if (page.note) {
-      const block = fitText(context, page.note, width * 0.73, height * 0.18, Math.round(24 * scale), Math.round(18 * scale), 1.6);
-      context.fillStyle = CLOTH_INK;
-      drawRevealed(context, block, width * 0.135, height * 0.73, input.revealed, "left", width * 0.73);
-      result = { noteLength: graphemes(block.lines.join("")).length, noteOverflow: block.overflow };
-    }
+    const result = paintCover(context, width, height, input, scale);
     context.restore();
     return result;
   }

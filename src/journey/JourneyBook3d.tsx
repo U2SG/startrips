@@ -29,7 +29,8 @@ import {
   spreadOfFace,
   stepFace,
 } from "./journeyBook3dModel";
-import { PLATE, noteCharacterCount, paintFace, type PageSource } from "./journeyBook3dPainter";
+import { coverRouteGeometry, coverRouteSvgPath } from "./coverRouteGeometry";
+import { PLATE, coverMarkReady, loadCoverMark, noteCharacterCount, paintFace, type PageSource } from "./journeyBook3dPainter";
 import { loadPictureChain } from "./journeyBook3dPictures";
 import { JourneyBook3dScene } from "./journeyBook3dScene";
 import {
@@ -102,7 +103,7 @@ function pageAsset(page: JourneyBookPage | undefined): JourneyMediaAsset | null 
 }
 
 function pageNote(page: JourneyBookPage | undefined): string | null {
-  if (page?.kind === "media" || page?.kind === "cover" || page?.kind === "note") return page.note;
+  if (page?.kind === "media" || page?.kind === "note") return page.note;
   return null;
 }
 
@@ -203,6 +204,9 @@ export function JourneyBook3d({
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
   const nextJourney = journeyIndex >= 0 && journeyIndex < journeys.length - 1 ? journeys[journeyIndex + 1] : null;
   const pages = useMemo(() => (journey ? journeyBookPages(journey) : []), [journey]);
+  const coverRoute = useMemo(() => coverRouteGeometry(journey?.routePoints ?? []), [journey?.routePoints]);
+  // Fingerprint of what the cover draws from the Route, for its repaint signature.
+  const coverRouteKey = `${journey?.routePoints.length ?? 0}:${coverRoute.kind === "point" ? "point" : coverRouteSvgPath(coverRoute, 1000, 1000)}`;
   const faceCount = pages.length;
   const soundtrack = journey ? journeySoundtrack(journey) : null;
 
@@ -223,6 +227,17 @@ export function JourneyBook3d({
   const [chosenVideoId, setChosenVideoId] = useState<string | null>(null);
   const [videoRect, setVideoRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [repaintTick, setRepaintTick] = useState(0);
+
+  // The cover's embossed mark is rasterised once; the cover repaints when it is ready.
+  useEffect(() => {
+    let live = true;
+    void loadCoverMark().then(() => {
+      if (live) setRepaintTick((tick) => tick + 1);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   const [stageSize, setStageSize] = useState("");
   const lastSettledRef = useRef(true);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -408,7 +423,7 @@ export function JourneyBook3d({
     const asset = pageAsset(page);
     const source: PageSource | null = asset ? pictures[asset.id] ?? { status: "loading" } : null;
     const revealed = revealedCount(target);
-    const signature = `${page.key}|${asset ? `${source?.status}:${pictureUrlsRef.current.get(asset.id) ?? ""}` : ""}|${source?.status === "ready" ? `${source.width}x${source.height}` : ""}|${Number.isFinite(revealed) ? Math.floor(revealed * 4) : "all"}|${journey.title}`;
+    const signature = `${page.key}|${asset ? `${source?.status}:${pictureUrlsRef.current.get(asset.id) ?? ""}` : ""}|${source?.status === "ready" ? `${source.width}x${source.height}` : ""}|${Number.isFinite(revealed) ? Math.floor(revealed * 4) : "all"}|${journey.title}${page.kind === "cover" ? `|${coverRouteKey}|${coverMarkReady()}|${journeyRange(journey)}` : ""}`;
     let surface = surfacesRef.current.get(target);
     if (surface?.signature === signature) return;
     if (!surface) {
@@ -430,6 +445,8 @@ export function JourneyBook3d({
       faceCount,
       title: journey.title,
       dates: journeyRange(journey),
+      routePointCount: journey.routePoints.length,
+      route: coverRoute,
       source,
       revealed,
     });
@@ -444,7 +461,7 @@ export function JourneyBook3d({
       else next.delete(target);
       return next;
     });
-  }, [faceCount, journey, pages, pictures, repaintTick, revealedCount]);
+  }, [coverRoute, coverRouteKey, faceCount, journey, pages, pictures, repaintTick, revealedCount]);
 
   // Faces near the reader hold painted textures; the rest are released.
   useEffect(() => {
@@ -787,7 +804,7 @@ export function JourneyBook3d({
   const readable = visibleFaces.map((target) => {
     const page = pages[target];
     if (!page) return "";
-    if (page.kind === "cover") return [journey.title, journeyRange(journey), page.note].filter(Boolean).join("。");
+    if (page.kind === "cover") return [journey.title, journeyRange(journey)].filter(Boolean).join("。");
     if (page.kind === "media" || page.kind === "note") return [page.routePoint?.label, page.note].filter(Boolean).join("。");
     return "";
   }).filter(Boolean).join(" ");
