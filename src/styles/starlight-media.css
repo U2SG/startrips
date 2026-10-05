@@ -88,36 +88,46 @@
   letter-spacing: 0.04em;
 }
 
+/* Retry and its neighbour are secondary pills of the control family. */
 .starlight-media-state > button {
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0 16px;
-  border: 1px solid var(--startrips-line, rgb(255 248 231 / 0.16));
-  border-radius: 999px;
-  background: rgb(255 248 231 / 0.08);
-  color: var(--startrips-starlight, #fff8e7);
+  min-width: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
-  font: 500 11px/1 var(--archive-sans, Inter, sans-serif);
-  letter-spacing: 0.06em;
-  transition: background var(--motion-instant, 120ms) var(--motion-ease-out, ease),
-    border-color var(--motion-instant, 120ms) var(--motion-ease-out, ease),
-    transform var(--motion-instant, 120ms) var(--motion-ease-out, ease);
+  font: 500 var(--control-font-size)/1 var(--archive-sans, Inter, sans-serif);
+  letter-spacing: var(--control-tracking);
+  transition: scale var(--motion-instant) var(--motion-ease-out), background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out;
 }
 
 .starlight-media-state > button:focus-visible {
-  border-color: var(--startrips-aurora, #7ce0c3);
-  background: rgb(124 224 195 / 0.12);
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+.starlight-media-state > button:disabled {
+  cursor: not-allowed;
+  opacity: var(--control-disabled-opacity);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .starlight-media-state > button:hover {
-    border-color: var(--startrips-aurora, #7ce0c3);
-    background: rgb(124 224 195 / 0.12);
+  .starlight-media-state > button:hover:not(:disabled) {
+    border-color: var(--control-line-strong);
   }
 }
 
-.starlight-media-state > button:active {
-  transform: translateY(1px);
+.starlight-media-state > button:active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .starlight-media-state > button:active:not(:disabled) {
+    scale: 0.97;
+  }
 }
 
 .journey-story__order-message .starlight-media-state__inline-cue {

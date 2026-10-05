@@ -51,33 +51,36 @@
   -webkit-user-select: text;
   user-select: text;
 }
+/* Quiet pills of the control family: text on no fill inside a 44px box, so the
+   note slot's geometry is unchanged. Story's shared rule draws the focus ring. */
 .story-point-note__expand,
 .story-point-note-sheet__close {
   flex: 0 0 auto;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0 10px;
-  border: 0;
+  min-width: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--startrips-muted);
-  font: 400 12px/1 var(--archive-sans);
-  letter-spacing: .04em;
+  color: var(--control-muted);
+  font: 400 var(--control-font-size)/1 var(--archive-sans);
+  letter-spacing: var(--control-tracking);
   cursor: pointer;
   touch-action: manipulation;
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  transition: scale var(--motion-instant) var(--motion-ease-out), color var(--motion-instant) ease-out;
 }
 .story-point-note__expand:active,
-.story-point-note-sheet__close:active { color: var(--startrips-starlight); opacity: .72; }
-.story-point-note__expand:focus-visible,
-.story-point-note-sheet__close:focus-visible {
-  outline: 1px solid rgb(255 248 231 / 60%);
-  outline-offset: 2px;
+.story-point-note-sheet__close:active { color: var(--control-ink); }
+@media (prefers-reduced-motion: no-preference) {
+  .story-point-note__expand:active,
+  .story-point-note-sheet__close:active { scale: 0.97; }
 }
 @media (hover: hover) and (pointer: fine) {
   .story-point-note__expand:hover,
-  .story-point-note-sheet__close:hover { color: var(--startrips-starlight); }
+  .story-point-note-sheet__close:hover { color: var(--control-ink); }
 }
 
 .story-point-note-sheet {
