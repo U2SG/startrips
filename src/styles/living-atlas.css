@@ -410,12 +410,37 @@
   backdrop-filter: blur(12px);
 }
 
+/* Zoom and compass are one rounded pill group of 44px controls; each answers
+   a press with a tint inside it. MapLibre's sheet loads after this one, so
+   the focus rule outranks its (0,3,1) glow and per-end radii, and its ring
+   sits inside the clipped pill. */
+.detailed-earth-map .maplibregl-ctrl-group {
+  overflow: hidden;
+  border-color: var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+}
+
 .detailed-earth-map .maplibregl-ctrl-group button {
+  width: var(--control-height);
+  height: var(--control-height);
   border-radius: 0;
+  transition: background-color var(--motion-instant) ease-out;
 }
 
 .detailed-earth-map .maplibregl-ctrl-group button + button {
-  border-top-color: rgba(118, 198, 188, 0.15);
+  border-top-color: var(--control-line);
+}
+
+.detailed-earth-map .maplibregl-ctrl-group button:active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+.detailed-earth-map .maplibregl-ctrl-group button:focus:focus-visible {
+  border-radius: var(--control-radius);
+  outline: 2px solid var(--control-focus);
+  outline-offset: -4px;
+  box-shadow: none;
 }
 
 .detailed-earth-map .maplibregl-ctrl-icon {
