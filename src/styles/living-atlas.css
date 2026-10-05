@@ -9535,10 +9535,10 @@ button.living-atlas__globe-focus-exit {
   width: 44px;
   height: 44px;
   padding: 0;
-  border: 1px solid var(--atlas-line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--atlas-muted);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
   cursor: pointer;
 }
 
@@ -9619,10 +9619,10 @@ button.living-atlas__globe-focus-exit {
   width: 44px;
   height: 44px;
   padding: 0;
-  border: 1px solid var(--atlas-line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--atlas-muted);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
   cursor: pointer;
 }
 
@@ -9664,21 +9664,46 @@ button.living-atlas__globe-focus-exit {
   gap: 8px;
 }
 
-.everyday-fragments button {
-  min-width: 44px;
-  min-height: 44px;
-  padding: 8px 12px;
-  border: 1px solid var(--atlas-line);
-  border-radius: 12px;
-  color: var(--atlas-text);
-  background: rgba(119, 200, 194, 0.08);
+/* Secondary pills; the form's submit is the card's one acid primary, and the
+   destructive pair carries the family's danger classes. */
+.everyday-fragments button:where(:not(.st-btn)) {
+  min-width: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  color: var(--control-ink);
+  background: var(--control-fill);
   font: inherit;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
   cursor: pointer;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out;
+}
+
+.everyday-fragments button[type="submit"] {
+  border-color: var(--control-primary);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
+  font-weight: 600;
+}
+
+.everyday-fragments button:not([type="submit"]):active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :is(.everyday-fragments button:not(.everyday-fragment-place-input__results button), .living-atlas__home-base-suggestion-actions button, :is(.living-atlas__home-base-context, .living-atlas__everyday-context) > header button):active:not(:disabled) {
+    scale: 0.97;
+  }
 }
 
 .everyday-fragments button:disabled {
   cursor: wait;
-  opacity: 0.55;
+  opacity: var(--control-disabled-opacity);
 }
 
 .everyday-fragments :is(button, input, textarea):focus-visible {
@@ -9721,11 +9746,11 @@ button.living-atlas__globe-focus-exit {
   width: 100%;
   min-width: 0;
   min-height: 44px;
-  border: 1px solid var(--atlas-line);
-  border-radius: 8px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-field);
   padding: 8px;
-  color: var(--atlas-text);
-  background: #071514;
+  color: var(--control-ink);
+  background: var(--control-fill);
   color-scheme: dark;
   font: inherit;
   font-size: 16px;
@@ -9774,17 +9799,20 @@ button.living-atlas__globe-focus-exit {
   border: 0;
 }
 
+/* Results are two-line tiles, and the chosen one takes the selection colour. */
 .everyday-fragment-place-input__results button {
   display: grid;
   width: 100%;
   justify-items: start;
   gap: 2px;
+  padding: 8px 12px;
+  border-radius: var(--radius-tile);
   text-align: left;
 }
 
 .everyday-fragment-place-input__results button[aria-selected="true"] {
-  border-color: color-mix(in srgb, var(--atlas-cyan) 65%, var(--atlas-line));
-  background: rgba(119, 200, 194, 0.14);
+  border-color: var(--control-select);
+  background: color-mix(in srgb, var(--control-select) 12%, transparent);
 }
 
 .everyday-fragment-place-input__results small,
@@ -9893,27 +9921,37 @@ button.living-atlas__globe-focus-exit {
   margin-top: 16px;
 }
 
+/* The card's one acid primary; the other answers are quiet text. */
 .living-atlas__home-base-suggestion-actions button {
-  min-height: 44px;
-  padding: 0 18px;
-  border: 1px solid color-mix(in srgb, var(--atlas-cyan) 30%, var(--atlas-line));
-  border-radius: 999px;
-  background: rgba(118, 227, 211, 0.08);
-  color: var(--atlas-text);
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-primary);
+  border-radius: var(--control-radius);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
   cursor: pointer;
-  font-size: 12px;
-  letter-spacing: 0.04em;
+  font-size: var(--control-font-size);
+  font-weight: 600;
+  letter-spacing: var(--control-tracking);
+  transition: scale var(--motion-instant) var(--motion-ease-out), color var(--motion-instant) ease-out;
 }
 
 .living-atlas__home-base-suggestion-actions button.is-quiet {
-  border-color: var(--atlas-line);
+  border-color: transparent;
   background: transparent;
-  color: var(--atlas-muted);
+  color: var(--control-muted);
+  font-weight: 400;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__home-base-suggestion-actions button.is-quiet:hover:not(:disabled) {
+    color: var(--control-ink);
+  }
 }
 
 .living-atlas__home-base-suggestion-actions button[disabled] {
   cursor: progress;
-  opacity: 0.55;
+  opacity: var(--control-disabled-opacity);
 }
 
 /* While the card sits at the foot of the desktop timeline, every year list

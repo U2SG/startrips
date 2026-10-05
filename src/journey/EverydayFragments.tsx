@@ -193,13 +193,13 @@ function FragmentRow({ fragment, client, canEdit, onSaved, onDeleted }: {
             <div className="everyday-fragments__actions" aria-busy={deletion.pending}>
               {confirmDelete ? <>
                 <span>删除这条日常？</span>
-                <button type="button" disabled={deletion.pending} onClick={() => void deletion.run((signal) => client.remove(fragment.id, signal), () => onDeleted(fragment.id))}>
+                <button type="button" className="st-btn st-btn--danger" disabled={deletion.pending} onClick={() => void deletion.run((signal) => client.remove(fragment.id, signal), () => onDeleted(fragment.id))}>
                   {deletion.pending ? "删除中…" : "确认删除"}
                 </button>
                 <button type="button" disabled={deletion.pending} onClick={() => setConfirmDelete(false)}>取消</button>
               </> : <>
                 <button type="button" onClick={() => setEditing(true)}>编辑</button>
-                <button type="button" onClick={() => setConfirmDelete(true)}>删除</button>
+                <button type="button" className="st-btn st-btn--danger" onClick={() => setConfirmDelete(true)}>删除</button>
               </>}
             </div>
           ) : null}
