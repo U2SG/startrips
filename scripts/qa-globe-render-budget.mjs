@@ -124,21 +124,25 @@ async function checkDegradedProductControls(failure) {
   await page.waitForFunction(() => document.querySelector(".account-dock__tab")?.getAttribute("aria-expanded") === "true");
   await account.click();
 
-  const railButtons = page.locator(".living-atlas__journey-rail li button");
-  await railButtons.nth(1).click();
+  // Select by title, not rail position: the rail lists the newest Journey
+  // first and that one is already active, so waiting for it would pass or
+  // time out depending on when the View Transition commits the click.
+  const target = degradedControlJourneys[0].title;
+  await page.locator(".living-atlas__journey-rail li button", { hasText: target }).click();
   await page.waitForFunction((title) => (
     document.querySelector(".living-atlas__journey-rail button.is-active strong")?.textContent?.includes(title)
-  ), degradedControlJourneys[1].title);
-  await page.getByRole("button", { name: `打开旅程：${degradedControlJourneys[1].title}` }).click();
+  ), target);
+  await page.getByRole("button", { name: `打开旅程：${target}` }).click();
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 10_000 });
 
-  const snapshot = await page.evaluate(() => ({
+  const snapshot = await page.evaluate((title) => ({
     backend: document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend"),
     canvases: document.querySelector("[data-persistent-earth-host]")?.querySelectorAll('canvas[data-three-scene="particle-earth"]').length ?? -1,
     railVisible: Boolean(document.querySelector(".living-atlas__journey-rail")),
     storyVisible: Boolean(document.querySelector(".journey-story")),
     accountVisible: Boolean(document.querySelector(".account-dock__tab")),
-  }));
+    storyTitleMatches: document.querySelector("#journey-story-title")?.textContent?.includes(title) ?? false,
+  }), target);
   const webglCreationErrors = consoleErrors.filter((message) => (
     /WebGLRenderer|Could not create a WebGL context|WebGL context.*could not/i.test(message)
   ));
@@ -147,6 +151,7 @@ async function checkDegradedProductControls(failure) {
       && snapshot.canvases === 0
       && snapshot.railVisible
       && snapshot.storyVisible
+      && snapshot.storyTitleMatches
       && snapshot.accountVisible
       && errors.length === 0
       && webglCreationErrors.length === 0);
