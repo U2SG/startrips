@@ -5,7 +5,10 @@ import {
   BOOK_SHEET_SPACING,
   bookFrame,
   bookTableHeight,
+  coverKeyLight,
   faceScreenRect,
+  RAKING_ELEVATION,
+  READING_KEY,
   restingPageHeight,
   stackSheets,
   dragFraction,
@@ -194,5 +197,45 @@ describe("drag", () => {
     expect(edgePreviewDirection({ ...base, spread: 2, pointerX: 210 })).toBe(-1);
     expect(edgePreviewDirection({ ...base, spread: 2, pointerX: 400 })).toBe(0);
     expect(edgePreviewDirection({ ...base, spread: 0, pointerX: 495 })).toBe(1);
+  });
+});
+
+describe("coverKeyLight", () => {
+  const elevation = (pose: { x: number; y: number; z: number }) => Math.atan2(pose.y, Math.hypot(pose.x, pose.z));
+
+  it("rakes from the upper left while the front cover is closed", () => {
+    const pose = coverKeyLight(0, false);
+    expect(elevation(pose)).toBeCloseTo(RAKING_ELEVATION, 6);
+    // Screen up is world -Z and screen left world -X.
+    expect(pose.x).toBeLessThan(0);
+    expect(pose.z).toBeLessThan(0);
+    expect(Math.hypot(pose.x, pose.y, pose.z)).toBeCloseTo(Math.hypot(READING_KEY.x, READING_KEY.y, READING_KEY.z), 6);
+  });
+
+  it("is today's reading light once the cover is open, and stays there", () => {
+    for (const progress of [1, 1.5, 12]) expect(coverKeyLight(progress, false)).toEqual({ ...READING_KEY });
+  });
+
+  it("keeps the irradiance on flat paper constant", () => {
+    const flat = READING_KEY.intensity * Math.sin(elevation(READING_KEY));
+    for (const progress of [0, 0.3, 0.7, 1]) {
+      const pose = coverKeyLight(progress, false);
+      expect(pose.intensity * Math.sin(elevation(pose))).toBeCloseTo(flat, 6);
+    }
+  });
+
+  it("rises steadily as the cover opens and ignores a hover lift", () => {
+    let previous = -Infinity;
+    for (let step = 0; step <= 20; step += 1) {
+      const current = elevation(coverKeyLight(step / 20, false));
+      expect(current).toBeGreaterThanOrEqual(previous - 1e-12);
+      previous = current;
+    }
+    expect(coverKeyLight(0.055, false)).toEqual(coverKeyLight(0, false));
+  });
+
+  it("snaps between the two poses under reduced motion", () => {
+    expect(coverKeyLight(0.3, true)).toEqual(coverKeyLight(0, false));
+    expect(coverKeyLight(0.6, true)).toEqual({ ...READING_KEY });
   });
 });

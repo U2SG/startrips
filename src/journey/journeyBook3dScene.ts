@@ -6,7 +6,9 @@ import {
   BOOK_SHEET_SPACING,
   bookFrame,
   bookTableHeight,
+  coverKeyLight,
   faceScreenRect,
+  READING_KEY,
   stackSheets,
   type BookFrame,
   type FaceSide,
@@ -30,6 +32,7 @@ const PAGE_SUBDIVISIONS = 16;
 const FLIP_SECONDS = 0.78;
 const FOCUS_RATE = 9;
 const EDGE_LIFT = 0.055;
+const PAPER_ROUGHNESS = 0.88;
 const SETTLED_EPSILON = 1e-4;
 /** A block's top sits this far under the top sheet of its stack. */
 const BLOCK_TOP_GAP = BOOK_SHEET_SPACING * 0.4;
@@ -38,6 +41,14 @@ const EDGE_TILE_HEIGHT = 0.35;
 /** How far the contact shadow spreads past the book (world units). */
 const CONTACT_SPREAD = 0.07;
 const CONTACT_LIFT = 0.0015;
+/**
+ * World height of one step (1/255) of the cover's height channel, per screen
+ * pixel: three.js differentiates the bump map in screen space and normalises
+ * the surface derivatives, so this is a slope, not a depth. The groove ramps
+ * fall about 0.06 per texel, so 10 tilts their walls 30–50° at the cover's
+ * on-screen sizes (desktop and phone) without the flat cloth moving at all.
+ */
+const COVER_BUMP_SCALE = 10;
 
 /** Thin page edges seen on the near side of a page block, tiled vertically. */
 function paperEdgeTexture(): THREE.CanvasTexture {
@@ -84,6 +95,8 @@ export class JourneyBook3dScene {
   private readonly table: THREE.Mesh;
   private readonly blank: THREE.MeshStandardMaterial;
   private readonly faceMaterials: THREE.MeshStandardMaterial[] = [];
+  private readonly key: THREE.DirectionalLight;
+  private readonly reduced: boolean;
   private readonly dirtySheets = new Set<{ page: THREE.Mesh }>();
   private frame: number | null = null;
   private lastTime = 0;
@@ -108,6 +121,7 @@ export class JourneyBook3dScene {
 
   constructor(canvas: HTMLCanvasElement, pageWidth: number, reduced: boolean, background: string) {
     this.pageWidth = pageWidth;
+    this.reduced = reduced;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -121,8 +135,10 @@ export class JourneyBook3dScene {
     this.camera.lookAt(0, 0, 0);
 
     this.scene.add(new THREE.HemisphereLight("#ffffff", "#2a2f2c", 1.05));
-    const key = new THREE.DirectionalLight("#ffffff", 2.4);
-    key.position.set(-2.8, 5.2, 2.7);
+    // Posed every frame by `coverKeyLight`: raking on the closed front cover.
+    const key = new THREE.DirectionalLight("#ffffff", READING_KEY.intensity);
+    key.position.set(READING_KEY.x, READING_KEY.y, READING_KEY.z);
+    this.key = key;
     key.castShadow = true;
     key.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
     Object.assign(key.shadow.camera, { near: 0.1, far: 14, left: -3, right: 3, top: 3, bottom: -3 });
@@ -230,7 +246,7 @@ export class JourneyBook3dScene {
   }
 
   private paperMaterial(map: THREE.Texture | null): THREE.MeshStandardMaterial {
-    const material = new THREE.MeshStandardMaterial({ color: "#ffffff", map, roughness: 0.88, metalness: 0 });
+    const material = new THREE.MeshStandardMaterial({ color: "#ffffff", map, roughness: PAPER_ROUGHNESS, metalness: 0 });
     material.shadowSide = THREE.DoubleSide;
     return material;
   }
@@ -285,6 +301,25 @@ export class JourneyBook3dScene {
     const hadMap = material.map !== null;
     material.map = texture;
     if (hadMap !== (texture !== null)) material.needsUpdate = true;
+    this.requestRender();
+  }
+
+  /**
+   * Attach (or release, with null) the front cover's material map: height in
+   * R (bump), roughness in G, metalness in B. three.js multiplies the scalars
+   * by the map, so they are 1 while the map is attached.
+   */
+  setCoverMaps(texture: THREE.Texture | null) {
+    const material = this.faceMaterials[0];
+    if (!material || material.bumpMap === texture) return;
+    const hadMaps = material.bumpMap !== null;
+    material.bumpMap = texture;
+    material.roughnessMap = texture;
+    material.metalnessMap = texture;
+    material.bumpScale = COVER_BUMP_SCALE;
+    material.roughness = texture ? 1 : PAPER_ROUGHNESS;
+    material.metalness = texture ? 1 : 0;
+    if (hadMaps !== (texture !== null)) material.needsUpdate = true;
     this.requestRender();
   }
 
@@ -513,6 +548,9 @@ export class JourneyBook3dScene {
       this.applyCamera();
     }
     this.updateStacks();
+    const pose = coverKeyLight(this.book.progress, this.reduced);
+    this.key.position.set(pose.x, pose.y, pose.z);
+    this.key.intensity = pose.intensity;
     for (const sheet of this.dirtySheets) sheet.page.geometry.computeVertexNormals();
     this.dirtySheets.clear();
     this.renderer.render(this.scene, this.camera);
