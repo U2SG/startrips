@@ -48,11 +48,14 @@ describe("cover material map", () => {
       expect(COVER_GROOVE[index].depth).toBeGreaterThan(COVER_GROOVE[index - 1].depth);
     }
     expect(COVER_GROOVE[COVER_GROOVE.length - 1].depth).toBe(1);
+    // A fine impression: no wider than the painted deboss line, and shallow.
+    expect(COVER_GROOVE[0].width).toBeLessThanOrEqual(1.1);
+    expect(COVER_MATERIAL.cloth[0] - COVER_MATERIAL.deboss[0]).toBeLessThanOrEqual(32);
   });
 
   it("interpolates a material colour from the cloth", () => {
-    expect(coverMaterialColor(COVER_MATERIAL.deboss)).toBe("rgb(72 204 0)");
-    expect(coverMaterialColor(COVER_MATERIAL.deboss, 0.5)).toBe("rgb(100 217 0)");
+    expect(coverMaterialColor(COVER_MATERIAL.deboss)).toBe("rgb(96 217 0)");
+    expect(coverMaterialColor(COVER_MATERIAL.deboss, 0.5)).toBe("rgb(112 224 0)");
     expect(coverMaterialColor(COVER_MATERIAL.deboss, 0)).toBe("rgb(128 230 0)");
   });
 });

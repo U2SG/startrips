@@ -42,13 +42,14 @@ const EDGE_TILE_HEIGHT = 0.35;
 const CONTACT_SPREAD = 0.07;
 const CONTACT_LIFT = 0.0015;
 /**
- * World height of one step (1/255) of the cover's height channel, per screen
- * pixel: three.js differentiates the bump map in screen space and normalises
- * the surface derivatives, so this is a slope, not a depth. The groove ramps
- * fall about 0.06 per texel, so 10 tilts their walls 30–50° at the cover's
- * on-screen sizes (desktop and phone) without the flat cloth moving at all.
+ * Slope per unit of the cover's height channel, per screen pixel: three.js
+ * differentiates the bump map in screen space and normalises the surface
+ * derivatives, so this is a slope, not a depth. The fine groove falls about
+ * 0.035 per texel, so 4 tilts its walls roughly 10–16° at the cover's
+ * on-screen sizes: under the 30° raking light that is a thin lit wall and a
+ * thin shaded wall, while the groove floor keeps the cloth's colour.
  */
-const COVER_BUMP_SCALE = 10;
+const COVER_BUMP_SCALE = 4;
 
 /** Thin page edges seen on the near side of a page block, tiled vertically. */
 function paperEdgeTexture(): THREE.CanvasTexture {

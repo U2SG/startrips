@@ -292,8 +292,8 @@ let markLoad: Promise<void> | null = null;
  */
 export const COVER_MATERIAL = {
   cloth: [128, 230, 0],
-  /** Floor of the Route groove and the start square; pressed cloth is a little smoother. */
-  deboss: [72, 204, 0],
+  /** Floor of the Route groove and the start square: a fine impression, a little smoother than the cloth. */
+  deboss: [96, 217, 0],
   /** The blind-stamped mark, shallower than the Route. */
   mark: [104, 217, 0],
   foil: [104, 128, 217],
@@ -308,9 +308,9 @@ export const COVER_MATERIAL = {
  * cloth to the groove floor.
  */
 export const COVER_GROOVE = [
-  { width: 2.2, depth: 1 / 3 },
-  { width: 1.6, depth: 2 / 3 },
-  { width: 1, depth: 1 },
+  { width: 1.1, depth: 1 / 3 },
+  { width: 0.8, depth: 2 / 3 },
+  { width: 0.5, depth: 1 },
 ] as const;
 
 type MaterialChannels = readonly [number, number, number];
@@ -456,7 +456,7 @@ function drawCoverRoute(context: CanvasRenderingContext2D, route: CoverRouteGeom
   const pen = coverRoutePen(context, width, height);
   if (route.kind === "path") {
     pen.trace(route);
-    context.strokeStyle = "rgb(0 0 0 / 0.16)";
+    context.strokeStyle = "rgb(0 0 0 / 0.07)";
     context.lineWidth = COVER_ROUTE_STROKE.deboss * width;
     context.stroke();
     const offset = -COVER_ROUTE_STROKE.highlightOffset * width;
@@ -464,7 +464,7 @@ function drawCoverRoute(context: CanvasRenderingContext2D, route: CoverRouteGeom
     context.strokeStyle = "rgb(255 255 255 / 0.07)";
     context.lineWidth = COVER_ROUTE_STROKE.highlight * width;
     context.stroke();
-    pen.square(route.start, COVER_ROUTE_STROKE.start, "rgb(0 0 0 / 0.2)");
+    pen.square(route.start, COVER_ROUTE_STROKE.start, "rgb(0 0 0 / 0.12)");
   }
   pen.square(route.end, COVER_ROUTE_STROKE.end, FOIL);
 }
