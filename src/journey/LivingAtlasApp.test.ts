@@ -2354,10 +2354,26 @@ describe("#200 phase E owner share dialog placement", () => {
     expect(dialogStart).toBeGreaterThan(sheetStart);
     expect(dialog).toContain("env(safe-area-inset-bottom, 0px)");
     expect(dialog).toContain("overscroll-behavior: contain;");
-    // Placement only: the phase E surface stays square, flat and unshadowed.
+    // The compact wrapper only places the sheet, so it carries no ornament.
     for (const ornament of ["border-radius", "box-shadow", "backdrop-filter", "gradient"]) {
       expect(sheet, ornament).not.toContain(ornament);
+    }
+    // 2026-10-05: the owner moved the dialog into the control family. Centred
+    // it is a floating layer with a hairline and an elevation; as the compact
+    // sheet it rounds only its top corners and keeps that elevation. Neither
+    // shape blurs the WebGL loop behind it or paints a gradient.
+    const baseStart = css.indexOf(".journey-share__dialog {");
+    expect(baseStart).toBeGreaterThan(start);
+    expect(baseStart).toBeLessThan(sheetStart);
+    const base = css.slice(baseStart, css.indexOf("}", baseStart));
+    expect(base).toContain("border: 1px solid var(--control-line);");
+    expect(base).toContain("border-radius: var(--radius-surface);");
+    expect(base).toContain("box-shadow: var(--elev-2);");
+    expect(dialog).toContain("border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;");
+    for (const ornament of ["backdrop-filter", "gradient"]) {
+      expect(base, ornament).not.toContain(ornament);
       expect(dialog, ornament).not.toContain(ornament);
     }
+    expect(dialog, "box-shadow").not.toContain("box-shadow");
   });
 });
