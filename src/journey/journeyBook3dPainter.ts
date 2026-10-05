@@ -88,12 +88,21 @@ export type PaintInput = {
   source: PageSource | null;
   /** Characters of the page's note shown so far; Infinity shows it all. */
   revealed: number;
+  /** The cover's goat has left its emboss (a live goat is on the cover); only the star stays stamped. */
+  goatAway?: boolean;
 };
 
 const PAPER = "#f7f6f0";
 const INK = "#292c26";
 const MUTED = "#73766c";
 const CLOTH = "#5f6b73";
+/** The blind-stamped mark: black at this alpha over the cloth. */
+const COVER_MARK_ALPHA = 0.18;
+/**
+ * The stamped mark's flat tone (black at `COVER_MARK_ALPHA` over the cloth):
+ * the live goat starts in it, so the emboss lifts off without a double.
+ */
+export const COVER_MARK_TONE = "#4e585e";
 const PLATE_MOUNT = "#ece7d6";
 const FOIL = "#e4cf98";
 const CLOTH_INK = "#f2efdf";
@@ -277,8 +286,12 @@ const COVER = {
 
 /** Raster height of the mark; it is drawn at about a tenth of this. */
 const MARK_RASTER = 480;
-let markImage: HTMLImageElement | null = null;
-let markMaterialImage: HTMLImageElement | null = null;
+const [, , MARK_VIEW_WIDTH, MARK_VIEW_HEIGHT] = STARTRIPS_V12_MARK_VIEWBOX.split(" ").map(Number);
+/** The mark's star alone: what stays stamped while the goat is out of its emboss. */
+const STAR_MARKUP = STARTRIPS_V12_MARK_MARKUP.slice(STARTRIPS_V12_MARK_MARKUP.indexOf('<g data-brand-part="star"'));
+type MarkImages = { colour: HTMLImageElement | null; material: HTMLImageElement | null };
+let markImages: MarkImages | null = null;
+let starImages: MarkImages | null = null;
 let markLoad: Promise<void> | null = null;
 
 /**
@@ -321,14 +334,13 @@ export function coverMaterialColor(to: MaterialChannels, depth = 1): string {
   return `rgb(${r} ${g} ${b})`;
 }
 
-/** The v12 mark as an SVG data URL: shapes in `fill`, cutouts in `cutout`. */
-function markUrl(fill: string, cutout: string): string {
-  const [, , viewWidth, viewHeight] = STARTRIPS_V12_MARK_VIEWBOX.split(" ").map(Number);
+/** The v12 mark (or `markup` from it) as an SVG data URL: shapes in `fill`, cutouts in `cutout`. */
+function markUrl(fill: string, cutout: string, markup = STARTRIPS_V12_MARK_MARKUP): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${STARTRIPS_V12_MARK_VIEWBOX}" `
-    + `width="${Math.round((MARK_RASTER * viewWidth) / viewHeight)}" height="${MARK_RASTER}" `
+    + `width="${Math.round((MARK_RASTER * MARK_VIEW_WIDTH) / MARK_VIEW_HEIGHT)}" height="${MARK_RASTER}" `
     + `style="color:${fill};--startrips-brand-cutout:${cutout}">`
     + "<style>.goat-fill{fill:currentColor}.far-fill{fill:currentColor;opacity:.72}</style>"
-    + `${STARTRIPS_V12_MARK_MARKUP}</svg>`;
+    + `${markup}</svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
@@ -349,39 +361,66 @@ function loadImage(url: string): Promise<HTMLImageElement | null> {
  * the mark's channels with cutouts in the cloth's. Resolves when both settle.
  */
 export function loadCoverMark(): Promise<void> {
+  const materialMark = coverMaterialColor(COVER_MATERIAL.mark);
+  const materialCloth = coverMaterialColor(COVER_MATERIAL.cloth);
   markLoad ??= Promise.all([
     loadImage(markUrl("#000", CLOTH)),
-    loadImage(markUrl(coverMaterialColor(COVER_MATERIAL.mark), coverMaterialColor(COVER_MATERIAL.cloth))),
-  ]).then(([colour, material]) => {
-    markImage = colour;
-    markMaterialImage = material;
+    loadImage(markUrl(materialMark, materialCloth)),
+    loadImage(markUrl("#000", CLOTH, STAR_MARKUP)),
+    loadImage(markUrl(materialMark, materialCloth, STAR_MARKUP)),
+  ]).then(([colour, material, starColour, starMaterial]) => {
+    markImages = { colour, material };
+    starImages = { colour: starColour, material: starMaterial };
   });
   return markLoad;
 }
 
-/** Whether both cover marks are ready to draw; part of a cover's repaint signature. */
+/** Whether the cover marks are ready to draw; part of a cover's repaint signature. */
 export function coverMarkReady(): boolean {
-  return markImage !== null && markMaterialImage !== null;
+  return Boolean(markImages?.colour && markImages.material && starImages?.colour && starImages.material);
 }
 
-/** Where the mark sits on a cover of `width` × `height`, bottom left. */
-function coverMarkRect(image: HTMLImageElement, width: number, height: number) {
-  const foot = height * (1 - COVER.bottom);
-  const box = { x: width * COVER.inset, y: foot - height * COVER.mark.height, width: width * COVER.mark.width, height: height * COVER.mark.height };
-  const rect = containRect(box, image.naturalWidth || image.width, image.naturalHeight || image.height);
-  return { ...rect, y: box.y + box.height - rect.height };
+/**
+ * Where the mark sits on the cover, bottom left, as fractions of the cover's
+ * width and height (`pageRatio` is width / height). The emboss and the live
+ * goat that leaves it share this frame; the mark's own viewBox fills it.
+ */
+export function coverMarkFrame(pageRatio: number): { x: number; y: number; width: number; height: number } {
+  const foot = 1 - COVER.bottom;
+  const scale = Math.min((COVER.mark.width * pageRatio) / MARK_VIEW_WIDTH, COVER.mark.height / MARK_VIEW_HEIGHT);
+  const width = (MARK_VIEW_WIDTH * scale) / pageRatio;
+  const height = MARK_VIEW_HEIGHT * scale;
+  return { x: COVER.inset + (COVER.mark.width - width) / 2, y: foot - height, width, height };
+}
+
+/** Where the mark sits on a cover of `width` × `height`, in canvas px. */
+function coverMarkRect(width: number, height: number) {
+  const frame = coverMarkFrame(width / height);
+  return { x: frame.x * width, y: frame.y * height, width: frame.width * width, height: frame.height * height };
+}
+
+/** The colour and material rasters to stamp: the whole mark, or the star alone while the goat is away. */
+function stampedMark(goatAway: boolean | undefined): MarkImages | null {
+  return goatAway ? starImages : markImages;
 }
 
 /** The tipped-in plate, bottom right. */
 function coverPlateRect(width: number, height: number) {
-  const foot = height * (1 - COVER.bottom);
   return {
-    x: width * (1 - COVER.inset - COVER.plate.width),
-    y: foot - height * COVER.plate.height,
-    width: width * COVER.plate.width,
-    height: height * COVER.plate.height,
+    x: width * COVER_PLATE_FRAME.x,
+    y: height * COVER_PLATE_FRAME.y,
+    width: width * COVER_PLATE_FRAME.width,
+    height: height * COVER_PLATE_FRAME.height,
   };
 }
+
+/** The tipped-in plate's frame on the cover, as fractions; the cover's goat walks below it. */
+export const COVER_PLATE_FRAME = {
+  x: 1 - COVER.inset - COVER.plate.width,
+  y: 1 - COVER.bottom - COVER.plate.height,
+  width: COVER.plate.width,
+  height: COVER.plate.height,
+} as const;
 
 /** Cover-fit `source` into `box`, clipped to it. */
 function drawCovered(
@@ -474,7 +513,7 @@ function drawCoverRoute(context: CanvasRenderingContext2D, route: CoverRouteGeom
  * colour face and drawn from the same Route, mark and plate geometry. Every
  * pixel is opaque, so no channel is premultiplied away.
  */
-export function paintCoverMaterial(canvas: HTMLCanvasElement, input: Pick<PaintInput, "page" | "route">) {
+export function paintCoverMaterial(canvas: HTMLCanvasElement, input: Pick<PaintInput, "page" | "route" | "goatAway">) {
   const context = canvas.getContext("2d")!;
   const { width, height } = canvas;
   context.save();
@@ -499,9 +538,10 @@ export function paintCoverMaterial(canvas: HTMLCanvasElement, input: Pick<PaintI
     pen.square(route.end, COVER_ROUTE_STROKE.end, coverMaterialColor(COVER_MATERIAL.foil));
   }
 
-  if (markMaterialImage) {
-    const rect = coverMarkRect(markMaterialImage, width, height);
-    context.drawImage(markMaterialImage, rect.x, rect.y, rect.width, rect.height);
+  const material = stampedMark(input.goatAway)?.material;
+  if (material) {
+    const rect = coverMarkRect(width, height);
+    context.drawImage(material, rect.x, rect.y, rect.width, rect.height);
   }
 
   if (input.page.kind === "cover" && input.page.asset) {
@@ -549,11 +589,12 @@ function paintCover(context: CanvasRenderingContext2D, width: number, height: nu
 
   drawCoverRoute(context, input.route, width, height);
 
-  if (markImage) {
-    const rect = coverMarkRect(markImage, width, height);
+  const mark = stampedMark(input.goatAway)?.colour;
+  if (mark) {
+    const rect = coverMarkRect(width, height);
     context.save();
-    context.globalAlpha = 0.18;
-    context.drawImage(markImage, rect.x, rect.y, rect.width, rect.height);
+    context.globalAlpha = COVER_MARK_ALPHA;
+    context.drawImage(mark, rect.x, rect.y, rect.width, rect.height);
     context.restore();
   }
 

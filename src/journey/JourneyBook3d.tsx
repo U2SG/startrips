@@ -8,6 +8,7 @@ import {
   IconMusicOff,
   IconX,
 } from "@tabler/icons-react";
+import { StartripsGoatRig } from "../brand/StartripsSignatureMotion";
 import { onMotionPreferenceChange, prefersReducedMotion } from "../motion/preferences";
 import { useAtlasView } from "./atlasView";
 import { journeySoundtrack } from "./journeyModel";
@@ -30,7 +31,18 @@ import {
   stepFace,
 } from "./journeyBook3dModel";
 import { coverRouteGeometry, coverRouteSvgPath } from "./coverRouteGeometry";
-import { PLATE, coverMarkReady, loadCoverMark, noteCharacterCount, paintCoverMaterial, paintFace, type PageSource } from "./journeyBook3dPainter";
+import { COVER_PLATE_FRAME, PLATE, coverMarkFrame, coverMarkReady, loadCoverMark, noteCharacterCount, paintCoverMaterial, paintFace, type PageSource } from "./journeyBook3dPainter";
+import {
+  GOAT_PULL_IDLE_MS,
+  goatPullAutoEligible,
+  goatPullMarkHit,
+  goatPullPlayed,
+  goatPullRecordsPlay,
+  type GoatPullOrigin,
+  goatPullStorage,
+  markGoatPullPlayed,
+} from "./journeyBookGoatPull";
+import { startGoatPull, type GoatPull, type GoatPullFrame } from "./journeyBookGoatPullStage";
 import { loadPictureChain } from "./journeyBook3dPictures";
 import { JourneyBook3dScene } from "./journeyBook3dScene";
 import {
@@ -67,6 +79,18 @@ const SWIPE_PX = 36;
 const EDGE_ZONE_PX = 28;
 /** The bottom of the live video belongs to its native controls. */
 const VIDEO_CONTROLS_BAND_PX = 52;
+/** Where the cover's goat mark is stamped, as fractions of the cover. */
+const MARK_FRAME = coverMarkFrame(BOOK_PAGE_RATIO);
+
+type GoatPullQaHook = { scrub: (elapsedMs: number) => void };
+declare global {
+  interface Window {
+    /** DEV QA only: scrub the cover's goat pull (`?qaState=journey-book-3d&goatPull=scrub`). */
+    __journeyBookGoatPull?: GoatPullQaHook;
+    /** DEV QA only: the 3D book's current turn progress. */
+    __journeyBook3dProgress?: () => number | null;
+  }
+}
 
 let fineHoverQuery: MediaQueryList | null = null;
 /** Whether the primary pointer can hover precisely (a desktop mouse or trackpad). */
@@ -113,7 +137,28 @@ type Gesture = {
   startFraction: number;
   fraction: number;
   onVideo: boolean;
+  /** The drag caught a cover the goat was pulling: a plain tap does what a tap does. */
+  caught: boolean;
 };
+
+/** A frame of the closed front cover (fractions) on the stage, in CSS px. */
+function coverFrameRect(scene: JourneyBook3dScene, frame: { x: number; y: number; width: number; height: number }) {
+  const rect = scene.faceRect("closed-front");
+  return {
+    left: rect.left + rect.width * frame.x,
+    top: rect.top + rect.height * frame.y,
+    width: rect.width * frame.width,
+    height: rect.height * frame.height,
+  };
+}
+
+/** The closed front cover's goat mark on the stage, in CSS px. */
+function coverMarkRect(scene: JourneyBook3dScene) {
+  return coverFrameRect(scene, MARK_FRAME);
+}
+
+/** A caught cover held past upright completes its turn on a tap. */
+const UPRIGHT_FRACTION = 0.5;
 
 function journeyRange(journey: Journey) {
   return journey.endedOn && journey.endedOn !== journey.startedOn
@@ -210,6 +255,7 @@ export function JourneyBook3d({
   onNavigate,
   onObservationChange,
   onGlobeCoverChange,
+  goatPullScrub = false,
 }: {
   journeys: readonly Journey[];
   journeyId: string;
@@ -221,6 +267,8 @@ export function JourneyBook3d({
   onObservationChange?: (observation: StoryLogicalObservation | null) => void;
   /** The book covers the globe completely, so the globe can stop rendering. */
   onGlobeCoverChange?: (state: { opaqueMediaCover: boolean; coverTransitionActive: boolean }) => void;
+  /** DEV QA only: the cover's goat never wakes by itself and is scrubbed through `window.__journeyBookGoatPull`. */
+  goatPullScrub?: boolean;
 }) {
   const { readMedia } = useAtlasView();
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
@@ -251,6 +299,9 @@ export function JourneyBook3d({
   const [chosenVideoId, setChosenVideoId] = useState<string | null>(null);
   const [videoRect, setVideoRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [repaintTick, setRepaintTick] = useState(0);
+  /** A live goat is out of the cover's emboss; the cover stamps only its star. */
+  const [goatAway, setGoatAway] = useState(false);
+  const [goatPlayed, setGoatPlayed] = useState(() => goatPullPlayed(goatPullStorage(), journeyId));
 
   // The cover's embossed mark is rasterised once; the cover repaints when it is ready.
   useEffect(() => {
@@ -272,6 +323,10 @@ export function JourneyBook3d({
   const gestureRef = useRef<Gesture | null>(null);
   const pictureUrlsRef = useRef(new Map<string, string>());
   const placedRef = useRef(false);
+  const goatRef = useRef<SVGSVGElement>(null);
+  const goatPullRef = useRef<GoatPull | null>(null);
+  /** The pointer whose press interrupted the goat; its drag catches the cover. */
+  const caughtPointerRef = useRef<number | null>(null);
   const rootRef = useModalFocus<HTMLDivElement>(() => {
     if (fullNote !== null) setFullNote(null);
     else if (tocOpen) setTocOpen(false);
@@ -316,6 +371,12 @@ export function JourneyBook3d({
     });
     const surfaces = surfacesRef.current;
     return () => {
+      // The goat belongs to this scene: it stops before the scene goes.
+      if (goatPullRef.current) {
+        goatPullRef.current.dispose();
+        goatPullRef.current = null;
+        setGoatAway(false);
+      }
       for (const surface of surfaces.values()) disposeSurface(surface);
       surfaces.clear();
       sceneRef.current = null;
@@ -447,7 +508,7 @@ export function JourneyBook3d({
     const asset = pageAsset(page);
     const source: PageSource | null = asset ? pictures[asset.id] ?? { status: "loading" } : null;
     const revealed = revealedCount(target);
-    const signature = `${page.key}|${asset ? `${source?.status}:${pictureUrlsRef.current.get(asset.id) ?? ""}` : ""}|${source?.status === "ready" ? `${source.width}x${source.height}` : ""}|${Number.isFinite(revealed) ? Math.floor(revealed * 4) : "all"}|${journey.title}${page.kind === "cover" ? `|${coverRouteKey}|${coverMarkReady()}|${journeyRange(journey)}` : ""}`;
+    const signature = `${page.key}|${asset ? `${source?.status}:${pictureUrlsRef.current.get(asset.id) ?? ""}` : ""}|${source?.status === "ready" ? `${source.width}x${source.height}` : ""}|${Number.isFinite(revealed) ? Math.floor(revealed * 4) : "all"}|${journey.title}${page.kind === "cover" ? `|${coverRouteKey}|${coverMarkReady()}|${goatAway}|${journeyRange(journey)}` : ""}`;
     let surface = surfacesRef.current.get(target);
     if (surface?.signature === signature) return;
     if (!surface) {
@@ -468,12 +529,13 @@ export function JourneyBook3d({
       route: coverRoute,
       source,
       revealed,
+      goatAway,
     });
     surface.signature = signature;
     surface.texture.needsUpdate = true;
     scene.setFaceTexture(target, surface.texture);
     if (surface.material) {
-      paintCoverMaterial(surface.material.canvas, { page, route: coverRoute });
+      paintCoverMaterial(surface.material.canvas, { page, route: coverRoute, goatAway });
       surface.material.texture.needsUpdate = true;
       scene.setCoverMaps(surface.material.texture);
     }
@@ -485,7 +547,7 @@ export function JourneyBook3d({
       else next.delete(target);
       return next;
     });
-  }, [coverRoute, coverRouteKey, faceCount, journey, pages, pictures, repaintTick, revealedCount]);
+  }, [coverRoute, coverRouteKey, faceCount, goatAway, journey, pages, pictures, repaintTick, revealedCount]);
 
   // Faces near the reader hold painted textures; the rest are released.
   useEffect(() => {
@@ -601,6 +663,8 @@ export function JourneyBook3d({
       pixelsPerUnit: scene.pixelsPerUnit,
       spineX: scene.spineX,
       rects: Object.fromEntries(sides.map((side) => [side, scene.faceRect(side)])),
+      goatMark: at <= 0 ? coverMarkRect(scene) : null,
+      coverPlate: at <= 0 ? coverFrameRect(scene, COVER_PLATE_FRAME) : null,
     });
   }, [face, faceCount, orientation, settled, stageSize]);
 
@@ -631,6 +695,8 @@ export function JourneyBook3d({
   const goToFace = useCallback((target: number, turns: boolean) => {
     const scene = sceneRef.current;
     if (!scene) return;
+    // A turn command takes over from the goat (normally its input already did).
+    goatPullRef.current?.interrupt();
     settleNotes();
     setChosenVideoId(null);
     markMoving();
@@ -641,10 +707,124 @@ export function JourneyBook3d({
 
   const step = useCallback((direction: -1 | 1) => {
     const scene = sceneRef.current;
-    if (!scene || !scene.isSettled()) return;
+    if (!scene) return;
+    goatPullRef.current?.interrupt();
+    // A page edge still up (a hover lift, a cover the goat let go) turns from where it is.
+    if (!scene.isSettled() && !scene.hasEdge) return;
     const next = stepFace(faceRef.current, direction, faceCount, orientationRef.current);
     if (next) goToFace(next.face, next.turns);
   }, [faceCount, goToFace]);
+
+  // ── the cover's goat ──────────────────────────────────────────────────
+  const markReady = coverMarkReady();
+  const publishGoat = useCallback((state: Omit<Partial<GoatPullFrame>, "status"> & { status: string }) => {
+    if (!import.meta.env.DEV) return;
+    const stage = stageRef.current;
+    if (stage) stage.dataset.goatPull = JSON.stringify(state);
+  }, []);
+
+  const playGoatPull = useCallback((origin: GoatPullOrigin) => {
+    const scene = sceneRef.current;
+    const overlay = goatRef.current;
+    if (!scene || !overlay || !journey || goatPullRef.current || faceRef.current !== 0 || !scene.isSettled()) return null;
+    if (origin !== "scrub" && reduced) return null;
+    // Any real performance, auto or tapped, counts: the goat never wakes again unasked.
+    if (goatPullRecordsPlay(origin)) {
+      markGoatPullPlayed(goatPullStorage(), journey.id);
+      setGoatPlayed(true);
+    }
+    setGoatAway(true);
+    markMoving();
+    const pull = startGoatPull({
+      scene,
+      overlay,
+      mark: MARK_FRAME,
+      scrubbing: origin === "scrub",
+      onRelease: () => {
+        setChosenVideoId(null);
+        const next = stepFace(0, 1, faceCount, orientationRef.current);
+        if (next) setFace(next.face);
+      },
+      onEnd: () => {
+        if (goatPullRef.current === pull) goatPullRef.current = null;
+        setGoatAway(false);
+      },
+      onInterrupt: (event) => {
+        const target = event.target as Element | null;
+        caughtPointerRef.current = event.type === "pointerdown"
+          && target instanceof Element
+          && Boolean(stageRef.current?.contains(target))
+          && !target.closest("button, a, input, select, textarea, video")
+          ? (event as PointerEvent).pointerId
+          : null;
+      },
+      onFrame: publishGoat,
+    });
+    goatPullRef.current = pull;
+    return pull;
+  }, [faceCount, journey, markMoving, publishGoat, reduced]);
+
+  useEffect(() => {
+    setGoatPlayed(goatPullPlayed(goatPullStorage(), journeyId));
+  }, [journeyId]);
+
+  useEffect(() => {
+    publishGoat({ status: "idle" });
+  }, [publishGoat]);
+
+  // Once per Journey per device: the goat wakes when the reader has left the
+  // closed cover alone for a moment. Any input restarts the wait.
+  const goatEligible = goatPullAutoEligible({
+    reduced,
+    played: goatPlayed,
+    onClosedCover: face === 0 && settled,
+    markReady,
+    blocked: goatPullScrub || Boolean(failure) || corsRefused || tocOpen || fullNote !== null,
+  });
+  useEffect(() => {
+    if (!goatEligible) return;
+    let timer = window.setTimeout(() => playGoatPull("auto"), GOAT_PULL_IDLE_MS);
+    const restart = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => playGoatPull("auto"), GOAT_PULL_IDLE_MS);
+    };
+    const options = { capture: true, passive: true } as const;
+    window.addEventListener("pointerdown", restart, options);
+    window.addEventListener("wheel", restart, options);
+    window.addEventListener("keydown", restart, options);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", restart, options);
+      window.removeEventListener("wheel", restart, options);
+      window.removeEventListener("keydown", restart, options);
+    };
+  }, [goatEligible, playGoatPull]);
+
+  // Reduced motion, live: a performance under way stops at once.
+  useEffect(() => {
+    if (reduced) goatPullRef.current?.interrupt();
+  }, [reduced]);
+
+  // DEV QA: scrub the performance to a time (the fixture's `goatPull=scrub`).
+  useEffect(() => {
+    if (!import.meta.env.DEV || !goatPullScrub) return;
+    window.__journeyBookGoatPull = {
+      scrub: (elapsedMs) => (goatPullRef.current ?? playGoatPull("scrub"))?.scrub(elapsedMs),
+    };
+    return () => {
+      delete window.__journeyBookGoatPull;
+    };
+  }, [goatPullScrub, playGoatPull]);
+
+  // DEV QA: the book's live turn progress, so browser QA can follow a drag
+  // that catches the goat's cover from its current angle.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    window.__journeyBook3dProgress = () => sceneRef.current?.progress ?? null;
+    return () => {
+      delete window.__journeyBook3dProgress;
+    };
+  }, []);
 
   const currentPage = pages[face];
   useEffect(() => {
@@ -660,12 +840,15 @@ export function JourneyBook3d({
   // ── gestures ──────────────────────────────────────────────────────────
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     const scene = sceneRef.current;
+    // A press that interrupted the goat catches the cover where it is; read once.
+    const caught = caughtPointerRef.current === event.pointerId;
+    caughtPointerRef.current = null;
     if (!scene || (event.pointerType === "mouse" && event.button !== 0)) return;
     const target = event.target as HTMLElement;
     if (target.closest("button, a, input, select, textarea")) return;
     const video = target.closest("video");
     if (video && video.getBoundingClientRect().bottom - event.clientY < VIDEO_CONTROLS_BAND_PX) return;
-    const lifted = scene.takeEdge();
+    const lifted = scene.takeEdge(caught);
     if (!lifted && !scene.isSettled()) return;
     gestureRef.current = {
       pointerId: event.pointerId,
@@ -679,6 +862,7 @@ export function JourneyBook3d({
       startFraction: lifted?.fraction ?? 0,
       fraction: lifted?.fraction ?? 0,
       onVideo: Boolean(video),
+      caught: caught && Boolean(lifted),
     };
     if (lifted) {
       markMoving();
@@ -757,7 +941,11 @@ export function JourneyBook3d({
     if (gesture.mode === "turn") {
       // A click on a lifted page edge (no drag) turns that page, as a tap does.
       const clicked = Math.abs(deltaX) < DRAG_SLOP_PX && elapsed < 500;
-      const complete = !cancelled && (clicked || shouldCompleteDrag(gesture.fraction, elapsed));
+      // A tap that caught the goat's cover turns it only where a tap turns forward.
+      const tapTurns = gesture.caught
+        ? event.clientX - stageRef.current!.getBoundingClientRect().left > (stageRef.current!.clientWidth * 2) / 3
+        : true;
+      const complete = !cancelled && (clicked ? tapTurns || gesture.fraction >= UPRIGHT_FRACTION : shouldCompleteDrag(gesture.fraction, elapsed));
       const targetSpread = gesture.spread + (complete ? gesture.direction : 0);
       scene.endDrag(targetSpread);
       if (complete) {
@@ -779,6 +967,10 @@ export function JourneyBook3d({
     // of the book it lands nearer turns toward it.
     const stage = stageRef.current!.getBoundingClientRect();
     const x = event.clientX - stage.left;
+    // A tap on the closed cover's goat mark plays the goat again.
+    if (face === 0 && !reduced && goatPullMarkHit({ x, y: event.clientY - stage.top }, coverMarkRect(scene))) {
+      if (playGoatPull("tap")) return;
+    }
     for (const target of visibleVideos) {
       const rect = scene.faceRect(faceSide(target, faceCount));
       if (x >= rect.left && x <= rect.left + rect.width && event.clientY - stage.top >= rect.top && event.clientY - stage.top <= rect.top + rect.height) {
@@ -916,6 +1108,9 @@ export function JourneyBook3d({
             </div>
           </div>
         ) : null}
+        <svg ref={goatRef} className="journey-book-3d__goat" aria-hidden="true" focusable="false" style={{ display: "none" }}>
+          <g data-goat-place=""><StartripsGoatRig /></g>
+        </svg>
         {liveAsset && liveRead?.status === "ready" && videoRect ? (
           <video
             ref={videoRef}
