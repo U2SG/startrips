@@ -9000,7 +9000,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   position: absolute;
   inset: 0;
   border: 0;
-  background: rgba(2, 7, 6, 0.82);
+  background: rgba(2, 7, 6, 0.6);
   cursor: pointer;
 }
 
