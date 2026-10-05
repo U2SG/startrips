@@ -721,7 +721,7 @@ function readZoomRowUnderMenu(page) {
           if (hit && button.contains(hit)) return "row";
           return hit instanceof Element ? hit.getAttribute("class") ?? hit.tagName : null;
         });
-        button.focus();
+        button.focus({ preventScroll: true });
         const focusable = document.activeElement === button;
         return {
           visibility: getComputedStyle(button).visibility,
@@ -731,10 +731,51 @@ function readZoomRowUnderMenu(page) {
         };
       }),
     };
-    if (opener instanceof HTMLElement) opener.focus();
+    if (opener instanceof HTMLElement) opener.focus({ preventScroll: true });
     return state;
   });
 }
+
+/**
+ * What decides the row's state, so a red reading names its cause: the body
+ * marker AuthGateway sets, the row container's computed visibility, which
+ * renderer owns the Dive (the particle owner turns the controls'
+ * pointer-events off), and what each button's five points actually hit.
+ */
+function readZoomRowDiagnostics(page) {
+  return page.evaluate(() => {
+    const container = document.querySelector(".detailed-earth-map .maplibregl-ctrl-bottom-right");
+    const group = document.querySelector(".detailed-earth-map .maplibregl-ctrl-group");
+    return {
+      accountMenuMarker: document.body.dataset.accountMenu ?? null,
+      dockOpen: Boolean(document.querySelector(".account-dock.is-open")),
+      containerVisibility: container ? getComputedStyle(container).visibility : null,
+      diveOwner: document.querySelector(".detailed-earth-map")?.getAttribute("data-dive-owner") ?? null,
+      earthDive: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") ?? null,
+      hitClasses: group
+        ? [...group.querySelectorAll("button")].map((button) => {
+          const rect = button.getBoundingClientRect();
+          return [
+            [rect.left + rect.width / 2, rect.top + rect.height / 2],
+            [rect.left + 4, rect.top + 4],
+            [rect.right - 4, rect.top + 4],
+            [rect.left + 4, rect.bottom - 4],
+            [rect.right - 4, rect.bottom - 4],
+          ].map(([x, y]) => {
+            const hit = document.elementFromPoint(x, y);
+            return hit instanceof Element ? hit.getAttribute("class") ?? hit.tagName : null;
+          });
+        })
+        : null,
+    };
+  });
+}
+
+/** Wait, bounded, for the row container's visibility to settle. */
+const waitForZoomRowVisibility = (page, expected) => page.waitForFunction((value) => {
+  const container = document.querySelector(".detailed-earth-map .maplibregl-ctrl-bottom-right");
+  return Boolean(container) && getComputedStyle(container).visibility === value;
+}, expected, { timeout: 5_000 }).then(() => true).catch(() => false);
 
 const zoomRowOwnedByMenu = (state) => Boolean(
   state
@@ -1845,24 +1886,33 @@ try {
       await activateDiveIntent(page);
       await settle(page);
       const menuClosed = await readZoomRow(page);
+      const closedDiagnostics = await readZoomRowDiagnostics(page);
       await page.locator(".account-dock__tab").click();
       const panel = page.locator(".account-dock.is-open .account-dock__panel");
       await panel.waitFor({ state: "visible", timeout: 5_000 });
       await finishAnimations(panel);
+      const withdrawnSettled = await waitForZoomRowVisibility(page, "hidden");
       await settle(page);
+      const openDiagnostics = await readZoomRowDiagnostics(page);
       const menuOpen = await readZoomRowUnderMenu(page);
       await page.locator(".account-dock__tab").click();
       await page.locator(".account-dock__panel").waitFor({ state: "hidden", timeout: 5_000 });
+      const restoredSettled = await waitForZoomRowVisibility(page, "visible");
       await settle(page);
       const menuReclosed = await readZoomRow(page);
+      const reclosedDiagnostics = await readZoomRowDiagnostics(page);
       record({
         name: `detail-zoom-group-under-account-menu/${viewport.name}`,
         viewport: viewport.name,
+        settled: { withdrawn: withdrawnSettled, restored: restoredSettled },
         menuClosed,
         menuOpen,
         menuReclosed,
+        diagnostics: { closed: closedDiagnostics, open: openDiagnostics, reclosed: reclosedDiagnostics },
         pageErrors,
-        failed: !zoomRowClear(menuClosed)
+        failed: !withdrawnSettled
+          || !restoredSettled
+          || !zoomRowClear(menuClosed)
           || !zoomRowOwnedByMenu(menuOpen)
           || !zoomRowClear(menuReclosed)
           || pageErrors.length > 0,

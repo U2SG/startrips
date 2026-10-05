@@ -460,8 +460,9 @@
 /* The open account menu is an opaque panel above the map that drops over the
    row's band from the same right edge, so it owns that region while open. The
    row underneath steps out entirely rather than staying tabbable (or leaving
-   a strip of its last button pressable) behind the panel. */
-body:has(.account-dock.is-open) .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right {
+   a strip of its last button pressable) behind the panel. AuthGateway marks
+   the body while the menu is open. */
+body[data-account-menu="open"] .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right {
   visibility: hidden;
 }
 
