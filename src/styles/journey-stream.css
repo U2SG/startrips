@@ -362,6 +362,10 @@
     border-color: var(--control-line-strong);
   }
 
+  .journey-stream :is(.journey-stream__icon, .journey-stream__text-action, .journey-stream__side):hover:not(:disabled, :active) {
+    background-color: var(--control-fill-hover);
+  }
+
   .journey-stream .journey-stream__icon:not([aria-pressed="true"]):hover:not(:disabled) {
     color: var(--control-ink);
   }

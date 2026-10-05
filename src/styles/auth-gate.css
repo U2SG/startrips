@@ -1090,7 +1090,7 @@
   background: var(--control-fill);
   backdrop-filter: blur(14px);
   cursor: pointer;
-  transition: scale var(--motion-instant) var(--motion-ease-out), border-color var(--motion-instant) ease-out;
+  transition: scale var(--motion-instant) var(--motion-ease-out), background-color var(--motion-instant) ease-out, border-color var(--motion-instant) ease-out;
 }
 .account-dock__tab-chevron { transition: transform 180ms ease; }
 .account-dock.is-open .account-dock__tab-chevron { transform: rotate(180deg); }
@@ -1320,7 +1320,7 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
   color: var(--control-ink);
   background: var(--control-fill);
   font-size: 27px;
-  transition: scale var(--motion-instant) var(--motion-ease-out);
+  transition: scale var(--motion-instant) var(--motion-ease-out), background-color var(--motion-instant) ease-out;
 }
 
 .account-sheet__form {
@@ -1406,6 +1406,16 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
 @media (hover: hover) and (pointer: fine) {
   :is(.account-dock > .account-dock__tab, .account-sheet__form button:not([type="submit"], .st-btn--primary)):hover:not(:disabled) {
     border-color: var(--control-line-strong);
+  }
+
+  :is(
+    .account-dock > .account-dock__tab,
+    .account-sheet__drill-header > button,
+    .account-sheet__form > button,
+    .account-sheet__form form > button[type="button"],
+    .account-identity-panel__methods button
+  ):not([type="submit"], .st-btn--primary):hover:not(:disabled, :active) {
+    background-color: var(--control-fill-hover);
   }
 
   .account-sheet__form button:is([type="submit"], .st-btn--primary):hover:not(:disabled) {

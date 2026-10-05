@@ -100,6 +100,10 @@
   .story-notes-editor__actions button:hover:not(:disabled) {
     border-color: var(--control-line-strong);
   }
+
+  .story-notes-editor__actions button:hover:not(:disabled, :active) {
+    background-color: var(--control-fill-hover);
+  }
 }
 
 .story-notes-editor__actions button:active:not(:disabled) {
