@@ -66,6 +66,23 @@
   outline-offset: 3px;
 }
 
+/* Shell surfaces that consume the control tokens take the family's focus
+   ring. :is() carries its most specific entry, which outranks the default. */
+:is(
+  .mobile-v2__sheet-actions button,
+  .journey-timeline__card > .journey-timeline__story,
+  .living-atlas__notice button,
+  .living-atlas__route-point-context button,
+  .living-atlas-globe__controls button,
+  .living-atlas > .living-atlas__globe-focus-exit,
+  .living-atlas__home-base-suggestion button,
+  .living-atlas__home-base-context :is(button, input, textarea),
+  .living-atlas__everyday-context :is(button, input, textarea)
+):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
 .living-atlas button:disabled {
   cursor: not-allowed;
   opacity: var(--control-disabled-opacity);
@@ -466,41 +483,41 @@
   letter-spacing: 0.08em;
 }
 
+/* The family's segmented look: a pill track whose selected item is an inset
+   cyan fill inside the item's full 44px box. */
 .living-atlas-globe__language {
   min-height: 44px;
   display: grid;
   grid-template-columns: repeat(2, minmax(52px, 1fr));
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  background: rgba(2, 11, 12, 0.82);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
   backdrop-filter: blur(12px);
 }
 
 .living-atlas-globe__language button {
   min-width: 52px;
-  min-height: 42px;
+  min-height: var(--control-height);
   padding: 0 10px;
-  border: 0;
+  border: 3px solid transparent;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-muted);
+  background-clip: padding-box;
+  color: var(--control-muted);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+  white-space: nowrap;
 }
 
-.living-atlas-globe__language button + button {
-  border-left: 1px solid rgba(118, 198, 188, 0.16);
-}
-
-.living-atlas-globe__language button:focus-visible,
 .living-atlas-globe__language button.is-active {
-  background: rgba(200, 255, 61, 0.1);
-  color: var(--atlas-acid);
+  background-color: color-mix(in srgb, var(--control-select) 14%, transparent);
+  color: var(--control-select);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .living-atlas-globe__language button:hover {
-    background: rgba(200, 255, 61, 0.1);
-    color: var(--atlas-acid);
+  .living-atlas-globe__language button:not(.is-active):hover {
+    color: var(--control-ink);
   }
 }
 
@@ -614,30 +631,31 @@
   to { transform: translate3d(5vmax, -4vmax, 0) scale(0.9); }
 }
 
+/* A secondary pill. Its geometry stays on one class so the compact rules can
+   still narrow it; the shell's type and ink defaults outrank one class, so
+   those two sit on `button.` below. */
 .living-atlas-globe__pick {
-  min-height: 44px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 14px;
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  background: rgba(2, 11, 12, 0.82);
+  gap: var(--control-gap);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
   backdrop-filter: blur(12px);
-  color: var(--atlas-muted);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--control-tracking);
 }
 
-.living-atlas-globe__pick:focus-visible {
-  background: rgba(200, 255, 61, 0.1);
-  color: var(--atlas-acid);
+button.living-atlas-globe__pick {
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .living-atlas-globe__pick:hover {
-    background: rgba(200, 255, 61, 0.1);
-    color: var(--atlas-acid);
+    border-color: var(--control-line-strong);
   }
 }
 
@@ -6683,18 +6701,24 @@ button.living-atlas__route-point-context-entry {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 0 16px;
-  border: 1px solid rgba(118, 198, 188, 0.22);
-  border-radius: 999px;
-  background: rgba(2, 10, 11, 0.55);
-  color: #a7b9b4;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--control-tracking);
   opacity: 0;
   pointer-events: none;
   backdrop-filter: blur(12px);
-  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+  transition:
+    opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease),
+    scale var(--motion-instant) var(--motion-ease-out);
+}
+
+/* The shell's type and ink defaults outrank one class. */
+button.living-atlas__globe-focus-exit {
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
 }
 
 .living-atlas.is-globe-focus .living-atlas__globe-focus-exit {
@@ -6981,7 +7005,7 @@ button.living-atlas__route-point-context-entry {
     font-size: 0;
   }
 
-  .living-atlas__globe-focus-exit {
+  button.living-atlas__globe-focus-exit {
     top: calc(env(safe-area-inset-top) + 12px);
     left: calc(env(safe-area-inset-left) + 12px);
     width: 44px;

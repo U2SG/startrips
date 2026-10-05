@@ -143,9 +143,16 @@
 .living-atlas .living-atlas-globe__language button,
 .living-atlas .living-atlas-globe__pick {
   transition:
-    border-color var(--motion-ui) ease,
-    background-color var(--motion-ui) ease,
-    color var(--motion-ui) ease;
+    scale var(--motion-instant) var(--motion-ease-out),
+    border-color var(--motion-instant) ease-out,
+    background-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .living-atlas :is(.living-atlas-globe__language button, .living-atlas-globe__pick, .living-atlas__globe-focus-exit):active:not(:disabled) {
+    scale: 0.97;
+  }
 }
 
 /* --- Mobile V2: press feedback for the primary touch surfaces --- */
