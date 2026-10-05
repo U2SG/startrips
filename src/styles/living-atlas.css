@@ -8011,12 +8011,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 /* The wordmark trigger is not a round control: keep the art exactly where the
-   bottom-aligned mark sat, and only extend the hit area upward to 44px. Its
-   width comes from an SVG that loads separately, so the minimum keeps a 44px
-   box before the art has arrived. */
+   bottom-aligned mark sat, and only extend the hit area upward to 44px. */
 .mobile-v2__header .startrips-signature-trigger {
   width: auto;
-  min-width: var(--mobile-control-hit-size, 44px);
   height: var(--mobile-control-hit-size, 44px);
   display: inline-flex;
   align-items: flex-end;

@@ -14,6 +14,11 @@ type StartripsBrandMarkProps = {
 
 const V12_WORDMARK = "/brand/startrips-v12-wordmark.svg";
 const V12_WORDMARK_ONLY = "/brand/startrips-v12-wordmark-only.svg";
+// Each file's viewBox size. Declared on the <img> so it has its real width
+// from the first frame instead of collapsing to 0 until the SVG arrives.
+const V12_WORDMARK_WIDTH = 780;
+const V12_WORDMARK_ONLY_WIDTH = 620;
+const V12_WORDMARK_HEIGHT = 176;
 
 export function StartripsBrandMark({
   className = "",
@@ -77,6 +82,8 @@ export function StartripsWordmark({
       <img
         className="startrips-v12-wordmark__art"
         src={companion ? V12_WORDMARK : V12_WORDMARK_ONLY}
+        width={companion ? V12_WORDMARK_WIDTH : V12_WORDMARK_ONLY_WIDTH}
+        height={V12_WORDMARK_HEIGHT}
         alt=""
         draggable={false}
       />
