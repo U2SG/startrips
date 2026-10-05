@@ -2,7 +2,7 @@ import { STARTRIPS_V12_MARK_MARKUP, STARTRIPS_V12_MARK_VIEWBOX } from "../brand/
 import {
   COVER_ROUTE_BAND,
   COVER_ROUTE_STROKE,
-  coverDateLine,
+  fitCoverDateLine,
   type CoverRouteGeometry,
   type CoverRouteVec,
 } from "./coverRouteGeometry";
@@ -411,11 +411,12 @@ function paintCover(context: CanvasRenderingContext2D, width: number, height: nu
   context.font = `500 ${datesSize}px ${SANS}`;
   context.letterSpacing = `${(datesSize * 0.26).toFixed(1)}px`;
   context.textBaseline = "top";
+  const datesWidth = width * (1 - 2 * COVER.inset);
   context.fillText(
-    coverDateLine(input.dates, input.routePointCount),
+    fitCoverDateLine(input.dates, input.routePointCount, (line) => context.measureText(line).width <= datesWidth),
     left,
     top + titleBlock.lines.length * titleBlock.lineHeight + width * COVER.datesGap,
-    width * (1 - 2 * COVER.inset),
+    datesWidth,
   );
   context.restore();
 

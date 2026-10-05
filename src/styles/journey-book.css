@@ -203,11 +203,29 @@
   -webkit-line-clamp: 2;
 }
 
+/* One line, like the 3D painter's fitCoverDateLine: when the count does not
+   fit beside the dates it wraps onto the clipped second line and only the
+   dates remain. */
 .journey-book__cover-dates {
+  display: flex;
+  flex-wrap: wrap;
+  height: 1.3em;
   margin: 2.8cqw 0 0;
+  overflow: hidden;
   font: 500 max(9px, 2.2cqw)/1.3 var(--archive-sans);
   letter-spacing: 0.26em;
   opacity: 0.75;
+}
+
+.journey-book__cover-dates > span {
+  white-space: pre;
+}
+
+.journey-book__cover-dates > span:first-child {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .journey-book__cover-route {

@@ -16,7 +16,7 @@ import {
   COVER_ROUTE_ASPECT,
   COVER_ROUTE_BAND,
   COVER_ROUTE_STROKE,
-  coverDateLine,
+  coverDateCount,
   coverRouteGeometry,
   coverRouteSvgPath,
 } from "./coverRouteGeometry";
@@ -760,7 +760,7 @@ function JourneyBookPageContent({
       <div className={`journey-book__sheet journey-book__sheet--cloth journey-book__sheet--cover${page.asset ? " has-plate" : ""}`}>
         <header className="journey-book__cover-head">
           <h1 className="journey-book__cover-title">{journey.title}</h1>
-          <p className="journey-book__cover-dates">{coverDateLine(journeyRange(journey), journey.routePoints.length)}</p>
+          <p className="journey-book__cover-dates"><span>{journeyRange(journey)}</span>{coverDateCount(journey.routePoints.length) ? <span>{coverDateCount(journey.routePoints.length)}</span> : null}</p>
         </header>
         <CoverRoute routePoints={journey.routePoints} />
         <svg

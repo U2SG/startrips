@@ -152,6 +152,20 @@ function round(value: number): number {
 }
 
 /** The cover's line under the title: dates, then the Route Point count when there is one. */
+/** The Route Point count after the dates, or "" when there is none. */
+export function coverDateCount(routePointCount: number): string {
+  return routePointCount > 0 ? ` · ${routePointCount} 个路线点` : "";
+}
+
 export function coverDateLine(dates: string, routePointCount: number): string {
-  return routePointCount > 0 ? `${dates} · ${routePointCount} 个路线点` : dates;
+  return dates + coverDateCount(routePointCount);
+}
+
+/**
+ * The cover's date line stays on one line in both renderers: when the full
+ * line does not fit, the count is dropped and only the dates remain.
+ */
+export function fitCoverDateLine(dates: string, routePointCount: number, fits: (line: string) => boolean): string {
+  const full = coverDateLine(dates, routePointCount);
+  return fits(full) ? full : dates;
 }
