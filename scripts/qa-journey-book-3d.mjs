@@ -121,6 +121,8 @@ const FILMSTRIP_MS = [0, 400, 1000, 1600, 2200, 2800, 3400];
 const GOAT_QUIET_MS = 2_500;
 // An input must end the performance within this.
 const INTERRUPT_BUDGET_MS = 200;
+// A whole performance steps through about 85 book frames, each up to a second or two under SwiftShader.
+const GOAT_PLAY_TIMEOUT_MS = 240_000;
 
 /**
  * One browser context, its page and the helpers that read it. `goatPlayed`
@@ -479,9 +481,13 @@ async function goatFilmstripSession(browser, name, contextOptions) {
  * a press ends it at once and the drag that press began turns the cover, it
  * does not wake again, a click on the mark replays it to the first spread,
  * and after a reload it stays asleep.
+ *
+ * The performance's clock steps with the book's frames (at most 40 ms each),
+ * and a SwiftShader frame of the full desktop stage takes about 2 s on a CI
+ * runner, so this session plays it on a smaller landscape stage.
  */
 async function goatLiveSession(browser) {
-  const session = await openSession(browser, "desktop-goat", { viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+  const session = await openSession(browser, "desktop-goat", { viewport: { width: 1024, height: 720 }, deviceScaleFactor: 1 });
   const { page } = session;
   const playing = (minElapsed) => {
     const raw = document.querySelector(".journey-book-3d__stage")?.dataset.goatPull;
@@ -496,7 +502,8 @@ async function goatLiveSession(browser) {
     record("desktop goat: it wakes by itself on the closed cover", { status: started.status }, started.shown);
 
     // Mid-tug, a press interrupts; the drag it starts turns the cover.
-    await session.waitForGoat(playing, 1_500, 60_000);
+    // Press during the first tug, with the cover lifted.
+    await session.waitForGoat(playing, 1_500, SETTLE_TIMEOUT_MS);
     const y = cover.stage.top + rect.top + rect.height * 0.5;
     const from = cover.stage.left + rect.left + rect.width * 0.8;
     const to = cover.stage.left + rect.left + rect.width * 0.05;
@@ -532,12 +539,12 @@ async function goatLiveSession(browser) {
     // A click on the mark replays it, through to the first spread.
     await page.mouse.click(cover.stage.left + mark.left + mark.width / 2, cover.stage.top + mark.top + mark.height / 2);
     await page.mouse.move(4, 4);
-    const replay = await session.waitForGoat(playing, 0, 30_000);
+    const replay = await session.waitForGoat(playing, 0, 60_000);
     record("desktop goat: a click on the goat mark replays it", { status: replay.status }, replay.status === "playing");
     const done = await session.waitForGoat(() => {
       const raw = document.querySelector(".journey-book-3d__stage")?.dataset.goatPull;
       return raw ? JSON.parse(raw).status === "done" : false;
-    }, undefined);
+    }, undefined, GOAT_PLAY_TIMEOUT_MS);
     const first = await session.settledAt(2);
     record("desktop goat: the performance leaves the book on the first spread", {
       status: done.status, spread: first.spread, face: first.face, goatShown: done.shown,
