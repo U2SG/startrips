@@ -515,9 +515,21 @@ async function goatLiveSession(browser) {
     record("desktop goat: a press ends the performance within 200 ms", {
       status: stopped.status, reactionMs: reaction === null ? null : Number(reaction.toFixed(1)), progressAtPress: stopped.progress,
     }, stopped.status === "interrupted" && reaction !== null && reaction >= 0 && reaction <= INTERRUPT_BUDGET_MS);
-    await page.waitForTimeout(400);
-    const letGo = await session.goat();
-    record("desktop goat: the goat lets go and fades at once", { shown: letGo.shown, opacity: letGo.opacity }, !letGo.shown);
+    // The goat lets go at once: its fade is a compositor animation no longer
+    // than an instant-tier step. Its progress follows the document's frames,
+    // which take a second or more under SwiftShader, so the end of the fade is
+    // awaited rather than sampled at a fixed delay.
+    const fade = await page.evaluate(() => {
+      const animation = document.querySelector(".journey-book-3d__goat")?.getAnimations()[0];
+      const timing = animation?.effect?.getTiming();
+      return animation ? { duration: Number(timing?.duration), to: animation.effect.getKeyframes().at(-1)?.opacity } : null;
+    });
+    const gone = await page.waitForFunction(() => {
+      const overlay = document.querySelector(".journey-book-3d__goat");
+      return overlay.style.display === "none" || Number(getComputedStyle(overlay).opacity) <= 0.01;
+    }, undefined, { timeout: 30_000 }).then(() => true, () => false);
+    record("desktop goat: the goat lets go and fades out within an instant-tier fade", { fade, gone },
+      Boolean(fade) && fade.duration <= 150 && Number(fade.to) === 0 && gone);
     for (let step = 1; step <= 12; step += 1) await page.mouse.move(from + ((to - from) * step) / 12, y);
     await page.mouse.up();
     await page.mouse.move(4, 4);
