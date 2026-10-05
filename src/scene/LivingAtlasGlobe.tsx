@@ -443,7 +443,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
             ) : null}
           </div>
         </div>
-        {particleEarthBackend === "unavailable" ? (
+        {particleEarthBackend === "unavailable" || particleEarthBackend === "lost" ? (
           // The renderer already degrades honestly: `useThreeScene` catches the
           // failed context probe, the DOM/SVG interaction layers never get built,
           // and the host is left as a silent empty field. That state was known
@@ -457,8 +457,13 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
           // `aria-hidden="true"`, so a `role="status"` inside it would never be
           // announced. Sibling of the host, so it also stays above its
           // `pointer-events: none` surface.
-          <p className="persistent-earth-unavailable" role="status">
-            这台设备的浏览器没有可用的 WebGL2，粒子地球暂时无法显示。
+          <p className="persistent-earth-unavailable" role="status" data-backend={particleEarthBackend}>
+            {particleEarthBackend === "lost"
+              // A context the browser took back (tab eviction, GPU reset) is
+              // not a missing capability: the scene is disposed and will not
+              // rebuild itself, so the honest instruction is a reload.
+              ? "粒子地球的图形上下文已被浏览器回收，刷新页面即可恢复。"
+              : "这台设备的浏览器没有可用的 WebGL2，粒子地球暂时无法显示。"}
             {atlas ? "旅程仍可从左侧列表浏览；添加途径点时可以直接填写坐标。" : null}
           </p>
         ) : null}

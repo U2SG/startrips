@@ -202,7 +202,12 @@ import {
   type VisitedImprintField,
 } from "./visitedImprint";
 
-export type ParticleEarthBackend = "webgl2" | "unavailable";
+/**
+ * `unavailable`: this browser never produced a WebGL2 context. `lost`: it did,
+ * and the context was taken away afterwards (tab eviction, GPU reset), which a
+ * reload recovers from. The notice copy depends on that difference.
+ */
+export type ParticleEarthBackend = "webgl2" | "unavailable" | "lost";
 
 function particleEarthQaFailureMode(mode: "no-webgl" | "renderer-throw") {
   if (!import.meta.env.DEV || typeof window === "undefined") return false;
@@ -6516,8 +6521,8 @@ export function ParticleEarthScene({
 
     const onWebGlContextLost = (event: Event) => {
       event.preventDefault();
-      host.dataset.particleEarthBackend = "unavailable";
-      latestOnBackendChange.current?.("unavailable");
+      host.dataset.particleEarthBackend = "lost";
+      latestOnBackendChange.current?.("lost");
       setReady(false);
       dispose();
     };

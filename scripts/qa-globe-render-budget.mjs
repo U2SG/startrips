@@ -232,7 +232,7 @@ async function checkParticleBackendDegradation() {
     canvas.dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
   });
   await page.waitForFunction(() => (
-    document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend") === "unavailable"
+    document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-particle-earth-backend") === "lost"
   ));
   await page.locator('[data-qa-earth-dive-route-switch="next"]').click();
   await page.waitForFunction((before) => (
@@ -243,9 +243,13 @@ async function checkParticleBackendDegradation() {
     return {
       backend: host?.getAttribute("data-particle-earth-backend"),
       canvases: host?.querySelectorAll("canvas").length ?? -1,
+      notice: document.querySelector(".persistent-earth-unavailable")?.getAttribute("data-backend"),
     };
   });
-  record("backend:runtime-context-loss", { lost, errors }, lost.backend === "unavailable"
+  // A lost context is recoverable by a reload, so the notice must name that
+  // path rather than the no-WebGL2 explanation.
+  record("backend:runtime-context-loss", { lost, errors }, lost.backend === "lost"
+    && lost.notice === "lost"
     && lost.canvases === 0
     && errors.length === 0);
   await context.close();
