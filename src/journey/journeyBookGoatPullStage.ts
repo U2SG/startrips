@@ -5,11 +5,10 @@ import { COVER_MARK_TONE } from "./journeyBook3dPainter";
 import type { JourneyBook3dScene } from "./journeyBook3dScene";
 import { goatPullCoverProgress, goatPullStaging, type MarkFrame } from "./journeyBookGoatPull";
 
-/** The v12 mark's viewBox: 170 × 150 units, its bottom centre at (695, 18). */
+/** The v12 mark's viewBox: 170 × 150 units; the goat's hooves stand at y 0, centred on x 695. */
 const MARK_UNITS_WIDE = 170;
 const MARK_UNITS_HIGH = 150;
 const MARK_CENTRE_X = 695;
-const MARK_FOOT_Y = 18;
 const STARLIGHT = "#fff8e7";
 /** Below upright the cover lies back down when the goat is interrupted; past it, it completes the turn. */
 const UPRIGHT = 0.5;
@@ -73,7 +72,6 @@ export function startGoatPull(options: {
   const place = overlay.querySelector<SVGGElement>("[data-goat-place]");
   let status: GoatPullStatus = "playing";
   let fading: Animation | null = null;
-  let start = -1;
   let scrubMs = 0;
   let elapsed = 0;
   let frame = 0;
@@ -84,15 +82,13 @@ export function startGoatPull(options: {
 
   function stage(t: number) {
     const staging = goatPullStaging(t, mark);
-    const foot = scene.coverRestPoint(staging.u, staging.v);
-    const head = scene.coverRestPoint(staging.u, mark.y);
-    const markPx = foot.y - head.y;
-    // Drawn at its emboss's size on screen: as wide as the mark, as high as
-    // the tilted cover shows it.
-    const scaleY = markPx / MARK_UNITS_HIGH;
-    const scaleX = (scene.coverRestPoint(staging.u + mark.width / 2, staging.v).x
-      - scene.coverRestPoint(staging.u - mark.width / 2, staging.v).x) / MARK_UNITS_WIDE;
-    let { x, y } = scene.coverPoint(staging.u, staging.v) ?? foot;
+    const markPx = scene.coverRestPoint(staging.u, mark.y + mark.height).y - scene.coverRestPoint(staging.u, mark.y).y;
+    // Its stamp's size on screen (as wide as the mark, as high as the tilted
+    // cover shows it), grown by `staging.scale` once awake.
+    const scaleY = (markPx / MARK_UNITS_HIGH) * staging.scale;
+    const scaleX = ((scene.coverRestPoint(staging.u + mark.width / 2, staging.v).x
+      - scene.coverRestPoint(staging.u - mark.width / 2, staging.v).x) / MARK_UNITS_WIDE) * staging.scale;
+    let { x, y } = scene.coverPoint(staging.u, staging.v) ?? scene.coverRestPoint(staging.u, staging.v);
     if (staging.hop > 0) {
       const land = scene.coverRestPoint(1 + mark.width, 1);
       x += (land.x - x) * staging.hop;
@@ -101,7 +97,7 @@ export function startGoatPull(options: {
     applyPose(overlay, sampleStartripsPullPose(t));
     place?.setAttribute(
       "transform",
-      `translate(${x.toFixed(2)} ${y.toFixed(2)}) scale(${(scaleX * staging.facing).toFixed(4)} ${scaleY.toFixed(4)}) translate(${-MARK_CENTRE_X} ${-MARK_FOOT_Y})`,
+      `translate(${x.toFixed(2)} ${y.toFixed(2)}) scale(${(scaleX * staging.facing).toFixed(4)} ${scaleY.toFixed(4)}) translate(${-MARK_CENTRE_X} 0)`,
     );
     opacity = staging.opacity;
     overlay.style.opacity = opacity.toFixed(3);
@@ -126,10 +122,11 @@ export function startGoatPull(options: {
     options.onEnd(end);
   }
 
-  const driver = (now: number): boolean => {
+  // The clip advances by the book's own clamped frame step, as its turns do:
+  // on a device that drops frames it slows down rather than skipping a tug.
+  const driver = (deltaSeconds: number): boolean => {
     if (status !== "playing" && status !== "released") return false;
-    if (start < 0) start = now;
-    elapsed = scrubbing ? scrubMs : now - start;
+    elapsed = scrubbing ? scrubMs : elapsed + deltaSeconds * 1000;
     if (status === "playing") {
       if (!scrubbing && elapsed >= P.release) {
         status = "released";

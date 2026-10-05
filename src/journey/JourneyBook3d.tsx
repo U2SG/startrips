@@ -31,7 +31,7 @@ import {
   stepFace,
 } from "./journeyBook3dModel";
 import { coverRouteGeometry, coverRouteSvgPath } from "./coverRouteGeometry";
-import { PLATE, coverMarkFrame, coverMarkReady, loadCoverMark, noteCharacterCount, paintCoverMaterial, paintFace, type PageSource } from "./journeyBook3dPainter";
+import { COVER_PLATE_FRAME, PLATE, coverMarkFrame, coverMarkReady, loadCoverMark, noteCharacterCount, paintCoverMaterial, paintFace, type PageSource } from "./journeyBook3dPainter";
 import {
   GOAT_PULL_IDLE_MS,
   goatPullAutoEligible,
@@ -137,15 +137,20 @@ type Gesture = {
   caught: boolean;
 };
 
-/** The closed front cover's goat mark on the stage, in CSS px. */
-function coverMarkRect(scene: JourneyBook3dScene) {
+/** A frame of the closed front cover (fractions) on the stage, in CSS px. */
+function coverFrameRect(scene: JourneyBook3dScene, frame: { x: number; y: number; width: number; height: number }) {
   const rect = scene.faceRect("closed-front");
   return {
-    left: rect.left + rect.width * MARK_FRAME.x,
-    top: rect.top + rect.height * MARK_FRAME.y,
-    width: rect.width * MARK_FRAME.width,
-    height: rect.height * MARK_FRAME.height,
+    left: rect.left + rect.width * frame.x,
+    top: rect.top + rect.height * frame.y,
+    width: rect.width * frame.width,
+    height: rect.height * frame.height,
   };
+}
+
+/** The closed front cover's goat mark on the stage, in CSS px. */
+function coverMarkRect(scene: JourneyBook3dScene) {
+  return coverFrameRect(scene, MARK_FRAME);
 }
 
 /** A caught cover held past upright completes its turn on a tap. */
@@ -655,6 +660,7 @@ export function JourneyBook3d({
       spineX: scene.spineX,
       rects: Object.fromEntries(sides.map((side) => [side, scene.faceRect(side)])),
       goatMark: at <= 0 ? coverMarkRect(scene) : null,
+      coverPlate: at <= 0 ? coverFrameRect(scene, COVER_PLATE_FRAME) : null,
     });
   }, [face, faceCount, orientation, settled, stageSize]);
 

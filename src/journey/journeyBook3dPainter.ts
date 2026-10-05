@@ -406,14 +406,21 @@ function stampedMark(goatAway: boolean | undefined): MarkImages | null {
 
 /** The tipped-in plate, bottom right. */
 function coverPlateRect(width: number, height: number) {
-  const foot = height * (1 - COVER.bottom);
   return {
-    x: width * (1 - COVER.inset - COVER.plate.width),
-    y: foot - height * COVER.plate.height,
-    width: width * COVER.plate.width,
-    height: height * COVER.plate.height,
+    x: width * COVER_PLATE_FRAME.x,
+    y: height * COVER_PLATE_FRAME.y,
+    width: width * COVER_PLATE_FRAME.width,
+    height: height * COVER_PLATE_FRAME.height,
   };
 }
+
+/** The tipped-in plate's frame on the cover, as fractions; the cover's goat walks below it. */
+export const COVER_PLATE_FRAME = {
+  x: 1 - COVER.inset - COVER.plate.width,
+  y: 1 - COVER.bottom - COVER.plate.height,
+  width: COVER.plate.width,
+  height: COVER.plate.height,
+} as const;
 
 /** Cover-fit `source` into `box`, clipped to it. */
 function drawCovered(

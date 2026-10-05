@@ -126,7 +126,7 @@ export class JourneyBook3dScene {
   private edge: { base: number; direction: -1 | 1; amount: number; target: number } | null = null;
   private onFrameListener: ((progress: number, settled: boolean) => void) | null = null;
   /** A per-frame performance (the cover's goat); keeps frames coming while it returns true. */
-  private driver: ((now: number) => boolean) | null = null;
+  private driver: ((deltaSeconds: number) => boolean) | null = null;
   private readonly pointScratch = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
   readonly pageWidth: number;
 
@@ -574,8 +574,8 @@ export class JourneyBook3dScene {
     }
   }
 
-  /** Run `driver` in every frame, before it renders, until it returns false (or is replaced by null). */
-  drive(driver: ((now: number) => boolean) | null) {
+  /** Run `driver` with each frame's clamped step, before the frame renders, until it returns false (or is replaced by null). */
+  drive(driver: ((deltaSeconds: number) => boolean) | null) {
     this.driver = driver;
     if (driver) this.requestRender();
   }
@@ -645,7 +645,7 @@ export class JourneyBook3dScene {
     this.lastTime = time;
     const before = this.book.progress;
     if (!this.dragging) this.book.animate(delta);
-    const driving = this.driver?.(time) ?? false;
+    const driving = this.driver?.(delta) ?? false;
     if (!driving) this.driver = null;
     const edgeMoving = this.animateEdge(delta);
     const focusMoving = Math.abs(this.focus - this.focusTarget) >= SETTLED_EPSILON;

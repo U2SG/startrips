@@ -80,16 +80,35 @@ export type MarkFrame = { x: number; y: number; width: number; height: number };
  * in the 610–780 viewBox, centre 695).
  */
 const MUZZLE_OFFSET = (695 - 657) / 170;
+/** The goat's hooves stand this far above the foot of the mark's viewBox (18 of 150 units). */
+export const GOAT_HOOF_RISE = 18 / 150;
+/** The goat's horns reach this far above its hooves, as a fraction of the mark's height (at most the viewBox's 132 of 150 units). */
+export const GOAT_REACH = 132 / 150;
 /** Where the muzzle hooks the fore-edge, just inside it. */
 const GRIP_U = 0.995;
+/** The strip below the tipped-in plate where the goat walks: its hooves on this line, just inside the cover's foot. */
+export const GOAT_WALK_V = 0.996;
+/**
+ * Once awake the goat grows to this width of the cover (its mark's frame,
+ * the stamp being about 0.067 wide): large enough for its lean, braced legs
+ * and head to read, small enough to walk below the plate.
+ */
+export const GOAT_AWAKE_WIDTH = 0.1;
 /** The live goat at full presence: brand starlight, held back so the foil stays the one bright point. */
 export const GOAT_OPACITY = 0.86;
 
+/** How much larger than its stamp the goat grows while it wakes. */
+export function goatAwakeScale(mark: MarkFrame): number {
+  return Math.max(1, GOAT_AWAKE_WIDTH / mark.width);
+}
+
 export type GoatPullStaging = {
-  /** Cover u (0 spine, 1 fore-edge) of the mark frame's bottom centre, where the goat stands. */
+  /** Cover u (0 spine, 1 fore-edge) of the point between the goat's hooves. */
   u: number;
-  /** Cover v of that point: the foot of the mark. */
+  /** Cover v of that point: on the emboss while waking, then the strip below the plate. */
   v: number;
+  /** The goat's size relative to its stamp: 1 as stamped, `goatAwakeScale` once awake. */
+  scale: number;
   /** Horizontal scale: 1 faces left as stamped, −1 faces the fore-edge; between, it is turning. */
   facing: number;
   /** 0 the stamped tone, 1 starlight. */
@@ -103,16 +122,23 @@ export type GoatPullStaging = {
 
 export function goatPullStaging(elapsedMs: number, mark: MarkFrame): GoatPullStaging {
   const t = Math.max(0, Math.min(P.end, Number.isFinite(elapsedMs) ? elapsedMs : 0));
+  const awake = goatAwakeScale(mark);
   const startU = mark.x + mark.width / 2;
-  const gripU = GRIP_U - MUZZLE_OFFSET * mark.width;
+  const startV = mark.y + mark.height * (1 - GOAT_HOOF_RISE);
+  const gripU = GRIP_U - MUZZLE_OFFSET * mark.width * awake;
+  const walkStart = P.wakeEnd + 120;
   const turn = smoothstep(P.wakeEnd, P.wakeEnd + 160, t);
-  const walk = smoothstep(P.wakeEnd + 120, P.walkEnd, t);
+  const walk = smoothstep(walkStart, P.walkEnd, t);
+  // It steps down off the stamp's line into the strip below the plate early
+  // in the walk, well before it reaches the plate.
+  const descend = smoothstep(walkStart, walkStart + (P.walkEnd - walkStart) * 0.35, t);
   const tone = smoothstep(0, P.wakeEnd, t);
   const hopRaw = clamp01((t - P.letGo) / (P.release - P.letGo));
-  const fade = 1 - smoothstep(P.letGo + 200, P.end, t);
+  const fade = 1 - smoothstep(P.release, P.end, t);
   return {
     u: startU + (gripU - startU) * walk,
-    v: mark.y + mark.height,
+    v: startV + (GOAT_WALK_V - startV) * descend,
+    scale: 1 + (awake - 1) * tone,
     facing: Math.cos(Math.PI * turn),
     tone,
     opacity: (1 - (1 - GOAT_OPACITY) * tone) * fade,

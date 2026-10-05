@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { STARTRIPS_PULL_PHASES as P } from "../brand/startripsPullClip";
 import { BOOK_PAGE_RATIO } from "./journeyBookLayout";
-import { coverMarkFrame } from "./journeyBook3dPainter";
+import { COVER_PLATE_FRAME, coverMarkFrame } from "./journeyBook3dPainter";
 import {
+  GOAT_AWAKE_WIDTH,
+  GOAT_HOOF_RISE,
+  GOAT_REACH,
+  GOAT_WALK_V,
+  goatAwakeScale,
   GOAT_OPACITY,
   GOAT_PULL_COVER,
   GOAT_PULL_PLAYED_KEY,
@@ -67,8 +72,34 @@ describe("where the goat stands", () => {
   it("starts exactly over its emboss, in the stamped tone, facing as stamped", () => {
     const start = goatPullStaging(0, MARK);
     expect(start.u).toBeCloseTo(MARK.x + MARK.width / 2, 12);
-    expect(start.v).toBeCloseTo(MARK.y + MARK.height, 12);
-    expect(start).toMatchObject({ facing: 1, tone: 0, opacity: 1, hop: 0, hopLift: 0 });
+    expect(start.v).toBeCloseTo(MARK.y + MARK.height * (1 - GOAT_HOOF_RISE), 12);
+    expect(start).toMatchObject({ scale: 1, facing: 1, tone: 0, opacity: 1, hop: 0, hopLift: 0 });
+  });
+
+  it("grows while it wakes to a size derived from the cover, and keeps it", () => {
+    const awake = goatAwakeScale(MARK);
+    expect(awake * MARK.width).toBeCloseTo(GOAT_AWAKE_WIDTH, 12);
+    expect(awake).toBeGreaterThan(1.3);
+    expect(goatPullStaging(P.wakeEnd / 2, MARK).scale).toBeGreaterThan(1);
+    expect(goatPullStaging(P.wakeEnd / 2, MARK).scale).toBeLessThan(awake);
+    for (const t of [P.wakeEnd, P.walkEnd, P.tug1Peak, P.tug2Peak, P.letGo, P.release]) {
+      expect(goatPullStaging(t, MARK).scale).toBeCloseTo(awake, 12);
+    }
+  });
+
+  it("never overlaps the tipped-in plate on its way to the fore-edge", () => {
+    const plateLeft = COVER_PLATE_FRAME.x;
+    const plateRight = COVER_PLATE_FRAME.x + COVER_PLATE_FRAME.width;
+    const plateBottom = COVER_PLATE_FRAME.y + COVER_PLATE_FRAME.height;
+    for (let t = 0; t <= P.gripEnd; t += 10) {
+      const { u, v, scale } = goatPullStaging(t, MARK);
+      const halfWidth = (MARK.width * scale) / 2;
+      const top = v - MARK.height * scale * GOAT_REACH;
+      const besidePlate = u + halfWidth <= plateLeft || u - halfWidth >= plateRight;
+      expect(besidePlate || top >= plateBottom, `t=${t} u=${u.toFixed(3)} top=${top.toFixed(4)}`).toBe(true);
+      expect(v).toBeLessThan(1);
+    }
+    expect(goatPullStaging(P.walkEnd, MARK).v).toBeCloseTo(GOAT_WALK_V, 12);
   });
 
   it("turns to the fore-edge and walks there along the foot", () => {
@@ -86,9 +117,10 @@ describe("where the goat stands", () => {
     }
   });
 
-  it("hops off after letting go and is gone by the end", () => {
+  it("hops off after letting go and fades out once the cover is released", () => {
     expect(goatPullStaging(P.letGo, MARK).hop).toBe(0);
     expect(goatPullStaging(P.release, MARK).hop).toBe(1);
+    expect(goatPullStaging(P.release, MARK).opacity).toBeCloseTo(GOAT_OPACITY, 12);
     expect(goatPullStaging(P.end, MARK).opacity).toBe(0);
   });
 });

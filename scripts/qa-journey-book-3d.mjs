@@ -451,6 +451,16 @@ async function goatFilmstripSession(browser, name, contextOptions) {
     record(`${name} goat filmstrip: the goat wakes over its embossed mark`, { mark, goat: wake.box }, Boolean(inside));
     record(`${name} goat filmstrip: it walks toward the fore-edge`, { mark, goat: walking.box },
       Boolean(walking.box) && walking.box.left > mark.left + mark.width);
+    const awake = frames[1];
+    record(`${name} goat filmstrip: awake, the goat has grown from its stamp`, { stamp: wake.box, awake: awake.box },
+      Boolean(wake.box && awake.box) && awake.box.height >= wake.box.height * 1.35);
+    // The cover lies flat until the grip, so the published plate rect holds.
+    const plate = cover.coverPlate;
+    const overlapping = frames.filter((frame) => frame.ms > 0 && frame.ms <= 1_000 && frame.box
+      && frame.box.left < plate.left + plate.width && frame.box.left + frame.box.width > plate.left
+      && frame.box.top < plate.top + plate.height && frame.box.top + frame.box.height > plate.top);
+    record(`${name} goat filmstrip: the walk never crosses the tipped-in plate`, { plate, overlapping },
+      Boolean(plate) && overlapping.length === 0);
     record(`${name} goat filmstrip: the cover lifts under the tugs and the goat rides its edge`, {
       tug1: tug1.progress, tug2: tug2.progress, tug1Bottom: tug1.box?.top + tug1.box?.height, tug2Bottom: tug2.box?.top + tug2.box?.height,
     }, tug1.progress > 0.01 && tug2.progress > tug1.progress && Boolean(tug1.box && tug2.box)
