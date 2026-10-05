@@ -86,6 +86,10 @@
     border-color: var(--control-line-strong);
     color: var(--control-ink);
   }
+
+  .revealed-note .revealed-note__toggle:hover:not(:active) {
+    background-color: var(--control-fill-hover);
+  }
 }
 
 /* Over Story's swipeable stage the text must not take the gesture; only the

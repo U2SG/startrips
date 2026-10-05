@@ -145,7 +145,20 @@ async function stubAtlasApi(page) {
   );
 }
 
-async function openAtlas(viewport, { reducedMotion = "no-preference" } = {}) {
+// A current Home Base in the shape qa-home-base-context.mjs stubs. The bypass
+// fixture reads Home Base periods only under `qaHomeBaseSuggestion=1`; a
+// current period also keeps the suggestion card from showing.
+const QA_HOME_BASE = {
+  id: "11111111-aaaa-4111-8111-111111111111",
+  label: "北京",
+  latitude: 39.9075,
+  longitude: 116.39723,
+  startedOn: "2025-01-01",
+  endedOn: null,
+  source: "manual",
+};
+
+async function openAtlas(viewport, { reducedMotion = "no-preference", homeBase = false } = {}) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     // A viewport may declare its own scale factor: that is how browser zoom is
@@ -161,11 +174,108 @@ async function openAtlas(viewport, { reducedMotion = "no-preference" } = {}) {
     body: "null",
   }));
   await stubAtlasApi(page);
+  if (homeBase) {
+    await page.route("**/api/home-bases/dismissal", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ dismissals: [] }),
+    }));
+    await page.route("**/api/home-bases", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ periods: [QA_HOME_BASE] }),
+    }));
+  }
   await page.goto(
-    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1`,
+    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1${homeBase ? "&qaHomeBaseSuggestion=1" : ""}`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 20_000 });
+  await page.locator(".living-atlas-globe__controls").waitFor({ state: "attached", timeout: 20_000 });
+  return { page, pageErrors };
+}
+
+/**
+ * The same Atlas behind the real AuthGateway, signed in, so the account dock
+ * renders: under `?qaState=living-atlas` the gateway takes its QA-bypass branch
+ * and renders no dock at all.
+ */
+async function openGatewayAtlas(viewport) {
+  const page = await browser.newPage({
+    viewport: { width: viewport.width, height: viewport.height },
+    reducedMotion: "reduce",
+  });
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  let authenticated = false;
+  const session = {
+    session: {
+      id: "qa-session",
+      userId: "qa-user",
+      token: "qa-token",
+      expiresAt: "2027-01-01T00:00:00.000Z",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+      activeOrganizationId: "qa-org",
+    },
+    user: {
+      id: "qa-user",
+      name: "QA Traveler",
+      email: "qa@example.com",
+      emailVerified: true,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+    },
+  };
+  await page.route("**/api/auth/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith("/sign-in/email")) {
+      authenticated = true;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+      return;
+    }
+    if (pathname.endsWith("/get-session")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(authenticated ? session : null),
+      });
+      return;
+    }
+    if (pathname.endsWith("/organization/list")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{ id: "qa-org", name: "QA Atlas", slug: "qa-atlas" }]),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  // #332: the Earth experience hydration read every signed-in mount issues.
+  // Unstubbed it falls through to no API and logs a 500 the console assertions catch.
+  await page.route("**/api/account-preferences/earth-experience", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ earthExperience: "default", revision: 0, updatedAt: null }),
+  }));
+  await page.route("**/api/atlases/current", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "同行记忆" },
+      role: "owner",
+    }),
+  }));
+  await stubAtlasApi(page);
+  await page.goto(
+    `${origin}/?qaState=atlas-gateway&qaMode=globe-chrome&qaLite=1`,
+    { waitUntil: "domcontentloaded" },
+  );
+  await page.locator('input[type="email"]').fill("qa@example.com");
+  await page.locator('input[type="password"]').fill("password1234");
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await page.locator(".account-dock__tab").waitFor({ state: "visible", timeout: 20_000 });
   await page.locator(".living-atlas-globe__controls").waitFor({ state: "attached", timeout: 20_000 });
   return { page, pageErrors };
 }
@@ -573,6 +683,104 @@ const zoomRowClearOfPanel = (state) => Boolean(
   && state.panel.top - state.group.bottom <= 24
   && (!state.cardVisible || !state.intersects)
   && zoomRowButtonsOwned(state),
+);
+
+/**
+ * With the account menu open, the menu owns the zoom row's region and the row
+ * steps out underneath it: every button is `visibility: hidden` and refuses
+ * programmatic focus (so Tab cannot land on a control nobody can see), none of
+ * its five points resolves to the row, and its centre resolves to the panel.
+ */
+function readZoomRowUnderMenu(page) {
+  return page.evaluate(() => {
+    const group = document.querySelector(".detailed-earth-map .maplibregl-ctrl-group");
+    const panel = document.querySelector(".account-dock.is-open .account-dock__panel");
+    if (!group || !panel) return { group: Boolean(group), panel: Boolean(panel) };
+    const box = (rect) => ({
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      right: Math.round(rect.right),
+      bottom: Math.round(rect.bottom),
+    });
+    const opener = document.activeElement;
+    const state = {
+      group: box(group.getBoundingClientRect()),
+      panel: box(panel.getBoundingClientRect()),
+      buttons: [...group.querySelectorAll("button")].map((button) => {
+        const rect = button.getBoundingClientRect();
+        const points = [
+          [rect.left + rect.width / 2, rect.top + rect.height / 2],
+          [rect.left + 4, rect.top + 4],
+          [rect.right - 4, rect.top + 4],
+          [rect.left + 4, rect.bottom - 4],
+          [rect.right - 4, rect.bottom - 4],
+        ];
+        const owners = points.map(([x, y]) => {
+          const hit = document.elementFromPoint(x, y);
+          if (hit && panel.contains(hit)) return "menu";
+          if (hit && button.contains(hit)) return "row";
+          return hit instanceof Element ? hit.getAttribute("class") ?? hit.tagName : null;
+        });
+        button.focus({ preventScroll: true });
+        const focusable = document.activeElement === button;
+        return {
+          visibility: getComputedStyle(button).visibility,
+          focusable,
+          owners,
+          withdrawn: owners[0] === "menu" && !owners.includes("row"),
+        };
+      }),
+    };
+    if (opener instanceof HTMLElement) opener.focus({ preventScroll: true });
+    return state;
+  });
+}
+
+/**
+ * What decides the row's state, so a red reading names its cause: the body
+ * marker AuthGateway sets, the row container's computed visibility, which
+ * renderer owns the Dive (the particle owner turns the controls'
+ * pointer-events off), and what each button's five points actually hit.
+ */
+function readZoomRowDiagnostics(page) {
+  return page.evaluate(() => {
+    const container = document.querySelector(".detailed-earth-map .maplibregl-ctrl-bottom-right");
+    const group = document.querySelector(".detailed-earth-map .maplibregl-ctrl-group");
+    return {
+      accountMenuMarker: document.body.dataset.accountMenu ?? null,
+      dockOpen: Boolean(document.querySelector(".account-dock.is-open")),
+      containerVisibility: container ? getComputedStyle(container).visibility : null,
+      diveOwner: document.querySelector(".detailed-earth-map")?.getAttribute("data-dive-owner") ?? null,
+      earthDive: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") ?? null,
+      hitClasses: group
+        ? [...group.querySelectorAll("button")].map((button) => {
+          const rect = button.getBoundingClientRect();
+          return [
+            [rect.left + rect.width / 2, rect.top + rect.height / 2],
+            [rect.left + 4, rect.top + 4],
+            [rect.right - 4, rect.top + 4],
+            [rect.left + 4, rect.bottom - 4],
+            [rect.right - 4, rect.bottom - 4],
+          ].map(([x, y]) => {
+            const hit = document.elementFromPoint(x, y);
+            return hit instanceof Element ? hit.getAttribute("class") ?? hit.tagName : null;
+          });
+        })
+        : null,
+    };
+  });
+}
+
+/** Wait, bounded, for the row container's visibility to settle. */
+const waitForZoomRowVisibility = (page, expected) => page.waitForFunction((value) => {
+  const container = document.querySelector(".detailed-earth-map .maplibregl-ctrl-bottom-right");
+  return Boolean(container) && getComputedStyle(container).visibility === value;
+}, expected, { timeout: 5_000 }).then(() => true).catch(() => false);
+
+const zoomRowOwnedByMenu = (state) => Boolean(
+  state
+  && state.buttons?.length > 0
+  && state.buttons.every((button) => button.visibility === "hidden" && !button.focusable && button.withdrawn),
 );
 
 /** Wait out an entrance, bounded so a stuck one still reaches the record. */
@@ -1299,84 +1507,8 @@ try {
   //    no-op cinematic-isolation hook, which would make this assertion vacuous.
   {
     const viewport = VIEWPORTS[1];
-    const page = await browser.newPage({
-      viewport: { width: viewport.width, height: viewport.height },
-      reducedMotion: "reduce",
-    });
-    const pageErrors = [];
-    page.on("pageerror", (error) => pageErrors.push(error.message));
-    let authenticated = false;
-    const session = {
-      session: {
-        id: "qa-session",
-        userId: "qa-user",
-        token: "qa-token",
-        expiresAt: "2027-01-01T00:00:00.000Z",
-        createdAt: "2026-09-01T00:00:00.000Z",
-        updatedAt: "2026-09-01T00:00:00.000Z",
-        activeOrganizationId: "qa-org",
-      },
-      user: {
-        id: "qa-user",
-        name: "QA Traveler",
-        email: "qa@example.com",
-        emailVerified: true,
-        createdAt: "2026-09-01T00:00:00.000Z",
-        updatedAt: "2026-09-01T00:00:00.000Z",
-      },
-    };
+    const { page, pageErrors } = await openGatewayAtlas(viewport);
     try {
-      await page.route("**/api/auth/**", async (route) => {
-        const pathname = new URL(route.request().url()).pathname;
-        if (pathname.endsWith("/sign-in/email")) {
-          authenticated = true;
-          await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
-          return;
-        }
-        if (pathname.endsWith("/get-session")) {
-          await route.fulfill({
-            status: 200,
-            contentType: "application/json",
-            body: JSON.stringify(authenticated ? session : null),
-          });
-          return;
-        }
-        if (pathname.endsWith("/organization/list")) {
-          await route.fulfill({
-            status: 200,
-            contentType: "application/json",
-            body: JSON.stringify([{ id: "qa-org", name: "QA Atlas", slug: "qa-atlas" }]),
-          });
-          return;
-        }
-        await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
-      });
-      // #332: the Earth experience hydration read every signed-in mount issues.
-      // Unstubbed it falls through to no API and logs a 500 the console assertions catch.
-      await page.route("**/api/account-preferences/earth-experience", (route) => route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ earthExperience: "default", revision: 0, updatedAt: null }),
-      }));
-      await page.route("**/api/atlases/current", (route) => route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "同行记忆" },
-          role: "owner",
-        }),
-      }));
-      await stubAtlasApi(page);
-      await page.goto(
-        `${origin}/?qaState=atlas-gateway&qaMode=globe-chrome&qaLite=1`,
-        { waitUntil: "domcontentloaded" },
-      );
-      await page.locator('input[type="email"]').fill("qa@example.com");
-      await page.locator('input[type="password"]').fill("password1234");
-      await page.getByRole("button", { name: "登录", exact: true }).click();
-      await page.locator(".account-dock__tab").waitFor({ state: "visible", timeout: 20_000 });
-      await page.locator(".living-atlas-globe__controls").waitFor({ state: "attached", timeout: 20_000 });
-
       // Owner review on PR 257: record the state that OWNS the presentation,
       // not just the symptom, so a red round says which half is wrong.
       const readDock = () => page.evaluate(() => {
@@ -1660,6 +1792,7 @@ try {
     { name: "1280x700", width: 1280, height: 700 },
   ]) {
     let session = null;
+    let homeSession = null;
     try {
       session = await openAtlas(viewport);
       const { page } = session;
@@ -1691,19 +1824,102 @@ try {
       await settle(page);
       const everydayOpen = await readZoomRow(page, "[data-atlas-everyday-context]");
 
+      // Home Base, on a page that reads a current period. Its marker takes
+      // input only over the particle earth, so the card opens before the dive,
+      // as the Route Point card does, and the dive keeps it open.
+      homeSession = await openAtlas(viewport, { homeBase: true });
+      const homePage = homeSession.page;
+      const marker = homePage.locator(`.living-atlas-globe__home-base[data-home-base-period-id="${QA_HOME_BASE.id}"]`);
+      await marker.waitFor({ state: "attached", timeout: 20_000 });
+      await marker.evaluate((button) => button.click());
+      const home = homePage.locator("[data-home-base-context]");
+      await home.waitFor({ state: "visible", timeout: 5_000 });
+      await activateDiveIntent(homePage);
+      await home.waitFor({ state: "visible", timeout: 5_000 });
+      await home.evaluate((node) => { node.style.height = "100vh"; });
+      await finishAnimations(home);
+      await settle(homePage);
+      const homeBaseOpen = await readZoomRow(homePage, "[data-home-base-context]");
+
       record({
         name: `detail-zoom-group-clears-context-cards/${viewport.name}`,
         viewport: viewport.name,
         routePointOpen,
         everydayOpen,
-        pageErrors: session.pageErrors,
+        homeBaseOpen,
+        pageErrors: [...session.pageErrors, ...homeSession.pageErrors],
         failed: !zoomRowClearOfPanel(routePointOpen)
           || !zoomRowClearOfPanel(everydayOpen)
-          || session.pageErrors.length > 0,
+          || !zoomRowClearOfPanel(homeBaseOpen)
+          || session.pageErrors.length > 0
+          || homeSession.pageErrors.length > 0,
       });
     } catch (error) {
       record({
         name: `detail-zoom-group-clears-context-cards/${viewport.name}`,
+        viewport: viewport.name,
+        error: error instanceof Error ? error.message : String(error),
+        pageErrors: [...(session?.pageErrors ?? []), ...(homeSession?.pageErrors ?? [])],
+        failed: true,
+      });
+    } finally {
+      await session?.page.close();
+      await homeSession?.page.close();
+    }
+  }
+
+  // 7c. The account menu against the zoom row. The menu is an opaque panel
+  //     above the map that drops over the row's band, so while it is open it
+  //     owns that region by design and the row steps out underneath. This runs
+  //     on the real gateway (the bypass fixture renders no dock): the row is
+  //     clear and hit-testable with the menu closed, hidden, unfocusable and
+  //     never hit while it is open, and owns all five points of every button
+  //     again once the menu closes.
+  for (const viewport of [
+    { name: "800x700", width: 800, height: 700 },
+    { name: "1280x700", width: 1280, height: 700 },
+  ]) {
+    let session = null;
+    try {
+      session = await openGatewayAtlas(viewport);
+      const { page, pageErrors } = session;
+      await activateDiveIntent(page);
+      await settle(page);
+      const menuClosed = await readZoomRow(page);
+      const closedDiagnostics = await readZoomRowDiagnostics(page);
+      await page.locator(".account-dock__tab").click();
+      const panel = page.locator(".account-dock.is-open .account-dock__panel");
+      await panel.waitFor({ state: "visible", timeout: 5_000 });
+      await finishAnimations(panel);
+      const withdrawnSettled = await waitForZoomRowVisibility(page, "hidden");
+      await settle(page);
+      const openDiagnostics = await readZoomRowDiagnostics(page);
+      const menuOpen = await readZoomRowUnderMenu(page);
+      await page.locator(".account-dock__tab").click();
+      await page.locator(".account-dock__panel").waitFor({ state: "hidden", timeout: 5_000 });
+      const restoredSettled = await waitForZoomRowVisibility(page, "visible");
+      await settle(page);
+      const menuReclosed = await readZoomRow(page);
+      const reclosedDiagnostics = await readZoomRowDiagnostics(page);
+      record({
+        name: `detail-zoom-group-under-account-menu/${viewport.name}`,
+        viewport: viewport.name,
+        settled: { withdrawn: withdrawnSettled, restored: restoredSettled },
+        menuClosed,
+        menuOpen,
+        menuReclosed,
+        diagnostics: { closed: closedDiagnostics, open: openDiagnostics, reclosed: reclosedDiagnostics },
+        pageErrors,
+        failed: !withdrawnSettled
+          || !restoredSettled
+          || !zoomRowClear(menuClosed)
+          || !zoomRowOwnedByMenu(menuOpen)
+          || !zoomRowClear(menuReclosed)
+          || pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({
+        name: `detail-zoom-group-under-account-menu/${viewport.name}`,
         viewport: viewport.name,
         error: error instanceof Error ? error.message : String(error),
         pageErrors: session?.pageErrors ?? [],

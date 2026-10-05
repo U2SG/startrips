@@ -300,6 +300,18 @@
     border-color: var(--control-line-strong);
   }
 
+  /* Secondary controls also lift their fill: the dark glass value over the
+     globe and map, the faint ink value inside the opaque panels above.
+     `:not(:active)` keeps the press fill winning while the pointer is down. */
+  :is(
+    .st-btn:not(.st-btn--primary, .st-btn--quiet, .st-btn--danger),
+    .st-icon-btn:not(.st-icon-btn--quiet, .st-icon-btn--danger),
+    .st-chip:not([aria-pressed="true"], [aria-checked="true"], .is-selected),
+    .st-select
+  ):hover:not(:disabled, :active) {
+    background-color: var(--control-fill-hover);
+  }
+
   :is(
     .st-btn--quiet,
     .st-icon-btn,

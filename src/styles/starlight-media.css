@@ -118,6 +118,10 @@
   .starlight-media-state > button:hover:not(:disabled) {
     border-color: var(--control-line-strong);
   }
+
+  .starlight-media-state > button:hover:not(:disabled, :active) {
+    background-color: var(--control-fill-hover);
+  }
 }
 
 .starlight-media-state > button:active:not(:disabled) {

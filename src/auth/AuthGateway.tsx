@@ -1308,6 +1308,17 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
     else setAccountSurface(null);
   }, [isMobileV2]);
 
+  // The open dock menu covers the detail map's zoom row, which renders in the
+  // Atlas tree rather than here; this marker lets that row step out of input
+  // while the menu owns its region (living-atlas.css).
+  useEffect(() => {
+    if (!dockOpen) return undefined;
+    document.body.dataset.accountMenu = "open";
+    return () => {
+      delete document.body.dataset.accountMenu;
+    };
+  }, [dockOpen]);
+
   useEffect(() => {
     if (gate.kind !== "loading") onReady?.();
   }, [gate.kind, onReady]);

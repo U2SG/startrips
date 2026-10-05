@@ -346,6 +346,8 @@
 }
 @media (hover: hover) and (pointer: fine) {
   .route-candidate-editor button:not(.is-primary, [aria-pressed]):hover:not(:disabled) { border-color: var(--control-line-strong); }
+  /* The launcher keeps its own denser glass; the panel's controls lift their fill. */
+  .route-candidate-editor__panel button:not(.is-primary, [aria-pressed]):hover:not(:disabled, :active) { background-color: var(--control-fill-hover); }
 }
 /* One acid primary at a time: 查看候选, then 就是这条 or 保存修正点. */
 .route-candidate-editor button.is-primary {
@@ -453,6 +455,15 @@
 .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right {
   top: calc(clamp(172px, 22vh, 232px) - var(--control-height) - 12px);
   bottom: auto;
+}
+
+/* The open account menu is an opaque panel above the map that drops over the
+   row's band from the same right edge, so it owns that region while open. The
+   row underneath steps out entirely rather than staying tabbable (or leaving
+   a strip of its last button pressable) behind the panel. AuthGateway marks
+   the body while the menu is open. */
+body[data-account-menu="open"] .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right {
+  visibility: hidden;
 }
 
 .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-group {
@@ -702,6 +713,7 @@ button.living-atlas-globe__pick {
 @media (hover: hover) and (pointer: fine) {
   .living-atlas-globe__pick:hover {
     border-color: var(--control-line-strong);
+    background-color: var(--control-fill-hover);
   }
 }
 
@@ -1234,6 +1246,7 @@ button.living-atlas-globe__pick {
 @media (hover: hover) and (pointer: fine) {
   .living-atlas__active .living-atlas__active-play:hover:not(:disabled) {
     border-color: var(--control-line-strong);
+    background-color: var(--control-fill-hover);
   }
 }
 
@@ -3245,6 +3258,16 @@ button.living-atlas-globe__pick {
     border-color: var(--control-line-strong);
   }
 
+  /* The same controls lift their fill, except the fullscreen close and the
+     media toggles, which carry a denser glass over the picture. */
+  :is(.journey-story > header > .journey-story__close, .journey-story-fullscreen__nav button:not(.is-active),
+    .journey-story__quick-recap-empty, .journey-story__delete-confirmation button:not(:last-child),
+    :is(.journey-story > footer, .journey-story__media-add, .journey-story__soundtrack-actions,
+    .journey-story__quick-recap-status, .journey-story__media-remove__confirm) button:not(.is-destructive, .is-secondary),
+    .journey-story__route-points button:not(.is-active)):hover:not(:disabled, :active) {
+    background-color: var(--control-fill-hover);
+  }
+
   :is(.journey-story > header > .journey-story__close, .journey-story__placement-actions button.is-secondary):hover:not(:disabled) {
     color: var(--control-ink);
   }
@@ -3417,6 +3440,10 @@ button.living-atlas-globe__pick {
 @media (hover: hover) and (pointer: fine) {
   .journey-composer__discard-guard-actions button:not([data-composer-discard-confirm]):hover {
     border-color: var(--control-line-strong);
+  }
+
+  .journey-composer__discard-guard-actions button:not([data-composer-discard-confirm]):hover:not(:active) {
+    background-color: var(--control-fill-hover);
   }
 }
 
@@ -7628,11 +7655,6 @@ button.living-atlas__globe-focus-exit {
     grid-template-rows: auto 44px;
   }
 
-  .journey-story__fullscreen-entry {
-    top: 66px;
-    right: 12px;
-  }
-
   .journey-story__media-remove {
     position: relative;
     top: auto;
@@ -9326,6 +9348,10 @@ body:has(.journey-share) .account-dock {
     border-color: var(--control-line-strong);
   }
 
+  .journey-share__dialog button:not(.journey-share__create, .is-destructive):hover:not(:disabled) {
+    background-color: var(--control-fill-hover);
+  }
+
   .journey-share__heading > button:hover:not(:disabled) {
     color: var(--control-ink);
   }
@@ -10494,6 +10520,10 @@ body:has(.journey-share) .account-dock {
   :is(.route-candidate-editor__candidates, .journey-route-draft__stay-ownership, .journey-itinerary-import__organization) button[aria-pressed="false"]:hover:not(:disabled) {
     border-color: var(--control-line-strong);
     color: var(--control-ink);
+  }
+
+  :is(.route-candidate-editor__candidates, .journey-route-draft__stay-ownership, .journey-itinerary-import__organization) button[aria-pressed="false"]:hover:not(:disabled, :active) {
+    background-color: var(--control-fill-hover);
   }
 
   :is(.route-candidate-editor__profiles, .nearby-route-points__modes, .journey-itinerary-import__modes) > button[aria-pressed="false"]:hover:not(:disabled) {

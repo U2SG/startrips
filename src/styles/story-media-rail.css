@@ -72,6 +72,7 @@
 }
 @media (hover: hover) and (pointer: fine) {
   .story-media-rail button.story-media-rail__organize:hover:not(:disabled) { border-color: var(--control-line-strong); }
+  .story-media-rail button.story-media-rail__organize:hover:not(:disabled, :active) { background-color: var(--control-fill-hover); }
 }
 .story-media-rail__number {
   position: absolute;

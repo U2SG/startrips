@@ -922,4 +922,10 @@
   .journey-playback__controls button:not(.is-active):hover:not(:disabled) {
     color: var(--control-ink);
   }
+
+  /* Only the controls drawn on the bar's own glass lift their fill; the close,
+     return and selection controls carry a denser glass of their own. */
+  :is(.journey-playback__controls button:not(.is-active), .journey-playback__tempo select):hover:not(:disabled, :active) {
+    background-color: var(--control-fill-hover);
+  }
 }
