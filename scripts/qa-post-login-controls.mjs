@@ -686,6 +686,91 @@ async function verifyMobileV2InteractionContract() {
   }
 }
 
+// The journey sheet's handle is a 36px bar in a 44px box, like the 更多 and
+// account handles: its box must stay 44px tall, a tap must close the sheet and
+// so must a drag of more than 64px down. A mouse drag would release off the
+// handle, so this runs on a touch page, where the pointer is captured.
+async function verifyMobileJourneySheetHandle() {
+  console.error("[qa-post-login] mobile journey sheet handle");
+  const page = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+    reducedMotion: "reduce",
+    hasTouch: true,
+    isMobile: true,
+  });
+  try {
+    await page.route("**/api/journeys", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ journeys }),
+    }));
+    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+    const chip = page.locator(".mobile-v2__journey-chip");
+    const sheet = page.locator(".mobile-v2__sheet");
+    const handle = sheet.locator(".mobile-v2__sheet-handle");
+    const stackDepth = () => page.evaluate(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return Array.isArray(stack) ? stack.length : 0;
+    });
+    const waitForEmptyStack = () => page.waitForFunction(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return !Array.isArray(stack) || stack.length === 0;
+    }, null, { timeout: 5_000 }).catch(() => undefined);
+    const openSheet = async () => {
+      await chip.waitFor({ state: "visible" });
+      await chip.tap();
+      await sheet.waitFor({ state: "visible" });
+      await sheet.evaluate((element) => Promise.race([
+        Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => undefined))),
+        new Promise((resolve) => setTimeout(resolve, 2_000)),
+      ]));
+    };
+
+    await openSheet();
+    const handleBox = await handle.boundingBox();
+    await handle.tap();
+    await sheet.waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
+    const tapClosed = await sheet.count() === 0;
+    await waitForEmptyStack();
+    const tapStackDepth = await stackDepth();
+
+    await openSheet();
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("journey sheet handle has no bounds");
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 50 }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 100 }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sheet.waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
+    const dragClosed = await sheet.count() === 0;
+    await waitForEmptyStack();
+    const dragStackDepth = await stackDepth();
+
+    const result = {
+      name: "mobile-v2-journey-sheet-handle",
+      handleHeight: handleBox ? Math.round(handleBox.height) : null,
+      handleWidth: handleBox ? Math.round(handleBox.width) : null,
+      tapClosed,
+      tapStackDepth,
+      dragClosed,
+      dragStackDepth,
+    };
+    result.failed = result.handleHeight === null
+      || result.handleHeight < 44
+      || !tapClosed
+      || tapStackDepth !== 0
+      || !dragClosed
+      || dragStackDepth !== 0;
+    if (result.failed) failed = true;
+    results.push(result);
+  } finally {
+    await page.close();
+  }
+}
+
 // #250: an expanded mobile Story runs a modal focus trap while React already
 // owns `inert` on the parent `.mobile-v2__sheet-layer`. The trap must not claim
 // that externally owned flag, because its owner releases it during the very
@@ -4303,6 +4388,7 @@ try {
   } else {
     await verifyAtlasShell();
     await verifyMobileV2InteractionContract();
+    await verifyMobileJourneySheetHandle();
     await verifyMobileStoryInertOwnership();
     await verifyComposerMediaActions();
     await verifyComposerGlobeRoundTrip();
