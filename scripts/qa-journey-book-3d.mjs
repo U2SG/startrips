@@ -520,6 +520,15 @@ async function goatLiveSession(browser) {
         if (window.__qaGoatFrames.length < 400) requestAnimationFrame(sample);
       };
       requestAnimationFrame(sample);
+      // The moment the page itself takes the goat off screen, stamped at the DOM write.
+      window.__qaGoatHiddenAt = null;
+      const observer = new MutationObserver(() => {
+        if (window.__qaGoatHiddenAt === null && overlay.style.display === "none") {
+          window.__qaGoatHiddenAt = performance.now();
+          observer.disconnect();
+        }
+      });
+      observer.observe(overlay, { attributes: true, attributeFilter: ["style"] });
     });
     await page.mouse.down();
     const stopped = await session.goat();
@@ -528,35 +537,29 @@ async function goatLiveSession(browser) {
     record("desktop goat: a press ends the performance within 200 ms", {
       status: stopped.status, reactionMs: reaction === null ? null : Number(reaction.toFixed(1)), progressAtPress: stopped.progress,
     }, stopped.status === "interrupted" && reaction !== null && reaction >= 0 && reaction <= INTERRUPT_BUDGET_MS);
-    // The goat lets go at once. Every frame is sampled in page time (its own
-    // start): from the press to the first frame without the goat, and no frame
-    // later than the 400 ms deadline may still show it. Under SwiftShader a
-    // frame can take longer than the deadline itself, so the first frame after
-    // the press is recorded as well: when it is already past the deadline it
-    // must already show the goat gone (the fade is timed from the input).
-    const frames = await page.waitForFunction(({ pressAt, budget }) => {
+    // The goat lets go at once: the page stamps the DOM write that takes it
+    // off screen (independent of the WebGL frames), and every frame is sampled
+    // in page time so none after the 400 ms deadline may still show it.
+    const letGo = await page.waitForFunction(({ pressAt, budget }) => {
+      const hiddenAt = window.__qaGoatHiddenAt;
       const seen = window.__qaGoatFrames ?? [];
       const after = seen.filter((frame) => frame.t >= pressAt);
-      const gone = after.find((frame) => frame.opacity <= 0.01);
-      if (!gone || after.at(-1).t < pressAt + budget) return false;
+      if (hiddenAt === null || !after.length || after.at(-1).t < pressAt + budget) return false;
       const before = seen.filter((frame) => frame.t < pressAt).slice(-6);
-      const gaps = before.slice(1).map((frame, index) => Number((frame.t - before[index].t).toFixed(1)));
       return {
         pressAt,
-        goneAt: gone.t,
+        hiddenAt,
         firstFrameAfterMs: Number((after[0].t - pressAt).toFixed(1)),
-        goneOnFirstFrame: gone === after[0],
-        frameGapsBeforeMs: gaps,
+        frameGapsBeforeMs: before.slice(1).map((frame, index) => Number((frame.t - before[index].t).toFixed(1))),
         visibleAfterDeadline: after.filter((frame) => frame.t > pressAt + budget && frame.opacity > 0.01),
         frames: after.slice(0, 8),
       };
     }, { pressAt: stopped.pointerDownAt, budget: LET_GO_BUDGET_MS }, { timeout: 30_000 }).then((handle) => handle.jsonValue(), () => null);
-    const disappearMs = frames ? Number((frames.goneAt - frames.pressAt).toFixed(1)) : null;
-    record("desktop goat: the goat is gone by the first frame after 400 ms from the press, and never seen after it", {
-      disappearMs, budgetMs: LET_GO_BUDGET_MS, firstFrameAfterMs: frames?.firstFrameAfterMs ?? null,
-      frameGapsBeforeMs: frames?.frameGapsBeforeMs ?? null, goneOnFirstFrame: frames?.goneOnFirstFrame ?? null, visibleAfterDeadline: frames?.visibleAfterDeadline ?? null, frames: frames?.frames ?? null,
-    }, Boolean(frames) && frames.visibleAfterDeadline.length === 0
-      && (disappearMs <= LET_GO_BUDGET_MS || frames.goneOnFirstFrame));
+    const hiddenMs = letGo ? Number((letGo.hiddenAt - letGo.pressAt).toFixed(1)) : null;
+    record("desktop goat: the goat leaves the screen within 400 ms of the press and no later frame shows it", {
+      hiddenMs, budgetMs: LET_GO_BUDGET_MS, firstFrameAfterMs: letGo?.firstFrameAfterMs ?? null,
+      frameGapsBeforeMs: letGo?.frameGapsBeforeMs ?? null, visibleAfterDeadline: letGo?.visibleAfterDeadline ?? null, frames: letGo?.frames ?? null,
+    }, hiddenMs !== null && hiddenMs >= 0 && hiddenMs <= LET_GO_BUDGET_MS && letGo.visibleAfterDeadline.length === 0);
     for (let step = 1; step <= 12; step += 1) await page.mouse.move(from + ((to - from) * step) / 12, y);
     await page.mouse.up();
     await page.mouse.move(4, 4);

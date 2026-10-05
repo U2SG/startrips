@@ -1,6 +1,5 @@
 import { applyPose } from "../brand/StartripsSignatureMotion";
 import { sampleStartripsPullPose, STARTRIPS_PULL_PHASES as P } from "../brand/startripsPullClip";
-import { motionTokens } from "../motion/tokens";
 import { COVER_MARK_TONE } from "./journeyBook3dPainter";
 import type { JourneyBook3dScene } from "./journeyBook3dScene";
 import { goatPullCoverProgress, goatPullStaging, type MarkFrame } from "./journeyBookGoatPull";
@@ -25,8 +24,8 @@ export type GoatPullFrame = {
 };
 
 export type GoatPull = {
-  /** Any input: the goat lets go and fades, the cover returns to the reader from its current angle. */
-  interrupt(inputAt?: number): void;
+  /** Any input: the goat lets go and leaves at once, the cover returns to the reader from its current angle. */
+  interrupt(): void;
   /** QA: hold the performance at `elapsedMs` (scrubbing performances only). */
   scrub(elapsedMs: number): void;
   /** Stop at once with nothing left behind (unmount, a new scene). */
@@ -71,7 +70,6 @@ export function startGoatPull(options: {
   const { scene, overlay, mark, scrubbing = false } = options;
   const place = overlay.querySelector<SVGGElement>("[data-goat-place]");
   let status: GoatPullStatus = "playing";
-  let fading: Animation | null = null;
   let scrubMs = 0;
   let elapsed = 0;
   let frame = 0;
@@ -146,9 +144,14 @@ export function startGoatPull(options: {
     return !scrubbing;
   };
 
-  /** `inputAt`: the input's time (performance.now() scale); the fade is timed from it. */
-  function interrupt(inputAt = performance.now()) {
+  /**
+   * Any input: the goat lets go at once. It leaves the screen in the input's
+   * own handler, with no fade, so its release never waits on the book's
+   * WebGL frames; the cover is handed back from its current angle.
+   */
+  function interrupt() {
     if (status !== "playing" && status !== "released") return;
+    hide();
     if (status === "playing") {
       if (!scrubbing && scene.progress >= UPRIGHT) {
         scene.endDrag(1);
@@ -162,39 +165,19 @@ export function startGoatPull(options: {
     scene.drive(null);
     stopListening();
     report();
-    // The goat lets go where it is and fades on the compositor, timed from
-    // the input itself: however long the book's frames take, the goat is gone
-    // `tiers.instant` after the reader's input, never later.
-    if (typeof overlay.animate === "function" && opacity > 0) {
-      fading = overlay.animate([{ opacity }, { opacity: 0 }], {
-        duration: motionTokens.tiers.instant,
-        easing: motionTokens.easings.easeOut,
-        fill: "forwards",
-      });
-      // The document timeline shares performance.now()'s origin.
-      fading.startTime = Math.min(inputAt, document.timeline.currentTime === null ? inputAt : Number(document.timeline.currentTime));
-      fading.onfinish = () => {
-        fading = null;
-        hide();
-        options.onEnd("interrupted");
-      };
-    } else {
-      hide();
-      options.onEnd("interrupted");
-    }
+    options.onEnd("interrupted");
   }
 
   function onInput(event: Event) {
     if (status !== "playing" && status !== "released") return;
     options.onInterrupt?.(event);
-    interrupt(event.timeStamp);
+    interrupt();
   }
 
   window.addEventListener("pointerdown", onInput, { capture: true });
   window.addEventListener("wheel", onInput, { capture: true, passive: true });
   window.addEventListener("keydown", onInput, { capture: true });
 
-  overlay.getAnimations?.().forEach((animation) => animation.cancel());
   overlay.style.display = "";
   scene.beginDrag();
   // Place the goat over its emboss before the first frame.
@@ -212,8 +195,6 @@ export function startGoatPull(options: {
       const holding = status === "playing";
       if (holding || status === "released") status = "interrupted";
       stopListening();
-      fading?.cancel();
-      fading = null;
       scene.drive(null);
       // Call before the scene is disposed: a held cover is let down.
       if (holding) scene.layDown();
