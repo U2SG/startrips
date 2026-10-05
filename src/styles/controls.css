@@ -18,6 +18,36 @@
   --control-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%238a9e98' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
+/* The dark glass fill disappears on an opaque floating panel, where a
+   secondary control then reads only by its hairline. Inside these panels the
+   fills are the control ink at a low alpha instead, so every primitive and
+   every surface selector that reads the tokens follows. The override sits on
+   the panel itself, never on a root that also holds controls over the globe
+   or map: the account tab, the route editor's launcher, the share scrim and
+   the Composer's globe-pick hint keep the dark glass, as do the compact
+   header, the dock, the globe toggles, the zoom row, the desktop nav and the
+   translucent Journey card. Primary and quiet controls set their own
+   backgrounds. */
+:is(
+  .journey-composer,
+  .journey-share__dialog,
+  .account-dock__panel,
+  .account-sheet,
+  .mobile-v2__sheet,
+  .mobile-v2__more-sheet,
+  .mobile-v2__picker,
+  .route-candidate-editor__panel,
+  .living-atlas__import-dialog,
+  .living-atlas__route-point-context,
+  .living-atlas__home-base-context,
+  .living-atlas__home-base-suggestion,
+  .living-atlas__everyday-context
+) {
+  --control-fill: rgba(231, 240, 236, 0.04);
+  --control-fill-hover: rgba(231, 240, 236, 0.07);
+  --control-fill-press: rgba(231, 240, 236, 0.1);
+}
+
 .st-btn,
 .st-icon-btn,
 .st-chip,

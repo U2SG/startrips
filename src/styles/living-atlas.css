@@ -8790,9 +8790,9 @@ button.living-atlas__globe-focus-exit {
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid rgba(118, 198, 188, 0.16);
+  border: 1px solid var(--control-line);
   border-radius: var(--mobile-control-radius, 999px);
-  background: rgba(5, 23, 22, 0.66);
+  background: var(--control-fill);
   color: rgba(225, 239, 233, 0.84);
 }
 
