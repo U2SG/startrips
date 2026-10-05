@@ -280,9 +280,10 @@
 
 /* The head stays pinned while the panel scrolls, so whatever is scrolled into
    view (a focused control, or one reached from further down) stops below it
-   instead of behind it: its 44px row plus the panel gap. */
+   instead of behind it. The head is one control tall (its 关闭 button sets the
+   row), and 12px is the panel's own gap. */
 .route-candidate-editor__panel {
-  scroll-padding-top: 56px;
+  scroll-padding-top: calc(var(--control-height) + 12px);
 }
 .route-candidate-editor__shapes,
 .route-candidate-editor__candidates { display: grid; gap: 8px; }

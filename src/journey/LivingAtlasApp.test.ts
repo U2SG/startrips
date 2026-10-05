@@ -1636,7 +1636,24 @@ describe("Mobile V2 particle-earth pointer ownership", () => {
 
   it("withholds the empty-state hero while a compact context surface owns the band", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
-    expect(source).toContain('{view === "planet" && journeys.length === 0 && !compactContextSurfaceOpen ? (');
+    // The hero stays mounted, so its signature clip never replays when a card
+    // closes; it only yields while a card is open.
+    const heroStart = source.indexOf('{view === "planet" && journeys.length === 0 ? (');
+    expect(heroStart).toBeGreaterThan(0);
+    expect(source.slice(heroStart, source.indexOf("/>", heroStart))).toContain("yielded={compactContextSurfaceOpen}");
+    const surface = readFileSync(new URL("../brand/StartripsRecoverySurface.tsx", import.meta.url), "utf8");
+    expect(surface).toContain('data-recovery-yielded={yielded ? "true" : undefined}');
+    expect(surface).toContain("inert={yielded || undefined}");
+    expect(surface).toContain("aria-hidden={yielded || undefined}");
+    // Hidden without display:none or the hidden attribute, either of which
+    // would restart the surface's animations when it is shown again.
+    const recoveryCss = readFileSync(new URL("../styles/starlight-experience.css", import.meta.url), "utf8");
+    const yieldStart = recoveryCss.indexOf('.startrips-recovery-surface[data-recovery-yielded="true"] {');
+    expect(yieldStart).toBeGreaterThan(0);
+    const yieldRule = recoveryCss.slice(yieldStart, recoveryCss.indexOf("}", yieldStart));
+    expect(yieldRule).toContain("visibility: hidden;");
+    expect(yieldRule).not.toContain("display");
+    expect(surface).not.toMatch(/\shidden=/);
     const start = source.indexOf("const compactContextSurfaceOpen = isMobileV2");
     expect(start).toBeGreaterThan(0);
     const definition = source.slice(start, source.indexOf(";", start));

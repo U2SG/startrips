@@ -53,6 +53,7 @@ export function StartripsRecoverySurface({
   detail,
   className = "",
   headingLevel = 1,
+  yielded = false,
 }: {
   kind: StartripsRecoveryKind;
   onPrimaryAction?: () => void;
@@ -60,6 +61,12 @@ export function StartripsRecoverySurface({
   detail?: string | null;
   className?: string;
   headingLevel?: 1 | 2;
+  /**
+   * Another surface holds this one's place for now. The surface stays mounted,
+   * so its signature clip does not replay when it returns, but it is unseen,
+   * out of the tab order and the accessibility tree, and never hit-testable.
+   */
+  yielded?: boolean;
 }) {
   const descriptor = getStartripsRecoveryDescriptor(kind);
   const primaryLabel = getStartripsRecoveryCopy(descriptor.copyKeys.primaryAction);
@@ -72,6 +79,9 @@ export function StartripsRecoverySurface({
     <section
       className={`startrips-recovery-surface startrips-recovery-surface--${kind}${className ? ` ${className}` : ""}`}
       data-recovery-kind={kind}
+      data-recovery-yielded={yielded ? "true" : undefined}
+      inert={yielded || undefined}
+      aria-hidden={yielded || undefined}
     >
       <div className="startrips-recovery-surface__motion" aria-hidden="true">
         <StartripsSignatureMotion clip="recovery" size={64} title="" />

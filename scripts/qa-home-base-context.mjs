@@ -481,6 +481,10 @@ async function closeContext(page) {
  * not a pass by default: the card then has to clear the bottom edge by the
  * same gap. The card must also own the pointer at its top, middle and bottom,
  * so nothing (the hero's CTA included) can sit over its controls.
+ *
+ * The hero of an empty Atlas stays mounted while a card is open, so its
+ * signature clip never replays. What is graded is that it yields: it is not
+ * visible, it is inert, and its CTA takes no pointer.
  */
 async function compactSurfacePlacement(page, selector) {
   return page.evaluate(({ wanted, gap }) => {
@@ -491,6 +495,10 @@ async function compactSurfacePlacement(page, selector) {
     const dock = document.querySelector(".mobile-v2__chrome")?.getBoundingClientRect() ?? null;
     const hero = document.querySelector(".living-atlas__empty");
     const heroRect = hero?.getBoundingClientRect() ?? null;
+    const heroVisible = Boolean(hero && heroRect && heroRect.width > 0 && heroRect.height > 0
+      && getComputedStyle(hero).visibility === "visible");
+    const heroAction = hero?.querySelector("button") ?? null;
+    const actionRect = heroAction?.getBoundingClientRect() ?? null;
     const middle = rect.left + rect.width / 2;
     const ownsHit = (y) => document.elementFromPoint(middle, y)?.closest(wanted) === node;
     return {
@@ -503,7 +511,12 @@ async function compactSurfacePlacement(page, selector) {
       clearsHeader: Boolean(header) && rect.top >= header.bottom + gap - 0.5,
       clearsDock: rect.bottom <= (dock ? dock.top : innerHeight) - gap + 0.5,
       heroPresent: Boolean(hero),
-      heroOverlap: Boolean(heroRect
+      heroVisible,
+      heroInert: Boolean(hero?.closest("[inert]")),
+      heroActionHit: Boolean(heroAction && actionRect && actionRect.width > 0 && heroAction.contains(
+        document.elementFromPoint(actionRect.left + actionRect.width / 2, actionRect.top + actionRect.height / 2),
+      )),
+      heroOverlap: heroVisible && Boolean(heroRect
         && heroRect.left < rect.right && heroRect.right > rect.left
         && heroRect.top < rect.bottom && heroRect.bottom > rect.top),
       ownsItsArea: ownsHit(rect.top + 6) && ownsHit(rect.top + rect.height / 2) && ownsHit(rect.bottom - 6),
@@ -511,17 +524,51 @@ async function compactSurfacePlacement(page, selector) {
   }, { wanted: selector, gap: SURFACE_GAP });
 }
 
+/** Remembers the empty-state hero node, so a later read can tell whether it was ever remounted. */
+async function pinHero(page) {
+  await page.evaluate(() => {
+    window.__qaEmptyHero = document.querySelector(".living-atlas__empty");
+  });
+}
+
 /** The empty-state hero of an Atlas with no Journeys, and its CTA. */
 async function heroState(page) {
   return page.evaluate(() => {
     const hero = document.querySelector(".living-atlas__empty");
     const rect = hero?.getBoundingClientRect();
+    const action = hero?.querySelector("button") ?? null;
+    const actionRect = action?.getBoundingClientRect() ?? null;
     return {
       present: Boolean(hero),
-      visible: Boolean(rect && rect.width > 0 && rect.height > 0),
-      action: Boolean(hero?.querySelector("button")),
+      visible: Boolean(hero && rect && rect.width > 0 && rect.height > 0
+        && getComputedStyle(hero).visibility === "visible"),
+      inert: Boolean(hero?.closest("[inert]")),
+      // A tap at the CTA's centre reaches the CTA.
+      actionHit: Boolean(action && actionRect && actionRect.width > 0 && action.contains(
+        document.elementFromPoint(actionRect.left + actionRect.width / 2, actionRect.top + actionRect.height / 2),
+      )),
+      // The very node pinned before a card opened: it was never remounted.
+      samePinnedNode: Boolean(hero) && hero === window.__qaEmptyHero,
     };
   });
+}
+
+// A compact header keeps 日常 in its 更多 sheet. The entry is that sheet's
+// row, which still carries data-atlas-everyday-trigger; the Atlas action
+// focus returns to is 更多, the header control the row lives behind.
+async function openCompactEveryday(page) {
+  const more = page.locator('.mobile-v2__header [data-atlas-more-trigger="true"]');
+  const sheet = page.locator(".mobile-v2__more-sheet");
+  await more.click();
+  await sheet.waitFor({ state: "visible" });
+  const row = sheet.locator("[data-atlas-everyday-trigger]");
+  const hit = await row.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return Math.min(rect.width, rect.height);
+  });
+  await row.click();
+  await sheet.waitFor({ state: "detached" });
+  return { more, hit };
 }
 
 async function homeMarkerCenter(marker) {
@@ -852,6 +899,7 @@ try {
   const mobile = await openOwner({ width: 390, height: 844 }, { journeyRows: mobileJourneys });
   const mobilePage = mobile.page;
   // No Journeys: the empty-state hero owns the band until a card opens.
+  await pinHero(mobilePage);
   const heroBeforeMobileContext = await heroState(mobilePage);
   const mobileMarker = await currentHomeMarker(mobilePage);
   await mobileMarker.focus();
@@ -896,18 +944,22 @@ try {
     && mobilePlacement.permanentHomeTabs === 0
     && mobilePlacement.suggestionsWhileContextOpen === 0
   ));
-  record("390x844: the Home context stays between the header block and the bottom edge, clear of the hero", {
+  record("390x844: the Home context stays between the header block and the bottom edge while the hero yields", {
     heroBeforeMobileContext, mobileBounds,
   }, Boolean(
     heroBeforeMobileContext.visible
-    && heroBeforeMobileContext.action
+    && heroBeforeMobileContext.actionHit
+    && !heroBeforeMobileContext.inert
     && mobileBounds
     && mobileBounds.mobileMode === "on"
     && mobileBounds.dockTop === null
     && mobileBounds.inViewport
     && mobileBounds.clearsHeader
     && mobileBounds.clearsDock
-    && !mobileBounds.heroPresent
+    && mobileBounds.heroPresent
+    && !mobileBounds.heroVisible
+    && mobileBounds.heroInert
+    && !mobileBounds.heroActionHit
     && !mobileBounds.heroOverlap
     && mobileBounds.ownsItsArea
   ));
@@ -915,35 +967,44 @@ try {
   await closeContext(mobilePage);
   const heroAfterMobileContext = await heroState(mobilePage);
 
-  // The Atlas-level Everyday panel is the other card of an empty Atlas: the
-  // hero yields to it the same way and returns once it closes.
-  const mobileEverydayTrigger = mobilePage.locator("[data-atlas-everyday-trigger]");
-  await mobileEverydayTrigger.click();
+  // The Atlas-level Everyday panel is the other card of an empty Atlas. On a
+  // compact header its entry is the 日常 row of the 更多 sheet. The hero yields
+  // to the panel the same way and returns once it closes.
+  await openCompactEveryday(mobilePage);
   const emptyAtlasEveryday = mobilePage.locator("[data-atlas-everyday-context]");
   await emptyAtlasEveryday.waitFor({ state: "visible" });
   const emptyAtlasEverydayBounds = await compactSurfacePlacement(mobilePage, "[data-atlas-everyday-context]");
   await emptyAtlasEveryday.getByRole("button", { name: "关闭日常", exact: true }).click();
   await emptyAtlasEveryday.waitFor({ state: "detached" });
   const heroAfterMobileEveryday = await heroState(mobilePage);
-  record("390x844: the empty-state hero yields to Atlas Everyday and returns after both cards close", {
+  record("390x844: the empty-state hero yields to Atlas Everyday and returns, never remounted, after both cards close", {
     heroAfterMobileContext, emptyAtlasEverydayBounds, heroAfterMobileEveryday,
   }, Boolean(
     heroAfterMobileContext.visible
+    && heroAfterMobileContext.actionHit
+    && !heroAfterMobileContext.inert
+    && heroAfterMobileContext.samePinnedNode
     && emptyAtlasEverydayBounds
     && emptyAtlasEverydayBounds.inViewport
     && emptyAtlasEverydayBounds.clearsHeader
     && emptyAtlasEverydayBounds.clearsDock
-    && !emptyAtlasEverydayBounds.heroPresent
+    && emptyAtlasEverydayBounds.heroPresent
+    && !emptyAtlasEverydayBounds.heroVisible
+    && emptyAtlasEverydayBounds.heroInert
+    && !emptyAtlasEverydayBounds.heroActionHit
     && !emptyAtlasEverydayBounds.heroOverlap
     && emptyAtlasEverydayBounds.ownsItsArea
     && heroAfterMobileEveryday.visible
-    && heroAfterMobileEveryday.action
+    && heroAfterMobileEveryday.actionHit
+    && !heroAfterMobileEveryday.inert
+    && heroAfterMobileEveryday.samePinnedNode
   ));
   await mobilePage.close();
 
   // The same Home context on a phone held sideways, still with no Journeys.
   const mobileLandscape = await openOwner({ width: 844, height: 390 }, { journeyRows: mobileJourneys, touch: true });
   const mobileLandscapePage = mobileLandscape.page;
+  await pinHero(mobileLandscapePage);
   const heroBeforeLandscapeContext = await heroState(mobileLandscapePage);
   await (await currentHomeMarker(mobileLandscapePage)).focus();
   await mobileLandscapePage.keyboard.press("Enter");
@@ -952,20 +1013,26 @@ try {
   await mobileLandscapePage.screenshot({ path: `${captureDir}/04-mobile-landscape-context.png`, fullPage: false });
   await closeContext(mobileLandscapePage);
   const heroAfterLandscapeContext = await heroState(mobileLandscapePage);
-  record("844x390: the Home context stays between the header block and the bottom edge, clear of the hero", {
+  record("844x390: the Home context stays between the header block and the bottom edge while the hero yields", {
     heroBeforeLandscapeContext, landscapeBounds, heroAfterLandscapeContext,
   }, Boolean(
     heroBeforeLandscapeContext.visible
+    && !heroBeforeLandscapeContext.inert
     && landscapeBounds
     && landscapeBounds.mobileMode === "on"
     && landscapeBounds.dockTop === null
     && landscapeBounds.inViewport
     && landscapeBounds.clearsHeader
     && landscapeBounds.clearsDock
-    && !landscapeBounds.heroPresent
+    && landscapeBounds.heroPresent
+    && !landscapeBounds.heroVisible
+    && landscapeBounds.heroInert
+    && !landscapeBounds.heroActionHit
     && !landscapeBounds.heroOverlap
     && landscapeBounds.ownsItsArea
     && heroAfterLandscapeContext.visible
+    && !heroAfterLandscapeContext.inert
+    && heroAfterLandscapeContext.samePinnedNode
   ));
   await mobileLandscapePage.close();
 
@@ -1004,24 +1071,6 @@ try {
     (node) => document.activeElement === node,
   ));
   await noHomePage.close();
-
-  // A compact header keeps 日常 in its 更多 sheet. The entry is that sheet's
-  // row, which still carries data-atlas-everyday-trigger; the Atlas action
-  // focus returns to is 更多, the header control the row lives behind.
-  const openCompactEveryday = async (page) => {
-    const more = page.locator('.mobile-v2__header [data-atlas-more-trigger="true"]');
-    const sheet = page.locator(".mobile-v2__more-sheet");
-    await more.click();
-    await sheet.waitFor({ state: "visible" });
-    const row = sheet.locator("[data-atlas-everyday-trigger]");
-    const hit = await row.evaluate((node) => {
-      const rect = node.getBoundingClientRect();
-      return Math.min(rect.width, rect.height);
-    });
-    await row.click();
-    await sheet.waitFor({ state: "detached" });
-    return { more, hit };
-  };
 
   const noHomeMobile = await openOwner({ width: 390, height: 844 }, { homePeriods: [] });
   const { more: noHomeMobileMore, hit: mobileEverydayHit } = await openCompactEveryday(noHomeMobile.page);
@@ -1080,6 +1129,18 @@ try {
     && landscapeEverydayHit >= 44
     && landscapeEverydayPlacement.inViewport
     && !landscapeEverydayPlacement.overflow);
+  // Sideways the band between the header block and the dock is shortest, and
+  // the panel used to reach into the dock here.
+  const landscapeEverydayBounds = await compactSurfacePlacement(noHomeLandscape.page, "[data-atlas-everyday-context]");
+  record("844x390: Atlas Everyday stays between the header block and the dock", { landscapeEverydayBounds }, Boolean(
+    landscapeEverydayBounds
+    && landscapeEverydayBounds.mobileMode === "on"
+    && landscapeEverydayBounds.dockTop !== null
+    && landscapeEverydayBounds.clearsHeader
+    && landscapeEverydayBounds.clearsDock
+    && !landscapeEverydayBounds.heroPresent
+    && landscapeEverydayBounds.ownsItsArea
+  ));
   await noHomeLandscapeSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
   await noHomeLandscapeSurface.waitFor({ state: "detached" });
   record("zero-Home phone landscape restores its exact Atlas action", {},

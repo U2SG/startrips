@@ -3464,8 +3464,9 @@ export function LivingAtlasApp({
   );
   // Compact mobile has one band between the header and the dock. The empty
   // hero and its CTA share it with every context card, so while any card is
-  // open the hero is not rendered at all: its CTA can never sit over or under
-  // a card's controls.
+  // open the hero yields: it stays mounted, so its signature clip does not
+  // replay when the card closes, but it is unseen, inert and out of hit
+  // testing, so its CTA can never sit over or under a card's controls.
   const compactContextSurfaceOpen = isMobileV2
     && (homeBaseContextSurfaceVisible || atlasEverydaySurfaceVisible || routePointContextVisible);
 
@@ -3775,12 +3776,13 @@ export function LivingAtlasApp({
         </aside>
       ) : null}
 
-      {view === "planet" && journeys.length === 0 && !compactContextSurfaceOpen ? (
+      {view === "planet" && journeys.length === 0 ? (
         <StartripsRecoverySurface
           kind="empty"
           className="living-atlas__empty"
           headingLevel={2}
           onPrimaryAction={canCreateJourney ? openCreateComposer : undefined}
+          yielded={compactContextSurfaceOpen}
         />
       ) : null}
 
