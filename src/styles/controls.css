@@ -293,12 +293,13 @@
 }
 
 /* #34 IconActionButton has no look of its own, so it rendered as whatever its
-   parent made of a <button>. Inside the Atlas shell and the Composer it is now
-   a 44px icon circle by default; :where() keeps every surface rule above it.
-   Journey Story is portaled to <body>, outside both scopes, so its icon
-   actions are unchanged. Position and the tooltip ::after stay in
-   living-atlas.css. */
-:where(.living-atlas, .journey-composer) :where(.icon-action-button) {
+   parent made of a <button>. Inside the Atlas shell, the Composer, Journey
+   Story and Playback it is a 44px icon circle by default; :where() keeps every
+   surface rule above it. Story is portaled to <body>, outside the shell, so
+   its root is named here; Playback renders inside the shell and is named so it
+   keeps the baseline wherever it mounts. Position and the tooltip ::after stay
+   in living-atlas.css. */
+:where(.living-atlas, .journey-composer, .journey-story-backdrop, .journey-playback) :where(.icon-action-button) {
   width: var(--control-height);
   min-width: var(--control-height);
   height: var(--control-height);
@@ -318,7 +319,7 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  :where(.living-atlas, .journey-composer) :where(.icon-action-button:active:not(:disabled)) {
+  :where(.living-atlas, .journey-composer, .journey-story-backdrop, .journey-playback) :where(.icon-action-button:active:not(:disabled)) {
     scale: 0.97;
   }
 }
