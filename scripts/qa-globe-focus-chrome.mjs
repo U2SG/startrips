@@ -494,6 +494,93 @@ async function probeNativeMapControls(page) {
   };
 }
 
+/**
+ * The detail map's zoom group against the desktop Journey card and, when a
+ * selector is given, a context card: their boxes, whether they meet, and
+ * whether every button owns its centre and the points 4px in from each corner.
+ */
+function readZoomRow(page, panelSelector = null) {
+  return page.evaluate((selector) => {
+    const group = document.querySelector(".detailed-earth-map .maplibregl-ctrl-group");
+    const card = document.querySelector(".living-atlas__active");
+    if (!group || !card) return null;
+    const panel = selector ? document.querySelector(selector) : null;
+    const box = (element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        right: Math.round(rect.right),
+        bottom: Math.round(rect.bottom),
+      };
+    };
+    const meets = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    const a = group.getBoundingClientRect();
+    const b = card.getBoundingClientRect();
+    const p = panel?.getBoundingClientRect() ?? null;
+    return {
+      group: box(group),
+      card: box(card),
+      cardVisible: b.width > 0 && b.height > 0,
+      intersects: meets(a, b),
+      onScreen: a.left >= 0 && a.top >= 0 && a.right <= innerWidth && a.bottom <= innerHeight,
+      panel: panel && p
+        ? { ...box(panel), visible: p.width > 0 && p.height > 0, intersects: meets(a, p) }
+        : null,
+      buttons: [...group.querySelectorAll("button")].map((button) => {
+        const rect = button.getBoundingClientRect();
+        // The centre, then 4px in from each corner.
+        const points = [
+          [rect.left + rect.width / 2, rect.top + rect.height / 2],
+          [rect.left + 4, rect.top + 4],
+          [rect.right - 4, rect.top + 4],
+          [rect.left + 4, rect.bottom - 4],
+          [rect.right - 4, rect.bottom - 4],
+        ];
+        const hits = points.map(([x, y]) => {
+          const hit = document.elementFromPoint(x, y);
+          return hit === button || Boolean(hit && button.contains(hit));
+        });
+        return {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          hits,
+          hitOwned: hits.every(Boolean),
+        };
+      }),
+    };
+  }, panelSelector);
+}
+
+const zoomRowButtonsOwned = (state) => state.onScreen
+  && state.buttons.length > 0
+  && state.buttons.every((button) => button.width >= 44 && button.height >= 44 && button.hitOwned);
+
+const zoomRowClear = (state) => Boolean(
+  state
+  && state.cardVisible
+  && !state.intersects
+  && zoomRowButtonsOwned(state),
+);
+
+// The Route Point card hides the Journey card while it is open, so the card
+// only has to clear the row when it is shown. Reaching within 24px of the row
+// is what makes the panel check bite: a card that rose further would meet it.
+const zoomRowClearOfPanel = (state) => Boolean(
+  state
+  && state.panel?.visible
+  && !state.panel.intersects
+  && state.panel.top - state.group.bottom <= 24
+  && (!state.cardVisible || !state.intersects)
+  && zoomRowButtonsOwned(state),
+);
+
+/** Wait out an entrance, bounded so a stuck one still reaches the record. */
+const finishAnimations = (locator) => locator.evaluate((node) => Promise.race([
+  Promise.all(node.getAnimations().map((animation) => animation.finished.catch(() => undefined))),
+  new Promise((resolve) => setTimeout(resolve, 2_000)),
+]));
+
 try {
   // 1. The three acceptance viewports: chrome absence, empty top-right, the
   //    return control's own contract, and a click exit that preserves context.
@@ -1535,75 +1622,88 @@ try {
       session = await openAtlas(viewport);
       const { page, pageErrors } = session;
       await activateDiveIntent(page);
-      const measure = () => page.evaluate(() => {
-        const group = document.querySelector(".detailed-earth-map .maplibregl-ctrl-group");
-        const card = document.querySelector(".living-atlas__active");
-        if (!group || !card) return null;
-        const box = (element) => {
-          const rect = element.getBoundingClientRect();
-          return {
-            left: Math.round(rect.left),
-            top: Math.round(rect.top),
-            right: Math.round(rect.right),
-            bottom: Math.round(rect.bottom),
-          };
-        };
-        const a = group.getBoundingClientRect();
-        const b = card.getBoundingClientRect();
-        return {
-          group: box(group),
-          card: box(card),
-          cardVisible: b.width > 0 && b.height > 0,
-          intersects: a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top,
-          onScreen: a.left >= 0 && a.top >= 0 && a.right <= innerWidth && a.bottom <= innerHeight,
-          buttons: [...group.querySelectorAll("button")].map((button) => {
-            const rect = button.getBoundingClientRect();
-            // The centre, then 4px in from each corner.
-            const points = [
-              [rect.left + rect.width / 2, rect.top + rect.height / 2],
-              [rect.left + 4, rect.top + 4],
-              [rect.right - 4, rect.top + 4],
-              [rect.left + 4, rect.bottom - 4],
-              [rect.right - 4, rect.bottom - 4],
-            ];
-            const hits = points.map(([x, y]) => {
-              const hit = document.elementFromPoint(x, y);
-              return hit === button || Boolean(hit && button.contains(hit));
-            });
-            return {
-              width: Math.round(rect.width),
-              height: Math.round(rect.height),
-              hits,
-              hitOwned: hits.every(Boolean),
-            };
-          }),
-        };
-      });
-      const chooserClosed = await measure();
+      const chooserClosed = await readZoomRow(page);
       await page.locator(".living-atlas__active-play").click();
       await page.locator(".living-atlas__playback-mode-menu").waitFor({ state: "visible", timeout: 5_000 });
       await settle(page);
-      const chooserOpen = await measure();
-      const clear = (state) => Boolean(
-        state
-        && state.cardVisible
-        && !state.intersects
-        && state.onScreen
-        && state.buttons.length > 0
-        && state.buttons.every((button) => button.width >= 44 && button.height >= 44 && button.hitOwned),
-      );
+      const chooserOpen = await readZoomRow(page);
       record({
         name: `detail-zoom-group-clears-the-journey-card/${viewport.name}`,
         viewport: viewport.name,
         chooserClosed,
         chooserOpen,
         pageErrors,
-        failed: !clear(chooserClosed) || !clear(chooserOpen) || pageErrors.length > 0,
+        failed: !zoomRowClear(chooserClosed) || !zoomRowClear(chooserOpen) || pageErrors.length > 0,
       });
     } catch (error) {
       // A step that throws still names the size it failed at.
       record({
         name: `detail-zoom-group-clears-the-journey-card/${viewport.name}`,
+        viewport: viewport.name,
+        error: error instanceof Error ? error.message : String(error),
+        pageErrors: session?.pageErrors ?? [],
+        failed: true,
+      });
+    } finally {
+      await session?.page.close();
+    }
+  }
+
+  // 7b. The right-hand context cards are not modal, so while the detail map
+  //     shows they keep out of the zoom row's band instead of covering it. The
+  //     Route Point card is graded at its tallest (asked for the full window,
+  //     so its cap decides), then the Everyday panel; each must reach the
+  //     band's edge, so a card that rose any higher would meet the row, and
+  //     the row keeps the same five-point hit test.
+  for (const viewport of [
+    { name: "800x700", width: 800, height: 700 },
+    { name: "1280x700", width: 1280, height: 700 },
+  ]) {
+    let session = null;
+    try {
+      session = await openAtlas(viewport);
+      const { page } = session;
+      await page.route(/\/api\/everyday-fragments(?:\/[^/?]+)?(?:\?.*)?$/, (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ fragments: [] }),
+      }));
+      const selection = await selectNonDefaultJourney(page);
+      const routePointId = journeys.find((journey) => journey.title === selection.selectedTitle)
+        ?.routePoints[0]?.id;
+      if (!routePointId) throw new Error("selected QA Journey has no Route Point");
+      await page.locator(`[data-qa-globe-route-point-activate="${routePointId}"]`).evaluate((button) => button.click());
+      const context = page.locator(`[data-route-point-context][data-route-point-id="${routePointId}"]`);
+      await context.waitFor({ state: "visible", timeout: 5_000 });
+      await activateDiveIntent(page);
+      await context.waitFor({ state: "visible", timeout: 5_000 });
+      await context.evaluate((node) => { node.style.height = "100vh"; });
+      await finishAnimations(context);
+      await settle(page);
+      const routePointOpen = await readZoomRow(page, "[data-route-point-context]");
+
+      await context.locator("[data-route-point-context-close]").click();
+      await context.waitFor({ state: "detached", timeout: 5_000 });
+      await page.locator("[data-atlas-everyday-trigger]").click();
+      const everyday = page.locator("[data-atlas-everyday-context]");
+      await everyday.waitFor({ state: "visible", timeout: 5_000 });
+      await finishAnimations(everyday);
+      await settle(page);
+      const everydayOpen = await readZoomRow(page, "[data-atlas-everyday-context]");
+
+      record({
+        name: `detail-zoom-group-clears-context-cards/${viewport.name}`,
+        viewport: viewport.name,
+        routePointOpen,
+        everydayOpen,
+        pageErrors: session.pageErrors,
+        failed: !zoomRowClearOfPanel(routePointOpen)
+          || !zoomRowClearOfPanel(everydayOpen)
+          || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({
+        name: `detail-zoom-group-clears-context-cards/${viewport.name}`,
         viewport: viewport.name,
         error: error instanceof Error ? error.message : String(error),
         pageErrors: session?.pageErrors ?? [],
