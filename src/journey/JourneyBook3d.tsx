@@ -30,7 +30,7 @@ import {
   stepFace,
 } from "./journeyBook3dModel";
 import { coverRouteGeometry, coverRouteSvgPath } from "./coverRouteGeometry";
-import { PLATE, coverMarkReady, loadCoverMark, noteCharacterCount, paintFace, type PageSource } from "./journeyBook3dPainter";
+import { PLATE, coverMarkReady, loadCoverMark, noteCharacterCount, paintCoverMaterial, paintFace, type PageSource } from "./journeyBook3dPainter";
 import { loadPictureChain } from "./journeyBook3dPictures";
 import { JourneyBook3dScene } from "./journeyBook3dScene";
 import {
@@ -76,7 +76,31 @@ function canHoverFinely(): boolean {
   return fineHoverQuery.matches;
 }
 
-type FaceSurface = { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; signature: string };
+type FaceSurface = {
+  canvas: HTMLCanvasElement;
+  texture: THREE.CanvasTexture;
+  signature: string;
+  /** The front cover's material map (height, roughness, metalness); other faces have none. */
+  material?: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture };
+};
+
+/** A face-sized canvas texture, mipmapped like every page so it stays sharp when minified. */
+function faceTexture(scene: JourneyBook3dScene): { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture } {
+  const canvas = document.createElement("canvas");
+  const height = Math.min(FACE_TEXTURE_HEIGHT, scene.maxTextureSize);
+  canvas.height = height;
+  canvas.width = Math.round(height * BOOK_PAGE_RATIO);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.anisotropy = Math.min(4, scene.maxAnisotropy);
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.generateMipmaps = true;
+  return { canvas, texture };
+}
+
+function disposeSurface(surface: FaceSurface) {
+  surface.texture.dispose();
+  surface.material?.texture.dispose();
+}
 type Gesture = {
   pointerId: number;
   x: number;
@@ -292,7 +316,7 @@ export function JourneyBook3d({
     });
     const surfaces = surfacesRef.current;
     return () => {
-      for (const surface of surfaces.values()) surface.texture.dispose();
+      for (const surface of surfaces.values()) disposeSurface(surface);
       surfaces.clear();
       sceneRef.current = null;
       scene.dispose();
@@ -427,16 +451,11 @@ export function JourneyBook3d({
     let surface = surfacesRef.current.get(target);
     if (surface?.signature === signature) return;
     if (!surface) {
-      const canvas = document.createElement("canvas");
-      const height = Math.min(FACE_TEXTURE_HEIGHT, scene.maxTextureSize);
-      canvas.height = height;
-      canvas.width = Math.round(height * BOOK_PAGE_RATIO);
-      const texture = new THREE.CanvasTexture(canvas);
+      const { canvas, texture } = faceTexture(scene);
       texture.colorSpace = THREE.SRGBColorSpace;
-      texture.anisotropy = Math.min(4, scene.maxAnisotropy);
-      texture.minFilter = THREE.LinearMipmapLinearFilter;
-      texture.generateMipmaps = true;
       surface = { canvas, texture, signature: "" };
+      // Only the front cover gets the material map; its data stays linear.
+      if (target === 0 && page.kind === "cover") surface.material = faceTexture(scene);
       surfacesRef.current.set(target, surface);
     }
     const result = paintFace(surface.canvas, {
@@ -453,6 +472,11 @@ export function JourneyBook3d({
     surface.signature = signature;
     surface.texture.needsUpdate = true;
     scene.setFaceTexture(target, surface.texture);
+    if (surface.material) {
+      paintCoverMaterial(surface.material.canvas, { page, route: coverRoute });
+      surface.material.texture.needsUpdate = true;
+      scene.setCoverMaps(surface.material.texture);
+    }
     scene.textureUpdated();
     setOverflowFaces((previous) => {
       if (previous.has(target) === result.noteOverflow) return previous;
@@ -475,7 +499,8 @@ export function JourneyBook3d({
       const surface = surfacesRef.current.get(target);
       if (!surface) continue;
       scene.setFaceTexture(target, null);
-      surface.texture.dispose();
+      if (surface.material) scene.setCoverMaps(null);
+      disposeSurface(surface);
       surfacesRef.current.delete(target);
     }
   }, [faceCount, paint, spread]);
