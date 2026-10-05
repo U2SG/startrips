@@ -1606,6 +1606,10 @@ try {
         overlapsHeader: overlaps(box, headerBox),
         overlapsChrome: overlaps(box, chromeBox),
         overlapsScrubber: overlaps(box, scrubberBox),
+        // The card keeps one surface gap (`--mobile-surface-gap`, 8px) from
+        // the header block above and from the dock box below.
+        clearsHeaderByGap: Boolean(box && headerBox && box.top >= headerBox.bottom + 8 - 0.5),
+        clearsChromeByGap: Boolean(box && chromeBox && box.bottom <= chromeBox.top - 8 + 0.5),
       };
     });
     record(`${mobileCase.label} keeps expanded stay detail inside the usable mobile viewport`, { before, openBox, expanded }, Boolean(
@@ -1621,6 +1625,8 @@ try {
       && !expanded.overlapsHeader
       && !expanded.overlapsChrome
       && !expanded.overlapsScrubber
+      && expanded.clearsHeaderByGap
+      && expanded.clearsChromeByGap
       && expanded.childCount >= 8
       && expanded.childHeights.every((height) => height >= 44)
       && expanded.detail

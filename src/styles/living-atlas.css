@@ -277,6 +277,14 @@
   justify-content: space-between;
   background: var(--atlas-panel-solid);
 }
+
+/* The head stays pinned while the panel scrolls, so whatever is scrolled into
+   view (a focused control, or one reached from further down) stops below it
+   instead of behind it. The head is one control tall (its 关闭 button sets the
+   row), and 12px is the panel's own gap. */
+.route-candidate-editor__panel {
+  scroll-padding-top: calc(var(--control-height) + 12px);
+}
 .route-candidate-editor__shapes,
 .route-candidate-editor__candidates { display: grid; gap: 8px; }
 .route-candidate-editor__shapes > div { justify-content: space-between; }
@@ -6331,6 +6339,74 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   letter-spacing: 0.04em;
 }
 
+/* The coordinates and the media-coordinate provenance are reference detail,
+   not the reading of the point, so they wait behind one closed disclosure and
+   the card leads with its title, date, note, media and Story entry. */
+.living-atlas__route-point-context-location {
+  margin-top: 12px;
+  border-top: 1px solid var(--atlas-line);
+}
+
+.living-atlas__route-point-context-location > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--atlas-muted);
+  cursor: pointer;
+  font: 500 9px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.08em;
+  list-style: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.living-atlas__route-point-context-location > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A drawn chevron: down while closed, up while open. */
+.living-atlas__route-point-context-location > summary::after {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  rotate: 45deg;
+  translate: 0 -2px;
+  transition:
+    rotate var(--motion-instant, 120ms) var(--motion-ease-out, ease),
+    translate var(--motion-instant, 120ms) var(--motion-ease-out, ease);
+}
+
+.living-atlas__route-point-context-location[open] > summary::after {
+  rotate: 225deg;
+  translate: 0 2px;
+}
+
+.living-atlas__route-point-context-location > summary:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__route-point-context-location > summary:hover {
+    color: var(--atlas-text);
+  }
+}
+
+.living-atlas__route-point-context-location-facts {
+  display: grid;
+  gap: 3px;
+  padding-bottom: 10px;
+  color: var(--atlas-muted);
+  font: 500 9px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
 .living-atlas__route-point-context-reading-links {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6488,13 +6564,15 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   transform: none;
 }
 
+/* Compact: grows up from the dock and stops at the header block; anything
+   taller scrolls inside the card (the base rule owns the scroll). */
 .living-atlas[data-mobile-v2="on"] .living-atlas__route-point-context {
   top: auto;
   right: calc(env(safe-area-inset-right) + 12px);
-  bottom: calc(env(safe-area-inset-bottom) + 136px);
+  bottom: var(--mobile-surface-bottom);
   left: calc(env(safe-area-inset-left) + 12px);
   width: auto;
-  max-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 164px);
+  max-height: var(--mobile-surface-max-height);
   transform: none;
 }
 
@@ -6504,11 +6582,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 @media (orientation: landscape) and (max-height: 520px) {
   .living-atlas[data-mobile-v2="on"] .living-atlas__route-point-context {
-    /* Short landscape has two persistent chrome bands: the 56px header and
-       the 118px journey/timeline dock. Give both real geometry instead of
+    /* Short landscape has two persistent chrome bands, the header block and
+       the dock. The card takes the whole band between them instead of
        overlapping the lower dock and trying to win the pointer with z-index. */
-    top: calc(env(safe-area-inset-top) + 64px);
-    bottom: calc(env(safe-area-inset-bottom) + 136px);
+    top: var(--mobile-surface-top);
+    bottom: var(--mobile-surface-bottom);
     max-height: none;
     padding-block: 12px;
   }
@@ -6757,14 +6835,16 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     display: none;
   }
 
+  /* MapLibre's own controls clear the dock like every other compact surface
+     (the geometry tokens live with the compact shell rules below). */
   .detailed-earth-map .maplibregl-ctrl-bottom-right {
     right: calc(4px + env(safe-area-inset-right, 0px));
-    bottom: calc(94px + env(safe-area-inset-bottom, 0px));
+    bottom: var(--mobile-surface-bottom);
   }
 
   .detailed-earth-map .maplibregl-ctrl-bottom-left {
     left: calc(4px + env(safe-area-inset-left, 0px));
-    bottom: calc(74px + env(safe-area-inset-bottom, 0px));
+    bottom: var(--mobile-surface-bottom);
   }
 
   .living-atlas__header {
@@ -6917,8 +6997,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     font-size: 39px;
   }
 
+  /* A notice is a toast: it sits above the dock in both position and stacking,
+     and still below every overlay sheet. */
   .living-atlas__notice {
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    z-index: var(--z-chrome-100);
+    bottom: var(--mobile-surface-bottom);
     width: calc(100vw - 20px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
   }
 
@@ -8040,6 +8123,32 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 /* Mobile V2 — Earth-first / Journey-player. These surfaces are rendered only
    by the compact mobile branch in LivingAtlasApp, so desktop keeps its full
    atlas chrome and interaction model unchanged. */
+
+/* Compact chrome geometry. The header and the dock are the two persistent
+   bands of the compact Atlas, and every surface that floats between them
+   (context cards, the Home Base suggestion, notices, MapLibre's controls and
+   the scrub bubble) is bounded by these values, never by a copy of the
+   dock's height. They are declared on every Atlas root so that no consumer
+   can resolve an undefined value; only compact rules read them.
+   - Header block: safe area + 10px top padding + 44px controls + 8px bottom
+     padding, the compact header's own geometry just below.
+   - Dock: one card holding a 56px journey row and the time row under a
+     hairline frame, inset from the bottom edge.
+   - The max height is a share of the Atlas root, which is 100svh tall, and
+     never a viewport unit, so a card cannot reach past the header block on a
+     phone whose dynamic viewport is taller than its small one. */
+.living-atlas {
+  --mobile-header-block: calc(env(safe-area-inset-top, 0px) + 62px);
+  --mobile-surface-gap: 8px;
+  --mobile-dock-inset: 8px;
+  --mobile-dock-height: 104px;
+  --mobile-dock-journey-row: 56px;
+  --mobile-dock-block: calc(env(safe-area-inset-bottom, 0px) + var(--mobile-dock-inset) + var(--mobile-dock-height));
+  --mobile-surface-top: calc(var(--mobile-header-block) + var(--mobile-surface-gap));
+  --mobile-surface-bottom: calc(var(--mobile-dock-block) + var(--mobile-surface-gap));
+  --mobile-surface-max-height: calc(100% - var(--mobile-surface-top) - var(--mobile-surface-bottom));
+}
+
 .mobile-v2__header {
   position: absolute;
   z-index: var(--z-chrome-92);
@@ -8147,34 +8256,77 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   backdrop-filter: none;
 }
 
+/* The dock is one card: the journey row and the time row share one hairline,
+   one radius and one glass, with a hairline divider between them. The rows
+   are transparent, so no glass is stacked on glass.
+   The box keeps its height while a Route Point context hides the journey row.
+   ParticleEarthScene frames the globe between the header and this box, and
+   the route editor clears it, so a box that collapsed would re-aim the camera
+   whenever a point opened. Only the painted card shrinks to the time row,
+   and the rest of the box passes pointers through to the globe. */
 .mobile-v2__chrome {
   position: absolute;
   z-index: var(--z-chrome-90);
   right: calc(12px + env(safe-area-inset-right, 0px));
-  bottom: calc(env(safe-area-inset-bottom) + 8px);
+  bottom: calc(env(safe-area-inset-bottom) + var(--mobile-dock-inset));
   left: calc(12px + env(safe-area-inset-left, 0px));
-  height: 118px;
+  height: var(--mobile-dock-height);
   display: grid;
-  grid-template-rows: 62px 50px;
-  gap: 6px;
+  grid-template-rows: var(--mobile-dock-journey-row) minmax(0, 1fr);
+  padding: 1px;
   pointer-events: none;
+}
+
+/* The Atlas-wide `.living-atlas > *` pointer rule would otherwise make the
+   whole box, its unpainted part included, a dead zone over the globe. */
+.living-atlas[data-mobile-v2="on"] > .mobile-v2__chrome {
+  pointer-events: none;
+}
+
+.mobile-v2__chrome::before {
+  content: "";
+  position: absolute;
+  z-index: var(--z-content-minus-1);
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--journey-color) 26%, rgba(118, 198, 188, 0.18));
+  border-radius: 18px;
+  background: rgba(2, 10, 11, 0.72);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(18px) saturate(120%);
+}
+
+/* A Route Point context holds the journey slot, so the card is the time row
+   alone. The box itself does not move. */
+.mobile-v2__chrome:has(> .mobile-v2__journey-chip[hidden])::before {
+  top: var(--mobile-dock-journey-row);
+}
+
+/* Playback and point-picking hide the scrubber (their isolation rules above),
+   so the card frames the journey row alone, as the journey bar did before the
+   dock became one card. */
+.living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__chrome::before {
+  bottom: calc(100% - var(--mobile-dock-journey-row) - 2px);
+}
+
+/* An Atlas without a dock (no Journeys yet): surfaces only clear the home
+   indicator. */
+.living-atlas:not(:has(> .mobile-v2__chrome)) {
+  --mobile-dock-block: env(safe-area-inset-bottom, 0px);
 }
 
 .mobile-v2__journey-chip {
   width: 100%;
   min-width: 0;
-  height: 62px;
+  height: 100%;
   display: grid;
   grid-template-columns: 5px minmax(0, 1fr) 24px;
   align-items: center;
   gap: 10px;
   padding: 7px 12px 7px 8px;
-  border: 1px solid color-mix(in srgb, var(--journey-color) 26%, rgba(118, 198, 188, 0.18));
-  border-radius: 18px;
-  background: linear-gradient(115deg, rgba(3, 15, 16, 0.88), rgba(2, 9, 10, 0.72));
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+  border: 0;
+  border-radius: 17px 17px 0 0;
+  background: transparent;
   color: #edf7f2;
-  backdrop-filter: blur(18px) saturate(120%);
   pointer-events: auto;
   touch-action: pan-y;
   text-align: left;
@@ -8223,10 +8375,25 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   white-space: nowrap;
 }
 
+/* The time row keeps the second row even while the journey row is hidden, so
+   the scrubber never jumps. Its top edge is the card's divider. */
 .mobile-v2__timeline {
+  grid-row: 2;
   min-width: 0;
-  height: 50px;
+  min-height: 0;
+  border-top: 1px solid rgba(118, 198, 188, 0.1);
   pointer-events: auto;
+}
+
+.mobile-v2__journey-chip[hidden] + .mobile-v2__timeline {
+  border-top-color: transparent;
+}
+
+/* The row whose scrubber playback or point-picking has hidden stops taking
+   pointers, and its divider goes with it. */
+.living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__timeline {
+  border-top-color: transparent;
+  pointer-events: none;
 }
 
 .mobile-v2__timeline .globe-time-scrubber {
@@ -8234,24 +8401,62 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   z-index: var(--z-content-1);
   inset: auto;
   width: 100%;
-  height: 50px;
-  min-height: 50px;
+  height: 100%;
+  min-height: 0;
   transform: none;
-  gap: 10px;
+  gap: 8px;
   justify-content: stretch;
-  padding: 5px 10px;
-  border-radius: 17px;
-  background: rgba(2, 10, 11, 0.72);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
-  backdrop-filter: blur(16px) saturate(115%);
+  padding: 0 12px 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .mobile-v2__timeline .globe-time-scrubber__play {
+  position: relative;
+  isolation: isolate;
   width: var(--mobile-control-hit-size, 44px);
   height: var(--mobile-control-hit-size, 44px);
   flex: 0 0 var(--mobile-control-hit-size, 44px);
-  border-color: rgba(118, 198, 188, 0.24);
+}
+
+/* The play control keeps its 44px hit box; the visible disc is inset 4px so
+   it clears the divider and the card edge of the time row. Every state paints
+   the disc and never the hit box, hence the extra class in this selector: it
+   outranks the scrubber's own hover and pressed rules. */
+.mobile-v2__timeline .globe-time-scrubber .globe-time-scrubber__play {
+  border-color: transparent;
+  background: transparent;
+}
+
+.mobile-v2__timeline .globe-time-scrubber__play::before {
+  content: "";
+  position: absolute;
+  z-index: var(--z-content-minus-1);
+  inset: 4px;
+  border: 1px solid rgba(118, 198, 188, 0.24);
+  border-radius: 50%;
   background: rgba(6, 28, 27, 0.4);
+  transition:
+    border-color var(--motion-ui, 260ms) ease,
+    background-color var(--motion-ui, 260ms) ease;
+}
+
+.mobile-v2__timeline .globe-time-scrubber__play:is(.is-active, [aria-pressed="true"])::before {
+  border-color: var(--atlas-acid);
+}
+
+.mobile-v2__timeline .globe-time-scrubber__play:focus-visible {
+  outline-offset: -4px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mobile-v2__timeline .globe-time-scrubber__play:hover::before {
+    border-color: rgba(118, 227, 211, 0.62);
+    background: rgba(118, 227, 211, 0.08);
+  }
 }
 
 .mobile-v2__timeline .globe-time-scrubber__track-wrap {
@@ -8275,7 +8480,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   position: absolute;
   z-index: var(--z-content-3);
   right: 22px;
-  bottom: 126px;
+  bottom: calc(100% + var(--mobile-surface-gap));
   max-width: min(230px, 72vw);
   display: grid;
   gap: 3px;
@@ -8286,6 +8491,12 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
   backdrop-filter: blur(14px);
   pointer-events: none;
+}
+
+/* With the time row alone, the bubble rides just above that card, inside the
+   unpainted part of the box, instead of over the Route Point context. */
+.mobile-v2__chrome:has(> .mobile-v2__journey-chip[hidden]) > .mobile-v2__scrub-bubble {
+  bottom: calc(100% - var(--mobile-dock-journey-row) + var(--mobile-surface-gap));
 }
 
 .mobile-v2__scrub-bubble strong {
@@ -8712,15 +8923,23 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 }
 
+/* The narrowest phones give the card 4px more on each side and tighten the
+   two rows' inner columns; the rows keep their heights. */
 @media (max-width: 360px) {
   .mobile-v2__chrome {
-    right: 8px;
-    left: 8px;
+    right: calc(8px + env(safe-area-inset-right, 0px));
+    left: calc(8px + env(safe-area-inset-left, 0px));
   }
 
   .mobile-v2__journey-chip {
     grid-template-columns: 4px minmax(0, 1fr) 20px;
     gap: 8px;
+    padding-right: 10px;
+  }
+
+  .mobile-v2__timeline .globe-time-scrubber {
+    gap: 6px;
+    padding-right: 10px;
   }
 
   .mobile-v2__timeline .globe-time-scrubber__date {
@@ -8765,7 +8984,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    target. */
 .journey-share {
   position: fixed;
-  z-index: var(--z-chrome-60);
+  /* A modal dialog sits in the overlay band with the other modal dialogs and
+     sheets, so no Atlas chrome (header, dock, hero, cards) paints over it. */
+  z-index: var(--z-overlay-200);
   inset: 0;
   display: grid;
   place-items: center;
@@ -9076,16 +9297,25 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   border-color: rgba(226, 122, 122, 0.36);
 }
 
-@media (max-width: 760px), (max-height: 480px) {
-  .journey-share__dialog {
-    width: 100%;
-    padding: 16px;
-    gap: 14px;
-  }
+/* Compact layout (the `data-mobile-v2` contract, not a breakpoint of its own):
+   a full-width sheet anchored to the bottom edge and bounded by the header
+   block. It stays square and unshadowed like the rest of the phase E surface;
+   only its placement changes. The dialog scrolls inside itself and pads the
+   home indicator. */
+.living-atlas[data-mobile-v2="on"] .journey-share {
+  place-items: end stretch;
+  padding: var(--mobile-header-block) 0 0;
+}
 
-  .journey-share__selection ol {
-    max-height: 152px;
-  }
+.living-atlas[data-mobile-v2="on"] .journey-share__dialog {
+  width: 100%;
+  padding: 16px calc(16px + env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
+  gap: 14px;
+  overscroll-behavior: contain;
+}
+
+.living-atlas[data-mobile-v2="on"] .journey-share__selection ol {
+  max-height: 152px;
 }
 
 /* Organizing needs room for destinations, the sortable grid and undo. */
@@ -9224,13 +9454,15 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   line-height: 1.65;
 }
 
+/* Compact: grows up from the dock (or from the bottom edge in an Atlas with
+   no dock yet) and stops at the header block; the rest scrolls inside. */
 .living-atlas[data-mobile-v2="on"] .living-atlas__home-base-context {
   right: calc(12px + env(safe-area-inset-right, 0px));
-  bottom: calc(env(safe-area-inset-bottom) + 142px);
+  bottom: var(--mobile-surface-bottom);
   left: calc(12px + env(safe-area-inset-left, 0px));
   width: auto;
   border-radius: 16px;
-  max-height: calc(100dvh - env(safe-area-inset-bottom) - 166px);
+  max-height: var(--mobile-surface-max-height);
 }
 
 /* #496 / ST-138: the Atlas-level Everyday disclosure is independent of Home
@@ -9300,12 +9532,14 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   display: none;
 }
 
+/* Compact: drops from the header block it was opened from and stops one gap
+   above the dock; the rest scrolls inside. */
 .living-atlas[data-mobile-v2="on"] .living-atlas__everyday-context {
-  top: calc(env(safe-area-inset-top) + 70px);
+  top: var(--mobile-surface-top);
   right: calc(12px + env(safe-area-inset-right, 0px));
   left: calc(12px + env(safe-area-inset-left, 0px));
   width: auto;
-  max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 154px);
+  max-height: var(--mobile-surface-max-height);
   border-radius: 16px;
 }
 
@@ -9491,7 +9725,13 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 /* #232: the quiet Home Base suggestion beside the Atlas timeline.
    Deliberately a flow-level card rather than an overlay: it has no backdrop,
    no fixed positioning over the timeline and no focus trap, so the Atlas
-   behind it stays readable and clickable while the question goes unanswered. */
+   behind it stays readable and clickable while the question goes unanswered.
+   Its footprint is bounded so the timeline can reserve exactly that room. */
+.living-atlas {
+  --home-base-suggestion-offset: calc(env(safe-area-inset-bottom) + 26px);
+  --home-base-suggestion-max-height: min(42svh, 280px);
+}
+
 .living-atlas__home-base-suggestion {
   /* `.journey-timeline` is an opaque absolute layer at --z-surface-35, so the card
      sits above it at the foot of the same region rather than in page flow
@@ -9500,8 +9740,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   position: absolute;
   z-index: var(--z-surface-40);
   left: 50%;
-  bottom: calc(env(safe-area-inset-bottom) + 26px);
+  bottom: var(--home-base-suggestion-offset);
   width: min(520px, calc(100vw - 56px));
+  max-height: var(--home-base-suggestion-max-height);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 18px 20px;
   transform: translateX(-50%);
   border: 1px solid color-mix(in srgb, var(--atlas-cyan) 26%, var(--atlas-line));
@@ -9569,18 +9812,26 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   opacity: 0.55;
 }
 
+/* While the card sits at the foot of the desktop timeline, every year list
+   gains the card's footprint as room at its end, so its last Journeys can
+   scroll clear of the card instead of staying under it. */
+.living-atlas:has(> .living-atlas__home-base-suggestion[data-home-base-surface="timeline"]) .journey-timeline__year ol {
+  padding-bottom: calc(var(--home-base-suggestion-offset) + var(--home-base-suggestion-max-height));
+}
+
 /* Compact mobile has no desktop timeline view, so #232 lives in the native
-   planet state instead. Keep it above the 118px journey chrome without
-   covering that chrome: the question stays optional and the globe remains
-   directly interactive everywhere outside the card. */
+   planet state instead. It sits one gap above the dock without covering it:
+   the question stays optional and the globe remains directly interactive
+   everywhere outside the card. */
 .living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion {
   z-index: var(--z-chrome-85);
   right: calc(12px + env(safe-area-inset-right, 0px));
-  bottom: calc(env(safe-area-inset-bottom) + 142px);
+  bottom: var(--mobile-surface-bottom);
   left: calc(12px + env(safe-area-inset-left, 0px));
   width: auto;
-  max-height: min(48svh, 360px);
+  max-height: min(48svh, 360px, var(--mobile-surface-max-height));
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 14px;
   transform: none;
   border-radius: 16px;

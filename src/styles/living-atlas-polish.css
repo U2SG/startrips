@@ -140,12 +140,14 @@
 }
 
 /* --- Mobile V2: press feedback for the primary touch surfaces --- */
+/* The journey chip is a full row of the dock card, so it answers a press with
+   a tint inside the card rather than a scale that would pull it off the card. */
 .living-atlas .mobile-v2__journey-chip {
-  transition: transform var(--motion-micro) var(--motion-ease-out);
+  transition: background-color var(--motion-instant) var(--motion-ease-out);
 }
 
 .living-atlas .mobile-v2__journey-chip:active {
-  transform: scale(0.985);
+  background-color: rgba(118, 227, 211, 0.06);
 }
 
 .living-atlas .mobile-v2__sheet-actions button {

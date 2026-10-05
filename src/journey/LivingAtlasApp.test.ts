@@ -1031,12 +1031,47 @@ describe("Mobile V2 playback presentation", () => {
 
   it("keeps the persistent mobile chrome within the design budget and safe area", () => {
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
-    const mobileChrome = css.slice(
-      css.indexOf(".mobile-v2__chrome"),
-      css.indexOf(".mobile-v2__journey-chip"),
-    );
-    expect(mobileChrome).toContain("height: 118px;");
+    const dockStart = css.indexOf(".mobile-v2__chrome {");
+    const mobileChrome = css.slice(dockStart, css.indexOf("}", dockStart));
+    expect(dockStart).toBeGreaterThan(0);
+    // The dock is drawn from the same token every surface that clears it reads.
+    expect(mobileChrome).toContain("height: var(--mobile-dock-height);");
+    expect(mobileChrome).toContain("grid-template-rows: var(--mobile-dock-journey-row) minmax(0, 1fr);");
     expect(mobileChrome).toContain("env(safe-area-inset-bottom)");
+    const dockHeight = Number(css.match(/--mobile-dock-height:\s*(\d+)px;/)?.[1]);
+    const journeyRow = Number(css.match(/--mobile-dock-journey-row:\s*(\d+)px;/)?.[1]);
+    expect(dockHeight).toBeGreaterThan(0);
+    expect(dockHeight).toBeLessThanOrEqual(104);
+    expect(journeyRow).toBeGreaterThanOrEqual(56);
+    // The card's two hairlines and the divider come out of the same budget,
+    // and the time row under them still holds the 44px play control.
+    expect(dockHeight - journeyRow - 3).toBeGreaterThanOrEqual(44);
+  });
+
+  it("keeps the dock box still while a Route Point context hides the journey row", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const ruleOf = (selector: string) => {
+      const start = css.indexOf(`${selector} {`);
+      expect(start, selector).toBeGreaterThan(0);
+      return css.slice(start, css.indexOf("}", start));
+    };
+    // Only the painted card shrinks; the measured box keeps its height, so the
+    // globe framing and the route editor never see the dock move.
+    expect(ruleOf(".mobile-v2__chrome:has(> .mobile-v2__journey-chip[hidden])::before"))
+      .toContain("top: var(--mobile-dock-journey-row);");
+    // Playback and point-picking hide the scrubber: the card frames the
+    // journey row alone instead of leaving an empty time row behind.
+    expect(ruleOf(".living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__chrome::before"))
+      .toContain("bottom: calc(100% - var(--mobile-dock-journey-row) - 2px);");
+    expect(ruleOf(".living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__timeline"))
+      .toContain("pointer-events: none;");
+    expect(ruleOf(".mobile-v2__timeline")).toContain("grid-row: 2;");
+    expect(ruleOf('.living-atlas[data-mobile-v2="on"] > .mobile-v2__chrome')).toContain("pointer-events: none;");
+    expect(ruleOf(".mobile-v2__journey-chip")).toContain("pointer-events: auto;");
+    expect(ruleOf(".mobile-v2__timeline")).toContain("pointer-events: auto;");
+    // The rows are transparent inside the one glass card.
+    expect(ruleOf(".mobile-v2__journey-chip")).toContain("background: transparent;");
+    expect(ruleOf(".mobile-v2__timeline .globe-time-scrubber")).toContain("background: transparent;");
   });
 
   it("keeps the desktop playback chooser within short viewports", () => {
@@ -1302,6 +1337,67 @@ describe("Route Point context integration (#291)", () => {
     expect(rule).toContain("overscroll-behavior: contain;");
   });
 
+  it("keeps coordinates and their provenance behind a closed 位置详情 disclosure", () => {
+    // The always-visible facts are the date and the media count.
+    const factsStart = appSource.indexOf('<div className="living-atlas__route-point-context-facts">');
+    const facts = appSource.slice(factsStart, appSource.indexOf("</div>", factsStart));
+    expect(factsStart).toBeGreaterThan(0);
+    expect(facts).toContain("日期未记录");
+    expect(facts).toContain("仅文字记录");
+    expect(facts).not.toContain("路线点定位");
+    // Coordinates and the media-coordinate provenance wait in a native
+    // disclosure that renders closed.
+    const opening = '<details className="living-atlas__route-point-context-location">';
+    const detailsStart = appSource.indexOf(opening);
+    const details = appSource.slice(detailsStart, appSource.indexOf("</details>", detailsStart));
+    expect(detailsStart).toBeGreaterThan(factsStart);
+    expect(details).toContain("<summary>位置详情</summary>");
+    expect(details).toContain("路线点定位 · {context.location.latitude.toFixed(4)}");
+    expect(details).toContain("<span data-route-point-media-location-precision>");
+    // Readers keep the location attributes on the context root itself.
+    expect(appSource).toContain("data-location-precision={context.location.precision.kind}");
+    expect(appSource).toContain("data-location-source={context.location.precision.source ?? undefined}");
+    expect(appSource).toContain("data-location-accuracy-meters={context.location.precision.accuracyMeters ?? undefined}");
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const summaryStart = css.indexOf(".living-atlas__route-point-context-location > summary {");
+    expect(summaryStart).toBeGreaterThan(0);
+    expect(css.slice(summaryStart, css.indexOf("}", summaryStart))).toContain("min-height: 44px;");
+  });
+
+  it("bounds every compact context surface between the header block and the dock", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const ruleOf = (selector: string) => {
+      const start = css.indexOf(`${selector} {`);
+      expect(start, selector).toBeGreaterThan(0);
+      return css.slice(start, css.indexOf("}", start));
+    };
+    for (const selector of [
+      '.living-atlas[data-mobile-v2="on"] .living-atlas__route-point-context',
+      '.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-context',
+    ]) {
+      expect(ruleOf(selector), selector).toContain("bottom: var(--mobile-surface-bottom);");
+      expect(ruleOf(selector), selector).toContain("max-height: var(--mobile-surface-max-height);");
+    }
+    const everyday = ruleOf('.living-atlas[data-mobile-v2="on"] .living-atlas__everyday-context');
+    expect(everyday).toContain("top: var(--mobile-surface-top);");
+    expect(everyday).toContain("max-height: var(--mobile-surface-max-height);");
+    expect(css).toContain("--mobile-header-block: calc(env(safe-area-inset-top, 0px) + 62px);");
+    expect(css).toContain("--mobile-surface-top: calc(var(--mobile-header-block) + var(--mobile-surface-gap));");
+    // A share of the 100svh Atlas root, never a viewport unit.
+    expect(css).toContain("--mobile-surface-max-height: calc(100% - var(--mobile-surface-top) - var(--mobile-surface-bottom));");
+    // An Atlas with no dock yet only clears the home indicator.
+    expect(ruleOf(".living-atlas:not(:has(> .mobile-v2__chrome))"))
+      .toContain("--mobile-dock-block: env(safe-area-inset-bottom, 0px);");
+    // Notices clear the dock too, and stack above it but below the overlay sheets.
+    const notice = ruleOf("  .living-atlas__notice");
+    expect(notice).toContain("z-index: var(--z-chrome-100);");
+    expect(notice).toContain("bottom: var(--mobile-surface-bottom);");
+    // No compact surface keeps a literal copied from the old two-bar dock.
+    for (const literal of ["+ 136px", "+ 142px", "- 154px", "- 164px", "- 166px", "bottom: 126px;", "height: 118px;", "94px + env", "74px + env"]) {
+      expect(css, literal).not.toContain(literal);
+    }
+  });
+
   it("keeps stay children behind a separate explicit detail intent (#514)", () => {
     const projectionStart = appSource.indexOf("const selectedStaySummary = routePointContextSelection.context");
     const projection = appSource.slice(projectionStart, projectionStart + 2600);
@@ -1537,6 +1633,38 @@ describe("Mobile V2 particle-earth pointer ownership", () => {
     expect(css.slice(emptyRule, buttonRule)).toContain("pointer-events: none;");
     expect(css.slice(buttonRule, css.indexOf("}", buttonRule) + 1)).toContain("pointer-events: auto;");
   });
+
+  it("withholds the empty-state hero while a compact context surface owns the band", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    // The hero stays mounted, so its signature clip never replays when a card
+    // closes; it only yields while a card is open.
+    const heroStart = source.indexOf('{view === "planet" && journeys.length === 0 ? (');
+    expect(heroStart).toBeGreaterThan(0);
+    expect(source.slice(heroStart, source.indexOf("/>", heroStart))).toContain("yielded={compactContextSurfaceOpen}");
+    const surface = readFileSync(new URL("../brand/StartripsRecoverySurface.tsx", import.meta.url), "utf8");
+    expect(surface).toContain('data-recovery-yielded={yielded ? "true" : undefined}');
+    expect(surface).toContain("inert={yielded || undefined}");
+    expect(surface).toContain("aria-hidden={yielded || undefined}");
+    // Hidden without display:none or the hidden attribute, either of which
+    // would restart the surface's animations when it is shown again.
+    const recoveryCss = readFileSync(new URL("../styles/starlight-experience.css", import.meta.url), "utf8");
+    const yieldStart = recoveryCss.indexOf('.startrips-recovery-surface[data-recovery-yielded="true"] {');
+    expect(yieldStart).toBeGreaterThan(0);
+    const yieldRule = recoveryCss.slice(yieldStart, recoveryCss.indexOf("}", yieldStart));
+    expect(yieldRule).toContain("visibility: hidden;");
+    expect(yieldRule).not.toContain("display");
+    expect(surface).not.toMatch(/\shidden=/);
+    const start = source.indexOf("const compactContextSurfaceOpen = isMobileV2");
+    expect(start).toBeGreaterThan(0);
+    const definition = source.slice(start, source.indexOf(";", start));
+    expect(definition).toContain("homeBaseContextSurfaceVisible");
+    expect(definition).toContain("atlasEverydaySurfaceVisible");
+    expect(definition).toContain("routePointContextVisible");
+    // The cards render from the very same booleans, so the hero cannot drift
+    // from what is actually on screen.
+    expect(source).toContain("{homeBaseContextSurfaceVisible && homeBaseContext ? (");
+    expect(source).toContain("{atlasEverydaySurfaceVisible && everydayFragments ? (");
+  });
 });
 
 describe("railContentSignature (rail overflow hint freshness)", () => {
@@ -1652,10 +1780,31 @@ describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
       css.indexOf('.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion {'),
       css.indexOf('.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion h2'),
     );
-    expect(mobileRule).toContain("bottom: calc(env(safe-area-inset-bottom) + 142px)");
+    // One gap above the dock, from the shared compact geometry rather than a
+    // copy of the dock's height.
+    expect(mobileRule).toContain("bottom: var(--mobile-surface-bottom);");
+    expect(mobileRule).toContain("var(--mobile-surface-max-height)");
+    expect(css).toContain("--mobile-surface-bottom: calc(var(--mobile-dock-block) + var(--mobile-surface-gap));");
+    expect(css).toContain("--mobile-dock-block: calc(env(safe-area-inset-bottom, 0px) + var(--mobile-dock-inset) + var(--mobile-dock-height));");
     expect(mobileRule).toContain("left: calc(12px + env(safe-area-inset-left, 0px))");
     expect(mobileRule).toContain("right: calc(12px + env(safe-area-inset-right, 0px))");
     expect(mobileRule).not.toContain("position: fixed");
+  });
+
+  it("lets the last timeline Journeys scroll clear of the desktop suggestion", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const cardStart = css.indexOf(".living-atlas__home-base-suggestion {");
+    const card = css.slice(cardStart, css.indexOf("}", cardStart));
+    expect(card).toContain("bottom: var(--home-base-suggestion-offset);");
+    expect(card).toContain("max-height: var(--home-base-suggestion-max-height);");
+    expect(card).toContain("overflow-y: auto;");
+    const reserveStart = css.indexOf(
+      '.living-atlas:has(> .living-atlas__home-base-suggestion[data-home-base-surface="timeline"]) .journey-timeline__year ol {',
+    );
+    expect(reserveStart).toBeGreaterThan(0);
+    // The scrolling list owns the reserve: its end room is the card's whole footprint.
+    expect(css.slice(reserveStart, css.indexOf("}", reserveStart)))
+      .toContain("padding-bottom: calc(var(--home-base-suggestion-offset) + var(--home-base-suggestion-max-height));");
   });
 
   it("recomputes from the frozen inference core rather than holding its own thresholds", () => {
@@ -2182,5 +2331,33 @@ describe("ST-065 Home Base context ownership", () => {
     expect(homeBaseContextActivationAvailable({ ...available, playbackActive: true })).toBe(false);
     expect(homeBaseContextActivationAvailable({ ...available, playbackMenuActive: true })).toBe(false);
     expect(homeBaseContextActivationAvailable({ ...available, globePickActive: true })).toBe(false);
+  });
+});
+
+describe("#200 phase E owner share dialog placement", () => {
+  it("paints in the overlay band and takes its compact sheet from the shared contract", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const start = css.indexOf(".journey-share {");
+    expect(start).toBeGreaterThan(0);
+    // A modal dialog: no header, dock, hero or card paints over its edges.
+    expect(css.slice(start, css.indexOf("}", start))).toContain("z-index: var(--z-overlay-200);");
+    // The compact sheet keys off the published attribute, not a breakpoint of
+    // its own that a short desktop window would also match.
+    expect(css).not.toContain("@media (max-width: 760px), (max-height: 480px)");
+    const sheetStart = css.indexOf('.living-atlas[data-mobile-v2="on"] .journey-share {');
+    expect(sheetStart).toBeGreaterThan(start);
+    const sheet = css.slice(sheetStart, css.indexOf("}", sheetStart));
+    expect(sheet).toContain("place-items: end stretch;");
+    expect(sheet).toContain("padding: var(--mobile-header-block) 0 0;");
+    const dialogStart = css.indexOf('.living-atlas[data-mobile-v2="on"] .journey-share__dialog {');
+    const dialog = css.slice(dialogStart, css.indexOf("}", dialogStart));
+    expect(dialogStart).toBeGreaterThan(sheetStart);
+    expect(dialog).toContain("env(safe-area-inset-bottom, 0px)");
+    expect(dialog).toContain("overscroll-behavior: contain;");
+    // Placement only: the phase E surface stays square, flat and unshadowed.
+    for (const ornament of ["border-radius", "box-shadow", "backdrop-filter", "gradient"]) {
+      expect(sheet, ornament).not.toContain(ornament);
+      expect(dialog, ornament).not.toContain(ornament);
+    }
   });
 });

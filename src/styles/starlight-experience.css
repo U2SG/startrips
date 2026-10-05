@@ -245,6 +245,12 @@
 .living-atlas__empty.startrips-recovery-surface .startrips-recovery-surface__actions {
   pointer-events: auto;
 }
+/* Yielded: kept mounted so its clip never replays, and hidden without
+   display:none so nothing restarts when it returns. Hidden boxes take no
+   pointer hits, and the element is also inert and aria-hidden. */
+.startrips-recovery-surface[data-recovery-yielded="true"] {
+  visibility: hidden;
+}
 @media (max-width: 760px), (max-width: 960px) and (max-height: 480px) and (any-pointer: coarse) {
   .living-atlas.is-mobile-v2 .living-atlas__empty.startrips-recovery-surface {
     pointer-events: none;

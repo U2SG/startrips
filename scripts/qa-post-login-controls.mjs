@@ -168,6 +168,10 @@ async function verifyAtlasShell() {
           const root = document.querySelector(".living-atlas");
           const chrome = document.querySelector(".mobile-v2__chrome");
           const chromeRect = chrome?.getBoundingClientRect();
+          // The dock's own floors, apart from the header's: one card holding a
+          // >=56px journey row over a time row with a >=44px play control.
+          const dockPlayRect = document.querySelector(".mobile-v2__timeline .globe-time-scrubber__play")?.getBoundingClientRect();
+          const dockJourneyRowRect = document.querySelector(".mobile-v2__journey-chip")?.getBoundingClientRect();
           const primaryTouchTargets = [...document.querySelectorAll(
             ".mobile-v2__header button, .mobile-v2__timeline .globe-time-scrubber__play",
           )].map((element) => {
@@ -182,6 +186,8 @@ async function verifyAtlasShell() {
             mobileChip: document.querySelectorAll(".mobile-v2__journey-chip").length,
             mobileTimeline: document.querySelectorAll(".mobile-v2__timeline").length,
             chromeHeight: chromeRect ? Math.round(chromeRect.height) : null,
+            dockPlayTarget: dockPlayRect ? Math.min(dockPlayRect.width, dockPlayRect.height) : null,
+            dockJourneyRowHeight: dockJourneyRowRect ? Math.round(dockJourneyRowRect.height) : null,
             minPrimaryTouchTarget: primaryTouchTargets.length > 0 ? Math.min(...primaryTouchTargets) : null,
             // Beside the wordmark an owner's compact header holds at most three
             // icon controls (account, 记录新旅程, 更多); every other Atlas action
@@ -200,7 +206,11 @@ async function verifyAtlasShell() {
             || mobileShell.mobileChip !== 1
             || mobileShell.mobileTimeline !== 1
             || mobileShell.chromeHeight === null
-            || mobileShell.chromeHeight > 125
+            || mobileShell.chromeHeight > 104
+            || mobileShell.dockPlayTarget === null
+            || mobileShell.dockPlayTarget < 44
+            || mobileShell.dockJourneyRowHeight === null
+            || mobileShell.dockJourneyRowHeight < 56
             || mobileShell.minPrimaryTouchTarget === null
             || mobileShell.minPrimaryTouchTarget < 44
             || mobileShell.headerIconControls > 3
