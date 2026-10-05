@@ -457,13 +457,16 @@
   bottom: auto;
 }
 
-/* Its right edge sits on the account dock's 16px column. The open account menu
-   is an opaque panel above the map, dropping from that same edge and wider and
-   taller than the row, so it owns the whole row while open: no strip of the
-   last button is left beside it to catch a stray press. */
+/* The open account menu is an opaque panel above the map that drops over the
+   row's band from the same right edge, so it owns that region while open. The
+   row underneath steps out entirely rather than staying tabbable (or leaving
+   a strip of its last button pressable) behind the panel. */
+body:has(.account-dock.is-open) .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right {
+  visibility: hidden;
+}
+
 .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-group {
   display: flex;
-  margin-right: 16px;
 }
 
 .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-group button + button {

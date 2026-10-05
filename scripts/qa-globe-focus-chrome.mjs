@@ -686,10 +686,10 @@ const zoomRowClearOfPanel = (state) => Boolean(
 );
 
 /**
- * With the account menu open, the menu owns the zoom row's region: the row
- * sits wholly inside the opaque panel's box, and every button's centre and
- * the points 4px in from its corners resolve inside the panel, never to the
- * row or to the map beside it.
+ * With the account menu open, the menu owns the zoom row's region and the row
+ * steps out underneath it: every button is `visibility: hidden` and refuses
+ * programmatic focus (so Tab cannot land on a control nobody can see), none of
+ * its five points resolves to the row, and its centre resolves to the panel.
  */
 function readZoomRowUnderMenu(page) {
   return page.evaluate(() => {
@@ -702,12 +702,10 @@ function readZoomRowUnderMenu(page) {
       right: Math.round(rect.right),
       bottom: Math.round(rect.bottom),
     });
-    const g = group.getBoundingClientRect();
-    const p = panel.getBoundingClientRect();
-    return {
-      group: box(g),
-      panel: box(p),
-      contained: g.left >= p.left && g.right <= p.right && g.top >= p.top && g.bottom <= p.bottom,
+    const opener = document.activeElement;
+    const state = {
+      group: box(group.getBoundingClientRect()),
+      panel: box(panel.getBoundingClientRect()),
       buttons: [...group.querySelectorAll("button")].map((button) => {
         const rect = button.getBoundingClientRect();
         const points = [
@@ -723,17 +721,25 @@ function readZoomRowUnderMenu(page) {
           if (hit && button.contains(hit)) return "row";
           return hit instanceof Element ? hit.getAttribute("class") ?? hit.tagName : null;
         });
-        return { owners, menuOwned: owners.every((owner) => owner === "menu") };
+        button.focus();
+        const focusable = document.activeElement === button;
+        return {
+          visibility: getComputedStyle(button).visibility,
+          focusable,
+          owners,
+          withdrawn: owners[0] === "menu" && !owners.includes("row"),
+        };
       }),
     };
+    if (opener instanceof HTMLElement) opener.focus();
+    return state;
   });
 }
 
 const zoomRowOwnedByMenu = (state) => Boolean(
   state
-  && state.contained
   && state.buttons?.length > 0
-  && state.buttons.every((button) => button.menuOwned),
+  && state.buttons.every((button) => button.visibility === "hidden" && !button.focusable && button.withdrawn),
 );
 
 /** Wait out an entrance, bounded so a stuck one still reaches the record. */
@@ -1822,12 +1828,12 @@ try {
   }
 
   // 7c. The account menu against the zoom row. The menu is an opaque panel
-  //     above the map, dropping from the same 16px right edge as the row, so
-  //     while it is open it owns the row's whole region by design and the row
-  //     stays underneath. This runs on the real gateway (the bypass fixture
-  //     renders no dock): the row is clear and hit-testable with the menu
-  //     closed, the menu owns all five points of every button while open, and
-  //     the row owns them again once the menu closes.
+  //     above the map that drops over the row's band, so while it is open it
+  //     owns that region by design and the row steps out underneath. This runs
+  //     on the real gateway (the bypass fixture renders no dock): the row is
+  //     clear and hit-testable with the menu closed, hidden, unfocusable and
+  //     never hit while it is open, and owns all five points of every button
+  //     again once the menu closes.
   for (const viewport of [
     { name: "800x700", width: 800, height: 700 },
     { name: "1280x700", width: 1280, height: 700 },
