@@ -777,9 +777,6 @@ function JourneyBookPageContent({
               : <BookPicture asset={page.asset} read={read} onExpired={onExpired} onLoaded={onLoaded} />}
           </figure>
         ) : null}
-        {page.note && noteState !== "hidden" ? (
-          <RevealedNote text={page.note} settled={noteState === "settled"} collapsible={false} className="is-inline journey-book__cover-note" />
-        ) : null}
       </div>
     );
   }

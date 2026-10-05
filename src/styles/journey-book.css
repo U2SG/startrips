@@ -466,29 +466,6 @@
   background: none;
   color: inherit;
 }
-
-/* The Journey note sits along the cover's foot, between the mark and the plate. */
-.revealed-note.is-inline.journey-book__cover-note {
-  position: absolute;
-  right: 9.5%;
-  bottom: 7.3%;
-  left: 20%;
-}
-
-.has-plate > .revealed-note.is-inline.journey-book__cover-note {
-  right: 43%;
-}
-
-.journey-book__cover-note .revealed-note__text {
-  display: -webkit-box;
-  overflow: hidden;
-  font-size: max(11px, 2.2cqw);
-  line-height: 1.5;
-  opacity: 0.85;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-}
-
 .journey-book__page-note .revealed-note__text {
   font-size: max(15px, 3cqw);
   line-height: 1.8;

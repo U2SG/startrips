@@ -112,13 +112,13 @@ describe("coverRouteGeometry", () => {
 
 describe("coverDateLine", () => {
   it("adds the Route Point count only when there is one", () => {
-    expect(coverDateLine("2026-10-12 — 2026-10-14", 7)).toBe("2026-10-12 — 2026-10-14 · 7 个路线点");
+    expect(coverDateLine("2026-10-12 — 2026-10-14", 7)).toBe("2026-10-12 — 2026-10-14 · 7 个地点");
     expect(coverDateLine("2026-10-12", 0)).toBe("2026-10-12");
   });
 
   it("keeps one line by dropping the count when the full line does not fit", () => {
     const fitsUpTo = (max: number) => (line: string) => line.length <= max;
-    expect(fitCoverDateLine("2026-10-12", 7, fitsUpTo(40))).toBe("2026-10-12 · 7 个路线点");
+    expect(fitCoverDateLine("2026-10-12", 7, fitsUpTo(40))).toBe("2026-10-12 · 7 个地点");
     expect(fitCoverDateLine("2026-10-12", 7, fitsUpTo(12))).toBe("2026-10-12");
     expect(fitCoverDateLine("2026-10-12", 0, fitsUpTo(4))).toBe("2026-10-12");
     expect(coverDateLine("2026-10-12", 7)).toBe("2026-10-12" + coverDateCount(7));

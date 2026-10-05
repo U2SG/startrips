@@ -103,7 +103,7 @@ function pageAsset(page: JourneyBookPage | undefined): JourneyMediaAsset | null 
 }
 
 function pageNote(page: JourneyBookPage | undefined): string | null {
-  if (page?.kind === "media" || page?.kind === "cover" || page?.kind === "note") return page.note;
+  if (page?.kind === "media" || page?.kind === "note") return page.note;
   return null;
 }
 
@@ -804,7 +804,7 @@ export function JourneyBook3d({
   const readable = visibleFaces.map((target) => {
     const page = pages[target];
     if (!page) return "";
-    if (page.kind === "cover") return [journey.title, journeyRange(journey), page.note].filter(Boolean).join("。");
+    if (page.kind === "cover") return [journey.title, journeyRange(journey)].filter(Boolean).join("。");
     if (page.kind === "media" || page.kind === "note") return [page.routePoint?.label, page.note].filter(Boolean).join("。");
     return "";
   }).filter(Boolean).join(" ");

@@ -1480,6 +1480,9 @@ const BOOK_3D_QA_ROUTE: [number, number][] = [
 ];
 const book3dQaJourney: Journey = {
   ...storyQaJourney,
+  // The lane's sheet count is fixed (40 sheets, 80 faces); a Journey note
+  // would add its own first page.
+  note: "",
   routePoints: BOOK_3D_QA_ROUTE.map(([latitude, longitude], index) => ({
     ...storyQaJourney.routePoints[0],
     id: `00000000-0000-4000-8000-${String(4900 + index).padStart(12, "0")}`,

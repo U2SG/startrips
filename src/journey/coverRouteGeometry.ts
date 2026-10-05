@@ -154,7 +154,7 @@ function round(value: number): number {
 /** The cover's line under the title: dates, then the Route Point count when there is one. */
 /** The Route Point count after the dates, or "" when there is none. */
 export function coverDateCount(routePointCount: number): string {
-  return routePointCount > 0 ? ` · ${routePointCount} 个路线点` : "";
+  return routePointCount > 0 ? ` · ${routePointCount} 个地点` : "";
 }
 
 export function coverDateLine(dates: string, routePointCount: number): string {

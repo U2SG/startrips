@@ -127,7 +127,9 @@ describe("journeyBookPages", () => {
     const pages = journeyBookPages(journey);
     expect(shape(pages)).toEqual(["cover", "media:intro", "media:photo-a", "end"]);
     // #555: the cover is a presentation copy; the asset keeps its own page.
-    expect(pages[0]).toMatchObject({ kind: "cover", note: "整段旅程的感想", asset: { id: "photo-a" } });
+    expect(pages[0]).toMatchObject({ kind: "cover", asset: { id: "photo-a" } });
+    expect(pages[0]).not.toHaveProperty("note");
+    expect(pages[1]).toMatchObject({ kind: "note", routePoint: null, note: "整段旅程的感想" });
   });
 
   it("never pages a soundtrack", () => {

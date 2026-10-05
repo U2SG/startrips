@@ -11,7 +11,7 @@ import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
  * page. Order follows the canonical Route order; media keeps its owner order.
  */
 export type JourneyBookPage =
-  | { kind: "cover"; key: string; asset: JourneyMediaAsset | null; note: string | null }
+  | { kind: "cover"; key: string; asset: JourneyMediaAsset | null }
   | { kind: "media"; key: string; asset: JourneyMediaAsset; routePoint: RoutePoint | null; note: string | null }
   | { kind: "note"; key: string; routePoint: RoutePoint | null; note: string }
   | { kind: "blank"; key: string }
@@ -73,10 +73,12 @@ function ownerPages(
 
 export function journeyBookPages(journey: Journey): JourneyBookPage[] {
   const journeyNote = trimmedNote(journey.note);
-  const pages: JourneyBookPage[] = [{ kind: "cover", key: "cover", asset: coverAsset(journey), note: journeyNote }];
-  // The cover presents the Journey note; Journey-level media follows without
-  // repeating it. The cover asset is a presentation copy (#555): it still
-  // appears at its own position with its own point's note.
+  const pages: JourneyBookPage[] = [{ kind: "cover", key: "cover", asset: coverAsset(journey) }];
+  // The Journey note opens the book on its own first page, never on the
+  // cover; Journey-level media follows without repeating it. The cover asset
+  // is a presentation copy (#555): it still appears at its own position with
+  // its own point's note.
+  if (journeyNote) pages.push({ kind: "note", key: "note:journey", routePoint: null, note: journeyNote });
   pages.push(...ownerPages(ownerMedia(journey, null), null, null));
   for (const point of journey.routePoints) {
     pages.push(...ownerPages(ownerMedia(journey, point.id), point, trimmedNote(point.note)));

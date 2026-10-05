@@ -273,7 +273,6 @@ const COVER = {
   datesSize: 0.022,
   mark: { width: 0.0675, height: 0.05 },
   plate: { width: 0.3, height: 0.187, mount: 0.01 },
-  note: { left: 0.2, rightWithPlate: 0.43, size: 0.022, maxHeight: 0.187 },
 } as const;
 
 /** Raster height of the mark; it is drawn at about a tenth of this. */
@@ -386,8 +385,8 @@ function drawCoverRoute(context: CanvasRenderingContext2D, route: CoverRouteGeom
 
 /**
  * The front cover, "route deboss": title and dates top left, the Route across
- * the middle, the embossed mark and a tipped-in plate along the foot, the
- * Journey note between them. Returns the note's reveal length and overflow.
+ * the middle, the embossed mark and a tipped-in plate along the foot. The
+ * Journey note is on the book's first page, never on the cover.
  */
 function paintCover(context: CanvasRenderingContext2D, width: number, height: number, input: PaintInput, scale: number): PaintResult {
   const page = input.page as Extract<JourneyBookPage, { kind: "cover" }>;
@@ -452,14 +451,7 @@ function paintCover(context: CanvasRenderingContext2D, width: number, height: nu
     }, scale);
   }
 
-  if (!page.note) return { noteLength: 0, noteOverflow: false };
-  const noteLeft = width * COVER.note.left;
-  const noteWidth = width * (1 - (page.asset ? COVER.note.rightWithPlate : COVER.inset)) - noteLeft;
-  const noteSize = Math.round(width * COVER.note.size);
-  const block = fitText(context, page.note, noteWidth, height * COVER.note.maxHeight, noteSize, Math.round(noteSize * 0.85), 1.5);
-  context.fillStyle = "rgb(242 239 223 / 0.85)";
-  drawRevealed(context, block, noteLeft, foot - block.lines.length * block.lineHeight, input.revealed, "left", noteWidth);
-  return { noteLength: graphemes(block.lines.join("")).length, noteOverflow: block.overflow };
+  return { noteLength: 0, noteOverflow: false };
 }
 
 export type PaintResult = {
