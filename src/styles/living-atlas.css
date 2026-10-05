@@ -1571,10 +1571,12 @@ button.living-atlas-globe__pick {
 
 /* The card content opens the Story, but the hit area stops before the
    right-edge action so the two buttons never share geometry: an absolutely
-   positioned grid child placed in column 1 takes that column as its box. */
+   positioned grid child placed between column lines 1 and 2 takes that column
+   as its box. Both lines are named, because an `auto` end line would resolve
+   to the card's padding edge instead of spanning one column. */
 .journey-timeline__hit-area {
   position: absolute;
-  grid-column: 1;
+  grid-column: 1 / 2;
   inset: 0;
   z-index: var(--z-content-1);
   border: 0;
