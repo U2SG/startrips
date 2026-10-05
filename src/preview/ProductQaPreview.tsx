@@ -1466,13 +1466,30 @@ function RecoverySurfaceQaPreview() {
 /**
  * 3D Journey Book QA: a deep book, so the stacks either side of the spine are
  * thick enough to expose the table and tilt regressions. Cover + 78 pictures +
- * back cover = 80 faces, 40 sheets; the Route Point has no note, so it adds no
- * page. The QA lane serves the checked-in artworks for these assets.
+ * back cover = 80 faces, 40 sheets; the Route Points have no note and no media,
+ * so they add no page, and give the cover a real Route to deboss. The QA lane
+ * serves the checked-in artworks for these assets.
  */
 const BOOK_3D_QA_PICTURES = 78;
+const BOOK_3D_QA_ROUTE: [number, number][] = [
+  [1.290256, 103.851471],
+  [1.2816, 103.8636],
+  [1.3008, 103.9122],
+  [1.3236, 103.9568],
+  [1.3644, 103.9915],
+];
 const book3dQaJourney: Journey = {
   ...storyQaJourney,
-  routePoints: storyQaJourney.routePoints.map((point) => ({ ...point, note: null })),
+  routePoints: BOOK_3D_QA_ROUTE.map(([latitude, longitude], index) => ({
+    ...storyQaJourney.routePoints[0],
+    id: `00000000-0000-4000-8000-${String(4900 + index).padStart(12, "0")}`,
+    sortOrder: index,
+    latitude,
+    longitude,
+    label: index === 0 ? storyQaJourney.routePoints[0].label : "",
+    isStop: index === 0,
+    note: null,
+  })),
   media: Array.from({ length: BOOK_3D_QA_PICTURES }, (_, index) => ({
     ...storyQaJourney.media[0],
     id: `00000000-0000-4000-8000-${String(5000 + index).padStart(12, "0")}`,

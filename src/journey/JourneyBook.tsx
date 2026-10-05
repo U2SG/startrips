@@ -10,7 +10,16 @@ import {
   IconPlayerPlay,
   IconX,
 } from "@tabler/icons-react";
+import { STARTRIPS_V12_MARK_MARKUP, STARTRIPS_V12_MARK_VIEWBOX } from "../brand/startripsV12Mark";
 import { onMotionPreferenceChange, prefersReducedMotion } from "../motion/preferences";
+import {
+  COVER_ROUTE_ASPECT,
+  COVER_ROUTE_BAND,
+  COVER_ROUTE_STROKE,
+  coverDateLine,
+  coverRouteGeometry,
+  coverRouteSvgPath,
+} from "./coverRouteGeometry";
 import { useAtlasView } from "./atlasView";
 import { journeySoundtrack } from "./journeyModel";
 import {
@@ -748,9 +757,19 @@ function JourneyBookPageContent({
   const read = near ? pageRead : undefined;
   if (page.kind === "cover") {
     return (
-      <div className="journey-book__sheet journey-book__sheet--cloth">
-        <h1 className="journey-book__cover-title">{journey.title}</h1>
-        <p className="journey-book__cover-dates">{journeyRange(journey)}</p>
+      <div className={`journey-book__sheet journey-book__sheet--cloth journey-book__sheet--cover${page.asset ? " has-plate" : ""}`}>
+        <header className="journey-book__cover-head">
+          <h1 className="journey-book__cover-title">{journey.title}</h1>
+          <p className="journey-book__cover-dates">{coverDateLine(journeyRange(journey), journey.routePoints.length)}</p>
+        </header>
+        <CoverRoute routePoints={journey.routePoints} />
+        <svg
+          className="journey-book__cover-mark"
+          viewBox={STARTRIPS_V12_MARK_VIEWBOX}
+          aria-hidden="true"
+          focusable="false"
+          dangerouslySetInnerHTML={{ __html: STARTRIPS_V12_MARK_MARKUP }}
+        />
         {page.asset ? (
           <figure className="journey-book__cover-plate">
             {isVideo(page.asset)
@@ -813,6 +832,43 @@ function JourneyBookPageContent({
       {page.routePoint?.label ? <span className="journey-book__caption">{page.routePoint.label}</span> : null}
       <span className="journey-book__folio" aria-label={pageLabel(page, index, count)}>{index}</span>
     </div>
+  );
+}
+
+/** Band units: the SVG is drawn in a 100-unit-high box of the band's aspect. */
+const COVER_BAND_HEIGHT = 100;
+const COVER_BAND_WIDTH = COVER_ROUTE_ASPECT * COVER_BAND_HEIGHT;
+/** Band units per cover width, for the stroke sizes given as fractions of it. */
+const COVER_UNITS = COVER_BAND_WIDTH / COVER_ROUTE_BAND.width;
+
+/** The Journey's Route, blind-debossed into the cover cloth (start dark, end foil). */
+function CoverRoute({ routePoints }: { routePoints: Journey["routePoints"] }) {
+  const geometry = useMemo(() => coverRouteGeometry(routePoints), [routePoints]);
+  if (geometry.kind === "none") return null;
+  const d = coverRouteSvgPath(geometry, COVER_BAND_WIDTH, COVER_BAND_HEIGHT);
+  const offset = -COVER_ROUTE_STROKE.highlightOffset * COVER_UNITS;
+  const square = (vec: { x: number; y: number }, size: number) => ({
+    x: vec.x * COVER_BAND_WIDTH - (size * COVER_UNITS) / 2,
+    y: vec.y * COVER_BAND_HEIGHT - (size * COVER_UNITS) / 2,
+    width: size * COVER_UNITS,
+    height: size * COVER_UNITS,
+  });
+  return (
+    <svg className="journey-book__cover-route" viewBox={`0 0 ${COVER_BAND_WIDTH} ${COVER_BAND_HEIGHT}`} aria-hidden="true" focusable="false">
+      {geometry.kind === "path" ? (
+        <>
+          <path className="journey-book__cover-route-deboss" d={d} strokeWidth={COVER_ROUTE_STROKE.deboss * COVER_UNITS} />
+          <path
+            className="journey-book__cover-route-highlight"
+            d={d}
+            strokeWidth={COVER_ROUTE_STROKE.highlight * COVER_UNITS}
+            transform={`translate(${offset} ${offset})`}
+          />
+          <rect className="journey-book__cover-route-start" {...square(geometry.start, COVER_ROUTE_STROKE.start)} />
+        </>
+      ) : null}
+      <rect className="journey-book__cover-route-end" {...square(geometry.end, COVER_ROUTE_STROKE.end)} />
+    </svg>
   );
 }
 
