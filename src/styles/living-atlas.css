@@ -6182,20 +6182,29 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   padding-right: 48px;
 }
 
-.living-atlas__route-point-context-close {
+/* A quiet icon circle. `button` lifts the selector over the shell's ink
+   default, which the muted tint used to lose to. */
+button.living-atlas__route-point-context-close {
   position: absolute;
   top: -8px;
   right: -8px;
-  width: 44px;
-  height: 44px;
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-muted);
+  color: var(--control-muted);
   cursor: pointer;
+  transition: scale var(--motion-instant) var(--motion-ease-out);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :is(button.living-atlas__route-point-context-close, button.living-atlas__route-point-context-entry):active:not(:disabled) {
+    scale: 0.97;
+  }
 }
 
 .living-atlas__route-point-context-close:focus-visible {
@@ -6287,17 +6296,28 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   column-gap: 8px;
   align-items: center;
   padding: 7px 10px;
-  border: 1px solid rgba(118, 198, 188, 0.12);
-  border-radius: 11px;
-  background: rgba(118, 227, 211, 0.025);
-  color: var(--atlas-text);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-tile);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
   text-align: left;
 }
 
+/* The stay summary's own text actions are pills; the records are tiles. */
+.living-atlas__route-point-context-switcher > button {
+  display: flex;
+  padding: 0 var(--control-pad-x);
+  border-radius: var(--control-radius);
+}
+
+.living-atlas__route-point-context-switcher button:active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
 .living-atlas__route-point-context-switcher button[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 32%, transparent);
-  background: color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 9%, transparent);
+  border-color: var(--control-select);
+  background: color-mix(in srgb, var(--control-select) 12%, transparent);
 }
 
 .living-atlas__route-point-context-switcher button > span {
@@ -6371,21 +6391,25 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   object-fit: cover;
 }
 
-.living-atlas__route-point-context-entry {
+/* The card's one acid primary (the desktop Journey card is hidden while this
+   card shows). `button` lifts it over the shell's type and ink defaults. */
+button.living-atlas__route-point-context-entry {
   width: 100%;
-  min-height: 44px;
+  min-height: var(--control-height);
   margin-top: 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  border-radius: 999px;
-  background: rgba(118, 227, 211, 0.06);
-  color: var(--atlas-text);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-primary);
+  border-radius: var(--control-radius);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
   cursor: pointer;
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: var(--control-font-size);
+  font-weight: 600;
+  letter-spacing: var(--control-tracking);
+  transition: scale var(--motion-instant) var(--motion-ease-out);
 }
 
 /* The coordinates and the media-coordinate provenance are reference detail,
@@ -6470,7 +6494,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   align-content: center;
   padding: 8px 10px;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-tile);
   background: rgba(255, 255, 255, 0.035);
   color: var(--atlas-text);
   cursor: pointer;
@@ -10286,8 +10310,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 /* #375: media belongs to the Route Point it was taken at. A full-width
-   secondary pill whose transparent file input covers the whole pill. */
-.journey-route-draft__media-upload {
+   secondary pill whose transparent file input covers the whole pill. The
+   Composer's `label` grid and `label > span` caption rules would otherwise
+   stack the icon over the text and grey the label. */
+.journey-composer label.journey-route-draft__media-upload {
   position: relative;
   min-height: var(--control-height);
   display: flex;
@@ -10300,6 +10326,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   background: var(--control-fill);
   color: var(--control-ink);
   font-size: 11px;
+}
+
+.journey-composer .journey-route-draft__media-upload > span {
+  color: var(--control-ink);
 }
 
 .journey-route-draft__media-upload:has(input:focus-visible) {
