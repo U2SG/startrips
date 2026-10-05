@@ -443,6 +443,24 @@
   box-shadow: none;
 }
 
+/* Desktop: the group is one row ending 10px above the Journey card's top edge
+   (the card's own clamp, below the 82px header). The card only grows downward,
+   to the window's foot when its playback chooser opens, so the two never meet
+   at any window height. */
+.living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right {
+  top: calc(clamp(172px, 22vh, 232px) - var(--control-height) - 12px);
+  bottom: auto;
+}
+
+.living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-group {
+  display: flex;
+}
+
+.living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-group button + button {
+  border-top: 0;
+  border-left: 1px solid var(--control-line);
+}
+
 .detailed-earth-map .maplibregl-ctrl-icon {
   filter: invert(86%) sepia(10%) saturate(404%) hue-rotate(112deg) brightness(86%);
 }
@@ -8671,13 +8689,14 @@ button.living-atlas__globe-focus-exit {
   animation: atlasSheetIn var(--motion-ui) var(--motion-ease-out) backwards;
 }
 
+/* A 36px bar in a 44px box; the negative margins keep the sheet's rhythm. */
 .mobile-v2__sheet-handle,
 .mobile-v2__more-handle {
   width: 70px;
-  height: 30px;
+  height: var(--mobile-control-hit-size, 44px);
   display: grid;
   place-items: center;
-  margin: 0 auto 2px;
+  margin: -6px auto -4px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -8921,12 +8940,6 @@ button.living-atlas__globe-focus-exit {
      scroll inside the journey sheet's 72svh cap. */
   max-height: calc(100svh - env(safe-area-inset-top, 0px) - 12px);
   color: rgba(226, 240, 234, 0.9);
-}
-
-/* Same bar and rhythm as the journey sheet's handle, in a 44px box. */
-.mobile-v2__more-handle {
-  height: var(--mobile-control-hit-size, 44px);
-  margin: -6px auto -4px;
 }
 
 .mobile-v2__more-heading {

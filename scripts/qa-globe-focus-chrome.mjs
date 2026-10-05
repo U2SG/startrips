@@ -1515,6 +1515,73 @@ try {
       await page.close();
     }
   }
+
+  // 7. The detail map's zoom group never meets the desktop Journey card. The
+  //    card grows down to the window's foot when its playback chooser opens,
+  //    so a short window is graded with the chooser closed and open: no
+  //    intersection, on screen, 44px buttons, each one hit-testable.
+  {
+    const viewport = { name: "1280x700", width: 1280, height: 700 };
+    const { page, pageErrors } = await openAtlas(viewport);
+    try {
+      await activateDiveIntent(page);
+      const measure = () => page.evaluate(() => {
+        const group = document.querySelector(".detailed-earth-map .maplibregl-ctrl-group");
+        const card = document.querySelector(".living-atlas__active");
+        if (!group || !card) return null;
+        const box = (element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            left: Math.round(rect.left),
+            top: Math.round(rect.top),
+            right: Math.round(rect.right),
+            bottom: Math.round(rect.bottom),
+          };
+        };
+        const a = group.getBoundingClientRect();
+        const b = card.getBoundingClientRect();
+        return {
+          group: box(group),
+          card: box(card),
+          cardVisible: b.width > 0 && b.height > 0,
+          intersects: a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top,
+          onScreen: a.left >= 0 && a.top >= 0 && a.right <= innerWidth && a.bottom <= innerHeight,
+          buttons: [...group.querySelectorAll("button")].map((button) => {
+            const rect = button.getBoundingClientRect();
+            const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+            return {
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+              hitOwned: hit === button || Boolean(hit && button.contains(hit)),
+            };
+          }),
+        };
+      });
+      const chooserClosed = await measure();
+      await page.locator(".living-atlas__active-play").click();
+      await page.locator(".living-atlas__playback-mode-menu").waitFor({ state: "visible", timeout: 5_000 });
+      await settle(page);
+      const chooserOpen = await measure();
+      const clear = (state) => Boolean(
+        state
+        && state.cardVisible
+        && !state.intersects
+        && state.onScreen
+        && state.buttons.length > 0
+        && state.buttons.every((button) => button.width >= 44 && button.height >= 44 && button.hitOwned),
+      );
+      record({
+        name: "detail-zoom-group-clears-the-journey-card",
+        viewport: viewport.name,
+        chooserClosed,
+        chooserOpen,
+        pageErrors,
+        failed: !clear(chooserClosed) || !clear(chooserOpen) || pageErrors.length > 0,
+      });
+    } finally {
+      await page.close();
+    }
+  }
 } catch (error) {
   // The accumulated checks are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439). Print first, then rethrow so

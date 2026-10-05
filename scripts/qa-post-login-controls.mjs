@@ -1872,6 +1872,11 @@ async function verifyAccountDock() {
             const buttonRect = button.getBoundingClientRect();
             return { width: Math.round(buttonRect.width), height: Math.round(buttonRect.height) };
           }),
+          // The sheet's grabber is a 44px tap-to-close box.
+          handleHeight: (() => {
+            const handle = element.querySelector(".account-sheet__handle");
+            return handle ? Math.round(handle.getBoundingClientRect().height) : null;
+          })(),
         };
       });
       // Every account action keeps a 44px box on the desktop dock too.
@@ -1880,7 +1885,8 @@ async function verifyAccountDock() {
         || panelMetrics.viewportOverflowY > 0
         || panelMetrics.overflowX > 0
         || panelMetrics.overflowY > 0
-        || panelMetrics.buttons.some((button) => button.height < minimumButtonHeight);
+        || panelMetrics.buttons.some((button) => button.height < minimumButtonHeight)
+        || (mobile && (panelMetrics.handleHeight === null || panelMetrics.handleHeight < 44));
       results.push({
         name: `account-${label}-panel`,
         ...panelMetrics,

@@ -1181,12 +1181,14 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
   animation: atlasSheetIn var(--motion-ui) var(--motion-ease-out) backwards;
 }
 
+/* The same 36px bar in a 44px box; the negative margins keep the sheet's
+   rhythm, as the 更多 sheet's handle does. */
 .account-sheet__handle {
   width: 70px;
-  height: 30px;
+  height: var(--control-height);
   display: grid;
   place-items: center;
-  margin: 0 auto 4px;
+  margin: -6px auto -4px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1366,15 +1368,19 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
     border-color var(--motion-instant) ease-out;
 }
 
-/* A form's own action is a secondary pill with a strong hairline, not acid:
-   #628 took the acid out of the account panel. */
-.account-sheet__form > button,
+/* Owner decision (2026-10-05), superseding #628's acid-free panel: each
+   account form's submit is its one acid primary; the password panel's
+   link-only state marks its single action with the family's primary class.
+   Every other action stays a secondary pill. */
+.account-sheet__form > button:is([type="submit"], .st-btn--primary),
 .account-sheet__form form > button[type="submit"] {
-  border-color: var(--control-line-strong);
+  border-color: var(--control-primary);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
   font-weight: 600;
 }
 
-.account-sheet__form button:active:not(:disabled) {
+.account-sheet__form button:not([type="submit"], .st-btn--primary):active:not(:disabled) {
   background-color: var(--control-fill-press);
 }
 
@@ -1398,8 +1404,12 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  :is(.account-dock > .account-dock__tab, .account-sheet__form button):hover:not(:disabled) {
+  :is(.account-dock > .account-dock__tab, .account-sheet__form button:not([type="submit"], .st-btn--primary)):hover:not(:disabled) {
     border-color: var(--control-line-strong);
+  }
+
+  .account-sheet__form button:is([type="submit"], .st-btn--primary):hover:not(:disabled) {
+    opacity: 0.9;
   }
 }
 
