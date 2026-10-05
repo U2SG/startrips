@@ -157,6 +157,8 @@ async function verifyAtlasShell() {
       ["landscape-932", 932, 430, true],
       ["wide-short-touch", 1200, 450, false],
       ["tablet", 768, 1024, false],
+      ["desktop-1280", 1280, 800, false],
+      ["desktop-1440", 1440, 900, false],
     ]) {
       await page.setViewportSize({ width, height });
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -268,6 +270,49 @@ async function verifyAtlasShell() {
           failed: wideShortShell.mobileV2 === "on"
             || wideShortShell.desktopHeader !== 1
             || wideShortShell.mobileChip !== 0,
+        });
+        continue;
+      }
+
+      // The centred header nav takes its content width: no label may wrap and
+      // the nav may not touch the brand block, whose text shows above 1300px.
+      if (label.startsWith("desktop-")) {
+        await clickText(page, "地球");
+        await page.locator(".living-atlas__active").waitFor({ state: "visible" });
+        const header = await page.evaluate(() => {
+          const brand = document.querySelector(".living-atlas__brand")?.getBoundingClientRect();
+          const nav = document.querySelector(".living-atlas__header nav")?.getBoundingClientRect();
+          const labels = [...document.querySelectorAll(".living-atlas__header nav button")].map((button) => {
+            // A wrapped label has text fragments on more than one line.
+            const lineTops = new Set();
+            for (const node of button.childNodes) {
+              if (node.nodeType !== Node.TEXT_NODE || !node.textContent?.trim()) continue;
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) {
+                if (rect.width > 0) lineTops.add(Math.round(rect.top));
+              }
+            }
+            return { label: button.textContent?.trim() ?? "", lines: lineTops.size };
+          });
+          return {
+            brandNavOverlap: brand && nav
+              ? Math.round(
+                Math.max(0, Math.min(brand.right, nav.right) - Math.max(brand.left, nav.left))
+                * Math.max(0, Math.min(brand.bottom, nav.bottom) - Math.max(brand.top, nav.top)),
+              )
+              : -1,
+            navWidth: nav ? Math.round(nav.width) : null,
+            labels,
+          };
+        });
+        const wrappedLabels = header.labels.filter((entry) => entry.lines !== 1);
+        record(`atlas-${label}-header-nav`, await scanButtons(page, ".living-atlas__header"), {
+          ...header,
+          wrappedLabels,
+          failed: header.brandNavOverlap !== 0
+            || header.labels.length === 0
+            || wrappedLabels.length > 0,
         });
         continue;
       }

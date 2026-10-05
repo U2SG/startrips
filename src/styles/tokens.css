@@ -28,6 +28,36 @@
   --motion-ease-soft: cubic-bezier(0.2, 0.75, 0.15, 1);
   --motion-ease-out-soft: cubic-bezier(0.22, 0.72, 0.24, 1);
   --motion-ease-in-out-spatial: cubic-bezier(0.65, 0, 0.35, 1);
+  /* One control family (src/styles/controls.css). Every value is a palette
+     colour already in the Atlas: text, muted, cyan, acid, panel lines and the
+     dark glass fills. Primitives read their shape from --control-radius, so a
+     surface switches register (for example to sharp) by setting one variable. */
+  --control-height: 44px;
+  --control-radius: 999px;
+  --control-gap: 8px;
+  --control-pad-x: 16px;
+  --control-font-size: 12px;
+  --control-tracking: 0.04em;
+  --control-ink: #e7f0ec;
+  --control-muted: #8a9e98;
+  --control-line: rgba(118, 198, 188, 0.17);
+  --control-line-strong: rgba(119, 227, 211, 0.42);
+  --control-fill: rgba(2, 10, 11, 0.46);
+  --control-fill-hover: rgba(2, 10, 11, 0.56);
+  --control-fill-press: rgba(2, 10, 11, 0.66);
+  --control-primary: #c8ff3d;
+  --control-primary-ink: #091006;
+  --control-select: #76e3d0;
+  --control-focus: #c8ff3d;
+  /* The most used of the eight former destructive tints. */
+  --control-danger: #c28e78;
+  --control-disabled-opacity: 0.38;
+  --radius-surface: 20px;
+  --radius-sheet: 24px;
+  --radius-tile: 14px;
+  --radius-field: 12px;
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.24), 0 8px 24px rgba(0, 0, 0, 0.2);
+  --elev-2: 0 2px 8px rgba(0, 0, 0, 0.28), 0 24px 64px rgba(0, 0, 0, 0.36);
   /* Stacking scale. Every z-index in the client names one step here, so a layer
      can no longer pick a number that quietly outranks or underruns a sibling.
      The values are load-bearing: they are the numbers the declarations had

@@ -294,14 +294,16 @@ export function JourneyRecordedTracks({
 
       <div className="journey-recorded-tracks__import">
         <label>
-          <span>选择 GPX 文件</span>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={RECORDED_TRACK_FILE_ACCEPT}
-            onChange={chooseFile}
-            disabled={importPending || withdrawPending}
-          />
+          <span className="journey-recorded-tracks__file-button">
+            选择 GPX 文件
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={RECORDED_TRACK_FILE_ACCEPT}
+              onChange={chooseFile}
+              disabled={importPending || withdrawPending}
+            />
+          </span>
         </label>
         {selected ? (
           <div className="journey-recorded-tracks__selection" role="status">

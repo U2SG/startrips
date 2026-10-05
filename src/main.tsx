@@ -13,6 +13,7 @@ import {
 } from "./journey/EarthExperienceProvider";
 import { PersistentEarthProvider } from "./scene/LivingAtlasGlobe";
 import "./styles/tokens.css";
+import "./styles/controls.css";
 import "./app.css";
 import "./styles/auth-gate.css";
 import "./styles/brand-mark.css";

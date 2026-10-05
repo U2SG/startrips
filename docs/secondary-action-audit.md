@@ -6,6 +6,7 @@ These actions are secondary, repeated in dense media/route controls, and have un
 
 - Journey Composer pending media: remove, move earlier, move later.
 - Journey Composer route draft: move point earlier, move point later, delete point.
+- Journey Composer task entries: more tasks (the "…" beside the two summary tiles).
 - Journey Story media overview: set media as Journey cover.
 - Journey Story current-media controls: set as cover, move earlier, move later, delete media.
 

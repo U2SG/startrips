@@ -116,7 +116,10 @@
 .startrips-not-found a:focus-visible { outline: 2px solid var(--startrips-aurora); outline-offset: 4px; }
 .startrips-not-found > small { color: var(--startrips-muted); line-height: 1.6; }
 
-@media (max-width: 1200px) {
+/* The centred ~573px header nav needs the brand block hidden until it clears:
+   38px gutter + 151px wordmark + 20px gap + ~135px text = 344px, plus a
+   16px margin, puts the earliest width at about 1293px. */
+@media (max-width: 1300px) {
   .living-atlas__brand > div { display: none; }
 }
 @media (max-width: 760px) {

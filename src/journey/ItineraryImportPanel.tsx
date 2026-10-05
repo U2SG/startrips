@@ -719,6 +719,7 @@ export function ItineraryImportPanel({
           <label className="journey-itinerary-import__field">
             <span>把行程粘贴进来</span>
             <textarea
+              className="st-field"
               rows={6}
               value={text}
               onChange={(event) => { cancelReading(); setText(event.target.value); }}
@@ -735,6 +736,7 @@ export function ItineraryImportPanel({
           <label className="journey-itinerary-import__field">
             <span>行程分享链接</span>
             <input
+              className="st-field"
               value={link}
               inputMode="url"
               onFocus={() => setCapabilitiesRequested(true)}
@@ -759,16 +761,20 @@ export function ItineraryImportPanel({
           <div className="journey-itinerary-import__field">
             <label className="journey-itinerary-import__file">
               <span>行程截图（可选多张，长图会自动分段读取）</span>
-              <input
-                type="file"
-                multiple
-                accept="image/png,image/jpeg,image/webp"
-                onChange={(event) => {
-                  addImages(event.target.files);
-                  event.target.value = "";
-                }}
-                disabled={reading || capabilities?.recognition.configured === false}
-              />
+              <span className="journey-itinerary-import__file-button">
+                <IconUpload size={16} stroke={1.4} aria-hidden="true" />
+                选择截图
+                <input
+                  type="file"
+                  multiple
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(event) => {
+                    addImages(event.target.files);
+                    event.target.value = "";
+                  }}
+                  disabled={reading || capabilities?.recognition.configured === false}
+                />
+              </span>
             </label>
             {images.length > 0 ? (
               <ol className="journey-itinerary-import__pages">
@@ -882,6 +888,7 @@ export function ItineraryImportPanel({
                 <label className="journey-itinerary-import__position">
                   <span>加入路线的位置</span>
                   <select
+                    className="st-select"
                     value={insertAfter ?? ""}
                     onChange={(event) => setInsertAfterDraftId(event.target.value || null)}
                   >
@@ -950,6 +957,7 @@ export function ItineraryImportPanel({
                               ) : (
                                 <label className="journey-checkbox">
                                   <input
+                                    className="st-check"
                                     type="checkbox"
                                     checked={selected.includes(entry.entryId)}
                                     disabled={entry.latitude === null}
@@ -1070,7 +1078,7 @@ export function ItineraryImportPanel({
                                 {canOrganize ? (
                                   <label>
                                     <span>所在区域</span>
-                                    <input maxLength={120} value={entry.regionContext ?? ""}
+                                    <input className="st-field" maxLength={120} value={entry.regionContext ?? ""}
                                       onChange={(event) => changeOrganization(entry.entryId, { regionContext: event.target.value || null })} />
                                   </label>
                                 ) : null}
@@ -1093,6 +1101,7 @@ export function ItineraryImportPanel({
                                     <label>
                                       <span>搜索地点</span>
                                       <input
+                                        className="st-field"
                                         maxLength={120}
                                         value={manualQuery}
                                         placeholder="中文或英文名称"

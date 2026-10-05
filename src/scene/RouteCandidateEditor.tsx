@@ -8,6 +8,7 @@ import {
   type SignedRouteCandidate,
 } from "../journey/journeyApi";
 import { routeSegmentSourceKey } from "../journey/journeyModel";
+import { COMPACT_MOBILE_LAYOUT_ATTRIBUTE, compactMobileLayoutMarker } from "../journey/mobileLayout";
 import type { JourneyRoute, RoadProfile, RouteAccessPoints, RoutePointSuggestion, RouteSegmentRecord, RouteShapePoint, RoutingPoint } from "../journey/types";
 import { RouteShapePointPicker } from "./RouteShapePointPicker";
 import { NearbyRoutePointPicker, nearbyPointDistance } from "./NearbyRoutePointPicker";
@@ -114,6 +115,9 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
     const observed = new Set<HTMLElement>();
     function place() {
       const bounds = host.getBoundingClientRect();
+      // Compact mode spans the screen between the safe-area edges (CSS owns
+      // that), so side chrome can only narrow the vertical band.
+      const compact = atlas!.getAttribute(COMPACT_MOBILE_LAYOUT_ATTRIBUTE) === compactMobileLayoutMarker(true);
       const gap = 12;
       let left = bounds.left + gap;
       let right = Math.min(bounds.right, window.innerWidth) - gap;
@@ -126,19 +130,20 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
           if (style.display === "none" || style.visibility === "hidden") continue;
           const rect = element.getBoundingClientRect();
           if (rect.width <= 0 || rect.height <= 0) continue;
+          const narrow = !compact && rect.width < bounds.width / 2;
           if (side === "left") {
-            if (rect.width < bounds.width / 2) left = Math.max(left, rect.right + gap);
+            if (narrow) left = Math.max(left, rect.right + gap);
             else top = Math.max(top, rect.bottom + gap);
           } else if (side === "right") {
-            if (rect.width < bounds.width / 2) right = Math.min(right, rect.left - gap);
+            if (narrow) right = Math.min(right, rect.left - gap);
             else bottom = Math.min(bottom, rect.top - gap);
           } else if (side === "top") top = Math.max(top, rect.bottom + gap);
           else bottom = Math.min(bottom, rect.top - gap);
         }
       }
-      editor!.style.left = `${left - bounds.left}px`;
+      editor!.style.left = compact ? "" : `${left - bounds.left}px`;
       editor!.style.bottom = `${bounds.bottom - bottom}px`;
-      editor!.style.width = `${Math.max(0, Math.min(340, right - left))}px`;
+      editor!.style.width = compact ? "" : `${Math.max(0, Math.min(340, right - left))}px`;
       editor!.style.setProperty("--route-editor-max-height", `${Math.max(0, bottom - top)}px`);
       editor!.dataset.routeEditorPositioned = "true";
     }
@@ -152,7 +157,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
     }
     // Watch only Atlas chrome and renderer size, never the map's frame-by-frame DOM.
     const chromeObserver = new MutationObserver(observeChrome);
-    chromeObserver.observe(atlas, { childList: true, attributes: true, attributeFilter: ["class"] });
+    chromeObserver.observe(atlas, { childList: true, attributes: true, attributeFilter: ["class", COMPACT_MOBILE_LAYOUT_ATTRIBUTE] });
     observeChrome();
     window.addEventListener("resize", place);
     return () => {
@@ -382,7 +387,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
           </div>
           <label>
             路段
-            <select value={selectedIndex} onChange={(event) => { setSelectedIndex(Number(event.target.value)); setEditMode(false); }}>
+            <select className="st-select" value={selectedIndex} onChange={(event) => { setSelectedIndex(Number(event.target.value)); setEditMode(false); }}>
               {route.points.slice(0, -1).map((point, index) => (
                 <option key={`${point.id ?? index}-${route.points[index + 1]?.id ?? index + 1}`} value={index}>
                   {point.label || `地点 ${index + 1}`} → {route.points[index + 1]?.label || `地点 ${index + 2}`}
@@ -408,12 +413,13 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
               ))}
             </div>
           </div>
-          <label className="route-candidate-editor__ferry"><input type="checkbox" checked={allowFerries} disabled={busy}
+          <label className="route-candidate-editor__ferry"><input className="st-check" type="checkbox" checked={allowFerries} disabled={busy}
             onChange={(event) => { cancelCandidateRequest(); setAllowFerries(event.target.checked); }} />允许包含轮渡</label>
           {availabilityLoading ? <p role="status">正在检查道路服务…</p> : availableProfiles.length === 0
             ? <p>当前没有配置道路服务，原路线继续显示。</p> : null}
           <div className="route-candidate-editor__actions">
-            <button type="button" disabled={busy || availabilityLoading || !profile || !availableProfiles.includes(profile) || editMode} onClick={() => void generate()}>
+            <button type="button" className={candidates.length === 0 && !editMode ? "is-primary" : undefined}
+              disabled={busy || availabilityLoading || !profile || !availableProfiles.includes(profile) || editMode} onClick={() => void generate()}>
               {busy ? "处理中…" : "查看候选"}
             </button>
             <button type="button" disabled={busy} onClick={() => {
@@ -471,7 +477,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
                   </div>
                 </div>
               ))}
-              <button type="button" disabled={busy} onClick={() => void save("shape")}>保存修正点</button>
+              <button type="button" className="is-primary" disabled={busy} onClick={() => void save("shape")}>保存修正点</button>
             </div>
           ) : null}
           {candidates.length > 0 ? (
@@ -499,7 +505,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
                 </div>
               ) : null}
               <div className="route-candidate-editor__actions">
-                <button type="button" disabled={busy} onClick={() => void save("confirm")}>就是这条</button>
+                <button type="button" className="is-primary" disabled={busy} onClick={() => void save("confirm")}>就是这条</button>
                 <button type="button" disabled={busy} onClick={() => void save("none")}>都不是／不记得</button>
               </div>
             </div>
