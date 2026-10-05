@@ -476,6 +476,9 @@ async function verifyAccountDockYieldsToShare(browser) {
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.locator(".account-dock__tab").waitFor({ state: "visible", timeout: 20_000 });
     await page.waitForFunction(() => document.body.textContent?.includes("海风经过深圳湾"), undefined, { timeout: 20_000 });
+    // Until the login handoff releases, a full-screen auth layer sits above the
+    // whole Atlas, dock included, and owns every hit test.
+    await page.locator(".auth-continuity.is-released").waitFor({ timeout: 15_000 });
 
     // One ownership state at a time: isolated is inert and invisible; released
     // is neither and not in cinematic isolation, so the inert flag the dialog
@@ -499,6 +502,7 @@ async function verifyAccountDockYieldsToShare(browser) {
       const reading = {
         visibility: [getComputedStyle(dock).visibility, getComputedStyle(tab).visibility],
         inert: dock.inert,
+        hit: hit ? `${hit.tagName.toLowerCase()}.${typeof hit.className === "string" ? hit.className : ""}` : null,
         hitIsTab: Boolean(hit && tab.contains(hit)),
         hitIsShare: Boolean(hit?.closest(".journey-share")),
       };
@@ -513,7 +517,7 @@ async function verifyAccountDockYieldsToShare(browser) {
     const isolated = await settled(true);
     const open = await readDock(true);
     check("desktop-gateway/share-hides-account-dock",
-      releasedBefore && isolated
+      releasedBefore && before?.hitIsTab === true && isolated
         && open?.visibility.every((value) => value === "hidden") === true
         && open.hitIsTab === false && open.hitIsShare === true,
       { before, open });
