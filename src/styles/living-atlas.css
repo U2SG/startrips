@@ -2018,37 +2018,6 @@ button.living-atlas-globe__pick {
   color: var(--control-select);
 }
 
-.journey-story__media-move-bar {
-  position: absolute;
-  z-index: var(--z-content-3);
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--atlas-line);
-  background: rgba(2, 8, 8, 0.92);
-  backdrop-filter: blur(12px);
-  color: var(--atlas-muted);
-  font-size: 11px;
-}
-
-.journey-story__media-move-bar select {
-  min-height: 36px;
-  padding: 0 8px;
-  border: 1px solid var(--atlas-line);
-  background: #0b0f13;
-  color: var(--atlas-text);
-  font: inherit;
-}
-
-.journey-story__media-move-bar select:disabled {
-  opacity: 0.6;
-}
-
 /* #7: explicit fullscreen-play entry, beside the overview toggle. */
 .journey-story__fullscreen-entry {
   position: absolute;
@@ -2292,52 +2261,6 @@ button.living-atlas-globe__pick {
 .journey-story__media-nav button.is-active {
   color: var(--control-select);
   border-color: var(--control-select);
-}
-
-.journey-story__media-order {
-  position: absolute;
-  z-index: var(--z-content-3);
-  left: 16px;
-  bottom: 16px;
-  min-height: 40px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px;
-  border: 1px solid rgba(118, 198, 188, 0.14);
-  background: rgba(2, 8, 8, 0.88);
-  backdrop-filter: blur(10px);
-}
-
-.journey-story__media-order > span {
-  padding: 0 7px;
-  color: var(--atlas-faint);
-  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.1em;
-}
-
-.journey-story__media-order button {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-muted);
-  cursor: pointer;
-}
-
-.journey-story__media-order button:focus-visible {
-  border-color: rgba(118, 227, 211, 0.48);
-  color: var(--atlas-cyan);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__media-order button:hover:not(:disabled) {
-    border-color: rgba(118, 227, 211, 0.48);
-    color: var(--atlas-cyan);
-  }
 }
 
 .journey-story__media-nav button {
@@ -2586,7 +2509,6 @@ button.living-atlas-globe__pick {
 .journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__media-overview,
 .journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__fullscreen-entry,
 .journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__media-nav,
-.journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__media-order,
 .journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__order-message {
   opacity: 0;
   pointer-events: none;
@@ -7251,13 +7173,10 @@ button.living-atlas__globe-focus-exit {
      spare height to give back here, so the sheet takes the room it needs and
      the media region is sized to what is left above the fold rather than to a
      floor the viewport cannot honour. 106px is this block's own sticky sheet
-     handle (44px) plus header (62px); the one later rule that changes either --
-     `.living-atlas.is-mobile-v2 .journey-story > header`, 56px --
-     only makes the header shorter, and its `.journey-story__media` height of
-     54svh is already inside the budget below. `max-height` carries the fit
-     independently of `height`, so a later, more specific height (that one, or
-     a future one) still cannot put the transport's control strip below the
-     fold; `min-height: 0` is what retires the floor that did. */
+     handle (44px) plus header (62px). `max-height` carries the fit
+     independently of `height`, so a later, more specific height still cannot
+     put the transport's control strip below the fold; `min-height: 0` is what
+     retires the floor that did. */
   @media (max-height: 480px) {
     .journey-story {
       --journey-story-sheet-extent: min(92svh, 680px);
@@ -7646,12 +7565,6 @@ button.living-atlas__globe-focus-exit {
     backdrop-filter: blur(12px);
   }
 
-  .journey-story__media-move-bar {
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
-  }
-
   .journey-story__media[data-mobile-layout="true"] .journey-story__media-grid {
     padding-top: 64px;
     touch-action: pan-y;
@@ -7718,55 +7631,6 @@ button.living-atlas__globe-focus-exit {
   .journey-story__fullscreen-entry {
     top: 66px;
     right: 12px;
-  }
-
-  .journey-story__media-controls {
-    position: absolute;
-    z-index: var(--z-content-3);
-    right: 12px;
-    bottom: 12px;
-    left: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 4px;
-    border: 1px solid rgba(118, 198, 188, 0.14);
-    background: rgba(2, 8, 8, 0.88);
-    backdrop-filter: blur(10px);
-  }
-
-  .journey-story__media-nav {
-    position: static;
-    grid-template-columns: 44px 44px minmax(36px, auto) 44px;
-    gap: 2px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    backdrop-filter: none;
-  }
-
-  .journey-story__media-order {
-    position: static;
-    gap: 2px;
-    padding: 0 0 0 4px;
-    border: 0;
-    border-left: 1px solid rgba(118, 198, 188, 0.14);
-    background: transparent;
-    backdrop-filter: none;
-  }
-
-  .journey-story__media-order > span {
-    display: none;
-  }
-
-  .journey-story__media-order button {
-    width: 44px;
-    height: 44px;
-  }
-
-  .journey-story__media:has([data-story-media-pages] video[data-shared-media-id]) .journey-story__media-controls {
-    bottom: 64px;
   }
 
   .journey-story__media-remove {
@@ -8969,27 +8833,6 @@ button.living-atlas__globe-focus-exit {
     min-height: 48px;
     border-radius: 14px;
     pointer-events: auto;
-  }
-
-  .living-atlas.is-mobile-v2 .journey-story {
-    background: linear-gradient(180deg, #010708, #010506);
-  }
-
-  .living-atlas.is-mobile-v2 .journey-story > header {
-    /* The top inset belongs to the expanded sheet handle above this row; a
-       collapsed sheet does not touch the top edge at all. */
-    height: 56px;
-    background: linear-gradient(180deg, rgba(1, 7, 8, 0.96), rgba(1, 7, 8, 0.72));
-    backdrop-filter: blur(16px);
-  }
-
-  .living-atlas.is-mobile-v2 .journey-story__media {
-    height: 54svh;
-  }
-
-  .living-atlas.is-mobile-v2 .journey-story__copy {
-    min-height: 42svh;
-    padding: 28px 20px calc(env(safe-area-inset-bottom) + 40px);
   }
 
 }

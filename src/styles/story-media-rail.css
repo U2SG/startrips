@@ -45,17 +45,33 @@
 .story-media-rail button[aria-busy="true"] { border-style: dashed; }
 .story-media-rail button:focus-visible { outline: 2px solid var(--startrips-starlight); outline-offset: 3px; }
 .story-media-rail button:disabled { cursor: default; opacity: 0.5; }
+/* A secondary pill of the control family, not a rail tile. */
 .story-media-rail button.story-media-rail__organize {
   display: flex;
+  align-items: center;
   justify-content: center;
-  min-height: 44px;
+  min-height: var(--control-height);
   aspect-ratio: auto;
   margin-top: 12px;
-  padding: 8px 16px;
-  border-radius: 6px;
-  background: rgb(255 248 231 / 5%);
+  padding: 0 var(--control-pad-x);
+  border-color: var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+  transition: scale var(--motion-instant) var(--motion-ease-out), background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out;
+}
+.story-media-rail button.story-media-rail__organize:focus-visible { outline: 2px solid var(--control-focus); outline-offset: 2px; }
+.story-media-rail button.story-media-rail__organize:disabled { cursor: not-allowed; opacity: var(--control-disabled-opacity); }
+.story-media-rail button.story-media-rail__organize:active:not(:disabled) { background-color: var(--control-fill-press); }
+@media (prefers-reduced-motion: no-preference) {
+  .story-media-rail button.story-media-rail__organize:active:not(:disabled) { scale: 0.97; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .story-media-rail button.story-media-rail__organize:hover:not(:disabled) { border-color: var(--control-line-strong); }
 }
 .story-media-rail__number {
   position: absolute;

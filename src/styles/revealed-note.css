@@ -46,17 +46,46 @@
   white-space: nowrap;
 }
 
-.revealed-note__toggle {
-  min-height: 32px;
-  padding: 4px 10px;
-  border: 1px solid var(--startrips-line);
-  background: rgb(2 7 6 / 0.48);
-  color: var(--startrips-muted);
+/* A secondary pill of the control family with a full 44px box, over Story's
+   stage and the Journey Book's plates alike. The label carries the state. */
+.revealed-note .revealed-note__toggle {
+  min-width: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
   font: inherit;
-  font-size: 12px;
-  letter-spacing: 0.04em;
+  font-size: var(--control-font-size);
+  line-height: 1;
+  letter-spacing: var(--control-tracking);
   cursor: pointer;
   pointer-events: auto;
+  transition: scale var(--motion-instant) var(--motion-ease-out), background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out, color var(--motion-instant) ease-out;
+}
+
+.revealed-note .revealed-note__toggle:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+.revealed-note .revealed-note__toggle:active {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .revealed-note .revealed-note__toggle:active {
+    scale: 0.97;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .revealed-note .revealed-note__toggle:hover {
+    border-color: var(--control-line-strong);
+    color: var(--control-ink);
+  }
 }
 
 /* Over Story's swipeable stage the text must not take the gesture; only the
