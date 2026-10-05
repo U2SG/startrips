@@ -134,6 +134,39 @@ export function stackSheets(progress: number, sheets: number): { left: number; r
   return { left: turned, right: sheets - turned - (inFlight ? 1 : 0), inFlight };
 }
 
+/**
+ * How stiff a sheet is: the front and back covers (the first and last sheet)
+ * are hardcover boards, 1; every interior sheet is paper, 0.
+ */
+export function sheetStiffness(index: number, sheets: number): number {
+  return index === 0 || index === sheets - 1 ? 1 : 0;
+}
+
+/** The deformation quick_flipbook's `FlipPage.flip` applies to one sheet. */
+export type SheetFlipPose = { rotationZ: number; bendForce: number; twistAngle: number; curveIntensity: number };
+
+/**
+ * One sheet's pose at turn `progress` (0–1) toward `direction`, with the page
+ * curve at `curveIntensity` as the book passes it. Paper (stiffness 0) gets
+ * quick_flipbook's own `FlipPage.flip` formula: a curl (`bend`) and a twist
+ * that peak mid-turn. A board (stiffness 1) swings rigidly about the spine:
+ * no curl, no twist, and the curve that lifts every resting page near the
+ * spine is damped by (1 − sin πt)² more, so it is a small give near the hinge
+ * as the board lifts and lands rather than a warp across it. At rest (0 or 1)
+ * sin πt is 0, so a board and a sheet of paper rest in exactly the same shape.
+ */
+export function sheetFlipPose(progress: number, direction: number, curveIntensity: number, stiffness: number): SheetFlipPose {
+  const rotationZ = Math.PI * progress;
+  const lift = Math.sin(rotationZ);
+  const paper = 1 - stiffness;
+  return {
+    rotationZ,
+    bendForce: Math.min((-lift / 2) * paper, -1e-4) * direction,
+    twistAngle: (lift / 10) * paper,
+    curveIntensity: (-1 + 2 * progress) * (1 - lift) ** (1 + 2 * stiffness) * curveIntensity,
+  };
+}
+
 export type ScreenRect = { left: number; top: number; width: number; height: number };
 
 /**
