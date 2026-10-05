@@ -8975,13 +8975,16 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 /* #200 phase E: the owner share surface.
-   Editorial-ink discipline throughout: no gradient, no drop shadow, no blur
-   and no ornament. Every box is square. The one `border-radius` in this block
-   is the radio dot of the expiry choice, which is the selection grammar
-   itself - a round mark is what distinguishes single choice from the square
-   multi-select mark next to it - not decorative rounding on a container.
-   Every interactive control is at least 44px tall, the #92 minimum hit
-   target. */
+   On 2026-10-05 the owner retired phase E's editorial-ink rule that every box
+   here is square: the dialog now follows the control family in controls.css.
+   It is a floating layer, --radius-surface when centred and --radius-sheet
+   top corners as the compact sheet, with a hairline and --elev-2 over a plain
+   dim scrim, never a backdrop blur next to the WebGL loop (#642). Text
+   actions are pills under one acid primary, the close is a 44px circle, the
+   expiry presets are chips with the round radio dot, the Journey set stays
+   square data rows with the square check, and revoke is text-forward in the
+   danger tint. Gradients, emoji and other ornament stay banned, and every
+   control keeps the 44px box of #92. */
 .journey-share {
   position: fixed;
   /* A modal dialog sits in the overlay band with the other modal dialogs and
@@ -9001,6 +9004,21 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   cursor: pointer;
 }
 
+/* The scrim is disabled while a create or revoke is pending. It keeps its dim
+   instead of taking the shell's disabled opacity. */
+.journey-share > .journey-share__backdrop:disabled {
+  opacity: 1;
+}
+
+/* The account dock is body-level chrome outside `.living-atlas`, whose
+   `isolation: isolate` keeps this dialog's overlay z-index local, so the
+   dock's chrome z-index painted it over the dialog. useModalFocus already
+   takes the dock out of the focus order with `inert`; this takes it off the
+   screen as well, and it returns when the dialog unmounts. */
+body:has(.journey-share) .account-dock {
+  visibility: hidden;
+}
+
 .journey-share__dialog {
   position: relative;
   z-index: var(--z-content-1);
@@ -9008,12 +9026,40 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   width: min(560px, 100%);
   max-height: 100%;
   padding: 20px;
-  border: 1px solid var(--archive-line);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-surface);
   background: var(--archive-bg);
+  box-shadow: var(--elev-2);
   color: var(--archive-ink);
   display: grid;
   align-content: start;
   gap: 18px;
+}
+
+/* Every action is a secondary family pill, a dark-glass fill inside a
+   hairline, unless a rule below makes it the primary, the danger or the close
+   circle. Scoped to the dialog so the scrim, its sibling, keeps its own look. */
+.journey-share__dialog button {
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--control-gap);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font: 500 var(--control-font-size)/1.2 var(--archive-sans);
+  letter-spacing: var(--control-tracking);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out,
+    opacity var(--motion-instant) ease-out;
 }
 
 .journey-share__heading {
@@ -9038,16 +9084,13 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   letter-spacing: -0.01em;
 }
 
+/* The close is the family's 44px icon circle. */
 .journey-share__heading > button {
   flex: none;
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--archive-line);
-  background: none;
-  color: var(--archive-ink);
-  cursor: pointer;
+  width: var(--control-height);
+  height: var(--control-height);
+  padding: 0;
+  color: var(--control-muted);
 }
 
 .journey-share__compose,
@@ -9087,12 +9130,13 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .journey-share__selection label,
 .journey-share__expiry label {
-  min-height: 44px;
+  min-height: var(--control-height);
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 0 12px;
   cursor: pointer;
+  transition: background-color var(--motion-instant) ease-out;
 }
 
 .journey-share__selection strong {
@@ -9110,9 +9154,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   letter-spacing: 0.06em;
 }
 
-/* One selection grammar for both controls: the native input is the state, the
-   span is the mark. A radio-dot for the single-choice expiry, a filled square
-   for the multi-choice Journey set, so cardinality is visible before reading. */
+/* The family's selection grammar for both controls: the native input is the
+   state and the span is the mark. The single-choice expiry draws the round
+   radio dot of .st-chip, the multi-choice Journey set the square check of
+   .st-check, and both select in --control-select, so cardinality is visible
+   before reading. */
 .journey-share input[type="checkbox"],
 .journey-share input[type="radio"] {
   position: absolute;
@@ -9124,34 +9170,54 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
 .journey-share label > span[aria-hidden] {
   flex: none;
-  width: 15px;
-  height: 15px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--archive-faint);
 }
 
 .journey-share input[type="radio"] + span[aria-hidden] {
+  box-sizing: content-box;
+  width: 12px;
+  height: 12px;
+  padding: 2px;
+  border: 1.5px solid currentColor;
   border-radius: 50%;
+  background-clip: content-box;
 }
 
-.journey-share input:checked + span[aria-hidden] {
-  border-color: var(--archive-cyan);
+.journey-share input[type="radio"]:checked + span[aria-hidden] {
+  background-color: currentColor;
 }
 
-.journey-share input:checked + span[aria-hidden]::after {
+.journey-share input[type="checkbox"] + span[aria-hidden] {
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid var(--control-line-strong);
+  border-radius: min(5px, var(--control-radius));
+  background: var(--control-fill);
+  transition: background-color var(--motion-instant) ease-out, border-color var(--motion-instant) ease-out;
+}
+
+.journey-share input[type="checkbox"] + span[aria-hidden]::before {
   content: "";
-  width: 7px;
-  height: 7px;
-  background: var(--archive-cyan);
+  width: 14px;
+  height: 14px;
+  background-color: var(--control-primary-ink);
+  opacity: 0;
+  -webkit-mask: var(--control-check-mask) center / contain no-repeat;
+  mask: var(--control-check-mask) center / contain no-repeat;
 }
 
-.journey-share input[type="radio"]:checked + span[aria-hidden]::after {
-  border-radius: 50%;
+.journey-share input[type="checkbox"]:checked + span[aria-hidden] {
+  border-color: var(--control-select);
+  background-color: var(--control-select);
 }
 
-.journey-share input:focus-visible + span[aria-hidden] {
-  outline: 2px solid var(--archive-cyan);
+.journey-share input[type="checkbox"]:checked + span[aria-hidden]::before {
+  opacity: 1;
+}
+
+.journey-share input[type="checkbox"]:focus-visible + span[aria-hidden] {
+  outline: 2px solid var(--control-focus);
   outline-offset: 2px;
 }
 
@@ -9163,19 +9229,53 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   grid-column: 1 / -1;
 }
 
+/* Each preset is a family chip: muted at rest, the selection colour once
+   chosen. The ring sits on the chip, since its input is visually hidden. */
 .journey-share__expiry label {
-  border: 1px solid var(--archive-line);
-  font: 500 13px/1 var(--archive-sans);
+  justify-content: center;
+  gap: var(--control-gap);
+  padding: 0 14px 0 12px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
+  font: 500 var(--control-font-size)/1.2 var(--archive-sans);
+  letter-spacing: var(--control-tracking);
+  white-space: nowrap;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
 }
 
+.journey-share__expiry label:has(input:checked) {
+  border-color: var(--control-select);
+  background-color: color-mix(in srgb, var(--control-select) 12%, transparent);
+  color: var(--control-select);
+}
+
+.journey-share__expiry label:has(input:focus-visible) {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+/* The custom expiry is a family field. */
 .journey-share__custom-expiry {
   grid-column: 1 / -1;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--archive-line);
-  background: none;
-  color: var(--archive-ink);
+  min-height: var(--control-height);
+  padding: 0 14px;
+  border: 1px solid var(--control-line);
+  border-radius: min(var(--radius-field), var(--control-radius));
+  background: var(--control-fill);
+  color: var(--control-ink);
+  color-scheme: dark;
   font: 500 13px/1 var(--archive-sans);
+  transition: border-color var(--motion-instant) ease-out;
+}
+
+.journey-share__custom-expiry:focus {
+  border-color: var(--control-line-strong);
 }
 
 .journey-share__selection-count,
@@ -9193,28 +9293,14 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   color: var(--archive-ink);
 }
 
-.journey-share button {
-  min-height: 44px;
-  padding: 0 14px;
-  border: 1px solid var(--archive-line);
-  background: none;
-  color: var(--archive-ink);
-  font: 500 13px/1 var(--archive-sans);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.journey-share button:disabled {
-  color: var(--archive-muted);
-  cursor: not-allowed;
-}
-
-.journey-share__create {
+/* The surface's one acid primary. Disabled until a Journey is chosen, it keeps
+   its acid and dims by the shell's family opacity. */
+.journey-share__dialog .journey-share__create {
   width: 100%;
-  border-color: rgba(116, 231, 208, 0.42);
+  border-color: var(--control-primary);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
+  font-weight: 600;
 }
 
 .journey-share__created-expiry,
@@ -9292,16 +9378,63 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   white-space: nowrap;
 }
 
+/* Revoke is text-forward: the danger tint is the signal, never a fill. */
 .journey-share__links .is-destructive {
   flex: none;
-  border-color: rgba(226, 122, 122, 0.36);
+  border-color: color-mix(in srgb, var(--control-danger) 45%, transparent);
+  background: transparent;
+  color: var(--control-danger);
+}
+
+.journey-share__dialog button:focus-visible,
+.journey-share__expiry > .journey-share__custom-expiry:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .journey-share__dialog button:active:not(:disabled),
+  .journey-share__expiry label:active {
+    scale: 0.97;
+  }
+}
+
+/* A Journey row is wide, so it answers a press with a tint rather than a
+   scale: half the hairline, the tint the 更多 rows use. */
+.journey-share__selection label:active {
+  background-color: color-mix(in srgb, var(--control-line) 50%, transparent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-share__dialog button:not(.journey-share__create, .is-destructive):hover:not(:disabled),
+  .journey-share__expiry label:not(:has(input:checked)):hover,
+  .journey-share__custom-expiry:hover {
+    border-color: var(--control-line-strong);
+  }
+
+  .journey-share__heading > button:hover:not(:disabled) {
+    color: var(--control-ink);
+  }
+
+  .journey-share__dialog .journey-share__create:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .journey-share__links .is-destructive:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--control-danger) 70%, transparent);
+  }
+
+  .journey-share__selection label:hover {
+    background-color: color-mix(in srgb, var(--control-line) 50%, transparent);
+  }
 }
 
 /* Compact layout (the `data-mobile-v2` contract, not a breakpoint of its own):
    a full-width sheet anchored to the bottom edge and bounded by the header
-   block. It stays square and unshadowed like the rest of the phase E surface;
-   only its placement changes. The dialog scrolls inside itself and pads the
-   home indicator. */
+   block. Like the family's other sheets it rounds only its top corners and
+   leaves the screen edge unbordered; panel, hairline and --elev-2 stay the
+   dialog's own. The dialog scrolls inside itself and pads the home
+   indicator. */
 .living-atlas[data-mobile-v2="on"] .journey-share {
   place-items: end stretch;
   padding: var(--mobile-header-block) 0 0;
@@ -9311,6 +9444,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   width: 100%;
   padding: 16px calc(16px + env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
   gap: 14px;
+  border-bottom: 0;
+  border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
   overscroll-behavior: contain;
 }
 

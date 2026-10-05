@@ -7,8 +7,10 @@
 // both entry paths are reachable at every viewport, that the exact expiry the
 // SERVER returned is the one rendered, that the copied text is the
 // `/share#<token>` fragment form, that revoking removes a row from the active
-// list, and that the surface carries no gradient, drop shadow, decorative
-// rounding or emoji ornament while every control clears 44px.
+// list, that the surface takes the control family's shapes (a rounded,
+// elevated dialog with pill and chip controls) and carries no gradient, blur,
+// emoji or stray rounding or shadow while every control clears 44px, and that
+// the body-level account dock yields to the dialog.
 //
 // The owner API is stubbed at the network boundary because this lane has no
 // database: `POST /api/shares` answers with a token and an expiry the client
@@ -330,9 +332,16 @@ async function captureSurface(page, viewportName, label) {
 }
 
 /**
- * The editorial-ink audit, run against the computed style of every element in
- * the dialog rather than against the stylesheet source, so a value inherited
- * from elsewhere is caught too.
+ * The ornament audit, run against the computed style of every element in the
+ * dialog rather than against the stylesheet source, so a value inherited from
+ * elsewhere is caught too.
+ *
+ * On 2026-10-05 the owner retired #200 phase E's rule that every box here is
+ * square and moved the dialog into the control family. Rounding is therefore
+ * allowed on exactly the family's shapes and a drop shadow on the floating
+ * dialog alone. Gradients, blur and emoji stay banned everywhere, and the
+ * scrim, the Journey rows, the active-link rows and the link read-out stay
+ * square.
  */
 async function ornamentScan(page) {
   return page.evaluate(() => {
@@ -340,12 +349,24 @@ async function ornamentScan(page) {
     if (!root) return null;
     const offenders = { gradient: [], shadow: [], rounding: [], blur: [], emoji: [] };
     const smallTargets = [];
-    // The radio dot identifies single choice; the lamb's orbit is part of the
-    // shared brand mark. Neither is a rounded panel or control. Keep the
-    // exemption on these exact shapes so surrounding surfaces remain audited.
-    const roundingAllowed = (element) => element.matches(
-      'input[type="radio"] + span[aria-hidden], .startrips-brand-mark > .startrips-brand-mark__orbit[aria-hidden="true"]',
-    );
+    // Exact shapes, not "anything rounded": the floating dialog, its pills and
+    // close circle, the expiry chips and the custom expiry field, the two
+    // drawn selection marks (the round radio dot and the square check box),
+    // and the lamb's orbit in the shared brand mark.
+    const roundingAllowed = (element) => element.matches([
+      ".journey-share__dialog",
+      ".journey-share__heading > button",
+      ".journey-share__create",
+      ".journey-share__created-actions > button",
+      ".journey-share__links li > button.is-destructive",
+      ".journey-share__expiry > label",
+      ".journey-share__custom-expiry",
+      '.journey-share__expiry input[type="radio"] + span[aria-hidden]',
+      '.journey-share__selection input[type="checkbox"] + span[aria-hidden]',
+      '.startrips-brand-mark > .startrips-brand-mark__orbit[aria-hidden="true"]',
+    ].join(", "));
+    // Elevation belongs to the floating layer, never to anything inside it.
+    const shadowAllowed = (element) => element.matches(".journey-share__dialog");
     const emojiPattern = /\p{Extended_Pictographic}/u;
     for (const element of root.querySelectorAll("*")) {
       const style = getComputedStyle(element);
@@ -354,7 +375,9 @@ async function ornamentScan(page) {
         ? element.className
         : element.tagName;
       if (/gradient/i.test(style.backgroundImage)) offenders.gradient.push(String(name));
-      if (style.boxShadow && style.boxShadow !== "none") offenders.shadow.push(String(name));
+      if (style.boxShadow && style.boxShadow !== "none" && !shadowAllowed(element)) {
+        offenders.shadow.push(String(name));
+      }
       if (style.filter?.includes("blur") || style.backdropFilter?.includes("blur")) {
         offenders.blur.push(String(name));
       }
@@ -378,6 +401,137 @@ async function ornamentScan(page) {
     }
     return { offenders, smallTargets };
   });
+}
+
+/**
+ * What the owner decision of 2026-10-05 requires rather than merely allows,
+ * read in the compose step: the dialog is a floating layer rounded by the
+ * shape tokens and lifted by an elevation, and its controls take family shapes.
+ */
+async function familyShapes(page) {
+  return page.evaluate(() => {
+    const tokens = getComputedStyle(document.documentElement);
+    const dialog = document.querySelector(".journey-share__dialog");
+    const style = dialog ? getComputedStyle(dialog) : null;
+    // A pill or circle rounds at least half of its own height.
+    const rounded = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      const radius = Number.parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0;
+      return radius >= element.getBoundingClientRect().height / 2;
+    };
+    const radio = document.querySelector('.journey-share__expiry input[type="radio"] + span[aria-hidden]');
+    return {
+      surfaceRadius: tokens.getPropertyValue("--radius-surface").trim(),
+      sheetRadius: tokens.getPropertyValue("--radius-sheet").trim(),
+      dialog: style ? {
+        corners: ["TopLeft", "TopRight", "BottomRight", "BottomLeft"].map((corner) => style[`border${corner}Radius`]),
+        shadow: style.boxShadow,
+        backdropFilter: style.backdropFilter,
+      } : null,
+      closeIsCircle: rounded(".journey-share__heading > button"),
+      createIsPill: rounded(".journey-share__create"),
+      expiryIsChip: rounded(".journey-share__expiry > label"),
+      // Single choice is a round dot; multi-select is a square check.
+      radioIsRound: radio ? getComputedStyle(radio).borderTopLeftRadius === "50%" : null,
+      checkIsSquare: rounded('.journey-share__selection input[type="checkbox"] + span[aria-hidden]') === false,
+    };
+  });
+}
+
+/**
+ * The account dock is body-level chrome outside `.living-atlas`, whose
+ * isolation keeps the dialog's overlay z-index local. Only the real gateway
+ * renders the dock (the `living-atlas` preview bypasses it), so this pass signs
+ * in through `atlas-gateway` at a desktop size with the stubs of
+ * qa-post-login-controls.mjs.
+ */
+async function verifyAccountDockYieldsToShare(browser) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  try {
+    let authenticated = false;
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const session = {
+      session: { id: "qa-session", userId: "qa-user", token: "qa-token", expiresAt, createdAt: now, updatedAt: now, activeOrganizationId: "qa-org" },
+      user: { id: "qa-user", name: "QA Traveler", email: "qa@example.com", emailVerified: true, createdAt: now, updatedAt: now },
+    };
+    const json = (body) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    await page.route("**/api/auth/**", (route) => {
+      const { pathname } = new URL(route.request().url());
+      if (pathname.endsWith("/sign-in/email")) authenticated = true;
+      if (pathname.endsWith("/get-session")) return route.fulfill(json(authenticated ? session : null));
+      if (pathname.endsWith("/organization/list")) return route.fulfill(json([{ id: "qa-org", name: "QA Atlas", slug: "qa-atlas" }]));
+      return route.fulfill(json({}));
+    });
+    await page.route("**/api/account-preferences/earth-experience", (route) => route.fulfill(json({ earthExperience: "default", revision: 0, updatedAt: null })));
+    await page.route("**/api/atlases/current", (route) => route.fulfill(json({ atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "同行记忆" }, role: "owner" })));
+    await page.route("**/api/home-bases/dismissal", (route) => route.fulfill(json({ dismissals: [] })));
+    await page.route("**/api/home-bases", (route) => route.fulfill(json({ periods: [] })));
+    await installOwnerApi(page, { shares: [], requests: [], createGate: null });
+    await page.goto(`${origin}/?qaState=atlas-gateway&qaLite=1`, { waitUntil: "domcontentloaded" });
+    await page.locator('input[type="email"]').fill("qa@example.com");
+    await page.locator('input[type="password"]').fill("password1234");
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await page.locator(".account-dock__tab").waitFor({ state: "visible", timeout: 20_000 });
+    await page.waitForFunction(() => document.body.textContent?.includes("海风经过深圳湾"), undefined, { timeout: 20_000 });
+
+    // One ownership state at a time: isolated is inert and invisible; released
+    // is neither and not in cinematic isolation, so the inert flag the dialog
+    // claims is one it owns and must give back.
+    const settled = (isolated) => page.waitForFunction((expected) => {
+      const dock = document.querySelector(".account-dock");
+      if (!dock) return false;
+      const hidden = getComputedStyle(dock).visibility === "hidden";
+      return expected
+        ? dock.inert && hidden
+        : !dock.inert && !hidden && !dock.classList.contains("is-cinematic-hidden");
+    }, isolated, { timeout: 10_000 }).then(() => true, () => false);
+    // Paint, the hit target at the tab's centre and, when asked, whether the
+    // tab can take focus.
+    const readDock = (tryFocus) => page.evaluate((focus) => {
+      const dock = document.querySelector(".account-dock");
+      const tab = dock?.querySelector(".account-dock__tab");
+      if (!dock || !(tab instanceof HTMLElement)) return null;
+      const rect = tab.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const reading = {
+        visibility: [getComputedStyle(dock).visibility, getComputedStyle(tab).visibility],
+        inert: dock.inert,
+        hitIsTab: Boolean(hit && tab.contains(hit)),
+        hitIsShare: Boolean(hit?.closest(".journey-share")),
+      };
+      if (focus) tab.focus({ preventScroll: true });
+      return { ...reading, takesFocus: focus ? document.activeElement === tab : null };
+    }, tryFocus);
+
+    const releasedBefore = await settled(false);
+    const before = await readDock(false);
+    await clickNamed(page, "分享多段旅程");
+    await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
+    const isolated = await settled(true);
+    const open = await readDock(true);
+    check("desktop-gateway/share-hides-account-dock",
+      releasedBefore && isolated
+        && open?.visibility.every((value) => value === "hidden") === true
+        && open.hitIsTab === false && open.hitIsShare === true,
+      { before, open });
+    check("desktop-gateway/account-dock-out-of-focus-order-under-share",
+      open?.inert === true && open.takesFocus === false,
+      open);
+
+    await clickLabel(page, "关闭分享");
+    await page.locator(".journey-share").waitFor({ state: "detached", timeout: 10_000 });
+    const released = await settled(false);
+    const after = await readDock(true);
+    check("desktop-gateway/account-dock-restored-after-share",
+      released && after?.visibility.every((value) => value === "visible") === true
+        && after.inert === false && after.hitIsTab === true && after.takesFocus === true,
+      after);
+  } finally {
+    await context.close();
+  }
 }
 
 const browser = await launchQaBrowser({
@@ -439,6 +593,23 @@ try {
     await clickNamed(page, "分享多段旅程");
     await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
     check(`${viewport.name}/multi-entry-reachable`, true);
+
+    // 2026-10-05: the dialog belongs to the control family. Centred it is a
+    // --radius-surface floating layer, as the compact sheet only its top
+    // corners take --radius-sheet, and an elevation lifts it, never a blur.
+    const shapes = await familyShapes(page);
+    const corners = viewport.compact
+      ? [shapes.sheetRadius, shapes.sheetRadius, "0px", "0px"]
+      : Array(4).fill(shapes.surfaceRadius);
+    check(`${viewport.name}/dialog-is-a-family-floating-layer`,
+      shapes.dialog?.corners.every((corner, index) => corner === corners[index]) === true
+        && shapes.dialog.shadow !== "none"
+        && !/blur/.test(shapes.dialog.backdropFilter ?? ""),
+      { ...shapes.dialog, expectedCorners: corners });
+    check(`${viewport.name}/controls-take-family-shapes`,
+      [shapes.closeIsCircle, shapes.createIsPill, shapes.expiryIsChip, shapes.radioIsRound, shapes.checkIsSquare]
+        .every((value) => value === true),
+      shapes);
 
     // Select two of the three, so the request proves the set is exactly what
     // was ticked rather than "every Journey in the Atlas".
@@ -526,7 +697,7 @@ try {
     // surface, which carries controls the compose step never renders.
     const createdOrnament = await ornamentScan(page);
     check(`${viewport.name}/created-no-gradient`, createdOrnament?.offenders.gradient.length === 0, createdOrnament?.offenders.gradient);
-    check(`${viewport.name}/created-no-drop-shadow`, createdOrnament?.offenders.shadow.length === 0, createdOrnament?.offenders.shadow);
+    check(`${viewport.name}/created-shadow-only-on-dialog`, createdOrnament?.offenders.shadow.length === 0, createdOrnament?.offenders.shadow);
     check(`${viewport.name}/created-no-decorative-rounding`, createdOrnament?.offenders.rounding.length === 0, createdOrnament?.offenders.rounding);
     check(`${viewport.name}/created-no-blur`, createdOrnament?.offenders.blur.length === 0, createdOrnament?.offenders.blur);
     check(`${viewport.name}/created-no-emoji-ornament`, createdOrnament?.offenders.emoji.length === 0, createdOrnament?.offenders.emoji);
@@ -567,7 +738,7 @@ try {
 
     const ornament = await ornamentScan(page);
     check(`${viewport.name}/no-gradient`, ornament?.offenders.gradient.length === 0, ornament?.offenders.gradient);
-    check(`${viewport.name}/no-drop-shadow`, ornament?.offenders.shadow.length === 0, ornament?.offenders.shadow);
+    check(`${viewport.name}/shadow-only-on-dialog`, ornament?.offenders.shadow.length === 0, ornament?.offenders.shadow);
     check(`${viewport.name}/no-decorative-rounding`, ornament?.offenders.rounding.length === 0, ornament?.offenders.rounding);
     check(`${viewport.name}/no-blur`, ornament?.offenders.blur.length === 0, ornament?.offenders.blur);
     check(`${viewport.name}/no-emoji-ornament`, ornament?.offenders.emoji.length === 0, ornament?.offenders.emoji);
@@ -856,6 +1027,8 @@ try {
 
     await context.close();
   }
+
+  await verifyAccountDockYieldsToShare(browser);
 } catch (error) {
   // The accumulated results are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439). Print first, then rethrow so
