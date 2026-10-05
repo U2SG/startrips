@@ -33,22 +33,23 @@
   margin: 0;
   padding-right: 16px;
 }
+/* Desktop header controls are quiet: no border, no fill, a 44px pill or circle. */
 .journey-story[data-story-layout="desktop"] > header > button {
   flex: 0 0 auto;
   width: auto;
   min-width: 44px;
   height: 44px;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--control-radius);
   background: transparent;
   box-shadow: none;
-  color: var(--startrips-muted);
-  font: 400 12px/1 var(--archive-sans);
-  letter-spacing: .04em;
+  color: var(--control-muted);
+  font: 400 var(--control-font-size)/1 var(--archive-sans);
+  letter-spacing: var(--control-tracking);
 }
 @media (hover: hover) and (pointer: fine) {
   .journey-story[data-story-layout="desktop"] > header > button:hover {
-    color: var(--startrips-starlight);
+    color: var(--control-ink);
     background: transparent;
   }
 }
@@ -182,19 +183,19 @@
   height: 44px;
   border: 0;
   background: transparent;
-  color: var(--startrips-muted);
+  color: var(--control-muted);
 }
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav :is(.journey-story__quick-recap-action, .journey-story__media-autobrowse) {
   width: auto;
   padding-inline: 10px;
 }
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav .journey-story__quick-recap-action {
-  color: var(--startrips-starlight);
+  color: var(--control-ink);
 }
 @media (hover: hover) and (pointer: fine) {
-  .journey-story[data-story-layout="desktop"] .journey-story__media-nav button:hover:not(:disabled) { color: var(--startrips-starlight); }
+  .journey-story[data-story-layout="desktop"] .journey-story__media-nav button:hover:not(:disabled) { color: var(--control-ink); }
 }
-.journey-story[data-story-layout="desktop"] .journey-story__media-nav button:disabled { opacity: .3; cursor: default; }
+.journey-story[data-story-layout="desktop"] .journey-story__media-nav button:disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
 .journey-story-fullscreen:not([data-mobile-layout="true"]) .journey-story-fullscreen__nav {
   display: flex;
   padding: 0;
@@ -213,17 +214,17 @@
   border: 0;
   background: transparent;
 }
+/* Previous / next Journey and the edit actions stay quiet 44px buttons. */
 .journey-story[data-story-layout="desktop"] > footer button {
   min-height: 44px;
   padding: 0 8px;
   border: 0;
   background: transparent;
-  color: var(--startrips-muted);
-  font-size: 11px;
+  color: var(--control-muted);
+  font-size: var(--control-font-size);
 }
-.journey-story[data-story-layout="desktop"] button:focus-visible {
-  outline: 1px solid var(--startrips-starlight);
-  outline-offset: 4px;
+@media (hover: hover) and (pointer: fine) {
+  .journey-story[data-story-layout="desktop"] > footer button:not(.is-destructive):hover:not(:disabled) { color: var(--control-ink); }
 }
 .journey-story[data-story-layout="desktop"][data-has-media="false"] {
   width: min(720px, 100%);

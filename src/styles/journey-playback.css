@@ -123,13 +123,13 @@
   display: flex;
   align-items: center;
   box-sizing: border-box;
-  padding: 0 13px;
-  border: 1px solid rgba(118, 198, 188, 0.26);
-  border-radius: 999px;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: rgba(2, 10, 11, 0.82);
-  color: rgba(235, 250, 247, 0.86);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
   cursor: pointer;
   list-style: none;
   backdrop-filter: blur(14px);
@@ -418,33 +418,34 @@
   right: max(18px, var(--playback-chapter-padding-inline));
   bottom: calc(var(--playback-controls-reserve) + 8px);
   display: grid;
-  grid-template-columns: 36px auto 36px;
+  /* 44px buttons inside a trimmed inset: the navigator keeps its outline. */
+  grid-template-columns: var(--control-height) auto var(--control-height);
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-height: 36px;
-  padding: 5px 7px;
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  border-radius: 999px;
+  padding: 1px 3px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: rgba(2, 8, 8, 0.78);
   backdrop-filter: blur(12px);
 }
 
 .journey-playback__dense-nav button {
-  width: 36px;
-  height: 36px;
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-text);
+  color: var(--control-ink);
   cursor: pointer;
 }
 
 .journey-playback__dense-nav button:disabled {
-  opacity: 0.28;
-  cursor: default;
+  opacity: var(--control-disabled-opacity);
+  cursor: not-allowed;
 }
 
 .journey-playback__dense-nav span {
@@ -476,14 +477,15 @@
   position: absolute;
   top: calc(18px + env(safe-area-inset-top, 0px));
   right: calc(18px + env(safe-area-inset-right, 0px));
-  width: 44px;
-  height: 44px;
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid rgba(203, 241, 193, 0.28);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: rgba(2, 8, 8, 0.8);
-  color: #d6e0dd;
+  color: var(--control-ink);
   cursor: pointer;
 }
 
@@ -492,19 +494,15 @@
   z-index: var(--z-content-5);
   top: calc(18px + env(safe-area-inset-top, 0px));
   left: calc(18px + env(safe-area-inset-left, 0px));
-  min-height: 44px;
-  padding: 0 16px;
-  border: 1px solid rgba(118, 198, 188, 0.42);
-  border-radius: 999px;
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: rgba(2, 10, 11, 0.86);
-  color: var(--atlas-text);
-  font: 500 12px/1 var(--archive-sans);
+  color: var(--control-ink);
+  font: 500 var(--control-font-size)/1 var(--archive-sans);
+  letter-spacing: var(--control-tracking);
   cursor: pointer;
-}
-
-.journey-playback__return-location:focus-visible {
-  outline: 2px solid var(--atlas-acid);
-  outline-offset: 2px;
 }
 
 .journey-playback__controls {
@@ -518,24 +516,28 @@
   gap: 10px;
   padding: 8px 12px;
   background: rgba(2, 8, 8, 0.82);
-  border: 1px solid var(--atlas-line);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
 }
 
 .journey-playback__controls button {
-  width: 44px;
-  height: 44px;
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--atlas-line);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-muted);
+  color: var(--control-muted);
   cursor: pointer;
 }
 
+/* Paused is the pressed state: the selection colour, never acid. */
 .journey-playback__controls button.is-active {
-  border-color: var(--atlas-acid);
-  color: var(--atlas-acid);
+  border-color: var(--control-select);
+  background-color: color-mix(in srgb, var(--control-select) 12%, transparent);
+  color: var(--control-select);
 }
 
 .journey-playback__tempo {
@@ -545,20 +547,27 @@
   align-items: center;
 }
 
+/* The .st-select look. The inset stays under 30px so two characters fit the
+   64px compact column at app.css's 16px coarse-pointer floor. */
 .journey-playback__tempo select {
+  appearance: none;
+  -webkit-appearance: none;
   width: 100%;
-  height: 44px;
-  padding: 0 24px 0 10px;
-  border: 1px solid var(--atlas-line);
-  background: rgba(2, 8, 8, 0.72);
-  color: var(--atlas-muted);
-  font: 500 11px/1 var(--archive-serif);
+  height: var(--control-height);
+  padding: 0 20px 0 8px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: transparent var(--control-chevron) no-repeat right 8px center / 10px 10px;
+  color: var(--control-ink);
+  font: 500 var(--control-font-size)/1 var(--archive-sans);
+  letter-spacing: var(--control-tracking);
+  color-scheme: dark;
   cursor: pointer;
 }
 
-.journey-playback__tempo select:focus-visible {
-  outline: 2px solid var(--atlas-acid);
-  outline-offset: 2px;
+.journey-playback__tempo select option {
+  background-color: #051011;
+  color: var(--control-ink);
 }
 
 .journey-playback__progress {
@@ -616,7 +625,7 @@
 }
 
 .journey-playback__progress:focus-within {
-  outline: 2px solid var(--atlas-acid);
+  outline: 2px solid var(--control-focus);
   outline-offset: 2px;
 }
 
@@ -626,6 +635,16 @@
 .journey-playback__selection-summary,
 .journey-playback__dense-nav {
   transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+/* The close also presses, so its idle fade carries the family transitions. */
+.journey-playback__close {
+  transition:
+    opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease),
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
 }
 
 .journey-playback.is-controls-hidden .journey-playback__close,
@@ -721,14 +740,6 @@
   .journey-playback__controls,
   .journey-playback__soundtrack {
     transition: none;
-  }
-
-  .journey-playback__tempo {
-    min-width: 64px;
-  }
-
-  .journey-playback__tempo select {
-    padding-inline: 7px 18px;
   }
 }
 
@@ -852,4 +863,63 @@
   font-size: 15px;
   line-height: 1.9;
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Playback in the control family (controls.css): one focus ring, a press on
+   pointer-down (reduced motion keeps the tint, drops the scale), fine-pointer hover. */
+.journey-playback :is(button, select, summary):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+:is(
+  .journey-playback__controls button,
+  .journey-playback__dense-nav button,
+  .journey-playback__return-location,
+  .journey-playback__selection-summary > summary,
+  .journey-playback__tempo select
+) {
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
+}
+
+:is(
+  .journey-playback__controls button,
+  .journey-playback__dense-nav button,
+  .journey-playback__close,
+  .journey-playback__return-location,
+  .journey-playback__selection-summary > summary
+):active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :is(
+    .journey-playback__controls button,
+    .journey-playback__dense-nav button,
+    .journey-playback__close,
+    .journey-playback__return-location,
+    .journey-playback__selection-summary > summary
+  ):active:not(:disabled) {
+    scale: 0.97;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :is(
+    .journey-playback__controls button:not(.is-active),
+    .journey-playback__close,
+    .journey-playback__return-location,
+    .journey-playback__selection-summary > summary,
+    .journey-playback__tempo select
+  ):hover:not(:disabled) {
+    border-color: var(--control-line-strong);
+  }
+
+  .journey-playback__controls button:not(.is-active):hover:not(:disabled) {
+    color: var(--control-ink);
+  }
 }

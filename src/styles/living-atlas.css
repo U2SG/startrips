@@ -1698,6 +1698,8 @@
   cursor: pointer;
 }
 
+/* Idle: the family's icon circle. During an upload, delete or save it widens
+   into a status pill (docs/mobile-control-grammar.md). */
 .journey-story > header > .journey-story__close {
   flex: 0 0 var(--mobile-control-hit-size, 44px);
   width: var(--mobile-control-hit-size, 44px);
@@ -1707,11 +1709,12 @@
   justify-content: center;
   gap: var(--mobile-control-cluster-gap, 6px);
   padding: 0;
+  border: 1px solid var(--control-line);
   border-radius: var(--mobile-control-radius, 999px);
-  color: #c4d1ce;
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+  background: var(--control-fill);
+  color: var(--control-muted);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
 .journey-story > header > .journey-story__close.is-status {
@@ -1719,20 +1722,6 @@
   flex-basis: auto;
   min-width: var(--mobile-control-hit-size, 44px);
   padding-inline: 13px;
-}
-
-.journey-story > header > .journey-story__close:focus-visible {
-  border-color: rgba(203, 241, 193, 0.54);
-  background: rgba(203, 241, 193, 0.07);
-  color: #eef7f3;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story > header > .journey-story__close:hover {
-    border-color: rgba(203, 241, 193, 0.54);
-    background: rgba(203, 241, 193, 0.07);
-    color: #eef7f3;
-  }
 }
 
 .journey-story__layout {
@@ -1795,24 +1784,29 @@
   right: auto;
   transform: translateX(-50%);
 }
+/* The desktop media lane makes its buttons quiet; these choices stay pills. */
 .journey-story[data-story-layout="desktop"] .journey-story__media-nav .journey-story__quick-recap-status button {
   width: auto;
   min-width: 44px;
-  padding-inline: 12px;
-  border: 1px solid var(--atlas-line);
-  color: var(--atlas-cyan);
+  padding-inline: var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  background: var(--control-fill);
+  color: var(--control-ink);
 }
 .journey-story__quick-recap-status button,
 .journey-story__quick-recap-empty {
-  min-height: 44px;
+  min-height: var(--control-height);
   margin-right: 8px;
-  padding: 0 12px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-cyan);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
-.journey-story__quick-recap-status button { margin-right: 0; font: inherit; }
+.journey-story__quick-recap-status button { margin-right: 0; }
 
 .journey-story__quick-recap-empty {
   display: inline-flex;
@@ -1821,13 +1815,7 @@
   margin: 12px 0;
 }
 
-.journey-story__quick-recap-status button:focus-visible,
-.journey-story__quick-recap-empty:focus-visible { border-color: var(--atlas-cyan); }
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__quick-recap-status button:hover,
-  .journey-story__quick-recap-empty:hover { border-color: var(--atlas-cyan); }
-}
-.journey-story__quick-recap-empty:disabled { opacity: 0.55; cursor: default; }
+.journey-story__quick-recap-empty:disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
 
 .journey-story__media {
   position: relative;
@@ -1875,32 +1863,18 @@
   z-index: var(--z-content-2);
   top: 16px;
   left: 16px;
-  min-height: 44px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px;
-  border: 1px solid var(--atlas-line);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: rgba(2, 8, 8, 0.82);
-  color: #d6e0dd;
+  color: var(--control-ink);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.09em;
-}
-
-.journey-story__media-overview:focus-visible {
-  border-color: rgba(200, 255, 61, 0.5);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__media-overview:hover {
-    border-color: rgba(200, 255, 61, 0.5);
-  }
-}
-
-.journey-story__media-overview.is-active {
-  color: var(--atlas-acid);
-  border-color: rgba(200, 255, 61, 0.5);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
 /* #20: batch-move entry point, opposite corner from the overview toggle so
@@ -1911,19 +1885,22 @@
   z-index: var(--z-content-2);
   top: 16px;
   right: 16px;
-  min-height: 44px;
-  padding: 0 14px;
-  border: 1px solid var(--atlas-line);
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: rgba(2, 8, 8, 0.82);
-  color: #d6e0dd;
+  color: var(--control-ink);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.09em;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
+/* Both toggles are pressed states, so they read in the selection colour. */
+.journey-story__media-overview.is-active,
 .journey-story__media-select-toggle.is-active {
-  color: var(--atlas-acid);
-  border-color: rgba(200, 255, 61, 0.5);
+  border-color: var(--control-select);
+  color: var(--control-select);
 }
 
 .journey-story__media-move-bar {
@@ -1965,29 +1942,6 @@
      top-right controls never overlap. */
   top: 68px;
   right: 16px;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  width: 44px;
-  min-width: 44px;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid rgba(200, 255, 61, 0.32);
-  background: rgba(2, 8, 8, 0.82);
-  color: var(--atlas-acid);
-  cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.09em;
-}
-
-.journey-story__fullscreen-entry:focus-visible {
-  border-color: rgba(200, 255, 61, 0.6);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__fullscreen-entry:hover {
-    border-color: rgba(200, 255, 61, 0.6);
-  }
 }
 
 /* The native control panel can change size across browsers. Reserve the
@@ -2221,8 +2175,8 @@
 }
 
 .journey-story__media-nav button.is-active {
-  color: var(--atlas-acid);
-  border-color: rgba(200, 255, 61, 0.5);
+  color: var(--control-select);
+  border-color: var(--control-select);
 }
 
 .journey-story__media-order {
@@ -2272,12 +2226,13 @@
 }
 
 .journey-story__media-nav button {
-  width: 40px;
-  height: 40px;
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--atlas-line);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: transparent;
   cursor: pointer;
 }
@@ -2296,18 +2251,17 @@
 }
 
 .journey-story__media-nav .journey-story__quick-recap-action {
-  color: var(--atlas-cyan);
-  border-color: rgba(118, 227, 211, 0.42);
+  color: var(--control-ink);
 }
 
 .journey-story__media-nav .journey-story__media-autobrowse {
-  color: var(--atlas-muted);
+  color: var(--control-muted);
 }
 
 .journey-story__media-nav :is(.journey-story__quick-recap-action, .journey-story__media-autobrowse) span {
   min-width: 0;
-  font: 500 11px/1 var(--archive-sans);
-  letter-spacing: 0;
+  font: 500 var(--control-font-size)/1 var(--archive-sans);
+  letter-spacing: var(--control-tracking);
   color: inherit;
 }
 
@@ -2342,8 +2296,9 @@
   min-height: 44px;
   padding: 0 8px;
   border: 0;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-text);
+  color: var(--control-ink);
   font: inherit;
   letter-spacing: inherit;
   cursor: pointer;
@@ -2385,9 +2340,18 @@
 
 /* #7: the control layer (close + nav) fades out after 2.5s idle; any pointer
    or key activity brings it back. */
-.journey-story-fullscreen__close,
 .journey-story-fullscreen__nav {
   transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+/* The close also presses, so its fade carries the family transitions. */
+.journey-story-fullscreen__close {
+  transition:
+    opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease),
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
 }
 
 .journey-story-fullscreen.is-controls-hidden .journey-story-fullscreen__close,
@@ -2401,14 +2365,15 @@
   position: absolute;
   top: 18px;
   right: 18px;
-  width: 44px;
-  height: 44px;
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid rgba(203, 241, 193, 0.28);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: rgba(2, 8, 8, 0.8);
-  color: #d6e0dd;
+  color: var(--control-ink);
   cursor: pointer;
 }
 
@@ -2427,20 +2392,22 @@
 }
 
 .journey-story-fullscreen__nav button {
-  width: 44px;
-  height: 44px;
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--atlas-line);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-muted);
+  color: var(--control-ink);
   cursor: pointer;
 }
 
 .journey-story-fullscreen__nav button.is-active {
-  border-color: var(--atlas-acid);
-  color: var(--atlas-acid);
+  border-color: var(--control-select);
+  background-color: color-mix(in srgb, var(--control-select) 12%, transparent);
+  color: var(--control-select);
 }
 
 .journey-story-fullscreen__nav span {
@@ -2464,33 +2431,25 @@
   flex: 0 0 auto;
 }
 
+/* Set cover and delete: the IconActionButton circle (controls.css) on dense
+   glass with ink, legible over the picture; delete's danger is shared above. */
+.journey-story__media-set-cover,
 .journey-story__media-remove > button {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid var(--atlas-line);
+  flex: 0 0 auto;
   background: rgba(2, 8, 8, 0.82);
-  color: var(--atlas-muted);
-  cursor: pointer;
-}
-
-.journey-story__media-remove > button:focus-visible {
-  color: #c28e78;
-  border-color: rgba(194, 142, 120, 0.55);
+  color: var(--control-ink);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .journey-story__media-remove > button:hover:not(:disabled) {
-    color: #c28e78;
-    border-color: rgba(194, 142, 120, 0.55);
+  .journey-story__media-set-cover:hover:not(:disabled) {
+    border-color: var(--control-line-strong);
   }
 }
 
+.journey-story__media-set-cover:disabled,
 .journey-story__media-remove > button:disabled {
   cursor: wait;
-  opacity: 0.68;
+  opacity: var(--control-disabled-opacity);
 }
 
 /* #14: single-photo cover action and current-cover label. */
@@ -2525,49 +2484,18 @@
   transform: translate(50%, -50%);
 }
 
-.journey-story__media-set-cover {
-  flex: 0 0 auto;
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
-  min-height: 40px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid rgba(200, 255, 61, 0.32);
-  background: rgba(2, 8, 8, 0.82);
-  color: var(--atlas-acid);
-  cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-}
-
-.journey-story__media-set-cover:focus-visible {
-  border-color: rgba(200, 255, 61, 0.6);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__media-set-cover:hover:not(:disabled) {
-    border-color: rgba(200, 255, 61, 0.6);
-  }
-}
-
-.journey-story__media-set-cover:disabled {
-  cursor: wait;
-  opacity: 0.68;
-}
-
 .journey-story__media-cover-current {
   flex: 0 0 auto;
-  min-height: 40px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
-  padding: 0 12px;
-  border: 1px solid rgba(200, 255, 61, 0.22);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
   background: rgba(2, 8, 8, 0.82);
-  color: var(--atlas-muted);
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  color: var(--control-muted);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
 .journey-story__media-remove__confirm {
@@ -2595,44 +2523,20 @@
 
 .journey-story__media-remove__confirm > button {
   flex: 0 0 auto;
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-muted);
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.09em;
-}
-
-.journey-story__media-remove__confirm > button.is-destructive {
-  color: #c28e78;
-  border-color: rgba(194, 142, 120, 0.45);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
 .journey-story__media-remove__confirm > button:disabled {
   cursor: wait;
-  opacity: 0.68;
-}
-
-.journey-story__media-remove__confirm > button:focus-visible {
-  border-color: rgba(203, 241, 193, 0.5);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__media-remove__confirm > button:hover:not(:disabled) {
-    border-color: rgba(203, 241, 193, 0.5);
-  }
-}
-
-.journey-story__media-remove__confirm > button.is-destructive:focus-visible {
-  border-color: rgba(194, 142, 120, 0.75);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__media-remove__confirm > button.is-destructive:hover:not(:disabled) {
-    border-color: rgba(194, 142, 120, 0.75);
-  }
+  opacity: var(--control-disabled-opacity);
 }
 
 .journey-story__media-remove__error {
@@ -2674,48 +2578,44 @@
   align-items: center;
   gap: 8px;
   padding: 10px 9px;
-  border: 1px solid rgba(203, 241, 193, 0.12);
-  background: rgba(203, 241, 193, 0.025);
-  color: var(--atlas-muted);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-tile);
+  background: var(--control-fill);
+  color: var(--control-muted);
   text-align: left;
+  transition: background-color var(--motion-instant) ease-out, border-color var(--motion-instant) ease-out, color var(--motion-instant) ease-out;
 }
 
 .journey-story__route-points button::after {
   content: "";
   position: absolute;
-  right: 10px;
+  right: var(--radius-tile);
   bottom: -1px;
-  left: 10px;
+  left: var(--radius-tile);
   height: 1px;
   background: transparent;
 }
 
-.journey-story__route-points button:focus-visible {
-  border-color: rgba(203, 241, 193, 0.34);
-  color: #edf6f2;
-}
-
 @media (hover: hover) and (pointer: fine) {
-  .journey-story__route-points button:hover {
-    border-color: rgba(203, 241, 193, 0.34);
-    color: #edf6f2;
+  .journey-story__route-points button:not(.is-active):hover {
+    border-color: var(--control-line-strong);
+    color: var(--control-ink);
   }
 }
 
 .journey-story__route-points button:disabled {
   cursor: wait;
-  opacity: 0.56;
+  opacity: var(--control-disabled-opacity);
 }
 
 .journey-story__route-points button.is-active {
-  border-color: rgba(200, 255, 61, 0.5);
-  background: rgba(200, 255, 61, 0.08);
-  color: #f3f9f6;
+  border-color: var(--control-select);
+  background: color-mix(in srgb, var(--control-select) 12%, transparent);
+  color: var(--control-ink);
 }
 
 .journey-story__route-points button.is-active::after {
-  background: var(--atlas-acid);
-  box-shadow: 0 0 12px rgba(200, 255, 61, 0.48);
+  background: var(--control-select);
 }
 
 .journey-story__route-points span,
@@ -2855,22 +2755,19 @@
 }
 
 .journey-story__delete-confirmation button {
-  min-height: 42px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: var(--atlas-muted);
+  min-height: var(--control-height);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
-}
-
-.journey-story__delete-confirmation button:last-child {
-  border-color: rgba(217, 138, 112, 0.42);
-  background: rgba(217, 138, 112, 0.09);
-  color: #efc6b6;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
 .journey-story__delete-confirmation button:disabled {
   cursor: wait;
-  opacity: 0.58;
+  opacity: var(--control-disabled-opacity);
 }
 
 .journey-story__delete-error {
@@ -2918,36 +2815,28 @@
   white-space: nowrap;
 }
 
-.journey-story__media-add > button {
-  min-height: 44px;
+/* Secondary pills. Retry is a recovery, not a destructive action. */
+.journey-story__media-add > button,
+.journey-story__soundtrack-actions button {
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 9px;
-  padding: 0 15px;
-  border: 1px solid rgba(203, 241, 193, 0.28);
-  background: rgba(203, 241, 193, 0.075);
-  color: #dbe8e4;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.09em;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
-.journey-story__media-add > button:focus-visible {
-  border-color: rgba(203, 241, 193, 0.6);
-  background: rgba(203, 241, 193, 0.12);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__media-add > button:hover:not(:disabled) {
-    border-color: rgba(203, 241, 193, 0.6);
-    background: rgba(203, 241, 193, 0.12);
-  }
-}
-
-.journey-story__media-add > button:disabled {
+.journey-story__media-add > button:disabled,
+.journey-story__soundtrack-actions button:disabled {
   cursor: wait;
-  opacity: 0.68;
+  opacity: var(--control-disabled-opacity);
 }
 
 .journey-story__placement-review {
@@ -3016,31 +2905,56 @@
 }
 
 .journey-story__placement-actions button {
-  min-height: 34px;
-  padding: 0 10px;
-  border: 1px solid rgba(203, 241, 193, 0.28);
-  background: rgba(203, 241, 193, 0.08);
-  color: #dbe8e4;
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
-  font-size: 9px;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
-.journey-story__placement-actions button:focus-visible {
-  border-color: rgba(203, 241, 193, 0.58);
-  background: rgba(203, 241, 193, 0.13);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__placement-actions button:hover {
-    border-color: rgba(203, 241, 193, 0.58);
-    background: rgba(203, 241, 193, 0.13);
-  }
+.journey-story__placement-actions button:disabled {
+  cursor: wait;
+  opacity: var(--control-disabled-opacity);
 }
 
 .journey-story__placement-actions button.is-secondary {
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: transparent;
   background: transparent;
-  color: var(--atlas-faint);
+  color: var(--control-muted);
+}
+
+/* Coordinate fields: the family field look without spinners; still
+   type=number, so typing and the arrow keys edit them. */
+.journey-story__placement-actions input[type="number"] {
+  width: 11em;
+  max-width: 100%;
+  min-height: var(--control-height);
+  padding: 0 14px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-field);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font: inherit;
+  font-size: var(--control-font-size);
+  color-scheme: dark;
+  appearance: textfield;
+  -moz-appearance: textfield;
+  transition: border-color var(--motion-instant) ease-out;
+}
+
+.journey-story__placement-actions input[type="number"]::-webkit-inner-spin-button,
+.journey-story__placement-actions input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.journey-story__placement-actions input[type="number"]:focus {
+  border-color: var(--control-line-strong);
 }
 
 .journey-story__upload-progress {
@@ -3080,13 +2994,6 @@
 }
 
 .journey-story__upload-message.is-error {
-  color: #d9a38c;
-}
-
-.journey-story__media-add > .journey-story__retry {
-  min-height: 36px;
-  border-color: rgba(217, 163, 140, 0.28);
-  background: transparent;
   color: #d9a38c;
 }
 
@@ -3214,44 +3121,6 @@
   gap: 8px;
 }
 
-.journey-story__soundtrack-actions button {
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  padding: 0 15px;
-  border: 1px solid rgba(203, 241, 193, 0.28);
-  background: rgba(203, 241, 193, 0.075);
-  color: #dbe8e4;
-  cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.09em;
-}
-
-.journey-story__soundtrack-actions button:focus-visible {
-  border-color: rgba(203, 241, 193, 0.6);
-  background: rgba(203, 241, 193, 0.12);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .journey-story__soundtrack-actions button:hover:not(:disabled) {
-    border-color: rgba(203, 241, 193, 0.6);
-    background: rgba(203, 241, 193, 0.12);
-  }
-}
-
-.journey-story__soundtrack-actions button.is-destructive {
-  border-color: rgba(217, 163, 140, 0.28);
-  background: transparent;
-  color: #d9a38c;
-}
-
-.journey-story__soundtrack-actions button:disabled {
-  cursor: wait;
-  opacity: 0.68;
-}
-
 .journey-story > footer {
   grid-row: 3;
   grid-column: 1;
@@ -3271,27 +3140,82 @@
 }
 
 .journey-story > footer button {
-  min-height: 42px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px;
-  border: 1px solid var(--atlas-line);
-  background: transparent;
-  color: #9eb0ab;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-}
-
-.journey-story > footer button.is-destructive {
-  border-color: rgba(217, 138, 112, 0.24);
-  color: #bd8c7a;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
 .journey-story > footer button:disabled {
-  cursor: default;
-  opacity: 0.38;
+  cursor: not-allowed;
+  opacity: var(--control-disabled-opacity);
+}
+
+/* ── Story in the control family (controls.css). Story is portaled to <body>,
+   so --atlas-* does not resolve here and its controls read :root --control-*.
+   Pills and circles press with a small scale, rows with a tint. */
+:is(.journey-story, .journey-story-fullscreen) :is(button, select, input, textarea):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+/* Destructive actions are text-forward in the shared danger tint. */
+:is(.journey-story > footer, .journey-story__soundtrack-actions, .journey-story__media-remove__confirm) button.is-destructive,
+.journey-story__delete-confirmation button:last-child {
+  border-color: color-mix(in srgb, var(--control-danger) 45%, transparent);
+  background: transparent;
+  color: var(--control-danger);
+}
+
+:where(.journey-story > header > button, .journey-story__media-overview, .journey-story__media-select-toggle,
+  .journey-story__quick-recap-empty, :is(.journey-story > footer, .journey-story__media-nav, .journey-story__media-add,
+  .journey-story__soundtrack-actions, .journey-story__quick-recap-status, .journey-story__delete-confirmation,
+  .journey-story__media-remove__confirm, .journey-story-fullscreen__nav) button) {
+  transition: scale var(--motion-instant) var(--motion-ease-out), background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out, color var(--motion-instant) ease-out;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :where(.journey-story > header > button, .journey-story-fullscreen__close, .journey-story__media-overview,
+    .journey-story__media-select-toggle, .journey-story__quick-recap-empty, :is(.journey-story > footer,
+    .journey-story__media-nav, .journey-story__media-add, .journey-story__soundtrack-actions,
+    .journey-story__quick-recap-status, .journey-story__delete-confirmation, .journey-story__media-remove__confirm,
+    .journey-story-fullscreen__nav) button):active:not(:disabled) {
+    scale: 0.97;
+  }
+}
+
+:is(.journey-story__route-points button, .journey-story__mobile-media-sheet > button,
+  .journey-story__mobile-media-confirm-actions > button):active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :is(.journey-story > header > .journey-story__close, .journey-story-fullscreen__close,
+    .journey-story-fullscreen__nav button:not(.is-active), .journey-story__quick-recap-empty,
+    :is(.journey-story__media-overview, .journey-story__media-select-toggle):not(.is-active),
+    .journey-story__delete-confirmation button:not(:last-child), :is(.journey-story > footer, .journey-story__media-add,
+    .journey-story__soundtrack-actions, .journey-story__quick-recap-status, .journey-story__media-remove__confirm)
+    button:not(.is-destructive, .is-secondary)):hover:not(:disabled) {
+    border-color: var(--control-line-strong);
+  }
+
+  :is(.journey-story > header > .journey-story__close, .journey-story__placement-actions button.is-secondary):hover:not(:disabled) {
+    color: var(--control-ink);
+  }
+
+  :is(:is(.journey-story > footer, .journey-story__soundtrack-actions, .journey-story__media-remove__confirm) button.is-destructive,
+    .journey-story__delete-confirmation button:last-child):hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--control-danger) 70%, transparent);
+  }
 }
 
 /* Composer */
@@ -7400,7 +7324,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   .journey-story__mobile-media-actions.has-quick-recap .journey-story__mobile-autobrowse {
     left: 12px;
     border-color: rgba(118, 227, 211, 0.18);
-    color: var(--atlas-muted);
+    color: var(--control-muted);
   }
 
   .journey-story__mobile-media-actions.has-quick-recap button:disabled {
@@ -7527,9 +7451,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-story__mobile-media-sheet > button.is-destructive,
   .journey-story__mobile-media-confirm-actions > button.is-destructive {
-    border-color: rgba(194, 142, 120, 0.28);
-    background: rgba(68, 30, 24, 0.3);
-    color: #d7a28c;
+    border-color: color-mix(in srgb, var(--control-danger) 45%, transparent);
+    background: transparent;
+    color: var(--control-danger);
   }
 
   .journey-story__mobile-media-sheet-current,

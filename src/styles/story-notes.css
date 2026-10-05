@@ -26,28 +26,30 @@
   font-size: 0.8rem;
 }
 
+/* The family's field look (controls.css .st-field); the ring is Story's. */
 .story-notes-editor__field textarea {
   box-sizing: border-box;
   width: 100%;
   min-height: 7rem;
   resize: vertical;
-  padding: 0.7rem;
-  border: 1px solid var(--startrips-line);
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--startrips-space) 86%, transparent);
-  color: var(--startrips-starlight);
+  padding: 10px 14px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-field);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  color-scheme: dark;
   font: inherit;
   line-height: 1.55;
+  transition: border-color var(--motion-instant) ease-out;
 }
 
-.story-notes-editor__field textarea:focus-visible {
-  outline: 1px solid var(--startrips-starlight);
-  outline-offset: 2px;
+.story-notes-editor__field textarea:focus {
+  border-color: var(--control-line-strong);
 }
 
 .story-notes-editor__field textarea:disabled {
   cursor: not-allowed;
-  opacity: 0.58;
+  opacity: var(--control-disabled-opacity);
 }
 
 .story-notes-editor__field small {
@@ -82,25 +84,37 @@
 .story-notes-editor__actions button {
   flex: 1 1 7rem;
   min-width: 0;
-  min-height: 44px;
-  padding: 0.5rem 0.7rem;
-  border: 1px solid var(--startrips-line);
-  border-radius: 3px;
-  background: transparent;
-  color: var(--startrips-starlight);
-  font: 500 0.78rem/1.2 var(--archive-sans);
+  min-height: var(--control-height);
+  padding: 0.5rem var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font: 500 var(--control-font-size)/1.2 var(--archive-sans);
+  letter-spacing: var(--control-tracking);
   cursor: pointer;
+  transition: scale var(--motion-instant) var(--motion-ease-out), background-color var(--motion-instant) ease-out, border-color var(--motion-instant) ease-out;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .story-notes-editor__actions button:hover:not(:disabled) {
-    border-color: var(--startrips-starlight);
+    border-color: var(--control-line-strong);
+  }
+}
+
+.story-notes-editor__actions button:active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .story-notes-editor__actions button:active:not(:disabled) {
+    scale: 0.97;
   }
 }
 
 .story-notes-editor__actions button:disabled {
   cursor: not-allowed;
-  opacity: 0.48;
+  opacity: var(--control-disabled-opacity);
 }
 
 .story-notes-editor__save {
