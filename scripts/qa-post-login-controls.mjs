@@ -339,16 +339,51 @@ async function verifyAtlasShell() {
         );
       });
       const planet = await scanButtons(page, ".living-atlas");
+      // The Journey card's 打开故事 and 播放旅程 are family pills: a 44px box
+      // whose radius is at least half its height.
+      const cardActions = await page.evaluate(() => [
+        ...document.querySelectorAll(".living-atlas__active-actions > button"),
+      ].map((button) => ({
+        height: Math.round(button.getBoundingClientRect().height),
+        radius: Number.parseFloat(getComputedStyle(button).borderTopLeftRadius),
+      })));
       record(`atlas-${label}-planet`, planet, {
         brandNavOverlap,
-        failed: brandNavOverlap !== 0,
+        cardActions,
+        failed: brandNavOverlap !== 0
+          || cardActions.length !== 2
+          || cardActions.some((action) => action.height < 44 || action.radius < action.height / 2),
       });
 
       await clickText(page, "时间线");
       const timeline = await scanButtons(page, ".living-atlas");
+      // Each card's 打开故事 is a one-line pill with a 44px box inside its card;
+      // the overlap scan above keeps it clear of the card's hit area.
+      const storyPills = await page.evaluate(() => [...document.querySelectorAll(".journey-timeline__story")].map((pill) => {
+        const box = pill.getBoundingClientRect();
+        const card = pill.closest(".journey-timeline__card")?.getBoundingClientRect();
+        const lineTops = new Set();
+        for (const node of pill.childNodes) {
+          if (node.nodeType !== Node.TEXT_NODE || !node.textContent?.trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            if (rect.width > 0) lineTops.add(Math.round(rect.top));
+          }
+        }
+        return {
+          lines: lineTops.size,
+          height: Math.round(box.height),
+          inside: Boolean(card) && box.left >= card.left && box.right <= card.right
+            && box.top >= card.top && box.bottom <= card.bottom,
+        };
+      }));
+      const badStoryPills = storyPills.filter((pill) => pill.lines !== 1 || pill.height < 44 || !pill.inside);
       record(`atlas-${label}-timeline`, timeline, {
         brandNavOverlap,
-        failed: brandNavOverlap !== 0,
+        storyPills: storyPills.length,
+        badStoryPills,
+        failed: brandNavOverlap !== 0 || storyPills.length === 0 || badStoryPills.length > 0,
       });
     }
   } finally {
@@ -1793,10 +1828,23 @@ async function verifyAccountDock() {
           headerMinTouchTarget: targets.length > 0 ? Math.min(...targets) : null,
         };
       }) : null;
+      // The account trigger is a 44px circle on desktop and on phones alike.
+      const accountTrigger = await page.locator(accountTriggerSelector).evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          radius: Number.parseFloat(getComputedStyle(element).borderTopLeftRadius),
+        };
+      });
       record(`account-${label}-closed`, await scanButtons(page, ".living-atlas"), {
         tabNavOverlap,
+        accountTrigger,
         ...(compactHeader ?? {}),
         failed: tabNavOverlap !== 0
+          || accountTrigger.width < 44
+          || accountTrigger.height < 44
+          || accountTrigger.radius < accountTrigger.height / 2
           || (compactHeader !== null && (
             compactHeader.headerIconControls > 3
             || compactHeader.headerMinTouchTarget === null
@@ -1826,7 +1874,8 @@ async function verifyAccountDock() {
           }),
         };
       });
-      const minimumButtonHeight = mobile ? 43 : 31;
+      // Every account action keeps a 44px box on the desktop dock too.
+      const minimumButtonHeight = 43;
       const invalidPanel = panelMetrics.viewportOverflowX > 0
         || panelMetrics.viewportOverflowY > 0
         || panelMetrics.overflowX > 0
