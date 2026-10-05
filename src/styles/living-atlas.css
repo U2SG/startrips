@@ -464,29 +464,6 @@
   border-left: 1px solid var(--control-line);
 }
 
-/* While the detail map shows, the band above the Journey card's top edge is
-   the zoom row's, so the right-hand context cards (none of them modal) keep
-   out of it: Everyday starts at the card's top edge, Home Base grows up to it
-   at most, and the centred Route Point card is capped so its top never rises
-   above it. The left column holds the globe controls at that height, so
-   moving the row instead would collide there on a narrow desktop. */
-.living-atlas[data-mobile-v2="off"]:has(.living-atlas-globe:is([data-earth-dive="blending"], [data-earth-dive="detail"])) {
-  --detail-zoom-band: clamp(172px, 22vh, 232px);
-}
-
-.living-atlas[data-mobile-v2="off"]:has(.living-atlas-globe:is([data-earth-dive="blending"], [data-earth-dive="detail"])) .living-atlas__everyday-context {
-  top: var(--detail-zoom-band);
-  max-height: calc(100dvh - var(--detail-zoom-band) - 28px);
-}
-
-.living-atlas[data-mobile-v2="off"]:has(.living-atlas-globe:is([data-earth-dive="blending"], [data-earth-dive="detail"])) .living-atlas__home-base-context {
-  max-height: calc(100dvh - var(--detail-zoom-band) - 28px - env(safe-area-inset-bottom));
-}
-
-.living-atlas[data-mobile-v2="off"]:has(.living-atlas-globe:is([data-earth-dive="blending"], [data-earth-dive="detail"])) .living-atlas__route-point-context {
-  max-height: min(70svh, 620px, calc(100% - 2 * var(--detail-zoom-band)));
-}
-
 .detailed-earth-map .maplibregl-ctrl-icon {
   filter: invert(86%) sepia(10%) saturate(404%) hue-rotate(112deg) brightness(86%);
 }
@@ -9713,6 +9690,29 @@ body:has(.journey-share) .account-dock {
   background: rgba(2, 10, 11, 0.82);
   box-shadow: 0 22px 64px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(18px);
+}
+
+/* While the detail map shows, the band above the Journey card's top edge is
+   the zoom row's, so the right-hand context cards (none of them modal) keep
+   out of it: Everyday starts at the card's top edge, Home Base grows up to it
+   at most, and the centred Route Point card is capped so its top never rises
+   above it. The left column holds the globe controls at that height, so
+   moving the row instead would collide there on a narrow desktop. */
+.living-atlas[data-mobile-v2="off"]:has(.living-atlas-globe:is([data-earth-dive="blending"], [data-earth-dive="detail"])) {
+  --detail-zoom-band: clamp(172px, 22vh, 232px);
+}
+
+.living-atlas[data-mobile-v2="off"]:has(.living-atlas-globe:is([data-earth-dive="blending"], [data-earth-dive="detail"])) .living-atlas__everyday-context {
+  top: var(--detail-zoom-band);
+  max-height: calc(100dvh - var(--detail-zoom-band) - 28px);
+}
+
+.living-atlas[data-mobile-v2="off"]:has(.living-atlas-globe:is([data-earth-dive="blending"], [data-earth-dive="detail"])) .living-atlas__home-base-context {
+  max-height: calc(100dvh - var(--detail-zoom-band) - 28px - env(safe-area-inset-bottom));
+}
+
+.living-atlas[data-mobile-v2="off"]:has(.living-atlas-globe:is([data-earth-dive="blending"], [data-earth-dive="detail"])) .living-atlas__route-point-context {
+  max-height: min(70svh, 620px, calc(100% - 2 * var(--detail-zoom-band)));
 }
 
 .living-atlas__everyday-context > header {
