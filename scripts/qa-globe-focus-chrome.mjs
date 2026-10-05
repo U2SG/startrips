@@ -1518,12 +1518,22 @@ try {
 
   // 7. The detail map's zoom group never meets the desktop Journey card. The
   //    card grows down to the window's foot when its playback chooser opens,
-  //    so a short window is graded with the chooser closed and open: no
-  //    intersection, on screen, 44px buttons, each one hit-testable.
-  {
-    const viewport = { name: "1280x700", width: 1280, height: 700 };
-    const { page, pageErrors } = await openAtlas(viewport);
+  //    so the ~700px height family is graded from the narrow 800px desktop
+  //    (the <=980px card) up, plus a shorter 800x640, with the chooser closed
+  //    and open: no intersection, on screen, 44px buttons, and every button
+  //    hit-testable at its centre and 4px in from each corner.
+  for (const viewport of [
+    { name: "800x700", width: 800, height: 700 },
+    { name: "900x700", width: 900, height: 700 },
+    { name: "981x700", width: 981, height: 700 },
+    { name: "1024x700", width: 1024, height: 700 },
+    { name: "1280x700", width: 1280, height: 700 },
+    { name: "800x640", width: 800, height: 640 },
+  ]) {
+    let session = null;
     try {
+      session = await openAtlas(viewport);
+      const { page, pageErrors } = session;
       await activateDiveIntent(page);
       const measure = () => page.evaluate(() => {
         const group = document.querySelector(".detailed-earth-map .maplibregl-ctrl-group");
@@ -1548,11 +1558,23 @@ try {
           onScreen: a.left >= 0 && a.top >= 0 && a.right <= innerWidth && a.bottom <= innerHeight,
           buttons: [...group.querySelectorAll("button")].map((button) => {
             const rect = button.getBoundingClientRect();
-            const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+            // The centre, then 4px in from each corner.
+            const points = [
+              [rect.left + rect.width / 2, rect.top + rect.height / 2],
+              [rect.left + 4, rect.top + 4],
+              [rect.right - 4, rect.top + 4],
+              [rect.left + 4, rect.bottom - 4],
+              [rect.right - 4, rect.bottom - 4],
+            ];
+            const hits = points.map(([x, y]) => {
+              const hit = document.elementFromPoint(x, y);
+              return hit === button || Boolean(hit && button.contains(hit));
+            });
             return {
               width: Math.round(rect.width),
               height: Math.round(rect.height),
-              hitOwned: hit === button || Boolean(hit && button.contains(hit)),
+              hits,
+              hitOwned: hits.every(Boolean),
             };
           }),
         };
@@ -1571,15 +1593,24 @@ try {
         && state.buttons.every((button) => button.width >= 44 && button.height >= 44 && button.hitOwned),
       );
       record({
-        name: "detail-zoom-group-clears-the-journey-card",
+        name: `detail-zoom-group-clears-the-journey-card/${viewport.name}`,
         viewport: viewport.name,
         chooserClosed,
         chooserOpen,
         pageErrors,
         failed: !clear(chooserClosed) || !clear(chooserOpen) || pageErrors.length > 0,
       });
+    } catch (error) {
+      // A step that throws still names the size it failed at.
+      record({
+        name: `detail-zoom-group-clears-the-journey-card/${viewport.name}`,
+        viewport: viewport.name,
+        error: error instanceof Error ? error.message : String(error),
+        pageErrors: session?.pageErrors ?? [],
+        failed: true,
+      });
     } finally {
-      await page.close();
+      await session?.page.close();
     }
   }
 } catch (error) {

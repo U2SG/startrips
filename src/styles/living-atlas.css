@@ -410,14 +410,17 @@
   backdrop-filter: blur(12px);
 }
 
-/* Zoom and compass are one rounded pill group of 44px controls; each answers
-   a press with a tint inside it. MapLibre's sheet loads after this one, so
-   the focus rule outranks its (0,3,1) glow and per-end radii, and its ring
-   sits inside the clipped pill. */
+/* Zoom and compass are one rounded tray of 44px controls; each answers a
+   press with a tint inside it. The tray takes --radius-tile, not a full pill:
+   a pill's end radius would clip the end buttons' outer corners out of hit
+   testing, while a 13px inner radius leaves every point 4px in from a
+   button's corner hittable. MapLibre's sheet loads after this one, so the
+   focus rule outranks its (0,3,1) glow and per-end radii, and its ring sits
+   inside the clipped tray. */
 .detailed-earth-map .maplibregl-ctrl-group {
   overflow: hidden;
   border-color: var(--control-line);
-  border-radius: var(--control-radius);
+  border-radius: var(--radius-tile);
   background: var(--control-fill);
 }
 
@@ -437,7 +440,7 @@
 }
 
 .detailed-earth-map .maplibregl-ctrl-group button:focus:focus-visible {
-  border-radius: var(--control-radius);
+  border-radius: 0;
   outline: 2px solid var(--control-focus);
   outline-offset: -4px;
   box-shadow: none;
