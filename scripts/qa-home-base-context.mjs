@@ -475,6 +475,22 @@ async function closeContext(page) {
 }
 
 /**
+ * The Atlas's layout marker once it has settled. `.living-atlas` first renders
+ * as the loading shell, which carries no `data-mobile-v2`, so a read straight
+ * after the shell appears can see null (#653's one-off route-home-share
+ * failure). Wait for the expected value, bounded; on a timeout the actual value
+ * is still returned, so a wrong layout fails its record rather than hanging.
+ */
+async function waitForMobileMode(page, expected) {
+  await page.waitForFunction(
+    (value) => document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === value,
+    expected,
+    { timeout: 5_000 },
+  ).catch(() => undefined);
+  return page.locator(".living-atlas").getAttribute("data-mobile-v2");
+}
+
+/**
  * Where a compact context surface sits relative to the two persistent bands
  * and to the empty-state hero. The header block bounds it from above; the
  * dock bounds it from below, and an Atlas with no dock (no Journeys yet) is
@@ -487,6 +503,7 @@ async function closeContext(page) {
  * visible, it is inert, and its CTA takes no pointer.
  */
 async function compactSurfacePlacement(page, selector) {
+  await waitForMobileMode(page, "on");
   return page.evaluate(({ wanted, gap }) => {
     const node = document.querySelector(wanted);
     if (!(node instanceof HTMLElement)) return null;
@@ -906,6 +923,7 @@ try {
   await mobilePage.keyboard.press("Enter");
   const mobileContext = mobilePage.locator("[data-home-base-context]");
   await mobileContext.waitFor({ state: "visible", timeout: 5_000 });
+  await waitForMobileMode(mobilePage, "on");
   const mobilePlacement = await mobilePage.evaluate((gap) => {
     const node = document.querySelector("[data-home-base-context]");
     const chrome = document.querySelector(".mobile-v2__chrome");
@@ -1110,7 +1128,7 @@ try {
   // never measured a phone in landscape. `touch` makes it one. Desktop
   // Everyday stays covered at 1280x800 above.
   const noHomeLandscape = await openOwner({ width: 844, height: 390 }, { homePeriods: [], touch: true });
-  const landscapeMode = await noHomeLandscape.page.locator(".living-atlas").getAttribute("data-mobile-v2");
+  const landscapeMode = await waitForMobileMode(noHomeLandscape.page, "on");
   const { more: noHomeLandscapeMore, hit: landscapeEverydayHit } = await openCompactEveryday(noHomeLandscape.page);
   const noHomeLandscapeSurface = noHomeLandscape.page.locator("[data-atlas-everyday-context]");
   await noHomeLandscapeSurface.waitFor({ state: "visible" });
