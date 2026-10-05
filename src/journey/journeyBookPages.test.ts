@@ -116,7 +116,7 @@ describe("journeyBookPages", () => {
     expect(shape(journeyBookPages(journey))).toEqual(["cover", "note:a", "media:clip", "media:photo", "blank", "end"]);
   });
 
-  it("puts the Journey note on the cover and Journey-level media before the route", () => {
+  it("puts the Journey note on the first page and Journey-level media before the route", () => {
     const journey: Journey = {
       ...base,
       note: "整段旅程的感想",
@@ -125,7 +125,7 @@ describe("journeyBookPages", () => {
       media: [asset("photo-a", "a", 0), asset("intro", null, 0)],
     };
     const pages = journeyBookPages(journey);
-    expect(shape(pages)).toEqual(["cover", "media:intro", "media:photo-a", "end"]);
+    expect(shape(pages)).toEqual(["cover", "note:journey", "media:intro", "media:photo-a", "blank", "end"]);
     // #555: the cover is a presentation copy; the asset keeps its own page.
     expect(pages[0]).toMatchObject({ kind: "cover", asset: { id: "photo-a" } });
     expect(pages[0]).not.toHaveProperty("note");
