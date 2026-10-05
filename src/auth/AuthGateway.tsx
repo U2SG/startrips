@@ -869,7 +869,7 @@ function AccountPasswordPanel({ state, surface, onSurface, email, className }: {
     return (
       <div className={className}>
         <p className="auth-copy" role="status">{passwordLinkSurfaceText(surface)}</p>
-        <button type="button" disabled={pending} onClick={() => void sendSetPasswordLink()}>
+        <button type="button" className="st-btn st-btn--primary" disabled={pending} onClick={() => void sendSetPasswordLink()}>
           {pending ? "发送中…" : sendable ? "重新发送设置链接" : "发送设置链接"}
         </button>
         {notice}

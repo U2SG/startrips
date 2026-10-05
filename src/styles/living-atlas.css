@@ -66,6 +66,23 @@
   outline-offset: 3px;
 }
 
+/* Shell surfaces that consume the control tokens take the family's focus
+   ring. :is() carries its most specific entry, which outranks the default. */
+:is(
+  .mobile-v2__sheet-actions button,
+  .journey-timeline__card > .journey-timeline__story,
+  .living-atlas__notice button,
+  .living-atlas__route-point-context button,
+  .living-atlas-globe__controls button,
+  .living-atlas > .living-atlas__globe-focus-exit,
+  .living-atlas__home-base-suggestion button,
+  .living-atlas__home-base-context :is(button, input, textarea),
+  .living-atlas__everyday-context :is(button, input, textarea)
+):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
 .living-atlas button:disabled {
   cursor: not-allowed;
   opacity: var(--control-disabled-opacity);
@@ -393,12 +410,58 @@
   backdrop-filter: blur(12px);
 }
 
+/* Zoom and compass are one rounded tray of 44px controls; each answers a
+   press with a tint inside it. The tray takes --radius-tile, not a full pill:
+   a pill's end radius would clip the end buttons' outer corners out of hit
+   testing, while a 13px inner radius leaves every point 4px in from a
+   button's corner hittable. MapLibre's sheet loads after this one, so the
+   focus rule outranks its (0,3,1) glow and per-end radii, and its ring sits
+   inside the clipped tray. */
+.detailed-earth-map .maplibregl-ctrl-group {
+  overflow: hidden;
+  border-color: var(--control-line);
+  border-radius: var(--radius-tile);
+  background: var(--control-fill);
+}
+
 .detailed-earth-map .maplibregl-ctrl-group button {
+  width: var(--control-height);
+  height: var(--control-height);
   border-radius: 0;
+  transition: background-color var(--motion-instant) ease-out;
 }
 
 .detailed-earth-map .maplibregl-ctrl-group button + button {
-  border-top-color: rgba(118, 198, 188, 0.15);
+  border-top-color: var(--control-line);
+}
+
+.detailed-earth-map .maplibregl-ctrl-group button:active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+.detailed-earth-map .maplibregl-ctrl-group button:focus:focus-visible {
+  border-radius: 0;
+  outline: 2px solid var(--control-focus);
+  outline-offset: -4px;
+  box-shadow: none;
+}
+
+/* Desktop: the group is one row ending 10px above the Journey card's top edge
+   (the card's own clamp, below the 82px header). The card only grows downward,
+   to the window's foot when its playback chooser opens, so the two never meet
+   at any window height. */
+.living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right {
+  top: calc(clamp(172px, 22vh, 232px) - var(--control-height) - 12px);
+  bottom: auto;
+}
+
+.living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-group {
+  display: flex;
+}
+
+.living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-group button + button {
+  border-top: 0;
+  border-left: 1px solid var(--control-line);
 }
 
 .detailed-earth-map .maplibregl-ctrl-icon {
@@ -466,41 +529,41 @@
   letter-spacing: 0.08em;
 }
 
+/* The family's segmented look: a pill track whose selected item is an inset
+   cyan fill inside the item's full 44px box. */
 .living-atlas-globe__language {
   min-height: 44px;
   display: grid;
   grid-template-columns: repeat(2, minmax(52px, 1fr));
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  background: rgba(2, 11, 12, 0.82);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
   backdrop-filter: blur(12px);
 }
 
 .living-atlas-globe__language button {
   min-width: 52px;
-  min-height: 42px;
+  min-height: var(--control-height);
   padding: 0 10px;
-  border: 0;
+  border: 3px solid transparent;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-muted);
+  background-clip: padding-box;
+  color: var(--control-muted);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+  white-space: nowrap;
 }
 
-.living-atlas-globe__language button + button {
-  border-left: 1px solid rgba(118, 198, 188, 0.16);
-}
-
-.living-atlas-globe__language button:focus-visible,
 .living-atlas-globe__language button.is-active {
-  background: rgba(200, 255, 61, 0.1);
-  color: var(--atlas-acid);
+  background-color: color-mix(in srgb, var(--control-select) 14%, transparent);
+  color: var(--control-select);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .living-atlas-globe__language button:hover {
-    background: rgba(200, 255, 61, 0.1);
-    color: var(--atlas-acid);
+  .living-atlas-globe__language button:not(.is-active):hover {
+    color: var(--control-ink);
   }
 }
 
@@ -614,30 +677,31 @@
   to { transform: translate3d(5vmax, -4vmax, 0) scale(0.9); }
 }
 
+/* A secondary pill. Its geometry stays on one class so the compact rules can
+   still narrow it; the shell's type and ink defaults outrank one class, so
+   those two sit on `button.` below. */
 .living-atlas-globe__pick {
-  min-height: 44px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 14px;
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  background: rgba(2, 11, 12, 0.82);
+  gap: var(--control-gap);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
   backdrop-filter: blur(12px);
-  color: var(--atlas-muted);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--control-tracking);
 }
 
-.living-atlas-globe__pick:focus-visible {
-  background: rgba(200, 255, 61, 0.1);
-  color: var(--atlas-acid);
+button.living-atlas-globe__pick {
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .living-atlas-globe__pick:hover {
-    background: rgba(200, 255, 61, 0.1);
-    color: var(--atlas-acid);
+    border-color: var(--control-line-strong);
   }
 }
 
@@ -1112,16 +1176,18 @@
   margin-top: auto;
 }
 
+/* The card's one acid primary. The arrow disc is an inset concentric with the
+   pill's end, inside the full 44px box. */
 .living-atlas__active-actions > button {
-  min-height: 56px;
+  min-height: var(--control-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 8px 0 20px;
-  border: 1px solid rgba(200, 255, 61, 0.7);
-  border-radius: 999px;
-  background: var(--atlas-acid);
-  color: #091006;
+  padding: 0 5px 0 var(--control-pad-x);
+  border: 1px solid var(--control-primary);
+  border-radius: var(--control-radius);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
   box-shadow: 0 12px 36px rgba(200, 255, 61, 0.18);
   cursor: pointer;
   font-size: 11px;
@@ -1129,9 +1195,14 @@
   letter-spacing: 0.12em;
 }
 
+.living-atlas__active-actions > button:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
 .living-atlas__active-action-icon {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   display: grid;
   flex: 0 0 auto;
   place-items: center;
@@ -1140,19 +1211,19 @@
   color: var(--atlas-acid);
 }
 
-/* #19: the playback entry is a quieter secondary action beside 打开故事. */
+/* #19: the playback entry is a quieter secondary pill beside 打开故事. */
 .living-atlas__active .living-atlas__active-play {
-  min-height: 56px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--control-gap);
   margin-top: 10px;
-  padding: 0 18px;
-  border: 1px solid rgba(118, 198, 188, 0.42);
-  border-radius: 999px;
-  background: rgba(2, 10, 11, 0.72);
-  color: #d6e0dd;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   box-shadow: none;
   cursor: pointer;
   font-size: 11px;
@@ -1160,15 +1231,9 @@
   letter-spacing: 0.1em;
 }
 
-.living-atlas__active .living-atlas__active-play:focus-visible {
-  border-color: var(--atlas-cyan);
-  color: var(--atlas-cyan);
-}
-
 @media (hover: hover) and (pointer: fine) {
-  .living-atlas__active .living-atlas__active-play:hover {
-    border-color: var(--atlas-cyan);
-    color: var(--atlas-cyan);
+  .living-atlas__active .living-atlas__active-play:hover:not(:disabled) {
+    border-color: var(--control-line-strong);
   }
 }
 
@@ -1307,7 +1372,7 @@
   align-items: center;
   gap: 18px;
   width: min(560px, calc(100vw - 48px));
-  padding: 10px 10px 10px 16px;
+  padding: 5px 5px 5px 16px;
   border: 1px solid var(--atlas-line-strong);
   background: #071312;
   color: #b8cbc5;
@@ -1316,18 +1381,41 @@
   line-height: 1.5;
 }
 
+/* A quiet 44px icon circle; the toast gives 5px of its old padding to the
+   message, so the larger box keeps the glyph where it was. */
 .living-atlas__notice button {
-  flex: 0 0 34px;
-  width: 34px;
-  height: 34px;
+  flex: 0 0 var(--control-height);
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   margin-left: auto;
   padding: 0;
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-muted);
+  color: var(--control-muted);
   cursor: pointer;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
+}
+
+.living-atlas__notice button:active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .living-atlas__notice button:active:not(:disabled) {
+    scale: 0.97;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__notice button:not(.living-atlas__notice-undo):hover {
+    color: var(--control-ink);
+  }
 }
 
 .living-atlas.is-loading,
@@ -1503,10 +1591,14 @@
 }
 
 /* The card content opens the Story, but the hit area stops before the
-   right-edge action so the two buttons never share geometry. */
+   right-edge action so the two buttons never share geometry: an absolutely
+   positioned grid child placed between column lines 1 and 2 takes that column
+   as its box. Both lines are named, because an `auto` end line would resolve
+   to the card's padding edge instead of spanning one column. */
 .journey-timeline__hit-area {
   position: absolute;
-  inset: 0 48px 0 0;
+  grid-column: 1 / 2;
+  inset: 0;
   z-index: var(--z-content-1);
   border: 0;
   border-radius: inherit;
@@ -1554,28 +1646,51 @@
   white-space: nowrap;
 }
 
-.journey-timeline__story {
+/* A quiet pill inside the sharp card. Two classes outrank the shell's
+   `.living-atlas button` type and ink defaults. */
+.journey-timeline__card > .journey-timeline__story {
   position: relative;
   z-index: var(--z-content-2);
-  width: 48px;
-  display: grid;
-  place-content: center;
+  min-height: var(--control-height);
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
   gap: 6px;
-  padding: 0;
-  border: 0;
-  border-left: 1px solid var(--atlas-line);
+  margin-right: 8px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: transparent;
+  color: var(--control-muted);
   cursor: pointer;
-  font-size: 0;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+  white-space: nowrap;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
 }
 
-.journey-timeline__story svg {
-  color: var(--atlas-muted);
+.journey-timeline__card > .journey-timeline__story:active {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .journey-timeline__card > .journey-timeline__story:active {
+    scale: 0.97;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-timeline__card > .journey-timeline__story:hover {
+    color: var(--control-ink);
+  }
 }
 
 .living-atlas__notice > span {
   flex: 1;
+  padding-block: 5px;
 }
 
 .living-atlas__notice button.living-atlas__notice-undo {
@@ -6057,20 +6172,29 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   padding-right: 48px;
 }
 
-.living-atlas__route-point-context-close {
+/* A quiet icon circle. `button` lifts the selector over the shell's ink
+   default, which the muted tint used to lose to. */
+button.living-atlas__route-point-context-close {
   position: absolute;
   top: -8px;
   right: -8px;
-  width: 44px;
-  height: 44px;
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-muted);
+  color: var(--control-muted);
   cursor: pointer;
+  transition: scale var(--motion-instant) var(--motion-ease-out);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :is(button.living-atlas__route-point-context-close, button.living-atlas__route-point-context-entry):active:not(:disabled) {
+    scale: 0.97;
+  }
 }
 
 .living-atlas__route-point-context-close:focus-visible {
@@ -6162,17 +6286,28 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   column-gap: 8px;
   align-items: center;
   padding: 7px 10px;
-  border: 1px solid rgba(118, 198, 188, 0.12);
-  border-radius: 11px;
-  background: rgba(118, 227, 211, 0.025);
-  color: var(--atlas-text);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-tile);
+  background: var(--control-fill);
+  color: var(--control-ink);
   cursor: pointer;
   text-align: left;
 }
 
+/* The stay summary's own text actions are pills; the records are tiles. */
+.living-atlas__route-point-context-switcher > button {
+  display: flex;
+  padding: 0 var(--control-pad-x);
+  border-radius: var(--control-radius);
+}
+
+.living-atlas__route-point-context-switcher button:active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
 .living-atlas__route-point-context-switcher button[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 32%, transparent);
-  background: color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 9%, transparent);
+  border-color: var(--control-select);
+  background: color-mix(in srgb, var(--control-select) 12%, transparent);
 }
 
 .living-atlas__route-point-context-switcher button > span {
@@ -6246,21 +6381,25 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   object-fit: cover;
 }
 
-.living-atlas__route-point-context-entry {
+/* The card's one acid primary (the desktop Journey card is hidden while this
+   card shows). `button` lifts it over the shell's type and ink defaults. */
+button.living-atlas__route-point-context-entry {
   width: 100%;
-  min-height: 44px;
+  min-height: var(--control-height);
   margin-top: 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  border-radius: 999px;
-  background: rgba(118, 227, 211, 0.06);
-  color: var(--atlas-text);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-primary);
+  border-radius: var(--control-radius);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
   cursor: pointer;
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: var(--control-font-size);
+  font-weight: 600;
+  letter-spacing: var(--control-tracking);
+  transition: scale var(--motion-instant) var(--motion-ease-out);
 }
 
 /* The coordinates and the media-coordinate provenance are reference detail,
@@ -6345,7 +6484,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   align-content: center;
   padding: 8px 10px;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-tile);
   background: rgba(255, 255, 255, 0.035);
   color: var(--atlas-text);
   cursor: pointer;
@@ -6534,18 +6673,24 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 0 16px;
-  border: 1px solid rgba(118, 198, 188, 0.22);
-  border-radius: 999px;
-  background: rgba(2, 10, 11, 0.55);
-  color: #a7b9b4;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
   cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--control-tracking);
   opacity: 0;
   pointer-events: none;
   backdrop-filter: blur(12px);
-  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+  transition:
+    opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease),
+    scale var(--motion-instant) var(--motion-ease-out);
+}
+
+/* The shell's type and ink defaults outrank one class. */
+button.living-atlas__globe-focus-exit {
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
 }
 
 .living-atlas.is-globe-focus .living-atlas__globe-focus-exit {
@@ -6832,7 +6977,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     font-size: 0;
   }
 
-  .living-atlas__globe-focus-exit {
+  button.living-atlas__globe-focus-exit {
     top: calc(env(safe-area-inset-top) + 12px);
     left: calc(env(safe-area-inset-left) + 12px);
     width: 44px;
@@ -8471,13 +8616,14 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   animation: atlasSheetIn var(--motion-ui) var(--motion-ease-out) backwards;
 }
 
+/* A 36px bar in a 44px box; the negative margins keep the sheet's rhythm. */
 .mobile-v2__sheet-handle,
 .mobile-v2__more-handle {
   width: 70px;
-  height: 30px;
+  height: var(--mobile-control-hit-size, 44px);
   display: grid;
   place-items: center;
-  margin: 0 auto 2px;
+  margin: -6px auto -4px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -8572,22 +8718,29 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .mobile-v2__sheet-actions button {
-  min-height: 44px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
   padding: 0 12px;
-  border: 1px solid rgba(118, 198, 188, 0.18);
-  border-radius: 12px;
-  background: rgba(5, 29, 27, 0.48);
-  color: rgba(216, 235, 228, 0.84);
-  font-size: 10px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
+.mobile-v2__sheet-actions button:not(.is-primary):active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+/* The only personalised primary in the product: it keeps the Journey's own
+   tint and takes only the family's shape, height and press. */
 .mobile-v2__sheet-actions .is-primary {
   grid-column: 1 / -1;
-  min-height: 48px;
+  padding: 0 var(--control-pad-x);
   justify-content: space-between;
   border-color: color-mix(in srgb, var(--journey-color) 38%, rgba(118, 198, 188, 0.24));
   background: color-mix(in srgb, var(--journey-color) 14%, rgba(4, 30, 27, 0.72));
@@ -8714,12 +8867,6 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
      scroll inside the journey sheet's 72svh cap. */
   max-height: calc(100svh - env(safe-area-inset-top, 0px) - 12px);
   color: rgba(226, 240, 234, 0.9);
-}
-
-/* Same bar and rhythm as the journey sheet's handle, in a 44px box. */
-.mobile-v2__more-handle {
-  height: var(--mobile-control-hit-size, 44px);
-  margin: -6px auto -4px;
 }
 
 .mobile-v2__more-heading {
@@ -9490,10 +9637,10 @@ body:has(.journey-share) .account-dock {
   width: 44px;
   height: 44px;
   padding: 0;
-  border: 1px solid var(--atlas-line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--atlas-muted);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
   cursor: pointer;
 }
 
@@ -9574,10 +9721,10 @@ body:has(.journey-share) .account-dock {
   width: 44px;
   height: 44px;
   padding: 0;
-  border: 1px solid var(--atlas-line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--atlas-muted);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-muted);
   cursor: pointer;
 }
 
@@ -9619,21 +9766,46 @@ body:has(.journey-share) .account-dock {
   gap: 8px;
 }
 
-.everyday-fragments button {
-  min-width: 44px;
-  min-height: 44px;
-  padding: 8px 12px;
-  border: 1px solid var(--atlas-line);
-  border-radius: 12px;
-  color: var(--atlas-text);
-  background: rgba(119, 200, 194, 0.08);
+/* Secondary pills; the form's submit is the card's one acid primary, and the
+   destructive pair carries the family's danger classes. */
+.everyday-fragments button:where(:not(.st-btn)) {
+  min-width: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  color: var(--control-ink);
+  background: var(--control-fill);
   font: inherit;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
   cursor: pointer;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    border-color var(--motion-instant) ease-out;
+}
+
+.everyday-fragments button[type="submit"] {
+  border-color: var(--control-primary);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
+  font-weight: 600;
+}
+
+.everyday-fragments button:not([type="submit"]):active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :is(.everyday-fragments button:not(.everyday-fragment-place-input__results button), .living-atlas__home-base-suggestion-actions button, :is(.living-atlas__home-base-context, .living-atlas__everyday-context) > header button):active:not(:disabled) {
+    scale: 0.97;
+  }
 }
 
 .everyday-fragments button:disabled {
   cursor: wait;
-  opacity: 0.55;
+  opacity: var(--control-disabled-opacity);
 }
 
 .everyday-fragments :is(button, input, textarea):focus-visible {
@@ -9676,11 +9848,11 @@ body:has(.journey-share) .account-dock {
   width: 100%;
   min-width: 0;
   min-height: 44px;
-  border: 1px solid var(--atlas-line);
-  border-radius: 8px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-field);
   padding: 8px;
-  color: var(--atlas-text);
-  background: #071514;
+  color: var(--control-ink);
+  background: var(--control-fill);
   color-scheme: dark;
   font: inherit;
   font-size: 16px;
@@ -9729,17 +9901,20 @@ body:has(.journey-share) .account-dock {
   border: 0;
 }
 
+/* Results are two-line tiles, and the chosen one takes the selection colour. */
 .everyday-fragment-place-input__results button {
   display: grid;
   width: 100%;
   justify-items: start;
   gap: 2px;
+  padding: 8px 12px;
+  border-radius: var(--radius-tile);
   text-align: left;
 }
 
 .everyday-fragment-place-input__results button[aria-selected="true"] {
-  border-color: color-mix(in srgb, var(--atlas-cyan) 65%, var(--atlas-line));
-  background: rgba(119, 200, 194, 0.14);
+  border-color: var(--control-select);
+  background: color-mix(in srgb, var(--control-select) 12%, transparent);
 }
 
 .everyday-fragment-place-input__results small,
@@ -9848,27 +10023,37 @@ body:has(.journey-share) .account-dock {
   margin-top: 16px;
 }
 
+/* The card's one acid primary; the other answers are quiet text. */
 .living-atlas__home-base-suggestion-actions button {
-  min-height: 44px;
-  padding: 0 18px;
-  border: 1px solid color-mix(in srgb, var(--atlas-cyan) 30%, var(--atlas-line));
-  border-radius: 999px;
-  background: rgba(118, 227, 211, 0.08);
-  color: var(--atlas-text);
+  min-height: var(--control-height);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-primary);
+  border-radius: var(--control-radius);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
   cursor: pointer;
-  font-size: 12px;
-  letter-spacing: 0.04em;
+  font-size: var(--control-font-size);
+  font-weight: 600;
+  letter-spacing: var(--control-tracking);
+  transition: scale var(--motion-instant) var(--motion-ease-out), color var(--motion-instant) ease-out;
 }
 
 .living-atlas__home-base-suggestion-actions button.is-quiet {
-  border-color: var(--atlas-line);
+  border-color: transparent;
   background: transparent;
-  color: var(--atlas-muted);
+  color: var(--control-muted);
+  font-weight: 400;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__home-base-suggestion-actions button.is-quiet:hover:not(:disabled) {
+    color: var(--control-ink);
+  }
 }
 
 .living-atlas__home-base-suggestion-actions button[disabled] {
   cursor: progress;
-  opacity: 0.55;
+  opacity: var(--control-disabled-opacity);
 }
 
 /* While the card sits at the foot of the desktop timeline, every year list
@@ -10289,8 +10474,10 @@ body:has(.journey-share) .account-dock {
 }
 
 /* #375: media belongs to the Route Point it was taken at. A full-width
-   secondary pill whose transparent file input covers the whole pill. */
-.journey-route-draft__media-upload {
+   secondary pill whose transparent file input covers the whole pill. The
+   Composer's `label` grid and `label > span` caption rules would otherwise
+   stack the icon over the text and grey the label. */
+.journey-composer label.journey-route-draft__media-upload {
   position: relative;
   min-height: var(--control-height);
   display: flex;
@@ -10303,6 +10490,10 @@ body:has(.journey-share) .account-dock {
   background: var(--control-fill);
   color: var(--control-ink);
   font-size: 11px;
+}
+
+.journey-composer .journey-route-draft__media-upload > span {
+  color: var(--control-ink);
 }
 
 .journey-route-draft__media-upload:has(input:focus-visible) {
