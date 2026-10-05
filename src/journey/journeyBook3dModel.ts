@@ -268,7 +268,28 @@ const RAKING_AZIMUTH = Math.atan2(-1, -1) + 2 * Math.PI;
 /** Progress below this is a hover lift or the start of a drag; the light stays. */
 const RAKING_DEAD_ZONE = 0.1;
 
-export type KeyLightPose = { x: number; y: number; z: number; intensity: number };
+/**
+ * The key light's shadow, tuned for the reading pose. The orthographic shadow
+ * camera spans ±`extent` world units on a `mapSize` map; PCF samples
+ * ±`radius` texels.
+ */
+export const KEY_SHADOW = { mapSize: 1024, extent: 3, near: 0.1, far: 14, bias: -0.00025, normalBias: 0.012, radius: 3 } as const;
+
+/**
+ * Normal offset a flat receiver needs so that no PCF tap toward a light at
+ * `elevation` reads the receiver's own depth as an occluder (acne): the
+ * farthest tap lies `reach · cot(elevation)` closer to the light, less the
+ * constant depth bias, and a normal offset `n` buys `n / sin(elevation)`.
+ */
+function acneGuard(elevation: number): number {
+  const reach = (KEY_SHADOW.radius * 2 * KEY_SHADOW.extent) / KEY_SHADOW.mapSize;
+  const depthBias = -KEY_SHADOW.bias * (KEY_SHADOW.far - KEY_SHADOW.near);
+  return (reach / Math.tan(elevation) - depthBias) * Math.sin(elevation);
+}
+
+export type KeyLightPose = { x: number; y: number; z: number; intensity: number; shadowNormalBias: number };
+
+const READING_POSE: KeyLightPose = { ...READING_KEY, shadowNormalBias: KEY_SHADOW.normalBias };
 
 /**
  * The key light as the front cover opens: raking while the book is closed on
@@ -276,8 +297,12 @@ export type KeyLightPose = { x: number; y: number; z: number; intensity: number 
  * cover lies open (progress 1) and staying there. Elevation and azimuth are
  * interpolated at a fixed distance, so the shadow camera keeps its range;
  * the intensity keeps the irradiance on flat paper constant, so the lowered
- * light changes the relief, not the colour of the cloth. Under reduced motion
- * the light snaps at half way instead of easing.
+ * light changes the relief, not the colour of the cloth. The shadow's normal
+ * offset is the tuned reading value scaled by `acneGuard`, so the same margin
+ * keeps the flat cover from shadowing itself (acne) at the lower angle; at
+ * 30° it is about 0.021, short of the book's thickness, so the book's shadow
+ * on the table stays attached. Under reduced motion the light snaps at half
+ * way instead of easing.
  */
 export function coverKeyLight(progress: number, reduced: boolean): KeyLightPose {
   const p = Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 0));
@@ -287,7 +312,7 @@ export function coverKeyLight(progress: number, reduced: boolean): KeyLightPose 
     const x = Math.max(0, Math.min(1, (p - RAKING_DEAD_ZONE) / (1 - RAKING_DEAD_ZONE)));
     t = x * x * (3 - 2 * x);
   }
-  if (t >= 1) return { ...READING_KEY };
+  if (t >= 1) return { ...READING_POSE };
   const elevation = RAKING_ELEVATION + (READING_ELEVATION - RAKING_ELEVATION) * t;
   const azimuth = RAKING_AZIMUTH + (READING_AZIMUTH - RAKING_AZIMUTH) * t;
   const horizontal = KEY_DISTANCE * Math.cos(elevation);
@@ -296,5 +321,6 @@ export function coverKeyLight(progress: number, reduced: boolean): KeyLightPose 
     y: KEY_DISTANCE * Math.sin(elevation),
     z: horizontal * Math.sin(azimuth),
     intensity: (READING_KEY.intensity * Math.sin(READING_ELEVATION)) / Math.sin(elevation),
+    shadowNormalBias: KEY_SHADOW.normalBias * (acneGuard(elevation) / acneGuard(READING_ELEVATION)),
   };
 }

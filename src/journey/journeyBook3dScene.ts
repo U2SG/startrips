@@ -8,6 +8,7 @@ import {
   bookTableHeight,
   coverKeyLight,
   faceScreenRect,
+  KEY_SHADOW,
   READING_KEY,
   stackSheets,
   type BookFrame,
@@ -27,7 +28,6 @@ import {
  * renders only while something moves.
  */
 const MAX_PIXEL_RATIO = 2;
-const SHADOW_MAP_SIZE = 1024;
 const PAGE_SUBDIVISIONS = 16;
 const FLIP_SECONDS = 0.78;
 const FOCUS_RATE = 9;
@@ -140,11 +140,12 @@ export class JourneyBook3dScene {
     key.position.set(READING_KEY.x, READING_KEY.y, READING_KEY.z);
     this.key = key;
     key.castShadow = true;
-    key.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
-    Object.assign(key.shadow.camera, { near: 0.1, far: 14, left: -3, right: 3, top: 3, bottom: -3 });
-    key.shadow.bias = -0.00025;
-    key.shadow.normalBias = 0.012;
-    key.shadow.radius = 3;
+    key.shadow.mapSize.set(KEY_SHADOW.mapSize, KEY_SHADOW.mapSize);
+    const { near, far, extent } = KEY_SHADOW;
+    Object.assign(key.shadow.camera, { near, far, left: -extent, right: extent, top: extent, bottom: -extent });
+    key.shadow.bias = KEY_SHADOW.bias;
+    key.shadow.normalBias = KEY_SHADOW.normalBias;
+    key.shadow.radius = KEY_SHADOW.radius;
     this.scene.add(key);
     const rim = new THREE.PointLight("#ffffff", 0.45, 8, 2);
     rim.position.set(2.5, 1.8, -2.4);
@@ -551,6 +552,7 @@ export class JourneyBook3dScene {
     const pose = coverKeyLight(this.book.progress, this.reduced);
     this.key.position.set(pose.x, pose.y, pose.z);
     this.key.intensity = pose.intensity;
+    this.key.shadow.normalBias = pose.shadowNormalBias;
     for (const sheet of this.dirtySheets) sheet.page.geometry.computeVertexNormals();
     this.dirtySheets.clear();
     this.renderer.render(this.scene, this.camera);

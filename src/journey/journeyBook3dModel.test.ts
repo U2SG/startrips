@@ -7,6 +7,7 @@ import {
   bookTableHeight,
   coverKeyLight,
   faceScreenRect,
+  KEY_SHADOW,
   RAKING_ELEVATION,
   READING_KEY,
   restingPageHeight,
@@ -213,7 +214,9 @@ describe("coverKeyLight", () => {
   });
 
   it("is today's reading light once the cover is open, and stays there", () => {
-    for (const progress of [1, 1.5, 12]) expect(coverKeyLight(progress, false)).toEqual({ ...READING_KEY });
+    for (const progress of [1, 1.5, 12]) {
+      expect(coverKeyLight(progress, false)).toEqual({ ...READING_KEY, shadowNormalBias: KEY_SHADOW.normalBias });
+    }
   });
 
   it("keeps the irradiance on flat paper constant", () => {
@@ -222,6 +225,12 @@ describe("coverKeyLight", () => {
       const pose = coverKeyLight(progress, false);
       expect(pose.intensity * Math.sin(elevation(pose))).toBeCloseTo(flat, 6);
     }
+  });
+
+  it("grows the shadow's normal offset at the low angle, short of the book's thickness", () => {
+    const raking = coverKeyLight(0, false).shadowNormalBias;
+    expect(raking).toBeGreaterThan(KEY_SHADOW.normalBias);
+    expect(raking).toBeLessThan(0.03);
   });
 
   it("rises steadily as the cover opens and ignores a hover lift", () => {
@@ -236,6 +245,6 @@ describe("coverKeyLight", () => {
 
   it("snaps between the two poses under reduced motion", () => {
     expect(coverKeyLight(0.3, true)).toEqual(coverKeyLight(0, false));
-    expect(coverKeyLight(0.6, true)).toEqual({ ...READING_KEY });
+    expect(coverKeyLight(0.6, true)).toEqual(coverKeyLight(1, false));
   });
 });
