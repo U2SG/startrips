@@ -1112,16 +1112,18 @@
   margin-top: auto;
 }
 
+/* The card's one acid primary. The arrow disc is an inset concentric with the
+   pill's end, inside the full 44px box. */
 .living-atlas__active-actions > button {
-  min-height: 56px;
+  min-height: var(--control-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 8px 0 20px;
-  border: 1px solid rgba(200, 255, 61, 0.7);
-  border-radius: 999px;
-  background: var(--atlas-acid);
-  color: #091006;
+  padding: 0 5px 0 var(--control-pad-x);
+  border: 1px solid var(--control-primary);
+  border-radius: var(--control-radius);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
   box-shadow: 0 12px 36px rgba(200, 255, 61, 0.18);
   cursor: pointer;
   font-size: 11px;
@@ -1129,9 +1131,14 @@
   letter-spacing: 0.12em;
 }
 
+.living-atlas__active-actions > button:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
 .living-atlas__active-action-icon {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   display: grid;
   flex: 0 0 auto;
   place-items: center;
@@ -1140,19 +1147,19 @@
   color: var(--atlas-acid);
 }
 
-/* #19: the playback entry is a quieter secondary action beside 打开故事. */
+/* #19: the playback entry is a quieter secondary pill beside 打开故事. */
 .living-atlas__active .living-atlas__active-play {
-  min-height: 56px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--control-gap);
   margin-top: 10px;
-  padding: 0 18px;
-  border: 1px solid rgba(118, 198, 188, 0.42);
-  border-radius: 999px;
-  background: rgba(2, 10, 11, 0.72);
-  color: #d6e0dd;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
   box-shadow: none;
   cursor: pointer;
   font-size: 11px;
@@ -1160,15 +1167,9 @@
   letter-spacing: 0.1em;
 }
 
-.living-atlas__active .living-atlas__active-play:focus-visible {
-  border-color: var(--atlas-cyan);
-  color: var(--atlas-cyan);
-}
-
 @media (hover: hover) and (pointer: fine) {
-  .living-atlas__active .living-atlas__active-play:hover {
-    border-color: var(--atlas-cyan);
-    color: var(--atlas-cyan);
+  .living-atlas__active .living-atlas__active-play:hover:not(:disabled) {
+    border-color: var(--control-line-strong);
   }
 }
 
@@ -1307,7 +1308,7 @@
   align-items: center;
   gap: 18px;
   width: min(560px, calc(100vw - 48px));
-  padding: 10px 10px 10px 16px;
+  padding: 5px 5px 5px 16px;
   border: 1px solid var(--atlas-line-strong);
   background: #071312;
   color: #b8cbc5;
@@ -1316,18 +1317,41 @@
   line-height: 1.5;
 }
 
+/* A quiet 44px icon circle; the toast gives 5px of its old padding to the
+   message, so the larger box keeps the glyph where it was. */
 .living-atlas__notice button {
-  flex: 0 0 34px;
-  width: 34px;
-  height: 34px;
+  flex: 0 0 var(--control-height);
+  width: var(--control-height);
+  height: var(--control-height);
   display: grid;
   place-items: center;
   margin-left: auto;
   padding: 0;
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: var(--atlas-muted);
+  color: var(--control-muted);
   cursor: pointer;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
+}
+
+.living-atlas__notice button:active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .living-atlas__notice button:active:not(:disabled) {
+    scale: 0.97;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__notice button:not(.living-atlas__notice-undo):hover {
+    color: var(--control-ink);
+  }
 }
 
 .living-atlas.is-loading,
@@ -1503,10 +1527,12 @@
 }
 
 /* The card content opens the Story, but the hit area stops before the
-   right-edge action so the two buttons never share geometry. */
+   right-edge action so the two buttons never share geometry: an absolutely
+   positioned grid child placed in column 1 takes that column as its box. */
 .journey-timeline__hit-area {
   position: absolute;
-  inset: 0 48px 0 0;
+  grid-column: 1;
+  inset: 0;
   z-index: var(--z-content-1);
   border: 0;
   border-radius: inherit;
@@ -1554,28 +1580,51 @@
   white-space: nowrap;
 }
 
-.journey-timeline__story {
+/* A quiet pill inside the sharp card. Two classes outrank the shell's
+   `.living-atlas button` type and ink defaults. */
+.journey-timeline__card > .journey-timeline__story {
   position: relative;
   z-index: var(--z-content-2);
-  width: 48px;
-  display: grid;
-  place-content: center;
+  min-height: var(--control-height);
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
   gap: 6px;
-  padding: 0;
-  border: 0;
-  border-left: 1px solid var(--atlas-line);
+  margin-right: 8px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
   background: transparent;
-  color: transparent;
+  color: var(--control-muted);
   cursor: pointer;
-  font-size: 0;
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
+  white-space: nowrap;
+  transition:
+    scale var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-instant) ease-out,
+    color var(--motion-instant) ease-out;
 }
 
-.journey-timeline__story svg {
-  color: var(--atlas-muted);
+.journey-timeline__card > .journey-timeline__story:active {
+  background-color: var(--control-fill-press);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .journey-timeline__card > .journey-timeline__story:active {
+    scale: 0.97;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .journey-timeline__card > .journey-timeline__story:hover {
+    color: var(--control-ink);
+  }
 }
 
 .living-atlas__notice > span {
   flex: 1;
+  padding-block: 5px;
 }
 
 .living-atlas__notice button.living-atlas__notice-undo {
@@ -8648,22 +8697,29 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 }
 
 .mobile-v2__sheet-actions button {
-  min-height: 44px;
+  min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
   padding: 0 12px;
-  border: 1px solid rgba(118, 198, 188, 0.18);
-  border-radius: 12px;
-  background: rgba(5, 29, 27, 0.48);
-  color: rgba(216, 235, 228, 0.84);
-  font-size: 10px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font-size: var(--control-font-size);
+  letter-spacing: var(--control-tracking);
 }
 
+.mobile-v2__sheet-actions button:not(.is-primary):active:not(:disabled) {
+  background-color: var(--control-fill-press);
+}
+
+/* The only personalised primary in the product: it keeps the Journey's own
+   tint and takes only the family's shape, height and press. */
 .mobile-v2__sheet-actions .is-primary {
   grid-column: 1 / -1;
-  min-height: 48px;
+  padding: 0 var(--control-pad-x);
   justify-content: space-between;
   border-color: color-mix(in srgb, var(--journey-color) 38%, rgba(118, 198, 188, 0.24));
   background: color-mix(in srgb, var(--journey-color) 14%, rgba(4, 30, 27, 0.72));
