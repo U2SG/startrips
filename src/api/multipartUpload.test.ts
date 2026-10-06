@@ -216,8 +216,19 @@ describe("uploadMediaInParts", () => {
           : Response.json({ preview: { mimeType: "image/jpeg", bytes: 7, width: 960, height: 540 } });
       }
       throw new Error(`Unexpected request: ${url}`);
-    }) as unknown as typeof fetch;
-    return { asset, calls, fetcher };
+    });
+    // The browser's `fetch` refuses a `this` that is not the global: a member
+    // call such as `input.fetcher(url)` throws "Illegal invocation" before any
+    // request is made. A plain vi.fn accepts any `this`, which is how that
+    // exact call shape shipped in #305 and silently failed every production
+    // preview upload. The test double enforces the native rule.
+    const nativeLikeFetcher = function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+      if (this !== undefined && this !== globalThis) {
+        throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+      }
+      return fetcher(input, init);
+    } as unknown as typeof fetch;
+    return { asset, calls, fetcher: nativeLikeFetcher };
   }
 
   it("produces the preview only after the original asset completes", async () => {

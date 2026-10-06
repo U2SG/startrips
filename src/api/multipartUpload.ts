@@ -178,11 +178,17 @@ async function uploadAssetPreviewBestEffort(input: {
   // replace it with a pending generation that can subsequently fail.
   if (input.asset.previewState === "ready") return;
 
+  // Called as a bare function on purpose. `fetcher` defaults to the browser's
+  // own `fetch`, and a member call (`input.fetcher(...)`) would bind `this` to
+  // this options object — Chrome then throws "Illegal invocation" before any
+  // request leaves. That one call shape kept every production preview stuck
+  // in `pending` from #305 until it was reproduced on the deployed host.
+  const { fetcher } = input;
   let prepared: PreparedMediaPreview | null = null;
   try {
     prepared = await input.preparePreview(input.file);
     const begun = await apiJson<PreviewBeginResponse>(
-      input.fetcher,
+      fetcher,
       `/api/uploads/assets/${encodeURIComponent(input.asset.id)}/preview`,
       {
         method: "POST",
@@ -196,7 +202,7 @@ async function uploadAssetPreviewBestEffort(input: {
     );
     const preview = await prepared.rasterize(begun.preview);
     if (preview.size > begun.preview.maxBytes) throw new Error("Preview exceeds issued byte budget");
-    const uploaded = await input.fetcher(begun.upload.url, {
+    const uploaded = await fetcher(begun.upload.url, {
       method: "PUT",
       body: preview,
       headers: begun.upload.headers,
@@ -204,7 +210,7 @@ async function uploadAssetPreviewBestEffort(input: {
     });
     if (!uploaded.ok) throw new Error(`Preview upload failed (${uploaded.status})`);
     await apiJson<{ preview: unknown }>(
-      input.fetcher,
+      fetcher,
       `/api/uploads/assets/${encodeURIComponent(input.asset.id)}/preview/complete`,
       { method: "POST", signal: input.signal },
     );
