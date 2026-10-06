@@ -7,10 +7,12 @@ import { startUploadReconciler } from "./services/multipart-uploads";
 import { startCoverRevealReconciler } from "./services/cover-reveal";
 import { startJourneyDeletionReconciler } from "./services/delete-journey";
 import { startPreviewReconciler } from "./services/media-preview";
+import { startPreviewBackfill } from "./services/media-preview-backfill";
 
 startUploadReconciler();
 startJourneyDeletionReconciler();
 startPreviewReconciler();
+startPreviewBackfill();
 startCoverRevealReconciler();
 startMapStyleCacheSweeper();
 
