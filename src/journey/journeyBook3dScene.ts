@@ -4,12 +4,16 @@ import type { JourneyBookOrientation } from "./journeyBookLayout";
 import {
   BOOK_CAMERA_TILT,
   BOOK_SHEET_SPACING,
-  bookFrame,
   bookTableHeight,
   coverKeyLight,
+  EDGE_LIFT,
   faceScreenRect,
+  fitBookFrame,
+  flightFrameTop,
   KEY_SHADOW,
   READING_KEY,
+  restBookFrame,
+  screenUp,
   sheetFlipPose,
   sheetStiffness,
   stackSheets,
@@ -36,7 +40,6 @@ const MAX_PIXEL_RATIO = 2;
 const PAGE_SUBDIVISIONS = 16;
 const FLIP_SECONDS = 0.78;
 const FOCUS_RATE = 9;
-const EDGE_LIFT = 0.055;
 const PAPER_ROUGHNESS = 0.88;
 const SETTLED_EPSILON = 1e-4;
 /** A block's top sits this far under the top sheet of its stack. */
@@ -109,7 +112,21 @@ export class JourneyBook3dScene {
   private cssWidth = 1;
   private cssHeight = 1;
   private orientation: JourneyBookOrientation = "landscape";
-  private frameBox: BookFrame = { top: 1, bottom: -1, halfWidth: 1 };
+  /** The camera's live frame, pulled back while a sheet in flight rises past the rest frame. */
+  private readonly frameBox: BookFrame = { top: 1, bottom: -1, halfWidth: 1 };
+  /**
+   * The frame of the book at rest (it holds a hover-lifted edge). Stage
+   * geometry (the face rects, the drag's page width) reads it, so it only
+   * describes a settled book and a drag keeps one scale while the camera
+   * pulls back under it.
+   */
+  private readonly restFrame: BookFrame = { top: 1, bottom: -1, halfWidth: 1 };
+  /** The live frame's unslacked top; NaN until first framed. */
+  private frameTop = Number.NaN;
+  /** Measured screen-up of the sheet in flight this frame, or null. */
+  private flightTop: number | null = null;
+  private readonly vertex = new THREE.Vector3();
+  private sheetList: Sheet[] = [];
   private readonly blocks: { left: THREE.Mesh; right: THREE.Mesh };
   private readonly edgeTextures: THREE.Texture[] = [];
   private readonly contact: THREE.Mesh;
@@ -267,6 +284,7 @@ export class JourneyBook3dScene {
     this.table.position.y = bookTableHeight(this.sheets);
     this.stacksKey = "";
     this.contactKey = "";
+    this.sheetList = [...this.book];
     this.updateStacks();
     this.updateFrame();
     // Quick FlipBook assigns supplied materials through a promise chain;
@@ -363,9 +381,63 @@ export class JourneyBook3dScene {
 
   /** The frame depends on the stage, the orientation and the book's thickness. */
   private updateFrame() {
-    this.frameBox = bookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets);
-    this.applyCamera();
+    restBookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets, BOOK_CAMERA_TILT, this.restFrame);
+    this.frameTop = Number.NaN;
+    this.frameFlight();
     this.requestRender();
+  }
+
+  /**
+   * Frame the sheet in flight from its real, deformed geometry: the camera
+   * pulls back as it rises past the rest frame, so it never leaves the frame,
+   * and frames the book at rest again once it lands. Returns whether the
+   * camera changed.
+   */
+  private frameFlight(): boolean {
+    this.flightTop = this.measureFlight();
+    const top = flightFrameTop(this.flightTop);
+    if (top === this.frameTop) return false;
+    this.frameTop = top;
+    fitBookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets, top, BOOK_CAMERA_TILT, this.frameBox);
+    this.applyCamera();
+    return true;
+  }
+
+  /**
+   * Highest screen-up point of the sheet in flight (curl, twist and the
+   * book's own shift included), or null when the book rests on a spread.
+   * quick_flipbook turns one sheet at a time: sheet ⌊progress⌋ at frac.
+   */
+  private measureFlight(): number | null {
+    const progress = this.book.progress;
+    const index = Math.floor(progress);
+    const sheet = this.sheetList[index];
+    if (!sheet || progress - index <= 0) return null;
+    const page = sheet.page;
+    page.updateWorldMatrix(true, false);
+    const position = page.geometry.getAttribute("position");
+    let top = -Infinity;
+    for (let i = 0; i < position.count; i += 1) {
+      const point = this.vertex.fromBufferAttribute(position, i).applyMatrix4(page.matrixWorld);
+      const up = screenUp(point.y, point.z);
+      if (up > top) top = up;
+    }
+    return top;
+  }
+
+  /**
+   * DEV QA readout: the sheet in flight's highest point and the frame's top,
+   * in stage CSS px from the stage's top edge (the sheet is inside the canvas
+   * while `sheetTopPx >= 0`), and how far the live frame pulled back.
+   */
+  get qaFlight() {
+    const frame = this.frameBox;
+    const pixelsPerUnit = this.cssHeight / (frame.top - frame.bottom);
+    return {
+      progress: this.book.progress,
+      sheetTopPx: this.flightTop === null ? null : (frame.top - this.flightTop) * pixelsPerUnit,
+      pullBackPx: (frame.top - frame.bottom - (this.restFrame.top - this.restFrame.bottom)) * pixelsPerUnit,
+    };
   }
 
   private applyCamera() {
@@ -387,7 +459,7 @@ export class JourneyBook3dScene {
   }
 
   get pixelsPerUnit() {
-    return this.cssHeight / (this.frameBox.top - this.frameBox.bottom);
+    return this.cssHeight / (this.restFrame.top - this.restFrame.bottom);
   }
 
   /** Screen x (stage CSS px) of the spine, or of the closed book's centre. */
@@ -413,7 +485,7 @@ export class JourneyBook3dScene {
       side,
       spread: Math.max(0, Math.min(this.sheets, Math.round(this.book.progress))),
       sheets: this.sheets,
-      frame: this.frameBox,
+      frame: this.restFrame,
       pixelsPerUnit: this.pixelsPerUnit,
       spineX: this.spineX,
       pageWidth: this.pageWidth,
@@ -561,8 +633,10 @@ export class JourneyBook3dScene {
     if (focusMoving) {
       this.focus += (this.focusTarget - this.focus) * (1 - Math.exp(-FOCUS_RATE * delta));
       if (Math.abs(this.focus - this.focusTarget) < SETTLED_EPSILON) this.focus = this.focusTarget;
-      this.applyCamera();
     }
+    // Under reduced motion a turn lands in one frame, so only a drag (which
+    // the pointer drives) keeps a sheet in flight for the camera to follow.
+    if (!this.frameFlight() && focusMoving) this.applyCamera();
     this.updateStacks();
     const pose = coverKeyLight(this.book.progress, this.reduced);
     this.key.position.set(pose.x, pose.y, pose.z);

@@ -92,25 +92,79 @@ export function screenUp(y: number, z: number, tilt = BOOK_CAMERA_TILT): number 
 
 /**
  * Frame that fits the book in a stage of `aspect` (width / height): a spread
- * in landscape, one page in portrait. Vertically it holds a page standing
- * upright mid-turn (world page height is 1, so its far corner reaches
- * sin(tilt) + cos(tilt)/2 up) and, below the near edge, the full thickness of
- * a `sheets` book. Any slack is shared above and below.
+ * in landscape, one page in portrait. Vertically it holds the book and,
+ * below the near edge, the full thickness of a `sheets` book. `lift` (0–1)
+ * is how high a page's free edge rises, in page-height units (world page
+ * height is 1), with its far corner at z = −0.5: at 1 it holds a page standing
+ * upright mid-turn, whose far corner reaches sin(tilt) + cos(tilt)/2 up. Any
+ * slack is shared above and below.
  */
 export function bookFrame(
   aspect: number,
   pageWidth: number,
   orientation: JourneyBookOrientation,
   sheets: number,
+  lift: number,
   tilt = BOOK_CAMERA_TILT,
+  out?: BookFrame,
 ): BookFrame {
-  const top = screenUp(1, -0.5, tilt) + FRAME_MARGIN;
+  const top = screenUp(Math.max(0, Math.min(1, lift)), -0.5, tilt) + FRAME_MARGIN;
+  return fitBookFrame(aspect, pageWidth, orientation, sheets, top, tilt, out);
+}
+
+/** Progress a desktop hover lifts the page edge under the pointer. */
+export const EDGE_LIFT = 0.055;
+/** How high a hover-lifted page's free edge stands, in page-height units. */
+export const HOVER_EDGE_HEIGHT = Math.sin(Math.PI * EDGE_LIFT);
+
+/**
+ * The frame of a book at rest. It already holds a hover-lifted page edge, so
+ * a desktop hover is contained without moving the camera.
+ */
+export function restBookFrame(
+  aspect: number,
+  pageWidth: number,
+  orientation: JourneyBookOrientation,
+  sheets: number,
+  tilt = BOOK_CAMERA_TILT,
+  out?: BookFrame,
+): BookFrame {
+  return bookFrame(aspect, pageWidth, orientation, sheets, HOVER_EDGE_HEIGHT, tilt, out);
+}
+
+/**
+ * The frame's top (screen-up, margin included) while a sheet is in flight:
+ * the rest frame's top, or the sheet's highest point plus the margin once the
+ * sheet rises past it. `sheetTop` is the measured screen-up of the sheet's
+ * deformed geometry, curl included; null when no sheet is in flight.
+ */
+export function flightFrameTop(sheetTop: number | null, tilt = BOOK_CAMERA_TILT): number {
+  const rest = screenUp(HOVER_EDGE_HEIGHT, -0.5, tilt) + FRAME_MARGIN;
+  return sheetTop === null || !Number.isFinite(sheetTop) ? rest : Math.max(rest, sheetTop + FRAME_MARGIN);
+}
+
+/**
+ * Fit a frame whose top (screen-up, margin included) is `top`. It writes into
+ * `out` when given, so a caller framing every rendered frame allocates nothing.
+ */
+export function fitBookFrame(
+  aspect: number,
+  pageWidth: number,
+  orientation: JourneyBookOrientation,
+  sheets: number,
+  top: number,
+  tilt = BOOK_CAMERA_TILT,
+  out: BookFrame = { top: 0, bottom: 0, halfWidth: 0 },
+): BookFrame {
   const bottom = screenUp(-BOOK_SHEET_SPACING * (Math.max(0, sheets) + 1), 0.5, tilt) - FRAME_MARGIN;
   const width = (orientation === "landscape" ? pageWidth * 2 : pageWidth) * FRAME_WIDTH_PADDING;
   const safeAspect = Math.max(aspect, 1e-3);
   const height = Math.max(top - bottom, width / safeAspect);
   const slack = (height - (top - bottom)) / 2;
-  return { top: top + slack, bottom: bottom - slack, halfWidth: (height * safeAspect) / 2 };
+  out.top = top + slack;
+  out.bottom = bottom - slack;
+  out.halfWidth = (height * safeAspect) / 2;
+  return out;
 }
 
 /**

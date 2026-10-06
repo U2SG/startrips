@@ -309,6 +309,9 @@ export function JourneyBook3d({
     placedRef.current = false;
     lastSettledRef.current = true;
     scene.onFrame((_, isSettled) => {
+      // QA: where the sheet in flight reaches against the stage, every
+      // rendered frame. DEV only; a production build writes nothing.
+      if (import.meta.env.DEV) stage.dataset.qaBookFlight = JSON.stringify(scene.qaFlight);
       if (isSettled !== lastSettledRef.current) {
         lastSettledRef.current = isSettled;
         setSettled(isSettled);
