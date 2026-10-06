@@ -1,5 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { playbackChapterOpeningUrl, playbackHoldReason, playbackMediaGate } from "./playbackMediaPresentation";
+import {
+  PLAYBACK_DECODE_WAIT_MESSAGE,
+  PLAYBACK_DECODE_WAIT_NOTICE_MS,
+  playbackChapterOpeningUrl,
+  playbackHoldReason,
+  playbackMediaGate,
+  playbackStatusLine,
+} from "./playbackMediaPresentation";
+
+describe("playbackStatusLine", () => {
+  it("names a decode hold only after its grace has elapsed", () => {
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "decode", decodeWaitElapsed: false })).toBeNull();
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "decode", decodeWaitElapsed: true }))
+      .toBe(PLAYBACK_DECODE_WAIT_MESSAGE);
+    // The grace is long enough that a fast decode never flickers a notice.
+    expect(PLAYBACK_DECODE_WAIT_NOTICE_MS).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("stays quiet for video and trim holds, which are the beat itself", () => {
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "video", decodeWaitElapsed: true })).toBeNull();
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "trim", decodeWaitElapsed: true })).toBeNull();
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "none", decodeWaitElapsed: true })).toBeNull();
+  });
+
+  it("lets the shell's own status message win", () => {
+    expect(playbackStatusLine({ statusMessage: "草稿预览", holdReason: "decode", decodeWaitElapsed: true }))
+      .toBe("草稿预览");
+  });
+});
 
 describe("playbackMediaGate (PR #24 review)", () => {
   it("keeps pending media held but treats signed-read failures as settled errors", () => {

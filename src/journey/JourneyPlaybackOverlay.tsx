@@ -23,7 +23,14 @@ import { PlaybackMediaStage } from "./PlaybackMediaStage";
 import { playbackSequenceChapterPresentation, type PlaybackSequenceChapterPresentation } from "./playbackSequenceChapter";
 import { usePlaybackMapBridge } from "./usePlaybackMapBridge";
 import { playbackReadIsReusable, type MediaReadState as MediaRead } from "./mediaReadRefresh";
-import { playbackMediaGate, playbackChapterOpeningUrl, playbackHoldReason, type PlaybackHoldReason } from "./playbackMediaPresentation";
+import {
+  PLAYBACK_DECODE_WAIT_NOTICE_MS,
+  playbackChapterOpeningUrl,
+  playbackHoldReason,
+  playbackMediaGate,
+  playbackStatusLine,
+  type PlaybackHoldReason,
+} from "./playbackMediaPresentation";
 import {
   playbackProgressFraction,
   useJourneyPlaybackDirector,
@@ -240,6 +247,22 @@ export function JourneyPlaybackOverlay({
   // waits on the decode settle instead of advancing on a fixed timer.
   const [holdReason, setHoldReason] = useState<PlaybackHoldReason>("none");
   const [presentationPending, setPresentationPending] = useState(false);
+  // A decode hold used to be invisible: the previous frame stayed up with
+  // nothing moving while a large original downloaded. After the grace the
+  // status line says what the wait is; it clears the moment the hold lifts.
+  const [decodeWaitElapsed, setDecodeWaitElapsed] = useState(false);
+  useEffect(() => {
+    if (holdReason !== "decode") {
+      setDecodeWaitElapsed(false);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setDecodeWaitElapsed(true),
+      PLAYBACK_DECODE_WAIT_NOTICE_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [holdReason]);
+  const statusLine = playbackStatusLine({ statusMessage, holdReason, decodeWaitElapsed });
   // Narrative return position is a commit log, not a mirror of the director's
   // latest requested index. Non-media beats commit with their React render; a
   // media beat commits only after PlaybackMediaStage has actually handed the
@@ -1407,8 +1430,14 @@ export function JourneyPlaybackOverlay({
       />
 
       {/* ── Chapter content ─────────────────────────────────────────────── */}
-      {statusMessage ? (
-        <div className="journey-playback__status" role="status">{statusMessage}</div>
+      {statusLine ? (
+        <div
+          className="journey-playback__status"
+          role="status"
+          data-playback-decode-wait={holdReason === "decode" && decodeWaitElapsed ? "visible" : "hidden"}
+        >
+          {statusLine}
+        </div>
       ) : null}
 
       <div className="journey-playback__stage">
