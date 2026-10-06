@@ -98,6 +98,15 @@ export function loadServerConfig(
   const mediaPreviewBackfillEnabled = (environment.MEDIA_PREVIEW_BACKFILL_ENABLED ?? "true")
     .trim()
     .toLowerCase() !== "false";
+  // How often the sweep runs and how many assets one pass may attempt. One
+  // asset costs a bounded download and one resize, well under a second, so a
+  // pass drains the whole queue by default; the limit only caps a runaway.
+  const mediaPreviewBackfillIntervalSeconds = Number(
+    environment.MEDIA_PREVIEW_BACKFILL_INTERVAL_SECONDS ?? 60,
+  );
+  const mediaPreviewBackfillPassLimit = Number(
+    environment.MEDIA_PREVIEW_BACKFILL_PASS_LIMIT ?? 200,
+  );
   // #349: the one social sign-in provider Startrips configures. Both halves
   // are deployment secrets with no development fallback, because a shared
   // default OAuth client is the same as no client at all. Absent means this
@@ -353,6 +362,24 @@ export function loadServerConfig(
       "MEDIA_PREVIEW_MAX_BYTES must be between 16384 and 8388608",
     );
   }
+  if (
+    !Number.isInteger(mediaPreviewBackfillIntervalSeconds)
+    || mediaPreviewBackfillIntervalSeconds < 10
+    || mediaPreviewBackfillIntervalSeconds > 3600
+  ) {
+    throw new Error(
+      "MEDIA_PREVIEW_BACKFILL_INTERVAL_SECONDS must be between 10 and 3600",
+    );
+  }
+  if (
+    !Number.isInteger(mediaPreviewBackfillPassLimit)
+    || mediaPreviewBackfillPassLimit < 1
+    || mediaPreviewBackfillPassLimit > 5000
+  ) {
+    throw new Error(
+      "MEDIA_PREVIEW_BACKFILL_PASS_LIMIT must be between 1 and 5000",
+    );
+  }
   // The floors are product floors, not safety margins: #200 is explicit that a
   // limit which breaks a normal image-heavy Journey during playback prefetch
   // is a worse outcome than the abuse it prevents, so a deployment cannot set
@@ -588,6 +615,8 @@ export function loadServerConfig(
     mediaPreviewMaxBytes,
     mediaPreviewUploadExpiresInSeconds,
     mediaPreviewBackfillEnabled,
+    mediaPreviewBackfillIntervalSeconds,
+    mediaPreviewBackfillPassLimit,
     googleClientId,
     googleClientSecret,
     coverRevealWorkerToken,

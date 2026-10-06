@@ -1,4 +1,4 @@
-import { and, eq, isNull, like, lt, or } from "drizzle-orm";
+import { and, eq, isNull, like, lt, notInArray, or } from "drizzle-orm";
 import sharp, { type Metadata } from "sharp";
 import { journeys, mediaAssets, mediaPreviewWrites } from "../db/app-schema";
 import { db } from "../db/client";
@@ -52,10 +52,15 @@ const defaultDependencies: PreviewBackfillDependencies = {
 
 /** Fresh uploads keep first claim: the browser producer runs right after completion. */
 export const PREVIEW_BACKFILL_MIN_AGE_MS = 10 * 60 * 1_000;
+/**
+ * One page of candidates. A pass drains page after page until the queue is
+ * empty or `MEDIA_PREVIEW_BACKFILL_PASS_LIMIT` is reached; one asset costs the
+ * API well under a second (a bounded download plus one `sharp` resize), so the
+ * page size only bounds how much is held in memory at once, not the pace.
+ */
 export const PREVIEW_BACKFILL_BATCH_SIZE = 8;
 /** An original above this is not decoded here; phones do not produce them. */
 export const PREVIEW_BACKFILL_SOURCE_MAX_BYTES = 64 * 1024 * 1024;
-const PREVIEW_BACKFILL_INTERVAL_MS = 5 * 60 * 1_000;
 /** Same ladder the browser producer walks, so byte ceilings bite identically. */
 const JPEG_QUALITY_LADDER = [82, 70, 58, 46, 34, 24, 16, 10];
 
@@ -91,6 +96,8 @@ export function previewCeilingsFromConfig(): PreviewCeilings {
 export async function listPreviewBackfillCandidates(
   now: Date,
   limit = PREVIEW_BACKFILL_BATCH_SIZE,
+  /** Assets this pass already attempted; a skipped one stays a candidate and must not be re-selected within the pass. */
+  excludeIds: readonly string[] = [],
 ): Promise<MediaAsset[]> {
   const cutoff = new Date(now.getTime() - PREVIEW_BACKFILL_MIN_AGE_MS);
   const rows = await db
@@ -104,6 +111,7 @@ export async function listPreviewBackfillCandidates(
     .where(
       and(
         like(mediaAssets.mimeType, "image/%"),
+        excludeIds.length > 0 ? notInArray(mediaAssets.id, [...excludeIds]) : undefined,
         or(isNull(mediaAssets.journeyId), isNull(journeys.deletionStartedAt)),
         or(
           and(eq(mediaAssets.previewState, "none"), lt(mediaAssets.createdAt, cutoff)),
@@ -279,44 +287,65 @@ export async function backfillAssetPreview(
     : "failed";
 }
 
+/**
+ * Drain the queue: page through candidates until none are left or the pass
+ * limit is reached. Every attempted asset is excluded from the pass's later
+ * pages, because a `skipped` outcome (a missing original, a transient store
+ * error) leaves the row a candidate and would otherwise be re-selected by the
+ * very next page.
+ */
 export async function runPreviewBackfillPass(
   dependencies: PreviewBackfillDependencies = defaultDependencies,
   ceilings: PreviewCeilings = previewCeilingsFromConfig(),
+  passLimit: number = serverConfig.mediaPreviewBackfillPassLimit,
 ) {
-  const candidates = await listPreviewBackfillCandidates(dependencies.now());
   const summary: Record<PreviewBackfillOutcome, number> = {
     ready: 0,
     failed: 0,
     skipped: 0,
     superseded: 0,
   };
-  for (const asset of candidates) {
-    try {
-      summary[await backfillAssetPreview(asset, ceilings, dependencies)] += 1;
-    } catch (error) {
-      summary.skipped += 1;
-      console.error(
-        "Preview backfill: asset pass failed",
-        asset.id,
-        error instanceof Error ? error.message : "unknown error",
-      );
+  const attempted: string[] = [];
+  while (attempted.length < passLimit) {
+    const page = await listPreviewBackfillCandidates(
+      dependencies.now(),
+      Math.min(PREVIEW_BACKFILL_BATCH_SIZE, passLimit - attempted.length),
+      attempted,
+    );
+    if (page.length === 0) break;
+    for (const asset of page) {
+      attempted.push(asset.id);
+      try {
+        summary[await backfillAssetPreview(asset, ceilings, dependencies)] += 1;
+      } catch (error) {
+        summary.skipped += 1;
+        console.error(
+          "Preview backfill: asset pass failed",
+          asset.id,
+          error instanceof Error ? error.message : "unknown error",
+        );
+      }
     }
   }
-  if (candidates.length > 0) {
+  if (attempted.length > 0) {
     console.info(
-      `Preview backfill: ${candidates.length} candidate(s); ready=${summary.ready} failed=${summary.failed} skipped=${summary.skipped} superseded=${summary.superseded}`,
+      `Preview backfill: ${attempted.length} candidate(s); ready=${summary.ready} failed=${summary.failed} skipped=${summary.skipped} superseded=${summary.superseded}`,
     );
   }
-  return { candidates: candidates.length, ...summary };
+  return { candidates: attempted.length, ...summary };
 }
 
+/**
+ * The interval is a rest BETWEEN passes, so the next pass is scheduled only
+ * after the current one has finished. A fixed `setInterval` would keep its
+ * ticks aligned to process start, and a long draining pass that ended just
+ * before a tick would get no rest before the next one.
+ */
 export function startPreviewBackfill() {
   if (!serverConfig.mediaPreviewBackfillEnabled) return;
   if (!hasConfiguredStorageBackends()) return;
-  let running = false;
+  const restMs = serverConfig.mediaPreviewBackfillIntervalSeconds * 1_000;
   const run = async () => {
-    if (running) return;
-    running = true;
     try {
       await runPreviewBackfillPass();
     } catch (error) {
@@ -325,10 +354,8 @@ export function startPreviewBackfill() {
         error instanceof Error ? error.message : "unknown error",
       );
     } finally {
-      running = false;
+      setTimeout(() => void run(), restMs).unref();
     }
   };
   void run();
-  const interval = setInterval(run, PREVIEW_BACKFILL_INTERVAL_MS);
-  interval.unref();
 }
