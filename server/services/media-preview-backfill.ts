@@ -335,13 +335,17 @@ export async function runPreviewBackfillPass(
   return { candidates: attempted.length, ...summary };
 }
 
+/**
+ * The interval is a rest BETWEEN passes, so the next pass is scheduled only
+ * after the current one has finished. A fixed `setInterval` would keep its
+ * ticks aligned to process start, and a long draining pass that ended just
+ * before a tick would get no rest before the next one.
+ */
 export function startPreviewBackfill() {
   if (!serverConfig.mediaPreviewBackfillEnabled) return;
   if (!hasConfiguredStorageBackends()) return;
-  let running = false;
+  const restMs = serverConfig.mediaPreviewBackfillIntervalSeconds * 1_000;
   const run = async () => {
-    if (running) return;
-    running = true;
     try {
       await runPreviewBackfillPass();
     } catch (error) {
@@ -350,10 +354,8 @@ export function startPreviewBackfill() {
         error instanceof Error ? error.message : "unknown error",
       );
     } finally {
-      running = false;
+      setTimeout(() => void run(), restMs).unref();
     }
   };
   void run();
-  const interval = setInterval(run, serverConfig.mediaPreviewBackfillIntervalSeconds * 1_000);
-  interval.unref();
 }
