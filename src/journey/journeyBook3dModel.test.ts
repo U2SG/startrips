@@ -8,8 +8,11 @@ import {
   coverKeyLight,
   EDGE_LIFT,
   faceScreenRect,
-  frameLift,
-  turnLift,
+  fitBookFrame,
+  flightFrameTop,
+  HOVER_EDGE_HEIGHT,
+  restBookFrame,
+  screenUp,
   KEY_SHADOW,
   RAKING_ELEVATION,
   READING_KEY,
@@ -104,10 +107,14 @@ describe("camera fit", () => {
     expect(narrow.halfWidth).toBeCloseTo(1.6 * 1.08 / 2, 12);
   });
 
-  it("frames a settled book tightly: a page fills about 90% of a wide stage", () => {
-    const frame = bookFrame(3, 0.8, "landscape", 4, 0);
-    expect(frame.top - frame.bottom).toBeCloseTo(1.042, 2);
-    expect(cos / (frame.top - frame.bottom)).toBeGreaterThan(0.89);
+  it("frames a settled book tightly: a page fills about 85% of a wide stage", () => {
+    // Without the hover headroom (lift 0) the page would fill about 90%.
+    expect(bookFrame(3, 0.8, "landscape", 4, 0).top - bookFrame(3, 0.8, "landscape", 4, 0).bottom).toBeCloseTo(1.042, 2);
+    const frame = restBookFrame(3, 0.8, "landscape", 4);
+    expect(frame.top - frame.bottom).toBeCloseTo(1.1, 2);
+    expect(cos / (frame.top - frame.bottom)).toBeGreaterThan(0.85);
+    // Against the #634 frame (lift 1), where it filled about 68%.
+    expect(cos / (bookFrame(3, 0.8, "landscape", 4, 1).top - bookFrame(3, 0.8, "landscape", 4, 1).bottom)).toBeLessThan(0.7);
     // The near and far edges of the settled page still clear the frame.
     expect(frame.top).toBeGreaterThanOrEqual(cos / 2 + 0.05 - 1e-12);
   });
@@ -146,7 +153,7 @@ describe("camera fit", () => {
 
   it("places settled faces where a tilted orthographic camera renders them", () => {
     const sheets = 40;
-    const frame = bookFrame(1.9, 0.8, "landscape", sheets, 0);
+    const frame = restBookFrame(1.9, 0.8, "landscape", sheets);
     const cssHeight = 680;
     const cssWidth = cssHeight * 1.9;
     const pixelsPerUnit = cssHeight / (frame.top - frame.bottom);
@@ -178,44 +185,74 @@ describe("camera fit", () => {
   });
 });
 
-describe("turn lift", () => {
-  it("is 0 on whole spreads and 1 half way through a turn", () => {
-    for (const spread of [0, 1, 2, 7]) {
-      expect(turnLift(spread)).toBeCloseTo(0, 12);
-      expect(turnLift(spread + 0.5)).toBeCloseTo(1, 12);
-      expect(frameLift(spread)).toBe(0);
-      expect(frameLift(spread + 0.5)).toBeCloseTo(1, 12);
+describe("framing a sheet in flight", () => {
+  const cos = Math.cos(BOOK_CAMERA_TILT);
+  const sin = Math.sin(BOOK_CAMERA_TILT);
+  const MARGIN = 0.05;
+  // The uncurled far corner of a sheet turned `t` of the way (0–1).
+  const cornerUp = (t: number) => screenUp(Math.sin(Math.PI * t), -0.5);
+  const flightFrame = (t: number) => fitBookFrame(3, 0.8, "landscape", 4, flightFrameTop(t > 0 ? cornerUp(t) : null));
+
+  it("frames the rest state with room for a hover-lifted edge", () => {
+    expect(HOVER_EDGE_HEIGHT).toBeCloseTo(Math.sin(Math.PI * EDGE_LIFT), 12);
+    for (const orientation of ["landscape", "portrait"] as const) {
+      for (const aspect of [0.5, 1, 1.9, 3]) {
+        for (const sheets of [1, 40, 200]) {
+          const frame = restBookFrame(aspect, 0.8, orientation, sheets);
+          expect(frame.top).toBeGreaterThanOrEqual(screenUp(HOVER_EDGE_HEIGHT, -0.5) + MARGIN - 1e-12);
+          expect(frame).toEqual(bookFrame(aspect, 0.8, orientation, sheets, HOVER_EDGE_HEIGHT));
+        }
+      }
     }
-    expect(turnLift(Number.NaN)).toBe(0);
   });
 
-  it("is continuous across a turn and across spreads", () => {
+  it("leaves the camera at rest for a hover in either direction", () => {
+    const rest = restBookFrame(3, 0.8, "landscape", 4);
+    for (const t of [EDGE_LIFT, 1 - EDGE_LIFT]) {
+      const frame = flightFrame(t);
+      expect(frame.top).toBeCloseTo(rest.top, 12);
+      expect(frame.bottom).toBeCloseTo(rest.bottom, 12);
+      expect(frame.halfWidth).toBeCloseTo(rest.halfWidth, 12);
+    }
+    expect(flightFrameTop(null)).toBeCloseTo(rest.top, 12);
+    expect(flightFrameTop(Number.NaN)).toBeCloseTo(rest.top, 12);
+  });
+
+  it("always keeps the measured sheet top a margin inside the frame", () => {
+    for (const sheetTop of [-1, 0, 0.4, 0.6, 0.8, 1.2]) {
+      expect(flightFrameTop(sheetTop)).toBeGreaterThanOrEqual(sheetTop + MARGIN);
+      expect(flightFrameTop(sheetTop)).toBeGreaterThanOrEqual(flightFrameTop(null));
+    }
+    for (let step = 0; step <= 100; step += 1) {
+      const t = step / 100;
+      expect(flightFrame(t).top).toBeGreaterThanOrEqual(cornerUp(t) + MARGIN - 1e-12);
+    }
+  });
+
+  it("pulls back continuously and monotonically over a half turn, and returns as it lands", () => {
+    const height = (t: number) => {
+      const frame = flightFrame(t);
+      return frame.top - frame.bottom;
+    };
     const step = 1 / 1000;
-    for (let progress = 0; progress < 3; progress += step) {
-      expect(Math.abs(turnLift(progress + step) - turnLift(progress))).toBeLessThan(0.01);
-      expect(Math.abs(frameLift(progress + step) - frameLift(progress))).toBeLessThan(0.01);
+    for (let t = 0; t < 0.5; t += step) {
+      expect(height(t + step)).toBeGreaterThanOrEqual(height(t) - 1e-12);
+      expect(height(t + step) - height(t)).toBeLessThan(0.005);
     }
+    for (let t = 0.5; t < 1 - step / 2; t += step) {
+      expect(height(t + step)).toBeLessThanOrEqual(height(t) + 1e-12);
+      expect(height(t) - height(t + step)).toBeLessThan(0.005);
+    }
+    expect(flightFrame(0.5).top).toBeCloseTo(sin + cos / 2 + MARGIN, 12);
+    expect(flightFrame(1)).toEqual(restBookFrame(3, 0.8, "landscape", 4));
   });
 
-  it("leaves the camera still for a hover lift in either direction", () => {
-    for (const base of [0, 1, 3]) {
-      expect(frameLift(base + EDGE_LIFT)).toBeLessThan(1e-9);
-      expect(frameLift(base + 1 - EDGE_LIFT)).toBeLessThan(1e-9);
-      expect(frameLift(base + 2 * EDGE_LIFT)).toBeGreaterThan(0);
+  it("fits the same frame from a top as from a lift", () => {
+    for (const lift of [0, HOVER_EDGE_HEIGHT, 0.5, 1]) {
+      const frame = bookFrame(1.9, 0.8, "landscape", 40, lift);
+      const top = screenUp(lift, -0.5) + MARGIN;
+      expect(fitBookFrame(1.9, 0.8, "landscape", 40, top)).toEqual(frame);
     }
-  });
-
-  it("pulls back as a page stands up and frames tightly again as it lands", () => {
-    const heights: number[] = [];
-    for (let step = 0; step <= 20; step += 1) {
-      const frame = bookFrame(3, 0.8, "landscape", 4, frameLift(1 + step / 20));
-      heights.push(frame.top - frame.bottom);
-    }
-    expect(heights[0]).toBeCloseTo(bookFrame(3, 0.8, "landscape", 4, 0).top - bookFrame(3, 0.8, "landscape", 4, 0).bottom, 12);
-    expect(heights[10]).toBeCloseTo(bookFrame(3, 0.8, "landscape", 4, 1).top - bookFrame(3, 0.8, "landscape", 4, 1).bottom, 12);
-    expect(heights[20]).toBeCloseTo(heights[0], 12);
-    for (let step = 1; step <= 10; step += 1) expect(heights[step]).toBeGreaterThanOrEqual(heights[step - 1]);
-    for (let step = 11; step <= 20; step += 1) expect(heights[step]).toBeLessThanOrEqual(heights[step - 1]);
   });
 });
 
