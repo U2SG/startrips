@@ -3814,8 +3814,27 @@ async function verifyFinalAcceptanceMobileFlow() {
         if (!(next instanceof HTMLButtonElement) || next.disabled) {
           throw new Error(`Playback next control disappeared: ${JSON.stringify(snapshot)}`);
         }
-        // This read and click share one browser task; the autoplay timer cannot
-        // advance to the target media between them and make Next skip it.
+        // A stale stop read is still possible: an autoplay `advance` the timer
+        // already queued may not have rendered yet, and React then rebases Next
+        // on top of it (stop -> media -> outro). Record every committed root
+        // state from before the click so the wait below reads where Next's own
+        // intent revision landed instead of waiting for a state that may have
+        // been passed. `advance` never bumps the intent; Next always does.
+        const commits = [];
+        const observer = new MutationObserver(() => {
+          const stage = playback.querySelector(".journey-playback__media");
+          commits.push({
+            intent: playback.getAttribute("data-playback-intent"),
+            step: playback.getAttribute("data-playback-step"),
+            phase: playback.getAttribute("data-playback-phase"),
+            requested: stage?.getAttribute("data-requested-asset") ?? null,
+          });
+        });
+        observer.observe(playback, {
+          attributes: true,
+          attributeFilter: ["data-playback-intent", "data-playback-step", "data-playback-phase"],
+        });
+        window.__qaPlaybackReturnCommits = { commits, observer };
         next.click();
         return { action: "next-from-final-stop", ...snapshot };
       }, {
@@ -3823,10 +3842,49 @@ async function verifyFinalAcceptanceMobileFlow() {
         expectedPointIndex: targetJourney.routePoints.length - 1,
         expectedAssetId: "fa-image-2",
       });
-      await page.waitForFunction(() => (
-        document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "media"
-        && document.querySelector('.journey-playback__media[data-requested-asset="fa-image-2"]') !== null
-      ), null, { timeout: 2_000 });
+      if (playbackReturnAdvance.action === "next-from-final-stop") {
+        // Wait for Next's own commit, then classify it; a landing anywhere but
+        // fa-image-2 is a skipped target, not a slow one.
+        const nextIntent = String(Number(playbackReturnAdvance.intent) + 1);
+        const nextLanding = await (await page.waitForFunction((intent) => {
+          const commits = window.__qaPlaybackReturnCommits?.commits ?? [];
+          const index = commits.findIndex((entry) => Number(entry.intent) >= Number(intent));
+          return index < 0 ? null : { index, ...commits[index], commits };
+        }, nextIntent, { timeout: 2_000 })).jsonValue();
+        if (nextLanding.intent !== nextIntent
+          || nextLanding.phase !== "media" || nextLanding.requested !== "fa-image-2") {
+          throw new Error(
+            `Playback Next from final stop skipped fa-image-2: intent ${nextLanding.intent}`
+            + ` (expected ${nextIntent}) committed ${nextLanding.phase} step ${nextLanding.step};`
+            + ` commits ${JSON.stringify(nextLanding.commits)} before ${JSON.stringify(playbackReturnAdvance)}`,
+          );
+        }
+        // Hold the landing until the presentation owner settles it; any later
+        // step commit (e.g. a rebased autoplay advance) means the transport
+        // advanced past the target after Next landed on it.
+        const settledLanding = await (await page.waitForFunction((landingIndex) => {
+          const commits = window.__qaPlaybackReturnCommits?.commits ?? [];
+          const landing = commits[landingIndex];
+          const passed = commits.slice(landingIndex + 1).find((entry) => entry.step !== landing.step);
+          if (passed) return { passed, commits };
+          const stage = document.querySelector('.journey-playback__media[data-requested-asset="fa-image-2"]');
+          return stage?.getAttribute("data-presented-asset") === "fa-image-2"
+            && stage?.getAttribute("data-media-presentation") === "settled"
+            && document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none"
+            ? { passed: null, commits }
+            : null;
+        }, nextLanding.index, { timeout: 5_000 })).jsonValue();
+        await page.evaluate(() => {
+          window.__qaPlaybackReturnCommits?.observer.disconnect();
+          delete window.__qaPlaybackReturnCommits;
+        });
+        if (settledLanding.passed) {
+          throw new Error(
+            `Playback advanced past fa-image-2 after Next landed on it: committed ${settledLanding.passed.phase}`
+            + ` step ${settledLanding.passed.step}; commits ${JSON.stringify(settledLanding.commits)}`,
+          );
+        }
+      }
       const returnedMediaStage = page.locator('.journey-playback__media[data-requested-asset="fa-image-2"]');
       await returnedMediaStage.waitFor({ state: "visible", timeout: 5_000 });
       // PlaybackMediaStage is the presentation owner. Require the requested
