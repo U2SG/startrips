@@ -18,6 +18,51 @@ export type PlaybackMediaGate = "waiting" | "ready" | "error";
 export type PlaybackHoldReason = "none" | "decode" | "video" | "trim";
 
 /**
+ * How long a decode hold may stay silent before the viewer is told about it.
+ *
+ * A decode hold keeps the previous frame on screen until the next image is
+ * downloaded and decoded. On a fast path that is a few hundred milliseconds
+ * and a notice would only flicker; on a slow one (a 10 MB original over a
+ * mobile connection) it is several seconds of a frame that does not move,
+ * which reads as a freeze. The grace separates the two.
+ */
+export const PLAYBACK_DECODE_WAIT_NOTICE_MS = 1_500;
+export const PLAYBACK_DECODE_WAIT_MESSAGE = "正在准备下一张照片";
+
+/**
+ * Identity of the wait the grace timer belongs to. Next, Back or a scrub from
+ * one decoding image to another keeps `holdReason` at `decode` throughout, so
+ * the reason alone cannot tell the two waits apart; the key changes with the
+ * beat and the held asset, and a timer keyed on it restarts for the new image
+ * instead of inheriting the previous one's elapsed grace. `null` means no
+ * decode wait is in progress.
+ */
+export function playbackDecodeWaitKey(input: {
+  holdReason: PlaybackHoldReason;
+  stepIndex: number;
+  heldAssetId: string | null;
+}): string | null {
+  if (input.holdReason !== "decode") return null;
+  return `${input.stepIndex}:${input.heldAssetId ?? ""}`;
+}
+
+/**
+ * The status line Playback shows: an explicit message from the shell always
+ * wins; otherwise a decode hold that has outlived its grace names itself.
+ */
+export function playbackStatusLine(input: {
+  statusMessage: string | null | undefined;
+  holdReason: PlaybackHoldReason;
+  decodeWaitElapsed: boolean;
+}): string | null {
+  if (input.statusMessage) return input.statusMessage;
+  if (input.holdReason === "decode" && input.decodeWaitElapsed) {
+    return PLAYBACK_DECODE_WAIT_MESSAGE;
+  }
+  return null;
+}
+
+/**
  * The single decision behind the hold, taken from already-resolved inputs so it
  * is unit-checkable without a journey, a director or a DOM.
  */

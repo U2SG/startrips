@@ -1,5 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { playbackChapterOpeningUrl, playbackHoldReason, playbackMediaGate } from "./playbackMediaPresentation";
+import {
+  PLAYBACK_DECODE_WAIT_MESSAGE,
+  PLAYBACK_DECODE_WAIT_NOTICE_MS,
+  playbackChapterOpeningUrl,
+  playbackDecodeWaitKey,
+  playbackHoldReason,
+  playbackMediaGate,
+  playbackStatusLine,
+} from "./playbackMediaPresentation";
+
+describe("playbackDecodeWaitKey", () => {
+  it("is absent unless a decode hold is in progress", () => {
+    expect(playbackDecodeWaitKey({ holdReason: "none", stepIndex: 3, heldAssetId: "a" })).toBeNull();
+    expect(playbackDecodeWaitKey({ holdReason: "video", stepIndex: 3, heldAssetId: "a" })).toBeNull();
+    expect(playbackDecodeWaitKey({ holdReason: "decode", stepIndex: 3, heldAssetId: "a" })).toBe("3:a");
+  });
+
+  it("changes when Next, Back or a scrub moves the decode wait to another image", () => {
+    const first = playbackDecodeWaitKey({ holdReason: "decode", stepIndex: 3, heldAssetId: "a" });
+    expect(playbackDecodeWaitKey({ holdReason: "decode", stepIndex: 4, heldAssetId: "b" })).not.toBe(first);
+    // Same beat, different held asset (a stop chapter whose first image changed).
+    expect(playbackDecodeWaitKey({ holdReason: "decode", stepIndex: 3, heldAssetId: "b" })).not.toBe(first);
+    // Same wait re-rendered keeps its key, so the timer is not restarted spuriously.
+    expect(playbackDecodeWaitKey({ holdReason: "decode", stepIndex: 3, heldAssetId: "a" })).toBe(first);
+  });
+});
+
+describe("playbackStatusLine", () => {
+  it("names a decode hold only after its grace has elapsed", () => {
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "decode", decodeWaitElapsed: false })).toBeNull();
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "decode", decodeWaitElapsed: true }))
+      .toBe(PLAYBACK_DECODE_WAIT_MESSAGE);
+    // The grace is long enough that a fast decode never flickers a notice.
+    expect(PLAYBACK_DECODE_WAIT_NOTICE_MS).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("stays quiet for video and trim holds, which are the beat itself", () => {
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "video", decodeWaitElapsed: true })).toBeNull();
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "trim", decodeWaitElapsed: true })).toBeNull();
+    expect(playbackStatusLine({ statusMessage: null, holdReason: "none", decodeWaitElapsed: true })).toBeNull();
+  });
+
+  it("lets the shell's own status message win", () => {
+    expect(playbackStatusLine({ statusMessage: "草稿预览", holdReason: "decode", decodeWaitElapsed: true }))
+      .toBe("草稿预览");
+  });
+});
 
 describe("playbackMediaGate (PR #24 review)", () => {
   it("keeps pending media held but treats signed-read failures as settled errors", () => {
