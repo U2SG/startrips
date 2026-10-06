@@ -364,19 +364,34 @@ describe("server-side preview backfill", () => {
     expect(candidates).not.toContain(deleted.id);
   });
 
-  it("runs a pass over its candidates and reports the outcomes", async () => {
-    const readyKey = `backfill/${randomUUID()}/pass-ready`;
+  it("drains more than one page in a pass, terminates on skipped rows, and honours the pass limit", async () => {
+    // Eleven originals that render (more than one page of eight), one corrupt
+    // one, and one whose original is missing: the last stays a candidate
+    // after being skipped and must not keep the pass looping.
+    const originals: Record<string, Uint8Array> = {};
+    const readyIds: string[] = [];
+    for (let index = 0; index < 11; index += 1) {
+      const key = `backfill/${randomUUID()}/pass-ready-${index}`;
+      originals[key] = ORIGINAL;
+      readyIds.push((await insertAsset({ key, previewState: index % 2 ? "pending" : "none" })).id);
+    }
     const brokenKey = `backfill/${randomUUID()}/pass-broken`;
-    const ready = await insertAsset({ key: readyKey, previewState: "pending" });
+    originals[brokenKey] = new TextEncoder().encode("still not a jpeg");
     const broken = await insertAsset({ key: brokenKey, previewState: "none" });
-    const backend = backfillBackend({
-      [readyKey]: ORIGINAL,
-      [brokenKey]: new TextEncoder().encode("still not a jpeg"),
-    });
+    const missing = await insertAsset({ key: `backfill/${randomUUID()}/pass-missing`, previewState: "none" });
+    const backend = backfillBackend(originals);
 
-    const summary = await runPreviewBackfillPass(backend.dependencies, CEILINGS);
-    expect(summary.candidates).toBeGreaterThanOrEqual(2);
-    expect((await readAsset(ready.id)).previewState).toBe("ready");
+    const summary = await runPreviewBackfillPass(backend.dependencies, CEILINGS, 500);
+    expect(summary.ready).toBeGreaterThanOrEqual(11);
+    expect(summary.failed).toBeGreaterThanOrEqual(1);
+    expect(summary.skipped).toBeGreaterThanOrEqual(1);
+    for (const id of readyIds) expect((await readAsset(id)).previewState).toBe("ready");
     expect((await readAsset(broken.id)).previewState).toBe("failed");
+    expect((await readAsset(missing.id)).previewState).toBe("none");
+
+    // A later pass sees only what is still a candidate, and a pass limit of
+    // one attempts exactly one asset.
+    const limited = await runPreviewBackfillPass(backend.dependencies, CEILINGS, 1);
+    expect(limited.candidates).toBe(1);
   });
 });
