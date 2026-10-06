@@ -26,6 +26,7 @@ import { playbackReadIsReusable, type MediaReadState as MediaRead } from "./medi
 import {
   PLAYBACK_DECODE_WAIT_NOTICE_MS,
   playbackChapterOpeningUrl,
+  playbackDecodeWaitKey,
   playbackHoldReason,
   playbackMediaGate,
   playbackStatusLine,
@@ -251,17 +252,20 @@ export function JourneyPlaybackOverlay({
   // nothing moving while a large original downloaded. After the grace the
   // status line says what the wait is; it clears the moment the hold lifts.
   const [decodeWaitElapsed, setDecodeWaitElapsed] = useState(false);
+  // The asset the current hold waits on, published by the hold effect below.
+  // Keying the grace on it (and the beat) means moving to another decoding
+  // image restarts the wait instead of inheriting the previous one's.
+  const [heldAssetId, setHeldAssetId] = useState<string | null>(null);
+  const decodeWaitKey = playbackDecodeWaitKey({ holdReason, stepIndex: director.stepIndex, heldAssetId });
   useEffect(() => {
-    if (holdReason !== "decode") {
-      setDecodeWaitElapsed(false);
-      return;
-    }
+    setDecodeWaitElapsed(false);
+    if (decodeWaitKey === null) return;
     const timer = window.setTimeout(
       () => setDecodeWaitElapsed(true),
       PLAYBACK_DECODE_WAIT_NOTICE_MS,
     );
     return () => window.clearTimeout(timer);
-  }, [holdReason]);
+  }, [decodeWaitKey]);
   const statusLine = playbackStatusLine({ statusMessage, holdReason, decodeWaitElapsed });
   // Narrative return position is a commit log, not a mirror of the director's
   // latest requested index. Non-media beats commit with their React render; a
@@ -810,6 +814,7 @@ export function JourneyPlaybackOverlay({
       videoPlaybackFailed: asset ? videoFallbackAssetId === asset.id : false,
       trimStatus,
     };
+    setHeldAssetId(asset?.id ?? null);
     setHoldReason(snapshot
       ? playbackLifecycleHoldReason(snapshot, beat)
       : playbackHoldReason({ ...beat, gate }));
