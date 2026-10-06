@@ -17,7 +17,7 @@ import {
   createJourneyForAtlas,
   markJourneyForDeletionForAtlas,
 } from "../repositories/journey-repository";
-import { PREVIEW_KEY_PREFIX } from "../services/media-preview";
+import { beginAssetPreview, PREVIEW_KEY_PREFIX } from "../services/media-preview";
 import {
   backfillAssetPreview,
   listPreviewBackfillCandidates,
@@ -255,6 +255,50 @@ describe("server-side preview backfill", () => {
     expect(backend.puts).toHaveLength(0);
   });
 
+  it("records a decided failure when the pixels fail to decode after metadata succeeded", async () => {
+    // The first 6 KiB of the fixture: `metadata()` reads the frame header, the
+    // render hits "premature end of JPEG image".
+    const key = `backfill/${randomUUID()}/original`;
+    const asset = await insertAsset({ key, previewState: "none" });
+    const backend = backfillBackend({ [key]: ORIGINAL.subarray(0, 6_000) });
+
+    await expect(backfillAssetPreview(asset, CEILINGS, backend.dependencies)).resolves.toBe("failed");
+    const stored = await readAsset(asset.id);
+    expect(stored.previewState).toBe("failed");
+    expect(stored.previewStorageKey).toBeNull();
+    expect(backend.puts).toHaveLength(0);
+  });
+
+  it("reports superseded and leaves a browser's newer generation untouched", async () => {
+    const key = `backfill/${randomUUID()}/original`;
+    const asset = await insertAsset({ key, previewState: "pending" });
+    const backend = backfillBackend({ [key]: ORIGINAL });
+    const browser = backfillBackend({});
+    let browserKey: string | null = null;
+    const sweepPut = backend.dependencies.fetch;
+    // While the sweep's still is in flight to storage, a browser producer
+    // begins a fresh generation for the same asset (a duplicate upload).
+    backend.dependencies.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const [current] = await db.select().from(mediaAssets).where(eq(mediaAssets.id, asset.id));
+      const begun = await beginAssetPreview(
+        current,
+        { sourceWidth: 2048, sourceHeight: 1024, exifOrientation: null },
+        CEILINGS,
+        serverConfig.mediaPreviewUploadExpiresInSeconds,
+        browser.dependencies,
+      );
+      expect(begun.ok).toBe(true);
+      if (begun.ok) browserKey = begun.storageKey;
+      return sweepPut(input, init);
+    }) as typeof fetch;
+
+    await expect(backfillAssetPreview(asset, CEILINGS, backend.dependencies)).resolves.toBe("superseded");
+    const stored = await readAsset(asset.id);
+    expect(stored.previewState).toBe("pending");
+    expect(stored.previewStorageKey).toBe(browserKey);
+    expect(stored.previewBytes).toBeNull();
+  });
+
   it("refuses to decode an original that fills the source window", async () => {
     const key = `backfill/${randomUUID()}/original`;
     const asset = await insertAsset({ key, previewState: "none" });
@@ -275,6 +319,27 @@ describe("server-side preview backfill", () => {
     const video = await insertAsset({ key: `backfill/${randomUUID()}/video`, mimeType: "video/mp4" });
     const legacy = await insertAsset({ key: `backfill/${randomUUID()}/legacy`, previewState: "none" });
     const stuck = await insertAsset({ key: `backfill/${randomUUID()}/stuck`, previewState: "pending" });
+    // An old asset whose CURRENT generation a browser began moments ago: its
+    // write record is still live, so the sweep must not take it over.
+    const liveGeneration = await insertAsset({ key: `backfill/${randomUUID()}/live`, previewState: "pending" });
+    const liveKey = `${PREVIEW_KEY_PREFIX}${randomUUID()}`;
+    await db.update(mediaAssets).set({ previewStorageKey: liveKey }).where(eq(mediaAssets.id, liveGeneration.id));
+    await db.insert(mediaPreviewWrites).values({
+      mediaAssetId: liveGeneration.id,
+      storageDriver: "s3",
+      storageKey: liveKey,
+      expiresAt: new Date(Date.now() + 120_000),
+    });
+    // The same shape long after its write expired: the producer is gone.
+    const expiredGeneration = await insertAsset({ key: `backfill/${randomUUID()}/expired`, previewState: "pending" });
+    const expiredKey = `${PREVIEW_KEY_PREFIX}${randomUUID()}`;
+    await db.update(mediaAssets).set({ previewStorageKey: expiredKey }).where(eq(mediaAssets.id, expiredGeneration.id));
+    await db.insert(mediaPreviewWrites).values({
+      mediaAssetId: expiredGeneration.id,
+      storageDriver: "s3",
+      storageKey: expiredKey,
+      expiresAt: new Date(Date.now() - PREVIEW_BACKFILL_MIN_AGE_MS - 60_000),
+    });
     const doomed = await createJourneyForAtlas(identity.atlasId, identity.userId, {
       title: "Journey on its way out",
       startedOn: "2026-09-01",
@@ -292,6 +357,8 @@ describe("server-side preview backfill", () => {
     const candidates = (await listPreviewBackfillCandidates(new Date(), 100)).map((asset) => asset.id);
     expect(candidates).toContain(legacy.id);
     expect(candidates).toContain(stuck.id);
+    expect(candidates).toContain(expiredGeneration.id);
+    expect(candidates).not.toContain(liveGeneration.id);
     expect(candidates).not.toContain(fresh.id);
     expect(candidates).not.toContain(video.id);
     expect(candidates).not.toContain(deleted.id);

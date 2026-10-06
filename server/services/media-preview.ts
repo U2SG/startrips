@@ -90,6 +90,12 @@ export type PreviewBegun = {
   ok: true;
   upload: { url: string; headers: Record<string, string>; expiresAt: string };
   preview: PreviewSpec;
+  /**
+   * The generation this begin claimed. A producer that holds the write must
+   * complete or fail exactly this key; re-reading the row later would hand it
+   * whatever generation a concurrent producer has since claimed.
+   */
+  storageKey: string;
 };
 
 export type PreviewCompleted = {
@@ -306,6 +312,7 @@ export async function beginAssetPreview(
       expiresAt: signed.expiresAt.toISOString(),
     },
     preview: spec,
+    storageKey: previewStorageKey,
   };
 }
 

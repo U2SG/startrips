@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNull, like, lt, or } from "drizzle-orm";
+import { and, eq, isNull, like, lt, or } from "drizzle-orm";
 import sharp, { type Metadata } from "sharp";
-import { journeys, mediaAssets } from "../db/app-schema";
+import { journeys, mediaAssets, mediaPreviewWrites } from "../db/app-schema";
 import { db } from "../db/client";
 import { serverConfig } from "../config";
 import type { PreviewCeilings, PreviewSpec } from "../media/preview-derivation";
@@ -73,8 +73,18 @@ export function previewCeilingsFromConfig(): PreviewCeilings {
 }
 
 /**
- * Image assets that never reached a servable preview: `none` (uploaded before
- * previews existed) and `pending` (a producer began and never completed).
+ * Image assets that never reached a servable preview.
+ *
+ * `none` (uploaded before previews existed) is stale by the asset's own age.
+ * `pending` is stale by the age of its CURRENT generation, not the asset's: a
+ * duplicate upload deduplicates onto an old asset and the browser begins a
+ * fresh preview for it seconds later, and that live generation must keep its
+ * claim. The generation's clock is its `media_preview_writes` record — issued
+ * by `beginAssetPreview` with the key — so a pending row is a candidate only
+ * once that record has expired past the grace, or no longer exists (the write
+ * reconciler retires expired records well after any producer could still be
+ * completing against them).
+ *
  * Media whose Journey is marked for deletion is left alone; the deletion
  * reconciler owns it. Everyday Fragment media has no Journey and is included.
  */
@@ -87,12 +97,21 @@ export async function listPreviewBackfillCandidates(
     .select({ asset: mediaAssets })
     .from(mediaAssets)
     .leftJoin(journeys, eq(journeys.id, mediaAssets.journeyId))
+    .leftJoin(
+      mediaPreviewWrites,
+      eq(mediaPreviewWrites.storageKey, mediaAssets.previewStorageKey),
+    )
     .where(
       and(
         like(mediaAssets.mimeType, "image/%"),
-        inArray(mediaAssets.previewState, ["none", "pending"]),
-        lt(mediaAssets.createdAt, cutoff),
         or(isNull(mediaAssets.journeyId), isNull(journeys.deletionStartedAt)),
+        or(
+          and(eq(mediaAssets.previewState, "none"), lt(mediaAssets.createdAt, cutoff)),
+          and(
+            eq(mediaAssets.previewState, "pending"),
+            or(isNull(mediaPreviewWrites.id), lt(mediaPreviewWrites.expiresAt, cutoff)),
+          ),
+        ),
       ),
     )
     .orderBy(mediaAssets.createdAt)
@@ -100,6 +119,12 @@ export async function listPreviewBackfillCandidates(
   return rows.map((row) => row.asset);
 }
 
+/**
+ * `null` when no quality fits the byte ceiling; throws when the pixel payload
+ * does not decode. The two are both decided failures for the caller, but a
+ * decode error is worth its own log line because `metadata()` succeeding on
+ * a truncated file is exactly how a corrupt original gets this far.
+ */
 async function renderWithinBudget(
   original: Uint8Array,
   spec: PreviewSpec,
@@ -188,20 +213,51 @@ export async function backfillAssetPreview(
     dependencies,
   );
   if (!begun.ok) {
-    // PREVIEW_UNSUPPORTED already cleared the row to `failed`; a lost swap
-    // means another producer owns this asset now.
-    return begun.error === "PREVIEW_UNSUPPORTED" ? "failed" : "superseded";
+    switch (begun.error) {
+      case "PREVIEW_UNSUPPORTED":
+        // Already cleared to `failed` by begin.
+        return "failed";
+      case "INVALID_PREVIEW_REQUEST":
+        // These dimensions came from the stored object, not from a request,
+        // so the condition is permanent: record it instead of re-downloading
+        // and re-measuring the same original every pass.
+        console.error("Preview backfill: original has unplannable dimensions", asset.id, metadata.width, metadata.height);
+        return (await failAssetPreview(asset, dependencies)) ? "failed" : "superseded";
+      default:
+        // A lost swap: another producer owns this asset now.
+        return "superseded";
+    }
   }
 
-  const rendered = await renderWithinBudget(original, begun.preview);
+  // The generation THIS pass claimed, built from what begin issued rather than
+  // read back from the row. Every write below is a compare-and-swap on this
+  // key, so if a browser producer supersedes it meanwhile, the row is left
+  // exactly as that producer set it and this pass reports `superseded`.
+  const claimed: MediaAsset = {
+    ...asset,
+    displayWidth: begun.preview.displayWidth,
+    displayHeight: begun.preview.displayHeight,
+    previewStorageKey: begun.storageKey,
+    previewMimeType: begun.preview.mimeType,
+    previewBytes: null,
+    previewWidth: begun.preview.width,
+    previewHeight: begun.preview.height,
+    previewState: "pending",
+  };
+
+  let rendered: Buffer | null;
+  try {
+    rendered = await renderWithinBudget(original, begun.preview);
+  } catch (error) {
+    console.error(
+      "Preview backfill: original pixels could not be decoded",
+      asset.id,
+      error instanceof Error ? error.message : "unknown error",
+    );
+    rendered = null;
+  }
   if (!rendered) {
-    const [claimed] = await db
-      .select()
-      .from(mediaAssets)
-      .where(eq(mediaAssets.id, asset.id))
-      .limit(1);
-    if (claimed) await failAssetPreview(claimed, dependencies);
-    return "failed";
+    return (await failAssetPreview(claimed, dependencies)) ? "failed" : "superseded";
   }
 
   const written = await dependencies.fetch(begun.upload.url, {
@@ -216,12 +272,6 @@ export async function backfillAssetPreview(
     return "skipped";
   }
 
-  const [claimed] = await db
-    .select()
-    .from(mediaAssets)
-    .where(eq(mediaAssets.id, asset.id))
-    .limit(1);
-  if (!claimed) return "superseded";
   const completed = await completeAssetPreview(claimed, ceilings, dependencies);
   if (completed.ok) return "ready";
   return completed.error === "PREVIEW_NOT_PENDING" || completed.error === "PREVIEW_SUPERSEDED"
