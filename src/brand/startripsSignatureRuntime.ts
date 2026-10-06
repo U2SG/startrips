@@ -7,7 +7,7 @@ export type StartripsSignatureRuntimeState = {
   driverCount: 0 | 1;
 };
 
-type Scheduler = {
+export type StartripsSignatureScheduler = {
   now: () => number;
   requestFrame: (callback: (now: number) => void) => number;
   cancelFrame: (id: number) => void;
@@ -22,11 +22,46 @@ export function createStartripsSignatureRuntime({
 }: {
   clip: StartripsSignatureClipName;
   reduced: boolean;
-  scheduler: Scheduler;
+  scheduler: StartripsSignatureScheduler;
   onPose: (pose: StartripsSignaturePose) => void;
   onState: (state: StartripsSignatureRuntimeState) => void;
 }) {
   const definition = getStartripsSignatureClip(clip);
+  return createSignatureFrameRuntime({
+    durationMs: definition.durationMs,
+    loop: definition.loop,
+    sample: (elapsedMs) => sampleStartripsSignaturePose(clip, elapsedMs),
+    reduced,
+    scheduler,
+    onPose,
+    onState,
+  });
+}
+
+/**
+ * The frame driver behind every brand signature: one requestAnimationFrame
+ * loop over a timeline of `durationMs`, with suspension (hidden tab or
+ * offscreen), interruption and reduced motion. Interruption, reduced motion
+ * and the natural end all settle on the final sample, i.e. the rest pose.
+ */
+export function createSignatureFrameRuntime<Pose>({
+  durationMs,
+  loop,
+  sample,
+  reduced,
+  scheduler,
+  onPose,
+  onState,
+}: {
+  durationMs: number;
+  loop: boolean;
+  sample: (elapsedMs: number) => Pose;
+  reduced: boolean;
+  scheduler: StartripsSignatureScheduler;
+  onPose: (pose: Pose) => void;
+  onState: (state: StartripsSignatureRuntimeState) => void;
+}) {
+  const definition = { durationMs, loop };
   let disposed = false;
   let interrupted = false;
   let settled = false;
@@ -51,7 +86,7 @@ export function createStartripsSignatureRuntime({
     if (status === "settled") settled = true;
     cancel();
     elapsedMs = definition.durationMs;
-    onPose(sampleStartripsSignaturePose(clip, definition.durationMs));
+    onPose(sample(definition.durationMs));
     publish(status, 0);
   };
 
@@ -73,7 +108,7 @@ export function createStartripsSignatureRuntime({
         return;
       }
     }
-    onPose(sampleStartripsSignaturePose(clip, elapsedMs));
+    onPose(sample(elapsedMs));
     publish("running", 1);
     schedule();
   };
@@ -90,7 +125,7 @@ export function createStartripsSignatureRuntime({
       return;
     }
     lastNow = scheduler.now();
-    onPose(sampleStartripsSignaturePose(clip, elapsedMs));
+    onPose(sample(elapsedMs));
     if (suspended) {
       publish("suspended", 0);
       return;

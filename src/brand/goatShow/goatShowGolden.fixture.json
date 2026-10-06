@@ -1,0 +1,1055 @@
+{
+ "durationMs": 8900,
+ "frames": [
+  {
+   "t": 0,
+   "attrs": {
+    "root": "translate(719.7 0) rotate(0) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(0 750 -56)",
+    "neck": "rotate(0 703 -56)",
+    "head": "rotate(0 686 -86)",
+    "ear-far": "rotate(0 692 -86)",
+    "ear-near": "rotate(0 692 -86)",
+    "fn-hip": "rotate(0 700 -57.5)",
+    "fn-knee": "rotate(0 697.5614 -35.412)",
+    "fn-fet": "rotate(0 692.982 -12.65)",
+    "ff-hip": "rotate(0 700 -57.5)",
+    "ff-knee": "rotate(0 702.6998 -35.4)",
+    "ff-fet": "rotate(0 702.982 -12.65)",
+    "hn-hip": "rotate(0 740.3 -54.5)",
+    "hn-knee": "rotate(0 746.4008 -34.3788)",
+    "hn-fet": "rotate(0 745.482 -13.15)",
+    "hf-hip": "rotate(0 740.3 -55.5)",
+    "hf-knee": "rotate(0 741.2185 -34.3775)",
+    "hf-fet": "rotate(0 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(0) scale(1)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1,
+    "r": 0
+   },
+   "goat": {
+    "A": [
+     719.7,
+     0
+    ],
+    "p": 0,
+    "face": 1
+   }
+  },
+  {
+   "t": 500,
+   "attrs": {
+    "root": "translate(719.666 2.5) rotate(0.778) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(2.514 750 -56)",
+    "neck": "rotate(10 703 -56)",
+    "head": "rotate(12 686 -86)",
+    "ear-far": "rotate(-3.405 692 -86)",
+    "ear-near": "rotate(-3.405 692 -86)",
+    "fn-hip": "rotate(-14.747 700 -57.5)",
+    "fn-knee": "rotate(30.126 697.5614 -35.412)",
+    "fn-fet": "rotate(-16.156 692.982 -12.65)",
+    "ff-hip": "rotate(-15.599 700 -57.5)",
+    "ff-knee": "rotate(30.9 702.6998 -35.4)",
+    "ff-fet": "rotate(-16.079 702.982 -12.65)",
+    "hn-hip": "rotate(-13.971 740.3 -54.5)",
+    "hn-knee": "rotate(27.269 746.4008 -34.3788)",
+    "hn-fet": "rotate(-14.075 745.482 -13.15)",
+    "hf-hip": "rotate(-12.927 740.3 -55.5)",
+    "hf-knee": "rotate(26.679 741.2185 -34.3775)",
+    "hf-fet": "rotate(-14.53 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(23.498) scale(1.274)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1.2741435445510505,
+    "r": 23.498018104375745
+   },
+   "goat": {
+    "A": [
+     719.6660718409045,
+     2.499769765402483
+    ],
+    "p": 0.7775999999999998,
+    "face": 1
+   }
+  },
+  {
+   "t": 1000,
+   "attrs": {
+    "root": "translate(706.828 -12.755) rotate(9.983) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-15.966 750 -56)",
+    "neck": "rotate(-0.32 703 -56)",
+    "head": "rotate(-0.256 686 -86)",
+    "ear-far": "rotate(10.55 692 -86)",
+    "ear-near": "rotate(10.55 692 -86)",
+    "fn-hip": "rotate(21.7 700 -57.5)",
+    "fn-knee": "rotate(44.925 697.5614 -35.412)",
+    "fn-fet": "rotate(-97.637 692.982 -12.65)",
+    "ff-hip": "rotate(30.965 700 -57.5)",
+    "ff-knee": "rotate(41.746 702.6998 -35.4)",
+    "ff-fet": "rotate(-99.723 702.982 -12.65)",
+    "hn-hip": "rotate(-13.783 740.3 -54.5)",
+    "hn-knee": "rotate(-16.14 746.4008 -34.3788)",
+    "hn-fet": "rotate(9.52 745.482 -13.15)",
+    "hf-hip": "rotate(-11.569 740.3 -55.5)",
+    "hf-knee": "rotate(-14.335 741.2185 -34.3775)",
+    "hf-fet": "rotate(14.657 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(0) scale(1)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1,
+    "r": 0
+   },
+   "goat": {
+    "A": [
+     706.8278496785657,
+     -12.754768700884608
+    ],
+    "p": 9.983278206982106,
+    "face": 1
+   }
+  },
+  {
+   "t": 1350,
+   "attrs": {
+    "root": "translate(533.237 -78.257) rotate(-1.387) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-4.212 750 -56)",
+    "neck": "rotate(-3.666 703 -56)",
+    "head": "rotate(-2.5 686 -86)",
+    "ear-far": "rotate(-2.789 692 -86)",
+    "ear-near": "rotate(-2.789 692 -86)",
+    "fn-hip": "rotate(-9.441 700 -57.5)",
+    "fn-knee": "rotate(30.875 697.5614 -35.412)",
+    "fn-fet": "rotate(-19.965 692.982 -12.65)",
+    "ff-hip": "rotate(-8.452 700 -57.5)",
+    "ff-knee": "rotate(24.918 702.6998 -35.4)",
+    "ff-fet": "rotate(-0.649 702.982 -12.65)",
+    "hn-hip": "rotate(12.854 740.3 -54.5)",
+    "hn-knee": "rotate(-16.917 746.4008 -34.3788)",
+    "hn-fet": "rotate(1.389 745.482 -13.15)",
+    "hf-hip": "rotate(3.964 740.3 -55.5)",
+    "hf-knee": "rotate(-16.183 741.2185 -34.3775)",
+    "hf-fet": "rotate(5.897 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(0) scale(1)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1,
+    "r": 0
+   },
+   "goat": {
+    "A": [
+     533.2366364941381,
+     -78.2569840272267
+    ],
+    "p": -1.3872146680365156,
+    "face": 1
+   }
+  },
+  {
+   "t": 1700,
+   "attrs": {
+    "root": "translate(530.101 -52.192) rotate(8.565) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-3.926 750 -56)",
+    "neck": "rotate(-3.296 703 -56)",
+    "head": "rotate(-1.778 686 -86)",
+    "ear-far": "rotate(1.444 692 -86)",
+    "ear-near": "rotate(1.444 692 -86)",
+    "fn-hip": "rotate(-38.878 700 -57.5)",
+    "fn-knee": "rotate(81.91 697.5614 -35.412)",
+    "fn-fet": "rotate(-68.891 692.982 -12.65)",
+    "ff-hip": "rotate(-25.578 700 -57.5)",
+    "ff-knee": "rotate(69.266 702.6998 -35.4)",
+    "ff-fet": "rotate(-48.544 702.982 -12.65)",
+    "hn-hip": "rotate(32.408 740.3 -54.5)",
+    "hn-knee": "rotate(-5.174 746.4008 -34.3788)",
+    "hn-fet": "rotate(-1.783 745.482 -13.15)",
+    "hf-hip": "rotate(-45.407 740.3 -55.5)",
+    "hf-knee": "rotate(42.431 741.2185 -34.3775)",
+    "hf-fet": "rotate(-7.391 735.482 -13.15)",
+    "star": "translate(369.278 -142.97) rotate(10.37) scale(1)",
+    "trips": "translate(0 0) rotate(9.016 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 9.015873015873016,
+    "sink": 0,
+    "notch": 0
+   },
+   "star": {
+    "p": [
+     369.27841399416906,
+     -142.97016909620993
+    ],
+    "s": 1,
+    "r": 10.37037037037037
+   },
+   "goat": {
+    "A": [
+     530.1009585299979,
+     -52.19164064738112
+    ],
+    "p": 8.565079365079358,
+    "face": 1
+   }
+  },
+  {
+   "t": 2300,
+   "attrs": {
+    "root": "translate(447.197 -58.628) rotate(35.537) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-3.926 750 -56)",
+    "neck": "rotate(-3.296 703 -56)",
+    "head": "rotate(-1.778 686 -86)",
+    "ear-far": "rotate(1.444 692 -86)",
+    "ear-near": "rotate(1.444 692 -86)",
+    "fn-hip": "rotate(19.29 700 -57.5)",
+    "fn-knee": "rotate(-1.45 697.5614 -35.412)",
+    "fn-fet": "rotate(-40.969 692.982 -12.65)",
+    "ff-hip": "rotate(-38.11 700 -57.5)",
+    "ff-knee": "rotate(41.684 702.6998 -35.4)",
+    "ff-fet": "rotate(-1.703 702.982 -12.65)",
+    "hn-hip": "rotate(-27.603 740.3 -54.5)",
+    "hn-knee": "rotate(19.717 746.4008 -34.3788)",
+    "hn-fet": "rotate(9.756 745.482 -13.15)",
+    "hf-hip": "rotate(4.287 740.3 -55.5)",
+    "hf-knee": "rotate(33.338 741.2185 -34.3775)",
+    "hf-fet": "rotate(-28.091 735.482 -13.15)",
+    "star": "translate(304.167 -187.249) rotate(70) scale(1)",
+    "trips": "translate(0 0) rotate(37.407 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 37.407407407407405,
+    "sink": 0,
+    "notch": 0
+   },
+   "star": {
+    "p": [
+     304.16655647390735,
+     -187.24868519909842
+    ],
+    "s": 1,
+    "r": 70
+   },
+   "goat": {
+    "A": [
+     447.19687020825216,
+     -58.62762236084832
+    ],
+    "p": 35.53703703703703,
+    "face": 1
+   }
+  },
+  {
+   "t": 2900,
+   "attrs": {
+    "root": "translate(460.35 -114.219) rotate(2.369) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-9.573 750 -56)",
+    "neck": "rotate(4.744 703 -56)",
+    "head": "rotate(3.722 686 -86)",
+    "ear-far": "rotate(14.074 692 -86)",
+    "ear-near": "rotate(14.074 692 -86)",
+    "fn-hip": "rotate(1.646 700 -57.5)",
+    "fn-knee": "rotate(15.14 697.5614 -35.412)",
+    "fn-fet": "rotate(-12.477 692.982 -12.65)",
+    "ff-hip": "rotate(10.392 700 -57.5)",
+    "ff-knee": "rotate(11.108 702.6998 -35.4)",
+    "ff-fet": "rotate(-14.596 702.982 -12.65)",
+    "hn-hip": "rotate(46.861 740.3 -54.5)",
+    "hn-knee": "rotate(-75.332 746.4008 -34.3788)",
+    "hn-fet": "rotate(57.59 745.482 -13.15)",
+    "hf-hip": "rotate(28.484 740.3 -55.5)",
+    "hf-knee": "rotate(-75.598 741.2185 -34.3775)",
+    "hf-fet": "rotate(80.234 735.482 -13.15)",
+    "star": "translate(300.303 -179.433) rotate(77.913) scale(1)",
+    "trips": "translate(0 0) rotate(89.926 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 89.92592592592592,
+    "sink": 0,
+    "notch": 0
+   },
+   "star": {
+    "p": [
+     300.3034074074074,
+     -179.43265618309565
+    ],
+    "s": 1,
+    "r": 77.91341207971824
+   },
+   "goat": {
+    "A": [
+     460.35027747257567,
+     -114.21886289845432
+    ],
+    "p": 2.369269389079946,
+    "face": 1
+   }
+  },
+  {
+   "t": 3500,
+   "attrs": {
+    "root": "translate(454.353 -111.773) rotate(-4.349) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-2.187 750 -56)",
+    "neck": "rotate(-18 703 -56)",
+    "head": "rotate(-10 686 -86)",
+    "ear-far": "rotate(-16 692 -86)",
+    "ear-near": "rotate(-16 692 -86)",
+    "fn-hip": "rotate(-46.259 700 -57.5)",
+    "fn-knee": "rotate(51.895 697.5614 -35.412)",
+    "fn-fet": "rotate(-1.287 692.982 -12.65)",
+    "ff-hip": "rotate(-33.419 700 -57.5)",
+    "ff-knee": "rotate(36.555 702.6998 -35.4)",
+    "ff-fet": "rotate(1.213 702.982 -12.65)",
+    "hn-hip": "rotate(2.998 740.3 -54.5)",
+    "hn-knee": "rotate(30.213 746.4008 -34.3788)",
+    "hn-fet": "rotate(-28.862 745.482 -13.15)",
+    "hf-hip": "rotate(1.106 740.3 -55.5)",
+    "hf-knee": "rotate(22.809 741.2185 -34.3775)",
+    "hf-fet": "rotate(-19.566 735.482 -13.15)",
+    "star": "translate(326.704 -174.906) rotate(45.418) scale(1)",
+    "trips": "translate(0 0) rotate(90 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 90,
+    "sink": 0,
+    "notch": 0
+   },
+   "star": {
+    "p": [
+     326.7040352167948,
+     -174.90632297069664
+    ],
+    "s": 1,
+    "r": 45.41838134430727
+   },
+   "goat": {
+    "A": [
+     454.3525107017809,
+     -111.77296108381746
+    ],
+    "p": -4.349169230769232,
+    "face": 1
+   }
+  },
+  {
+   "t": 3760,
+   "attrs": {
+    "root": "translate(455.003 -109.538) rotate(-8.306) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-21.801 750 -56)",
+    "neck": "rotate(-30.396 703 -56)",
+    "head": "rotate(-21.425 686 -86)",
+    "ear-far": "rotate(20 692 -86)",
+    "ear-near": "rotate(20 692 -86)",
+    "fn-hip": "rotate(-55.616 700 -57.5)",
+    "fn-knee": "rotate(65.459 697.5614 -35.412)",
+    "fn-fet": "rotate(-1.537 692.982 -12.65)",
+    "ff-hip": "rotate(-42.754 700 -57.5)",
+    "ff-knee": "rotate(50.027 702.6998 -35.4)",
+    "ff-fet": "rotate(1.034 702.982 -12.65)",
+    "hn-hip": "rotate(-2.276 740.3 -54.5)",
+    "hn-knee": "rotate(39.04 746.4008 -34.3788)",
+    "hn-fet": "rotate(-28.458 745.482 -13.15)",
+    "hf-hip": "rotate(-5.879 740.3 -55.5)",
+    "hf-knee": "rotate(35.805 741.2185 -34.3775)",
+    "hf-fet": "rotate(-21.619 735.482 -13.15)",
+    "star": "translate(382.116 -167.616) rotate(24.136) scale(0.9)",
+    "trips": "translate(0 0) rotate(90 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 90,
+    "sink": 0,
+    "notch": 0
+   },
+   "star": {
+    "p": [
+     382.1160741476135,
+     -167.61618449625632
+    ],
+    "s": 0.899978625,
+    "r": 24.13640625000002
+   },
+   "goat": {
+    "A": [
+     455.00297558342777,
+     -109.53816299876831
+    ],
+    "p": -8.30632680928539,
+    "face": 1
+   }
+  },
+  {
+   "t": 4200,
+   "attrs": {
+    "root": "translate(454 -113.908) rotate(0) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-1.562 750 -56)",
+    "neck": "rotate(18 703 -56)",
+    "head": "rotate(22 686 -86)",
+    "ear-far": "rotate(-2.187 692 -86)",
+    "ear-near": "rotate(-2.187 692 -86)",
+    "fn-hip": "rotate(-34.916 700 -57.5)",
+    "fn-knee": "rotate(33.864 697.5614 -35.412)",
+    "fn-fet": "rotate(1.051 692.982 -12.65)",
+    "ff-hip": "rotate(-20.831 700 -57.5)",
+    "ff-knee": "rotate(16.246 702.6998 -35.4)",
+    "ff-fet": "rotate(4.585 702.982 -12.65)",
+    "hn-hip": "rotate(8.864 740.3 -54.5)",
+    "hn-knee": "rotate(20.611 746.4008 -34.3788)",
+    "hn-fet": "rotate(-29.475 745.482 -13.15)",
+    "hf-hip": "rotate(11.069 740.3 -55.5)",
+    "hf-knee": "rotate(4.32 741.2185 -34.3775)",
+    "hf-fet": "rotate(-15.389 735.482 -13.15)",
+    "star": "translate(459.178 -232.183) rotate(320.01) scale(0.62)",
+    "trips": "translate(0 0) rotate(90 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 90,
+    "sink": 0,
+    "notch": 0
+   },
+   "star": {
+    "p": [
+     459.17823121416825,
+     -232.1827349265401
+    ],
+    "s": 0.62,
+    "r": 320.0104508290207
+   },
+   "goat": {
+    "A": [
+     454,
+     -113.90800000000002
+    ],
+    "p": 0,
+    "face": 1
+   }
+  },
+  {
+   "t": 4800,
+   "attrs": {
+    "root": "translate(454 -71.673) rotate(0) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-2 750 -56)",
+    "neck": "rotate(-8.286 703 -56)",
+    "head": "rotate(-6.286 686 -86)",
+    "ear-far": "rotate(4 692 -86)",
+    "ear-near": "rotate(4 692 -86)",
+    "fn-hip": "rotate(-40.357 700 -57.5)",
+    "fn-knee": "rotate(43.863 697.5614 -35.412)",
+    "fn-fet": "rotate(-3.506 692.982 -12.65)",
+    "ff-hip": "rotate(-28.634 700 -57.5)",
+    "ff-knee": "rotate(30.55 702.6998 -35.4)",
+    "ff-fet": "rotate(-1.915 702.982 -12.65)",
+    "hn-hip": "rotate(4.125 740.3 -54.5)",
+    "hn-knee": "rotate(30.966 746.4008 -34.3788)",
+    "hn-fet": "rotate(-35.091 745.482 -13.15)",
+    "hf-hip": "rotate(4.225 740.3 -55.5)",
+    "hf-knee": "rotate(19.117 741.2185 -34.3775)",
+    "hf-fet": "rotate(-23.342 735.482 -13.15)",
+    "star": "translate(409.962 -193.815) rotate(321.867) scale(0.62)",
+    "trips": "translate(0 40.735) rotate(90 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 90,
+    "sink": 40.735253772290804,
+    "notch": 0
+   },
+   "star": {
+    "p": [
+     409.96203441645343,
+     -193.8150351523319
+    ],
+    "s": 0.62,
+    "r": 321.8667060843242
+   },
+   "goat": {
+    "A": [
+     454,
+     -71.67274622770921
+    ],
+    "p": 0,
+    "face": 1
+   }
+  },
+  {
+   "t": 5300,
+   "attrs": {
+    "root": "translate(454 4) rotate(0) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(0 750 -56)",
+    "neck": "rotate(-4 703 -56)",
+    "head": "rotate(-2 686 -86)",
+    "ear-far": "rotate(-4.444 692 -86)",
+    "ear-near": "rotate(-4.444 692 -86)",
+    "fn-hip": "rotate(-40.357 700 -57.5)",
+    "fn-knee": "rotate(43.863 697.5614 -35.412)",
+    "fn-fet": "rotate(-3.506 692.982 -12.65)",
+    "ff-hip": "rotate(-28.634 700 -57.5)",
+    "ff-knee": "rotate(30.55 702.6998 -35.4)",
+    "ff-fet": "rotate(-1.915 702.982 -12.65)",
+    "hn-hip": "rotate(4.125 740.3 -54.5)",
+    "hn-knee": "rotate(30.966 746.4008 -34.3788)",
+    "hn-fet": "rotate(-35.091 745.482 -13.15)",
+    "hf-hip": "rotate(4.225 740.3 -55.5)",
+    "hf-knee": "rotate(19.117 741.2185 -34.3775)",
+    "hf-fet": "rotate(-23.342 735.482 -13.15)",
+    "star": "translate(418.046 -119.5) rotate(326.158) scale(0.62)",
+    "trips": "translate(0 116) rotate(90 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 90,
+    "sink": 116,
+    "notch": 0
+   },
+   "star": {
+    "p": [
+     418.0456659840262,
+     -119.4995309914233
+    ],
+    "s": 0.62,
+    "r": 326.1584130988387
+   },
+   "goat": {
+    "A": [
+     454,
+     4
+    ],
+    "p": 0,
+    "face": 1
+   }
+  },
+  {
+   "t": 5600,
+   "attrs": {
+    "root": "translate(454 -36.522) rotate(0) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-9.154 750 -56)",
+    "neck": "rotate(6 703 -56)",
+    "head": "rotate(4 686 -86)",
+    "ear-far": "rotate(-3.111 692 -86)",
+    "ear-near": "rotate(-3.111 692 -86)",
+    "fn-hip": "rotate(-45.391 700 -57.5)",
+    "fn-knee": "rotate(52.941 697.5614 -35.412)",
+    "fn-fet": "rotate(-7.55 692.982 -12.65)",
+    "ff-hip": "rotate(-34.89 700 -57.5)",
+    "ff-knee": "rotate(41.59 702.6998 -35.4)",
+    "ff-fet": "rotate(-6.7 702.982 -12.65)",
+    "hn-hip": "rotate(-8.753 740.3 -54.5)",
+    "hn-knee": "rotate(39.96 746.4008 -34.3788)",
+    "hn-fet": "rotate(-6.207 745.482 -13.15)",
+    "hf-hip": "rotate(-0.704 740.3 -55.5)",
+    "hf-knee": "rotate(30.387 741.2185 -34.3775)",
+    "hf-fet": "rotate(-29.684 735.482 -13.15)",
+    "star": "translate(434.414 -161.348) rotate(329.391) scale(0.62)",
+    "trips": "translate(0 36.443) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 36.443148688046655,
+    "notch": 0
+   },
+   "star": {
+    "p": [
+     434.41413979549486,
+     -161.34790852338844
+    ],
+    "s": 0.62,
+    "r": 329.3907466955401
+   },
+   "goat": {
+    "A": [
+     454,
+     -36.52158774690459
+    ],
+    "p": 0,
+    "face": 1
+   }
+  },
+  {
+   "t": 6000,
+   "attrs": {
+    "root": "translate(454 -75.554) rotate(0) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-1.04 750 -56)",
+    "neck": "rotate(-0.8 703 -56)",
+    "head": "rotate(-2.016 686 -86)",
+    "ear-far": "rotate(4.128 692 -86)",
+    "ear-near": "rotate(4.128 692 -86)",
+    "fn-hip": "rotate(-36.854 700 -57.5)",
+    "fn-knee": "rotate(37.447 697.5614 -35.412)",
+    "fn-fet": "rotate(-0.593 692.982 -12.65)",
+    "ff-hip": "rotate(-23.836 700 -57.5)",
+    "ff-knee": "rotate(21.822 702.6998 -35.4)",
+    "ff-fet": "rotate(2.014 702.982 -12.65)",
+    "hn-hip": "rotate(-0.688 740.3 -54.5)",
+    "hn-knee": "rotate(23.373 746.4008 -34.3788)",
+    "hn-fet": "rotate(2.314 745.482 -13.15)",
+    "hf-hip": "rotate(8.335 740.3 -55.5)",
+    "hf-knee": "rotate(10.132 741.2185 -34.3775)",
+    "hf-fet": "rotate(-18.466 735.482 -13.15)",
+    "star": "translate(421.913 -200.332) rotate(333.742) scale(0.62)",
+    "trips": "translate(0 0.05) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0.049990601766869425,
+    "notch": 48.333646607771016
+   },
+   "star": {
+    "p": [
+     421.91281402240907,
+     -200.33171098901968
+    ],
+    "s": 0.62,
+    "r": 333.7415123057122
+   },
+   "goat": {
+    "A": [
+     454,
+     -75.55400939823313
+    ],
+    "p": 0,
+    "face": 1
+   }
+  },
+  {
+   "t": 6400,
+   "attrs": {
+    "root": "translate(454.591 -73.674) rotate(-6.839) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-6.208 750 -56)",
+    "neck": "rotate(-33.612 703 -56)",
+    "head": "rotate(-23.54 686 -86)",
+    "ear-far": "rotate(-15.761 692 -86)",
+    "ear-near": "rotate(-15.761 692 -86)",
+    "fn-hip": "rotate(-49.204 700 -57.5)",
+    "fn-knee": "rotate(55.494 697.5614 -35.412)",
+    "fn-fet": "rotate(0.548 692.982 -12.65)",
+    "ff-hip": "rotate(-35.641 700 -57.5)",
+    "ff-knee": "rotate(38.952 702.6998 -35.4)",
+    "ff-fet": "rotate(3.528 702.982 -12.65)",
+    "hn-hip": "rotate(-1.927 740.3 -54.5)",
+    "hn-knee": "rotate(21.971 746.4008 -34.3788)",
+    "hn-fet": "rotate(11.794 745.482 -13.15)",
+    "hf-hip": "rotate(-0.266 740.3 -55.5)",
+    "hf-knee": "rotate(24.062 741.2185 -34.3775)",
+    "hf-fet": "rotate(-16.957 735.482 -13.15)",
+    "star": "translate(364.747 -159.806) rotate(337.365) scale(0.62)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     364.7472661771631,
+     -159.805719395137
+    ],
+    "s": 0.62,
+    "r": 337.3652996006889
+   },
+   "goat": {
+    "A": [
+     454.5912010046172,
+     -73.6742595886319
+    ],
+    "p": -6.838558799342105,
+    "face": 1
+   }
+  },
+  {
+   "t": 6900,
+   "attrs": {
+    "root": "translate(454 -83.989) rotate(0) scale(0.936 1) translate(-719.7 0)",
+    "tail": "rotate(-8.431 750 -56)",
+    "neck": "rotate(3.055 703 -56)",
+    "head": "rotate(2.292 686 -86)",
+    "ear-far": "rotate(11.441 692 -86)",
+    "ear-near": "rotate(11.441 692 -86)",
+    "fn-hip": "rotate(7.7 700 -57.5)",
+    "fn-knee": "rotate(2.925 697.5614 -35.412)",
+    "fn-fet": "rotate(-3.637 692.982 -12.65)",
+    "ff-hip": "rotate(16.965 700 -57.5)",
+    "ff-knee": "rotate(-0.254 702.6998 -35.4)",
+    "ff-fet": "rotate(-5.723 702.982 -12.65)",
+    "hn-hip": "rotate(8.867 740.3 -54.5)",
+    "hn-knee": "rotate(-5.346 746.4008 -34.3788)",
+    "hn-fet": "rotate(7.604 745.482 -13.15)",
+    "hf-hip": "rotate(-9.51 740.3 -55.5)",
+    "hf-knee": "rotate(-5.612 741.2185 -34.3775)",
+    "hf-fet": "rotate(30.248 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(721.374) scale(1.041)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1.0410495626822156,
+    "r": 721.3742833074172
+   },
+   "goat": {
+    "A": [
+     454,
+     -83.98891033107317
+    ],
+    "p": 0,
+    "face": 0.9359999999999999
+   }
+  },
+  {
+   "t": 7400,
+   "attrs": {
+    "root": "translate(475.015 -70.849) rotate(0) scale(-1 1) translate(-719.7 0)",
+    "tail": "rotate(-2.544 750 -56)",
+    "neck": "rotate(-3.728 703 -56)",
+    "head": "rotate(-2.296 686 -86)",
+    "ear-far": "rotate(0.408 692 -86)",
+    "ear-near": "rotate(0.408 692 -86)",
+    "fn-hip": "rotate(24.7 700 -57.5)",
+    "fn-knee": "rotate(-1.45 697.5614 -35.412)",
+    "fn-fet": "rotate(-47.674 692.982 -12.65)",
+    "ff-hip": "rotate(-19.577 700 -57.5)",
+    "ff-knee": "rotate(-2.63 702.6998 -35.4)",
+    "ff-fet": "rotate(47.207 702.982 -12.65)",
+    "hn-hip": "rotate(-35.948 740.3 -54.5)",
+    "hn-knee": "rotate(44.048 746.4008 -34.3788)",
+    "hn-fet": "rotate(-8.101 745.482 -13.15)",
+    "hf-hip": "rotate(28.182 740.3 -55.5)",
+    "hf-knee": "rotate(-13.988 741.2185 -34.3775)",
+    "hf-fet": "rotate(10.806 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(720) scale(1)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1,
+    "r": 720
+   },
+   "goat": {
+    "A": [
+     475.01531250000005,
+     -70.84924900780113
+    ],
+    "p": 0,
+    "face": -1
+   }
+  },
+  {
+   "t": 7900,
+   "attrs": {
+    "root": "translate(548.422 -75.454) rotate(-12.144) scale(-1 1) translate(-719.7 0)",
+    "tail": "rotate(-15.99 750 -56)",
+    "neck": "rotate(-0.049 703 -56)",
+    "head": "rotate(-0.717 686 -86)",
+    "ear-far": "rotate(10.267 692 -86)",
+    "ear-near": "rotate(10.267 692 -86)",
+    "fn-hip": "rotate(21.7 700 -57.5)",
+    "fn-knee": "rotate(44.925 697.5614 -35.412)",
+    "fn-fet": "rotate(-97.637 692.982 -12.65)",
+    "ff-hip": "rotate(24.467 700 -57.5)",
+    "ff-knee": "rotate(33.66 702.6998 -35.4)",
+    "ff-fet": "rotate(-78.843 702.982 -12.65)",
+    "hn-hip": "rotate(-10.235 740.3 -54.5)",
+    "hn-knee": "rotate(30.294 746.4008 -34.3788)",
+    "hn-fet": "rotate(-56.425 745.482 -13.15)",
+    "hf-hip": "rotate(-18.287 740.3 -55.5)",
+    "hf-knee": "rotate(25.714 741.2185 -34.3775)",
+    "hf-fet": "rotate(-44.572 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(720) scale(1)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1,
+    "r": 720
+   },
+   "goat": {
+    "A": [
+     548.4222224609168,
+     -75.45448147630924
+    ],
+    "p": -12.144116688068364,
+    "face": -1
+   }
+  },
+  {
+   "t": 8200,
+   "attrs": {
+    "root": "translate(719.717 0.241) rotate(-4.907) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(-5.163 750 -56)",
+    "neck": "rotate(-2.648 703 -56)",
+    "head": "rotate(-1.736 686 -86)",
+    "ear-far": "rotate(-0.908 692 -86)",
+    "ear-near": "rotate(-0.908 692 -86)",
+    "fn-hip": "rotate(-18.659 700 -57.5)",
+    "fn-knee": "rotate(34.422 697.5614 -35.412)",
+    "fn-fet": "rotate(-10.855 692.982 -12.65)",
+    "ff-hip": "rotate(-13.958 700 -57.5)",
+    "ff-knee": "rotate(24.339 702.6998 -35.4)",
+    "ff-fet": "rotate(-5.473 702.982 -12.65)",
+    "hn-hip": "rotate(17.703 740.3 -54.5)",
+    "hn-knee": "rotate(-20.916 746.4008 -34.3788)",
+    "hn-fet": "rotate(10.87 745.482 -13.15)",
+    "hf-hip": "rotate(5.314 740.3 -55.5)",
+    "hf-knee": "rotate(-20.48 741.2185 -34.3775)",
+    "hf-fet": "rotate(25.418 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(720) scale(1)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1,
+    "r": 720
+   },
+   "goat": {
+    "A": [
+     719.7170303750823,
+     0.2409543742226097
+    ],
+    "p": -4.907407407407407,
+    "face": 1
+   }
+  },
+  {
+   "t": 8600,
+   "attrs": {
+    "root": "translate(719.7 2.429) rotate(0) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(6.671 750 -56)",
+    "neck": "rotate(2.657 703 -56)",
+    "head": "rotate(1.771 686 -86)",
+    "ear-far": "rotate(-0.224 692 -86)",
+    "ear-near": "rotate(-0.224 692 -86)",
+    "fn-hip": "rotate(-16.214 700 -57.5)",
+    "fn-knee": "rotate(32.682 697.5614 -35.412)",
+    "fn-fet": "rotate(-16.468 692.982 -12.65)",
+    "ff-hip": "rotate(-16.422 700 -57.5)",
+    "ff-knee": "rotate(32.046 702.6998 -35.4)",
+    "ff-fet": "rotate(-15.625 702.982 -12.65)",
+    "hn-hip": "rotate(-12.591 740.3 -54.5)",
+    "hn-knee": "rotate(24.162 746.4008 -34.3788)",
+    "hn-fet": "rotate(-11.571 745.482 -13.15)",
+    "hf-hip": "rotate(-12.277 740.3 -55.5)",
+    "hf-knee": "rotate(24.813 741.2185 -34.3775)",
+    "hf-fet": "rotate(-12.535 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(720) scale(1)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1,
+    "r": 720
+   },
+   "goat": {
+    "A": [
+     719.7,
+     2.4294759945130315
+    ],
+    "p": 0,
+    "face": 1
+   }
+  },
+  {
+   "t": 8900,
+   "attrs": {
+    "root": "translate(719.7 0) rotate(0) scale(1 1) translate(-719.7 0)",
+    "tail": "rotate(0 750 -56)",
+    "neck": "rotate(0 703 -56)",
+    "head": "rotate(0 686 -86)",
+    "ear-far": "rotate(0 692 -86)",
+    "ear-near": "rotate(0 692 -86)",
+    "fn-hip": "rotate(0 700 -57.5)",
+    "fn-knee": "rotate(0 697.5614 -35.412)",
+    "fn-fet": "rotate(0 692.982 -12.65)",
+    "ff-hip": "rotate(0 700 -57.5)",
+    "ff-knee": "rotate(0 702.6998 -35.4)",
+    "ff-fet": "rotate(0 702.982 -12.65)",
+    "hn-hip": "rotate(0 740.3 -54.5)",
+    "hn-knee": "rotate(0 746.4008 -34.3788)",
+    "hn-fet": "rotate(0 745.482 -13.15)",
+    "hf-hip": "rotate(0 740.3 -55.5)",
+    "hf-knee": "rotate(0 741.2185 -34.3775)",
+    "hf-fet": "rotate(0 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(720) scale(1)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1,
+    "r": 720
+   },
+   "goat": {
+    "A": [
+     719.7,
+     0
+    ],
+    "p": 0,
+    "face": 1
+   }
+  }
+ ]
+}
