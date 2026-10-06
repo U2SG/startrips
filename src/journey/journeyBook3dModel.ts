@@ -92,25 +92,59 @@ export function screenUp(y: number, z: number, tilt = BOOK_CAMERA_TILT): number 
 
 /**
  * Frame that fits the book in a stage of `aspect` (width / height): a spread
- * in landscape, one page in portrait. Vertically it holds a page standing
- * upright mid-turn (world page height is 1, so its far corner reaches
- * sin(tilt) + cos(tilt)/2 up) and, below the near edge, the full thickness of
- * a `sheets` book. Any slack is shared above and below.
+ * in landscape, one page in portrait. Vertically it holds the book and,
+ * below the near edge, the full thickness of a `sheets` book. `lift` (0–1)
+ * is how high a turning page's free edge rises, in page-height units (world
+ * page height is 1): at 0 the frame fits the settled book tightly; at 1 it
+ * holds a page standing upright mid-turn, whose far corner reaches
+ * sin(tilt) + cos(tilt)/2 up. Any slack is shared above and below. It writes
+ * into `out` when given, so a caller framing every rendered frame allocates
+ * nothing.
  */
 export function bookFrame(
   aspect: number,
   pageWidth: number,
   orientation: JourneyBookOrientation,
   sheets: number,
+  lift: number,
   tilt = BOOK_CAMERA_TILT,
+  out: BookFrame = { top: 0, bottom: 0, halfWidth: 0 },
 ): BookFrame {
-  const top = screenUp(1, -0.5, tilt) + FRAME_MARGIN;
+  const top = screenUp(Math.max(0, Math.min(1, lift)), -0.5, tilt) + FRAME_MARGIN;
   const bottom = screenUp(-BOOK_SHEET_SPACING * (Math.max(0, sheets) + 1), 0.5, tilt) - FRAME_MARGIN;
   const width = (orientation === "landscape" ? pageWidth * 2 : pageWidth) * FRAME_WIDTH_PADDING;
   const safeAspect = Math.max(aspect, 1e-3);
   const height = Math.max(top - bottom, width / safeAspect);
   const slack = (height - (top - bottom)) / 2;
-  return { top: top + slack, bottom: bottom - slack, halfWidth: (height * safeAspect) / 2 };
+  out.top = top + slack;
+  out.bottom = bottom - slack;
+  out.halfWidth = (height * safeAspect) / 2;
+  return out;
+}
+
+/**
+ * How far the sheet in flight stands up at book `progress`: sin(π · frac),
+ * 0 on every whole spread and 1 at a half turn. A sheet turns about the spine
+ * and the book scales only its width, so this is the world height of its free
+ * edge (before the paper's curl).
+ */
+export function turnLift(progress: number): number {
+  if (!Number.isFinite(progress)) return 0;
+  return Math.sin(Math.PI * (progress - Math.floor(progress)));
+}
+
+/** Progress a desktop hover lifts the page edge under the pointer. */
+export const EDGE_LIFT = 0.055;
+const HOVER_TURN_LIFT = Math.sin(Math.PI * EDGE_LIFT);
+
+/**
+ * The lift the camera frames at book `progress`: `turnLift` with a dead zone
+ * as tall as a hover lift, rescaled to still reach 1 at a half turn. A hover
+ * (or a drag that starts from one) leaves the camera still; past it the
+ * camera pulls back continuously as the page rises and returns as it lands.
+ */
+export function frameLift(progress: number): number {
+  return Math.max(0, (turnLift(progress) - HOVER_TURN_LIFT) / (1 - HOVER_TURN_LIFT));
 }
 
 /**

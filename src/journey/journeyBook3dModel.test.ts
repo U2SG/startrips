@@ -6,7 +6,10 @@ import {
   bookFrame,
   bookTableHeight,
   coverKeyLight,
+  EDGE_LIFT,
   faceScreenRect,
+  frameLift,
+  turnLift,
   KEY_SHADOW,
   RAKING_ELEVATION,
   READING_KEY,
@@ -75,25 +78,63 @@ describe("camera fit", () => {
   const sin = Math.sin(BOOK_CAMERA_TILT);
 
   it("fits the spread width on a narrow stage and the page height on a wide one", () => {
-    const narrow = bookFrame(0.5, 0.8, "landscape", 4);
-    expect(narrow.halfWidth * 2).toBeGreaterThanOrEqual(1.6);
-    expect((narrow.halfWidth * 2) / (narrow.top - narrow.bottom)).toBeCloseTo(0.5);
-    const wide = bookFrame(3, 0.8, "landscape", 4);
-    expect(wide.top - wide.bottom).toBeGreaterThanOrEqual(cos);
-    expect((wide.halfWidth * 2) / (wide.top - wide.bottom)).toBeCloseTo(3);
+    for (const lift of [0, 1]) {
+      const narrow = bookFrame(0.5, 0.8, "landscape", 4, lift);
+      expect(narrow.halfWidth * 2).toBeGreaterThanOrEqual(1.6);
+      expect((narrow.halfWidth * 2) / (narrow.top - narrow.bottom)).toBeCloseTo(0.5);
+      const wide = bookFrame(3, 0.8, "landscape", 4, lift);
+      expect(wide.top - wide.bottom).toBeGreaterThanOrEqual(cos);
+      expect((wide.halfWidth * 2) / (wide.top - wide.bottom)).toBeCloseTo(3);
+    }
   });
 
   it("frames one page in portrait", () => {
-    const frame = bookFrame(0.6, 0.8, "portrait", 4);
+    const frame = bookFrame(0.6, 0.8, "portrait", 4, 0);
     expect(frame.halfWidth * 2).toBeGreaterThanOrEqual(0.8);
     expect(frame.top - frame.bottom).toBeGreaterThanOrEqual(cos);
+  });
+
+  it("keeps the full-lift frame of a page standing upright mid-turn", () => {
+    // The frame before the rest framing: top = sin + cos / 2 + margin.
+    const frame = bookFrame(3, 0.8, "landscape", 4, 1);
+    expect(frame.top).toBeCloseTo(sin + cos / 2 + 0.05, 12);
+    expect(frame.bottom).toBeCloseTo(-BOOK_SHEET_SPACING * 5 * sin - cos / 2 - 0.05, 12);
+    expect(frame.halfWidth).toBeCloseTo((3 * (frame.top - frame.bottom)) / 2, 12);
+    const narrow = bookFrame(0.5, 0.8, "landscape", 4, 1);
+    expect(narrow.halfWidth).toBeCloseTo(1.6 * 1.08 / 2, 12);
+  });
+
+  it("frames a settled book tightly: a page fills about 90% of a wide stage", () => {
+    const frame = bookFrame(3, 0.8, "landscape", 4, 0);
+    expect(frame.top - frame.bottom).toBeCloseTo(1.042, 2);
+    expect(cos / (frame.top - frame.bottom)).toBeGreaterThan(0.89);
+    // The near and far edges of the settled page still clear the frame.
+    expect(frame.top).toBeGreaterThanOrEqual(cos / 2 + 0.05 - 1e-12);
+  });
+
+  it("grows the frame monotonically as the page stands up", () => {
+    for (const aspect of [0.5, 1, 1.9, 3]) {
+      let previous = bookFrame(aspect, 0.8, "landscape", 40, 0);
+      for (let step = 1; step <= 20; step += 1) {
+        const frame = bookFrame(aspect, 0.8, "landscape", 40, step / 20);
+        expect(frame.top - frame.bottom).toBeGreaterThanOrEqual(previous.top - previous.bottom - 1e-12);
+        expect(frame.top).toBeGreaterThanOrEqual(previous.top - 1e-12);
+        previous = frame;
+      }
+    }
+  });
+
+  it("writes into a supplied frame without allocating", () => {
+    const out = { top: 0, bottom: 0, halfWidth: 0 };
+    expect(bookFrame(1.9, 0.8, "landscape", 4, 0.5, BOOK_CAMERA_TILT, out)).toBe(out);
+    expect(out).toEqual(bookFrame(1.9, 0.8, "landscape", 4, 0.5));
   });
 
   it("holds a page standing mid-turn and the whole stack thickness on any stage", () => {
     for (const orientation of ["landscape", "portrait"] as const) {
       for (const aspect of [0.5, 0.6, 1, 1.9, 3]) {
         for (const sheets of [1, 40, 200]) {
-          const frame = bookFrame(aspect, 0.8, orientation, sheets);
+          const frame = bookFrame(aspect, 0.8, orientation, sheets, 1);
           // The far top corner of an upright page in flight.
           expect(frame.top).toBeGreaterThanOrEqual(sin + cos / 2);
           // The near edge of the deepest sheet, below the near page edge.
@@ -105,7 +146,7 @@ describe("camera fit", () => {
 
   it("places settled faces where a tilted orthographic camera renders them", () => {
     const sheets = 40;
-    const frame = bookFrame(1.9, 0.8, "landscape", sheets);
+    const frame = bookFrame(1.9, 0.8, "landscape", sheets, 0);
     const cssHeight = 680;
     const cssWidth = cssHeight * 1.9;
     const pixelsPerUnit = cssHeight / (frame.top - frame.bottom);
@@ -134,6 +175,47 @@ describe("camera fit", () => {
     const left = faceScreenRect({ side: "left", spread: 1, sheets, frame, pixelsPerUnit, spineX: 0, pageWidth: 0.8 });
     const right = faceScreenRect({ side: "right", spread: 1, sheets, frame, pixelsPerUnit, spineX: 0, pageWidth: 0.8 });
     expect(left.top - right.top).toBeCloseTo(BOOK_SHEET_SPACING * (sheets - 1) * sin * pixelsPerUnit, 6);
+  });
+});
+
+describe("turn lift", () => {
+  it("is 0 on whole spreads and 1 half way through a turn", () => {
+    for (const spread of [0, 1, 2, 7]) {
+      expect(turnLift(spread)).toBeCloseTo(0, 12);
+      expect(turnLift(spread + 0.5)).toBeCloseTo(1, 12);
+      expect(frameLift(spread)).toBe(0);
+      expect(frameLift(spread + 0.5)).toBeCloseTo(1, 12);
+    }
+    expect(turnLift(Number.NaN)).toBe(0);
+  });
+
+  it("is continuous across a turn and across spreads", () => {
+    const step = 1 / 1000;
+    for (let progress = 0; progress < 3; progress += step) {
+      expect(Math.abs(turnLift(progress + step) - turnLift(progress))).toBeLessThan(0.01);
+      expect(Math.abs(frameLift(progress + step) - frameLift(progress))).toBeLessThan(0.01);
+    }
+  });
+
+  it("leaves the camera still for a hover lift in either direction", () => {
+    for (const base of [0, 1, 3]) {
+      expect(frameLift(base + EDGE_LIFT)).toBeLessThan(1e-9);
+      expect(frameLift(base + 1 - EDGE_LIFT)).toBeLessThan(1e-9);
+      expect(frameLift(base + 2 * EDGE_LIFT)).toBeGreaterThan(0);
+    }
+  });
+
+  it("pulls back as a page stands up and frames tightly again as it lands", () => {
+    const heights: number[] = [];
+    for (let step = 0; step <= 20; step += 1) {
+      const frame = bookFrame(3, 0.8, "landscape", 4, frameLift(1 + step / 20));
+      heights.push(frame.top - frame.bottom);
+    }
+    expect(heights[0]).toBeCloseTo(bookFrame(3, 0.8, "landscape", 4, 0).top - bookFrame(3, 0.8, "landscape", 4, 0).bottom, 12);
+    expect(heights[10]).toBeCloseTo(bookFrame(3, 0.8, "landscape", 4, 1).top - bookFrame(3, 0.8, "landscape", 4, 1).bottom, 12);
+    expect(heights[20]).toBeCloseTo(heights[0], 12);
+    for (let step = 1; step <= 10; step += 1) expect(heights[step]).toBeGreaterThanOrEqual(heights[step - 1]);
+    for (let step = 11; step <= 20; step += 1) expect(heights[step]).toBeLessThanOrEqual(heights[step - 1]);
   });
 });
 

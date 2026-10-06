@@ -7,7 +7,9 @@ import {
   bookFrame,
   bookTableHeight,
   coverKeyLight,
+  EDGE_LIFT,
   faceScreenRect,
+  frameLift,
   KEY_SHADOW,
   READING_KEY,
   sheetFlipPose,
@@ -36,7 +38,6 @@ const MAX_PIXEL_RATIO = 2;
 const PAGE_SUBDIVISIONS = 16;
 const FLIP_SECONDS = 0.78;
 const FOCUS_RATE = 9;
-const EDGE_LIFT = 0.055;
 const PAPER_ROUGHNESS = 0.88;
 const SETTLED_EPSILON = 1e-4;
 /** A block's top sits this far under the top sheet of its stack. */
@@ -109,7 +110,15 @@ export class JourneyBook3dScene {
   private cssWidth = 1;
   private cssHeight = 1;
   private orientation: JourneyBookOrientation = "landscape";
-  private frameBox: BookFrame = { top: 1, bottom: -1, halfWidth: 1 };
+  /** The camera's live frame, pulled back while a page stands up mid-turn. */
+  private readonly frameBox: BookFrame = { top: 1, bottom: -1, halfWidth: 1 };
+  /**
+   * The frame of the settled book (lift 0). Stage geometry (the face rects,
+   * the drag's page width) reads it, so it only describes a settled book and
+   * a drag keeps one scale while the camera pulls back under it.
+   */
+  private readonly restFrame: BookFrame = { top: 1, bottom: -1, halfWidth: 1 };
+  private lift = 0;
   private readonly blocks: { left: THREE.Mesh; right: THREE.Mesh };
   private readonly edgeTextures: THREE.Texture[] = [];
   private readonly contact: THREE.Mesh;
@@ -363,9 +372,19 @@ export class JourneyBook3dScene {
 
   /** The frame depends on the stage, the orientation and the book's thickness. */
   private updateFrame() {
-    this.frameBox = bookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets);
-    this.applyCamera();
+    bookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets, 0, BOOK_CAMERA_TILT, this.restFrame);
+    this.liftCamera(this.lift);
     this.requestRender();
+  }
+
+  /**
+   * The camera pulls back as a turning page stands up, so the page never
+   * leaves the frame, and frames the book tightly again once it lands.
+   */
+  private liftCamera(lift: number) {
+    this.lift = lift;
+    bookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets, lift, BOOK_CAMERA_TILT, this.frameBox);
+    this.applyCamera();
   }
 
   private applyCamera() {
@@ -387,7 +406,7 @@ export class JourneyBook3dScene {
   }
 
   get pixelsPerUnit() {
-    return this.cssHeight / (this.frameBox.top - this.frameBox.bottom);
+    return this.cssHeight / (this.restFrame.top - this.restFrame.bottom);
   }
 
   /** Screen x (stage CSS px) of the spine, or of the closed book's centre. */
@@ -413,7 +432,7 @@ export class JourneyBook3dScene {
       side,
       spread: Math.max(0, Math.min(this.sheets, Math.round(this.book.progress))),
       sheets: this.sheets,
-      frame: this.frameBox,
+      frame: this.restFrame,
       pixelsPerUnit: this.pixelsPerUnit,
       spineX: this.spineX,
       pageWidth: this.pageWidth,
@@ -561,8 +580,12 @@ export class JourneyBook3dScene {
     if (focusMoving) {
       this.focus += (this.focusTarget - this.focus) * (1 - Math.exp(-FOCUS_RATE * delta));
       if (Math.abs(this.focus - this.focusTarget) < SETTLED_EPSILON) this.focus = this.focusTarget;
-      this.applyCamera();
     }
+    // Reduced motion turns instantly, so only a drag (which the pointer
+    // drives) can stand a page up; the camera follows it there alone.
+    const lift = this.reduced && !this.dragging ? 0 : frameLift(this.book.progress);
+    if (lift !== this.lift) this.liftCamera(lift);
+    else if (focusMoving) this.applyCamera();
     this.updateStacks();
     const pose = coverKeyLight(this.book.progress, this.reduced);
     this.key.position.set(pose.x, pose.y, pose.z);
