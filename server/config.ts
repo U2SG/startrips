@@ -91,6 +91,13 @@ export function loadServerConfig(
   const mediaPreviewUploadExpiresInSeconds = Number(
     environment.MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS ?? 120,
   );
+  // The server-side sweep that derives previews for originals the browser
+  // producer never finished (`server/services/media-preview-backfill.ts`). On
+  // by default wherever object storage is configured; a deployment that wants
+  // the API to stay out of pixel decoding sets it to `false`.
+  const mediaPreviewBackfillEnabled = (environment.MEDIA_PREVIEW_BACKFILL_ENABLED ?? "true")
+    .trim()
+    .toLowerCase() !== "false";
   // #349: the one social sign-in provider Startrips configures. Both halves
   // are deployment secrets with no development fallback, because a shared
   // default OAuth client is the same as no client at all. Absent means this
@@ -580,6 +587,7 @@ export function loadServerConfig(
     mediaPreviewMaxEdgePixels,
     mediaPreviewMaxBytes,
     mediaPreviewUploadExpiresInSeconds,
+    mediaPreviewBackfillEnabled,
     googleClientId,
     googleClientSecret,
     coverRevealWorkerToken,

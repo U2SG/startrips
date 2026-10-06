@@ -172,6 +172,32 @@ async function discardPreviewObject(
 }
 
 /**
+ * Record a decided failure for the generation the caller holds: an original
+ * that no producer can decode, or one too large to decode here. The row is
+ * cleared to `failed` only if it still carries that generation, and the
+ * object it pointed at is dropped, exactly as the completion rejections do.
+ * Used by the server-side backfill; the browser never reaches this path
+ * because `beginAssetPreview` already clears unsupported sources itself.
+ */
+export async function failAssetPreview(
+  asset: MediaAsset,
+  dependencies: MediaPreviewDependencies = defaultDependencies,
+): Promise<boolean> {
+  const [cleared] = await db
+    .update(mediaAssets)
+    .set(CLEARED_PREVIEW)
+    .where(stillHoldsGeneration(asset.id, asset.previewStorageKey))
+    .returning({ id: mediaAssets.id });
+  if (!cleared) return false;
+  await discardPreviewObject(
+    asset.storageDriver,
+    asset.previewStorageKey,
+    dependencies,
+  );
+  return true;
+}
+
+/**
  * Plan the preview and hand back a write for exactly that plan.
  *
  * The caller supplies only what it can measure about the source — its pixel
