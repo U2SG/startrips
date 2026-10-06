@@ -1511,7 +1511,6 @@ function JourneyBook3dQaPreview() {
         journeyId={book3dQaJourney.id}
         onClose={() => {}}
         onOpenClassic={() => {}}
-        goatPullScrub={new URLSearchParams(window.location.search).get("goatPull") === "scrub"}
       />
     </main>
   );

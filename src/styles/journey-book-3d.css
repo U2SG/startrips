@@ -17,22 +17,6 @@
   height: 100%;
 }
 
-/*
- * The cover's goat: a live v12 goat drawn over the WebGL book while it pulls
- * the cover open. Placed in stage px every frame by the book's own loop; never
- * hit-testable, so every input reaches the book.
- */
-.journey-book-3d__goat {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  pointer-events: none;
-  user-select: none;
-}
-
 /* The one live video, laid over its settled page's plate. */
 .journey-book-3d__video {
   position: absolute;
