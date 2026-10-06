@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { prefersReducedMotion } from "../motion/preferences";
 import { StartripsWordmark, type StartripsBrandState } from "./StartripsBrandMark";
 import { StartripsSignatureMotion } from "./StartripsSignatureMotion";
+import { StartripsGoatShow } from "./goatShow/StartripsGoatShow";
 import { SIGNATURE_MOMENT_FADE_MS, signatureMomentReducer, type SignatureMomentPhase } from "./signatureMoment";
 
 export function useStartripsSignatureMoment() {
@@ -24,12 +25,13 @@ export function useStartripsSignatureMoment() {
 }
 
 /**
- * The Atlas wordmark as a control: activating it plays the `full` clip once,
- * in place, over the exact same geometry (both share the v12 viewBox), so the
- * mark itself comes alive without a takeover, backdrop or layout change. The
- * static art is hidden only while the clip runs; any pointerdown/keydown
- * (including Escape) or the clip's own end settles to the rest pose, which is
- * the static mark, and fades the overlay out.
+ * The Atlas wordmark as a control: activating it plays the goat show once, in
+ * place, on the wordmark's own baseline and scale, so the mark itself comes
+ * alive without a takeover, backdrop or layout change. The show draws above
+ * and beyond the mark's box on purpose. The static art is hidden only while
+ * the show runs; any pointerdown/keydown (including Escape) or the show's own
+ * end settles to the rest lockup, which is the static mark, and fades the
+ * overlay out.
  */
 export function StartripsWordmarkSignatureButton({ size, state }: {
   size: number;
@@ -56,26 +58,30 @@ export function StartripsWordmarkSignatureButton({ size, state }: {
     >
       <span className="startrips-signature-trigger__art">
         <StartripsWordmark size={size} state={state} />
-        <StartripsSignatureMoment phase={phase} size={size} onEnd={handleEnd} />
+        <StartripsSignatureMoment phase={phase} size={size} show="goat" onEnd={handleEnd} />
       </span>
     </button>
   );
 }
 
 /**
- * Decorative overlay for one `full` clip. Mounted only while a moment is
- * active, so no clip runtime, listener or frame exists at rest.
+ * Decorative overlay for one moment: the `full` clip (an accepted invitation)
+ * or the goat show (the Atlas wordmark). Mounted only while a moment is
+ * active, so no runtime, listener or frame exists at rest.
  */
-export function StartripsSignatureMoment({ phase, size, className = "", onEnd }: {
+export function StartripsSignatureMoment({ phase, size, show = "full", className = "", onEnd }: {
   phase: SignatureMomentPhase;
   size: number;
+  show?: "full" | "goat";
   className?: string;
   onEnd: () => void;
 }) {
   if (phase === "idle") return null;
   return (
     <span className={`startrips-signature-moment is-${phase} ${className}`} aria-hidden="true">
-      <StartripsSignatureMotion clip="full" size={size} title="" onEnd={onEnd} />
+      {show === "goat"
+        ? <StartripsGoatShow size={size} onEnd={onEnd} />
+        : <StartripsSignatureMotion clip="full" size={size} title="" onEnd={onEnd} />}
     </span>
   );
 }

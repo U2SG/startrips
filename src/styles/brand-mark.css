@@ -149,6 +149,29 @@
   transition: opacity var(--motion-ui) var(--motion-ease-soft);
 }
 
+/* The wordmark's goat show. StartripsGoatShow sizes and offsets this box so
+   its baseline and scale coincide with the static wordmark; the stage extends
+   about one wordmark height above the mark, because the climb onto the column
+   rises out of the header box on purpose. Nothing between here and the
+   viewport clips it (the Living Atlas headers set no overflow). */
+.startrips-goat-show {
+  position: absolute;
+  display: block;
+  overflow: visible;
+  color: var(--startrips-starlight, #fff8e7);
+  line-height: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.startrips-goat-show > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
 .startrips-brand-loader {
   position: relative;
   display: grid;
