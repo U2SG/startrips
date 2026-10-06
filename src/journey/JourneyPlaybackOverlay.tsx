@@ -256,17 +256,6 @@ export function JourneyPlaybackOverlay({
   // Keying the grace on it (and the beat) means moving to another decoding
   // image restarts the wait instead of inheriting the previous one's.
   const [heldAssetId, setHeldAssetId] = useState<string | null>(null);
-  const decodeWaitKey = playbackDecodeWaitKey({ holdReason, stepIndex: director.stepIndex, heldAssetId });
-  useEffect(() => {
-    setDecodeWaitElapsed(false);
-    if (decodeWaitKey === null) return;
-    const timer = window.setTimeout(
-      () => setDecodeWaitElapsed(true),
-      PLAYBACK_DECODE_WAIT_NOTICE_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [decodeWaitKey]);
-  const statusLine = playbackStatusLine({ statusMessage, holdReason, decodeWaitElapsed });
   // Narrative return position is a commit log, not a mirror of the director's
   // latest requested index. Non-media beats commit with their React render; a
   // media beat commits only after PlaybackMediaStage has actually handed the
@@ -289,6 +278,17 @@ export function JourneyPlaybackOverlay({
   const hold = holdReason !== "none" || presentationPending || arrivalHolding;
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver, homeNarrativeContext);
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
+  const decodeWaitKey = playbackDecodeWaitKey({ holdReason, stepIndex, heldAssetId });
+  useEffect(() => {
+    setDecodeWaitElapsed(false);
+    if (decodeWaitKey === null) return;
+    const timer = window.setTimeout(
+      () => setDecodeWaitElapsed(true),
+      PLAYBACK_DECODE_WAIT_NOTICE_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [decodeWaitKey]);
+  const statusLine = playbackStatusLine({ statusMessage, holdReason, decodeWaitElapsed });
   const mapInteractive = playbackMode === "full"
     && (director.step?.kind === "travel" || director.step?.kind === "stop");
   const mapInteractiveRef = useRef(mapInteractive);
