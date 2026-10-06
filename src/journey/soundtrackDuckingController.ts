@@ -12,6 +12,13 @@
 // from the element on each frame removes that whole class instead of trying to
 // filter it afterwards.
 //
+// Polled, but not at display cadence for its own sake (#610). The gain only
+// moves while a ramp is in flight, so the loop runs per frame only then, and on
+// the frame after anything it watches has changed. Once the gain has arrived
+// and the decision is unchanged it parks on a slow idle tick that still reads
+// the same live state, so a video that starts, pauses, mutes or ends without
+// any event is still picked up - one idle tick later instead of one frame.
+//
 // The real `<audio>` element stays the playback source and is never routed
 // through Web Audio; ducking is only ever `element.volume`. The analysis
 // sidechain in `audioSampler` is untouched by this.
@@ -25,6 +32,13 @@ import {
 
 /** `readyState` value meaning "has current frame data", i.e. really playing. */
 const HAVE_CURRENT_DATA = 2;
+
+/**
+ * How often a parked controller still polls. Short beside the attack, so a
+ * transport change the idle tick finds still ducks well inside a beat; long
+ * enough that a photo-only Journey stops paying for a frame every frame.
+ */
+export const SOUNDTRACK_DUCK_IDLE_POLL_MS = 150;
 
 export type SoundtrackDuckingHost = {
   /** The one live soundtrack element, or null before it mounts. */
@@ -50,6 +64,14 @@ export type SoundtrackDuckingHost = {
   now?: () => number;
   requestFrame?: (callback: () => void) => number;
   cancelFrame?: (handle: number) => void;
+  /**
+   * The slow tick a parked controller polls on, the same shape as
+   * `requestFrame`/`cancelFrame`. Scheduling stays with the host: outside a
+   * browser the default routes through `requestFrame` instead of a timer
+   * nothing drains, so a parked loop can never die.
+   */
+  setIdleTimer?: (callback: () => void, ms: number) => number;
+  cancelIdleTimer?: (handle: number) => void;
 };
 
 export type SoundtrackDuckingController = {
@@ -101,12 +123,23 @@ export function createSoundtrackDuckingController(
     ?? ((handle: number) => {
       if (typeof window !== "undefined" && handle) window.cancelAnimationFrame(handle);
     });
+  const setIdleTimer = host.setIdleTimer
+    ?? ((callback: () => void, ms: number) => (
+      typeof window === "undefined" ? requestFrame(callback) : window.setTimeout(callback, ms)
+    ));
+  const cancelIdleTimer = host.cancelIdleTimer
+    ?? ((handle: number) => {
+      if (typeof window === "undefined") cancelFrame(handle);
+      else window.clearTimeout(handle);
+    });
 
-  let handle: number | null = null;
+  // The one pending tick, and which mechanism scheduled it, so `stop()` cancels
+  // it through the matching call instead of leaking a timer or a frame.
+  let pending: { kind: "frame" | "idle"; handle: number } | null = null;
   let running = false;
-  // How many times the loop has actually run. A frozen `frames` beside a
-  // pending-but-unreached target is what distinguishes "the ramp restarted" from
-  // "the loop stopped", which look identical from the gain alone.
+  // How many times the loop has actually run, on either tick. A frozen `frames`
+  // beside a pending-but-unreached target is what distinguishes "the ramp
+  // restarted" from "the loop stopped", which look identical from the gain alone.
   let frames = 0;
   // What the element's volume is right now, and where it is heading.
   let current = 1;
@@ -133,6 +166,18 @@ export function createSoundtrackDuckingController(
   // else changed the level - a future volume control, a restored session - and
   // that new level is the baseline to restore to.
   let lastWritten: number | null = null;
+  // The decision the previous tick reached. A flip is a change worth a frame.
+  let lastDucking: boolean | null = null;
+
+  const tick = () => {
+    pending = null;
+    step();
+  };
+  const schedule = (kind: "frame" | "idle") => {
+    pending = kind === "frame"
+      ? { kind, handle: requestFrame(tick) }
+      : { kind, handle: setIdleTimer(tick, SOUNDTRACK_DUCK_IDLE_POLL_MS) };
+  };
 
   const retarget = (audio: HTMLAudioElement, ducking: boolean) => {
     const target = soundtrackTargetGain(
@@ -152,6 +197,8 @@ export function createSoundtrackDuckingController(
   const step = () => {
     if (!running) return;
     frames += 1;
+    // Anything observed this tick that the previous one did not see.
+    let changed = false;
     const audio = host.getSoundtrack();
     const video = host.getForegroundVideo();
     const hostGeneration = host.getMediaGeneration?.() ?? null;
@@ -164,6 +211,7 @@ export function createSoundtrackDuckingController(
       lastHostGeneration = hostGeneration;
       transport += 1;
       from = current;
+      changed = true;
     }
     // A new soundtrack element is a new thing to control, not a continuation of
     // the old one: it starts at the browser default, and `current` describes an
@@ -173,6 +221,7 @@ export function createSoundtrackDuckingController(
     // while the video is playing.
     if (audio !== seenSoundtrack) {
       seenSoundtrack = audio;
+      changed = true;
       if (audio) {
         current = audio.volume;
         from = current;
@@ -201,6 +250,7 @@ export function createSoundtrackDuckingController(
       // Record it as observed, so the same level is not taken again next frame.
       lastWritten = audio.volume;
       to = Number.NaN;
+      changed = true;
     }
     const ducking = video
       ? shouldDuckSoundtrack({
@@ -211,6 +261,8 @@ export function createSoundtrackDuckingController(
         volume: video.volume,
       })
       : false;
+    if (ducking !== lastDucking) changed = true;
+    lastDucking = ducking;
     if (audio) {
       retarget(audio, ducking);
       const gain = soundtrackRampGain(
@@ -228,7 +280,10 @@ export function createSoundtrackDuckingController(
         lastWritten = gain;
       }
     }
-    handle = requestFrame(step);
+    // Per frame while the gain is still moving or something just changed;
+    // otherwise park on the idle tick, which keeps polling the same live state.
+    const moving = Boolean(audio) && Math.abs(to - current) > 1e-4;
+    schedule(changed || moving ? "frame" : "idle");
   };
 
   return {
@@ -237,12 +292,15 @@ export function createSoundtrackDuckingController(
       running = true;
       const audio = host.getSoundtrack();
       if (audio) current = audio.volume;
-      handle = requestFrame(step);
+      schedule("frame");
     },
     stop() {
       running = false;
-      if (handle !== null) cancelFrame(handle);
-      handle = null;
+      if (pending !== null) {
+        if (pending.kind === "frame") cancelFrame(pending.handle);
+        else cancelIdleTimer(pending.handle);
+      }
+      pending = null;
     },
     currentGain() {
       return current;

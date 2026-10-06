@@ -4,7 +4,10 @@ import {
   SOUNDTRACK_DUCK_ATTACK_MS,
   SOUNDTRACK_DUCK_RELEASE_MS,
 } from "./soundtrackDucking";
-import { createSoundtrackDuckingController } from "./soundtrackDuckingController";
+import {
+  createSoundtrackDuckingController,
+  SOUNDTRACK_DUCK_IDLE_POLL_MS,
+} from "./soundtrackDuckingController";
 
 function fakeAudio(volume = 1) {
   const element = { volume };
@@ -346,5 +349,262 @@ describe("soundtrack ducking controller", () => {
 
     expect(second.volume).toBeLessThan(1);
     expect(second.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+  });
+});
+
+/**
+ * #610: both scheduling paths injected separately, with disjoint handles and
+ * cancels that remove only their own handle, so a tick cancelled through the
+ * wrong call stays pending and fails the assertion instead of being swept away.
+ */
+function parkingHarness() {
+  let time = 0;
+  const frames = new Map<number, () => void>();
+  const idles = new Map<number, () => void>();
+  let nextFrame = 1;
+  let nextIdle = 1001;
+  const calls = {
+    requestFrame: 0,
+    idleDelays: [] as number[],
+    cancelFrame: [] as number[],
+    cancelIdleTimer: [] as number[],
+  };
+  const video = fakeVideo();
+  const state = {
+    video: video as HTMLVideoElement | null,
+    generation: 0,
+    soundtrack: fakeAudio(1) as HTMLAudioElement,
+  };
+  const controller = createSoundtrackDuckingController({
+    getSoundtrack: () => state.soundtrack,
+    getForegroundVideo: () => state.video,
+    getMediaGeneration: () => state.generation,
+    now: () => time,
+    requestFrame: (callback: () => void) => {
+      calls.requestFrame += 1;
+      const handle = nextFrame++;
+      frames.set(handle, callback);
+      return handle;
+    },
+    cancelFrame: (handle: number) => {
+      calls.cancelFrame.push(handle);
+      frames.delete(handle);
+    },
+    setIdleTimer: (callback: () => void, ms: number) => {
+      calls.idleDelays.push(ms);
+      const handle = nextIdle++;
+      idles.set(handle, callback);
+      return handle;
+    },
+    cancelIdleTimer: (handle: number) => {
+      calls.cancelIdleTimer.push(handle);
+      idles.delete(handle);
+    },
+  });
+  const fire = (queue: Map<number, () => void>) => {
+    const pending = [...queue.values()];
+    queue.clear();
+    for (const callback of pending) callback();
+  };
+  /** One display frame. */
+  const frame = () => {
+    time += 8;
+    fire(frames);
+  };
+  /** One idle tick. */
+  const idle = () => {
+    time += SOUNDTRACK_DUCK_IDLE_POLL_MS;
+    fire(idles);
+  };
+  /** Drive frames until the loop stops asking for them, and require it parked. */
+  const untilParked = () => {
+    for (let index = 0; index < 1000 && frames.size > 0; index += 1) frame();
+    expect(frames.size).toBe(0);
+    expect(idles.size).toBe(1);
+  };
+  /** A few frames in, a transition must sit strictly between its endpoints. */
+  const partWay = () => {
+    for (let index = 0; index < 10; index += 1) frame();
+    return state.soundtrack.volume;
+  };
+  return { video, state, controller, calls, frames, idles, frame, idle, untilParked, partWay };
+}
+
+describe("soundtrack ducking controller parking (#610)", () => {
+  it("stops requesting frames once the gain has arrived and keeps polling on the idle tick", () => {
+    const { state, controller, calls, idle, untilParked } = parkingHarness();
+    controller.start();
+    untilParked();
+    expect(state.soundtrack.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+
+    const requested = calls.requestFrame;
+    const ran = controller.snapshot().frames;
+    for (let index = 0; index < 5; index += 1) idle();
+    expect(calls.requestFrame).toBe(requested);
+    expect(controller.snapshot().frames).toBe(ran + 5);
+    expect(calls.idleDelays.length).toBeGreaterThan(5);
+    expect(calls.idleDelays.every((ms) => ms === SOUNDTRACK_DUCK_IDLE_POLL_MS)).toBe(true);
+    expect(state.soundtrack.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+  });
+
+  it("wakes per frame for a pause, mute or end found by the idle tick, with the same transitions", () => {
+    const { video, state, controller, frames, idles, idle, untilParked, partWay } = parkingHarness();
+    controller.start();
+    untilParked();
+
+    for (const change of [{ paused: true }, { muted: true }, { ended: true }]) {
+      Object.assign(video, change);
+      idle();
+      expect(frames.size).toBe(1);
+      expect(idles.size).toBe(0);
+      const releasing = partWay();
+      expect(releasing).toBeGreaterThan(SOUNDTRACK_DUCK_FACTOR);
+      expect(releasing).toBeLessThan(1);
+      untilParked();
+      expect(state.soundtrack.volume).toBe(1);
+
+      Object.assign(video, { paused: false, muted: false, ended: false });
+      idle();
+      expect(frames.size).toBe(1);
+      expect(idles.size).toBe(0);
+      const attacking = partWay();
+      expect(attacking).toBeLessThan(1);
+      expect(attacking).toBeGreaterThan(SOUNDTRACK_DUCK_FACTOR);
+      untilParked();
+      expect(state.soundtrack.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+    }
+  });
+
+  it("picks up a video that starts while parked with no event to announce it", () => {
+    const { state, controller, frames, idle, untilParked } = parkingHarness();
+    state.video = null;
+    controller.start();
+    untilParked();
+    expect(state.soundtrack.volume).toBe(1);
+
+    state.video = fakeVideo();
+    idle();
+    expect(frames.size).toBe(1);
+    untilParked();
+    expect(state.soundtrack.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+  });
+
+  it("adopts and re-ducks a soundtrack element replaced while parked", () => {
+    const { state, controller, frames, idle, untilParked } = parkingHarness();
+    controller.start();
+    untilParked();
+
+    const replacement = fakeAudio(1) as HTMLAudioElement;
+    state.soundtrack = replacement;
+    idle();
+    expect(frames.size).toBe(1);
+    untilParked();
+    expect(replacement.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+  });
+
+  it("wakes for an external level change while parked and ducks the new baseline", () => {
+    const { state, controller, frames, idle, untilParked } = parkingHarness();
+    controller.start();
+    untilParked();
+
+    state.soundtrack.volume = 0.5;
+    idle();
+    expect(frames.size).toBe(1);
+    untilParked();
+    expect(state.soundtrack.volume).toBeCloseTo(0.5 * SOUNDTRACK_DUCK_FACTOR, 3);
+  });
+
+  it("takes a frame for a generation change and parks again when nothing moves", () => {
+    const { state, controller, frames, idles, frame, idle, untilParked } = parkingHarness();
+    controller.start();
+    untilParked();
+    const settled = state.soundtrack.volume;
+
+    state.generation = 1;
+    idle();
+    expect(frames.size).toBe(1);
+    expect(idles.size).toBe(0);
+    frame();
+    expect(frames.size).toBe(0);
+    expect(idles.size).toBe(1);
+    expect(state.soundtrack.volume).toBe(settled);
+  });
+
+  it("stop() while parked cancels the idle timer, not a frame, and leaves nothing pending", () => {
+    const { video, state, controller, calls, frames, idles, idle, untilParked } = parkingHarness();
+    controller.start();
+    untilParked();
+    const [timer] = [...idles.keys()];
+
+    controller.stop();
+    expect(calls.cancelIdleTimer).toEqual([timer]);
+    expect(calls.cancelFrame).toEqual([]);
+    expect(frames.size).toBe(0);
+    expect(idles.size).toBe(0);
+
+    const settled = state.soundtrack.volume;
+    Object.assign(video, { paused: true });
+    idle();
+    expect(state.soundtrack.volume).toBe(settled);
+
+    // A restart polls per frame again from scratch.
+    controller.start();
+    expect(frames.size).toBe(1);
+    expect(idles.size).toBe(0);
+  });
+
+  it("stop() while ramping cancels the frame, not a timer, and leaves nothing pending", () => {
+    const { controller, calls, frames, idles, frame } = parkingHarness();
+    controller.start();
+    frame();
+    frame();
+    expect(controller.isRamping()).toBe(true);
+    const [pending] = [...frames.keys()];
+
+    controller.stop();
+    expect(calls.cancelFrame).toEqual([pending]);
+    expect(calls.cancelIdleTimer).toEqual([]);
+    expect(frames.size).toBe(0);
+    expect(idles.size).toBe(0);
+  });
+
+  // The way the first attempt died: an idle path that reached for a timer
+  // nothing drives. Outside a browser, with no idle timer injected, the slow
+  // tick must still come back through the host's own frame scheduling.
+  it("keeps polling through requestFrame outside a browser when no idle timer is injected", () => {
+    const audio = fakeAudio(1);
+    const video = fakeVideo();
+    let time = 0;
+    let queue: (() => void)[] = [];
+    const drain = () => {
+      time += 8;
+      const pending = queue;
+      queue = [];
+      for (const callback of pending) callback();
+    };
+    const controller = createSoundtrackDuckingController({
+      getSoundtrack: () => audio,
+      getForegroundVideo: () => video,
+      now: () => time,
+      requestFrame: (callback: () => void) => {
+        queue.push(callback);
+        return queue.length;
+      },
+      cancelFrame: () => {
+        queue = [];
+      },
+    });
+    controller.start();
+    for (let index = 0; index < 200; index += 1) {
+      drain();
+      expect(queue.length).toBe(1);
+    }
+    expect(audio.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+
+    Object.assign(video, { paused: true });
+    for (let index = 0; index < 200; index += 1) drain();
+    expect(audio.volume).toBe(1);
+    controller.stop();
+    expect(queue.length).toBe(0);
   });
 });
