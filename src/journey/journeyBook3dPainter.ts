@@ -92,6 +92,9 @@ export type PaintInput = {
 
 const PAPER = "#f7f6f0";
 const INK = "#292c26";
+/** The Journey note is set heavier and darker than labels, so it reads on lit paper. */
+const NOTE_INK = "#1d1f1b";
+const NOTE_WEIGHT = 600;
 const MUTED = "#73766c";
 const CLOTH = "#5f6b73";
 const PLATE_MOUNT = "#ece7d6";
@@ -198,7 +201,7 @@ function drawPlayGlyph(context: CanvasRenderingContext2D, rect: { x: number; y: 
   context.fill();
 }
 
-type TextBlock = { lines: string[]; fontSize: number; lineHeight: number; overflow: boolean };
+type TextBlock = { lines: string[]; fontSize: number; lineHeight: number; overflow: boolean; weight: number };
 
 /** Fit text into a box, shrinking the type down to `minSize`, then cutting with an ellipsis. */
 function fitText(
@@ -209,17 +212,18 @@ function fitText(
   size: number,
   minSize: number,
   lineRatio: number,
+  weight = 400,
 ): TextBlock {
   for (let fontSize = size; ; fontSize = Math.max(minSize, fontSize - 2)) {
-    context.font = `${fontSize}px ${SERIF}`;
+    context.font = `${weight} ${fontSize}px ${SERIF}`;
     const lines = wrapLines(text, maxWidth, (value) => context.measureText(value).width);
     const lineHeight = fontSize * lineRatio;
     const fits = Math.floor(maxHeight / lineHeight);
-    if (lines.length <= fits) return { lines, fontSize, lineHeight, overflow: false };
+    if (lines.length <= fits) return { lines, fontSize, lineHeight, overflow: false, weight };
     if (fontSize === minSize) {
       const kept = lines.slice(0, Math.max(1, fits));
       kept[kept.length - 1] = `${kept[kept.length - 1].slice(0, -1)}…`;
-      return { lines: kept, fontSize, lineHeight, overflow: true };
+      return { lines: kept, fontSize, lineHeight, overflow: true, weight };
     }
   }
 }
@@ -238,7 +242,7 @@ function drawRevealed(
   align: "left" | "center",
   maxWidth: number,
 ) {
-  context.font = `${block.fontSize}px ${SERIF}`;
+  context.font = `${block.weight} ${block.fontSize}px ${SERIF}`;
   context.textBaseline = "alphabetic";
   context.textAlign = "left";
   const base = context.fillStyle;
@@ -632,8 +636,8 @@ export function paintFace(canvas: HTMLCanvasElement, input: PaintInput): PaintRe
       drawRevealed(context, heading, left, top, Infinity, "left", textWidth);
       top += heading.lines.length * heading.lineHeight + 36 * scale;
     }
-    const block = fitText(context, page.note, textWidth, height * 0.84 - top, Math.round(30 * scale), Math.round(20 * scale), 1.8);
-    context.fillStyle = INK;
+    const block = fitText(context, page.note, textWidth, height * 0.84 - top, Math.round(30 * scale), Math.round(20 * scale), 1.8, NOTE_WEIGHT);
+    context.fillStyle = NOTE_INK;
     drawRevealed(context, block, left, top, input.revealed, "left", textWidth);
     folio();
     context.restore();
@@ -653,7 +657,7 @@ export function paintFace(canvas: HTMLCanvasElement, input: PaintInput): PaintRe
     // A note laid over the picture with a local scrim; the rest of the
     // picture keeps its pixels.
     const textWidth = drawn.width - 48 * scale;
-    const block = fitText(context, page.note, textWidth, drawn.height * 0.42, Math.round(28 * scale), Math.round(20 * scale), 1.65);
+    const block = fitText(context, page.note, textWidth, drawn.height * 0.42, Math.round(28 * scale), Math.round(20 * scale), 1.65, NOTE_WEIGHT);
     const blockHeight = block.lines.length * block.lineHeight;
     const scrimTop = drawn.y + drawn.height - blockHeight - 72 * scale;
     const scrim = context.createLinearGradient(0, scrimTop, 0, drawn.y + drawn.height);
