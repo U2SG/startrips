@@ -248,8 +248,6 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   const eligible = input.digests.filter((digest) =>
     isQuickRecapEligible(digest, input.journeyId, input.journeyRevision, canonicalRouteOrder),
   );
-  const mediaRouteScopes = new Set(eligible.map((digest) => digest.routePointId));
-
   const duplicateSizes = new Map<string, number>();
   for (const digest of eligible) {
     const key = digest.similarity?.duplicateClusterId;
@@ -263,10 +261,22 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
     if (digest.userSignals.pinnedForRecap || digest.userSignals.isJourneyCover) selected.set(digest.assetId, digest);
   }
 
+  // A Stop is mandatory: it keeps its arrival and, when it owns media, one
+  // representative, whatever the budget says. A transit via (a route point
+  // that is not a Stop) is optional as a whole: its chapter exists only while
+  // its representative is selected, and its camera beat is paid only then. A
+  // recap that had to represent every media-bearing via could not fit a long
+  // Journey into any target, because that floor grows with the number of
+  // media chapters rather than with the number of photos; now the floor is the
+  // Stops, and vias are filled greedily in route order with what remains.
+  const isTransit = (routePointId: string) => input.routePointGeometry?.[routePointId]?.isStop === false;
+  const transitRepresentatives: MediaDigestV1[] = [];
   for (const routePointId of input.routePointIds) {
     const routeCandidates = representatives.filter((digest) => digest.routePointId === routePointId).sort(stableCandidateSort);
     const representative = routeCandidates[0];
-    if (representative) selected.set(representative.assetId, representative);
+    if (!representative) continue;
+    if (isTransit(routePointId)) transitRepresentatives.push(representative);
+    else selected.set(representative.assetId, representative);
   }
 
   const introCandidates = representatives.filter((digest) => digest.routePointId === null).sort(stableCandidateSort);
@@ -287,15 +297,36 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
         ? 0 : quickRecapTiming("arrival", tempo, { noteLength: geometry?.noteLength }),
     };
   };
-  const baseOverhead = input.routePointIds
-    .reduce((sum, routePointId) => {
-      if (input.routePointGeometry?.[routePointId]?.isStop === false && !mediaRouteScopes.has(routePointId)) return sum;
+  // The route beats the current selection commits to: every Stop, plus every
+  // via that currently has selected media. This is exactly the set of chapters
+  // the emission below produces, so the budget check and `plannedDurationMs`
+  // read the same clock.
+  const routeOverheadMs = (current: ReadonlyMap<string, MediaDigestV1>) => {
+    const representedVias = new Set<string>();
+    for (const digest of current.values()) {
+      if (digest.routePointId !== null && isTransit(digest.routePointId)) representedVias.add(digest.routePointId);
+    }
+    return input.routePointIds.reduce((sum, routePointId) => {
+      if (isTransit(routePointId) && !representedVias.has(routePointId)) return sum;
       const beat = routeBeatMs(routePointId);
       return sum + beat.cameraMs + beat.arrivalMs;
     }, 0);
-  let selectedDuration = selectedMediaDuration(selected.values(), tempo);
+  };
+  const fits = (current: ReadonlyMap<string, MediaDigestV1>) =>
+    routeOverheadMs(current) + selectedMediaDuration(current.values(), tempo) <= input.targetDurationMs;
+  // Route order first, so a long Journey keeps its early vias rather than a
+  // scattered sample; a via that does not fit is skipped whole and the greedy
+  // walk continues, because a later, cheaper via may still fit.
+  for (const digest of transitRepresentatives) {
+    selected.set(digest.assetId, digest);
+    if (!fits(selected)) selected.delete(digest.assetId);
+  }
   const optional = representatives
     .filter((digest) => !selected.has(digest.assetId))
+    // A via whose representative did not fit stays out: admitting one of its
+    // other photos would recreate the chapter the walk above just skipped.
+    .filter((digest) => digest.routePointId === null || !isTransit(digest.routePointId)
+      || [...selected.values()].some((chosen) => chosen.routePointId === digest.routePointId))
     .sort((a, b) => {
       const routeA = a.routePointId === null ? -1 : (canonicalRouteOrder.get(a.routePointId) ?? Number.MAX_SAFE_INTEGER);
       const routeB = b.routePointId === null ? -1 : (canonicalRouteOrder.get(b.routePointId) ?? Number.MAX_SAFE_INTEGER);
@@ -304,12 +335,7 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
     });
   for (const digest of optional) {
     selected.set(digest.assetId, digest);
-    const nextDuration = selectedMediaDuration(selected.values(), tempo);
-    if (baseOverhead + nextDuration > input.targetDurationMs) {
-      selected.delete(digest.assetId);
-      continue;
-    }
-    selectedDuration = nextDuration;
+    if (!fits(selected)) selected.delete(digest.assetId);
   }
 
   const chapterOrder: Array<string | null> = [null, ...input.routePointIds];

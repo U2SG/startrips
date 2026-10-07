@@ -463,6 +463,46 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(tight.plannedDurationMs).toBe(4_550);
   });
 
+  it("fills transit vias greedily in route order once Stops are booked, skipping a via whole when it does not fit", () => {
+    // One Stop and three media-bearing transit vias at zero distance. Standard
+    // tempo books the Stop at camera 650 + arrival 800 + hero 3100 = 4550 and
+    // each via at camera 650 + hero 3100 = 3750 (a via has no arrival). A
+    // 12 050 budget therefore holds the Stop and exactly two vias; the third
+    // via and both of its photos stay out, and nothing from it is admitted as
+    // a supporting photo either, because that would recreate the chapter.
+    const routePointIds = ["tokyo", "via1", "via2", "via3"];
+    const routePointGeometry = {
+      tokyo: { isStop: true, noteLength: 0 },
+      via1: { isStop: false, angularDistanceFromPrevious: 0 },
+      via2: { isStop: false, angularDistanceFromPrevious: 0 },
+      via3: { isStop: false, angularDistanceFromPrevious: 0 },
+    };
+    const digests = [
+      digest("tokyo-1", "tokyo", 0),
+      digest("via1-1", "via1", 1),
+      digest("via2-1", "via2", 2),
+      digest("via3-1", "via3", 3),
+      digest("via3-2", "via3", 4),
+    ];
+    const tightInput = { ...baseInput, routePointIds, routePointGeometry, targetDurationMs: 12_050, digests };
+    const tight = buildDeterministicQuickRecapPlan(tightInput);
+    expect(tight.chapters.map((chapter) => chapter.routePointId)).toEqual(["tokyo", "via1", "via2"]);
+    expect(tight.omittedAssetIds).toEqual(["via3-1", "via3-2"]);
+    expect(tight.plannedDurationMs).toBe(12_050);
+    expect(validateAutoEditPlanV1(tight, tightInput).valid).toBe(true);
+
+    // With room for every via the plan is the one the old mandatory rule produced.
+    const roomy = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds, routePointGeometry, targetDurationMs: 30_000, digests });
+    expect(roomy.chapters.map((chapter) => chapter.routePointId)).toEqual(["tokyo", "via1", "via2", "via3"]);
+    expect(roomy.omittedAssetIds).toEqual([]);
+
+    // A Stop is never traded for a via: when the budget holds the Stop alone,
+    // every via is skipped rather than the Stop's representative.
+    const stopsOnly = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds, routePointGeometry, targetDurationMs: 4_550, digests });
+    expect(stopsOnly.chapters.map((chapter) => chapter.routePointId)).toEqual(["tokyo"]);
+    expect(stopsOnly.plannedDurationMs).toBe(4_550);
+  });
+
   it("keeps hero image dwell inside the intended tempo bands", () => {
     const digests = [digest("tokyo", "tokyo", 0)];
     const fast = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 10_000, tempo: "fast", digests });

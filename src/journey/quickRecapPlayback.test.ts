@@ -412,6 +412,59 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })).toBeNull();
   });
 
+  it("plays a long Journey's recap by skipping transit vias whole instead of refusing it", () => {
+    // The shape of a real 14-day Journey (25 route points, 8 Stops, 66 media)
+    // that the recap refused on the deployed host: every media-bearing via
+    // used to be mandatory, so the floor alone was ~52 s against a 42.4 s
+    // chapter budget. [sortOrder, lat, lon, isStop, noteLength, anchor, images, videos]
+    const shape: Array<[number, number, number, boolean, number, number | null, number, number]> = [
+      [0, 33.791, -118.071, true, 35, null, 0, 0], [1, 34.139, -118.354, false, 54, 0, 1, 0],
+      [2, 36.167, -115.148, true, 45, null, 2, 0], [3, 35.190, -114.053, false, 0, 2, 0, 0],
+      [4, 35.251, -112.187, false, 0, 5, 0, 0], [5, 36.098, -112.096, true, 43, null, 1, 0],
+      [6, 36.915, -111.457, true, 50, null, 0, 0], [7, 36.863, -111.375, false, 48, 6, 2, 0],
+      [8, 36.880, -111.516, false, 0, 6, 2, 0], [9, 37.571, -112.186, false, 25, null, 8, 0],
+      [10, 37.322, -113.005, false, 24, null, 1, 0], [11, 36.167, -115.148, true, 0, null, 0, 0],
+      [12, 36.423, -116.914, false, 56, null, 8, 2], [13, 35.362, -119.118, false, 0, null, 0, 0],
+      [14, 36.328, -119.389, false, 0, null, 0, 0], [15, 37.788, -122.408, true, 48, null, 3, 0],
+      [16, 37.829, -122.480, false, 0, 15, 1, 0], [17, 37.464, -122.429, true, 47, null, 11, 1],
+      [18, 37.431, -122.169, false, 47, null, 12, 1], [19, 36.248, -121.767, true, 55, null, 2, 0],
+      [20, 36.555, -121.921, false, 0, null, 0, 0], [21, 35.613, -121.144, false, 0, null, 1, 0],
+      [22, 34.416, -119.686, false, 0, null, 0, 0], [23, 34.019, -118.491, true, 0, null, 0, 0],
+      [24, 33.791, -118.071, true, 57, null, 0, 0],
+    ];
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.note = "字".repeat(128);
+    journey.routePoints = shape.map(([index, latitude, longitude, isStop, noteLength, anchor]) => ({
+      ...point(`p${index}`, index), latitude, longitude, isStop,
+      note: noteLength ? "字".repeat(noteLength) : null,
+      ...(anchor === null ? {} : { stayAnchorRoutePointId: `p${anchor}` }),
+    }));
+    let sortOrder = 0;
+    journey.media = [
+      ...Array.from({ length: 7 }, (_, index) => media(`intro-${index}`, null, "image/jpeg", sortOrder++)),
+      ...shape.flatMap(([index, , , , , , images, videos]) => [
+        ...Array.from({ length: images }, (_, k) => media(`p${index}-i${k}`, `p${index}`, "image/jpeg", sortOrder++)),
+        ...Array.from({ length: videos }, (_, k) => media(`p${index}-v${k}`, `p${index}`, "video/mp4", sortOrder++)),
+      ]),
+    ];
+
+    const result = prepareQuickRecapPlaybackResult(journey, { generatedAt: "2026-10-07T00:00:00.000Z" });
+    expect(result.fallbackReason).toBeNull();
+    const plan = result.playback!.plan;
+    expect(plan.plannedDurationMs).toBeLessThanOrEqual(plan.targetDurationMs!);
+    const chapterIds = plan.chapters.map((chapter) => chapter.routePointId);
+    for (const [index, , , isStop] of shape) {
+      if (isStop) expect(chapterIds).toContain(`p${index}`);
+    }
+    // Vias are present only when their representative fit; none is fabricated empty.
+    for (const chapter of plan.chapters) {
+      const row = shape.find(([index]) => `p${index}` === chapter.routePointId);
+      if (row && !row[3]) expect(chapter.items.length).toBeGreaterThan(0);
+    }
+    expect(plan.omittedAssetIds.length).toBeGreaterThan(0);
+  });
+
   it("retains shaping geometry without creating empty via chapters", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
