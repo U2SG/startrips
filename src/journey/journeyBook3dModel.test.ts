@@ -11,6 +11,7 @@ import {
   faceScreenRect,
   fitBookFrame,
   flightFrameTop,
+  FRAME_FOLLOW_EPSILON,
   HOVER_EDGE_HEIGHT,
   MAX_PULLBACK,
   pullBackTopLimit,
@@ -23,6 +24,7 @@ import {
   sheetFlipPose,
   sheetStiffness,
   stackSheets,
+  stepFrameFollow,
   dragFraction,
   dragTurnDirection,
   edgePreviewDirection,
@@ -308,6 +310,63 @@ describe("framing a sheet in flight", () => {
       const top = screenUp(lift, -0.5) + MARGIN;
       expect(fitBookFrame(1.9, 0.8, "landscape", 40, top)).toEqual(frame);
     }
+  });
+});
+
+describe("camera follow", () => {
+  const RATE = 1 / 0.25;
+  const REST = 0.4;
+  const CAP = 0.49;
+
+  /** Steps until the follow lands exactly on `target`, or Infinity. */
+  const stepsToLand = (from: number, velocity: number, target: number, delta: number) => {
+    const follow = { top: from, velocity };
+    for (let step = 1; step <= 100_000; step += 1) {
+      stepFrameFollow(follow, target, REST, CAP, RATE, delta);
+      expect(follow.top).toBeLessThanOrEqual(CAP);
+      expect(follow.top).toBeGreaterThanOrEqual(REST);
+      if (follow.top === target && follow.velocity === 0) return step;
+    }
+    return Infinity;
+  };
+
+  it("lands exactly on the target in finite steps at any frame rate, outward and back", () => {
+    for (const delta of [1 / 120, 1 / 60, 0.04, 0.25, 1]) {
+      for (const [from, target] of [[REST, CAP], [CAP, REST], [REST, 0.45], [0.45, REST]]) {
+        const steps = stepsToLand(from, 0, target, delta);
+        expect(steps).toBeLessThan(Infinity);
+        // Under about 3 s of follow time at the 0.25 s time constant, whatever the step.
+        expect(steps * delta).toBeLessThan(3.5);
+      }
+    }
+  });
+
+  it("eases rather than snaps, and is independent of the frame rate", () => {
+    const one = stepFrameFollow({ top: REST, velocity: 0 }, CAP, REST, CAP, RATE, 0.1);
+    expect(one.top).toBeGreaterThan(REST);
+    expect(one.top).toBeLessThan(REST + (CAP - REST) * 0.2);
+    const halves = { top: REST, velocity: 0 };
+    stepFrameFollow(halves, CAP, REST, CAP, RATE, 0.05);
+    stepFrameFollow(halves, CAP, REST, CAP, RATE, 0.05);
+    expect(halves.top).toBeCloseTo(one.top, 12);
+    expect(halves.velocity).toBeCloseTo(one.velocity, 12);
+  });
+
+  it("holds the cap and the rest frame against carried velocity", () => {
+    const outward = stepFrameFollow({ top: CAP - 1e-3, velocity: 5 }, CAP, REST, CAP, RATE, 0.1);
+    expect(outward.top).toBe(CAP);
+    expect(outward.velocity).toBeLessThanOrEqual(0);
+    const back = stepFrameFollow({ top: REST + 1e-3, velocity: -5 }, REST, REST, CAP, RATE, 0.1);
+    expect(back.top).toBe(REST);
+    expect(back.velocity).toBeGreaterThanOrEqual(0);
+    expect(stepsToLand(CAP - 1e-3, 5, CAP, 1 / 60)).toBeLessThan(Infinity);
+    expect(stepsToLand(REST + 1e-3, -5, REST, 1 / 60)).toBeLessThan(Infinity);
+  });
+
+  it("lands at once when never framed, and holds still over an empty step", () => {
+    expect(stepFrameFollow({ top: Number.NaN, velocity: 3 }, 0.42, REST, CAP, RATE, 0.016)).toEqual({ top: 0.42, velocity: 0 });
+    expect(stepFrameFollow({ top: 0.45, velocity: 0.1 }, REST, REST, CAP, RATE, 0)).toEqual({ top: 0.45, velocity: 0.1 });
+    expect(FRAME_FOLLOW_EPSILON).toBeGreaterThan(0);
   });
 });
 

@@ -174,6 +174,58 @@ export function cappedFlightFrameTop(sheetTop: number | null, rest: BookFrame, s
   return Math.min(flightFrameTop(sheetTop, tilt), pullBackTopLimit(rest, sheets, tilt));
 }
 
+/** A frame top easing toward its target: position (screen-up) and velocity (per second). */
+export type FrameFollow = { top: number; velocity: number };
+
+/** Below this distance (world units) and speed (world units/s) the follow lands. */
+export const FRAME_FOLLOW_EPSILON = 1e-4;
+
+/**
+ * One step of a critically damped follow of `target` at `rate` (1 / time
+ * constant) over `delta` seconds. The step is the exact solution for a target
+ * held over the step, so it is stable for any `delta` and two half steps equal
+ * one whole step. The top stays within [floor, ceiling] (the rest frame and
+ * the pull-back cap), which kills velocity carried past either, and lands
+ * exactly on the target once both distance and speed are under
+ * `FRAME_FOLLOW_EPSILON`. A NaN top (never framed) lands at once. Writes into
+ * `follow` and returns it.
+ */
+export function stepFrameFollow(
+  follow: FrameFollow,
+  target: number,
+  floor: number,
+  ceiling: number,
+  rate: number,
+  delta: number,
+): FrameFollow {
+  if (Number.isNaN(follow.top) || !(delta > 0)) {
+    if (Number.isNaN(follow.top)) {
+      follow.top = target;
+      follow.velocity = 0;
+    }
+    return follow;
+  }
+  const offset = follow.top - target;
+  const decay = Math.exp(-rate * delta);
+  const drift = (follow.velocity + rate * offset) * delta;
+  let top = target + (offset + drift) * decay;
+  let velocity = (follow.velocity - rate * drift) * decay;
+  if (top > ceiling) {
+    top = ceiling;
+    velocity = Math.min(0, velocity);
+  } else if (top < floor) {
+    top = floor;
+    velocity = Math.max(0, velocity);
+  }
+  if (Math.abs(top - target) < FRAME_FOLLOW_EPSILON && Math.abs(velocity) < FRAME_FOLLOW_EPSILON) {
+    top = target;
+    velocity = 0;
+  }
+  follow.top = top;
+  follow.velocity = velocity;
+  return follow;
+}
+
 /**
  * Fit a frame whose top (screen-up, margin included) is `top`. It writes into
  * `out` when given, so a caller framing every rendered frame allocates nothing.

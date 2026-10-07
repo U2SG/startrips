@@ -19,7 +19,9 @@ import {
   sheetFlipPose,
   sheetStiffness,
   stackSheets,
+  stepFrameFollow,
   type BookFrame,
+  type FrameFollow,
   type FaceSide,
   type ScreenRect,
 } from "./journeyBook3dModel";
@@ -136,11 +138,10 @@ export class JourneyBook3dScene {
    * pulls back under it.
    */
   private readonly restFrame: BookFrame = { top: 1, bottom: -1, halfWidth: 1 };
-  /** The live frame's unslacked top; NaN until first framed. */
-  private frameTop = Number.NaN;
-  /** The unslacked top the camera eases toward, and its follow velocity (world units/s). */
+  /** The live frame's unslacked top (NaN until first framed) and its follow velocity. */
+  private readonly follow: FrameFollow = { top: Number.NaN, velocity: 0 };
+  /** The unslacked top the camera eases toward. */
   private frameTarget = Number.NaN;
-  private frameVelocity = 0;
   /** Measured screen-up of the sheet in flight this frame, or null. */
   private flightTop: number | null = null;
   private readonly vertex = new THREE.Vector3();
@@ -400,8 +401,8 @@ export class JourneyBook3dScene {
   /** The frame depends on the stage, the orientation and the book's thickness. */
   private updateFrame() {
     restBookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets, BOOK_CAMERA_TILT, this.restFrame);
-    this.frameTop = Number.NaN;
-    this.frameVelocity = 0;
+    this.follow.top = Number.NaN;
+    this.follow.velocity = 0;
     this.frameFlight(0);
     this.requestRender();
   }
@@ -409,42 +410,26 @@ export class JourneyBook3dScene {
   /**
    * Frame the sheet in flight from its real, deformed geometry. The target
    * pulls back as the sheet rises past the rest frame, by at most
-   * `MAX_PULLBACK`, and returns to the rest frame once it lands; the camera
-   * follows it critically damped over `delta` seconds (exact for a target held
-   * over the step, so independent of the frame rate) and never leaves the
-   * band between the rest frame and the cap. Under reduced motion, and on the
-   * first framing, it snaps. Returns whether the camera changed.
+   * `MAX_PULLBACK`, and is exactly the rest top while no sheet is in flight;
+   * the camera follows it with `stepFrameFollow` over `delta` seconds, never
+   * leaving the band between the rest frame and the cap. Under reduced motion,
+   * and on the first framing, it snaps. Returns whether the camera changed.
    */
   private frameFlight(delta: number): boolean {
     this.flightTop = this.measureFlight();
     const rest = flightFrameTop(null);
     const limit = pullBackTopLimit(this.restFrame, this.sheets);
-    const target = cappedFlightFrameTop(this.flightTop, this.restFrame, this.sheets);
+    const target = this.flightTop === null ? rest : cappedFlightFrameTop(this.flightTop, this.restFrame, this.sheets);
     this.frameTarget = target;
-    let top = target;
-    if (Number.isNaN(this.frameTop) || this.reduced) {
-      this.frameVelocity = 0;
+    const previous = this.follow.top;
+    if (this.reduced) {
+      this.follow.top = target;
+      this.follow.velocity = 0;
     } else {
-      const offset = this.frameTop - target;
-      const decay = Math.exp(-CAMERA_FOLLOW_RATE * delta);
-      const drift = (this.frameVelocity + CAMERA_FOLLOW_RATE * offset) * delta;
-      top = target + (offset + drift) * decay;
-      this.frameVelocity = (this.frameVelocity - CAMERA_FOLLOW_RATE * drift) * decay;
-      // Carried velocity could overshoot: hold the cap and the rest frame.
-      if (top > limit) {
-        top = limit;
-        this.frameVelocity = Math.min(0, this.frameVelocity);
-      } else if (top < rest) {
-        top = rest;
-        this.frameVelocity = Math.max(0, this.frameVelocity);
-      }
-      if (Math.abs(top - target) < SETTLED_EPSILON && Math.abs(this.frameVelocity) < SETTLED_EPSILON) {
-        top = target;
-        this.frameVelocity = 0;
-      }
+      stepFrameFollow(this.follow, target, rest, limit, CAMERA_FOLLOW_RATE, delta);
     }
-    if (top === this.frameTop) return false;
-    this.frameTop = top;
+    const top = this.follow.top;
+    if (top === previous) return false;
     if (top === rest) Object.assign(this.frameBox, this.restFrame);
     else fitBookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets, top, BOOK_CAMERA_TILT, this.frameBox);
     this.applyCamera();
@@ -453,7 +438,7 @@ export class JourneyBook3dScene {
 
   /** Whether the camera is still easing toward the frame the book asks for. */
   private get cameraFollowing(): boolean {
-    return this.frameTop !== this.frameTarget;
+    return this.follow.top !== this.frameTarget;
   }
 
   /**
