@@ -24,6 +24,13 @@ export const SOUNDTRACK_DUCK_FACTOR = 0.3;
 /** Issue asks for roughly 150-300ms into the duck. */
 export const SOUNDTRACK_DUCK_ATTACK_MS = 220;
 
+/**
+ * #596's ceiling from audible playback start to a full duck. The ramp is only
+ * part of it: whatever latency a driver adds before it notices the video has
+ * to fit in the remainder.
+ */
+export const SOUNDTRACK_DUCK_ATTACK_WINDOW_MS = 300;
+
 /** Issue asks for roughly 300-600ms back to the member's own level. */
 export const SOUNDTRACK_DUCK_RELEASE_MS = 450;
 

@@ -3,6 +3,7 @@ import {
   SOUNDTRACK_DUCK_FACTOR,
   SOUNDTRACK_DUCK_ATTACK_MS,
   SOUNDTRACK_DUCK_RELEASE_MS,
+  SOUNDTRACK_DUCK_ATTACK_WINDOW_MS,
 } from "./soundtrackDucking";
 import {
   createSoundtrackDuckingController,
@@ -427,10 +428,47 @@ function parkingHarness() {
     for (let index = 0; index < 10; index += 1) frame();
     return state.soundtrack.volume;
   };
-  return { video, state, controller, calls, frames, idles, frame, idle, untilParked, partWay };
+  return {
+    video, state, controller, calls, frames, idles, frame, idle, untilParked, partWay,
+    now: () => time,
+  };
 }
 
 describe("soundtrack ducking controller parking (#610)", () => {
+  // #596's windows include the latency before the driver notices the change,
+  // not only the ramp: a parked controller adds at most one idle tick.
+  it("keeps the idle tick inside #596's attack and release windows", () => {
+    expect(SOUNDTRACK_DUCK_IDLE_POLL_MS).toBeGreaterThan(0);
+    expect(SOUNDTRACK_DUCK_IDLE_POLL_MS + SOUNDTRACK_DUCK_ATTACK_MS)
+      .toBeLessThanOrEqual(SOUNDTRACK_DUCK_ATTACK_WINDOW_MS);
+    // #596 asks for roughly 300-600ms back to the member's level.
+    expect(SOUNDTRACK_DUCK_IDLE_POLL_MS + SOUNDTRACK_DUCK_RELEASE_MS).toBeLessThanOrEqual(600);
+  });
+
+  it("fully ducks within the attack window for a video that starts just after the idle tick is armed", () => {
+    const { state, controller, frames, frame, idle, untilParked, now } = parkingHarness();
+    state.video = null;
+    controller.start();
+    untilParked();
+    expect(state.soundtrack.volume).toBe(1);
+
+    // The worst moment: the idle timer was armed on the frame that just ran,
+    // and the video starts playing now, with no event for anyone to hear.
+    const playbackStart = now();
+    state.video = fakeVideo();
+    idle();
+    let arrivedAt: number | null = null;
+    for (let index = 0; index < 1000 && frames.size > 0; index += 1) {
+      frame();
+      if (arrivedAt === null && Math.abs(state.soundtrack.volume - SOUNDTRACK_DUCK_FACTOR) <= 1e-3) {
+        arrivedAt = now();
+      }
+    }
+    expect(arrivedAt).not.toBeNull();
+    expect((arrivedAt ?? Infinity) - playbackStart).toBeLessThanOrEqual(SOUNDTRACK_DUCK_ATTACK_WINDOW_MS);
+    expect(state.soundtrack.volume).toBeCloseTo(SOUNDTRACK_DUCK_FACTOR, 3);
+  });
+
   it("stops requesting frames once the gain has arrived and keeps polling on the idle tick", () => {
     const { state, controller, calls, idle, untilParked } = parkingHarness();
     controller.start();

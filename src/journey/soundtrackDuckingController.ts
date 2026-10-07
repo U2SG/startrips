@@ -24,6 +24,8 @@
 // sidechain in `audioSampler` is untouched by this.
 
 import {
+  SOUNDTRACK_DUCK_ATTACK_MS,
+  SOUNDTRACK_DUCK_ATTACK_WINDOW_MS,
   shouldDuckSoundtrack,
   soundtrackRampGain,
   soundtrackRampMs,
@@ -33,12 +35,19 @@ import {
 /** `readyState` value meaning "has current frame data", i.e. really playing. */
 const HAVE_CURRENT_DATA = 2;
 
+/** About one display frame, the most a ramp can overshoot its own end by. */
+const FRAME_MARGIN_MS = 17;
+
 /**
- * How often a parked controller still polls. Short beside the attack, so a
- * transport change the idle tick finds still ducks well inside a beat; long
- * enough that a photo-only Journey stops paying for a frame every frame.
+ * How often a parked controller still polls. A video that starts with no event
+ * is noticed at worst one idle tick late, and the attack only begins then, so
+ * the tick is whatever #596's attack window leaves after the ramp and one frame
+ * of margin (about 63ms). Still a fraction of display cadence, so a photo-only
+ * Journey stops paying for a frame every frame.
  */
-export const SOUNDTRACK_DUCK_IDLE_POLL_MS = 150;
+export const SOUNDTRACK_DUCK_IDLE_POLL_MS = SOUNDTRACK_DUCK_ATTACK_WINDOW_MS
+  - SOUNDTRACK_DUCK_ATTACK_MS
+  - FRAME_MARGIN_MS;
 
 export type SoundtrackDuckingHost = {
   /** The one live soundtrack element, or null before it mounts. */
