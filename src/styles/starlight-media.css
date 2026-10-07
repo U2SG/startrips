@@ -29,6 +29,19 @@
   grid-template-rows: minmax(0, 1fr);
 }
 
+/* #595 lets a transit via's short note ride with its media. The note is a
+   sibling grid item ahead of the media (`.journey-playback__transit-media` is
+   `display: contents`), so with the single row above the note takes the whole
+   stage and the media lands in an implicit 0 px row: the image loads, decodes
+   and commits inside a box nobody can see, and Playback moves on past a frame
+   that showed only the note. With a note present the stage is two rows, the
+   same shape a Stop chapter uses: the note takes what it needs, capped, and
+   the media owns the rest. */
+.journey-playback__stage:has(> .journey-playback__transit-media > .journey-playback__transit-note) {
+  grid-template-rows: fit-content(34%) minmax(0, 1fr);
+  align-content: stretch;
+}
+
 .journey-story-fullscreen:has(> .starlight-media-state) > :is(.journey-story-fullscreen__close, .journey-story-fullscreen__nav) {
   z-index: var(--z-content-3);
 }
