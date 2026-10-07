@@ -1,5 +1,5 @@
+import { createRequire } from "node:module";
 import * as THREE from "three";
-import { FlipBook } from "quick_flipbook";
 import { describe, expect, it } from "vitest";
 import {
   AUTO_TURN_RISE,
@@ -323,10 +323,17 @@ describe("an automatic turn's camera", () => {
   const rest = restBookFrame(3, 0.8, "landscape", sheets);
   const restTop = flightFrameTop(null);
 
+  // quick_flipbook's ES build imports CommonJS three.modifiers by name, which
+  // Node rejects, so load its CommonJS build, with the three it requires.
+  const require = createRequire(import.meta.url);
+  const { FlipBook } = require("quick_flipbook") as typeof import("quick_flipbook");
+  const CjsThree = require("three") as typeof THREE;
+
   /** Highest screen-up of quick_flipbook's real sheet 1 posed by `sheetFlipPose` at t. */
   const measuredTop = (stiffness: number) => {
     const book = new FlipBook({ flipDuration: 1, pageSubdivisions: 16, yBetweenPages: BOOK_SHEET_SPACING });
-    const material = new THREE.MeshBasicMaterial();
+    // Its own three's material, so the book takes it as a material, not a URL.
+    const material = new CjsThree.MeshBasicMaterial();
     book.setPages(Array.from({ length: sheets * 2 }, () => material));
     book.scale.x = 0.8;
     const sheet = [...book][1];
