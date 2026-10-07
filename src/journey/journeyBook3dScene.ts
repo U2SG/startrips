@@ -48,6 +48,13 @@ const FOCUS_RATE = 9;
  */
 const CAMERA_FOLLOW_SECONDS = 0.25;
 const CAMERA_FOLLOW_RATE = 1 / CAMERA_FOLLOW_SECONDS;
+/**
+ * The follow steps on real elapsed time, not the book's 40 ms-capped clock:
+ * its exact step is stable for any step, so a slow renderer still lands the
+ * camera within its time constant instead of dragging its tail over many
+ * frames. Capped so a long stall does not read as one jump.
+ */
+const CAMERA_MAX_STEP_SECONDS = 1;
 const PAPER_ROUGHNESS = 0.88;
 const SETTLED_EPSILON = 1e-4;
 /** A block's top sits this far under the top sheet of its stack. */
@@ -680,6 +687,7 @@ export class JourneyBook3dScene {
   private animate = (time: number) => {
     this.frame = null;
     const delta = Math.min((time - this.lastTime) / 1000, 0.04);
+    const elapsed = Math.max(0, (time - this.lastTime) / 1000);
     this.lastTime = time;
     const before = this.book.progress;
     if (!this.dragging) this.book.animate(delta);
@@ -691,7 +699,7 @@ export class JourneyBook3dScene {
     }
     // Under reduced motion a turn lands in one frame, so only a drag (which
     // the pointer drives) keeps a sheet in flight, and the camera snaps to it.
-    if (!this.frameFlight(delta) && focusMoving) this.applyCamera();
+    if (!this.frameFlight(Math.min(elapsed, CAMERA_MAX_STEP_SECONDS)) && focusMoving) this.applyCamera();
     const cameraMoving = this.cameraFollowing;
     this.updateStacks();
     const pose = coverKeyLight(this.book.progress, this.reduced);
