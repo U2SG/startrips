@@ -124,7 +124,7 @@
 .story-media-organizer__flight { position: fixed; z-index: var(--z-transient-12000); pointer-events: none; overflow: hidden; border-radius: 8px; background: #182019; box-shadow: 0 10px 24px #0005; transform-origin: center; }
 .story-media-organizer__flight img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .story-media-organizer__flight b,
-.story-media-organizer__drag-stack > b { position: absolute; bottom: 6px; right: 6px; padding: 4px 7px; border-radius: 12px; background: #d8d8ae; color: #192018; font: 600 12px/1.3 system-ui, sans-serif; }
+.story-media-organizer__drag-stack > b { position: absolute; bottom: 6px; right: 6px; padding: 4px 7px; border-radius: 12px; background: var(--control-select); color: var(--control-primary-ink); font: 600 12px/1.3 system-ui, sans-serif; }
 .story-media-organizer__drag-stack { position: relative; isolation: isolate; width: 110px; height: 110px; pointer-events: none; }
 .story-media-organizer__drag-stack > div { position: absolute; inset: 0; overflow: hidden; border-radius: 8px; background: #263127; box-shadow: 0 10px 22px #0005; }
 .story-media-organizer__drag-stack > div:nth-child(2) { transform: translate(4px, -5px) scale(.97); z-index: var(--z-content-minus-1); }
