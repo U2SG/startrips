@@ -2222,7 +2222,11 @@ async function verifyFinalAcceptanceMobileFlow() {
     id: "fa-journey-over-budget",
     title: "FINAL ACCEPTANCE · INTERCONTINENTAL",
     coverMediaAssetId: null,
-    routePoints: Array.from({ length: 10 }, (_, index) => ({
+    // Sixteen intercontinental Stops with six photos each. The Stops alone
+    // overrun the 45 s chapter budget at standard tempo AND at the fast tempo
+    // the planner falls back to (#675), so this Journey still exercises the
+    // over-budget choice surface; at ten Stops the fast fallback fits (42.8 s).
+    routePoints: Array.from({ length: 16 }, (_, index) => ({
       id: `fa-over-budget-point-${index}`,
       journeyId: "fa-journey-over-budget",
       sortOrder: index,
@@ -2234,7 +2238,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       note: null,
       createdAt: "2026-08-10T00:00:00.000Z",
     })),
-    media: Array.from({ length: 60 }, (_, index) => ({
+    media: Array.from({ length: 96 }, (_, index) => ({
       id: `fa-over-budget-image-${index}`,
       journeyId: "fa-journey-over-budget",
       routePointId: `fa-over-budget-point-${Math.floor(index / 6)}`,
