@@ -325,9 +325,12 @@ const DRAG_FRACTIONS = [0.1, 0.25, 0.5, 0.75, 0.9];
 // Check 6: an automatic turn may crop the sheet by its held-pose bound plus this
 // share of the stage while the camera moves.
 const DYNAMIC_OVERSHOOT_STAGE_SHARE = 0.01;
-// Frames of a turn that must be sampled with the camera still easing, so the
-// dynamic check cannot pass on a turn the camera never moved through.
-const MIN_FOLLOWING_FRAMES = 4;
+// The dynamic check cannot pass vacuously: a turn must be sampled across its
+// flight, and at least one of those frames with the camera still easing. The
+// camera leads an automatic turn to its peak, so on CI's software renderer
+// (about twenty frames a turn) only a few frames are still easing.
+const MIN_FLIGHT_FRAMES = 12;
+const MIN_FOLLOWING_FRAMES = 1;
 
 /**
  * Check 6: automatic turns, every rendered frame. The scene feeds the DEV probe
@@ -381,13 +384,13 @@ async function checkAutoTurn(session, label, from, to, marks) {
   const round = (value, digits) => (value === null ? null : Number(value.toFixed(digits)));
   record(`desktop auto-turn ${label}: every frame pulls back at most ${MAX_PULLBACK * 100}% and crops at most the held-pose bound plus 1% of the stage`, {
     from, to,
-    frames: measured.length, followingFrames: following, minFollowingFrames: MIN_FOLLOWING_FRAMES,
+    frames: measured.length, minFlightFrames: MIN_FLIGHT_FRAMES, followingFrames: following, minFollowingFrames: MIN_FOLLOWING_FRAMES,
     maxDynamicPullBack: round(maxDynamicPullBack, 4),
     maxDynamicOvershootPx: round(maxDynamicOvershootPx, 2),
     heldBoundPx: round(boundPx, 2), limitPx: round(limitPx, 2),
     shots: Object.keys(probe.shots),
     bad: bad.slice(0, 8).map((frame) => ({ ...frame, progress: round(frame.progress, 4), pullBack: round(frame.pullBack, 4), overshootPx: round(frame.overshootPx, 2), heldBoundPx: round(frame.heldBoundPx, 2) })),
-  }, measured.length > 0 && following >= MIN_FOLLOWING_FRAMES && bad.length === 0
+  }, measured.length >= MIN_FLIGHT_FRAMES && following >= MIN_FOLLOWING_FRAMES && bad.length === 0
     && probe.frames.length < 4096 && Object.keys(probe.shots).length >= 1 + marks.length);
 }
 

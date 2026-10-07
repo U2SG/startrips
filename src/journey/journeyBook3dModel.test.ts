@@ -329,55 +329,62 @@ describe("an automatic turn's camera", () => {
   const { FlipBook } = require("quick_flipbook") as typeof import("quick_flipbook");
   const CjsThree = require("three") as typeof THREE;
 
-  /** Highest screen-up of quick_flipbook's real sheet 1 posed by `sheetFlipPose` at t. */
-  const measuredTop = (stiffness: number) => {
-    const book = new FlipBook({ flipDuration: 1, pageSubdivisions: 16, yBetweenPages: BOOK_SHEET_SPACING });
-    // Its own three's material, so the book takes it as a material, not a URL.
-    const material = new CjsThree.MeshBasicMaterial();
-    book.setPages(Array.from({ length: sheets * 2 }, () => material));
-    book.scale.x = 0.8;
-    const sheet = [...book][1];
-    const point = new THREE.Vector3();
+  // A real quick_flipbook book; sheet 1 is interior, as in the product.
+  const book = new FlipBook({ flipDuration: 1, pageSubdivisions: 16, yBetweenPages: BOOK_SHEET_SPACING });
+  // Its own three's material, so the book takes it as a material, not a URL.
+  const material = new CjsThree.MeshBasicMaterial();
+  book.setPages(Array.from({ length: sheets * 2 }, () => material));
+  book.scale.x = 0.8;
+  const sheet = [...book][1];
+  const point = new THREE.Vector3();
+
+  /** Pose the real sheet as the scene does and return its highest screen-up. */
+  const poseTop = (pose: ReturnType<typeof sheetFlipPose>) => {
+    sheet.rotation.z = pose.rotationZ;
+    sheet.bend.force = pose.bendForce;
+    sheet.twist.angle = pose.twistAngle;
+    (sheet.pageCurve as { intensity: number }).intensity = pose.curveIntensity;
+    sheet.modifiers.apply();
+    sheet.page.updateWorldMatrix(true, false);
+    const position = sheet.page.geometry.getAttribute("position");
     let top = -Infinity;
-    for (let step = 1; step < 200; step += 1) {
-      const t = step / 200;
-      book.progress = 1 + t;
-      for (const direction of [-1, 1]) {
-        const pose = sheetFlipPose(t, direction, 1, stiffness);
-        sheet.rotation.z = pose.rotationZ;
-        sheet.bend.force = pose.bendForce;
-        sheet.twist.angle = pose.twistAngle;
-        (sheet.pageCurve as { intensity: number }).intensity = pose.curveIntensity;
-        sheet.modifiers.apply();
-        sheet.page.updateWorldMatrix(true, false);
-        const position = sheet.page.geometry.getAttribute("position");
-        for (let i = 0; i < position.count; i += 1) {
-          point.fromBufferAttribute(position, i).applyMatrix4(sheet.page.matrixWorld);
-          top = Math.max(top, screenUp(point.y, point.z));
-        }
-      }
+    for (let i = 0; i < position.count; i += 1) {
+      point.fromBufferAttribute(position, i).applyMatrix4(sheet.page.matrixWorld);
+      top = Math.max(top, screenUp(point.y, point.z));
     }
     return top;
   };
 
+  /** The sheet's highest point over a whole turn, finely and off the peak's sample grid. */
+  const measuredTop = (stiffness: number) => {
+    let top = -Infinity;
+    for (let step = 1; step < 499; step += 1) {
+      const t = step / 499;
+      book.progress = 1 + t;
+      for (const direction of [-1, 1]) top = Math.max(top, poseTop(sheetFlipPose(t, direction, 1, stiffness)));
+    }
+    return top;
+  };
+  const peak = (stiffness: number) => turnPeakSheetTop(stiffness, poseTop);
+
   it("peaks a rigid cover exactly where it stands upright", () => {
-    expect(turnPeakSheetTop(1)).toBeCloseTo(screenUp(1, -0.5), 12);
+    expect(peak(1)).toBeCloseTo(screenUp(1, -0.5), 12);
     const top = measuredTop(1);
-    expect(top).toBeLessThanOrEqual(turnPeakSheetTop(1) + 1e-9);
-    expect(top).toBeGreaterThan(turnPeakSheetTop(1) - 1e-3);
+    expect(top).toBeLessThanOrEqual(peak(1) + 1e-9);
+    expect(top).toBeGreaterThan(peak(1) - 1e-3);
   });
 
-  it("bounds a curling, twisting sheet of paper from above", () => {
+  it("measures a curling, twisting sheet of paper's peak from above, close", () => {
     const top = measuredTop(0);
-    expect(top).toBeLessThanOrEqual(turnPeakSheetTop(0) + 1e-9);
-    expect(turnPeakSheetTop(0)).toBeGreaterThanOrEqual(turnPeakSheetTop(1));
-    // A loose bound, not a different camera: about 0.005 page heights above the upright board.
-    expect(turnPeakSheetTop(0) - turnPeakSheetTop(1)).toBeLessThan(0.006);
+    expect(top).toBeLessThanOrEqual(peak(0));
+    expect(peak(0) - top).toBeLessThan(0.006);
+    // Turning back, paper's curl lifts it above an upright board.
+    expect(top).toBeGreaterThan(peak(1));
   });
 
   it("holds the turn's peak under the cap, for rigid and paper alike", () => {
     for (const stiffness of [0, 1]) {
-      const top = autoTurnFrameTop(stiffness, rest, sheets);
+      const top = autoTurnFrameTop(peak(stiffness), rest, sheets);
       expect(top).toBeLessThanOrEqual(pullBackTopLimit(rest, sheets) + 1e-12);
       // On a wide stage the upright page needs more than the cap allows.
       expect(top).toBeCloseTo(pullBackTopLimit(rest, sheets), 12);
@@ -386,29 +393,29 @@ describe("an automatic turn's camera", () => {
     }
     // On a narrow stage the slack may hold the upright page without the cap.
     const narrow = restBookFrame(0.5, 0.8, "landscape", sheets);
-    expect(autoTurnFrameTop(1, narrow, sheets)).toBeLessThanOrEqual(pullBackTopLimit(narrow, sheets));
-    expect(autoTurnFrameTop(1, narrow, sheets)).toBeLessThanOrEqual(flightFrameTop(turnPeakSheetTop(1)) + 1e-12);
+    expect(autoTurnFrameTop(peak(1), narrow, sheets)).toBeLessThanOrEqual(pullBackTopLimit(narrow, sheets));
+    expect(autoTurnFrameTop(peak(1), narrow, sheets)).toBeLessThanOrEqual(flightFrameTop(peak(1)) + 1e-12);
   });
 
   it("raises its floor smoothly from rest to the peak frame before the sheet gets there", () => {
-    const peak = autoTurnFrameTop(1, rest, sheets);
-    expect(autoTurnFloorTop(0, restTop, peak)).toBe(restTop);
-    expect(autoTurnFloorTop(AUTO_TURN_RISE, restTop, peak)).toBeCloseTo(peak, 12);
-    expect(autoTurnFloorTop(-2, restTop, peak)).toBeCloseTo(peak, 12);
+    const peakTop = autoTurnFrameTop(peak(1), rest, sheets);
+    expect(autoTurnFloorTop(0, restTop, peakTop)).toBe(restTop);
+    expect(autoTurnFloorTop(AUTO_TURN_RISE, restTop, peakTop)).toBeCloseTo(peakTop, 12);
+    expect(autoTurnFloorTop(-2, restTop, peakTop)).toBeCloseTo(peakTop, 12);
     let previous = restTop;
     for (let step = 1; step <= 100; step += 1) {
-      const floor = autoTurnFloorTop((step / 100) * AUTO_TURN_RISE, restTop, peak);
+      const floor = autoTurnFloorTop((step / 100) * AUTO_TURN_RISE, restTop, peakTop);
       expect(floor).toBeGreaterThanOrEqual(previous - 1e-12);
-      expect(floor - previous).toBeLessThan((peak - restTop) * 0.02);
+      expect(floor - previous).toBeLessThan((peakTop - restTop) * 0.02);
       previous = floor;
     }
     // A camera on the floor never crops a rising rigid cover more than the
     // cap crops it held upright.
-    const capFrame = fitBookFrame(3, 0.8, "landscape", sheets, peak);
-    const heldOvershoot = (turnPeakSheetTop(1) - capFrame.top) / (capFrame.top - capFrame.bottom);
+    const capFrame = fitBookFrame(3, 0.8, "landscape", sheets, peakTop);
+    const heldOvershoot = (peak(1) - capFrame.top) / (capFrame.top - capFrame.bottom);
     for (let step = 0; step <= 500; step += 1) {
       const t = step / 1000;
-      const frame = fitBookFrame(3, 0.8, "landscape", sheets, autoTurnFloorTop(t, restTop, peak));
+      const frame = fitBookFrame(3, 0.8, "landscape", sheets, autoTurnFloorTop(t, restTop, peakTop));
       const overshoot = (screenUp(Math.sin(Math.PI * t), -0.5) - frame.top) / (frame.top - frame.bottom);
       expect(overshoot).toBeLessThanOrEqual(heldOvershoot + 1e-12);
     }

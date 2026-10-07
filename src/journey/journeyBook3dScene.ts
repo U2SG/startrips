@@ -22,6 +22,7 @@ import {
   sheetStiffness,
   stackSheets,
   stepFrameFollow,
+  turnPeakSheetTop,
   type BookFrame,
   type FrameFollow,
   type FaceSide,
@@ -147,6 +148,9 @@ export class JourneyBook3dScene {
   /** Progress where the automatic turn in progress started, and its goal; null otherwise. */
   private turnFrom: number | null = null;
   private turnGoal: number | null = null;
+  /** Where a board's and a sheet of paper's turns peak (`turnPeakSheetTop`). */
+  private readonly boardPeakTop = turnPeakSheetTop(1, () => Number.NaN);
+  private paperPeakTop = this.boardPeakTop;
   /** Measured screen-up of the sheet in flight this frame, or null. */
   private flightTop: number | null = null;
   private readonly vertex = new THREE.Vector3();
@@ -208,6 +212,7 @@ export class JourneyBook3dScene {
     this.scene.add(this.table);
 
     this.blank = this.paperMaterial(null);
+    this.paperPeakTop = this.measurePaperPeak();
     this.book = new FlipBook({
       flipDuration: reduced ? 0.001 : FLIP_SECONDS,
       yBetweenPages: BOOK_SHEET_SPACING,
@@ -438,7 +443,7 @@ export class JourneyBook3dScene {
     } else {
       const stiffness = sheetStiffness(Math.floor(this.book.progress), this.sheets);
       this.frameTarget = Math.max(
-        autoTurnFrameTop(stiffness, this.restFrame, this.sheets),
+        autoTurnFrameTop(stiffness >= 1 ? this.boardPeakTop : this.paperPeakTop, this.restFrame, this.sheets),
         cappedFlightFrameTop(this.flightTop, this.restFrame, this.sheets),
       );
     }
@@ -490,6 +495,11 @@ export class JourneyBook3dScene {
     const index = Math.floor(progress);
     const sheet = this.sheetList[index];
     if (!sheet || progress - index <= 0) return null;
+    return this.sheetTop(sheet);
+  }
+
+  /** Highest screen-up point of a sheet's deformed geometry, in world units. */
+  private sheetTop(sheet: Sheet): number {
     const page = sheet.page;
     page.updateWorldMatrix(true, false);
     const position = page.geometry.getAttribute("position");
@@ -500,6 +510,28 @@ export class JourneyBook3dScene {
       if (up > top) top = up;
     }
     return top;
+  }
+
+  /**
+   * Measure the peak of a sheet of paper over a whole turn on a scratch
+   * quick_flipbook sheet, once, so an automatic turn knows where to lead the
+   * camera before the sheet gets there.
+   */
+  private measurePaperPeak(): number {
+    const scratch = new FlipBook({ flipDuration: 1, yBetweenPages: BOOK_SHEET_SPACING, pageSubdivisions: PAGE_SUBDIVISIONS });
+    scratch.setPages([this.blank, this.blank]);
+    const sheet = [...scratch][0];
+    const peak = turnPeakSheetTop(0, (pose) => {
+      sheet.rotation.z = pose.rotationZ;
+      sheet.bend.force = pose.bendForce;
+      sheet.twist.angle = pose.twistAngle;
+      (sheet.pageCurve as { intensity: number }).intensity = pose.curveIntensity;
+      sheet.modifiers.apply();
+      return this.sheetTop(sheet);
+    });
+    scratch.dispose();
+    sheet.page.geometry.dispose();
+    return peak;
   }
 
   /**

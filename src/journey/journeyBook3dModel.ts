@@ -174,38 +174,46 @@ export function cappedFlightFrameTop(sheetTop: number | null, rest: BookFrame, s
   return Math.min(flightFrameTop(sheetTop, tilt), pullBackTopLimit(rest, sheets, tilt));
 }
 
+/** Turn progresses (per direction) a paper sheet's peak is sampled at. */
+export const TURN_PEAK_SAMPLES = 64;
 /**
- * quick_flipbook's page curve lifts a page off its own plane by up to 0.054
- * (world units, page height 1). Its twist (at most 1/10 mid-turn) turns each
- * point about the page's centre line by the twist angle times its distance
- * from the spine over |(maxX, maxY, maxZ) / 2| = √2/4, so the free edge turns
- * by up to 2√2/10 rad and its corners, half a page deep, leave the plane by
- * half its sine. Together: the most a sheet of paper stands off the plane
- * through its spine.
+ * Headroom over the highest sample (world units): between two samples 1/64 of
+ * a turn apart the measured top moves well under this.
  */
-const PAPER_OFFSET = 0.054 + 0.5 * Math.sin((2 * Math.SQRT2) / 10);
+const TURN_PEAK_SLACK = 0.004;
 
 /**
- * The highest screen-up any point of a turning sheet can reach, at any
- * progress, curl and twist included. A board (stiffness 1) swings rigidly
- * about the spine, so its far corner reaches screenUp(1, −0.5) exactly when it
- * stands upright. Paper curls and twists, but no point of it lies farther from
- * the spine than its length and its offset off the plane allow, so its top is
- * bounded by the same corner at hypot(1, PAPER_OFFSET).
+ * The highest screen-up a sheet with `stiffness` reaches over a whole turn,
+ * in either direction. A board (stiffness 1) swings rigidly about the spine,
+ * so its far corner peaks at screenUp(1, −0.5) as it stands upright. Paper
+ * curls and twists, and turning back its curl lifts it well above that, so
+ * its peak is measured: `measure` returns the highest screen-up of a real
+ * sheet posed by `sheetFlipPose`, sampled over the turn in both directions,
+ * plus a little headroom between samples.
  */
-export function turnPeakSheetTop(stiffness: number, tilt = BOOK_CAMERA_TILT): number {
-  const reach = stiffness >= 1 ? 1 : Math.hypot(1, PAPER_OFFSET);
-  return screenUp(reach, -0.5, tilt);
+export function turnPeakSheetTop(
+  stiffness: number,
+  measure: (pose: SheetFlipPose) => number,
+  tilt = BOOK_CAMERA_TILT,
+): number {
+  if (stiffness >= 1) return screenUp(1, -0.5, tilt);
+  let top = -Infinity;
+  for (let step = 1; step < TURN_PEAK_SAMPLES; step += 1) {
+    for (const direction of [-1, 1]) {
+      top = Math.max(top, measure(sheetFlipPose(step / TURN_PEAK_SAMPLES, direction, 1, stiffness)));
+    }
+  }
+  return top + TURN_PEAK_SLACK;
 }
 
 /**
- * The frame top the camera holds through an automatic turn of a sheet with
- * `stiffness`: the turn's peak, held under the pull-back cap. An automatic
- * turn is deterministic once it starts, so the camera eases toward its peak
- * from the first frame instead of chasing the sheet.
+ * The frame top the camera holds through an automatic turn whose sheet peaks
+ * at `peakSheetTop` (`turnPeakSheetTop`): that peak, held under the pull-back
+ * cap. An automatic turn is deterministic once it starts, so the camera eases
+ * toward its peak from the first frame instead of chasing the sheet.
  */
-export function autoTurnFrameTop(stiffness: number, rest: BookFrame, sheets: number, tilt = BOOK_CAMERA_TILT): number {
-  return cappedFlightFrameTop(turnPeakSheetTop(stiffness, tilt), rest, sheets, tilt);
+export function autoTurnFrameTop(peakSheetTop: number, rest: BookFrame, sheets: number, tilt = BOOK_CAMERA_TILT): number {
+  return cappedFlightFrameTop(peakSheetTop, rest, sheets, tilt);
 }
 
 /**
