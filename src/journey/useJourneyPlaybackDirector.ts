@@ -225,7 +225,15 @@ export function useJourneyPlaybackDirector(
   hold = false,
   resolveStepDuration?: PlaybackStepDurationResolver,
   homeContext?: HomeNarrativeContext | null,
+  /**
+   * The tempo this run starts at. Quick Recap passes its plan's tempo, so a
+   * plan the shell re-planned at a faster tempo (see `tempoFallback`) is played
+   * at that tempo from the first beat instead of at `PLAYBACK_INITIAL_TEMPO`.
+   */
+  initialTempo: PlaybackTempo = PLAYBACK_INITIAL_TEMPO,
 ) {
+  const initialTempoRef = useRef(initialTempo);
+  initialTempoRef.current = initialTempo;
   const playbackSessionHomeContextRef = useRef<PlaybackSessionHomeContextSnapshot>({
     journeyId: journey?.id ?? null,
     homeContext,
@@ -237,7 +245,7 @@ export function useJourneyPlaybackDirector(
   );
   const sessionHomeContext = playbackSessionHomeContextRef.current.homeContext;
   const [state, setState] = useState<PlaybackState>(() => initialPlaybackState(sessionHomeContext));
-  const [tempo, setTempoState] = useState<PlaybackTempo>(PLAYBACK_INITIAL_TEMPO);
+  const [tempo, setTempoState] = useState<PlaybackTempo>(initialTempo);
   const tempoRef = useRef(tempo);
   tempoRef.current = tempo;
   const intentRevisionRef = useRef(0);
@@ -451,10 +459,10 @@ export function useJourneyPlaybackDirector(
     pendingRemapSeekRef.current = false;
     prefetchBlockedThroughRevisionRef.current = null;
     setState(initialPlaybackState(homeContextRef.current));
-    if (tempoRef.current !== PLAYBACK_INITIAL_TEMPO) {
-      tempoRef.current = PLAYBACK_INITIAL_TEMPO;
+    if (tempoRef.current !== initialTempoRef.current) {
+      tempoRef.current = initialTempoRef.current;
       advancePlaybackIntentRevision(intentRevisionRef);
-      setTempoState(PLAYBACK_INITIAL_TEMPO);
+      setTempoState(initialTempoRef.current);
     }
   }, [journey?.id]);
 

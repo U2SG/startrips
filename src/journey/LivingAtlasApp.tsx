@@ -3215,11 +3215,15 @@ export function LivingAtlasApp({
     let quickRecap: PreparedQuickRecapPlayback | null = null;
     let fallbackMessage = carriedFallbackMessage;
     if (mode === "quick-recap") {
-      // The director starts every run at PLAYBACK_INITIAL_TEMPO, so the opening
-      // plan must be budgeted at the same tempo; a later change re-plans below.
+      // The opening plan is budgeted at PLAYBACK_INITIAL_TEMPO and the director
+      // starts at the plan's tempo (the overlay seeds it from `plan.tempo`), so
+      // the two agree even when the planner fell back to the faster tempo
+      // because the Stops left no room for a transit via; a later change
+      // re-plans below.
       const preparation = prepareQuickRecapPlaybackResult(journey, {
         generatedAt: new Date().toISOString(),
         tempo: PLAYBACK_INITIAL_TEMPO,
+        tempoFallback: "fast",
         homeNarrativeContext: homeNarrativeContextForJourney(journey),
       });
       quickRecap = preparation.playback;

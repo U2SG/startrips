@@ -195,6 +195,9 @@ export function quickRecapRouteGeometry(
     geometry[routePointId] = {
       // The first point has no leg in front of it, so it resolves to the floor.
       ...(pointIndex > 0 ? { angularDistanceFromPrevious: playbackTravelAngularDistance(journey, pointIndex, previousIndex) } : {}),
+      // Cumulative, so the planner can price a leg from whichever chapter it
+      // actually retains before this one rather than from the next candidate.
+      routeDistanceFromStart: playbackTravelAngularDistance(journey, pointIndex, 0),
       noteLength: noteLengthFor(point),
       isStop: point.isStop,
     };
@@ -221,14 +224,62 @@ export function quickRecapNoteBeats(journey: Journey): { routePointIds: Set<stri
   return { routePointIds, durationMs };
 }
 
+export type QuickRecapPreparationOptions = {
+  generatedAt: string;
+  targetDurationMs?: number;
+  tempo?: AutoEditTempo;
+  homeNarrativeContext?: HomeNarrativeContext | null;
+  /**
+   * A faster tempo to re-plan at when the requested tempo either cannot fit
+   * the Stops alone or fits them with no room for a single media-bearing
+   * transit via. A long Journey's Stops can spend the whole 45 s at standard
+   * tempo, which answers "quick recap" with the Stops' photos only; at a
+   * faster tempo the same budget carries the vias too. The returned plan's
+   * `tempo` says which tempo was used, and the director starts at it.
+   */
+  tempoFallback?: AutoEditTempo | null;
+};
+
+/** Whether the plan carries at least one transit via (a non-Stop route point) chapter. */
+function planRepresentsTransitVia(
+  plan: AutoEditPlanV1,
+  geometry: Record<string, QuickRecapRouteGeometryV1>,
+): boolean {
+  return plan.chapters.some((chapter) =>
+    chapter.routePointId !== null && geometry[chapter.routePointId]?.isStop === false && chapter.items.length > 0);
+}
+
 export function prepareQuickRecapPlaybackResult(
   journey: Journey,
-  options: {
-    generatedAt: string;
-    targetDurationMs?: number;
-    tempo?: AutoEditTempo;
-    homeNarrativeContext?: HomeNarrativeContext | null;
-  },
+  options: QuickRecapPreparationOptions,
+): QuickRecapPreparationResult {
+  const { tempoFallback = null, ...requested } = options;
+  const first = prepareQuickRecapPlaybackAtTempo(journey, requested);
+  if (!tempoFallback || tempoFallback === (requested.tempo ?? "standard")) return first;
+  const geometry = quickRecapRouteGeometry(journey, quickRecapCandidateRoutePointIds(journey));
+  const viaCandidatesExist = Object.values(geometry).some((entry) => entry.isStop === false);
+  const needsFallback = first.playback
+    ? viaCandidatesExist && !planRepresentsTransitVia(first.playback.plan, geometry)
+    : first.fallbackReason === "over-budget";
+  if (!needsFallback) return first;
+  const faster = prepareQuickRecapPlaybackAtTempo(journey, { ...requested, tempo: tempoFallback });
+  if (!faster.playback) return first;
+  // A faster plan is only an improvement when it brings a via in; otherwise the
+  // slower, calmer plan that already fits is the better recap.
+  if (first.playback && !planRepresentsTransitVia(faster.playback.plan, geometry)) return first;
+  return faster;
+}
+
+function quickRecapCandidateRoutePointIds(journey: Journey): string[] {
+  const digests = quickRecapDigestsForJourney(journey);
+  return journey.routePoints
+    .filter((point) => point.isStop || digests.some((digest) => digest.routePointId === point.id))
+    .map((point) => point.id);
+}
+
+function prepareQuickRecapPlaybackAtTempo(
+  journey: Journey,
+  options: Omit<QuickRecapPreparationOptions, "tempoFallback">,
 ): QuickRecapPreparationResult {
   if (journey.routePoints.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
   const digests = quickRecapDigestsForJourney(journey);
