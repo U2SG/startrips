@@ -879,7 +879,14 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
     for (const digest of eligibleDigests) {
       if (digest.userSignals.pinnedForRecap && !seen.has(digest.assetId)) errors.push(`pinned asset omitted ${digest.assetId}`);
     }
+    // A Stop (or a route point of unknown kind) with eligible media must be
+    // represented. A transit via may be skipped whole when the budget cannot
+    // carry it; that skip is not silent, because the omission-ledger check
+    // above already requires every one of its eligible assets to be listed in
+    // `omittedAssetIds`, and the selection-mismatch check above rejects a plan
+    // that skips a via the deterministic builder would have admitted.
     for (const routePointId of input.routePointIds) {
+      if (input.routePointGeometry?.[routePointId]?.isStop === false) continue;
       const hasEligible = input.digests.some((digest) =>
         digest.routePointId === routePointId && isQuickRecapEligible(digest, input.journeyId, input.journeyRevision, routeOrder),
       );

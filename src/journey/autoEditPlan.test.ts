@@ -492,9 +492,19 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(tight, tightInput).valid).toBe(true);
 
     // With room for every via the plan is the one the old mandatory rule produced.
-    const roomy = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds, routePointGeometry, targetDurationMs: 30_000, digests });
+    const roomyInput = { ...baseInput, routePointIds, routePointGeometry, targetDurationMs: 30_000, digests };
+    const roomy = buildDeterministicQuickRecapPlan(roomyInput);
     expect(roomy.chapters.map((chapter) => chapter.routePointId)).toEqual(["tokyo", "via1", "via2", "via3"]);
     expect(roomy.omittedAssetIds).toEqual([]);
+
+    // Skipping a via is a budget decision, not a loophole: a plan that drops a
+    // via the builder would have admitted is still rejected by the validator.
+    const forged = structuredClone(roomy);
+    forged.chapters = forged.chapters.filter((chapter) => chapter.routePointId !== "via3");
+    forged.omittedAssetIds = ["via3-1", "via3-2"];
+    forged.plannedDurationMs = sumPlannedDurationMs(forged);
+    expect(validateAutoEditPlanV1(forged, roomyInput).errors).toContain("quick recap selection mismatch");
+    expect(validateAutoEditPlanV1(forged, roomyInput).errors).not.toContain("route point omitted via3");
 
     // A Stop is never traded for a via: when the budget holds the Stop alone,
     // every via is skipped rather than the Stop's representative.
