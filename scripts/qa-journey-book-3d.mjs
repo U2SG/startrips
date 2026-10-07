@@ -542,16 +542,25 @@ async function phoneSession(browser) {
   }
 }
 
-const browser = await launchQaBrowser({
-  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
-});
+// Each session gets its own browser, so the desktop session's canvas captures
+// and SwiftShader GPU memory cannot starve the phone's DPR 3 canvas.
+async function inOwnBrowser(session) {
+  const browser = await launchQaBrowser({
+    args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+  });
+  try {
+    await session(browser);
+  } finally {
+    await browser.close();
+  }
+}
+
 try {
   await mkdir(artifactDir, { recursive: true });
-  await desktopSession(browser);
-  await phoneSession(browser);
+  await inOwnBrowser(desktopSession);
+  await inOwnBrowser(phoneSession);
 } finally {
   await writeFile(`${artifactDir}/checks.json`, `${JSON.stringify(checks, null, 2)}\n`).catch(() => {});
-  await browser.close();
 }
 
 if (failed) {
