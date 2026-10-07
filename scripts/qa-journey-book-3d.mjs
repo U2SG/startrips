@@ -21,6 +21,10 @@
 //      through the front cover's turn. The scene reports the highest point of
 //      the sheet's deformed geometry and both frames in DEV
 //      (`data-qa-book-flight`); a hover must not visibly pull the camera back.
+//   6. Desktop: the same rule holds at every rendered frame of an automatic
+//      turn (the footer button) of the rigid front cover and of a sheet of
+//      paper, within 1% of the stage, while the camera moves; frames of the
+//      cover's turn are saved as evidence (desktop-auto-*.png).
 //
 // Two sessions run it. Desktop (1440x1000, mouse) reads spreads in landscape
 // and navigates with the footer buttons and the keyboard. Phone (390x844, DPR 3,
@@ -318,6 +322,74 @@ async function checkFlight(session) {
 
 const EDGE_LIFT = 0.055;
 const DRAG_FRACTIONS = [0.1, 0.25, 0.5, 0.75, 0.9];
+// Check 6: an automatic turn may crop the sheet by its held-pose bound plus this
+// share of the stage while the camera moves.
+const DYNAMIC_OVERSHOOT_STAGE_SHARE = 0.01;
+// Frames of a turn that must be sampled with the camera still easing, so the
+// dynamic check cannot pass on a turn the camera never moved through.
+const MIN_FOLLOWING_FRAMES = 4;
+
+/**
+ * Check 6: automatic turns, every rendered frame. The scene feeds the DEV probe
+ * (`window.__qaJourneyBookFlight`) each frame's flight readout and captures
+ * the canvas at the frame of maximum overshoot and at `marks`.
+ *
+ * Every frame with a sheet in flight under the automatic turn is asserted:
+ * the pull-back stays at or under MAX_PULLBACK, and the overshoot stays at or
+ * under the turn's held-pose bound at the cap (the largest per-frame cap
+ * bound over the turn, as in check 5) plus 1% of the stage height.
+ */
+const dynamicTurns = [];
+async function checkAutoTurn(session, label, from, to, marks) {
+  const { page } = session;
+  await page.evaluate((wanted) => {
+    window.__qaJourneyBookFlight = { frames: [], marks: wanted, shots: {}, maxOvershootPx: -Infinity };
+  }, marks);
+  await page.locator('button[aria-label="下一页"]').click();
+  await session.settledAt(to);
+  const probe = await page.evaluate(() => {
+    const value = window.__qaJourneyBookFlight;
+    delete window.__qaJourneyBookFlight;
+    return value;
+  });
+  for (const [shot, { progress, dataUrl }] of Object.entries(probe.shots)) {
+    const name = `desktop-auto-${label}-${shot}.png`;
+    await writeFile(`${artifactDir}/${name}`, Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64"));
+    console.log(JSON.stringify({ evidence: name, progress: Number(progress.toFixed(4)) }));
+  }
+  const frames = probe.frames.filter((frame) => frame.sheetTop !== null && frame.auto);
+  const stageHeight = frames[0]?.cssHeight ?? 0;
+  const measured = frames.map((frame) => {
+    const restHeight = frame.rest.top - frame.rest.bottom;
+    const liveHeight = frame.live.top - frame.live.bottom;
+    const capHeight = (1 + MAX_PULLBACK) * restHeight;
+    return {
+      progress: frame.progress,
+      following: frame.following,
+      pullBack: liveHeight / restHeight - 1,
+      overshootPx: (frame.sheetTop - frame.live.top) * (frame.cssHeight / liveHeight),
+      heldBoundPx: Math.max(0, frame.sheetTop - (frame.rest.bottom + capHeight)) * (frame.cssHeight / capHeight),
+    };
+  });
+  const boundPx = measured.length ? Math.max(...measured.map((frame) => frame.heldBoundPx)) : 0;
+  const limitPx = boundPx + DYNAMIC_OVERSHOOT_STAGE_SHARE * stageHeight;
+  const bad = measured.filter((frame) => frame.pullBack > MAX_PULLBACK + PULLBACK_TOLERANCE || frame.overshootPx > limitPx);
+  const following = measured.filter((frame) => frame.following).length;
+  const maxDynamicPullBack = measured.length ? Math.max(...measured.map((frame) => frame.pullBack)) : null;
+  const maxDynamicOvershootPx = measured.length ? Math.max(...measured.map((frame) => frame.overshootPx)) : null;
+  dynamicTurns.push({ maxDynamicPullBack, maxDynamicOvershootPx, boundPx, limitPx });
+  const round = (value, digits) => (value === null ? null : Number(value.toFixed(digits)));
+  record(`desktop auto-turn ${label}: every frame pulls back at most ${MAX_PULLBACK * 100}% and crops at most the held-pose bound plus 1% of the stage`, {
+    from, to,
+    frames: measured.length, followingFrames: following, minFollowingFrames: MIN_FOLLOWING_FRAMES,
+    maxDynamicPullBack: round(maxDynamicPullBack, 4),
+    maxDynamicOvershootPx: round(maxDynamicOvershootPx, 2),
+    heldBoundPx: round(boundPx, 2), limitPx: round(limitPx, 2),
+    shots: Object.keys(probe.shots),
+    bad: bad.slice(0, 8).map((frame) => ({ ...frame, progress: round(frame.progress, 4), pullBack: round(frame.pullBack, 4), overshootPx: round(frame.overshootPx, 2), heldBoundPx: round(frame.heldBoundPx, 2) })),
+  }, measured.length > 0 && following >= MIN_FOLLOWING_FRAMES && bad.length === 0
+    && probe.frames.length < 4096 && Object.keys(probe.shots).length >= 1 + marks.length);
+}
 
 /** Desktop: spreads in landscape, mouse and keyboard. */
 async function desktopSession(browser) {
@@ -370,7 +442,21 @@ async function desktopSession(browser) {
       await writeFile(`${artifactDir}/desktop-cover-turn-${String(index).padStart(3, "0")}.png`, await page.screenshot({ type: "png" }));
     }
     await page.mouse.up();
+    await page.mouse.move(0, 0);
     record("desktop cover-turn: front cover drag frames saved for review", { fractions }, true);
+
+    // Check 6: automatic turns from the footer button, frame by frame: the
+    // rigid front cover, then a sheet of paper.
+    await page.keyboard.press("Home");
+    await session.settledAt(0);
+    await checkAutoTurn(session, "cover", 0, 2, [0.25, 0.5, 0.75]);
+    await checkAutoTurn(session, "paper", 2, 4, []);
+    record("desktop auto-turns: dynamic maxima", {
+      maxDynamicPullBack: Number(Math.max(...dynamicTurns.map((turn) => turn.maxDynamicPullBack ?? -Infinity)).toFixed(4)),
+      maxDynamicOvershootPx: Number(Math.max(...dynamicTurns.map((turn) => turn.maxDynamicOvershootPx ?? -Infinity)).toFixed(2)),
+      boundsPx: dynamicTurns.map((turn) => Number(turn.boundPx.toFixed(2))),
+      limitsPx: dynamicTurns.map((turn) => Number(turn.limitPx.toFixed(2))),
+    }, dynamicTurns.length === 2);
     const maxPullBack = flights.length ? Math.max(...flights.map((flight) => flight.pullBack)) : null;
     const maxOvershootPx = flights.length ? Math.max(...flights.map((flight) => flight.overshootPx)) : null;
     record("desktop: every sheet in flight was sampled under the pull-back cap", {

@@ -174,6 +174,59 @@ export function cappedFlightFrameTop(sheetTop: number | null, rest: BookFrame, s
   return Math.min(flightFrameTop(sheetTop, tilt), pullBackTopLimit(rest, sheets, tilt));
 }
 
+/**
+ * quick_flipbook's page curve lifts a page off its own plane by up to 0.054
+ * (world units, page height 1). Its twist (at most 1/10 mid-turn) turns each
+ * point about the page's centre line by the twist angle times its distance
+ * from the spine over |(maxX, maxY, maxZ) / 2| = √2/4, so the free edge turns
+ * by up to 2√2/10 rad and its corners, half a page deep, leave the plane by
+ * half its sine. Together: the most a sheet of paper stands off the plane
+ * through its spine.
+ */
+const PAPER_OFFSET = 0.054 + 0.5 * Math.sin((2 * Math.SQRT2) / 10);
+
+/**
+ * The highest screen-up any point of a turning sheet can reach, at any
+ * progress, curl and twist included. A board (stiffness 1) swings rigidly
+ * about the spine, so its far corner reaches screenUp(1, −0.5) exactly when it
+ * stands upright. Paper curls and twists, but no point of it lies farther from
+ * the spine than its length and its offset off the plane allow, so its top is
+ * bounded by the same corner at hypot(1, PAPER_OFFSET).
+ */
+export function turnPeakSheetTop(stiffness: number, tilt = BOOK_CAMERA_TILT): number {
+  const reach = stiffness >= 1 ? 1 : Math.hypot(1, PAPER_OFFSET);
+  return screenUp(reach, -0.5, tilt);
+}
+
+/**
+ * The frame top the camera holds through an automatic turn of a sheet with
+ * `stiffness`: the turn's peak, held under the pull-back cap. An automatic
+ * turn is deterministic once it starts, so the camera eases toward its peak
+ * from the first frame instead of chasing the sheet.
+ */
+export function autoTurnFrameTop(stiffness: number, rest: BookFrame, sheets: number, tilt = BOOK_CAMERA_TILT): number {
+  return cappedFlightFrameTop(turnPeakSheetTop(stiffness, tilt), rest, sheets, tilt);
+}
+
+/**
+ * Progress (in sheets) over which an automatic turn's camera floor rises from
+ * the rest frame to the turn's peak frame.
+ */
+export const AUTO_TURN_RISE = 0.35;
+
+/**
+ * The lowest the frame top may be `travelled` sheets into an automatic turn:
+ * it rises from `restTop` to `peakTop` along a smoothstep over
+ * `AUTO_TURN_RISE`. A damped follow alone starts too slowly to keep up with a
+ * sheet rising in a fraction of a second; the floor is scheduled by progress,
+ * so the camera reaches the peak frame before the sheet does at any frame
+ * rate, and the overshoot stays at what the cap allows a held pose.
+ */
+export function autoTurnFloorTop(travelled: number, restTop: number, peakTop: number): number {
+  const x = Math.max(0, Math.min(1, Math.abs(travelled) / AUTO_TURN_RISE));
+  return restTop + (peakTop - restTop) * x * x * (3 - 2 * x);
+}
+
 /** A frame top easing toward its target: position (screen-up) and velocity (per second). */
 export type FrameFollow = { top: number; velocity: number };
 
