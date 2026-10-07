@@ -69,7 +69,7 @@ export function bookTableHeight(sheets: number): number {
  * page blocks. A flat page stays an axis-aligned rectangle on screen, its
  * height foreshortened by cos(tilt); widths are unchanged.
  */
-export const BOOK_CAMERA_TILT = (20 * Math.PI) / 180;
+export const BOOK_CAMERA_TILT = (15 * Math.PI) / 180;
 
 /** Clearance around the book inside the frame (world units). */
 const FRAME_MARGIN = 0.05;
@@ -144,6 +144,150 @@ export function flightFrameTop(sheetTop: number | null, tilt = BOOK_CAMERA_TILT)
 }
 
 /**
+ * How far the camera may pull back while a sheet is in flight: the live
+ * frame's height exceeds the rest frame's by at most this fraction of it.
+ * Above the cap a page standing up mid-turn briefly passes the canvas top
+ * (an owner decision over strict containment).
+ */
+export const MAX_PULLBACK = 0.08;
+
+/** The frame's bottom (screen-up, margin included, before slack). */
+function frameBottom(sheets: number, tilt: number): number {
+  return screenUp(-BOOK_SHEET_SPACING * (Math.max(0, sheets) + 1), 0.5, tilt) - FRAME_MARGIN;
+}
+
+/**
+ * The highest frame top (screen-up, before slack) the pull-back cap allows
+ * for a book whose rest frame is `rest`. Once a frame is taller than the rest
+ * frame it has no slack, so this top fits a frame exactly
+ * (1 + MAX_PULLBACK) times the rest frame's height.
+ */
+export function pullBackTopLimit(rest: BookFrame, sheets: number, tilt = BOOK_CAMERA_TILT): number {
+  return frameBottom(sheets, tilt) + (1 + MAX_PULLBACK) * (rest.top - rest.bottom);
+}
+
+/**
+ * `flightFrameTop` held under the pull-back cap: the frame top the camera
+ * eases toward while a sheet is in flight.
+ */
+export function cappedFlightFrameTop(sheetTop: number | null, rest: BookFrame, sheets: number, tilt = BOOK_CAMERA_TILT): number {
+  return Math.min(flightFrameTop(sheetTop, tilt), pullBackTopLimit(rest, sheets, tilt));
+}
+
+/** Turn progresses (per direction) a paper sheet's peak is sampled at. */
+export const TURN_PEAK_SAMPLES = 64;
+/**
+ * Headroom over the highest sample (world units): between two samples 1/64 of
+ * a turn apart the measured top moves well under this.
+ */
+const TURN_PEAK_SLACK = 0.004;
+
+/**
+ * The highest screen-up a sheet with `stiffness` reaches over a whole turn,
+ * in either direction. A board (stiffness 1) swings rigidly about the spine,
+ * so its far corner peaks at screenUp(1, −0.5) as it stands upright. Paper
+ * curls and twists, and turning back its curl lifts it well above that, so
+ * its peak is measured: `measure` returns the highest screen-up of a real
+ * sheet posed by `sheetFlipPose`, sampled over the turn in both directions,
+ * plus a little headroom between samples.
+ */
+export function turnPeakSheetTop(
+  stiffness: number,
+  measure: (pose: SheetFlipPose) => number,
+  tilt = BOOK_CAMERA_TILT,
+): number {
+  if (stiffness >= 1) return screenUp(1, -0.5, tilt);
+  let top = -Infinity;
+  for (let step = 1; step < TURN_PEAK_SAMPLES; step += 1) {
+    for (const direction of [-1, 1]) {
+      top = Math.max(top, measure(sheetFlipPose(step / TURN_PEAK_SAMPLES, direction, 1, stiffness)));
+    }
+  }
+  return top + TURN_PEAK_SLACK;
+}
+
+/**
+ * The frame top the camera holds through an automatic turn whose sheet peaks
+ * at `peakSheetTop` (`turnPeakSheetTop`): that peak, held under the pull-back
+ * cap. An automatic turn is deterministic once it starts, so the camera eases
+ * toward its peak from the first frame instead of chasing the sheet.
+ */
+export function autoTurnFrameTop(peakSheetTop: number, rest: BookFrame, sheets: number, tilt = BOOK_CAMERA_TILT): number {
+  return cappedFlightFrameTop(peakSheetTop, rest, sheets, tilt);
+}
+
+/**
+ * Progress (in sheets) over which an automatic turn's camera floor rises from
+ * the rest frame to the turn's peak frame.
+ */
+export const AUTO_TURN_RISE = 0.35;
+
+/**
+ * The lowest the frame top may be `travelled` sheets into an automatic turn:
+ * it rises from `restTop` to `peakTop` along a smoothstep over
+ * `AUTO_TURN_RISE`. A damped follow alone starts too slowly to keep up with a
+ * sheet rising in a fraction of a second; the floor is scheduled by progress,
+ * so the camera reaches the peak frame before the sheet does at any frame
+ * rate, and the overshoot stays at what the cap allows a held pose.
+ */
+export function autoTurnFloorTop(travelled: number, restTop: number, peakTop: number): number {
+  const x = Math.max(0, Math.min(1, Math.abs(travelled) / AUTO_TURN_RISE));
+  return restTop + (peakTop - restTop) * x * x * (3 - 2 * x);
+}
+
+/** A frame top easing toward its target: position (screen-up) and velocity (per second). */
+export type FrameFollow = { top: number; velocity: number };
+
+/** Below this distance (world units) and speed (world units/s) the follow lands. */
+export const FRAME_FOLLOW_EPSILON = 1e-4;
+
+/**
+ * One step of a critically damped follow of `target` at `rate` (1 / time
+ * constant) over `delta` seconds. The step is the exact solution for a target
+ * held over the step, so it is stable for any `delta` and two half steps equal
+ * one whole step. The top stays within [floor, ceiling] (the rest frame and
+ * the pull-back cap), which kills velocity carried past either, and lands
+ * exactly on the target once both distance and speed are under
+ * `FRAME_FOLLOW_EPSILON`. A NaN top (never framed) lands at once. Writes into
+ * `follow` and returns it.
+ */
+export function stepFrameFollow(
+  follow: FrameFollow,
+  target: number,
+  floor: number,
+  ceiling: number,
+  rate: number,
+  delta: number,
+): FrameFollow {
+  if (Number.isNaN(follow.top) || !(delta > 0)) {
+    if (Number.isNaN(follow.top)) {
+      follow.top = target;
+      follow.velocity = 0;
+    }
+    return follow;
+  }
+  const offset = follow.top - target;
+  const decay = Math.exp(-rate * delta);
+  const drift = (follow.velocity + rate * offset) * delta;
+  let top = target + (offset + drift) * decay;
+  let velocity = (follow.velocity - rate * drift) * decay;
+  if (top > ceiling) {
+    top = ceiling;
+    velocity = Math.min(0, velocity);
+  } else if (top < floor) {
+    top = floor;
+    velocity = Math.max(0, velocity);
+  }
+  if (Math.abs(top - target) < FRAME_FOLLOW_EPSILON && Math.abs(velocity) < FRAME_FOLLOW_EPSILON) {
+    top = target;
+    velocity = 0;
+  }
+  follow.top = top;
+  follow.velocity = velocity;
+  return follow;
+}
+
+/**
  * Fit a frame whose top (screen-up, margin included) is `top`. It writes into
  * `out` when given, so a caller framing every rendered frame allocates nothing.
  */
@@ -156,7 +300,7 @@ export function fitBookFrame(
   tilt = BOOK_CAMERA_TILT,
   out: BookFrame = { top: 0, bottom: 0, halfWidth: 0 },
 ): BookFrame {
-  const bottom = screenUp(-BOOK_SHEET_SPACING * (Math.max(0, sheets) + 1), 0.5, tilt) - FRAME_MARGIN;
+  const bottom = frameBottom(sheets, tilt);
   const width = (orientation === "landscape" ? pageWidth * 2 : pageWidth) * FRAME_WIDTH_PADDING;
   const safeAspect = Math.max(aspect, 1e-3);
   const height = Math.max(top - bottom, width / safeAspect);

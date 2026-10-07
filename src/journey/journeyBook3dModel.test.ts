@@ -1,16 +1,25 @@
+import { createRequire } from "node:module";
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import {
+  AUTO_TURN_RISE,
+  autoTurnFloorTop,
+  autoTurnFrameTop,
+  turnPeakSheetTop,
   BOOK_CAMERA_TILT,
   BOOK_SHEET_SPACING,
   bookFrame,
   bookTableHeight,
+  cappedFlightFrameTop,
   coverKeyLight,
   EDGE_LIFT,
   faceScreenRect,
   fitBookFrame,
   flightFrameTop,
+  FRAME_FOLLOW_EPSILON,
   HOVER_EDGE_HEIGHT,
+  MAX_PULLBACK,
+  pullBackTopLimit,
   restBookFrame,
   screenUp,
   KEY_SHADOW,
@@ -20,6 +29,7 @@ import {
   sheetFlipPose,
   sheetStiffness,
   stackSheets,
+  stepFrameFollow,
   dragFraction,
   dragTurnDirection,
   edgePreviewDirection,
@@ -107,14 +117,20 @@ describe("camera fit", () => {
     expect(narrow.halfWidth).toBeCloseTo(1.6 * 1.08 / 2, 12);
   });
 
-  it("frames a settled book tightly: a page fills about 85% of a wide stage", () => {
+  it("tilts the camera 15 degrees toward the reader", () => {
+    expect(BOOK_CAMERA_TILT).toBeCloseTo((15 * Math.PI) / 180, 12);
+  });
+
+  it("frames a settled book tightly: a page fills about 87% of a wide stage", () => {
     // Without the hover headroom (lift 0) the page would fill about 90%.
-    expect(bookFrame(3, 0.8, "landscape", 4, 0).top - bookFrame(3, 0.8, "landscape", 4, 0).bottom).toBeCloseTo(1.042, 2);
+    expect(bookFrame(3, 0.8, "landscape", 4, 0).top - bookFrame(3, 0.8, "landscape", 4, 0).bottom).toBeCloseTo(1.0675, 3);
     const frame = restBookFrame(3, 0.8, "landscape", 4);
-    expect(frame.top - frame.bottom).toBeCloseTo(1.1, 2);
-    expect(cos / (frame.top - frame.bottom)).toBeGreaterThan(0.85);
-    // Against the #634 frame (lift 1), where it filled about 68%.
-    expect(cos / (bookFrame(3, 0.8, "landscape", 4, 1).top - bookFrame(3, 0.8, "landscape", 4, 1).bottom)).toBeLessThan(0.7);
+    expect(frame.top - frame.bottom).toBeCloseTo(1.112, 3);
+    expect(cos / (frame.top - frame.bottom)).toBeGreaterThan(0.86);
+    // Against the #634 frame (lift 1, at its 20 degree tilt), where it filled about 68%.
+    const tilt634 = (20 * Math.PI) / 180;
+    const frame634 = bookFrame(3, 0.8, "landscape", 4, 1, tilt634);
+    expect(Math.cos(tilt634) / (frame634.top - frame634.bottom)).toBeLessThan(0.7);
     // The near and far edges of the settled page still clear the frame.
     expect(frame.top).toBeGreaterThanOrEqual(cos / 2 + 0.05 - 1e-12);
   });
@@ -186,12 +202,13 @@ describe("camera fit", () => {
 });
 
 describe("framing a sheet in flight", () => {
-  const cos = Math.cos(BOOK_CAMERA_TILT);
-  const sin = Math.sin(BOOK_CAMERA_TILT);
   const MARGIN = 0.05;
   // The uncurled far corner of a sheet turned `t` of the way (0–1).
   const cornerUp = (t: number) => screenUp(Math.sin(Math.PI * t), -0.5);
-  const flightFrame = (t: number) => fitBookFrame(3, 0.8, "landscape", 4, flightFrameTop(t > 0 ? cornerUp(t) : null));
+  const rest = restBookFrame(3, 0.8, "landscape", 4);
+  const restHeight = rest.top - rest.bottom;
+  // The frame the camera eases toward, under the pull-back cap.
+  const flightFrame = (t: number) => fitBookFrame(3, 0.8, "landscape", 4, cappedFlightFrameTop(t > 0 ? cornerUp(t) : null, rest, 4));
 
   it("frames the rest state with room for a hover-lifted edge", () => {
     expect(HOVER_EDGE_HEIGHT).toBeCloseTo(Math.sin(Math.PI * EDGE_LIFT), 12);
@@ -207,7 +224,6 @@ describe("framing a sheet in flight", () => {
   });
 
   it("leaves the camera at rest for a hover in either direction", () => {
-    const rest = restBookFrame(3, 0.8, "landscape", 4);
     for (const t of [EDGE_LIFT, 1 - EDGE_LIFT]) {
       const frame = flightFrame(t);
       expect(frame.top).toBeCloseTo(rest.top, 12);
@@ -218,15 +234,60 @@ describe("framing a sheet in flight", () => {
     expect(flightFrameTop(Number.NaN)).toBeCloseTo(rest.top, 12);
   });
 
-  it("always keeps the measured sheet top a margin inside the frame", () => {
+  it("asks, before the cap, for the measured sheet top a margin inside the frame", () => {
     for (const sheetTop of [-1, 0, 0.4, 0.6, 0.8, 1.2]) {
       expect(flightFrameTop(sheetTop)).toBeGreaterThanOrEqual(sheetTop + MARGIN);
       expect(flightFrameTop(sheetTop)).toBeGreaterThanOrEqual(flightFrameTop(null));
     }
-    for (let step = 0; step <= 100; step += 1) {
-      const t = step / 100;
-      expect(flightFrame(t).top).toBeGreaterThanOrEqual(cornerUp(t) + MARGIN - 1e-12);
+  });
+
+  it("caps the pull-back at 8% of the rest frame for every progress, a rigid cover's full turn included", () => {
+    expect(MAX_PULLBACK).toBe(0.08);
+    for (const orientation of ["landscape", "portrait"] as const) {
+      for (const aspect of [0.5, 1, 1.9, 3]) {
+        for (const sheets of [1, 40, 200]) {
+          const restFrame = restBookFrame(aspect, 0.8, orientation, sheets);
+          const restH = restFrame.top - restFrame.bottom;
+          const limit = pullBackTopLimit(restFrame, sheets);
+          // A board turns rigidly, so its uncurled far corner is its highest
+          // point; t = 0.5 stands it upright at screenUp(1, -0.5).
+          const tops = Array.from({ length: 201 }, (_, step) => cornerUp(step / 200));
+          tops.push(screenUp(1, -0.5), 5);
+          for (const sheetTop of tops) {
+            const top = cappedFlightFrameTop(sheetTop, restFrame, sheets);
+            const frame = fitBookFrame(aspect, 0.8, orientation, sheets, top);
+            const height = frame.top - frame.bottom;
+            expect(height).toBeLessThanOrEqual((1 + MAX_PULLBACK) * restH + 1e-12);
+            expect(height).toBeGreaterThanOrEqual(restH - 1e-12);
+            if (flightFrameTop(sheetTop) <= limit) {
+              // Below the cap the sheet is still a margin inside the frame.
+              expect(frame.top).toBeGreaterThanOrEqual(sheetTop + MARGIN - 1e-12);
+            } else {
+              // At the cap the frame is exactly 8% taller than at rest.
+              expect(height).toBeCloseTo((1 + MAX_PULLBACK) * restH, 12);
+              expect(frame.top).toBeCloseTo(limit, 12);
+            }
+          }
+        }
+      }
     }
+  });
+
+  it("shrinks a mid-turn book by at most 1 - 1/1.08 (about 7.4%), down from about 20%", () => {
+    const upright = screenUp(1, -0.5);
+    // The book's on-screen size scales with restHeight / frame height.
+    const shrink = (top: number) => {
+      const frame = fitBookFrame(3, 0.8, "landscape", 4, top);
+      return 1 - restHeight / (frame.top - frame.bottom);
+    };
+    expect(shrink(cappedFlightFrameTop(upright, rest, 4))).toBeCloseTo(1 - 1 / 1.08, 12);
+    // Uncapped at 15 degrees it would shrink about 16%.
+    expect(shrink(flightFrameTop(upright))).toBeCloseTo(0.162, 3);
+    // Before: uncapped at the 20 degree tilt it shrank about 20.5%.
+    const tilt20 = (20 * Math.PI) / 180;
+    const rest20 = restBookFrame(3, 0.8, "landscape", 4, tilt20);
+    const full20 = bookFrame(3, 0.8, "landscape", 4, 1, tilt20);
+    expect(1 - (rest20.top - rest20.bottom) / (full20.top - full20.bottom)).toBeCloseTo(0.205, 3);
   });
 
   it("pulls back continuously and monotonically over a half turn, and returns as it lands", () => {
@@ -243,8 +304,9 @@ describe("framing a sheet in flight", () => {
       expect(height(t + step)).toBeLessThanOrEqual(height(t) + 1e-12);
       expect(height(t) - height(t + step)).toBeLessThan(0.005);
     }
-    expect(flightFrame(0.5).top).toBeCloseTo(sin + cos / 2 + MARGIN, 12);
-    expect(flightFrame(1)).toEqual(restBookFrame(3, 0.8, "landscape", 4));
+    // Mid-turn the cap holds the frame 8% taller than at rest.
+    expect(height(0.5)).toBeCloseTo((1 + MAX_PULLBACK) * restHeight, 12);
+    expect(flightFrame(1)).toEqual(rest);
   });
 
   it("fits the same frame from a top as from a lift", () => {
@@ -253,6 +315,167 @@ describe("framing a sheet in flight", () => {
       const top = screenUp(lift, -0.5) + MARGIN;
       expect(fitBookFrame(1.9, 0.8, "landscape", 40, top)).toEqual(frame);
     }
+  });
+});
+
+describe("an automatic turn's camera", () => {
+  const sheets = 3;
+  const rest = restBookFrame(3, 0.8, "landscape", sheets);
+  const restTop = flightFrameTop(null);
+
+  // quick_flipbook's ES build imports CommonJS three.modifiers by name, which
+  // Node rejects, so load its CommonJS build, with the three it requires.
+  const require = createRequire(import.meta.url);
+  const { FlipBook } = require("quick_flipbook") as typeof import("quick_flipbook");
+  const CjsThree = require("three") as typeof THREE;
+
+  // A real quick_flipbook book; sheet 1 is interior, as in the product.
+  const book = new FlipBook({ flipDuration: 1, pageSubdivisions: 16, yBetweenPages: BOOK_SHEET_SPACING });
+  // Its own three's material, so the book takes it as a material, not a URL.
+  const material = new CjsThree.MeshBasicMaterial();
+  book.setPages(Array.from({ length: sheets * 2 }, () => material));
+  book.scale.x = 0.8;
+  const sheet = [...book][1];
+  const point = new THREE.Vector3();
+
+  /** Pose the real sheet as the scene does and return its highest screen-up. */
+  const poseTop = (pose: ReturnType<typeof sheetFlipPose>) => {
+    sheet.rotation.z = pose.rotationZ;
+    sheet.bend.force = pose.bendForce;
+    sheet.twist.angle = pose.twistAngle;
+    (sheet.pageCurve as { intensity: number }).intensity = pose.curveIntensity;
+    sheet.modifiers.apply();
+    sheet.page.updateWorldMatrix(true, false);
+    const position = sheet.page.geometry.getAttribute("position");
+    let top = -Infinity;
+    for (let i = 0; i < position.count; i += 1) {
+      point.fromBufferAttribute(position, i).applyMatrix4(sheet.page.matrixWorld);
+      top = Math.max(top, screenUp(point.y, point.z));
+    }
+    return top;
+  };
+
+  /** The sheet's highest point over a whole turn, finely and off the peak's sample grid. */
+  const measuredTop = (stiffness: number) => {
+    let top = -Infinity;
+    for (let step = 1; step < 499; step += 1) {
+      const t = step / 499;
+      book.progress = 1 + t;
+      for (const direction of [-1, 1]) top = Math.max(top, poseTop(sheetFlipPose(t, direction, 1, stiffness)));
+    }
+    return top;
+  };
+  const peak = (stiffness: number) => turnPeakSheetTop(stiffness, poseTop);
+
+  it("peaks a rigid cover exactly where it stands upright", () => {
+    expect(peak(1)).toBeCloseTo(screenUp(1, -0.5), 12);
+    const top = measuredTop(1);
+    expect(top).toBeLessThanOrEqual(peak(1) + 1e-9);
+    expect(top).toBeGreaterThan(peak(1) - 1e-3);
+  });
+
+  it("measures a curling, twisting sheet of paper's peak from above, close", () => {
+    const top = measuredTop(0);
+    expect(top).toBeLessThanOrEqual(peak(0));
+    expect(peak(0) - top).toBeLessThan(0.006);
+    // Turning back, paper's curl lifts it above an upright board.
+    expect(top).toBeGreaterThan(peak(1));
+  });
+
+  it("holds the turn's peak under the cap, for rigid and paper alike", () => {
+    for (const stiffness of [0, 1]) {
+      const top = autoTurnFrameTop(peak(stiffness), rest, sheets);
+      expect(top).toBeLessThanOrEqual(pullBackTopLimit(rest, sheets) + 1e-12);
+      // On a wide stage the upright page needs more than the cap allows.
+      expect(top).toBeCloseTo(pullBackTopLimit(rest, sheets), 12);
+      const frame = fitBookFrame(3, 0.8, "landscape", sheets, top);
+      expect((frame.top - frame.bottom) / (rest.top - rest.bottom) - 1).toBeCloseTo(MAX_PULLBACK, 12);
+    }
+    // On a narrow stage the slack may hold the upright page without the cap.
+    const narrow = restBookFrame(0.5, 0.8, "landscape", sheets);
+    expect(autoTurnFrameTop(peak(1), narrow, sheets)).toBeLessThanOrEqual(pullBackTopLimit(narrow, sheets));
+    expect(autoTurnFrameTop(peak(1), narrow, sheets)).toBeLessThanOrEqual(flightFrameTop(peak(1)) + 1e-12);
+  });
+
+  it("raises its floor smoothly from rest to the peak frame before the sheet gets there", () => {
+    const peakTop = autoTurnFrameTop(peak(1), rest, sheets);
+    expect(autoTurnFloorTop(0, restTop, peakTop)).toBe(restTop);
+    expect(autoTurnFloorTop(AUTO_TURN_RISE, restTop, peakTop)).toBeCloseTo(peakTop, 12);
+    expect(autoTurnFloorTop(-2, restTop, peakTop)).toBeCloseTo(peakTop, 12);
+    let previous = restTop;
+    for (let step = 1; step <= 100; step += 1) {
+      const floor = autoTurnFloorTop((step / 100) * AUTO_TURN_RISE, restTop, peakTop);
+      expect(floor).toBeGreaterThanOrEqual(previous - 1e-12);
+      expect(floor - previous).toBeLessThan((peakTop - restTop) * 0.02);
+      previous = floor;
+    }
+    // A camera on the floor never crops a rising rigid cover more than the
+    // cap crops it held upright.
+    const capFrame = fitBookFrame(3, 0.8, "landscape", sheets, peakTop);
+    const heldOvershoot = (peak(1) - capFrame.top) / (capFrame.top - capFrame.bottom);
+    for (let step = 0; step <= 500; step += 1) {
+      const t = step / 1000;
+      const frame = fitBookFrame(3, 0.8, "landscape", sheets, autoTurnFloorTop(t, restTop, peakTop));
+      const overshoot = (screenUp(Math.sin(Math.PI * t), -0.5) - frame.top) / (frame.top - frame.bottom);
+      expect(overshoot).toBeLessThanOrEqual(heldOvershoot + 1e-12);
+    }
+  });
+});
+
+describe("camera follow", () => {
+  const RATE = 1 / 0.25;
+  const REST = 0.4;
+  const CAP = 0.49;
+
+  /** Steps until the follow lands exactly on `target`, or Infinity. */
+  const stepsToLand = (from: number, velocity: number, target: number, delta: number) => {
+    const follow = { top: from, velocity };
+    for (let step = 1; step <= 100_000; step += 1) {
+      stepFrameFollow(follow, target, REST, CAP, RATE, delta);
+      expect(follow.top).toBeLessThanOrEqual(CAP);
+      expect(follow.top).toBeGreaterThanOrEqual(REST);
+      if (follow.top === target && follow.velocity === 0) return step;
+    }
+    return Infinity;
+  };
+
+  it("lands exactly on the target in finite steps at any frame rate, outward and back", () => {
+    for (const delta of [1 / 120, 1 / 60, 0.04, 0.25, 1]) {
+      for (const [from, target] of [[REST, CAP], [CAP, REST], [REST, 0.45], [0.45, REST]]) {
+        const steps = stepsToLand(from, 0, target, delta);
+        expect(steps).toBeLessThan(Infinity);
+        // Under about 3 s of follow time at the 0.25 s time constant, whatever the step.
+        expect(steps * delta).toBeLessThan(3.5);
+      }
+    }
+  });
+
+  it("eases rather than snaps, and is independent of the frame rate", () => {
+    const one = stepFrameFollow({ top: REST, velocity: 0 }, CAP, REST, CAP, RATE, 0.1);
+    expect(one.top).toBeGreaterThan(REST);
+    expect(one.top).toBeLessThan(REST + (CAP - REST) * 0.2);
+    const halves = { top: REST, velocity: 0 };
+    stepFrameFollow(halves, CAP, REST, CAP, RATE, 0.05);
+    stepFrameFollow(halves, CAP, REST, CAP, RATE, 0.05);
+    expect(halves.top).toBeCloseTo(one.top, 12);
+    expect(halves.velocity).toBeCloseTo(one.velocity, 12);
+  });
+
+  it("holds the cap and the rest frame against carried velocity", () => {
+    const outward = stepFrameFollow({ top: CAP - 1e-3, velocity: 5 }, CAP, REST, CAP, RATE, 0.1);
+    expect(outward.top).toBe(CAP);
+    expect(outward.velocity).toBeLessThanOrEqual(0);
+    const back = stepFrameFollow({ top: REST + 1e-3, velocity: -5 }, REST, REST, CAP, RATE, 0.1);
+    expect(back.top).toBe(REST);
+    expect(back.velocity).toBeGreaterThanOrEqual(0);
+    expect(stepsToLand(CAP - 1e-3, 5, CAP, 1 / 60)).toBeLessThan(Infinity);
+    expect(stepsToLand(REST + 1e-3, -5, REST, 1 / 60)).toBeLessThan(Infinity);
+  });
+
+  it("lands at once when never framed, and holds still over an empty step", () => {
+    expect(stepFrameFollow({ top: Number.NaN, velocity: 3 }, 0.42, REST, CAP, RATE, 0.016)).toEqual({ top: 0.42, velocity: 0 });
+    expect(stepFrameFollow({ top: 0.45, velocity: 0.1 }, REST, REST, CAP, RATE, 0)).toEqual({ top: 0.45, velocity: 0.1 });
+    expect(FRAME_FOLLOW_EPSILON).toBeGreaterThan(0);
   });
 });
 

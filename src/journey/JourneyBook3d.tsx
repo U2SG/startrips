@@ -76,6 +76,42 @@ function canHoverFinely(): boolean {
   return fineHoverQuery.matches;
 }
 
+type QaFlight = JourneyBook3dScene["qaFlight"];
+/**
+ * DEV browser QA probe for the 3D Journey Book's camera, installed by the QA
+ * script on `window`: every rendered frame's flight readout, plus canvas
+ * captures of the frame where the sheet overshoots the canvas top the most
+ * and of the first frame at or past each progress in `marks`.
+ */
+type QaFlightProbe = {
+  frames: QaFlight[];
+  marks: number[];
+  shots: Record<string, { progress: number; dataUrl: string }>;
+  maxOvershootPx: number;
+};
+const QA_FLIGHT_FRAMES = 4096;
+
+/** DEV only: feed the QA probe, when the QA script has installed one. */
+function recordQaFlightFrame(flight: QaFlight, canvas: HTMLCanvasElement) {
+  const probe = (window as unknown as { __qaJourneyBookFlight?: QaFlightProbe }).__qaJourneyBookFlight;
+  if (!probe) return;
+  if (probe.frames.length < QA_FLIGHT_FRAMES) probe.frames.push(flight);
+  if (flight.sheetTop === null) return;
+  // Read back in the same task as the render, before the drawing buffer clears.
+  const height = flight.live.top - flight.live.bottom;
+  const overshootPx = (flight.sheetTop - flight.live.top) * (flight.cssHeight / height);
+  if (overshootPx > probe.maxOvershootPx) {
+    probe.maxOvershootPx = overshootPx;
+    probe.shots["max-overshoot"] = { progress: flight.progress, dataUrl: canvas.toDataURL("image/png") };
+  }
+  for (const mark of probe.marks) {
+    const label = `progress-${mark}`;
+    if (!probe.shots[label] && flight.progress >= mark) {
+      probe.shots[label] = { progress: flight.progress, dataUrl: canvas.toDataURL("image/png") };
+    }
+  }
+}
+
 type FaceSurface = {
   canvas: HTMLCanvasElement;
   texture: THREE.CanvasTexture;
@@ -311,7 +347,11 @@ export function JourneyBook3d({
     scene.onFrame((_, isSettled) => {
       // QA: where the sheet in flight reaches against the stage, every
       // rendered frame. DEV only; a production build writes nothing.
-      if (import.meta.env.DEV) stage.dataset.qaBookFlight = JSON.stringify(scene.qaFlight);
+      if (import.meta.env.DEV) {
+        const flight = scene.qaFlight;
+        stage.dataset.qaBookFlight = JSON.stringify(flight);
+        recordQaFlightFrame(flight, scene.renderer.domElement);
+      }
       if (isSettled !== lastSettledRef.current) {
         lastSettledRef.current = isSettled;
         setSettled(isSettled);
