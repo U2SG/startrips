@@ -14,10 +14,12 @@
 //      outside (below the near edge, outside means past the page block).
 //   3. The page block shows as a strip under the near edge of a thick stack.
 //   4. No console error and no page error.
-//   5. Desktop: a sheet in flight stays inside the canvas: under the hover
-//      lift of a page edge, at several progresses of a held drag across a
-//      sheet of paper, and through the front cover's turn. The scene reports
-//      the highest point of the sheet's deformed geometry in DEV
+//   5. Desktop: while a sheet is in flight the camera pulls back by at most
+//      MAX_PULLBACK of the rest frame's height, and the sheet passes the canvas
+//      top by no more than that cap implies: under the hover lift of a page
+//      edge, at several progresses of a held drag across a sheet of paper, and
+//      through the front cover's turn. The scene reports the highest point of
+//      the sheet's deformed geometry and both frames in DEV
 //      (`data-qa-book-flight`); a hover must not visibly pull the camera back.
 //
 // Two sessions run it. Desktop (1440x1000, mouse) reads spreads in landscape
@@ -41,7 +43,13 @@ const SHEETS = 40;
 const FACES = 80;
 // journeyBook3dModel: BOOK_SHEET_SPACING and BOOK_CAMERA_TILT.
 const SHEET_SPACING = 0.0012;
-const TILT = (20 * Math.PI) / 180;
+const TILT = (15 * Math.PI) / 180;
+// journeyBook3dModel: MAX_PULLBACK, the live frame's height over the rest
+// frame's, minus 1, may not exceed it while a sheet is in flight.
+const MAX_PULLBACK = 0.08;
+// Float and rounding slack on the pull-back fraction and the overshoot (px).
+const PULLBACK_TOLERANCE = 0.002;
+const OVERSHOOT_TOLERANCE_PX = 1;
 // Samples sit this far inside / outside an edge, clear of its antialiasing.
 const INSIDE_PX = 3;
 const OUTSIDE_PX = 4;
@@ -220,12 +228,15 @@ async function openSession(browser, name, contextOptions) {
 
   /**
    * Wait until the scene has rendered the book at `progress` (within `tolerance`)
-   * and read where the sheet in flight reaches (`data-qa-book-flight`).
+   * with the camera's damped follow landed on its frame, and read where the
+   * sheet in flight reaches (`data-qa-book-flight`).
    */
   async function flightAt(progress, tolerance) {
     await page.waitForFunction(({ want, tol }) => {
       const raw = document.querySelector(".journey-book-3d__stage")?.dataset.qaBookFlight;
-      return raw ? Math.abs(JSON.parse(raw).progress - want) <= tol : false;
+      if (!raw) return false;
+      const flight = JSON.parse(raw);
+      return Math.abs(flight.progress - want) <= tol && !flight.following;
     }, { want: progress, tol: tolerance }, { timeout: SETTLE_TIMEOUT_MS });
     return page.evaluate(() => JSON.parse(document.querySelector(".journey-book-3d__stage").dataset.qaBookFlight));
   }
@@ -234,24 +245,41 @@ async function openSession(browser, name, contextOptions) {
 }
 
 /**
- * Check 5: a sheet in flight never leaves the canvas. The scene measures the
- * highest point of the sheet's deformed geometry (curl included) and frames
- * the camera from it; `sheetTopPx` is that point below the stage's top edge.
+ * Check 5: the camera pulls back by at most MAX_PULLBACK, and the sheet in
+ * flight passes the canvas top by no more than the cap implies. The scene
+ * measures the highest point of the sheet's deformed geometry (curl included)
+ * and reports it with the live and rest frames, in screen-up world units.
+ *
+ * Pull-back: the live frame's height over the rest frame's, minus 1.
+ * Overshoot: how far the sheet rises above the live frame's top, in stage px.
+ * Its bound: how far the sheet rises above the top of a frame pulled back
+ * exactly to the cap (the rest frame's bottom plus (1 + MAX_PULLBACK) times its
+ * height; a frame taller than the rest frame has no slack), at that frame's
+ * scale, and 0 when it does not. The desktop stage is wide enough that the
+ * rest frame itself has no slack either.
  */
-const containment = [];
-function recordContainment(label, flight) {
-  const overshootPx = flight.sheetTopPx === null ? null : -flight.sheetTopPx;
-  if (overshootPx !== null) containment.push(overshootPx);
-  record(`desktop ${label}: the sheet in flight stays inside the canvas`, {
+const flights = [];
+function recordFlight(label, flight) {
+  const restHeight = flight.rest.top - flight.rest.bottom;
+  const liveHeight = flight.live.top - flight.live.bottom;
+  const pullBack = liveHeight / restHeight - 1;
+  const capHeight = (1 + MAX_PULLBACK) * restHeight;
+  const overshootPx = flight.sheetTop === null ? null : (flight.sheetTop - flight.live.top) * (flight.cssHeight / liveHeight);
+  const boundPx = flight.sheetTop === null ? null
+    : Math.max(0, flight.sheetTop - (flight.rest.bottom + capHeight)) * (flight.cssHeight / capHeight);
+  if (overshootPx !== null) flights.push({ pullBack, overshootPx });
+  record(`desktop ${label}: the camera pulls back at most ${MAX_PULLBACK * 100}% and the sheet passes the top only as far as the cap allows`, {
     progress: Number(flight.progress.toFixed(4)),
-    sheetTopPx: flight.sheetTopPx === null ? null : Number(flight.sheetTopPx.toFixed(2)),
-    overshootPx: overshootPx === null ? null : Number(overshootPx.toFixed(2)),
+    pullBack: Number(pullBack.toFixed(4)),
     pullBackPx: Number(flight.pullBackPx.toFixed(2)),
-  }, overshootPx !== null && overshootPx <= 0);
+    overshootPx: overshootPx === null ? null : Number(overshootPx.toFixed(2)),
+    boundPx: boundPx === null ? null : Number(boundPx.toFixed(2)),
+  }, overshootPx !== null && pullBack <= MAX_PULLBACK + PULLBACK_TOLERANCE
+    && overshootPx <= boundPx + OVERSHOOT_TOLERANCE_PX);
 }
 
 /** Desktop hover lift and a held drag across one interior sheet of paper. */
-async function checkFlightContainment(session) {
+async function checkFlight(session) {
   const { page } = session;
   await page.mouse.move(0, 0);
   await page.keyboard.press("Home");
@@ -265,7 +293,7 @@ async function checkFlightContainment(session) {
   // The pointer resting on the right page's outer edge lifts it (EDGE_LIFT).
   await page.mouse.move(outerX - 8, centerY);
   const hover = await session.flightAt(1 + EDGE_LIFT, 1e-6);
-  recordContainment("hover", hover);
+  recordFlight("hover", hover);
   // The rest frame already holds the uncurled hover edge; the paper's twist
   // may add a hair, but the camera must not visibly pump (under 1% of the stage).
   record("desktop hover: the lifted edge leaves the camera at rest", {
@@ -281,7 +309,7 @@ async function checkFlightContainment(session) {
   await page.mouse.down();
   for (const fraction of DRAG_FRACTIONS) {
     await page.mouse.move(grabX - rect.width * fraction, centerY, { steps: 2 });
-    recordContainment(`drag ${fraction}`, await session.flightAt(1 + fraction, 0.01));
+    recordFlight(`drag ${fraction}`, await session.flightAt(1 + fraction, 0.01));
   }
   await page.mouse.up();
   await session.settledAt(4);
@@ -322,10 +350,10 @@ async function desktopSession(browser) {
     await session.checkAlignment("last-spread", last, ["left", "right"], isPaper);
 
     // The mouse enters the stage from here on.
-    await checkFlightContainment(session);
+    await checkFlight(session);
 
     // The front cover turning as a rigid board under a held mouse drag
-    // (cover-turn-000..004.png), each pose also checked for containment.
+    // (cover-turn-000..004.png), each pose also checked against the cap.
     // While the pointer holds the cover the book's clock is paused, so each
     // frame is a fixed pose.
     await page.keyboard.press("Home");
@@ -338,15 +366,19 @@ async function desktopSession(browser) {
     await page.mouse.down();
     for (const [index, fraction] of fractions.entries()) {
       await page.mouse.move(grabX - coverRect.width * fraction, grabY, { steps: 2 });
-      recordContainment(`cover-turn ${fraction}`, await session.flightAt(fraction, 0.01));
+      recordFlight(`cover-turn ${fraction}`, await session.flightAt(fraction, 0.01));
       await writeFile(`${artifactDir}/desktop-cover-turn-${String(index).padStart(3, "0")}.png`, await page.screenshot({ type: "png" }));
     }
     await page.mouse.up();
     record("desktop cover-turn: front cover drag frames saved for review", { fractions }, true);
-    const maxOvershootPx = containment.length ? Math.max(...containment) : null;
-    record("desktop: no sheet in flight left the canvas", {
-      samples: containment.length, maxOvershootPx: maxOvershootPx === null ? null : Number(maxOvershootPx.toFixed(2)),
-    }, maxOvershootPx !== null && containment.length === 1 + DRAG_FRACTIONS.length + fractions.length && maxOvershootPx <= 0);
+    const maxPullBack = flights.length ? Math.max(...flights.map((flight) => flight.pullBack)) : null;
+    const maxOvershootPx = flights.length ? Math.max(...flights.map((flight) => flight.overshootPx)) : null;
+    record("desktop: every sheet in flight was sampled under the pull-back cap", {
+      samples: flights.length,
+      maxPullBack: maxPullBack === null ? null : Number(maxPullBack.toFixed(4)),
+      maxOvershootPx: maxOvershootPx === null ? null : Number(maxOvershootPx.toFixed(2)),
+    }, maxPullBack !== null && flights.length === 1 + DRAG_FRACTIONS.length + fractions.length
+      && maxPullBack <= MAX_PULLBACK + PULLBACK_TOLERANCE);
   } catch (error) {
     record("desktop: session ran to completion", { error: error instanceof Error ? error.stack ?? error.message : String(error) }, false);
   } finally {

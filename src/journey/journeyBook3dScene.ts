@@ -5,11 +5,13 @@ import {
   BOOK_CAMERA_TILT,
   BOOK_SHEET_SPACING,
   bookTableHeight,
+  cappedFlightFrameTop,
   coverKeyLight,
   EDGE_LIFT,
   faceScreenRect,
   fitBookFrame,
   flightFrameTop,
+  pullBackTopLimit,
   KEY_SHADOW,
   READING_KEY,
   restBookFrame,
@@ -40,6 +42,12 @@ const MAX_PIXEL_RATIO = 2;
 const PAGE_SUBDIVISIONS = 16;
 const FLIP_SECONDS = 0.78;
 const FOCUS_RATE = 9;
+/**
+ * Time constant (1/ω) of the camera's critically damped follow of the frame
+ * a sheet in flight asks for, so the pull-back and its return ease in and out.
+ */
+const CAMERA_FOLLOW_SECONDS = 0.25;
+const CAMERA_FOLLOW_RATE = 1 / CAMERA_FOLLOW_SECONDS;
 const PAPER_ROUGHNESS = 0.88;
 const SETTLED_EPSILON = 1e-4;
 /** A block's top sits this far under the top sheet of its stack. */
@@ -123,6 +131,9 @@ export class JourneyBook3dScene {
   private readonly restFrame: BookFrame = { top: 1, bottom: -1, halfWidth: 1 };
   /** The live frame's unslacked top; NaN until first framed. */
   private frameTop = Number.NaN;
+  /** The unslacked top the camera eases toward, and its follow velocity (world units/s). */
+  private frameTarget = Number.NaN;
+  private frameVelocity = 0;
   /** Measured screen-up of the sheet in flight this frame, or null. */
   private flightTop: number | null = null;
   private readonly vertex = new THREE.Vector3();
@@ -383,24 +394,59 @@ export class JourneyBook3dScene {
   private updateFrame() {
     restBookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets, BOOK_CAMERA_TILT, this.restFrame);
     this.frameTop = Number.NaN;
-    this.frameFlight();
+    this.frameVelocity = 0;
+    this.frameFlight(0);
     this.requestRender();
   }
 
   /**
-   * Frame the sheet in flight from its real, deformed geometry: the camera
-   * pulls back as it rises past the rest frame, so it never leaves the frame,
-   * and frames the book at rest again once it lands. Returns whether the
-   * camera changed.
+   * Frame the sheet in flight from its real, deformed geometry. The target
+   * pulls back as the sheet rises past the rest frame, by at most
+   * `MAX_PULLBACK`, and returns to the rest frame once it lands; the camera
+   * follows it critically damped over `delta` seconds (exact for a target held
+   * over the step, so independent of the frame rate) and never leaves the
+   * band between the rest frame and the cap. Under reduced motion, and on the
+   * first framing, it snaps. Returns whether the camera changed.
    */
-  private frameFlight(): boolean {
+  private frameFlight(delta: number): boolean {
     this.flightTop = this.measureFlight();
-    const top = flightFrameTop(this.flightTop);
+    const rest = flightFrameTop(null);
+    const limit = pullBackTopLimit(this.restFrame, this.sheets);
+    const target = cappedFlightFrameTop(this.flightTop, this.restFrame, this.sheets);
+    this.frameTarget = target;
+    let top = target;
+    if (Number.isNaN(this.frameTop) || this.reduced) {
+      this.frameVelocity = 0;
+    } else {
+      const offset = this.frameTop - target;
+      const decay = Math.exp(-CAMERA_FOLLOW_RATE * delta);
+      const drift = (this.frameVelocity + CAMERA_FOLLOW_RATE * offset) * delta;
+      top = target + (offset + drift) * decay;
+      this.frameVelocity = (this.frameVelocity - CAMERA_FOLLOW_RATE * drift) * decay;
+      // Carried velocity could overshoot: hold the cap and the rest frame.
+      if (top > limit) {
+        top = limit;
+        this.frameVelocity = Math.min(0, this.frameVelocity);
+      } else if (top < rest) {
+        top = rest;
+        this.frameVelocity = Math.max(0, this.frameVelocity);
+      }
+      if (Math.abs(top - target) < SETTLED_EPSILON && Math.abs(this.frameVelocity) < SETTLED_EPSILON) {
+        top = target;
+        this.frameVelocity = 0;
+      }
+    }
     if (top === this.frameTop) return false;
     this.frameTop = top;
-    fitBookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets, top, BOOK_CAMERA_TILT, this.frameBox);
+    if (top === rest) Object.assign(this.frameBox, this.restFrame);
+    else fitBookFrame(this.cssWidth / this.cssHeight, this.pageWidth, this.orientation, this.sheets, top, BOOK_CAMERA_TILT, this.frameBox);
     this.applyCamera();
     return true;
+  }
+
+  /** Whether the camera is still easing toward the frame the book asks for. */
+  private get cameraFollowing(): boolean {
+    return this.frameTop !== this.frameTarget;
   }
 
   /**
@@ -426,17 +472,26 @@ export class JourneyBook3dScene {
   }
 
   /**
-   * DEV QA readout: the sheet in flight's highest point and the frame's top,
-   * in stage CSS px from the stage's top edge (the sheet is inside the canvas
-   * while `sheetTopPx >= 0`), and how far the live frame pulled back.
+   * DEV QA readout: the sheet in flight's highest point (`sheetTop`) and the
+   * live and rest frames' top and bottom, all screen-up world units, with the
+   * stage height in CSS px to scale them. `sheetTopPx` is the sheet's top
+   * below the stage's top edge (inside the canvas while >= 0) and `pullBackPx`
+   * how much taller the live frame is than the rest frame, both in stage CSS
+   * px. `following` is true while the camera still eases toward its target.
    */
   get qaFlight() {
     const frame = this.frameBox;
+    const rest = this.restFrame;
     const pixelsPerUnit = this.cssHeight / (frame.top - frame.bottom);
     return {
       progress: this.book.progress,
+      following: this.cameraFollowing,
+      cssHeight: this.cssHeight,
+      sheetTop: this.flightTop,
+      live: { top: frame.top, bottom: frame.bottom },
+      rest: { top: rest.top, bottom: rest.bottom },
       sheetTopPx: this.flightTop === null ? null : (frame.top - this.flightTop) * pixelsPerUnit,
-      pullBackPx: (frame.top - frame.bottom - (this.restFrame.top - this.restFrame.bottom)) * pixelsPerUnit,
+      pullBackPx: (frame.top - frame.bottom - (rest.top - rest.bottom)) * pixelsPerUnit,
     };
   }
 
@@ -635,8 +690,9 @@ export class JourneyBook3dScene {
       if (Math.abs(this.focus - this.focusTarget) < SETTLED_EPSILON) this.focus = this.focusTarget;
     }
     // Under reduced motion a turn lands in one frame, so only a drag (which
-    // the pointer drives) keeps a sheet in flight for the camera to follow.
-    if (!this.frameFlight() && focusMoving) this.applyCamera();
+    // the pointer drives) keeps a sheet in flight, and the camera snaps to it.
+    if (!this.frameFlight(delta) && focusMoving) this.applyCamera();
+    const cameraMoving = this.cameraFollowing;
     this.updateStacks();
     const pose = coverKeyLight(this.book.progress, this.reduced);
     this.key.position.set(pose.x, pose.y, pose.z);
@@ -646,8 +702,10 @@ export class JourneyBook3dScene {
     this.dirtySheets.clear();
     this.renderer.render(this.scene, this.camera);
     const turning = !this.dragging && Math.abs(before - this.book.progress) > 1e-7;
-    this.onFrameListener?.(this.book.progress, this.isSettled());
-    if (turning || edgeMoving || focusMoving) this.frame = requestAnimationFrame(this.animate);
+    // Overlays and settled-page work wait for the camera to land on the rest
+    // frame they are placed in; input (`isSettled`) does not wait for its tail.
+    this.onFrameListener?.(this.book.progress, this.isSettled() && !cameraMoving);
+    if (turning || edgeMoving || focusMoving || cameraMoving) this.frame = requestAnimationFrame(this.animate);
   };
 
   dispose() {

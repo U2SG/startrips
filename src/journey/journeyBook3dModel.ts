@@ -69,7 +69,7 @@ export function bookTableHeight(sheets: number): number {
  * page blocks. A flat page stays an axis-aligned rectangle on screen, its
  * height foreshortened by cos(tilt); widths are unchanged.
  */
-export const BOOK_CAMERA_TILT = (20 * Math.PI) / 180;
+export const BOOK_CAMERA_TILT = (15 * Math.PI) / 180;
 
 /** Clearance around the book inside the frame (world units). */
 const FRAME_MARGIN = 0.05;
@@ -144,6 +144,37 @@ export function flightFrameTop(sheetTop: number | null, tilt = BOOK_CAMERA_TILT)
 }
 
 /**
+ * How far the camera may pull back while a sheet is in flight: the live
+ * frame's height exceeds the rest frame's by at most this fraction of it.
+ * Above the cap a page standing up mid-turn briefly passes the canvas top
+ * (an owner decision over strict containment).
+ */
+export const MAX_PULLBACK = 0.08;
+
+/** The frame's bottom (screen-up, margin included, before slack). */
+function frameBottom(sheets: number, tilt: number): number {
+  return screenUp(-BOOK_SHEET_SPACING * (Math.max(0, sheets) + 1), 0.5, tilt) - FRAME_MARGIN;
+}
+
+/**
+ * The highest frame top (screen-up, before slack) the pull-back cap allows
+ * for a book whose rest frame is `rest`. Once a frame is taller than the rest
+ * frame it has no slack, so this top fits a frame exactly
+ * (1 + MAX_PULLBACK) times the rest frame's height.
+ */
+export function pullBackTopLimit(rest: BookFrame, sheets: number, tilt = BOOK_CAMERA_TILT): number {
+  return frameBottom(sheets, tilt) + (1 + MAX_PULLBACK) * (rest.top - rest.bottom);
+}
+
+/**
+ * `flightFrameTop` held under the pull-back cap: the frame top the camera
+ * eases toward while a sheet is in flight.
+ */
+export function cappedFlightFrameTop(sheetTop: number | null, rest: BookFrame, sheets: number, tilt = BOOK_CAMERA_TILT): number {
+  return Math.min(flightFrameTop(sheetTop, tilt), pullBackTopLimit(rest, sheets, tilt));
+}
+
+/**
  * Fit a frame whose top (screen-up, margin included) is `top`. It writes into
  * `out` when given, so a caller framing every rendered frame allocates nothing.
  */
@@ -156,7 +187,7 @@ export function fitBookFrame(
   tilt = BOOK_CAMERA_TILT,
   out: BookFrame = { top: 0, bottom: 0, halfWidth: 0 },
 ): BookFrame {
-  const bottom = screenUp(-BOOK_SHEET_SPACING * (Math.max(0, sheets) + 1), 0.5, tilt) - FRAME_MARGIN;
+  const bottom = frameBottom(sheets, tilt);
   const width = (orientation === "landscape" ? pageWidth * 2 : pageWidth) * FRAME_WIDTH_PADDING;
   const safeAspect = Math.max(aspect, 1e-3);
   const height = Math.max(top - bottom, width / safeAspect);
