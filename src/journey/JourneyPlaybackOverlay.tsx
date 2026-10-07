@@ -276,7 +276,15 @@ export function JourneyPlaybackOverlay({
       && cameraFlight.revision >= arrivalGate.minCameraRevision
       && cameraFlight.settled));
   const hold = holdReason !== "none" || presentationPending || arrivalHolding;
-  const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver, homeNarrativeContext);
+  // Quick Recap plays at the tempo its plan was budgeted for; the shell may
+  // have fallen back to a faster tempo so the Stops leave room for the vias.
+  const director = useJourneyPlaybackDirector(
+    journey,
+    hold,
+    stepDurationResolver,
+    homeNarrativeContext,
+    playbackMode === "quick-recap" && quickRecapPlan ? quickRecapPlan.tempo : undefined,
+  );
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
   const decodeWaitKey = playbackDecodeWaitKey({ holdReason, stepIndex, heldAssetId });
   useEffect(() => {

@@ -463,6 +463,48 @@ describe("Quick Recap playback handoff (#127)", () => {
       if (row && !row[3]) expect(chapter.items.length).toBeGreaterThan(0);
     }
     expect(plan.omittedAssetIds.length).toBeGreaterThan(0);
+
+    // At standard tempo the Stops' legs and arrivals leave no room for a via, so
+    // the recap would show the Stops' photos only. With the faster fallback the
+    // same budget carries the photographed vias, and the plan says so in its
+    // tempo so the director starts there.
+    const viaIds = shape.filter(([, , , isStop, , , images]) => !isStop && images > 0).map(([index]) => `p${index}`);
+    expect(chapterIds.some((id) => id !== null && viaIds.includes(id))).toBe(false);
+    const withFallback = prepareQuickRecapPlaybackResult(journey, {
+      generatedAt: "2026-10-07T00:00:00.000Z",
+      tempoFallback: "fast",
+    });
+    expect(withFallback.fallbackReason).toBeNull();
+    const faster = withFallback.playback!.plan;
+    expect(faster.tempo).toBe("fast");
+    expect(faster.plannedDurationMs).toBeLessThanOrEqual(faster.targetDurationMs!);
+    expect(faster.chapters.some((chapter) => chapter.routePointId !== null && viaIds.includes(chapter.routePointId))).toBe(true);
+    for (const [index, , , isStop] of shape) {
+      if (isStop) expect(faster.chapters.map((chapter) => chapter.routePointId)).toContain(`p${index}`);
+    }
+  });
+
+  it("keeps the requested tempo when it already carries a via, and uses the fallback only to rescue an over-budget Stop floor", () => {
+    // Two Stops and one photographed via fit comfortably at standard: no fallback.
+    const roomy = fixture();
+    roomy.coverMediaAssetId = null;
+    roomy.routePoints = [point("p0", 0), { ...point("via", 1), isStop: false }, point("p2", 2)];
+    roomy.media = [media("a", "p0"), media("b", "via"), media("c", "p2")];
+    const kept = prepareQuickRecapPlaybackResult(roomy, { generatedAt: "2026-10-07T00:00:00.000Z", tempoFallback: "fast" });
+    expect(kept.playback?.plan.tempo).toBe("standard");
+    expect(kept.playback?.plan.chapters.map((chapter) => chapter.routePointId)).toContain("via");
+
+    // Ten Stops overrun the standard budget (see the fail-closed test above);
+    // at the faster tempo they fit, so the fallback turns a refusal into a plan.
+    const crowded = fixture();
+    crowded.coverMediaAssetId = null;
+    crowded.routePoints = Array.from({ length: 10 }, (_, index) => point(`p${index}`, index));
+    crowded.media = crowded.routePoints.map((routePoint, index) => media(`photo-${index}`, routePoint.id, "image/jpeg", index));
+    expect(prepareQuickRecapPlaybackResult(crowded, { generatedAt: "2026-10-07T00:00:00.000Z" }).fallbackReason).toBe("over-budget");
+    const rescued = prepareQuickRecapPlaybackResult(crowded, { generatedAt: "2026-10-07T00:00:00.000Z", tempoFallback: "fast" });
+    expect(rescued.fallbackReason).toBeNull();
+    expect(rescued.playback?.plan.tempo).toBe("fast");
+    expect(rescued.playback?.plan.chapters).toHaveLength(10);
   });
 
   it("retains shaping geometry without creating empty via chapters", () => {
