@@ -109,6 +109,14 @@ export type AutoEditPlanV1 = {
  */
 export type QuickRecapRouteGeometryV1 = {
   angularDistanceFromPrevious?: number;
+  /**
+   * Angular distance along the whole route from its first point to this one,
+   * summing every shaping point in between. A leg between two retained
+   * chapters is the difference of their values, which is exactly what Full
+   * Playback travels after the omitted chapters are gone. `angularDistanceFromPrevious`
+   * is the fallback when a caller supplies no cumulative distances.
+   */
+  routeDistanceFromStart?: number;
   noteLength?: number;
   /** Canonical chapter role: a media-bearing via has no arrival ceremony. */
   isStop?: boolean;
@@ -288,36 +296,57 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   // flat per-point estimate. A flat estimate was not a safe upper bound: it
   // under-booked every long-haul leg and every annotated stop, which is how a
   // 45 s recap came to play for 45.2 s.
-  const routeBeatMs = (routePointId: string) => {
+  // A leg is priced from the previous RETAINED chapter, not from the previous
+  // candidate: once a via is skipped, the next chapter's camera really does fly
+  // from the chapter before the skipped one, and Full Playback sums every
+  // shaping point on the way. Cumulative route distances make that exact; a
+  // caller without them falls back to the candidate-chain distance.
+  const legDistance = (routePointId: string, previousChapterId: string | null) => {
+    const geometry = input.routePointGeometry?.[routePointId];
+    const to = geometry?.routeDistanceFromStart;
+    const from = previousChapterId === null
+      ? 0
+      : input.routePointGeometry?.[previousChapterId]?.routeDistanceFromStart;
+    if (to !== undefined && from !== undefined) return Math.max(0, to - from);
+    return geometry?.angularDistanceFromPrevious;
+  };
+  const routeBeatMs = (routePointId: string, previousChapterId: string | null) => {
     const geometry = input.routePointGeometry?.[routePointId];
     return {
       cameraMs: geometry?.isStop === false && geometry.angularDistanceFromPrevious === undefined
-        ? 0 : quickRecapTiming("travel", tempo, { routeDistanceRadians: geometry?.angularDistanceFromPrevious }),
+        ? 0 : quickRecapTiming("travel", tempo, { routeDistanceRadians: legDistance(routePointId, previousChapterId) }),
       arrivalMs: geometry?.isStop === false
         ? 0 : quickRecapTiming("arrival", tempo, { noteLength: geometry?.noteLength }),
     };
   };
-  // The route beats the current selection commits to: every Stop, plus every
-  // via that currently has selected media. This is exactly the set of chapters
-  // the emission below produces, so the budget check and `plannedDurationMs`
-  // read the same clock.
-  const routeOverheadMs = (current: ReadonlyMap<string, MediaDigestV1>) => {
-    const representedVias = new Set<string>();
-    for (const digest of current.values()) {
-      if (digest.routePointId !== null && isTransit(digest.routePointId)) representedVias.add(digest.routePointId);
+  const representsVia = (current: ReadonlyMap<string, MediaDigestV1>, routePointId: string) =>
+    [...current.values()].some((digest) => digest.routePointId === routePointId);
+  // The route chapters the current selection commits to, in order: every Stop,
+  // plus every via that currently has selected media, each priced from the
+  // chapter before it. This is exactly the set the emission below produces, so
+  // the budget check and `plannedDurationMs` read the same clock.
+  const routeChapters = (current: ReadonlyMap<string, MediaDigestV1>) => {
+    const chapters: Array<{ routePointId: string; cameraMs: number; arrivalMs: number }> = [];
+    let previous: string | null = null;
+    for (const routePointId of input.routePointIds) {
+      if (isTransit(routePointId) && !representsVia(current, routePointId)) continue;
+      chapters.push({ routePointId, ...routeBeatMs(routePointId, previous) });
+      previous = routePointId;
     }
-    return input.routePointIds.reduce((sum, routePointId) => {
-      if (isTransit(routePointId) && !representedVias.has(routePointId)) return sum;
-      const beat = routeBeatMs(routePointId);
-      return sum + beat.cameraMs + beat.arrivalMs;
-    }, 0);
+    return chapters;
   };
+  const routeOverheadMs = (current: ReadonlyMap<string, MediaDigestV1>) =>
+    routeChapters(current).reduce((sum, chapter) => sum + chapter.cameraMs + chapter.arrivalMs, 0);
   const fits = (current: ReadonlyMap<string, MediaDigestV1>) =>
     routeOverheadMs(current) + selectedMediaDuration(current.values(), tempo) <= input.targetDurationMs;
   // Route order first, so a long Journey keeps its early vias rather than a
   // scattered sample; a via that does not fit is skipped whole and the greedy
   // walk continues, because a later, cheaper via may still fit.
   for (const digest of transitRepresentatives) {
+    // A pinned or cover asset on a via is a hard selection made above and is
+    // never traded for budget; only a representative this loop itself adds
+    // may be taken back out.
+    if (selected.has(digest.assetId)) continue;
     selected.set(digest.assetId, digest);
     if (!fits(selected)) selected.delete(digest.assetId);
   }
@@ -339,6 +368,7 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   }
 
   const chapterOrder: Array<string | null> = [null, ...input.routePointIds];
+  const chapterBeats = new Map(routeChapters(selected).map((chapter) => [chapter.routePointId, chapter]));
   const chapters = chapterOrder.flatMap<AutoEditPlanV1["chapters"][number]>((routePointId) => {
     let imageIndex = 0;
     const chapterItems = [...selected.values()]
@@ -371,7 +401,8 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
         items: chapterItems,
       }];
     }
-    const beat = routeBeatMs(routePointId);
+    const beat = chapterBeats.get(routePointId);
+    if (!beat) return [];
     return [{
       chapterId: `route:${routePointId}`,
       routePointId,

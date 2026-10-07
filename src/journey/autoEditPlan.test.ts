@@ -513,6 +513,59 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(stopsOnly.plannedDurationMs).toBe(4_550);
   });
 
+  it("never trades a pinned or cover asset on a via for budget", () => {
+    const routePointIds = ["tokyo", "via1"];
+    const routePointGeometry = {
+      tokyo: { isStop: true, noteLength: 0 },
+      via1: { isStop: false, angularDistanceFromPrevious: 0 },
+    };
+    const digests = [
+      digest("tokyo-1", "tokyo", 0),
+      digest("via-pin", "via1", 1, { userSignals: { isJourneyCover: false, pinnedForRecap: true, excludedFromRecap: false } }),
+    ];
+    // The Stop alone exactly fills the target, so the via cannot fit; the pin
+    // stays anyway, and the plan overruns rather than drop it (the shell's
+    // over-budget answer is the honest outcome, a silently dropped pin is not).
+    const input = { ...baseInput, routePointIds, routePointGeometry, targetDurationMs: 4_550, digests };
+    const plan = buildDeterministicQuickRecapPlan(input);
+    expect(plan.chapters.map((chapter) => [chapter.routePointId, chapter.items.map((item) => item.assetId)]))
+      .toEqual([["tokyo", ["tokyo-1"]], ["via1", ["via-pin"]]]);
+    expect(plan.omittedAssetIds).toEqual([]);
+    expect(plan.plannedDurationMs).toBeGreaterThan(4_550);
+    expect(validateAutoEditPlanV1(plan, input).errors).not.toContain("pinned asset omitted via-pin");
+  });
+
+  it("prices a retained via's leg from the previous retained chapter once an earlier via is skipped", () => {
+    const travel = (routeDistanceRadians: number) =>
+      resolveNarrativeTiming({ mode: "quick-recap", tempo: "standard", segmentKind: "travel", routeDistanceRadians });
+    // tokyo (Stop) at the route start; via1 half a radian on, with a long video
+    // as its only media; via2 a tenth of a radian past via1 with one photo. The
+    // candidate chain prices via2 from via1 (0.1 rad), but once via1 is skipped
+    // Full Playback flies to via2 from tokyo (0.6 rad), and the plan must book that.
+    const routePointIds = ["tokyo", "via1", "via2"];
+    const routePointGeometry = {
+      tokyo: { isStop: true, noteLength: 0, routeDistanceFromStart: 0 },
+      via1: { isStop: false, angularDistanceFromPrevious: 0.5, routeDistanceFromStart: 0.5 },
+      via2: { isStop: false, angularDistanceFromPrevious: 0.1, routeDistanceFromStart: 0.6 },
+    };
+    const digests = [
+      digest("tokyo-1", "tokyo", 0),
+      digest("via1-video", "via1", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 10_000 } }),
+      digest("via2-1", "via2", 2),
+    ];
+    const stopMs = quickRecapTravelMs("standard") + quickRecapArrivalMs("standard") + quickRecapDwellMs("standard", "hero");
+    const targetDurationMs = stopMs + travel(0.6) + quickRecapDwellMs("standard", "hero");
+    const input = { ...baseInput, routePointIds, routePointGeometry, targetDurationMs, digests };
+    const plan = buildDeterministicQuickRecapPlan(input);
+    expect(plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["tokyo", "via2"]);
+    expect(plan.omittedAssetIds).toEqual(["via1-video"]);
+    const via2 = plan.chapters.find((chapter) => chapter.routePointId === "via2")!;
+    expect(via2.camera.durationMs).toBe(travel(0.6));
+    expect(via2.camera.durationMs).not.toBe(travel(0.1));
+    expect(plan.plannedDurationMs).toBe(targetDurationMs);
+    expect(validateAutoEditPlanV1(plan, input).valid).toBe(true);
+  });
+
   it("keeps hero image dwell inside the intended tempo bands", () => {
     const digests = [digest("tokyo", "tokyo", 0)];
     const fast = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 10_000, tempo: "fast", digests });

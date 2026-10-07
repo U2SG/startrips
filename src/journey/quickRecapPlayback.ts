@@ -195,6 +195,9 @@ export function quickRecapRouteGeometry(
     geometry[routePointId] = {
       // The first point has no leg in front of it, so it resolves to the floor.
       ...(pointIndex > 0 ? { angularDistanceFromPrevious: playbackTravelAngularDistance(journey, pointIndex, previousIndex) } : {}),
+      // Cumulative, so the planner can price a leg from whichever chapter it
+      // actually retains before this one rather than from the next candidate.
+      routeDistanceFromStart: playbackTravelAngularDistance(journey, pointIndex, 0),
       noteLength: noteLengthFor(point),
       isStop: point.isStop,
     };
