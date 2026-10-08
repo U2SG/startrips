@@ -10,6 +10,7 @@ import {
   lte,
   notInArray,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import { db } from "../db/client";
 import {
@@ -362,52 +363,77 @@ export async function updateJourneyForAtlas(
         ));
     }
 
+    // Payload order is route order: every point's sortOrder is its index. The
+    // updates and the inserts are each one statement instead of one per
+    // point; the sortOrder bump above keeps the new 0..n-1 values clear of
+    // every stored one, so the (journey, sortOrder) unique index holds row by
+    // row inside a single statement too.
+    const updates: SQL[] = [];
+    const inserts: (typeof journeyRoutePoints.$inferInsert)[] = [];
     for (let sortOrder = 0; sortOrder < values.routePoints.length; sortOrder += 1) {
       const point = values.routePoints[sortOrder];
-      const pointValues = {
-        sortOrder,
-        latitude: point.latitude,
-        longitude: point.longitude,
-        label: point.label,
-        isStop: point.isStop,
-        occurredAt: point.occurredAt,
-        // #10 + review fix: `undefined` means "preserve the stored note" —
-        // an older/partial client that omits note must never wipe it. Only
-        // explicit null/empty (parsed to null) clears. New points default to
-        // null (no note) because the column is nullable.
-        ...(point.note !== undefined ? { note: point.note ?? null } : {}),
-        // #514: optional presentation evidence follows the same preservation
-        // rule as notes. Omitted fields from an older/partial client do not
-        // erase persisted corrections; explicit null clears them.
-        ...(point.regionContext !== undefined ? { regionContext: point.regionContext ?? null } : {}),
-        ...(point.placeRole !== undefined ? { placeRole: point.placeRole ?? null } : {}),
-        ...(point.overviewVisibility !== undefined
-          ? { overviewVisibility: point.overviewVisibility ?? null }
-          : {}),
-        ...(point.stayAnchorRoutePointId !== undefined
-          ? { stayAnchorRoutePointId: point.stayAnchorRoutePointId ?? null }
-          : {}),
-      };
       if (point.id && existingIds.has(point.id)) {
-        await transaction
-          .update(journeyRoutePoints)
-          .set(pointValues)
-          .where(and(
-            eq(journeyRoutePoints.id, point.id),
-            eq(journeyRoutePoints.journeyId, journey.id),
-          ));
+        // #10/#514: `undefined` means "preserve the stored value", so each
+        // optional column carries its own set flag rather than a value.
+        updates.push(sql`(
+          ${point.id}::uuid,
+          ${sortOrder}::integer,
+          ${point.latitude}::double precision,
+          ${point.longitude}::double precision,
+          ${point.label}::text,
+          ${point.isStop}::boolean,
+          ${point.occurredAt ?? null}::timestamptz,
+          ${point.note !== undefined}::boolean, ${point.note ?? null}::text,
+          ${point.regionContext !== undefined}::boolean, ${point.regionContext ?? null}::text,
+          ${point.placeRole !== undefined}::boolean, ${point.placeRole ?? null}::text,
+          ${point.overviewVisibility !== undefined}::boolean, ${point.overviewVisibility ?? null}::text,
+          ${point.stayAnchorRoutePointId !== undefined}::boolean, ${point.stayAnchorRoutePointId ?? null}::uuid
+        )`);
       } else {
-        await transaction.insert(journeyRoutePoints).values({
+        inserts.push({
           ...(point.id ? { id: point.id } : {}),
           journeyId: journey.id,
-          ...pointValues,
-          ...(point.note === undefined ? { note: null } : {}),
-          ...(point.regionContext === undefined ? { regionContext: null } : {}),
-          ...(point.placeRole === undefined ? { placeRole: null } : {}),
-          ...(point.overviewVisibility === undefined ? { overviewVisibility: null } : {}),
-          ...(point.stayAnchorRoutePointId === undefined ? { stayAnchorRoutePointId: null } : {}),
+          sortOrder,
+          latitude: point.latitude,
+          longitude: point.longitude,
+          label: point.label,
+          isStop: point.isStop,
+          occurredAt: point.occurredAt,
+          note: point.note ?? null,
+          regionContext: point.regionContext ?? null,
+          placeRole: point.placeRole ?? null,
+          overviewVisibility: point.overviewVisibility ?? null,
+          stayAnchorRoutePointId: point.stayAnchorRoutePointId ?? null,
         });
       }
+    }
+    if (updates.length > 0) {
+      await transaction.execute(sql`
+        update ${journeyRoutePoints} as stored set
+          sort_order = incoming.sort_order,
+          latitude = incoming.latitude,
+          longitude = incoming.longitude,
+          label = incoming.label,
+          is_stop = incoming.is_stop,
+          occurred_at = incoming.occurred_at,
+          note = case when incoming.note_set then incoming.note else stored.note end,
+          region_context = case when incoming.region_context_set then incoming.region_context else stored.region_context end,
+          place_role = case when incoming.place_role_set then incoming.place_role else stored.place_role end,
+          overview_visibility = case when incoming.overview_visibility_set
+            then incoming.overview_visibility else stored.overview_visibility end,
+          stay_anchor_route_point_id = case when incoming.stay_anchor_set
+            then incoming.stay_anchor_route_point_id else stored.stay_anchor_route_point_id end
+        from (values ${sql.join(updates, sql`, `)}) as incoming(
+          id, sort_order, latitude, longitude, label, is_stop, occurred_at,
+          note_set, note, region_context_set, region_context, place_role_set, place_role,
+          overview_visibility_set, overview_visibility, stay_anchor_set, stay_anchor_route_point_id
+        )
+        where stored.id = incoming.id
+          and stored.journey_id = ${journey.id}
+      `);
+    }
+    if (inserts.length > 0) {
+      await transaction.insert(journeyRoutePoints).values(inserts);
     }
     await pruneStaleRouteSegments(transaction, journey.id, journey.routeSegments);
     return true;
