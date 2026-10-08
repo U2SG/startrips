@@ -19,7 +19,7 @@ describe("corridor query", () => {
 
   it("uses only major classes along long driving legs and keeps legs independent", () => {
     const query = buildCorridorQuery("driving", [auckland, hamilton, { lat: -37.79, lon: 175.3 }]);
-    const legs = query.split("\n").filter((line) => /around:\d+,[-\d.]+,[-\d.]+,[-\d.]+,[-\d.]+\)/.test(line));
+    const legs = query.split("\n").filter((line) => /around:\d+,[-\d.]+,[-\d.]+,[-\d.]+,[-\d.]+\)\[highway/.test(line));
     expect(legs).toHaveLength(2);
     // ~110 km -> 15% = a 10-20 km radius, major roads only.
     expect(legs[0]).toMatch(/around:1\d{4},/);
@@ -35,6 +35,15 @@ describe("corridor query", () => {
     const leg = long.split("\n").find((line) => /around:1\d{4},/.test(line));
     expect(leg).toContain("cycleway|path|track");
     expect(leg).not.toContain("motorway");
+  });
+
+  it("includes ferry routes along every leg for every profile", () => {
+    for (const profile of ["driving", "walking", "cycling"]) {
+      const query = buildCorridorQuery(profile, [auckland, hamilton, nearby]);
+      const ferries = query.split("\n").filter((line) => line.includes("[route=ferry]"));
+      expect(ferries).toHaveLength(2);
+      expect(ferries[0]).toMatch(/way\(around:1\d{4},-36\.85,174\.76,-37\.79,175\.28\)\[route=ferry\];/);
+    }
   });
 
   it("clamps the corridor radius at 30 km and rejects corridors beyond 400 km", () => {

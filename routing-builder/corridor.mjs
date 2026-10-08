@@ -86,7 +86,11 @@ export function buildCorridorQuery(profile, rawPoints) {
     const classes = profile === "driving"
       ? (legMeters > 25_000 ? DRIVING_MAJOR : DRIVING_FULL)
       : (legMeters > 50_000 ? ACTIVE_LONG : null);
-    statements.push(`way(around:${radius},${format(from.lat)},${format(from.lon)},${format(to.lat)},${format(to.lon)})${highwayFilter(classes)};`);
+    const leg = `around:${radius},${format(from.lat)},${format(from.lon)},${format(to.lat)},${format(to.lon)}`;
+    statements.push(`way(${leg})${highwayFilter(classes)};`);
+    // Ferries are mapped as route=ferry ways, usually without highway=*. Fetch
+    // them for every profile; the profile and the member's ferry consent decide.
+    statements.push(`way(${leg})[route=ferry];`);
   }
   // One union and a single `out;` keeps the XML ordered nodes, ways, relations.
   // Restriction relations bring their member ways and nodes with `>`.
