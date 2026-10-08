@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
+import { createModuleLoader, whenIdle } from "../journey/deferredSurface";
 import { prefersReducedMotion } from "../motion/preferences";
 import { StartripsWordmark, type StartripsBrandState } from "./StartripsBrandMark";
 import { StartripsSignatureMotion } from "./StartripsSignatureMotion";
-import { StartripsGoatShow } from "./goatShow/StartripsGoatShow";
 import { SIGNATURE_MOMENT_FADE_MS, signatureMomentReducer, type SignatureMomentPhase } from "./signatureMoment";
+
+// The goat show is decorative and plays only when the wordmark is activated, so
+// it is not part of the entry chunk: it is fetched on idle once the wordmark
+// mounts, and an activation that beats the fetch starts the show on arrival.
+// If it cannot load, the static wordmark simply stays.
+const goatShow = createModuleLoader(
+  () => import("./goatShow/StartripsGoatShow").then((module) => module.StartripsGoatShow),
+);
+
+/** Fetch the goat show ahead of an activation (idle preload, tests). */
+export function loadStartripsGoatShow() {
+  return goatShow.load();
+}
 
 export function useStartripsSignatureMoment() {
   const [phase, dispatch] = useReducer(signatureMomentReducer, "idle");
@@ -39,6 +52,13 @@ export function StartripsWordmarkSignatureButton({ size, state }: {
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const { phase, play, end } = useStartripsSignatureMoment();
+  useEffect(() => whenIdle(() => {
+    loadStartripsGoatShow().catch(() => undefined);
+  }), []);
+  const playGoatShow = useCallback(() => {
+    if (goatShow.current()) play();
+    else goatShow.load().then(play, () => undefined);
+  }, [play]);
   const handleEnd = useCallback(() => {
     end();
     // Focus normally never left the button. If the platform did not focus it
@@ -54,7 +74,7 @@ export function StartripsWordmarkSignatureButton({ size, state }: {
       type="button"
       className={`startrips-signature-trigger${phase === "playing" ? " is-signature-playing" : ""}`}
       aria-label="播放 Startrips 动画"
-      onClick={play}
+      onClick={playGoatShow}
     >
       <span className="startrips-signature-trigger__art">
         <StartripsWordmark size={size} state={state} />
@@ -77,10 +97,13 @@ export function StartripsSignatureMoment({ phase, size, show = "full", className
   onEnd: () => void;
 }) {
   if (phase === "idle") return null;
+  // Only StartripsWordmarkSignatureButton plays the goat show, and it plays
+  // only once the module has arrived.
+  const GoatShow = goatShow.current();
   return (
     <span className={`startrips-signature-moment is-${phase} ${className}`} aria-hidden="true">
       {show === "goat"
-        ? <StartripsGoatShow size={size} onEnd={onEnd} />
+        ? GoatShow ? <GoatShow size={size} onEnd={onEnd} /> : null
         : <StartripsSignatureMotion clip="full" size={size} title="" onEnd={onEnd} />}
     </span>
   );
