@@ -560,10 +560,14 @@ async function main() {
     },
     fixtures: states.map(summarize),
   };
+  // A query that lands after a request's sample window would be missing from
+  // that request's count, so any leak invalidates the run like an error does.
   let errorCount = 0;
+  let leakedCount = 0;
   for (const fixture of result.fixtures) {
     for (const endpoint of Object.values(fixture.endpoints)) {
       errorCount += (endpoint as { errors: number }).errors;
+      leakedCount += (endpoint as { leakedQueries: number }).leakedQueries;
     }
   }
 
@@ -573,24 +577,25 @@ async function main() {
   const lines = [
     `## API latency harness (${MEASURED_ROUNDS} measured rounds after ${WARMUP_ROUNDS} warmup)`,
     "",
-    "| fixture | endpoint | queries (med) | p50 ms | range ms | bytes (med) | errors |",
-    "| --- | --- | ---: | ---: | --- | ---: | ---: |",
+    "| fixture | endpoint | queries (med) | p50 ms | range ms | bytes (med) | errors | leaked queries |",
+    "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: |",
   ];
   for (const fixture of result.fixtures) {
     for (const [endpoint, value] of Object.entries(fixture.endpoints)) {
       const entry = value as {
         queries: { median: number }; latencyMs: { median: number; min: number; max: number };
-        bytes: { median: number }; errors: number;
+        bytes: { median: number }; errors: number; leakedQueries: number;
       };
-      lines.push(`| ${fixture.fixture} | ${endpoint} | ${entry.queries.median} | ${entry.latencyMs.median} | ${entry.latencyMs.min}-${entry.latencyMs.max} | ${entry.bytes.median} | ${entry.errors} |`);
+      lines.push(`| ${fixture.fixture} | ${endpoint} | ${entry.queries.median} | ${entry.latencyMs.median} | ${entry.latencyMs.min}-${entry.latencyMs.max} | ${entry.bytes.median} | ${entry.errors} | ${entry.leakedQueries} |`);
     }
-    lines.push(`| ${fixture.fixture} | load path (${fixture.loadPath.requests} requests) | ${fixture.loadPath.queries.median} | ${fixture.loadPath.latencyMs.median} | ${fixture.loadPath.latencyMs.min}-${fixture.loadPath.latencyMs.max} | | |`);
+    lines.push(`| ${fixture.fixture} | load path (${fixture.loadPath.requests} requests) | ${fixture.loadPath.queries.median} | ${fixture.loadPath.latencyMs.median} | ${fixture.loadPath.latencyMs.min}-${fixture.loadPath.latencyMs.max} | | | |`);
   }
-  lines.push("", `Total errors: ${errorCount}`);
+  lines.push("", `Total errors: ${errorCount}`, `Total leaked queries: ${leakedCount}`);
   writeFileSync(SUMMARY_PATH, `${lines.join("\n")}\n`);
   console.log(lines.join("\n"));
 
   if (errorCount > 0) throw new Error(`${errorCount} measured requests failed validation`);
+  if (leakedCount > 0) throw new Error(`${leakedCount} queries ran outside their request's sample window`);
 }
 
 try {
