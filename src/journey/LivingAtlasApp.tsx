@@ -32,8 +32,6 @@ import { ShinyText } from "../motion/primitives/ShinyText";
 import { morphJourneyCard, runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { LivingAtlasGlobe, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
 import type { RouteArrivalBloomRequest } from "../scene/ParticleEarthScene";
-import { JourneyComposer } from "./JourneyComposer";
-import { ItineraryImportPanel } from "./ItineraryImportPanel";
 import type { GlobePointPick, RouteDraftPoint } from "./routeDraft";
 import {
   draftPlaybackPreviewOwnerKey,
@@ -92,11 +90,22 @@ import {
 import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
 import { JourneyStory } from "./JourneyStory";
 import { useMediaPresentationStyle } from "./mediaPresentation";
+import { deferredSurface, whenIdle } from "./deferredSurface";
 
 // #393 trial: loaded only when this device chose the Journey Book or Stream.
 const JourneyBook = lazy(() => import("./JourneyBook").then((module) => ({ default: module.JourneyBook })));
 const JourneyStream = lazy(() => import("./JourneyStream").then((module) => ({ default: module.JourneyStream })));
 const JourneyBook3d = lazy(() => import("./JourneyBook3d").then((module) => ({ default: module.JourneyBook3d })));
+// Owner-only editing surfaces stay out of the entry chunk: they are fetched on
+// idle once the Atlas can create or edit, and render synchronously from then on.
+const { Surface: JourneyComposer, preload: preloadJourneyComposer } = deferredSurface(
+  () => import("./JourneyComposer").then((module) => module.JourneyComposer),
+  <div className="journey-reader-loading" role="status">正在打开旅程编辑…</div>,
+);
+const { Surface: ItineraryImportPanel, preload: preloadItineraryImportPanel } = deferredSurface(
+  () => import("./ItineraryImportPanel").then((module) => module.ItineraryImportPanel),
+  <p role="status">正在打开行程导入…</p>,
+);
 /** A tap this recent is where the Journey was opened from (Stream's pour). */
 const STORY_ORIGIN_MAX_AGE_MS = 1500;
 import type { StoryLogicalObservation } from "./storyMediaPolicy";
@@ -1146,6 +1155,13 @@ export function LivingAtlasApp({
   } = useAtlasView();
   const quickRecapAvailable = !isReadOnlyAtlasView(capabilities);
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
+  useEffect(() => {
+    if (!canCreateJourney && !canEditJourney) return;
+    return whenIdle(() => {
+      preloadJourneyComposer();
+      if (canCreateJourney) preloadItineraryImportPanel();
+    });
+  }, [canCreateJourney, canEditJourney]);
   // #200 phase E. Both halves must hold: the capability decides the affordance
   // exists, `mutations` decides a client capable of the call exists. In shared
   // mode both are false, so no share surface is ever constructed.
