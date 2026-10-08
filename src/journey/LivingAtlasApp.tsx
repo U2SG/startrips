@@ -117,6 +117,10 @@ const { Surface: JourneyStory, preload: preloadJourneyStory } = deferredSurface(
   () => import("./JourneyStory").then((module) => module.JourneyStory),
   <div className="journey-reader-loading" role="status">正在打开旅程故事…</div>,
 );
+const { Surface: JourneyShareDialog, preload: preloadJourneyShareDialog } = deferredSurface(
+  () => import("./JourneyShareDialog").then((module) => module.JourneyShareDialog),
+  <div className="journey-reader-loading" role="status">正在打开分享…</div>,
+);
 /** A tap this recent is where the Journey was opened from (Stream's pour). */
 const STORY_ORIGIN_MAX_AGE_MS = 1500;
 import type { StoryLogicalObservation } from "./storyMediaPolicy";
@@ -124,7 +128,6 @@ import {
   cachedSoundtrackRead,
   prefetchSoundtrackRead,
 } from "./soundtrackReadCache";
-import { JourneyShareDialog } from "./JourneyShareDialog";
 import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
@@ -1181,6 +1184,10 @@ export function LivingAtlasApp({
   // exists, `mutations` decides a client capable of the call exists. In shared
   // mode both are false, so no share surface is ever constructed.
   const shareClient = capabilities.canShareAtlas ? mutations : null;
+  useEffect(() => {
+    if (!shareClient) return;
+    return whenIdle(preloadJourneyShareDialog);
+  }, [shareClient]);
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [recordedTrackSnapshot, setRecordedTrackSnapshot] = useState<RecordedTrackSnapshot | null>(null);
