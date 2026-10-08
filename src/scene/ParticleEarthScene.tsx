@@ -2023,6 +2023,13 @@ export function ParticleEarthScene({
     // counters below say what that frame did, not that one occurred.
     let sceneFrameRevision = 0;
     let qualityBuildRevision = 0;
+    // #247: cumulative render work. `renderer.info.render` resets on every
+    // render() call, so a reader sampling it sees only the last frame; these
+    // totals let a measurement window take end-minus-start work counts.
+    let renderCallsTotal = 0;
+    let renderPointsTotal = 0;
+    let particleRefinementRequests = 0;
+    let coastlineRefinementRequests = 0;
     const targetSize = new Vector2();
     const scene = new Scene();
     const camera = new PerspectiveCamera(38, 1, 0.1, 100);
@@ -2141,6 +2148,13 @@ export function ParticleEarthScene({
         quality: keyof typeof QUALITY_PROFILE;
         pixelRatio: number;
         drawingBufferPixels: number;
+        drawingBufferWidth: number;
+        drawingBufferHeight: number;
+        sceneFrameRevision: number;
+        renderCallsTotal: number;
+        renderPointsTotal: number;
+        particleRefinementRequests: number;
+        coastlineRefinementRequests: number;
         renderState: GlobeRenderState;
         lastFrameDeltaMs: number;
         particleCount: number;
@@ -2196,6 +2210,13 @@ export function ParticleEarthScene({
       quality: currentQuality,
       pixelRatio: renderer.getPixelRatio(),
       drawingBufferPixels: resolvedRenderBudget.drawingBufferPixels,
+      drawingBufferWidth: renderer.domElement.width,
+      drawingBufferHeight: renderer.domElement.height,
+      sceneFrameRevision,
+      renderCallsTotal,
+      renderPointsTotal,
+      particleRefinementRequests,
+      coastlineRefinementRequests,
       renderState: currentRenderState,
       lastFrameDeltaMs,
       particleCount: particleGeometry?.getAttribute("position")?.count ?? 0,
@@ -5154,6 +5175,7 @@ export function ParticleEarthScene({
       }
       if (requestedRefinementCacheKey === cacheKey) return;
       requestedRefinementCacheKey = cacheKey;
+      particleRefinementRequests += 1;
       const ticket = refinementBuildGuard.request(cacheKey);
       const cached = refinementCache.get(cacheKey);
       if (cached) {
@@ -5312,11 +5334,13 @@ export function ParticleEarthScene({
       };
 
       if (!localCell || !useLocalSource) {
+        coastlineRefinementRequests += 1;
         coastlineRefinementState = "building";
         applyRegionalFallback(localCell ? "50m-regional-local-backoff" : "50m-regional-foundation");
         return;
       }
 
+      coastlineRefinementRequests += 1;
       coastlineRefinementState = "loading-local";
       void (async () => {
         const manifest = await loadLocalCoastlineManifest();
@@ -6438,6 +6462,8 @@ export function ParticleEarthScene({
       }
 
       renderer.render(scene, camera);
+      renderCallsTotal += renderer.info.render.calls;
+      renderPointsTotal += renderer.info.render.points;
       if (focusSettledRevisionThisFrame !== null) {
         latestOnFocusSettled.current?.(focusSettledRevisionThisFrame);
       }
