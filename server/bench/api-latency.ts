@@ -164,6 +164,16 @@ async function createIdentity(label: string, ip: string): Promise<Identity> {
   absorbCookies(jar, organizationResponse);
   const organization = await organizationResponse.json() as { id: string };
   createdOrganizations.push(organization.id);
+  // The product client activates the new Organization explicitly
+  // (AuthGateway createOrganization), which also refreshes any cached session
+  // cookie; organization/create alone does not.
+  const activate = await app.request(`${ORIGIN}/api/auth/organization/set-active`, {
+    method: "POST",
+    headers: headers(authed, true),
+    body: JSON.stringify({ organizationId: organization.id }),
+  });
+  assertStatus(activate, [200], "organization/set-active");
+  absorbCookies(jar, activate);
 
   const bootstrap = await app.request(`${ORIGIN}/api/atlases/bootstrap`, {
     method: "POST",
