@@ -173,8 +173,13 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   });
 }) as typeof fetch;
 
+/** Later cookies replace earlier ones of the same name, as a browser does. */
 function cookieHeader(...values: string[]): string {
-  return values.filter(Boolean).join("; ");
+  const cookies = new Map<string, string>();
+  for (const entry of values.flatMap((value) => value.split("; ")).filter(Boolean)) {
+    cookies.set(entry.slice(0, entry.indexOf("=")), entry);
+  }
+  return [...cookies.values()].join("; ");
 }
 
 function jarFrom(response: Response): string {
