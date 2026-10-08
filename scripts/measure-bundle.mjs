@@ -129,6 +129,22 @@ export function manifestEagerClosure(manifest) {
   return { roots: roots.map(([key]) => key).sort(), files: [...files].sort() };
 }
 
+/** Rendered (pre-minify) bytes per package or source file across the given chunks. */
+export function aggregateModules(stats, chunkFiles, limit = 40) {
+  const totals = new Map();
+  let renderedLength = 0;
+  for (const file of chunkFiles) {
+    for (const module of stats.chunks?.[file] ?? []) {
+      totals.set(module.id, (totals.get(module.id) ?? 0) + module.renderedLength);
+      renderedLength += module.renderedLength;
+    }
+  }
+  const ranked = [...totals]
+    .map(([id, length]) => ({ id, renderedLength: length }))
+    .sort((a, b) => b.renderedLength - a.renderedLength || a.id.localeCompare(b.id));
+  return { renderedLength, modules: ranked.length, top: ranked.slice(0, limit) };
+}
+
 async function listFiles(root, directory = root) {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -247,6 +263,17 @@ export async function measureBundle(distDirectory) {
   const byKind = (records, kind) => records.filter((record) => record.kind === kind);
   const kinds = [...new Set(files.map((record) => record.kind))].sort();
 
+  // Optional attribution written by scripts/perf-bundle-build.mjs.
+  let eagerModules = null;
+  const statsText = await readFile(join(dist, ".vite", "module-stats.json"), "utf8").catch(() => null);
+  if (statsText) {
+    try {
+      eagerModules = aggregateModules(JSON.parse(statsText), byKind(eagerRecords, "js").map((record) => record.file));
+    } catch (error) {
+      errors.push(`module-stats is not valid JSON: ${error.message}`);
+    }
+  }
+
   return {
     schema: 1,
     dist: distDirectory,
@@ -268,6 +295,7 @@ export async function measureBundle(distDirectory) {
       .sort((a, b) => b.gzip - a.gzip || a.file.localeCompare(b.file))
       .slice(0, 15)
       .map(({ file, eager, gzip, raw, source }) => ({ file, eager, gzip, raw, ...(source ? { source } : {}) })),
+    ...(eagerModules ? { eagerModules } : {}),
     measured: { files: files.length, jsChunks: byKind(files, "js").length, eagerFiles: eagerRecords.length },
     files,
     errors,
@@ -300,6 +328,12 @@ export function renderSummary(report) {
     "| --- | --- | ---: |",
     ...report.largestJs.map((record) => `| \`${record.file}\` ${record.source ? `(${record.source})` : ""} | ${record.eager ? "yes" : "no"} | ${record.gzip} |`),
     "",
+    ...(report.eagerModules ? [
+      `| Eager module or package (${report.eagerModules.modules} total) | Rendered bytes |`,
+      "| --- | ---: |",
+      ...report.eagerModules.top.slice(0, 25).map((module) => `| \`${module.id}\` | ${module.renderedLength} |`),
+      "",
+    ] : []),
     `Measured ${report.measured.files} files (${report.measured.jsChunks} JS chunks, ${report.measured.eagerFiles} eager) via ${report.closureSource}; errors: ${report.errorCount}.`,
     ...report.errors.map((error) => `- ${error}`),
     "",

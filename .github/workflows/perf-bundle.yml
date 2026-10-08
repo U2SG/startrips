@@ -34,8 +34,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Test bundle measurement
         run: node --test scripts/measure-bundle.node-test.mjs
-      - name: Production build with manifest
-        run: pnpm exec vite build --manifest
+      - name: Production build with manifest and module stats
+        run: node scripts/perf-bundle-build.mjs
       - name: Measure production first-load bundle
         run: node scripts/measure-bundle.mjs --dist dist --output artifacts/perf-bundle/bundle.json --summary "$GITHUB_STEP_SUMMARY"
       - name: Upload bundle measurement

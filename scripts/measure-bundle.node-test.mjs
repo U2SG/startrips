@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { manifestEagerClosure, measureBundle, parseIndexHtml, staticImportsOf } from "./measure-bundle.mjs";
+import { aggregateModules, manifestEagerClosure, measureBundle, parseIndexHtml, staticImportsOf } from "./measure-bundle.mjs";
 
 const html = `<!doctype html><html><head>
 <script type="module" crossorigin src="/assets/index-a.js"></script>
@@ -69,6 +69,21 @@ test("measureBundle reports eager vs total and agrees across manifest, code and 
   } finally {
     await rm(dist, { recursive: true, force: true });
   }
+});
+
+test("aggregateModules sums rendered bytes over the given chunks only", () => {
+  const stats = {
+    chunks: {
+      "assets/index-a.js": [{ id: "three", renderedLength: 30 }, { id: "react-dom", renderedLength: 20 }],
+      "assets/vendor-b.js": [{ id: "three", renderedLength: 5 }],
+      "assets/lazy-d.js": [{ id: "maplibre-gl", renderedLength: 900 }],
+    },
+  };
+  assert.deepEqual(aggregateModules(stats, ["assets/index-a.js", "assets/vendor-b.js"]), {
+    renderedLength: 55,
+    modules: 2,
+    top: [{ id: "three", renderedLength: 35 }, { id: "react-dom", renderedLength: 20 }],
+  });
 });
 
 test("measureBundle fails closed on a missing dist", async () => {
