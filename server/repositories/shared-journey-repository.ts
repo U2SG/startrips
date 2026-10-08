@@ -149,6 +149,8 @@ export function buildSharedJourneyView(
         return [{
           fromRoutePointId: from.id, toRoutePointId: to.id,
           sourceKey: segment.sourceKey, revision: segment.revision, decision: segment.decision,
+          // Guests must see automatic geometry as a suggestion, as the owner does.
+          ...(candidate && segment.confirmedBy === "auto" ? { confirmedBy: "auto" as const } : {}),
           shapePoints: segment.shapePoints.map(({ id, lat, lon }) => ({ id, lat, lon })),
           confirmedCandidate: candidate ? {
             id: candidate.id, geometry: candidate.geometry.map(([lon, lat]): [number, number] => [lon, lat]),

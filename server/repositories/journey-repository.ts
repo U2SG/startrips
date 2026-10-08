@@ -21,6 +21,7 @@ import {
   mediaUploads,
 } from "../db/app-schema";
 import { routeSegmentSourceKey } from "../../src/journey/journeyModel";
+import { withAutoRouteStatus } from "../routing/auto-route-status";
 
 export type JourneyValues = Pick<
   typeof journeys.$inferInsert,
@@ -164,7 +165,7 @@ async function loadJourneys(atlasId: string, requestedIds?: readonly string[]) {
     else mediaByJourney.set(journeyId, [asset]);
   });
 
-  return journeyRows.map((journey) => ({
+  return journeyRows.map((journey) => withAutoRouteStatus({
     ...journey,
     routePoints: routesByJourney.get(journey.id) ?? [],
     media: mediaByJourney.get(journey.id) ?? [],

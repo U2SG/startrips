@@ -161,11 +161,18 @@ same pinned OSRM image.
   the [ODbL](https://www.openstreetmap.org/copyright); confirmed route
   geometry derived from it keeps that attribution requirement.
 - Per request, the builder fetches only the roads around the routing
-  coordinates: full road detail within 5 km of each point, plus a per-leg
-  corridor of 15% of the leg's direct distance (3-30 km). Long driving legs
-  (over 25 km) use motorway to secondary roads only; walking and cycling never
-  fetch motorways and let the profile decide access. Coordinates are rounded
-  to 0.01° so nearby requests share a graph. Corridors over 400 km are refused.
+  coordinates: full road detail within 25 km of each point (the nearby road
+  point search radius), plus a per-leg corridor of 15% of the leg's direct
+  distance (5-30 km). Long driving legs (over 25 km) use motorway to tertiary
+  roads plus unclassified roads, which join rural towns to the network; walking
+  and cycling never fetch motorways and let the profile decide access.
+  Coordinates are rounded to 0.01° so nearby requests share a graph. Corridors
+  over 400 km are refused.
+- When a standard graph leaves a point on an unjoined road island (a waypoint
+  snaps beyond the mode limit, OSRM finds no route, or every nearby road point
+  fails its connectivity check), the API asks once for an `extended` graph:
+  every road class of the mode along a 20% corridor (8-40 km). It is a
+  separate graph and may answer `202` like any other.
 - It then runs `osrm-extract` (the stock `/opt/car.lua` for driving; the
   `routing-profiles/` wrappers with `country-access.geojson` for walking and
   cycling), `osrm-partition`, `osrm-customize`, deletes the extract, and
@@ -191,10 +198,23 @@ same pinned OSRM image.
 `pnpm qa:routing-builder` builds the image and exercises the whole lifecycle
 against a local fixture Overpass with anonymous roads.
 
+### Automatic road snapping
+
+When driving or walking routing is configured, the API gives Route Segments
+road geometry by itself in the background, one segment at a time: walking
+below 2 km of direct distance, driving otherwise, never with ferries. It fills
+only segments without a member decision (a confirmed candidate, "none", or
+shape points), backfills existing Journeys oldest first, and stores the result
+as a suggestion (`confirmedBy: "auto"`), not as a member-confirmed route.
+Unavailable road data is retried after 15 minutes; no route, no roads or a
+too-large area are not retried until the segment's Route Points change. With
+no routing configured it does nothing and no pending status is shown. The
+candidate editor remains the way to correct a segment.
+
 ### Candidate rules
 
-The browser never calls these URLs. The member must select a mode, compare
-the suggestions and confirm one before its geometry becomes a saved route.
+The browser never calls these URLs. In the editor, the member selects a mode,
+compares the suggestions and confirms one before it becomes their route.
 All steps must match that mode; cycling may include bike-pushing steps, with
 a notice in its preview. Ferries require the member's explicit permission and
 show a notice; train steps remain rejected. Walking and

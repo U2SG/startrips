@@ -67,13 +67,18 @@ export class RoutingGraphError extends Error {
   }
 }
 
+/** "extended" asks for a richer on-demand graph when the standard one is disconnected. */
+export type RoutingGraphDetail = "standard" | "extended";
+
 /**
  * Resolves the OSRM base URL serving one profile for one request. A static
  * graph ignores the points; an on-demand graph is chosen by them.
  */
 export interface OsrmBaseUrlResolver {
   supports(profile: RoadProfile): boolean;
-  resolve(profile: RoadProfile, points: readonly RoutingCoordinate[], signal: AbortSignal): Promise<string>;
+  /** True when an extended graph exists for this profile, i.e. one escalation is worth trying. */
+  canExtend?(profile: RoadProfile): boolean;
+  resolve(profile: RoadProfile, points: readonly RoutingCoordinate[], signal: AbortSignal, detail?: RoutingGraphDetail): Promise<string>;
 }
 
 export function staticOsrmBaseUrls(baseUrls: Partial<Record<RoadProfile, string | null>>): OsrmBaseUrlResolver {

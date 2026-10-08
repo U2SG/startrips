@@ -164,7 +164,16 @@ export async function listJourneys(fetcher: Fetcher = fetch): Promise<Journey[]>
   return payload.journeys;
 }
 
-export type SignedRouteCandidate = { candidate: RouteCandidate; confirmationToken: string };
+export async function getJourney(id: string, signal: AbortSignal, fetcher: Fetcher = fetch): Promise<Journey> {
+  const payload = await requestJson<{ journey: Journey }>(
+    `/api/journeys/${encodeURIComponent(id)}`,
+    { cache: "no-store", signal },
+    fetcher,
+  );
+  return payload.journey;
+}
+
+export type SignedRouteCandidate ={ candidate: RouteCandidate; confirmationToken: string };
 
 function routeSegmentPath(journeyId: string, fromId: string, toId: string) {
   return `/api/journey-route-segments/journeys/${encodeURIComponent(journeyId)}`

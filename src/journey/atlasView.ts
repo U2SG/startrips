@@ -11,6 +11,7 @@ import {
   readMediaEvidence,
   writeMediaDisplayState,
   listHomeBasePeriods,
+  getJourney,
   listJourneys,
   listHomeBaseDismissals,
   recordHomeBaseDismissal,
@@ -191,6 +192,8 @@ export type AtlasView = {
   listHomeBaseDismissals: (() => Promise<HomeBaseDismissal[]>) | null;
   /** Owner-private precise route evidence. Guest/demo/QA modes may omit it entirely. */
   readRecordedTrackGeometry?: typeof readJourneyRecordedTrackGeometry | null;
+  /** Owner re-read of one Journey, used while automatic road snapping is pending. */
+  readJourney?: ((id: string, signal: AbortSignal) => Promise<Journey>) | null;
   readMedia: AtlasMediaRead;
   mutations: AtlasMutations | null;
 };
@@ -231,6 +234,7 @@ export function createOwnerAtlasView(
     listHomeBasePeriods: () => listHomeBasePeriods(),
     listHomeBaseDismissals: () => listHomeBaseDismissals(),
     readRecordedTrackGeometry: readJourneyRecordedTrackGeometry,
+    readJourney: (id, signal) => getJourney(id, signal),
     readMedia: (assetId) => getPrivateMediaRead(assetId),
     mutations: createOwnerAtlasMutations(capabilities.canEditJourney),
   };

@@ -141,10 +141,10 @@ export function createGraphStore({ dataDir, limits: overrides = {}, deps, now = 
   return {
     limits,
     /** Validated input in; throws CorridorError for area limits or a full queue. */
-    ensure(profile, points) {
+    ensure(profile, points, detail = "standard") {
       if (closed) throw new CorridorError("ROUTING_BUILDER_BUSY", "Builder is shutting down");
-      const query = buildCorridorQuery(profile, points);
-      const id = graphId(profile, query);
+      const query = buildCorridorQuery(profile, points, detail);
+      const id = graphId(profile, query, detail);
       let entry = graphs.get(id);
       if (entry?.state === "failed" && now() - entry.failedAt >= limits.failedTtlMs) {
         graphs.delete(id);

@@ -99,6 +99,8 @@ export type Journey = {
   routePoints: RoutePoint[];
   /** Segment-scoped geometry choices. Shared reads project only granted segments. Never Journey nodes. */
   routeSegments?: RouteSegmentRecord[];
+  /** Owner reads only, and only while automatic road snapping is configured. */
+  autoRouteSegments?: AutoRouteSegmentStatus[];
   media: JourneyMediaAsset[];
 };
 
@@ -249,6 +251,21 @@ export type RouteSegmentRecord = {
   shapePoints: RouteShapePoint[];
   decision: "open" | "none" | "confirmed";
   confirmedCandidate: RouteCandidate | null;
+  /**
+   * Absent for every member decision. "auto" marks road geometry the server
+   * chose by itself: a suggestion, never a member-confirmed route. Any member
+   * write replaces the whole record, so it becomes a member decision.
+   */
+  confirmedBy?: "auto";
+  /** The last automatic attempt that produced no road; `retryAt` absent means not until the segment changes. */
+  autoAttempt?: { at: string; code: string; retryAt?: string };
+};
+
+/** Automatic road snapping of one segment that is not done; done segments carry `confirmedBy: "auto"`. */
+export type AutoRouteSegmentStatus = {
+  sourceKey: string;
+  state: "pending" | "snapping" | "failed";
+  code?: string;
 };
 
 export type JourneyRoute = {
@@ -271,6 +288,8 @@ export type JourneyRoute = {
   segmentProvenance?: readonly RouteProvenanceTier[];
   /** Same index as point-to-point legs; holes have no stored decision. */
   routeSegments?: readonly (RouteSegmentRecord | null)[];
+  /** Same index as point-to-point legs; null when automatic snapping has nothing to report. */
+  autoRouteSegments?: readonly (AutoRouteSegmentStatus | null)[];
   /** Owner-private recorded evidence. Each server segment stays independent so
    * gaps are never bridged by presentation code. */
   recordedTrackSegments?: readonly {
