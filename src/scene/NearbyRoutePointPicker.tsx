@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { requestRoutePointSuggestions, routeCandidateAvailability } from "../journey/journeyApi";
+import { routingFailureMessage, routingPreparationCopy, type RoutingPreparationPhase } from "../journey/routingPreparation";
 import type { RoadProfile, RoutePointSuggestion, RoutingPoint } from "../journey/types";
 
 const MODES = [{ profile: "driving", label: "驾车" }, { profile: "walking", label: "步行" }, { profile: "cycling", label: "骑行" }] as const;
@@ -27,7 +28,7 @@ export function NearbyRoutePointPicker({ coordinate, neighbors, profile, allowFe
     ...(neighbors.after ? { after: { lat: neighbors.after.lat, lon: neighbors.after.lon } } : {}),
   });
   const key = JSON.stringify([coordinate.lat, coordinate.lon, neighborsKey, mode, allowFerries, retry]);
-  const [result, setResult] = useState<{ key: string; pending: boolean; points: RoutePointSuggestion[]; error: string } | null>(null);
+  const [result, setResult] = useState<{ key: string; pending: boolean; points: RoutePointSuggestion[]; error: string; phase?: RoutingPreparationPhase } | null>(null);
   const callbackRef = useRef(onSuggestionsChange);
   callbackRef.current = onSuggestionsChange;
   useEffect(() => {
@@ -44,13 +45,16 @@ export function NearbyRoutePointPicker({ coordinate, neighbors, profile, allowFe
     const controller = new AbortController();
     setResult({ key, pending: true, points: [], error: "" });
     void requestRoutePointSuggestions({ coordinate: { lat: coordinate.lat, lon: coordinate.lon },
-      neighbors: JSON.parse(neighborsKey), profile: mode, allowFerries }, controller.signal)
+      neighbors: JSON.parse(neighborsKey), profile: mode, allowFerries }, controller.signal, fetch, (phase) => {
+      if (!controller.signal.aborted) setResult({ key, pending: true, points: [], error: "", phase });
+    })
       .then((points) => {
         if (controller.signal.aborted) return;
         setResult({ key, pending: false, points, error: "" });
         callbackRef.current?.(points);
-      }).catch(() => {
-        if (!controller.signal.aborted) setResult({ key, pending: false, points: [], error: "附近道路暂时查询失败，可以重试或保留原点。" });
+      }).catch((error: unknown) => {
+        if (!controller.signal.aborted) setResult({ key, pending: false, points: [],
+          error: routingFailureMessage(error) ?? "附近道路暂时查询失败，可以重试或保留原点。" });
       });
     return () => { controller.abort(); callbackRef.current?.([]); };
   }, [allowFerries, coordinate.lat, coordinate.lon, disabled, key, mode, neighborsKey]);
@@ -67,7 +71,7 @@ export function NearbyRoutePointPicker({ coordinate, neighbors, profile, allowFe
       ) : null}
       {!mode ? <p role="status">{availabilityLoading ? "正在检查道路服务…" : profile === undefined && available.length === 0
         ? "当前道路服务不可用，可以保留原点。" : "选择一种交通方式，查看附近建议。"}</p> : null}
-      {mode && (!current || current.pending) && !disabled ? <p role="status">正在寻找附近能接上路线的点…</p> : null}
+      {mode && (!current || current.pending) && !disabled ? <p role="status">{current?.phase ? routingPreparationCopy(current.phase) : "正在寻找附近能接上路线的点…"}</p> : null}
       {current?.points.length ? <ul>
         {current.points.map((point) => <li key={point.id}><button type="button" disabled={disabled} onClick={() => onChoose(point)}>
           <strong>{point.label || "附近可通行道路"}</strong>

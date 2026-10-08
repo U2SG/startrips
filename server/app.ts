@@ -34,7 +34,7 @@ import { itineraryImportRoutes } from "./routes/itinerary-import";
 import { journeyRecordedTrackRoutes } from "./routes/journey-recorded-tracks";
 import { journeyRoutes } from "./routes/journeys";
 import { journeyRouteSegmentRoutes } from "./routes/journey-route-segments";
-import { RoutingInvalidError, RoutingUnavailableError } from "./routing/route-candidate-provider";
+import { RoutingGraphError, RoutingInvalidError, RoutingUnavailableError } from "./routing/route-candidate-provider";
 import { locationRoutes } from "./routes/locations";
 import { mapStyleRoutes } from "./routes/mapstyle";
 import { mediaEvidenceRoutes } from "./routes/media-evidence";
@@ -133,7 +133,7 @@ app.notFound((context) =>
 );
 
 app.onError((error, context) => {
-  if (error instanceof RoutingInvalidError || error instanceof RoutingUnavailableError) {
+  if (error instanceof RoutingInvalidError || error instanceof RoutingUnavailableError || error instanceof RoutingGraphError) {
     return context.json({ error: error.code, message: error.message }, error.status as 400);
   }
   if (error instanceof AtlasAccessError) {

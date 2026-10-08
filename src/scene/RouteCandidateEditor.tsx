@@ -8,6 +8,7 @@ import {
   type SignedRouteCandidate,
 } from "../journey/journeyApi";
 import { routeSegmentSourceKey } from "../journey/journeyModel";
+import { routingFailureMessage, routingPreparationCopy, type RoutingPreparationPhase } from "../journey/routingPreparation";
 import { COMPACT_MOBILE_LAYOUT_ATTRIBUTE, compactMobileLayoutMarker } from "../journey/mobileLayout";
 import type { JourneyRoute, RoadProfile, RouteAccessPoints, RoutePointSuggestion, RouteSegmentRecord, RouteShapePoint, RoutingPoint } from "../journey/types";
 import { RouteShapePointPicker } from "./RouteShapePointPicker";
@@ -44,6 +45,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [preparing, setPreparing] = useState<RoutingPreparationPhase | null>(null);
   const [editor, setEditor] = useState<HTMLDivElement | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const requestEpochRef = useRef(0);
@@ -53,6 +55,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
     pending?.abort();
     requestRef.current = null;
     if (pending) setBusy(false);
+    setPreparing(null);
     setCandidates([]);
     setCandidateIndex(0);
   }, []);
@@ -336,17 +339,21 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
     setBusy(true);
     setMessage("");
     try {
-      const response = await requestRouteCandidates(journeyId, fromId, toId, sourceKey, revision, profile, controller.signal, fetch, { allowFerries, accessPoints });
+      const response = await requestRouteCandidates(journeyId, fromId, toId, sourceKey, revision, profile, controller.signal, fetch, {
+        allowFerries, accessPoints,
+        onPreparing: (phase) => { if (epoch === requestEpochRef.current) setPreparing(phase); },
+      });
       if (epoch !== requestEpochRef.current || controller.signal.aborted) return;
       setCandidates(response.candidates);
       setCandidateIndex(0);
       if (response.candidates.length === 0) setMessage("暂未找到可用路线。试试起终点的附近可达点；跨海路段可允许轮渡，或换一种方式。原路线已保留。");
     } catch (error) {
       if (epoch !== requestEpochRef.current || controller.signal.aborted) return;
-      setMessage(error instanceof Error ? error.message : "路线请求失败，原路线已保留。");
+      setMessage(routingFailureMessage(error) ?? (error instanceof Error ? error.message : "路线请求失败，原路线已保留。"));
     } finally {
       if (epoch === requestEpochRef.current) {
         requestRef.current = null;
+        setPreparing(null);
         setBusy(false);
       }
     }
@@ -510,6 +517,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
               </div>
             </div>
           ) : null}
+          {preparing ? <p role="status">{routingPreparationCopy(preparing)}首次查看这一段需要准备道路数据，可能需要几分钟。</p> : null}
           {message ? <p role="status">{message}</p> : null}
         </div>
       )}

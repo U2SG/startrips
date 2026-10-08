@@ -41,3 +41,56 @@ export class RoutingInvalidError extends Error {
     this.status = status;
   }
 }
+
+export type RoutingGraphPhase = "queued" | "fetching" | "building";
+
+/** The road graph for this request is still being prepared; not a failure. */
+export class RoutingPreparingError extends Error {
+  readonly code = "ROUTING_PREPARING";
+  readonly phase: RoutingGraphPhase;
+  readonly retryAfterMs: number;
+  constructor(phase: RoutingGraphPhase, retryAfterMs: number) {
+    super("Road graph is being prepared");
+    this.phase = phase;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/** A specific reason the on-demand road graph could not be prepared. */
+export class RoutingGraphError extends Error {
+  readonly code: "ROUTING_DATA_UNAVAILABLE" | "ROUTING_AREA_TOO_LARGE" | "ROUTING_GRAPH_BUILD_FAILED" | "ROUTING_NO_ROADS";
+  readonly status: 422 | 503;
+  constructor(code: RoutingGraphError["code"], message: string) {
+    super(message);
+    this.code = code;
+    this.status = code === "ROUTING_AREA_TOO_LARGE" || code === "ROUTING_NO_ROADS" ? 422 : 503;
+  }
+}
+
+/**
+ * Resolves the OSRM base URL serving one profile for one request. A static
+ * graph ignores the points; an on-demand graph is chosen by them.
+ */
+export interface OsrmBaseUrlResolver {
+  supports(profile: RoadProfile): boolean;
+  resolve(profile: RoadProfile, points: readonly RoutingCoordinate[], signal: AbortSignal): Promise<string>;
+}
+
+export function staticOsrmBaseUrls(baseUrls: Partial<Record<RoadProfile, string | null>>): OsrmBaseUrlResolver {
+  return {
+    supports: (profile) => Boolean(baseUrls[profile]),
+    async resolve(profile) {
+      const baseUrl = baseUrls[profile];
+      if (!baseUrl) throw new RoutingUnavailableError("This road profile is not configured");
+      return baseUrl;
+    },
+  };
+}
+
+export function osrmBaseUrlResolver(
+  value: Partial<Record<RoadProfile, string | null>> | OsrmBaseUrlResolver,
+): OsrmBaseUrlResolver {
+  return typeof (value as OsrmBaseUrlResolver).resolve === "function"
+    ? value as OsrmBaseUrlResolver
+    : staticOsrmBaseUrls(value as Partial<Record<RoadProfile, string | null>>);
+}

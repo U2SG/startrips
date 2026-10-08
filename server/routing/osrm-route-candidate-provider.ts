@@ -4,7 +4,9 @@ import type { RoadProfile, RouteCandidate } from "../../src/journey/types";
 import { createOsrmPointSuggestions } from "./osrm-point-suggestions";
 import { compatibleRoutingStep, MAX_SELECTED_POINT_METERS, MAX_SNAP_METERS, routingDistanceMeters as meters, validProfileSnap, validRoutingCoordinate } from "./routing-coordinates";
 import {
+  osrmBaseUrlResolver,
   RoutingUnavailableError,
+  type OsrmBaseUrlResolver,
   type RouteCandidateProvider,
   type RouteCandidateRequest,
   type RoutingCoordinate,
@@ -147,16 +149,16 @@ export function acceptOsrmCandidate(
 }
 
 export function createOsrmRouteCandidateProvider(
-  baseUrls: Partial<Record<RoadProfile, string | null>>,
+  baseUrls: Partial<Record<RoadProfile, string | null>> | OsrmBaseUrlResolver,
   fetcher: typeof fetch = fetch,
 ): RouteCandidateProvider {
+  const resolver = osrmBaseUrlResolver(baseUrls);
   return {
     id: "osrm",
-    supports: (profile) => Boolean(baseUrls[profile]),
-    pointSuggestions: createOsrmPointSuggestions(baseUrls, fetcher),
+    supports: (profile) => resolver.supports(profile),
+    pointSuggestions: createOsrmPointSuggestions(resolver, fetcher),
     async candidates({ coordinates, profile, alternativesCount, signal, allowFerries = false, routingCoordinates }: RouteCandidateRequest) {
-      const baseUrl = baseUrls[profile];
-      if (!baseUrl) throw new RoutingUnavailableError("This road profile is not configured");
+      if (!resolver.supports(profile)) throw new RoutingUnavailableError("This road profile is not configured");
       const routing = routingCoordinates ?? coordinates;
       if (coordinates.length < 2 || coordinates.length > 18 || alternativesCount < 1 || alternativesCount > 3
         || coordinates.some((point) => !validRoutingCoordinate(point)) || routing.length !== coordinates.length
@@ -166,6 +168,9 @@ export function createOsrmRouteCandidateProvider(
       }
       const direct = coordinates.slice(1).reduce((sum, point, index) => sum + meters(coordinates[index], point), 0);
       if (!(direct > 0) || direct > MAX_DIRECT_METERS) return [];
+      // Resolved only after every request gate, so an out-of-range request
+      // never asks for an on-demand graph.
+      const baseUrl = await resolver.resolve(profile, routing, signal);
       const coordinatePath = routing.map(({ lon, lat }) => `${lon},${lat}`).join(";");
       const url = new URL(`${baseUrl}/route/v1/${profile}/${coordinatePath}`);
       url.searchParams.set("overview", "full");

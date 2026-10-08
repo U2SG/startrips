@@ -27,6 +27,7 @@
     "qa:globe-interaction": "node scripts/qa-globe-interaction.mjs",
     "qa:particle-spatial-lod": "node scripts/qa-particle-spatial-lod.mjs",
     "qa:route-anchoring": "node scripts/qa-route-anchoring.mjs",
+    "qa:routing-builder": "node scripts/qa-routing-builder.mjs",
     "qa:route-candidates": "node scripts/qa-routing-profiles.mjs && node scripts/qa-route-candidates.mjs",
     "qa:earth-dive": "node scripts/qa-earth-dive.mjs",
     "qa:attention-hierarchy": "node scripts/qa-attention-hierarchy.mjs",

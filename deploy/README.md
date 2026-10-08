@@ -126,8 +126,9 @@ detail view projects the active Journey's Route Points and saved segment
 geometry. Shape points appear only while editing a route; they are never Journey
 nodes. The map defaults to Chinese labels with a Chinese/bilingual switch.
 
-Road candidates require deployment-owned OSRM graphs. Configure the base URLs
-reachable from the API container for the modes you support:
+Road candidates use OSRM graphs: static deployment-owned graphs, or on-demand
+corridor graphs (below). For static graphs, configure the base URLs reachable
+from the API container for the modes you support:
 
 | Mode | Environment setting | OSRM build profile |
 | --- | --- | --- |
@@ -136,8 +137,62 @@ reachable from the API container for the modes you support:
 | Cycling | `ROUTING_OSRM_CYCLING_BASE_URL` | `bicycle.lua` |
 
 Each URL must serve its matching graph; changing the URL's profile name does
-not change a driving graph into a walking or cycling graph. An empty setting
-disables that mode's button. The public OSRM demo is not a production service.
+not change a driving graph into a walking or cycling graph. The public OSRM
+demo is not a production service.
+
+### On-demand corridor graphs
+
+A mode without a static URL uses the internal `routing-builder` service when
+`ROUTING_GRAPH_BUILDER_URL` is set (`http://routing-builder:8080` in
+Compose). A static `ROUTING_OSRM_*_BASE_URL` always takes precedence for its
+mode; a mode with neither setting keeps its button disabled.
+
+`scripts/deploy-main.py` builds and starts `routing-builder` with every release,
+waits for its health check before activating the API, and restores (or removes)
+it on rollback. To enable on-demand graphs for a mode, set the builder URL and
+clear that mode's static URL in `.env.deploy`. A host that cannot pull ghcr.io
+reliably may set `ROUTING_BUILDER_OSRM_IMAGE` to a locally loaded tag of the
+same pinned OSRM image.
+
+- Data source: [Overpass API](https://overpass-api.de/) only
+  (`ROUTING_BUILDER_OVERPASS_URL`, default `https://overpass-api.de/api/interpreter`).
+  The builder sends `User-Agent: startrips-routing-builder/1 (+APP_ORIGIN)`
+  and retries a 429/504 once. Road data is © OpenStreetMap contributors under
+  the [ODbL](https://www.openstreetmap.org/copyright); confirmed route
+  geometry derived from it keeps that attribution requirement.
+- Per request, the builder fetches only the roads around the routing
+  coordinates: full road detail within 5 km of each point, plus a per-leg
+  corridor of 15% of the leg's direct distance (3-30 km). Long driving legs
+  (over 25 km) use motorway to secondary roads only; walking and cycling never
+  fetch motorways and let the profile decide access. Coordinates are rounded
+  to 0.01° so nearby requests share a graph. Corridors over 400 km are refused.
+- It then runs `osrm-extract` (the stock `/opt/car.lua` for driving; the
+  `routing-profiles/` wrappers with `country-access.geojson` for walking and
+  cycling), `osrm-partition`, `osrm-customize`, deletes the extract, and
+  serves the graph with `osrm-routed --mmap` behind
+  `/graphs/<id>/{route,nearest}/v1/...`.
+- One build runs at a time. The first request for a new corridor answers
+  `202` while the graph is prepared; the editor polls and shows the phase.
+  Expect seconds for a town and a few minutes for a long driving corridor,
+  dominated by the Overpass transfer.
+- Limits (all environment-configurable): extract size
+  `ROUTING_BUILDER_MAX_OSM_BYTES` (400 MB), idle eviction
+  `ROUTING_BUILDER_IDLE_TTL_MS` (30 min), live graphs
+  `ROUTING_BUILDER_MAX_LIVE` (4, LRU), total graph disk
+  `ROUTING_BUILDER_MAX_DISK_BYTES` (3 GB, LRU), `mem_limit: 1536m`. A failure
+  is cached for 60 s, then retried. `/data` is wiped at start: graphs are
+  disposable, because confirmed geometry is saved with the Journey.
+- Failures are reported, never faked: `ROUTING_DATA_UNAVAILABLE` (Overpass
+  unreachable or overloaded), `ROUTING_AREA_TOO_LARGE`, `ROUTING_NO_ROADS`,
+  `ROUTING_GRAPH_BUILD_FAILED`.
+- The service publishes no ports. It joins the internal `backend` network and
+  a separate outbound-only `routing_egress` network for Overpass.
+
+`pnpm qa:routing-builder` builds the image and exercises the whole lifecycle
+against a local fixture Overpass with anonymous roads.
+
+### Candidate rules
+
 The browser never calls these URLs. The member must select a mode, compare
 the suggestions and confirm one before its geometry becomes a saved route.
 All steps must match that mode; cycling may include bike-pushing steps, with

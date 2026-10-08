@@ -381,6 +381,7 @@ fi
 old_current=$(readlink -f /opt/startrips/current)
 old_api=$(sudo docker inspect startrips-api-1 --format '{{{{.Image}}}}')
 old_web=$(sudo docker inspect startrips-web-1 --format '{{{{.Image}}}}')
+old_builder=$(sudo docker inspect startrips-routing-builder-1 --format '{{{{.Image}}}}' 2>/dev/null || true)
 rollback_needed=0
 {web_https_readiness_shell(arguments.server)}
 rollback_release() {{
@@ -404,6 +405,14 @@ rollback_release() {{
     done
     [ "$rollback_health" = healthy ] || rollback_failed=1
     sudo docker compose --env-file .env.deploy -f deploy/compose.yaml up -d --no-deps --force-recreate web || rollback_failed=1
+    # The routing builder holds only disposable graphs; restore its previous
+    # image, or remove it when the previous release did not run one.
+    if [ -n "$old_builder" ]; then
+      sudo docker image tag "$old_builder" startrips-routing-builder:latest || rollback_failed=1
+      sudo docker compose --env-file .env.deploy -f deploy/compose.yaml up -d --no-deps --force-recreate routing-builder || rollback_failed=1
+    else
+      sudo docker rm -f startrips-routing-builder-1 >/dev/null 2>&1 || true
+    fi
     sudo ln -sfn "$old_current" /opt/startrips/current || rollback_failed=1
     [ "$(sudo docker inspect startrips-api-1 --format '{{{{.Image}}}}' 2>/dev/null)" = "$old_api" ] || rollback_failed=1
     [ "$(sudo docker inspect startrips-web-1 --format '{{{{.Image}}}}' 2>/dev/null)" = "$old_web" ] || rollback_failed=1
@@ -431,10 +440,20 @@ sudo gzip -t {shlex.quote(backup_path)}
 sudo docker image tag "$old_api" {shlex.quote(rollback_api)}
 sudo docker image tag "$old_web" {shlex.quote(rollback_web)}
 cd {shlex.quote(release_path)}
-sudo docker compose --env-file .env.deploy -f deploy/compose.yaml build api migrate web
-echo "6/7 Applying migrations and activating API/Web..."
+sudo docker compose --env-file .env.deploy -f deploy/compose.yaml build api migrate web routing-builder
+echo "6/7 Applying migrations and activating routing builder/API/Web..."
 sudo docker compose --env-file .env.deploy -f deploy/compose.yaml up --no-deps --force-recreate --abort-on-container-exit --exit-code-from migrate migrate
 rollback_needed=1
+sudo docker compose --env-file .env.deploy -f deploy/compose.yaml up -d --no-deps --force-recreate routing-builder
+for attempt in $(seq 1 24); do
+  builder_health=$(sudo docker inspect startrips-routing-builder-1 --format '{{{{.State.Health.Status}}}}')
+  if [ "$builder_health" = healthy ]; then break; fi
+  if [ "$builder_health" = unhealthy ] || [ "$attempt" = 24 ]; then
+    sudo docker logs --tail 200 startrips-routing-builder-1
+    exit 1
+  fi
+  sleep 5
+done
 sudo docker compose --env-file .env.deploy -f deploy/compose.yaml up -d --no-deps --force-recreate api
 for attempt in $(seq 1 24); do
   health=$(sudo docker inspect startrips-api-1 --format '{{{{.State.Health.Status}}}}')
@@ -456,6 +475,7 @@ test "$(sudo docker inspect startrips-api-1 --format '{{{{.RestartCount}}}}')" =
 test "$(sudo docker inspect startrips-web-1 --format '{{{{.State.Status}}}}')" = running
 test "$(sudo docker inspect startrips-web-1 --format '{{{{.RestartCount}}}}')" = 0
 test "$(sudo docker inspect startrips-migrate-1 --format '{{{{.State.ExitCode}}}}')" = 0
+test "$(sudo docker inspect startrips-routing-builder-1 --format '{{{{.State.Health.Status}}}}')" = healthy
 wait_for_web_https
 sudo docker logs --since 10m --tail 120 startrips-api-1
 sudo docker logs --since 10m --tail 80 startrips-web-1

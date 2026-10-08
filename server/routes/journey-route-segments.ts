@@ -3,19 +3,20 @@ import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
 import { getRouteSegmentContext, writeRouteSegment } from "../repositories/route-segment-repository";
+import { createRoutingBaseUrlResolver } from "../routing/graph-builder-client";
 import { createOsrmRouteCandidateProvider } from "../routing/osrm-route-candidate-provider";
 import { RoutingInvalidError } from "../routing/route-candidate-provider";
 import { MAX_SELECTED_POINT_METERS, routingDistanceMeters, validRoutingCoordinate } from "../routing/routing-coordinates";
 import type { RoadProfile, RouteAccessPoints, RouteCandidate, RouteShapePoint } from "../../src/journey/types";
-import { createRoutePointSuggestionRoutes } from "./route-point-suggestions";
+import { createRoutePointSuggestionRoutes, whileRoutingPrepares } from "./route-point-suggestions";
 import { readJsonObject } from "./json-body";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const provider = createOsrmRouteCandidateProvider({
+const provider = createOsrmRouteCandidateProvider(createRoutingBaseUrlResolver({
   driving: serverConfig.routingOsrmDrivingBaseUrl,
   walking: serverConfig.routingOsrmWalkingBaseUrl,
   cycling: serverConfig.routingOsrmCyclingBaseUrl,
-});
+}, serverConfig.routingGraphBuilderUrl));
 export const journeyRouteSegmentRoutes = new Hono();
 journeyRouteSegmentRoutes.route("/", createRoutePointSuggestionRoutes(provider));
 
@@ -88,14 +89,17 @@ journeyRouteSegmentRoutes.post("/journeys/:journeyId/segments/:fromId/:toId/cand
     || (access.to && routingDistanceMeters(access.to, segment.to) > MAX_SELECTED_POINT_METERS)) {
     throw new RoutingInvalidError("INVALID_ROUTE_ACCESS_POINTS", "Selected road access points are invalid");
   }
-  const candidates = await provider.candidates({
+  const result = await whileRoutingPrepares(context, () => provider.candidates({
     coordinates,
     routingCoordinates: [access.from ?? segment.from, ...coordinates.slice(1, -1), access.to ?? segment.to],
     profile: profile!,
     alternativesCount: body.alternativesCount as 1 | 2 | 3,
     signal: context.req.raw.signal,
     allowFerries: body.allowFerries === true,
-  });
+  }));
+  // Nothing is signed while the road graph is prepared; the client retries.
+  if ("preparing" in result) return result.preparing;
+  const candidates = result.value;
   // The provider can finish after another tab edits this segment. Its result
   // must never become a candidate for that newer shape revision.
   const latest = await getRouteSegmentContext(journeyId, atlas.id, fromId, toId);
