@@ -154,7 +154,7 @@ function syntheticPoint(journeyIndex: number, pointIndex: number) {
   const radius = 5 + pointIndex * 0.2;
   return {
     latitude: Math.max(-80, Math.min(80, Math.sin(angle) * radius + (journeyIndex % 9) * 7 - 30)),
-    longitude: ((Math.cos(angle) * radius + journeyIndex * 6.9) % 360) - 180,
+    longitude: ((((Math.cos(angle) * radius + journeyIndex * 6.9) % 360) + 360) % 360) - 180,
   };
 }
 
