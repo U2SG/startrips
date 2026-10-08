@@ -20,7 +20,12 @@ const WARMUP_MS = 2_000;
 const WINDOW_MS = 2_000;
 const LONG_FRAME_MS = 50;
 const SCENE_VIEWPORT = { width: 430, height: 932, dpr: 3 };
-const FIXTURE_PATH = "/?qaState=journey-routes&qaRenderBudget=1&qaRouteOptics=1&qaMotion=animate";
+// The overview fixture has no active Route and no temporal reveal: every Route
+// is fully revealed and the camera rests on the preview's fixed focus point.
+// Route optics (an active, partly revealed Route) is enabled only for the
+// covered narrative-update case, which needs its temporal-reveal stages.
+const FIXTURE_PATH = "/?qaState=journey-routes&qaRenderBudget=1&qaMotion=animate";
+const OPTICS_QUERY = "&qaRouteOptics=1";
 
 const errors = [];
 const apiAbsent = {};
@@ -261,7 +266,7 @@ async function firstFrameAfter(page, action) {
   };
 }
 
-async function openScene({ width, height, dpr }, quality) {
+async function openScene({ width, height, dpr }, quality, extraQuery = "") {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: dpr });
   await context.addInitScript(installProbe);
   const page = await context.newPage();
@@ -284,7 +289,7 @@ async function openScene({ width, height, dpr }, quality) {
     if (message.text().startsWith("Failed to load resource:")) return;
     errors.push({ source: "console", message: message.text() });
   });
-  await page.goto(`${origin}${FIXTURE_PATH}&qaQuality=${quality}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}${FIXTURE_PATH}${extraQuery}&qaQuality=${quality}`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => {
     const debug = window.__particleEarthDebug?.();
     return Boolean(debug && debug.drawingBufferPixels > 0 && debug.particleCount > 0
@@ -300,6 +305,7 @@ async function runScenarioPass(pass) {
   const scenarios = [];
   const events = {};
   try {
+    events.overviewFixture = await fixtureState(page);
     // 1. Atlas overview, idle and with manual rotation.
     scenarios.push(await measure(page, "overview-idle"));
     scenarios.push(await measure(page, "overview-manual-drag", { during: () => drag(page, 40, 6) }));
@@ -326,17 +332,6 @@ async function runScenarioPass(pass) {
     await clickQa(page, '[data-qa-render-visibility="covered"]');
     await page.waitForTimeout(500);
     scenarios.push(await measure(page, "covered-stable", { windowMs: 3_000 }));
-    // 4b. Still covered while narrative state keeps changing underneath,
-    // as Playback does when it advances temporal reveal behind media.
-    scenarios.push(await measure(page, "covered-narrative-updates", {
-      windowMs: 3_000,
-      during: async () => {
-        for (const stage of ["playing", "rewound", "browse", "playing", "rewound", "browse", "playing", "browse"]) {
-          await clickQa(page, `[data-qa-route-optics-stage="${stage}"]`);
-          await page.waitForTimeout(300);
-        }
-      },
-    }));
     // 5b. Exit: the first frame resumes on the same canvas with a clamped delta.
     events.reveal = await firstFrameAfter(page, () => clickQa(page, '[data-qa-render-visibility="reveal"]'));
     scenarios.push(await measure(page, "revealed", { windowMs: 1_500 }));
@@ -380,7 +375,42 @@ async function runScenarioPass(pass) {
   } finally {
     await context.close();
   }
+
+  // 4b. Covered while narrative state keeps changing underneath, as Playback
+  // does when it advances temporal reveal behind media. Its own page enables
+  // Route optics; the cover is measured only once the initial Route focus
+  // flight has settled and the loop itself reports `covered`.
+  const optics = await openScene(SCENE_VIEWPORT, "high", OPTICS_QUERY);
+  try {
+    events.opticsFixture = await fixtureState(optics.page);
+    await clickQa(optics.page, '[data-qa-render-visibility="covered"]');
+    await optics.page.waitForFunction(() => window.__particleEarthDebug?.().renderState === "covered", null, { timeout: 30_000 });
+    await optics.page.waitForTimeout(500);
+    scenarios.push(await measure(optics.page, "covered-narrative-updates", {
+      windowMs: 3_000,
+      during: async () => {
+        for (const stage of ["playing", "rewound", "browse", "playing", "rewound", "browse", "playing", "browse"]) {
+          await clickQa(optics.page, `[data-qa-route-optics-stage="${stage}"]`);
+          await optics.page.waitForTimeout(300);
+        }
+      },
+    }));
+  } finally {
+    await optics.context.close();
+  }
   return { pass, viewport: SCENE_VIEWPORT, scenarios, events };
+}
+
+// What the fixture claims: active Routes and Routes carrying a temporal reveal.
+async function fixtureState(page) {
+  return page.evaluate(() => {
+    const routes = [...document.querySelectorAll(".particle-earth-route")];
+    return {
+      routes: routes.length,
+      activeRoutes: routes.filter((route) => route.classList.contains("is-active")).length,
+      temporallyRevealedRoutes: routes.filter((route) => route.dataset.temporalReveal !== undefined).length,
+    };
+  });
 }
 
 async function runBudgetMatrix() {
@@ -463,6 +493,10 @@ for (const name of VISIBLE_SCENARIOS) {
   if (!row || !(row.framesRendered?.min > 0)) proofFailures.push(`${name}: no frames rendered`);
 }
 for (const pass of passes) {
+  const overview = pass.events.overviewFixture;
+  if (!overview || overview.routes === 0 || overview.activeRoutes !== 0 || overview.temporallyRevealedRoutes !== 0) {
+    proofFailures.push(`pass ${pass.pass}: overview fixture is focused or partly revealed`);
+  }
   for (const key of ["reveal", "visibleAgain"]) {
     const event = pass.events[key];
     if (!event?.sameCanvas) proofFailures.push(`pass ${pass.pass} ${key}: canvas remounted`);
@@ -478,7 +512,7 @@ const result = {
     defaultWindowMs: WINDOW_MS,
     repetitions,
     sceneViewport: SCENE_VIEWPORT,
-    fixture: "qaState=journey-routes (synthetic QA routes), quality high, motion animate",
+    fixture: "qaState=journey-routes (synthetic QA routes), quality high, motion animate; overview has no active Route and no temporal reveal; qaRouteOptics=1 only for covered-narrative-updates",
   },
   errorCount: errors.length + (fatal ? 1 : 0),
   errors: errors.slice(0, 20),
