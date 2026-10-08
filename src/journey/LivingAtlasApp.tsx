@@ -45,7 +45,6 @@ import {
   type UnknownJourneyCreateAttempt,
 } from "./journeySaveRecovery";
 import { createArrivalBloomScope, isFirstJourneyArrival } from "./firstJourneyMoments";
-import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import { classifyHomeBasePeriodWrite, type HomeBasePeriod } from "./homeBase";
 import {
@@ -105,6 +104,12 @@ const { Surface: JourneyComposer, preload: preloadJourneyComposer } = deferredSu
 const { Surface: ItineraryImportPanel, preload: preloadItineraryImportPanel } = deferredSurface(
   () => import("./ItineraryImportPanel").then((module) => module.ItineraryImportPanel),
   <p role="status">正在打开行程导入…</p>,
+);
+// Playback is reachable in every Atlas mode; it is fetched on idle and again
+// when a playback starts, so its preparation phase covers any remaining wait.
+const { Surface: JourneyPlaybackOverlay, preload: preloadJourneyPlaybackOverlay } = deferredSurface(
+  () => import("./JourneyPlaybackOverlay").then((module) => module.JourneyPlaybackOverlay),
+  <div className="journey-reader-loading" role="status">正在打开旅程回放…</div>,
 );
 /** A tap this recent is where the Journey was opened from (Stream's pour). */
 const STORY_ORIGIN_MAX_AGE_MS = 1500;
@@ -1155,6 +1160,7 @@ export function LivingAtlasApp({
   } = useAtlasView();
   const quickRecapAvailable = !isReadOnlyAtlasView(capabilities);
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
+  useEffect(() => whenIdle(preloadJourneyPlaybackOverlay), []);
   useEffect(() => {
     if (!canCreateJourney && !canEditJourney) return;
     return whenIdle(() => {
@@ -3179,6 +3185,7 @@ export function LivingAtlasApp({
   // Pending local Files stay in the Composer and are represented only by the
   // snapshot's excluded count; persisted media can keep using ordinary reads.
   function startDraftPlaybackPreview(snapshot: DraftPlaybackPreviewSnapshot) {
+    preloadJourneyPlaybackOverlay();
     const ownerId = draftPlaybackPreviewOwnerKey(snapshot.sourceJourneyId);
     const cachedRead = cachedSoundtrackRead(snapshot.journey);
     if (playbackEntryNeedsPreparation(snapshot.journey, cachedRead)) {
@@ -3231,6 +3238,7 @@ export function LivingAtlasApp({
     requestedMode: "full" | "quick-recap" = "full",
     carriedFallbackMessage: string | null = null,
   ) {
+    preloadJourneyPlaybackOverlay();
     clearHomeBaseContext();
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;
