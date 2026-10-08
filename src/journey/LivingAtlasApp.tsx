@@ -87,7 +87,6 @@ import {
   type StorySnapState,
 } from "./playbackReturn";
 import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
-import { JourneyStory } from "./JourneyStory";
 import { useMediaPresentationStyle } from "./mediaPresentation";
 import { deferredSurface, whenIdle } from "./deferredSurface";
 
@@ -110,6 +109,13 @@ const { Surface: ItineraryImportPanel, preload: preloadItineraryImportPanel } = 
 const { Surface: JourneyPlaybackOverlay, preload: preloadJourneyPlaybackOverlay } = deferredSurface(
   () => import("./JourneyPlaybackOverlay").then((module) => module.JourneyPlaybackOverlay),
   <div className="journey-reader-loading" role="status">正在打开旅程回放…</div>,
+);
+// Story opens with a shared-element morph that needs its DOM in the same
+// commit, which the idle preload provides; only an open that beats the preload
+// shows the reader placeholder, and the morph then skips its missing target.
+const { Surface: JourneyStory, preload: preloadJourneyStory } = deferredSurface(
+  () => import("./JourneyStory").then((module) => module.JourneyStory),
+  <div className="journey-reader-loading" role="status">正在打开旅程故事…</div>,
 );
 /** A tap this recent is where the Journey was opened from (Stream's pour). */
 const STORY_ORIGIN_MAX_AGE_MS = 1500;
@@ -1160,7 +1166,10 @@ export function LivingAtlasApp({
   } = useAtlasView();
   const quickRecapAvailable = !isReadOnlyAtlasView(capabilities);
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
-  useEffect(() => whenIdle(preloadJourneyPlaybackOverlay), []);
+  useEffect(() => whenIdle(() => {
+    preloadJourneyStory();
+    preloadJourneyPlaybackOverlay();
+  }), []);
   useEffect(() => {
     if (!canCreateJourney && !canEditJourney) return;
     return whenIdle(() => {
