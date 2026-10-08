@@ -6495,8 +6495,27 @@ export function ParticleEarthScene({
       }
     };
 
+    // Outside a running frame, the scene state the visibility policy reads.
+    const resolveIdleRenderState = () => resolveGlobeRenderState({
+      documentVisible: !document.hidden,
+      opaqueMediaCover: currentVisibilityHint.opaqueMediaCover,
+      coverTransitionActive: currentVisibilityHint.coverTransitionActive,
+      focusFlightActive: isFocusFlightActive(pointFocusSettling, routeFocusSettling),
+      interactionActive: activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0 || performance.now() < wheelInteractionUntil,
+      earthDiveOverlapActive: Boolean(currentVisibilityHint.earthDiveOverlapActive),
+    });
+
     const wakeRenderLoop = () => {
       if (disposed || animationFrame !== 0 || document.hidden) return;
+      // #247: a stable opaque cover owns the loop. Narrative setters (temporal
+      // reveal, Route Point selection, routes) keep updating their latest
+      // state while covered, but must not each buy a full invisible frame; the
+      // reveal transition wakes the loop and renders that latest state.
+      const state = resolveIdleRenderState();
+      if (!globeRenderStateRunsScene(state)) {
+        currentRenderState = state;
+        return;
+      }
       lastTime = performance.now();
       lastFrameDeltaMs = 0;
       lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
@@ -6521,14 +6540,7 @@ export function ParticleEarthScene({
     };
 
     const updateRenderLoopVisibility = () => {
-      const state = resolveGlobeRenderState({
-        documentVisible: !document.hidden,
-        opaqueMediaCover: currentVisibilityHint.opaqueMediaCover,
-        coverTransitionActive: currentVisibilityHint.coverTransitionActive,
-        focusFlightActive: isFocusFlightActive(pointFocusSettling, routeFocusSettling),
-        interactionActive: activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0 || performance.now() < wheelInteractionUntil,
-        earthDiveOverlapActive: Boolean(currentVisibilityHint.earthDiveOverlapActive),
-      });
+      const state = resolveIdleRenderState();
       currentRenderState = state;
       if (globeRenderStateRunsScene(state)) wakeRenderLoop();
       else pauseRenderLoop(state);
