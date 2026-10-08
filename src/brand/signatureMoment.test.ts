@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { motionTokens } from "../motion/tokens";
-import { StartripsSignatureMoment, StartripsWordmarkSignatureButton } from "./StartripsSignatureMoment";
+import { loadStartripsGoatShow, StartripsSignatureMoment, StartripsWordmarkSignatureButton } from "./StartripsSignatureMoment";
 import { SIGNATURE_MOMENT_FADE_MS, signatureMomentReducer, type SignatureMomentEvent, type SignatureMomentPhase } from "./signatureMoment";
 
 const run = (events: SignatureMomentEvent[], from: SignatureMomentPhase = "idle") =>
@@ -48,7 +48,9 @@ describe("Startrips signature moment", () => {
     expect(markup).not.toContain("startrips-goat-show");
   });
 
-  it("plays the goat show over the wordmark's baseline and scale, drawing above it", () => {
+  it("plays the goat show over the wordmark's baseline and scale, drawing above it", async () => {
+    // The show is a deferred module; the wordmark button fetches it before playing.
+    await loadStartripsGoatShow();
     const markup = renderToStaticMarkup(createElement(StartripsSignatureMoment, {
       phase: "playing", size: 34, show: "goat", onEnd: () => undefined,
     }));

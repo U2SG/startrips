@@ -32,8 +32,6 @@ import { ShinyText } from "../motion/primitives/ShinyText";
 import { morphJourneyCard, runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { LivingAtlasGlobe, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
 import type { RouteArrivalBloomRequest } from "../scene/ParticleEarthScene";
-import { JourneyComposer } from "./JourneyComposer";
-import { ItineraryImportPanel } from "./ItineraryImportPanel";
 import type { GlobePointPick, RouteDraftPoint } from "./routeDraft";
 import {
   draftPlaybackPreviewOwnerKey,
@@ -47,7 +45,6 @@ import {
   type UnknownJourneyCreateAttempt,
 } from "./journeySaveRecovery";
 import { createArrivalBloomScope, isFirstJourneyArrival } from "./firstJourneyMoments";
-import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import { classifyHomeBasePeriodWrite, type HomeBasePeriod } from "./homeBase";
 import {
@@ -90,13 +87,40 @@ import {
   type StorySnapState,
 } from "./playbackReturn";
 import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
-import { JourneyStory } from "./JourneyStory";
 import { useMediaPresentationStyle } from "./mediaPresentation";
+import { deferredSurface, whenIdle } from "./deferredSurface";
 
 // #393 trial: loaded only when this device chose the Journey Book or Stream.
 const JourneyBook = lazy(() => import("./JourneyBook").then((module) => ({ default: module.JourneyBook })));
 const JourneyStream = lazy(() => import("./JourneyStream").then((module) => ({ default: module.JourneyStream })));
 const JourneyBook3d = lazy(() => import("./JourneyBook3d").then((module) => ({ default: module.JourneyBook3d })));
+// Owner-only editing surfaces stay out of the entry chunk: they are fetched on
+// idle once the Atlas can create or edit, and render synchronously from then on.
+const { Surface: JourneyComposer, preload: preloadJourneyComposer } = deferredSurface(
+  () => import("./JourneyComposer").then((module) => module.JourneyComposer),
+  <div className="journey-reader-loading" role="status">正在打开旅程编辑…</div>,
+);
+const { Surface: ItineraryImportPanel, preload: preloadItineraryImportPanel } = deferredSurface(
+  () => import("./ItineraryImportPanel").then((module) => module.ItineraryImportPanel),
+  <p role="status">正在打开行程导入…</p>,
+);
+// Playback is reachable in every Atlas mode; it is fetched on idle and again
+// when a playback starts, so its preparation phase covers any remaining wait.
+const { Surface: JourneyPlaybackOverlay, preload: preloadJourneyPlaybackOverlay } = deferredSurface(
+  () => import("./JourneyPlaybackOverlay").then((module) => module.JourneyPlaybackOverlay),
+  <div className="journey-reader-loading" role="status">正在打开旅程回放…</div>,
+);
+// Story opens with a shared-element morph that needs its DOM in the same
+// commit, which the idle preload provides; only an open that beats the preload
+// shows the reader placeholder, and the morph then skips its missing target.
+const { Surface: JourneyStory, preload: preloadJourneyStory } = deferredSurface(
+  () => import("./JourneyStory").then((module) => module.JourneyStory),
+  <div className="journey-reader-loading" role="status">正在打开旅程故事…</div>,
+);
+const { Surface: JourneyShareDialog, preload: preloadJourneyShareDialog } = deferredSurface(
+  () => import("./JourneyShareDialog").then((module) => module.JourneyShareDialog),
+  <div className="journey-reader-loading" role="status">正在打开分享…</div>,
+);
 /** A tap this recent is where the Journey was opened from (Stream's pour). */
 const STORY_ORIGIN_MAX_AGE_MS = 1500;
 import type { StoryLogicalObservation } from "./storyMediaPolicy";
@@ -104,7 +128,6 @@ import {
   cachedSoundtrackRead,
   prefetchSoundtrackRead,
 } from "./soundtrackReadCache";
-import { JourneyShareDialog } from "./JourneyShareDialog";
 import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
@@ -1146,10 +1169,25 @@ export function LivingAtlasApp({
   } = useAtlasView();
   const quickRecapAvailable = !isReadOnlyAtlasView(capabilities);
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
+  useEffect(() => whenIdle(() => {
+    preloadJourneyStory();
+    preloadJourneyPlaybackOverlay();
+  }), []);
+  useEffect(() => {
+    if (!canCreateJourney && !canEditJourney) return;
+    return whenIdle(() => {
+      preloadJourneyComposer();
+      if (canCreateJourney) preloadItineraryImportPanel();
+    });
+  }, [canCreateJourney, canEditJourney]);
   // #200 phase E. Both halves must hold: the capability decides the affordance
   // exists, `mutations` decides a client capable of the call exists. In shared
   // mode both are false, so no share surface is ever constructed.
   const shareClient = capabilities.canShareAtlas ? mutations : null;
+  useEffect(() => {
+    if (!shareClient) return;
+    return whenIdle(preloadJourneyShareDialog);
+  }, [shareClient]);
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [recordedTrackSnapshot, setRecordedTrackSnapshot] = useState<RecordedTrackSnapshot | null>(null);
@@ -3163,6 +3201,7 @@ export function LivingAtlasApp({
   // Pending local Files stay in the Composer and are represented only by the
   // snapshot's excluded count; persisted media can keep using ordinary reads.
   function startDraftPlaybackPreview(snapshot: DraftPlaybackPreviewSnapshot) {
+    preloadJourneyPlaybackOverlay();
     const ownerId = draftPlaybackPreviewOwnerKey(snapshot.sourceJourneyId);
     const cachedRead = cachedSoundtrackRead(snapshot.journey);
     if (playbackEntryNeedsPreparation(snapshot.journey, cachedRead)) {
@@ -3215,6 +3254,7 @@ export function LivingAtlasApp({
     requestedMode: "full" | "quick-recap" = "full",
     carriedFallbackMessage: string | null = null,
   ) {
+    preloadJourneyPlaybackOverlay();
     clearHomeBaseContext();
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;

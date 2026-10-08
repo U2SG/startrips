@@ -57,6 +57,20 @@ export default defineConfig({
       }
     },
   }],
+  build: {
+    rollupOptions: {
+      output: {
+        // three and React change far less often than the app, so they get
+        // their own content-hashed chunks and stay cached across app deploys.
+        manualChunks(id) {
+          const path = id.replaceAll("\\", "/");
+          if (path.includes("/node_modules/three/")) return "vendor-three";
+          if (/\/node_modules\/(?:react|react-dom|scheduler)\//.test(path)) return "vendor-react";
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       "/api": {
