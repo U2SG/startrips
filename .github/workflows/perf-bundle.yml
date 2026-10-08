@@ -1,0 +1,48 @@
+name: perf-bundle
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: perf-bundle-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: perf-bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        timeout-minutes: 3
+        run: pnpm install --frozen-lockfile
+      - name: Test bundle measurement
+        run: node --test scripts/measure-bundle.node-test.mjs
+      - name: Production build with manifest
+        run: pnpm exec vite build --manifest
+      - name: Measure production first-load bundle
+        run: node scripts/measure-bundle.mjs --dist dist --output artifacts/perf-bundle/bundle.json --summary "$GITHUB_STEP_SUMMARY"
+      - name: Upload bundle measurement
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: perf-bundle-${{ github.run_attempt }}
+          path: artifacts/perf-bundle/
+          if-no-files-found: error
+          retention-days: 14
