@@ -45,6 +45,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
         timeout-minutes: 3
+      # The runtime check opens a recording-capable page, which needs
+      # Playwright's ffmpeg helper; the hosted image's Chrome is used as-is.
+      - name: Install Playwright video recorder only
+        timeout-minutes: 2
+        env:
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: '20000'
+        run: pnpm exec playwright-core install ffmpeg
       - name: Verify preinstalled browser runtime
         timeout-minutes: 1
         run: node scripts/ci-browser-runtime.mjs
