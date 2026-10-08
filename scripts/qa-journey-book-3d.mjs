@@ -329,9 +329,9 @@ async function checkFlight(session, spread) {
     await page.mouse.move(grabX - rect.width * fraction, centerY, { steps: 2 });
     recordFlight(`drag ${fraction}`, await session.flightAt(1 + fraction, 0.01));
   }
+  // Nothing reads the book after this drag, so its release is not waited out
+  // (about fifty seconds of rendered turn under SwiftShader).
   await page.mouse.up();
-  await session.settledAt(4, { evidence: false });
-  await page.mouse.move(0, 0);
 }
 
 const EDGE_LIFT = 0.055;
