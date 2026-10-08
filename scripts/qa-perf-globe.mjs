@@ -451,6 +451,7 @@ const VISIBLE_SCENARIOS = [
   "overview-idle", "overview-manual-drag", "near-lod-drag", "focus-flight",
   "story-partial", "cover-transition", "revealed", "document-visible-again",
 ];
+const INVISIBLE_SCENARIOS = ["covered-stable", "covered-narrative-updates", "document-hidden-synthetic"];
 
 function summarize(passes) {
   const names = passes[0]?.scenarios.map((scenario) => scenario.name) ?? [];
@@ -492,6 +493,12 @@ for (const name of VISIBLE_SCENARIOS) {
   const row = summary.find((entry) => entry.name === name);
   if (!row || !(row.framesRendered?.min > 0)) proofFailures.push(`${name}: no frames rendered`);
 }
+// #247 budget: a globe the user cannot see does no render or refinement work.
+for (const name of INVISIBLE_SCENARIOS) {
+  const row = summary.find((entry) => entry.name === name);
+  const work = ["framesRendered", "renderCalls", "renderPoints", "particleRefinementRequests", "coastlineRefinementRequests"];
+  if (!row || work.some((field) => row[field]?.max !== 0)) proofFailures.push(`${name}: render work while invisible`);
+}
 for (const pass of passes) {
   const overview = pass.events.overviewFixture;
   if (!overview || overview.routes === 0 || overview.activeRoutes !== 0 || overview.temporallyRevealedRoutes !== 0) {
@@ -518,7 +525,7 @@ const result = {
   errors: errors.slice(0, 20),
   harnessApiAbsent: apiAbsent,
   fatal,
-  proof: { visibleScenarios: VISIBLE_SCENARIOS, failures: proofFailures },
+  proof: { visibleScenarios: VISIBLE_SCENARIOS, invisibleScenarios: INVISIBLE_SCENARIOS, failures: proofFailures },
   summary,
   budget,
   passes,
