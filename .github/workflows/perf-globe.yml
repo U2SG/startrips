@@ -9,6 +9,8 @@ on:
     paths:
       - src/scene/**
       - src/preview/RouteQaPreview.tsx
+      - src/preview/qaRoutes.ts
+      - src/preview/qaEntry.tsx
       - scripts/qa-perf-globe.mjs
       - scripts/qa-browser.mjs
       - scripts/ci-browser-runtime.mjs
