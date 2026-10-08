@@ -77,14 +77,40 @@ const authSchema = await import("../db/auth-schema");
 // ---------------------------------------------------------------------------
 // Fixture.
 // ---------------------------------------------------------------------------
-type Identity = { cookie: string; userId: string; ip: string; atlasId: string; organizationId: string };
+/**
+ * A browser-like cookie jar: every cookie the API sets is sent back, exactly
+ * as the real client would, so session caching behaves as it does in a tab.
+ */
+type CookieJar = Map<string, string>;
+type Identity = { jar: CookieJar; userId: string; ip: string; atlasId: string; organizationId: string };
 
-function headers(identity: { ip: string; cookie?: string }, json = false) {
+function absorbCookies(jar: CookieJar, response: Response) {
+  for (const line of response.headers.getSetCookie()) {
+    const [pair, ...attributes] = line.split(";");
+    const separator = pair.indexOf("=");
+    if (separator < 1) continue;
+    const name = pair.slice(0, separator).trim();
+    const value = pair.slice(separator + 1).trim();
+    const expired = attributes.some((attribute) => {
+      const [key, raw = ""] = attribute.trim().split("=");
+      if (key.toLowerCase() === "max-age") return Number(raw) <= 0;
+      if (key.toLowerCase() === "expires") return Date.parse(raw) <= Date.now();
+      return false;
+    });
+    if (!value || expired) jar.delete(name);
+    else jar.set(name, value);
+  }
+}
+
+function headers(identity: { ip: string; jar?: CookieJar }, json = false) {
+  const cookie = identity.jar && identity.jar.size > 0
+    ? [...identity.jar].map(([name, value]) => `${name}=${value}`).join("; ")
+    : null;
   return {
     origin: ORIGIN,
     "x-forwarded-for": identity.ip,
     ...(json ? { "content-type": "application/json" } : {}),
-    ...(identity.cookie ? { cookie: identity.cookie } : {}),
+    ...(cookie ? { cookie } : {}),
   };
 }
 
@@ -122,11 +148,12 @@ async function createIdentity(label: string, ip: string): Promise<Identity> {
   });
   assertStatus(signIn, [200], "sign-in");
   const { user } = await signIn.json() as { user: { id: string } };
-  const cookie = signIn.headers
-    .get("set-cookie")
-    ?.match(/(?:__Secure-)?startrips\.session_token=[^;,\s]+/)?.[0];
-  if (!cookie) throw new Error("sign-in returned no session cookie");
-  const authed = { ip, cookie };
+  const jar: CookieJar = new Map();
+  absorbCookies(jar, signIn);
+  if (![...jar.keys()].some((name) => name.endsWith("startrips.session_token"))) {
+    throw new Error("sign-in returned no session cookie");
+  }
+  const authed = { ip, jar };
 
   const organizationResponse = await app.request(`${ORIGIN}/api/auth/organization/create`, {
     method: "POST",
@@ -134,6 +161,7 @@ async function createIdentity(label: string, ip: string): Promise<Identity> {
     body: JSON.stringify({ name: `${label} Atlas`, slug: `bench-${label}-${randomUUID()}` }),
   });
   assertStatus(organizationResponse, [200], "organization/create");
+  absorbCookies(jar, organizationResponse);
   const organization = await organizationResponse.json() as { id: string };
   createdOrganizations.push(organization.id);
 
@@ -143,9 +171,10 @@ async function createIdentity(label: string, ip: string): Promise<Identity> {
     body: JSON.stringify({ title: `${label} Atlas`, dedication: "bench" }),
   });
   assertStatus(bootstrap, [200, 201], "atlases/bootstrap");
+  absorbCookies(jar, bootstrap);
   const { atlas } = await bootstrap.json() as { atlas: { id: string } };
   createdAtlases.push(atlas.id);
-  return { cookie, userId: user.id, ip, atlasId: atlas.id, organizationId: organization.id };
+  return { jar, userId: user.id, ip, atlasId: atlas.id, organizationId: organization.id };
 }
 
 /** Deterministic synthetic coordinates: a spiral, no real places. */
@@ -257,6 +286,7 @@ type Sample = {
 };
 
 async function measure(
+  jar: CookieJar,
   path: string,
   init: RequestInit,
   validate: (status: number, body: unknown) => { ok: boolean; rows?: Record<string, number> },
@@ -267,6 +297,7 @@ async function measure(
   const response = await app.request(`${ORIGIN}${path}`, init);
   const buffer = await response.arrayBuffer();
   const ms = performance.now() - started;
+  absorbCookies(jar, response);
   await settle();
   const log = resetQueryLog();
   await settle();
@@ -346,8 +377,10 @@ function record(state: FixtureState, endpoint: string, sample: Sample, measured:
 }
 
 async function runRound(state: FixtureState, round: number, measured: boolean) {
-  const auth = { ip: state.identity.ip, cookie: state.identity.cookie };
-  const get = { headers: headers(auth) };
+  const jar = state.identity.jar;
+  const auth = { ip: state.identity.ip, jar };
+  // Built per request, so a cookie set by one response reaches the next.
+  const get = () => ({ headers: headers(auth) });
   let loadMs = 0;
   let loadQueries = 0;
   let loadRequests = 0;
@@ -357,26 +390,26 @@ async function runRound(state: FixtureState, round: number, measured: boolean) {
     loadRequests += 1;
   };
 
-  const session = await measure("/api/auth/get-session", get, (status, body) => ({
+  const session = await measure(jar, "/api/auth/get-session", get(), (status, body) => ({
     ok: status === 200 && Boolean((body as { session?: { activeOrganizationId?: string } })?.session?.activeOrganizationId),
   }));
   record(state, "GET /api/auth/get-session", session, measured);
   onLoadPath(session);
 
-  const organizations = await measure("/api/auth/organization/list", get, (status, body) => ({
+  const organizations = await measure(jar, "/api/auth/organization/list", get(), (status, body) => ({
     ok: status === 200 && Array.isArray(body) && body.length === 1,
     rows: { organizations: Array.isArray(body) ? body.length : 0 },
   }));
   record(state, "GET /api/auth/organization/list", organizations, measured);
   onLoadPath(organizations);
 
-  const current = await measure("/api/atlases/current", get, (status, body) => ({
+  const current = await measure(jar, "/api/atlases/current", get(), (status, body) => ({
     ok: status === 200 && (body as { atlas?: { id?: string } })?.atlas?.id === state.identity.atlasId,
   }));
   record(state, "GET /api/atlases/current", current, measured);
   onLoadPath(current);
 
-  const list = await measure("/api/journeys", get, (status, body) => {
+  const list = await measure(jar, "/api/journeys", get(), (status, body) => {
     const listed = (body as { journeys?: JourneyBody[] })?.journeys ?? [];
     return {
       ok: status === 200 && listed.length === state.journeyIds.length,
@@ -392,7 +425,7 @@ async function runRound(state: FixtureState, round: number, measured: boolean) {
 
   for (let index = 0; index < READ_URLS_PER_ROUND; index += 1) {
     const assetId = state.mediaIds[(round * READ_URLS_PER_ROUND + index) % state.mediaIds.length];
-    const read = await measure(`/api/uploads/assets/${assetId}/read-url`, get, (status, body) => ({
+    const read = await measure(jar, `/api/uploads/assets/${assetId}/read-url`, get(), (status, body) => ({
       ok: status === 200 && typeof (body as { url?: unknown })?.url === "string",
       rows: { previews: (body as { preview?: unknown })?.preview ? 1 : 0 },
     }));
@@ -401,7 +434,7 @@ async function runRound(state: FixtureState, round: number, measured: boolean) {
   }
   if (measured) state.loadPath.push({ ms: loadMs, queries: loadQueries, requests: loadRequests });
 
-  const detail = await measure(`/api/journeys/${state.detailJourneyId}`, get, (status, body) => {
+  const detail = await measure(jar, `/api/journeys/${state.detailJourneyId}`, get(), (status, body) => {
     const journey = (body as { journey?: JourneyBody })?.journey;
     return {
       ok: status === 200 && journey?.id === state.detailJourneyId,
@@ -412,7 +445,7 @@ async function runRound(state: FixtureState, round: number, measured: boolean) {
   if (!state.patchJourney) state.patchJourney = (detail.body as { journey: JourneyBody }).journey;
 
   const before = state.patchJourney;
-  const patch = await measure(`/api/journeys/${before.id}`, {
+  const patch = await measure(jar, `/api/journeys/${before.id}`, {
     method: "PATCH",
     headers: headers(auth, true),
     body: JSON.stringify(patchPayload(before, round)),
@@ -502,7 +535,7 @@ async function main() {
 
   const result = {
     harness: "server/bench/api-latency.ts",
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
     environment: {
       node: process.version,
