@@ -88,10 +88,13 @@ export function resolveJourneyRouteSegmentProvenance(
   if (declared === "recorded-track") return declared;
   const stored = route.routeSegments?.[segmentIndex];
   const segment = stored?.sourceKey === routeSegmentSourceKey(route.points, segmentIndex) ? stored : null;
-  if (segment?.decision === "confirmed" && (segment.confirmedCandidate?.geometry.length ?? 0) >= 2) return "user-confirmed-route";
+  const confirmedGeometry = segment?.decision === "confirmed" && (segment.confirmedCandidate?.geometry.length ?? 0) >= 2;
+  // Geometry the server chose by itself is a suggestion, never a member claim.
+  if (confirmedGeometry && segment?.confirmedBy !== "auto") return "user-confirmed-route";
   if (declared === "user-confirmed-route") return declared;
   if (segment?.shapePoints.length) return "user-shaped-route";
   if (declared) return declared;
+  if (confirmedGeometry) return "suggested-route";
   const left = route.points[segmentIndex];
   const right = route.points[segmentIndex + 1];
   return resolveRouteProvenance({
@@ -587,7 +590,16 @@ export function toJourneyRoutes(
       index,
       journey.routeSegments,
     )),
+    ...(journey.autoRouteSegments ? { autoRouteSegments: autoRouteSegmentsByLeg(journey) } : {}),
   }));
+}
+
+function autoRouteSegmentsByLeg(journey: Journey) {
+  const points = journey.routePoints.map((point) => ({ id: point.id, lat: point.latitude, lon: point.longitude }));
+  return points.slice(0, -1).map((_, index) => {
+    const sourceKey = routeSegmentSourceKey(points, index);
+    return journey.autoRouteSegments?.find((status) => status.sourceKey === sourceKey) ?? null;
+  });
 }
 
 export function validateJourneyInput(input: JourneyInput): ValidationResult {

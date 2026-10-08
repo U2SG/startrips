@@ -3,20 +3,14 @@ import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
 import { getRouteSegmentContext, writeRouteSegment } from "../repositories/route-segment-repository";
-import { createRoutingBaseUrlResolver } from "../routing/graph-builder-client";
-import { createOsrmRouteCandidateProvider } from "../routing/osrm-route-candidate-provider";
 import { RoutingInvalidError } from "../routing/route-candidate-provider";
+import { routingProvider as provider } from "../routing/routing-provider";
 import { MAX_SELECTED_POINT_METERS, routingDistanceMeters, validRoutingCoordinate } from "../routing/routing-coordinates";
 import type { RoadProfile, RouteAccessPoints, RouteCandidate, RouteShapePoint } from "../../src/journey/types";
 import { createRoutePointSuggestionRoutes, whileRoutingPrepares } from "./route-point-suggestions";
 import { readJsonObject } from "./json-body";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const provider = createOsrmRouteCandidateProvider(createRoutingBaseUrlResolver({
-  driving: serverConfig.routingOsrmDrivingBaseUrl,
-  walking: serverConfig.routingOsrmWalkingBaseUrl,
-  cycling: serverConfig.routingOsrmCyclingBaseUrl,
-}, serverConfig.routingGraphBuilderUrl));
 export const journeyRouteSegmentRoutes = new Hono();
 journeyRouteSegmentRoutes.route("/", createRoutePointSuggestionRoutes(provider));
 

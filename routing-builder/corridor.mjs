@@ -2,18 +2,29 @@
 import { createHash } from "node:crypto";
 
 export const PROFILES = ["driving", "walking", "cycling"];
+// "extended" is the escalation tier: full profile classes along the whole
+// corridor, for places whose local roads join the network only far away.
+export const DETAILS = ["standard", "extended"];
 export const MAX_POINTS = 18;
 export const MAX_DIRECT_METERS = 400_000;
-export const POINT_RADIUS_METERS = 5_000;
+// Driving matches the API's MAX_SELECTED_POINT_METERS, so nearby road point
+// suggestions find their whole search area in the graph. Walking and cycling
+// snap within 750 m and fetch every path, so a city-wide radius would be huge.
+export const POINT_RADIUS_METERS = { driving: 25_000, walking: 5_000, cycling: 5_000 };
 // Requests are quantized before hashing so that small drags and the slightly
 // different point sets of candidates and nearby-point lookups share one graph.
-// 0.01 degrees is at most ~0.8 km off, well inside the 5 km full-detail radius.
+// 0.01 degrees is at most ~0.8 km off, well inside the full-detail radius.
 const QUANTUM = 100;
 
 const LINKED = (classes) => classes.flatMap((name) => [name, `${name}_link`]);
-const DRIVING_MAJOR = LINKED(["motorway", "trunk", "primary", "secondary"]);
-const DRIVING_FULL = [...LINKED(["motorway", "trunk", "primary", "secondary", "tertiary"]),
-  "unclassified", "residential", "living_street", "service", "road"];
+// Tertiary and unclassified roads are what joins rural towns to the skeleton;
+// without them a town's local roads form an island the route cannot leave.
+const DRIVING_LONG = [...LINKED(["motorway", "trunk", "primary", "secondary", "tertiary"]), "unclassified"];
+const DRIVING_FULL = [...DRIVING_LONG, "residential", "living_street", "service", "road"];
+const LEG_RADIUS = {
+  standard: { share: 0.15, min: 5_000, max: 30_000 },
+  extended: { share: 0.2, min: 8_000, max: 40_000 },
+};
 // Trunk stays in long walking/cycling corridors: country-access.geojson permits
 // it in some countries, and the profile, not the query, decides access.
 const ACTIVE_LONG = [...LINKED(["trunk", "primary", "secondary", "tertiary"]),
@@ -44,13 +55,18 @@ function validPoint(value) {
 /** Strictly validates a request body; throws CorridorError("INVALID_GRAPH_REQUEST"). */
 export function parseGraphRequest(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)
-    || Object.keys(body).some((key) => key !== "profile" && key !== "points")
+    || Object.keys(body).some((key) => !["profile", "points", "detail"].includes(key))
     || !PROFILES.includes(body.profile) || !Array.isArray(body.points)
+    || (body.detail !== undefined && !DETAILS.includes(body.detail))
     || body.points.length < 1 || body.points.length > MAX_POINTS
     || !body.points.every(validPoint)) {
     throw new CorridorError("INVALID_GRAPH_REQUEST", "Graph request is invalid");
   }
-  return { profile: body.profile, points: body.points.map(({ lat, lon }) => ({ lat, lon })) };
+  return {
+    profile: body.profile,
+    points: body.points.map(({ lat, lon }) => ({ lat, lon })),
+    detail: body.detail ?? "standard",
+  };
 }
 
 const quantize = (value) => Math.round(value * QUANTUM) / QUANTUM;
@@ -64,7 +80,7 @@ function highwayFilter(classes) {
  * Returns the normalized Overpass query for a corridor. Deterministic for the
  * same quantized points, so the query itself is the graph identity.
  */
-export function buildCorridorQuery(profile, rawPoints) {
+export function buildCorridorQuery(profile, rawPoints, detail = "standard") {
   const points = [];
   for (const point of rawPoints) {
     const next = { lat: quantize(point.lat), lon: quantize(point.lon) };
@@ -77,15 +93,16 @@ export function buildCorridorQuery(profile, rawPoints) {
   }
   const full = profile === "driving" ? DRIVING_FULL : null;
   const statements = points.map((point) =>
-    `way(around:${POINT_RADIUS_METERS},${format(point.lat)},${format(point.lon)})${highwayFilter(full)};`);
+    `way(around:${POINT_RADIUS_METERS[profile]},${format(point.lat)},${format(point.lon)})${highwayFilter(full)};`);
   for (let index = 1; index < points.length; index += 1) {
     const from = points[index - 1];
     const to = points[index];
     const legMeters = distanceMeters(from, to);
-    const radius = Math.round(Math.min(30_000, Math.max(3_000, legMeters * 0.15)));
-    const classes = profile === "driving"
-      ? (legMeters > 25_000 ? DRIVING_MAJOR : DRIVING_FULL)
-      : (legMeters > 50_000 ? ACTIVE_LONG : null);
+    const bounds = LEG_RADIUS[detail];
+    const radius = Math.round(Math.min(bounds.max, Math.max(bounds.min, legMeters * bounds.share)));
+    const classes = detail === "extended" ? full
+      : profile === "driving" ? (legMeters > 25_000 ? DRIVING_LONG : DRIVING_FULL)
+        : (legMeters > 50_000 ? ACTIVE_LONG : null);
     const leg = `around:${radius},${format(from.lat)},${format(from.lon)},${format(to.lat)},${format(to.lon)}`;
     statements.push(`way(${leg})${highwayFilter(classes)};`);
     // Ferries are mapped as route=ferry ways, usually without highway=*. Fetch
@@ -105,6 +122,6 @@ export function buildCorridorQuery(profile, rawPoints) {
   ].join("\n");
 }
 
-export function graphId(profile, query) {
-  return createHash("sha256").update(`${profile}\n${query}`).digest("hex");
+export function graphId(profile, query, detail = "standard") {
+  return createHash("sha256").update(`${profile}\n${detail}\n${query}`).digest("hex");
 }

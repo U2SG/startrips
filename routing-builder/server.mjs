@@ -152,8 +152,8 @@ export function createHandler(store) {
         let body;
         try { body = JSON.parse(await readBody(request)); }
         catch { return json(response, 400, { error: "INVALID_GRAPH_REQUEST" }); }
-        const { profile, points } = parseGraphRequest(body);
-        return json(response, 200, store.ensure(profile, points));
+        const { profile, points, detail } = parseGraphRequest(body);
+        return json(response, 200, store.ensure(profile, points, detail));
       }
       const graph = /^\/graphs\/([^/]+)$/.exec(url.pathname);
       if (graph && request.method === "GET") {

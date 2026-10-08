@@ -117,7 +117,16 @@ try {
     evidence.push({ profile, phases: settled.phases, route: route.body.code, nearest: nearest.body.code });
   }
 
+  // The escalation tier is a separate graph for the same points.
+  const extended = await post({ profile: "driving", points, detail: "extended" });
+  assert.equal(extended.status, 200);
+  assert.notEqual(extended.body.id, ready.driving, "the extended tier must have its own graph identity");
+  assert.equal((await settle(extended.body.id)).state, "ready", "extended driving graph");
+  ready.extended = extended.body.id;
+  evidence.push({ scenario: "extended", id: extended.body.id });
+
   assert.equal((await post({ profile: "driving", points: [{ lat: 1, lon: 1, extra: true }] })).status, 400);
+  assert.equal((await post({ profile: "driving", points, detail: "maximal" })).status, 400);
   assert.equal((await call(`/graphs/${ready.driving}/table/v1/driving/1,1;1.01,1.01`)).status, 404, "only route/nearest are proxied");
   const tooFar = await post({ profile: "driving", points: [{ lat: 0, lon: 0 }, { lat: 0, lon: 4 }] });
   assert.deepEqual(tooFar, { status: 422, body: { error: "ROUTING_AREA_TOO_LARGE" } });

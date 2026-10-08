@@ -7,6 +7,7 @@ import {
   saveRouteSegment,
   type SignedRouteCandidate,
 } from "../journey/journeyApi";
+import { autoRouteFailureMessage } from "../journey/autoRouteSnapping";
 import { routeSegmentSourceKey } from "../journey/journeyModel";
 import { routingFailureMessage, routingPreparationCopy, type RoutingPreparationPhase } from "../journey/routingPreparation";
 import { COMPACT_MOBILE_LAYOUT_ATTRIBUTE, compactMobileLayoutMarker } from "../journey/mobileLayout";
@@ -63,6 +64,8 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   const next = route?.points[selectedIndex + 1];
   const sourceKey = route ? routeSegmentSourceKey(route.points, selectedIndex) : null;
   const record = route?.routeSegments?.[selectedIndex] ?? null;
+  const autoStatus = route?.autoRouteSegments?.[selectedIndex] ?? null;
+  const autoSnapping = route?.autoRouteSegments?.some((status) => status !== null && status.state !== "failed") ?? false;
   const revision = record?.revision ?? 0;
   const journeyId = route?.id ?? null;
   const fromId = selected?.id ?? null;
@@ -385,7 +388,10 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
   return (
     <div ref={setEditor} className="route-candidate-editor" data-route-editor-open={open} data-route-edit-mode={editMode}>
       {!open ? (
-        <button type="button" onClick={() => { setAvailabilityLoading(true); setOpen(true); }}>贴合道路</button>
+        <>
+          {autoSnapping ? <p role="status">正在贴合道路…</p> : null}
+          <button type="button" onClick={() => { setAvailabilityLoading(true); setOpen(true); }}>贴合道路</button>
+        </>
       ) : (
         <div className="route-candidate-editor__panel">
           <div className="route-candidate-editor__head">
@@ -517,6 +523,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
               </div>
             </div>
           ) : null}
+          {autoStatus?.state === "failed" && autoStatus.code && !candidates.length ? <p>{autoRouteFailureMessage(autoStatus.code)}</p> : null}
           {preparing ? <p role="status">{routingPreparationCopy(preparing)}首次查看这一段需要准备道路数据，可能需要几分钟。</p> : null}
           {message ? <p role="status">{message}</p> : null}
         </div>

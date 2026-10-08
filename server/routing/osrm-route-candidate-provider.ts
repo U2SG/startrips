@@ -148,6 +148,74 @@ export function acceptOsrmCandidate(
   };
 }
 
+/** One OSRM route request on one graph; `disconnected` marks a result an extended graph may fix. */
+async function routeOnGraph(baseUrl: string, { fetcher, coordinates, routing, profile, alternativesCount, signal, allowFerries }: {
+  fetcher: typeof fetch;
+  coordinates: readonly RoutingCoordinate[];
+  routing: readonly RoutingCoordinate[];
+  profile: RoadProfile;
+  alternativesCount: number;
+  signal: AbortSignal;
+  allowFerries: boolean;
+}): Promise<{ candidates: RouteCandidate[]; disconnected: boolean }> {
+  const coordinatePath = routing.map(({ lon, lat }) => `${lon},${lat}`).join(";");
+  const url = new URL(`${baseUrl}/route/v1/${profile}/${coordinatePath}`);
+  url.searchParams.set("overview", "full");
+  url.searchParams.set("geometries", "geojson");
+  url.searchParams.set("alternatives", String(alternativesCount - 1));
+  // Each URL must serve a graph built for that profile. Check every step
+  // as well: a graph may use a ferry/train or be configured incorrectly.
+  url.searchParams.set("steps", "true");
+  let response: Response;
+  try {
+    response = await fetcher(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) });
+  } catch {
+    throw new RoutingUnavailableError();
+  }
+  if (!response.ok && response.status !== 400) throw new RoutingUnavailableError();
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (contentLength > 1_000_000) throw new RoutingUnavailableError("Road route response is too large");
+  let payload: OsrmResponse;
+  try {
+    const body = await response.text();
+    if (body.length > 1_000_000) throw new Error("oversized");
+    payload = JSON.parse(body) as OsrmResponse;
+  } catch {
+    throw new RoutingUnavailableError("Road route response is invalid");
+  }
+  if (!payload || typeof payload !== "object") throw new RoutingUnavailableError("Road route response is invalid");
+  if (payload.code === "NoRoute" || payload.code === "NoSegment") return { candidates: [], disconnected: true };
+  if (!response.ok) throw new RoutingUnavailableError();
+  if (payload.code !== "Ok") return { candidates: [], disconnected: false };
+  if (!Array.isArray(payload.waypoints) || !Array.isArray(payload.routes)) {
+    throw new RoutingUnavailableError("Road route response is invalid");
+  }
+  const candidates = payload.routes
+    .slice(0, alternativesCount)
+    .map((route) => acceptOsrmCandidate(route, payload.waypoints!, routing, profile, allowFerries))
+    .filter((candidate): candidate is RouteCandidate => candidate !== null)
+    .filter((candidate) => candidate.snapping.waypoints.every((point, index) =>
+      meters(coordinates[index], { lon: point.snapped[0], lat: point.snapped[1] }) <= MAX_SELECTED_POINT_METERS))
+    .map((candidate) => ({
+      ...candidate,
+      snapping: { ...candidate.snapping, waypoints: candidate.snapping.waypoints.map((point, index) => {
+        const original = coordinates[index];
+        const selected = routing[index];
+        return original.lat === selected.lat && original.lon === selected.lon ? point : {
+          ...point, requested: [original.lon, original.lat] as [number, number],
+          selected: [selected.lon, selected.lat] as [number, number],
+          distanceMeters: meters(original, { lon: point.snapped[0], lat: point.snapped[1] }),
+        };
+      }) },
+    }))
+    .sort((left, right) => right.relevance - left.relevance || left.id.localeCompare(right.id));
+  return {
+    candidates,
+    disconnected: candidates.length === 0
+      && payload.waypoints.some((waypoint, index) => !validProfileSnap(waypoint, routing[index], profile)),
+  };
+}
+
 export function createOsrmRouteCandidateProvider(
   baseUrls: Partial<Record<RoadProfile, string | null>> | OsrmBaseUrlResolver,
   fetcher: typeof fetch = fetch,
@@ -170,60 +238,12 @@ export function createOsrmRouteCandidateProvider(
       if (!(direct > 0) || direct > MAX_DIRECT_METERS) return [];
       // Resolved only after every request gate, so an out-of-range request
       // never asks for an on-demand graph.
-      const baseUrl = await resolver.resolve(profile, routing, signal);
-      const coordinatePath = routing.map(({ lon, lat }) => `${lon},${lat}`).join(";");
-      const url = new URL(`${baseUrl}/route/v1/${profile}/${coordinatePath}`);
-      url.searchParams.set("overview", "full");
-      url.searchParams.set("geometries", "geojson");
-      url.searchParams.set("alternatives", String(alternativesCount - 1));
-      // Each URL must serve a graph built for that profile. Check every step
-      // as well: a graph may use a ferry/train or be configured incorrectly.
-      url.searchParams.set("steps", "true");
-      let response: Response;
-      try {
-        response = await fetcher(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) });
-      } catch {
-        throw new RoutingUnavailableError();
-      }
-      if (!response.ok && response.status !== 400) throw new RoutingUnavailableError();
-      const contentLength = Number(response.headers.get("content-length") ?? 0);
-      if (contentLength > 1_000_000) throw new RoutingUnavailableError("Road route response is too large");
-      let payload: OsrmResponse;
-      try {
-        const body = await response.text();
-        if (body.length > 1_000_000) throw new Error("oversized");
-        payload = JSON.parse(body) as OsrmResponse;
-      } catch {
-        throw new RoutingUnavailableError("Road route response is invalid");
-      }
-      if (!payload || typeof payload !== "object") throw new RoutingUnavailableError("Road route response is invalid");
-      if (!response.ok) {
-        if (payload.code === "NoRoute" || payload.code === "NoSegment") return [];
-        throw new RoutingUnavailableError();
-      }
-      if (payload.code !== "Ok") return [];
-      if (!Array.isArray(payload.waypoints) || !Array.isArray(payload.routes)) {
-        throw new RoutingUnavailableError("Road route response is invalid");
-      }
-      return payload.routes
-        .slice(0, alternativesCount)
-        .map((route) => acceptOsrmCandidate(route, payload.waypoints!, routing, profile, allowFerries))
-        .filter((candidate): candidate is RouteCandidate => candidate !== null)
-        .filter((candidate) => candidate.snapping.waypoints.every((point, index) =>
-          meters(coordinates[index], { lon: point.snapped[0], lat: point.snapped[1] }) <= MAX_SELECTED_POINT_METERS))
-        .map((candidate) => ({
-          ...candidate,
-          snapping: { ...candidate.snapping, waypoints: candidate.snapping.waypoints.map((point, index) => {
-            const original = coordinates[index];
-            const selected = routing[index];
-            return original.lat === selected.lat && original.lon === selected.lon ? point : {
-              ...point, requested: [original.lon, original.lat] as [number, number],
-              selected: [selected.lon, selected.lat] as [number, number],
-              distanceMeters: meters(original, { lon: point.snapped[0], lat: point.snapped[1] }),
-            };
-          }) },
-        }))
-        .sort((left, right) => right.relevance - left.relevance || left.id.localeCompare(right.id));
+      // A standard on-demand graph can leave a town's local roads as an island:
+      // the waypoint snaps far away or OSRM finds no route. Escalate once.
+      const route = { fetcher, coordinates, routing, profile, alternativesCount, signal, allowFerries };
+      const first = await routeOnGraph(await resolver.resolve(profile, routing, signal), route);
+      if (!first.disconnected || !resolver.canExtend?.(profile)) return first.candidates;
+      return (await routeOnGraph(await resolver.resolve(profile, routing, signal, "extended"), route)).candidates;
     },
   };
 }

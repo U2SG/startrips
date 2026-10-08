@@ -6,6 +6,7 @@ import {
   staticOsrmBaseUrls,
   type OsrmBaseUrlResolver,
   type RoutingCoordinate,
+  type RoutingGraphDetail,
 } from "./route-candidate-provider";
 
 const GRAPH_ID = /^[0-9a-f]{64}$/;
@@ -32,13 +33,22 @@ function graphError(code: unknown): Error {
  * throws RoutingPreparingError so the route can answer 202.
  */
 export function createGraphBuilderResolver(builderUrl: string, fetcher: typeof fetch = fetch) {
-  return async (profile: RoadProfile, points: readonly RoutingCoordinate[], signal: AbortSignal): Promise<string> => {
+  return async (
+    profile: RoadProfile,
+    points: readonly RoutingCoordinate[],
+    signal: AbortSignal,
+    detail: RoutingGraphDetail = "standard",
+  ): Promise<string> => {
     let response: Response;
     try {
       response = await fetcher(`${builderUrl}/graphs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profile, points: points.map(({ lat, lon }) => ({ lat, lon })) }),
+        body: JSON.stringify({
+          profile,
+          points: points.map(({ lat, lon }) => ({ lat, lon })),
+          ...(detail === "extended" ? { detail } : {}),
+        }),
         signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
       });
     } catch {
@@ -79,8 +89,9 @@ export function createRoutingBaseUrlResolver(
   const onDemand = builderUrl ? createGraphBuilderResolver(builderUrl, fetcher) : null;
   return {
     supports: (profile) => fixed.supports(profile) || Boolean(onDemand),
-    resolve: (profile, points, signal) => fixed.supports(profile) || !onDemand
+    canExtend: (profile) => !fixed.supports(profile) && Boolean(onDemand),
+    resolve: (profile, points, signal, detail) => fixed.supports(profile) || !onDemand
       ? fixed.resolve(profile, points, signal)
-      : onDemand(profile, points, signal),
+      : onDemand(profile, points, signal, detail),
   };
 }

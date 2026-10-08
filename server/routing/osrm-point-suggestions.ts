@@ -13,8 +13,7 @@ export function createOsrmPointSuggestions(baseUrls: Partial<Record<RoadProfile,
       || Object.values(neighbors).some((point) => !validRoutingCoordinate(point))) {
       throw new RoutingUnavailableError("Road point coordinates are invalid");
     }
-    const baseUrl = await resolver.resolve(profile,
-      [neighbors.before, coordinate, neighbors.after].filter((point): point is RoutingCoordinate => Boolean(point)), signal);
+    const corridor = [neighbors.before, coordinate, neighbors.after].filter((point): point is RoutingCoordinate => Boolean(point));
     const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(12_000)]);
     async function read(url: URL) {
       let response: Response;
@@ -32,54 +31,64 @@ export function createOsrmPointSuggestions(baseUrls: Partial<Record<RoadProfile,
       if (!response.ok && !["NoRoute", "NoSegment"].includes(payload.code)) throw new RoutingUnavailableError();
       return payload;
     }
-    const nearestUrl = new URL(`${baseUrl}/nearest/v1/${profile}/${coordinate.lon},${coordinate.lat}`);
-    nearestUrl.searchParams.set("number", "20");
-    const nearest = await read(nearestUrl);
-    if (["NoSegment", "NoRoute"].includes(nearest.code)) return [];
-    if (nearest.code !== "Ok" || !Array.isArray(nearest.waypoints)) throw new RoutingUnavailableError("Nearby road response is invalid");
-    const points: { coordinate: RoutingCoordinate; distanceMeters: number; label: string; hint: string }[] = [];
-    for (const raw of nearest.waypoints.slice(0, 20) as NearestPoint[]) {
-      if (!raw || !Array.isArray(raw.location) || raw.location.length !== 2) continue;
-      const point = { lon: raw.location[0], lat: raw.location[1] };
-      if (!validRoutingCoordinate(point) || typeof raw.distance !== "number" || !Number.isFinite(raw.distance)
-        || raw.distance < 0 || raw.distance > MAX_SELECTED_POINT_METERS) continue;
-      const distanceMeters = routingDistanceMeters(coordinate, point);
-      if (distanceMeters > MAX_SELECTED_POINT_METERS || points.some((entry) => routingDistanceMeters(entry.coordinate, point) < 80)) continue;
-      points.push({ coordinate: point, distanceMeters,
-        label: typeof raw.name === "string" ? raw.name.trim().slice(0, 120) : "",
-        hint: typeof raw.hint === "string" && raw.hint.length <= 2_048 ? raw.hint : "" });
-      if (points.length === 5) break;
-    }
-    const suggestions = await Promise.all(points.map(async (point): Promise<RoutePointSuggestion | null> => {
-      const ordered = [neighbors.before, point.coordinate, neighbors.after].filter((entry): entry is RoutingCoordinate => Boolean(entry));
-      let connected: boolean | null = null;
-      if (ordered.length > 1) {
-        const url = new URL(`${baseUrl}/route/v1/${profile}/${ordered.map((entry) => `${entry.lon},${entry.lat}`).join(";")}`);
-        url.searchParams.set("overview", "false");
-        url.searchParams.set("alternatives", "false");
-        url.searchParams.set("steps", "true");
-        url.searchParams.set("hints", ordered.map((entry) => entry === point.coordinate ? point.hint : "").join(";"));
-        const route = await read(url);
-        if (["NoRoute", "NoSegment"].includes(route.code)) return null;
-        if (route.code !== "Ok" || !Array.isArray(route.routes) || !Array.isArray(route.waypoints)) {
-          throw new RoutingUnavailableError("Nearby road connection response is invalid");
-        }
-        connected = route.waypoints.length === ordered.length
-          && route.waypoints.every((waypoint: NearestPoint, index: number) => validProfileSnap(waypoint, ordered[index], profile))
-          && route.routes.some((entry: { distance?: number; duration?: number; legs?: { steps?: { mode?: string }[] }[] }) =>
-          Number.isFinite(entry?.distance) && Number(entry.distance) > 0
-          && Number.isFinite(entry.duration) && Number(entry.duration) > 0
-          && Array.isArray(entry.legs) && entry.legs.length === ordered.length - 1
-          && entry.legs.every((leg) => Array.isArray(leg?.steps) && leg.steps.length > 0
-            && leg.steps.every((step) => step && compatibleRoutingStep(step.mode, profile, allowFerries))));
-        if (!connected) return null;
+    // A standard on-demand graph can leave local roads unjoined to the
+    // neighbours; then every suggestion fails its connectivity check. Escalate once.
+    const first = await suggestOn(await resolver.resolve(profile, corridor, signal));
+    if (!first.disconnected || !resolver.canExtend?.(profile)) return first.suggestions;
+    return (await suggestOn(await resolver.resolve(profile, corridor, signal, "extended"))).suggestions;
+
+    async function suggestOn(baseUrl: string): Promise<{ suggestions: RoutePointSuggestion[]; disconnected: boolean }> {
+      const nearestUrl = new URL(`${baseUrl}/nearest/v1/${profile}/${coordinate.lon},${coordinate.lat}`);
+      nearestUrl.searchParams.set("number", "20");
+      const nearest = await read(nearestUrl);
+      if (["NoSegment", "NoRoute"].includes(nearest.code)) return { suggestions: [], disconnected: false };
+      if (nearest.code !== "Ok" || !Array.isArray(nearest.waypoints)) throw new RoutingUnavailableError("Nearby road response is invalid");
+      const points: { coordinate: RoutingCoordinate; distanceMeters: number; label: string; hint: string }[] = [];
+      for (const raw of nearest.waypoints.slice(0, 20) as NearestPoint[]) {
+        if (!raw || !Array.isArray(raw.location) || raw.location.length !== 2) continue;
+        const point = { lon: raw.location[0], lat: raw.location[1] };
+        if (!validRoutingCoordinate(point) || typeof raw.distance !== "number" || !Number.isFinite(raw.distance)
+          || raw.distance < 0 || raw.distance > MAX_SELECTED_POINT_METERS) continue;
+        const distanceMeters = routingDistanceMeters(coordinate, point);
+        if (distanceMeters > MAX_SELECTED_POINT_METERS || points.some((entry) => routingDistanceMeters(entry.coordinate, point) < 80)) continue;
+        points.push({ coordinate: point, distanceMeters,
+          label: typeof raw.name === "string" ? raw.name.trim().slice(0, 120) : "",
+          hint: typeof raw.hint === "string" && raw.hint.length <= 2_048 ? raw.hint : "" });
+        if (points.length === 5) break;
       }
-      return {
-        id: createHash("sha256").update(JSON.stringify(["osrm-point", profile, point.coordinate])).digest("hex").slice(0, 24),
-        coordinate: point.coordinate, label: point.label, distanceMeters: point.distanceMeters, connected,
-      };
-    }));
-    return suggestions.filter((point): point is RoutePointSuggestion => point !== null)
-      .sort((a, b) => a.distanceMeters - b.distanceMeters || a.id.localeCompare(b.id)).slice(0, 3);
+      const suggestions = await Promise.all(points.map(async (point): Promise<RoutePointSuggestion | null> => {
+        const ordered = [neighbors.before, point.coordinate, neighbors.after].filter((entry): entry is RoutingCoordinate => Boolean(entry));
+        let connected: boolean | null = null;
+        if (ordered.length > 1) {
+          const url = new URL(`${baseUrl}/route/v1/${profile}/${ordered.map((entry) => `${entry.lon},${entry.lat}`).join(";")}`);
+          url.searchParams.set("overview", "false");
+          url.searchParams.set("alternatives", "false");
+          url.searchParams.set("steps", "true");
+          url.searchParams.set("hints", ordered.map((entry) => entry === point.coordinate ? point.hint : "").join(";"));
+          const route = await read(url);
+          if (["NoRoute", "NoSegment"].includes(route.code)) return null;
+          if (route.code !== "Ok" || !Array.isArray(route.routes) || !Array.isArray(route.waypoints)) {
+            throw new RoutingUnavailableError("Nearby road connection response is invalid");
+          }
+          connected = route.waypoints.length === ordered.length
+            && route.waypoints.every((waypoint: NearestPoint, index: number) => validProfileSnap(waypoint, ordered[index], profile))
+            && route.routes.some((entry: { distance?: number; duration?: number; legs?: { steps?: { mode?: string }[] }[] }) =>
+            Number.isFinite(entry?.distance) && Number(entry.distance) > 0
+            && Number.isFinite(entry.duration) && Number(entry.duration) > 0
+            && Array.isArray(entry.legs) && entry.legs.length === ordered.length - 1
+            && entry.legs.every((leg) => Array.isArray(leg?.steps) && leg.steps.length > 0
+              && leg.steps.every((step) => step && compatibleRoutingStep(step.mode, profile, allowFerries))));
+          if (!connected) return null;
+        }
+        return {
+          id: createHash("sha256").update(JSON.stringify(["osrm-point", profile, point.coordinate])).digest("hex").slice(0, 24),
+          coordinate: point.coordinate, label: point.label, distanceMeters: point.distanceMeters, connected,
+        };
+      }));
+      const found = suggestions.filter((point): point is RoutePointSuggestion => point !== null)
+        .sort((a, b) => a.distanceMeters - b.distanceMeters || a.id.localeCompare(b.id)).slice(0, 3);
+      // Nearby roads exist but none joins the neighbours: an island in the graph.
+      return { suggestions: found, disconnected: points.length > 0 && found.length === 0 };
+    }
   };
 }

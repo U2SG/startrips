@@ -109,6 +109,8 @@ import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
 import { useModalFocus } from "./useModalFocus";
+import { useAutoRouteRefresh } from "./useAutoRouteRefresh";
+import { mergeAutoRouteRefresh } from "./autoRouteSnapping";
 import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import {
@@ -1137,6 +1139,7 @@ export function LivingAtlasApp({
     listHomeBasePeriods,
     listHomeBaseDismissals,
     readRecordedTrackGeometry,
+    readJourney,
     readMedia,
     mutations,
     everydayFragments,
@@ -1644,6 +1647,13 @@ export function LivingAtlasApp({
   const activeJourneyId = unknownCreateSemanticOwnership.activeJourneyId;
   const activeJourneyIdRef = useRef(activeJourneyId);
   activeJourneyIdRef.current = activeJourneyId;
+  useAutoRouteRefresh(
+    journeys.find((candidate) => candidate.id === activeJourneyId) ?? null,
+    mutations ? readJourney : null,
+    (fetched) => setJourneys((current) => current.map((journey) => (
+      journey.id === fetched.id ? mergeAutoRouteRefresh(journey, fetched) : journey
+    ))),
+  );
   const selectedPointContext = routePointContextSelection.context;
   const routePointContextVisible = Boolean(
     view === "planet" && selectedPointContext && routePointContextSelection.intent
@@ -3530,6 +3540,10 @@ export function LivingAtlasApp({
                     ...(journey.routeSegments ?? []).filter((entry) => entry.sourceKey !== segment.sourceKey),
                     segment,
                   ],
+                  // A member decision ends automatic snapping for this segment.
+                  ...(journey.autoRouteSegments ? {
+                    autoRouteSegments: journey.autoRouteSegments.filter((entry) => entry.sourceKey !== segment.sourceKey),
+                  } : {}),
                 };
               }));
             }}
