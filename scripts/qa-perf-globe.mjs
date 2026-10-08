@@ -10,7 +10,7 @@
 //
 // Diagnostics are whitelisted fields from `window.__particleEarthDebug`: no
 // coordinates, Route Point data or media URLs are copied into the artifact.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
@@ -508,6 +508,31 @@ for (const pass of passes) {
     const event = pass.events[key];
     if (!event?.sameCanvas) proofFailures.push(`pass ${pass.pass} ${key}: canvas remounted`);
   }
+  const cycles = pass.events.coverCycles;
+  if (!cycles?.sameCanvas) proofFailures.push(`pass ${pass.pass} coverCycles: canvas remounted`);
+  for (const [field, growth] of Object.entries(cycles?.growth ?? {})) {
+    if (growth > 0) proofFailures.push(`pass ${pass.pass} coverCycles: ${field} grew by ${growth}`);
+  }
+  if (!cycles?.growth) proofFailures.push(`pass ${pass.pass} coverCycles: not measured`);
+}
+// The drawing buffer the browser actually allocated stays inside the named
+// per-quality cap. The caps are read from the budget's single owner.
+const QUALITY_PIXEL_CAPS = readQualityPixelCaps();
+if (budget.length !== 12) proofFailures.push(`budget matrix: ${budget.length} of 12 rows`);
+for (const row of budget) {
+  const cap = QUALITY_PIXEL_CAPS[row.quality];
+  if (!(cap > 0) || !(row.drawingBufferPixels > 0) || row.drawingBufferPixels > cap) {
+    proofFailures.push(`budget ${row.cssViewport.width}x${row.cssViewport.height}@${row.deviceDpr} ${row.quality}: ${row.drawingBufferPixels} px exceeds cap ${cap}`);
+  }
+}
+
+function readQualityPixelCaps() {
+  const source = readFileSync(new URL("../src/scene/renderBudget.ts", import.meta.url), "utf8");
+  const cap = (quality) => {
+    const match = source.match(new RegExp(`${quality}:\\s*\\{[^}]*maxDrawingBufferPixels:\\s*([\\d_]+)`));
+    return match ? Number(match[1].replaceAll("_", "")) : Number.NaN;
+  };
+  return { high: cap("high"), low: cap("low") };
 }
 const result = {
   harness: "qa-perf-globe",
