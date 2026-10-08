@@ -2403,6 +2403,11 @@ export function ParticleEarthScene({
     let routeFocusFrame = getSphericalRouteFocus(latestFocusRoute.current?.points ?? []);
     let routeFocusSettling = false;
     let pointFocusSettling = false;
+    // #247: a Home camera seed is a camera flight the render frame treats as
+    // focus (`initialCameraAnchorSettling`). Outside a frame that settling is
+    // not yet known, so a fresh seed holds the wake open until a frame has
+    // measured it; a stable cover then cannot postpone the flight to reveal.
+    let initialCameraAnchorWakePending = false;
     let activeFocusRevision = Number.NEGATIVE_INFINITY;
     let focusTarget: {
       point: { lat: number; lon: number };
@@ -5947,6 +5952,7 @@ export function ParticleEarthScene({
           || Math.abs(interactiveRotationY) > 0.001
         )
       );
+      if (!initialCameraAnchorSettling) initialCameraAnchorWakePending = false;
       if (
         !cameraHeldByDetail
         && activePointers.size === 0
@@ -6500,7 +6506,7 @@ export function ParticleEarthScene({
       documentVisible: !document.hidden,
       opaqueMediaCover: currentVisibilityHint.opaqueMediaCover,
       coverTransitionActive: currentVisibilityHint.coverTransitionActive,
-      focusFlightActive: isFocusFlightActive(pointFocusSettling, routeFocusSettling),
+      focusFlightActive: isFocusFlightActive(pointFocusSettling, routeFocusSettling) || initialCameraAnchorWakePending,
       interactionActive: activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0 || performance.now() < wheelInteractionUntil,
       earthDiveOverlapActive: Boolean(currentVisibilityHint.earthDiveOverlapActive),
     });
@@ -6625,6 +6631,7 @@ export function ParticleEarthScene({
     return {
       setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"]) {
         latestInitialCameraAnchor.current = anchor;
+        initialCameraAnchorWakePending = Boolean(anchor);
         wakeRenderLoop();
       },
       setHomeBasePresence(presence: readonly HomeBasePresenceDrawable[]) {

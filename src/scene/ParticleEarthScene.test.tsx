@@ -316,6 +316,11 @@ describe("ParticleEarthScene contracts", () => {
     expect(gate).toBeLessThan(wake.indexOf("requestAnimationFrame(render)"));
     // One idle-state spelling: the visibility update and the wake gate agree.
     expect(source).toMatch(/const updateRenderLoopVisibility = \(\) => \{\s*const state = resolveIdleRenderState\(\);/);
+    // A Home camera seed is a flight; a stable cover must not postpone it to
+    // reveal, where the user would watch the camera move.
+    expect(source).toMatch(/focusFlightActive: isFocusFlightActive\(pointFocusSettling, routeFocusSettling\) \|\| initialCameraAnchorWakePending,/);
+    expect(source).toMatch(/setInitialCameraAnchor\([\s\S]*?initialCameraAnchorWakePending = Boolean\(anchor\);\s*wakeRenderLoop\(\);/);
+    expect(source).toContain("if (!initialCameraAnchorSettling) initialCameraAnchorWakePending = false;");
   });
 
   it("uses one geographic surface anchor for map semantics", () => {
