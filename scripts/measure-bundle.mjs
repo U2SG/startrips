@@ -3,6 +3,7 @@ import { dirname, extname, join, posix, relative, resolve } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
+import { parseAst } from "vite";
 
 /**
  * Production first-load bundle measurement.
@@ -94,11 +95,18 @@ export function parseIndexHtml(html) {
   return { scripts, modulepreload, stylesheets, preloads };
 }
 
-/** Static import specifiers of an emitted ES chunk; `import("...")` is dynamic and excluded. */
+/**
+ * Static import specifiers of an emitted ES chunk, read from its syntax tree
+ * (Rollup's parser, re-exported by Vite) so text in strings or comments is
+ * never mistaken for an import. Static imports and re-exports are top-level
+ * statements by definition; `import("...")` is an expression and is excluded.
+ */
 export function staticImportsOf(code, chunkPath) {
   const imports = new Set();
-  for (const match of code.matchAll(/(?:\bfrom|\bimport)\s*["']([^"']+)["']/g)) {
-    const specifier = match[1];
+  for (const node of parseAst(code).body) {
+    if (node.type !== "ImportDeclaration" && node.type !== "ExportAllDeclaration" && node.type !== "ExportNamedDeclaration") continue;
+    const specifier = node.source?.value;
+    if (typeof specifier !== "string") continue;
     if (!specifier.startsWith(".") && !specifier.startsWith("/")) continue;
     const resolved = specifier.startsWith("/")
       ? posix.normalize(specifier.slice(1))
@@ -210,8 +218,14 @@ export async function measureBundle(distDirectory) {
     }
     if (kindOf(file) !== "js") continue;
     const code = await readFile(join(dist, file), "utf8");
-    for (const imported of staticImportsOf(code, file)) {
-      if (kindOf(imported) === "js") stack.push(imported);
+    let imported = [];
+    try {
+      imported = staticImportsOf(code, file);
+    } catch (error) {
+      errors.push(`cannot parse emitted chunk ${file}: ${error.message}`);
+    }
+    for (const path of imported) {
+      if (kindOf(path) === "js") stack.push(path);
     }
   }
 

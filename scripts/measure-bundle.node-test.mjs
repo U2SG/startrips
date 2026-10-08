@@ -26,6 +26,11 @@ test("staticImportsOf ignores dynamic import()", () => {
   assert.deepEqual(staticImportsOf(code, "assets/index-a.js"), ["assets/side-e.js", "assets/vendor-b.js"]);
 });
 
+test("staticImportsOf ignores import-like text in strings and comments, and reads re-exports", () => {
+  const code = `const help="import './example.js'";/* from "./comment.js" */const t=\`import "./template.js"\`;export*from"./re-export-f.js";export{x}from"./named-g.js";`;
+  assert.deepEqual(staticImportsOf(code, "assets/index-a.js"), ["assets/named-g.js", "assets/re-export-f.js"]);
+});
+
 test("manifestEagerClosure follows static imports and css, not dynamic imports", () => {
   const manifest = {
     "index.html": { file: "assets/index-a.js", isEntry: true, imports: ["_vendor"], css: ["assets/index-c.css"], dynamicImports: ["src/lazy.tsx"] },
