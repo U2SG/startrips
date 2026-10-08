@@ -26,15 +26,28 @@
 //      paper, within 1% of the stage, while the camera moves; frames of the
 //      cover's turn are saved as evidence (desktop-auto-*.png).
 //
-// Two sessions run it. Desktop (1440x1000, mouse) reads spreads in landscape
-// and navigates with the footer buttons and the keyboard. Phone (390x844, DPR 3,
-// touch) reads one page at a time in portrait: a real touch drag turns the
-// cover, the camera pans between pages, and every check is repeated on the
-// page in focus after its pan. The desktop mouse never moves over the stage
-// while sampling, so no page edge is lifted by hover; only afterwards does it
-// hover and drag (check 5) and drag the front cover to save frames of its
-// rigid turn. The phone session
-// checks that a tap leaves no edge lifted.
+// Desktop (1440x1000, mouse) reads spreads in landscape and navigates with the
+// footer buttons and the keyboard. Phone (390x844, DPR 3, touch) reads one page
+// at a time in portrait: a real touch drag turns the cover, the camera pans
+// between pages, and every check is repeated on the page in focus after its
+// pan. The desktop mouse never moves over the stage while a turns or
+// last-spread session samples, so no page edge is lifted by hover; the drags
+// session drags the front cover (saving frames of its rigid turn), hovers and
+// drags paper (check 5). The phone session checks that a tap leaves no edge
+// lifted.
+//
+// Every turn under SwiftShader costs tens of seconds of rendered frames, so the
+// lane runs as four parts, each in its own browser and its own CI suite with
+// its own cap (`node scripts/qa-journey-book-3d.mjs <part>`; no part runs all):
+//
+//   turns        desktop cover, the automatic cover turn onto the first spread
+//                (check 6) and that spread (checks 1-3), the automatic paper turn
+//   drags        desktop front-cover drag, hover and paper drag (check 5)
+//   last-spread  desktop End and back one spread, the last interior spread
+//   phone        the phone session
+//
+// No part turns paper only to reach a starting spread another turn already
+// reached.
 //
 // Expectations are fixed by the fixture: 40 sheets, quick_flipbook's sheet
 // spacing and the camera tilt below.
@@ -153,15 +166,18 @@ async function openSession(browser, name, contextOptions) {
   await page.goto(`${origin}/?qaState=journey-book-3d`, { waitUntil: "domcontentloaded" });
   await page.locator(".journey-book-3d").waitFor({ state: "visible", timeout: 30_000 });
 
-  /** Wait until the book has settled with the reader on `face`, then read what it reports. */
-  async function settledAt(face) {
+  /**
+   * Wait until the book has settled with the reader on `face`, then read what
+   * it reports. `evidence: false` when no screenshot of this spread follows.
+   */
+  async function settledAt(face, { evidence = true } = {}) {
     await page.waitForFunction((want) => {
       const raw = document.querySelector(".journey-book-3d__stage")?.dataset.qaBook;
       return raw ? JSON.parse(raw).face === want : false;
     }, face, { timeout: SETTLE_TIMEOUT_MS });
     // Let pictures near the spread land so the evidence shows real pages; the
     // sampled margins are paper either way.
-    await page.waitForTimeout(1_200);
+    if (evidence) await page.waitForTimeout(1_200);
     return page.evaluate(() => {
       const stage = document.querySelector(".journey-book-3d__stage");
       const box = stage.getBoundingClientRect();
@@ -225,8 +241,8 @@ async function openSession(browser, name, contextOptions) {
     record(`${name} ${label}: ${side} page's outer margin is paper, not table`, { rect, probes: points.length, bad }, bad.length === 0);
   }
 
-  function recordErrors() {
-    record(`${name}: no console or page errors`, { consoleErrors, pageErrors },
+  function recordErrors(scope = name) {
+    record(`${scope}: no console or page errors`, { consoleErrors, pageErrors },
       consoleErrors.length === 0 && pageErrors.length === 0);
   }
 
@@ -282,14 +298,12 @@ function recordFlight(label, flight) {
     && overshootPx <= boundPx + OVERSHOOT_TOLERANCE_PX);
 }
 
-/** Desktop hover lift and a held drag across one interior sheet of paper. */
-async function checkFlight(session) {
+/**
+ * Desktop hover lift and a held drag across one interior sheet of paper,
+ * from `spread`: the book settled on face 2 with the mouse off the stage.
+ */
+async function checkFlight(session, spread) {
   const { page } = session;
-  await page.mouse.move(0, 0);
-  await page.keyboard.press("Home");
-  await session.settledAt(0);
-  await page.locator('button[aria-label="下一页"]').click();
-  const spread = await session.settledAt(2);
   const rect = spread.rects.right;
   const centerY = spread.stage.top + rect.top + rect.height / 2;
   const outerX = spread.stage.left + rect.left + rect.width;
@@ -309,14 +323,14 @@ async function checkFlight(session) {
   const grabX = spread.stage.left + rect.left + rect.width * 0.6;
   await page.mouse.move(grabX, centerY);
   await session.flightAt(1, 0);
-  await session.settledAt(2);
+  await session.settledAt(2, { evidence: false });
   await page.mouse.down();
   for (const fraction of DRAG_FRACTIONS) {
     await page.mouse.move(grabX - rect.width * fraction, centerY, { steps: 2 });
     recordFlight(`drag ${fraction}`, await session.flightAt(1 + fraction, 0.01));
   }
   await page.mouse.up();
-  await session.settledAt(4);
+  await session.settledAt(4, { evidence: false });
   await page.mouse.move(0, 0);
 }
 
@@ -343,13 +357,13 @@ const MIN_FOLLOWING_FRAMES = 1;
  * bound over the turn, as in check 5) plus 1% of the stage height.
  */
 const dynamicTurns = [];
-async function checkAutoTurn(session, label, from, to, marks) {
+async function checkAutoTurn(session, label, from, to, marks, { evidence = true } = {}) {
   const { page } = session;
   await page.evaluate((wanted) => {
     window.__qaJourneyBookFlight = { frames: [], marks: wanted, shots: {}, maxOvershootPx: -Infinity };
   }, marks);
   await page.locator('button[aria-label="下一页"]').click();
-  await session.settledAt(to);
+  const settled = await session.settledAt(to, { evidence });
   const probe = await page.evaluate(() => {
     const value = window.__qaJourneyBookFlight;
     delete window.__qaJourneyBookFlight;
@@ -392,21 +406,38 @@ async function checkAutoTurn(session, label, from, to, marks) {
     bad: bad.slice(0, 8).map((frame) => ({ ...frame, progress: round(frame.progress, 4), pullBack: round(frame.pullBack, 4), overshootPx: round(frame.overshootPx, 2), heldBoundPx: round(frame.heldBoundPx, 2) })),
   }, measured.length >= MIN_FLIGHT_FRAMES && following >= MIN_FOLLOWING_FRAMES && bad.length === 0
     && probe.frames.length < 4096 && Object.keys(probe.shots).length >= 1 + marks.length);
+  return settled;
 }
 
-/** Desktop: spreads in landscape, mouse and keyboard. */
-async function desktopSession(browser) {
+/**
+ * Desktop: spreads in landscape, mouse and keyboard. Opens on the closed
+ * cover, checks the fixture there and runs `body` with the cover's readout.
+ */
+async function desktopSession(browser, part, body) {
   const session = await openSession(browser, "desktop", { viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
-  const { page } = session;
   try {
     const cover = await session.settledAt(0);
-    record("desktop fixture: the book has 40 sheets in landscape", { sheets: cover.sheets, orientation: cover.orientation },
+    record(`desktop ${part} fixture: the book has 40 sheets in landscape`, { sheets: cover.sheets, orientation: cover.orientation },
       cover.sheets === SHEETS && cover.sheets * 2 === FACES && cover.orientation === "landscape");
+    await body(session, cover);
+  } catch (error) {
+    record(`desktop ${part}: session ran to completion`, { error: error instanceof Error ? error.stack ?? error.message : String(error) }, false);
+  } finally {
+    session.recordErrors(`desktop ${part}`);
+    await session.context.close();
+  }
+}
+
+/**
+ * Desktop turns: the cover, then check 6 on the footer button's two automatic
+ * turns. The cover's turn is the one that opens the book onto the first spread,
+ * so that spread's checks (the deep left page, #630) read where it settles.
+ */
+async function desktopTurns(browser) {
+  await desktopSession(browser, "turns", async (session, cover) => {
     await session.checkAlignment("cover", cover, ["closed-front"], isCloth);
 
-    // First spread: the deep left page (#630).
-    await page.locator('button[aria-label="下一页"]').click();
-    const first = await session.settledAt(2);
+    const first = await checkAutoTurn(session, "cover", 0, 2, [0.25, 0.5, 0.75]);
     await session.checkOuterMargin("first-spread", first, "left");
     await session.checkAlignment("first-spread", first, ["left", "right"], isPaper);
     const offset = first.rects.left.top - first.rects.right.top;
@@ -415,24 +446,26 @@ async function desktopSession(browser) {
       offset: Number(offset.toFixed(2)), expected: Number(expected.toFixed(2)),
     }, Math.abs(offset - expected) < 0.5);
 
-    // Last interior spread: the deep right page.
-    await page.locator(".journey-book-3d").focus();
-    await page.keyboard.press("End");
-    await session.settledAt(FACES - 1);
-    await page.locator('button[aria-label="上一页"]').click();
-    const last = await session.settledAt(FACES - 2);
-    await session.checkOuterMargin("last-spread", last, "right");
-    await session.checkAlignment("last-spread", last, ["left", "right"], isPaper);
+    await checkAutoTurn(session, "paper", 2, 4, [], { evidence: false });
+    record("desktop auto-turns: dynamic maxima", {
+      maxDynamicPullBack: Number(Math.max(...dynamicTurns.map((turn) => turn.maxDynamicPullBack ?? -Infinity)).toFixed(4)),
+      maxDynamicOvershootPx: Number(Math.max(...dynamicTurns.map((turn) => turn.maxDynamicOvershootPx ?? -Infinity)).toFixed(2)),
+      boundsPx: dynamicTurns.map((turn) => Number(turn.boundPx.toFixed(2))),
+      limitsPx: dynamicTurns.map((turn) => Number(turn.limitPx.toFixed(2))),
+    }, dynamicTurns.length === 2);
+  });
+}
 
-    // The mouse enters the stage from here on.
-    await checkFlight(session);
-
-    // The front cover turning as a rigid board under a held mouse drag
-    // (cover-turn-000..004.png), each pose also checked against the cap.
-    // While the pointer holds the cover the book's clock is paused, so each
-    // frame is a fixed pose.
-    await page.keyboard.press("Home");
-    const closed = await session.settledAt(0);
+/**
+ * Desktop drags (check 5): the front cover turning as a rigid board under a
+ * held mouse drag (cover-turn-000..004.png), each pose checked against the cap;
+ * its release completes the turn onto the first spread, where the hover lift
+ * and a held drag across a sheet of paper follow. While the pointer holds a
+ * sheet the book's clock is paused, so each sample is a fixed pose.
+ */
+async function desktopDrags(browser) {
+  await desktopSession(browser, "drags", async (session, closed) => {
+    const { page } = session;
     const coverRect = closed.rects["closed-front"];
     const grabX = closed.stage.left + coverRect.left + coverRect.width * 0.6;
     const grabY = closed.stage.top + coverRect.top + coverRect.height * 0.5;
@@ -448,18 +481,7 @@ async function desktopSession(browser) {
     await page.mouse.move(0, 0);
     record("desktop cover-turn: front cover drag frames saved for review", { fractions }, true);
 
-    // Check 6: automatic turns from the footer button, frame by frame: the
-    // rigid front cover, then a sheet of paper.
-    await page.keyboard.press("Home");
-    await session.settledAt(0);
-    await checkAutoTurn(session, "cover", 0, 2, [0.25, 0.5, 0.75]);
-    await checkAutoTurn(session, "paper", 2, 4, []);
-    record("desktop auto-turns: dynamic maxima", {
-      maxDynamicPullBack: Number(Math.max(...dynamicTurns.map((turn) => turn.maxDynamicPullBack ?? -Infinity)).toFixed(4)),
-      maxDynamicOvershootPx: Number(Math.max(...dynamicTurns.map((turn) => turn.maxDynamicOvershootPx ?? -Infinity)).toFixed(2)),
-      boundsPx: dynamicTurns.map((turn) => Number(turn.boundPx.toFixed(2))),
-      limitsPx: dynamicTurns.map((turn) => Number(turn.limitPx.toFixed(2))),
-    }, dynamicTurns.length === 2);
+    await checkFlight(session, await session.settledAt(2, { evidence: false }));
     const maxPullBack = flights.length ? Math.max(...flights.map((flight) => flight.pullBack)) : null;
     const maxOvershootPx = flights.length ? Math.max(...flights.map((flight) => flight.overshootPx)) : null;
     record("desktop: every sheet in flight was sampled under the pull-back cap", {
@@ -468,13 +490,23 @@ async function desktopSession(browser) {
       maxOvershootPx: maxOvershootPx === null ? null : Number(maxOvershootPx.toFixed(2)),
     }, maxPullBack !== null && flights.length === 1 + DRAG_FRACTIONS.length + fractions.length
       && maxPullBack <= MAX_PULLBACK + PULLBACK_TOLERANCE);
-  } catch (error) {
-    record("desktop: session ran to completion", { error: error instanceof Error ? error.stack ?? error.message : String(error) }, false);
-  } finally {
-    session.recordErrors();
-    await session.context.close();
-  }
+  });
 }
+
+/** Desktop last spread: End riffles to the back cover, one step back reads the deep right page. */
+async function desktopLastSpread(browser) {
+  await desktopSession(browser, "last-spread", async (session) => {
+    const { page } = session;
+    await page.locator(".journey-book-3d").focus();
+    await page.keyboard.press("End");
+    await session.settledAt(FACES - 1, { evidence: false });
+    await page.locator('button[aria-label="上一页"]').click();
+    const last = await session.settledAt(FACES - 2);
+    await session.checkOuterMargin("last-spread", last, "right");
+    await session.checkAlignment("last-spread", last, ["left", "right"], isPaper);
+  });
+}
+
 
 /**
  * Phone: one page at a time in portrait, real touch input through CDP (the
@@ -526,7 +558,7 @@ async function phoneSession(browser) {
     // Last interior spread: its right page, then the pan back to its left page.
     await page.locator(".journey-book-3d").focus();
     await page.keyboard.press("End");
-    await session.settledAt(FACES - 1);
+    await session.settledAt(FACES - 1, { evidence: false });
     await page.locator('button[aria-label="上一页"]').tap();
     const last = await session.settledAt(FACES - 2);
     await session.checkOuterMargin("last-page", last, "right");
@@ -534,6 +566,12 @@ async function phoneSession(browser) {
     await page.locator('button[aria-label="上一页"]').tap();
     const lastLeft = await session.settledAt(FACES - 3);
     await session.checkAlignment("last-spread-left-after-pan", lastLeft, ["left"], isPaper);
+
+    // Home closes the book again (one frame under reduced motion).
+    await page.keyboard.press("Home");
+    const closed = await session.settledAt(0, { evidence: false });
+    record("phone: Home returns to the closed cover", { spread: closed.spread, face: closed.face },
+      closed.spread === 0 && closed.face === 0);
   } catch (error) {
     record("phone: session ran to completion", { error: error instanceof Error ? error.stack ?? error.message : String(error) }, false);
   } finally {
@@ -555,12 +593,17 @@ async function inOwnBrowser(session) {
   }
 }
 
+const PARTS = { turns: desktopTurns, drags: desktopDrags, "last-spread": desktopLastSpread, phone: phoneSession };
+const part = process.argv[2];
+if (part !== undefined && !Object.hasOwn(PARTS, part)) {
+  throw new Error(`Unknown 3D Journey Book QA part "${part}"; expected one of ${Object.keys(PARTS).join(", ")}`);
+}
+
 try {
   await mkdir(artifactDir, { recursive: true });
-  await inOwnBrowser(desktopSession);
-  await inOwnBrowser(phoneSession);
+  for (const run of part === undefined ? Object.values(PARTS) : [PARTS[part]]) await inOwnBrowser(run);
 } finally {
-  await writeFile(`${artifactDir}/checks.json`, `${JSON.stringify(checks, null, 2)}\n`).catch(() => {});
+  await writeFile(`${artifactDir}/checks${part === undefined ? "" : `-${part}`}.json`, `${JSON.stringify(checks, null, 2)}\n`).catch(() => {});
 }
 
 if (failed) {
