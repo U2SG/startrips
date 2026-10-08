@@ -23,6 +23,7 @@ const SCENE_VIEWPORT = { width: 430, height: 932, dpr: 3 };
 const FIXTURE_PATH = "/?qaState=journey-routes&qaRenderBudget=1&qaRouteOptics=1&qaMotion=animate";
 
 const errors = [];
+const apiAbsent = {};
 const browser = await launchQaBrowser({
   headless: true,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
@@ -265,8 +266,23 @@ async function openScene({ width, height, dpr }, quality) {
   await context.addInitScript(installProbe);
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push({ source: "pageerror", message: error.message }));
+  // Browser QA serves the client from Vite with no API behind it, so an
+  // unstubbed `/api/*` read answers 5xx from the proxy. That is a property of
+  // the harness, not of the scene: record those paths separately and keep
+  // every other failed resource and console error as a harness error.
+  page.on("response", (response) => {
+    if (response.status() < 400) return;
+    const { pathname } = new URL(response.url());
+    if (pathname.startsWith("/api/")) {
+      apiAbsent[pathname] = (apiAbsent[pathname] ?? 0) + 1;
+    } else {
+      errors.push({ source: "response", message: `${response.status()} ${pathname}` });
+    }
+  });
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push({ source: "console", message: message.text() });
+    if (message.type() !== "error") return;
+    if (message.text().startsWith("Failed to load resource:")) return;
+    errors.push({ source: "console", message: message.text() });
   });
   await page.goto(`${origin}${FIXTURE_PATH}&qaQuality=${quality}`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => {
@@ -466,6 +482,7 @@ const result = {
   },
   errorCount: errors.length + (fatal ? 1 : 0),
   errors: errors.slice(0, 20),
+  harnessApiAbsent: apiAbsent,
   fatal,
   proof: { visibleScenarios: VISIBLE_SCENARIOS, failures: proofFailures },
   summary,
