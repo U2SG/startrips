@@ -18,6 +18,12 @@ describe("road profile configuration", () => {
     expect(config.routingOsrmDrivingBaseUrl).toBe("http://car.internal:5000");
     expect(config.routingOsrmWalkingBaseUrl).toBeNull();
     expect(config.routingOsrmCyclingBaseUrl).toBeNull();
+    expect(config.routingGraphBuilderUrl).toBeNull();
+  });
+
+  it("reads the optional on-demand graph builder URL", () => {
+    expect(loadServerConfig({ ...productionEnvironment, ROUTING_GRAPH_BUILDER_URL: " http://routing-builder:8080/ " }).routingGraphBuilderUrl)
+      .toBe("http://routing-builder:8080");
   });
 
   it("reads the three deployment-owned graph URLs independently", () => {
@@ -31,7 +37,7 @@ describe("road profile configuration", () => {
       .toEqual(["http://car.internal:5000", "http://foot.internal:5000", "http://bike.internal:5000"]);
   });
 
-  it.each(["ROUTING_OSRM_DRIVING_BASE_URL", "ROUTING_OSRM_WALKING_BASE_URL", "ROUTING_OSRM_CYCLING_BASE_URL"])("validates %s before startup", (name) => {
+  it.each(["ROUTING_OSRM_DRIVING_BASE_URL", "ROUTING_OSRM_WALKING_BASE_URL", "ROUTING_OSRM_CYCLING_BASE_URL", "ROUTING_GRAPH_BUILDER_URL"])("validates %s before startup", (name) => {
     for (const value of ["file:///roads", "http://user:password@routing.internal", "http://routing.internal?token=secret", "http://routing.internal#fragment"]) {
       expect(() => loadServerConfig({ ...productionEnvironment, [name]: value })).toThrow(name);
     }

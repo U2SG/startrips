@@ -1,18 +1,20 @@
 import { createHash } from "node:crypto";
 import type { RoadProfile, RoutePointSuggestion } from "../../src/journey/types";
-import { RoutingUnavailableError, type RoutePointSuggestionRequest, type RoutingCoordinate } from "./route-candidate-provider";
+import { osrmBaseUrlResolver, RoutingUnavailableError, type OsrmBaseUrlResolver, type RoutePointSuggestionRequest, type RoutingCoordinate } from "./route-candidate-provider";
 import { compatibleRoutingStep, MAX_SELECTED_POINT_METERS, routingDistanceMeters, validProfileSnap, validRoutingCoordinate } from "./routing-coordinates";
 
 type NearestPoint = { location?: unknown; distance?: unknown; name?: unknown; hint?: unknown };
 
-export function createOsrmPointSuggestions(baseUrls: Partial<Record<RoadProfile, string | null>>, fetcher: typeof fetch = fetch) {
+export function createOsrmPointSuggestions(baseUrls: Partial<Record<RoadProfile, string | null>> | OsrmBaseUrlResolver, fetcher: typeof fetch = fetch) {
+  const resolver = osrmBaseUrlResolver(baseUrls);
   return async ({ coordinate, neighbors, profile, allowFerries = false, signal }: RoutePointSuggestionRequest): Promise<RoutePointSuggestion[]> => {
-    const baseUrl = baseUrls[profile];
-    if (!baseUrl) throw new RoutingUnavailableError("This road profile is not configured");
+    if (!resolver.supports(profile)) throw new RoutingUnavailableError("This road profile is not configured");
     if (!validRoutingCoordinate(coordinate)
       || Object.values(neighbors).some((point) => !validRoutingCoordinate(point))) {
       throw new RoutingUnavailableError("Road point coordinates are invalid");
     }
+    const baseUrl = await resolver.resolve(profile,
+      [neighbors.before, coordinate, neighbors.after].filter((point): point is RoutingCoordinate => Boolean(point)), signal);
     const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(12_000)]);
     async function read(url: URL) {
       let response: Response;

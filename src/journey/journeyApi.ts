@@ -21,6 +21,7 @@ import type {
   PrivateMediaRead,
   ShareGrantSummary,
 } from "./types";
+import { pollWhileRoutingPrepares, type RoutingPreparationPhase, type RoutingPreparing } from "./routingPreparation";
 
 type Fetcher = typeof fetch;
 
@@ -181,11 +182,12 @@ export async function requestRoutePointSuggestions(
   input: { coordinate: RoutingPoint; neighbors: { before?: RoutingPoint; after?: RoutingPoint }; profile: RoadProfile; allowFerries?: boolean },
   signal: AbortSignal,
   fetcher: Fetcher = fetch,
+  onPreparing?: (phase: RoutingPreparationPhase) => void,
 ): Promise<RoutePointSuggestion[]> {
-  const response = await requestJson<{ suggestions: RoutePointSuggestion[] }>(
+  const response = await pollWhileRoutingPrepares(() => requestJson<{ suggestions: RoutePointSuggestion[] } | RoutingPreparing>(
     "/api/journey-route-segments/point-suggestions",
     { method: "POST", body: JSON.stringify(input), signal }, fetcher,
-  );
+  ), { signal, onPreparing });
   return response.suggestions;
 }
 
@@ -198,13 +200,19 @@ export async function requestRouteCandidates(
   profile: RoadProfile,
   signal: AbortSignal,
   fetcher: Fetcher = fetch,
-  options: { allowFerries?: boolean; accessPoints?: RouteAccessPoints } = {},
+  { onPreparing, ...options }: {
+    allowFerries?: boolean;
+    accessPoints?: RouteAccessPoints;
+    onPreparing?: (phase: RoutingPreparationPhase) => void;
+  } = {},
 ): Promise<{ sourceKey: string; revision: number; candidates: SignedRouteCandidate[] }> {
-  return requestJson(
+  return pollWhileRoutingPrepares(() => requestJson<
+    { sourceKey: string; revision: number; candidates: SignedRouteCandidate[] } | RoutingPreparing
+  >(
     `${routeSegmentPath(journeyId, fromId, toId)}/candidates`,
     { method: "POST", body: JSON.stringify({ sourceKey, revision, profile, alternativesCount: 3, ...options }), signal },
     fetcher,
-  );
+  ), { signal, onPreparing });
 }
 
 export async function saveRouteSegment(

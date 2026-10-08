@@ -198,6 +198,9 @@ export function loadServerConfig(
   const routingOsrmDrivingBaseUrl = routingBaseUrl("ROUTING_OSRM_DRIVING_BASE_URL");
   const routingOsrmWalkingBaseUrl = routingBaseUrl("ROUTING_OSRM_WALKING_BASE_URL");
   const routingOsrmCyclingBaseUrl = routingBaseUrl("ROUTING_OSRM_CYCLING_BASE_URL");
+  // The internal routing-builder sidecar prepares corridor graphs on demand
+  // for every profile without a static OSRM URL above.
+  const routingGraphBuilderUrl = routingBaseUrl("ROUTING_GRAPH_BUILDER_URL");
   const locationSearchBaseUrl = (
     environment.LOCATION_SEARCH_BASE_URL?.trim()
     || "https://nominatim.openstreetmap.org"
@@ -634,6 +637,7 @@ export function loadServerConfig(
     routingOsrmDrivingBaseUrl,
     routingOsrmWalkingBaseUrl,
     routingOsrmCyclingBaseUrl,
+    routingGraphBuilderUrl,
     locationSearchBaseUrl,
     locationSearchUserAgent,
     locationSearchFallbackBaseUrl,
