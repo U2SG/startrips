@@ -19,6 +19,9 @@ const repetitions = Number(process.env.QA_PERF_GLOBE_REPS ?? 3);
 const WARMUP_MS = 2_000;
 const WINDOW_MS = 2_000;
 const LONG_FRAME_MS = 50;
+// render() clamps a scene step to 50 ms; the resume path also resets the
+// wall-clock origin, so a resumed first frame can never exceed one step.
+const RESUME_FRAME_DELTA_LIMIT_MS = 50.5;
 const SCENE_VIEWPORT = { width: 430, height: 932, dpr: 3 };
 // The overview fixture has no active Route and no temporal reveal: every Route
 // is fully revealed and the camera rests on the preview's fixed focus point.
@@ -507,6 +510,11 @@ for (const pass of passes) {
   for (const key of ["reveal", "visibleAgain"]) {
     const event = pass.events[key];
     if (!event?.sameCanvas) proofFailures.push(`pass ${pass.pass} ${key}: canvas remounted`);
+    // No catch-up animation: the first resumed frame advances at most one
+    // clamped scene step, however long the globe was covered or hidden.
+    if (!(event?.firstFrameDeltaMs >= 0 && event.firstFrameDeltaMs <= RESUME_FRAME_DELTA_LIMIT_MS)) {
+      proofFailures.push(`pass ${pass.pass} ${key}: first frame advanced ${event?.firstFrameDeltaMs} ms`);
+    }
   }
   const cycles = pass.events.coverCycles;
   if (!cycles?.sameCanvas) proofFailures.push(`pass ${pass.pass} coverCycles: canvas remounted`);
@@ -516,23 +524,33 @@ for (const pass of passes) {
   if (!cycles?.growth) proofFailures.push(`pass ${pass.pass} coverCycles: not measured`);
 }
 // The drawing buffer the browser actually allocated stays inside the named
-// per-quality cap. The caps are read from the budget's single owner.
-const QUALITY_PIXEL_CAPS = readQualityPixelCaps();
+// per-quality caps: both the pixel area and the effective DPR. The caps are
+// read from the budget's single owner.
+const QUALITY_CAPS = readQualityCaps();
 if (budget.length !== 12) proofFailures.push(`budget matrix: ${budget.length} of 12 rows`);
 for (const row of budget) {
-  const cap = QUALITY_PIXEL_CAPS[row.quality];
-  if (!(cap > 0) || !(row.drawingBufferPixels > 0) || row.drawingBufferPixels > cap) {
-    proofFailures.push(`budget ${row.cssViewport.width}x${row.cssViewport.height}@${row.deviceDpr} ${row.quality}: ${row.drawingBufferPixels} px exceeds cap ${cap}`);
+  const cap = QUALITY_CAPS[row.quality];
+  const label = `budget ${row.cssViewport.width}x${row.cssViewport.height}@${row.deviceDpr} ${row.quality}`;
+  if (!(cap?.maxPixels > 0) || !(row.drawingBufferPixels > 0) || row.drawingBufferPixels > cap.maxPixels) {
+    proofFailures.push(`${label}: ${row.drawingBufferPixels} px exceeds cap ${cap?.maxPixels}`);
+  }
+  const dprLimit = Math.min(cap?.maxDpr ?? Number.NaN, row.deviceDpr);
+  if (!(dprLimit > 0) || !(row.effectivePixelRatio > 0) || row.effectivePixelRatio > dprLimit + 1e-6) {
+    proofFailures.push(`${label}: effective DPR ${row.effectivePixelRatio} exceeds cap ${dprLimit}`);
   }
 }
 
-function readQualityPixelCaps() {
+function readQualityCaps() {
   const source = readFileSync(new URL("../src/scene/renderBudget.ts", import.meta.url), "utf8");
-  const cap = (quality) => {
-    const match = source.match(new RegExp(`${quality}:\\s*\\{[^}]*maxDrawingBufferPixels:\\s*([\\d_]+)`));
+  const field = (quality, name) => {
+    const match = source.match(new RegExp(`${quality}:\\s*\\{[^}]*${name}:\\s*([\\d_.]+)`));
     return match ? Number(match[1].replaceAll("_", "")) : Number.NaN;
   };
-  return { high: cap("high"), low: cap("low") };
+  const caps = (quality) => ({
+    maxDpr: field(quality, "maxDpr"),
+    maxPixels: field(quality, "maxDrawingBufferPixels"),
+  });
+  return { high: caps("high"), low: caps("low") };
 }
 const result = {
   harness: "qa-perf-globe",
