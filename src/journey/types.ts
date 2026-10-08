@@ -266,6 +266,8 @@ export type AutoRouteSegmentStatus = {
   sourceKey: string;
   state: "pending" | "snapping" | "failed";
   code?: string;
+  /** A failed segment the server will try again at this time; absent for final failures. */
+  retryAt?: string;
 };
 
 export type JourneyRoute = {

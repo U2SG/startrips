@@ -50,9 +50,14 @@ export function createRouteSnapper(deps: RouteSnappingDependencies) {
   const refused = new Set<string>();
   const key = (target: Target) => JSON.stringify([target.journeyId, target.sourceKey, target.revision]);
 
+  // The SQL prefilter cannot see profile support, so rows owing only
+  // unsupported legs stay candidates forever. The scan therefore resumes where
+  // the last pass stopped and wraps at the end, so such rows cannot starve it.
+  let offset = 0;
   async function nextTarget(now: number): Promise<Target | null> {
+    let wrapped = offset === 0;
     for (let page = 0; page < SCAN_PAGES; page += 1) {
-      const rows = await deps.listJourneys(new Date(now), page * pageSize);
+      const rows = await deps.listJourneys(new Date(now), offset);
       for (const row of rows) {
         for (const segment of unsettledAutoRouteSegments(row.points, row.routeSegments, now, deps.provider.supports)) {
           if (segment.state !== "pending") continue;
@@ -60,7 +65,12 @@ export function createRouteSnapper(deps: RouteSnappingDependencies) {
           if (!refused.has(key(target))) return target;
         }
       }
-      if (rows.length < pageSize) return null;
+      if (rows.length === pageSize) offset += pageSize;
+      else {
+        offset = 0;
+        if (wrapped) return null;
+        wrapped = true;
+      }
     }
     return null;
   }

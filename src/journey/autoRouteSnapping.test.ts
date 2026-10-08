@@ -3,11 +3,11 @@ import {
   autoRouteFailureMessage,
   autoRouteProfile,
   autoRouteSegmentStatuses,
-  journeyAutoRoutePending,
+  autoRouteRefreshDelay,
   mergeAutoRouteRefresh,
 } from "./autoRouteSnapping";
 import { resolveJourneyRouteSegmentProvenance, routeSegmentSourceKey } from "./journeyModel";
-import type { Journey, RouteCandidate, RouteSegmentRecord } from "./types";
+import type { AutoRouteSegmentStatus, Journey, RouteCandidate, RouteSegmentRecord } from "./types";
 
 const points = [
   { id: "a", lat: 0, lon: 0 },
@@ -57,19 +57,48 @@ describe("automatic road snapping rules", () => {
     expect(resolveJourneyRouteSegmentProvenance({ ...route, routeSegments: [{ ...confirmed, confirmedBy: "auto" }] }, 0)).toBe("suggested-route");
   });
 
-  it("polls only while a current leg is pending or snapping", () => {
-    expect(journeyAutoRoutePending(journey())).toBe(false);
-    expect(journeyAutoRoutePending(journey({ autoRouteSegments: [{ sourceKey: key(0), state: "failed", code: "X" }] }))).toBe(false);
-    expect(journeyAutoRoutePending(journey({ autoRouteSegments: [{ sourceKey: "stale", state: "pending" }] }))).toBe(false);
-    expect(journeyAutoRoutePending(journey({ autoRouteSegments: [{ sourceKey: key(1), state: "snapping" }] }))).toBe(true);
+  it("refreshes every 10 s while pending, at the retry time of a retryable failure, and never for final failures", () => {
+    const at = (status: AutoRouteSegmentStatus) => autoRouteRefreshDelay(journey({ autoRouteSegments: [status] }), now);
+    expect(autoRouteRefreshDelay(journey(), now)).toBeNull();
+    expect(at({ sourceKey: key(1), state: "snapping" })).toBe(10_000);
+    expect(at({ sourceKey: "stale", state: "pending" })).toBeNull();
+    expect(at({ sourceKey: key(0), state: "failed", code: "ROUTING_NO_ROADS" })).toBeNull();
+    const retry = (minutes: number) => ({ sourceKey: key(0), state: "failed" as const, code: "ROUTING_DATA_UNAVAILABLE",
+      retryAt: new Date(now + minutes * 60_000).toISOString() });
+    expect(at(retry(5))).toBe(5 * 60_000);
+    expect(at(retry(0))).toBe(10_000);
+    expect(at(retry(60))).toBe(15 * 60_000);
+    // The server status carries the retry time of a retryable failure.
+    const failed = [record(0, { autoAttempt: { at: "2026-10-08T00:00:00Z", code: "ROUTING_DATA_UNAVAILABLE", retryAt: "2026-10-08T00:15:00Z" } })];
+    expect(autoRouteSegmentStatuses(points, failed, now, () => true)[0]).toEqual({
+      sourceKey: key(0), state: "failed", code: "ROUTING_DATA_UNAVAILABLE", retryAt: "2026-10-08T00:15:00Z",
+    });
   });
 
-  it("merges only segment geometry and status from a refresh of the same legs", () => {
+  it("merges segment geometry and status per segment from a refresh of the same legs", () => {
     const current = journey({ title: "local" });
-    const fetched = journey({ title: "server", routeSegments: [record(0, { decision: "confirmed", confirmedCandidate: candidate, confirmedBy: "auto" })], autoRouteSegments: [] });
+    const fetched = journey({ title: "server", routeSegments: [record(0, { revision: 2, decision: "confirmed", confirmedCandidate: candidate, confirmedBy: "auto" })], autoRouteSegments: [] });
     expect(mergeAutoRouteRefresh(current, fetched)).toEqual({ ...current, routeSegments: fetched.routeSegments, autoRouteSegments: [] });
     const moved = journey({ routePoints: [{ id: "a", latitude: 1, longitude: 0 }, ...current.routePoints.slice(1)] as Journey["routePoints"] });
     expect(mergeAutoRouteRefresh(current, moved)).toBe(current);
+  });
+
+  it("never lets a read that started before a member save overwrite the newer local record", () => {
+    const saved = record(0, { revision: 3, decision: "none" });
+    const local = journey({ routeSegments: [saved], autoRouteSegments: [] });
+    const older = journey({
+      routeSegments: [record(0, { revision: 2, decision: "confirmed", confirmedCandidate: candidate, confirmedBy: "auto" }), record(1, { revision: 1, decision: "none" })],
+      autoRouteSegments: [{ sourceKey: key(0), state: "pending" }],
+    });
+    const merged = mergeAutoRouteRefresh(local, older);
+    expect(merged.routeSegments).toEqual([saved, older.routeSegments![1]]);
+    expect(merged.autoRouteSegments).toEqual([]);
+    // An equal revision never replaces a member decision with an auto/open record either.
+    const attempt = record(0, { revision: 3, autoAttempt: { at: "2026-10-08T00:00:00Z", code: "ROUTING_NO_ROADS" } });
+    expect(mergeAutoRouteRefresh(local, journey({ routeSegments: [attempt] })).routeSegments).toEqual([saved]);
+    // A failed attempt keeps the revision and still replaces a local open record.
+    const open = journey({ routeSegments: [record(0, { revision: 3 })] });
+    expect(mergeAutoRouteRefresh(open, journey({ routeSegments: [attempt] })).routeSegments).toEqual([attempt]);
   });
 
   it("explains a failed segment in the editor", () => {

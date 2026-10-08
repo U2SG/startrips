@@ -65,7 +65,10 @@ export function autoRouteSegmentStatuses(
 ): AutoRouteSegmentStatus[] {
   return unsettledAutoRouteSegments(points, records, nowMs, supports).map((segment) => (
     segment.sourceKey === snappingSourceKey ? { sourceKey: segment.sourceKey, state: "snapping" }
-      : segment.state === "failed" ? { sourceKey: segment.sourceKey, state: "failed", code: segment.record!.autoAttempt!.code }
+      : segment.state === "failed" ? {
+        sourceKey: segment.sourceKey, state: "failed", code: segment.record!.autoAttempt!.code,
+        ...(segment.record!.autoAttempt!.retryAt ? { retryAt: segment.record!.autoAttempt!.retryAt } : {}),
+      }
         : { sourceKey: segment.sourceKey, state: "pending" }
   ));
 }
@@ -75,22 +78,55 @@ function journeySourceKeys(journey: Pick<Journey, "routePoints">) {
   return points.slice(0, -1).map((_, index) => routeSegmentSourceKey(points, index));
 }
 
-/** True while a current leg of this Journey is waiting for, or being given, road geometry. */
-export function journeyAutoRoutePending(journey: Pick<Journey, "routePoints" | "autoRouteSegments">): boolean {
-  if (!journey.autoRouteSegments?.length) return false;
+export const AUTO_ROUTE_REFRESH_MS = 10_000;
+const AUTO_ROUTE_RETRY_REFRESH_MAX_MS = 15 * 60_000;
+
+/**
+ * When to re-read this Journey: every 10 s while a current leg is pending or
+ * snapping; at the earliest retry of a retryable failure (clamped to 10 s -
+ * 15 min); null when only final failures, or nothing, remain.
+ */
+export function autoRouteRefreshDelay(journey: Pick<Journey, "routePoints" | "autoRouteSegments">, nowMs: number): number | null {
   const current = new Set(journeySourceKeys(journey));
-  return journey.autoRouteSegments.some((status) => status.state !== "failed" && current.has(status.sourceKey));
+  const statuses = (journey.autoRouteSegments ?? []).filter((status) => current.has(status.sourceKey));
+  if (statuses.some((status) => status.state !== "failed")) return AUTO_ROUTE_REFRESH_MS;
+  const retries = statuses.flatMap((status) => status.retryAt ? [Date.parse(status.retryAt)] : [])
+    .filter((at) => Number.isFinite(at));
+  if (!retries.length) return null;
+  return Math.min(AUTO_ROUTE_RETRY_REFRESH_MAX_MS, Math.max(AUTO_ROUTE_REFRESH_MS, Math.min(...retries) - nowMs));
+}
+
+function memberDecision(record: RouteSegmentRecord) {
+  return record.confirmedBy !== "auto" && (record.decision !== "open" || record.shapePoints.length > 0);
 }
 
 /**
- * Takes only segment geometry and status from a refreshed read, and only while
- * both reads describe the same legs; anything else stays with the Journey the
- * Atlas already holds.
+ * Takes segment geometry and status from a refreshed read, per segment, and
+ * only while both reads describe the same legs. A read that started before a
+ * member save can land after it: a fetched record wins only with a newer
+ * revision, or an equal one over a local record that is no member decision.
  */
 export function mergeAutoRouteRefresh(current: Journey, fetched: Journey): Journey {
-  if (current.id !== fetched.id
-    || JSON.stringify(journeySourceKeys(current)) !== JSON.stringify(journeySourceKeys(fetched))) return current;
-  return { ...current, routeSegments: fetched.routeSegments, autoRouteSegments: fetched.autoRouteSegments };
+  const sourceKeys = journeySourceKeys(current);
+  if (current.id !== fetched.id || JSON.stringify(sourceKeys) !== JSON.stringify(journeySourceKeys(fetched))) return current;
+  const kept = new Set<string | null>();
+  const routeSegments = sourceKeys.flatMap((sourceKey): RouteSegmentRecord[] => {
+    const local = current.routeSegments?.find((record) => record.sourceKey === sourceKey);
+    const remote = fetched.routeSegments?.find((record) => record.sourceKey === sourceKey);
+    if (local && (!remote || remote.revision < local.revision
+      || (remote.revision === local.revision && memberDecision(local)))) {
+      kept.add(sourceKey);
+      return [local];
+    }
+    return remote ? [remote] : [];
+  });
+  return {
+    ...current,
+    routeSegments,
+    // A segment kept for its local member decision owes nothing any more.
+    autoRouteSegments: fetched.autoRouteSegments?.filter((status) => !kept.has(status.sourceKey)
+      || !memberDecision(current.routeSegments!.find((record) => record.sourceKey === status.sourceKey)!)),
+  };
 }
 
 /** Editor copy for a segment the server could not snap; the map view shows nothing for it. */

@@ -65,6 +65,20 @@ describe("automatic road snapping", () => {
     expect(deps.provider.candidates).not.toHaveBeenCalled();
   });
 
+  it("resumes the scan past rows owing only unsupported legs and wraps to the start", async () => {
+    const ineligible = Array.from({ length: 81 }, (_, index) => ({ id: `walk-${index}`, routeSegments: [], points: near }));
+    const { snapper, deps, writes } = setup([...ineligible, { id: "j-drive", routeSegments: [], points: far }], {
+      provider: { supports: (profile) => profile === "driving", candidates: vi.fn(async () => [candidate]) },
+    });
+    // The bounded first pass stops inside the ineligible rows ...
+    await snapper.step(signal());
+    expect(writes).toHaveLength(0);
+    // ... and the next pass continues there instead of starting over.
+    await snapper.step(signal());
+    expect(writes[0][0]).toBe("j-drive");
+    expect(vi.mocked(deps.listJourneys).mock.calls.slice(40).map(([, offset]) => offset)[0]).toBe(80);
+  });
+
   it("keeps one preparing segment until its graph is ready, then gives up after the preparing limit", async () => {
     const candidates = vi.fn(async (_request: { coordinates: readonly unknown[] }): Promise<RouteCandidate[]> => {
       throw new RoutingPreparingError("fetching", 2_000);

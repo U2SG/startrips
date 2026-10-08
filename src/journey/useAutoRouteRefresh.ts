@@ -1,13 +1,12 @@
 import { useEffect, useRef } from "react";
-import { journeyAutoRoutePending } from "./autoRouteSnapping";
+import { autoRouteRefreshDelay } from "./autoRouteSnapping";
 import type { Journey } from "./types";
-
-export const AUTO_ROUTE_REFRESH_MS = 10_000;
 
 /**
  * While the visible Journey has a segment waiting for automatic road geometry,
- * re-reads it on a modest interval; stops as soon as nothing is pending, and
- * aborts on unmount or when another Journey becomes visible.
+ * re-reads it: every 10 s while pending, at the retry time of a retryable
+ * failure, never for final failures. Aborts on unmount or when another
+ * Journey becomes visible.
  */
 export function useAutoRouteRefresh(
   journey: Journey | null,
@@ -15,26 +14,32 @@ export function useAutoRouteRefresh(
   onRefreshed: (journey: Journey) => void,
 ) {
   const journeyId = journey?.id ?? null;
-  const pending = journey ? journeyAutoRoutePending(journey) : false;
+  // Restart only when the reported statuses change, not on every render.
+  const statusKey = journey && autoRouteRefreshDelay(journey, 0) !== null
+    ? JSON.stringify(journey.autoRouteSegments) : null;
+  const latest = useRef(journey);
+  latest.current = journey;
   const refreshed = useRef(onRefreshed);
   refreshed.current = onRefreshed;
   useEffect(() => {
-    if (!journeyId || !pending || !readJourney) return;
+    if (!journeyId || statusKey === null || !readJourney) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const schedule = () => {
+      const delay = latest.current ? autoRouteRefreshDelay(latest.current, Date.now()) : null;
+      if (delay === null) return;
       timer = setTimeout(() => {
         void readJourney(journeyId, controller.signal)
           .then((fetched) => { if (!controller.signal.aborted) refreshed.current(fetched); })
           .catch(() => undefined)
-          // A refresh that clears the pending state re-runs this effect and stops here.
+          // A refresh that changes the statuses re-runs this effect instead.
           .finally(() => { if (!controller.signal.aborted) schedule(); });
-      }, AUTO_ROUTE_REFRESH_MS);
+      }, delay);
     };
     schedule();
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [journeyId, pending, readJourney]);
+  }, [journeyId, statusKey, readJourney]);
 }
