@@ -243,15 +243,15 @@ jobs:
               story-note-beats::pnpm qa:story-note-beats
               media-motion-lab::pnpm qa:media-motion-lab
               soundtrack-ducking::pnpm qa:soundtrack-ducking
-              journey-book-3d-turns::pnpm qa:journey-book-3d turns
+              journey-book-3d-turns::pnpm qa:journey-book-3d-turns
           - name: labels-recovery
             suites: "|city-label-anchoring|recovery-surfaces|mobile-native|journey-book-3d-last-spread|journey-book-3d-phone|"
             commands: |
               city-label-anchoring::pnpm qa:city-label-anchoring
               recovery-surfaces::pnpm qa:recovery-surfaces
               mobile-native::pnpm qa:mobile-native
-              journey-book-3d-last-spread::pnpm qa:journey-book-3d last-spread
-              journey-book-3d-phone::pnpm qa:journey-book-3d phone
+              journey-book-3d-last-spread::pnpm qa:journey-book-3d-last-spread
+              journey-book-3d-phone::pnpm qa:journey-book-3d-phone
           - name: reveal-share
             suites: "|cover-reveal-opening|cover-reveal|owner-share|playback-map-bridge|"
             commands: |
@@ -283,7 +283,7 @@ jobs:
               guest-share::pnpm qa:guest-share
               home-base-suggestion::pnpm qa:home-base-suggestion
               home-base-context::pnpm qa:home-base-context
-              journey-book-3d-drags::pnpm qa:journey-book-3d drags
+              journey-book-3d-drags::pnpm qa:journey-book-3d-drags
           - name: route-candidates
             suites: "|route-candidates|playback-manual-camera|playback-prefetch|playback-continuity|brand-signature-motion|"
             commands: |
