@@ -201,6 +201,8 @@ export function loadServerConfig(
   // The internal routing-builder sidecar prepares corridor graphs on demand
   // for every profile without a static OSRM URL above.
   const routingGraphBuilderUrl = routingBaseUrl("ROUTING_GRAPH_BUILDER_URL");
+  // Background snapping can be paused while the member's own road tools stay on.
+  const routingAutoSnappingEnabled = environment.ROUTING_AUTO_SNAPPING?.trim() !== "disabled";
   const locationSearchBaseUrl = (
     environment.LOCATION_SEARCH_BASE_URL?.trim()
     || "https://nominatim.openstreetmap.org"
@@ -638,6 +640,7 @@ export function loadServerConfig(
     routingOsrmWalkingBaseUrl,
     routingOsrmCyclingBaseUrl,
     routingGraphBuilderUrl,
+    routingAutoSnappingEnabled,
     locationSearchBaseUrl,
     locationSearchUserAgent,
     locationSearchFallbackBaseUrl,
