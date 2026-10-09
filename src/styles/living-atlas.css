@@ -461,9 +461,16 @@
    row's band from the same right edge, so it owns that region while open. The
    row underneath steps out entirely rather than staying tabbable (or leaving
    a strip of its last button pressable) behind the panel. AuthGateway marks
-   the body while the menu is open. */
-body[data-account-menu="open"] .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right {
+   the body while the menu is open.
+   Every descendant matches the rule itself rather than inheriting it: MapLibre
+   rewrites the compass icon's inline transform on each `rotate` event, and
+   Chrome can then keep that icon's inherited `visibility: visible` while its
+   button reads hidden, leaving the compass strip beside the panel pressable.
+   `pointer-events` is withdrawn too, since `.maplibregl-ctrl` opts back in. */
+body[data-account-menu="open"] .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right,
+body[data-account-menu="open"] .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-bottom-right * {
   visibility: hidden;
+  pointer-events: none;
 }
 
 .living-atlas[data-mobile-v2="off"] .detailed-earth-map .maplibregl-ctrl-group {

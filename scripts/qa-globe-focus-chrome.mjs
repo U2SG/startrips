@@ -740,16 +740,21 @@ function readZoomRowUnderMenu(page) {
  * What decides the row's state, so a red reading names its cause: the body
  * marker AuthGateway sets, the row container's computed visibility, which
  * renderer owns the Dive (the particle owner turns the controls'
- * pointer-events off), and what each button's five points actually hit.
+ * pointer-events off), the compass icon's own visibility/pointer-events, and
+ * what each button's five points actually hit.
  */
 function readZoomRowDiagnostics(page) {
   return page.evaluate(() => {
     const container = document.querySelector(".detailed-earth-map .maplibregl-ctrl-bottom-right");
     const group = document.querySelector(".detailed-earth-map .maplibregl-ctrl-group");
+    const compassIcon = document.querySelector(".detailed-earth-map .maplibregl-ctrl-compass .maplibregl-ctrl-icon");
     return {
       accountMenuMarker: document.body.dataset.accountMenu ?? null,
       dockOpen: Boolean(document.querySelector(".account-dock.is-open")),
       containerVisibility: container ? getComputedStyle(container).visibility : null,
+      compassIcon: compassIcon
+        ? `${getComputedStyle(compassIcon).visibility}/${getComputedStyle(compassIcon).pointerEvents}`
+        : null,
       diveOwner: document.querySelector(".detailed-earth-map")?.getAttribute("data-dive-owner") ?? null,
       earthDive: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") ?? null,
       hitClasses: group
@@ -770,6 +775,36 @@ function readZoomRowDiagnostics(page) {
     };
   });
 }
+
+/**
+ * MapLibre rewrites the compass icon's inline transform on every `rotate`
+ * event. A camera rotation in flight while the menu opens left that icon
+ * hit-testable behind the hidden row in about 1 in 35 CI runs; rewriting it
+ * every frame across the open, as a rotation does, makes that case
+ * deterministic instead of depending on where the Dive camera happens to be.
+ */
+const startCompassRotation = (page) => page.evaluate(() => {
+  const icon = document.querySelector(".detailed-earth-map .maplibregl-ctrl-compass .maplibregl-ctrl-icon");
+  if (!(icon instanceof HTMLElement)) return;
+  const original = icon.style.transform;
+  let degrees = 0;
+  let frame = 0;
+  const tick = () => {
+    degrees = (degrees + 1) % 360;
+    icon.style.transform = `rotate(${-degrees}deg)`;
+    frame = requestAnimationFrame(tick);
+  };
+  frame = requestAnimationFrame(tick);
+  window.__qaStopCompassRotation = () => {
+    cancelAnimationFrame(frame);
+    icon.style.transform = original;
+  };
+});
+
+const stopCompassRotation = (page) => page.evaluate(() => {
+  window.__qaStopCompassRotation?.();
+  delete window.__qaStopCompassRotation;
+});
 
 /** Wait, bounded, for the row container's visibility to settle. */
 const waitForZoomRowVisibility = (page, expected) => page.waitForFunction((value) => {
@@ -1874,7 +1909,9 @@ try {
   //     on the real gateway (the bypass fixture renders no dock): the row is
   //     clear and hit-testable with the menu closed, hidden, unfocusable and
   //     never hit while it is open, and owns all five points of every button
-  //     again once the menu closes.
+  //     again once the menu closes. The compass keeps rotating across the
+  //     open, as it does when the camera turns, so the hidden state must hold
+  //     on an icon MapLibre is still restyling.
   for (const viewport of [
     { name: "800x700", width: 800, height: 700 },
     { name: "1280x700", width: 1280, height: 700 },
@@ -1887,6 +1924,7 @@ try {
       await settle(page);
       const menuClosed = await readZoomRow(page);
       const closedDiagnostics = await readZoomRowDiagnostics(page);
+      await startCompassRotation(page);
       await page.locator(".account-dock__tab").click();
       const panel = page.locator(".account-dock.is-open .account-dock__panel");
       await panel.waitFor({ state: "visible", timeout: 5_000 });
@@ -1895,6 +1933,7 @@ try {
       await settle(page);
       const openDiagnostics = await readZoomRowDiagnostics(page);
       const menuOpen = await readZoomRowUnderMenu(page);
+      await stopCompassRotation(page);
       await page.locator(".account-dock__tab").click();
       await page.locator(".account-dock__panel").waitFor({ state: "hidden", timeout: 5_000 });
       const restoredSettled = await waitForZoomRowVisibility(page, "visible");
