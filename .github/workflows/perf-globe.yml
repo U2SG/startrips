@@ -1,0 +1,82 @@
+name: perf-globe
+
+# #247: Particle Earth render-work measurement. SwiftShader cannot answer
+# device frame-time questions, so this lane records work counts (frames,
+# draw calls, drawing-buffer size, refinement requests, timers/listeners)
+# and uploads them as an artifact. It does not gate merges on timing.
+on:
+  pull_request:
+    paths:
+      - src/scene/**
+      - src/preview/RouteQaPreview.tsx
+      - src/preview/qaRoutes.ts
+      - src/preview/qaEntry.tsx
+      - scripts/qa-perf-globe.mjs
+      - scripts/qa-browser.mjs
+      - scripts/ci-browser-runtime.mjs
+      - .github/workflows/perf-globe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-globe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render-work:
+    name: perf-globe / render work
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      QA_PLAYWRIGHT_VERSION: '1.55.0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Record measured source
+        run: echo "QA_BUILD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        timeout-minutes: 3
+      # The runtime check opens a recording-capable page, which needs
+      # Playwright's ffmpeg helper; the hosted image's Chrome is used as-is.
+      - name: Install Playwright video recorder only
+        timeout-minutes: 2
+        env:
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: '20000'
+        run: pnpm exec playwright-core install ffmpeg
+      - name: Verify preinstalled browser runtime
+        timeout-minutes: 1
+        run: node scripts/ci-browser-runtime.mjs
+      - name: Measure Particle Earth render work
+        run: |
+          set -euo pipefail
+          pnpm exec vite --host 127.0.0.1 --port 4173 > "$RUNNER_TEMP/perf-globe-vite.log" 2>&1 &
+          VITE_PID=$!
+          trap 'kill "$VITE_PID" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --max-time 2 --fail --silent http://127.0.0.1:4173/ > /dev/null; then break; fi
+            sleep 1
+          done
+          curl --max-time 2 --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat "$RUNNER_TEMP/perf-globe-vite.log" && exit 1)
+          node scripts/qa-perf-globe.mjs
+      - name: Publish summary
+        if: always()
+        run: cat artifacts/perf-globe/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload render-work artifact
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: perf-globe-${{ github.run_attempt }}
+          path: artifacts/perf-globe/
+          if-no-files-found: error
+          retention-days: 14

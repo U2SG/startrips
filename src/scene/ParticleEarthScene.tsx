@@ -2023,6 +2023,13 @@ export function ParticleEarthScene({
     // counters below say what that frame did, not that one occurred.
     let sceneFrameRevision = 0;
     let qualityBuildRevision = 0;
+    // #247: cumulative render work. `renderer.info.render` resets on every
+    // render() call, so a reader sampling it sees only the last frame; these
+    // totals let a measurement window take end-minus-start work counts.
+    let renderCallsTotal = 0;
+    let renderPointsTotal = 0;
+    let particleRefinementRequests = 0;
+    let coastlineRefinementRequests = 0;
     const targetSize = new Vector2();
     const scene = new Scene();
     const camera = new PerspectiveCamera(38, 1, 0.1, 100);
@@ -2141,6 +2148,13 @@ export function ParticleEarthScene({
         quality: keyof typeof QUALITY_PROFILE;
         pixelRatio: number;
         drawingBufferPixels: number;
+        drawingBufferWidth: number;
+        drawingBufferHeight: number;
+        sceneFrameRevision: number;
+        renderCallsTotal: number;
+        renderPointsTotal: number;
+        particleRefinementRequests: number;
+        coastlineRefinementRequests: number;
         renderState: GlobeRenderState;
         lastFrameDeltaMs: number;
         particleCount: number;
@@ -2196,6 +2210,13 @@ export function ParticleEarthScene({
       quality: currentQuality,
       pixelRatio: renderer.getPixelRatio(),
       drawingBufferPixels: resolvedRenderBudget.drawingBufferPixels,
+      drawingBufferWidth: renderer.domElement.width,
+      drawingBufferHeight: renderer.domElement.height,
+      sceneFrameRevision,
+      renderCallsTotal,
+      renderPointsTotal,
+      particleRefinementRequests,
+      coastlineRefinementRequests,
       renderState: currentRenderState,
       lastFrameDeltaMs,
       particleCount: particleGeometry?.getAttribute("position")?.count ?? 0,
@@ -2382,6 +2403,11 @@ export function ParticleEarthScene({
     let routeFocusFrame = getSphericalRouteFocus(latestFocusRoute.current?.points ?? []);
     let routeFocusSettling = false;
     let pointFocusSettling = false;
+    // #247: a Home camera seed is a camera flight the render frame treats as
+    // focus (`initialCameraAnchorSettling`). Outside a frame that settling is
+    // not yet known, so a fresh seed holds the wake open until a frame has
+    // measured it; a stable cover then cannot postpone the flight to reveal.
+    let initialCameraAnchorWakePending = false;
     let activeFocusRevision = Number.NEGATIVE_INFINITY;
     let focusTarget: {
       point: { lat: number; lon: number };
@@ -5154,6 +5180,7 @@ export function ParticleEarthScene({
       }
       if (requestedRefinementCacheKey === cacheKey) return;
       requestedRefinementCacheKey = cacheKey;
+      particleRefinementRequests += 1;
       const ticket = refinementBuildGuard.request(cacheKey);
       const cached = refinementCache.get(cacheKey);
       if (cached) {
@@ -5312,11 +5339,13 @@ export function ParticleEarthScene({
       };
 
       if (!localCell || !useLocalSource) {
+        coastlineRefinementRequests += 1;
         coastlineRefinementState = "building";
         applyRegionalFallback(localCell ? "50m-regional-local-backoff" : "50m-regional-foundation");
         return;
       }
 
+      coastlineRefinementRequests += 1;
       coastlineRefinementState = "loading-local";
       void (async () => {
         const manifest = await loadLocalCoastlineManifest();
@@ -5923,6 +5952,7 @@ export function ParticleEarthScene({
           || Math.abs(interactiveRotationY) > 0.001
         )
       );
+      if (!initialCameraAnchorSettling) initialCameraAnchorWakePending = false;
       if (
         !cameraHeldByDetail
         && activePointers.size === 0
@@ -6438,6 +6468,8 @@ export function ParticleEarthScene({
       }
 
       renderer.render(scene, camera);
+      renderCallsTotal += renderer.info.render.calls;
+      renderPointsTotal += renderer.info.render.points;
       if (focusSettledRevisionThisFrame !== null) {
         latestOnFocusSettled.current?.(focusSettledRevisionThisFrame);
       }
@@ -6469,8 +6501,27 @@ export function ParticleEarthScene({
       }
     };
 
+    // Outside a running frame, the scene state the visibility policy reads.
+    const resolveIdleRenderState = () => resolveGlobeRenderState({
+      documentVisible: !document.hidden,
+      opaqueMediaCover: currentVisibilityHint.opaqueMediaCover,
+      coverTransitionActive: currentVisibilityHint.coverTransitionActive,
+      focusFlightActive: isFocusFlightActive(pointFocusSettling, routeFocusSettling) || initialCameraAnchorWakePending,
+      interactionActive: activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0 || performance.now() < wheelInteractionUntil,
+      earthDiveOverlapActive: Boolean(currentVisibilityHint.earthDiveOverlapActive),
+    });
+
     const wakeRenderLoop = () => {
       if (disposed || animationFrame !== 0 || document.hidden) return;
+      // #247: a stable opaque cover owns the loop. Narrative setters (temporal
+      // reveal, Route Point selection, routes) keep updating their latest
+      // state while covered, but must not each buy a full invisible frame; the
+      // reveal transition wakes the loop and renders that latest state.
+      const state = resolveIdleRenderState();
+      if (!globeRenderStateRunsScene(state)) {
+        currentRenderState = state;
+        return;
+      }
       lastTime = performance.now();
       lastFrameDeltaMs = 0;
       lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
@@ -6495,14 +6546,7 @@ export function ParticleEarthScene({
     };
 
     const updateRenderLoopVisibility = () => {
-      const state = resolveGlobeRenderState({
-        documentVisible: !document.hidden,
-        opaqueMediaCover: currentVisibilityHint.opaqueMediaCover,
-        coverTransitionActive: currentVisibilityHint.coverTransitionActive,
-        focusFlightActive: isFocusFlightActive(pointFocusSettling, routeFocusSettling),
-        interactionActive: activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0 || performance.now() < wheelInteractionUntil,
-        earthDiveOverlapActive: Boolean(currentVisibilityHint.earthDiveOverlapActive),
-      });
+      const state = resolveIdleRenderState();
       currentRenderState = state;
       if (globeRenderStateRunsScene(state)) wakeRenderLoop();
       else pauseRenderLoop(state);
@@ -6587,6 +6631,7 @@ export function ParticleEarthScene({
     return {
       setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"]) {
         latestInitialCameraAnchor.current = anchor;
+        initialCameraAnchorWakePending = Boolean(anchor);
         wakeRenderLoop();
       },
       setHomeBasePresence(presence: readonly HomeBasePresenceDrawable[]) {
