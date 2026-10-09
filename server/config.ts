@@ -203,6 +203,32 @@ export function loadServerConfig(
   const routingGraphBuilderUrl = routingBaseUrl("ROUTING_GRAPH_BUILDER_URL");
   // Background snapping can be paused while the member's own road tools stay on.
   const routingAutoSnappingEnabled = environment.ROUTING_AUTO_SNAPPING?.trim() !== "disabled";
+  // The private GitHub Actions routing worker. All four values or none; a
+  // configured worker serves every profile without a static OSRM URL.
+  const routingWorkerValues = {
+    repo: environment.ROUTING_WORKER_REPO?.trim() || null,
+    token: environment.ROUTING_WORKER_GITHUB_TOKEN?.trim() || null,
+    callbackUrl: environment.ROUTING_WORKER_CALLBACK_URL?.trim() || null,
+    callbackSecret: environment.ROUTING_WORKER_CALLBACK_SECRET?.trim() || null,
+  };
+  const routingWorker = (() => {
+    const { repo, token, callbackUrl, callbackSecret } = routingWorkerValues;
+    if (!repo && !token && !callbackUrl && !callbackSecret) return null;
+    if (!repo || !token || !callbackUrl || !callbackSecret) {
+      throw new Error("ROUTING_WORKER_REPO, ROUTING_WORKER_GITHUB_TOKEN, ROUTING_WORKER_CALLBACK_URL and ROUTING_WORKER_CALLBACK_SECRET must be set together");
+    }
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error("ROUTING_WORKER_REPO must be owner/name");
+    if (/\s/.test(token)) throw new Error("ROUTING_WORKER_GITHUB_TOKEN is malformed");
+    if (callbackSecret.length < 32) throw new Error("ROUTING_WORKER_CALLBACK_SECRET must be at least 32 characters");
+    let url: URL;
+    try { url = new URL(callbackUrl); } catch { throw new Error("ROUTING_WORKER_CALLBACK_URL must be an absolute URL"); }
+    // The runner posts Journey geometry back: production needs HTTPS.
+    if (!(url.protocol === "https:" || (!production && url.protocol === "http:"))
+      || url.username || url.password || url.search || url.hash) {
+      throw new Error("ROUTING_WORKER_CALLBACK_URL must be an HTTPS URL without credentials or query");
+    }
+    return { repo, token, callbackUrl: url.toString(), callbackSecret };
+  })();
   const locationSearchBaseUrl = (
     environment.LOCATION_SEARCH_BASE_URL?.trim()
     || "https://nominatim.openstreetmap.org"
@@ -641,6 +667,7 @@ export function loadServerConfig(
     routingOsrmCyclingBaseUrl,
     routingGraphBuilderUrl,
     routingAutoSnappingEnabled,
+    routingWorker,
     locationSearchBaseUrl,
     locationSearchUserAgent,
     locationSearchFallbackBaseUrl,

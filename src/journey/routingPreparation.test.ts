@@ -24,14 +24,14 @@ describe("routing preparation polling", () => {
     expect(phases).toEqual(["queued", "fetching", "building"]);
   });
 
-  it("gives up after four minutes with a specific error", async () => {
+  it("gives up after fifteen minutes with a specific error", async () => {
     let time = 0;
     const attempt = vi.fn(async () => preparing("building", 5_000));
     const error = await pollWhileRoutingPrepares(attempt, {
       signal: new AbortController().signal, now: () => time, sleep: async (ms) => { time += ms; },
     }).catch((reason) => reason);
     expect(error.code).toBe("ROUTING_PREPARING_TIMEOUT");
-    expect(attempt).toHaveBeenCalledTimes(49);
+    expect(attempt).toHaveBeenCalledTimes(181);
     expect(routingFailureMessage(error)).toBe(error.message);
   });
 
@@ -46,9 +46,9 @@ describe("routing preparation polling", () => {
   });
 
   it("names the phase and each graph failure instead of a generic failure", () => {
-    expect(routingPreparationCopy("queued")).toBe("正在获取这段路线周边的道路…");
-    expect(routingPreparationCopy("fetching")).toBe("正在获取这段路线周边的道路…");
-    expect(routingPreparationCopy("building")).toBe("正在生成路网…");
+    for (const phase of ["queued", "fetching", "building"] as const) {
+      expect(routingPreparationCopy(phase)).toBe("正在准备这段路线的道路数据，通常需要几分钟…");
+    }
     for (const code of ["ROUTING_DATA_UNAVAILABLE", "ROUTING_AREA_TOO_LARGE", "ROUTING_NO_ROADS", "ROUTING_GRAPH_BUILD_FAILED"]) {
       expect(routingFailureMessage({ code })).toBeTruthy();
     }

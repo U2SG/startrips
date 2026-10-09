@@ -4,7 +4,8 @@
 export type RoutingPreparationPhase = "queued" | "fetching" | "building";
 export type RoutingPreparing = { status: "preparing"; phase: RoutingPreparationPhase; retryAfterMs: number };
 
-export const ROUTING_PREPARATION_TIMEOUT_MS = 4 * 60_000;
+// The GitHub Actions routing worker usually needs several minutes.
+export const ROUTING_PREPARATION_TIMEOUT_MS = 15 * 60_000;
 const MIN_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 5_000;
 
@@ -33,8 +34,8 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 
 /**
  * Repeats `attempt` while it reports preparation, waiting the server's hint
- * clamped to 1-5 s, until a real result arrives, the signal aborts, or four
- * minutes pass.
+ * clamped to 1-5 s, until a real result arrives, the signal aborts, or
+ * fifteen minutes pass.
  */
 export async function pollWhileRoutingPrepares<T>(
   attempt: () => Promise<T | RoutingPreparing>,
@@ -64,8 +65,9 @@ export async function pollWhileRoutingPrepares<T>(
   }
 }
 
-export function routingPreparationCopy(phase: RoutingPreparationPhase): string {
-  return phase === "building" ? "正在生成路网…" : "正在获取这段路线周边的道路…";
+/** One copy for every phase: each of them can last minutes. */
+export function routingPreparationCopy(_phase: RoutingPreparationPhase): string {
+  return "正在准备这段路线的道路数据，通常需要几分钟…";
 }
 
 const FAILURE_COPY: Record<string, string> = {

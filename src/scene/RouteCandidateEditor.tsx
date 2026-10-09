@@ -524,7 +524,7 @@ export function RouteCandidateEditor({ map, route, active, onSaved, onEditModeCh
             </div>
           ) : null}
           {autoStatus?.state === "failed" && autoStatus.code && !candidates.length ? <p>{autoRouteFailureMessage(autoStatus.code)}</p> : null}
-          {preparing ? <p role="status">{routingPreparationCopy(preparing)}首次查看这一段需要准备道路数据，可能需要几分钟。</p> : null}
+          {preparing ? <p role="status">{routingPreparationCopy(preparing)}</p> : null}
           {message ? <p role="status">{message}</p> : null}
         </div>
       )}

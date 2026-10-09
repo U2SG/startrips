@@ -35,6 +35,9 @@ import { journeyRecordedTrackRoutes } from "./routes/journey-recorded-tracks";
 import { journeyRoutes } from "./routes/journeys";
 import { journeyRouteSegmentRoutes } from "./routes/journey-route-segments";
 import { RoutingGraphError, RoutingInvalidError, RoutingUnavailableError } from "./routing/route-candidate-provider";
+import { ROUTING_WORKER_RESULTS_PATH } from "./routing/github-worker";
+import { routingWorker } from "./routing/routing-provider";
+import { createRoutingWorkerRoutes } from "./routes/routing-worker";
 import { locationRoutes } from "./routes/locations";
 import { mapStyleRoutes } from "./routes/mapstyle";
 import { mediaEvidenceRoutes } from "./routes/media-evidence";
@@ -46,13 +49,13 @@ export const app = new Hono();
 
 app.use("*", requestLog);
 
-app.use(
-  "/api/*",
-  bodyLimit({
-    maxSize: 512 * 1024,
-    onError: (context) => context.json({ error: "REQUEST_TOO_LARGE" }, 413),
-  }),
-);
+const apiBodyLimit = bodyLimit({
+  maxSize: 512 * 1024,
+  onError: (context) => context.json({ error: "REQUEST_TOO_LARGE" }, 413),
+});
+// The routing worker callback carries its own, larger limit (route geometry).
+app.use("/api/*", (context, next) =>
+  context.req.path === ROUTING_WORKER_RESULTS_PATH ? next() : apiBodyLimit(context, next));
 
 app.get("/api/health", async (context) => {
   try {
@@ -112,6 +115,9 @@ app.route("/api/everyday-fragments", everydayFragmentRoutes);
 app.route("/api/itinerary-import", itineraryImportRoutes);
 app.route("/api/journeys", journeyRoutes);
 app.route("/api/journey-route-segments", journeyRouteSegmentRoutes);
+// The GitHub Actions routing worker's signed result callback: a machine
+// credential (HMAC over the raw body), never a member session.
+app.route("/api/internal/routing-worker", createRoutingWorkerRoutes(routingWorker));
 // #419: owner-only recorded-track evidence for one Journey, and since #341
 // the format-neutral import channel that writes it. Never part of a guest
 // share payload, because these samples are precise.

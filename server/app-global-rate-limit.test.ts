@@ -79,4 +79,13 @@ describe("global API throttling", () => {
     expect(await response.json()).toEqual({ error: "Not found" });
     expect(auth.handler).not.toHaveBeenCalled();
   });
+
+  it("exempts only the routing worker callback from the 512 KB API body limit", async () => {
+    const body = "x".repeat(600 * 1024);
+    const callback = await app.request("http://localhost/api/internal/routing-worker/results", { method: "POST", body });
+    // No worker is configured in tests: the callback's own route answers, not the global limit.
+    expect(callback.status).toBe(404);
+    const other = await app.request("http://localhost/api/internal/routing-worker/other", { method: "POST", body });
+    expect(other.status).toBe(413);
+  });
 });

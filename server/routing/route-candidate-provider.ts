@@ -8,6 +8,11 @@ export type RouteCandidateRequest = {
   signal: AbortSignal;
   allowFerries?: boolean;
   routingCoordinates?: readonly RoutingCoordinate[];
+  /**
+   * Background work prepared through `prepareCandidates`: a provider that
+   * batches must not start separate work for this request.
+   */
+  background?: boolean;
 };
 export type RoutePointSuggestionRequest = {
   coordinate: RoutingCoordinate;
@@ -22,6 +27,11 @@ export interface RouteCandidateProvider {
   supports(profile: RoadProfile): boolean;
   candidates(request: RouteCandidateRequest): Promise<RouteCandidate[]>;
   pointSuggestions(request: RoutePointSuggestionRequest): Promise<RoutePointSuggestion[]>;
+  /**
+   * Optional batching: starts work for every request at once (one Journey's
+   * pending segments). "queued" means nothing could be started yet.
+   */
+  prepareCandidates?(requests: readonly Omit<RouteCandidateRequest, "signal">[]): Promise<"started" | "queued">;
 }
 
 export class RoutingUnavailableError extends Error {
