@@ -22,7 +22,7 @@ import {
   mediaUploads,
 } from "../db/app-schema";
 import { routeSegmentSourceKey } from "../../src/journey/journeyModel";
-import { withAutoRouteStatus } from "../routing/auto-route-status";
+import { markAutoRoutePriority, withAutoRouteStatus } from "../routing/auto-route-status";
 
 export type JourneyValues = Pick<
   typeof journeys.$inferInsert,
@@ -130,6 +130,8 @@ async function loadJourneys(atlasId: string, requestedIds?: readonly string[]) {
   if (journeyRows.length === 0) return [];
 
   const journeyIds = journeyRows.map((journey) => journey.id);
+  // A member is reading or has just written these: snap their segments first.
+  markAutoRoutePriority(journeyIds);
   const [routeRows, mediaRows] = await Promise.all([
     db
       .select()

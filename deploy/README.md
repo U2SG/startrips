@@ -198,6 +198,65 @@ same pinned OSRM image.
 `pnpm qa:routing-builder` builds the image and exercises the whole lifecycle
 against a local fixture Overpass with anonymous roads.
 
+### GitHub Actions routing worker
+
+A host that cannot reach road data (Geofabrik, Overpass) can route on GitHub
+Actions instead. The private repository `U2SG/startrips-routing-worker` holds
+one workflow, `route.yml`. The API dispatches it through `api.github.com`. The
+runner downloads Geofabrik extracts, clips a 30 km corridor, builds OSRM graphs
+with the same pinned image and `routing-profiles/`, and runs this repository's
+`createOsrmRouteCandidateProvider`, so every candidate gate is unchanged. It
+then POSTs each result to the API, signed with HMAC-SHA256.
+
+Setup:
+
+1. In the worker repository, add the secret `ROUTING_CALLBACK_SECRET`: a random
+   value of at least 32 characters, for example `openssl rand -hex 32`.
+2. Create a fine-grained personal access token. Scope it to that one
+   repository, with **Actions: read and write** and nothing else.
+3. In `.env.deploy`, set:
+   - `ROUTING_WORKER_REPO=U2SG/startrips-routing-worker`
+   - `ROUTING_WORKER_GITHUB_TOKEN=<token>`
+   - `ROUTING_WORKER_CALLBACK_URL=https://<APP_HOST>/api/internal/routing-worker/results`
+   - `ROUTING_WORKER_CALLBACK_SECRET=<the same secret>`
+
+   All four are set together or not at all. A malformed value fails startup.
+4. Clear the static `ROUTING_OSRM_*_BASE_URL` of every mode the worker should
+   serve. A static URL still wins for its own mode. The routing-builder is used
+   only when the worker is not configured.
+
+How it behaves:
+
+- A member's candidate or nearby-point request dispatches a one-item run. The
+  API answers `202` until the result arrives, usually after 3 to 6 minutes. The
+  editor keeps polling for up to 15 minutes.
+- Background snapping dispatches one run per Journey with all of its pending
+  segments: at most 6 items and about 600 km of summed leg distance per run;
+  the rest go into further runs. Journeys a member just read or edited
+  go first. Journeys whose title contains the word `QA` or `Probe` are skipped.
+  Segments over 400 km are recorded as `ROUTING_AREA_TOO_LARGE` without a run.
+- At most 3 runs are in flight, and only 1 of them for background snapping. An
+  item is never dispatched twice while in flight. An item with no result after
+  25 minutes can be dispatched again.
+- Results are cached in memory for 2 hours. Transient failures are cached for
+  5 minutes. A restart forgets in-flight runs, and their late callbacks are
+  refused.
+- `POST /api/internal/routing-worker/results` has no session. It checks the
+  HMAC over the raw body before parsing, accepts only a known in-flight job and
+  one of its items, and has its own 2 MB body limit. It also validates every
+  result against the requested item: profile, waypoints, geometry bounds and
+  counts. The route does not exist when the worker is not configured.
+- Each run takes about 2 to 4 minutes of Actions time. Private repositories
+  include 2,000 free minutes per month.
+
+Privacy: Journey coordinates go only to the private worker repository, as
+workflow inputs, and come back in the signed callback over HTTPS. The worker
+never prints coordinates, labels, tool output or `osrm-routed` request logs.
+It uploads artifacts only in its test mode, kept for 1 day. Nothing is sent to
+the public `U2SG/startrips` repository or its CI. The callback certificate must
+verify. For a non-public CA, add the CA PEM to the worker secret
+`CALLBACK_CA_CERT`. TLS verification is never disabled.
+
 ### Automatic road snapping
 
 When driving or walking routing is configured, the API gives Route Segments

@@ -14,7 +14,7 @@ const GRAPH_ERRORS = new Set<RoutingGraphError["code"]>([
   "ROUTING_DATA_UNAVAILABLE", "ROUTING_AREA_TOO_LARGE", "ROUTING_GRAPH_BUILD_FAILED", "ROUTING_NO_ROADS",
 ]);
 const RETRY_AFTER_MS = { queued: 3_000, fetching: 2_000, building: 2_000 } as const;
-const GRAPH_ERROR_MESSAGES: Record<RoutingGraphError["code"], string> = {
+export const GRAPH_ERROR_MESSAGES: Record<RoutingGraphError["code"], string> = {
   ROUTING_DATA_UNAVAILABLE: "Road data for this route is temporarily unavailable",
   ROUTING_AREA_TOO_LARGE: "This route covers too large an area for an on-demand road graph",
   ROUTING_GRAPH_BUILD_FAILED: "The road graph for this route could not be built",

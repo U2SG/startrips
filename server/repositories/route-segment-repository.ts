@@ -100,6 +100,13 @@ export async function writeRouteSegment(
 
 export const AUTO_ROUTE_SCAN_PAGE_SIZE = 25;
 
+/**
+ * Test Journeys ("Flow QA Journey", "Transit Chapter Probe") are never snapped
+ * automatically. The same pattern runs in PostgreSQL, so it keeps to syntax
+ * both regex dialects read alike.
+ */
+export const AUTO_ROUTE_SKIPPED_TITLE = /(^|\s)(QA|Probe)(\s|$)/;
+
 export type AutoRouteJourney = {
   id: string;
   routeSegments: RouteSegmentRecord[];
@@ -107,10 +114,11 @@ export type AutoRouteJourney = {
 };
 
 /**
- * One keyset page of active Journeys, oldest first, that may still owe
- * automatic road geometry: fewer settled records than legs. A record is
- * settled by a member decision, auto geometry, or an attempt not yet due.
- * Route edits prune stale records, so every record belongs to a current leg.
+ * One page of active Journeys, oldest first, that may still owe automatic
+ * road geometry: fewer settled records than legs. A record is settled by a
+ * member decision, auto geometry, or an attempt not yet due. Route edits
+ * prune stale records, so every record belongs to a current leg. With
+ * `journeyIds`, only those Journeys are considered (the priority lookup).
  */
 export async function listAutoRouteJourneys(
   now: Date,
@@ -118,7 +126,9 @@ export async function listAutoRouteJourneys(
   // but not in a JS Date. A row skipped while rows settle is found next pass.
   offset: number,
   limit = AUTO_ROUTE_SCAN_PAGE_SIZE,
+  journeyIds?: readonly string[],
 ): Promise<AutoRouteJourney[]> {
+  if (journeyIds?.length === 0) return [];
   const legs = sql`(select count(*) from ${journeyRoutePoints} where ${journeyRoutePoints.journeyId} = ${journeys.id}) - 1`;
   const settled = sql`(select count(*) from jsonb_array_elements(${journeys.routeSegments}) as segment
     where segment->>'decision' <> 'open'
@@ -131,6 +141,8 @@ export async function listAutoRouteJourneys(
     .where(and(
       isNull(journeys.deletionStartedAt),
       isNull(atlases.deletionStartedAt),
+      journeyIds ? inArray(journeys.id, [...journeyIds]) : undefined,
+      sql`${journeys.title} !~ ${AUTO_ROUTE_SKIPPED_TITLE.source}`,
       sql`${settled} < ${legs}`,
     ))
     .orderBy(asc(journeys.createdAt), asc(journeys.id))

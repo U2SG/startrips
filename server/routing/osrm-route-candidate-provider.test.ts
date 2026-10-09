@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createOsrmRouteCandidateProvider } from "./osrm-route-candidate-provider";
+import { createOsrmRouteCandidateProvider, MAX_TOLERATED_CROSSING_LOOP_METERS, obviousSelfIntersection } from "./osrm-route-candidate-provider";
 
 const coordinates = [{ lat: 0, lon: 0 }, { lat: 0, lon: 0.1 }] as const;
 
@@ -128,6 +128,25 @@ describe("OSRM road candidate gate", () => {
     }], [{ location: corners[0], distance: 0 }, { location: corners[3], distance: 0 }]));
     expect(await provider.candidates({ coordinates: [{ lat: 0, lon: 0 }, { lat: 0, lon: 0.2 }],
       profile: "driving", alternativesCount: 1, signal: new AbortController().signal })).toEqual([]);
+  });
+
+  // East along the road, a ramp loop that passes back over it, then onwards.
+  const rampLoop = (size: number): [number, number][] => [
+    [0, 0], [0.05 + size, 0], [0.05 + size, size], [0.05, size], [0.05, -size], [0.1, 0],
+  ];
+
+  it("accepts a short interchange-like loop that crosses its own road", async () => {
+    // The loop between the crossing segments is about 450 m along the route.
+    expect(obviousSelfIntersection(rampLoop(0.002))).toBe(false);
+    const provider = providerWith(osrmResponse([{ ...direct, geometry: { type: "LineString", coordinates: rampLoop(0.002) } }]));
+    expect(await provider.candidates({ coordinates, profile: "driving", alternativesCount: 1,
+      signal: new AbortController().signal })).toHaveLength(1);
+  });
+
+  it("still rejects a crossing between parts of the route more than 3 km apart along it", () => {
+    // About 4.4 km of road between the two crossing segments.
+    expect(obviousSelfIntersection(rampLoop(0.02))).toBe(true);
+    expect(MAX_TOLERATED_CROSSING_LOOP_METERS).toBe(3_000);
   });
 
   it("returns stable suggested geometries and ranks alternatives as relevance only", async () => {

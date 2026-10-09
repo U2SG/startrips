@@ -42,6 +42,31 @@ describe("road profile configuration", () => {
       expect(() => loadServerConfig({ ...productionEnvironment, [name]: value })).toThrow(name);
     }
   });
+
+  const worker = {
+    ROUTING_WORKER_REPO: "U2SG/startrips-routing-worker",
+    ROUTING_WORKER_GITHUB_TOKEN: "github_pat_example",
+    ROUTING_WORKER_CALLBACK_URL: "https://startrips.example/api/internal/routing-worker/results",
+    ROUTING_WORKER_CALLBACK_SECRET: "s".repeat(32),
+  };
+
+  it("configures the routing worker only when all four values are present", () => {
+    expect(loadServerConfig(productionEnvironment).routingWorker).toBeNull();
+    expect(loadServerConfig({ ...productionEnvironment, ...worker }).routingWorker).toEqual({
+      repo: "U2SG/startrips-routing-worker", token: "github_pat_example",
+      callbackUrl: "https://startrips.example/api/internal/routing-worker/results", callbackSecret: "s".repeat(32),
+    });
+    expect(() => loadServerConfig({ ...productionEnvironment, ...worker, ROUTING_WORKER_GITHUB_TOKEN: "" })).toThrow("must be set together");
+  });
+
+  it.each([
+    ["ROUTING_WORKER_REPO", "startrips-routing-worker"],
+    ["ROUTING_WORKER_CALLBACK_SECRET", "short"],
+    ["ROUTING_WORKER_CALLBACK_URL", "http://startrips.example/api/internal/routing-worker/results"],
+    ["ROUTING_WORKER_CALLBACK_URL", "https://startrips.example/results?token=x"],
+  ])("fails closed on a malformed %s", (name, value) => {
+    expect(() => loadServerConfig({ ...productionEnvironment, ...worker, [name]: value })).toThrow(name);
+  });
 });
 
 describe("S3-compatible storage configuration", () => {

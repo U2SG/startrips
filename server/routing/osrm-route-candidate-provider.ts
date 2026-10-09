@@ -18,7 +18,8 @@ const MAX_GEOMETRY_POINTS = 4_000;
 const MAX_PROVIDER_GEOMETRY_POINTS = 32_000;
 const GEOMETRY_ERROR_RADIANS = 5 / 6_371_000;
 const SIMPLIFICATION_BLOCK_POINTS = 256;
-const MAX_DIRECT_METERS = 400_000;
+/** Beyond this direct distance no road candidate is offered. */
+export const MAX_DIRECT_METERS = 400_000;
 
 type OsrmRoute = {
   distance?: number;
@@ -69,12 +70,24 @@ function cross(a: [number, number], b: [number, number], c: [number, number]) {
   return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
 }
 
-function obviousSelfIntersection(line: readonly [number, number][]): boolean {
-  // A grade-separated crossing may also project as a crossing. Rejecting it
-  // loses a suggestion; accepting a loop could invent a wildly wrong route.
+/** A crossing between parts of the route at most this far apart along it is tolerated. */
+export const MAX_TOLERATED_CROSSING_LOOP_METERS = 3_000;
+
+export function obviousSelfIntersection(line: readonly [number, number][]): boolean {
+  // A grade-separated crossing also projects as a crossing: an interchange
+  // ramp loop or a spiral road passes over or under itself within a short
+  // distance along the route. Those are tolerated. A crossing between parts
+  // of the route farther apart than that is a loop that could invent a
+  // wildly wrong route, so it still rejects the candidate.
+  const along = [0];
+  for (let index = 1; index < line.length; index += 1) {
+    along.push(along[index - 1] + meters({ lon: line[index - 1][0], lat: line[index - 1][1] }, { lon: line[index][0], lat: line[index][1] }));
+  }
   for (let a = 0; a < line.length - 1; a += 1) {
     for (let b = a + 2; b < line.length - 1; b += 1) {
       if (a === 0 && b === line.length - 2) continue;
+      // Distance along the line from the end of segment a to the start of segment b.
+      if (along[b] - along[a + 1] <= MAX_TOLERATED_CROSSING_LOOP_METERS) continue;
       const ab1 = cross(line[a], line[a + 1], line[b]);
       const ab2 = cross(line[a], line[a + 1], line[b + 1]);
       const ba1 = cross(line[b], line[b + 1], line[a]);

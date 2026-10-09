@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
 import { getRouteSegmentContext, writeRouteSegment } from "../repositories/route-segment-repository";
+import { markAutoRoutePriority } from "../routing/auto-route-status";
 import { RoutingInvalidError } from "../routing/route-candidate-provider";
 import { routingProvider as provider } from "../routing/routing-provider";
 import { MAX_SELECTED_POINT_METERS, routingDistanceMeters, validRoutingCoordinate } from "../routing/routing-coordinates";
@@ -136,6 +137,7 @@ journeyRouteSegmentRoutes.put("/journeys/:journeyId/segments/:fromId/:toId", asy
     ...(action === "confirm" ? { candidate } : {}),
   });
   if (!record) return context.json({ error: "ROUTE_SEGMENT_NOT_FOUND" }, 404);
+  markAutoRoutePriority([journeyId]);
   context.header("Cache-Control", "private, no-store");
   return context.json({ segment: record });
 });

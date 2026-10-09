@@ -16,6 +16,7 @@ import {
   type JourneyRoutePointBatchInput,
   type JourneyValues,
 } from "../repositories/journey-repository";
+import { markAutoRoutePriority } from "../routing/auto-route-status";
 import { deleteJourneyWithStorage } from "../services/delete-journey";
 import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { readJsonObject } from "./json-body";
@@ -401,6 +402,7 @@ journeyRoutes.post("/:id/route-point-batches", async (context) => {
   try {
     const operation = await applyJourneyRoutePointBatchForAtlas(context.req.param("id"), atlas.id, input);
     if (!operation) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+    markAutoRoutePriority([context.req.param("id")]);
     return context.json({ operation }, operation.status === "staged" ? 202 : 200);
   } catch (error) {
     const response = routePointBatchErrorResponse(error);
@@ -425,6 +427,7 @@ journeyRoutes.post("/:id/route-point-batches/:operationId/undo", async (context)
   try {
     const operation = await undoJourneyRoutePointBatchForAtlas(context.req.param("id"), atlas.id, operationId);
     if (!operation) return context.json({ error: "ROUTE_POINT_BATCH_NOT_FOUND" }, 404);
+    markAutoRoutePriority([context.req.param("id")]);
     return context.json({ operation });
   } catch (error) {
     const response = routePointBatchErrorResponse(error);
