@@ -72,6 +72,16 @@ describe("GitHub Actions routing worker", () => {
     expect(callback({ job, kind: "done" }).status).toBe(200);
   });
 
+  it("refuses a nearby-point lookup whose own corridor exceeds the job distance cap", async () => {
+    const { worker, fetcher } = setup();
+    const error = await preparing(worker.provider.pointSuggestions({
+      coordinate: { lat: 0, lon: 3 }, neighbors: { before: { lat: 0, lon: 0 }, after: { lat: 0, lon: 6 } },
+      profile: "driving", signal,
+    }));
+    expect(error).toMatchObject({ code: "ROUTING_AREA_TOO_LARGE" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("verifies the HMAC over the raw body before anything else, and refuses unknown jobs and items", async () => {
     const { worker, dispatched, callback, signed } = setup();
     await preparing(worker.provider.candidates({ ...request, signal }));

@@ -347,7 +347,10 @@ export function createRoutingWorker(options: RoutingWorkerOptions) {
       if (!validRoutingCoordinate(request.coordinate) || Object.values(request.neighbors).some((entry) => !validRoutingCoordinate(entry))) {
         throw new RoutingUnavailableError("Road point coordinates are invalid");
       }
-      return answer<RoutePointSuggestion>(pointSuggestionItem(request), false);
+      const item = pointSuggestionItem(request);
+      // Neighbours are unbounded, so one lookup could exceed a whole job's corridor budget.
+      if (routingWorkerItemMeters(item) > ROUTING_WORKER_MAX_JOB_METERS) throw workerError("ROUTING_AREA_TOO_LARGE");
+      return answer<RoutePointSuggestion>(item, false);
     },
     async prepareCandidates(requests) {
       const entries = requests.filter(validCandidateRequest).map((request) => {
