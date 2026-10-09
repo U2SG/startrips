@@ -2403,8 +2403,12 @@ export function JourneyStory({
     // settled clip directly, stop Story autoplay too so soundtrack/state do
     // not claim the sequence is still progressing. Ignore the terminal pause
     // associated with an ended clip; `ended` owns that transition.
+    // `pause` is dispatched as a queued task. A fullscreen handoff pauses the
+    // source in place; when Back restores it before that task runs, this
+    // listener is already re-subscribed and the effect has called play(). An
+    // event the element no longer reflects is not the viewer's pause.
     const stopForNativePause = () => {
-      if (!video.ended && videoHandoffRef.current?.source !== video) setPlaying(false);
+      if (video.paused && !video.ended && videoHandoffRef.current?.source !== video) setPlaying(false);
     };
     video.addEventListener("ended", finishStep);
     video.addEventListener("error", armFallback);
