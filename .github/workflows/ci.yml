@@ -237,19 +237,21 @@ jobs:
               login-media::QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification
               composer-playback-preview::pnpm qa:composer-playback-preview
           - name: story-media
-            suites: "|story-media-handoff|story-note-beats|media-motion-lab|soundtrack-ducking|journey-book-3d|"
+            suites: "|story-media-handoff|story-note-beats|media-motion-lab|soundtrack-ducking|journey-book-3d-turns|"
             commands: |
               story-media-handoff::pnpm qa:story-media-handoff
               story-note-beats::pnpm qa:story-note-beats
               media-motion-lab::pnpm qa:media-motion-lab
               soundtrack-ducking::pnpm qa:soundtrack-ducking
-              journey-book-3d::pnpm qa:journey-book-3d
+              journey-book-3d-turns::pnpm qa:journey-book-3d-turns
           - name: labels-recovery
-            suites: "|city-label-anchoring|recovery-surfaces|mobile-native|"
+            suites: "|city-label-anchoring|recovery-surfaces|mobile-native|journey-book-3d-last-spread|journey-book-3d-phone|"
             commands: |
               city-label-anchoring::pnpm qa:city-label-anchoring
               recovery-surfaces::pnpm qa:recovery-surfaces
               mobile-native::pnpm qa:mobile-native
+              journey-book-3d-last-spread::pnpm qa:journey-book-3d-last-spread
+              journey-book-3d-phone::pnpm qa:journey-book-3d-phone
           - name: reveal-share
             suites: "|cover-reveal-opening|cover-reveal|owner-share|playback-map-bridge|"
             commands: |
@@ -275,12 +277,13 @@ jobs:
               route-point-context::pnpm qa:route-point-context
               attention-hierarchy::pnpm qa:attention-hierarchy
           - name: route-home-share
-            suites: "|route-anchoring|guest-share|home-base-suggestion|home-base-context|"
+            suites: "|route-anchoring|guest-share|home-base-suggestion|home-base-context|journey-book-3d-drags|"
             commands: |
               route-anchoring::pnpm qa:route-anchoring
               guest-share::pnpm qa:guest-share
               home-base-suggestion::pnpm qa:home-base-suggestion
               home-base-context::pnpm qa:home-base-context
+              journey-book-3d-drags::pnpm qa:journey-book-3d-drags
           - name: route-candidates
             suites: "|route-candidates|playback-manual-camera|playback-prefetch|playback-continuity|brand-signature-motion|"
             commands: |
@@ -366,10 +369,10 @@ jobs:
           retention-days: 7
 
       - name: Upload 3D Journey Book evidence
-        if: ${{ always() && contains(matrix.suites, '|journey-book-3d|') }}
+        if: ${{ always() && contains(matrix.suites, '|journey-book-3d-') }}
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: journey-book-3d-${{ github.run_attempt }}
+          name: journey-book-3d-${{ matrix.name }}-${{ github.run_attempt }}
           path: artifacts/journey-book-3d/
           if-no-files-found: warn
           retention-days: 7
