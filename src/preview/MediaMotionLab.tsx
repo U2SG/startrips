@@ -47,7 +47,10 @@ function selected<T extends string>(value: string | null, values: readonly T[], 
   return values.find((candidate) => candidate === value) ?? fallback;
 }
 
-function fixtureMedia(density: Density, scenario: Scenario): JourneyMediaAsset[] {
+/** A public fixture asset; its bytes come from a public URL, not signed reads. */
+type LabMediaAsset = JourneyMediaAsset & { fixtureUrl: string };
+
+function fixtureMedia(density: Density, scenario: Scenario): LabMediaAsset[] {
   return Array.from({ length: COUNTS[density] }, (_, index) => {
     const video = scenario === "mixed" ? index % 3 === 1
       : scenario === "video-first" ? index === 0 : density === "dense" && index % 5 === 3;
@@ -56,22 +59,20 @@ function fixtureMedia(density: Density, scenario: Scenario): JourneyMediaAsset[]
       id: `lab-${index + 1}`,
       journeyId: "public-media-motion-lab",
       routePointId: "public-lab-point",
-      storageDriver: "public-fixture",
-      storageKey: url,
+      fixtureUrl: url,
       fileName: video ? `Public video ${index + 1}` : `Public image ${index + 1}`,
       mimeType: video ? "video/webm" : "image/jpeg",
       bytes: 0,
       sortOrder: index,
-      uploadedByUserId: "public-fixture",
       createdAt: "2026-01-01T00:00:00.000Z",
     };
   });
 }
 
-function initialReads(media: JourneyMediaAsset[], scenario: Scenario): Record<string, Read> {
+function initialReads(media: LabMediaAsset[], scenario: Scenario): Record<string, Read> {
   return Object.fromEntries(media.map((asset, index) => [asset.id,
     index === 1 && (scenario === "delayed" || scenario === "stale" || scenario === "failure")
-      ? { status: "loading" } : { status: "ready", url: asset.storageKey },
+      ? { status: "loading" } : { status: "ready", url: asset.fixtureUrl },
   ]));
 }
 
@@ -229,7 +230,7 @@ function LabSurface({ mode, density, scenario }: { mode: Mode; density: Density;
 
   const release = () => {
     if (!held) return;
-    setReads((prior) => ({ ...prior, [held.id]: { status: "ready", url: held.storageKey } }));
+    setReads((prior) => ({ ...prior, [held.id]: { status: "ready", url: held.fixtureUrl } }));
     mark("target-ready");
   };
 
@@ -272,7 +273,7 @@ function LabSurface({ mode, density, scenario }: { mode: Mode; density: Density;
   const url = read?.status === "ready" ? read.url : null;
   const peeks = media.length >= 4 ? media.slice(index + 1, index + 3)
     .filter((asset) => !asset.mimeType.startsWith("video/"))
-    .map((asset) => ({ asset, url: asset.storageKey })) : undefined;
+    .map((asset) => ({ asset, url: asset.fixtureUrl })) : undefined;
 
   return <main className="media-motion-lab" data-media-motion-lab
     data-mode={mode} data-density={density} data-scenario={scenario}
@@ -293,7 +294,7 @@ function LabSurface({ mode, density, scenario }: { mode: Mode; density: Density;
       <section className="media-motion-lab__viewer" aria-label="Media stage">
         <div className="media-motion-lab__source">
           {current && !current.mimeType.startsWith("video/") ? <img ref={thumbnailRef}
-            src={current.storageKey} alt="Shared element source" data-lab-shared-source /> : <span>Public Route Point</span>}
+            src={current.fixtureUrl} alt="Shared element source" data-lab-shared-source /> : <span>Public Route Point</span>}
           <span>Route Point · 2026-01-01</span>
         </div>
         <div ref={stageRef} className={`media-motion-lab__stage${immersive ? " is-immersive" : ""}`}

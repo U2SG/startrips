@@ -25,13 +25,10 @@ function makeJourney(id: string): Journey {
       id: `track-${id}`,
       journeyId: id,
       routePointId: null,
-      storageDriver: "test",
-      storageKey: `track-${id}`,
       fileName: "night.mp3",
       mimeType: "audio/mpeg",
       bytes: 64,
       sortOrder: 0,
-      uploadedByUserId: "user-1",
       createdAt: "2026-08-11T00:00:00.000Z",
     }],
   };

@@ -33,13 +33,10 @@ function media(id: string, routePointId: string | null, mimeType = "image/jpeg",
     id,
     journeyId: "journey-1",
     routePointId,
-    storageDriver: "test",
-    storageKey: id,
     fileName: id,
     mimeType,
     bytes: 1,
     sortOrder,
-    uploadedByUserId: "user-1",
     createdAt: "2026-09-01T00:00:00.000Z",
   };
 }

@@ -56,13 +56,10 @@ function asset(
     id,
     journeyId: journey.id,
     routePointId: null,
-    storageDriver: "test",
-    storageKey: `journey-1/${id}`,
     fileName,
     mimeType,
     bytes: 128,
     sortOrder,
-    uploadedByUserId: "user-1",
     createdAt: journey.createdAt,
   };
 }

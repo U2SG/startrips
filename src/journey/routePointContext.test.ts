@@ -42,13 +42,10 @@ function asset(
     id,
     journeyId,
     routePointId,
-    storageDriver: "s3",
-    storageKey: id,
     fileName: `${id}.${mimeType.startsWith("video/") ? "mp4" : "jpg"}`,
     mimeType,
     bytes: 128,
     sortOrder,
-    uploadedByUserId: "user-1",
     createdAt: "2026-04-06T09:30:00.000Z",
   };
 }

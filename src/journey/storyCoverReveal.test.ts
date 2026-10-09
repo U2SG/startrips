@@ -31,9 +31,8 @@ function point(id: string, sortOrder: number, note: string | null): RoutePoint {
 
 function asset(id: string, routePointId: string | null, sortOrder: number, extra: Partial<JourneyMediaAsset> = {}): JourneyMediaAsset {
   return {
-    id, journeyId: "journey-1", routePointId, storageDriver: "test", storageKey: `journey-1/${id}`,
-    fileName: `${id}.jpg`, mimeType: "image/jpeg", bytes: 128, sortOrder,
-    uploadedByUserId: "user-1", createdAt, ...extra,
+    id, journeyId: "journey-1", routePointId, fileName: `${id}.jpg`, mimeType: "image/jpeg", bytes: 128, sortOrder,
+    createdAt, ...extra,
   };
 }
 

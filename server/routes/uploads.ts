@@ -10,6 +10,7 @@ import {
   parseUndoMoveMediaInput,
   readPreviewRequest,
 } from "../media/upload-protocol";
+import { toOwnerMediaAsset } from "../repositories/journey-repository";
 import { deleteMediaAssetForAtlas } from "../services/delete-media";
 import {
   findAssetForAtlas,
@@ -59,7 +60,11 @@ uploadRoutes.post("/:id/complete", async (context) => {
     context.req.param("id"),
     () => readJsonObject(() => context.req.json()),
   );
-  return context.json(result.body, result.status);
+  // The owner payload never carries storage internals; see OWNER_MEDIA_COLUMNS.
+  const body = "asset" in result.body && result.body.asset
+    ? { ...result.body, asset: toOwnerMediaAsset(result.body.asset) }
+    : result.body;
+  return context.json(body, result.status);
 });
 
 uploadRoutes.delete("/:id", async (context) => {

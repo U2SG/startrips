@@ -309,13 +309,10 @@ function progressMedia(id: string, routePointId: string): JourneyMediaAsset {
     id,
     journeyId: "journey-progress",
     routePointId,
-    storageDriver: "test",
-    storageKey: id,
     fileName: `${id}.jpg`,
     mimeType: "image/jpeg",
     bytes: 64,
     sortOrder: 0,
-    uploadedByUserId: "user-1",
     createdAt: "2026-09-01T00:00:00.000Z",
   };
 }

@@ -5,8 +5,6 @@ export type UploadedMediaAsset = {
   id: string;
   journeyId: string;
   routePointId: string | null;
-  storageDriver: string;
-  storageKey: string;
   fileName: string;
   mimeType: string;
   bytes: number;

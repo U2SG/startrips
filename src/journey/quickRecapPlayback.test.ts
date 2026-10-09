@@ -40,8 +40,8 @@ function point(id: string, sortOrder: number): RoutePoint {
 
 function media(id: string, routePointId: string | null, mimeType = "image/jpeg", sortOrder = 0): JourneyMediaAsset {
   return {
-    id, journeyId: "journey-1", routePointId, storageDriver: "test", storageKey: id, fileName: id,
-    mimeType, bytes: 1, sortOrder, uploadedByUserId: "user-1", createdAt: "2026-09-02T00:00:00.000Z",
+    id, journeyId: "journey-1", routePointId, fileName: id,
+    mimeType, bytes: 1, sortOrder, createdAt: "2026-09-02T00:00:00.000Z",
   };
 }
 

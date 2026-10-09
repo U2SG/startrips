@@ -73,13 +73,10 @@ function asset(id: string, routePointId: string | null, sortOrder: number, mimeT
     id,
     journeyId: "journey-notes",
     routePointId,
-    storageDriver: "test",
-    storageKey: id,
     fileName: `${id}.jpg`,
     mimeType,
     bytes: 128,
     sortOrder,
-    uploadedByUserId: "user-1",
     createdAt,
   };
 }

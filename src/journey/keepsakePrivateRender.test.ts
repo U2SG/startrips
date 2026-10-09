@@ -29,13 +29,10 @@ function media(id: string, routePointId: string | null, sortOrder: number): Jour
     id,
     journeyId: "journey-private-render",
     routePointId,
-    storageDriver: "s3",
-    storageKey: `private/${id}`,
     fileName: `${id}.jpg`,
     mimeType: "image/jpeg",
     bytes: 1024,
     sortOrder,
-    uploadedByUserId: "user-1",
     createdAt: "2026-08-10T00:00:00.000Z",
   };
 }

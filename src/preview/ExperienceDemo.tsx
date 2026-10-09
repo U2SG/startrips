@@ -164,9 +164,9 @@ function createDemoAtlasSession() {
         onProgress?.({ fileName: file.name, uploadedBytes, totalBytes });
         return {
           id, journeyId, routePointId: routePointId ?? null,
-          storageDriver: "demo", storageKey: `demo/${id}`, fileName: file.name,
+          fileName: file.name,
           mimeType: file.type, bytes: file.size, sortOrder: journey.media.length + index,
-          uploadedByUserId: journey.createdByUserId, createdAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
         };
       });
       if (assets.length) save(journey, [...orderedMedia(journey), ...assets]);

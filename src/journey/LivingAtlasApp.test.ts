@@ -451,8 +451,7 @@ describe("Story to Playback return entry (#245)", () => {
         { id: "point-d", journeyId: playbackJourney.id, sortOrder: 1, latitude: 3, longitude: 4, label: "D", isStop: true, occurredAt: null, createdAt: playbackJourney.createdAt },
       ],
       media: [{
-        id: "asset-d", journeyId: playbackJourney.id, routePointId: "point-d", storageDriver: "s3", storageKey: "d",
-        fileName: "d.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 0, uploadedByUserId: "user-1", createdAt: playbackJourney.createdAt,
+        id: "asset-d", journeyId: playbackJourney.id, routePointId: "point-d", fileName: "d.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 0, createdAt: playbackJourney.createdAt,
       }],
     };
     const entry = capturePlaybackEntryForContext(
@@ -1474,14 +1473,12 @@ describe("Quick Recap over-budget choice (ST-011)", () => {
       ],
       media: [
         {
-          id: "asset-a", journeyId: playbackJourney.id, routePointId: "point-a", storageDriver: "test",
-          storageKey: "a", fileName: "a.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 0,
-          uploadedByUserId: "user-1", createdAt: playbackJourney.createdAt,
+          id: "asset-a", journeyId: playbackJourney.id, routePointId: "point-a", fileName: "a.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 0,
+          createdAt: playbackJourney.createdAt,
         },
         {
-          id: "asset-b", journeyId: playbackJourney.id, routePointId: "point-b", storageDriver: "test",
-          storageKey: "b", fileName: "b.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 1,
-          uploadedByUserId: "user-1", createdAt: playbackJourney.createdAt,
+          id: "asset-b", journeyId: playbackJourney.id, routePointId: "point-b", fileName: "b.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 1,
+          createdAt: playbackJourney.createdAt,
         },
       ],
     };
@@ -1530,13 +1527,10 @@ describe("playbackEntryNeedsPreparation (PR #24 review)", () => {
         id: "track-1",
         journeyId: playbackJourney.id,
         routePointId: null,
-        storageDriver: "test",
-        storageKey: "track-1",
         fileName: "journey.mp3",
         mimeType: "audio/mpeg",
         bytes: 128,
         sortOrder: 0,
-        uploadedByUserId: "user-1",
         createdAt: "2026-08-25T00:00:00.000Z",
       }],
     };

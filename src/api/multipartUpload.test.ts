@@ -175,8 +175,6 @@ describe("uploadMediaInParts", () => {
       id: "asset-preview",
       journeyId: "journey-preview",
       routePointId: null,
-      storageDriver: "s3",
-      storageKey: "original/key",
       fileName: "photo.jpg",
       mimeType: "image/jpeg",
       bytes: 8,

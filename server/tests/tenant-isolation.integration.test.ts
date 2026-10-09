@@ -67,6 +67,17 @@ const baseJourney = {
   ],
 };
 
+/** Media columns the owner Journey payload withholds (journey-repository OWNER_MEDIA_COLUMNS). */
+const OWNER_WITHHELD_MEDIA_FIELDS = ["storageDriver", "storageKey", "previewStorageKey", "uploadedByUserId"] as const;
+
+async function storedStorageKeys(assetIds: readonly string[]) {
+  const rows = await db
+    .select({ id: mediaAssets.id, storageKey: mediaAssets.storageKey })
+    .from(mediaAssets)
+    .where(inArray(mediaAssets.id, [...assetIds]));
+  return new Map(assetIds.map((id) => [id, rows.find((row) => row.id === id)?.storageKey]));
+}
+
 function authHeaders(cookie?: string) {
   return {
     "content-type": "application/json",
@@ -1043,7 +1054,7 @@ describe("media and atlas HTTP endpoints", () => {
       sourceJourney: { coverMediaAssetId: string | null; media: Array<{ id: string }> };
       destinationJourney: {
         coverMediaAssetId: string | null;
-        media: Array<{ id: string; journeyId: string; routePointId: string | null; storageKey: string }>;
+        media: Array<{ id: string; journeyId: string; routePointId: string | null } & Record<string, unknown>>;
       };
       undo: {
         sourceJourneyId: string;
@@ -1070,8 +1081,11 @@ describe("media and atlas HTTP endpoints", () => {
     for (const asset of movedPayload.destinationJourney.media.filter((asset) => movedIds.includes(asset.id))) {
       expect(asset.journeyId).toBe(destination.id);
       expect(asset.routePointId).toBe(destinationStopId);
-      expect(asset.storageKey).toBe(originalStorageKeys.get(asset.id));
+      // The owner payload never carries storage internals.
+      for (const internal of OWNER_WITHHELD_MEDIA_FIELDS) expect(asset).not.toHaveProperty(internal);
     }
+    // A move re-parents rows; it never rewrites where the bytes live.
+    expect(await storedStorageKeys(movedIds)).toEqual(new Map(movedIds.map((id) => [id, originalStorageKeys.get(id)])));
     expect(movedPayload.undo).toMatchObject({
       sourceJourneyId: source.id,
       targetJourneyId: destination.id,
@@ -1239,7 +1253,7 @@ describe("media and atlas HTTP endpoints", () => {
     const undone = await undoResponse.json() as {
       sourceJourney: {
         coverMediaAssetId: string | null;
-        media: Array<{ id: string; journeyId: string; routePointId: string | null; storageKey: string }>;
+        media: Array<{ id: string; journeyId: string; routePointId: string | null } & Record<string, unknown>>;
       };
       destinationJourney: { coverMediaAssetId: string | null; media: Array<{ id: string }> };
     };
@@ -1249,8 +1263,9 @@ describe("media and atlas HTTP endpoints", () => {
     expect(undone.sourceJourney.media.find((asset) => asset.id === sourceAssets[1].id)?.routePointId).toBeNull();
     for (const asset of undone.sourceJourney.media.filter((asset) => movedIds.includes(asset.id))) {
       expect(asset.journeyId).toBe(source.id);
-      expect(asset.storageKey).toBe(originalStorageKeys.get(asset.id));
+      for (const internal of OWNER_WITHHELD_MEDIA_FIELDS) expect(asset).not.toHaveProperty(internal);
     }
+    expect(await storedStorageKeys(movedIds)).toEqual(new Map(movedIds.map((id) => [id, originalStorageKeys.get(id)])));
     expect(undone.destinationJourney.coverMediaAssetId).toBe(targetExisting.id);
     expect(undone.destinationJourney.media.map((asset) => asset.id)).toEqual([targetExisting.id]);
 

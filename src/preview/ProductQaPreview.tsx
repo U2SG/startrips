@@ -492,13 +492,10 @@ const storyQaJourney: Journey = {
     id: `00000000-0000-4000-8000-00000000010${index}`,
     journeyId: "00000000-0000-4000-8000-000000000001",
     routePointId: null,
-    storageDriver: "qa",
-    storageKey: `qa/story-seed-${index}`,
     fileName: `seed-${index}.png`,
     mimeType: "image/png",
     bytes: 68,
     sortOrder: index,
-    uploadedByUserId: "00000000-0000-4000-8000-000000000003",
     createdAt: "2026-08-11T00:00:00.000Z",
   })),
 };
@@ -564,12 +561,9 @@ const storyQaGroupedNotesJourney: Journey = {
   ].map((asset, index) => ({
     ...asset,
     journeyId: GROUPED_NOTES_JOURNEY_ID,
-    storageDriver: "qa",
-    storageKey: `qa/${asset.id}`,
     fileName: `${asset.id}.${asset.mimeType === "video/webm" ? "webm" : "jpg"}`,
     bytes: 68,
     sortOrder: index,
-    uploadedByUserId: storyQaJourney.createdByUserId,
     createdAt: "2026-10-04T00:00:00.000Z",
   })),
 };
@@ -634,7 +628,6 @@ const storyQaRouteBoundaryJourney: Journey = {
     {
       ...storyQaJourney.media[2],
       id: "00000000-0000-4000-8000-000000000103",
-      storageKey: "qa/story-seed-3",
       fileName: "seed-3.png",
       sortOrder: 3,
       routePointId: "00000000-0000-4000-8000-000000000005",
@@ -675,7 +668,6 @@ const storyQaCoverOpeningIntroJourney: Journey = {
     {
       ...storyQaCoverOpeningJourney.media[0],
       id: "00000000-0000-4000-8000-000000000104",
-      storageKey: "qa/story-seed-4",
       fileName: "seed-4.png",
       sortOrder: 4,
       routePointId: null,
@@ -689,7 +681,6 @@ const storyQaMixedJourney: Journey = {
   media: storyQaJourney.media.map((asset, index) => index === 1 ? {
     ...asset,
     id: STORY_QA_MIXED_VIDEO_ASSET_ID,
-    storageKey: "qa/story-mixed-video",
     fileName: "mixed-video.mp4",
     mimeType: "video/mp4",
   } : asset),
@@ -709,7 +700,6 @@ const storyQaMixedPairJourney: Journey = {
     {
       ...storyQaJourney.media[1],
       id: STORY_QA_MIXED_VIDEO_ASSET_ID,
-      storageKey: "qa/story-mixed-video",
       fileName: "mixed-video.mp4",
       mimeType: "video/mp4",
       sortOrder: 1,
@@ -717,7 +707,6 @@ const storyQaMixedPairJourney: Journey = {
     {
       ...storyQaJourney.media[1],
       id: STORY_QA_MIXED_VERTICAL_VIDEO_ASSET_ID,
-      storageKey: "qa/story-mixed-video-vertical",
       fileName: "mixed-video-vertical.webm",
       mimeType: "video/webm",
       sortOrder: 2,
@@ -726,7 +715,6 @@ const storyQaMixedPairJourney: Journey = {
     {
       ...storyQaJourney.media[2],
       id: STORY_QA_MIXED_SECOND_PHOTO_ASSET_ID,
-      storageKey: "qa/story-seed-3",
       fileName: "seed-3.png",
       sortOrder: 4,
     },
@@ -806,7 +794,7 @@ function JourneyStoryQaPreview() {
     media: Array.from({ length: 8 }, (_, index) => ({
       ...storyQaJourney.media[0],
       id: `00000000-0000-4000-8000-${String(100 + index).padStart(12, "0")}`,
-      storageKey: `qa/story-seed-${index}`, fileName: `seed-${index}.jpg`, sortOrder: index,
+      fileName: `seed-${index}.jpg`, sortOrder: index,
     })),
   } : storyQaJourney;
   const [open, setOpen] = useState(true);
@@ -850,13 +838,10 @@ function JourneyStoryQaPreview() {
                 id: nextId,
                 journeyId: journey.id,
                 routePointId: null,
-                storageDriver: "qa",
-                storageKey: "qa/story-soundtrack",
                 fileName: "night-theme.mp3",
                 mimeType: "audio/mpeg",
                 bytes: 68,
                 sortOrder: kept.length,
-                uploadedByUserId: journey.createdByUserId,
                 createdAt: "2026-08-11T00:00:00.000Z",
               }],
             }];
@@ -902,13 +887,10 @@ function JourneyStoryQaPreview() {
                   : `00000000-0000-4000-8000-00000000020${index}`,
                 journeyId: storyQaJourney.id,
                 routePointId: null,
-                storageDriver: "qa",
-                storageKey: `qa/story-media-${index}`,
                 fileName: nextMediaIsSoundtrack ? "night-theme.mp3" : "night-route.png",
                 mimeType: nextMediaIsSoundtrack ? "audio/mpeg" : "image/png",
                 bytes: 68,
                 sortOrder: index,
-                uploadedByUserId: storyQaJourney.createdByUserId,
                 createdAt: "2026-08-11T00:00:00.000Z",
               }],
             };
@@ -956,7 +938,6 @@ const playbackQaJourney: Journey = {
     id: "00000000-0000-4000-8000-000000000111",
     journeyId: playbackQaJourneyId,
     routePointId: storyQaJourney.routePoints[0].id,
-    storageKey: "qa/playback-video",
     fileName: "playback-video.mp4",
     mimeType: "video/mp4",
     sortOrder: 0,
@@ -974,7 +955,6 @@ const playbackQaTrimJourney: Journey = {
     {
       ...playbackQaJourney.media[0],
       id: "00000000-0000-4000-8000-000000000112",
-      storageKey: "qa/playback-after-trim",
       fileName: "playback-after-trim.png",
       mimeType: "image/png",
       sortOrder: 1,
@@ -1054,13 +1034,10 @@ function prefetchQaJourney(pointCount: number, imagesPerPoint: number): Journey 
       id: `00000000-0000-4000-8000-1${`${pointIndex}`.padStart(2, "0")}${`${mediaIndex}`.padStart(3, "0")}000000`,
       journeyId,
       routePointId: point.id,
-      storageDriver: "qa",
-      storageKey: `qa/prefetch-${pointIndex}-${mediaIndex}`,
       fileName: `prefetch-${pointIndex}-${mediaIndex}.png`,
       mimeType: "image/png",
       bytes: 68,
       sortOrder: pointIndex * 1_000 + mediaIndex,
-      uploadedByUserId: storyQaJourney.createdByUserId,
       createdAt: "2026-08-11T00:00:00.000Z",
     }))
   ));
@@ -1158,8 +1135,6 @@ function buildContinuityQaJourney(mediaCounts: readonly number[]): Journey {
       id: `st109-p${pointIndex}-m${mediaIndex}`,
       journeyId: continuityQaJourneyId,
       routePointId: point.id,
-      storageDriver: "qa",
-      storageKey: `qa/continuity-${pointIndex}-${mediaIndex}`,
       fileName: (pointIndex === 4 && mediaIndex === 2)
         || (mediaCounts[pointIndex] >= 30 && mediaIndex === 2)
         ? `continuity-${pointIndex}-${mediaIndex}.webm`
@@ -1170,7 +1145,6 @@ function buildContinuityQaJourney(mediaCounts: readonly number[]): Journey {
         : "image/png",
       bytes: 68,
       sortOrder: pointIndex * 10 + mediaIndex,
-      uploadedByUserId: storyQaJourney.createdByUserId,
       createdAt: "2026-09-20T00:00:00.000Z",
     }))
   ));
@@ -1211,9 +1185,8 @@ const chapterMembershipQaJourney: Journey = {
   })),
   media: [2, 3].map((pointIndex, index) => ({
     id: `st121-chapter-photo-${pointIndex}`, journeyId: "00000000-0000-4000-8000-000000003421",
-    routePointId: `st121-chapter-point-${pointIndex}`, storageDriver: "qa", storageKey: `qa/chapter-${pointIndex}`,
-    fileName: `chapter-${pointIndex}.png`, mimeType: "image/png", bytes: 68, sortOrder: index,
-    uploadedByUserId: storyQaJourney.createdByUserId, createdAt: "2026-09-28T00:00:00.000Z",
+    routePointId: `st121-chapter-point-${pointIndex}`, fileName: `chapter-${pointIndex}.png`, mimeType: "image/png", bytes: 68, sortOrder: index,
+    createdAt: "2026-09-28T00:00:00.000Z",
   })),
 };
 
@@ -1496,7 +1469,6 @@ const book3dQaJourney: Journey = {
   media: Array.from({ length: BOOK_3D_QA_PICTURES }, (_, index) => ({
     ...storyQaJourney.media[0],
     id: `00000000-0000-4000-8000-${String(5000 + index).padStart(12, "0")}`,
-    storageKey: `qa/book-3d-${index}`,
     fileName: `book-3d-${index}.jpg`,
     mimeType: "image/jpeg",
     sortOrder: index,

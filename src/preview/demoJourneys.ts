@@ -78,13 +78,10 @@ function createImage(
     id,
     journeyId,
     routePointId,
-    storageDriver: "demo",
-    storageKey: `demo/${fileName}`,
     fileName,
     mimeType: "image/jpeg",
     bytes,
     sortOrder,
-    uploadedByUserId: DEMO_USER_ID,
     createdAt,
   };
 }

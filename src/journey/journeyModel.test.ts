@@ -166,8 +166,7 @@ describe("journeyModel", () => {
       { id: "hotel-b", journeyId: trip.id, sortOrder: 4, latitude: 30.65, longitude: 104.08, label: "Hotel B", isStop: true, occurredAt: null, regionContext: "成都", placeRole: "accommodation", createdAt: trip.createdAt },
     ];
     trip.media = [{
-      id: "media-1", journeyId: trip.id, routePointId: "museum", storageDriver: "s3", storageKey: "a",
-      fileName: "a.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, uploadedByUserId: "user-1", createdAt: trip.createdAt,
+      id: "media-1", journeyId: trip.id, routePointId: "museum", fileName: "a.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, createdAt: trip.createdAt,
     }];
 
     const summaries = deriveJourneyStaySummaries(trip);
@@ -212,8 +211,7 @@ describe("journeyModel", () => {
       { id: "stop-b", journeyId: trip.id, sortOrder: 2, latitude: 31.1, longitude: 105.1, label: "Stop B", isStop: true, occurredAt: null, regionContext: "B", createdAt: trip.createdAt },
     ];
     trip.media = [{
-      id: "via-photo", journeyId: trip.id, routePointId: "via", storageDriver: "s3", storageKey: "via",
-      fileName: "via.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, uploadedByUserId: "user-1", createdAt: trip.createdAt,
+      id: "via-photo", journeyId: trip.id, routePointId: "via", fileName: "via.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, createdAt: trip.createdAt,
     }];
     const beforeRoute = structuredClone(trip.routePoints);
     const beforeMedia = structuredClone(trip.media);
@@ -261,9 +259,8 @@ describe("journeyModel", () => {
       { id: "distant", journeyId: trip.id, sortOrder: 4, latitude: 20, longitude: 20, label: "distant", isStop: false, occurredAt: null, regionContext: "A", createdAt: trip.createdAt },
     ];
     trip.media = ["child", "unknown", "distant"].map((routePointId, sortOrder) => ({
-      id: `${routePointId}-photo`, journeyId: trip.id, routePointId, storageDriver: "test", storageKey: routePointId,
-      fileName: `${routePointId}.jpg`, mimeType: "image/jpeg", bytes: 1, sortOrder,
-      uploadedByUserId: "user-1", createdAt: trip.createdAt,
+      id: `${routePointId}-photo`, journeyId: trip.id, routePointId, fileName: `${routePointId}.jpg`, mimeType: "image/jpeg", bytes: 1, sortOrder,
+      createdAt: trip.createdAt,
     }));
     const before = structuredClone(trip);
     expect(deriveJourneyStaySummaries(trip)).toEqual([expect.objectContaining({
@@ -291,8 +288,8 @@ describe("journeyModel", () => {
     ] satisfies Journey["routePoints"];
     trip.routePoints = routePoints;
     trip.media = [
-      { id: "a-photo", journeyId: trip.id, routePointId: "a-day-2", storageDriver: "s3", storageKey: "a", fileName: "a.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, uploadedByUserId: "user-1", createdAt: trip.createdAt },
-      { id: "detour-photo", journeyId: trip.id, routePointId: "detour", storageDriver: "s3", storageKey: "d", fileName: "d.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 1, uploadedByUserId: "user-1", createdAt: trip.createdAt },
+      { id: "a-photo", journeyId: trip.id, routePointId: "a-day-2", fileName: "a.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, createdAt: trip.createdAt },
+      { id: "detour-photo", journeyId: trip.id, routePointId: "detour", fileName: "d.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 1, createdAt: trip.createdAt },
     ];
     const routeBefore = structuredClone(trip.routePoints);
     const mediaBefore = structuredClone(trip.media);
@@ -338,9 +335,8 @@ describe("journeyModel", () => {
       label: `Point ${index}`, isStop: true, occurredAt: null, regionContext: `Region ${index}`, createdAt: large.createdAt,
     }));
     large.media = Array.from({ length: 512 }, (_, index) => ({
-      id: `m-${index}`, journeyId: large.id, routePointId: `p-${index % 64}`, storageDriver: "s3",
-      storageKey: `m-${index}`, fileName: `m-${index}.jpg`, mimeType: "image/jpeg", bytes: 1, sortOrder: index,
-      uploadedByUserId: "user-1", createdAt: large.createdAt,
+      id: `m-${index}`, journeyId: large.id, routePointId: `p-${index % 64}`, fileName: `m-${index}.jpg`, mimeType: "image/jpeg", bytes: 1, sortOrder: index,
+      createdAt: large.createdAt,
     }));
     const authorizedPointIds = new Set(large.routePoints.filter((_, index) => index % 2 === 0).map((point) => point.id));
     const authorizedMediaIds = new Set(large.media.filter((_, index) => index % 4 === 0).map((asset) => asset.id));
@@ -425,13 +421,10 @@ describe("journeyModel", () => {
       id,
       journeyId: "journey-1",
       routePointId: null,
-      storageDriver: "test",
-      storageKey: `journey-1/${id}`,
       fileName: id,
       mimeType,
       bytes: 128,
       sortOrder,
-      uploadedByUserId: "user-1",
       createdAt: "2026-08-11T00:00:00.000Z",
     });
     const mixed = {
@@ -525,13 +518,10 @@ describe("journeyModel", () => {
       id: "",
       journeyId: "journey-1",
       routePointId: null,
-      storageDriver: "test",
-      storageKey: "journey-1",
       fileName: "",
       mimeType: "image/jpeg",
       bytes: 128,
       sortOrder: 0,
-      uploadedByUserId: "user-1",
       createdAt: "2026-08-11T00:00:00.000Z",
     };
     const media = [
@@ -554,13 +544,10 @@ describe("journeyModel", () => {
       id: "",
       journeyId: "journey-1",
       routePointId: null,
-      storageDriver: "test",
-      storageKey: "journey-1",
       fileName: "",
       mimeType: "image/jpeg",
       bytes: 128,
       sortOrder: 0,
-      uploadedByUserId: "user-1",
       createdAt: "2026-08-11T00:00:00.000Z",
     };
     const withPoint = [
@@ -579,13 +566,10 @@ describe("journeyModel", () => {
       id: "",
       journeyId: "journey-1",
       routePointId: null,
-      storageDriver: "test",
-      storageKey: "journey-1",
       fileName: "",
       mimeType: "image/jpeg",
       bytes: 128,
       sortOrder: 0,
-      uploadedByUserId: "user-1",
       createdAt: "2026-08-11T00:00:00.000Z",
     };
     const withScope = [
@@ -603,13 +587,10 @@ describe("journeyModel", () => {
       id: "",
       journeyId: "journey-1",
       routePointId: null,
-      storageDriver: "test",
-      storageKey: "journey-1",
       fileName: "",
       mimeType: "image/jpeg",
       bytes: 128,
       sortOrder: 0,
-      uploadedByUserId: "user-1",
       createdAt: "2026-08-11T00:00:00.000Z",
     };
     const media = [

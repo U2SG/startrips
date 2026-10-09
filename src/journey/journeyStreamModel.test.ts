@@ -34,8 +34,8 @@ function point(id: string, note: string | null = null, occurredAt: string | null
 
 function asset(id: string, routePointId: string | null, sortOrder: number, mimeType = "image/jpeg"): JourneyMediaAsset {
   return {
-    id, journeyId: base.id, routePointId, storageDriver: "test", storageKey: id, fileName: id,
-    mimeType, bytes: 1, sortOrder, uploadedByUserId: "user-1", createdAt: base.createdAt,
+    id, journeyId: base.id, routePointId, fileName: id,
+    mimeType, bytes: 1, sortOrder, createdAt: base.createdAt,
   };
 }
 

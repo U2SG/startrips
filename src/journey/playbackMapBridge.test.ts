@@ -11,9 +11,8 @@ function fixture(counts: number[]): Journey {
     routePoints: counts.map((_, index) => ({ id: `p${index}`, journeyId: "bridge", sortOrder: index,
       latitude: index, longitude: index, label: `Place ${index}`, isStop: true, occurredAt: null, createdAt: "" })),
     media: counts.flatMap((count, point) => Array.from({ length: count }, (_, index) => ({
-      id: `p${point}m${index}`, journeyId: "bridge", routePointId: `p${point}`, storageDriver: "test",
-      storageKey: "", fileName: "frame", mimeType: index % 2 ? "video/mp4" : "image/jpeg", bytes: 1,
-      sortOrder: index, uploadedByUserId: "owner", createdAt: "",
+      id: `p${point}m${index}`, journeyId: "bridge", routePointId: `p${point}`, fileName: "frame", mimeType: index % 2 ? "video/mp4" : "image/jpeg", bytes: 1,
+      sortOrder: index, createdAt: "",
     }))),
   };
 }

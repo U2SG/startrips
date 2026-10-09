@@ -30,9 +30,9 @@ function sourceJourney(): Journey {
       { id: "point-b", journeyId: "journey-1", sortOrder: 1, latitude: 3, longitude: 4, label: "B", isStop: false, occurredAt: null, note: null, createdAt: "2026-09-01T02:00:00.000Z" },
     ],
     media: [
-      { id: "asset-journey", journeyId: "journey-1", routePointId: null, storageDriver: "qa", storageKey: "journey", fileName: "journey.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, uploadedByUserId: "user-1", createdAt: generatedAt },
-      { id: "asset-kept", journeyId: "journey-1", routePointId: "point-a", storageDriver: "qa", storageKey: "kept", fileName: "kept.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 1, uploadedByUserId: "user-1", createdAt: generatedAt },
-      { id: "asset-removed", journeyId: "journey-1", routePointId: "point-b", storageDriver: "qa", storageKey: "removed", fileName: "removed.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 2, uploadedByUserId: "user-1", createdAt: generatedAt },
+      { id: "asset-journey", journeyId: "journey-1", routePointId: null, fileName: "journey.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 0, createdAt: generatedAt },
+      { id: "asset-kept", journeyId: "journey-1", routePointId: "point-a", fileName: "kept.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 1, createdAt: generatedAt },
+      { id: "asset-removed", journeyId: "journey-1", routePointId: "point-b", fileName: "removed.jpg", mimeType: "image/jpeg", bytes: 10, sortOrder: 2, createdAt: generatedAt },
     ],
   };
 }
