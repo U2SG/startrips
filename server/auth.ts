@@ -112,6 +112,16 @@ export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 7,
     updateAge: 60 * 60 * 24,
+    // A signed copy of the session in a short-lived cookie, so a burst of
+    // requests from one tab does not re-read the session and user rows each
+    // time. The tradeoff is bounded: a revoked session (sign-out elsewhere,
+    // password reset) can keep authenticating for at most `maxAge` seconds.
+    // Atlas membership is still read from the database on every request
+    // (`authorization/atlas-access.ts`), so removing a member is immediate.
+    cookieCache: {
+      enabled: true,
+      maxAge: 60,
+    },
   },
   // #345: account rows are login identities of one stable Startrips user.
   // Better Auth 1.6.23 can otherwise expose implicit email-based linking and

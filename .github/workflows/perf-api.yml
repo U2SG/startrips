@@ -1,0 +1,77 @@
+name: perf-api
+
+# Frozen API latency harness (server/bench/api-latency.ts). Separate from
+# ci.yml on purpose: it measures, it does not gate other lanes.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: perf-api-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api-latency:
+    name: api-latency
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: startrips_perf
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d startrips_perf"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ORIGIN: http://127.0.0.1:5173
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/startrips_perf
+      DATABASE_SSL: "false"
+      BETTER_AUTH_SECRET: ci-only-secret-with-more-than-thirty-two-bytes
+      # read-url must sign for real; S3 presigning is local and never contacts
+      # this endpoint.
+      STORAGE_DRIVER: s3
+      S3_BACKEND_ID: bench-s3
+      S3_ENDPOINT: http://127.0.0.1:9
+      S3_REGION: us-east-1
+      S3_BUCKET: bench
+      S3_ACCESS_KEY_ID: bench-access-key
+      S3_SECRET_ACCESS_KEY: bench-secret-key
+      S3_FORCE_PATH_STYLE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        timeout-minutes: 3
+      - name: Apply migrations
+        run: pnpm db:migrate
+      - name: Run API latency harness
+        run: |
+          set -euo pipefail
+          pnpm exec tsx server/bench/api-latency.ts
+          cat artifacts/perf-api/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload API latency evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: perf-api-latency-${{ github.run_attempt }}
+          path: artifacts/perf-api/
+          if-no-files-found: error
+          retention-days: 14
