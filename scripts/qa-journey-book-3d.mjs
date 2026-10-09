@@ -222,7 +222,7 @@ async function openSession(browser, name, contextOptions) {
 
   /** Screenshot at CSS scale and read the given viewport pixels back from it. */
   async function sample(label, points) {
-    const png = await page.screenshot({ type: "png", scale: "css" });
+    const png = await page.screenshot({ type: "png", scale: "css", timeout: STEP_TIMEOUT_MS });
     await writeFile(`${artifactDir}/${name}-${label}.png`, png);
     return bounded(`${name} ${label}: read the screenshot's pixels`, page.evaluate(async ({ data, points: wanted }) => {
       const image = new Image();
@@ -511,7 +511,7 @@ async function desktopDrags(browser) {
     for (const [index, fraction] of fractions.entries()) {
       await page.mouse.move(grabX - coverRect.width * fraction, grabY, { steps: 2 });
       recordFlight(`cover-turn ${fraction}`, await session.flightAt(fraction, 0.01));
-      await writeFile(`${artifactDir}/desktop-cover-turn-${String(index).padStart(3, "0")}.png`, await page.screenshot({ type: "png" }));
+      await writeFile(`${artifactDir}/desktop-cover-turn-${String(index).padStart(3, "0")}.png`, await page.screenshot({ type: "png", timeout: STEP_TIMEOUT_MS }));
     }
     await page.mouse.up();
     await page.mouse.move(0, 0);
@@ -533,7 +533,7 @@ async function desktopDrags(browser) {
 async function desktopLastSpread(browser) {
   await desktopSession(browser, "last-spread", async (session) => {
     const { page } = session;
-    await page.locator(".journey-book-3d").focus();
+    await page.locator(".journey-book-3d").focus({ timeout: STEP_TIMEOUT_MS });
     await bounded("desktop key End not acknowledged", page.keyboard.press("End"));
     await session.settledAt(FACES - 1, { evidence: false });
     await page.locator('button[aria-label="上一页"]').click();
@@ -590,19 +590,19 @@ async function phoneSession(browser) {
 
     // A tap on the step button pans to the facing page without turning paper,
     // and leaves no page edge lifted.
-    await page.locator('button[aria-label="下一页"]').tap();
+    await page.locator('button[aria-label="下一页"]').tap({ timeout: STEP_TIMEOUT_MS });
     const facing = await session.settledAt(2);
     await session.checkAlignment("first-spread-right-after-pan", facing, ["right"], isPaper);
 
     // Last interior spread: its right page, then the pan back to its left page.
-    await page.locator(".journey-book-3d").focus();
+    await page.locator(".journey-book-3d").focus({ timeout: STEP_TIMEOUT_MS });
     await press("End");
     await session.settledAt(FACES - 1, { evidence: false });
-    await page.locator('button[aria-label="上一页"]').tap();
+    await page.locator('button[aria-label="上一页"]').tap({ timeout: STEP_TIMEOUT_MS });
     const last = await session.settledAt(FACES - 2);
     await session.checkOuterMargin("last-page", last, "right");
     await session.checkAlignment("last-page", last, ["right"], isPaper);
-    await page.locator('button[aria-label="上一页"]').tap();
+    await page.locator('button[aria-label="上一页"]').tap({ timeout: STEP_TIMEOUT_MS });
     const lastLeft = await session.settledAt(FACES - 3);
     await session.checkAlignment("last-spread-left-after-pan", lastLeft, ["left"], isPaper);
 
