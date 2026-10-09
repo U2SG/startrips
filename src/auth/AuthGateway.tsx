@@ -80,26 +80,13 @@ import { MediaPresentationMenuEntry } from "../journey/mediaPresentation";
 import { authClient } from "./auth-client";
 import { authExceptionEvent, authFormReducer, authProviderErrorEvent, authServiceErrorEvent, authVerificationCallbackURL, createAuthFormState, withAuthRequestBoundary, type AuthFormEvent, type AuthFormState } from "./authFormState";
 import { resolvePasswordResetOutcome, type PasswordResetOutcome } from "./passwordResetOutcome";
-
-type OrganizationSummary = {
-  id: string;
-  name: string;
-  slug: string;
-};
-
-type AtlasSummary = {
-  id: string;
-  title: string;
-  dedication: string;
-};
-
-type GateState =
-  | { kind: "loading" }
-  | { kind: "create-organization" }
-  | { kind: "choose-organization"; organizations: OrganizationSummary[] }
-  | { kind: "bootstrap"; organization: OrganizationSummary }
-  | { kind: "ready"; atlas: AtlasSummary; role: string }
-  | { kind: "error"; message: string };
+import {
+  canReadCurrentAtlasEarly,
+  gateFromCurrentAtlas,
+  gateFromOrganizationList,
+  readCurrentAtlas,
+  type GateState,
+} from "./workspaceGate";
 
 const AtlasCinematicContext = createContext<(active: boolean) => void>(() => undefined);
 
@@ -1327,37 +1314,22 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
     let cancelled = false;
     async function load() {
       setGate({ kind: "loading" });
+      // The two reads are independent on the server, so the Atlas read starts
+      // alongside the list whenever an active Organization is already known.
+      // The list still decides first; see workspaceGate.ts.
+      const earlyAtlas = canReadCurrentAtlasEarly(selectedActiveId) ? readCurrentAtlas() : null;
       const listed = await authClient.organization.list();
       if (cancelled) return;
-      if (listed.error) {
-        setGate({ kind: "error", message: listed.error.message || "无法读取图谱列表" });
+      const listVerdict = gateFromOrganizationList(listed, selectedActiveId);
+      if ("gate" in listVerdict) {
+        setGate(listVerdict.gate);
         return;
       }
-      const organizations = listed.data ?? [];
-      if (organizations.length === 0) {
-        setGate({ kind: "create-organization" });
-        return;
-      }
-      const active = organizations.find((organization) => organization.id === selectedActiveId);
-      if (!active) {
-        setGate({ kind: "choose-organization", organizations });
-        return;
-      }
-
-      const response = await fetch("/api/atlases/current", { credentials: "include" });
+      const current = await (earlyAtlas ?? readCurrentAtlas());
       if (cancelled) return;
-      if (response.ok) {
-        const payload = await response.json() as { atlas: AtlasSummary; role: string };
-        setGate({ kind: "ready", atlas: payload.atlas, role: payload.role });
-        return;
-      }
-      const error = await response.json().catch(() => null) as { error?: string; message?: string } | null;
-      if (response.status === 404 && error?.error === "ATLAS_NOT_FOUND") {
-        setAtlasName(active.name);
-        setGate({ kind: "bootstrap", organization: active });
-        return;
-      }
-      setGate({ kind: "error", message: error?.message || error?.error || "无法读取私人图谱" });
+      const next = gateFromCurrentAtlas(listVerdict.active, current);
+      if (next.kind === "bootstrap") setAtlasName(next.organization.name);
+      setGate(next);
     }
     void load();
     return () => { cancelled = true; };
