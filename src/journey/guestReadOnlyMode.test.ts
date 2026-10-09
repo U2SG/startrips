@@ -52,13 +52,10 @@ const journey: Journey = {
     id: "asset-a",
     journeyId: "journey-a",
     routePointId: null,
-    storageDriver: "",
-    storageKey: "",
     fileName: "sea.jpg",
     mimeType: "image/jpeg",
     bytes: 2048,
     sortOrder: 0,
-    uploadedByUserId: "",
     createdAt: "",
   }],
 };

@@ -26,13 +26,10 @@ function media(id: string, routePointId: string | null, sortOrder: number): Jour
     id,
     journeyId: "journey-a",
     routePointId,
-    storageDriver: "local",
-    storageKey: `journey-a/${id}.jpg`,
     fileName: `${id}.jpg`,
     mimeType: "image/jpeg",
     bytes: 1_024,
     sortOrder,
-    uploadedByUserId: "user-a",
     createdAt: "2026-09-01T00:00:00.000Z",
   };
 }

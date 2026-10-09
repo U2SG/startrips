@@ -9,6 +9,7 @@ import {
   isNull,
   lte,
   notInArray,
+  getTableColumns,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -102,6 +103,34 @@ export async function lockActiveJourney(
   return locked.rows[0];
 }
 
+/**
+ * Media columns an owner Journey payload carries. Storage internals — which
+ * backend holds the bytes, the object keys of the original and its preview —
+ * and the uploader id have no reader in the client: media is only ever read
+ * through a short-lived signed URL issued after tenant authorization, and the
+ * server re-reads the full row for that. Every loadJourneys result is a client
+ * response body, so withholding them here covers each Journey response.
+ */
+const {
+  storageDriver: _storageDriver,
+  storageKey: _storageKey,
+  previewStorageKey: _previewStorageKey,
+  uploadedByUserId: _uploadedByUserId,
+  ...OWNER_MEDIA_COLUMNS
+} = getTableColumns(mediaAssets);
+
+/** The same owner projection for a media row read elsewhere (upload completion). */
+export function toOwnerMediaAsset(asset: typeof mediaAssets.$inferSelect) {
+  const {
+    storageDriver: _driver,
+    storageKey: _key,
+    previewStorageKey: _previewKey,
+    uploadedByUserId: _uploader,
+    ...owner
+  } = asset;
+  return owner;
+}
+
 async function loadJourneys(atlasId: string, requestedIds?: readonly string[]) {
   if (requestedIds?.length === 0) return [];
   const atlasScope = requestedIds
@@ -142,7 +171,7 @@ async function loadJourneys(atlasId: string, requestedIds?: readonly string[]) {
         asc(journeyRoutePoints.sortOrder),
       ),
     db
-      .select()
+      .select(OWNER_MEDIA_COLUMNS)
       .from(mediaAssets)
       .where(inArray(mediaAssets.journeyId, journeyIds))
       .orderBy(asc(mediaAssets.journeyId), asc(mediaAssets.sortOrder)),

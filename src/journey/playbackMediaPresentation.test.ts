@@ -95,13 +95,10 @@ describe("playbackHoldReason (#197)", () => {
     id: "asset-image",
     journeyId: "journey",
     routePointId: "point",
-    storageDriver: "qa",
-    storageKey: "qa/image",
     fileName: "image.png",
     mimeType: "image/png",
     bytes: 68,
     sortOrder: 0,
-    uploadedByUserId: "user",
     createdAt: "2026-09-05T00:00:00.000Z",
   };
   const video = { ...image, id: "asset-video", fileName: "clip.mp4", mimeType: "video/mp4" };

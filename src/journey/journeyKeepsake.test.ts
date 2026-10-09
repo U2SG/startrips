@@ -28,13 +28,10 @@ function media(
     id,
     journeyId: "journey-reel",
     routePointId,
-    storageDriver: "s3",
-    storageKey: `private/${id}`,
     fileName: `${id}.bin`,
     mimeType,
     bytes: 1024,
     sortOrder,
-    uploadedByUserId: "user-1",
     createdAt: "2026-08-10T00:00:00.000Z",
   };
 }

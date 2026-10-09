@@ -19,8 +19,8 @@ const journey: Journey = {
     { id: "point-d", journeyId: "journey-a", sortOrder: 1, latitude: 3, longitude: 4, label: "D", isStop: true, occurredAt: null, createdAt: "2026-01-01T00:00:00Z" },
   ],
   media: [
-    { id: "asset-a", journeyId: "journey-a", routePointId: "point-a", storageDriver: "s3", storageKey: "a", fileName: "a.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 0, uploadedByUserId: "user-a", createdAt: "2026-01-01T00:00:00Z" },
-    { id: "asset-d", journeyId: "journey-a", routePointId: "point-d", storageDriver: "s3", storageKey: "d", fileName: "d.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 1, uploadedByUserId: "user-a", createdAt: "2026-01-01T00:00:00Z" },
+    { id: "asset-a", journeyId: "journey-a", routePointId: "point-a", fileName: "a.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 0, createdAt: "2026-01-01T00:00:00Z" },
+    { id: "asset-d", journeyId: "journey-a", routePointId: "point-d", fileName: "d.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 1, createdAt: "2026-01-01T00:00:00Z" },
   ],
 };
 

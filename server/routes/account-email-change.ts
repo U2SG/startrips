@@ -7,7 +7,7 @@ import {
   startAccountEmailChange,
   verifyAccountEmailChangeNewAddress,
 } from "../account-identities/email-change-repository";
-import { auth } from "../auth";
+import { getAuthoritativeSession } from "../authorization/authoritative-session";
 import { serverConfig } from "../config";
 import {
   createEmailSender,
@@ -26,7 +26,7 @@ function sameOrigin(request: Request): boolean {
 }
 
 async function requireSession(request: Request) {
-  return await auth.api.getSession({ headers: request.headers });
+  return await getAuthoritativeSession(request.headers);
 }
 
 function stringField(body: Record<string, unknown>, key: string): string | null {

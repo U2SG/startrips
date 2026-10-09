@@ -286,10 +286,12 @@ describe("sharedJourneyToJourney", () => {
     expect(journey.createdByUserId).toBe("");
     expect(journey.createdAt).toBe("");
     expect(journey.updatedAt).toBe("");
-    // A private storage key must never reach the browser (#200).
-    expect(journey.media[0].storageKey).toBe("");
-    expect(journey.media[0].storageDriver).toBe("");
-    expect(journey.media[0].uploadedByUserId).toBe("");
+    // A private storage key must never reach the browser (#200). The owner
+    // shape no longer has storage internals at all, so the guest shape has
+    // nothing to blank out.
+    for (const internal of ["storageKey", "storageDriver", "previewStorageKey", "uploadedByUserId"]) {
+      expect(journey.media[0]).not.toHaveProperty(internal);
+    }
     // Content the recipient is looking at does come through.
     expect(journey.title).toBe("海风经过深圳湾");
     expect(journey.revision).toBe(3);

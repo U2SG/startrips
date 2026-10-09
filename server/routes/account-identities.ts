@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { auth } from "../auth";
+import { getAuthoritativeSession } from "../authorization/authoritative-session";
 import { serverConfig } from "../config";
 import {
   AccountIdentityError,
@@ -103,7 +104,7 @@ function refusalStatus(error: AccountIdentityError): 400 | 403 | 404 | 409 {
 }
 
 async function requireSession(request: Request) {
-  return await auth.api.getSession({ headers: request.headers });
+  return await getAuthoritativeSession(request.headers);
 }
 
 function stringField(body: Record<string, unknown>, key: string): string | null {

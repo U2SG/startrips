@@ -57,13 +57,10 @@ const media = (
   id,
   journeyId: "journey-1",
   routePointId,
-  storageDriver: "test",
-  storageKey: id,
   fileName: `${id}.bin`,
   mimeType,
   bytes: 128,
   sortOrder,
-  uploadedByUserId: "user-1",
   createdAt: "2026-08-11T00:00:00.000Z",
 });
 

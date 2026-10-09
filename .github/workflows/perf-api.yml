@@ -1,9 +1,20 @@
 name: perf-api
 
 # Frozen API latency harness (server/bench/api-latency.ts). Separate from
-# ci.yml on purpose: it measures, it does not gate other lanes.
+# ci.yml on purpose: it measures, it does not gate other lanes, and it is not a
+# required check (merge readiness reads only ci.yml's `verify`). It runs only
+# when something the harness executes can change: server code (including the
+# harness and migrations), the src/journey modules the server imports,
+# dependencies, or this workflow.
 on:
   pull_request:
+    paths:
+      - "server/**"
+      - "src/journey/**"
+      - "drizzle.config.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/perf-api.yml"
   workflow_dispatch:
 
 concurrency:

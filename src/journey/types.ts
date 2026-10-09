@@ -4,13 +4,12 @@ export type JourneyMediaAsset = {
   id: string;
   journeyId: string;
   routePointId: string | null;
-  storageDriver: string;
-  storageKey: string;
+  // Storage internals (driver, object keys) and the uploader id are withheld
+  // from every client payload: bytes are read only through signed URLs.
   fileName: string;
   mimeType: string;
   bytes: number;
   sortOrder: number;
-  uploadedByUserId: string;
   // #127/ST-058 + #311/ST-059: owner payloads may carry a persisted content
   // hash, but it is exact-byte identity only when the backend marks it verified.
   // Shared Journey projections intentionally omit both fields.

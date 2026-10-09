@@ -27,13 +27,10 @@ const media = (id: string, routePointId: string, sortOrder = 0): JourneyMediaAss
   id,
   journeyId: "journey-nav",
   routePointId,
-  storageDriver: "test",
-  storageKey: id,
   fileName: `${id}.jpg`,
   mimeType: "image/jpeg",
   bytes: 128,
   sortOrder,
-  uploadedByUserId: "user-1",
   createdAt: "2026-09-01T00:00:00.000Z",
 });
 

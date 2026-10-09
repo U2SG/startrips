@@ -269,8 +269,8 @@ export function createSharedAtlasClient(
  * in the shape the presentation components already consume; filling them with
  * an empty string keeps that reuse without inventing a plausible-looking value
  * for something the guest was never told. Nothing in the viewing path reads
- * them: `atlasId`, `createdByUserId`, `storageDriver`, `storageKey` and
- * `uploadedByUserId` have no reader anywhere in `src/`, and `createdAt` is
+ * them: `atlasId` and `createdByUserId` have no reader anywhere in `src/`, and
+ * `createdAt` is
  * read only as a tiebreak in `sortJourneysChronologically`, where every guest
  * journey ties and the payload's own grant order therefore survives the sort.
  */
@@ -303,13 +303,10 @@ export function sharedJourneyToJourney(shared: SharedJourney): Journey {
     id: asset.id,
     journeyId: shared.id,
     routePointId: asset.routePointId,
-    storageDriver: GUEST_WITHHELD,
-    storageKey: GUEST_WITHHELD,
     fileName: asset.fileName,
     mimeType: asset.mimeType,
     bytes: asset.bytes,
     sortOrder: index,
-    uploadedByUserId: GUEST_WITHHELD,
     createdAt: GUEST_WITHHELD,
   }));
   return {

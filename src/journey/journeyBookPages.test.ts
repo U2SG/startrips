@@ -44,13 +44,10 @@ function asset(id: string, routePointId: string | null, sortOrder: number, mimeT
     id,
     journeyId: base.id,
     routePointId,
-    storageDriver: "test",
-    storageKey: `journey-1/${id}`,
     fileName: `${id}.bin`,
     mimeType,
     bytes: 128,
     sortOrder,
-    uploadedByUserId: "user-1",
     createdAt: base.createdAt,
   };
 }

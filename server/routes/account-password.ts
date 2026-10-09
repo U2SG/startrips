@@ -9,7 +9,7 @@ import {
   enrollAccountPassword,
   type AccountPasswordEnrollmentErrorCode,
 } from "../account-identities/password-enrollment";
-import { auth } from "../auth";
+import { getAuthoritativeSession } from "../authorization/authoritative-session";
 import { serverConfig } from "../config";
 import { readJsonObject } from "./json-body";
 
@@ -79,9 +79,7 @@ export function createAccountPasswordRoutes() {
     if (!sameOrigin(context.req.raw)) {
       return context.json({ error: "PASSWORD_CHANGE_ORIGIN_REQUIRED" }, 403);
     }
-    const session = await auth.api.getSession({
-      headers: context.req.raw.headers,
-    });
+    const session = await getAuthoritativeSession(context.req.raw.headers);
     if (!session) return context.json({ error: "UNAUTHORIZED" }, 401);
     const body = await readJsonObject(() => context.req.json());
     const currentPassword = body && stringField(body, "currentPassword");
@@ -115,9 +113,7 @@ export function createAccountPasswordRoutes() {
     if (!sameOrigin(context.req.raw)) {
       return context.json({ error: "PASSWORD_ENROLL_ORIGIN_REQUIRED" }, 403);
     }
-    const session = await auth.api.getSession({
-      headers: context.req.raw.headers,
-    });
+    const session = await getAuthoritativeSession(context.req.raw.headers);
     if (!session) return context.json({ error: "UNAUTHORIZED" }, 401);
     const body = await readJsonObject(() => context.req.json());
     const newPassword = body && stringField(body, "newPassword");

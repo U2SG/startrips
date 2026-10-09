@@ -207,8 +207,6 @@ describe("persistJourneyDraft", () => {
       id: "media-1",
       journeyId: "journey-1",
       routePointId: "point-1",
-      storageDriver: "test",
-      storageKey: "point-1/photo.jpg",
       fileName: "point.jpg",
       mimeType: "image/jpeg",
       bytes: 10,

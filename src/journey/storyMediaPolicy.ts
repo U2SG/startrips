@@ -521,13 +521,10 @@ function storyNotePage(pageId: string, entry: StoryCursorEntry): JourneyMediaAss
     id: pageId,
     journeyId: "",
     routePointId: entry.routePointId,
-    storageDriver: "",
-    storageKey: "",
     fileName: "",
     mimeType: STORY_NOTE_PAGE_MIME_TYPE,
     bytes: 0,
     sortOrder: 0,
-    uploadedByUserId: "",
     createdAt: "",
   };
 }
