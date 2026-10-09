@@ -85,6 +85,25 @@ const FIRST_ASSET = 5000;
 // scene advances a turn by at most 40 ms per frame, so one turn can take tens
 // of seconds on a CI runner.
 const SETTLE_TIMEOUT_MS = 120_000;
+// A CDP input event or page evaluation has no timeout of its own: an input
+// event waits for the renderer to acknowledge it. On CI one touch move costs
+// about two seconds of DPR 3 SwiftShader frames, so a step still unanswered
+// after this long is stuck, and fails by name instead of running to the
+// suite cap.
+const STEP_TIMEOUT_MS = 30_000;
+
+/** Resolve as `promise` does, or reject naming `label` after `ms`. */
+async function bounded(label, promise, ms = STEP_TIMEOUT_MS) {
+  let timer;
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label}: no answer within ${ms} ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const checks = [];
 let failed = false;
@@ -171,25 +190,41 @@ async function openSession(browser, name, contextOptions) {
    * it reports. `evidence: false` when no screenshot of this spread follows.
    */
   async function settledAt(face, { evidence = true } = {}) {
-    await page.waitForFunction((want) => {
+    await waitForBook(`settle on face ${face}`, (want) => {
       const raw = document.querySelector(".journey-book-3d__stage")?.dataset.qaBook;
       return raw ? JSON.parse(raw).face === want : false;
-    }, face, { timeout: SETTLE_TIMEOUT_MS });
+    }, face);
     // Let pictures near the spread land so the evidence shows real pages; the
     // sampled margins are paper either way.
     if (evidence) await page.waitForTimeout(1_200);
-    return page.evaluate(() => {
+    return bounded(`${name} read the settled book on face ${face}`, page.evaluate(() => {
       const stage = document.querySelector(".journey-book-3d__stage");
       const box = stage.getBoundingClientRect();
       return { ...JSON.parse(stage.dataset.qaBook), stage: { left: box.left, top: box.top, width: box.width, height: box.height } };
-    });
+    }));
+  }
+
+  /**
+   * Wait for `predicate` on the page; when it never holds, fail naming `label`
+   * with what the stage reports (`data-qa-book` is absent while unsettled).
+   */
+  async function waitForBook(label, predicate, arg) {
+    try {
+      await page.waitForFunction(predicate, arg, { timeout: SETTLE_TIMEOUT_MS });
+    } catch (error) {
+      const now = await bounded("read the book's QA readout", page.evaluate(() => {
+        const stage = document.querySelector(".journey-book-3d__stage");
+        return { qaBook: stage?.dataset.qaBook ?? null, qaBookFlight: stage?.dataset.qaBookFlight ?? null };
+      }), 5_000).catch((readError) => ({ unreadable: readError.message }));
+      throw new Error(`${name} ${label}: not reached within ${SETTLE_TIMEOUT_MS} ms; the stage reports ${JSON.stringify(now)}`, { cause: error });
+    }
   }
 
   /** Screenshot at CSS scale and read the given viewport pixels back from it. */
   async function sample(label, points) {
     const png = await page.screenshot({ type: "png", scale: "css" });
     await writeFile(`${artifactDir}/${name}-${label}.png`, png);
-    return page.evaluate(async ({ data, points: wanted }) => {
+    return bounded(`${name} ${label}: read the screenshot's pixels`, page.evaluate(async ({ data, points: wanted }) => {
       const image = new Image();
       image.src = `data:image/png;base64,${data}`;
       await image.decode();
@@ -199,7 +234,7 @@ async function openSession(browser, name, contextOptions) {
       const context = canvas.getContext("2d", { willReadFrequently: true });
       context.drawImage(image, 0, 0);
       return wanted.map(({ x, y }) => Array.from(context.getImageData(Math.round(x), Math.round(y), 1, 1).data).slice(0, 3));
-    }, { data: png.toString("base64"), points });
+    }, { data: png.toString("base64"), points }));
   }
 
   async function checkAlignment(label, state, sides, paperTest) {
@@ -252,13 +287,14 @@ async function openSession(browser, name, contextOptions) {
    * sheet in flight reaches (`data-qa-book-flight`).
    */
   async function flightAt(progress, tolerance) {
-    await page.waitForFunction(({ want, tol }) => {
+    await waitForBook(`render progress ${progress} with the camera landed`, ({ want, tol }) => {
       const raw = document.querySelector(".journey-book-3d__stage")?.dataset.qaBookFlight;
       if (!raw) return false;
       const flight = JSON.parse(raw);
       return Math.abs(flight.progress - want) <= tol && !flight.following;
-    }, { want: progress, tol: tolerance }, { timeout: SETTLE_TIMEOUT_MS });
-    return page.evaluate(() => JSON.parse(document.querySelector(".journey-book-3d__stage").dataset.qaBookFlight));
+    }, { want: progress, tol: tolerance });
+    return bounded(`${name} read the flight at progress ${progress}`,
+      page.evaluate(() => JSON.parse(document.querySelector(".journey-book-3d__stage").dataset.qaBookFlight)));
   }
 
   return { page, context, settledAt, flightAt, checkAlignment, checkOuterMargin, recordErrors };
@@ -498,7 +534,7 @@ async function desktopLastSpread(browser) {
   await desktopSession(browser, "last-spread", async (session) => {
     const { page } = session;
     await page.locator(".journey-book-3d").focus();
-    await page.keyboard.press("End");
+    await bounded("desktop key End not acknowledged", page.keyboard.press("End"));
     await session.settledAt(FACES - 1, { evidence: false });
     await page.locator('button[aria-label="上一页"]').click();
     const last = await session.settledAt(FACES - 2);
@@ -522,11 +558,14 @@ async function phoneSession(browser) {
   });
   const { page } = session;
   const cdp = await page.context().newCDPSession(page);
-  const touch = (type, x, y) => cdp.send("Input.dispatchTouchEvent", {
+  // Each touch event waits for the renderer's acknowledgement, which CDP never times out.
+  const touch = (label, type, x, y) => bounded(`phone touch drag: ${label} not acknowledged`, cdp.send("Input.dispatchTouchEvent", {
     type, touchPoints: type === "touchEnd" ? [] : [{ x: Math.round(x), y: Math.round(y), id: 1 }],
-  });
+  }));
+  const press = (key) => bounded(`phone key ${key} not acknowledged`, page.keyboard.press(key));
   try {
-    const hover = await page.evaluate(() => window.matchMedia("(hover: hover) and (pointer: fine)").matches);
+    const hover = await bounded("phone read the hover media query",
+      page.evaluate(() => window.matchMedia("(hover: hover) and (pointer: fine)").matches));
     record("phone: the emulated device has no fine hover pointer", { hover }, hover === false);
 
     const cover = await session.settledAt(0);
@@ -540,9 +579,9 @@ async function phoneSession(browser) {
     const y = cover.stage.top + rect.top + rect.height * 0.5;
     const from = cover.stage.left + rect.left + rect.width * 0.85;
     const to = cover.stage.left + rect.left + rect.width * 0.1;
-    await touch("touchStart", from, y);
-    for (let step = 1; step <= 12; step += 1) await touch("touchMove", from + ((to - from) * step) / 12, y);
-    await touch("touchEnd");
+    await touch("touchStart", "touchStart", from, y);
+    for (let step = 1; step <= 12; step += 1) await touch(`touchMove ${step}/12`, "touchMove", from + ((to - from) * step) / 12, y);
+    await touch("touchEnd", "touchEnd");
     const first = await session.settledAt(1);
     record("phone: a touch drag turns the cover to the first page", { spread: first.spread, face: first.face },
       first.spread === 1 && first.face === 1);
@@ -557,7 +596,7 @@ async function phoneSession(browser) {
 
     // Last interior spread: its right page, then the pan back to its left page.
     await page.locator(".journey-book-3d").focus();
-    await page.keyboard.press("End");
+    await press("End");
     await session.settledAt(FACES - 1, { evidence: false });
     await page.locator('button[aria-label="上一页"]').tap();
     const last = await session.settledAt(FACES - 2);
@@ -568,7 +607,7 @@ async function phoneSession(browser) {
     await session.checkAlignment("last-spread-left-after-pan", lastLeft, ["left"], isPaper);
 
     // Home closes the book again (one frame under reduced motion).
-    await page.keyboard.press("Home");
+    await press("Home");
     const closed = await session.settledAt(0, { evidence: false });
     record("phone: Home returns to the closed cover", { spread: closed.spread, face: closed.face },
       closed.spread === 0 && closed.face === 0);
