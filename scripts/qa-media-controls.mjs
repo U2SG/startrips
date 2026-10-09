@@ -3011,9 +3011,13 @@ try {
 
     // Native controls own the element too: pausing the settled video must
     // immediately stop Story autoplay rather than leaving `playing=true`.
-    // Pause the element itself: a bare `pause` event on a still-playing video
+    // `instrumentMedia` stubs pause() without an event, so pause the element
+    // and then deliver its event. A bare `pause` event on a still-playing video
     // is what a stale queued event looks like, and Story correctly ignores it.
-    await settledVideo.evaluate((element) => element.pause());
+    await settledVideo.evaluate((element) => {
+      element.pause();
+      element.dispatchEvent(new Event("pause"));
+    });
     const nativePauseStoppedSequence = await videoAutoplay.page.waitForFunction(
       () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "false",
       undefined,
