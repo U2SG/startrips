@@ -34,3 +34,8 @@
 .cover-reveal-request p:empty {
   display: none;
 }
+
+.cover-reveal-request label { display: grid; gap: 6px; font-size: 12px; }
+.cover-reveal-request select { width: min(100%, 260px); min-height: 44px; padding: 8px; color: inherit; background: var(--atlas-bg, #111820); border: 1px solid var(--atlas-line); border-radius: 8px; font: inherit; }
+.cover-reveal-request__preview { position: relative; width: 100%; height: 260px; overflow: hidden; border-radius: 8px; }
+.cover-reveal-request__preview > div { width: 100%; height: 100%; }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 /**
  * Slice 2 of #367: the reference cover-reveal worker client.
  *
@@ -288,7 +289,7 @@ async function settleAttempt(context, job, leaseToken, reason, result) {
   return result;
 }
 
-async function downloadSource(context, url, destination, expectedBytes) {
+async function downloadSource(context, url, destination, expectedBytes, expectedHash) {
   let response;
   try {
     response = await context.fetchImpl(url, { method: "GET" });
@@ -304,6 +305,9 @@ async function downloadSource(context, url, destination, expectedBytes) {
     // truncated download, and generating from it would publish a derivative of
     // bytes the member never uploaded.
     return { ok: false, reason: "source byte count did not match the pinned size" };
+  }
+  if (typeof expectedHash !== "string" || createHash("sha256").update(buffer).digest("hex") !== expectedHash) {
+    return { ok: false, reason: "source stored-byte identity did not match" };
   }
   await writeFile(destination, buffer);
   return { ok: true, bytes: buffer.length };
@@ -390,12 +394,28 @@ export function terminateActiveGenerators() {
   activeGenerators.clear();
 }
 
+/** Provider grants are explicit; the adapter itself must not inherit worker/cloud authority. */
+export function coverGeneratorEnvironment(env) {
+  const names = ["PATH", "Path", "SystemRoot", "SYSTEMROOT", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR", "LANG", "LOCALAPPDATA", "APPDATA",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS",
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY",
+    "STARTRIPS_CREATIVE_IMAGE_MODEL", "STARTRIPS_CREATIVE_REVIEW_MODEL",
+    "STARTRIPS_CREATIVE_GENERATOR_COMMAND_JSON", "STARTRIPS_CREATIVE_REVIEWER_COMMAND_JSON", "STARTRIPS_CREATIVE_PROVIDER_ENV_NAMES"];
+  const extra = (env.STARTRIPS_CREATIVE_PROVIDER_ENV_NAMES ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  for (const name of extra) {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name) || /(COVER_REVEAL|STARTRIPS|DATABASE|AWS_|S3_|R2_|STORAGE|SESSION|COOKIE|LEASE)/.test(name)) throw new WorkerConfigError("invalid provider environment grant");
+  }
+  return Object.fromEntries([...new Set([...names, ...extra])].filter((name) => typeof env[name] === "string").map((name) => [name, env[name]]));
+}
+
 async function runGenerator(context, request) {
   const { command, args, timeoutMs } = context.generator;
   return await new Promise((resolve) => {
     let child;
     try {
       child = spawn(command, args, {
+        shell: false,
+        env: coverGeneratorEnvironment(process.env),
         stdio: ["pipe", "pipe", "pipe"],
         // Its own process group, so a timeout or an interrupt can take the
         // adapter's descendants down with it.
@@ -626,7 +646,7 @@ export async function runCoverRevealWorkerIteration(options) {
   }
 
   const source = sourceRead.payload.source;
-  const downloaded = await downloadSource(context, source.url, sourcePath, source.bytes);
+  const downloaded = await downloadSource(context, source.url, sourcePath, source.bytes, job.sourceContentHash);
   if (!downloaded.ok) {
     context.log("source.unreadable", { jobId: job.id, detail: downloaded.reason });
     return await settleAttempt(context, job, leaseToken, "WORKER_SOURCE_UNREADABLE", {

@@ -1,3 +1,4 @@
+import type { CreativeCoverRecipeId } from "../reveal/creativeCoverRecipes";
 import type { CoverRevealDisplayPayload } from "./coverRevealOpening";
 import type { HomeBasePeriod } from "./homeBase";
 import type { EverydayFragment, EverydayFragmentValues } from "./everydayFragment";
@@ -266,10 +267,11 @@ export type CoverRevealRequestResult = {
 export async function enqueueCoverReveal(
   journeyId: string,
   fetcher: Fetcher = fetch,
+  recipeId?: CreativeCoverRecipeId,
 ): Promise<CoverRevealRequestResult> {
   const payload = await requestJson<{ derivative: CoverRevealRequestResult }>(
     `/api/cover-reveal/journeys/${encodeURIComponent(journeyId)}`,
-    { method: "POST" },
+    { method: "POST", ...(recipeId ? { body: JSON.stringify({ recipeId }) } : {}) },
     fetcher,
   );
   return payload.derivative;
@@ -621,3 +623,24 @@ export async function revokeShare(
     fetcher,
   );
 }
+
+export type CreativeCoverStatus = {
+  state: "idle" | "queued" | "leased" | "ready" | "failed" | "unavailable";
+  recipeId: CreativeCoverRecipeId | null;
+  sourceMediaAssetId: string | null;
+  derivativeId?: string | null;
+};
+export function listCreativeCoverRecipes(fetcher: Fetcher = fetch) {
+  return requestJson<{ recipes: Array<{ id: CreativeCoverRecipeId; title: string }> }>(
+    "/api/cover-reveal/recipes", { cache: "no-store" }, fetcher);
+}
+export function readCreativeCoverStatus(journeyId: string, fetcher: Fetcher = fetch) {
+  return requestJson<CreativeCoverStatus>(`/api/cover-reveal/journeys/${encodeURIComponent(journeyId)}/status`, { cache: "no-store" }, fetcher);
+}
+
+export type CreativeCoverClient = {
+  readRecipes: () => ReturnType<typeof listCreativeCoverRecipes>;
+  readStatus: (journeyId: string) => ReturnType<typeof readCreativeCoverStatus>;
+  readDisplay: (journeyId: string) => ReturnType<typeof readCoverRevealDisplay>;
+  readSource: (assetId: string) => ReturnType<typeof getPrivateMediaRead>;
+};

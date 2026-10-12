@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -7,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildGeneratorRequest,
+  coverGeneratorEnvironment,
   EXIT_CODES,
   resolveWorkerConfig,
   runCoverRevealWorkerIteration,
@@ -66,7 +68,7 @@ function derivative(state) {
     presetId: "reveal-flow-ink-wash-v1",
     seed: "fixture-seed",
     sourceMediaAssetId: "0a9e1c34-5b67-4d89-9e01-2f3a4b5c6d7e",
-    sourceContentHash: "sha256:fixture",
+    sourceContentHash: createHash("sha256").update(SOURCE_BYTES).digest("hex"),
     attempts: 0,
     lastErrorCode: null,
   };
@@ -979,3 +981,9 @@ async function waitFor(predicate, timeoutMs = 10000) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+it("does not forward cloud or worker authority into the adapter process", () => {
+  const env = coverGeneratorEnvironment({ PATH: "/bin", OPENAI_API_KEY: "provider", COVER_REVEAL_WORKER_TOKEN: "worker", DATABASE_URL: "database", AWS_SECRET_ACCESS_KEY: "storage", STARTRIPS_API_ORIGIN: "https://private" });
+  expect(env).toEqual({ PATH: "/bin", OPENAI_API_KEY: "provider" });
+  expect(() => coverGeneratorEnvironment({ STARTRIPS_CREATIVE_PROVIDER_ENV_NAMES: "DATABASE_URL", DATABASE_URL: "secret" })).toThrow();
+});

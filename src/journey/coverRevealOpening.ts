@@ -1,3 +1,4 @@
+import { creativeCoverRecipeForGeneration } from "../reveal/creativeCoverRecipes";
 /**
  * #379 (slice 4 of #367): whether this Journey may open with its cover reveal,
  * and with which images.
@@ -61,6 +62,8 @@ export type CoverRevealDisplayPayload = {
   derivative: {
     id: string;
     journeyId: string;
+    generationKind?: string;
+    generationVersion?: number;
     presetId: string;
     sourceMediaAssetId: string;
     sourceContentHash: string;
@@ -151,6 +154,14 @@ export function planCoverRevealOpening(
     return { kind: "none", reason: "stale-cover" };
   }
 
+  // Missing generation fields are the old browser DTO; explicit unknown versions never inherit a flow.
+  if (derivative.generationKind !== undefined || derivative.generationVersion !== undefined) {
+    const recipe = creativeCoverRecipeForGeneration(derivative.generationKind, derivative.generationVersion);
+    if (!recipe || (recipe.id !== "ink-wash-memory" && derivative.presetId !== recipe.presetId)) {
+      return { kind: "none", reason: "unusable-derivative" };
+    }
+  }
+  if (derivative.mimeType !== "image/jpeg") return { kind: "none", reason: "unusable-derivative" };
   const display = payload.display;
   if (!display || typeof display.url !== "string" || display.url.length === 0) {
     return { kind: "none", reason: "unusable-derivative" };

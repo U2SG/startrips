@@ -1,24 +1,6 @@
 /** Startrips-owned recipes. Provider commands and credentials never come from a job. */
-const definitions = [
-  {
-    id: "ink-wash-memory", version: 1, generationKind: "ink-wash-poster",
-    title: "水墨记忆",
-    artDirection: "Distill the source into broad ink masses, broken dry-brush edges and generous negative space. Derive the palette and structural axes from the source. Do not invent scenery, people, signs or narrative facts.",
-    marks: "ink masses and restrained pigment",
-  },
-  {
-    id: "poetic-line-memory", version: 1, generationKind: "poetic-line-memory",
-    title: "线条记忆",
-    artDirection: "Reconstruct two to four observable spatial relationships with broad charcoal sweeps and one continuous source-derived color gesture. Keep the composition sparse. No stock symbols, tracing, invented scenery or decorative text.",
-    marks: "charcoal sweeps and a single color gesture",
-  },
-  {
-    id: "paper-collage-memory", version: 1, generationKind: "paper-collage-memory",
-    title: "纸上记忆",
-    artDirection: "Distill source subjects into a small set of cut-paper masses with source-derived color, scale and overlap. Preserve the source's focal hierarchy. No travel stickers, invented props, labels or stock landmarks.",
-    marks: "layered cut-paper masses",
-  },
-];
+import { readFileSync } from "node:fs";
+const definitions = JSON.parse(readFileSync(new URL("../src/reveal/creativeCoverRecipes.json", import.meta.url), "utf8"));
 
 export function listCreativeCoverRecipes() {
   return structuredClone(definitions);

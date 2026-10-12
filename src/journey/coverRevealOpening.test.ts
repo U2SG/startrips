@@ -286,3 +286,15 @@ describe("mountedCoverRevealOpening", () => {
     expect(mountedCoverRevealOpening(null, pin, true)).toBeNull();
   });
 });
+
+describe("creative generation recognition", () => {
+  it.each([["poetic-line-memory", "brush-sweep"], ["paper-collage-memory", "guided-ribbon"]])("uses %s only with its pinned renderer", (kind, preset) => {
+    const metadata = { generationKind: kind, generationVersion: 1, presetId: preset };
+    expect(planCoverRevealOpening(input({ payload: payload(metadata) }))).toMatchObject({ kind: "open", preset });
+    expect(planCoverRevealOpening(input({ payload: payload({ ...metadata, generationVersion: 9 }) }))).toMatchObject({ kind: "none" });
+    expect(planCoverRevealOpening(input({ payload: payload({ ...metadata, presetId: "mist-veil" }) }))).toMatchObject({ kind: "none" });
+  });
+  it("refuses an unknown explicit generator even with a valid renderer", () => {
+    expect(planCoverRevealOpening(input({ payload: payload({ generationKind: "unknown", generationVersion: 1 }) }))).toMatchObject({ kind: "none" });
+  });
+});

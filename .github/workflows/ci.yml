@@ -256,7 +256,7 @@ jobs:
             suites: "|cover-reveal-opening|cover-reveal|owner-share|playback-map-bridge|"
             commands: |
               cover-reveal-opening::pnpm qa:cover-reveal-opening
-              cover-reveal::pnpm qa:cover-reveal
+              cover-reveal::pnpm qa:cover-reveal && pnpm qa:creative-cover
               owner-share::pnpm qa:owner-share
               playback-map-bridge::pnpm qa:playback-map-bridge
           - name: shell-composer

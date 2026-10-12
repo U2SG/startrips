@@ -767,7 +767,7 @@ export function JourneyStory({
   // is null too and every media write in this component has nothing to call.
   // Before this contract an absent `onMediaDelete` fell through to the owner
   // API, which meant hiding the control left deletion reachable.
-  const { capabilities, readMedia, listJourneys, mutations } = useAtlasView();
+  const { capabilities, readMedia, listJourneys, mutations, creativeCover } = useAtlasView();
   const mediaPresentation = useMediaPresentationStyle();
   const manageMedia: AtlasMutations | null = capabilities.canManageMedia ? mutations : null;
   const removeMedia = onMediaDelete ?? manageMedia?.deleteMedia ?? null;
@@ -5027,6 +5027,7 @@ export function JourneyStory({
                 journeyId={journey.id}
                 cover={cover}
                 enqueue={mutations.enqueueCoverReveal}
+                client={creativeCover}
                 disabled={mutationPending || deleteState !== "idle"}
               />
             ) : null}

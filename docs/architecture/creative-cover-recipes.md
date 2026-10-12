@@ -1,55 +1,72 @@
-# Creative cover recipes — opt-in adapter slice (#692)
+# Creative Journey covers (#692)
 
-The production owner/worker protocol remains `cover-reveal-worker-protocol.md`.
-`creative-cover-adapter.mjs` implements its existing local generator stdin boundary.
-It does not introduce a worker, scheduler, storage credential or runtime GitHub dependency.
+The owner editor selects water-ink, poetic-line or paper-collage art. One shared
+versioned registry supplies the browser, server and local generator. The existing
+five-route worker, private derivative table, storage namespace and RevealFlow stay
+in place. There is no third-party runtime Skill download and no second scheduler.
 
-## Implemented
+## End-to-end flow
 
-Three Startrips-owned recipes: `ink-wash-memory` (legacy generation kind
-`ink-wash-poster`, v1), `poetic-line-memory` v1 and `paper-collage-memory` v1.
-Each task pins the recipe, source SHA-256 and the server's preset/seed. It carries
-art direction, fact-to-mark requirements and non-executable motion intent. The
-opening has the source aspect ratio, no poster frame or experimental text, and
-must not replace the source. Subjects/camera remain locked; this is not image
-segmentation or natural-object animation.
+Owner recipe selection -> transactionally pinned source/recipe/seed/preset ->
+existing worker claim -> verified source SHA-256 -> image analysis -> image edit ->
+independent pixel review -> reviewed JPEG publication -> owner status/preview ->
+Story opening and optional Journey-film opening. Source bytes are never replaced.
 
-The generator writes a separate JPEG. A separately configured reviewer must
-return a pass bound to the exact source/output hashes and recipe, all four
-checks, and two to four fact-to-mark pairs. File type, decoded dimensions,
-aspect ratio, source integrity and post-review output integrity are checked.
-Publication uses an exclusive hard link of the reviewed buffer; a pre-existing
-output is not overwritten. Temporary files are removed on completion/failure.
-The server remains authoritative for uploaded object validation.
+Enqueue locks the canonical Journey and media, then its live derivative rows.
+Reselecting the same style/source returns the existing job. Changing styles
+supersedes the previous live job, including an in-flight claim. A late completion
+cannot restore a deselected style. A pending or failed replacement shows the
+original, not the last style by worker completion time. Re-selecting a previously
+superseded style generates again; this version does not claim a multi-style cache.
+No database migration or preference copy is needed: the one live derivative is
+the durable selection. Existing unique identity indexes remain in force.
 
-## Operator integration (not activated by this PR)
+GET /api/cover-reveal/recipes is the deployment capability; GET
+/api/cover-reveal/journeys/:id/status is the owner editor's bounded state read.
+Neither accepts worker authority or exposes credentials, object keys or signed
+source URLs. Display signing retains its fresh canonical-cover revalidation.
+The editor polls only while a job is pending, stops on unmount, offers explicit
+refresh/retry, and previews with the real RevealFlow component. Reduced motion
+and source-preserving final frames are inherited from that component.
 
-Keep `COVER_REVEAL_GENERATOR_COMMAND` set to the absolute Node executable and set
-`COVER_REVEAL_GENERATOR_ARGS` to a JSON array containing the absolute path to
-`scripts/creative-cover-adapter.mjs`.
+## Existing worker configuration
 
-Configure `STARTRIPS_CREATIVE_GENERATOR_COMMAND_JSON` and
-`STARTRIPS_CREATIVE_REVIEWER_COMMAND_JSON` as operator-owned absolute argv arrays.
-Both programs read one JSON document on stdin and return one JSON object on stdout.
-The generator reads `sourcePath` and writes its JPEG to `outputPath` (reply `{}`).
-The reviewer examines both paths and returns the shape tested in
-`creative-cover-adapter.test.mjs`. Neither command comes from a job or prompt.
-Only explicitly named provider environment variables from
-`STARTRIPS_CREATIVE_PROVIDER_ENV_NAMES` are forwarded; worker/database/storage
-credentials are refused. Child stderr and untrusted error text are not logged.
+Use the absolute Node executable as COVER_REVEAL_GENERATOR_COMMAND and the
+absolute path to scripts/creative-cover-adapter.mjs as the sole JSON-array entry
+in COVER_REVEAL_GENERATOR_ARGS. Run the adapter with --check before enabling.
+With no operator command overrides, the built-in provider uses OPENAI_API_KEY,
+STARTRIPS_CREATIVE_IMAGE_MODEL (default gpt-image-2-2026-04-21), and
+STARTRIPS_CREATIVE_REVIEW_MODEL (default gpt-6.1-sol). It performs three separate
+API requests: observable-fact analysis, image editing, independent review. These
+requests consume API quota; the application does not use ChatGPT subscription
+credentials. Original metadata is stripped before provider transfer; Responses
+requests use store:false. No worker capability is sent to the model.
 
-Sharp is the existing repository decoder. This adapter is trusted local code,
-not a sandbox for hostile generator programs. Provider and reviewer commands
-must be installed and reviewed by the operator; do not execute remote Skills.
+Once that existing worker is configured, set COVER_REVEAL_CREATIVE_ENABLED=true
+on the API service. Until then, the UI truthfully offers the legacy ink recipe
+and the API refuses new recipe IDs instead of queueing unsupported jobs. Production
+configuration, paid calls, deployment and owner photos are not modified by a PR.
 
-## Delivery boundary
+Operator-installed generator/reviewer commands remain supported by the existing
+*_COMMAND_JSON settings. Both must be configured together; each consumes one
+JSON stdin document. They are trusted local programs, not sandboxed remote Skills.
+Only explicitly granted provider environment variables enter these children.
 
-This is **not** the completed product feature. Current owner enqueue/display
-still pins `ink-wash-poster` v1. The two additional recipes are registered for
-integration, not silently substituted under an ink-wash job. Server-side recipe
-selection/idempotency/display recognition, the owner selector, installed worker
-configuration, real-photo visual evaluation and browser/renderer regression are
-still required before rollout. No live configuration or source image was changed.
+## Validation
 
-Tests use synthetic bytes and an injected decoder/reviewer. They prove contract
-and publication behavior, not the aesthetic quality of a generated photograph.
+Source/output hashes, decoded JPEG dimensions/aspect, post-review integrity and
+exclusive publication are enforced locally; stored object validation remains
+server-authoritative. The review must pass four visual checks and provide two to
+four observable fact-to-mark correspondences for these exact bytes. A rejection
+publishes nothing. The adapter has no hidden paid retry; normal bounded worker
+attempt policy remains unchanged.
+
+CI covers real JPEG decoding against a mocked provider, transaction/concurrency,
+late completion, owner/worker isolation, and browser selection/status/preview.
+Mock-provider checks prove integration, not the artistic quality of a real paid
+model result; evaluate representative owner-approved photographs before enabling
+new styles in production. The final photo remains the unchanged canonical source.
+
+Provider API contracts checked 2026-10-12:
+- https://developers.openai.com/api/reference/python/resources/images/methods/edit
+- https://developers.openai.com/api/reference/resources/responses/methods/create

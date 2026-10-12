@@ -37,6 +37,12 @@ async function installHarnessRoutes(context) {
     contentType: "application/json",
     body: JSON.stringify({ signInProviders: [] }),
   }));
+  await context.route("**/api/cover-reveal/recipes", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ recipes: [{ id: "ink-wash-memory", title: "水墨记忆" }] }),
+  }));
+  await context.route("**/api/cover-reveal/journeys/*/status", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ state: "unavailable", recipeId: null, sourceMediaAssetId: null }),
+  }));
   return context;
 }
 

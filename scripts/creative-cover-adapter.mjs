@@ -76,10 +76,11 @@ async function readRegularFile(filePath, maxBytes) {
 }
 
 /** Produces the one JPEG expected by the existing worker, only after byte-bound review. */
-export async function executeCreativeCover(request, { generate, review, validateImage }) {
+export async function executeCreativeCover(request, { generate, review, validateImage, signal }) {
   if (!request || !path.isAbsolute(request.sourcePath ?? "") || !path.isAbsolute(request.outputPath ?? "")) {
     throw new Error("CREATIVE_PATH_INVALID");
   }
+  signal?.throwIfAborted();
   const sourcePath = await realpath(request.sourcePath);
   const parent = await realpath(path.dirname(request.outputPath));
   const outputPath = path.join(parent, path.basename(request.outputPath));
@@ -97,6 +98,7 @@ export async function executeCreativeCover(request, { generate, review, validate
   const publishPath = path.join(parent, `.creative-${randomUUID()}.publish`);
   try {
     await generate({ ...task, sourcePath, outputPath: candidatePath });
+    signal?.throwIfAborted();
     const bytes = await readRegularFile(candidatePath, request.maxBytes);
     if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) throw new Error("CREATIVE_OUTPUT_NOT_JPEG");
     // Decoder is a trusted implementation, not dimensions declared by the generator.
@@ -115,6 +117,7 @@ export async function executeCreativeCover(request, { generate, review, validate
     if (sha256(await readRegularFile(candidatePath, request.maxBytes)) !== outputHash) throw new Error("CREATIVE_OUTPUT_CHANGED");
     // Publish the reviewed buffer, not a mutable file still owned by the generator.
     await writeFile(publishPath, bytes, { flag: "wx", mode: 0o600 });
+    signal?.throwIfAborted();
     await link(publishPath, outputPath);
     return { recipeId: task.recipe.id, recipeVersion: task.recipe.version, sourceSha256: sourceHash, outputSha256: outputHash };
   } finally {
@@ -123,8 +126,23 @@ export async function executeCreativeCover(request, { generate, review, validate
 }
 
 async function main() {
-  const generator = parseCreativeCommand(process.env.STARTRIPS_CREATIVE_GENERATOR_COMMAND_JSON);
-  const reviewer = parseCreativeCommand(process.env.STARTRIPS_CREATIVE_REVIEWER_COMMAND_JSON);
+  if (process.argv.includes("--check")) {
+    const configured = Boolean(process.env.STARTRIPS_CREATIVE_GENERATOR_COMMAND_JSON);
+    if (configured) {
+      parseCreativeCommand(process.env.STARTRIPS_CREATIVE_GENERATOR_COMMAND_JSON);
+      parseCreativeCommand(process.env.STARTRIPS_CREATIVE_REVIEWER_COMMAND_JSON);
+    } else {
+      const { creativeProviderConfig } = await import("./creative-cover-openai.mjs");
+      creativeProviderConfig(process.env);
+    }
+    process.stdout.write(JSON.stringify({ ready: true, provider: configured ? "operator-commands" : "openai", recipes: ["ink-wash-memory", "poetic-line-memory", "paper-collage-memory"] }) + "\n");
+    return;
+  }
+  const generatorRaw = process.env.STARTRIPS_CREATIVE_GENERATOR_COMMAND_JSON;
+  const reviewerRaw = process.env.STARTRIPS_CREATIVE_REVIEWER_COMMAND_JSON;
+  if (Boolean(generatorRaw) !== Boolean(reviewerRaw)) throw new Error("CREATIVE_COMMAND_PAIR_REQUIRED");
+  const generator = generatorRaw ? parseCreativeCommand(generatorRaw) : null;
+  const reviewer = reviewerRaw ? parseCreativeCommand(reviewerRaw) : null;
   const names = (process.env.STARTRIPS_CREATIVE_PROVIDER_ENV_NAMES ?? "").split(",").map((name) => name.trim()).filter(Boolean);
   const env = creativeChildEnvironment(process.env, names);
   const chunks = [];
@@ -142,13 +160,18 @@ async function main() {
   process.once("SIGTERM", abort);
   process.once("SIGINT", abort);
   try {
-    await executeCreativeCover(request, {
+    const { createOpenAICreativeProvider, creativeProviderConfig } = await import("./creative-cover-openai.mjs");
+    const provider = generator && reviewer ? {
       generate: (task) => runCreativeCommand(generator, task, { env, signal: controller.signal }),
       review: (task) => runCreativeCommand(reviewer, task, { env, signal: controller.signal }),
+    } : createOpenAICreativeProvider(creativeProviderConfig(process.env), { signal: controller.signal });
+    await executeCreativeCover(request, {
+      ...provider,
+      signal: controller.signal,
       validateImage: async (bytes) => {
         // Read the displayed orientation and decode the complete raster.
         // Source resolution may legitimately exceed the derivative edge ceiling.
-        const { info } = await sharp(bytes).rotate().raw().toBuffer({ resolveWithObject: true });
+        const { info } = await sharp(bytes, { limitInputPixels: 64 * 1024 * 1024 }).rotate().raw().toBuffer({ resolveWithObject: true });
         return { width: info.width, height: info.height };
       },
     });
