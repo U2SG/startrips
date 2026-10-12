@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mediaPresentationFromSearch, mediaPresentationLabel, nextMediaPresentationStyle, parseMediaPresentationStyle } from "./mediaPresentation";
 
 describe("media presentation style", () => {
@@ -29,5 +29,39 @@ describe("media presentation style", () => {
     expect(mediaPresentationFromSearch("?share=abc&mediaPresentation=note-overlay")).toBe("note-overlay");
     expect(mediaPresentationFromSearch("?mediaPresentation=cube")).toBeNull();
     expect(mediaPresentationFromSearch("")).toBeNull();
+  });
+});
+
+describe("shared presentation ignores recipient preferences", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it.each(["/share", "/share/"])("uses the link in %s without changing the browser preference", async (pathname) => {
+    const storage = { getItem: vi.fn(() => "stream"), setItem: vi.fn() };
+    vi.stubGlobal("window", { location: { pathname, search: "?mediaPresentation=book-3d" }, localStorage: storage });
+    vi.resetModules();
+    const presentation = await import("./mediaPresentation");
+    expect(presentation.readMediaPresentationStyle()).toBe("book-3d");
+    storage.getItem.mockReturnValue("note-overlay");
+    expect(presentation.readMediaPresentationStyle()).toBe("book-3d");
+    expect(storage.getItem).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+
+    // An explicit reader recovery still works, just for this visit.
+    presentation.writeMediaPresentationStyle("book");
+    expect(presentation.readMediaPresentationStyle()).toBe("book");
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "?mediaPresentation=unknown"])("uses classic for legacy or invalid links: %s", async (search) => {
+    vi.stubGlobal("window", {
+      location: { pathname: "/share", search },
+      localStorage: { getItem: vi.fn(() => "book-3d"), setItem: vi.fn() },
+    });
+    vi.resetModules();
+    const { readMediaPresentationStyle } = await import("./mediaPresentation");
+    expect(readMediaPresentationStyle()).toBe("classic");
   });
 });

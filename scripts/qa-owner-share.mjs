@@ -559,6 +559,7 @@ try {
     // clipboard round-trip keeps this check about the link the owner copies
     // instead of about headless clipboard permissions.
     await page.addInitScript(() => {
+      localStorage.setItem("startrips.media-presentation", "note-overlay");
       const original = navigator.clipboard?.writeText?.bind(navigator.clipboard);
       window.__qaClipboardWrites = [];
       if (original) {
@@ -648,11 +649,12 @@ try {
     );
 
     // Acceptance 4: the copy affordance yields the fragment form.
-    const linkOk = created.link === `${new URL(origin).origin}/share#${TOKEN}`;
+    const linkOk = created.link === `${new URL(origin).origin}/share?mediaPresentation=note-overlay#${TOKEN}`;
     check(`${viewport.name}/link-is-fragment-form`, linkOk, created.link);
     check(
       `${viewport.name}/token-not-in-path-or-query`,
-      linkOk && new URL(created.link).pathname === "/share" && new URL(created.link).search === "",
+      linkOk && new URL(created.link).pathname === "/share"
+        && !(new URL(created.link).pathname + new URL(created.link).search).includes(TOKEN),
       created.link,
     );
 

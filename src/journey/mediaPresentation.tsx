@@ -1,8 +1,9 @@
 import { useSyncExternalStore } from "react";
+import { isSharedAtlasPathname } from "./sharedAtlas";
 import "../styles/journey-reader.css";
 
 /**
- * #393 device trial: how Story presents a Journey's photos, videos and notes.
+ * How Story presents a Journey's photos, videos and notes.
  *
  * - `classic`: the existing Story media stage, unchanged.
  * - `note-overlay`: the existing stage, with the Route Point note revealed
@@ -11,14 +12,10 @@ import "../styles/journey-reader.css";
  * - `stream`: the Journey Stream reader (after Undertow), in place of Story.
  * - `book-3d`: the Journey Book with real bending paper (Three.js).
  *
- * This is a per-device trial switch, not an account preference: it lives in
- * this browser only so the variants can be compared on a real device and
- * removed once one of them is chosen. Missing or unreadable storage means
- * `classic`, never a guess.
- *
- * A link may carry `?mediaPresentation=<style>`: opening it adopts that style
- * on this device. It is the only way to switch where the account menu is not
- * available, such as a guest share link.
+ * The owner's choice is remembered in this browser. A share link captures
+ * that choice in `?mediaPresentation=<style>` so every recipient starts with
+ * the same presentation, regardless of their own browser preference.
+ * Legacy share links without a style use `classic`.
  */
 export type MediaPresentationStyle = "classic" | "note-overlay" | "book" | "book-3d" | "stream";
 
@@ -58,9 +55,14 @@ export function mediaPresentationLabel(style: MediaPresentationStyle): string {
 const listeners = new Set<() => void>();
 let memoryStyle: MediaPresentationStyle | null = null;
 // Read once, when the app loads, before any later history change can drop it.
-let linkedStyle = typeof window === "undefined" ? null : mediaPresentationFromSearch(window.location.search);
+const sharedStyle = typeof window !== "undefined" && isSharedAtlasPathname(window.location.pathname)
+  ? mediaPresentationFromSearch(window.location.search) ?? "classic"
+  : null;
+let linkedStyle = typeof window === "undefined" || sharedStyle !== null
+  ? null : mediaPresentationFromSearch(window.location.search);
 
-function readStoredStyle(): MediaPresentationStyle {
+export function readMediaPresentationStyle(): MediaPresentationStyle {
+  if (sharedStyle !== null) return memoryStyle ?? sharedStyle;
   if (linkedStyle) {
     // Adopted silently: this runs while React reads the value, so it must not
     // notify subscribers.
@@ -79,6 +81,9 @@ function persistStyle(style: MediaPresentationStyle): void {
   // Kept in memory as well, so a browser that refuses storage still honours
   // the choice for the rest of this visit.
   memoryStyle = style;
+  // Reader recovery may choose a fallback for this visit, without changing
+  // either the shared link or the recipient's own preference.
+  if (sharedStyle !== null) return;
   try {
     window.localStorage.setItem(STORAGE_KEY, style);
   } catch {
@@ -94,7 +99,7 @@ export function writeMediaPresentationStyle(style: MediaPresentationStyle): void
 function subscribe(listener: () => void) {
   listeners.add(listener);
   const onStorage = (event: StorageEvent) => {
-    if (event.key !== STORAGE_KEY) return;
+    if (sharedStyle !== null || event.key !== STORAGE_KEY) return;
     memoryStyle = null;
     listener();
   };
@@ -106,7 +111,7 @@ function subscribe(listener: () => void) {
 }
 
 export function useMediaPresentationStyle(): MediaPresentationStyle {
-  return useSyncExternalStore(subscribe, readStoredStyle, () => "classic");
+  return useSyncExternalStore(subscribe, readMediaPresentationStyle, () => "classic");
 }
 
 /**
@@ -123,7 +128,7 @@ export function MediaPresentationMenuEntry({ surface }: { surface: "dock" | "she
       data-media-presentation-value={style}
       onClick={() => writeMediaPresentationStyle(nextMediaPresentationStyle(style))}
     >
-      <span>媒体呈现</span><small>{label}（本机试用）</small>
+      <span>媒体呈现</span><small>{label}</small>
     </button>
   );
 }
