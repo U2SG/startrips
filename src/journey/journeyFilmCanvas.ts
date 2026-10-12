@@ -50,6 +50,18 @@ function contain(ctx: CanvasRenderingContext2D, image: CanvasImageSource, source
   ctx.drawImage(image, (width - w) / 2, (height - h) / 2, w, h);
 }
 
+/** Disjoint map, footer and caption bands, sized from actual wrapped text. */
+export function filmTextBands(width: number, height: number, margin: number, fontSize: number, captionLineCount: number, headingBottom: number) {
+  const captionHeight = captionLineCount > 0 ? captionLineCount * fontSize * 1.55 + margin : 0;
+  const captionTop = height - captionHeight;
+  const dateTop = captionTop - margin;
+  const routeLabelTop = dateTop - fontSize * 2;
+  const mapTop = Math.max(height * 0.32, headingBottom + margin);
+  const mapSize = Math.min(width - 2 * margin, height * 0.45, routeLabelTop - margin / 2 - mapTop);
+  if (captionHeight > height * 0.55 || mapSize < fontSize * 2) throw new Error("journey_film_text_layout_limit");
+  return { captionHeight, captionTop, dateTop, routeLabelTop, mapTop, mapSize };
+}
+
 /** Frame-exact WebCodecs + MP4 muxing, not a screen recording or renamed WebM. */
 export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise<Blob> {
   const { journey, film, sourcePlan, signal } = input;
@@ -89,13 +101,15 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
   };
   const margin = Math.min(width, height) * 0.075;
   const fontSize = Math.min(width, height) * 0.034;
-  const drawCaption = (text: string) => {
+  const captionLines = new Map<string, string[]>();
+  ctx.font = `${fontSize}px ${FONT}`;
+  for (const [id, text] of film.captions) captionLines.set(id, wrapText(ctx, text, width - 2 * margin));
+  const drawCaption = (lines: string[]) => {
     ctx.font = `${fontSize}px ${FONT}`;
-    const lines = wrapText(ctx, text, width - 2 * margin);
     const lineHeight = fontSize * 1.55;
     const boxHeight = lines.length * lineHeight + margin;
     if (boxHeight > height * 0.55) throw new Error("journey_film_text_layout_limit");
-    ctx.fillStyle = "rgba(10, 16, 23, 0.88)";
+    ctx.fillStyle = "#0a1017";
     ctx.fillRect(0, height - boxHeight, width, boxHeight);
     ctx.fillStyle = INK; ctx.textAlign = "left"; ctx.textBaseline = "top";
     lines.forEach((line, index) => ctx.fillText(line, margin, height - boxHeight + margin / 2 + index * lineHeight));
@@ -113,6 +127,8 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
       const entry = sourcePlan.scenes[state.sourceSceneIndex];
       const shot = film.manifest.shots[state.sourceSceneIndex];
       const scene = entry.scene;
+      const lines = state.captionId ? captionLines.get(state.captionId) : undefined;
+      if (state.captionId && !lines) throw new Error("memory_film_caption_missing");
       if (activeShot !== state.sourceSceneIndex) {
         await releaseMedia();
         activeShot = state.sourceSceneIndex;
@@ -191,8 +207,10 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
         } while (headingSize >= 16);
         if (headingSize < 16) throw new Error("journey_film_text_layout_limit");
         headingLines.forEach((line, i) => ctx.fillText(line, margin, margin + fontSize * 2 + i * headingSize * 1.25));
-        const box = Math.min(width - 2 * margin, height * 0.45);
-        const xy = points.map((p) => ({ x: (width - box) / 2 + p.x * box, y: height * 0.32 + p.y * box }));
+        const headingBottom = margin + fontSize * 2 + headingLines.length * headingSize * 1.25;
+        const bands = filmTextBands(width, height, margin, fontSize, lines?.length ?? 0, headingBottom);
+        const box = bands.mapSize;
+        const xy = points.map((p) => ({ x: (width - box) / 2 + p.x * box, y: bands.mapTop + p.y * box }));
         ctx.strokeStyle = "#657079"; ctx.lineWidth = Math.max(2, width * 0.003); ctx.setLineDash([6, 8]);
         ctx.beginPath(); xy.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke(); ctx.setLineDash([]);
         xy.forEach((p, index) => {
@@ -210,14 +228,10 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
           if (a && b) { const t = cursor % 1; ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, Math.max(7, width * 0.009), 0, 2 * Math.PI); ctx.fill(); }
         }
         ctx.fillStyle = "#9aa6af"; ctx.font = `${fontSize * 0.76}px ${FONT}`;
-        ctx.fillText("旅程路线示意 · 非道路导航", margin, height - margin - fontSize * 2);
-        ctx.fillText(journey.startedOn + (journey.endedOn ? ` — ${journey.endedOn}` : ""), margin, height - margin);
+        ctx.fillText("旅程路线示意 · 非道路导航", margin, bands.routeLabelTop);
+        ctx.fillText(journey.startedOn + (journey.endedOn ? ` — ${journey.endedOn}` : ""), margin, bands.dateTop);
       }
-      if (state.captionId) {
-        const caption = film.captions.get(state.captionId);
-        if (caption === undefined) throw new Error("memory_film_caption_missing");
-        drawCaption(caption);
-      }
+      if (lines) drawCaption(lines);
       await source.add(frame / fps, 1 / fps);
       if (frame % 8 === 0) { input.onFrame(frame + 1); await new Promise<void>((resolve) => setTimeout(resolve, 0)); }
     }
