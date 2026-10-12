@@ -70,7 +70,7 @@
     "qa:mobile-contract": "node scripts/qa-mobile-contract.mjs",
     "qa:mobile-native": "node scripts/qa-mobile-native.mjs",
     "qa:creative-cover": "node scripts/qa-creative-cover.mjs",
-    "qa:cover-reveal": "node scripts/qa-cover-reveal.mjs",
+    "qa:cover-reveal": "node scripts/qa-cover-reveal.mjs && node scripts/qa-creative-cover.mjs",
     "worker:cover-reveal": "node scripts/cover-reveal-worker.mjs",
     "build:city": "node scripts/build-city-data.mjs",
     "cfaa:validate": "node scripts/cfaa.mjs validate",

@@ -37,7 +37,7 @@ export function CoverRevealRequest({ journeyId, cover, enqueue, disabled, client
   const [recipeId, setRecipeId] = useState<CreativeCoverRecipeId>("ink-wash-memory");
   const [recipes, setRecipes] = useState(CREATIVE_COVER_RECIPES.filter((r) => r.id === "ink-wash-memory"));
   const [status, setStatus] = useState<CreativeCoverStatus | null>(null);
-  const [preview, setPreview] = useState<{ pair: CoverRevealImagePair; preset: RevealPresetId; revision: number } | null>(null);
+  const [preview, setPreview] = useState<{ pair: CoverRevealImagePair; preset: RevealPresetId; revision: number; derivativeId: string } | null>(null);
   const busy = useRef(false), mounted = useRef(false), touched = useRef(false);
   const operation = useRef(0);
   const descriptionId = useId();
@@ -51,6 +51,7 @@ export function CoverRevealRequest({ journeyId, cover, enqueue, disabled, client
       setMessage("封面已变化，请刷新旅程后查看。"); setStatus(null); return;
     }
     setStatus(next);
+    setPreview((current) => next.state === "ready" && next.derivativeId === current?.derivativeId ? current : null);
     if (!touched.current && creativeCoverRecipe(next.recipeId)) setRecipeId(next.recipeId!);
   };
   useEffect(() => {
@@ -111,7 +112,7 @@ export function CoverRevealRequest({ journeyId, cover, enqueue, disabled, client
       const original = await client.readSource(cover.id);
       if (!(Date.parse(original.expiresAt) > Date.now())) throw new Error("preview_unavailable");
       if (mounted.current && request === operation.current) setPreview({
-        pair: { generatedFirst: decision.generatedUrl, originalCover: original.url }, preset: decision.preset, revision: request,
+        pair: { generatedFirst: decision.generatedUrl, originalCover: original.url }, preset: decision.preset, revision: request, derivativeId: payload.derivative!.id,
       });
     } catch { if (mounted.current && request === operation.current) setMessage("暂时无法预览当前封面，请刷新状态后重试。"); }
     finally { if (request === operation.current) { busy.current = false; if (mounted.current) setPending(false); } }

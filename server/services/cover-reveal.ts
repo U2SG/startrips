@@ -580,6 +580,24 @@ export async function readCoverRevealDisplay(
       expiresInSeconds: displayReadExpiresInSeconds,
     });
 
+  // A same-source style change while signing must not return a deselected image.
+  // Revalidate canonical source and the live derivative together after asynchronous storage work.
+  const stillDisplayable = await db.transaction(async (transaction) => {
+    const state = await lockJourneyState(transaction, journeyId);
+    if (!state || state.atlasId !== atlasId) return false;
+    const source = evaluateCoverRevealEligibility(state);
+    if (!source.ok || source.source.id !== ready.sourceMediaAssetId || source.contentHash !== ready.sourceContentHash) return false;
+    const [selected] = await transaction.select().from(coverRevealDerivatives).where(and(
+      eq(coverRevealDerivatives.id, ready.id), eq(coverRevealDerivatives.state, "ready"),
+      eq(coverRevealDerivatives.outputStorageKey, ready.outputStorageKey!),
+      eq(coverRevealDerivatives.generationKind, ready.generationKind),
+      eq(coverRevealDerivatives.generationVersion, ready.generationVersion),
+      eq(coverRevealDerivatives.presetId, ready.presetId),
+    ));
+    return Boolean(selected);
+  });
+  if (!stillDisplayable) return { ok: true, derivative: null, reason: "NO_READY_DERIVATIVE" };
+
   return {
     ok: true,
     derivative: {

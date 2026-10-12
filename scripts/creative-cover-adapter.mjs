@@ -128,6 +128,7 @@ export async function executeCreativeCover(request, { generate, review, validate
 async function main() {
   if (process.argv.includes("--check")) {
     const configured = Boolean(process.env.STARTRIPS_CREATIVE_GENERATOR_COMMAND_JSON);
+    if (configured !== Boolean(process.env.STARTRIPS_CREATIVE_REVIEWER_COMMAND_JSON)) throw new Error("CREATIVE_COMMAND_PAIR_REQUIRED");
     if (configured) {
       parseCreativeCommand(process.env.STARTRIPS_CREATIVE_GENERATOR_COMMAND_JSON);
       parseCreativeCommand(process.env.STARTRIPS_CREATIVE_REVIEWER_COMMAND_JSON);
