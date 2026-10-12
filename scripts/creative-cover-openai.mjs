@@ -49,9 +49,16 @@ function parseStructuredResponse(payload) {
   if (texts.length !== 1) throw new Error("CREATIVE_PROVIDER_REVIEW_MISSING");
   try { return JSON.parse(texts[0]); } catch { throw new Error("CREATIVE_PROVIDER_JSON_INVALID"); }
 }
+function isRaster(bytes) {
+  return (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    || (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+    || (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP");
+}
+
 async function normalizedSource(task) {
   const bytes = await readFile(task.sourcePath);
   if (sha(bytes) !== task.source.sha256) throw new Error("CREATIVE_SOURCE_CHANGED");
+  if (!isRaster(bytes)) throw new Error("CREATIVE_SOURCE_NOT_RASTER");
   // EXIF/GPS are not forwarded. Scale for provider budgets without changing the original file.
   const { data, info } = await sharp(bytes, { limitInputPixels: 64 * 1024 * 1024 }).rotate()
     .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
@@ -98,6 +105,7 @@ export function createOpenAICreativeProvider(config, { fetcher = fetch, signal: 
       const encoded = result.data?.[0]?.b64_json;
       if (result.data?.length !== 1 || typeof encoded !== "string" || encoded.length > 24 * 1024 * 1024) throw new Error("CREATIVE_PROVIDER_IMAGE_MISSING");
       const generated = Buffer.from(encoded, "base64");
+      if (!isRaster(generated)) throw new Error("CREATIVE_PROVIDER_IMAGE_INVALID");
       const scale = Math.min(1, task.output.maxEdgePixels / Math.max(source.width, source.height));
       const width = Math.max(1, Math.round(source.width * scale)), height = Math.max(1, Math.round(source.height * scale));
       // Contain rather than crop the model output. The independent review sees this FINAL framing.

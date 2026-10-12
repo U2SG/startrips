@@ -68,4 +68,15 @@ describe("built-in creative provider contract (mocked provider, real JPEG decode
   it("requires a key without forwarding provider-supplied errors", () => {
     expect(() => creativeProviderConfig({})).toThrow("KEY_REQUIRED");
   });
+  it("rejects non-raster bytes before decoding or sending them to the provider", async () => fixture(async ({ sourcePath, outputPath, config }) => {
+    const markup = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><text>not a JPEG</text></svg>');
+    await writeFile(sourcePath, markup);
+    let requests = 0;
+    const provider = createOpenAICreativeProvider(config, { fetcher: async () => { requests++; throw new Error("must not send markup"); } });
+    const task = buildCreativeCoverTask({ contractVersion: 1, generationKind: "ink-wash-poster", generationVersion: 1,
+      mimeType: "image/jpeg", maxBytes: 1000000, maxEdgePixels: 1024, presetId: "reveal-flow-ink-wash-v1", seed: "fixture" }, hash(markup));
+    await expect(provider.generate({ ...task, sourcePath, outputPath })).rejects.toThrow("CREATIVE_SOURCE_NOT_RASTER");
+    expect(requests).toBe(0);
+  }));
+
 });
