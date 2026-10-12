@@ -271,7 +271,10 @@ try {
     const link = shareUrl().replace("/share#", "/share?mediaPresentation=book-3d#");
     for (const [style, selector] of [["book", ".journey-book"], ["stream", ".journey-stream"]]) {
       state.mediaPresentation = style;
-      await page.goto(link, { waitUntil: "domcontentloaded" });
+      // Navigating to the identical fragment URL can reuse the open document.
+      // Refresh it to exercise a new grant read without replacing the link.
+      if (page.url() === link) await page.reload({ waitUntil: "domcontentloaded" });
+      else await page.goto(link, { waitUntil: "domcontentloaded" });
       await page.locator(".living-atlas").waitFor({ timeout: 30_000 });
       await page.locator(".living-atlas__journey-rail ol li button").first().click();
       await page.getByRole("button", { name: /打开故事/ }).first().waitFor({ timeout: 10_000 });
