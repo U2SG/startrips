@@ -34,4 +34,10 @@ The browser check uses the real JourneyStory QA fixture, starts its own Vite ser
 
 Each layout also enters immersive viewing twice through More and returns using Escape and browser Back. The secondary entry collapses on return, so focus must land on visible More before the next interaction; a still-connected hidden button is not an acceptable return target.
 
+### Staggered entrance paint regression
+
+The `auth-media` job `114816346693` on Source `41f2dc38` failed only `story-stage-owner-back-during-settle`. Its initial screenshot was dim while the return image, return clone and media identity were correct. The classic context row shifts `.journey-story__layout` to the fourth staged child: its 420ms delay can outlive the article's 360ms entrance. The former root-only animation/opacity check therefore accepted a still-transparent, translated media ancestor.
+
+`storyPaintReady` checks the current picture and its paint ancestors, including delayed/pending animations, before the existing stationary screenshot. It retains the 3-second deadline and every pixel, clone, focus and media-identity assertion. It does not change product motion or poll screenshots until they pass. The classic-view browser test holds the real layout's entrance after finishing the article, proves the old root-only check incorrectly accepts it and the new check rejects it, then finishes that entrance and verifies the unchanged media node is ready.
+
 Emulation does not prove hardware safe-area insets, software keyboards, iOS Safari media behavior or the owner's final visual preference. Final acceptance is the owner's phone trial. This change does not merge or deploy itself.

@@ -1,5 +1,6 @@
 import { launchQaBrowser, revealStoryChapters, revealStoryViewingOptions, storyViewerReturnLabel } from "./qa-browser.mjs";
 import { apertureSeamId, attributeApertureJumps, expectedApertureSeams, gradeApertureContinuity } from "./qa-aperture-continuity.mjs";
+import { storyPaintReady } from "./qa-story-paint-ready.mjs";
 
 // A collapsed classic secondary entry returns to its visible More disclosure;
 // legacy layouts keep the original entry. Observe focus before any next click.
@@ -2168,14 +2169,11 @@ try {
     await page.waitForFunction((id) => document.querySelector(
       `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
     ), second, { polling: "raf" });
-    // The first image can decode while the mobile Story itself is still
-    // fading in. Inspect pixels after that finite entrance owns a full frame.
-    await page.waitForFunction(() => {
-      const story = document.querySelector(".journey-story");
-      return story && Number(getComputedStyle(story).opacity) > .99
-        && !story.getAnimations().some((animation) => animation.animationName === "atlasViewIn"
-          && animation.playState === "running");
-    }, null, { polling: "raf", timeout: 3_000 });
+    // A finished article entrance does not imply a finished staggered layout:
+    // the classic context row puts the media under the fourth child. Observe
+    // the actual picture's paint ancestors before the unchanged pixel verdict.
+    await page.waitForFunction(storyPaintReady, ".journey-story__media",
+      { polling: "raf", timeout: 3_000 });
     const beforeBack = await inspectStagePaint(page, ".journey-story__media");
     await revealStoryViewingOptions(page);
     await page.locator(".journey-story__mobile-media-fullscreen").click();

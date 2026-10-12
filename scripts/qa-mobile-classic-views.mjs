@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { createServer } from "vite";
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { storyPaintReady } from "./qa-story-paint-ready.mjs";
 
 // Real product fixture + browser, not reconstructed prototype markup.
 const width = Number(process.argv[2] ?? 390);
@@ -43,8 +44,33 @@ async function unchanged(asset) {
   assert.equal(await current.getAttribute("data-shared-media-id"), asset);
 }
 try {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto(`${origin}/?qaState=journey-story`, { waitUntil: "networkidle" });
   const asset = await rememberStage();
+  // Freeze the real staggered child in its delayed phase after the article
+  // finished. The former root-only predicate incorrectly accepted this frame.
+  const entrance = await root.evaluate((story) => {
+    for (const animation of story.getAnimations()) animation.finish();
+    const layout = story.querySelector(".journey-story__layout");
+    const animation = layout.getAnimations().find((item) => item.animationName === "motionStageIn");
+    if (!animation) throw new Error("The staggered Story layout has no entrance animation");
+    animation.pause();
+    animation.currentTime = 0;
+    window.__classicEntrance = animation;
+    return { delay: animation.effect.getTiming().delay,
+      rootOnlyReady: Number(getComputedStyle(story).opacity) > .99
+        && !story.getAnimations().some((item) => item.animationName === "atlasViewIn" && item.playState === "running"),
+      layoutOpacity: Number(getComputedStyle(layout).opacity) };
+  });
+  assert.equal(entrance.rootOnlyReady, true);
+  assert.equal(entrance.layoutOpacity, 0);
+  assert.equal(await page.evaluate(storyPaintReady, ".journey-story__media"), false,
+    "a delayed transparent media ancestor must not pass the paint precondition");
+  await page.evaluate(() => window.__classicEntrance.finish());
+  await page.waitForFunction(storyPaintReady, ".journey-story__media", { polling: "raf", timeout: 3_000 });
+  await unchanged(asset);
+  results.push({ delayedEntranceGuard: true, ...entrance });
+  await page.emulateMedia({ reducedMotion: "reduce" });
   for (const [index, view] of ["light", "thumb", "photo", "earth"].entries()) {
     assert.equal(await root.getAttribute("data-classic-view"), view);
     assert.equal(await root.getAttribute("data-classic-panel"), "none");
