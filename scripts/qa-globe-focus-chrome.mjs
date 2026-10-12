@@ -254,6 +254,9 @@ async function openGatewayAtlas(viewport) {
   });
   // #332: the Earth experience hydration read every signed-in mount issues.
   // Unstubbed it falls through to no API and logs a 500 the console assertions catch.
+  await page.route("**/api/account-preferences/media-presentation", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ style: "classic" }),
+  }));
   await page.route("**/api/account-preferences/earth-experience", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",

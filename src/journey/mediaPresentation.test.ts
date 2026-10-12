@@ -32,7 +32,7 @@ describe("media presentation style", () => {
   });
 });
 
-describe("shared presentation ignores recipient preferences", () => {
+describe("standalone preview fallback outside the share policy provider", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.resetModules();

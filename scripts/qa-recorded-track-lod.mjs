@@ -116,6 +116,7 @@ await page.route("**/api/**", async (route) => {
   if (path === "/api/account-preferences/earth-experience") return json(route, {
     earthExperience: "default", revision: 0, updatedAt: null,
   });
+  if (path === "/api/account-preferences/media-presentation") return json(route, { style: "classic" });
   if (path === "/api/home-bases") return json(route, { periods: [] });
   if (path === "/api/home-bases/dismissal") return json(route, { dismissals: [] });
   if (path === "/api/mapstyle") return json(route, paintedStyle);

@@ -8,7 +8,7 @@ import { MEDIA_PRESENTATION_STYLES } from "./mediaPresentationStyle";
 
 describe("durable media presentation", () => {
   it("reads the signed-in account and sends only the selected style on save", async () => {
-    const request = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ style: "stream" })));
+    const request = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({ style: "stream" })));
     expect(await requestMediaPresentationPreference(undefined, undefined, request)).toBe("stream");
     expect(request).toHaveBeenLastCalledWith(MEDIA_PRESENTATION_PREFERENCE_PATH, expect.objectContaining({ method: "GET", credentials: "include" }));
     expect(await requestMediaPresentationPreference("stream", undefined, request)).toBe("stream");

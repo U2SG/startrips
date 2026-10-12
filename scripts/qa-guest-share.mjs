@@ -273,6 +273,8 @@ try {
       state.mediaPresentation = style;
       await page.goto(link, { waitUntil: "domcontentloaded" });
       await page.locator(".living-atlas").waitFor({ timeout: 30_000 });
+      await page.locator(".living-atlas__journey-rail ol li button").first().click();
+      await page.getByRole("button", { name: /打开故事/ }).first().waitFor({ timeout: 10_000 });
       const opened = await page.evaluate(() => {
         const button = [...document.querySelectorAll("button")].find((node) => node.textContent?.includes("打开故事"));
         button?.click();
