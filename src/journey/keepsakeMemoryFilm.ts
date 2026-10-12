@@ -28,7 +28,7 @@ export interface MemoryFilmManifest {
   journeyId: string;
   journeyRevision: number;
   narrativeSnapshot: KeepsakePrivateRenderPlan["narrativeSnapshot"];
-  privacy: { artifactVisibility: "private"; mediaResolution: "authorized-server-fetch" };
+  privacy: { artifactVisibility: "private"; mediaResolution: "authorized-server-fetch" | "authorized-owner-fetch" };
   fps: 24 | 30;
   output: { width: number; height: number };
   reducedMotion: boolean;

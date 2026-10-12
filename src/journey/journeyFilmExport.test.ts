@@ -1,0 +1,138 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import { createOwnerAtlasView, GUEST_ATLAS_VIEW_CAPABILITIES, resolveAtlasView, type AtlasView } from "./atlasView";
+import { exportPrivateJourneyFilm, FILM_MAX_ASSET_BYTES, journeyFilmFilename, journeyFilmIdentity, readBoundedFilmBlob, type JourneyFilmEncoder, type JourneyFilmExportOptions } from "./journeyFilmExport";
+import { projectFilmRoute } from "./journeyFilmCanvas";
+import type { Journey } from "./types";
+
+const bytes = new TextEncoder().encode("source fixture");
+function fixture(): Journey {
+  return {
+    id: "journey-film", atlasId: "atlas-one", title: "海边的一天", startedOn: "2026-10-01", endedOn: null,
+    note: "", lightColor: "#fff", revision: 1, createdByUserId: "owner", createdAt: "2026-10-01", updatedAt: "2026-10-01",
+    routePoints: [0, 1].map((index) => ({ id: `p${index}`, journeyId: "journey-film", sortOrder: index, latitude: 22, longitude: 114 + index,
+      label: `途径点${index}`, isStop: true, note: index ? "海风很轻。" : null, occurredAt: null, createdAt: "2026-10-01" })),
+    media: [{ id: "photo-one", journeyId: "journey-film", routePointId: "p1", sortOrder: 0,
+      fileName: "photo.jpg", mimeType: "image/jpeg", bytes: bytes.length, createdAt: "2026-10-01",
+      contentHashVerified: true, contentHash: createHash("sha256").update(bytes).digest("hex") }],
+  };
+}
+function options(signal = new AbortController().signal): JourneyFilmExportOptions {
+  return { presetSeconds: 15, aspect: "portrait", includeCover: false, includeRoutePointNotes: false,
+    reducedMotion: false, signal, onProgress: vi.fn() };
+}
+function transport(journey: Journey) {
+  let current = journey, allowed = true;
+  const fetcher = vi.fn<typeof fetch>(async (url) => {
+    const path = String(url);
+    if (!allowed && path.startsWith("/api/")) return Response.json({ error: "AUTH_REQUIRED" }, { status: 401 });
+    if (path === "/api/journeys/journey-film") return Response.json({ journey: current });
+    if (path.includes("/read-url")) return Response.json({ url: "https://storage.example/original", expiresAt: new Date(Date.now() + 60000).toISOString() });
+    if (path === "https://storage.example/original") return new Response(bytes, { headers: { "content-type": "image/jpeg" } });
+    if (path.includes("cover-reveal")) return Response.json({ derivative: null, reason: "NO_READY_DERIVATIVE" });
+    throw new Error("Unexpected request: " + path);
+  });
+  return { fetcher, change: (value: Journey) => { current = value; }, revoke: () => { allowed = false; } };
+}
+const encode: JourneyFilmEncoder = async (input) => {
+  for (const asset of input.journey.media) await input.readMedia(asset);
+  input.onFrame(input.film.manifest.totalFrames);
+  return new Blob(["synthetic encoder output"], { type: "video/mp4" });
+};
+
+describe("owner Journey film export", () => {
+  it("reads the owner snapshot and original bytes, never a preview or a mutation", async () => {
+    const api = transport(fixture());
+    const runOptions = options();
+    const artifact = await exportPrivateJourneyFilm("journey-film", runOptions, { ...api, encode });
+    expect(artifact.filename).toBe("Startrips-海边的一天.mp4");
+    expect(artifact.blob.type).toBe("video/mp4");
+    expect(runOptions.onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: "validating" }));
+    expect(api.fetcher.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+    expect(api.fetcher.mock.calls.find(([url]) => String(url).startsWith("https://"))?.[1]?.credentials).toBe("omit");
+    await artifact.verify(new AbortController().signal);
+  });
+  it("keeps captions opt-in and reports the actual owner read boundary", async () => {
+    const api = transport(fixture());
+    const inspect: JourneyFilmEncoder = async (input) => {
+      expect(input.film.manifest.privacy.mediaResolution).toBe("authorized-owner-fetch");
+      expect([...input.film.captions.values()]).toEqual(["海风很轻。"]);
+      expect(JSON.stringify(input.film.manifest)).not.toContain("海风");
+      return encode(input);
+    };
+    await exportPrivateJourneyFilm("journey-film", { ...options(), includeRoutePointNotes: true }, { ...api, encode: inspect });
+  });
+  it("rejects cancellation before any request", async () => {
+    const controller = new AbortController(); controller.abort();
+    const api = transport(fixture());
+    await expect(exportPrivateJourneyFilm("journey-film", options(controller.signal), { ...api, encode })).rejects.toMatchObject({ name: "AbortError" });
+    expect(api.fetcher).not.toHaveBeenCalled();
+  });
+  it("does not return a partial artifact after cancellation during encode", async () => {
+    const controller = new AbortController(), api = transport(fixture());
+    await expect(exportPrivateJourneyFilm("journey-film", options(controller.signal), { ...api, encode: async (input) => {
+      const result = await encode(input); controller.abort(); return result;
+    } })).rejects.toMatchObject({ name: "AbortError" });
+  });
+  it.each(["title", "note", "media", "cover", "atlas"])("rejects %s changes even without a revision bump", async (kind) => {
+    const journey = fixture(), api = transport(journey);
+    const changed = structuredClone(journey);
+    if (kind === "title") changed.title = "edited";
+    if (kind === "note") changed.routePoints[1].note = "edited";
+    if (kind === "media") changed.media[0].routePointId = "p0";
+    if (kind === "cover") changed.coverMediaAssetId = "new-cover";
+    if (kind === "atlas") changed.atlasId = "other-atlas";
+    await expect(exportPrivateJourneyFilm("journey-film", options(), { ...api, encode: async (input) => {
+      const result = await encode(input); api.change(changed); return result;
+    } })).rejects.toThrow("journey_film_changed");
+  });
+  it("rejects revoked access after rendering and before a later download", async () => {
+    const api = transport(fixture());
+    const artifact = await exportPrivateJourneyFilm("journey-film", options(), { ...api, encode });
+    api.revoke();
+    await expect(artifact.verify(new AbortController().signal)).rejects.toMatchObject({ status: 401 });
+    const other = transport(fixture());
+    await expect(exportPrivateJourneyFilm("journey-film", options(), { ...other, encode: async (input) => {
+      const result = await encode(input); other.revoke(); return result;
+    } })).rejects.toMatchObject({ status: 401 });
+  });
+  it("rejects mismatched stored source hashes rather than rendering other bytes", async () => {
+    const journey = fixture(); journey.media[0].contentHash = "a".repeat(64);
+    await expect(exportPrivateJourneyFilm("journey-film", options(), { ...transport(journey), encode })).rejects.toThrow("journey_film_source_changed");
+  });
+  it("rejects oversized sources before signing them", async () => {
+    const journey = fixture(); journey.media[0].bytes = FILM_MAX_ASSET_BYTES + 1;
+    const api = transport(journey);
+    await expect(exportPrivateJourneyFilm("journey-film", options(), { ...api, encode })).rejects.toThrow("journey_film_source_limit");
+    expect(api.fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("rejects overlong captions instead of silently dropping their text", async () => {
+    const journey = fixture(); journey.routePoints[1].note = "长".repeat(1000);
+    await expect(exportPrivateJourneyFilm("journey-film", { ...options(), includeRoutePointNotes: true }, { ...transport(journey), encode })).rejects.toThrow("journey_film_duration_limit");
+  });
+  it("uses the original when no approved creative cover is ready", async () => {
+    await exportPrivateJourneyFilm("journey-film", { ...options(), includeCover: true }, { ...transport(fixture()), encode: async (input) => {
+      expect(input.readOpening).toBeNull(); expect(input.film.manifest.cover).toBeNull(); return encode(input);
+    } });
+  });
+  it("never supplies an export client to read-only or guest views", () => {
+    expect(createOwnerAtlasView().exportJourneyFilm).toBeTypeOf("function");
+    expect(createOwnerAtlasView({ canEditJourney: false }).exportJourneyFilm).toBeNull();
+    const guest: AtlasView = { capabilities: GUEST_ATLAS_VIEW_CAPABILITIES, listJourneys: async () => [],
+      listHomeBasePeriods: null, listHomeBaseDismissals: null, readMedia: vi.fn(), mutations: null };
+    const fallback = vi.fn(createOwnerAtlasView);
+    expect(resolveAtlasView(guest, fallback).exportJourneyFilm).toBeUndefined();
+    expect(fallback).not.toHaveBeenCalled();
+  });
+  it("bounds streamed bytes even when Content-Length is absent or untrue", async () => {
+    await expect(readBoundedFilmBlob(new Response(bytes), 3, new AbortController().signal)).rejects.toThrow("journey_film_source_limit");
+    await expect(readBoundedFilmBlob(new Response(bytes, { headers: { "content-length": "100" } }), 30, new AbortController().signal)).rejects.toThrow("journey_film_source_limit");
+  });
+  it("projects a dateline crossing locally and protects filenames", () => {
+    const points = fixture().routePoints; points[0].longitude = 179; points[1].longitude = -179;
+    const projected = projectFilmRoute(points);
+    expect(projected[0].x).toBeLessThan(projected[1].x);
+    expect(journeyFilmFilename('旅程/<>:*?.')).toMatch(/^Startrips-[^<>:"/\\|?*]+\.mp4$/);
+    expect(journeyFilmIdentity(fixture())).toBe(journeyFilmIdentity(structuredClone(fixture())));
+  });
+});

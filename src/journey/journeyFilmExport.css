@@ -1,0 +1,28 @@
+.journey-film-export {
+  width: min(34rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem);
+  margin: auto; padding: 0; overflow: auto; border-radius: 18px;
+  border: 1px solid rgba(216, 191, 145, .24); background: #111820; color: #f1ece2;
+  font: inherit; box-shadow: 0 24px 80px rgba(0, 0, 0, .4);
+}
+.journey-film-export::backdrop { background: rgba(5, 10, 16, .76); }
+.journey-film-export__body { padding: clamp(18px, 4vw, 28px); }
+.journey-film-export header { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
+.journey-film-export header p { letter-spacing: .16em; font-size: .7rem; color: #d8bf91; }
+.journey-film-export h2 { margin: 6px 0 16px; font-size: 1.3rem; font-weight: 500; }
+.journey-film-export p { line-height: 1.7; font-size: .875rem; }
+.journey-film-export__title { overflow-wrap: anywhere; font-weight: 600; }
+.journey-film-export fieldset { border: 0; margin: 24px 0; padding: 0; }
+.journey-film-export legend { margin-bottom: 12px; font-size: .875rem; }
+.journey-film-export__options { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+.journey-film-export__options label { display: grid; gap: 8px; font-size: .875rem; }
+.journey-film-export select, .journey-film-export button { font: inherit; color: inherit; border: 1px solid rgba(216, 191, 145, .3); background: #1e2832; border-radius: 9px; padding: 10px 14px; min-height: 44px; }
+.journey-film-export select { width: 100%; }
+.journey-film-export button { cursor: pointer; }
+.journey-film-export :focus-visible { outline: 2px solid #d8bf91; outline-offset: 3px; }
+.journey-film-export :disabled { opacity: .6; cursor: default; }
+.journey-film-export__check { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: .875rem; }
+.journey-film-export__check input { width: 18px; height: 18px; accent-color: #d8bf91; }
+.journey-film-export__hint { color: #a9b2ba; }
+.journey-film-export progress { width: 100%; accent-color: #d8bf91; }
+.journey-film-export footer { display: flex; justify-content: end; margin-top: 20px; }
+.journey-film-export footer button { padding-inline: 24px; }
