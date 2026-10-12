@@ -157,3 +157,14 @@ it("projects identity fields instead of spreading private runtime data into the 
   assert(!text.includes("https://"));
   assert(!text.includes("bytes"));
 });
+
+it("paginates explicit newlines without losing author text or overflowing a caption card", () => {
+  const { plan, context } = fixture();
+  const text = "第一行\n第二行\n第三行\n第四行\n第五行\n第六行\n最后一行";
+  context.routePoints[1].note = text;
+  const film = buildMemoryFilm(plan, context, { includeRoutePointNotes: true });
+  const pages = [...film.captions.values()];
+  assert(pages.length >= 3);
+  assert.equal(pages.join(""), text);
+  assert(pages.every((page) => (page.match(/\n/g) ?? []).length <= 3));
+});

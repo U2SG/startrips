@@ -8,7 +8,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
-const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4195";
+const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const outputDir = "artifacts/journey-film-export";
 await mkdir(outputDir, { recursive: true });
 const ffmpeg = process.env.FFMPEG_PATH ?? (process.platform === "win32" ? "D:/tools/ffmpeg/bin/ffmpeg.exe" : "ffmpeg");
@@ -53,7 +53,7 @@ function Harness(){
  onEdit={window.__filmGuest ? undefined : ()=>{}} /></div></AtlasViewProvider>
 }
 createRoot(document.getElementById("root")).render(<Harness/>);`);
-const browser = await launchQaBrowser({ args: ["--disable-gpu"] });
+const browser = await launchQaBrowser();
 const evidence = { checks: [], files: [], screenshots: [] };
 const heldReads = new Set();
 let stage = "start";
@@ -75,9 +75,13 @@ try {
     if (revoked) return route.fulfill({ status: 401, json: { error: "AUTH_REQUIRED" } });
     if (url.pathname === `/api/journeys/${fixture.id}`) return route.fulfill({ json: { journey: current } });
     if (url.pathname === "/api/journeys") return route.fulfill({ json: { journeys: [current] } });
+    if (url.pathname === "/api/cover-reveal/recipes") return route.fulfill({ json: { recipes: [
+      { id: "ink-wash-memory", title: "水墨记忆" }, { id: "poetic-line-memory", title: "线条记忆" }, { id: "paper-collage-memory", title: "纸上记忆" },
+    ] } });
+    if (url.pathname.endsWith("/status")) return route.fulfill({ json: { state: "ready", recipeId: "paper-collage-memory", sourceMediaAssetId: "photo", derivativeId: "opening-qa" } });
     if (url.pathname.startsWith("/api/cover-reveal/")) return route.fulfill({ json: {
       derivative: { id: "opening-qa", journeyId: fixture.id, sourceMediaAssetId: "photo", sourceContentHash: fixture.media[0].contentHash,
-        generationKind: "ink-wash-poster", generationVersion: 1, presetId: "reveal-flow-ink-wash-v1", mimeType: "image/jpeg", width: 320, height: 480 },
+        generationKind: "paper-collage-memory", generationVersion: 1, presetId: "guided-ribbon", mimeType: "image/jpeg", width: 320, height: 480 },
       display: { url: "https://film-storage.invalid/opening", expiresAt: expiresAt() },
     } });
     const match = /\/api\/uploads\/assets\/([^/]+)\/read-url/.exec(url.pathname);
@@ -138,6 +142,54 @@ try {
   assert.equal(probe.streams.filter((item) => item.codec_type === "audio").length, 0);
   evidence.checks.push("real owner Story button -> MP4 download", "H.264 1080x1920 30fps, actual duration and decoded frames", "notes opt-in and silent audio contract");
   evidence.files.push({ path: artifact, bytes: Number(probe.format.size), duration: Number(probe.format.duration), frames: Number(stream.nb_read_frames) });
+  // Inspect decoded movie frames, not a mocked draw callback or a .mp4 extension.
+  const framePins = await page.evaluate(async (trip) => {
+    const { buildKeepsakeRenderManifest } = await import("/src/journey/journeyKeepsake.ts");
+    const { buildKeepsakePrivateRenderPlan } = await import("/src/journey/keepsakePrivateRender.ts");
+    const { buildMemoryFilm } = await import("/src/journey/keepsakeMemoryFilm.ts");
+    const plan = buildKeepsakePrivateRenderPlan(buildKeepsakeRenderManifest(trip, 15, "portrait"));
+    const film = buildMemoryFilm(plan, { journeyId: trip.id, journeyRevision: trip.revision, narrativeSnapshot: plan.narrativeSnapshot,
+      routePoints: trip.routePoints.map((point) => ({ routePointId: point.id, latitude: point.latitude, longitude: point.longitude, label: point.label, note: point.note })) },
+      { includeRoutePointNotes: true }, { derivativeId: "opening-qa", sourceMediaAssetId: "photo", recipeId: "paper-collage-memory", recipeVersion: 1 });
+    const shot = film.manifest.shots.find((item) => item.openingDerivativeId);
+    const caption = film.manifest.shots.flatMap((item) => item.captionCues)[0];
+    return { opening: shot.startFrame, original: shot.endFrame - 1, caption: caption.startFrame + 2, totalFrames: film.manifest.totalFrames };
+  }, fixture);
+  assert.equal(Number(stream.nb_read_frames), framePins.totalFrames);
+  for (const [name, frame] of Object.entries(framePins).filter(([name]) => name !== "totalFrames")) {
+    const filename = `${outputDir}/${name}-frame.png`;
+    run(ffmpeg, ["-y", "-i", artifact, "-vf", `select=eq(n\\,${frame})`, "-frames:v", "1", filename]);
+    if (name !== "caption") {
+      const { data, info } = await sharp(filename).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const offset = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * info.channels;
+      const expected = name === "opening" ? [200, 154, 102] : [66, 111, 152];
+      expected.forEach((channel, index) => assert(Math.abs(data[offset + index] - channel) < 18, `${name} frame must show the correct source image`));
+    }
+    evidence.screenshots.push(filename);
+  }
+  evidence.checks.push("decoded creative opening and unchanged original final pixels", "Chinese-caption review frame retained");
+  // A second real encoding exercises landscape and Reduced Motion through the same owner control.
+  mark("landscape reduced-motion encode");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await dialog.getByLabel("画面比例").selectOption("landscape");
+  await dialog.getByRole("button", { name: "生成 MP4", exact: true }).click();
+  await dialog.getByRole("button", { name: "下载 MP4", exact: true }).waitFor({ state: "visible", timeout: 120_000 });
+  const landscapeDownloadEvent = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "下载 MP4", exact: true }).click();
+  const landscapeArtifact = `${outputDir}/journey-film-landscape.mp4`;
+  await (await landscapeDownloadEvent).saveAs(landscapeArtifact);
+  const landscapeProbe = JSON.parse(run(ffprobe, ["-v", "error", "-show_streams", "-of", "json", landscapeArtifact]));
+  const landscapeStream = landscapeProbe.streams.find((item) => item.codec_type === "video");
+  assert.equal(landscapeStream.width, 1920); assert.equal(landscapeStream.height, 1080);
+  assert.equal(landscapeStream.codec_name, "h264"); assert.equal(landscapeStream.avg_frame_rate, "30/1");
+  const reducedFrame = `${outputDir}/reduced-motion-original.png`;
+  run(ffmpeg, ["-y", "-i", landscapeArtifact, "-vf", `select=eq(n\\,${framePins.opening})`, "-frames:v", "1", reducedFrame]);
+  const reduced = await sharp(reducedFrame).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const middle = (Math.floor(reduced.info.height / 2) * reduced.info.width + Math.floor(reduced.info.width / 2)) * reduced.info.channels;
+  [66, 111, 152].forEach((channel, index) => assert(Math.abs(reduced.data[middle + index] - channel) < 18));
+  evidence.checks.push("landscape 1920x1080 real MP4", "Reduced Motion skips generated opening pixels");
+  evidence.files.push({ path: landscapeArtifact }); evidence.screenshots.push(reducedFrame);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   // Re-authorization on the explicit second click: an old artifact cannot bypass expired access.
   mark("revoked download");
   revoked = true;
@@ -174,9 +226,10 @@ try {
   // Phone-sized settings, no overflow; owner-client omission in a guest mount.
   mark("phone settings");
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "导出短片", exact: true }).waitFor({ state: "visible" }).catch(() => {});
   const phoneButton = page.getByRole("button", { name: "导出短片", exact: true });
-  if (await phoneButton.isVisible()) {
+  if (!await phoneButton.isVisible()) await page.getByRole("button", { name: "管理旅程", exact: true }).click();
+  await phoneButton.waitFor({ state: "visible" });
+  {
     await phoneButton.click();
     await dialog.waitFor({ state: "visible" });
     const box = await dialog.boundingBox(); assert(box && box.x >= 0 && box.width <= 390);
@@ -184,6 +237,7 @@ try {
     evidence.screenshots.push(`${outputDir}/phone-settings.png`);
     await dialog.getByRole("button", { name: "关闭短片导出", exact: true }).click();
   }
+  evidence.checks.push("phone export control and settings are required, not skipped");
   mark("guest");
   await context.addInitScript(() => { window.__filmGuest = true; });
   await page.reload({ waitUntil: "networkidle" });

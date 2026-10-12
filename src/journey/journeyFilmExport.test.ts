@@ -136,3 +136,69 @@ describe("owner Journey film export", () => {
     expect(journeyFilmIdentity(fixture())).toBe(journeyFilmIdentity(structuredClone(fixture())));
   });
 });
+
+
+describe("creative film integration", () => {
+  const recipes = [
+    ["ink-wash-poster", "ink-wash-memory", "reveal-flow-ink-wash-v1"],
+    ["poetic-line-memory", "poetic-line-memory", "brush-sweep"],
+    ["paper-collage-memory", "paper-collage-memory", "guided-ribbon"],
+  ];
+  it.each(recipes)("exports %s with refreshed capabilities and a pinned recipe", async (kind, recipeId, presetId) => {
+    const journey = fixture(), api = transport(journey);
+    let reads = 0;
+    const display = () => ({ derivative: {
+      id: "derivative", journeyId: journey.id, sourceMediaAssetId: journey.media[0].id,
+      sourceContentHash: journey.media[0].contentHash, generationKind: kind, generationVersion: 1,
+      presetId, mimeType: "image/jpeg", width: 32, height: 48,
+    }, display: { url: `https://storage.example/opening?read=${++reads}`, expiresAt: new Date(Date.now() + 60000).toISOString() } });
+    const fetcher: typeof fetch = async (url, init) => {
+      if (String(url).includes("/api/cover-reveal/")) return Response.json(display());
+      if (String(url).startsWith("https://storage.example/opening")) {
+        expect(String(url)).toContain("read=2"); return new Response(bytes);
+      }
+      return api.fetcher(url, init);
+    };
+    const artifact = await exportPrivateJourneyFilm(journey.id, { ...options(), includeCover: true }, { fetcher, encode: async (input) => {
+      expect(input.film.manifest.cover?.recipeId).toBe(recipeId);
+      expect(input.readOpening).not.toBeNull();
+      await input.readOpening!();
+      const source = input.journey.media[0];
+      expect(await input.readMedia(source)).toBe(await input.readMedia(source));
+      return new Blob(["encoded"], { type: "video/mp4" });
+    } });
+    expect(reads).toBe(3); // plan, immediate pre-decode, completion
+    await artifact.verify(new AbortController().signal);
+    expect(reads).toBe(4);
+    expect(api.fetcher.mock.calls.filter(([url]) => String(url) === "https://storage.example/original")).toHaveLength(1);
+  });
+  it("rejects a changed recipe during pre-decode re-signing", async () => {
+    const journey = fixture(), api = transport(journey); let reads = 0;
+    const fetcher: typeof fetch = async (url, init) => {
+      if (String(url).includes("/api/cover-reveal/")) return Response.json({
+        derivative: { id: ++reads === 1 ? "old" : "new", journeyId: journey.id, sourceMediaAssetId: journey.media[0].id,
+          sourceContentHash: journey.media[0].contentHash, generationKind: "ink-wash-poster", generationVersion: 1,
+          presetId: "reveal-flow-ink-wash-v1", mimeType: "image/jpeg", width: 32, height: 48 },
+        display: { url: "https://storage.example/unread", expiresAt: new Date(Date.now() + 60000).toISOString() },
+      });
+      return api.fetcher(url, init);
+    };
+    await expect(exportPrivateJourneyFilm(journey.id, { ...options(), includeCover: true }, { fetcher, encode: async (input) => {
+      await input.readOpening!(); return new Blob(["bad"], { type: "video/mp4" });
+    } })).rejects.toThrow("journey_film_changed");
+    expect(api.fetcher.mock.calls.some(([url]) => String(url).includes("unread"))).toBe(false);
+  });
+  it("cancels an in-flight stalled body read instead of waiting for another chunk", async () => {
+    const controller = new AbortController(); let cancelled = false;
+    const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+    const reading = readBoundedFilmBlob(response, 1000, controller.signal);
+    controller.abort();
+    await expect(reading).rejects.toMatchObject({ name: "AbortError" });
+    expect(cancelled).toBe(true);
+  });
+  it("does not even request cover capabilities for reduced motion", async () => {
+    const api = transport(fixture());
+    await exportPrivateJourneyFilm("journey-film", { ...options(), reducedMotion: true, includeCover: true }, { ...api, encode });
+    expect(api.fetcher.mock.calls.some(([url]) => String(url).includes("cover-reveal"))).toBe(false);
+  });
+});

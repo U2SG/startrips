@@ -56,7 +56,13 @@ function notePages(text: string): string[] {
   const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
   const chars = [...segmenter.segment(normalized)].map((item) => item.segment);
   const pages: string[] = [];
-  for (let index = 0; index < chars.length; index += 64) pages.push(chars.slice(index, index + 64).join(""));
+  let page: string[] = [], breaks = 0;
+  for (const char of chars) {
+    page.push(char);
+    if (char.includes("\n")) breaks++;
+    if (page.length >= 64 || breaks >= 3) { pages.push(page.join("")); page = []; breaks = 0; }
+  }
+  if (page.length) pages.push(page.join(""));
   return pages;
 }
 

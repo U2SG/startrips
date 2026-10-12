@@ -1,3 +1,4 @@
+import { creativeCoverRecipeForGeneration } from "../reveal/creativeCoverRecipes";
 import { getJourney, getPrivateMediaRead, JourneyApiError, readCoverRevealDisplay } from "./journeyApi";
 import { journeyCover } from "./journeyModel";
 import { buildKeepsakeRenderManifest, type KeepsakeAspect, type KeepsakeDurationPreset } from "./journeyKeepsake";
@@ -63,6 +64,8 @@ export function journeyFilmErrorMessage(error: unknown): string {
   if (code === "journey_film_codec_unavailable") return "此浏览器无法编码 MP4，请使用支持 H.264 视频编码的浏览器。";
   if (code === "journey_film_source_limit") return "素材超过本地导出上限：单个 128 MB、合计 256 MB。请减少素材后重试。";
   if (code === "journey_film_duration_limit") return "内容或字幕需要超过两分钟，请减少素材或关闭字幕后重试。";
+  if (code === "journey_film_reveal_unavailable") return "此浏览器无法渲染艺术开场，请关闭艺术封面选项后重试。";
+  if (code === "journey_film_text_layout_limit") return "文字过长，无法在画面内完整呈现，请缩短标题或关闭感想字幕后重试。";
   if (code === "journey_film_video_unsupported") return "有视频无法在此浏览器中解码，未生成不完整的短片。";
   if (code === "journey_film_source_changed") return "原片校验失败，未生成短片。请刷新旅程后重试。";
   return "未能完成导出。请检查网络和素材是否可读取，然后重试。";
@@ -75,6 +78,8 @@ export async function readBoundedFilmBlob(response: Response, maxBytes: number, 
   const reader = response.body.getReader();
   const parts: ArrayBuffer[] = [];
   let size = 0;
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener("abort", abort, { once: true });
   try {
     while (true) {
       signal.throwIfAborted();
@@ -88,6 +93,7 @@ export async function readBoundedFilmBlob(response: Response, maxBytes: number, 
     if (!size) throw new Error("journey_film_source_unreadable");
     return new Blob(parts, { type: response.headers.get("content-type") ?? "application/octet-stream" });
   } finally {
+    signal.removeEventListener("abort", abort);
     await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
@@ -132,9 +138,10 @@ export async function exportPrivateJourneyFilm(
   if (options.includeCover && !options.reducedMotion && cover && sourcePlan.mediaAssetIds.includes(cover.id)) {
     openingPayload = await readCoverRevealDisplay(journey.id, scopedFetch);
     const decision = planCoverRevealOpening({ journeyId, cover, payload: openingPayload, played: new Set(), reducedMotion: false, supersededByIntent: false });
-    const metadata = openingPayload.derivative as (NonNullable<CoverRevealDisplayPayload["derivative"]> & { generationKind?: string; generationVersion?: number }) | null;
-    if (decision.kind === "open" && metadata?.generationKind === "ink-wash-poster" && metadata.generationVersion === 1) {
-      coverPin = { derivativeId: metadata.id, sourceMediaAssetId: cover.id, recipeId: "ink-wash-memory", recipeVersion: 1 };
+    const metadata = openingPayload.derivative;
+    const recipe = creativeCoverRecipeForGeneration(metadata?.generationKind, metadata?.generationVersion);
+    if (decision.kind === "open" && metadata && recipe) {
+      coverPin = { derivativeId: metadata.id, sourceMediaAssetId: cover.id, recipeId: recipe.id, recipeVersion: 1 };
     }
   }
   const film = buildMemoryFilm(sourcePlan, context, {
@@ -154,7 +161,8 @@ export async function exportPrivateJourneyFilm(
     transferred += blob.size;
     return blob;
   };
-  const readMedia = async (asset: JourneyMediaAsset): Promise<Blob> => {
+  const mediaCache = new Map<string, Promise<Blob>>();
+  const readMediaBytes = async (asset: JourneyMediaAsset): Promise<Blob> => {
     if (assets.get(asset.id) !== asset) throw new Error("journey_film_source_changed");
     const read = await getPrivateMediaRead(asset.id, scopedFetch);
     if (!(Date.parse(read.expiresAt) > Date.now())) throw new Error("journey_film_source_unreadable");
@@ -162,6 +170,17 @@ export async function exportPrivateJourneyFilm(
     if (bytes.size !== asset.bytes || (asset.contentHashVerified === true && asset.contentHash !== await blobHash(bytes))) throw new Error("journey_film_source_changed");
     return new Blob([bytes], { type: asset.mimeType });
   };
+  const readMedia = (asset: JourneyMediaAsset): Promise<Blob> => {
+    if (assets.get(asset.id) !== asset) return Promise.reject(new Error("journey_film_source_changed"));
+    let pending = mediaCache.get(asset.id);
+    if (!pending) { pending = readMediaBytes(asset); mediaCache.set(asset.id, pending); }
+    return pending;
+  };
+  const openingIdentity = (payload: CoverRevealDisplayPayload | null) => {
+    const d = payload?.derivative;
+    return d ? JSON.stringify([d.id, d.journeyId, d.sourceMediaAssetId, d.sourceContentHash, d.generationKind, d.generationVersion, d.presetId, d.mimeType, d.width, d.height]) : null;
+  };
+  const pinnedOpening = openingIdentity(openingPayload);
   const verify = async (downloadSignal: AbortSignal) => {
     downloadSignal.throwIfAborted();
     const checkFetch: typeof fetch = (input, init) => fetcher(input, { ...init, signal: downloadSignal, cache: "no-store" });
@@ -169,20 +188,27 @@ export async function exportPrivateJourneyFilm(
     if (journeyFilmIdentity(current) !== identity) throw new Error("journey_film_changed");
     if (coverPin) {
       const currentCover = await readCoverRevealDisplay(journeyId, checkFetch);
-      if (currentCover.derivative?.id !== coverPin.derivativeId || currentCover.derivative.sourceContentHash !== openingPayload?.derivative?.sourceContentHash) throw new Error("journey_film_changed");
+      if (openingIdentity(currentCover) !== pinnedOpening) throw new Error("journey_film_changed");
     }
     downloadSignal.throwIfAborted();
   };
   const encode = dependencies.encode ?? (await import("./journeyFilmCanvas")).encodeJourneyFilm;
-  const blob = await encode({
+  let blob: Blob;
+  try {
+    blob = await encode({
     journey, sourcePlan, film, signal, readMedia,
     readOpening: coverPin && openingPayload?.display ? async () => {
-      if (!(Date.parse(openingPayload!.display!.expiresAt) > Date.now())) throw new Error("journey_film_source_unreadable");
-      return readUrl(openingPayload!.display!.url, 16 * 1024 * 1024);
+      // Re-sign immediately before decoding. Slow preparation must not reuse an expired URL.
+      const current = await readCoverRevealDisplay(journeyId, scopedFetch);
+      if (openingIdentity(current) !== pinnedOpening) throw new Error("journey_film_changed");
+      if (!current.display || !(Date.parse(current.display.expiresAt) > Date.now())) throw new Error("journey_film_source_unreadable");
+      return readUrl(current.display.url, 16 * 1024 * 1024);
     } : null,
     onFrame: (completed) => options.onProgress({ phase: "rendering", completed, total: film.manifest.totalFrames }),
   });
+  } finally { mediaCache.clear(); }
   signal.throwIfAborted();
+  if (journeyFilmIdentity(journey) !== identity) throw new Error("journey_film_changed");
   if (blob.type !== "video/mp4" || blob.size === 0) throw new Error("journey_film_output_invalid");
   options.onProgress({ phase: "validating", completed: 0, total: 1 });
   await verify(signal);

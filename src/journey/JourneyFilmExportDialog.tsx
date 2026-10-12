@@ -34,9 +34,15 @@ export function JourneyFilmExportDialog({ journeyId, title, exporter, onClose }:
     };
   }, []);
 
+  function clearArtifact() {
+    if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
+    downloadUrl.current = null;
+    setArtifact(null);
+  }
   function cancel() {
-    run.current?.abort(); run.current = null;
-    setBusy(false); setProgress(null); setMessage("已取消导出。"); setFailed(false);
+    run.current?.abort();
+    // Retain the run slot until encoder/decoder teardown settles.
+    clearArtifact(); setProgress(null); setMessage("已取消导出。"); setFailed(false);
   }
 
   async function generate() {
@@ -44,7 +50,7 @@ export function JourneyFilmExportDialog({ journeyId, title, exporter, onClose }:
     const controller = new AbortController();
     run.current = controller;
     const signal = AbortSignal.any([controller.signal, lifetime.current.signal]);
-    setBusy(true); setArtifact(null); setMessage(""); setFailed(false);
+    setBusy(true); clearArtifact(); setMessage(""); setFailed(false);
     setProgress({ phase: "preparing", completed: 0, total: 1 });
     try {
       const result = await exporter(journeyId, {
@@ -80,7 +86,7 @@ export function JourneyFilmExportDialog({ journeyId, title, exporter, onClose }:
       setMessage("已发起 MP4 下载。");
     } catch (error) {
       if (controller.signal.aborted || lifetime.current.signal.aborted) return;
-      setArtifact(null); setMessage(journeyFilmErrorMessage(error)); setFailed(true);
+      clearArtifact(); setMessage(journeyFilmErrorMessage(error)); setFailed(true);
     } finally {
       if (run.current === controller) { run.current = null; setBusy(false); setProgress(null); }
     }
@@ -98,15 +104,15 @@ export function JourneyFilmExportDialog({ journeyId, title, exporter, onClose }:
       <fieldset disabled={busy}>
         <legend>导出设置</legend>
         <div className="journey-film-export__options">
-          <label>画面比例<select value={aspect} onChange={(e) => { setAspect(e.target.value as KeepsakeAspect); setArtifact(null); }}>
+          <label>画面比例<select value={aspect} onChange={(e) => { setAspect(e.target.value as KeepsakeAspect); clearArtifact(); }}>
             <option value="portrait">竖屏 9:16</option><option value="landscape">横屏 16:9</option>
           </select></label>
-          <label>目标时长<select value={presetSeconds} onChange={(e) => { setPreset(Number(e.target.value) as KeepsakeDurationPreset); setArtifact(null); }}>
+          <label>目标时长<select value={presetSeconds} onChange={(e) => { setPreset(Number(e.target.value) as KeepsakeDurationPreset); clearArtifact(); }}>
             <option value={15}>15 秒</option><option value={30}>30 秒</option><option value={60}>60 秒</option>
           </select></label>
         </div>
-        <label className="journey-film-export__check"><input type="checkbox" checked={includeNotes} onChange={(e) => { setNotes(e.target.checked); setArtifact(null); }} />包含途径点感想字幕</label>
-        <label className="journey-film-export__check"><input type="checkbox" checked={includeCover} onChange={(e) => { setCover(e.target.checked); setArtifact(null); }} />使用已生成的艺术封面（没有则使用原图）</label>
+        <label className="journey-film-export__check"><input type="checkbox" checked={includeNotes} onChange={(e) => { setNotes(e.target.checked); clearArtifact(); }} />包含途径点感想字幕</label>
+        <label className="journey-film-export__check"><input type="checkbox" checked={includeCover} onChange={(e) => { setCover(e.target.checked); clearArtifact(); }} />使用已生成的艺术封面（没有则使用原图）</label>
       </fieldset>
       <p className="journey-film-export__hint">为保留全部场景和字幕，实际时长可能超过目标，最多两分钟。短视频取开头片段，较短的片段停留在末帧。导出期间请保持页面打开。</p>
       {busy ? <div role="status" aria-live="polite"><p>{progressText}</p>

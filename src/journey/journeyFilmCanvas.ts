@@ -1,3 +1,6 @@
+import { RevealFlow } from "../reveal/vendor/index.js";
+import { creativeCoverRecipe } from "../reveal/creativeCoverRecipes";
+import { resolveCoverRevealPresetId } from "./coverRevealOpening";
 import { ALL_FORMATS, BlobSource, BufferTarget, CanvasSink, CanvasSource, Input, Mp4OutputFormat, Output, canEncodeVideo } from "mediabunny";
 import { sampleMemoryFilmFrame } from "./keepsakeMemoryFilm";
 import type { JourneyFilmEncoderInput } from "./journeyFilmExport";
@@ -33,7 +36,7 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
   const lines: string[] = [];
   let line = "";
   for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)) {
-    if (segment === "\n") { lines.push(line); line = ""; continue; }
+    if (segment === "\n" || segment === "\r\n") { lines.push(line); line = ""; continue; }
     if (line && ctx.measureText(line + segment).width > maxWidth) { lines.push(line); line = ""; }
     line += segment;
   }
@@ -72,9 +75,13 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
   let videoInput: Input | null = null;
   let videoFrames: ReturnType<CanvasSink["canvasesAtTimestamps"]> | null = null;
   let activeShot = -1;
-  const abort = () => { videoInput?.dispose(); void output.cancel().catch(() => {}); };
+  let reveal: RevealFlow | null = null;
+  let revealHost: HTMLDivElement | null = null;
+  const releaseReveal = () => { reveal?.dispose(); reveal = null; revealHost?.remove(); revealHost = null; };
+  const abort = () => { releaseReveal(); videoInput?.dispose(); void output.cancel().catch(() => {}); };
   signal.addEventListener("abort", abort, { once: true });
   const releaseMedia = async () => {
+    releaseReveal();
     if (videoFrames) await videoFrames.return().catch(() => {});
     videoFrames = null;
     videoInput?.dispose(); videoInput = null;
@@ -87,6 +94,7 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
     const lines = wrapText(ctx, text, width - 2 * margin);
     const lineHeight = fontSize * 1.55;
     const boxHeight = lines.length * lineHeight + margin;
+    if (boxHeight > height * 0.55) throw new Error("journey_film_text_layout_limit");
     ctx.fillStyle = "rgba(10, 16, 23, 0.88)";
     ctx.fillRect(0, height - boxHeight, width, boxHeight);
     ctx.fillStyle = INK; ctx.textAlign = "left"; ctx.textBaseline = "top";
@@ -115,6 +123,27 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
           signal.throwIfAborted();
           if (scene.mediaType === "image") {
             picture = await createImageBitmap(blob);
+            signal.throwIfAborted();
+            if (opening && shot.openingDerivativeId && film.manifest.cover) {
+              const recipe = creativeCoverRecipe(film.manifest.cover.recipeId);
+              const preset = recipe && resolveCoverRevealPresetId(recipe.presetId);
+              if (!preset) throw new Error("journey_film_reveal_unavailable");
+              revealHost = document.createElement("div");
+              revealHost.setAttribute("aria-hidden", "true");
+              Object.assign(revealHost.style, { position: "fixed", left: "-10000px", top: "0", width: `${width}px`, height: `${height}px`, pointerEvents: "none" });
+              document.body.appendChild(revealHost);
+              try {
+                reveal = new RevealFlow({ container: revealHost, from: opening, to: picture, preset,
+                  fit: "contain", background: BACKGROUND, maxDpr: 1, maxPixels: width * height,
+                  respectReducedMotion: false, fallback: false });
+                await reveal.ready;
+                signal.throwIfAborted();
+                reveal.pause();
+              } catch (error) {
+                signal.throwIfAborted();
+                throw new Error("journey_film_reveal_unavailable", { cause: error });
+              }
+            }
           } else {
             videoInput = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
             const track = await videoInput.getPrimaryVideoTrack();
@@ -140,9 +169,11 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
           if (!decoded.value) throw new Error("journey_film_video_unsupported");
           ctx.drawImage(decoded.value.canvas, 0, 0, width, height);
         }
-        if (opening && state.openingOpacity > 0) {
-          ctx.save(); ctx.globalAlpha = state.openingOpacity;
-          contain(ctx, opening, opening.width, opening.height, width, height); ctx.restore();
+        if (reveal && state.openingOpacity > 0) {
+          // Use the same authored renderer as Story, sampled deterministically without RAF.
+          const revealFrames = Math.max(1, Math.min(Math.round(1.2 * fps), Math.floor((shot.endFrame - shot.startFrame - 1) / 2)));
+          reveal.seek(Math.min(1, (frame - shot.startFrame) / revealFrames));
+          ctx.drawImage(reveal.canvas, 0, 0, width, height);
         }
       } else {
         ctx.textAlign = "left"; ctx.textBaseline = "top";
@@ -150,7 +181,16 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
         ctx.fillText("STARTRIPS  /  JOURNEY", margin, margin);
         ctx.fillStyle = INK; ctx.font = `500 ${fontSize * 1.65}px ${FONT}`;
         const heading = scene.role === "arrival" ? journey.routePoints[pointIndex.get(scene.routePointId) ?? -1]?.label || journey.title : journey.title;
-        wrapText(ctx, heading, width - margin * 2).forEach((line, i) => ctx.fillText(line, margin, margin + fontSize * (2 + i * 2)));
+        let headingSize = fontSize * 1.65;
+        let headingLines: string[] = [];
+        do {
+          ctx.font = `500 ${headingSize}px ${FONT}`;
+          headingLines = wrapText(ctx, heading, width - margin * 2);
+          if (headingLines.length * headingSize * 1.25 <= height * 0.20) break;
+          headingSize -= 2;
+        } while (headingSize >= 16);
+        if (headingSize < 16) throw new Error("journey_film_text_layout_limit");
+        headingLines.forEach((line, i) => ctx.fillText(line, margin, margin + fontSize * 2 + i * headingSize * 1.25));
         const box = Math.min(width - 2 * margin, height * 0.45);
         const xy = points.map((p) => ({ x: (width - box) / 2 + p.x * box, y: height * 0.32 + p.y * box }));
         ctx.strokeStyle = "#657079"; ctx.lineWidth = Math.max(2, width * 0.003); ctx.setLineDash([6, 8]);
