@@ -41,7 +41,7 @@ import {
   type ReaderRead,
 } from "./journeyReaderMedia";
 import type { JourneyBookOpenTarget } from "./JourneyBook";
-import { writeMediaPresentationStyle } from "./mediaPresentation";
+import { useMediaPresentationRecovery } from "./mediaPresentation";
 import { useModalFocus } from "./useModalFocus";
 import { withStillFragment } from "./videoStillFrame";
 import type { StoryLogicalObservation } from "./storyMediaPolicy";
@@ -259,6 +259,7 @@ export function JourneyBook3d({
   onGlobeCoverChange?: (state: { opaqueMediaCover: boolean; coverTransitionActive: boolean }) => void;
 }) {
   const { readMedia } = useAtlasView();
+  const recoverPresentation = useMediaPresentationRecovery();
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeyIndex >= 0 ? journeys[journeyIndex] : null;
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
@@ -955,7 +956,7 @@ export function JourneyBook3d({
             <p>{failure ?? "媒体存储不允许跨域读取，立体之书无法显示照片。"}</p>
             <div className="journey-book-3d__failure-actions">
               <button type="button" className="journey-book__text-action" onClick={() => onOpenClassic(classicTarget)}>打开经典视图</button>
-              <button type="button" className="journey-book__text-action" onClick={() => writeMediaPresentationStyle("book")}>改用旅程之书</button>
+              <button type="button" className="journey-book__text-action" onClick={() => recoverPresentation("book")}>改用旅程之书</button>
             </div>
           </div>
         ) : null}

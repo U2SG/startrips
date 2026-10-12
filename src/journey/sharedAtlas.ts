@@ -1,6 +1,7 @@
 import type { Journey, JourneyMediaAsset, PrivateMediaRead, RoutePoint, RouteSegmentRecord } from "./types";
 import { routeSegmentSourceKey } from "./journeyModel";
 import type { LightEffectId } from "./lightEffects";
+import type { MediaPresentationStyle } from "./mediaPresentationStyle";
 
 /** The one path that renders a shared Atlas. */
 export const SHARE_VIEW_PATHNAME = "/share";
@@ -70,7 +71,7 @@ export type SharedJourney = {
 };
 
 export type SharedJourneyView = {
-  share: { expiresAt: string; journeyCount: number };
+  share: { expiresAt: string; journeyCount: number; mediaPresentation?: MediaPresentationStyle };
   journeys: SharedJourney[];
 };
 

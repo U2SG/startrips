@@ -1,5 +1,4 @@
 import { SHARE_VIEW_PATHNAME } from "./sharedAtlas";
-import { MEDIA_PRESENTATION_QUERY, type MediaPresentationStyle } from "./mediaPresentation";
 import type { ShareGrantStatus, ShareGrantSummary } from "./types";
 
 /**
@@ -140,8 +139,8 @@ export function formatShareExpiry(expiresAt: string | Date): string {
  * rather than repeated so the owner's copy and the guest's parser can never
  * describe different paths.
  */
-export function shareLinkUrl(origin: string, token: string, style: MediaPresentationStyle = "classic"): string {
-  return `${origin.replace(/\/+$/, "")}${SHARE_VIEW_PATHNAME}?${MEDIA_PRESENTATION_QUERY}=${style}#${token}`;
+export function shareLinkUrl(origin: string, token: string): string {
+  return `${origin.replace(/\/+$/, "")}${SHARE_VIEW_PATHNAME}#${token}`;
 }
 
 /**

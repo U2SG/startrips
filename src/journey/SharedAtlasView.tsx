@@ -7,6 +7,8 @@ import {
   type AtlasView,
 } from "./atlasView";
 import { LivingAtlasApp } from "./LivingAtlasApp";
+import { SharedMediaPresentationProvider } from "./MediaPresentationProvider";
+import { parseMediaPresentationStyle, type MediaPresentationStyle } from "./mediaPresentationStyle";
 import {
   SharedAtlasError,
   createSharedAtlasClient,
@@ -110,6 +112,7 @@ export function SharedAtlasView({
   const persistentEarth = usePersistentEarth();
   const [state, setState] = useState<SharedAtlasState>(LOADING_STATE);
   const [attempt, setAttempt] = useState(0);
+  const [presentation, setPresentation] = useState<MediaPresentationStyle>("classic");
   // Resolved once per mount from a holder that itself reads the fragment once
   // per document, and held only in this closure from here on.
   const token = useMemo(() => readToken(), [readToken]);
@@ -151,6 +154,7 @@ export function SharedAtlasView({
         );
       }
       const expiresAt = Date.parse(view.share.expiresAt);
+      setPresentation(parseMediaPresentationStyle(view.share.mediaPresentation));
       setState((current) => ({
         status: view.journeys.length === 0 ? "empty" : "ready",
         message: "",
@@ -283,7 +287,9 @@ export function SharedAtlasView({
 
   return (
     <AtlasViewProvider value={atlasView}>
-      <LivingAtlasApp GlobeComponent={GlobeComponent} />
+      <SharedMediaPresentationProvider style={presentation}>
+        <LivingAtlasApp GlobeComponent={GlobeComponent} />
+      </SharedMediaPresentationProvider>
     </AtlasViewProvider>
   );
 }

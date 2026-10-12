@@ -1017,6 +1017,20 @@ export const coverRevealWrites = pgTable(
   ],
 );
 
+// Public presentation policy for the links this account creates. Kept apart
+// from the private Earth preference, whose value and revision stay independent.
+export const accountMediaPresentations = pgTable(
+  "account_media_presentations",
+  {
+    userId: text("user_id").primaryKey().references(() => authUser.id, { onDelete: "cascade" }),
+    style: text("style").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("account_media_presentations_style_check", sql`${table.style} in ('classic', 'note-overlay', 'book', 'book-3d', 'stream')`),
+  ],
+);
+
 // #387: one person's Earth experience preference, keyed by the stable Better
 // Auth user rather than by an Atlas.
 //
@@ -1037,20 +1051,6 @@ export const coverRevealWrites = pgTable(
 // value already stored leaves both `revision` and `updated_at` alone, so a
 // client can compare the two and tell "my write landed and changed nothing"
 // from "someone else's write moved this since I read it".
-// Public presentation policy for the links this account creates. Kept apart
-// from the private Earth preference, whose value and revision stay independent.
-export const accountMediaPresentations = pgTable(
-  "account_media_presentations",
-  {
-    userId: text("user_id").primaryKey().references(() => authUser.id, { onDelete: "cascade" }),
-    style: text("style").notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    check("account_media_presentations_style_check", sql`${table.style} in ('classic', 'note-overlay', 'book', 'book-3d', 'stream')`),
-  ],
-);
-
 export const accountExperiencePreferences = pgTable(
   "account_experience_preferences",
   {

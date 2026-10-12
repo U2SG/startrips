@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
-import { accountExperiencePreferences, atlases } from "../db/app-schema";
+import { accountExperiencePreferences, accountMediaPresentations, atlases } from "../db/app-schema";
 import {
   organization as authOrganizations,
   rateLimit,
@@ -149,6 +149,38 @@ afterAll(async () => {
     await db.delete(authUsers).where(eq(authUsers.email, email));
   }
   await pool.end();
+});
+
+describe("media presentation preference", () => {
+  const url = `${TEST_ORIGIN}/api/account-preferences/media-presentation`;
+  it("reads classic without writing an account row", async () => {
+    const response = await app.request(url, { headers: authHeaders(alice.cookie) });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(await response.json()).toEqual({ style: "classic" });
+    expect(await db.select().from(accountMediaPresentations).where(eq(accountMediaPresentations.userId, alice.userId))).toEqual([]);
+  });
+
+  it("keeps the author's choice across reads while another account stays independent", async () => {
+    for (const style of ["book", "stream", "book-3d", "note-overlay", "classic"]) {
+      const response = await app.request(url, { method: "PUT", headers: authHeaders(alice.cookie), body: JSON.stringify({ style, userId: bob.userId }) });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ style });
+      expect(await (await app.request(url, { headers: authHeaders(alice.cookie) })).json()).toEqual({ style });
+      expect(await (await app.request(url, { headers: authHeaders(bob.cookie) })).json()).toEqual({ style: "classic" });
+    }
+    // Earth policy absence must remain absence: this preference has its own row.
+    expect(await storedRows(alice.userId)).toEqual([]);
+  });
+
+  it("refuses unsigned and malformed writes without changing the preference", async () => {
+    expect((await app.request(url, { headers: authHeaders() })).status).toBe(401);
+    expect((await app.request(url, { method: "PUT", headers: authHeaders(), body: JSON.stringify({ style: "book" }) })).status).toBe(401);
+    for (const body of [null, [], {}, { style: "cube" }]) {
+      expect((await app.request(url, { method: "PUT", headers: authHeaders(alice.cookie), body: JSON.stringify(body) })).status).toBe(400);
+    }
+    expect(await (await app.request(url, { headers: authHeaders(alice.cookie) })).json()).toEqual({ style: "classic" });
+  });
 });
 
 describe("Earth experience preference: absence", () => {

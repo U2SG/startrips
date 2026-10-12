@@ -1,5 +1,8 @@
 import { useSyncExternalStore } from "react";
 import { isSharedAtlasPathname } from "./sharedAtlas";
+import { useMediaPresentationAccess } from "./MediaPresentationProvider";
+import { MEDIA_PRESENTATION_STYLES, parseMediaPresentationStyle, type MediaPresentationStyle } from "./mediaPresentationStyle";
+export { MEDIA_PRESENTATION_STYLES, parseMediaPresentationStyle, type MediaPresentationStyle } from "./mediaPresentationStyle";
 import "../styles/journey-reader.css";
 
 /**
@@ -12,15 +15,10 @@ import "../styles/journey-reader.css";
  * - `stream`: the Journey Stream reader (after Undertow), in place of Story.
  * - `book-3d`: the Journey Book with real bending paper (Three.js).
  *
- * The owner's choice is remembered in this browser. A share link captures
- * that choice in `?mediaPresentation=<style>` so every recipient starts with
- * the same presentation, regardless of their own browser preference.
- * Legacy share links without a style use `classic`.
+ * Production uses the account preference provider; shared viewers use the
+ * latest policy returned by the grant read. The browser store below remains
+ * a fallback for standalone previews, outside either production provider.
  */
-export type MediaPresentationStyle = "classic" | "note-overlay" | "book" | "book-3d" | "stream";
-
-export const MEDIA_PRESENTATION_STYLES: readonly MediaPresentationStyle[] = ["classic", "note-overlay", "book", "book-3d", "stream"];
-
 const STORAGE_KEY = "startrips.media-presentation";
 export const MEDIA_PRESENTATION_QUERY = "mediaPresentation";
 
@@ -30,12 +28,6 @@ export function mediaPresentationFromSearch(search: string): MediaPresentationSt
   return value !== null && MEDIA_PRESENTATION_STYLES.includes(value as MediaPresentationStyle)
     ? value as MediaPresentationStyle
     : null;
-}
-
-export function parseMediaPresentationStyle(value: unknown): MediaPresentationStyle {
-  return MEDIA_PRESENTATION_STYLES.includes(value as MediaPresentationStyle)
-    ? value as MediaPresentationStyle
-    : "classic";
 }
 
 /** What one activation of the menu entry chooses: the next style, wrapping. */
@@ -111,7 +103,17 @@ function subscribe(listener: () => void) {
 }
 
 export function useMediaPresentationStyle(): MediaPresentationStyle {
-  return useSyncExternalStore(subscribe, readMediaPresentationStyle, () => "classic");
+  const access = useMediaPresentationAccess();
+  return useSyncExternalStore(
+    access ? () => () => undefined : subscribe,
+    access ? () => access.style : readMediaPresentationStyle,
+    () => access?.style ?? "classic",
+  );
+}
+
+export function useMediaPresentationRecovery(): (style: MediaPresentationStyle) => void {
+  const access = useMediaPresentationAccess();
+  return access?.recover ?? writeMediaPresentationStyle;
 }
 
 /**
@@ -119,6 +121,7 @@ export function useMediaPresentationStyle(): MediaPresentationStyle {
  * activation moves to the next style; the label names the style in force.
  */
 export function MediaPresentationMenuEntry({ surface }: { surface: "dock" | "sheet" }) {
+  const access = useMediaPresentationAccess();
   const style = useMediaPresentationStyle();
   const label = mediaPresentationLabel(style);
   return (
@@ -126,9 +129,14 @@ export function MediaPresentationMenuEntry({ surface }: { surface: "dock" | "she
       type="button"
       data-media-presentation-entry={surface}
       data-media-presentation-value={style}
-      onClick={() => writeMediaPresentationStyle(nextMediaPresentationStyle(style))}
+      disabled={access ? access.busy || (!access.select && !access.error) : false}
+      onClick={() => {
+        if (!access) writeMediaPresentationStyle(nextMediaPresentationStyle(style));
+        else if (access.select) void access.select(nextMediaPresentationStyle(style));
+        else access.retry();
+      }}
     >
-      <span>媒体呈现</span><small>{label}</small>
+      <span>媒体呈现</span><small>{access?.busy ? "请稍候…" : access?.error ? (access.select ? "保存未确认，点击重试" : "无法读取，点击重试") : label}</small>
     </button>
   );
 }

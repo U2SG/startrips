@@ -27,7 +27,6 @@ import {
   type ShareLinkRow,
 } from "./shareLinks";
 import { useModalFocus } from "./useModalFocus";
-import { readMediaPresentationStyle } from "./mediaPresentation";
 import type { Journey, ShareGrantSummary } from "./types";
 
 /**
@@ -160,11 +159,10 @@ export function JourneyShareDialog({
     onMutationPendingChange?.(true);
     setPending(true);
     setMessage("");
-    const presentation = readMediaPresentationStyle();
     try {
       const response = await mutations.createShare(selected, expiry.expiresAt);
       setCreated({
-        url: shareLinkUrl(linkOrigin, response.token, presentation),
+        url: shareLinkUrl(linkOrigin, response.token),
         // The server's own value, not the one just requested: #200 makes the
         // server clock the authority for what "有效至" means.
         expiresAt: response.share.expiresAt,

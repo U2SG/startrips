@@ -466,6 +466,15 @@ async function verifyAccountDockYieldsToShare(browser) {
       return route.fulfill(json({}));
     });
     await page.route("**/api/account-preferences/earth-experience", (route) => route.fulfill(json({ earthExperience: "default", revision: 0, updatedAt: null })));
+    let presentation = "classic";
+    let presentationSaves = 0;
+    await page.route("**/api/account-preferences/media-presentation", (route) => {
+      if (route.request().method() === "PUT") {
+        presentation = route.request().postDataJSON().style;
+        presentationSaves += 1;
+      }
+      return route.fulfill(json({ style: presentation }));
+    });
     await page.route("**/api/atlases/current", (route) => route.fulfill(json({ atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "同行记忆" }, role: "owner" })));
     await page.route("**/api/home-bases/dismissal", (route) => route.fulfill(json({ dismissals: [] })));
     await page.route("**/api/home-bases", (route) => route.fulfill(json({ periods: [] })));
@@ -479,6 +488,13 @@ async function verifyAccountDockYieldsToShare(browser) {
     // Until the login handoff releases, a full-screen auth layer sits above the
     // whole Atlas, dock included, and owns every hit test.
     await page.locator(".auth-continuity.is-released").waitFor({ timeout: 15_000 });
+    await page.waitForFunction(() => {
+      const entry = document.querySelector('[data-media-presentation-entry="dock"]');
+      return entry instanceof HTMLButtonElement && !entry.disabled;
+    }, undefined, { timeout: 10_000 });
+    await page.evaluate(() => document.querySelector('[data-media-presentation-entry="dock"]')?.click());
+    await page.waitForFunction(() => document.querySelector('[data-media-presentation-entry="dock"]')?.dataset.mediaPresentationValue === "note-overlay", undefined, { timeout: 10_000 });
+    check("desktop-gateway/media-presentation-saved-to-account", presentation === "note-overlay" && presentationSaves === 1, { presentation, presentationSaves });
 
     // One ownership state at a time: isolated is inert and invisible; released
     // is neither and not in cinematic isolation, so the inert flag the dialog
@@ -649,7 +665,7 @@ try {
     );
 
     // Acceptance 4: the copy affordance yields the fragment form.
-    const linkOk = created.link === `${new URL(origin).origin}/share?mediaPresentation=note-overlay#${TOKEN}`;
+    const linkOk = created.link === `${new URL(origin).origin}/share#${TOKEN}`;
     check(`${viewport.name}/link-is-fragment-form`, linkOk, created.link);
     check(
       `${viewport.name}/token-not-in-path-or-query`,
