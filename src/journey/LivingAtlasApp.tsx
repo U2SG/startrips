@@ -90,7 +90,7 @@ import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
 import { useMediaPresentationStyle } from "./mediaPresentation";
 import { deferredSurface, whenIdle } from "./deferredSurface";
 
-// #393 trial: loaded only when this device chose the Journey Book or Stream.
+// Loaded only when the chosen presentation uses the Journey Book or Stream.
 const JourneyBook = lazy(() => import("./JourneyBook").then((module) => ({ default: module.JourneyBook })));
 const JourneyStream = lazy(() => import("./JourneyStream").then((module) => ({ default: module.JourneyStream })));
 const JourneyBook3d = lazy(() => import("./JourneyBook3d").then((module) => ({ default: module.JourneyBook3d })));
