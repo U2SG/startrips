@@ -3343,7 +3343,7 @@ export function JourneyStory({
 
   function openFullscreenAfterStoryGesture() {
     if (classicActive && mobileClassicView === "photo") {
-      setClassicPanel((panel) => panel === null ? "more" : null);
+      setClassicPanel((panel) => panel === "more" ? null : "more");
       return;
     }
     // Story chooses the destination; the active stage reports the real spring
@@ -3359,7 +3359,7 @@ export function JourneyStory({
     storyMediaGestureConsumedRef.current = false;
     cancelPendingMediaDragSettle();
     if (classicActive && mobileClassicView === "photo") {
-      setClassicPanel((panel) => panel === null ? "more" : null);
+      setClassicPanel((panel) => panel === "more" ? null : "more");
       return;
     }
     enterFullscreen(mobileLayout ? false : playingRef.current);
@@ -4847,10 +4847,7 @@ export function JourneyStory({
                     || (!playing && !storyAutoplayCanStart(autoplayVideoCandidate,
                       storyMediaAvailability(autoplayVideoCandidateRead?.status)))}
                   {...mediaButtonInput("play", togglePlaying)}>
-                  {classicActive ? (playing
-                    ? <IconPlayerPause size={19} stroke={1.5} aria-hidden="true" />
-                    : <IconPlayerPlay size={19} stroke={1.5} aria-hidden="true" />)
-                    : playing ? "暂停浏览" : "自动浏览"}
+                  {playing ? "暂停浏览" : "自动浏览"}
                 </button> : (
                   <IconActionButton
                     type="button"

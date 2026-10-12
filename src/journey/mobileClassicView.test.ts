@@ -33,4 +33,30 @@ describe("mobile classic layout trials", () => {
     preference.receive("photo"); expect(preference.read()).toBe("photo");
     preference.receive(null); expect(preference.read()).toBe("light");
   });
+  it("refreshes changes missed while Story had no subscribers", () => {
+    let stored = "light";
+    const preference = createMobileClassicPreference({ getItem: () => stored, setItem: (_key, value) => { stored = value; } });
+    stored = "earth";
+    expect(preference.read()).toBe("light");
+    preference.refresh();
+    expect(preference.read()).toBe("earth");
+  });
+  it("preserves a rejected write on resubscribe until external storage changes", () => {
+    let stored = "light";
+    const preference = createMobileClassicPreference({ getItem: () => stored, setItem: () => { throw new Error("denied"); } });
+    preference.select("photo");
+    preference.refresh();
+    expect(preference.read()).toBe("photo");
+    stored = "thumb";
+    preference.refresh();
+    expect(preference.read()).toBe("thumb");
+  });
+  it("retains the choice if a resumed storage read fails", () => {
+    let blocked = false;
+    const preference = createMobileClassicPreference({ getItem: () => { if (blocked) throw new Error("denied"); return "earth"; }, setItem: () => {} });
+    blocked = true;
+    preference.refresh();
+    expect(preference.read()).toBe("earth");
+  });
+
 });

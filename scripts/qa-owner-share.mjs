@@ -1,3 +1,4 @@
+import { revealStoryViewingOptions } from "./qa-browser.mjs";
 // #200 phase E owner-share QA: drive the real owner share surface in a browser
 // at desktop, portrait-phone and phone-landscape.
 //
@@ -248,6 +249,7 @@ async function shareFromCollapsedMobileStory(page, repeatIntent = false) {
   // portaled above the whole Atlas, so the sheet could only open under it.
   const atlasTrigger = page.locator(ATLAS_MORE_TRIGGER);
   const disabled = await atlasTrigger.isDisabled();
+  await revealStoryViewingOptions(page);
   await page.getByRole("button", { name: "管理旅程", exact: true }).first().click();
   await page.waitForFunction(() => (
     document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage"

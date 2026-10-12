@@ -1,3 +1,4 @@
+import { revealStoryViewingOptions } from "./qa-browser.mjs";
 /**
  * #595 browser QA: grouped Route Point notes stay narrative beats.
  *
@@ -542,6 +543,7 @@ try {
       // #616: a chip on a Route Point with nothing to say keeps the truthful
       // empty chapter; a chip on a note-only one lands on its note page.
       const chip = (id) => page.locator(`.journey-story button[data-route-point-id="${id}"]`);
+      if (mobile) await revealStoryViewingOptions(page);
       if (mobile) await chip("no-point-x").tap(); else await chip("no-point-x").click();
       await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-has-media") === "false",
         null, { timeout: 5_000 });
@@ -549,6 +551,7 @@ try {
         pressed: await chip("no-point-x").getAttribute("aria-pressed"),
         stage: await page.locator(".journey-story__media").count(),
       };
+      if (mobile) await revealStoryViewingOptions(page);
       if (mobile) await chip("no-point-w").tap(); else await chip("no-point-w").click();
       await visit(NOTE_W);
       progress.noteChipPressed = await chip("no-point-w").getAttribute("aria-pressed");

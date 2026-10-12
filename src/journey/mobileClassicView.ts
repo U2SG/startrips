@@ -21,15 +21,45 @@ export function nextMobileClassicView(value: unknown): MobileClassicView {
 // A blocked storage adapter still supports switching for this visit.
 export function createMobileClassicPreference(storage: Pick<Storage, "getItem" | "setItem"> | null) {
   let current: MobileClassicView = "light";
-  try { current = parseMobileClassicView(storage?.getItem(MOBILE_CLASSIC_VIEW_KEY)); } catch { /* Private storage. */ }
+  let storedValue: string | null = null;
+  let sessionOnly = false;
+  try {
+    storedValue = storage?.getItem(MOBILE_CLASSIC_VIEW_KEY) ?? null;
+    current = parseMobileClassicView(storedValue);
+  } catch { /* Private storage. */ }
   return {
     read: () => current,
+    // Story may have been unmounted when another tab changed the preference.
+    // A failed write remains authoritative in this visit until storage actually
+    // changes; a successful stale read must not discard that in-session choice.
+    refresh() {
+      if (!storage) return;
+      try {
+        const next = storage.getItem(MOBILE_CLASSIC_VIEW_KEY);
+        if (!sessionOnly || next !== storedValue) {
+          current = parseMobileClassicView(next);
+          sessionOnly = false;
+        }
+        storedValue = next;
+      } catch { /* Retain the current choice while storage is unavailable. */ }
+    },
     select(value: unknown) {
       current = parseMobileClassicView(value);
-      try { storage?.setItem(MOBILE_CLASSIC_VIEW_KEY, current); } catch { /* Keep the in-session choice. */ }
+      sessionOnly = true;
+      try {
+        if (storage) {
+          storage.setItem(MOBILE_CLASSIC_VIEW_KEY, current);
+          storedValue = current;
+          sessionOnly = false;
+        }
+      } catch { /* Keep the in-session choice. */ }
       return current;
     },
-    receive(value: unknown) { current = parseMobileClassicView(value); },
+    receive(value: string | null) {
+      storedValue = value;
+      current = parseMobileClassicView(value);
+      sessionOnly = false;
+    },
   };
 }
 
@@ -52,6 +82,9 @@ function subscribe(notify: () => void) {
     for (const listener of listeners) listener();
   };
   window.addEventListener("storage", onStorage);
+  const previous = read();
+  getPreference().refresh();
+  if (read() !== previous) for (const listener of listeners) listener();
   return () => { listeners.delete(notify); window.removeEventListener("storage", onStorage); };
 }
 export function useMobileClassicView() {

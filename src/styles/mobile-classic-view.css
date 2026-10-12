@@ -117,9 +117,13 @@
 .journey-story[data-classic-view] .journey-story__copy > .journey-story__mobile-media-actions {
   position: relative; inset: auto; height: auto; min-height: 64px;
 }
+/* Anchor decisions to the whole controls region, not the 44px play slot. */
+.journey-story[data-classic-view] .journey-story__mobile-media-actions.has-quick-recap > .journey-story__playback-entry {
+  position: static;
+}
 .journey-story[data-classic-view] .journey-story__mobile-media-actions .journey-story__quick-recap-status {
-  top: auto; bottom: 100%; right: 0; width: min(280px, calc(100vw - 40px));
-  max-height: 45dvh; overflow-y: auto;
+  top: auto; bottom: 100%; right: 12px; width: min(280px, calc(100vw - 40px));
+  max-width: calc(100% - 24px); max-height: 45dvh; overflow-y: auto;
 }
 /* B: one thumb-sized dock. A keeps a quiet flat row; C gives the photo room;
    D keeps substantially more of the existing particle Earth visible. */
@@ -138,9 +142,16 @@
 @media (max-height: 480px) {
   .journey-story[data-classic-view] {
     --journey-story-sheet-extent: 92svh;
-    --classic-aperture: max(100px, calc(92svh - 224px));
+    /* Preserve a picture area above the native video controls on short phones. */
+    --classic-aperture: max(180px, calc(92svh - 192px));
   }
+  .journey-story[data-classic-view] .journey-story__classic-context { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .journey-story[data-classic-view] { transition: none; }
+}
+
+/* Secondary autoplay retains its visible label, unlike the primary play icon. */
+.journey-story[data-classic-view] .journey-story__mobile-media-actions > .journey-story__mobile-autobrowse {
+  width: auto; min-width: 88px; padding-inline: 12px;
 }

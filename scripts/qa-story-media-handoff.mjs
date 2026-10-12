@@ -1,3 +1,4 @@
+import { revealStoryViewingOptions } from "./qa-browser.mjs";
 /**
  * #489 (ST-134). Story / immersive viewing: real input reaching the presented
  * transport, and the same-Route-Point media handoff staying continuous.
@@ -3577,6 +3578,7 @@ try {
       await waitForSettledAsset(page, I1);
       const toVideo = await navigateByGesture(page, STAGE, 1, V1);
       const inlineLive = await waitForPresentedLiveVideo(page, STAGE, V1);
+      await revealStoryViewingOptions(page);
       const entry = page.locator(".journey-story__mobile-media-fullscreen");
       await entry.click();
       await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
@@ -5065,6 +5067,7 @@ try {
         throw new Error(`playing source lacks time for fullscreen roundtrip: ${progress.remainingAtHandoff}`);
       }
       if (rapidReverse) progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 650);
+      await revealStoryViewingOptions(page);
       await startSampler(page, [STAGE, FULLSCREEN]);
       progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__mobile-media-fullscreen");
       progress.handoffClickedAt = await page.evaluate(() => window.__qaStage?.handoffSource?.wallAt ?? null);
@@ -5179,6 +5182,7 @@ try {
       progress.beforeControls = await readNativeControls(page, STAGE);
       progress.beforePixels = await pausedVideoScreenPixels(page, STAGE, "decode-timeout-before");
       progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 9_500);
+      await revealStoryViewingOptions(page);
       await startSampler(page, [STAGE, FULLSCREEN]);
       progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__mobile-media-fullscreen");
       progress.clickedAt = await page.evaluate(() => window.__qaStage?.handoffSource?.wallAt ?? null);

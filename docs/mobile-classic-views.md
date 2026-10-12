@@ -19,6 +19,8 @@ The switch only changes scoped layout attributes. It does not key or remount Sto
 
 ## Validation
 
+CI runs `pnpm qa:mobile-classic-views` in the existing `shell-composer` shard. It executes all five viewport commands below; the browser matrix stays within eight shards and retains every existing suite.
+
 - `pnpm vitest run src/journey/mobileClassicView.test.ts src/journey/JourneyStory.test.ts src/journey/compactMobileContract.test.ts --maxWorkers=1`
 - `pnpm exec tsc -p tsconfig.json --noEmit`
 - `pnpm build`

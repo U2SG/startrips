@@ -14,14 +14,15 @@ const server = process.env.QA_ORIGIN ? null : await createServer({
 if (server) await server.listen();
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4186";
 const browser = await launchQaBrowser({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
-const page = await browser.newPage({ viewport: { width, height }, hasTouch: true, isMobile: true,
+const context = await browser.newContext({ viewport: { width, height }, hasTouch: true, isMobile: true,
   deviceScaleFactor: 1, reducedMotion: "reduce" });
+const page = await context.newPage();
 page.setDefaultTimeout(8000);
 const errors = [];
 const results = [];
 page.on("pageerror", (error) => errors.push(error.message));
-await page.route("**/api/auth/get-session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "null" }));
-await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({ status: 200,
+await context.route("**/api/auth/get-session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "null" }));
+await context.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({ status: 200,
   contentType: "application/json", body: JSON.stringify({
     url: `${origin}/artworks/monet-water-lilies.jpg`, expiresAt: "2027-01-01T00:00:00.000Z",
   }) }));
@@ -69,6 +70,15 @@ try {
     assert.ok(geometry.stage.height > 80, `empty media aperture in ${view}`);
     assert.ok(geometry.overflow <= 1, `horizontal document overflow in ${view}`);
     assert.equal(await page.getByRole("button", { name: "管理旅程", exact: true }).isVisible(), false);
+    if (view === "photo") {
+      await page.getByRole("button", { name: "选择停靠点", exact: true }).tap();
+      assert.equal(await root.getAttribute("data-classic-panel"), "chapters");
+      await current.tap();
+      assert.equal(await root.getAttribute("data-classic-panel"), "more", "photo tap must replace chapters with More");
+      await current.tap();
+      assert.equal(await root.getAttribute("data-classic-panel"), "none");
+      await unchanged(asset);
+    }
     await page.screenshot({ path: `${output}/${view}.png` });
     results.push({ view, ...geometry });
     await page.getByRole("button", { name: /切换经典视图/ }).tap();
@@ -90,7 +100,7 @@ try {
   await page.reload({ waitUntil: "networkidle" });
   assert.equal(await root.getAttribute("data-classic-view"), "thumb", "reload lost preference");
   if (width === 390) {
-    await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({ status: 200,
+    await context.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({ status: 200,
       contentType: "application/json", body: JSON.stringify({
         url: `${origin}${route.request().url().includes("000000000152") ? "/demo-media/east-star-orbit.webm" : "/artworks/monet-water-lilies.jpg"}`,
         expiresAt: "2027-01-01T00:00:00.000Z",
@@ -118,6 +128,19 @@ try {
     }
     results.push({ videoContinuity: true });
   }
+  // An external tab can change the preference while this Story is closed.
+  await page.getByRole("button", { name: "退出旅程故事", exact: true }).click();
+  await root.waitFor({ state: "detached" });
+  const other = await page.context().newPage();
+  await other.goto(`${origin}/?qaState=journey-story`, { waitUntil: "networkidle" });
+  const remote = other.locator(".journey-story");
+  for (let i = 0; i < 4 && await remote.getAttribute("data-classic-view") !== "earth"; i++) {
+    await other.getByRole("button", { name: /切换经典视图/ }).tap();
+  }
+  assert.equal(await remote.getAttribute("data-classic-view"), "earth");
+  await other.close();
+  await page.locator("[data-qa-story-reopen]").click();
+  await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-classic-view") === "earth");
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-layout") === "desktop");
   assert.equal(await root.getAttribute("data-classic-view"), null);
