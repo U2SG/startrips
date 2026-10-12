@@ -32,4 +32,6 @@ CI runs `pnpm qa:mobile-classic-views` in the existing `shell-composer` shard. I
 
 The browser check uses the real JourneyStory QA fixture, starts its own Vite server unless QA_ORIGIN is provided, and writes captures and geometry to `artifacts/mobile-classic/`. It verifies four-way cycling, 44px controls, overlaps, horizontal overflow, live picture identity, disclosure Back, expanded Escape, reload persistence and desktop isolation. The 390px case also plays a real fixture video and verifies node identity, retained playback time, play state and native controls during switching.
 
+Each layout also enters immersive viewing twice through More and returns using Escape and browser Back. The secondary entry collapses on return, so focus must land on visible More before the next interaction; a still-connected hidden button is not an acceptable return target.
+
 Emulation does not prove hardware safe-area insets, software keyboards, iOS Safari media behavior or the owner's final visual preference. Final acceptance is the owner's phone trial. This change does not merge or deploy itself.

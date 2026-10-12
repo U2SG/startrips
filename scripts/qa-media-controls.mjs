@@ -1,6 +1,20 @@
 import { launchQaBrowser, revealStoryChapters, revealStoryViewingOptions, storyViewerReturnLabel } from "./qa-browser.mjs";
 import { apertureSeamId, attributeApertureJumps, expectedApertureSeams, gradeApertureContinuity } from "./qa-aperture-continuity.mjs";
 
+// A collapsed classic secondary entry returns to its visible More disclosure;
+// legacy layouts keep the original entry. Observe focus before any next click.
+async function storyFullscreenFocusReturned(entry) {
+  return entry.evaluate((button) => {
+    const story = button.closest(".journey-story");
+    const target = story?.hasAttribute("data-classic-view")
+      ? story.querySelector(".journey-story__classic-more") : button;
+    return target instanceof HTMLElement && document.activeElement === target
+      && target.getClientRects().length > 0
+      && getComputedStyle(target).visibility === "visible"
+      && !target.closest("[inert], [hidden]");
+  });
+}
+
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 const captureMotion = process.env.CI === "true" && process.env.QA_CAPTURE_MEDIA_MOTION === "1";
@@ -2598,15 +2612,17 @@ try {
       await overlay.waitFor({ state: "hidden", timeout: 5_000 });
       const returned = await readStoryFullscreenMorphProbe(morphPage.page);
       const returnMorph = returned.morphs.find((candidate) => candidate.name === `story-fullscreen-${mediaId}`);
-      const focusReturned = await entry.evaluate((button) => document.activeElement === button);
+      const focusReturned = await storyFullscreenFocusReturned(entry);
 
-      // Open -> close -> open again through the same control. A previous clone
-      // may be cancelled, but there must be only one live presentation owner.
+      // Reopen through the same visible entry after each collapsed disclosure.
+      // A previous clone may be cancelled; only one presentation owner survives.
       await startStoryFullscreenMorphProbe(morphPage.page);
+      await revealStoryViewingOptions(morphPage.page);
       await entry.click();
       await overlay.waitFor({ state: "visible", timeout: 5_000 });
       await morphPage.page.keyboard.press("Escape");
       await overlay.waitFor({ state: "hidden", timeout: 5_000 });
+      await revealStoryViewingOptions(morphPage.page);
       await entry.click();
       await overlay.waitFor({ state: "visible", timeout: 5_000 });
       const rapid = await readStoryFullscreenMorphProbe(morphPage.page);
@@ -2689,7 +2705,7 @@ try {
     const entryClones = await reducedFullscreen.page.locator('[data-shared-element-clone^="story-fullscreen-"]').count();
     await reducedFullscreen.page.evaluate(() => window.history.back());
     await overlay.waitFor({ state: "hidden", timeout: 5_000 });
-    const focusReturned = await entry.evaluate((button) => document.activeElement === button);
+    const focusReturned = await storyFullscreenFocusReturned(entry);
     const exitClones = await reducedFullscreen.page.locator('[data-shared-element-clone^="story-fullscreen-"]').count();
     const reducedFailed = entryClones !== 0 || exitClones !== 0 || !focusReturned
       || reducedFullscreen.consoleErrors.length > 0 || reducedFullscreen.pageErrors.length > 0;
@@ -2754,7 +2770,7 @@ try {
       const returnClone = matchingMorphs.at(-1);
       const returnSettled = await waitForStoryVideoHandoff(videoMorph.page, ".journey-story__media", mediaId);
       const returnLiveVideos = await videoMorph.page.locator("video[data-shared-media-id]").count();
-      const focusReturned = await entry.evaluate((button) => document.activeElement === button);
+      const focusReturned = await storyFullscreenFocusReturned(entry);
       await stopStoryFullscreenMorphProbe(videoMorph.page);
 
       const videoMorphFailed = !entryClone || entryClone.tag !== "CANVAS"

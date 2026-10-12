@@ -2648,7 +2648,14 @@ export function JourneyStory({
       document.removeEventListener("keydown", onKeyDown, true);
       // Returning to a persistent media node must not scroll the Story under
       // its sticky mobile header (the original photo may now be a back page).
-      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+      // Classic viewing options collapse during fullscreen. Their old trigger
+      // is still connected but cannot receive focus; return to visible More.
+      const previousStillVisible = previousFocus?.isConnected
+        && previousFocus.getClientRects().length > 0
+        && getComputedStyle(previousFocus).visibility !== "hidden"
+        && !previousFocus.closest("[inert], [hidden]");
+      const returnTarget = previousStillVisible ? previousFocus : mobileManageViewerTriggerRef.current;
+      if (returnTarget?.isConnected) returnTarget.focus({ preventScroll: true });
     };
   }, [fullscreen]);
 

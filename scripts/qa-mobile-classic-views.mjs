@@ -79,8 +79,26 @@ try {
       assert.equal(await root.getAttribute("data-classic-panel"), "none");
       await unchanged(asset);
     }
+    // Secondary entries disappear when fullscreen closes. Return keyboard
+    // focus to the visible disclosure, then re-enter through the real controls.
+    const more = page.getByRole("button", { name: "更多查看选项", exact: true });
+    const immersive = page.getByRole("button", { name: "沉浸查看媒体", exact: true });
+    const fullscreen = page.locator(".journey-story-fullscreen");
+    for (const exit of ["Escape", "Back"]) {
+      await more.click();
+      await immersive.click();
+      await fullscreen.waitFor({ state: "visible" });
+      if (exit === "Escape") await page.keyboard.press("Escape");
+      else await page.goBack();
+      await fullscreen.waitFor({ state: "hidden" });
+      assert.equal(await root.getAttribute("data-classic-panel"), "none");
+      assert.equal(await more.evaluate((button) => document.activeElement === button
+        && button.getClientRects().length > 0 && getComputedStyle(button).visibility === "visible"),
+      true, `${view}: ${exit} lost focus after the immersive entry collapsed`);
+      assert.equal(await current.getAttribute("data-shared-media-id"), asset);
+    }
     await page.screenshot({ path: `${output}/${view}.png` });
-    results.push({ view, ...geometry });
+    results.push({ view, ...geometry, fullscreenReturnFocus: true });
     await page.getByRole("button", { name: /切换经典视图/ }).tap();
   }
   assert.equal(await root.getAttribute("data-classic-view"), "light");
