@@ -10,6 +10,8 @@ import {
   isEarthExperiencePreference,
 } from "../../src/journey/earthExperiencePreference";
 import { readJsonObject } from "./json-body";
+import { isMediaPresentationStyle } from "../../src/journey/mediaPresentationStyle";
+import { readMediaPresentationForUser, writeMediaPresentationForUser } from "../repositories/media-presentation-repository";
 
 /**
  * #387: the account-scoped preference surface.
@@ -52,6 +54,27 @@ function answer(context: Context, record: EarthExperiencePreferenceRecord) {
 }
 
 export const accountPreferenceRoutes = new Hono();
+
+accountPreferenceRoutes.use("/media-presentation", async (context, next) => {
+  context.header("Cache-Control", ACCOUNT_PREFERENCE_CACHE_CONTROL);
+  await next();
+});
+
+accountPreferenceRoutes.get("/media-presentation", async (context) => {
+  const session = await auth.api.getSession({ headers: context.req.raw.headers });
+  if (!session) return context.json({ error: "UNAUTHORIZED" }, 401);
+  return context.json({ style: await readMediaPresentationForUser(session.user.id) });
+});
+
+accountPreferenceRoutes.put("/media-presentation", async (context) => {
+  const session = await auth.api.getSession({ headers: context.req.raw.headers });
+  if (!session) return context.json({ error: "UNAUTHORIZED" }, 401);
+  const body = await readJsonObject(() => context.req.json());
+  if (!isMediaPresentationStyle(body?.style)) {
+    return context.json({ error: "INVALID_MEDIA_PRESENTATION", message: "请选择有效的媒体呈现方式。" }, 400);
+  }
+  return context.json({ style: await writeMediaPresentationForUser(session.user.id, body.style) });
+});
 
 accountPreferenceRoutes.get("/earth-experience", async (context) => {
   const session = await auth.api.getSession({ headers: context.req.raw.headers });
