@@ -83,6 +83,7 @@ async function fixture(page, profile) {
     return json(route, {});
   });
   await page.route("**/api/account-preferences/earth-experience", (route) => json(route, { earthExperience: "default", revision: 0, updatedAt: null }));
+  await page.route("**/api/account-preferences/media-presentation", (route) => json(route, { style: "classic" }));
   await page.route("**/api/atlases/current", (route) => json(route, { atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "Synthetic" }, role: "owner" }));
   const paintFixtures = paintedPictures[profile.large ? "large" : "ordinary"];
   const suppliedJourney = profile.paint ? { ...journey,

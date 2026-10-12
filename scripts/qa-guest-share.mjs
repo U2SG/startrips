@@ -169,7 +169,11 @@ async function installGuestApi(page, state) {
       contentType: "application/json",
       headers: { "cache-control": "private, no-store" },
       body: JSON.stringify(state.journeysStatus === 200
-        ? sharedPayload(state.journeys, state.expiresAt ?? undefined)
+        ? (() => {
+          const payload = sharedPayload(state.journeys, state.expiresAt ?? undefined);
+          payload.share.mediaPresentation = state.mediaPresentation ?? "classic";
+          return payload;
+        })()
         : { error: "SHARE_UNAVAILABLE", message: "Share link unavailable" }),
     });
   });
@@ -258,6 +262,36 @@ const context = await browser.newContext({
 });
 
 try {
+  // The author changes policy behind one unchanged, already-issued link.
+  // Neither an old query override nor this viewer's browser preference wins.
+  {
+    const state = { journeysStatus: 200, journeys: sharedJourneys, mediaPresentation: "book" };
+    const { page } = await newGuestPage(context, state);
+    await page.addInitScript(() => localStorage.setItem("startrips.media-presentation", "note-overlay"));
+    const link = shareUrl().replace("/share#", "/share?mediaPresentation=book-3d#");
+    for (const [style, selector] of [["book", ".journey-book"], ["stream", ".journey-stream"]]) {
+      state.mediaPresentation = style;
+      // Navigating to the identical fragment URL can reuse the open document.
+      // Refresh it to exercise a new grant read without replacing the link.
+      if (page.url() === link) await page.reload({ waitUntil: "domcontentloaded" });
+      else await page.goto(link, { waitUntil: "domcontentloaded" });
+      await page.locator(".living-atlas").waitFor({ timeout: 30_000 });
+      await page.locator(".living-atlas__journey-rail ol li button").first().click();
+      await page.getByRole("button", { name: /打开故事/ }).first().waitFor({ timeout: 10_000 });
+      const opened = await page.evaluate(() => {
+        const button = [...document.querySelectorAll("button")].find((node) => node.textContent?.includes("打开故事"));
+        button?.click();
+        return Boolean(button);
+      });
+      if (!opened) throw new Error("shared presentation: no Story entry");
+      await page.locator(selector).waitFor({ timeout: 15_000 });
+      if (page.url() !== link) failures.push("shared presentation changed the existing link");
+      const preference = await page.evaluate(() => localStorage.getItem("startrips.media-presentation"));
+      if (preference !== "note-overlay") failures.push("shared presentation overwrote recipient preference");
+      console.log(`[qa-guest-share] same link follows author's ${style} presentation`);
+    }
+    await page.close();
+  }
   // ---------------------------------------------------------------- 1. layouts
   for (const viewport of VIEWPORTS) {
     const state = { journeysStatus: 200, journeys: sharedJourneys, expiresAt: undefined };

@@ -15,6 +15,8 @@ import {
   shareGrants,
 } from "../db/app-schema";
 import { db } from "../db/client";
+import { parseMediaPresentationStyle, type MediaPresentationStyle } from "../../src/journey/mediaPresentationStyle";
+import { accountMediaPresentations } from "../db/app-schema";
 
 /**
  * #200 phase B: the guest read model.
@@ -83,6 +85,7 @@ export type SharedJourneyView = {
      * not select, so it discloses no private inventory.
      */
     journeyCount: number;
+    mediaPresentation: MediaPresentationStyle;
   };
   journeys: SharedJourney[];
 };
@@ -125,7 +128,7 @@ function groupByJourney<T extends { journeyId: string }>(
  * resolved inside that array.
  */
 export function buildSharedJourneyView(
-  grant: { expiresAt: Date },
+  grant: { expiresAt: Date; mediaPresentation?: string | null },
   rows: SharedJourneyRows,
 ): SharedJourneyView {
   const journeyIds = new Set(rows.journeys.map((journey) => journey.id));
@@ -133,7 +136,7 @@ export function buildSharedJourneyView(
   const mediaByJourney = groupByJourney(rows.media, journeyIds);
 
   return {
-    share: { expiresAt: grant.expiresAt, journeyCount: rows.journeys.length },
+    share: { expiresAt: grant.expiresAt, journeyCount: rows.journeys.length, mediaPresentation: parseMediaPresentationStyle(grant.mediaPresentation) },
     journeys: rows.journeys.map((journey, index) => {
       const { routeSegments: storedSegments = [], ...sharedJourney } = journey;
       const routePoints = routePointsByJourney.get(journey.id) ?? [];
@@ -238,9 +241,11 @@ async function readSharedJourneyView(
       expiresAt: shareGrants.expiresAt,
       revokedAt: shareGrants.revokedAt,
       atlasDeletionStartedAt: atlases.deletionStartedAt,
+      mediaPresentation: accountMediaPresentations.style,
     })
     .from(shareGrants)
     .innerJoin(atlases, eq(atlases.id, shareGrants.atlasId))
+    .leftJoin(accountMediaPresentations, eq(accountMediaPresentations.userId, shareGrants.createdByUserId))
     .where(eq(shareGrants.id, grant.id))
     .limit(1);
   if (!current || evaluateShareGrant(current, now) !== "active") {

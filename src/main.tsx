@@ -6,6 +6,7 @@ import { StartripsNotFound } from "./brand/StartripsNotFound";
 import { StartripsBrandLoader } from "./brand/StartripsBrandMark";
 import { LivingAtlasApp } from "./journey/LivingAtlasApp";
 import { SharedAtlasView } from "./journey/SharedAtlasView";
+import { MediaPresentationPreferenceProvider } from "./journey/MediaPresentationProvider";
 import { isSharedAtlasPathname } from "./journey/sharedAtlas";
 import {
   EarthExperiencePreferenceProvider,
@@ -38,7 +39,9 @@ function SessionEarthExperienceProvider({ children }: { children: ReactNode }) {
       accountKey={session.data?.user.id ?? null}
       sessionResolved={!session.isPending}
     >
-      {children}
+      <MediaPresentationPreferenceProvider accountKey={session.data?.user.id ?? null} sessionResolved={!session.isPending}>
+        {children}
+      </MediaPresentationPreferenceProvider>
     </EarthExperiencePreferenceProvider>
   );
 }

@@ -706,7 +706,7 @@ describe("share grant lifecycle", () => {
  */
 describe("guest journey read", () => {
   type GuestPayload = {
-    share: { expiresAt: string; journeyCount: number };
+    share: { expiresAt: string; journeyCount: number; mediaPresentation: string };
     journeys: Array<{
       id: string;
       title: string;
@@ -791,6 +791,33 @@ describe("guest journey read", () => {
       .toEqual(["Singapore"]);
     expect(payload.journeys[0].media.map((asset) => asset.id))
       .toEqual([sharedMediaId]);
+  });
+
+  it("keeps the same grant while the creator changes presentation; a viewer cannot override it", async () => {
+    const token = await createShare([journeyA]);
+    const setStyle = async (style: string, cookie = identity.cookie) => {
+      const response = await app.request(`${TEST_ORIGIN}/api/account-preferences/media-presentation`, {
+        method: "PUT", headers: authHeaders(cookie), body: JSON.stringify({ style }),
+      });
+      expect(response.status).toBe(200);
+    };
+    try {
+      await setStyle("book");
+      expect((await (await guestRead(token)).json() as GuestPayload).share.mediaPresentation).toBe("book");
+      await setStyle("stream");
+      const response = await app.request(`${TEST_ORIGIN}/api/shared/journeys?mediaPresentation=book-3d`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json() as GuestPayload).share.mediaPresentation).toBe("stream");
+      const unauthorized = await app.request(`${TEST_ORIGIN}/api/account-preferences/media-presentation`, {
+        method: "PUT", headers: { ...authHeaders(), authorization: `Bearer ${token}` }, body: JSON.stringify({ style: "classic" }),
+      });
+      expect(unauthorized.status).toBe(401);
+      expect((await (await guestRead(token)).json() as GuestPayload).share.mediaPresentation).toBe("stream");
+    } finally {
+      await setStyle("classic");
+    }
   });
 
   it("answers a multi-journey grant with exactly the granted set in its recorded order", async () => {
@@ -900,6 +927,7 @@ describe("guest journey read", () => {
     expect(Object.keys(payload.share).sort()).toEqual([
       "expiresAt",
       "journeyCount",
+      "mediaPresentation",
     ]);
   });
 

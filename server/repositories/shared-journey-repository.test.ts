@@ -95,7 +95,7 @@ describe("shared journey view scope closure", () => {
     const view = buildSharedJourneyView(GRANT, rows({
       journeys: [journeyRow(SHARED_A, "Only")],
     }));
-    expect(view.share).toEqual({ expiresAt: EXPIRES_AT, journeyCount: 1 });
+    expect(view.share).toEqual({ expiresAt: EXPIRES_AT, journeyCount: 1, mediaPresentation: "classic" });
     expect(view.journeys[0]).toMatchObject({
       previousJourneyId: null,
       nextJourneyId: null,
@@ -146,7 +146,7 @@ describe("shared journey view scope closure", () => {
       media: [mediaRow(UNSHARED, "ffffffff-ffff-4fff-8fff-ffffffffffff")],
     }));
     expect(view).toEqual({
-      share: { expiresAt: EXPIRES_AT, journeyCount: 0 },
+      share: { expiresAt: EXPIRES_AT, journeyCount: 0, mediaPresentation: "classic" },
       journeys: [],
     });
   });

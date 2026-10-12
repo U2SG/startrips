@@ -161,6 +161,9 @@ async function installOwnerApi(page) {
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
   });
+  await page.route("**/api/account-preferences/media-presentation", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ style: "classic" }),
+  }));
   await page.route("**/api/account-preferences/earth-experience", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",

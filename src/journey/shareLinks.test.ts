@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { MEDIA_PRESENTATION_STYLES, mediaPresentationFromSearch } from "./mediaPresentation";
 import {
   MAX_SHARE_JOURNEYS,
   MAX_SHARE_LIFETIME_MS,
@@ -109,26 +108,20 @@ describe("formatShareExpiry", () => {
 describe("shareLinkUrl", () => {
   it("puts the token in the fragment, per the #200 design amendment", () => {
     const url = shareLinkUrl("https://startrips.example", "token-value");
-    expect(url).toBe("https://startrips.example/share?mediaPresentation=classic#token-value");
+    expect(url).toBe("https://startrips.example/share#token-value");
     // A fragment is never sent to a server. If the token ever moved into the
     // path or the query it would land in the edge access log on every request,
     // which is the exact leak the amendment removed.
     expect(new URL(url).pathname).toBe("/share");
-    expect(new URL(url).search).toBe("?mediaPresentation=classic");
+    expect(new URL(url).search).toBe("");
     expect(new URL(url).hash).toBe("#token-value");
   });
 
   it("does not double the separator for an origin with a trailing slash", () => {
     expect(shareLinkUrl("https://startrips.example/", "abc"))
-      .toBe("https://startrips.example/share?mediaPresentation=classic#abc");
+      .toBe("https://startrips.example/share#abc");
   });
 
-  it.each(MEDIA_PRESENTATION_STYLES)("carries the chosen %s presentation when forwarded", (style) => {
-    const link = new URL(shareLinkUrl("https://startrips.example", "token-value", style));
-    expect(mediaPresentationFromSearch(link.search)).toBe(style);
-    expect(link.hash).toBe("#token-value");
-    expect(link.search).not.toContain("token-value");
-  });
 });
 
 describe("shareScopeLabel", () => {
