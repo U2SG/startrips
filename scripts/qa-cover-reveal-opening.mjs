@@ -16,6 +16,7 @@
 // the authorized ready derivative" is observable as a request the browser
 // actually made, and so the renderer's real cross-origin texture path runs.
 import { mkdir, writeFile } from "node:fs/promises";
+import sharp from "sharp";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
@@ -32,7 +33,7 @@ const ORIGINAL_COLOR = { r: 36, g: 92, b: 176 };
 // cover", and the revision case would grade nothing.
 const REPLACED_ORIGINAL_COLOR = { r: 46, g: 158, b: 82 };
 
-const DERIVATIVE_URL = "https://qa-storage.invalid/cover-reveal/derivative.png?sig=qa-display";
+const DERIVATIVE_URL = "https://qa-storage.invalid/cover-reveal/derivative.jpg?sig=qa-display";
 const ORIGINAL_URL = "https://qa-storage.invalid/media/original.png?sig=qa-original";
 // The same canonical original photograph, re-signed. The Atlas refreshes a
 // signed read on its own timer, so the url under a mounted opening changes
@@ -41,7 +42,7 @@ const ORIGINAL_URL_RESIGNED = "https://qa-storage.invalid/media/original.png?sig
 // The replacement cover bytes behind the SAME cover asset id, and the
 // derivative the server generated from them.
 const REPLACED_ORIGINAL_URL = "https://qa-storage.invalid/media/original-replaced.png?sig=qa-original-v2";
-const REPLACED_DERIVATIVE_URL = "https://qa-storage.invalid/cover-reveal/derivative-replaced.png?sig=qa-display-v2";
+const REPLACED_DERIVATIVE_URL = "https://qa-storage.invalid/cover-reveal/derivative-replaced.jpg?sig=qa-display-v2";
 
 const COVER_ASSET_ID = "qa-asset-cover";
 const COVER_HASH = "sha256:qa-cover-bytes";
@@ -99,7 +100,8 @@ function solidPng({ r, g, b }) {
   ]);
 }
 
-const DERIVATIVE_PNG = solidPng(DERIVATIVE_COLOR);
+// The server publishes JPEG derivatives, even when the canonical source is PNG.
+const DERIVATIVE_JPEG = await sharp(solidPng(DERIVATIVE_COLOR)).jpeg({ quality: 100, chromaSubsampling: "4:4:4" }).toBuffer();
 const ORIGINAL_PNG = solidPng(ORIGINAL_COLOR);
 const REPLACED_ORIGINAL_PNG = solidPng(REPLACED_ORIGINAL_COLOR);
 
@@ -168,14 +170,14 @@ function derivativePayload(overrides = {}, displayUrl = DERIVATIVE_URL) {
     derivative: {
       id: "qa-derivative-1",
       journeyId: JOURNEY_ID,
-      generationKind: "cover-reveal",
+      generationKind: "ink-wash-poster",
       generationVersion: 1,
       // Match the metadata emitted by the shipped server/worker contract. The
       // Web opening must accept this persisted legacy id without regeneration.
       presetId: "reveal-flow-ink-wash-v1",
       sourceMediaAssetId: COVER_ASSET_ID,
       sourceContentHash: COVER_HASH,
-      mimeType: "image/png",
+      mimeType: "image/jpeg",
       width: 1600,
       height: 1200,
       ...overrides,
@@ -209,11 +211,11 @@ async function installAtlasApi(page, state) {
   await page.route("**/qa-storage.invalid/**", (route) => {
     const url = route.request().url();
     const body = url.includes("derivative")
-      ? DERIVATIVE_PNG
+      ? DERIVATIVE_JPEG
       : url.includes("original-replaced") ? REPLACED_ORIGINAL_PNG : ORIGINAL_PNG;
     return route.fulfill({
       status: 200,
-      contentType: "image/png",
+      contentType: url.includes("derivative") ? "image/jpeg" : "image/png",
       headers: { "access-control-allow-origin": "*", "cache-control": "no-store" },
       body,
     });
