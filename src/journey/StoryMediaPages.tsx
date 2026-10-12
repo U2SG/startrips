@@ -93,6 +93,8 @@ type Props = {
   onPlaybackReady: (id: string | null) => void;
   onBackdropClick?: () => void;
   onImageClick?: (accessibleActivation?: boolean) => void;
+  /** Match the picture's accessible action when a compact trial reveals controls. */
+  imageActionLabel?: string;
   onNavigate?: (direction: -1 | 1, accessibleActivation?: boolean) => void;
   canNavigatePrevious?: boolean;
   canNavigateNext?: boolean;
@@ -1273,7 +1275,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           tabIndex={presented && !note && pageReady && (canNavigate || props.onImageClick) ? 0 : -1}
           aria-label={presented && canNavigate
             ? `${asset?.fileName ?? "照片"}。左侧上一张，右侧下一张，方向键切换`
-            : presented && props.onImageClick ? `沉浸查看：${asset?.fileName ?? "照片"}` : undefined}
+            : presented && props.onImageClick ? `${props.imageActionLabel ?? "沉浸查看"}：${asset?.fileName ?? "照片"}` : undefined}
           aria-keyshortcuts={presented && canNavigate ? "ArrowLeft ArrowRight" : undefined}
           data-shared-media-id={id !== null && id === foregroundId && !isVideo && pageReady ? assetIdOf(id) : undefined}
           data-shared-journey-cover={id !== null && id === foregroundId && !isVideo && pageReady && assetIdOf(id) === props.coverId ? "true" : undefined}
