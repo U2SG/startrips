@@ -3796,6 +3796,7 @@ try {
       window.__qaStoryReducedPageNodes = pages;
       return { count: pages.length, currentId: root?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null };
     }, { pagesSelector: storyMediaPagesSelector });
+    await revealStoryViewingOptions(reducedMotionStory.page);
     await reducedMotionStory.page.getByRole("button", { name: "查看第 2 个照片：seed-1.png", exact: true }).click();
     const reducedState = await reducedMotionStory.page.waitForFunction(({ pagesSelector, currentMediaSelector, targetId }) => {
       const root = document.querySelector(pagesSelector);
