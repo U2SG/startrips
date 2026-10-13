@@ -41,12 +41,35 @@ const harnessPath = path.join(outputDir, "harness.tsx");
 await writeFile(harnessPath, `import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { JourneyStory } from "/src/journey/JourneyStory";
+import { exportPrivateJourneyFilm } from "/src/journey/journeyFilmExport";
 import { createOwnerAtlasView, AtlasViewProvider, GUEST_ATLAS_VIEW_CAPABILITIES } from "/src/journey/atlasView";
 import "/src/styles/story-experience.css";
 function Harness(){
  const [journey,setJourney]=useState(window.__filmFixture);
  window.__filmSetJourney=setJourney;
  const owner=createOwnerAtlasView();
+ const normalExport=owner.exportJourneyFilm;
+ owner.exportJourneyFilm=(id,options)=>{
+  if(!window.__filmHoldCleanup) return normalExport(id,options);
+  let entered=false;
+  // A deferred encoder is used only for the remount/lifetime case below.
+  // All earlier MP4/pixel checks still use the real encoder.
+  return exportPrivateJourneyFilm(id,options,{encode:async({signal})=>{
+   signal.throwIfAborted(); entered=true;
+   window.__filmEncoderStarts=(window.__filmEncoderStarts||0)+1;
+   return new Promise((resolve,reject)=>{
+    const abort=()=>{
+     window.__filmAwaitingCleanup=true;
+     window.__filmReleaseCleanup=()=>{
+      signal.removeEventListener("abort",abort);
+      window.__filmAwaitingCleanup=false;
+      reject(signal.reason);
+     };
+    };
+    signal.addEventListener("abort",abort,{once:true});
+   });
+  }}).finally(()=>{if(entered) window.__filmSettledEncoders=(window.__filmSettledEncoders||0)+1;});
+ };
  const guest={capabilities:GUEST_ATLAS_VIEW_CAPABILITIES,mutations:null,readMedia:owner.readMedia,listJourneys:async()=>[journey],listHomeBasePeriods:null,listHomeBaseDismissals:null};
  return <AtlasViewProvider value={window.__filmGuest ? guest : owner}><div className="living-atlas"><JourneyStory
  journeys={[journey]} journeyId={journey.id} onClose={()=>{}} onNavigate={()=>{}} onMediaAdded={async()=>journey}
@@ -238,6 +261,34 @@ try {
     await dialog.getByRole("button", { name: "关闭短片导出", exact: true }).click();
   }
   evidence.checks.push("phone export control and settings are required, not skipped");
+  mark("close and reopen before encoder teardown");
+  await page.evaluate(() => {
+    window.__filmHoldCleanup = true;
+    window.__filmEncoderStarts = 0;
+    window.__filmSettledEncoders = 0;
+    window.__filmAwaitingCleanup = false;
+  });
+  await page.getByRole("button", { name: "导出短片", exact: true }).click();
+  await dialog.getByRole("button", { name: "生成 MP4", exact: true }).click();
+  await page.waitForFunction(() => window.__filmEncoderStarts === 1);
+  await dialog.getByRole("button", { name: "关闭短片导出", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  await page.waitForFunction(() => window.__filmAwaitingCleanup === true);
+  await page.getByRole("button", { name: "导出短片", exact: true }).click();
+  await dialog.getByRole("button", { name: "生成 MP4", exact: true }).click();
+  await dialog.getByRole("alert").filter({ hasText: "上一段短片仍在生成或清理" }).waitFor();
+  assert.equal(await page.evaluate(() => window.__filmEncoderStarts), 1, "a remount must not start a second encoder while old disposal is pending");
+  assert.equal(await page.evaluate(() => window.__filmSettledEncoders), 0);
+  await page.evaluate(() => window.__filmReleaseCleanup());
+  await page.waitForFunction(() => window.__filmSettledEncoders === 1);
+  await dialog.getByRole("button", { name: "重新生成", exact: true }).click();
+  await page.waitForFunction(() => window.__filmEncoderStarts === 2);
+  await dialog.getByRole("button", { name: "关闭短片导出", exact: true }).click();
+  await page.waitForFunction(() => window.__filmAwaitingCleanup === true);
+  await page.evaluate(() => window.__filmReleaseCleanup());
+  await page.waitForFunction(() => window.__filmSettledEncoders === 2);
+  await page.evaluate(() => { window.__filmHoldCleanup = false; });
+  evidence.checks.push("dialog unmount/remount retains old run ownership through delayed disposal", "explicit retry becomes available only after old exporter settles");
   mark("guest");
   await context.addInitScript(() => { window.__filmGuest = true; });
   await page.reload({ waitUntil: "networkidle" });

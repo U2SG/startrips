@@ -45,9 +45,13 @@ on render completion and each later explicit download. All rendered Journey
 facts are re-read before release, including note/media changes without a Journey
 revision increment. A changed/unauthorized source fails closed.
 
-Fetches/stream readers/decoder/encoder have a shared abort signal. Cancellation
-keeps the run slot until teardown settles, so restart cannot overlap a surviving
-encode. Images/video inputs/reveal contexts are released; original-byte caches
+Fetches/stream readers/decoder/encoder have a shared abort signal. The active
+encoding slot belongs to the page-level export service, not a dialog mount.
+Closing, switching Journey or immediately reopening cannot free it: a second
+export fails with a retryable busy message until the first exporter settles.
+The renderer awaits the actual Output.cancel promise even when the library has
+already marked its state canceled, so disposal really completes before release.
+Images/video inputs/reveal contexts are released; original-byte caches
 are cleared and stale download URLs are revoked. No partial MP4 is offered.
 Caps: 128 MiB per source, 256 MiB combined input, 120 seconds, 96 MiB output.
 These caps are checked and exposed to the user rather than silently dropping
@@ -63,6 +67,12 @@ motion, requires the phone button, and exercises cancellation, expiry/revocation
 Journey changes and guest omission. Synthetic photos/videos and mocked owner
 HTTP responses are used: this is browser/codec integration evidence, not a paid
 model-output aesthetic evaluation or a production account test.
+
+A separate real-dialog unmount/remount test injects deliberately delayed encoder
+disposal through the actual export service. It verifies no second encoder starts
+until the previous exporter settles, then an explicit retry can start. Unit tests
+also cover a canceled output whose disposal promise is still pending. These
+controlled-lifetime tests supplement, not replace, native MP4 generation.
 
 #694 is merged into main and supplies the shared creative-cover registry and
 protocol. #695 now targets main after rebasing its export-only changes; the

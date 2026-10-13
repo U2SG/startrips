@@ -60,6 +60,7 @@ export function journeyFilmErrorMessage(error: unknown): string {
   if (error instanceof DOMException && error.name === "TimeoutError") return "导出超时，请缩短旅程后重试。";
   if (error instanceof JourneyApiError && (error.status === 401 || error.status === 403)) return "登录或访问权限已变化，请重新登录后再导出。";
   const code = error instanceof Error ? error.message : "";
+  if (code === "journey_film_busy") return "上一段短片仍在生成或清理，请稍后重试。";
   if (code === "journey_film_changed") return "旅程内容已变化，请关闭此窗口后重新导出。";
   if (code === "journey_film_codec_unavailable") return "此浏览器无法编码 MP4，请使用支持 H.264 视频编码的浏览器。";
   if (code === "journey_film_source_limit") return "素材超过本地导出上限：单个 128 MB、合计 256 MB。请减少素材后重试。";
@@ -104,11 +105,28 @@ async function blobHash(blob: Blob): Promise<string> {
   return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// One memory-intensive encoder per page, owned outside any dialog mount.
+// Unmount aborts a run, but only its fully settled exporter releases this slot.
+let activeJourneyFilmRun: symbol | null = null;
+
 /** Owner browser export. Server-authorized signed reads, no guest fallback and no upload/queue. */
 export async function exportPrivateJourneyFilm(
   journeyId: string,
   options: JourneyFilmExportOptions,
   dependencies: { fetcher?: typeof fetch; encode?: JourneyFilmEncoder } = {},
+): Promise<JourneyFilmArtifact> {
+  options.signal.throwIfAborted();
+  if (activeJourneyFilmRun !== null) throw new Error("journey_film_busy");
+  const owner = Symbol("journey-film-run");
+  activeJourneyFilmRun = owner;
+  try { return await renderAuthorizedJourneyFilm(journeyId, options, dependencies); }
+  finally { if (activeJourneyFilmRun === owner) activeJourneyFilmRun = null; }
+}
+
+async function renderAuthorizedJourneyFilm(
+  journeyId: string,
+  options: JourneyFilmExportOptions,
+  dependencies: { fetcher?: typeof fetch; encode?: JourneyFilmEncoder },
 ): Promise<JourneyFilmArtifact> {
   const signal = AbortSignal.any([options.signal, AbortSignal.timeout(300_000)]);
   signal.throwIfAborted();

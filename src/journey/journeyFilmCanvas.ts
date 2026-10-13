@@ -90,7 +90,14 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
   let reveal: RevealFlow | null = null;
   let revealHost: HTMLDivElement | null = null;
   const releaseReveal = () => { reveal?.dispose(); reveal = null; revealHost?.remove(); revealHost = null; };
-  const abort = () => { releaseReveal(); videoInput?.dispose(); void output.cancel().catch(() => {}); };
+  const outputCleanup: { promise: Promise<void> | null } = { promise: null };
+  const cancelOutput = () => {
+    // Output may enter its canceled state before asynchronous disposal ends.
+    // Retain and drain the actual promise, not just that state flag.
+    outputCleanup.promise ??= output.cancel();
+    return outputCleanup.promise;
+  };
+  const abort = () => { releaseReveal(); videoInput?.dispose(); void cancelOutput().catch(() => {}); };
   signal.addEventListener("abort", abort, { once: true });
   const releaseMedia = async () => {
     releaseReveal();
@@ -244,9 +251,14 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
     return new Blob([target.buffer], { type: "video/mp4" });
   } finally {
     signal.removeEventListener("abort", abort);
-    await releaseMedia();
-    opening?.close();
-    if (output.state !== "finalized" && output.state !== "canceled") await output.cancel().catch(() => {});
-    canvas.width = 1; canvas.height = 1;
+    try { await releaseMedia(); }
+    finally {
+      try { opening?.close(); }
+      finally {
+        if (outputCleanup.promise) await outputCleanup.promise.catch(() => {});
+        else if (output.state !== "finalized" && output.state !== "canceled") await cancelOutput().catch(() => {});
+        canvas.width = 1; canvas.height = 1;
+      }
+    }
   }
 }

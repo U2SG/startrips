@@ -202,3 +202,51 @@ describe("creative film integration", () => {
     expect(api.fetcher.mock.calls.some(([url]) => String(url).includes("cover-reveal"))).toBe(false);
   });
 });
+
+
+describe("page-owned export lifetime", () => {
+  it("holds the page-wide slot across abort/remount until old teardown settles", async () => {
+    const first = transport(fixture()), next = transport(fixture());
+    const controller = new AbortController();
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const cleanup = new Promise<void>((resolve) => { release = resolve; });
+    const oldEncoder: JourneyFilmEncoder = async ({ signal }) => {
+      entered();
+      await cleanup; // cancellation starts disposal, but does not complete it
+      signal.throwIfAborted();
+      return new Blob(["unreachable"], { type: "video/mp4" });
+    };
+    const oldRun = exportPrivateJourneyFilm("journey-film", options(controller.signal), { ...first, encode: oldEncoder });
+    const oldResult = oldRun.catch((error: unknown) => error);
+    const nextEncoder = vi.fn(encode);
+    try {
+      await started;
+      controller.abort(); // closing the old mount aborts its lifetime controller
+      await expect(exportPrivateJourneyFilm("journey-film", options(), { ...next, encode: nextEncoder })).rejects.toThrow("journey_film_busy");
+      await expect(exportPrivateJourneyFilm("another-journey", options(), { ...next, encode: nextEncoder })).rejects.toThrow("journey_film_busy");
+      expect(next.fetcher).not.toHaveBeenCalled();
+      expect(nextEncoder).not.toHaveBeenCalled();
+      const cancelled = new AbortController(); cancelled.abort();
+      await expect(exportPrivateJourneyFilm("journey-film", options(cancelled.signal), { ...next, encode: nextEncoder })).rejects.toMatchObject({ name: "AbortError" });
+      // A rejected second caller cannot release the first caller's resource slot.
+      await expect(exportPrivateJourneyFilm("journey-film", options(), { ...next, encode: nextEncoder })).rejects.toThrow("journey_film_busy");
+    } finally { controller.abort(); release(); await oldResult; }
+    expect(await oldResult).toMatchObject({ name: "AbortError" });
+    const artifact = await exportPrivateJourneyFilm("journey-film", options(), { ...next, encode: nextEncoder });
+    expect(nextEncoder).toHaveBeenCalledOnce();
+    expect(artifact.blob.type).toBe("video/mp4");
+  });
+  it.each(["prepare", "encode"])("releases ownership after a %s failure", async (stage) => {
+    const failed = new Error("fixture failure");
+    const api = transport(fixture());
+    const failingFetch: typeof fetch = async () => { throw failed; };
+    const failingEncoder: JourneyFilmEncoder = async () => { throw failed; };
+    await expect(exportPrivateJourneyFilm("journey-film", options(), {
+      fetcher: stage === "prepare" ? failingFetch : api.fetcher,
+      encode: stage === "encode" ? failingEncoder : encode,
+    })).rejects.toThrow();
+    const artifact = await exportPrivateJourneyFilm("journey-film", options(), { ...api, encode });
+    expect(artifact.blob.type).toBe("video/mp4");
+  });
+});

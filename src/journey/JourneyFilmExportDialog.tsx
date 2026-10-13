@@ -27,6 +27,8 @@ export function JourneyFilmExportDialog({ journeyId, title, exporter, onClose }:
     const element = dialog.current;
     element?.showModal();
     return () => {
+      // Drop only this view's handle. exportPrivateJourneyFilm retains the
+      // page-wide encoder slot until abort teardown has actually settled.
       controller.abort(); run.current?.abort(); run.current = null;
       if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
       downloadUrl.current = null;
