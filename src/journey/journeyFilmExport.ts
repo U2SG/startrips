@@ -54,9 +54,20 @@ export function journeyFilmFilename(title: string): string {
   // Keep the control-code bound separate from punctuation: ordinary letters,
   // hyphens, @ and ^ must never become part of a character-class range.
   const forbidden = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*']);
-  const safe = Array.from(title.normalize("NFC"), (character) =>
-    character.charCodeAt(0) < 32 || forbidden.has(character) ? "_" : character,
-  ).join("").replace(/[. ]+$/g, "").slice(0, 80);
+  const sanitized = Array.from(title.normalize("NFC"), (character) => {
+    const code = character.charCodeAt(0);
+    const loneSurrogate = character.length === 1 && code >= 0xd800 && code <= 0xdfff;
+    return code < 32 || loneSurrogate || forbidden.has(character) ? "_" : character;
+  }).join("");
+  // NFC can expand even an originally valid 80-unit title. Keep the same
+  // UTF-16 budget, but never split an emoji, combining sequence or ZWJ family.
+  let safe = "";
+  const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  for (const { segment } of graphemes.segment(sanitized)) {
+    if (safe.length + segment.length > 80) break;
+    safe += segment;
+  }
+  safe = safe.replace(/[. ]+$/g, "");
   return `Startrips-${safe || "Journey"}.mp4`;
 }
 

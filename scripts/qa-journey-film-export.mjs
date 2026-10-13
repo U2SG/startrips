@@ -206,7 +206,16 @@ try {
   }
   evidence.checks.push("decoded creative opening and unchanged original final pixels", "Stop and non-Stop via Chinese-caption frames retained without adding an arrival");
   // A second real encoding exercises landscape and Reduced Motion through the same owner control.
-  mark("landscape reduced-motion encode");
+  mark("landscape reduced-motion encode with Unicode filename boundary");
+  const boundaryTitle = "A".repeat(76) + "-\u0344😀";
+  assert.equal(boundaryTitle.length, 80);
+  assert.equal(boundaryTitle.normalize("NFC").length, 81);
+  current = { ...current, title: boundaryTitle };
+  await page.evaluate((trip) => window.__filmSetJourney(trip), current);
+  await dialog.waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "导出短片", exact: true }).click();
+  await dialog.getByLabel("目标时长").selectOption("15");
+  await dialog.getByLabel("包含途径点感想字幕").check();
   await page.emulateMedia({ reducedMotion: "reduce" });
   await dialog.getByLabel("画面比例").selectOption("landscape");
   await dialog.getByRole("button", { name: "生成 MP4", exact: true }).click();
@@ -215,10 +224,10 @@ try {
   await dialog.getByRole("button", { name: "下载 MP4", exact: true }).click();
   const landscapeArtifact = `${outputDir}/journey-film-landscape.mp4`;
   const landscapeDownload = await landscapeDownloadEvent;
-  assert.equal(landscapeDownload.suggestedFilename(), "Startrips-Paris Trip 海风.mp4");
+  assert.equal(landscapeDownload.suggestedFilename(), `Startrips-${"A".repeat(76)}-\u0308\u0301.mp4`);
   await landscapeDownload.saveAs(landscapeArtifact);
-  evidence.filenames.push({ aspect: "landscape", title: fixture.title, suggested: landscapeDownload.suggestedFilename() });
-  evidence.checks.push("portrait and landscape downloads preserve mixed-case ASCII and Chinese titles exactly");
+  evidence.filenames.push({ aspect: "landscape", title: boundaryTitle, normalizedUnits: boundaryTitle.normalize("NFC").length, suggested: landscapeDownload.suggestedFilename() });
+  evidence.checks.push("portrait download preserves mixed-case ASCII and Chinese", "landscape native filename is well formed after NFC expands a valid 80-unit title");
   const landscapeProbe = JSON.parse(run(ffprobe, ["-v", "error", "-show_streams", "-of", "json", landscapeArtifact]));
   const landscapeStream = landscapeProbe.streams.find((item) => item.codec_type === "video");
   assert.equal(landscapeStream.width, 1920); assert.equal(landscapeStream.height, 1080);

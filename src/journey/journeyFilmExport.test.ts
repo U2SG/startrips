@@ -357,3 +357,56 @@ describe("filename preservation", () => {
     expect(journey).toEqual(before);
   });
 });
+
+
+describe("normalized title boundary", () => {
+  const stem = (filename: string) => filename.slice("Startrips-".length, -".mp4".length);
+  function assertWellFormed(text: string) {
+    for (const character of Array.from(text)) {
+      const unit = character.charCodeAt(0);
+      expect(character.length === 1 && unit >= 0xd800 && unit <= 0xdfff).toBe(false);
+    }
+  }
+  it("does not cut an emoji when NFC expands a valid 80-unit source title", () => {
+    const title = "A".repeat(76) + "-\u0344😀";
+    expect(title.length).toBe(80);
+    expect(title.normalize("NFC").length).toBe(81);
+    const result = journeyFilmFilename(title);
+    expect(result).toBe(`Startrips-${"A".repeat(76)}-\u0308\u0301.mp4`);
+    expect(stem(result).length).toBe(79);
+    assertWellFormed(result);
+  });
+  it.each([
+    [78, "😀"],
+    [76, "🇨🇳"],
+    [72, "👩‍👩‍👦"],
+    [78, "❤️"],
+  ] as const)("keeps a whole grapheme when it exactly fits after %i units", (prefix, grapheme) => {
+    const title = "A".repeat(prefix) + grapheme;
+    expect(title.length).toBe(80);
+    expect(journeyFilmFilename(title)).toBe(`Startrips-${title}.mp4`);
+  });
+  it.each(["😀", "🇨🇳", "👩‍👩‍👦", "❤️", "x\u0301"])("never emits a partial final grapheme: %s", (grapheme) => {
+    const prefix = "A".repeat(81 - grapheme.length);
+    const filename = journeyFilmFilename(prefix + grapheme);
+    expect(filename).toBe(`Startrips-${prefix}.mp4`);
+    expect(stem(filename).length).toBeLessThanOrEqual(80);
+    assertWellFormed(filename);
+  });
+  it("strips trailing separators introduced by the length cap", () => {
+    for (const ending of [" Z", ".Z"]) {
+      expect(journeyFilmFilename("A".repeat(79) + ending)).toBe(`Startrips-${"A".repeat(79)}.mp4`);
+    }
+  });
+  it("replaces invalid lone input surrogates but leaves valid emoji unchanged", () => {
+    expect(journeyFilmFilename("A\ud800Z\udfff B😀")).toBe("Startrips-A_Z_ B😀.mp4");
+  });
+  it("the actual owner artifact retains a well-formed normalized filename", async () => {
+    const journey = fixture(); journey.title = "A".repeat(76) + "-\u0344😀";
+    const before = structuredClone(journey), api = transport(journey);
+    const artifact = await exportPrivateJourneyFilm(journey.id, options(), { ...api, encode });
+    expect(artifact.filename).toBe(`Startrips-${"A".repeat(76)}-\u0308\u0301.mp4`);
+    assertWellFormed(artifact.filename);
+    expect(journey).toEqual(before);
+  });
+});
