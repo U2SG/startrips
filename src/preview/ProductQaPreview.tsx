@@ -5,6 +5,7 @@ import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
 import { LivingAtlasApp } from "../journey/LivingAtlasApp";
 import { JourneyComposer } from "../journey/JourneyComposer";
 import { JourneyStory } from "../journey/JourneyStory";
+import { MobileClassicViewMenuEntry } from "../journey/MobileClassicViewMenuEntry";
 import { JourneyBook3d } from "../journey/JourneyBook3d";
 import { JourneyPlaybackOverlay } from "../journey/JourneyPlaybackOverlay";
 import { resolveSuggestedRouteDecision, toJourneyRoutes } from "../journey/journeyModel";
@@ -755,6 +756,7 @@ const storyQaNotesOnlyJourney: Journey = {
 };
 
 function JourneyStoryQaPreview() {
+  const preferenceControls = new URLSearchParams(window.location.search).get("qaClassicControls") === "1";
   const qaMode = new URLSearchParams(window.location.search).get("qaMode");
   const mixedMediaMode = qaMode === "mixed-media";
   const mixedMediaPairMode = qaMode === "mixed-media-pair";
@@ -797,7 +799,7 @@ function JourneyStoryQaPreview() {
       fileName: `seed-${index}.jpg`, sortOrder: index,
     })),
   } : storyQaJourney;
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(!preferenceControls);
   const [journeys, setJourneys] = useState<Journey[]>([initialJourney]);
   const [observation, setObservation] = useState<{ assetId: string | null; routePointId: string | null } | null>(null);
   // The preview synthesizes the asset a real API would return, so it needs to
@@ -809,6 +811,7 @@ function JourneyStoryQaPreview() {
       data-qa-story-observation-route-point={observation?.routePointId ?? undefined}>
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       <button type="button" data-qa-story-reopen onClick={() => setOpen(true)}>重新打开旅程</button>
+      {preferenceControls ? <MobileClassicViewMenuEntry surface="sheet" /> : null}
       <button type="button" data-qa-story-next-audio onClick={() => setNextMediaIsSoundtrack(true)}>下一个上传是配乐</button>
       {/* #596 QA: attach a soundtrack directly, so the ducking lane can reach a
           real `<audio>` without driving the whole upload pipeline to create one.

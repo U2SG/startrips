@@ -28,12 +28,6 @@
   font: 500 16px/1.4 var(--archive-sans); letter-spacing: 0;
 }
 .journey-story[data-classic-view] .journey-story__close { order: -1; flex: 0 0 44px; }
-.journey-story__classic-view-switch {
-  flex: 0 0 auto; min-height: var(--control-height); min-width: 72px;
-  padding: 0 12px; border: 1px solid var(--control-line); border-radius: var(--control-radius);
-  color: var(--control-ink); background: var(--control-fill);
-  font: 500 12px/1 var(--archive-sans); cursor: pointer; touch-action: manipulation;
-}
 .journey-story__classic-context {
   display: flex; gap: 12px; justify-content: space-between;
   margin: 0; padding: 8px 18px; min-height: 32px;
@@ -135,7 +129,7 @@
 }
 .journey-story[data-classic-view="photo"] .journey-story__classic-context > small { display: none; }
 .journey-story[data-classic-view="earth"] .journey-story__media { margin-inline: 8px; }
-.journey-story[data-classic-view] :is(.journey-story__classic-view-switch, .journey-story__classic-chapters, .journey-story__classic-more):focus-visible {
+.journey-story[data-classic-view] :is(.journey-story__classic-chapters, .journey-story__classic-more):focus-visible {
   outline: 2px solid var(--control-focus); outline-offset: -3px;
 }
 .journey-story[data-classic-view] button:disabled { cursor: default; }

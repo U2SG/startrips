@@ -29,6 +29,14 @@ await context.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill
   }) }));
 const root = page.locator(".journey-story");
 const current = page.locator('.journey-story [data-media-page="current"] img[data-shared-media-id]').first();
+// Exercise the real account-menu component in another tab so the live Story
+// stays mounted while the shared browser-local preference changes.
+const settings = await context.newPage();
+async function cycleClassicView(target = page) {
+  await settings.getByRole("button", { name: /切换经典视图/ }).click();
+  const value = await settings.locator("[data-mobile-classic-view-entry]").getAttribute("data-mobile-classic-view-value");
+  await target.waitForFunction((expected) => document.querySelector(".journey-story")?.getAttribute("data-classic-view") === expected, value);
+}
 async function rememberStage() {
   await current.waitFor({ state: "visible" });
   await current.evaluate((image) => image.decode());
@@ -44,6 +52,7 @@ async function unchanged(asset) {
   assert.equal(await current.getAttribute("data-shared-media-id"), asset);
 }
 try {
+  await settings.goto(`${origin}/?qaState=journey-story&qaClassicControls=1`, { waitUntil: "networkidle" });
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto(`${origin}/?qaState=journey-story`, { waitUntil: "networkidle" });
   const asset = await rememberStage();
@@ -125,7 +134,7 @@ try {
     }
     await page.screenshot({ path: `${output}/${view}.png` });
     results.push({ view, ...geometry, fullscreenReturnFocus: true });
-    await page.getByRole("button", { name: /切换经典视图/ }).tap();
+    await cycleClassicView();
   }
   assert.equal(await root.getAttribute("data-classic-view"), "light");
   await page.getByRole("button", { name: "更多查看选项" }).tap();
@@ -140,7 +149,7 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await root.getAttribute("data-classic-panel"), "none", "Escape must close disclosure before expanded Story");
   assert.equal(await root.getAttribute("data-mobile-presentation"), "expanded");
-  await page.getByRole("button", { name: /切换经典视图/ }).tap();
+  await cycleClassicView();
   await page.reload({ waitUntil: "networkidle" });
   assert.equal(await root.getAttribute("data-classic-view"), "thumb", "reload lost preference");
   if (width === 390) {
@@ -162,7 +171,7 @@ try {
     });
     for (let i = 0; i < 4; i++) {
       const before = await video.evaluate((element) => element.currentTime);
-      await page.getByRole("button", { name: /切换经典视图/ }).tap();
+      await cycleClassicView();
       const state = await video.evaluate((element) => ({ same: element === window.__classicVideo,
         time: element.currentTime, paused: element.paused, controls: element.controls }));
       assert.equal(state.same, true, "layout replaced the video element");
@@ -173,13 +182,19 @@ try {
     results.push({ videoContinuity: true });
   }
   // An external tab can change the preference while this Story is closed.
+  // A preference change no longer activates the old header action that closed
+  // More; dismiss that real disclosure before asking to close its parent.
+  if (await root.getAttribute("data-classic-panel") === "more") {
+    await page.getByRole("button", { name: "更多查看选项", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-classic-panel") === "none");
+  }
   await page.getByRole("button", { name: "退出旅程故事", exact: true }).click();
   await root.waitFor({ state: "detached" });
   const other = await page.context().newPage();
   await other.goto(`${origin}/?qaState=journey-story`, { waitUntil: "networkidle" });
   const remote = other.locator(".journey-story");
   for (let i = 0; i < 4 && await remote.getAttribute("data-classic-view") !== "earth"; i++) {
-    await other.getByRole("button", { name: /切换经典视图/ }).tap();
+    await cycleClassicView(other);
   }
   assert.equal(await remote.getAttribute("data-classic-view"), "earth");
   await other.close();
