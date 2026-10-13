@@ -28,11 +28,14 @@ const page = await browser.newPage({ viewport: { width: 760, height: 880 }, redu
 page.setDefaultTimeout(15000);
 const errors = [], submitted = [];
 page.on("pageerror", (error) => errors.push(error.message));
-let selected = recipes[0], state = "idle", count = 0;
+let selected = recipes[0], state = "idle", count = 0, statusReads = 0;
 const signed = (url) => ({ url, expiresAt: new Date(Date.now() + 60000).toISOString() });
 const reply = (route, value) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
 await page.route("**/api/cover-reveal/recipes", (route) => reply(route, { recipes }));
-await page.route("**/api/cover-reveal/journeys/journey/status", (route) => reply(route, { state, recipeId: selected.id, sourceMediaAssetId: cover.id, derivativeId: state === "idle" ? null : `d${count}` }));
+await page.route("**/api/cover-reveal/journeys/journey/status", (route) => {
+  statusReads++;
+  return reply(route, { state, recipeId: selected.id, sourceMediaAssetId: cover.id, derivativeId: state === "idle" ? null : `d${count}` });
+});
 await page.route("**/api/cover-reveal/journeys/journey", async (route) => {
   if (route.request().method() === "POST") {
     const id = route.request().postDataJSON().recipeId;
@@ -74,7 +77,34 @@ try {
   state = "ready"; await page.getByRole("button", { name: "刷新生成状态" }).click();
   await page.getByRole("button", { name: "预览开场" }).click();
   await page.locator('[data-cover-reveal-settle-reason="reduced-motion"] [data-cover-reveal-image="original-cover"]').waitFor();
+  // #694/P2: use the real component/client with controlled browser time and
+  // visibility. runFor executes every due timer (unlike a clock jump), so the
+  // former ++attempts-before-hidden-check loop exhausts its budget here.
+  const clockStart = new Date("2026-10-13T10:00:00Z");
+  await page.clock.install({ time: clockStart });
+  state = "queued"; count++;
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+  });
+  await page.reload();
+  await page.getByRole("status").filter({ hasText: "加入生成队列" }).waitFor();
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 60_000));
+  const hiddenReads = statusReads;
+  await page.clock.runFor(6 * 60_000);
+  assert.equal(statusReads, hiddenReads, "hidden time must not issue status reads");
+  state = "ready";
+  const resumedResponse = page.waitForResponse((response) => response.url().endsWith("/journeys/journey/status"), { timeout: 15000 });
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await resumedResponse;
+  await page.clock.resume();
+  await page.getByRole("status").filter({ hasText: "已生成，原封面保持不变" }).waitFor();
+  await page.getByRole("button", { name: "预览开场" }).waitFor();
+  assert.equal(statusReads, hiddenReads + 1, "returning must resume without a manual refresh or duplicate read");
+  const pollingEvidence = { hiddenMs: 6 * 60_000, readsWhileHidden: 0, readsOnReturn: statusReads - hiddenReads, state: "ready" };
   assert.deepEqual(errors, []);
   assert.deepEqual(submitted, recipes.map((recipe) => recipe.id));
-  await writeFile(path.join(dir, "evidence.json"), JSON.stringify({ passed: true, cases: ["three-recipe-owner-selection", "pending-and-ready-status", "real-reveal-original-final-pixels", "failed-no-preview", "reduced-motion-original"], submitted }, null, 2));
+  await writeFile(path.join(dir, "evidence.json"), JSON.stringify({ passed: true, cases: ["three-recipe-owner-selection", "pending-and-ready-status", "real-reveal-original-final-pixels", "failed-no-preview", "reduced-motion-original", "background-six-minutes-then-automatic-foreground-ready"], submitted, polling: pollingEvidence }, null, 2));
 } finally { await browser.close(); await rm(harness, { force: true }); }

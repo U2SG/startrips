@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { startCoverRevealStatusPolling } from "./coverRevealStatusPolling";
 import { IconPhotoStar } from "@tabler/icons-react";
 import { JourneyApiError, type enqueueCoverReveal, type CreativeCoverClient, type CreativeCoverStatus } from "./journeyApi";
 import { CREATIVE_COVER_RECIPES, creativeCoverRecipe, type CreativeCoverRecipeId } from "../reveal/creativeCoverRecipes";
@@ -69,17 +70,10 @@ export function CoverRevealRequest({ journeyId, cover, enqueue, disabled, client
   }, [journeyId, cover.id, client, supported]);
   useEffect(() => {
     if (!client || (status?.state !== "queued" && status?.state !== "leased")) return;
-    let cancelled = false, attempts = 0;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      if (cancelled || ++attempts > 60) return;
-      try { if (!document.hidden) await refreshStatus(); }
-      catch { if (!cancelled) setMessage("暂时无法确认生成进度，请稍后刷新状态。"); }
-      if (!cancelled) timer = setTimeout(poll, 5000);
-    };
-    timer = setTimeout(poll, 5000);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [client, status?.state, status?.derivativeId]);
+    return startCoverRevealStatusPolling(refreshStatus, () => {
+      setMessage("暂时无法确认生成进度，请稍后刷新状态。");
+    });
+  }, [client, journeyId, cover.id, status?.state, status?.derivativeId]);
 
   async function submit() {
     if (disabled || !supported || busy.current || !recipes.some((r) => r.id === recipeId)) return;
