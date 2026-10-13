@@ -26,7 +26,7 @@ const video = await readFile(videoPath);
 const media = new Map([["photo", photo], ["clip", video]]);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const fixture = {
-  id: "journey-film-qa", atlasId: "atlas-qa", title: "海风里的旅程", startedOn: "2026-10-01", endedOn: "2026-10-02",
+  id: "journey-film-qa", atlasId: "atlas-qa", title: "Paris Trip 海风", startedOn: "2026-10-01", endedOn: "2026-10-02",
   note: "", lightColor: "#d8bf91", coverMediaAssetId: "photo", revision: 1,
   createdByUserId: "qa-owner", createdAt: "2026-10-01", updatedAt: "2026-10-01",
   routePoints: [0, 1].map((index) => ({ id: `p${index}`, journeyId: "journey-film-qa", sortOrder: index,
@@ -84,7 +84,7 @@ function Harness(){
 }
 createRoot(document.getElementById("root")).render(<Harness/>);`);
 const browser = await launchQaBrowser();
-const evidence = { checks: [], files: [], screenshots: [] };
+const evidence = { checks: [], files: [], screenshots: [], filenames: [] };
 const heldReads = new Set();
 let stage = "start";
 const mark = (value) => { stage = value; console.log("QA_STAGE", value); };
@@ -160,9 +160,10 @@ try {
   const downloadEvent = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "下载 MP4", exact: true }).click();
   const download = await downloadEvent;
-  assert.equal(download.suggestedFilename(), "Startrips-海风里的旅程.mp4");
+  assert.equal(download.suggestedFilename(), "Startrips-Paris Trip 海风.mp4");
   const artifact = `${outputDir}/journey-film.mp4`;
   await download.saveAs(artifact);
+  evidence.filenames.push({ aspect: "portrait", title: fixture.title, suggested: download.suggestedFilename() });
   const probe = JSON.parse(run(ffprobe, ["-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", artifact]));
   const stream = probe.streams.find((item) => item.codec_type === "video");
   assert.equal(stream.codec_name, "h264"); assert.equal(stream.width, 1080); assert.equal(stream.height, 1920);
@@ -213,7 +214,11 @@ try {
   const landscapeDownloadEvent = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "下载 MP4", exact: true }).click();
   const landscapeArtifact = `${outputDir}/journey-film-landscape.mp4`;
-  await (await landscapeDownloadEvent).saveAs(landscapeArtifact);
+  const landscapeDownload = await landscapeDownloadEvent;
+  assert.equal(landscapeDownload.suggestedFilename(), "Startrips-Paris Trip 海风.mp4");
+  await landscapeDownload.saveAs(landscapeArtifact);
+  evidence.filenames.push({ aspect: "landscape", title: fixture.title, suggested: landscapeDownload.suggestedFilename() });
+  evidence.checks.push("portrait and landscape downloads preserve mixed-case ASCII and Chinese titles exactly");
   const landscapeProbe = JSON.parse(run(ffprobe, ["-v", "error", "-show_streams", "-of", "json", landscapeArtifact]));
   const landscapeStream = landscapeProbe.streams.find((item) => item.codec_type === "video");
   assert.equal(landscapeStream.width, 1920); assert.equal(landscapeStream.height, 1080);

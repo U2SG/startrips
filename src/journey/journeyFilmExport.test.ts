@@ -314,3 +314,46 @@ describe("oversized caption error guidance", () => {
       .rejects.toThrow("journey_film_duration_limit");
   });
 });
+
+
+describe("filename preservation", () => {
+  it.each([
+    ["Paris Trip", "Startrips-Paris Trip.mp4"],
+    ["ABC xyz", "Startrips-ABC xyz.mp4"],
+    ["A-Z", "Startrips-A-Z.mp4"],
+    ["ABCDEFGHIJKLMNOPQRSTUVWXYZ", "Startrips-ABCDEFGHIJKLMNOPQRSTUVWXYZ.mp4"],
+    ["Paris Trip 海风", "Startrips-Paris Trip 海风.mp4"],
+    ["A-Z_a-z @^[]`!#$%&'()+,;={}~", "Startrips-A-Z_a-z @^[]`!#$%&'()+,;={}~.mp4"],
+    ["Été Paris 2026", "Startrips-Été Paris 2026.mp4"],
+    ["海风里的旅程", "Startrips-海风里的旅程.mp4"],
+  ])("preserves allowed characters exactly: %s", (title, expected) => {
+    expect(journeyFilmFilename(title)).toBe(expected);
+  });
+  it("replaces only the forbidden punctuation among all printable ASCII", () => {
+    const forbidden = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*']);
+    for (let code = 32; code < 127; code++) {
+      const char = String.fromCharCode(code);
+      const expected = forbidden.has(char) ? "_" : char;
+      expect(journeyFilmFilename(`A${char}Z`), `printable ASCII ${code}`).toBe(`Startrips-A${expected}Z.mp4`);
+    }
+  });
+  it("removes each control code without eating neighboring uppercase letters", () => {
+    for (let code = 0; code < 32; code++) {
+      expect(journeyFilmFilename(`A${String.fromCharCode(code)}Z`), `control ${code}`).toBe("Startrips-A_Z.mp4");
+    }
+  });
+  it("retains existing normalization, length, trailing dot/space and empty-title policy", () => {
+    expect(journeyFilmFilename("Cafe\u0301 Paris")).toBe("Startrips-Café Paris.mp4");
+    expect(journeyFilmFilename("Paris Trip. . ")).toBe("Startrips-Paris Trip.mp4");
+    expect(journeyFilmFilename("A".repeat(100))).toBe(`Startrips-${"A".repeat(80)}.mp4`);
+    for (const empty of ["", "   ", ". ."]) expect(journeyFilmFilename(empty)).toBe("Startrips-Journey.mp4");
+  });
+  it.each(["Paris Trip", "ABC xyz", "A-Z", "Paris Trip 海风"])("preserves the title in the actual export result: %s", async (title) => {
+    const journey = fixture(); journey.title = title;
+    const before = structuredClone(journey), api = transport(journey);
+    const artifact = await exportPrivateJourneyFilm(journey.id, options(), { ...api, encode });
+    expect(artifact.filename).toBe(`Startrips-${title}.mp4`);
+    await artifact.verify(new AbortController().signal);
+    expect(journey).toEqual(before);
+  });
+});

@@ -51,7 +51,12 @@ export function journeyFilmIdentity(journey: Journey): string {
 }
 
 export function journeyFilmFilename(title: string): string {
-  const safe = title.normalize("NFC").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/g, "").slice(0, 80);
+  // Keep the control-code bound separate from punctuation: ordinary letters,
+  // hyphens, @ and ^ must never become part of a character-class range.
+  const forbidden = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*']);
+  const safe = Array.from(title.normalize("NFC"), (character) =>
+    character.charCodeAt(0) < 32 || forbidden.has(character) ? "_" : character,
+  ).join("").replace(/[. ]+$/g, "").slice(0, 80);
   return `Startrips-${safe || "Journey"}.mp4`;
 }
 
