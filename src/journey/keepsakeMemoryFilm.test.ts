@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { it } from "vitest";
+import { describe, it } from "vitest";
+import { buildKeepsakeRenderManifest } from "./journeyKeepsake";
+import { buildKeepsakePrivateRenderPlan } from "./keepsakePrivateRender";
+import type { Journey } from "./types";
 import type { AuthorizedKeepsakeJourneyContext, KeepsakePrivateRenderPlan } from "./keepsakePrivateRender";
 import { buildMemoryFilm, renderMemoryFilmFrame, sampleMemoryFilmFrame, type MemoryFilmCoverPin } from "./keepsakeMemoryFilm";
 
@@ -167,4 +170,127 @@ it("paginates explicit newlines without losing author text or overflowing a capt
   assert(pages.length >= 3);
   assert.equal(pages.join(""), text);
   assert(pages.every((page) => (page.match(/\n/g) ?? []).length <= 3));
+});
+
+
+function viaFixture(stops: number[], mediaOwners: number[] = []): Journey {
+  return {
+    id: "via-journey", atlasId: "atlas", title: "途中", startedOn: "2026-10-01", endedOn: null,
+    note: "", lightColor: "#fff", revision: 1, createdByUserId: "owner", createdAt: "2026-10-01", updatedAt: "2026-10-01",
+    routePoints: [0, 1, 2, 3, 4].map((index) => ({
+      id: `via-${index}`, journeyId: "via-journey", sortOrder: index,
+      latitude: 22 + index / 10, longitude: 114 + index / 10, label: `途径点${index}`,
+      isStop: stops.includes(index), note: `点${index}的感想。`, occurredAt: null, createdAt: "2026-10-01",
+    })),
+    media: mediaOwners.map((owner, index) => ({
+      id: `via-photo-${index}`, journeyId: "via-journey", routePointId: `via-${owner}`,
+      fileName: `${index}.jpg`, mimeType: "image/jpeg", bytes: 100, sortOrder: index, createdAt: "2026-10-01",
+    })),
+  };
+}
+function viaPlan(journey: Journey) {
+  const plan = buildKeepsakePrivateRenderPlan(buildKeepsakeRenderManifest(journey, 30));
+  const context: AuthorizedKeepsakeJourneyContext = {
+    journeyId: journey.id, journeyRevision: journey.revision, narrativeSnapshot: plan.narrativeSnapshot,
+    routePoints: journey.routePoints.map((point) => ({ routePointId: point.id, latitude: point.latitude,
+      longitude: point.longitude, label: point.label, note: point.note ?? null })),
+  };
+  return { plan, context };
+}
+function sceneForCaption(film: ReturnType<typeof buildMemoryFilm>, text: string) {
+  const cue = [...film.captions].find(([, value]) => value === text)?.[0];
+  assert(cue, `missing caption: ${text}`);
+  const matches = film.manifest.shots.filter((shot) => shot.captionCues.some((entry) => entry.id === cue));
+  assert.equal(matches.length, 1);
+  return matches[0].sourceSceneIndex;
+}
+describe("all authorized Route Point notes, not arrival-only", () => {
+  for (const fps of [24, 30] as const) {
+    it(`includes media-bearing and shape-only vias exactly once at ${fps} fps`, () => {
+      const journey = viaFixture([0, 4], [0, 2, 4]);
+      const { plan, context } = viaPlan(journey);
+      const original = structuredClone(plan);
+      const film = buildMemoryFilm(plan, context, { includeRoutePointNotes: true, fps });
+      assert.deepEqual(plan, original);
+      assert.deepEqual(film.manifest.shots.map((shot) => shot.sourceSceneIndex), plan.scenes.map((_, index) => index));
+      assert.deepEqual([...film.captions.values()].sort(), journey.routePoints.map((point) => point.note!).sort());
+      for (const point of journey.routePoints) {
+        const scene = plan.scenes[sceneForCaption(film, point.note!)].scene;
+        if (point.isStop) assert(scene.kind === "map" && scene.role === "arrival" && scene.routePointId === point.id);
+        else if (point.id === "via-2") assert(scene.kind === "media" && scene.routePointId === point.id);
+        else assert(scene.kind === "map" && scene.role === "travel");
+      }
+      for (let index = 1; index < film.manifest.shots.length; index++) {
+        assert.equal(film.manifest.shots[index].startFrame, film.manifest.shots[index - 1].endFrame);
+      }
+      assert(!JSON.stringify(film.manifest).includes("感想"));
+      for (const shot of film.manifest.shots) for (const cue of shot.captionCues) {
+        assert(cue.endFrame > cue.startFrame);
+        assert.equal(sampleMemoryFilmFrame(film.manifest, cue.startFrame).captionId, cue.id);
+        assert.equal(sampleMemoryFilmFrame(film.manifest, cue.endFrame - 1).captionId, cue.id);
+      }
+    });
+  }
+  it("finds a noted via inside a multi-point leg and preserves note order", () => {
+    const journey = viaFixture([0, 4]);
+    const { plan, context } = viaPlan(journey);
+    const film = buildMemoryFilm(plan, context, { includeRoutePointNotes: true });
+    const travel = plan.scenes.find(({ scene }) => scene.kind === "map" && scene.role === "travel");
+    assert(travel);
+    for (const index of [1, 2, 3]) assert.equal(sceneForCaption(film, journey.routePoints[index].note!), travel.index);
+    const pages = film.manifest.shots[travel.index].captionCues.map((cue) => film.captions.get(cue.id));
+    assert.deepEqual(pages, journey.routePoints.slice(1, 4).map((point) => point.note));
+  });
+  it("keeps leading and trailing via notes without inventing Stops", () => {
+    const journey = viaFixture([1, 3]);
+    const { plan, context } = viaPlan(journey);
+    const film = buildMemoryFilm(plan, context, { includeRoutePointNotes: true });
+    assert.equal(film.captions.size, 5);
+    const first = plan.scenes[sceneForCaption(film, journey.routePoints[0].note!)].scene;
+    const last = plan.scenes[sceneForCaption(film, journey.routePoints[4].note!)].scene;
+    assert(first.kind === "map" && first.role === "travel");
+    assert(last.kind === "map" && last.role === "outro");
+    assert.equal(plan.scenes.filter(({ scene }) => scene.kind === "map" && scene.role === "arrival").length, 2);
+  });
+  it("exports all-via note-only Journeys on the overview without changing the v1 plan", () => {
+    const journey = viaFixture([]);
+    const { plan, context } = viaPlan(journey);
+    const before = structuredClone(plan);
+    const film = buildMemoryFilm(plan, context, { includeRoutePointNotes: true });
+    assert.deepEqual(plan, before);
+    assert.deepEqual([...film.captions.values()], journey.routePoints.map((point) => point.note));
+    assert.equal(plan.scenes.length, 2);
+    const scene = plan.scenes[sceneForCaption(film, journey.routePoints[2].note!)].scene;
+    assert(scene.kind === "map" && scene.role === "intro");
+  });
+  it("uses canonical media ownership for a via grouped under a Stop chapter", () => {
+    const journey = viaFixture([0, 4], [0, 2, 4]);
+    journey.routePoints[2].stayAnchorRoutePointId = journey.routePoints[0].id;
+    const { plan, context } = viaPlan(journey);
+    const film = buildMemoryFilm(plan, context, { includeRoutePointNotes: true });
+    const scene = plan.scenes[sceneForCaption(film, journey.routePoints[2].note!)].scene;
+    assert(scene.kind === "media" && scene.routePointId === journey.routePoints[2].id);
+    assert.equal([...film.captions.values()].filter((value) => value === journey.routePoints[2].note).length, 1);
+  });
+  it("does not leak notes outside the pinned narrative or silently omit missing via context", () => {
+    const { plan, context } = viaPlan(viaFixture([0, 4]));
+    const extra = { ...context.routePoints[0], routePointId: "unrelated", note: "not in this Journey" };
+    const film = buildMemoryFilm(plan, { ...context, routePoints: [...context.routePoints, extra] }, { includeRoutePointNotes: true });
+    assert(![...film.captions.values()].includes(extra.note));
+    assert.throws(() => buildMemoryFilm(plan, { ...context, routePoints: context.routePoints.filter((point) => point.routePointId !== "via-2") },
+      { includeRoutePointNotes: true }), /point_missing/);
+  });
+  it("paginates long via notes completely and leaves opt-out timing unchanged", () => {
+    const journey = viaFixture([0, 4]);
+    for (const point of journey.routePoints) point.note = null;
+    journey.routePoints[2].note = "途".repeat(150);
+    const { plan, context } = viaPlan(journey);
+    const film = buildMemoryFilm(plan, context, { includeRoutePointNotes: true });
+    assert.equal([...film.captions.values()].join(""), journey.routePoints[2].note);
+    assert.equal(film.captions.size, 3);
+    assert.equal(buildMemoryFilm(plan, context).captions.size, 0);
+    assert.equal(buildMemoryFilm(plan, context).manifest.totalFrames, Math.round(plan.actualDurationMs * 30 / 1000));
+    context.routePoints[2].note = "途".repeat(8001);
+    assert.throws(() => buildMemoryFilm(plan, context, { includeRoutePointNotes: true }), /note_too_long/);
+  });
 });

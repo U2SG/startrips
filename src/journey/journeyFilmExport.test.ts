@@ -250,3 +250,25 @@ describe("page-owned export lifetime", () => {
     expect(artifact.blob.type).toBe("video/mp4");
   });
 });
+
+
+it("the actual owner export includes a noted non-Stop waypoint inside a travel span", async () => {
+  const journey = fixture();
+  journey.routePoints.splice(1, 0, {
+    ...journey.routePoints[0], id: "transit-note", isStop: false, note: "路上的感想。",
+    latitude: 22, longitude: 114.5, sortOrder: 1,
+  });
+  journey.routePoints.forEach((point, index) => { point.sortOrder = index; });
+  const api = transport(journey);
+  const inspect: JourneyFilmEncoder = async (input) => {
+    expect([...input.film.captions.values()]).toEqual(["路上的感想。", "海风很轻。"]);
+    expect(input.sourcePlan.scenes.some(({ scene }) => scene.kind === "map" && scene.role === "arrival" && scene.routePointId === "transit-note")).toBe(false);
+    return encode(input);
+  };
+  const artifact = await exportPrivateJourneyFilm(journey.id, { ...options(), includeRoutePointNotes: true }, { ...api, encode: inspect });
+  expect(artifact.blob.type).toBe("video/mp4");
+  const changed = structuredClone(journey);
+  changed.routePoints[1].note = "已经编辑";
+  api.change(changed);
+  await expect(artifact.verify(new AbortController().signal)).rejects.toThrow("journey_film_changed");
+});

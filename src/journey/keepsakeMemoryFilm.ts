@@ -1,5 +1,6 @@
 import type {
   AuthorizedKeepsakeJourneyContext,
+  AuthorizedKeepsakeRoutePointContext,
   KeepsakePrivateRenderPlan,
 } from "./keepsakePrivateRender";
 
@@ -66,6 +67,58 @@ function notePages(text: string): string[] {
   return pages;
 }
 
+/** Assign every authorized Route Point note without creating a Stop or changing v1 scenes. */
+function captionPagesByScene(
+  plan: KeepsakePrivateRenderPlan,
+  points: ReadonlyMap<string, AuthorizedKeepsakeRoutePointContext>,
+): Map<number, string[]> {
+  const ids = plan.narrativeSnapshot.routePointIds;
+  const rank = new Map(ids.map((id, index) => [id, index]));
+  if (rank.size !== ids.length) throw new Error("memory_film_duplicate_point");
+  const target = new Map<string, number>();
+  let intro: number | undefined, outro: number | undefined;
+  // Keep existing Stop captions at arrival. A transit point's own media is
+  // next best; its owner ID is preserved even when media is chapter-grouped.
+  plan.scenes.forEach(({ scene }, index) => {
+    if (scene.kind !== "map") return;
+    if (scene.role === "intro") intro ??= index;
+    if (scene.role === "outro") outro = index;
+    if (scene.role === "arrival" && !target.has(scene.routePointId)) target.set(scene.routePointId, index);
+  });
+  plan.scenes.forEach(({ scene }, index) => {
+    if (scene.kind === "media" && scene.routePointId !== null && !target.has(scene.routePointId)) {
+      target.set(scene.routePointId, index);
+    }
+  });
+  // Shape-only vias can lie INSIDE a travel span, not merely at an endpoint.
+  // Use canonical Route Point order rather than guessing from coordinates.
+  plan.scenes.forEach(({ scene }, index) => {
+    if (scene.kind !== "map" || scene.role !== "travel") return;
+    const from = rank.get(scene.fromRoutePointId), to = rank.get(scene.toRoutePointId);
+    if (from === undefined || to === undefined) throw new Error("memory_film_point_missing");
+    for (let at = Math.min(from, to); at <= Math.max(from, to); at++) {
+      if (!target.has(ids[at])) target.set(ids[at], index);
+    }
+  });
+  // A trailing via may have neither media nor a travel scene; an all-via,
+  // text-only Journey has only overview scenes. Keep these notes on the
+  // overview, never on another point's photo or a fabricated arrival.
+  const overview = target.size === 0 ? intro ?? outro : outro ?? intro;
+  const result = new Map<number, string[]>();
+  for (const id of ids) {
+    const point = points.get(id);
+    if (!point) throw new Error("memory_film_point_missing");
+    const pages = notePages(point.note ?? "");
+    if (!pages.length) continue;
+    const index = target.get(id) ?? overview;
+    if (index === undefined) throw new Error("memory_film_note_scene_missing");
+    const existing = result.get(index) ?? [];
+    existing.push(...pages); // canonical order for notes sharing one travel/overview shot
+    result.set(index, existing);
+  }
+  return result;
+}
+
 /**
  * Enrich the existing canonical Keepsake plan; never re-sort stops or invent a route.
  * Call only after the existing private context/media resolvers have authorized the pin.
@@ -91,7 +144,7 @@ export function buildMemoryFilm(
   if (points.size !== context.routePoints.length) throw new Error("memory_film_duplicate_point");
   const reducedMotion = options.reducedMotion === true;
   const captions = new Map<string, string>();
-  const usedNotes = new Set<string>();
+  const notePagesForScene = options.includeRoutePointNotes === true ? captionPagesByScene(plan, points) : new Map<number, string[]>();
   let elapsedMs = 0;
   let expectedSourceStart = 0;
   let nextFrame = 0;
@@ -114,12 +167,7 @@ export function buildMemoryFilm(
       : scene.role === "arrival" ? [scene.routePointId]
         : scene.role === "travel" ? [scene.fromRoutePointId, scene.toRoutePointId] : [];
     if (pointIds.some((id) => !points.has(id))) throw new Error("memory_film_point_missing");
-    const pages: string[] = [];
-    if (options.includeRoutePointNotes === true && scene.kind === "map" && scene.role === "arrival"
-      && !usedNotes.has(scene.routePointId)) {
-      pages.push(...notePages(points.get(scene.routePointId)?.note ?? ""));
-      usedNotes.add(scene.routePointId);
-    }
+    const pages = notePagesForScene.get(index) ?? [];
     const pageDurations = pages.map((page) => Math.max(3000, [...page].length * 180));
     const durationMs = Math.max(scene.durationMs, pageDurations.reduce((sum, value) => sum + value, 0));
     const startFrame = nextFrame;

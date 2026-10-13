@@ -37,6 +37,13 @@ const fixture = {
     mimeType: index ? "video/mp4" : "image/jpeg", fileName: `${id}.${index ? "mp4" : "jpg"}`, bytes: bytes.length,
     sortOrder: index, contentHash: hash(bytes), contentHashVerified: true, createdAt: "2026-10-01" })),
 };
+// A noted shape-only via has no arrival scene. Its note must survive the
+// actual owner export, not just a handwritten director fixture.
+fixture.routePoints.splice(1, 0, {
+  ...fixture.routePoints[0], id: "p-via", label: "途中", isStop: false,
+  latitude: 22.4, longitude: 114.1, note: "途中的海风，也值得记下。", sortOrder: 1,
+});
+fixture.routePoints.forEach((point, index) => { point.sortOrder = index; });
 const harnessPath = path.join(outputDir, "harness.tsx");
 await writeFile(harnessPath, `import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -175,14 +182,20 @@ try {
       routePoints: trip.routePoints.map((point) => ({ routePointId: point.id, latitude: point.latitude, longitude: point.longitude, label: point.label, note: point.note })) },
       { includeRoutePointNotes: true }, { derivativeId: "opening-qa", sourceMediaAssetId: "photo", recipeId: "paper-collage-memory", recipeVersion: 1 });
     const shot = film.manifest.shots.find((item) => item.openingDerivativeId);
-    const caption = film.manifest.shots.flatMap((item) => item.captionCues)[0];
-    return { opening: shot.startFrame, original: shot.endFrame - 1, caption: caption.startFrame + 2, totalFrames: film.manifest.totalFrames };
+    const cues = film.manifest.shots.flatMap((item) => item.captionCues);
+    const caption = cues.find((cue) => film.captions.get(cue.id) === trip.routePoints.find((point) => point.id === "p1").note);
+    const via = cues.find((cue) => film.captions.get(cue.id) === trip.routePoints.find((point) => point.id === "p-via").note);
+    if (!caption || !via) throw new Error("owner export omitted an enabled Route Point note");
+    if (plan.scenes.some(({ scene }) => scene.kind === "map" && scene.role === "arrival" && scene.routePointId === "p-via")) {
+      throw new Error("the via must not become a Stop just to show its note");
+    }
+    return { opening: shot.startFrame, original: shot.endFrame - 1, caption: caption.startFrame + 2, viaCaption: via.startFrame + 2, totalFrames: film.manifest.totalFrames };
   }, fixture);
   assert.equal(Number(stream.nb_read_frames), framePins.totalFrames);
   for (const [name, frame] of Object.entries(framePins).filter(([name]) => name !== "totalFrames")) {
     const filename = `${outputDir}/${name}-frame.png`;
     run(ffmpeg, ["-y", "-i", artifact, "-vf", `select=eq(n\\,${frame})`, "-frames:v", "1", filename]);
-    if (name !== "caption") {
+    if (name === "opening" || name === "original") {
       const { data, info } = await sharp(filename).removeAlpha().raw().toBuffer({ resolveWithObject: true });
       const offset = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * info.channels;
       const expected = name === "opening" ? [200, 154, 102] : [66, 111, 152];
@@ -190,7 +203,7 @@ try {
     }
     evidence.screenshots.push(filename);
   }
-  evidence.checks.push("decoded creative opening and unchanged original final pixels", "Chinese-caption review frame retained");
+  evidence.checks.push("decoded creative opening and unchanged original final pixels", "Stop and non-Stop via Chinese-caption frames retained without adding an arrival");
   // A second real encoding exercises landscape and Reduced Motion through the same owner control.
   mark("landscape reduced-motion encode");
   await page.emulateMedia({ reducedMotion: "reduce" });

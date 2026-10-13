@@ -29,7 +29,13 @@ original. Reduced Motion omits it and stops the schematic travel cursor motion.
 If WebGL cannot render the selected opening, the user can explicitly disable it;
 no ordinary fade is falsely described as a recipe-specific animation.
 
-Route Point captions are opt-in and grapheme/newline paginated with sufficient
+Route Point captions are opt-in and include Stop and non-Stop notes exactly once.
+Stops retain their arrival captions; a via uses its own media when present,
+otherwise the travel span containing its canonical route position. Trailing vias
+without a content/travel shot use the closing route overview; an all-via text-only
+Journey uses its opening overview. Shared-shot notes follow canonical point order.
+This adds no Stop, live note beat or new v1 scene. Missing note context is rejected
+instead of treated as empty. Captions are grapheme/newline paginated with enough
 reading time. Excessive text/size/duration is rejected with an actionable message,
 not silently omitted. Titles shrink to fit bounded heading space; the renderer
 refuses unrenderable text rather than clipping it. This version does not export
@@ -62,7 +68,7 @@ scenes. Existing Keepsake v1 construction and live playback remain unchanged.
 The existing keepsake-render job retains its job budget and runs both the old
 private prototype regression and the actual owner Story button -> native modal
 -> real H.264 MP4 -> download test. It decodes the resulting file to verify
-opening/original frames, captures Chinese captions, checks landscape/reduced
+opening/original frames, captures Stop and shape-only via Chinese captions, checks landscape/reduced
 motion, requires the phone button, and exercises cancellation, expiry/revocation,
 Journey changes and guest omission. Synthetic photos/videos and mocked owner
 HTTP responses are used: this is browser/codec integration evidence, not a paid
