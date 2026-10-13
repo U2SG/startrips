@@ -87,7 +87,7 @@ import {
   type StorySnapState,
 } from "./playbackReturn";
 import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
-import { useMediaPresentationStyle } from "./mediaPresentation";
+import { useMediaPresentationRecovery, useMediaPresentationStyle } from "./mediaPresentation";
 import { deferredSurface, whenIdle } from "./deferredSurface";
 
 // Loaded only when the chosen presentation uses the Journey Book or Stream.
@@ -1362,12 +1362,22 @@ export function LivingAtlasApp({
   }, []);
   const storyObservationRef = useRef<StoryLogicalObservation | null>(null);
   const mediaPresentation = useMediaPresentationStyle();
-  // The Journey whose Book the reader left for classic Story (to edit, or to
-  // compare); reset whenever Story closes.
-  const [storyClassicFor, setStoryClassicFor] = useState<string | null>(null);
-  useEffect(() => {
-    if (storyJourneyId === null) setStoryClassicFor(null);
-  }, [storyJourneyId]);
+  const recoverMediaPresentation = useMediaPresentationRecovery();
+  const [renderedPresentation, setRenderedPresentation] = useState(mediaPresentation);
+  if (renderedPresentation !== mediaPresentation) {
+    // Adjust this component's entry seed before React renders the new reader.
+    // An effect would first mount it at the old opening, then jump to this page.
+    setRenderedPresentation(mediaPresentation);
+    const isClassic = (value: typeof mediaPresentation) => value === "classic" || value === "note-overlay";
+    const sameReader = isClassic(renderedPresentation) && isClassic(mediaPresentation);
+    const observation = storyObservationRef.current;
+    if (!sameReader && observation?.journeyId === storyJourneyId) {
+      setStoryRoutePointId(observation.routePointId);
+      setStoryInitialAssetId(observation.assetId);
+      setStoryPresentsJourneyCoverOpening(false);
+      setStoryInitialSnapState("in-context");
+    }
+  }
   // The last tap, so a reader can open from where the person touched.
   const lastPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
   useEffect(() => {
@@ -1383,7 +1393,7 @@ export function LivingAtlasApp({
       ? { x: pointer.x, y: pointer.y }
       : null;
   }, [storyJourneyId]);
-  const storyReader = storyJourneyId && storyClassicFor !== storyJourneyId
+  const storyReader = storyJourneyId
     && (mediaPresentation === "book" || mediaPresentation === "book-3d" || mediaPresentation === "stream")
     ? mediaPresentation
     : null;
@@ -3088,7 +3098,7 @@ export function LivingAtlasApp({
     setStoryInitialAssetId(target.assetId);
     setStoryPresentsJourneyCoverOpening(false);
     setStoryInitialSnapState("in-context");
-    setStoryClassicFor(storyJourneyId);
+    recoverMediaPresentation("classic");
   }
 
   function navigateStoryJourney(id: string) {

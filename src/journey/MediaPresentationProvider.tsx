@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { requestMediaPresentationPreference } from "./mediaPresentationPreference";
 import type { MediaPresentationStyle } from "./mediaPresentationStyle";
 
@@ -6,13 +6,23 @@ type PresentationAccess = {
   style: MediaPresentationStyle;
   busy: boolean;
   error: string;
-  select: ((style: MediaPresentationStyle) => Promise<void>) | null;
+  select: ((style: MediaPresentationStyle, onConfirmed?: () => void) => Promise<void>) | null;
   retry: () => void;
   recover: (style: MediaPresentationStyle) => void;
+  registerChangeGuard?: (guard: () => boolean) => () => void;
 };
 
 const PresentationContext = createContext<PresentationAccess | null>(null);
 export const useMediaPresentationAccess = () => useContext(PresentationContext);
+
+/** Account and reader changes must both preserve an unfinished Story edit. */
+export function useMediaPresentationChangeGuard(blocked: boolean) {
+  const register = useMediaPresentationAccess()?.registerChangeGuard;
+  const current = useRef(blocked);
+  current.current = blocked;
+  useEffect(() => register?.(() => current.current), [register]);
+}
+
 
 export function MediaPresentationPreferenceProvider({ accountKey, sessionResolved, children }: {
   accountKey: string | null;
@@ -32,6 +42,12 @@ export function MediaPresentationPreferenceProvider({ accountKey, sessionResolve
   const currentOwner = useRef(owner);
   currentOwner.current = owner;
   const writing = useRef<AbortController | null>(null);
+  const changeGuards = useRef(new Set<() => boolean>());
+  const registerChangeGuard = useCallback((guard: () => boolean) => {
+    changeGuards.current.add(guard);
+    return () => { changeGuards.current.delete(guard); };
+  }, []);
+
 
   useEffect(() => {
     if (!sessionResolved) return;
@@ -54,14 +70,19 @@ export function MediaPresentationPreferenceProvider({ accountKey, sessionResolve
     };
   }, [accountKey, sessionResolved, attempt]);
 
-  async function select(style: MediaPresentationStyle) {
+  async function select(style: MediaPresentationStyle, onConfirmed?: () => void) {
     if (!accountKey || !sessionResolved || state.accountKey !== accountKey || state.status !== "ready" || writing.current) return;
+    if ([...changeGuards.current].some((guard) => guard())) {
+      setState((value) => ({ ...value, error: "请先保存或放弃当前编辑，完成正在进行的操作后再切换媒体呈现。" }));
+      return;
+    }
     const controller = new AbortController();
     writing.current = controller;
     setState((value) => ({ ...value, saving: true, error: "" }));
     try {
       const saved = await requestMediaPresentationPreference(style, controller.signal);
       if (!controller.signal.aborted && currentOwner.current === accountKey) {
+        onConfirmed?.();
         setState((value) => value.accountKey === accountKey ? { ...value, style: saved, recovery: null, saving: false, error: "" } : value);
       }
     } catch {
@@ -81,6 +102,7 @@ export function MediaPresentationPreferenceProvider({ accountKey, sessionResolve
       error: owned ? state.error : "",
       select: accountKey && sessionResolved && owned && state.status === "ready" ? select : null,
       retry: () => setAttempt((value) => value + 1),
+      registerChangeGuard,
       recover: (style) => setState((value) => value.accountKey === currentOwner.current ? { ...value, recovery: style } : value),
     }}>
       {children}

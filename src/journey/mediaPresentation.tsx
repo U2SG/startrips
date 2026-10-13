@@ -120,7 +120,7 @@ export function useMediaPresentationRecovery(): (style: MediaPresentationStyle) 
  * The account-menu entry, in the desktop dock and the mobile sheet. One
  * activation moves to the next style; the label names the style in force.
  */
-export function MediaPresentationMenuEntry({ surface }: { surface: "dock" | "sheet" }) {
+export function MediaPresentationMenuEntry({ surface, onConfirmed }: { surface: "dock" | "sheet"; onConfirmed?: () => void }) {
   const access = useMediaPresentationAccess();
   const style = useMediaPresentationStyle();
   const label = mediaPresentationLabel(style);
@@ -131,12 +131,17 @@ export function MediaPresentationMenuEntry({ surface }: { surface: "dock" | "she
       data-media-presentation-value={style}
       disabled={access ? access.busy || (!access.select && !access.error) : false}
       onClick={() => {
-        if (!access) writeMediaPresentationStyle(nextMediaPresentationStyle(style));
-        else if (access.select) void access.select(nextMediaPresentationStyle(style));
-        else access.retry();
+        if (!access) {
+          onConfirmed?.();
+          writeMediaPresentationStyle(nextMediaPresentationStyle(style));
+        } else if (access.select) {
+          // Release the account modal before a confirmed preference mounts a
+          // different reader. A rejected save retains its previous presentation.
+          void access.select(nextMediaPresentationStyle(style), onConfirmed);
+        } else access.retry();
       }}
     >
-      <span>媒体呈现</span><small>{access?.busy ? "请稍候…" : access?.error ? (access.select ? "保存未确认，点击重试" : "无法读取，点击重试") : label}</small>
+      <span>媒体呈现</span><small role={access?.error ? "status" : undefined}>{access?.busy ? "请稍候…" : access?.error || label}</small>
     </button>
   );
 }

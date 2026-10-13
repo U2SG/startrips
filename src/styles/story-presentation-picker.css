@@ -1,0 +1,16 @@
+.story-presentation-picker { position: relative; flex: 0 0 auto; min-width: 0; }
+.story-presentation-picker select,
+.story-presentation-picker__fallback {
+  box-sizing: border-box; min-height: var(--control-height, 44px); width: 112px; max-width: 30vw;
+  padding: 0 8px; border: 1px solid var(--control-line); border-radius: var(--control-radius);
+  background: var(--archive-bg, #020809); color: var(--control-ink);
+  font: 400 12px/1.4 var(--archive-sans); touch-action: manipulation; cursor: pointer;
+}
+.story-presentation-picker select:focus-visible { outline: 2px solid var(--control-focus); outline-offset: 2px; }
+.story-presentation-picker__error {
+  position: absolute; right: 0; top: 100%; z-index: var(--z-content-10);
+  width: min(280px, calc(100vw - 32px)); padding: 12px; box-sizing: border-box;
+  border: 1px solid var(--control-line); border-radius: var(--control-radius);
+  color: var(--control-ink); background: var(--archive-bg, #020809); font: 400 13px/1.6 var(--archive-sans);
+}
+.story-presentation-picker__error button { min-height: 44px; padding: 0 12px; color: inherit; background: transparent; border: 0; }
