@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createOwnerAtlasView, GUEST_ATLAS_VIEW_CAPABILITIES, resolveAtlasView, type AtlasView } from "./atlasView";
-import { exportPrivateJourneyFilm, FILM_MAX_ASSET_BYTES, journeyFilmFilename, journeyFilmIdentity, readBoundedFilmBlob, type JourneyFilmEncoder, type JourneyFilmExportOptions } from "./journeyFilmExport";
+import { exportPrivateJourneyFilm, FILM_MAX_ASSET_BYTES, journeyFilmErrorMessage, journeyFilmFilename, journeyFilmIdentity, readBoundedFilmBlob, type JourneyFilmEncoder, type JourneyFilmExportOptions } from "./journeyFilmExport";
 import { projectFilmRoute } from "./journeyFilmCanvas";
 import type { Journey } from "./types";
 
@@ -271,4 +271,46 @@ it("the actual owner export includes a noted non-Stop waypoint inside a travel s
   changed.routePoints[1].note = "已经编辑";
   api.change(changed);
   await expect(artifact.verify(new AbortController().signal)).rejects.toThrow("journey_film_changed");
+});
+
+
+describe("oversized caption error guidance", () => {
+  const message = "单条感想超过字幕长度上限，请缩短感想或关闭感想字幕后重试。";
+  it("maps the note limit separately from layout and unknown transport failures", () => {
+    expect(journeyFilmErrorMessage(new Error("memory_film_note_too_long"))).toBe(message);
+    expect(journeyFilmErrorMessage(new Error("journey_film_text_layout_limit"))).toContain("缩短标题或关闭感想字幕");
+    expect(journeyFilmErrorMessage(new Error("unknown"))).toBe("未能完成导出。请检查网络和素材是否可读取，然后重试。");
+  });
+  for (const isStop of [true, false]) {
+    it.each([
+      ["BMP", "长".repeat(8001)],
+      ["surrogate pairs", "🌍".repeat(4000) + "长"],
+    ])(`shows actionable guidance before encoding a ${isStop ? "Stop" : "via"} note over 8000 UTF-16 units: %s`, async (_label, note) => {
+      expect(note.length).toBe(8001);
+      const journey = fixture();
+      journey.routePoints[1].isStop = isStop;
+      journey.routePoints[1].note = note;
+      const before = structuredClone(journey);
+      const api = transport(journey), encoder = vi.fn(encode);
+      const failure = await exportPrivateJourneyFilm(journey.id, { ...options(), includeRoutePointNotes: true }, { ...api, encode: encoder })
+        .then(() => { throw new Error("oversized note unexpectedly exported"); }, (error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe("memory_film_note_too_long");
+      expect(journeyFilmErrorMessage(failure)).toBe(message);
+      expect(encoder).not.toHaveBeenCalled();
+      expect(api.fetcher).toHaveBeenCalledTimes(1); // snapshot only; no media read/signing
+      expect(journey).toEqual(before);
+      // The suggested recovery works without editing, truncating or deleting the note.
+      const result = await exportPrivateJourneyFilm(journey.id, options(), { ...api, encode: encoder });
+      expect(result.blob.type).toBe("video/mp4");
+      expect(encoder).toHaveBeenCalledOnce();
+      expect(journey).toEqual(before);
+    });
+  }
+  it.each(["长".repeat(8000), "🌍".repeat(4000)])("keeps the exact 8000-unit note boundary distinct from duration limits", async (note) => {
+    expect(note.length).toBe(8000);
+    const journey = fixture(); journey.routePoints[1].note = note;
+    await expect(exportPrivateJourneyFilm(journey.id, { ...options(), includeRoutePointNotes: true }, { ...transport(journey), encode }))
+      .rejects.toThrow("journey_film_duration_limit");
+  });
 });

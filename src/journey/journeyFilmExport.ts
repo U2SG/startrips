@@ -66,6 +66,7 @@ export function journeyFilmErrorMessage(error: unknown): string {
   if (code === "journey_film_source_limit") return "素材超过本地导出上限：单个 128 MB、合计 256 MB。请减少素材后重试。";
   if (code === "journey_film_duration_limit") return "内容或字幕需要超过两分钟，请减少素材或关闭字幕后重试。";
   if (code === "journey_film_reveal_unavailable") return "此浏览器无法渲染艺术开场，请关闭艺术封面选项后重试。";
+  if (code === "memory_film_note_too_long") return "单条感想超过字幕长度上限，请缩短感想或关闭感想字幕后重试。";
   if (code === "journey_film_text_layout_limit") return "文字过长，无法在画面内完整呈现，请缩短标题或关闭感想字幕后重试。";
   if (code === "journey_film_video_unsupported") return "有视频无法在此浏览器中解码，未生成不完整的短片。";
   if (code === "journey_film_source_changed") return "原片校验失败，未生成短片。请刷新旅程后重试。";
