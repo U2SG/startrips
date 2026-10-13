@@ -4,7 +4,7 @@ The owner requested all four mobile directions together, with one switch, for pe
 
 ## Try the layouts
 
-Open any Journey in the classic (default) media presentation on a compact viewport. The header button `视图 A` cycles A → B → C → D → A. Its accessible name includes the current layout name. The choice is remembered only in this browser under `startrips.mobile-classic-view.v1`; no server, Journey, or share-setting write occurs. Storage denial still allows switching for the current visit.
+Open the account menu. Directly below `媒体呈现`, the `经典视图` button shows the current letter and layout name and cycles A → B → C → D → A. This entry is available in both the desktop dock and the mobile account sheet, even before opening a Journey. The selected layout applies when you open a Journey in the classic (`媒体呈现：默认`) presentation on a compact viewport. Its accessible name includes the current layout name. The choice is remembered only in this browser under `startrips.mobile-classic-view.v1`; no server, Journey, or share-setting write occurs. Storage denial still allows switching for the current visit.
 
 | Variant | Name | Main difference |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ CI runs `pnpm qa:mobile-classic-views` in the existing `shell-composer` shard. I
 - `node scripts/qa-mobile-classic-views.mjs 430`
 - `node scripts/qa-mobile-classic-views.mjs 844 390`
 
-The browser check uses the real JourneyStory QA fixture, starts its own Vite server unless QA_ORIGIN is provided, and writes captures and geometry to `artifacts/mobile-classic/`. It verifies four-way cycling, 44px controls, overlaps, horizontal overflow, live picture identity, disclosure Back, expanded Escape, reload persistence and desktop isolation. The 390px case also plays a real fixture video and verifies node identity, retained playback time, play state and native controls during switching.
+The browser check uses the real JourneyStory QA fixture and the real account-menu preference component in a second tab, starts its own Vite server unless QA_ORIGIN is provided, and writes captures and geometry to `artifacts/mobile-classic/`. It verifies four-way cycling through storage events, 44px controls, overlaps, horizontal overflow, live picture identity, disclosure Back, expanded Escape, reload persistence and desktop isolation. The 390px case also plays a real fixture video and verifies node identity, retained playback time, play state and native controls during switching. The existing login-v3 suite also opens the actual mobile account sheet and desktop dock, checks that Classic View immediately follows Media Presentation, and cycles all four choices without an API write.
 
 Each layout also enters immersive viewing twice through More and returns using Escape and browser Back. The secondary entry collapses on return, so focus must land on visible More before the next interaction; a still-connected hidden button is not an acceptable return target.
 

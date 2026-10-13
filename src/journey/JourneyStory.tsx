@@ -908,7 +908,7 @@ export function JourneyStory({
   const playingRef = useRef(false);
   playingRef.current = playing;
   const mobileLayout = useCompactMobileLayout();
-  const [mobileClassicView, cycleMobileClassicView] = useMobileClassicView();
+  const [mobileClassicView] = useMobileClassicView();
   const [classicPanel, setClassicPanel] = useState<"chapters" | "more" | null>(null);
   const classicViewDefinition = MOBILE_CLASSIC_VIEWS.find((view) => view.id === mobileClassicView)!;
   useEffect(() => {
@@ -4566,12 +4566,6 @@ export function JourneyStory({
             disabled={mutationPending || placementAnalyzing}
             onClick={toggleDesktopEditing}
           >{desktopEditing ? "完成" : "编辑"}</button> : null}
-          {classicActive ? <button type="button" className="journey-story__classic-view-switch"
-            aria-label={`切换经典视图，当前 ${classicViewDefinition.letter} ${classicViewDefinition.label}`}
-            title="A 轻量经典 / B 单手操作 / C 照片优先 / D 地球优先"
-            disabled={mutationPending || mediaGestureHolding || Boolean(videoHandoffRef.current)}
-            onClick={() => { setClassicPanel(null); cycleMobileClassicView(); }}
-          >视图 {classicViewDefinition.letter}</button> : null}
           {/* An upload in flight keeps this button clickable so pressing it
               explains the wait instead of silently doing nothing. */}
           <button

@@ -302,6 +302,45 @@ async function submitGatewayLogin(gatewayPage) {
   await gatewayPage.getByRole("button", { name: "登录", exact: true }).click();
 }
 
+async function verifyClassicViewAccountMenu() {
+  const gateway = await createGatewayPage({ initialAuthenticated: true });
+  const target = gateway.page;
+  let writes = 0;
+  target.on("request", (request) => {
+    if (new URL(request.url()).pathname.startsWith("/api/") && !["GET", "HEAD"].includes(request.method())) writes += 1;
+  });
+  try {
+    await target.locator(".auth-continuity.is-released").waitFor({ timeout: 15_000 });
+    for (const [surface, width, height, trigger] of [
+      ["sheet", 390, 844, "打开账户菜单"],
+      ["dock", 1280, 900, "展开账户菜单"],
+    ]) {
+      await target.setViewportSize({ width, height });
+      await target.getByRole("button", { name: trigger, exact: true }).click();
+      const entry = target.locator(`[data-mobile-classic-view-entry="${surface}"]`);
+      await entry.waitFor({ state: "visible" });
+      const adjacent = await entry.evaluate((button) => button.previousElementSibling?.getAttribute("data-media-presentation-entry"));
+      if (adjacent !== surface) throw new Error(`${surface}: classic view must immediately follow media presentation`);
+      const box = await entry.boundingBox();
+      if (!box || box.height < 44 || box.x < 0 || box.x + box.width > width + 1) throw new Error(`${surface}: clipped or small classic view entry`);
+      const start = await entry.getAttribute("data-mobile-classic-view-value");
+      const views = ["light", "thumb", "photo", "earth"];
+      for (let step = 1; step <= 4; step++) {
+        await entry.click();
+        const expected = views[(views.indexOf(start) + step) % views.length];
+        await target.waitForFunction(({ surface, expected }) => document.querySelector(`[data-mobile-classic-view-entry="${surface}"]`)?.getAttribute("data-mobile-classic-view-value") === expected, { surface, expected });
+        const stored = await target.evaluate(() => localStorage.getItem("startrips.mobile-classic-view.v1"));
+        if (stored !== expected) throw new Error(`${surface}: classic preference was not persisted`);
+      }
+      if (surface === "sheet") await target.getByRole("button", { name: "关闭账户菜单", exact: true }).last().click();
+      else await target.getByRole("button", { name: "收起账户菜单", exact: true }).click();
+    }
+    return { label: "classic-view-account-menu", writes, errors: gateway.errors, failed: writes !== 0 || gateway.errors.length > 0 };
+  } finally {
+    await gateway.close();
+  }
+}
+
 async function verifyKeyboardValidationFocus() {
   console.error("[qa-login-v3] keyboard submit validation focus");
   const gateway = await createGatewayPage({ reducedMotion: "reduce" });
@@ -1663,6 +1702,9 @@ try {
   await verifyViewport("mobile", { width: 390, height: 844 }, true);
   await verifyViewport("mobile-compact", { width: 360, height: 800 }, true);
   await verifyViewport("mobile-landscape", { width: 844, height: 390 }, true);
+  const classicMenu = await verifyClassicViewAccountMenu();
+  results.push(classicMenu);
+  if (classicMenu.failed) failed = true;
   const keyboardValidation = await verifyKeyboardValidationFocus();
   if (keyboardValidation.failed) failed = true;
   results.push(keyboardValidation);
