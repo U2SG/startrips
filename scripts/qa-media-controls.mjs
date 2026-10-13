@@ -1,5 +1,20 @@
-import { launchQaBrowser } from "./qa-browser.mjs";
+import { launchQaBrowser, revealStoryChapters, revealStoryViewingOptions, storyViewerReturnLabel } from "./qa-browser.mjs";
 import { apertureSeamId, attributeApertureJumps, expectedApertureSeams, gradeApertureContinuity } from "./qa-aperture-continuity.mjs";
+import { storyPaintReady } from "./qa-story-paint-ready.mjs";
+
+// A collapsed classic secondary entry returns to its visible More disclosure;
+// legacy layouts keep the original entry. Observe focus before any next click.
+async function storyFullscreenFocusReturned(entry) {
+  return entry.evaluate((button) => {
+    const story = button.closest(".journey-story");
+    const target = story?.hasAttribute("data-classic-view")
+      ? story.querySelector(".journey-story__classic-more") : button;
+    return target instanceof HTMLElement && document.activeElement === target
+      && target.getClientRects().length > 0
+      && getComputedStyle(target).visibility === "visible"
+      && !target.closest("[inert], [hidden]");
+  });
+}
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
@@ -1151,6 +1166,7 @@ try {
     });
     if (closeVisibleText !== "" || !closeUsesControlGrid) failed = true;
 
+    await revealStoryViewingOptions(story.page);
     const manageTrigger = story.page.getByRole("button", { name: "管理旅程" });
     const manageTriggerButton = story.page.locator(".journey-story__mobile-media-menu-trigger");
     const viewerMode = await storyRoot.getAttribute("data-mobile-mode");
@@ -1168,6 +1184,7 @@ try {
     });
     if (viewerMode !== "viewer" || viewerMutationButtons !== 0 || manageTouchTarget < 44) failed = true;
 
+    await revealStoryViewingOptions(story.page);
     await manageTrigger.click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
     const manageMutationButtons = await story.page.getByRole("button", { name: /编辑旅程|删除旅程/ }).count();
@@ -1210,8 +1227,8 @@ try {
     await journeyDeleteConfirmation.waitFor({ state: "visible" });
     await manageDone.click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
-    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
-    const manageDoneFocusRestored = await story.page.getByRole("button", { name: "管理旅程" }).evaluate((button) => document.activeElement === button);
+    await story.page.waitForFunction((label) => document.activeElement?.getAttribute("aria-label") === label, await storyViewerReturnLabel(story.page));
+    const manageDoneFocusRestored = await story.page.getByRole("button", { name: await storyViewerReturnLabel(story.page), exact: true }).evaluate((button) => document.activeElement === button);
     const deleteConfirmationLeakedToViewer = await journeyDeleteConfirmation.count() !== 0;
     checks.push({
       name: "story-mobile-delete-confirmation-owned-by-manage",
@@ -1221,13 +1238,14 @@ try {
     });
     if (deleteConfirmationLeakedToViewer || !manageDoneFocusRestored) failed = true;
 
+    await revealStoryViewingOptions(story.page);
     await story.page.getByRole("button", { name: "管理旅程" }).click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
     await story.page.evaluate(() => window.history.back());
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
-    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    await story.page.waitForFunction((label) => document.activeElement?.getAttribute("aria-label") === label, await storyViewerReturnLabel(story.page));
     const manageExitedOnBack = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
-    const manageBackFocusRestored = await story.page.getByRole("button", { name: "管理旅程" }).evaluate((button) => document.activeElement === button);
+    const manageBackFocusRestored = await story.page.getByRole("button", { name: await storyViewerReturnLabel(story.page), exact: true }).evaluate((button) => document.activeElement === button);
     checks.push({
       name: "story-mobile-manage-back-contract",
       manageExitedOnBack,
@@ -1236,6 +1254,7 @@ try {
     });
     if (!manageExitedOnBack || !manageBackFocusRestored) failed = true;
 
+    await revealStoryViewingOptions(story.page);
     await story.page.getByRole("button", { name: "管理旅程" }).click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
     const mediaManageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
@@ -1312,10 +1331,11 @@ try {
 
     await story.page.keyboard.press("Escape");
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
-    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    await story.page.waitForFunction((label) => document.activeElement?.getAttribute("aria-label") === label, await storyViewerReturnLabel(story.page));
     const directMoveEscapeRestoredViewer = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
-    const directMoveEscapeFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+    const directMoveEscapeFocusRestored = await story.page.getByRole("button", { name: await storyViewerReturnLabel(story.page), exact: true }).evaluate((button) => document.activeElement === button);
 
+    await revealStoryViewingOptions(story.page);
     await manageTrigger.click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
     await mediaManageTrigger.click();
@@ -1323,9 +1343,9 @@ try {
     await moveSelectToggle.waitFor({ state: "visible" });
     await story.page.evaluate(() => window.history.back());
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
-    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    await story.page.waitForFunction((label) => document.activeElement?.getAttribute("aria-label") === label, await storyViewerReturnLabel(story.page));
     const directMoveBackRestoredViewer = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
-    const directMoveBackFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+    const directMoveBackFocusRestored = await story.page.getByRole("button", { name: await storyViewerReturnLabel(story.page), exact: true }).evaluate((button) => document.activeElement === button);
     checks.push({
       name: "story-mobile-media-reclassification-exit-contract",
       directMoveEscapeRestoredViewer,
@@ -1342,6 +1362,7 @@ try {
       || !directMoveBackRestoredViewer
       || !directMoveBackFocusRestored) failed = true;
 
+    await revealStoryViewingOptions(story.page);
     await manageTrigger.click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
     await mediaManageTrigger.click();
@@ -1441,6 +1462,7 @@ try {
       || !replacementMenuStayedClosed
       || !replacementStayedInManage
       || !replacementSecondBackExitedManage) failed = true;
+    await revealStoryViewingOptions(story.page);
     await story.page.getByRole("button", { name: "管理旅程" }).click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
 
@@ -1550,6 +1572,9 @@ try {
     // deferred fullscreen to cancel in the first place.
     await deferredStage.locator(`${storyCurrentMediaSelector}[data-media-page-ready="true"]`)
       .waitFor({ state: "attached", timeout: 10_000 });
+    // Open the actual chapter entry before sampling gesture geometry; opening
+    // it after touchEnd would miss the pending-fullscreen cancellation window.
+    await revealStoryChapters(deferredFullscreenStory.page);
     const deferredBox = await deferredStage.boundingBox();
     if (!deferredBox) throw new Error("deferred-fullscreen Story stage has no bounds");
     const deferredTouch = await deferredFullscreenStory.page.context().newCDPSession(deferredFullscreenStory.page);
@@ -2144,15 +2169,13 @@ try {
     await page.waitForFunction((id) => document.querySelector(
       `.journey-story__media [data-media-page-id="${id}"][data-media-page-ready="true"]`,
     ), second, { polling: "raf" });
-    // The first image can decode while the mobile Story itself is still
-    // fading in. Inspect pixels after that finite entrance owns a full frame.
-    await page.waitForFunction(() => {
-      const story = document.querySelector(".journey-story");
-      return story && Number(getComputedStyle(story).opacity) > .99
-        && !story.getAnimations().some((animation) => animation.animationName === "atlasViewIn"
-          && animation.playState === "running");
-    }, null, { polling: "raf", timeout: 3_000 });
+    // A finished article entrance does not imply a finished staggered layout:
+    // the classic context row puts the media under the fourth child. Observe
+    // the actual picture's paint ancestors before the unchanged pixel verdict.
+    await page.waitForFunction(storyPaintReady, ".journey-story__media",
+      { polling: "raf", timeout: 3_000 });
     const beforeBack = await inspectStagePaint(page, ".journey-story__media");
+    await revealStoryViewingOptions(page);
     await page.locator(".journey-story__mobile-media-fullscreen").click();
     const overlay = page.locator(".journey-story-fullscreen");
     await overlay.waitFor({ state: "visible" });
@@ -2558,6 +2581,7 @@ try {
       const current = morphPage.page.locator(`.journey-story__media ${storyCurrentImageSelector}`).first();
       await current.waitFor({ state: "visible", timeout: 5_000 });
       const mediaId = await current.getAttribute("data-shared-media-id");
+      if (surface.mobile) await revealStoryViewingOptions(morphPage.page);
       const entry = surface.mobile
         ? morphPage.page.locator(".journey-story__mobile-media-fullscreen")
         : storyRoot.getByRole("button", { name: "全屏查看媒体", exact: true });
@@ -2586,15 +2610,17 @@ try {
       await overlay.waitFor({ state: "hidden", timeout: 5_000 });
       const returned = await readStoryFullscreenMorphProbe(morphPage.page);
       const returnMorph = returned.morphs.find((candidate) => candidate.name === `story-fullscreen-${mediaId}`);
-      const focusReturned = await entry.evaluate((button) => document.activeElement === button);
+      const focusReturned = await storyFullscreenFocusReturned(entry);
 
-      // Open -> close -> open again through the same control. A previous clone
-      // may be cancelled, but there must be only one live presentation owner.
+      // Reopen through the same visible entry after each collapsed disclosure.
+      // A previous clone may be cancelled; only one presentation owner survives.
       await startStoryFullscreenMorphProbe(morphPage.page);
+      await revealStoryViewingOptions(morphPage.page);
       await entry.click();
       await overlay.waitFor({ state: "visible", timeout: 5_000 });
       await morphPage.page.keyboard.press("Escape");
       await overlay.waitFor({ state: "hidden", timeout: 5_000 });
+      await revealStoryViewingOptions(morphPage.page);
       await entry.click();
       await overlay.waitFor({ state: "visible", timeout: 5_000 });
       const rapid = await readStoryFullscreenMorphProbe(morphPage.page);
@@ -2667,6 +2693,7 @@ try {
   });
   try {
     await reducedFullscreen.page.locator(".journey-story").waitFor({ state: "visible" });
+    await revealStoryViewingOptions(reducedFullscreen.page);
     const entry = reducedFullscreen.page.locator(".journey-story__mobile-media-fullscreen");
     const overlay = reducedFullscreen.page.locator(".journey-story-fullscreen");
     await entry.waitFor({ state: "visible", timeout: 5_000 });
@@ -2676,7 +2703,7 @@ try {
     const entryClones = await reducedFullscreen.page.locator('[data-shared-element-clone^="story-fullscreen-"]').count();
     await reducedFullscreen.page.evaluate(() => window.history.back());
     await overlay.waitFor({ state: "hidden", timeout: 5_000 });
-    const focusReturned = await entry.evaluate((button) => document.activeElement === button);
+    const focusReturned = await storyFullscreenFocusReturned(entry);
     const exitClones = await reducedFullscreen.page.locator('[data-shared-element-clone^="story-fullscreen-"]').count();
     const reducedFailed = entryClones !== 0 || exitClones !== 0 || !focusReturned
       || reducedFullscreen.consoleErrors.length > 0 || reducedFullscreen.pageErrors.length > 0;
@@ -2719,6 +2746,7 @@ try {
       const video = stage.locator(storyCurrentVideoSelector);
       await video.waitFor({ state: "visible", timeout: 5_000 });
       const mediaId = await video.getAttribute("data-shared-media-id");
+      if (surface.mobile) await revealStoryViewingOptions(videoMorph.page);
       const entry = surface.mobile
         ? videoMorph.page.locator(".journey-story__mobile-media-fullscreen")
         : videoMorph.page.locator(".journey-story").getByRole("button", { name: "全屏查看媒体", exact: true });
@@ -2740,7 +2768,7 @@ try {
       const returnClone = matchingMorphs.at(-1);
       const returnSettled = await waitForStoryVideoHandoff(videoMorph.page, ".journey-story__media", mediaId);
       const returnLiveVideos = await videoMorph.page.locator("video[data-shared-media-id]").count();
-      const focusReturned = await entry.evaluate((button) => document.activeElement === button);
+      const focusReturned = await storyFullscreenFocusReturned(entry);
       await stopStoryFullscreenMorphProbe(videoMorph.page);
 
       const videoMorphFailed = !entryClone || entryClone.tag !== "CANVAS"
@@ -2896,6 +2924,7 @@ try {
       // shares the Viewer cluster with playback instead of living in the
       // management sheet. It must clear the same 44px target at every phone
       // width the playback control is graded at.
+      await revealStoryViewingOptions(viewerPlayback.page);
       const fullscreenControl = viewerPlayback.page.locator(".journey-story__mobile-media-fullscreen");
       await fullscreenControl.waitFor({ state: "visible", timeout: 5_000 });
       const fullscreenBox = await fullscreenControl.boundingBox();
@@ -3161,6 +3190,7 @@ try {
       document.querySelector(selector)?.tagName === "VIDEO"
     ), storyCurrentMediaSelector);
 
+    await revealStoryViewingOptions(videoImmersive.page);
     const immersiveEntry = videoImmersive.page.locator(".journey-story__mobile-media-fullscreen");
     const playControl = videoImmersive.page.locator(".journey-story__mobile-media-play");
     const overlay = videoImmersive.page.locator(".journey-story-fullscreen");
@@ -3168,6 +3198,7 @@ try {
     const entryReachableInViewer = await videoImmersive.page.evaluate(() => (
       document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer"
     ));
+    await revealStoryViewingOptions(videoImmersive.page);
     await immersiveEntry.click();
     const videoOpenedFullscreen = await overlay
       .waitFor({ state: "visible", timeout: 5_000 })
@@ -3189,6 +3220,7 @@ try {
       undefined,
       { timeout: 3_000 },
     );
+    await revealStoryViewingOptions(videoImmersive.page);
     await immersiveEntry.click();
     await overlay.waitFor({ state: "visible", timeout: 5_000 });
     const keptPlayingInFullscreen = await videoImmersive.page.waitForFunction(
@@ -3764,6 +3796,7 @@ try {
       window.__qaStoryReducedPageNodes = pages;
       return { count: pages.length, currentId: root?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null };
     }, { pagesSelector: storyMediaPagesSelector });
+    await revealStoryViewingOptions(reducedMotionStory.page);
     await reducedMotionStory.page.getByRole("button", { name: "查看第 2 个照片：seed-1.png", exact: true }).click();
     const reducedState = await reducedMotionStory.page.waitForFunction(({ pagesSelector, currentMediaSelector, targetId }) => {
       const root = document.querySelector(pagesSelector);

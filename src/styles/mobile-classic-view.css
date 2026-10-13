@@ -1,0 +1,157 @@
+/* Layout trials only: never change the stage key, media cursor or browser fullscreen.
+   The product's resolved compact marker owns the breakpoint; desktop is untouched. */
+.journey-story[data-classic-view] {
+  --classic-aperture: clamp(150px, 30svh, 320px);
+  --journey-story-sheet-extent: min(72svh, 680px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  scroll-padding-block: 112px 24px;
+}
+.journey-story[data-classic-view="thumb"] {
+  --classic-aperture: clamp(160px, 34svh, 350px);
+  --journey-story-sheet-extent: min(78svh, 740px);
+}
+.journey-story[data-classic-view="photo"] {
+  --classic-aperture: clamp(190px, 44svh, 470px);
+  --journey-story-sheet-extent: min(86svh, 840px);
+}
+.journey-story[data-classic-view="earth"] {
+  --classic-aperture: clamp(130px, 21svh, 230px);
+  --journey-story-sheet-extent: min(56svh, 540px);
+}
+.journey-story[data-classic-view] > header {
+  display: flex; gap: var(--control-gap); height: 56px; padding-inline: 12px;
+}
+.journey-story[data-classic-view] > header > div { flex: 1; min-width: 0; }
+.journey-story[data-classic-view] > header > div > p { display: none; }
+.journey-story[data-classic-view] > header h2 {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 500 16px/1.4 var(--archive-sans); letter-spacing: 0;
+}
+.journey-story[data-classic-view] .journey-story__close { order: -1; flex: 0 0 44px; }
+.journey-story__classic-view-switch {
+  flex: 0 0 auto; min-height: var(--control-height); min-width: 72px;
+  padding: 0 12px; border: 1px solid var(--control-line); border-radius: var(--control-radius);
+  color: var(--control-ink); background: var(--control-fill);
+  font: 500 12px/1 var(--archive-sans); cursor: pointer; touch-action: manipulation;
+}
+.journey-story__classic-context {
+  display: flex; gap: 12px; justify-content: space-between;
+  margin: 0; padding: 8px 18px; min-height: 32px;
+  color: var(--control-ink); font: 400 13px/1.5 var(--archive-sans);
+}
+.journey-story__classic-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.journey-story__classic-context > small { flex-shrink: 0; color: var(--control-muted); font-size: 11px; }
+.journey-story[data-classic-view] .journey-story__media {
+  --classic-note-space: 0px;
+  --classic-controls-height: 64px;
+  height: calc(var(--classic-aperture) + var(--classic-note-space) + var(--classic-controls-height));
+  min-height: 0; max-height: none;
+}
+.journey-story[data-classic-view] .journey-story__media[data-point-note-slot="true"] {
+  --classic-note-space: var(--story-point-note-slot);
+}
+.journey-story[data-classic-view][data-classic-panel="more"] .journey-story__media {
+  --classic-controls-height: 120px;
+}
+.journey-story[data-classic-view] .journey-story__media > .story-media-pages {
+  top: var(--classic-note-space); bottom: var(--classic-controls-height);
+  --stack-x: 16px; --stack-y: 12px;
+}
+.journey-story[data-classic-view="photo"] .journey-story__media > .story-media-pages {
+  --stack-x: 4px; --stack-y: 6px;
+}
+/* The transport is below the picture, not over native video controls. Its extra
+   options grow the section, leaving the aperture and live video node intact. */
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions {
+  position: absolute; inset: auto 0 0; top: auto; box-sizing: border-box;
+  height: var(--classic-controls-height); padding: 10px 12px;
+  display: flex; flex-wrap: wrap; align-content: center; align-items: center;
+  justify-content: center; gap: var(--control-gap);
+  pointer-events: none; background: var(--archive-bg);
+}
+.journey-story[data-classic-view] .journey-story__mobile-media-actions > :is(button, nav, .journey-story__playback-entry) {
+  position: relative; inset: auto; margin: 0; flex: 0 0 auto; order: 5;
+  pointer-events: auto; width: auto; min-width: 44px;
+}
+.journey-story[data-classic-view] .journey-story__mobile-media-actions > button {
+  display: grid; place-items: center; width: 44px; height: 44px; min-height: 44px;
+  padding: 0; color: var(--control-muted); background: transparent;
+  border: 1px solid transparent; border-radius: var(--control-radius);
+  font: 400 12px/1 var(--archive-sans); box-shadow: none; backdrop-filter: none;
+  touch-action: manipulation; cursor: pointer;
+}
+.journey-story[data-classic-view] .journey-story__mobile-media-actions .journey-story__mobile-video-nav { order: 0; }
+.journey-story[data-classic-view] .journey-story__mobile-media-actions > .journey-story__classic-chapters { order: 1; }
+.journey-story[data-classic-view] .journey-story__mobile-media-actions > :is(.journey-story__playback-entry, .journey-story__mobile-media-play) { order: 2; }
+.journey-story[data-classic-view] .journey-story__mobile-media-actions > .journey-story__classic-more { order: 3; }
+.journey-story[data-classic-view] .journey-story__mobile-media-actions .journey-story__mobile-quick-recap {
+  position: static; min-width: 44px; width: 44px; height: 44px; min-height: 44px;
+  padding: 0; display: grid; place-items: center;
+  border: 1px solid var(--control-line); border-radius: var(--control-radius);
+  color: var(--control-ink); background: var(--control-fill); pointer-events: auto;
+}
+.journey-story[data-classic-view] .journey-story__mobile-quick-recap > span { display: none; }
+.journey-story[data-classic-view] .journey-story__classic-toolbar-break { display: none; }
+.journey-story[data-classic-view][data-classic-panel="more"] .journey-story__classic-toolbar-break {
+  display: block; order: 4; flex-basis: 100%; height: 0;
+}
+.journey-story[data-classic-view]:not([data-classic-panel="more"]) :is(
+  .journey-story__mobile-media-fullscreen, .journey-story__mobile-autobrowse,
+  .journey-story__mobile-media-menu-trigger, .story-media-rail,
+  .journey-story__copy > dl, .journey-story__stops, .journey-story__soundtrack,
+  .journey-story__navigation
+) { display: none; }
+.journey-story[data-classic-view][data-classic-playing="true"] .journey-story__mobile-media-actions > .journey-story__mobile-autobrowse {
+  display: grid; order: 2; color: var(--control-ink);
+}
+.journey-story[data-classic-view][data-classic-playing="true"] .journey-story__mobile-quick-recap { display: none; }
+.journey-story[data-classic-view][data-classic-panel="none"] .journey-story__route-points { display: none; }
+.journey-story[data-classic-view] .journey-story__copy {
+  min-height: 0; padding: 12px 18px 20px; border: 0;
+}
+.journey-story[data-classic-view] .journey-story__copy > :is(.journey-story__note, .journey-story__point-note) {
+  margin-block: 8px; font-size: 15px; line-height: 1.8;
+}
+.journey-story[data-classic-view] > footer { min-height: 0; padding: 0; }
+.journey-story[data-classic-view][data-classic-panel="more"] > footer { padding: 8px 12px 16px; }
+.journey-story[data-classic-view] .journey-story__copy > .journey-story__mobile-media-actions {
+  position: relative; inset: auto; height: auto; min-height: 64px;
+}
+/* Anchor decisions to the whole controls region, not the 44px play slot. */
+.journey-story[data-classic-view] .journey-story__mobile-media-actions.has-quick-recap > .journey-story__playback-entry {
+  position: static;
+}
+.journey-story[data-classic-view] .journey-story__mobile-media-actions .journey-story__quick-recap-status {
+  top: auto; bottom: 100%; right: 12px; width: min(280px, calc(100vw - 40px));
+  max-width: calc(100% - 24px); max-height: 45dvh; overflow-y: auto;
+}
+/* B: one thumb-sized dock. A keeps a quiet flat row; C gives the photo room;
+   D keeps substantially more of the existing particle Earth visible. */
+.journey-story[data-classic-view="thumb"] .journey-story__mobile-media-actions {
+  border-block: 1px solid var(--control-line); background: var(--control-fill);
+}
+.journey-story[data-classic-view="thumb"] :is(.journey-story__mobile-quick-recap, .journey-story__mobile-media-play) {
+  color: var(--control-primary-ink); background: var(--startrips-starlight);
+}
+.journey-story[data-classic-view="photo"] .journey-story__classic-context > small { display: none; }
+.journey-story[data-classic-view="earth"] .journey-story__media { margin-inline: 8px; }
+.journey-story[data-classic-view] :is(.journey-story__classic-view-switch, .journey-story__classic-chapters, .journey-story__classic-more):focus-visible {
+  outline: 2px solid var(--control-focus); outline-offset: -3px;
+}
+.journey-story[data-classic-view] button:disabled { cursor: default; }
+@media (max-height: 480px) {
+  .journey-story[data-classic-view] {
+    --journey-story-sheet-extent: 92svh;
+    /* Preserve a picture area above the native video controls on short phones. */
+    --classic-aperture: max(180px, calc(92svh - 192px));
+  }
+  .journey-story[data-classic-view] .journey-story__classic-context { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .journey-story[data-classic-view] { transition: none; }
+}
+
+/* Secondary autoplay retains its visible label, unlike the primary play icon. */
+.journey-story[data-classic-view] .journey-story__mobile-media-actions > .journey-story__mobile-autobrowse {
+  width: auto; min-width: 88px; padding-inline: 12px;
+}

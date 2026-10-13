@@ -1,4 +1,4 @@
-import { launchQaBrowser } from "./qa-browser.mjs";
+import { launchQaBrowser, revealStoryViewingOptions, storyViewerReturnLabel } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
@@ -170,6 +170,7 @@ try {
       return sheet;
     };
     const enterManage = async () => {
+      await revealStoryViewingOptions(page);
       await manageTrigger.click();
       await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
     };
@@ -191,6 +192,7 @@ try {
       await page.waitForFunction(() => document.querySelector(".journey-story__order-message")?.textContent?.includes("已撤销媒体移动"));
     };
 
+    await revealStoryViewingOptions(page);
     const viewerManageLabel = await manageTrigger.getAttribute("aria-label");
     record("story-mobile-media-reclassification-viewer-trigger", { viewerManageLabel, failed: viewerManageLabel !== "管理旅程" });
     await enterManage();
@@ -211,13 +213,15 @@ try {
     });
     await waitForCounts(3, 1, 2);
     await page.keyboard.press("Escape");
-    await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer"
-      && document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    await page.waitForFunction((label) => document.activeElement?.getAttribute("aria-label") === label,
+      await storyViewerReturnLabel(page));
     await enterManage();
     await openReclassification();
     await page.evaluate(() => window.history.back());
-    await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer"
-      && document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    await page.waitForFunction((label) => document.activeElement?.getAttribute("aria-label") === label,
+      await storyViewerReturnLabel(page));
     record("story-mobile-media-reclassification-exit-contract", { escapeAndBackRestoreViewerFocus: true, failed: false });
 
     await enterManage();

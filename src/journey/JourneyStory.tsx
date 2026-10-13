@@ -102,6 +102,8 @@ import {
 } from "./journeyApi";
 import { useAtlasView, type AtlasMutations, type UploadJourneyMedia } from "./atlasView";
 import { useMediaPresentationStyle } from "./mediaPresentation";
+import { MOBILE_CLASSIC_VIEWS, useMobileClassicView } from "./mobileClassicView";
+import "../styles/mobile-classic-view.css";
 import { RevealedNote } from "./RevealedNote";
 import { shouldRefreshStoryMediaRead, type MediaReadState } from "./mediaReadRefresh";
 import { mediaPreviewLayer } from "./mediaPreviewLayer";
@@ -906,6 +908,9 @@ export function JourneyStory({
   const playingRef = useRef(false);
   playingRef.current = playing;
   const mobileLayout = useCompactMobileLayout();
+  const [mobileClassicView, cycleMobileClassicView] = useMobileClassicView();
+  const [classicPanel, setClassicPanel] = useState<"chapters" | "more" | null>(null);
+  const classicViewDefinition = MOBILE_CLASSIC_VIEWS.find((view) => view.id === mobileClassicView)!;
   useEffect(() => {
     if (quickRecap?.state !== "over-budget") return;
     // Touch activation runs on pointerup. Its native compatibility-click focus
@@ -948,6 +953,8 @@ export function JourneyStory({
   const inlineStageRef = useRef<StoryMediaPagesHandle>(null);
   const fullscreenStageRef = useRef<StoryMediaPagesHandle>(null);
   const [mobileManageMode, setMobileManageMode] = useState(false);
+  const classicActive = mobileLayout && mediaPresentation === "classic" && !mobileManageMode;
+  useEffect(() => { setClassicPanel(null); }, [classicActive, fullscreen, journeyId]);
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
   const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileManageFocusFrameRef = useRef<number | null>(null);
@@ -1604,6 +1611,10 @@ export function JourneyStory({
       exitFullscreen();
       return;
     }
+    if (classicActive && classicPanel) {
+      setClassicPanel(null);
+      return;
+    }
     if (mobileLayout && mobileMediaMenuOpen) {
       setMobileMediaMenuOpen(false);
       return;
@@ -1663,7 +1674,7 @@ export function JourneyStory({
   // burying a stale menu token underneath the replacement. Mutation-only
   // children are gated by Manage so desktop confirmations migrating into a
   // compact viewport push parent -> child tokens in the correct order.
-  useMobileSurfaceHistory(mobileHistoryLayers.mediaSurface, "story-media-surface", () => {
+  useMobileSurfaceHistory(mobileHistoryLayers.mediaSurface || (classicActive && classicPanel !== null), "story-media-surface", () => {
     if (fullscreen) {
       exitFullscreen();
       return;
@@ -1672,6 +1683,7 @@ export function JourneyStory({
       return closeMobileMediaDelete();
     }
     if (mobileMediaMenuOpen) setMobileMediaMenuOpen(false);
+    else setClassicPanel(null);
   });
   useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
   const storyModal = !mobileLayout || mobileStoryExpanded;
@@ -1730,6 +1742,9 @@ export function JourneyStory({
       }
       // Fullscreen owns Escape on its window-level handler.
       if (fullscreen) return;
+      if (classicActive && classicPanel) {
+        event.preventDefault(); setClassicPanel(null); return;
+      }
       event.preventDefault();
       if (mobileManageMode) {
         exitMobileManageMode();
@@ -1748,6 +1763,8 @@ export function JourneyStory({
     mobileMediaMenuOpen,
     mutationPending,
     storyModal,
+    classicActive,
+    classicPanel,
   ]);
 
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
@@ -2631,7 +2648,14 @@ export function JourneyStory({
       document.removeEventListener("keydown", onKeyDown, true);
       // Returning to a persistent media node must not scroll the Story under
       // its sticky mobile header (the original photo may now be a back page).
-      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+      // Classic viewing options collapse during fullscreen. Their old trigger
+      // is still connected but cannot receive focus; return to visible More.
+      const previousStillVisible = previousFocus?.isConnected
+        && previousFocus.getClientRects().length > 0
+        && getComputedStyle(previousFocus).visibility !== "hidden"
+        && !previousFocus.closest("[inert], [hidden]");
+      const returnTarget = previousStillVisible ? previousFocus : mobileManageViewerTriggerRef.current;
+      if (returnTarget?.isConnected) returnTarget.focus({ preventScroll: true });
     };
   }, [fullscreen]);
 
@@ -3325,6 +3349,10 @@ export function JourneyStory({
   }
 
   function openFullscreenAfterStoryGesture() {
+    if (classicActive && mobileClassicView === "photo") {
+      setClassicPanel((panel) => panel === "more" ? null : "more");
+      return;
+    }
     // Story chooses the destination; the active stage reports the real spring
     // completion only while that gesture still owns its media and surface.
     enterFullscreen(false);
@@ -3337,6 +3365,10 @@ export function JourneyStory({
     }
     storyMediaGestureConsumedRef.current = false;
     cancelPendingMediaDragSettle();
+    if (classicActive && mobileClassicView === "photo") {
+      setClassicPanel((panel) => panel === "more" ? null : "more");
+      return;
+    }
     enterFullscreen(mobileLayout ? false : playingRef.current);
   }
 
@@ -4378,6 +4410,9 @@ export function JourneyStory({
       ref={!mobileLayout ? desktopChapterRailRef : undefined}
       className="journey-story__route-points"
       aria-label="选择旅程途径点"
+      onClick={(event) => {
+        if (classicActive && event.target instanceof Element && event.target.closest("button")) setClassicPanel(null);
+      }}
       onKeyDown={!mobileLayout ? focusChapterRailButton : undefined}
       onFocusCapture={!mobileLayout ? (event) => {
         if (!(event.target instanceof HTMLButtonElement)) return;
@@ -4451,6 +4486,18 @@ export function JourneyStory({
     </div>
   ) : null;
 
+  const classicDisclosureControls = classicActive ? <>
+    <button type="button" className="journey-story__classic-chapters"
+      aria-label="选择停靠点" aria-expanded={classicPanel === "chapters"}
+      aria-controls="journey-classic-details" disabled={mutationPending}
+      onClick={() => setClassicPanel((panel) => panel === "chapters" ? null : "chapters")}>站点</button>
+    <button ref={mobileManageViewerTriggerRef} type="button" className="journey-story__classic-more"
+      aria-label="更多查看选项" aria-expanded={classicPanel === "more"}
+      aria-controls="journey-classic-details" disabled={mutationPending}
+      onClick={() => setClassicPanel((panel) => panel === "more" ? null : "more")}>更多</button>
+    <span className="journey-story__classic-toolbar-break" aria-hidden="true" />
+  </> : null;
+
   const content = (
     <div
       className={`journey-story-backdrop${mobileLayout ? " is-mobile-context" : ""}${mobileLayout && mobileStoryExpanded ? " is-story-expanded" : ""}`}
@@ -4462,6 +4509,9 @@ export function JourneyStory({
         tabIndex={-1}
         className={`journey-story motion-staged${mobileLayout && mobileManageMode ? " is-mobile-manage" : ""}`}
         data-story-layout={mobileLayout ? "mobile" : "desktop"}
+        data-classic-view={classicActive ? mobileClassicView : undefined}
+        data-classic-panel={classicActive ? classicPanel ?? "none" : undefined}
+        data-classic-playing={classicActive && playing ? "true" : undefined}
         data-story-editing={mediaEditing ? "true" : undefined}
         data-has-media={hasStoryMedia ? "true" : "false"}
         data-mobile-mode={mobileLayout ? (mobileManageMode ? "manage" : "viewer") : undefined}
@@ -4516,6 +4566,12 @@ export function JourneyStory({
             disabled={mutationPending || placementAnalyzing}
             onClick={toggleDesktopEditing}
           >{desktopEditing ? "完成" : "编辑"}</button> : null}
+          {classicActive ? <button type="button" className="journey-story__classic-view-switch"
+            aria-label={`切换经典视图，当前 ${classicViewDefinition.letter} ${classicViewDefinition.label}`}
+            title="A 轻量经典 / B 单手操作 / C 照片优先 / D 地球优先"
+            disabled={mutationPending || mediaGestureHolding || Boolean(videoHandoffRef.current)}
+            onClick={() => { setClassicPanel(null); cycleMobileClassicView(); }}
+          >视图 {classicViewDefinition.letter}</button> : null}
           {/* An upload in flight keeps this button clickable so pressing it
               explains the wait instead of silently doing nothing. */}
           <button
@@ -4538,6 +4594,10 @@ export function JourneyStory({
           </p>
         ) : null}
 
+        {classicActive ? <p className="journey-story__classic-context">
+          <span>{activeChapterRoutePoint?.label || (activeChapterRoutePoint ? "途径点" : "整段旅程")}</span>
+          <small>{classicViewDefinition.label}</small>
+        </p> : null}
         <div className="journey-story__layout">
           {hasStoryMedia ? <section
             className={`journey-story__media${overview && manageMedia ? " is-organizing" : ""}`}
@@ -4675,6 +4735,7 @@ export function JourneyStory({
               onGestureTapAfterSettle={openFullscreenAfterStoryGesture}
               onForegroundChange={reportForegroundMedia}
               onImageClick={mobileLayout ? openImageFullscreenAfterTap : undefined}
+              imageActionLabel={classicActive && mobileClassicView === "photo" ? "查看操作" : undefined}
               onNavigate={!mobileLayout ? navigateFromPicture : undefined}
               canNavigatePrevious={canStepPrevious}
               canNavigateNext={canStepNext}
@@ -4741,6 +4802,7 @@ export function JourneyStory({
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
             {mobileLayout && !overview && activeEntry ? (
               <div className={`journey-story__mobile-media-actions${quickRecap ? " has-quick-recap" : ""}`}>
+                {classicDisclosureControls}
                 {videoNavigationVisible && !mobileManageMode && mediaDeleteState === "idle" ? <nav className="journey-story__mobile-video-nav" aria-label="视频媒体导航">
                   <button type="button" data-video-step="previous" disabled={!canStepPrevious}
                     {...videoStepButtonInput(-1)} aria-label="上一个媒体">
@@ -4816,7 +4878,7 @@ export function JourneyStory({
                 {manageMedia ? <IconActionButton
                   type="button"
                   className="journey-story__mobile-media-menu-trigger"
-                  buttonRef={mobileManageViewerTriggerRef}
+                  buttonRef={classicActive ? undefined : mobileManageViewerTriggerRef}
                   label={mobileManageMode ? "管理当前媒体" : "管理旅程"}
                   tooltip={mobileManageMode ? "管理媒体" : "管理旅程"}
                   aria-expanded={mobileManageMode ? mobileMediaMenuOpen : undefined}
@@ -4963,7 +5025,7 @@ export function JourneyStory({
             ) : null}
           </section> : null}
 
-          <section ref={copyRef} className="journey-story__copy">
+          <section ref={copyRef} id={classicActive ? "journey-classic-details" : undefined} className="journey-story__copy">
             {!mobileLayout ? <div className="journey-story__heading">
               <p>{journeyRange(journey)}</p>
               <h2 id="journey-story-title">{journey.title}</h2>
@@ -4986,10 +5048,11 @@ export function JourneyStory({
             </div> : null}
             {mobileLayout && !overview && !stagePresented && !mobileManageMode ? (
               <div className="journey-story__mobile-media-actions">
+                {classicDisclosureControls}
                 {manageMedia ? <IconActionButton
                   type="button"
                   className="journey-story__mobile-media-menu-trigger"
-                  buttonRef={mobileManageViewerTriggerRef}
+                  buttonRef={classicActive ? undefined : mobileManageViewerTriggerRef}
                   label="管理旅程"
                   tooltip="管理旅程"
                   disabled={mutationPending}

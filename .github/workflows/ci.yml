@@ -260,10 +260,11 @@ jobs:
               owner-share::pnpm qa:owner-share
               playback-map-bridge::pnpm qa:playback-map-bridge
           - name: shell-composer
-            suites: "|post-login|mobile-contract|composer-route-points|composer-mobile-ia|entry-boundaries|final-acceptance|"
+            suites: "|post-login|mobile-contract|mobile-classic-views|composer-route-points|composer-mobile-ia|entry-boundaries|final-acceptance|"
             commands: |
               post-login::pnpm qa:post-login-controls
               mobile-contract::pnpm qa:mobile-contract
+              mobile-classic-views::pnpm qa:mobile-classic-views
               composer-route-points::pnpm qa:composer-route-points
               composer-mobile-ia::pnpm qa:composer-mobile-ia
               entry-boundaries::pnpm qa:entry-boundaries

@@ -1,3 +1,4 @@
+import { revealStoryViewingOptions } from "./qa-browser.mjs";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
@@ -3108,6 +3109,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.waitForFunction(() => Boolean(
         document.querySelector('.journey-story [data-media-page="current"][data-media-page-id="fa-image-2"]'),
       ), null, { timeout: 5_000 });
+      await revealStoryViewingOptions(page);
       const mobileAutobrowse = page.locator('.journey-story__mobile-autobrowse');
       if (!await mobileAutobrowse.isVisible()
         || await mobileAutobrowse.getAttribute("aria-label") !== "自动浏览当前媒体") {
