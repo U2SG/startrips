@@ -182,6 +182,12 @@ try {
     results.push({ videoContinuity: true });
   }
   // An external tab can change the preference while this Story is closed.
+  // A preference change no longer activates the old header action that closed
+  // More; dismiss that real disclosure before asking to close its parent.
+  if (await root.getAttribute("data-classic-panel") === "more") {
+    await page.getByRole("button", { name: "更多查看选项", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-classic-panel") === "none");
+  }
   await page.getByRole("button", { name: "退出旅程故事", exact: true }).click();
   await root.waitFor({ state: "detached" });
   const other = await page.context().newPage();
