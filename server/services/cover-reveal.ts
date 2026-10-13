@@ -1,3 +1,4 @@
+import { creativeCoverRecipe, creativeCoverRecipeForGeneration, CREATIVE_COVER_RECIPES } from "../../src/reveal/creativeCoverRecipes";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import {
@@ -130,6 +131,7 @@ export type CoverRevealSettings = CoverRevealCeilings & {
 
 export type CoverRevealErrorCode =
   | CoverRevealIneligibleReason
+  | "COVER_REVEAL_RECIPE_UNSUPPORTED"
   | "COVER_REVEAL_NOT_CLAIMED"
   | "COVER_REVEAL_NOT_LEASED"
   | "COVER_REVEAL_SOURCE_CHANGED"
@@ -141,7 +143,7 @@ export type CoverRevealErrorCode =
 export type CoverRevealFailure = {
   ok: false;
   error: CoverRevealErrorCode;
-  status: 404 | 409;
+  status: 400 | 404 | 409;
 };
 
 /** The public shape of a job. It carries no URL and no token, ever. */
@@ -364,84 +366,68 @@ export async function enqueueCoverRevealDerivative(
   journeyId: string,
   atlasId: string,
   dependencies: CoverRevealDependencies = defaultDependencies,
+  recipeId = "ink-wash-memory",
 ): Promise<{ ok: true; job: CoverRevealJobView } | CoverRevealFailure> {
-  const journey = await loadJourneyState(journeyId, atlasId);
-  if (!journey) return { ok: false, error: "JOURNEY_UNAVAILABLE", status: 404 };
-
-  const eligibility = evaluateCoverRevealEligibility(journey);
-  if (!eligibility.ok) {
-    return { ok: false, error: eligibility.reason, status: 409 };
+  const recipe = creativeCoverRecipe(recipeId);
+  if (!recipe) return { ok: false, error: "COVER_REVEAL_RECIPE_UNSUPPORTED", status: 400 };
+  // Refuse foreign/unknown Journeys before acquiring their row locks.
+  if (!await loadJourneyState(journeyId, atlasId)) {
+    return { ok: false, error: "JOURNEY_UNAVAILABLE", status: 404 };
   }
-
-  await supersedeStaleDerivatives(
-    journeyId,
-    eligibility.source.id,
-    eligibility.contentHash,
-    dependencies,
-  );
-
-  const existing = await db
-    .select()
-    .from(coverRevealDerivatives)
-    .where(and(
+  const retired: CoverRevealDerivative[] = [];
+  const outcome = await db.transaction(async (transaction): Promise<{ ok: true; job: CoverRevealJobView } | CoverRevealFailure> => {
+    const current = await lockJourneyState(transaction, journeyId);
+    if (!current || current.atlasId !== atlasId) return { ok: false, error: "JOURNEY_UNAVAILABLE", status: 404 };
+    const eligibility = evaluateCoverRevealEligibility(current);
+    if (!eligibility.ok) return { ok: false, error: eligibility.reason, status: 409 };
+    // A Journey has one selected creative opening, not three competing ready rows.
+    // Selection and source validation share the same lock as worker publication.
+    const live = await transaction.select().from(coverRevealDerivatives).where(and(
       eq(coverRevealDerivatives.journeyId, journeyId),
-      eq(coverRevealDerivatives.sourceMediaAssetId, eligibility.source.id),
-      eq(coverRevealDerivatives.sourceContentHash, eligibility.contentHash),
-      eq(
-        coverRevealDerivatives.generationKind,
-        COVER_REVEAL_GENERATION_KIND,
-      ),
-      eq(
-        coverRevealDerivatives.generationVersion,
-        COVER_REVEAL_GENERATION_VERSION,
-      ),
       inArray(coverRevealDerivatives.state, ["queued", "leased", "ready"]),
-    ))
-    .limit(1);
-  if (existing[0]) return { ok: true, job: jobView(existing[0]) };
+    )).for("update");
+    let selected: CoverRevealDerivative | undefined;
+    for (const row of live) {
+      if (row.sourceMediaAssetId === eligibility.source.id && row.sourceContentHash === eligibility.contentHash
+        && row.generationKind === recipe.generationKind && row.generationVersion === recipe.version) {
+        selected = row;
+        continue;
+      }
+      await transaction.update(coverRevealDerivatives).set({
+        state: "superseded", supersededAt: new Date(), updatedAt: new Date(),
+        outputStorageKey: null, outputStorageDriver: null, outputMimeType: null,
+        outputBytes: null, outputWidth: null, outputHeight: null,
+      }).where(eq(coverRevealDerivatives.id, row.id));
+      retired.push(row);
+    }
+    if (selected) return { ok: true, job: jobView(selected) };
+    const [created] = await transaction.insert(coverRevealDerivatives).values({
+      journeyId, sourceMediaAssetId: eligibility.source.id, sourceContentHash: eligibility.contentHash,
+      generationKind: recipe.generationKind, generationVersion: recipe.version,
+      presetId: recipe.presetId, seed: eligibility.contentHash.slice(0, 32), state: "queued",
+    }).returning();
+    return { ok: true, job: jobView(created) };
+  });
+  // Object I/O is outside the transaction; existing write/namespace sweep remains the backstop.
+  for (const row of retired) await discardDerivativeObject(row.outputStorageDriver, row.outputStorageKey, dependencies);
+  return outcome;
+}
 
-  const [created] = await db
-    .insert(coverRevealDerivatives)
-    .values({
-      journeyId,
-      sourceMediaAssetId: eligibility.source.id,
-      sourceContentHash: eligibility.contentHash,
-      generationKind: COVER_REVEAL_GENERATION_KIND,
-      generationVersion: COVER_REVEAL_GENERATION_VERSION,
-      presetId: COVER_REVEAL_DEFAULT_PRESET_ID,
-      // Deterministic for this pinned source and this contract, so the same
-      // cover re-queued after a failure reproduces the same output rather than
-      // a different painting of the same photograph.
-      seed: `${eligibility.contentHash.slice(0, 32)}`,
-      state: "queued",
-    })
-    // The read above is an optimisation, not the guarantee. Two owner requests
-    // arriving together both see no live row, so the live-identity partial
-    // unique index is what actually makes enqueue idempotent: the loser
-    // conflicts, inserts nothing, and reads the winner back.
-    .onConflictDoNothing()
-    .returning();
-  if (created) return { ok: true, job: jobView(created) };
-
-  const [won] = await db
-    .select()
-    .from(coverRevealDerivatives)
-    .where(and(
-      eq(coverRevealDerivatives.journeyId, journeyId),
-      eq(coverRevealDerivatives.sourceMediaAssetId, eligibility.source.id),
-      eq(coverRevealDerivatives.sourceContentHash, eligibility.contentHash),
-      eq(coverRevealDerivatives.generationKind, COVER_REVEAL_GENERATION_KIND),
-      eq(
-        coverRevealDerivatives.generationVersion,
-        COVER_REVEAL_GENERATION_VERSION,
-      ),
-      inArray(coverRevealDerivatives.state, ["queued", "leased", "ready"]),
-    ))
-    .limit(1);
-  // The winner settled the job out of the live set between the conflict and
-  // this read, which only a cover change can do; the caller asks again.
-  if (!won) return { ok: false, error: "JOURNEY_UNAVAILABLE", status: 409 };
-  return { ok: true, job: jobView(won) };
+/** Owner editor status, separate from the display capability and worker's processing view. */
+export async function readCoverRevealStatus(journeyId: string, atlasId: string) {
+  const current = await loadJourneyState(journeyId, atlasId);
+  if (!current) return null;
+  const source = evaluateCoverRevealEligibility(current);
+  if (!source.ok) return { state: "unavailable", recipeId: null, sourceMediaAssetId: null, reason: source.reason };
+  const rows = await db.select().from(coverRevealDerivatives).where(and(
+    eq(coverRevealDerivatives.journeyId, journeyId),
+    eq(coverRevealDerivatives.sourceMediaAssetId, source.source.id),
+    eq(coverRevealDerivatives.sourceContentHash, source.contentHash),
+    inArray(coverRevealDerivatives.state, ["queued", "leased", "ready", "failed"]),
+  )).orderBy(sql`${coverRevealDerivatives.createdAt} desc`);
+  const row = rows.find((candidate) => creativeCoverRecipeForGeneration(candidate.generationKind, candidate.generationVersion));
+  return { state: row?.state ?? "idle", recipeId: row ? creativeCoverRecipeForGeneration(row.generationKind, row.generationVersion)!.id : null,
+    sourceMediaAssetId: source.source.id, derivativeId: row?.id ?? null };
 }
 
 /**
@@ -533,7 +519,7 @@ export async function readCoverRevealDisplay(
     .from(coverRevealDerivatives)
     .where(and(
       eq(coverRevealDerivatives.journeyId, journeyId),
-      eq(coverRevealDerivatives.generationKind, COVER_REVEAL_GENERATION_KIND),
+      inArray(coverRevealDerivatives.generationKind, CREATIVE_COVER_RECIPES.map((recipe) => recipe.generationKind)),
       eq(
         coverRevealDerivatives.generationVersion,
         COVER_REVEAL_GENERATION_VERSION,
@@ -561,7 +547,8 @@ export async function readCoverRevealDisplay(
   // identify a revision: replacing the photograph behind the same cover asset
   // keeps the id and moves the verified stored-byte identity.
   const ready = readyRows.find((row) => (
-    row.sourceMediaAssetId === currentEligibility.source.id
+    creativeCoverRecipeForGeneration(row.generationKind, row.generationVersion) !== null
+    && row.sourceMediaAssetId === currentEligibility.source.id
     && row.sourceContentHash === currentEligibility.contentHash
   ));
 
@@ -592,6 +579,24 @@ export async function readCoverRevealDisplay(
       key: ready.outputStorageKey,
       expiresInSeconds: displayReadExpiresInSeconds,
     });
+
+  // A same-source style change while signing must not return a deselected image.
+  // Revalidate canonical source and the live derivative together after asynchronous storage work.
+  const stillDisplayable = await db.transaction(async (transaction) => {
+    const state = await lockJourneyState(transaction, journeyId);
+    if (!state || state.atlasId !== atlasId) return false;
+    const source = evaluateCoverRevealEligibility(state);
+    if (!source.ok || source.source.id !== ready.sourceMediaAssetId || source.contentHash !== ready.sourceContentHash) return false;
+    const [selected] = await transaction.select().from(coverRevealDerivatives).where(and(
+      eq(coverRevealDerivatives.id, ready.id), eq(coverRevealDerivatives.state, "ready"),
+      eq(coverRevealDerivatives.outputStorageKey, ready.outputStorageKey!),
+      eq(coverRevealDerivatives.generationKind, ready.generationKind),
+      eq(coverRevealDerivatives.generationVersion, ready.generationVersion),
+      eq(coverRevealDerivatives.presetId, ready.presetId),
+    ));
+    return Boolean(selected);
+  });
+  if (!stillDisplayable) return { ok: true, derivative: null, reason: "NO_READY_DERIVATIVE" };
 
   return {
     ok: true,

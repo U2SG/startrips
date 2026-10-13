@@ -818,4 +818,21 @@ describe("#386 cover-reveal display read", () => {
         .toMatchObject({ error: "STORAGE_UNAVAILABLE" });
     });
   });
+  it("does not return a deselected recipe if selection changes while storage signs", async () => {
+    const { journeyId, backend } = await publishedDerivative();
+    const original = backend.dependencies.storageForBackend;
+    const racing: CoverRevealDependencies = {
+      ...backend.dependencies,
+      storageForBackend: (id) => ({ ...original(id), async createPrivateReadUrl(input) {
+        const signed = await original(id).createPrivateReadUrl(input);
+        const changed = await enqueueCoverRevealDerivative(journeyId, identity.atlasId, backend.dependencies, "paper-collage-memory");
+        expect(changed.ok).toBe(true);
+        return signed;
+      } }),
+    };
+    expect(await readCoverRevealDisplay(journeyId, identity.atlasId, DISPLAY_TTL_SECONDS, racing)).toEqual({
+      ok: true, derivative: null, reason: "NO_READY_DERIVATIVE",
+    });
+  });
+
 });

@@ -53,6 +53,8 @@
 // spacing and the camera tilt below.
 import { mkdir, writeFile } from "node:fs/promises";
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { bounded, settledBookSnapshot, flightBookSnapshot, waitForBookSnapshot } from "./qa-journey-book-readout.mjs";
+import { verifyBookReadoutRaces } from "./qa-journey-book-readout-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const artifactDir = "artifacts/journey-book-3d";
@@ -91,19 +93,6 @@ const SETTLE_TIMEOUT_MS = 120_000;
 // after this long is stuck, and fails by name instead of running to the
 // suite cap.
 const STEP_TIMEOUT_MS = 30_000;
-
-/** Resolve as `promise` does, or reject naming `label` after `ms`. */
-async function bounded(label, promise, ms = STEP_TIMEOUT_MS) {
-  let timer;
-  const expired = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label}: no answer within ${ms} ms`)), ms);
-  });
-  try {
-    return await Promise.race([promise, expired]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 const checks = [];
 let failed = false;
@@ -190,27 +179,27 @@ async function openSession(browser, name, contextOptions) {
    * it reports. `evidence: false` when no screenshot of this spread follows.
    */
   async function settledAt(face, { evidence = true } = {}) {
-    await waitForBook(`settle on face ${face}`, (want) => {
-      const raw = document.querySelector(".journey-book-3d__stage")?.dataset.qaBook;
-      return raw ? JSON.parse(raw).face === want : false;
-    }, face);
-    // Let pictures near the spread land so the evidence shows real pages; the
-    // sampled margins are paper either way.
-    if (evidence) await page.waitForTimeout(1_200);
-    return bounded(`${name} read the settled book on face ${face}`, page.evaluate(() => {
-      const stage = document.querySelector(".journey-book-3d__stage");
-      const box = stage.getBoundingClientRect();
-      return { ...JSON.parse(stage.dataset.qaBook), stage: { left: box.left, top: box.top, width: box.width, height: box.height } };
-    }));
+    const deadline = performance.now() + SETTLE_TIMEOUT_MS;
+    const snapshot = () => waitForBook(`settle on face ${face}`, settledBookSnapshot, face,
+      Math.max(1, deadline - performance.now()));
+    if (evidence) {
+      await snapshot();
+      // Preserve the existing picture-loading allowance, but never use a
+      // pre-delay readout for the screenshot. Both waits share one budget.
+      await page.waitForTimeout(1_200);
+    }
+    // The successful poll returns its own parsed readout + rect. No second
+    // DOM read can race a subsequent removal of data-qa-book.
+    return snapshot();
   }
 
   /**
    * Wait for `predicate` on the page; when it never holds, fail naming `label`
    * with what the stage reports (`data-qa-book` is absent while unsettled).
    */
-  async function waitForBook(label, predicate, arg) {
+  async function waitForBook(label, predicate, arg, timeoutMs = SETTLE_TIMEOUT_MS) {
     try {
-      await page.waitForFunction(predicate, arg, { timeout: SETTLE_TIMEOUT_MS });
+      return await waitForBookSnapshot(page, `${name} ${label}`, predicate, arg, timeoutMs, STEP_TIMEOUT_MS);
     } catch (error) {
       const now = await bounded("read the book's QA readout", page.evaluate(() => {
         const stage = document.querySelector(".journey-book-3d__stage");
@@ -287,14 +276,8 @@ async function openSession(browser, name, contextOptions) {
    * sheet in flight reaches (`data-qa-book-flight`).
    */
   async function flightAt(progress, tolerance) {
-    await waitForBook(`render progress ${progress} with the camera landed`, ({ want, tol }) => {
-      const raw = document.querySelector(".journey-book-3d__stage")?.dataset.qaBookFlight;
-      if (!raw) return false;
-      const flight = JSON.parse(raw);
-      return Math.abs(flight.progress - want) <= tol && !flight.following;
-    }, { want: progress, tol: tolerance });
-    return bounded(`${name} read the flight at progress ${progress}`,
-      page.evaluate(() => JSON.parse(document.querySelector(".journey-book-3d__stage").dataset.qaBookFlight)));
+    return waitForBook(`render progress ${progress} with the camera landed`, flightBookSnapshot,
+      { want: progress, tol: tolerance });
   }
 
   return { page, context, settledAt, flightAt, checkAlignment, checkOuterMargin, recordErrors };
@@ -531,6 +514,8 @@ async function desktopDrags(browser) {
 
 /** Desktop last spread: End riffles to the back cover, one step back reads the deep right page. */
 async function desktopLastSpread(browser) {
+  const raceEvidence = await verifyBookReadoutRaces(browser);
+  record("book readout: matched snapshots survive post-wait DOM invalidation", raceEvidence, true);
   await desktopSession(browser, "last-spread", async (session) => {
     const { page } = session;
     await page.locator(".journey-book-3d").focus({ timeout: STEP_TIMEOUT_MS });

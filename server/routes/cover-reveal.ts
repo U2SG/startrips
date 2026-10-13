@@ -1,3 +1,4 @@
+import { creativeCoverRecipe, CREATIVE_COVER_RECIPES } from "../../src/reveal/creativeCoverRecipes";
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
@@ -8,6 +9,7 @@ import {
   enqueueCoverRevealDerivative,
   failCoverRevealJob,
   readCoverRevealDisplay,
+  readCoverRevealStatus,
   signCoverRevealOutputUpload,
   signCoverRevealSourceRead,
   type CoverRevealSettings,
@@ -96,6 +98,23 @@ async function readLeaseToken(read: () => Promise<unknown>) {
   };
 }
 
+// Capability is deployment-owned: do not queue new kinds against a legacy-only worker.
+coverRevealRoutes.get("/recipes", async (context) => {
+  await requireAtlasAccess(context.req.raw, "read");
+  context.header("cache-control", COVER_REVEAL_CACHE_CONTROL);
+  return context.json({ recipes: CREATIVE_COVER_RECIPES
+    .filter((recipe) => recipe.id === "ink-wash-memory" || process.env.COVER_REVEAL_CREATIVE_ENABLED === "true")
+    .map(({ id, title }) => ({ id, title })) });
+});
+coverRevealRoutes.get("/journeys/:id/status", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  context.header("cache-control", COVER_REVEAL_CACHE_CONTROL);
+  const id = context.req.param("id");
+  if (!UUID_PATTERN.test(id)) return context.json({ error: "JOURNEY_UNAVAILABLE" }, 404);
+  const status = await readCoverRevealStatus(id, atlas.id);
+  return status ? context.json(status) : context.json({ error: "JOURNEY_UNAVAILABLE" }, 404);
+});
+
 // The owner's single verb. Eligibility is decided here from canonical Journey
 // state and never from anything the caller said beyond which Journey it is.
 coverRevealRoutes.post("/journeys/:id", async (context) => {
@@ -104,7 +123,16 @@ coverRevealRoutes.post("/journeys/:id", async (context) => {
   if (!UUID_PATTERN.test(journeyId)) {
     return context.json({ error: "JOURNEY_UNAVAILABLE" }, 404);
   }
-  const result = await enqueueCoverRevealDerivative(journeyId, atlas.id);
+  const raw = await context.req.text();
+  const body = raw.trim() ? await readJsonObject(async () => JSON.parse(raw)) : {};
+  if (!body || Object.keys(body).some((key) => key !== "recipeId") || (body.recipeId !== undefined && !creativeCoverRecipe(body.recipeId))) {
+    return context.json({ error: "COVER_REVEAL_RECIPE_UNSUPPORTED" }, 400);
+  }
+  const recipeId = body.recipeId === undefined ? "ink-wash-memory" : String(body.recipeId);
+  if (recipeId !== "ink-wash-memory" && process.env.COVER_REVEAL_CREATIVE_ENABLED !== "true") {
+    return context.json({ error: "COVER_REVEAL_RECIPE_UNAVAILABLE" }, 503);
+  }
+  const result = await enqueueCoverRevealDerivative(journeyId, atlas.id, undefined, recipeId);
   if (!result.ok) return context.json({ error: result.error }, result.status);
   return context.json({ derivative: result.job });
 });

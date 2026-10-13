@@ -4,6 +4,7 @@ import {
   everydayFragmentClient,
   type EverydayFragmentClient,
   enqueueCoverReveal,
+  listCreativeCoverRecipes, readCreativeCoverStatus, readCoverRevealDisplay, type CreativeCoverClient,
   createShare,
   deleteJourney,
   deleteMedia,
@@ -182,6 +183,7 @@ export type AtlasMutations = {
  * so the presentation components below it are the same code.
  */
 export type AtlasView = {
+  creativeCover?: CreativeCoverClient;
   /** #463: absent in guest/demo views; never fall back to the owner client. */
   everydayFragments?: EverydayFragmentClient;
   capabilities: AtlasViewCapabilities;
@@ -236,6 +238,10 @@ export function createOwnerAtlasView(
     readRecordedTrackGeometry: readJourneyRecordedTrackGeometry,
     readJourney: (id, signal) => getJourney(id, signal),
     readMedia: (assetId) => getPrivateMediaRead(assetId),
+    ...(capabilities.canEditJourney ? { creativeCover: {
+      readRecipes: listCreativeCoverRecipes, readStatus: readCreativeCoverStatus,
+      readDisplay: readCoverRevealDisplay, readSource: getPrivateMediaRead,
+    } } : {}),
     mutations: createOwnerAtlasMutations(capabilities.canEditJourney),
   };
 }

@@ -28,6 +28,7 @@ import {
   COVER_REVEAL_KEY_PREFIX,
   COVER_REVEAL_OUTPUT_MIME_TYPE,
   enqueueCoverRevealDerivative,
+  readCoverRevealDisplay, readCoverRevealStatus,
   failCoverRevealJob,
   reconcileCoverRevealDerivatives,
   reconcileCoverRevealNamespace,
@@ -1274,4 +1275,63 @@ describe("#368 cover-reveal worker protocol", () => {
       expect(context.backend.objects.has(failedKey)).toBe(false);
     });
   });
+  describe("creative recipe integration", () => {
+    it("atomically replaces a leased recipe, keeps the new one idempotent, and displays its exact preset", async () => {
+      const { journeyId, asset, claim, backend } = await queuedAndClaimed();
+      const [a, b] = await Promise.all([1, 2].map(() => enqueueCoverRevealDerivative(journeyId, identity.atlasId, backend.dependencies, "poetic-line-memory")));
+      expect(a.ok && b.ok).toBe(true);
+      if (!a.ok || !b.ok) throw new Error("enqueue failed");
+      expect(a.job.id).toBe(b.job.id);
+      expect(a.job.id).not.toBe(claim.job.id);
+      expect(a.job.presetId).toBe("brush-sweep");
+      expect((await readJob(claim.job.id)).state).toBe("superseded");
+      const late = await completeCoverRevealJob(claim.job.id, claim.leaseToken, SETTINGS, backend.dependencies);
+      expect(late.ok).toBe(false);
+      const next = await claimCoverRevealJob(SETTINGS, new Date(), backend.dependencies);
+      if (!next.ok) throw new Error("claim failed");
+      expect(next.job.id).toBe(a.job.id);
+      await signCoverRevealOutputUpload(next.job.id, next.leaseToken, SETTINGS, backend.dependencies);
+      expect((await completeCoverRevealJob(next.job.id, next.leaseToken, SETTINGS, backend.dependencies)).ok).toBe(true);
+      const display = await readCoverRevealDisplay(journeyId, identity.atlasId, 60, backend.dependencies);
+      expect(display.ok && display.derivative?.generationKind).toBe("poetic-line-memory");
+      expect(display.ok && display.derivative?.sourceMediaAssetId).toBe(asset.id);
+      expect(await readCoverRevealStatus(journeyId, identity.atlasId)).toMatchObject({ state: "ready", recipeId: "poetic-line-memory", derivativeId: a.job.id });
+      const [original] = await db.select().from(mediaAssets).where(eq(mediaAssets.id, asset.id));
+      expect(original.contentHash).toBe(asset.contentHash);
+    });
+    it("concurrent different selections cannot leave two active styles", async () => {
+      const { journeyId } = await createJourneyWithCover();
+      const backend = recordingStorage();
+      const results = await Promise.all(["poetic-line-memory", "paper-collage-memory"].map((recipe) => enqueueCoverRevealDerivative(journeyId, identity.atlasId, backend.dependencies, recipe)));
+      expect(results.every((result) => result.ok)).toBe(true);
+      const rows = await db.select().from(coverRevealDerivatives).where(eq(coverRevealDerivatives.journeyId, journeyId));
+      expect(rows.filter((row) => ["ready", "queued", "leased"].includes(row.state))).toHaveLength(1);
+      expect(rows.filter((row) => row.state === "superseded")).toHaveLength(1);
+    });
+    it("new owner endpoints reject worker authority and disabled or unknown recipes without queueing", async () => {
+      const old = process.env.COVER_REVEAL_CREATIVE_ENABLED;
+      try {
+        delete process.env.COVER_REVEAL_CREATIVE_ENABLED;
+        const { journeyId } = await createJourneyWithCover();
+        for (const endpoint of ["recipes", `journeys/${journeyId}/status`]) {
+          const refused = await app.request(`${TEST_ORIGIN}/api/cover-reveal/${endpoint}`, { headers: workerHeaders() });
+          expect(refused.status).toBe(401);
+        }
+        const available = await app.request(`${TEST_ORIGIN}/api/cover-reveal/recipes`, { headers: authHeaders(identity.cookie) });
+        expect((await available.json()).recipes.map((recipe: { id: string }) => recipe.id)).toEqual(["ink-wash-memory"]);
+        for (const [body, expected] of [["{", 400], ["null", 400], [JSON.stringify({ recipeId: "unknown" }), 400], [JSON.stringify({ recipeId: "paper-collage-memory" }), 503]] as const) {
+          const result = await app.request(`${TEST_ORIGIN}/api/cover-reveal/journeys/${journeyId}`, { method: "POST", headers: authHeaders(identity.cookie), body });
+          expect(result.status).toBe(expected);
+        }
+        expect(await db.select().from(coverRevealDerivatives)).toHaveLength(0);
+        process.env.COVER_REVEAL_CREATIVE_ENABLED = "true";
+        const result = await app.request(`${TEST_ORIGIN}/api/cover-reveal/journeys/${journeyId}`, {
+          method: "POST", headers: authHeaders(identity.cookie), body: JSON.stringify({ recipeId: "paper-collage-memory" }),
+        });
+        expect(result.status).toBe(200);
+        expect((await result.json()).derivative.generationKind).toBe("paper-collage-memory");
+      } finally { if (old === undefined) delete process.env.COVER_REVEAL_CREATIVE_ENABLED; else process.env.COVER_REVEAL_CREATIVE_ENABLED = old; }
+    });
+  });
+
 });
