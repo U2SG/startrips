@@ -64,6 +64,9 @@ Journey changes and guest omission. Synthetic photos/videos and mocked owner
 HTTP responses are used: this is browser/codec integration evidence, not a paid
 model-output aesthetic evaluation or a production account test.
 
-#695 is stacked on #694 for the shared creative-cover registry and protocol.
-Merge the parent first, then retarget and revalidate the child. Code push does
-not change the installed worker, enable paid image calls, deploy or merge.
+#694 is merged into main and supplies the shared creative-cover registry and
+protocol. #695 now targets main after rebasing its export-only changes; the
+parent's final polling and Journey Book QA fixes stay inherited, not copied
+into the child diff. Rebased Source CI and independent review remain required
+before sealing. Code push does not change the installed worker, enable paid
+image calls, deploy or merge.
