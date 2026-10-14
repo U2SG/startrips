@@ -1,4 +1,5 @@
 import { revealStoryViewingOptions } from "./qa-browser.mjs";
+import { beginCloneScreenCapture } from "./qa-clone-screen-capture.mjs";
 /**
  * #489 (ST-134). Story / immersive viewing: real input reaching the presented
  * transport, and the same-Route-Point media handoff staying continuous.
@@ -2956,175 +2957,168 @@ async function heldRenewalFramePixels(page, rootSelector,
     expectedHidden: videoHidden, heldMode: heldFrame });
 }
 
-/** Screenshot pixels over the active clone must match its decoded canvas. */
-async function activeCloneScreenPixels(page, assetId, { stationary = false } = {}) {
-  await page.waitForFunction(({ expected, still }) => {
-    const clones = [...document.querySelectorAll('[data-shared-element-clone]')];
-    if (clones.length !== 1 || clones[0].getAttribute('data-shared-element-clone') !== `story-fullscreen-${expected}`) return false;
-    if (still) return true;
-    const animation = clones[0].getAnimations().find((entry) => entry.effect?.target === clones[0]);
-    const duration = animation?.effect?.getTiming().duration;
-    const progress = typeof duration === 'number' && duration > 0 && typeof animation.currentTime === 'number'
-      ? animation.currentTime / duration : 0;
-    return progress >= 0.25 && progress <= 0.65;
-  }, { expected: assetId, still: stationary }, { polling: "raf", timeout: 9_000 });
-  await page.evaluate((expected) => {
-    const name = `story-fullscreen-${expected}`;
-    const boxes = [];
-    const probe = { name, boxes, running: true };
-    window.__qaCloneScreen = probe;
-    const sample = () => {
-      if (!probe.running) return;
-      const clone = document.querySelector(`[data-shared-element-clone="${name}"]`);
-      if (clone) {
-        const box = clone.getBoundingClientRect();
-        boxes.push({ at: performance.now(), x: box.x, y: box.y, width: box.width, height: box.height });
-      }
-      requestAnimationFrame(sample);
-    };
-    sample();
-  }, assetId);
-  const png = (await page.screenshot()).toString("base64");
-  const capturedAt = Date.now();
-  const screenPixels = await page.evaluate(async ({ expected, screenshot }) => {
-    const probe = window.__qaCloneScreen;
-    probe.running = false;
-    const clones = [...document.querySelectorAll('[data-shared-element-clone]')];
-    const clone = clones[0];
-    if (clones.length !== 1 || clone?.getAttribute('data-shared-element-clone') !== `story-fullscreen-${expected}`
-      || !(clone instanceof HTMLCanvasElement)) {
-      return { failed: true, reason: "clone disappeared or another clone appeared during screenshot",
-        clones: clones.map((node) => node.getAttribute('data-shared-element-clone')), boxes: probe.boxes.length };
+/** A stamped compositor frame must match the exact observed clone bitmap. */
+async function activeCloneScreenPixels(page, assetId, {
+  action, stationary = false, artifact, gradeAfterDetach = false,
+} = {}) {
+  const capture = await beginCloneScreenCapture(page, assetId, { stationary, artifact });
+  try {
+    await action();
+    const evidence = await capture.frame();
+    const { png, ...diagnostic } = evidence;
+    if (evidence.failed) return { ...diagnostic, reason: "no unambiguous in-flight clone paint witness" };
+    if (gradeAfterDetach) {
+      // Regression for the original race: grade the retained frame only after
+      // ordinary cleanup, without delaying or pausing the real animation.
+      await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
+        .waitFor({ state: "detached", timeout: 5_000 });
+      diagnostic.gradedAfterDetach = await page.evaluate(() => !window.__qaCloneScreen.clone.isConnected);
+      if (!diagnostic.gradedAfterDetach) return { ...diagnostic, failed: true };
     }
-    const lastBox = clone.getBoundingClientRect();
-    probe.boxes.push({ at: performance.now(), x: lastBox.x, y: lastBox.y,
-      width: lastBox.width, height: lastBox.height });
-    const image = new Image();
-    image.src = `data:image/png;base64,${screenshot}`;
-    await image.decode();
-    const screen = document.createElement("canvas");
-    screen.width = 64; screen.height = 64;
-    const screenContext = screen.getContext("2d", { willReadFrequently: true });
-    const frame = document.createElement("canvas");
-    frame.width = 64; frame.height = 64;
-    const frameContext = frame.getContext("2d", { willReadFrequently: true });
-    if (!screenContext || !frameContext) return { failed: true, reason: "canvas context unavailable" };
-    frameContext.drawImage(clone, 0, 0, 64, 64);
-    const pixels = frameContext.getImageData(0, 0, 64, 64).data;
-    const bright = [];
-    const spread = Array(16).fill(null);
-    for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
-      const at = (y * 64 + x) * 4;
-      const strength = Math.max(pixels[at], pixels[at + 1], pixels[at + 2]);
-      if (strength <= 24) continue;
-      const point = { x, y, strength };
-      bright.push(point);
-      const cell = Math.floor(y / 16) * 4 + Math.floor(x / 16);
-      if (!spread[cell] || strength > spread[cell].strength) spread[cell] = point;
-    }
-    bright.sort((left, right) => right.strength - left.strength);
-    const points = spread.filter(Boolean).sort((left, right) => right.strength - left.strength).slice(0, 12);
-    if (points.length < 8) {
-      for (const point of bright) {
-        if (points.some((selected) => selected.x === point.x && selected.y === point.y)) continue;
-        points.push(point);
-        if (points.length === 12) break;
-      }
-    }
-    const spreadCells = spread.filter(Boolean).length;
-    if (bright.length < 16 || spreadCells < 3 || points.length < 8 || !probe.boxes.length) {
-      return { failed: true, reason: "clone has too little visible image signal or no geometry samples",
-        brightPixels: bright.length, spreadCells, boxes: probe.boxes.length };
-    }
-    const screenshotScaleX = image.naturalWidth / innerWidth;
-    const screenshotScaleY = image.naturalHeight / innerHeight;
-    const raster = document.createElement("canvas");
-    const rasterContext = raster.getContext("2d");
-    if (!rasterContext) return { failed: true, reason: "clone screen raster unavailable" };
-    const candidate = (box) => {
-      raster.width = Math.max(1, Math.round(box.width * screenshotScaleX));
-      raster.height = Math.max(1, Math.round(box.height * screenshotScaleY));
-      rasterContext.drawImage(clone, 0, 0, raster.width, raster.height);
-      frameContext.clearRect(0, 0, 64, 64);
-      frameContext.drawImage(raster, 0, 0, 64, 64);
-      const expectedPixels = frameContext.getImageData(0, 0, 64, 64).data;
-      screenContext.clearRect(0, 0, 64, 64);
-      screenContext.drawImage(image, box.x * screenshotScaleX, box.y * screenshotScaleY,
-        box.width * screenshotScaleX, box.height * screenshotScaleY, 0, 0, 64, 64);
-      const visiblePixels = screenContext.getImageData(0, 0, 64, 64).data;
-      const spatialDirect = window.__qaSpatialFrameEvidence(pixels, visiblePixels);
-      const spatialRaster = window.__qaSpatialFrameEvidence(expectedPixels, visiblePixels);
-      const visibleCells = new Set();
+    const screenPixels = await page.evaluate(async ({ screenshot, observation }) => {
+      const clone = window.__qaCloneScreen.bitmap;
+      const probe = { boxes: [observation.box] };
+      const image = new Image();
+      image.src = `data:image/png;base64,${screenshot}`;
+      await image.decode();
+      const screen = document.createElement("canvas");
+      screen.width = 64; screen.height = 64;
+      const screenContext = screen.getContext("2d", { willReadFrequently: true });
+      const frame = document.createElement("canvas");
+      frame.width = 64; frame.height = 64;
+      const frameContext = frame.getContext("2d", { willReadFrequently: true });
+      if (!screenContext || !frameContext) return { failed: true, reason: "canvas context unavailable" };
+      frameContext.drawImage(clone, 0, 0, 64, 64);
+      const pixels = frameContext.getImageData(0, 0, 64, 64).data;
+      const bright = [];
+      const spread = Array(16).fill(null);
       for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
         const at = (y * 64 + x) * 4;
-        if (Math.max(visiblePixels[at], visiblePixels[at + 1], visiblePixels[at + 2]) > 24) {
-          visibleCells.add(Math.floor(y / 16) * 4 + Math.floor(x / 16));
+        const strength = Math.max(pixels[at], pixels[at + 1], pixels[at + 2]);
+        if (strength <= 24) continue;
+        const point = { x, y, strength };
+        bright.push(point);
+        const cell = Math.floor(y / 16) * 4 + Math.floor(x / 16);
+        if (!spread[cell] || strength > spread[cell].strength) spread[cell] = point;
+      }
+      bright.sort((left, right) => right.strength - left.strength);
+      const points = spread.filter(Boolean).sort((left, right) => right.strength - left.strength).slice(0, 12);
+      if (points.length < 8) {
+        for (const point of bright) {
+          if (points.some((selected) => selected.x === point.x && selected.y === point.y)) continue;
+          points.push(point);
+          if (points.length === 12) break;
         }
       }
-      const samples = points.map(({ x, y, strength }) => {
-        const sx = Math.round((box.x + box.width * (x + 0.5) / 64) * screenshotScaleX);
-        const sy = Math.round((box.y + box.height * (y + 0.5) / 64) * screenshotScaleY);
-        if (sx < 0 || sy < 0 || sx >= image.naturalWidth || sy >= image.naturalHeight) {
-          return { x, y, strength, offscreen: true, delta: 255 };
+      const spreadCells = spread.filter(Boolean).length;
+      if (bright.length < 16 || spreadCells < 3 || points.length < 8 || !probe.boxes.length) {
+        return { failed: true, reason: "clone has too little visible image signal or no geometry samples",
+          brightPixels: bright.length, spreadCells, boxes: probe.boxes.length };
+      }
+      const screenshotScaleX = image.naturalWidth / observation.viewport.width;
+      const screenshotScaleY = image.naturalHeight / observation.viewport.height;
+      const raster = document.createElement("canvas");
+      const rasterContext = raster.getContext("2d");
+      if (!rasterContext) return { failed: true, reason: "clone screen raster unavailable" };
+      const candidate = (box, sourceImage = image) => {
+        raster.width = Math.max(1, Math.round(box.width * screenshotScaleX));
+        raster.height = Math.max(1, Math.round(box.height * screenshotScaleY));
+        rasterContext.drawImage(clone, 0, 0, raster.width, raster.height);
+        frameContext.clearRect(0, 0, 64, 64);
+        frameContext.drawImage(raster, 0, 0, 64, 64);
+        const expectedPixels = frameContext.getImageData(0, 0, 64, 64).data;
+        screenContext.clearRect(0, 0, 64, 64);
+        screenContext.drawImage(sourceImage, box.x * screenshotScaleX, box.y * screenshotScaleY,
+          box.width * screenshotScaleX, box.height * screenshotScaleY, 0, 0, 64, 64);
+        const visiblePixels = screenContext.getImageData(0, 0, 64, 64).data;
+        const spatialDirect = window.__qaSpatialFrameEvidence(pixels, visiblePixels);
+        const spatialRaster = window.__qaSpatialFrameEvidence(expectedPixels, visiblePixels);
+        const visibleCells = new Set();
+        for (let y = 2; y < 62; y += 1) for (let x = 2; x < 62; x += 1) {
+          const at = (y * 64 + x) * 4;
+          if (Math.max(visiblePixels[at], visiblePixels[at + 1], visiblePixels[at + 2]) > 24) {
+            visibleCells.add(Math.floor(y / 16) * 4 + Math.floor(x / 16));
+          }
         }
-        const offset = (y * 64 + x) * 4;
-        const expectedRgb = [expectedPixels[offset], expectedPixels[offset + 1], expectedPixels[offset + 2]];
-        let visibleRgb = [0, 0, 0];
-        let delta = expectedRgb.reduce((sum, channel) => sum + channel, 0) / 3;
-        // The moving clone crosses fractional device pixels. Resample its
-        // screenshot footprint before matching local bright texels instead
-        // of comparing a raw screen pixel with a downsampled canvas texel.
-        for (let dy = -2; dy <= 2; dy += 1) for (let dx = -2; dx <= 2; dx += 1) {
-          const nx = x + dx, ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= 64 || ny >= 64) continue;
-          const near = (ny * 64 + nx) * 4;
-          const rgb = [visiblePixels[near], visiblePixels[near + 1], visiblePixels[near + 2]];
-          if (Math.max(...rgb) <= 24) continue;
-          const nearDelta = expectedRgb.reduce((sum, channel, index) =>
-            sum + Math.abs(channel - rgb[index]), 0) / 3;
-          if (nearDelta < delta) { delta = nearDelta; visibleRgb = rgb; }
-        }
-        return { x, y, strength, expectedRgb, visibleRgb,
-          delta: Number(delta.toFixed(1)) };
-      });
-      const retainedCells = spread.reduce((count, entry, cell) =>
-        count + Number(Boolean(entry) && visibleCells.has(cell)), 0);
-      const visibleBright = samples.filter((sample) =>
-        sample.visibleRgb && Math.max(...sample.visibleRgb) > 24).length;
-      const meanDelta = samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length;
-      const picture = spatialDirect;
-      const visibleFrameWrong = picture.aligned < 0.8 || picture.margin < 0.08
-        || picture.visibleCells < Math.ceil(picture.sourceCells * 0.6)
-        || picture.energyRatio < 0.25 || picture.energyRatio > 2;
-      return { box, samples, retainedCells, visibleBright, meanDelta,
-        spatialDirect, spatialRaster, visibleFrameWrong,
-        failed: samples.some((sample) => sample.offscreen)
-          || retainedCells < Math.ceil(spreadCells * 0.6)
-          || visibleBright < Math.ceil(samples.length * 0.6) || visibleFrameWrong };
-    };
-    // A screenshot can land between rAF samples during a moving morph. Each
-    // midpoint remains on the observed path, rather than fitting arbitrary
-    // image locations to the source frame.
-    const candidateBoxes = probe.boxes.flatMap((box, index) => {
-      const next = probe.boxes[index + 1];
-      return next ? [box, { x: (box.x + next.x) / 2, y: (box.y + next.y) / 2,
-        width: (box.width + next.width) / 2, height: (box.height + next.height) / 2 }] : [box];
-    });
-    const scored = candidateBoxes.map(candidate).sort((left, right) => left.meanDelta - right.meanDelta);
-    const matching = scored.find((entry) => !entry.failed) ?? scored[0];
-    const spatialCandidates = [...scored].sort((left, right) =>
-      right.spatialDirect.margin - left.spatialDirect.margin);
-    return { candidateBoxes: candidateBoxes.length, brightPixels: bright.length,
-      spreadCells, retainedCells: matching.retainedCells, visibleBright: matching.visibleBright,
-      meanDelta: Number(matching.meanDelta.toFixed(1)), bestBox: matching.box,
-      spatialDirect: matching.spatialDirect, spatialRaster: matching.spatialRaster,
-      bestSpatial: spatialCandidates[0]
-        ? { box: spatialCandidates[0].box, direct: spatialCandidates[0].spatialDirect,
-          raster: spatialCandidates[0].spatialRaster } : null,
-      samples: matching.samples,
-      failed: matching.failed };
-  }, { expected: assetId, screenshot: png });
-  return { ...screenPixels, capturedAt };
+        const samples = points.map(({ x, y, strength }) => {
+          const sx = Math.round((box.x + box.width * (x + 0.5) / 64) * screenshotScaleX);
+          const sy = Math.round((box.y + box.height * (y + 0.5) / 64) * screenshotScaleY);
+          if (sx < 0 || sy < 0 || sx >= image.naturalWidth || sy >= image.naturalHeight) {
+            return { x, y, strength, offscreen: true, delta: 255 };
+          }
+          const offset = (y * 64 + x) * 4;
+          const expectedRgb = [expectedPixels[offset], expectedPixels[offset + 1], expectedPixels[offset + 2]];
+          let visibleRgb = [0, 0, 0];
+          let delta = expectedRgb.reduce((sum, channel) => sum + channel, 0) / 3;
+          // The moving clone crosses fractional device pixels. Resample its
+          // screenshot footprint before matching local bright texels instead
+          // of comparing a raw screen pixel with a downsampled canvas texel.
+          for (let dy = -2; dy <= 2; dy += 1) for (let dx = -2; dx <= 2; dx += 1) {
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= 64 || ny >= 64) continue;
+            const near = (ny * 64 + nx) * 4;
+            const rgb = [visiblePixels[near], visiblePixels[near + 1], visiblePixels[near + 2]];
+            if (Math.max(...rgb) <= 24) continue;
+            const nearDelta = expectedRgb.reduce((sum, channel, index) =>
+              sum + Math.abs(channel - rgb[index]), 0) / 3;
+            if (nearDelta < delta) { delta = nearDelta; visibleRgb = rgb; }
+          }
+          return { x, y, strength, expectedRgb, visibleRgb,
+            delta: Number(delta.toFixed(1)) };
+        });
+        const retainedCells = spread.reduce((count, entry, cell) =>
+          count + Number(Boolean(entry) && visibleCells.has(cell)), 0);
+        const visibleBright = samples.filter((sample) =>
+          sample.visibleRgb && Math.max(...sample.visibleRgb) > 24).length;
+        const meanDelta = samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length;
+        const picture = spatialDirect;
+        const visibleFrameWrong = picture.aligned < 0.8 || picture.margin < 0.08
+          || picture.visibleCells < Math.ceil(picture.sourceCells * 0.6)
+          || picture.energyRatio < 0.25 || picture.energyRatio > 2;
+        return { box, samples, retainedCells, visibleBright, meanDelta,
+          spatialDirect, spatialRaster, visibleFrameWrong,
+          failed: samples.some((sample) => sample.offscreen)
+            || retainedCells < Math.ceil(spreadCells * 0.6)
+            || visibleBright < Math.ceil(samples.length * 0.6) || visibleFrameWrong };
+      };
+      // The image itself identifies this exact layout observation. Do not search
+      // later geometry or a settled destination for a more flattering match.
+      const candidateBoxes = [observation.box];
+      const scored = candidateBoxes.map((box) => candidate(box)).sort((left, right) => left.meanDelta - right.meanDelta);
+      const matching = scored.find((entry) => !entry.failed) ?? scored[0];
+      const spatialCandidates = [...scored].sort((left, right) =>
+        right.spatialDirect.margin - left.spatialDirect.margin);
+      // Negative controls use the very same scorer: a stamped blank or wrong
+      // picture must not become acceptable merely because its witness is valid.
+      const blank = document.createElement("canvas");
+      blank.width = image.naturalWidth; blank.height = image.naturalHeight;
+      const wrong = document.createElement("canvas");
+      wrong.width = blank.width; wrong.height = blank.height;
+      const wrongContext = wrong.getContext("2d");
+      if (!wrongContext) return { failed: true, reason: "negative-control canvas unavailable" };
+      const box = observation.box;
+      wrongContext.translate(box.x + box.width / 2, box.y + box.height / 2);
+      wrongContext.rotate(Math.PI / 2);
+      wrongContext.drawImage(clone, -box.height / 2, -box.width / 2, box.height, box.width);
+      const negativeControls = { blankRejected: candidate(box, blank).failed,
+        wrongFrameRejected: candidate(box, wrong).failed };
+      return { candidateBoxes: candidateBoxes.length, brightPixels: bright.length,
+        spreadCells, retainedCells: matching.retainedCells, visibleBright: matching.visibleBright,
+        meanDelta: Number(matching.meanDelta.toFixed(1)), bestBox: matching.box,
+        spatialDirect: matching.spatialDirect, spatialRaster: matching.spatialRaster,
+        bestSpatial: spatialCandidates[0]
+          ? { box: spatialCandidates[0].box, direct: spatialCandidates[0].spatialDirect,
+            raster: spatialCandidates[0].spatialRaster } : null,
+        samples: matching.samples,
+        negativeControls,
+        failed: matching.failed || !negativeControls.blankRejected || !negativeControls.wrongFrameRejected };
+    }, { screenshot: png, observation: evidence.observation });
+    return { ...diagnostic, ...screenPixels, observedAt: evidence.observation.at,
+      receivedAt: evidence.selected.receivedAt };
+  } finally {
+    await capture.dispose();
+    await page.evaluate(() => { delete window.__qaCloneScreen; }).catch(() => {});
+  }
 }
 
 /** A compositor callback after handoff proves the playing destination presented a real frame. */
@@ -4826,8 +4820,10 @@ try {
         "paused-rotation-fullscreen");
 
       await startSampler(page, [STAGE, FULLSCREEN]);
-      progress.close = await clickFullscreenClose(page);
-      progress.exitScreen = await activeCloneScreenPixels(page, V1);
+      progress.exitScreen = await activeCloneScreenPixels(page, V1, {
+        action: async () => { progress.close = await clickFullscreenClose(page); },
+        artifact: `${name}-exit`, gradeAfterDetach: true,
+      });
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       await waitForVideoHandoffState(page, STAGE, V1, true);
       await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
@@ -4881,21 +4877,24 @@ try {
       progress.beforePixels = await pausedVideoScreenPixels(page, STAGE);
       progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 3_000);
       await startSampler(page, [STAGE, FULLSCREEN]);
-      progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
-      await page.waitForFunction(() => {
-        const clone = document.querySelector('[data-shared-element-clone^="story-fullscreen-"]');
-        const target = document.querySelector('.journey-story-fullscreen .story-media-pages__video video');
-        return clone && target instanceof HTMLVideoElement
-          && target.readyState < HTMLMediaElement.HAVE_CURRENT_DATA;
-      }, undefined, { polling: "raf", timeout: 3_000 });
-      progress.delayedRequest = session.mediaDelays.find((request) =>
-        request.startedAt >= progress.delayedTarget.initiatedAt) ?? null;
-      progress.waiting = await page.evaluate(() => ({
-        clone: document.querySelector('[data-shared-element-clone]')?.getAttribute('data-shared-element-clone') ?? null,
-        targetReadyState: document.querySelector('.journey-story-fullscreen .story-media-pages__video video')?.readyState ?? null,
-      }));
-      progress.waiting.requestReleasedAt = progress.delayedRequest?.releasedAt ?? null;
-      progress.entryScreen = await activeCloneScreenPixels(page, V1, { stationary: true });
+      progress.entryScreen = await activeCloneScreenPixels(page, V1, {
+        stationary: true, artifact: `${name}-entry`, action: async () => {
+          progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__fullscreen-entry");
+          await page.waitForFunction(() => {
+            const clone = document.querySelector('[data-shared-element-clone^="story-fullscreen-"]');
+            const target = document.querySelector('.journey-story-fullscreen .story-media-pages__video video');
+            return clone && target instanceof HTMLVideoElement
+              && target.readyState < HTMLMediaElement.HAVE_CURRENT_DATA;
+          }, undefined, { polling: "raf", timeout: 3_000 });
+          progress.delayedRequest = session.mediaDelays.find((request) =>
+            request.startedAt >= progress.delayedTarget.initiatedAt) ?? null;
+          progress.waiting = await page.evaluate(() => ({
+            clone: document.querySelector('[data-shared-element-clone]')?.getAttribute('data-shared-element-clone') ?? null,
+            targetReadyState: document.querySelector('.journey-story-fullscreen .story-media-pages__video video')?.readyState ?? null,
+          }));
+          progress.waiting.requestReleasedAt = progress.delayedRequest?.releasedAt ?? null;
+        },
+      });
       await waitForVideoHandoffState(page, FULLSCREEN, V1, true);
       await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
         .waitFor({ state: "detached", timeout: 5_000 });
@@ -4924,7 +4923,7 @@ try {
           || progress.waiting.requestReleasedAt !== null
           || !progress.delayedRequest || progress.delayedRequest.outcome !== "continued"
           || progress.delayedRequest.releasedAt === null
-          || progress.entryScreen.capturedAt >= progress.delayedRequest.releasedAt
+          || progress.entryScreen.receivedAt >= progress.delayedRequest.releasedAt
           || progress.entryScreen.failed || progress.entry.failed
           || progress.fullscreenPixels.failed || progress.entryFrameIdentity.failed
           || progress.entryClock.failed || !progress.fullscreenPoint.hitIsVideo
@@ -5069,12 +5068,18 @@ try {
       if (rapidReverse) progress.delayedTarget = await prepareDelayedFullscreenTarget(page, session, 650);
       await revealStoryViewingOptions(page);
       await startSampler(page, [STAGE, FULLSCREEN]);
-      progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__mobile-media-fullscreen");
-      progress.handoffClickedAt = await page.evaluate(() => window.__qaStage?.handoffSource?.wallAt ?? null);
-      await page.waitForFunction(() => {
-        const stack = window.history.state?.__startripsMobileSurfaceStack;
-        return Array.isArray(stack) && stack.at(-1)?.startsWith("story-media-surface:");
-      }, undefined, { polling: "raf", timeout: 3_000 });
+      const enterFullscreen = async () => {
+        progress.fullscreenActivation = await clickHandoffButton(page, ".journey-story__mobile-media-fullscreen");
+        progress.handoffClickedAt = await page.evaluate(() => window.__qaStage?.handoffSource?.wallAt ?? null);
+        await page.waitForFunction(() => {
+          const stack = window.history.state?.__startripsMobileSurfaceStack;
+          return Array.isArray(stack) && stack.at(-1)?.startsWith("story-media-surface:");
+        }, undefined, { polling: "raf", timeout: 3_000 });
+      };
+      if (rapidReverse) await enterFullscreen();
+      else progress.entryScreen = await activeCloneScreenPixels(page, V1, {
+        action: enterFullscreen, artifact: `${name}-entry`,
+      });
       if (rapidReverse) {
         await page.waitForFunction(() => Boolean(document.querySelector(
           '[data-shared-element-clone^="story-fullscreen-"]'))
@@ -5082,7 +5087,6 @@ try {
         undefined, { polling: "raf", timeout: 3_000 });
         progress.entryCloneObserved = true;
       } else {
-        progress.entryScreen = await activeCloneScreenPixels(page, V1);
         await page.locator(FULLSCREEN).waitFor({ state: "visible", timeout: 10_000 });
         await waitForVideoHandoffState(page, FULLSCREEN, V1, false);
         await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
@@ -5098,19 +5102,24 @@ try {
       }
       // Same-document browser history traversal exercises the real mobile Back
       // contract; dispatching a popstate event would bypass that ownership.
-      progress.back = await page.evaluate((mustStillBeUnready) => {
-        const cloneAtBack = Boolean(document.querySelector('[data-shared-element-clone^="story-fullscreen-"]'));
-        const targetReadyState = document.querySelector('.journey-story-fullscreen .story-media-pages__video video')?.readyState ?? null;
-        const stack = window.history.state?.__startripsMobileSurfaceStack ?? null;
-        const at = Date.now();
-        if (mustStillBeUnready && (!cloneAtBack || targetReadyState === null || targetReadyState >= 2)) {
-          return { triggered: false, cloneAtBack, targetReadyState, stack, at };
-        }
-        window.history.back();
-        return { triggered: true, cloneAtBack, targetReadyState, stack, at };
-      }, rapidReverse);
-      if (!progress.back.triggered) throw new Error(`Back missed the unready clone: ${JSON.stringify(progress.back)}`);
-      if (!rapidReverse) progress.exitScreen = await activeCloneScreenPixels(page, V1);
+      const goBack = async () => {
+        progress.back = await page.evaluate((mustStillBeUnready) => {
+          const cloneAtBack = Boolean(document.querySelector('[data-shared-element-clone^="story-fullscreen-"]'));
+          const targetReadyState = document.querySelector('.journey-story-fullscreen .story-media-pages__video video')?.readyState ?? null;
+          const stack = window.history.state?.__startripsMobileSurfaceStack ?? null;
+          const at = Date.now();
+          if (mustStillBeUnready && (!cloneAtBack || targetReadyState === null || targetReadyState >= 2)) {
+            return { triggered: false, cloneAtBack, targetReadyState, stack, at };
+          }
+          window.history.back();
+          return { triggered: true, cloneAtBack, targetReadyState, stack, at };
+        }, rapidReverse);
+        if (!progress.back.triggered) throw new Error(`Back missed the unready clone: ${JSON.stringify(progress.back)}`);
+      };
+      if (rapidReverse) await goBack();
+      else progress.exitScreen = await activeCloneScreenPixels(page, V1, {
+        action: goBack, artifact: `${name}-exit`,
+      });
       await page.locator(FULLSCREEN).waitFor({ state: "hidden", timeout: 10_000 });
       await waitForVideoHandoffState(page, STAGE, V1, false);
       await page.locator('[data-shared-element-clone^="story-fullscreen-"]')
