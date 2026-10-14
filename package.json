@@ -78,7 +78,8 @@
     "worker:cover-reveal": "node scripts/cover-reveal-worker.mjs",
     "build:city": "node scripts/build-city-data.mjs",
     "cfaa:validate": "node scripts/cfaa.mjs validate",
-    "cfaa:impact": "node scripts/cfaa.mjs impact"
+    "cfaa:impact": "node scripts/cfaa.mjs impact",
+    "qa:journey-film-export": "node scripts/qa-journey-film-export.mjs && node scripts/qa-story-film-integration.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1108.0",
@@ -93,6 +94,7 @@
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.1",
     "maplibre-gl": "^6.3.0",
+    "mediabunny": "1.61.3",
     "nodemailer": "^9.0.5",
     "page-flip": "2.0.7",
     "pg": "^8.23.0",

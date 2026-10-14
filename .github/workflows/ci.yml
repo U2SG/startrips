@@ -208,6 +208,38 @@ jobs:
           set -euo pipefail
           pnpm qa:keepsake-render
           cat artifacts/keepsake-render/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Prepare the existing browser runtime for owner export QA
+        env:
+          QA_PLAYWRIGHT_VERSION: '1.55.0'
+        run: |
+          pnpm exec playwright-core install ffmpeg
+          node scripts/ci-browser-runtime.mjs
+          if [ -z "$(fc-list :lang=zh | head -n 1)" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y fonts-noto-cjk
+          fi
+      - name: Verify owner button, private MP4 pixels and cancellation
+        env:
+          QA_ORIGIN: http://127.0.0.1:4173
+        run: |
+          set -euo pipefail
+          pnpm exec vite --host 127.0.0.1 --port 4173 > /tmp/startrips-film-vite.log 2>&1 &
+          VITE_PID=$!
+          trap 'kill $VITE_PID 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --max-time 2 --fail --silent http://127.0.0.1:4173/ > /dev/null; then break; fi
+            sleep 1
+          done
+          curl --max-time 2 --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-film-vite.log && exit 1)
+          pnpm qa:journey-film-export
+      - name: Upload owner MP4 export evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: journey-film-export-${{ github.run_attempt }}
+          path: artifacts/journey-film-export/
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload Keepsake render evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v7.0.1

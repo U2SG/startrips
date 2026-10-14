@@ -864,9 +864,24 @@ try {
         (box?.x ?? 0) + (box?.width ?? viewport.width) / 2,
         (box?.y ?? 0) + (box?.height ?? viewport.height) / 2,
       );
+      // Measure the actual native event boundary in the browser, not just a
+      // later poll which could mistake natural completion for interruption.
+      await page.evaluate((selector) => {
+        const trace = { received: false, before: null, after: null, startedAt: null, elapsedMs: null };
+        window.__startripsCoverIntentTrace = trace;
+        window.addEventListener("wheel", () => {
+          trace.received = true;
+          trace.before = document.querySelector(selector) !== null;
+          trace.startedAt = performance.now();
+        }, { capture: true, passive: true, once: true });
+        window.addEventListener("wheel", () => {
+          trace.after = document.querySelector(selector) !== null;
+          trace.elapsedMs = performance.now() - trace.startedAt;
+        }, { passive: true, once: true });
+      }, STORY_REVEAL);
       await page.mouse.wheel(0, 40);
-      // Bounded rather than zero-frame: the yield is a React commit, and the
-      // shortest preset still runs for 3.4s.
+      // Keep the existing 1s budget as well as the stronger same-event check.
+      // The shortest preset still runs for 3.4s.
       let yielded = true;
       try {
         await page.waitForFunction(
@@ -878,7 +893,12 @@ try {
         yielded = false;
       }
       const interrupted = await coverState(page);
-      check(`${label}/intent-ends-the-opening-immediately`, yielded && interrupted.stage === false, interrupted);
+      const intentTrace = await page.evaluate(() => window.__startripsCoverIntentTrace);
+      check(`${label}/intent-ends-the-opening-immediately`,
+        yielded && interrupted.stage === false && intentTrace.received
+          && intentTrace.before === true && intentTrace.after === false
+          && intentTrace.elapsedMs <= 1000,
+        { ...interrupted, intentTrace });
       const interruptedColor = classify(await compositedColor(page));
       check(
         `${label}/interruption-lands-on-the-canonical-original`,

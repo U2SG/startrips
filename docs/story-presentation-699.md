@@ -88,3 +88,33 @@ The same flow still checks all five reader choices, note-page identity and nativ
 scrolling, expanded Story scrolling and the simulated 34px safe-area inset.
 
 React state ownership reference: https://react.dev/learn/sharing-state-between-components
+
+## Integration with #695 MP4 export
+
+The owner explicitly requested conflict resolution, fresh full Source CI,
+independent Maintainer review, a legal ledger-only final and exact-main proof.
+#695 was already merged as main `87391852026b942b00c00ab81d2e5c479e8b5eaa`.
+Merge that exact main into the existing #701 owner branch rather than dropping
+one side or rewriting the unrelated export implementation.
+
+The real conflict is the Story footer: retain both `inert={presentationBusy}`
+from #701 and `canExportJourney` from #695. The imports, lazy native export
+dialog, page-wide encoder lifecycle, owner capability, MP4 dependencies and
+existing complete export/pixel/download QA all remain. The existing eight
+browser shards, deadlines and Source/final distinction are unchanged.
+
+`qa-story-film-integration.mjs` adds the signed-in product-shell path to the
+existing full `qa:journey-film-export` command. It switches among all five media
+presentations, checks that a pending save still exposes the export control in
+DOM but cannot activate it, then generates and downloads an actual H.264
+1080x1920/30 FPS silent MP4 with pure-note via captions enabled. It validates the
+codec and decoded frame count using ffprobe. Native-dialog keyboard ownership,
+Escape focus return, fresh artifact scope after 3D/Classic round trips and Back
+cancellation followed by a reader switch and a late source response are checked.
+It neither replaces the original full MP4 QA nor declares cancellation success
+by stubbing the exporter. Only HTTP authorization and media fixtures are mocked.
+
+A Source change invalidates the preceding CLEAR/CI evidence. Do not seal this
+integration until its full hosted product CI and independent review pass. The
+only final commit then permitted adds `docs/pr-history/701.md` with that exact
+Source. Final CI must independently verify the Source proof before any merge.
