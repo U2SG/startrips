@@ -63,8 +63,12 @@ try {
   holdPreference=true;
   const pending=page.waitForRequest(r=>r.url().endsWith('/api/account-preferences/media-presentation')&&r.method()==='PUT');
   await picker().selectOption("book");await pending;
-  assert.equal(await exportButton().count(),1,"export was lost during conflict resolution");
-  assert.equal(await exportButton().evaluate(el=>Boolean(el.closest('[inert]'))),true,"pending preference leaves export clickable");
+  // Inert controls intentionally leave the accessibility tree. Include them
+  // only for this DOM-preservation observation, never for a user interaction.
+  const pendingExport=page.getByRole("button",{name:"导出短片",exact:true,includeHidden:true});
+  assert.equal(await pendingExport.count(),1,"export was lost during conflict resolution");
+  assert.equal(await pendingExport.evaluate(el=>Boolean(el.closest('[inert]'))),true,"pending preference leaves export clickable");
+  assert.equal(await exportButton().count(),0,"pending export remains exposed to accessibility actions");
   assert.equal(await dialog.count(),0);
   releasePreference();await ready("book");await choose("note-overlay");await manage();
   checks.push("#695 export entry and #701 pending-preference inert both preserved");
