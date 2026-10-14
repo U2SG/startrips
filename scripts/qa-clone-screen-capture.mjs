@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import sharp from "sharp";
 import { encodeCloneFrameStamp, decodeCloneFrameStamp } from "./qa-clone-frame-stamp.mjs";
@@ -160,9 +160,16 @@ export async function beginCloneScreenCapture(page, assetId, { stationary = fals
       finally { clearTimeout(timer); }
       await dispose();
       const probe = await page.evaluate(() => {
-        const { observations, events, fatal } = window.__qaCloneScreen;
-        return { observations, events, fatal };
+        const { observations, events, fatal, bitmap } = window.__qaCloneScreen;
+        return { observations, events, fatal,
+          reference: bitmap ? { width: bitmap.width, height: bitmap.height,
+            png: bitmap.toDataURL("image/png").split(",")[1] } : null };
       });
+      const referencePng = probe.reference ? Buffer.from(probe.reference.png, "base64") : null;
+      if (probe.reference) {
+        delete probe.reference.png;
+        probe.reference.sha256 = createHash("sha256").update(referencePng).digest("hex");
+      }
       const observation = selected && probe.observations[selected.stamp.observationId];
       const failed = Boolean(error || probe.fatal || !selected || selected.ambiguous || !observation
         || ["x", "y", "width", "height"].some((key) => observation.position[key] !== selected.stamp.position[key])
@@ -174,6 +181,10 @@ export async function beginCloneScreenCapture(page, assetId, { stationary = fals
       if (artifact) {
         await mkdir("artifacts/story-media", { recursive: true });
         const path = `artifacts/story-media/${artifact}-clone-screen`;
+        if (referencePng) {
+          diagnostic.reference.artifact = `artifacts/story-media/${artifact}-clone-reference.png`;
+          await writeFile(diagnostic.reference.artifact, referencePng);
+        }
         await writeFile(`${path}.json`, JSON.stringify(diagnostic, null, 2));
         if (selected?.png ?? lastPng) {
           await writeFile(`${path}.png`, selected?.png ?? lastPng);

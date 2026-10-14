@@ -2975,7 +2975,7 @@ async function activeCloneScreenPixels(page, assetId, {
       diagnostic.gradedAfterDetach = await page.evaluate(() => !window.__qaCloneScreen.clone.isConnected);
       if (!diagnostic.gradedAfterDetach) return { ...diagnostic, failed: true };
     }
-    const screenPixels = await page.evaluate(async ({ screenshot, observation }) => {
+    const scoredPixels = await page.evaluate(async ({ screenshot, observation }) => {
       const clone = window.__qaCloneScreen.bitmap;
       const probe = { boxes: [observation.box] };
       const image = new Image();
@@ -3021,11 +3021,17 @@ async function activeCloneScreenPixels(page, assetId, {
       const rasterContext = raster.getContext("2d");
       if (!rasterContext) return { failed: true, reason: "clone screen raster unavailable" };
       const candidate = (box, sourceImage = image) => {
-        raster.width = Math.max(1, Math.round(box.width * screenshotScaleX));
-        raster.height = Math.max(1, Math.round(box.height * screenshotScaleY));
-        rasterContext.drawImage(clone, 0, 0, raster.width, raster.height);
+        // Match the screenshot's sampling chain, including fractional device
+        // placement. clone→64 skips the compositor's displayed-size raster and
+        // can alias this sparse star field into a different spatial pattern.
+        // Both references use this ONE stamped box, never a fitted candidate.
+        raster.width = image.naturalWidth;
+        raster.height = image.naturalHeight;
+        rasterContext.drawImage(clone, box.x * screenshotScaleX, box.y * screenshotScaleY,
+          box.width * screenshotScaleX, box.height * screenshotScaleY);
         frameContext.clearRect(0, 0, 64, 64);
-        frameContext.drawImage(raster, 0, 0, 64, 64);
+        frameContext.drawImage(raster, box.x * screenshotScaleX, box.y * screenshotScaleY,
+          box.width * screenshotScaleX, box.height * screenshotScaleY, 0, 0, 64, 64);
         const expectedPixels = frameContext.getImageData(0, 0, 64, 64).data;
         screenContext.clearRect(0, 0, 64, 64);
         screenContext.drawImage(sourceImage, box.x * screenshotScaleX, box.y * screenshotScaleY,
@@ -3071,7 +3077,7 @@ async function activeCloneScreenPixels(page, assetId, {
         const visibleBright = samples.filter((sample) =>
           sample.visibleRgb && Math.max(...sample.visibleRgb) > 24).length;
         const meanDelta = samples.reduce((sum, sample) => sum + sample.delta, 0) / samples.length;
-        const picture = spatialDirect;
+        const picture = spatialRaster;
         const visibleFrameWrong = picture.aligned < 0.8 || picture.margin < 0.08
           || picture.visibleCells < Math.ceil(picture.sourceCells * 0.6)
           || picture.energyRatio < 0.25 || picture.energyRatio > 2;
@@ -3085,11 +3091,20 @@ async function activeCloneScreenPixels(page, assetId, {
       // later geometry or a settled destination for a more flattering match.
       const candidateBoxes = [observation.box];
       const scored = candidateBoxes.map((box) => candidate(box)).sort((left, right) => left.meanDelta - right.meanDelta);
-      const matching = scored.find((entry) => !entry.failed) ?? scored[0];
+      const matching = scored[0];
+      const expectedPng = frame.toDataURL("image/png").split(",")[1];
+      const visiblePng = screen.toDataURL("image/png").split(",")[1];
       const spatialCandidates = [...scored].sort((left, right) =>
         right.spatialDirect.margin - left.spatialDirect.margin);
       // Negative controls use the very same scorer: a stamped blank or wrong
       // picture must not become acceptable merely because its witness is valid.
+      const same = document.createElement("canvas");
+      same.width = image.naturalWidth; same.height = image.naturalHeight;
+      const sameContext = same.getContext("2d");
+      if (!sameContext) return { failed: true, reason: "positive-control canvas unavailable" };
+      sameContext.drawImage(clone, observation.box.x * screenshotScaleX, observation.box.y * screenshotScaleY,
+        observation.box.width * screenshotScaleX, observation.box.height * screenshotScaleY);
+      const positiveControl = candidate(observation.box, same);
       const blank = document.createElement("canvas");
       blank.width = image.naturalWidth; blank.height = image.naturalHeight;
       const wrong = document.createElement("canvas");
@@ -3110,11 +3125,23 @@ async function activeCloneScreenPixels(page, assetId, {
           ? { box: spatialCandidates[0].box, direct: spatialCandidates[0].spatialDirect,
             raster: spatialCandidates[0].spatialRaster } : null,
         samples: matching.samples,
-        negativeControls,
-        failed: matching.failed || !negativeControls.blankRejected || !negativeControls.wrongFrameRejected };
+        comparison: "same-displayed-raster-and-fractional-crop",
+        positiveControl: { sameFrameAccepted: !positiveControl.failed,
+          direct: positiveControl.spatialDirect, raster: positiveControl.spatialRaster },
+        negativeControls, expectedPng, visiblePng,
+        failed: matching.failed || positiveControl.failed
+          || !negativeControls.blankRejected || !negativeControls.wrongFrameRejected };
     }, { screenshot: png, observation: evidence.observation });
-    return { ...diagnostic, ...screenPixels, observedAt: evidence.observation.at,
+    const { expectedPng, visiblePng, ...screenPixels } = scoredPixels;
+    const result = { ...diagnostic, ...screenPixels, observedAt: evidence.observation.at,
       receivedAt: evidence.selected.receivedAt };
+    if (artifact) {
+      const path = `artifacts/story-media/${artifact}`;
+      if (expectedPng) await writeFile(`${path}-expected-64.png`, Buffer.from(expectedPng, "base64"));
+      if (visiblePng) await writeFile(`${path}-visible-64.png`, Buffer.from(visiblePng, "base64"));
+      await writeFile(`${path}-clone-screen.json`, JSON.stringify(result, null, 2));
+    }
+    return result;
   } finally {
     await capture.dispose();
     await page.evaluate(() => { delete window.__qaCloneScreen; }).catch(() => {});
@@ -4784,6 +4811,7 @@ try {
   {
     const session = await createStoryPage({ mobile: false });
     const progress = {};
+    const name = "story-video-fullscreen-paused-rotation-roundtrip";
     try {
       const { page } = session;
       await waitForSettledAsset(page, I1);
@@ -4837,7 +4865,7 @@ try {
       progress.exitClock = gradeVideoClock(progress.fullscreen, progress.inlineAfter, true);
       progress.returnHit = await clickReturnedVideo(page);
       record({
-        name: "story-video-fullscreen-paused-rotation-roundtrip",
+        name,
         claim: "a real 43% native seek and paused desktop video retain asset, time, intent and visible decoded pixels through fullscreen entry interrupted by resize and real Close; the sampled entry and exit frames keep one picture owner and the returned video receives a real click",
         ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: !progress.toVideo.ok || progress.seek.failed || progress.pause.failed
@@ -4852,7 +4880,7 @@ try {
           || progress.returnHit.failed || session.consoleErrors.length > 0 || session.pageErrors.length > 0,
       });
     } catch (error) {
-      record({ name: "story-video-fullscreen-paused-rotation-roundtrip", ...progress,
+      record({ name, ...progress,
         error: error instanceof Error ? error.message : String(error),
         diagnostic: await videoHandoffFailureDiagnostic(session.page).catch(() => null),
         consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
