@@ -53,7 +53,7 @@ await context.route("**/__integration_opening.jpg",async route=>{
   const held=holdSource&&route.request().resourceType()==="fetch";
   if(held) {
     heldSourceCount++;let release;const promise=new Promise(resolve=>{release=resolve;});
-    sourceReleases.add(release);acknowledgeSourceHeld();
+    sourceReleases.add(release);acknowledgeSourceHeld(route.request());
     await promise;sourceReleases.delete(release);
   }
   try {await route.fulfill({body:bytes,contentType:"image/jpeg"}).catch(()=>{});}
@@ -126,25 +126,33 @@ try {
   // Original-media reads are lazy and may follow hundreds of encoded frames.
   await page.emulateMedia({reducedMotion:"no-preference"});
   await dialog.getByLabel("使用已生成的艺术封面（没有则使用原图）").check();holdSource=true;
-  let sourceDeadline;
+  let sourceDeadline, heldRequest;
   try {
-    await Promise.all([
+    [heldRequest]=await Promise.all([
       Promise.race([sourceHeld,new Promise((_,reject)=>{sourceDeadline=setTimeout(()=>reject(new Error("opening source was never held")),20_000);})]),
       dialog.getByRole("button",{name:"生成 MP4",exact:true}).click(),
     ]);
   } finally {clearTimeout(sourceDeadline);}
   assert.equal(heldSourceCount,1,"the export must reach exactly one held source read");
   assert.equal(sourceReleases.size,1,"Back must run while the source response is still held");
-  await page.goBack();await dialog.waitFor({state:"hidden"});
-  await assertExportReturnFocus("Back");
-  await page.emulateMedia({reducedMotion:"reduce"});
-  await choose("stream");holdSource=false;for(const release of sourceReleases)release();sourceReleases.clear();
-  await sourceSettled;
+  // Closing a view alone can hide an abandoned encoder. Require the exact held
+  // browser request to abort, not merely a fresh dialog with no old artifact.
+  const [failedSource]=await Promise.all([
+    page.waitForEvent("requestfailed",request=>request===heldRequest),
+    (async()=>{
+      await page.goBack();await dialog.waitFor({state:"hidden"});
+      await assertExportReturnFocus("Back");
+      await page.emulateMedia({reducedMotion:"reduce"});
+      await choose("stream");holdSource=false;for(const release of sourceReleases)release();sourceReleases.clear();
+      await sourceSettled;
+    })(),
+  ]);
+  assert.equal(failedSource.failure()?.errorText,"net::ERR_ABORTED","Back must abort the held private source request");
   await choose("classic");await manage();await exportButton().click();await dialog.waitFor({state:"visible"});
   assert.equal(await dialog.getByRole("button",{name:"下载 MP4",exact:true}).count(),0);assert.equal(downloads.length,1);
   checks.push("Back aborts export at a held private opening read; late source after reader changes cannot publish/download stale MP4");
   assert.deepEqual(errors,[]);
-  await fs.writeFile(`${out}/evidence.json`,JSON.stringify({ok:true,checks,requests,downloads,heldSourceCount,video:{codec:video.codec_name,width:video.width,height:video.height,frames:video.nb_read_frames},errors},null,2));
+  await fs.writeFile(`${out}/evidence.json`,JSON.stringify({ok:true,checks,requests,downloads,heldSourceCount,sourceFailure:failedSource.failure(),video:{codec:video.codec_name,width:video.width,height:video.height,frames:video.nb_read_frames},errors},null,2));
   console.log(JSON.stringify({ok:true,checks}));
 } catch(error) {
   await page.screenshot({path:`${out}/failure.png`}).catch(()=>{});
