@@ -22,6 +22,9 @@ const browser = await launchQaBrowser({args:["--use-angle=swiftshader","--enable
 const context = await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,reducedMotion:"reduce",acceptDownloads:true});
 let style="book", holdPreference=false, releasePreference=()=>{}, holdSource=false, heldSourceCount=0;
 const sourceReleases=new Set(), errors=[], requests=[], downloads=[], checks=[];
+let acknowledgeSourceHeld, acknowledgeSourceSettled;
+const sourceHeld=new Promise(resolve=>{acknowledgeSourceHeld=resolve;});
+const sourceSettled=new Promise(resolve=>{acknowledgeSourceSettled=resolve;});
 const page=await context.newPage();
 page.setDefaultTimeout(20_000);
 page.on("pageerror",e=>errors.push(e.message));
@@ -40,9 +43,21 @@ await context.route("**/api/home-bases",route=>route.fulfill(json({periods:[]}))
 await context.route("**/api/home-bases/dismissal",route=>route.fulfill(json({dismissals:[]})));
 await context.route("**/api/media-evidence/*",route=>route.fulfill(json({evidence:{mediaAssetId:id(100),revision:0,recorded:{spatial:{source:"unknown",granularity:"unknown",latitude:null,longitude:null,accuracyMeters:null,label:null},captureTime:{source:"unknown",timezone:"unknown",local:null,instant:null,offsetMinutes:null}},display:{hidden:false,correction:null},effective:null,updatedAt:null}})));
 await context.route("**/api/uploads/assets/*/read-url",route=>route.fulfill(json({url:`${origin}/__integration_photo.jpg`,expiresAt:"2099-01-01T00:00:00.000Z"})));
-await context.route("**/__integration_photo.jpg",async route=>{
-  if(holdSource&&route.request().resourceType()==="fetch") {heldSourceCount++;let release;const promise=new Promise(resolve=>{release=resolve;});sourceReleases.add(release);await promise;sourceReleases.delete(release);}
-  await route.fulfill({body:bytes,contentType:"image/jpeg"}).catch(()=>{});
+await context.route("**/__integration_photo.jpg",route=>route.fulfill({body:bytes,contentType:"image/jpeg"}).catch(()=>{}));
+await context.route(`**/api/cover-reveal/journeys/${journey.id}`,route=>route.fulfill(json({
+  derivative:{id:id(101),journeyId:journey.id,sourceMediaAssetId:journey.media[0].id,sourceContentHash:journey.media[0].contentHash,
+    generationKind:"paper-collage-memory",generationVersion:1,presetId:"guided-ribbon",mimeType:"image/jpeg",width:320,height:480},
+  display:{url:`${origin}/__integration_opening.jpg`,expiresAt:"2099-01-01T00:00:00.000Z"},
+})));
+await context.route("**/__integration_opening.jpg",async route=>{
+  const held=holdSource&&route.request().resourceType()==="fetch";
+  if(held) {
+    heldSourceCount++;let release;const promise=new Promise(resolve=>{release=resolve;});
+    sourceReleases.add(release);acknowledgeSourceHeld(route.request());
+    await promise;sourceReleases.delete(release);
+  }
+  try {await route.fulfill({body:bytes,contentType:"image/jpeg"}).catch(()=>{});}
+  finally {if(held)acknowledgeSourceSettled();}
 });
 const picker=()=>page.getByRole("combobox",{name:"切换媒体呈现",exact:true});
 const story=page.locator(".journey-story");
@@ -106,17 +121,38 @@ try {
   assert.equal(await dialog.getByRole("button",{name:"下载 MP4",exact:true}).count(),0,"old artifact revived after reader replacement");
   checks.push("export close returns focus; 3D reader round trip does not revive an old artifact");
   mark("cancel before switching away, reject late source completion");
-  await dialog.getByLabel("使用已生成的艺术封面（没有则使用原图）").uncheck();holdSource=true;
-  const sourceRequest=page.waitForRequest(r=>r.url().endsWith('/__integration_photo.jpg')&&r.resourceType()==="fetch");
-  await dialog.getByRole("button",{name:"生成 MP4",exact:true}).click();await sourceRequest;
-  await page.goBack();await dialog.waitFor({state:"hidden"});
-  await assertExportReturnFocus("Back");
-  await choose("stream");holdSource=false;for(const release of sourceReleases)release();sourceReleases.clear();
+  // The real encoder reads its opening before encoding any map frames. Holding
+  // this private byte fetch makes cancellation independent of encoder throughput.
+  // Original-media reads are lazy and may follow hundreds of encoded frames.
+  await page.emulateMedia({reducedMotion:"no-preference"});
+  await dialog.getByLabel("使用已生成的艺术封面（没有则使用原图）").check();holdSource=true;
+  let sourceDeadline, heldRequest;
+  try {
+    [heldRequest]=await Promise.all([
+      Promise.race([sourceHeld,new Promise((_,reject)=>{sourceDeadline=setTimeout(()=>reject(new Error("opening source was never held")),20_000);})]),
+      dialog.getByRole("button",{name:"生成 MP4",exact:true}).click(),
+    ]);
+  } finally {clearTimeout(sourceDeadline);}
+  assert.equal(heldSourceCount,1,"the export must reach exactly one held source read");
+  assert.equal(sourceReleases.size,1,"Back must run while the source response is still held");
+  // Closing a view alone can hide an abandoned encoder. Require the exact held
+  // browser request to abort, not merely a fresh dialog with no old artifact.
+  const [failedSource]=await Promise.all([
+    page.waitForEvent("requestfailed",request=>request===heldRequest),
+    (async()=>{
+      await page.goBack();await dialog.waitFor({state:"hidden"});
+      await assertExportReturnFocus("Back");
+      await page.emulateMedia({reducedMotion:"reduce"});
+      await choose("stream");holdSource=false;for(const release of sourceReleases)release();sourceReleases.clear();
+      await sourceSettled;
+    })(),
+  ]);
+  assert.equal(failedSource.failure()?.errorText,"net::ERR_ABORTED","Back must abort the held private source request");
   await choose("classic");await manage();await exportButton().click();await dialog.waitFor({state:"visible"});
   assert.equal(await dialog.getByRole("button",{name:"下载 MP4",exact:true}).count(),0);assert.equal(downloads.length,1);
-  checks.push("Back aborts export; late source after reader changes cannot publish/download stale MP4");
+  checks.push("Back aborts export at a held private opening read; late source after reader changes cannot publish/download stale MP4");
   assert.deepEqual(errors,[]);
-  await fs.writeFile(`${out}/evidence.json`,JSON.stringify({ok:true,checks,requests,downloads,heldSourceCount,video:{codec:video.codec_name,width:video.width,height:video.height,frames:video.nb_read_frames},errors},null,2));
+  await fs.writeFile(`${out}/evidence.json`,JSON.stringify({ok:true,checks,requests,downloads,heldSourceCount,sourceFailure:failedSource.failure(),video:{codec:video.codec_name,width:video.width,height:video.height,frames:video.nb_read_frames},errors},null,2));
   console.log(JSON.stringify({ok:true,checks}));
 } catch(error) {
   await page.screenshot({path:`${out}/failure.png`}).catch(()=>{});
