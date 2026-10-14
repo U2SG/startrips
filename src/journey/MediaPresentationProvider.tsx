@@ -7,7 +7,7 @@ type PresentationAccess = {
   busy: boolean;
   error: string;
   select: ((style: MediaPresentationStyle, onConfirmed?: () => void) => Promise<void>) | null;
-  retry: () => void;
+  retry: (onConfirmed?: () => void) => void;
   recover: (style: MediaPresentationStyle) => void;
   registerChangeGuard?: (guard: () => boolean) => () => void;
 };
@@ -36,7 +36,8 @@ export function MediaPresentationPreferenceProvider({ accountKey, sessionResolve
     status: "loading" | "ready" | "error";
     saving: boolean;
     error: string;
-  }>({ accountKey: null, style: "classic", recovery: null, status: "loading", saving: false, error: "" });
+    retryStyle: MediaPresentationStyle | null;
+  }>({ accountKey: null, style: "classic", recovery: null, status: "loading", saving: false, error: "", retryStyle: null });
   const [attempt, setAttempt] = useState(0);
   const owner = sessionResolved ? accountKey : state.accountKey;
   const currentOwner = useRef(owner);
@@ -52,7 +53,7 @@ export function MediaPresentationPreferenceProvider({ accountKey, sessionResolve
   useEffect(() => {
     if (!sessionResolved) return;
     const controller = new AbortController();
-    setState({ accountKey, style: "classic", recovery: null, status: accountKey ? "loading" : "ready", saving: false, error: "" });
+    setState({ accountKey, style: "classic", recovery: null, status: accountKey ? "loading" : "ready", saving: false, error: "", retryStyle: null });
     if (accountKey) {
       void requestMediaPresentationPreference(undefined, controller.signal).then(
         (style) => {
@@ -73,24 +74,34 @@ export function MediaPresentationPreferenceProvider({ accountKey, sessionResolve
   async function select(style: MediaPresentationStyle, onConfirmed?: () => void) {
     if (!accountKey || !sessionResolved || state.accountKey !== accountKey || state.status !== "ready" || writing.current) return;
     if ([...changeGuards.current].some((guard) => guard())) {
-      setState((value) => ({ ...value, error: "请先保存或放弃当前编辑，完成正在进行的操作后再切换媒体呈现。" }));
+      setState((value) => ({ ...value, retryStyle: style, error: "请先保存或放弃当前编辑，完成正在进行的操作后再切换媒体呈现。" }));
       return;
     }
     const controller = new AbortController();
     writing.current = controller;
-    setState((value) => ({ ...value, saving: true, error: "" }));
+    setState((value) => ({ ...value, saving: true, error: "", retryStyle: null }));
     try {
       const saved = await requestMediaPresentationPreference(style, controller.signal);
       if (!controller.signal.aborted && currentOwner.current === accountKey) {
         onConfirmed?.();
-        setState((value) => value.accountKey === accountKey ? { ...value, style: saved, recovery: null, saving: false, error: "" } : value);
+        setState((value) => value.accountKey === accountKey ? { ...value, style: saved, recovery: null, saving: false, error: "", retryStyle: null } : value);
       }
     } catch {
       if (!controller.signal.aborted && currentOwner.current === accountKey) {
-        setState((value) => value.accountKey === accountKey ? { ...value, saving: false, error: "无法确认设置已保存，请重试。" } : value);
+        setState((value) => value.accountKey === accountKey ? { ...value, saving: false, error: "无法确认设置已保存，请重试。", retryStyle: style } : value);
       }
     } finally {
       if (writing.current === controller) writing.current = null;
+    }
+  }
+
+  function retry(onConfirmed?: () => void) {
+    if (!accountKey || !sessionResolved || state.accountKey !== accountKey || writing.current) return;
+    // The failed request belongs to the preference owner, not whichever UI
+    // happens to display its error. Do not retain a closed surface's callback.
+    if (state.status === "error") setAttempt((value) => value + 1);
+    else if (state.status === "ready" && state.error && state.retryStyle) {
+      void select(state.retryStyle, onConfirmed);
     }
   }
 
@@ -101,9 +112,9 @@ export function MediaPresentationPreferenceProvider({ accountKey, sessionResolve
       busy: !sessionResolved || !owned || state.status === "loading" || state.saving,
       error: owned ? state.error : "",
       select: accountKey && sessionResolved && owned && state.status === "ready" ? select : null,
-      retry: () => setAttempt((value) => value + 1),
+      retry,
       registerChangeGuard,
-      recover: (style) => setState((value) => value.accountKey === currentOwner.current ? { ...value, recovery: style } : value),
+      recover: (style) => setState((value) => value.accountKey === currentOwner.current ? { ...value, recovery: style, error: "", retryStyle: null } : value),
     }}>
       {children}
     </PresentationContext.Provider>

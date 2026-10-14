@@ -64,3 +64,27 @@ Nodlik/StPageFlip#71.
 
 Local artifacts are under `artifacts/story-repair/`. No deployment or final
 owner acceptance is implied by a code/test pass.
+
+## Cross-surface retry repair
+
+Review thread PRRT_kwDOT1Guu86r4_4T identified that a Story-local attempted-style
+ref cannot describe a failure initiated from Account. The before-fix real browser
+probe requested note-overlay in Account, then retried from Story and observed
+PUT values [note-overlay, classic] instead of [note-overlay, note-overlay].
+
+The account preference provider now owns the failed style with its error. Both
+Story and Account invoke its retry; retrying a selection runs the same guarded
+save, while retrying an initial read only reads again. The retry carries only the
+currently invoking surface's confirmation callback, not a callback from a closed
+surface. A new successful selection, explicit recovery or account reinitialization
+clears the old target. Busy/unsaved-edit boundaries remain active on retries.
+
+The existing complete browser flow also checks Account-to-Story and
+Story-to-Account retries, discarding an unsaved draft before retrying the blocked
+intent, a newer explicit choice superseding an error, and a fresh read failure
+that must issue no preference write. These checks assert actual API payloads and
+the displayed selection; they do not finish a broken retry with another select.
+The same flow still checks all five reader choices, note-page identity and native
+scrolling, expanded Story scrolling and the simulated 34px safe-area inset.
+
+React state ownership reference: https://react.dev/learn/sharing-state-between-components

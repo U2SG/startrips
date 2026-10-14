@@ -1,4 +1,3 @@
-import { useRef } from "react";
 import { useMediaPresentationAccess } from "./MediaPresentationProvider";
 import { MEDIA_PRESENTATION_STYLES, mediaPresentationLabel, useMediaPresentationStyle, writeMediaPresentationStyle } from "./mediaPresentation";
 import type { MediaPresentationStyle } from "./mediaPresentationStyle";
@@ -12,9 +11,7 @@ export function StoryPresentationPicker({ disabled = false, onOpenClassic }: {
 }) {
   const access = useMediaPresentationAccess();
   const style = useMediaPresentationStyle();
-  const attempted = useRef<MediaPresentationStyle>(style);
   const choose = (next: MediaPresentationStyle) => {
-    attempted.current = next;
     if (access?.select) void access.select(next);
     else if (!access) {
       writeMediaPresentationStyle(next);
@@ -34,8 +31,8 @@ export function StoryPresentationPicker({ disabled = false, onOpenClassic }: {
       </option>)}
     </select>
     {access?.error ? <span role="status" className="story-presentation-picker__error">
-      {access.error}<button type="button" disabled={access.busy}
-        onClick={() => access.select ? choose(attempted.current) : access.retry()}>重试</button>
+      {access.error}<button type="button" disabled={disabled || access.busy}
+        onClick={() => access.retry()}>重试</button>
     </span> : null}
   </div>;
 }

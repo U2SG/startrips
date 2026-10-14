@@ -4,7 +4,8 @@ import { createServer } from "vite";
 import { launchQaBrowser } from "./qa-browser.mjs";
 const baseline = process.argv.includes("--baseline");
 const width = Number(process.argv.find(arg=>/^\d+$/.test(arg)) ?? 390);
-const out = `artifacts/story-repair/${baseline ? "baseline" : `fixed-${width}`}`;
+const retryProof = process.argv.includes("--retry-baseline") ? "retry-baseline" : "retry-fixed";
+const out = `artifacts/story-repair/${baseline ? "baseline" : `${retryProof}-${width}`}`;
 await fs.mkdir(out, {recursive:true});
 const server = process.env.QA_ORIGIN ? null : await createServer({server:{host:"127.0.0.1",port:4297,strictPort:true},logLevel:"error"});
 if (server) await server.listen();
@@ -20,13 +21,15 @@ const journey = {id:id(1),atlasId:id(2),title:"沿途的光与文字",startedOn:
 const session = {session:{id:"qa-session",userId:id(3),token:"qa-token",expiresAt:"2099-01-01T00:00:00.000Z",createdAt:now,updatedAt:now,activeOrganizationId:"qa-org"},user:{id:id(3),name:"QA",email:"qa@example.com",emailVerified:true,createdAt:now,updatedAt:now}};
 let style = "book";
 let rejectNextSave = false;
+let rejectNextRead = false;
+let preferenceReads = 0;
 let holdNextSave = false;
 let releaseSave = () => {};
 const saves = [], errors = [], result = {baseline};
 const json = (body,status=200) => ({status,contentType:"application/json",body:JSON.stringify(body)});
 page.on("pageerror",e=>errors.push(e.message));
 await page.route("**/api/auth/**",route=>{const path=new URL(route.request().url()).pathname;return route.fulfill(json(path.endsWith("/get-session") ? session : path.endsWith("/organization/list") ? [{id:"qa-org",name:"QA Atlas",slug:"qa-atlas"}] : {}));});
-await page.route("**/api/account-preferences/media-presentation",async route=>{if(route.request().method()==="PUT"){const next=route.request().postDataJSON().style;saves.push(next);if(holdNextSave){holdNextSave=false;await new Promise(resolve=>{releaseSave=resolve;});}if(rejectNextSave){rejectNextSave=false;return route.fulfill(json({error:"rejected"},500));}style=next;}return route.fulfill(json({style}));});
+await page.route("**/api/account-preferences/media-presentation",async route=>{if(route.request().method()==="GET"){preferenceReads++;if(rejectNextRead){rejectNextRead=false;return route.fulfill(json({error:"read-unavailable"},500));}}if(route.request().method()==="PUT"){const next=route.request().postDataJSON().style;saves.push(next);if(holdNextSave){holdNextSave=false;await new Promise(resolve=>{releaseSave=resolve;});}if(rejectNextSave){rejectNextSave=false;return route.fulfill(json({error:"rejected"},500));}style=next;}return route.fulfill(json({style}));});
 await page.route("**/api/account-preferences/earth-experience",route=>route.fulfill(json({earthExperience:"default",revision:0,updatedAt:null})));
 await page.route("**/api/atlases/current",route=>route.fulfill(json({atlas:{id:id(2),title:"QA Atlas",dedication:"同行"},role:"owner"})));
 await page.route("**/api/journeys",route=>route.fulfill(json({journeys:[journey]})));
@@ -47,6 +50,9 @@ async function swipeUp(element, distance=180){
 }
 async function choose(next){
  await page.getByRole("combobox",{name:"切换媒体呈现",exact:true}).selectOption(next);
+ await waitStyle(next);
+}
+async function waitStyle(next){
  await page.waitForFunction(expected=>{
   const picker=document.querySelector('select[aria-label="切换媒体呈现"]');
   const selector=expected==="book"?".journey-book":expected==="book-3d"?".journey-book-3d":expected==="stream"?".journey-stream":".journey-story";
@@ -111,10 +117,49 @@ try {
   await page.screenshot({path:`${out}/03-note-only.png`});
   await choose('book'); await choose('classic');
   await note.waitFor({state:'visible'});result.notePositionPreserved=true;
+  // One failed intent must follow the user to the other surface. Do not call
+  // choose() to finish a retry: that would hide which request Retry emitted.
+  const accountRetryStart=saves.length;
+  rejectNextSave=true;
+  await page.locator('.mobile-v2__account-trigger').click();
+  await account.locator('[data-media-presentation-entry="sheet"]').click();
+  await account.getByRole('status').filter({hasText:'无法确认'}).waitFor({state:'visible'});
+  assert.deepEqual(saves.slice(accountRetryStart),['note-overlay']);
+  await account.locator('.account-sheet__handle').click();
+  await account.waitFor({state:'detached'});
+  const retryResponse=page.waitForResponse(response=>response.url().endsWith('/api/account-preferences/media-presentation')&&response.request().method()==='PUT');
+  await page.locator('.story-presentation-picker__error').getByRole('button',{name:'重试',exact:true}).click();
+  await retryResponse;
+  assert.deepEqual(saves.slice(accountRetryStart),['note-overlay','note-overlay'],
+    'Account failure was retried as a stale Story style');
+  await waitStyle('note-overlay');
+  result.accountFailureRetriedFromStory=true;
+  await choose('classic');
+  await note.waitFor({state:'visible'});
+
   rejectNextSave=true;
   await page.getByRole('combobox',{name:'切换媒体呈现',exact:true}).selectOption('stream');
   await page.getByRole('status').filter({hasText:'无法确认'}).waitFor({state:'visible'});
   assert.equal(await activeReader(),'classic');result.rejectedSavePreservesReader=true;
+  const pickerRetryStart=saves.length;
+  await page.locator('.mobile-v2__account-trigger').click();
+  await account.locator('[data-media-presentation-entry="sheet"]').click();
+  await account.waitFor({state:'detached'});
+  assert.deepEqual(saves.slice(pickerRetryStart),['stream'],
+    'Account retry advanced the cycle instead of retrying the failed Story choice');
+  await waitStyle('stream');
+  result.storyFailureRetriedFromAccount=true;
+  await choose('classic');
+  await note.waitFor({state:'visible'});
+  rejectNextSave=true;
+  await page.getByRole('combobox',{name:'切换媒体呈现',exact:true}).selectOption('stream');
+  await page.locator('.story-presentation-picker__error').waitFor({state:'visible'});
+  await choose('book');
+  assert.equal(await page.locator('.story-presentation-picker__error').count(),0);
+  result.newChoiceClearsOldRetry=true;
+  await choose('classic');
+  await note.waitFor({state:'visible'});
+
   await story.getByRole('button',{name:'选择停靠点',exact:true}).click();
   await story.locator(`[data-route-point-id="${id(4)}"]`).click();
   await page.addStyleTag({content:'.journey-story[data-classic-view] { --story-safe-bottom: 34px; }'});
@@ -148,6 +193,30 @@ try {
   assert.equal(saves.length,writesBefore);
   assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),'这段尚未保存，切换呈现不能丢失。');
   result.unsavedEditProtected=true;
+  await account.locator('.account-sheet__handle').click();
+  await account.waitFor({state:'detached'});
+  await page.getByRole('button',{name:'放弃更改',exact:true}).click();
+  const guardedRetryStart=saves.length;
+  await page.locator('.story-presentation-picker__error').getByRole('button',{name:'重试',exact:true}).click();
+  await waitStyle('note-overlay');
+  assert.deepEqual(saves.slice(guardedRetryStart),['note-overlay']);
+  result.blockedAccountIntentRetriedAfterDiscard=true;
+  // A fresh provider read failure is not a failed selection. Its retry must
+  // never send a stale PUT from the preceding errors or reader instances.
+  rejectNextRead=true;
+  const writesBeforeReload=saves.length;
+  await page.reload({waitUntil:'networkidle'});
+  await page.locator('.mobile-v2__journey-chip').click();
+  await page.locator('.mobile-v2__sheet').getByRole('button',{name:/打开故事/}).click();
+  await page.locator('.story-presentation-picker__error').filter({hasText:'无法读取'}).waitFor({state:'visible'});
+  const readsBeforeRetry=preferenceReads;
+  await page.locator('.story-presentation-picker__error').getByRole('button',{name:'重试',exact:true}).click();
+  await waitStyle(style);
+  assert.equal(saves.length,writesBeforeReload,'read recovery wrote a preference');
+  assert.ok(preferenceReads>readsBeforeRetry);
+  result.readFailureRetriesOnlyGet=true;
+
+
 
 
   assert.deepEqual(errors,[]);

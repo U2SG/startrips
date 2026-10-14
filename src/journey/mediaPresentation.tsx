@@ -134,6 +134,8 @@ export function MediaPresentationMenuEntry({ surface, onConfirmed }: { surface: 
         if (!access) {
           onConfirmed?.();
           writeMediaPresentationStyle(nextMediaPresentationStyle(style));
+        } else if (access.error) {
+          access.retry(onConfirmed);
         } else if (access.select) {
           // Release the account modal before a confirmed preference mounts a
           // different reader. A rejected save retains its previous presentation.
