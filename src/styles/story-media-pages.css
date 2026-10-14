@@ -100,6 +100,8 @@
    the pictures around it and keeps the stage's swipe (no touch-action of its
    own); only its words opt back into selection. */
 .story-media-pages__note {
+  /* A media-free Route Point is a page, never a caption over another point. */
+  background: var(--archive-bg, #020809);
   position: absolute;
   inset: 0;
   box-sizing: border-box;
@@ -149,4 +151,14 @@
   .story-media-pages__transport-state { animation: none; }
   .story-media-pages.is-drag-settling .story-media-pages__video,
   .story-media-pages .journey-story__media-drag-settle { transition: none; }
+}
+
+/* Retain neighbouring physical pages and decoded media without painting them
+   behind a settled text page. A deliberate swipe may reveal its next page. */
+.story-media-pages[data-current-media-kind="note"][data-media-presentation="settled"]
+  > .story-media-pages__page:not([data-media-presented="true"]) {
+  visibility: hidden;
+}
+.story-media-pages__page[data-story-note-page] {
+  background: var(--archive-bg, #020809);
 }

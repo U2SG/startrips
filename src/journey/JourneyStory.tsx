@@ -1,3 +1,5 @@
+import { useMediaPresentationAccess, useMediaPresentationChangeGuard } from "./MediaPresentationProvider";
+import { StoryPresentationPicker } from "./StoryPresentationPicker";
 import {
   type StoryLogicalObservation,
   storyLogicalObservation,
@@ -776,6 +778,7 @@ export function JourneyStory({
   // API, which meant hiding the control left deletion reachable.
   const { capabilities, readMedia, listJourneys, mutations, creativeCover, exportJourneyFilm } = useAtlasView();
   const mediaPresentation = useMediaPresentationStyle();
+  const presentationBusy = Boolean(useMediaPresentationAccess()?.busy);
   const manageMedia: AtlasMutations | null = capabilities.canManageMedia ? mutations : null;
   const removeMedia = onMediaDelete ?? manageMedia?.deleteMedia ?? null;
   const updateJourneyNotes = mutations?.updateJourneyNotes ?? null;
@@ -1105,6 +1108,8 @@ export function JourneyStory({
       });
     });
   }
+
+  useMediaPresentationChangeGuard(notesDirty || mutationPending);
 
   function notesPreventAction(savingMessage: string) {
     const message = notesSaveState === "saving"
@@ -1725,6 +1730,18 @@ export function JourneyStory({
     filmExportOpen,
     resolvePlaybackReturnInitialFocus,
   );
+
+  // A collapsed mobile Story has no active modal trap to restore the export
+  // opener. Restore once after the child dialog's native cleanup releases it;
+  // expanded/desktop Story keeps the existing modal resolver as sole owner.
+  useEffect(() => {
+    if (filmExportOpen || storyModal || !filmExportReturnFocusRef.current) return;
+    filmExportReturnFocusRef.current = false;
+    const trigger = filmExportTriggerRef.current;
+    if (trigger?.isConnected && isModalFocusCandidate(trigger)) {
+      trigger.focus({ preventScroll: true });
+    }
+  }, [filmExportOpen, storyModal]);
 
   // #245: an active Story modal gives initial-focus ownership to useModalFocus
   // itself, so the trap cannot overwrite the Playback-return target in a later
@@ -3305,6 +3322,8 @@ export function JourneyStory({
   }
 
   function scrollCopyFromMedia(event: ReactWheelEvent<HTMLElement>) {
+    // Compact Story owns one native vertical scroller, never the desktop copy proxy.
+    if (mobileLayout) return;
     // #595: the point note block and its sheet scroll themselves.
     if ((event.target as Element).closest(".journey-story__copy, .journey-story__route-points, .story-point-note, .story-point-note-sheet")) return;
     const copy = copyRef.current;
@@ -4532,6 +4551,7 @@ export function JourneyStory({
         tabIndex={-1}
         className={`journey-story motion-staged${mobileLayout && mobileManageMode ? " is-mobile-manage" : ""}`}
         data-story-layout={mobileLayout ? "mobile" : "desktop"}
+        data-story-presentation={mediaPresentation}
         data-classic-view={classicActive ? mobileClassicView : undefined}
         data-classic-panel={classicActive ? classicPanel ?? "none" : undefined}
         data-classic-playing={classicActive && playing ? "true" : undefined}
@@ -4589,6 +4609,7 @@ export function JourneyStory({
             disabled={mutationPending || placementAnalyzing}
             onClick={toggleDesktopEditing}
           >{desktopEditing ? "完成" : "编辑"}</button> : null}
+          <StoryPresentationPicker disabled={notesDirty || mutationPending || mediaGestureHolding || Boolean(videoHandoffRef.current)} />
           {/* An upload in flight keeps this button clickable so pressing it
               explains the wait instead of silently doing nothing. */}
           <button
@@ -4615,7 +4636,7 @@ export function JourneyStory({
           <span>{activeChapterRoutePoint?.label || (activeChapterRoutePoint ? "途径点" : "整段旅程")}</span>
           <small>{classicViewDefinition.label}</small>
         </p> : null}
-        <div className="journey-story__layout">
+        <div className="journey-story__layout" inert={presentationBusy || undefined}>
           {hasStoryMedia ? <section
             className={`journey-story__media${overview && manageMedia ? " is-organizing" : ""}`}
             aria-label="旅程媒体"
@@ -5385,7 +5406,7 @@ export function JourneyStory({
           </section>
         </div>
 
-        <footer>
+        <footer inert={presentationBusy || undefined}>
           {(canEditJourney || canShareJourney || canExportJourney || onDelete) && mediaEditing ? (
             <div className="journey-story__manage">
               {canEditJourney ? <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={openJourneyComposer}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button> : null}

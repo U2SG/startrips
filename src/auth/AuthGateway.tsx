@@ -1516,7 +1516,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
                 busy={earthExperienceEntryBusy(earthExperience)}
                 onToggle={() => void toggleEarthExperience()}
               />
-              <MediaPresentationMenuEntry surface="dock" />
+              <MediaPresentationMenuEntry surface="dock" onConfirmed={() => setDockOpen(false)} />
               <MobileClassicViewMenuEntry surface="dock" />
               <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
             </div>
@@ -1539,7 +1539,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
           </div>
         </aside>
       ) : null}
-      {accountSheetOpen ? (
+      {accountSheetOpen ? createPortal(
         <div className="account-sheet-layer">
           <button className="account-sheet__backdrop" type="button" tabIndex={-1} aria-label="关闭账户菜单" onClick={() => { setEmailChangeOpen(false); setAccountSurface(null); }} />
           <section ref={accountSheetRef} id="account-mobile-sheet" className="account-sheet" tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-sheet-title">
@@ -1563,7 +1563,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
                     busy={earthExperienceEntryBusy(earthExperience)}
                     onToggle={() => void toggleEarthExperience()}
                   />
-                  <MediaPresentationMenuEntry surface="sheet" />
+                  <MediaPresentationMenuEntry surface="sheet" onConfirmed={() => setAccountSurface(null)} />
                   <MobileClassicViewMenuEntry surface="sheet" />
                   <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}><span>退出</span><small>退出当前账户</small></button>
                 </div>
@@ -1600,7 +1600,8 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
               </>
             )}
           </section>
-        </div>
+        </div>,
+        document.body,
       ) : null}
       <AtlasViewProvider value={ownerView}>
         {children}

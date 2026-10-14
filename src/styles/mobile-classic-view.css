@@ -1,9 +1,11 @@
 /* Layout trials only: never change the stage key, media cursor or browser fullscreen.
    The product's resolved compact marker owns the breakpoint; desktop is untouched. */
 .journey-story[data-classic-view] {
+  box-sizing: border-box;
+  --story-safe-bottom: env(safe-area-inset-bottom, 0px);
   --classic-aperture: clamp(150px, 30svh, 320px);
   --journey-story-sheet-extent: min(72svh, 680px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-bottom: var(--story-safe-bottom);
   scroll-padding-block: 112px 24px;
 }
 .journey-story[data-classic-view="thumb"] {
@@ -148,4 +150,17 @@
 /* Secondary autoplay retains its visible label, unlike the primary play icon. */
 .journey-story[data-classic-view] .journey-story__mobile-media-actions > .journey-story__mobile-autobrowse {
   width: auto; min-width: 88px; padding-inline: 12px;
+}
+
+/* One vertical scroller on phones. Desktop's copy column and wheel proxy are
+   not a second scroll owner nested inside the expanded Story. */
+.journey-story[data-story-layout="mobile"] .journey-story__copy {
+  overflow: visible;
+  overscroll-behavior: auto;
+  scrollbar-gutter: auto;
+}
+
+/* Safe-area padding is inside this border-box height, unlike the old sheet. */
+.journey-story[data-classic-view][data-story-layout="mobile"][data-mobile-presentation="in-context"] {
+  translate: 0 calc(100% - var(--journey-story-sheet-extent));
 }

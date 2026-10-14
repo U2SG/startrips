@@ -1,3 +1,4 @@
+import { StoryPresentationPicker } from "./StoryPresentationPicker";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { PageFlip } from "page-flip";
@@ -561,9 +562,7 @@ export function JourneyBook({
             aria-expanded={tocOpen}
             onClick={() => setTocOpen((value) => !value)}
           ><IconLayoutList size={19} stroke={1.35} aria-hidden="true" /></button>
-          <button type="button" className="journey-book__text-action" onClick={() => onOpenClassic(classicTarget)}>
-            经典视图
-          </button>
+          <StoryPresentationPicker onOpenClassic={() => onOpenClassic(classicTarget)} />
         </div>
       </header>
       {tocOpen ? (

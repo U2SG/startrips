@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  page-flip@2.0.7:
+    hash: d440fa87180ba9bd6c3167df6860ba82966f8e6b5b164f9e43d7221b0a7981b0
+    path: patches/page-flip@2.0.7.patch
+
 importers:
 
   .:
@@ -52,7 +57,7 @@ importers:
         version: 9.0.5
       page-flip:
         specifier: 2.0.7
-        version: 2.0.7
+        version: 2.0.7(patch_hash=d440fa87180ba9bd6c3167df6860ba82966f8e6b5b164f9e43d7221b0a7981b0)
       pg:
         specifier: ^8.23.0
         version: 8.23.0
@@ -3775,7 +3780,7 @@ snapshots:
       is-inside-container: 1.0.0
       wsl-utils: 0.1.0
 
-  page-flip@2.0.7: {}
+  page-flip@2.0.7(patch_hash=d440fa87180ba9bd6c3167df6860ba82966f8e6b5b164f9e43d7221b0a7981b0): {}
 
   pathe@2.0.3: {}
 

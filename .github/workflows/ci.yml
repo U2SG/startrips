@@ -392,6 +392,14 @@ jobs:
           path: artifacts/story-media/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Upload Story presentation and scroll evidence
+        if: ${{ always() && contains(matrix.suites, '|mobile-classic-views|') }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: story-presentation-${{ github.run_attempt }}
+          path: artifacts/story-repair/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload Media Motion Lab evidence
         if: ${{ always() && contains(matrix.suites, '|media-motion-lab|') }}
         uses: actions/upload-artifact@v7.0.1

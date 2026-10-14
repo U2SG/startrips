@@ -1,3 +1,4 @@
+import { StoryPresentationPicker } from "./StoryPresentationPicker";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type Ref, type RefObject, type WheelEvent } from "react";
 import { IconArrowUp, IconChevronLeft, IconChevronRight, IconMusic, IconMusicOff, IconPlayerPlay, IconX } from "@tabler/icons-react";
 import { onMotionPreferenceChange, prefersReducedMotion } from "../motion/preferences";
@@ -522,7 +523,7 @@ export function JourneyStream({
                 : <IconMusicOff size={19} stroke={1.35} aria-hidden="true" />}
             </button>
           ) : null}
-          <button type="button" className="journey-stream__text-action" onClick={() => onOpenClassic(classicTarget)}>经典视图</button>
+          <StoryPresentationPicker onOpenClassic={() => onOpenClassic(classicTarget)} />
         </div>
       </header>
       {previousJourney && onNavigate ? (

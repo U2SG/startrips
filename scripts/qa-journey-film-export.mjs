@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { launchQaBrowser } from "./qa-browser.mjs";
+import { launchQaBrowser, revealStoryViewingOptions } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const outputDir = "artifacts/journey-film-export";
@@ -276,8 +276,14 @@ try {
   // Phone-sized settings, no overflow; owner-client omission in a guest mount.
   mark("phone settings");
   await page.setViewportSize({ width: 390, height: 844 });
+  // Resolve the product's compact layout before choosing its actual entry path;
+  // an immediate visibility snapshot can still observe the previous desktop.
+  await page.waitForFunction(() => document.querySelector('.journey-story')?.getAttribute('data-story-layout') === 'mobile');
   const phoneButton = page.getByRole("button", { name: "导出短片", exact: true });
-  if (!await phoneButton.isVisible()) await page.getByRole("button", { name: "管理旅程", exact: true }).click();
+  if (await page.locator('.journey-story').getAttribute('data-mobile-mode') !== 'manage') {
+    await revealStoryViewingOptions(page);
+    await page.getByRole("button", { name: "管理旅程", exact: true }).click();
+  }
   await phoneButton.waitFor({ state: "visible" });
   {
     await phoneButton.click();
