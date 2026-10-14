@@ -51,6 +51,12 @@ const dialog=page.getByRole("dialog",{name:"导出旅程短片",exact:true});
 async function ready(next){await page.waitForFunction(value=>{const p=document.querySelector('select[aria-label="切换媒体呈现"]');const selector=value==="book"?".journey-book":value==="book-3d"?".journey-book-3d":value==="stream"?".journey-stream":".journey-story";return p?.value===value&&!p.disabled&&Boolean(document.querySelector(selector));},next);}
 async function choose(next){await picker().selectOption(next);await ready(next);}
 async function manage(){if(await story.getAttribute("data-mobile-mode")!=="manage"){await revealStoryViewingOptions(page);await story.getByRole("button",{name:"管理旅程",exact:true}).click();}await exportButton().waitFor({state:"visible"});}
+async function assertExportReturnFocus(exit){
+  const state=await exportButton().evaluate(el=>({same:el===document.activeElement,activeTag:document.activeElement?.tagName,activeLabel:document.activeElement?.getAttribute('aria-label'),mode:el.closest('.journey-story')?.getAttribute('data-mobile-mode'),inert:Boolean(el.closest('[inert]'))}));
+  console.log('STORY_FILM_RETURN_FOCUS',exit,JSON.stringify(state));
+  assert.equal(state.same,true,`${exit} lost the collapsed Story export opener: ${JSON.stringify(state)}`);
+  assert.equal(state.inert,false);
+}
 let phase="open";
 const mark=name=>{phase=name;console.log("STORY_FILM_STAGE",name);};
 const watchdog=setTimeout(()=>{console.error("STORY_FILM_TIMEOUT",phase);process.exit(1);},150_000);
@@ -92,8 +98,9 @@ try {
   assert.equal(video.codec_name,"h264");assert.equal(video.width,1080);assert.equal(video.height,1920);assert.equal(video.avg_frame_rate,"30/1");assert.ok(Number(video.nb_read_frames)>=450);assert.equal(parsed.streams.filter(s=>s.codec_type==="audio").length,0);
   checks.push("real signed-in shell -> book/stream/classic/note-overlay -> H.264 1080p/30 silent MP4 with note-only via captions enabled");
   await page.screenshot({path:`${out}/mp4-ready.png`});
+  mark("Escape returns to collapsed Story export");
   await page.keyboard.press("Escape");await dialog.waitFor({state:"hidden"});
-  assert.equal(await exportButton().evaluate(el=>el===document.activeElement),true);
+  await assertExportReturnFocus("Escape");
   await choose("book-3d");await choose("classic");await manage();
   await exportButton().click();await dialog.waitFor({state:"visible"});
   assert.equal(await dialog.getByRole("button",{name:"下载 MP4",exact:true}).count(),0,"old artifact revived after reader replacement");
@@ -103,7 +110,7 @@ try {
   const sourceRequest=page.waitForRequest(r=>r.url().endsWith('/__integration_photo.jpg')&&r.resourceType()==="fetch");
   await dialog.getByRole("button",{name:"生成 MP4",exact:true}).click();await sourceRequest;
   await page.goBack();await dialog.waitFor({state:"hidden"});
-  assert.equal(await exportButton().evaluate(el=>el===document.activeElement),true);
+  await assertExportReturnFocus("Back");
   await choose("stream");holdSource=false;for(const release of sourceReleases)release();sourceReleases.clear();
   await choose("classic");await manage();await exportButton().click();await dialog.waitFor({state:"visible"});
   assert.equal(await dialog.getByRole("button",{name:"下载 MP4",exact:true}).count(),0);assert.equal(downloads.length,1);

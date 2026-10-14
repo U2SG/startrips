@@ -1731,6 +1731,18 @@ export function JourneyStory({
     resolvePlaybackReturnInitialFocus,
   );
 
+  // A collapsed mobile Story has no active modal trap to restore the export
+  // opener. Restore once after the child dialog's native cleanup releases it;
+  // expanded/desktop Story keeps the existing modal resolver as sole owner.
+  useEffect(() => {
+    if (filmExportOpen || storyModal || !filmExportReturnFocusRef.current) return;
+    filmExportReturnFocusRef.current = false;
+    const trigger = filmExportTriggerRef.current;
+    if (trigger?.isConnected && isModalFocusCandidate(trigger)) {
+      trigger.focus({ preventScroll: true });
+    }
+  }, [filmExportOpen, storyModal]);
+
   // #245: an active Story modal gives initial-focus ownership to useModalFocus
   // itself, so the trap cannot overwrite the Playback-return target in a later
   // passive effect. A collapsed mobile Story intentionally has no active trap;
