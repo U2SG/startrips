@@ -30,11 +30,12 @@ import {
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
   pickDetailedEarthJourneyRoutePointHit,
+  resolveDetailedEarthRenderedRoutePointHit,
   selectDetailedEarthJourneyOverlayLod,
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
-import type { ParticleAnchorFrame } from "./detailedEarthModel";
+import type { DetailedEarthJourneyOverlay, ParticleAnchorFrame } from "./detailedEarthModel";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
 
 describe("detailedEarthModel", () => {
@@ -536,6 +537,150 @@ describe("detailed-earth Journey overlay", () => {
       visibleRoutePointIds: new Set(["point-a", "point-c"]),
     });
     expect(pickDetailedEarthJourneyRoutePointHit(scoped, pointB, project)).toBeNull();
+  });
+
+  describe("rendered Route Point fallback", () => {
+    const renderedPoint = { journeyId: route.id, routePointId: "point-b" };
+
+    it("accepts an authorized rendered point when projected picking cannot resolve it", () => {
+      const overlay = buildDetailedEarthJourneyOverlay({ route });
+      expect(pickDetailedEarthJourneyRoutePointHit(
+        overlay,
+        { x: 0, y: 0 },
+        () => ({ x: Number.NaN, y: Number.NaN }),
+      )).toBeNull();
+      expect(resolveDetailedEarthRenderedRoutePointHit(overlay, renderedPoint))
+        .toEqual(renderedPoint);
+    });
+
+    it("rejects retained rendered IDs after the active Journey is cleared or revoked", () => {
+      expect(resolveDetailedEarthRenderedRoutePointHit(
+        buildDetailedEarthJourneyOverlay({ route }),
+        renderedPoint,
+      )).toEqual(renderedPoint);
+      for (const clearedRoute of [null, undefined]) {
+        expect(resolveDetailedEarthRenderedRoutePointHit(
+          buildDetailedEarthJourneyOverlay({ route: clearedRoute }),
+          renderedPoint,
+        )).toBeNull();
+      }
+    });
+
+    it("requires the current Journey and point ID pair when another Journey reuses a point ID", () => {
+      const switched = buildDetailedEarthJourneyOverlay({
+        route: { ...route, id: "another-journey" },
+      });
+      expect(resolveDetailedEarthRenderedRoutePointHit(switched, renderedPoint)).toBeNull();
+      expect(resolveDetailedEarthRenderedRoutePointHit(switched, {
+        journeyId: "another-journey",
+        routePointId: renderedPoint.routePointId,
+      })).toEqual({ journeyId: "another-journey", routePointId: "point-b" });
+    });
+
+    it("rejects a removed point instead of resolving the point now occupying its old index", () => {
+      const removed = buildDetailedEarthJourneyOverlay({
+        route: { ...route, points: [route.points[0], route.points[2]] },
+      });
+      expect(resolveDetailedEarthRenderedRoutePointHit(removed, renderedPoint)).toBeNull();
+      expect(resolveDetailedEarthRenderedRoutePointHit(removed, {
+        journeyId: route.id,
+        routePointId: "point-c",
+      })).toEqual({ journeyId: route.id, routePointId: "point-c" });
+    });
+
+    it("rejects stale rendered IDs after temporal reveal removes the current point", () => {
+      const rewound = buildDetailedEarthJourneyOverlay({
+        route,
+        temporalReveal: {
+          journeys: new Map([[route.id, 1]]),
+          points: new Map([
+            [`${route.id}:0`, 1],
+            [`${route.id}:1`, 0],
+            [`${route.id}:2`, 0],
+          ]),
+        },
+      });
+      expect(rewound.data.features.some((feature) => (
+        feature.properties.routePointId === renderedPoint.routePointId
+      ))).toBe(false);
+      expect(resolveDetailedEarthRenderedRoutePointHit(rewound, renderedPoint)).toBeNull();
+      expect(resolveDetailedEarthRenderedRoutePointHit(rewound, {
+        journeyId: route.id,
+        routePointId: "point-a",
+      })).toEqual({ journeyId: route.id, routePointId: "point-a" });
+    });
+
+    it("rejects a point still in canonical geometry when its marker is no longer activatable", () => {
+      const scoped = buildDetailedEarthJourneyOverlay({
+        route,
+        visibleRoutePointIds: new Set(["point-a", "point-c"]),
+      });
+      expect(scoped.data.features.find((feature) => (
+        feature.properties.routePointId === renderedPoint.routePointId
+      ))?.properties).toMatchObject({ featureKind: "route-point", activatable: false });
+      expect(resolveDetailedEarthRenderedRoutePointHit(scoped, renderedPoint)).toBeNull();
+    });
+
+    it("rechecks current features even when the overlay object and revision are unchanged", () => {
+      const overlay = buildDetailedEarthJourneyOverlay({ route });
+      expect(resolveDetailedEarthRenderedRoutePointHit(overlay, renderedPoint)).toEqual(renderedPoint);
+      const pointIndex = overlay.data.features.findIndex((feature) => (
+        feature.properties.routePointId === renderedPoint.routePointId
+      ));
+      expect(pointIndex).toBeGreaterThanOrEqual(0);
+      overlay.data.features.splice(pointIndex, 1);
+      expect(resolveDetailedEarthRenderedRoutePointHit(overlay, renderedPoint)).toBeNull();
+    });
+
+    it("rejects absent, empty and non-string rendered IDs without coercion", () => {
+      const overlay = buildDetailedEarthJourneyOverlay({ route });
+      for (const properties of [null, undefined, {}, { journeyId: route.id }, { routePointId: "point-b" }]) {
+        expect(resolveDetailedEarthRenderedRoutePointHit(overlay, properties)).toBeNull();
+      }
+      for (const invalidId of ["", null, undefined, 0, 1, false, true, [], {}, [route.id], ["point-b"]]) {
+        expect(resolveDetailedEarthRenderedRoutePointHit(overlay, {
+          ...renderedPoint,
+          journeyId: invalidId,
+        })).toBeNull();
+        expect(resolveDetailedEarthRenderedRoutePointHit(overlay, {
+          ...renderedPoint,
+          routePointId: invalidId,
+        })).toBeNull();
+      }
+    });
+
+    it("rejects empty IDs even when a malformed current feature repeats them", () => {
+      for (const emptyField of ["journeyId", "routePointId"] as const) {
+        const overlay = buildDetailedEarthJourneyOverlay({ route });
+        const properties = { ...renderedPoint, [emptyField]: "" };
+        overlay.journeyId = properties.journeyId;
+        overlay.data.features = overlay.data.features.map((feature) => ({
+          ...feature,
+          properties: { ...feature.properties, [emptyField]: "" },
+        }));
+        expect(resolveDetailedEarthRenderedRoutePointHit(overlay, properties)).toBeNull();
+      }
+    });
+
+    it("requires a current route-point Point feature with explicit activation permission", () => {
+      const overlay = buildDetailedEarthJourneyOverlay({ route });
+      const currentPoint = overlay.data.features.find((feature) => (
+        feature.properties.routePointId === renderedPoint.routePointId
+      ));
+      if (!currentPoint) throw new Error("expected current route point");
+      const invalidFeatures: DetailedEarthJourneyOverlay["data"]["features"] = [
+        { ...currentPoint, properties: { ...currentPoint.properties, featureKind: "segment" } },
+        {
+          ...currentPoint,
+          geometry: { type: "LineString", coordinates: [[114.05, 22.54], [114.08, 22.56]] },
+        },
+        { ...currentPoint, properties: { ...currentPoint.properties, activatable: undefined } },
+      ];
+      for (const feature of invalidFeatures) {
+        const current = { ...overlay, data: { ...overlay.data, features: [feature] } };
+        expect(resolveDetailedEarthRenderedRoutePointHit(current, renderedPoint)).toBeNull();
+      }
+    });
   });
 
   it("changes revision when order or Stop semantics change and clears cleanly with no active Journey", () => {
