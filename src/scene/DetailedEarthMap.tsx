@@ -17,6 +17,7 @@ import {
   getDetailedEarthRouteFrame,
   getDetailedEarthFocusDuration,
   pickDetailedEarthJourneyRoutePointHit,
+  resolveDetailedEarthRenderedRoutePointHit,
   selectDetailedEarthJourneyOverlayLod,
   getEarthDiveHandoffFrame,
   detailedEarthAnchorCorrection,
@@ -1182,6 +1183,16 @@ export default function DetailedEarthMap({
         (coordinates) => map.project(coordinates),
       )
     );
+    // The production click and DEV probe share the same current-overlay gate;
+    // a rendered feature from before setData must never restore stale authority.
+    const journeyRoutePointHit = (point: { x: number; y: number }) => {
+      const projectedHit = projectedJourneyRoutePointHit(point);
+      if (projectedHit || !map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) return projectedHit;
+      const [renderedHit] = map.queryRenderedFeatures([point.x, point.y], {
+        layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
+      });
+      return resolveDetailedEarthRenderedRoutePointHit(journeyOverlayRef.current, renderedHit?.properties);
+    };
     if (import.meta.env.DEV && typeof window !== "undefined") {
       const debugWindow = window as Window & {
         __detailedEarthJourneyRoutePointHit?: (clientX: number, clientY: number) => {
@@ -1192,18 +1203,7 @@ export default function DetailedEarthMap({
       debugJourneyRoutePointHit = (clientX, clientY) => {
         const rect = host.getBoundingClientRect();
         const point = { x: clientX - rect.left, y: clientY - rect.top };
-        let routePointHit = projectedJourneyRoutePointHit(point);
-        if (!routePointHit && map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
-          const [journeyHit] = map.queryRenderedFeatures([point.x, point.y], {
-            layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
-          });
-          const journeyId = journeyHit?.properties?.journeyId;
-          const routePointId = journeyHit?.properties?.routePointId;
-          if (typeof journeyId === "string" && typeof routePointId === "string") {
-            routePointHit = { journeyId, routePointId };
-          }
-        }
-        return routePointHit;
+        return journeyRoutePointHit(point);
       };
       debugWindow.__detailedEarthJourneyRoutePointHit = debugJourneyRoutePointHit;
     }
@@ -1231,17 +1231,7 @@ export default function DetailedEarthMap({
       // The capture listener above owns ordinary Route Point activation. Keep a
       // MapLibre-layer lookup as a bounded projection/style fallback and retain
       // this event for explicit map-point picking before a blank-map dismissal.
-      let routePointHit = projectedJourneyRoutePointHit(event.point);
-      if (!routePointHit && map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
-        const [journeyHit] = map.queryRenderedFeatures(event.point, {
-          layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
-        });
-        const journeyId = journeyHit?.properties?.journeyId;
-        const routePointId = journeyHit?.properties?.routePointId;
-        if (typeof journeyId === "string" && typeof routePointId === "string") {
-          routePointHit = { journeyId, routePointId };
-        }
-      }
+      const routePointHit = journeyRoutePointHit(event.point);
       if (routePointHit && onJourneyRoutePointActivateRef.current) {
         onJourneyRoutePointActivateRef.current(routePointHit.journeyId, routePointHit.routePointId);
         return;

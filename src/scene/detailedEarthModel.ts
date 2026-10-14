@@ -112,6 +112,32 @@ export type DetailedEarthJourneyRoutePointHit = {
 };
 
 /**
+ * Rendered features can outlive setData while MapLibre updates its worker and
+ * tiles. Treat their IDs only as candidates: the current authorized overlay
+ * owns whether a Route Point can still be activated, including disclosure.
+ */
+export function resolveDetailedEarthRenderedRoutePointHit(
+  overlay: DetailedEarthJourneyOverlay,
+  properties: { journeyId?: unknown; routePointId?: unknown } | null | undefined,
+): DetailedEarthJourneyRoutePointHit | null {
+  const journeyId = properties?.journeyId;
+  const routePointId = properties?.routePointId;
+  if (
+    typeof journeyId !== "string" || journeyId.length === 0
+    || typeof routePointId !== "string" || routePointId.length === 0
+    || overlay.journeyId !== journeyId
+  ) return null;
+  const authorized = overlay.data.features.some((feature) => (
+    feature.properties.featureKind === "route-point"
+    && feature.geometry.type === "Point"
+    && feature.properties.activatable === true
+    && feature.properties.journeyId === journeyId
+    && feature.properties.routePointId === routePointId
+  ));
+  return authorized ? { journeyId, routePointId } : null;
+}
+
+/**
  * Resolve a pointer against the current authorized Journey overlay using the
  * map's own projection. The interaction radius is independent from the visible
  * marker radius, so a tiny passthrough marker still has a touch-safe target.

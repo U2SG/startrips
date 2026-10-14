@@ -1507,6 +1507,33 @@ try {
       ? window.__detailedEarthJourneyRoutePointHit?.(projected.x, projected.y) ?? null
       : null
   ), scopedHitBefore.projected);
+  // Reuse the exact pointer-reachable location that activated the authorized
+  // point. Do not wait for MapLibre's old rendered feature to disappear: the
+  // current overlay must reject it through the real click path immediately.
+  const revokedClickTarget = scopedActivation.target;
+  const revokedClickReachable = await scopedRun.page.evaluate(({ x, y }) => {
+    const target = document.elementFromPoint(x, y);
+    window.__qaRevokedRoutePointClick = null;
+    document.addEventListener("click", (event) => {
+      window.__qaRevokedRoutePointClick = {
+        trusted: event.isTrusted,
+        detailSurface: event.target instanceof Element
+          && Boolean(event.target.closest(".detailed-earth-map")),
+        x: event.clientX,
+        y: event.clientY,
+      };
+    }, { capture: true, once: true });
+    return target instanceof Element && Boolean(target.closest(".detailed-earth-map"));
+  }, revokedClickTarget);
+  if (!revokedClickReachable) {
+    throw new Error(`revoked Route Point click no longer reaches Detailed Earth: ${JSON.stringify(revokedClickTarget)}`);
+  }
+  await scopedRun.page.mouse.click(revokedClickTarget.x, revokedClickTarget.y);
+  const revokedClick = await scopedRun.page.evaluate(() => {
+    const click = window.__qaRevokedRoutePointClick;
+    delete window.__qaRevokedRoutePointClick;
+    return click;
+  });
   const revokedFixtureState = await scopedRun.page.evaluate(() => ({
     routePointPublished: Boolean(document.querySelector("[data-qa-earth-dive-route-point]")),
     activated: document.querySelector("[data-qa-earth-dive-activated-route-point]")
@@ -1521,11 +1548,13 @@ try {
     || scopedAfter.journeyOverlayFeatureCount !== 0
     || scopedAfter.journeyOverlaySourceJourneyCount !== 0
     || scopedHitAfter !== null
+    || !revokedClick?.trusted
+    || !revokedClick.detailSurface
     || revokedFixtureState.routePointPublished
     || revokedFixtureState.activated !== ""
     || revokedFixtureState.scope !== "revoked"
   ) {
-    scopeFailures.push(`share scope revocation left stale Journey source or hit authority: ${JSON.stringify({ before: scopedBefore, after: scopedAfter, staleHit: scopedHitAfter, fixture: revokedFixtureState })}`);
+    scopeFailures.push(`share scope revocation left stale Journey source or hit authority: ${JSON.stringify({ before: scopedBefore, after: scopedAfter, staleHit: scopedHitAfter, revokedClick, fixture: revokedFixtureState })}`);
   }
   if (scopedRun.pageErrors.length > 0) scopeFailures.push("share scope revocation raised a page error");
   result.shareScopeRevocation = {
@@ -1534,6 +1563,7 @@ try {
     hitBefore: scopedHitBefore,
     revoked: scopedAfter,
     hitAfter: scopedHitAfter,
+    revokedClick,
     fixture: revokedFixtureState,
   };
   await scopedRun.page.close();
