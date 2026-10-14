@@ -1,3 +1,4 @@
+import type { JourneyFilmExporter } from "./journeyFilmExport";
 import { createContext, useContext } from "react";
 import {
   createHomeBasePeriod,
@@ -197,6 +198,8 @@ export type AtlasView = {
   /** Owner re-read of one Journey, used while automatic road snapping is pending. */
   readJourney?: ((id: string, signal: AbortSignal) => Promise<Journey>) | null;
   readMedia: AtlasMediaRead;
+  /** Owner-only export client. Absent in guest/demo views; never fall back. */
+  exportJourneyFilm?: JourneyFilmExporter | null;
   mutations: AtlasMutations | null;
 };
 
@@ -238,10 +241,14 @@ export function createOwnerAtlasView(
     readRecordedTrackGeometry: readJourneyRecordedTrackGeometry,
     readJourney: (id, signal) => getJourney(id, signal),
     readMedia: (assetId) => getPrivateMediaRead(assetId),
+    exportJourneyFilm: capabilities.canEditJourney
+      ? async (id, options) => (await import("./journeyFilmExport")).exportPrivateJourneyFilm(id, options)
+      : null,
     ...(capabilities.canEditJourney ? { creativeCover: {
       readRecipes: listCreativeCoverRecipes, readStatus: readCreativeCoverStatus,
       readDisplay: readCoverRevealDisplay, readSource: getPrivateMediaRead,
     } } : {}),
+
     mutations: createOwnerAtlasMutations(capabilities.canEditJourney),
   };
 }

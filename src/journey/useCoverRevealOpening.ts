@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { RevealPresetId } from "../reveal/coverRevealFlow";
 import { readCoverRevealDisplay } from "./journeyApi";
 import { journeyCover } from "./journeyModel";
@@ -191,12 +192,22 @@ export function useCoverRevealOpening({
     // gesture it is yielding to, and a blocking touch/wheel listener on the
     // document would make every scroll wait on this.
     const events = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+    const onViewerIntent = () => {
+      // Native continuous input (notably wheel) can defer React's commit even
+      // after dismiss has invalidated the read. A visible opening must release
+      // this surface before the same event reaches the underlying control.
+      // Scope the synchronous boundary to an actual mounted opening: pending
+      // reads only need their ref invalidated, and effect-driven dismissals
+      // must never invoke flushSync from inside React's lifecycle.
+      if (mounted !== null) flushSync(dismiss);
+      else dismiss();
+    };
     for (const type of events) {
-      document.addEventListener(type, dismiss, { capture: true, passive: true });
+      document.addEventListener(type, onViewerIntent, { capture: true, passive: true });
     }
     return () => {
       for (const type of events) {
-        document.removeEventListener(type, dismiss, { capture: true });
+        document.removeEventListener(type, onViewerIntent, { capture: true });
       }
     };
   }, [awaitingRead, dismiss, mounted]);

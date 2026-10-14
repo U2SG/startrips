@@ -47,6 +47,8 @@ import {
   journeyDeleteDescription,
 } from "./storySurfacePolicy";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -68,6 +70,7 @@ import {
   IconChevronDown,
   IconChevronUp,
   IconDots,
+  IconDownload,
   IconEdit,
   IconLayoutGrid,
   IconMaximize,
@@ -156,6 +159,8 @@ import { isModalFocusCandidate, useModalFocus, useNestedModalFocus } from "./use
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import "../styles/story-notes.css";
+
+const JourneyFilmExportDialog = lazy(() => import("./JourneyFilmExportDialog").then((module) => ({ default: module.JourneyFilmExportDialog })));
 
 const SOUNDTRACK_INPUT_ACCEPT = [
   "audio/mpeg",
@@ -769,7 +774,7 @@ export function JourneyStory({
   // is null too and every media write in this component has nothing to call.
   // Before this contract an absent `onMediaDelete` fell through to the owner
   // API, which meant hiding the control left deletion reachable.
-  const { capabilities, readMedia, listJourneys, mutations, creativeCover } = useAtlasView();
+  const { capabilities, readMedia, listJourneys, mutations, creativeCover, exportJourneyFilm } = useAtlasView();
   const mediaPresentation = useMediaPresentationStyle();
   const manageMedia: AtlasMutations | null = capabilities.canManageMedia ? mutations : null;
   const removeMedia = onMediaDelete ?? manageMedia?.deleteMedia ?? null;
@@ -778,6 +783,17 @@ export function JourneyStory({
   const canShareJourney = capabilities.canShareAtlas && Boolean(onShare);
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
+  const canExportJourney = capabilities.canEditJourney && Boolean(exportJourneyFilm);
+  const [filmExportTarget, setFilmExportTarget] = useState<string | null>(null);
+  const filmExportTriggerRef = useRef<HTMLButtonElement>(null);
+  const filmExportReturnFocusRef = useRef(false);
+  function closeFilmExport() {
+    filmExportReturnFocusRef.current = true;
+    setFilmExportTarget(null);
+  }
+  const filmExportKey = useMemo(() => journey ? JSON.stringify([journey.id, journey.atlasId, journey.revision, journey.title, journey.coverMediaAssetId, journey.routePoints, journey.routeSegments, journey.media]) : "", [journey]);
+  const filmExportOpen = canExportJourney && filmExportTarget !== null && filmExportTarget === filmExportKey;
+  useEffect(() => { if (filmExportTarget !== null && !filmExportOpen) setFilmExportTarget(null); }, [filmExportTarget, filmExportOpen]);
   const initialMediaSelection = storyInitialMediaSelection(journey, routePointId, initialAssetId);
   // #555: the cursor is an entry index. Whether this open carries the Journey
   // cover opening is decided once, here and in the re-seek below, and only an
@@ -1607,6 +1623,7 @@ export function JourneyStory({
   }
 
   function requestClose() {
+    if (filmExportOpen) { closeFilmExport(); return; }
     if (fullscreen) {
       exitFullscreen();
       return;
@@ -1686,8 +1703,13 @@ export function JourneyStory({
     else setClassicPanel(null);
   });
   useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
+  useMobileSurfaceHistory(filmExportOpen && mobileLayout, "story-film-export", closeFilmExport);
   const storyModal = !mobileLayout || mobileStoryExpanded;
   const resolvePlaybackReturnInitialFocus = useCallback((root: HTMLElement) => {
+    if (filmExportReturnFocusRef.current && filmExportTriggerRef.current && root.contains(filmExportTriggerRef.current)) {
+      filmExportReturnFocusRef.current = false;
+      return filmExportTriggerRef.current;
+    }
     if (!focusVisibleControlOnOpen) return null;
     const preferred = mobileLayout
       ? root.querySelector<HTMLElement>(".journey-story__sheet-handle")
@@ -1700,7 +1722,7 @@ export function JourneyStory({
   const dialogRef = useModalFocus<HTMLElement>(
     requestClose,
     storyModal,
-    false,
+    filmExportOpen,
     resolvePlaybackReturnInitialFocus,
   );
 
@@ -1719,7 +1741,7 @@ export function JourneyStory({
   // does not own Escape there. Give it the same top-layer-first close order as
   // Browser Back: transient children first, Manage second, Story last.
   useEffect(() => {
-    if (!mobileLayout || storyModal) return;
+    if (!mobileLayout || storyModal || filmExportOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (mutationPending) return;
@@ -1765,6 +1787,7 @@ export function JourneyStory({
     storyModal,
     classicActive,
     classicPanel,
+    filmExportOpen,
   ]);
 
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
@@ -4403,7 +4426,7 @@ export function JourneyStory({
   // #595: what the cursor can step through - media and note entries alike.
   const browsableEntryCount = scopedMedia.length + storyCursor.notePageIds.size;
   const showDesktopChapterRail = !mobileLayout && visualMedia.length > 0;
-  const canEditStory = Boolean(manageMedia || updateJourneyNotes || canEditJourney || canShareJourney || onDelete);
+  const canEditStory = Boolean(manageMedia || updateJourneyNotes || canEditJourney || canShareJourney || canExportJourney || onDelete);
   const showSoundtrack = Boolean(soundtrack || (manageMedia && mediaEditing));
   const routePointNavigation = (
     <nav
@@ -5363,10 +5386,14 @@ export function JourneyStory({
         </div>
 
         <footer>
-          {(canEditJourney || canShareJourney || onDelete) && mediaEditing ? (
+          {(canEditJourney || canShareJourney || canExportJourney || onDelete) && mediaEditing ? (
             <div className="journey-story__manage">
               {canEditJourney ? <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={openJourneyComposer}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button> : null}
               {canShareJourney ? <button type="button" data-share-journey-trigger="true" disabled={mutationPending || deleteState !== "idle"} onClick={openJourneyShare}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享旅程</button> : null}
+              {canExportJourney ? <button ref={filmExportTriggerRef} type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => {
+                if (notesPreventAction("请先保存或放弃感想更改，再导出旅程。")) return;
+                setPlaying(false); setFilmExportTarget(filmExportKey);
+              }}><IconDownload size={16} stroke={1.35} aria-hidden="true" />导出短片</button> : null}
               {onDelete ? <button ref={journeyDeleteTriggerRef} className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => {
                 if (notesPreventAction("正在保存感想，完成后才能删除旅程。")) return;
                 setDeleteState("confirming");
@@ -5493,5 +5520,8 @@ export function JourneyStory({
     </div>
   );
 
-  return typeof document === "undefined" ? content : createPortal(content, document.body);
+  const surfaces = <>{content}{filmExportOpen && exportJourneyFilm ? <Suspense fallback={<div role="status">正在打开短片导出…</div>}>
+    <JourneyFilmExportDialog key={filmExportKey} journeyId={journey.id} title={journey.title} exporter={exportJourneyFilm} onClose={closeFilmExport} />
+  </Suspense> : null}</>;
+  return typeof document === "undefined" ? surfaces : createPortal(surfaces, document.body);
 }
