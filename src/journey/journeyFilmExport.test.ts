@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createOwnerAtlasView, GUEST_ATLAS_VIEW_CAPABILITIES, resolveAtlasView, type AtlasView } from "./atlasView";
-import { exportPrivateJourneyFilm, FILM_MAX_ASSET_BYTES, journeyFilmErrorMessage, journeyFilmFilename, journeyFilmIdentity, readBoundedFilmBlob, type JourneyFilmEncoder, type JourneyFilmExportOptions } from "./journeyFilmExport";
+import { exportPrivateJourneyFilm, FILM_MAX_ASSET_BYTES, FILM_MAX_BYTES, journeyFilmErrorMessage, journeyFilmFilename, journeyFilmIdentity, readBoundedFilmBlob, type JourneyFilmEncoder, type JourneyFilmExportOptions } from "./journeyFilmExport";
 import { projectFilmRoute } from "./journeyFilmCanvas";
 import type { Journey } from "./types";
 
 const bytes = new TextEncoder().encode("source fixture");
+const soundtrackBytes = new TextEncoder().encode("authorized soundtrack fixture");
 function fixture(): Journey {
   return {
     id: "journey-film", atlasId: "atlas-one", title: "海边的一天", startedOn: "2026-10-01", endedOn: null,
@@ -21,21 +22,37 @@ function options(signal = new AbortController().signal): JourneyFilmExportOption
   return { presetSeconds: 15, aspect: "portrait", includeCover: false, includeRoutePointNotes: false,
     reducedMotion: false, signal, onProgress: vi.fn() };
 }
+function soundtrackFixture(): Journey {
+  const journey = fixture();
+  journey.media.push(...["old-track", "active-track"].map((id, index) => ({
+    id, journeyId: journey.id, routePointId: null, sortOrder: index + 1,
+    fileName: `${id}.mp3`, mimeType: "audio/mpeg", bytes: soundtrackBytes.length, createdAt: "2026-10-01",
+    contentHashVerified: true, contentHash: createHash("sha256").update(soundtrackBytes).digest("hex"),
+  })));
+  return journey;
+}
 function transport(journey: Journey) {
   let current = journey, allowed = true;
   const fetcher = vi.fn<typeof fetch>(async (url) => {
     const path = String(url);
     if (!allowed && path.startsWith("/api/")) return Response.json({ error: "AUTH_REQUIRED" }, { status: 401 });
     if (path === "/api/journeys/journey-film") return Response.json({ journey: current });
-    if (path.includes("/read-url")) return Response.json({ url: "https://storage.example/original", expiresAt: new Date(Date.now() + 60000).toISOString() });
+    if (path.includes("/read-url")) {
+      const audio = journey.media.find((asset) => path.includes(`/assets/${asset.id}/`) && asset.mimeType.startsWith("audio/"));
+      return Response.json({ url: audio ? `https://storage.example/soundtrack/${audio.id}` : "https://storage.example/original", expiresAt: new Date(Date.now() + 60000).toISOString() });
+    }
     if (path === "https://storage.example/original") return new Response(bytes, { headers: { "content-type": "image/jpeg" } });
+    if (path.startsWith("https://storage.example/soundtrack/")) return new Response(soundtrackBytes, { headers: { "content-type": "audio/mpeg" } });
     if (path.includes("cover-reveal")) return Response.json({ derivative: null, reason: "NO_READY_DERIVATIVE" });
     throw new Error("Unexpected request: " + path);
   });
   return { fetcher, change: (value: Journey) => { current = value; }, revoke: () => { allowed = false; } };
 }
 const encode: JourneyFilmEncoder = async (input) => {
-  for (const asset of input.journey.media) await input.readMedia(asset);
+  for (const asset of input.journey.media) {
+    if (input.sourcePlan.mediaAssetIds.includes(asset.id)) await input.readMedia(asset);
+  }
+  if (input.readSoundtrack) await input.readSoundtrack();
   input.onFrame(input.film.manifest.totalFrames);
   return new Blob(["synthetic encoder output"], { type: "video/mp4" });
 };
@@ -106,9 +123,18 @@ describe("owner Journey film export", () => {
     await expect(exportPrivateJourneyFilm("journey-film", options(), { ...api, encode })).rejects.toThrow("journey_film_source_limit");
     expect(api.fetcher).toHaveBeenCalledTimes(1);
   });
-  it("rejects overlong captions instead of silently dropping their text", async () => {
-    const journey = fixture(); journey.routePoints[1].note = "长".repeat(1000);
-    await expect(exportPrivateJourneyFilm("journey-film", { ...options(), includeRoutePointNotes: true }, { ...transport(journey), encode })).rejects.toThrow("journey_film_duration_limit");
+  it("exports the complete caption timeline beyond two minutes without dropping text", async () => {
+    const journey = soundtrackFixture(); journey.routePoints[1].note = "长".repeat(1000);
+    const artifact = await exportPrivateJourneyFilm(journey.id, { ...options(), includeRoutePointNotes: true }, {
+      ...transport(journey), encode: async (input) => {
+        expect(input.film.manifest.actualDurationMs).toBeGreaterThan(120_000);
+        expect([...input.film.captions.values()].join("")).toBe(journey.routePoints[1].note);
+        expect(input.film.manifest.shots.at(-1)?.endFrame).toBe(input.film.manifest.totalFrames);
+        return encode(input);
+      },
+    });
+    expect(artifact.durationMs).toBeGreaterThan(120_000);
+    expect(artifact.soundtrackIncluded).toBe(true);
   });
   it("uses the original when no approved creative cover is ready", async () => {
     await exportPrivateJourneyFilm("journey-film", { ...options(), includeCover: true }, { ...transport(fixture()), encode: async (input) => {
@@ -134,6 +160,137 @@ describe("owner Journey film export", () => {
     expect(projected[0].x).toBeLessThan(projected[1].x);
     expect(journeyFilmFilename('旅程/<>:*?.')).toMatch(/^Startrips-[^<>:"/\\|?*]+\.mp4$/);
     expect(journeyFilmIdentity(fixture())).toBe(journeyFilmIdentity(structuredClone(fixture())));
+  });
+});
+
+describe("authorized journey soundtrack export", () => {
+  it.each([undefined, true])("includes only the active journey soundtrack when includeSoundtrack is %s", async (includeSoundtrack) => {
+    const journey = soundtrackFixture(), api = transport(journey);
+    const artifact = await exportPrivateJourneyFilm(journey.id, { ...options(), includeSoundtrack }, { ...api, encode: async (input) => {
+      expect(input.readSoundtrack).toBeTypeOf("function");
+      expect(input.sourcePlan.mediaAssetIds).not.toContain("active-track");
+      expect(input.sourcePlan.mediaAssetIds).not.toContain("old-track");
+      const first = await input.readSoundtrack!();
+      expect(first.type).toBe("audio/mpeg");
+      expect(await first.text()).toBe(new TextDecoder().decode(soundtrackBytes));
+      expect(await input.readSoundtrack!()).toBe(first);
+      return encode(input);
+    } });
+    expect(artifact.soundtrackIncluded).toBe(true);
+    const calls = api.fetcher.mock.calls;
+    expect(calls.filter(([url]) => String(url).includes("/assets/active-track/read-url"))).toHaveLength(1);
+    expect(calls.filter(([url]) => String(url) === "https://storage.example/soundtrack/active-track")).toHaveLength(1);
+    expect(calls.some(([url]) => String(url).includes("old-track"))).toBe(false);
+    expect(calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+    const audioRead = calls.find(([url]) => String(url) === "https://storage.example/soundtrack/active-track");
+    expect(audioRead?.[1]).toMatchObject({ credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer" });
+  });
+  it("keeps soundtrack opt-out silent without signing or counting the omitted track", async () => {
+    const journey = soundtrackFixture();
+    journey.media[2].bytes = FILM_MAX_ASSET_BYTES + 1;
+    const api = transport(journey);
+    const artifact = await exportPrivateJourneyFilm(journey.id, { ...options(), includeSoundtrack: false }, { ...api, encode: async (input) => {
+      expect(input.readSoundtrack).toBeNull();
+      return encode(input);
+    } });
+    expect(artifact.soundtrackIncluded).toBe(false);
+    expect(api.fetcher.mock.calls.some(([url]) => String(url).includes("track"))).toBe(false);
+  });
+  it("supplies no soundtrack reader when the journey has no track", async () => {
+    const artifact = await exportPrivateJourneyFilm("journey-film", options(), { ...transport(fixture()), encode: async (input) => {
+      expect(input.readSoundtrack).toBeNull();
+      return encode(input);
+    } });
+    expect(artifact.soundtrackIncluded).toBe(false);
+  });
+  it("does not count, verify or read an obsolete soundtrack", async () => {
+    const journey = soundtrackFixture();
+    journey.media[1].bytes = FILM_MAX_ASSET_BYTES + 1;
+    journey.media[1].contentHash = "0".repeat(64);
+    const api = transport(journey);
+    await exportPrivateJourneyFilm(journey.id, options(), { ...api, encode });
+    expect(api.fetcher.mock.calls.some(([url]) => String(url).includes("old-track"))).toBe(false);
+  });
+  it.each(["hash", "size"])("rejects a selected soundtrack with a mismatched %s", async (kind) => {
+    const journey = soundtrackFixture();
+    if (kind === "hash") journey.media[2].contentHash = "a".repeat(64);
+    else journey.media[2].bytes += 1;
+    await expect(exportPrivateJourneyFilm(journey.id, options(), { ...transport(journey), encode }))
+      .rejects.toThrow("journey_film_source_changed");
+  });
+  it.each(["point", "foreign journey"])("rejects a selected soundtrack in the wrong %s scope before signing", async (kind) => {
+    const journey = soundtrackFixture();
+    if (kind === "point") journey.media[2].routePointId = "p1";
+    else journey.media[2].journeyId = "another-journey";
+    const api = transport(journey), encoder = vi.fn(encode);
+    await expect(exportPrivateJourneyFilm(journey.id, options(), { ...api, encode: encoder }))
+      .rejects.toThrow("journey_film_source_changed");
+    expect(api.fetcher).toHaveBeenCalledTimes(1);
+    expect(encoder).not.toHaveBeenCalled();
+  });
+  it("checks the selected soundtrack's single-source limit before signing", async () => {
+    const journey = soundtrackFixture(); journey.media[2].bytes = FILM_MAX_ASSET_BYTES + 1;
+    const api = transport(journey), encoder = vi.fn(encode);
+    await expect(exportPrivateJourneyFilm(journey.id, options(), { ...api, encode: encoder }))
+      .rejects.toThrow("journey_film_source_limit");
+    expect(api.fetcher).toHaveBeenCalledTimes(1);
+    expect(encoder).not.toHaveBeenCalled();
+  });
+  it("counts the selected soundtrack toward the aggregate source limit before signing", async () => {
+    const journey = soundtrackFixture();
+    journey.media[0].bytes = FILM_MAX_ASSET_BYTES;
+    journey.media.push({ ...journey.media[0], id: "photo-two", sortOrder: 3,
+      bytes: FILM_MAX_BYTES - FILM_MAX_ASSET_BYTES - soundtrackBytes.length + 1 });
+    const api = transport(journey), encoder = vi.fn(encode);
+    await expect(exportPrivateJourneyFilm(journey.id, options(), { ...api, encode: encoder }))
+      .rejects.toThrow("journey_film_source_limit");
+    expect(api.fetcher).toHaveBeenCalledTimes(1);
+    expect(encoder).not.toHaveBeenCalled();
+  });
+  it("does not fetch soundtrack bytes after its owner capability is revoked", async () => {
+    const journey = soundtrackFixture(), api = transport(journey);
+    await expect(exportPrivateJourneyFilm(journey.id, options(), { ...api, encode: async (input) => {
+      api.revoke();
+      await input.readSoundtrack!();
+      return new Blob(["must not publish"], { type: "video/mp4" });
+    } })).rejects.toMatchObject({ status: 401 });
+    expect(api.fetcher.mock.calls.some(([url]) => String(url).startsWith("https://storage.example/soundtrack/"))).toBe(false);
+  });
+  it("re-authorizes a soundtrack-bearing artifact before a later download", async () => {
+    const journey = soundtrackFixture(), api = transport(journey);
+    const artifact = await exportPrivateJourneyFilm(journey.id, options(), { ...api, encode });
+    api.revoke();
+    await expect(artifact.verify(new AbortController().signal)).rejects.toMatchObject({ status: 401 });
+  });
+  it.each(["hash", "selection", "scope", "foreign journey"])("invalidates the completed artifact after a soundtrack %s change", async (kind) => {
+    const journey = soundtrackFixture(), api = transport(journey);
+    const artifact = await exportPrivateJourneyFilm(journey.id, options(), { ...api, encode });
+    const changed = structuredClone(journey);
+    if (kind === "hash") changed.media[2].contentHash = "a".repeat(64);
+    if (kind === "selection") changed.media[1].sortOrder = 99;
+    if (kind === "scope") changed.media[2].routePointId = "p1";
+    if (kind === "foreign journey") changed.media[2].journeyId = "another-journey";
+    api.change(changed);
+    await expect(artifact.verify(new AbortController().signal)).rejects.toThrow("journey_film_changed");
+  });
+  it("rejects an expired soundtrack capability without using its storage URL", async () => {
+    const journey = soundtrackFixture(), api = transport(journey);
+    const fetcher: typeof fetch = async (url, init) => {
+      if (String(url).includes("/assets/active-track/read-url")) return Response.json({
+        url: "https://storage.example/soundtrack/active-track", expiresAt: "2020-01-01T00:00:00Z",
+      });
+      return api.fetcher(url, init);
+    };
+    await expect(exportPrivateJourneyFilm(journey.id, options(), { fetcher, encode }))
+      .rejects.toThrow("journey_film_source_unreadable");
+    expect(api.fetcher.mock.calls.some(([url]) => String(url).startsWith("https://storage.example/soundtrack/"))).toBe(false);
+  });
+  it("fails closed when the selected soundtrack cannot be read", async () => {
+    const journey = soundtrackFixture(), api = transport(journey);
+    const fetcher: typeof fetch = async (url, init) => String(url) === "https://storage.example/soundtrack/active-track"
+      ? new Response(null, { status: 403 }) : api.fetcher(url, init);
+    await expect(exportPrivateJourneyFilm(journey.id, options(), { fetcher, encode }))
+      .rejects.toThrow("journey_film_source_unreadable");
   });
 });
 
@@ -205,6 +362,43 @@ describe("creative film integration", () => {
 
 
 describe("page-owned export lifetime", () => {
+  it("transfers disk artifact disposal and download retention to its owner", async () => {
+    const api = transport(fixture());
+    const dispose = vi.fn(async () => {}), retainForDownload = vi.fn(async () => {});
+    const artifact = await exportPrivateJourneyFilm("journey-film", options(), { ...api, encode: async () => ({
+      blob: new Blob(["disk-backed fixture"], { type: "video/mp4" }), storageMode: "disk", dispose, retainForDownload,
+    }) });
+    expect(artifact.storageMode).toBe("disk");
+    expect(artifact.dispose).toBe(dispose);
+    expect(artifact.retainForDownload).toBe(retainForDownload);
+    expect(dispose).not.toHaveBeenCalled();
+    await artifact.verify(new AbortController().signal);
+    expect(dispose).not.toHaveBeenCalled();
+    await artifact.retainForDownload!();
+    await artifact.dispose!();
+    expect(retainForDownload).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+  it("drains failed disk-artifact cleanup before releasing the page-wide export slot", async () => {
+    const api = transport(fixture()), next = transport(fixture());
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const cleanup = new Promise<void>((resolve) => { release = resolve; });
+    const dispose = vi.fn(async () => { entered(); await cleanup; });
+    const failed = exportPrivateJourneyFilm("journey-film", options(), { ...api, encode: async () => {
+      api.revoke();
+      return { blob: new Blob(["disk-backed fixture"], { type: "video/mp4" }), storageMode: "disk", dispose };
+    } });
+    const result = failed.catch((error: unknown) => error);
+    try {
+      await started;
+      await expect(exportPrivateJourneyFilm("journey-film", options(), { ...next, encode })).rejects.toThrow("journey_film_busy");
+      expect(next.fetcher).not.toHaveBeenCalled();
+    } finally { release(); await result; }
+    expect(await result).toMatchObject({ status: 401 });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect((await exportPrivateJourneyFilm("journey-film", options(), { ...next, encode })).blob.type).toBe("video/mp4");
+  });
   it("holds the page-wide slot across abort/remount until old teardown settles", async () => {
     const first = transport(fixture()), next = transport(fixture());
     const controller = new AbortController();
@@ -281,6 +475,17 @@ describe("oversized caption error guidance", () => {
     expect(journeyFilmErrorMessage(new Error("journey_film_text_layout_limit"))).toContain("缩短标题或关闭感想字幕");
     expect(journeyFilmErrorMessage(new Error("unknown"))).toBe("未能完成导出。请检查网络和素材是否可读取，然后重试。");
   });
+  it("explains resource budgets without imposing a hidden duration cutoff", () => {
+    const budget = Object.assign(new Error("journey_film_output_limit"), { requiredBytes: 180 * 1024 * 1024, availableBytes: 120 * 1024 * 1024 });
+    expect(journeyFilmErrorMessage(budget)).toContain("所需约 180 MiB，当前可用导出预算 120 MiB");
+    expect(journeyFilmErrorMessage(budget)).toContain("不会自动删减或拆分");
+    const retained = Object.assign(new Error("journey_film_downloads_pending"), { exportCount: 8, exportLimit: 8 });
+    expect(journeyFilmErrorMessage(retained)).toContain("临时文件已达 8 份上限");
+    const unsupported = Object.assign(new Error("journey_film_storage_unavailable"), { requiredBytes: 110 * 1024 * 1024, availableBytes: 96 * 1024 * 1024 });
+    expect(journeyFilmErrorMessage(unsupported)).toContain("所需约 110 MiB，当前可用导出预算 96 MiB");
+    const invalid = Object.assign(new Error("journey_film_output_limit"), { requiredBytes: NaN, availableBytes: -1 });
+    expect(journeyFilmErrorMessage(invalid)).not.toContain("当前可用");
+  });
   for (const isStop of [true, false]) {
     it.each([
       ["BMP", "长".repeat(8001)],
@@ -307,11 +512,18 @@ describe("oversized caption error guidance", () => {
       expect(journey).toEqual(before);
     });
   }
-  it.each(["长".repeat(8000), "🌍".repeat(4000)])("keeps the exact 8000-unit note boundary distinct from duration limits", async (note) => {
+  it.each(["长".repeat(8000), "🌍".repeat(4000)])("exports every caption at the exact 8000-unit note boundary without a duration cutoff", async (note) => {
     expect(note.length).toBe(8000);
     const journey = fixture(); journey.routePoints[1].note = note;
-    await expect(exportPrivateJourneyFilm(journey.id, { ...options(), includeRoutePointNotes: true }, { ...transport(journey), encode }))
-      .rejects.toThrow("journey_film_duration_limit");
+    const artifact = await exportPrivateJourneyFilm(journey.id, { ...options(), includeRoutePointNotes: true }, {
+      ...transport(journey), encode: async (input) => {
+        expect([...input.film.captions.values()].join("")).toBe(note);
+        expect(input.film.manifest.actualDurationMs).toBeGreaterThan(120_000);
+        return encode(input);
+      },
+    });
+    expect(artifact.blob.type).toBe("video/mp4");
+    expect(artifact.durationMs).toBeGreaterThan(120_000);
   });
 });
 
@@ -410,3 +622,4 @@ describe("normalized title boundary", () => {
     expect(journey).toEqual(before);
   });
 });
+

@@ -1,29 +1,38 @@
 import { creativeCoverRecipeForGeneration } from "../reveal/creativeCoverRecipes";
 import { getJourney, getPrivateMediaRead, JourneyApiError, readCoverRevealDisplay } from "./journeyApi";
-import { journeyCover } from "./journeyModel";
+import { journeyCover, journeySoundtrack } from "./journeyModel";
 import { buildKeepsakeRenderManifest, type KeepsakeAspect, type KeepsakeDurationPreset } from "./journeyKeepsake";
 import { buildKeepsakePrivateRenderPlan, type AuthorizedKeepsakeJourneyContext } from "./keepsakePrivateRender";
 import { buildMemoryFilm, type MemoryFilmCoverPin, type PreparedMemoryFilm } from "./keepsakeMemoryFilm";
 import { planCoverRevealOpening, type CoverRevealDisplayPayload } from "./coverRevealOpening";
 import type { Journey, JourneyMediaAsset } from "./types";
+import { createJourneyFilmWatchdog } from "./journeyFilmWatchdog";
+import { estimateJourneyFilmOutputBytes } from "./journeyFilmBudget";
 
 export const FILM_MAX_BYTES = 256 * 1024 * 1024;
 export const FILM_MAX_ASSET_BYTES = 128 * 1024 * 1024;
-export const FILM_MAX_DURATION_MS = 120_000;
-export type JourneyFilmProgress = { phase: "preparing" | "rendering" | "validating"; completed: number; total: number };
+export type JourneyFilmProgress = { phase: "preparing" | "rendering" | "finalizing" | "validating"; completed: number; total: number };
+export type JourneyFilmPlanSummary = { durationMs: number; estimatedOutputBytes: number; soundtrackIncluded: boolean };
 export type JourneyFilmExportOptions = {
   presetSeconds: KeepsakeDurationPreset;
   aspect: KeepsakeAspect;
   includeRoutePointNotes: boolean;
   includeCover: boolean;
+  /** Include the Journey's existing owner-uploaded soundtrack unless explicitly disabled. */
+  includeSoundtrack?: boolean;
   reducedMotion: boolean;
   signal: AbortSignal;
   onProgress: (progress: JourneyFilmProgress) => void;
+  onPlan?: (plan: JourneyFilmPlanSummary) => void;
 };
 export type JourneyFilmArtifact = {
   blob: Blob;
   filename: string;
   durationMs: number;
+  soundtrackIncluded?: boolean;
+  storageMode?: "disk" | "memory";
+  dispose?: () => Promise<void>;
+  retainForDownload?: () => Promise<void>;
   /** Re-authorize immediately before a later explicit download, not just on render completion. */
   verify: (signal: AbortSignal) => Promise<void>;
 };
@@ -34,10 +43,17 @@ export type JourneyFilmEncoderInput = {
   sourcePlan: ReturnType<typeof buildKeepsakePrivateRenderPlan>;
   readMedia: (asset: JourneyMediaAsset) => Promise<Blob>;
   readOpening: (() => Promise<Blob>) | null;
+  readSoundtrack: (() => Promise<Blob>) | null;
   signal: AbortSignal;
   onFrame: (completed: number) => void;
+  onFinalize?: () => void;
+  onWrite?: (writtenBytes: number) => void;
 };
-export type JourneyFilmEncoder = (input: JourneyFilmEncoderInput) => Promise<Blob>;
+export type JourneyFilmEncoded = { blob: Blob; storageMode: "disk" | "memory"; dispose: () => Promise<void>; retainForDownload?: () => Promise<void> };
+export type JourneyFilmEncoder = (input: JourneyFilmEncoderInput) => Promise<Blob | JourneyFilmEncoded>;
+class JourneyFilmCleanupError extends Error {
+  constructor(readonly originalError: unknown) { super("journey_film_cleanup_failed", { cause: originalError }); }
+}
 
 /** Compare all rendered facts, including edits that do not bump Journey.revision. */
 export function journeyFilmIdentity(journey: Journey): string {
@@ -46,7 +62,7 @@ export function journeyFilmIdentity(journey: Journey): string {
     journey.coverMediaAssetId ?? null,
     journey.routePoints.map((p) => [p.id, p.latitude, p.longitude, p.label, p.note ?? null, p.isStop, p.sortOrder, p.regionContext ?? null, p.stayAnchorRoutePointId ?? null]),
     journey.routeSegments ?? [],
-    journey.media.map((a) => [a.id, a.routePointId, a.mimeType, a.bytes, a.sortOrder, a.contentHash ?? null, a.contentHashVerified === true]),
+    journey.media.map((a) => [a.id, a.journeyId, a.routePointId, a.mimeType, a.bytes, a.sortOrder, a.contentHash ?? null, a.contentHashVerified === true]),
   ]);
 }
 
@@ -72,19 +88,33 @@ export function journeyFilmFilename(title: string): string {
 }
 
 export function journeyFilmErrorMessage(error: unknown): string {
+  if (error instanceof JourneyFilmCleanupError) return `${journeyFilmErrorMessage(error.originalError)} 临时文件清理未完成，请稍后重试清理。`;
   if (error instanceof DOMException && error.name === "AbortError") return "已取消导出。";
-  if (error instanceof DOMException && error.name === "TimeoutError") return "导出超时，请缩短旅程后重试。";
+  if (error instanceof DOMException && error.name === "TimeoutError") return "导出长时间没有进展，已停止。请检查网络或设备状态后重试。";
+  if (error instanceof DOMException && error.name === "QuotaExceededError") return "设备可用存储空间不足，请释放空间后重试。未生成不完整的视频。";
   if (error instanceof JourneyApiError && (error.status === 401 || error.status === 403)) return "登录或访问权限已变化，请重新登录后再导出。";
   const code = error instanceof Error ? error.message : "";
+  const limits = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  const bytes = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  const capacity = bytes(limits.requiredBytes) && bytes(limits.availableBytes)
+    ? `所需约 ${Math.ceil(limits.requiredBytes / 1024 / 1024)} MiB，当前可用导出预算 ${Math.floor(limits.availableBytes / 1024 / 1024)} MiB。` : "";
   if (code === "journey_film_busy") return "上一段短片仍在生成或清理，请稍后重试。";
   if (code === "journey_film_changed") return "旅程内容已变化，请关闭此窗口后重新导出。";
   if (code === "journey_film_codec_unavailable") return "此浏览器无法编码 MP4，请使用支持 H.264 视频编码的浏览器。";
   if (code === "journey_film_source_limit") return "素材超过本地导出上限：单个 128 MB、合计 256 MB。请减少素材后重试。";
-  if (code === "journey_film_duration_limit") return "内容或字幕需要超过两分钟，请减少素材或关闭字幕后重试。";
+  if (code === "journey_film_output_limit") return `预计成片或实际文件超过本地导出空间预算（最多 512 MiB）。${capacity}请释放空间或选择内容较少的旅程；不会自动删减或拆分。`;
+  if (code === "journey_film_storage_unavailable") return `此浏览器无法为完整视频准备临时存储，内存导出最多 96 MiB。${capacity}请使用较新的浏览器并检查设备空间；不会自动删减或拆分。`;
+  if (code === "journey_film_downloads_pending") {
+    const count = bytes(limits.exportCount) && bytes(limits.exportLimit) && limits.exportCount >= limits.exportLimit
+      ? `临时文件已达 ${limits.exportLimit} 份上限。` : "";
+    return `导出临时存储已满。${count}${capacity}请确认之前的下载全部完成后清理临时文件，或等待其他导出结束再重试。`;
+  }
   if (code === "journey_film_reveal_unavailable") return "此浏览器无法渲染艺术开场，请关闭艺术封面选项后重试。";
   if (code === "memory_film_note_too_long") return "单条感想超过字幕长度上限，请缩短感想或关闭感想字幕后重试。";
   if (code === "journey_film_text_layout_limit") return "文字过长，无法在画面内完整呈现，请缩短标题或关闭感想字幕后重试。";
   if (code === "journey_film_video_unsupported") return "有视频无法在此浏览器中解码，未生成不完整的短片。";
+  if (code === "journey_film_soundtrack_unsupported") return "旅程配乐无法解码，未生成静音替代片。请更换配乐后重试，或明确关闭配乐选项。";
+  if (code === "journey_film_audio_codec_unavailable") return "此浏览器无法编码配乐，未生成静音替代片。请换用支持音频编码的浏览器。";
   if (code === "journey_film_source_changed") return "原片校验失败，未生成短片。请刷新旅程后重试。";
   return "未能完成导出。请检查网络和素材是否可读取，然后重试。";
 }
@@ -136,16 +166,20 @@ export async function exportPrivateJourneyFilm(
   if (activeJourneyFilmRun !== null) throw new Error("journey_film_busy");
   const owner = Symbol("journey-film-run");
   activeJourneyFilmRun = owner;
-  try { return await renderAuthorizedJourneyFilm(journeyId, options, dependencies); }
-  finally { if (activeJourneyFilmRun === owner) activeJourneyFilmRun = null; }
+  const watchdog = createJourneyFilmWatchdog(options.signal);
+  try { return await renderAuthorizedJourneyFilm(journeyId, { ...options, signal: watchdog.signal,
+    onProgress: (next) => { watchdog.progress(next.phase, next.completed); options.onProgress(next); },
+  }, dependencies, watchdog.progress); }
+  finally { watchdog.dispose(); if (activeJourneyFilmRun === owner) activeJourneyFilmRun = null; }
 }
 
 async function renderAuthorizedJourneyFilm(
   journeyId: string,
   options: JourneyFilmExportOptions,
   dependencies: { fetcher?: typeof fetch; encode?: JourneyFilmEncoder },
+  activity: (phase: string, completed: number) => void,
 ): Promise<JourneyFilmArtifact> {
-  const signal = AbortSignal.any([options.signal, AbortSignal.timeout(300_000)]);
+  const signal = options.signal;
   signal.throwIfAborted();
   if (![15, 30, 60].includes(options.presetSeconds) || !["portrait", "landscape"].includes(options.aspect)) throw new Error("journey_film_options_invalid");
   const fetcher = dependencies.fetcher ?? fetch;
@@ -156,8 +190,12 @@ async function renderAuthorizedJourneyFilm(
   const identity = journeyFilmIdentity(journey);
   const sourcePlan = buildKeepsakePrivateRenderPlan(buildKeepsakeRenderManifest(journey, options.presetSeconds, options.aspect));
   const assets = new Map(journey.media.map((asset) => [asset.id, asset]));
+  const soundtrack = options.includeSoundtrack !== false ? journeySoundtrack(journey) : null;
+  if (soundtrack && (soundtrack.journeyId !== journey.id || soundtrack.routePointId !== null)) throw new Error("journey_film_source_changed");
+  const sourceIds = new Set(sourcePlan.mediaAssetIds);
+  if (soundtrack) sourceIds.add(soundtrack.id);
   let total = 0;
-  for (const id of sourcePlan.mediaAssetIds) {
+  for (const id of sourceIds) {
     const asset = assets.get(id);
     if (!asset || !Number.isSafeInteger(asset.bytes) || asset.bytes <= 0 || asset.bytes > FILM_MAX_ASSET_BYTES) throw new Error("journey_film_source_limit");
     total += asset.bytes;
@@ -184,7 +222,9 @@ async function renderAuthorizedJourneyFilm(
   }, coverPin);
   // This client is not the privileged server resolver. Keep the actual read boundary truthful.
   film.manifest.privacy.mediaResolution = "authorized-owner-fetch";
-  if (film.manifest.actualDurationMs > FILM_MAX_DURATION_MS) throw new Error("journey_film_duration_limit");
+  options.onPlan?.({ durationMs: film.manifest.actualDurationMs,
+    estimatedOutputBytes: estimateJourneyFilmOutputBytes(film.manifest.actualDurationMs, soundtrack !== null),
+    soundtrackIncluded: soundtrack !== null });
   let transferred = 0;
   const readUrl = async (url: string, maxBytes: number) => {
     signal.throwIfAborted();
@@ -194,6 +234,7 @@ async function renderAuthorizedJourneyFilm(
     const response = await fetcher(parsed.href, { signal: readSignal, cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
     const blob = await readBoundedFilmBlob(response, Math.min(maxBytes, FILM_MAX_BYTES - transferred), readSignal);
     transferred += blob.size;
+    activity("source-read", transferred);
     return blob;
   };
   const mediaCache = new Map<string, Promise<Blob>>();
@@ -228,10 +269,11 @@ async function renderAuthorizedJourneyFilm(
     downloadSignal.throwIfAborted();
   };
   const encode = dependencies.encode ?? (await import("./journeyFilmCanvas")).encodeJourneyFilm;
-  let blob: Blob;
+  let encoded: Blob | JourneyFilmEncoded;
   try {
-    blob = await encode({
+    encoded = await encode({
     journey, sourcePlan, film, signal, readMedia,
+    readSoundtrack: soundtrack ? () => readMedia(soundtrack) : null,
     readOpening: coverPin && openingPayload?.display ? async () => {
       // Re-sign immediately before decoding. Slow preparation must not reuse an expired URL.
       const current = await readCoverRevealDisplay(journeyId, scopedFetch);
@@ -240,12 +282,23 @@ async function renderAuthorizedJourneyFilm(
       return readUrl(current.display.url, 16 * 1024 * 1024);
     } : null,
     onFrame: (completed) => options.onProgress({ phase: "rendering", completed, total: film.manifest.totalFrames }),
+    onFinalize: () => options.onProgress({ phase: "finalizing", completed: 0, total: 1 }),
+    onWrite: (writtenBytes) => activity("output-write", writtenBytes),
   });
   } finally { mediaCache.clear(); }
+  const result = encoded instanceof Blob ? { blob: encoded } : encoded;
+  const { blob } = result;
+  try {
   signal.throwIfAborted();
   if (journeyFilmIdentity(journey) !== identity) throw new Error("journey_film_changed");
   if (blob.type !== "video/mp4" || blob.size === 0) throw new Error("journey_film_output_invalid");
   options.onProgress({ phase: "validating", completed: 0, total: 1 });
   await verify(signal);
-  return { blob, filename: journeyFilmFilename(journey.title), durationMs: film.manifest.actualDurationMs, verify };
+  return { ...result, filename: journeyFilmFilename(journey.title), durationMs: film.manifest.actualDurationMs, soundtrackIncluded: soundtrack !== null, verify };
+  } catch (error) {
+    try { if ("dispose" in result) await result.dispose(); }
+    catch { throw new JourneyFilmCleanupError(error); }
+    throw error;
+  }
 }
+

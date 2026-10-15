@@ -1,9 +1,12 @@
 import { RevealFlow } from "../reveal/vendor/index.js";
 import { creativeCoverRecipe } from "../reveal/creativeCoverRecipes";
 import { resolveCoverRevealPresetId } from "./coverRevealOpening";
-import { ALL_FORMATS, BlobSource, BufferTarget, CanvasSink, CanvasSource, Input, Mp4OutputFormat, Output, canEncodeVideo } from "mediabunny";
+import { ALL_FORMATS, BlobSource, CanvasSink, CanvasSource, Input, Mp4OutputFormat, Output, canEncodeVideo } from "mediabunny";
 import { sampleMemoryFilmFrame } from "./keepsakeMemoryFilm";
-import type { JourneyFilmEncoderInput } from "./journeyFilmExport";
+import { prepareJourneyFilmSoundtrack } from "./journeyFilmSoundtrack";
+import { createJourneyFilmStorage, type JourneyFilmStorage } from "./journeyFilmStorage";
+import { estimateJourneyFilmOutputBytes, FILM_VIDEO_BITRATE } from "./journeyFilmBudget";
+import type { JourneyFilmEncoderInput, JourneyFilmEncoded } from "./journeyFilmExport";
 import type { RoutePoint } from "./types";
 
 const BACKGROUND = "#111820";
@@ -63,22 +66,21 @@ export function filmTextBands(width: number, height: number, margin: number, fon
 }
 
 /** Frame-exact WebCodecs + MP4 muxing, not a screen recording or renamed WebM. */
-export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise<Blob> {
+export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise<JourneyFilmEncoded> {
   const { journey, film, sourcePlan, signal } = input;
   const { width, height } = film.manifest.output;
   const fps = film.manifest.fps;
   signal.throwIfAborted();
-  if (!await canEncodeVideo("avc", { width, height, bitrate: 4_000_000 })) throw new Error("journey_film_codec_unavailable");
+  if (!await canEncodeVideo("avc", { width, height, bitrate: FILM_VIDEO_BITRATE })) throw new Error("journey_film_codec_unavailable");
   signal.throwIfAborted();
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
   const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) throw new Error("journey_film_canvas_unavailable");
   await document.fonts.ready;
-  const target = new BufferTarget();
-  const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target });
-  const source = new CanvasSource(canvas, { codec: "avc", bitrate: 4_000_000 });
-  output.addVideoTrack(source, { frameRate: fps });
+  let storage: JourneyFilmStorage | null = null;
+  let output: Output | null = null;
+  let preserveArtifact = false;
   const assets = new Map(journey.media.map((asset) => [asset.id, asset]));
   const points = projectFilmRoute(journey.routePoints);
   const pointIndex = new Map(journey.routePoints.map((p, index) => [p.id, index]));
@@ -89,9 +91,11 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
   let activeShot = -1;
   let reveal: RevealFlow | null = null;
   let revealHost: HTMLDivElement | null = null;
+  let soundtrack: Awaited<ReturnType<typeof prepareJourneyFilmSoundtrack>> | null = null;
   const releaseReveal = () => { reveal?.dispose(); reveal = null; revealHost?.remove(); revealHost = null; };
   const outputCleanup: { promise: Promise<void> | null } = { promise: null };
   const cancelOutput = () => {
+    if (!output) return Promise.resolve();
     // Output may enter its canceled state before asynchronous disposal ends.
     // Retain and drain the actual promise, not just that state flag.
     outputCleanup.promise ??= output.cancel();
@@ -122,6 +126,15 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
     lines.forEach((line, index) => ctx.fillText(line, margin, height - boxHeight + margin / 2 + index * lineHeight));
   };
   try {
+    storage = await createJourneyFilmStorage(estimateJourneyFilmOutputBytes(film.manifest.actualDurationMs, !!input.readSoundtrack), signal, input.onWrite);
+    signal.throwIfAborted();
+    output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: storage.target });
+    const source = new CanvasSource(canvas, { codec: "avc", bitrate: FILM_VIDEO_BITRATE });
+    output.addVideoTrack(source, { frameRate: fps });
+    if (input.readSoundtrack) {
+      soundtrack = await prepareJourneyFilmSoundtrack(await input.readSoundtrack(), output, film.manifest.actualDurationMs / 1000, signal);
+      signal.throwIfAborted();
+    }
     await output.start();
     signal.throwIfAborted();
     if (input.readOpening) {
@@ -240,25 +253,33 @@ export async function encodeJourneyFilm(input: JourneyFilmEncoderInput): Promise
       }
       if (lines) drawCaption(lines);
       await source.add(frame / fps, 1 / fps);
+      await soundtrack?.addUntil((frame + 1) / fps);
       if (frame % 8 === 0) { input.onFrame(frame + 1); await new Promise<void>((resolve) => setTimeout(resolve, 0)); }
     }
     await releaseMedia();
     source.close();
+    soundtrack?.close();
+    input.onFinalize?.();
     await output.finalize();
     signal.throwIfAborted();
-    if (!target.buffer || target.buffer.byteLength > 96 * 1024 * 1024) throw new Error("journey_film_output_invalid");
+    const blob = await storage.finish();
+    signal.throwIfAborted();
+    await soundtrack?.dispose();
     input.onFrame(film.manifest.totalFrames);
-    return new Blob([target.buffer], { type: "video/mp4" });
+    preserveArtifact = true;
+    return { blob, storageMode: storage.storageMode, dispose: storage.dispose, retainForDownload: storage.retainForDownload };
   } finally {
     signal.removeEventListener("abort", abort);
     try { await releaseMedia(); }
     finally {
-      try { opening?.close(); }
+      try { opening?.close(); await soundtrack?.dispose(); }
       finally {
         if (outputCleanup.promise) await outputCleanup.promise.catch(() => {});
-        else if (output.state !== "finalized" && output.state !== "canceled") await cancelOutput().catch(() => {});
+        else if (output && output.state !== "finalized" && output.state !== "canceled") await cancelOutput().catch(() => {});
+        if (!preserveArtifact) await storage?.dispose();
         canvas.width = 1; canvas.height = 1;
       }
     }
   }
 }
+
