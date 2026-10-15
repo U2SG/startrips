@@ -4,7 +4,7 @@ The owner requested all four mobile directions together, with one switch, for pe
 
 ## Try the layouts
 
-Open the account menu. Directly below `媒体呈现`, the `经典视图` button shows the current letter and layout name and cycles A → B → C → D → A. This entry is available in both the desktop dock and the mobile account sheet, even before opening a Journey. The selected layout applies when you open a Journey in the classic (`媒体呈现：默认`) presentation on a compact viewport. Its accessible name includes the current layout name. The choice is remembered only in this browser under `startrips.mobile-classic-view.v1`; no server, Journey, or share-setting write occurs. Storage denial still allows switching for the current visit.
+Open the account menu. Directly below `媒体呈现`, the `经典视图` button shows the current letter and layout name and cycles A → B → C → D → A. This entry is available in both the desktop dock and the mobile account sheet, even before opening a Journey. The selected layout applies to the editable Story page and to the default (`媒体呈现：默认`) reader on a compact viewport. In any media presentation, the small return icon (`退出媒体呈现`) opens that Story page at the current Route Point/media. Owners can edit there, with `导出短片` directly below the header; shared viewers retain their read-only capabilities. The play icon (`进入媒体呈现`) returns to the selected presentation. These session actions do not write the account/share preference; changing `媒体呈现` in Account still selects and saves a presentation. Its accessible name includes the current layout name. The choice is remembered only in this browser under `startrips.mobile-classic-view.v1`; no server, Journey, or share-setting write occurs. Storage denial still allows switching for the current visit.
 
 | Variant | Name | Main difference |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ Open the account menu. Directly below `媒体呈现`, the `经典视图` button 
 | C | 照片优先 | The largest picture aperture; tapping a photo reveals viewing options instead of immediately entering immersive viewing. |
 | D | 地球优先 | A shorter sheet keeps more of the existing particle Earth visible. |
 
-The first row contains chapter selection, playback and More. Native-video navigation retains its separate Previous/Next pair instead of hijacking video seeking gestures. More reveals immersive viewing, automatic browsing, management, thumbnails, statistics, soundtrack and Journey navigation. Notes are not deleted or trimmed from stored content. The existing full-text note reader and management mode remain available.
+The first row contains chapter selection, playback and More. Native-video navigation retains its separate Previous/Next pair instead of hijacking video seeking gestures. More reveals immersive viewing, automatic browsing, management, thumbnails, statistics, soundtrack and Journey navigation. Notes are not deleted or trimmed from stored content. The existing full-text note reader and management mode remain available. The editor retains the selected layout while its management controls stay visible; media menus scroll within the picture aperture when necessary.
 
 The switch only changes scoped layout attributes. It does not key or remount StoryMediaPages, reset the selected media, replace the live video, or change its currentTime. Desktop and other media presentations retain their existing layout. Expanded Story and native/browser fullscreen remain explicit user actions.
 
@@ -41,3 +41,4 @@ The `auth-media` job `114816346693` on Source `41f2dc38` failed only `story-stag
 `storyPaintReady` checks the current picture and its paint ancestors, including delayed/pending animations, before the existing stationary screenshot. It retains the 3-second deadline and every pixel, clone, focus and media-identity assertion. It does not change product motion or poll screenshots until they pass. The classic-view browser test holds the real layout's entrance after finishing the article, proves the old root-only check incorrectly accepts it and the new check rejects it, then finishes that entrance and verifies the unchanged media node is ready.
 
 Emulation does not prove hardware safe-area insets, software keyboards, iOS Safari media behavior or the owner's final visual preference. Final acceptance is the owner's phone trial. This change does not merge or deploy itself.
+

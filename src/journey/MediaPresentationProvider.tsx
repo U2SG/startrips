@@ -99,7 +99,15 @@ export function MediaPresentationPreferenceProvider({ accountKey, sessionResolve
     if (!accountKey || !sessionResolved || state.accountKey !== accountKey || writing.current) return;
     // The failed request belongs to the preference owner, not whichever UI
     // happens to display its error. Do not retain a closed surface's callback.
-    if (state.status === "error") setAttempt((value) => value + 1);
+    if (state.status === "error") {
+      // A successful read may replace the local editor with another reader.
+      // Account's Retry must respect the same unfinished work as a saved change.
+      if ([...changeGuards.current].some((guard) => guard())) {
+        setState((value) => ({ ...value, error: "请先保存或放弃当前编辑，完成正在进行的操作后再切换媒体呈现。" }));
+        return;
+      }
+      setAttempt((value) => value + 1);
+    }
     else if (state.status === "ready" && state.error && state.retryStyle) {
       void select(state.retryStyle, onConfirmed);
     }
@@ -131,3 +139,4 @@ export function SharedMediaPresentationProvider({ style, children }: { style: Me
     </PresentationContext.Provider>
   );
 }
+

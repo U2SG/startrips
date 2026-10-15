@@ -282,3 +282,44 @@
 @media (prefers-reduced-motion: reduce) {
   .journey-story[data-story-layout="desktop"] .journey-story__copy { animation: none; }
 }
+
+
+/* Editing actions stay in view beside the story's entry, including on compact
+   layouts. Export retains one opener/ref for dialog cancellation and focus. */
+.journey-story__editor-actions {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  grid-row: 2; grid-column: 1; padding-block: 8px;
+}
+.journey-story__editor-actions > button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line); border-radius: var(--control-radius);
+  background: var(--control-fill); color: var(--control-ink);
+  font: 400 var(--control-font-size)/1.4 var(--archive-sans); cursor: pointer;
+}
+.journey-story__editor-actions > button:disabled { cursor: default; opacity: var(--control-disabled-opacity); }
+.journey-story[data-story-layout="desktop"]:has(> .journey-story__editor-actions) {
+  grid-template-rows: 44px auto minmax(0, 1fr) 44px;
+}
+.journey-story[data-story-layout="desktop"]:has(> .journey-story__editor-actions) > .journey-story__layout { grid-row: 3; }
+.journey-story[data-story-layout="desktop"]:has(> .journey-story__editor-actions) > footer { grid-row: 4; }
+.journey-story[data-story-layout="mobile"] > .journey-story__editor-actions {
+  position: sticky; top: 106px; z-index: var(--z-content-3);
+  margin: 0; padding: 8px 12px; background: var(--archive-bg);
+}
+.journey-story[data-classic-view] > .journey-story__editor-actions { top: 100px; }
+.journey-story[data-story-layout="mobile"][data-mobile-presentation="expanded"] > .journey-story__editor-actions {
+  top: calc(106px + env(safe-area-inset-top, 0px));
+}
+.journey-story[data-classic-view][data-mobile-presentation="expanded"] > .journey-story__editor-actions {
+  top: calc(100px + env(safe-area-inset-top, 0px));
+}
+
+.journey-story[data-story-layout="mobile"]:has(> .journey-story__editor-actions) {
+  scroll-padding-block-start: calc(174px + env(safe-area-inset-top, 0px));
+}
+
+/* Keep picture/tool overlays below the sticky editor controls while scrolling. */
+.journey-story[data-story-layout="mobile"][data-story-editing="true"] > .journey-story__layout {
+  position: relative; isolation: isolate;
+}

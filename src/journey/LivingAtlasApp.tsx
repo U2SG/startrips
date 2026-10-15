@@ -87,7 +87,7 @@ import {
   type StorySnapState,
 } from "./playbackReturn";
 import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
-import { useMediaPresentationRecovery, useMediaPresentationStyle } from "./mediaPresentation";
+import { useMediaPresentationStyle } from "./mediaPresentation";
 import { deferredSurface, whenIdle } from "./deferredSurface";
 
 // Loaded only when the chosen presentation uses the Journey Book or Stream.
@@ -1362,14 +1362,22 @@ export function LivingAtlasApp({
   }, []);
   const storyObservationRef = useRef<StoryLogicalObservation | null>(null);
   const mediaPresentation = useMediaPresentationStyle();
-  const recoverMediaPresentation = useMediaPresentationRecovery();
-  const [renderedPresentation, setRenderedPresentation] = useState(mediaPresentation);
-  if (renderedPresentation !== mediaPresentation) {
+  // Leaving a presentation is navigation within this Story session, never a
+  // replacement for the saved account/share presentation preference.
+  const [storyEditor, setStoryEditor] = useState<{
+    journeyId: string; preference: typeof mediaPresentation;
+  } | null>(null);
+  const storyEditorOpen = Boolean(storyEditor && storyEditor.journeyId === storyJourneyId
+    && storyEditor.preference === mediaPresentation);
+  if (storyEditor && !storyEditorOpen) setStoryEditor(null);
+  const storyPresentation = storyEditorOpen ? "classic" : mediaPresentation;
+  const [renderedPresentation, setRenderedPresentation] = useState(storyPresentation);
+  if (renderedPresentation !== storyPresentation) {
     // Adjust this component's entry seed before React renders the new reader.
     // An effect would first mount it at the old opening, then jump to this page.
-    setRenderedPresentation(mediaPresentation);
+    setRenderedPresentation(storyPresentation);
     const isClassic = (value: typeof mediaPresentation) => value === "classic" || value === "note-overlay";
-    const sameReader = isClassic(renderedPresentation) && isClassic(mediaPresentation);
+    const sameReader = isClassic(renderedPresentation) && isClassic(storyPresentation);
     const observation = storyObservationRef.current;
     if (!sameReader && observation?.journeyId === storyJourneyId) {
       setStoryRoutePointId(observation.routePointId);
@@ -1394,8 +1402,8 @@ export function LivingAtlasApp({
       : null;
   }, [storyJourneyId]);
   const storyReader = storyJourneyId
-    && (mediaPresentation === "book" || mediaPresentation === "book-3d" || mediaPresentation === "stream")
-    ? mediaPresentation
+    && (storyPresentation === "book" || storyPresentation === "book-3d" || storyPresentation === "stream")
+    ? storyPresentation
     : null;
   const playbackReturnIntentRevisionRef = useRef(0);
   const playbackEntryRef = useRef<PlaybackEntry | null>(null);
@@ -2996,6 +3004,7 @@ export function LivingAtlasApp({
   // observation aperture beside the CURRENT projected marker; no geographic
   // coordinate is persisted in React state.
   function openJourneyStory(journeyId: string, routePointId: string | null, presentJourneyCoverOpening = false) {
+    setStoryEditor(null);
     claimPlaybackReturnIntent();
     setStoryInitialSnapState("in-context");
     setStoryFocusVisibleControlOnOpen(false);
@@ -3098,10 +3107,11 @@ export function LivingAtlasApp({
     setStoryInitialAssetId(target.assetId);
     setStoryPresentsJourneyCoverOpening(false);
     setStoryInitialSnapState("in-context");
-    recoverMediaPresentation("classic");
+    if (storyJourneyId) setStoryEditor({ journeyId: storyJourneyId, preference: mediaPresentation });
   }
 
   function navigateStoryJourney(id: string) {
+    setStoryEditor(null);
     claimPlaybackReturnIntent();
     timeCursor.selectJourney(id);
     setStoryRoutePointId(null);
@@ -3155,6 +3165,7 @@ export function LivingAtlasApp({
         ? `place-media-${journeyId}-${returnRoutePointId}-return`
         : `journey-cover-${journeyId ?? "story"}`,
       update: () => {
+        setStoryEditor(null);
         setStoryJourneyId(null);
         setStoryRoutePointId(null);
         setStoryInitialAssetId(null);
@@ -4824,6 +4835,9 @@ export function LivingAtlasApp({
           presentJourneyCoverOpening={storyPresentsJourneyCoverOpening}
           coverRevealPlayed={storyCoverRevealPlayed}
           focusVisibleControlOnOpen={storyFocusVisibleControlOnOpen}
+          editorSession={storyEditorOpen}
+          onOpenEditor={() => setStoryEditor({ journeyId: storyJourneyId, preference: mediaPresentation })}
+          onReturnPresentation={() => setStoryEditor(null)}
           onObservationChange={handleStoryObservationChange}
           onGlobeCoverChange={setStoryGlobeCover}
           onClose={(source) => closeJourneyStory(source ?? null)}
@@ -4947,3 +4961,4 @@ export function LivingAtlasApp({
     </main>
   );
 }
+

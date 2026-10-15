@@ -70,7 +70,8 @@ try {
   await page.locator(".living-atlas__active-hit-area").waitFor({ state: "visible" });
   await page.locator(".living-atlas__active-hit-area").click();
   await page.locator(".journey-story").waitFor({ state: "visible" });
-  await page.locator(".journey-story").getByRole("button", { name: "编辑故事", exact: true }).click();
+  await page.locator(".journey-story").getByRole("button", { name: "退出媒体呈现", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-editing") === "true");
   await page.getByRole("button", { name: "编辑旅程" }).click();
   await page.locator(".journey-composer").waitFor({ state: "visible" });
 
