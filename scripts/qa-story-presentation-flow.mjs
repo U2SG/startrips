@@ -181,6 +181,22 @@ async function waitExportFocus() {
   return trigger && document.activeElement===trigger && trigger.getClientRects().length>0;
  });
 }
+async function desktopScrollGeometry() {
+ return page.evaluate(() => {
+  const story=document.querySelector('.journey-story');
+  const backdrop=story?.closest('.journey-story-backdrop');
+  const copy=story?.querySelector('.journey-story__copy');
+  const rect=element=>{
+   if(!element) return null;
+   const {x,y,width,height}=element.getBoundingClientRect();
+   return {x,y,width,height};
+  };
+  const scroll=element=>element ? {top:element.scrollTop,left:element.scrollLeft,
+   height:element.clientHeight,scrollHeight:element.scrollHeight,rect:rect(element)} : null;
+  return {backdrop:scroll(backdrop),story:scroll(story),copy:scroll(copy),document:scroll(document.scrollingElement),
+   header:rect(story?.querySelector('header')),export:rect(story?.querySelector('[data-story-film-export-trigger]'))};
+ });
+}
 let settings;
 try {
  await page.goto(`${origin}/?qaState=atlas-gateway&qaLite=1`,{waitUntil:'networkidle'});
@@ -445,6 +461,8 @@ try {
   await leavePresentation();
   assert.equal(await story.getAttribute('data-story-layout'),'desktop');
   assert.equal(await story.getAttribute('data-classic-view'),null);
+  await page.screenshot({path:`${out}/desktop-entry-from-${saved}.png`});
+  const entryGeometry=await desktopScrollGeometry();
   for (const close of ['button','Escape']) {
    await exportButton().click();
    await dialog.waitFor({state:'visible'});
@@ -473,15 +491,17 @@ try {
   assert.equal(await story.getAttribute('data-story-editing'),'true');
   await page.setViewportSize({width:1280,height:900});
   await page.waitForFunction(()=>document.querySelector('.journey-story')?.dataset.storyLayout==='desktop');
+  const rotatedGeometry=await desktopScrollGeometry();
   await page.getByRole('button',{name:'放弃更改',exact:true}).click();
   await page.screenshot({path:`${out}/desktop-editor-from-${saved}.png`});
+  const discardedGeometry=await desktopScrollGeometry();
   await returnPresentation();
   await page.setViewportSize({width,height:844});
   if (saved==='classic') {
    await page.waitForFunction(()=>document.querySelector('.journey-story')?.dataset.storyLayout==='mobile');
    assert.equal(await story.getAttribute('data-classic-view'),'light');
   }
-  result.desktop.push({saved,editor:true,exportCloseFocus:true,dirtyDraftProtected:true});
+  result.desktop.push({saved,editor:true,exportCloseFocus:true,dirtyDraftProtected:true,entryGeometry,rotatedGeometry,discardedGeometry});
  }
  assert.deepEqual(errors,[]);
  await fs.writeFile(`${out}/result.json`,JSON.stringify({...result,saves,errors,ok:true},null,2));

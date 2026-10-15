@@ -292,10 +292,11 @@ jobs:
               owner-share::pnpm qa:owner-share
               playback-map-bridge::pnpm qa:playback-map-bridge
           - name: shell-composer
-            suites: "|post-login|mobile-contract|mobile-classic-views|composer-route-points|composer-mobile-ia|entry-boundaries|final-acceptance|"
+            suites: "|post-login|mobile-contract|story-presentation-navigation|mobile-classic-views|composer-route-points|composer-mobile-ia|entry-boundaries|final-acceptance|"
             commands: |
               post-login::pnpm qa:post-login-controls
               mobile-contract::pnpm qa:mobile-contract
+              story-presentation-navigation::pnpm qa:story-presentation-navigation
               mobile-classic-views::pnpm qa:mobile-classic-views
               composer-route-points::pnpm qa:composer-route-points
               composer-mobile-ia::pnpm qa:composer-mobile-ia
@@ -393,7 +394,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload Story presentation and scroll evidence
-        if: ${{ always() && contains(matrix.suites, '|mobile-classic-views|') }}
+        if: ${{ always() && (contains(matrix.suites, '|mobile-classic-views|') || contains(matrix.suites, '|story-presentation-navigation|')) }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: story-presentation-${{ github.run_attempt }}
@@ -571,3 +572,4 @@ jobs:
           PROVEN_LEDGER_ONLY: ${{ steps.source-proof.outputs.ledger_only_final }}
           SOURCE_PROOF_OUTCOME: ${{ steps.source-proof.outcome }}
         run: node scripts/ci-validation-results.mjs
+
