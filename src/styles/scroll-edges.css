@@ -3,8 +3,6 @@
   /* Defaults must yield to each directional state, regardless of source order. */
   --scroll-edge-before: transparent;
   --scroll-edge-after: transparent;
-  --scroll-edge-before-width: 0px;
-  --scroll-edge-after-width: 0px;
 }
 [data-scroll-before][data-scroll-after] {
   background-image:
@@ -21,10 +19,9 @@
   [data-scroll-before][data-scroll-after] {
     background-image: none;
     /* A zero-width edge cannot be recolored into a visible inactive border. */
-    border-block-style: solid;
-    border-block-color: CanvasText;
-    border-block-width: var(--scroll-edge-before-width) var(--scroll-edge-after-width);
+    border-top: 0 solid CanvasText;
+    border-bottom: 0 solid CanvasText;
   }
-  [data-scroll-before="true"] { --scroll-edge-before-width: 1px; }
-  [data-scroll-after="true"] { --scroll-edge-after-width: 1px; }
+  [data-scroll-before="true"][data-scroll-after] { border-top-width: 1px; }
+  [data-scroll-before][data-scroll-after="true"] { border-bottom-width: 1px; }
 }

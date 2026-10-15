@@ -44,8 +44,13 @@
 }
 @media (forced-colors: active) {
   .story-media-organizer[data-scroll-before][data-scroll-after] {
-    --scroll-edge-before-width: 0px;
-    padding-bottom: calc(16px - var(--scroll-edge-after-width));
+    border-top-width: 0;
+  }
+  .story-media-organizer[data-scroll-before][data-scroll-after="true"] {
+    padding-bottom: 15px;
+  }
+  @media (max-width: 760px) {
+    .story-media-organizer[data-scroll-before][data-scroll-after="true"] { padding-bottom: 11px; }
   }
   .story-media-organizer[data-scroll-before] > .story-media-organizer__destinations {
     background-image: none;

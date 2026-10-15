@@ -39,7 +39,7 @@ async function expectState(page, text, state, phase, forced = false) {
   assert.ok(expected, `Unknown scroll expectation: ${state}`);
   try {
     // The expected state is chosen by the scenario, never inferred from the DOM.
-    await page.waitForFunction(({ selector, state, expected }) => {
+    await page.waitForFunction(({ selector, state, expected, forced }) => {
       const body = document.querySelector(selector);
       if (!body || body.clientHeight <= 0) return false;
       const maximum = Math.max(0, body.scrollHeight - body.clientHeight);
@@ -47,8 +47,13 @@ async function expectState(page, text, state, phase, forced = false) {
         : maximum > 1 && (state === "top" ? body.scrollTop <= 1
           : state === "bottom" ? maximum - body.scrollTop <= 1
             : body.scrollTop > 1 && maximum - body.scrollTop > 1);
-      return geometry && body.dataset.scrollBefore === expected.before && body.dataset.scrollAfter === expected.after;
-    }, { selector: SELECTOR, state, expected }, { polling: "raf", timeout: 3_000 });
+      const style = getComputedStyle(body);
+      const colorMode = matchMedia("(forced-colors: active)").matches === forced;
+      const edgeWidths = !forced || (style.borderTopWidth === (expected.before === "true" ? "1px" : "0px")
+        && style.borderBottomWidth === (expected.after === "true" ? "1px" : "0px"));
+      return geometry && colorMode && edgeWidths
+        && body.dataset.scrollBefore === expected.before && body.dataset.scrollAfter === expected.after;
+    }, { selector: SELECTOR, state, expected, forced }, { polling: "raf", timeout: 3_000 });
     const actual = await readState(page, text);
     assert.equal(actual.textMatches, true, `${phase}: render the exact fixed note, not another fixture`);
     assert.ok(actual.clientHeight > 20 && actual.rect.top < actual.viewport.height && actual.rect.bottom > 0,

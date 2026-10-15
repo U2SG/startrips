@@ -57,10 +57,14 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
         const root = page.locator(ROOT), sticky = page.locator(STICKY);
         await root.waitFor({state:"visible",timeout:3_000});
         const check = async (before, after, phase, forced = false) => {
-          await page.waitForFunction(({selector,before,after})=>{
-            const node=document.querySelector(selector);
-            return node?.dataset.scrollBefore===String(before) && node.dataset.scrollAfter===String(after);
-          },{selector:ROOT,before,after},{polling:"raf",timeout:3_000});
+          await page.waitForFunction(({selector,sticky,before,after,forced})=>{
+            const node=document.querySelector(selector), header=document.querySelector(sticky);
+            if (!node || !header || node.dataset.scrollBefore!==String(before) || node.dataset.scrollAfter!==String(after)
+              || matchMedia("(forced-colors: active)").matches!==forced) return false;
+            const style=getComputedStyle(node), ink=getComputedStyle(header);
+            return !forced || (style.borderTopWidth==="0px" && style.borderBottomWidth===(after ? "1px" : "0px")
+              && ink.borderTopWidth===(before ? "2px" : "0px"));
+          },{selector:ROOT,sticky:STICKY,before,after,forced},{polling:"raf",timeout:3_000});
           const geometry = await root.evaluate(node=>({top:node.getBoundingClientRect().top+node.clientTop,
             maximum:node.scrollHeight-node.clientHeight,scrollTop:node.scrollTop}));
           const paint = await sticky.evaluate(node=>{
@@ -78,11 +82,13 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
           const path=`${output}/${name}-${phase}.png`;
           assert.equal(paint.forced,forced,`${name}/${phase}: verify the requested color mode`);
           if (forced) assert.equal(paint.borderWidth,before ? "2px" : "0px");
-          const buffer=await page.screenshot({path,clip:{x:paint.x,y:paint.y,width:3,height:4}});
+          const buffer=await page.screenshot({path,clip:{x:paint.x,y:paint.y,width:3,height:3}});
           const {data,info}=await sharp(buffer).removeAlpha().raw().toBuffer({resolveWithObject:true});
           // Compare against the actual composited padding pixel, not raw rgba
           // components: production desktop sticky backgrounds are translucent.
-          const reference=(3*info.width+1)*info.channels;
+          // The fourth pixel row can antialias the first button when top is
+          // fractional. Row two is beyond the 2px cue and inside 4px padding.
+          const reference=(2*info.width+1)*info.channels;
           const base=[...data.subarray(reference,reference+3)];
           const pixel=[...data.subarray(info.channels,info.channels+3)];
           const difference=pixel.reduce((sum,value,i)=>sum+Math.abs(value-base[i]),0);
