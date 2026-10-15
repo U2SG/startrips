@@ -114,10 +114,10 @@
   position: relative; inset: auto; height: auto; min-height: 64px;
 }
 /* Anchor decisions to the whole controls region, not the 44px play slot. */
-.journey-story[data-classic-view] .journey-story__mobile-media-actions.has-quick-recap > .journey-story__playback-entry {
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions.has-quick-recap > .journey-story__playback-entry {
   position: static;
 }
-.journey-story[data-classic-view] .journey-story__mobile-media-actions .journey-story__quick-recap-status {
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions .journey-story__quick-recap-status {
   top: auto; bottom: 100%; right: 12px; width: min(280px, calc(100vw - 40px));
   max-width: calc(100% - 24px); max-height: 45dvh; overflow-y: auto;
 }

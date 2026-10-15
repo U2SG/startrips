@@ -1659,6 +1659,8 @@ describe("Story presentation editor navigation", () => {
     const css = readFileSync(new URL("../styles/mobile-classic-view.css", import.meta.url), "utf8");
     expect(css).toContain('[data-mobile-mode="viewer"]:not([data-classic-panel="more"])');
     expect(css).toContain('[data-mobile-mode="viewer"] .journey-story__mobile-media-actions > button');
+    expect(css).toContain('[data-mobile-mode="viewer"] .journey-story__mobile-media-actions.has-quick-recap > .journey-story__playback-entry');
+    expect(css).toContain('[data-mobile-mode="viewer"] .journey-story__mobile-media-actions .journey-story__quick-recap-status');
     expect(css).toContain('[data-mobile-mode="manage"] .journey-story__mobile-media-sheet');
     expect(css).toContain('max-height: calc(100% - 24px)');
     expect(css).toContain('overflow-y: auto; overscroll-behavior: contain;');

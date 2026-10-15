@@ -64,6 +64,18 @@ const account = page.locator('.account-sheet');
 const exit = () => page.getByRole('button', {name:'退出媒体呈现',exact:true});
 const enter = () => page.getByRole('button', {name:'进入媒体呈现',exact:true});
 const exportButton = () => story.getByRole('button', {name:'导出短片',exact:true});
+async function openCurrentStory() {
+ // Returning from Story keeps the observed stop. Its context card owns the
+ // entry while the journey chip is deliberately hidden and inert.
+ const pointEntry=page.locator('.living-atlas__route-point-context-entry');
+ await page.locator('.living-atlas__route-point-context-entry:visible, .mobile-v2__journey-chip:visible').first().waitFor({state:'visible'});
+ if (await pointEntry.isVisible()) {
+  await pointEntry.click();
+ } else {
+  await page.locator('.mobile-v2__journey-chip').click();
+  await page.locator('.mobile-v2__sheet').getByRole('button',{name:/打开故事/}).click();
+ }
+}
 async function openAccount() {
  // Immersive readers own the screen. Use the user's icon exit before opening
  // Account from the editable in-context Story, never click behind a modal.
@@ -172,8 +184,7 @@ async function waitExportFocus() {
 let settings;
 try {
  await page.goto(`${origin}/?qaState=atlas-gateway&qaLite=1`,{waitUntil:'networkidle'});
- await page.locator('.mobile-v2__journey-chip').click();
- await page.locator('.mobile-v2__sheet').getByRole('button',{name:/打开故事/}).click();
+ await openCurrentStory();
  await waitStyle('book');
  await page.screenshot({path:`${out}/01-book.png`});
  result.initialReader=await activeReader();
@@ -204,7 +215,22 @@ try {
   await page.waitForFunction(view=>document.querySelector('.journey-story')?.dataset.classicView===view,layout);
   await leavePresentation();
   assert.equal(await story.getAttribute('data-classic-view'),layout);
-  await story.getByRole('button',{name:'管理当前媒体',exact:true}).click();
+  // Manage retains its two-row overlay: the viewer's below-picture playback
+  // positioning must not move quick recap onto the media management target.
+  const aperture=await story.locator('.journey-story__media').boundingBox();
+  const recapBox=await story.getByRole('button',{name:'快速回顾',exact:true}).boundingBox();
+  const management=story.getByRole('button',{name:'管理当前媒体',exact:true});
+  const managementBox=await management.boundingBox();
+  for (const [name,box] of [['quick recap',recapBox],['media management',managementBox]]) {
+   assert.ok(box && box.width>=43.5 && box.height>=43.5,`${layout} ${name} lost its touch target`);
+   assert.ok(box.x>=aperture.x-1 && box.x+box.width<=aperture.x+aperture.width+1
+    && box.y>=aperture.y-1 && box.y+box.height<=aperture.y+aperture.height+1,`${layout} ${name} escapes the media aperture`);
+  }
+  const overlapWidth=Math.min(recapBox.x+recapBox.width,managementBox.x+managementBox.width)-Math.max(recapBox.x,managementBox.x);
+  const overlapHeight=Math.min(recapBox.y+recapBox.height,managementBox.y+managementBox.height)-Math.max(recapBox.y,managementBox.y);
+  assert.ok(overlapWidth<=0 || overlapHeight<=0,`${layout} playback and media management touch targets overlap`);
+  await page.screenshot({path:`${out}/layout-${layout}-controls.png`});
+  await management.click();
   const mediaMenu=story.getByRole('dialog',{name:'媒体管理',exact:true});
   await mediaMenu.waitFor({state:'visible'});
   const mediaBox=await story.locator('.journey-story__media').boundingBox();
@@ -385,16 +411,14 @@ try {
  // The first close may return from manage mode; the second closes Story itself.
  if (await story.count()) await story.getByRole('button',{name:'退出旅程故事',exact:true}).click();
  await story.waitFor({state:'detached'});
- await page.locator('.mobile-v2__journey-chip').click();
- await page.locator('.mobile-v2__sheet').getByRole('button',{name:/打开故事/}).click();
+ await openCurrentStory();
  await waitStyle('note-overlay');
  result.closeAndReopenRestoresSavedPresentation=true;
  // A fresh read error retries GET only, even after earlier failed PUT intents.
  rejectNextRead=true;
  const writesBeforeReload=saves.length;
  await page.reload({waitUntil:'networkidle'});
- await page.locator('.mobile-v2__journey-chip').click();
- await page.locator('.mobile-v2__sheet').getByRole('button',{name:/打开故事/}).click();
+ await openCurrentStory();
  await page.locator('.story-presentation-picker__error').filter({hasText:'无法读取'}).waitFor({state:'visible'});
  const readsBeforeRetry=preferenceReads;
  await leavePresentation();
