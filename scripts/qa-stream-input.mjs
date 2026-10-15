@@ -55,7 +55,7 @@ const state = (page) => page.evaluate(() => ({
   observation: window.__streamObservation, navigations: window.__streamNavigations,
   paused: Boolean(document.querySelector(".journey-stream__paused")),
 }));
-async function unchangedForFrames(page, expected) {
+async function unchangedForFrames(page, expected, evidencePath = null) {
   const samples = await page.evaluate(async () => {
     const samples = [];
     for (let frame = 0; frame < 8; frame++) {
@@ -66,6 +66,8 @@ async function unchangedForFrames(page, expected) {
     }
     return samples;
   });
+  if (evidencePath) await writeFile(evidencePath, JSON.stringify({ expected, samples,
+    cancellation: await page.evaluate(() => window.__streamCancelEvidence) }, null, 2));
   for (const sample of samples) assert.deepEqual(sample, expected, "Input changed the inactive Stream or left release inertia");
 }
 try {
@@ -117,9 +119,32 @@ try {
       // Cancel a genuine drag. Capture-loss uses the browser's real release API;
       // touch uses its cancellation event, not dispatchEvent or a state setter.
       const flow = page.locator(".journey-stream__flow");
-      await flow.evaluate((node) => node.addEventListener("gotpointercapture", (event) => {
-        if (event.target === node) window.__streamCapturedPointer = event.pointerId;
-      }));
+      await flow.evaluate((node) => {
+        window.__streamCancelEvidence = { events: [], boundary: null };
+        const witness = (event) => {
+          if (event.target !== node) return;
+          if (event.type === "gotpointercapture") window.__streamCapturedPointer = event.pointerId;
+          if (event.pointerId !== window.__streamCapturedPointer) return;
+          const strip = document.querySelector(".journey-stream__strip"), style = getComputedStyle(strip);
+          const snapshot = { type: event.type, pointerId: event.pointerId, trusted: event.isTrusted,
+            captured: node.hasPointerCapture(event.pointerId), inline: strip.style.transform,
+            transitionProperty: style.transitionProperty, transitionDuration: style.transitionDuration,
+            animations: strip.getAnimations().map(animation => ({ type: animation.constructor.name, playState: animation.playState })),
+            state: { transform: style.transform, observation: window.__streamObservation,
+              navigations: [...window.__streamNavigations], paused: Boolean(document.querySelector(".journey-stream__paused")) } };
+          window.__streamCancelEvidence.events.push(snapshot);
+          if (event.type !== "gotpointercapture" && !window.__streamCancelEvidence.boundary) {
+            window.__streamCancelEvidence.boundary = snapshot;
+          }
+        };
+        // Document bubble runs after React's root handler, within the SAME
+        // native dispatch. Never move the baseline after a settling frame.
+        const events = ["gotpointercapture", "lostpointercapture", "pointercancel"];
+        for (const type of events) document.addEventListener(type, witness);
+        window.__streamCancelCleanup = () => { for (const type of events) document.removeEventListener(type, witness); };
+      });
+      assert.equal(await page.locator(".journey-stream__strip").evaluate(node => getComputedStyle(node).transitionProperty), "none",
+        "Only the RAF integrator may interpolate the Stream transform");
       const start = { x: mobile ? 16 : 96, y: viewport.height * .6 };
       if (mobile) {
         const cdp = await context.newCDPSession(page);
@@ -139,7 +164,18 @@ try {
         await page.mouse.move(start.x, start.y + 51);
         await page.mouse.up();
       }
-      await unchangedForFrames(page, await state(page));
+      await page.waitForFunction(() => window.__streamCancelEvidence?.boundary !== null, null, { polling: "raf", timeout: 3_000 });
+      const cancellation = await page.evaluate(() => window.__streamCancelEvidence.boundary);
+      const cancellationPath = `${output}/${viewport.width}x${viewport.height}-cancellation.json`;
+      await writeFile(cancellationPath, JSON.stringify(cancellation, null, 2));
+      assert.equal(cancellation.type, mobile ? "pointercancel" : "lostpointercapture", "Witness the real matching cancellation event");
+      assert.equal(cancellation.trusted, true, "Cancellation must come from the browser");
+      assert.equal(cancellation.captured, false, "A cancelled Stream no longer owns capture");
+      assert.equal(cancellation.transitionProperty, "none");
+      assert.deepEqual(cancellation.animations, [], "No CSS interpolation may survive cancellation");
+      assert.deepEqual(await state(page), cancellation.state, "No movement between native cancellation and the first assertion");
+      await unchangedForFrames(page, cancellation.state, cancellationPath);
+      await page.evaluate(() => window.__streamCancelCleanup());
       assert.equal(await page.locator(".journey-stream__lightbox").count(), 0, "Cancellation synthesized a photo activation");
       await page.screenshot({ path: `${output}/${viewport.width}x${viewport.height}-stream.png` });
 
