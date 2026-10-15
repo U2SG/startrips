@@ -21,11 +21,14 @@ export async function assertPhotoZoom(page, touch = false) {
       panning: root.dataset.photoPanning, zoomed: root.dataset.photoZoomed };
   });
   const initial = await read();
-  const activate = async (name) => {
-    const button = stage.getByRole("button", { name, exact: true });
-    const rect = await button.boundingBox();
-    assert.ok(rect && rect.width >= 44 && rect.height >= 44, `${name} needs a full touch target`);
-    if (touch) await button.tap(); else await button.click();
+  // The owner wants direct manipulation, not three new permanent buttons.
+  assert.equal(await stage.locator("button").count(), 0, "Photo zoom must not add controls to the media stage");
+  assert.equal(await page.locator(".photo-zoom-controls").count(), 0, "No zoom toolbar, including a hidden substitute");
+  const picture = stage.locator('[data-media-presented="true"] > img');
+  const pressPhotoKey = async (key) => {
+    assert.equal(await picture.getAttribute("tabindex"), "0", "The existing photo remains keyboard reachable");
+    await picture.focus();
+    await page.keyboard.press(key);
   };
   if (touch) {
     const session = await page.context().newCDPSession(page);
@@ -46,6 +49,16 @@ export async function assertPhotoZoom(page, touch = false) {
       await session.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
       assert.equal((await read()).panning, undefined, "Cancellation releases photo pointer ownership");
       assert.equal((await read()).id, initial.id, "A remaining pinch finger must not become a page swipe");
+      // Return to fit with touch alone; no reset button or keyboard is needed.
+      await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [
+        { x: x - 50, y, id: 3 }, { x: x + 50, y, id: 4 },
+      ] });
+      await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [
+        { x: x - 15, y, id: 3 }, { x: x + 15, y, id: 4 },
+      ] });
+      await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      assert.equal((await read()).scale, 1, "Pinching inward restores fit without another control");
+      assert.equal((await read()).id, initial.id);
     } finally { await session.detach(); }
   } else {
     const anchor = { x: initial.fittedWidth * .08, y: initial.fittedHeight * .08 };
@@ -69,15 +82,20 @@ export async function assertPhotoZoom(page, touch = false) {
     await page.mouse.up();
     assert.equal((await read()).id, initial.id, "Photo pan must not navigate or dismiss");
   }
-  await activate("还原照片");
+  await pressPhotoKey("0");
   const reset = await read();
   assert.equal(reset.scale, 1);
   assert.equal(reset.x, 0);
   assert.equal(reset.y, 0);
   assert.equal(reset.id, initial.id);
-  await activate("放大照片");
-  assert.ok((await read()).scale > 1, "Accessible controls zoom independently of pointer gestures");
-  await activate("还原照片");
+  await pressPhotoKey("=");
+  assert.ok((await read()).scale > 1, "The focused photo supports keyboard zoom without another button");
+  await pressPhotoKey("-");
+  assert.equal((await read()).scale, 1, "Keyboard zoom-out restores fit");
+  await pressPhotoKey("=");
+  await pressPhotoKey("0");
+  assert.equal((await read()).scale, 1, "Keyboard reset restores fit");
+  assert.equal(await stage.locator("button").count(), 0, "Interacting must not reveal a replacement toolbar");
   assert.ok(await page.locator(".journey-story-fullscreen").isVisible());
   console.log(JSON.stringify({ name: touch ? "story-photo-pinch-cancel" : "story-photo-zoom-anchor-pan", id: initial.id, reset }));
 }

@@ -1,7 +1,5 @@
 import { cloneElement, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type ReactNode, type Ref, type VideoHTMLAttributes } from "react";
 import { flushSync } from "react-dom";
-import { IconMinus, IconPlus, IconArrowsMinimize } from "@tabler/icons-react";
-import { IconActionButton } from "../components/IconActionButton";
 import { usePhotoPanZoom } from "./usePhotoPanZoom";
 import { cancelSharedElementMorph } from "../motion/primitives/sharedElement";
 import "../styles/photo-pan-zoom.css";
@@ -1237,18 +1235,6 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     data-click-navigation={props.onNavigate ? "true" : undefined}
     data-current-media-kind={presentedId ? (presentedNote ? "note" : presentedVideo ? "video" : "image") : undefined}
     data-media-presentation={gesturePhase ?? (movingId ? "moving" : props.incomingId ? "waiting" : "settled")}>
-    {photoZoomEnabled ? <div className="photo-zoom-controls" role="group" aria-label="照片缩放">
-      <IconActionButton type="button" label="缩小照片" disabled={photoZoom.fitted} onClick={() => photoZoom.zoom(-1)}>
-        <IconMinus size={18} aria-hidden="true" />
-      </IconActionButton>
-      <output ref={photoZoom.output} aria-label="照片缩放比例">100%</output>
-      <IconActionButton type="button" label="放大照片" disabled={photoZoom.maximum} onClick={() => photoZoom.zoom(1)}>
-        <IconPlus size={18} aria-hidden="true" />
-      </IconActionButton>
-      <IconActionButton type="button" label="还原照片" disabled={photoZoom.fitted} onClick={photoZoom.reset}>
-        <IconArrowsMinimize size={18} aria-hidden="true" />
-      </IconActionButton>
-    </div> : null}
     {assigned.map((id, slot) => {
       const asset = props.media.find((item) => item.id === id);
       const read = id ? props.reads[id] : undefined;
@@ -1307,7 +1293,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           alt={presented ? asset?.fileName ?? "" : ""}
           draggable={false} decoding="async"
           role={presented && !note && (canNavigate || props.onImageClick) ? "button" : undefined}
-          tabIndex={presented && !note && pageReady && (canNavigate || props.onImageClick) ? 0 : -1}
+          tabIndex={presented && !note && pageReady && (canNavigate || props.onImageClick || photoZoomEnabled) ? 0 : -1}
+          aria-description={presented && photoZoomEnabled ? "滚轮或双指缩放照片；加号放大，减号缩小，0 还原。" : undefined}
           aria-label={presented && canNavigate
             ? `${asset?.fileName ?? "照片"}。左侧上一张，右侧下一张，方向键切换`
             : presented && props.onImageClick ? `${props.imageActionLabel ?? "沉浸查看"}：${asset?.fileName ?? "照片"}` : undefined}

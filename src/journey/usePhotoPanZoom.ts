@@ -1,5 +1,5 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { clampPhoto, fitPhoto, panPhoto, pinchPhoto, zoomPhotoAt, PHOTO_FIT, PHOTO_ZOOM_MAX, type PhotoPoint, type PhotoTransform } from "./photoViewport";
+import { useLayoutEffect, useRef, type RefObject } from "react";
+import { clampPhoto, fitPhoto, panPhoto, pinchPhoto, zoomPhotoAt, PHOTO_FIT, type PhotoPoint, type PhotoTransform } from "./photoViewport";
 
 type Options = {
   root: RefObject<HTMLDivElement | null>;
@@ -15,9 +15,7 @@ type Options = {
 export function usePhotoPanZoom(options: Options) {
   const latest = useRef(options);
   latest.current = options;
-  const output = useRef<HTMLOutputElement>(null);
-  const actions = useRef({ reset: () => {}, zoom: (_direction: number) => {} });
-  const [limits, setLimits] = useState({ fitted: true, maximum: false });
+  const actions = useRef({ reset: () => {} });
 
   useLayoutEffect(() => {
     const root = options.root.current;
@@ -59,10 +57,6 @@ export function usePhotoPanZoom(options: Options) {
       root.dataset.photoZoomed = String(next.scale > 1);
       root.dataset.photoZoomScale = String(next.scale);
       if (next.scale > 1) delete root.dataset.clickDirection;
-      if (output.current) output.current.textContent = `${Math.round(next.scale * 100)}%`;
-      const fitted = next.scale === 1;
-      const maximum = next.scale === PHOTO_ZOOM_MAX;
-      setLimits((old) => old.fitted === fitted && old.maximum === maximum ? old : { fitted, maximum });
       updateHold();
     };
     const release = () => {
@@ -194,7 +188,7 @@ export function usePhotoPanZoom(options: Options) {
     observer.observe(page);
     image.addEventListener("load", resize);
     paint({ ...PHOTO_FIT });
-    actions.current = { reset, zoom: (direction) => zoom(value.scale * (direction > 0 ? 1.5 : 1 / 1.5)) };
+    actions.current = { reset };
     return () => {
       alive = false;
       for (const [name, handler] of Object.entries(pointerEvents)) root.removeEventListener(name, handler as EventListener, true);
@@ -212,9 +206,9 @@ export function usePhotoPanZoom(options: Options) {
       delete root.dataset.photoZoomed;
       delete root.dataset.photoZoomScale;
       if (holding) { holding = false; latest.current.onHolding(false); }
-      actions.current = { reset: () => {}, zoom: () => {} };
+      actions.current = { reset: () => {} };
     };
   }, [options.enabled, options.identity, options.root]);
 
-  return { output, ...limits, reset: () => actions.current.reset(), zoom: (direction: number) => actions.current.zoom(direction) };
+  return { reset: () => actions.current.reset() };
 }

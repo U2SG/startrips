@@ -1,46 +1,5 @@
-.photo-zoom-controls {
-  position: absolute;
-  z-index: var(--z-content-9);
-  top: max(8px, env(safe-area-inset-top));
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--control-line);
-  border-radius: var(--control-radius);
-  background: var(--startrips-space);
-  color: var(--control-ink);
-  max-width: calc(100% - 112px);
-}
-.photo-zoom-controls > .icon-action-button {
-  flex: 0 0 var(--control-height);
-  width: var(--control-height);
-  height: var(--control-height);
-  min-width: var(--control-height);
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: var(--control-radius);
-  background: transparent;
-  color: inherit;
-  touch-action: manipulation;
-  cursor: pointer;
-}
-.photo-zoom-controls > .icon-action-button:disabled { opacity: var(--control-disabled-opacity); cursor: default; }
-.photo-zoom-controls > .icon-action-button:focus-visible { outline: 2px solid var(--control-focus); outline-offset: -3px; }
-.photo-zoom-controls output { width: 4ch; text-align: center; font: 400 11px/1.5 var(--archive-sans); font-variant-numeric: tabular-nums; }
-@media (hover: hover) and (pointer: fine) {
-  .photo-zoom-controls > .icon-action-button:hover:not(:disabled) { background: var(--control-fill-hover); }
-}
+/* Photo gestures add no visible controls or toolbar. */
 .story-media-pages[data-photo-zoomed="true"] :is(.story-media-pages__hit-surface, .story-media-pages__page[data-media-presented="true"] > img) { cursor: grab; }
 .story-media-pages[data-photo-panning="true"] :is(.story-media-pages__hit-surface, .story-media-pages__page[data-media-presented="true"] > img) { cursor: grabbing; }
 /* Direct manipulation, never a CSS transition or a second spring. */
 .story-media-pages[data-photo-zoom-enabled="true"] .story-media-pages__page[data-media-presented="true"] > img { transition: none; transform-origin: center; }
-@media (forced-colors: active) {
-  .photo-zoom-controls { background: Canvas; color: CanvasText; border-color: ButtonText; }
-  .photo-zoom-controls > .icon-action-button:disabled { opacity: 1; color: GrayText; }
-  .photo-zoom-controls > .icon-action-button:focus-visible { outline-color: Highlight; }
-}
