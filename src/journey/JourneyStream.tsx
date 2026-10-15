@@ -23,7 +23,7 @@ import {
 } from "./journeyReaderMedia";
 import type { JourneyBookOpenTarget } from "./JourneyBook";
 import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
-import { canStartStreamPointer, streamSwipeDirection, STREAM_NATIVE_INPUT } from "./journeyStreamInput";
+import { canStartStreamPointer, streamPointerHasLostCapture, streamSwipeDirection, STREAM_NATIVE_INPUT } from "./journeyStreamInput";
 import { withStillFragment, type VideoStill } from "./videoStillFrame";
 import type { StoryLogicalObservation } from "./storyMediaPolicy";
 import type { Journey, JourneyMediaAsset } from "./types";
@@ -292,6 +292,12 @@ export function JourneyStream({
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
+      const pointer = dragRef.current;
+      if (pointer && streamPointerHasLostCapture(pointer.moved, flowRef.current?.hasPointerCapture(pointer.pointerId) ?? false)) {
+        // Native release can precede its lostpointercapture notification.
+        // A queued frame must not integrate an ownerless drag or its velocity.
+        stopStreamMotion();
+      }
       const motion = motionRef.current;
       const centers = centersRef.current;
       const known = centers.filter(Number.isFinite);
@@ -421,6 +427,10 @@ export function JourneyStream({
     if (event.pointerType === "mouse") setHovering(Boolean((event.target as HTMLElement).closest(".journey-stream__item")));
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId || lightbox || closingRef.current) return;
+    if (streamPointerHasLostCapture(drag.moved, event.currentTarget.hasPointerCapture(event.pointerId))) {
+      stopStreamMotion();
+      return;
+    }
     if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > DRAG_SLOP_PX) {
       drag.moved = true;
       draggedRef.current = true;

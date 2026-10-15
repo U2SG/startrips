@@ -13,3 +13,8 @@ export function streamSwipeDirection(dx: number, dy: number, moved: boolean, can
     || Math.abs(dx) <= 70 || Math.abs(dx) <= Math.abs(dy) * 1.5) return null;
   return dx < 0 ? 1 : -1;
 }
+
+/** Once a drag claims capture, native loss ends ownership before any later event. */
+export function streamPointerHasLostCapture(moved: boolean, captured: boolean): boolean {
+  return moved && !captured;
+}

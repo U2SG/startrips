@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canStartStreamPointer, streamSwipeDirection, STREAM_NATIVE_INPUT } from "./journeyStreamInput";
+import { canStartStreamPointer, streamPointerHasLostCapture, streamSwipeDirection, STREAM_NATIVE_INPUT } from "./journeyStreamInput";
 
 describe("Stream input ownership", () => {
   const valid = { isPrimary: true, button: 0, blocked: false, activePointerId: null };
@@ -10,6 +10,12 @@ describe("Stream input ownership", () => {
     expect(canStartStreamPointer({ ...valid, isPrimary: false })).toBe(false);
     expect(canStartStreamPointer({ ...valid, button: 2 })).toBe(false);
     expect(canStartStreamPointer({ ...valid, blocked: true })).toBe(false);
+  });
+  it("ends claimed drags as soon as native capture is gone, but permits an unclaimed press", () => {
+    expect(streamPointerHasLostCapture(false, false)).toBe(false);
+    expect(streamPointerHasLostCapture(false, true)).toBe(false);
+    expect(streamPointerHasLostCapture(true, true)).toBe(false);
+    expect(streamPointerHasLostCapture(true, false)).toBe(true);
   });
   it("always leaves native media and editable controls to their own handlers", () => {
     expect(STREAM_NATIVE_INPUT.split(", ")).toEqual(expect.arrayContaining(["video", "audio", "input", "textarea", "select"]));
