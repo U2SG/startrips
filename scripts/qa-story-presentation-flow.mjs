@@ -9,7 +9,8 @@ const server = process.env.QA_ORIGIN ? null : await createServer({server:{host:"
 if (server) await server.listen();
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4297";
 const browser = await launchQaBrowser({args:["--use-angle=swiftshader","--enable-unsafe-swiftshader"]});
-const page = await browser.newPage({viewport:{width,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,reducedMotion:"reduce",recordVideo:{dir:`${out}/raw`,size:{width,height:844}}});
+const context = await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,reducedMotion:"reduce",recordVideo:{dir:`${out}/raw`,size:{width,height:844}}});
+const page = await context.newPage();
 page.setDefaultTimeout(10000);
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
 const now = "2026-10-01T00:00:00.000Z";
@@ -273,7 +274,8 @@ try {
  await story.locator(`[data-route-point-id="${id(5)}"]`).click();
  const note=page.locator('.journey-story [data-current-media-kind="note"] .story-media-pages__note-text');
  await note.waitFor({state:'visible'});
- assert.ok((await note.textContent()).includes('这里没有拍照'));
+ const selectedNoteText=await note.textContent();
+ assert.ok(selectedNoteText.includes('这里没有拍照'));
  result.note=await note.evaluate(el=>{const card=el.closest('.story-media-pages__note');return {background:getComputedStyle(card).backgroundColor,text:el.textContent.length,scroll:el.scrollHeight>el.clientHeight};});
  assert.notEqual(result.note.background,'rgba(0, 0, 0, 0)');
  const noteBefore=await note.evaluate(el=>el.scrollTop);
@@ -284,6 +286,7 @@ try {
  await leavePresentation();
  await returnPresentation();
  await note.waitFor({state:'visible'});
+ assert.equal(await note.textContent(),selectedNoteText,'editor return selected a different note');
  result.notePositionPreserved=true;
  result.noteNativeScroll=true;
  await page.screenshot({path:`${out}/03-note-only.png`});
@@ -431,13 +434,18 @@ try {
   await story.getByRole('button',{name:'退出旅程故事',exact:true}).click();
   assert.equal(await story.getAttribute('data-story-editing'),'true');
   assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),draft);
+  // Clear the Close warning through another real edit so Back must produce a
+  // fresh guard response; the prior message cannot satisfy the assertion.
+  const rotatedDraft=`${draft}旋转后也保留。`;
+  await page.getByRole('textbox',{name:'旅程感想',exact:true}).fill(rotatedDraft);
+  await story.locator('.story-notes-editor__message').waitFor({state:'hidden'});
   // Desktop ownership must register the parent Story before compact Manage.
   // Back after rotation cannot consume the parent and bypass the dirty guard.
   await page.setViewportSize({width,height:844});
   await page.waitForFunction(()=>document.querySelector('.journey-story')?.dataset.mobileMode==='manage');
   await page.goBack();
-  await page.waitForFunction(()=>document.querySelector('.story-notes-editor')?.textContent.includes('未保存'));
-  assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),draft);
+  await story.locator('.story-notes-editor__message').filter({hasText:'还有未保存的感想'}).waitFor({state:'visible'});
+  assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),rotatedDraft);
   assert.equal(await story.getAttribute('data-story-editing'),'true');
   await page.setViewportSize({width:1280,height:900});
   await page.waitForFunction(()=>document.querySelector('.journey-story')?.dataset.storyLayout==='desktop');
@@ -465,6 +473,7 @@ try {
  const video=page.video();
  await page.close();
  if(video) await video.saveAs(`${out}/story-presentation-flow.webm`);
+ await context.close();
  await browser.close();
  if(server) await server.close();
 }
