@@ -22,7 +22,8 @@ import {
   type ReaderRead,
 } from "./journeyReaderMedia";
 import type { JourneyBookOpenTarget } from "./JourneyBook";
-import { useModalFocus } from "./useModalFocus";
+import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
+import { canStartStreamPointer, streamSwipeDirection, STREAM_NATIVE_INPUT } from "./journeyStreamInput";
 import { withStillFragment, type VideoStill } from "./videoStillFrame";
 import type { StoryLogicalObservation } from "./storyMediaPolicy";
 import type { Journey, JourneyMediaAsset } from "./types";
@@ -36,8 +37,6 @@ const UNFOLD_AT_MS = 1180;
 const UNFOLD_STAGGER_MS = 110;
 const NOTE_AFTER_PICTURE_MS = 520;
 const CLOSE_MS = 900;
-/** A horizontal swipe past this distance moves to the neighbouring Journey. */
-const JOURNEY_SWIPE_PX = 70;
 const DRAG_SLOP_PX = 6;
 /** Entries read ahead/behind the one at the centre. */
 const READ_WINDOW = 4;
@@ -46,8 +45,6 @@ const READ_WINDOW = 4;
  * picture, so a long Journey does not keep every decoded image alive.
  */
 const RENDER_WINDOW = 6;
-/** Pixels of the bottom of a video that belong to its native controls. */
-const VIDEO_CONTROLS_BAND_PX = 52;
 
 type Phase = "pouring" | "centered" | "unfolded" | "closing";
 
@@ -129,6 +126,8 @@ export function JourneyStream({
   const wakeRef = useRef<() => void>(() => {});
   const dragRef = useRef<{ x: number; y: number; lastY: number; lastTime: number; pointerId: number; moved: boolean } | null>(null);
   const draggedRef = useRef(false);
+  const lightboxOpenerRef = useRef<HTMLElement | null>(null);
+  const lightboxRef = useNestedModalFocus<HTMLDivElement>(Boolean(lightbox), lightbox);
   const videoRef = useRef<HTMLVideoElement>(null);
   const timersRef = useRef<number[]>([]);
   const closingRef = useRef(false);
@@ -138,6 +137,7 @@ export function JourneyStream({
   const requestClose = useCallback(() => {
     if (closingRef.current) return;
     closingRef.current = true;
+    stopStreamMotion();
     if (reduced) {
       onClose();
       return;
@@ -150,6 +150,26 @@ export function JourneyStream({
     else requestClose();
   });
 
+  useLayoutEffect(() => {
+    stopStreamMotion();
+  }, [lightbox, journeyId, viewport?.width, viewport?.height]);
+  useEffect(() => {
+    if (lightbox) return;
+    const opener = lightboxOpenerRef.current;
+    lightboxOpenerRef.current = null;
+    if (opener?.isConnected && !closingRef.current && !opener.closest("[inert]")) opener.focus({ preventScroll: true });
+  }, [lightbox]);
+  useEffect(() => {
+    const interrupt = () => stopStreamMotion();
+    const hidden = () => { if (document.hidden) interrupt(); };
+    window.addEventListener("blur", interrupt);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("blur", interrupt);
+      document.removeEventListener("visibilitychange", hidden);
+      interrupt();
+    };
+  }, []);
   useEffect(() => onMotionPreferenceChange(setReduced), []);
   useEffect(() => () => timersRef.current.forEach((timer) => window.clearTimeout(timer)), []);
 
@@ -359,18 +379,38 @@ export function JourneyStream({
     wakeRef.current();
   }
 
+  function releaseStreamPointer(pointerId: number) {
+    const flow = flowRef.current;
+    try { if (flow?.hasPointerCapture(pointerId)) flow.releasePointerCapture(pointerId); }
+    catch { /* Browser cancellation may have released capture already. */ }
+  }
+
+  function stopStreamMotion() {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (drag) {
+      draggedRef.current = true;
+      releaseStreamPointer(drag.pointerId);
+    }
+    const motion = motionRef.current;
+    motion.velocity = 0;
+    motion.drift = 0;
+    motion.target = motion.offset;
+  }
+
   function onWheel(event: WheelEvent<HTMLDivElement>) {
+    if (lightbox || closingRef.current || event.ctrlKey || event.metaKey
+      || (event.target instanceof Element && event.target.closest(STREAM_NATIVE_INPUT))) return;
     const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (viewport?.height ?? 800) : 1;
     motionRef.current.target -= event.deltaY * unit;
     wakeRef.current();
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    const target = event.target as HTMLElement;
-    if (target.closest("button:not([data-stream-shot])")) return;
-    const video = target.closest("video");
-    if (video && video.getBoundingClientRect().bottom - event.clientY < VIDEO_CONTROLS_BAND_PX) return;
+    const blocked = Boolean(lightbox || closingRef.current || !(event.target instanceof Element)
+      || event.target.closest(STREAM_NATIVE_INPUT));
+    if (!canStartStreamPointer({ isPrimary: event.isPrimary, button: event.button, blocked,
+      activePointerId: dragRef.current?.pointerId ?? null })) return;
     dragRef.current = { x: event.clientX, y: event.clientY, lastY: event.clientY, lastTime: performance.now(), pointerId: event.pointerId, moved: false };
     draggedRef.current = false;
     motionRef.current.velocity = 0;
@@ -380,11 +420,12 @@ export function JourneyStream({
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.pointerType === "mouse") setHovering(Boolean((event.target as HTMLElement).closest(".journey-stream__item")));
     const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag || drag.pointerId !== event.pointerId || lightbox || closingRef.current) return;
     if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > DRAG_SLOP_PX) {
       drag.moved = true;
       draggedRef.current = true;
-      event.currentTarget.setPointerCapture(event.pointerId);
+      try { event.currentTarget.setPointerCapture(event.pointerId); }
+      catch { stopStreamMotion(); return; }
     }
     if (!drag.moved) return;
     const now = performance.now();
@@ -403,15 +444,21 @@ export function JourneyStream({
     dragRef.current = null;
     const dx = event.clientX - drag.x;
     const dy = event.clientY - drag.y;
-    if (!cancelled && drag.moved && Math.abs(dx) > JOURNEY_SWIPE_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      motionRef.current.velocity = 0;
-      const neighbour = dx < 0 ? nextJourney : previousJourney;
+    releaseStreamPointer(drag.pointerId);
+    const direction = streamSwipeDirection(dx, dy, drag.moved, cancelled || Boolean(lightbox) || closingRef.current);
+    if (cancelled || direction !== null) stopStreamMotion();
+    if (cancelled || drag.moved) draggedRef.current = true;
+    if (direction !== null) {
+      const neighbour = direction > 0 ? nextJourney : previousJourney;
       if (neighbour && onNavigate) onNavigate(neighbour.id);
     }
-    window.setTimeout(() => { draggedRef.current = false; }, 0);
+    // A compatibility click remains suppressed until the next valid pointer
+    // starts. Keyboard activation (detail=0) is never suppressed by a drag.
+    wakeRef.current();
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (lightbox || closingRef.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target as HTMLElement;
     if (target.closest("video, input, textarea, select")) return;
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
@@ -465,12 +512,29 @@ export function JourneyStream({
       <div
         ref={flowRef}
         className="journey-stream__flow"
+        inert={Boolean(lightbox) || phase === "closing"}
+        onClickCapture={(event) => {
+          if (!draggedRef.current || event.detail === 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+        }}
         onWheel={onWheel}
+        onPointerDownCapture={(event) => {
+          // A fresh native-control press also ends the previous drag's click
+          // suppression; only its late compatibility click must be blocked.
+          if (event.isPrimary && event.button === 0 && !dragRef.current) draggedRef.current = false;
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={(event) => onPointerUp(event)}
         onPointerCancel={(event) => onPointerUp(event, true)}
-        onPointerLeave={() => setHovering(false)}
+        onLostPointerCapture={(event) => {
+          if (event.target === event.currentTarget && dragRef.current?.pointerId === event.pointerId) onPointerUp(event, true);
+        }}
+        onPointerLeave={(event) => {
+          setHovering(false);
+          if (dragRef.current?.pointerId === event.pointerId && !event.currentTarget.hasPointerCapture(event.pointerId)) stopStreamMotion();
+        }}
       >
         <div ref={stripRef} className="journey-stream__strip">
           {layout ? drawn.map(({ entry, index }, position) => (
@@ -492,9 +556,15 @@ export function JourneyStream({
                 previous[assetId] ? previous : { ...previous, [assetId]: size }
               ))}
               onOpen={(assetId) => {
-                if (draggedRef.current) return;
+                if (closingRef.current || lightbox) return;
                 if (index !== active) centreOn(index);
-                else setLightbox(assetId);
+                else {
+                  stopStreamMotion();
+                  const opener = itemRefs.current[index]?.querySelector<HTMLElement>("[data-stream-shot]") ?? null;
+                  lightboxOpenerRef.current = opener;
+                  opener?.focus({ preventScroll: true });
+                  setLightbox(assetId);
+                }
               }}
               onPlay={() => centreOn(index)}
               onExpired={expireRead}
@@ -503,7 +573,7 @@ export function JourneyStream({
           )) : null}
         </div>
       </div>
-      <header className="journey-stream__header">
+      <header className="journey-stream__header" inert={Boolean(lightbox) || phase === "closing"}>
         <button type="button" className="journey-stream__icon" aria-label="回到地球" onClick={requestClose}>
           <IconArrowUp size={20} stroke={1.35} aria-hidden="true" />
         </button>
@@ -530,6 +600,7 @@ export function JourneyStream({
         <button
           type="button"
           className="journey-stream__side is-previous"
+          inert={Boolean(lightbox) || phase === "closing"}
           style={{ "--side-accent": previousJourney.lightColor } as CSSProperties}
           aria-label={`上一段旅程：${previousJourney.title}`}
           onClick={() => onNavigate(previousJourney.id)}
@@ -539,6 +610,7 @@ export function JourneyStream({
         <button
           type="button"
           className="journey-stream__side is-next"
+          inert={Boolean(lightbox) || phase === "closing"}
           style={{ "--side-accent": nextJourney.lightColor } as CSSProperties}
           aria-label={`下一段旅程：${nextJourney.title}`}
           onClick={() => onNavigate(nextJourney.id)}
@@ -546,7 +618,8 @@ export function JourneyStream({
       ) : null}
       {paused ? <p className="journey-stream__paused" role="status">已暂停流动 · 空格继续</p> : null}
       {lightbox && lightboxEntry?.kind === "media" ? (
-        <div className="journey-stream__lightbox" role="dialog" aria-label="大图" onClick={() => setLightbox(null)}>
+        <div ref={lightboxRef} className="journey-stream__lightbox" role="dialog" aria-modal="true"
+          data-focus-trap-exempt tabIndex={-1} aria-label="大图" onClick={() => setLightbox(null)}>
           {lightboxRead?.status === "ready" ? (
             <img
               src={lightboxRead.read.url}
