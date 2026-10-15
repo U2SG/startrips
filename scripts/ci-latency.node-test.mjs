@@ -61,6 +61,7 @@ test("hosted Chrome is reused without per-run Chromium or OS dependency installa
 test("fast feedback runs once and final classification precedes expensive provisioning", () => {
   assert.equal((ci.match(/run: pnpm typecheck/g) || []).length, 1);
   assert.match(job("quick-checks"), /CLASSIFY_ONLY: '1'/);
+  assert.match(job("quick-checks"), /scripts\/ci-ledger-fast-path\.node-test\.mjs/);
   assert.match(job("quick-checks"), /run: pnpm typecheck/);
   for (const name of ["core", "browser-qa", "keepsake-render"]) {
     const block = job(name);
