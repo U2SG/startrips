@@ -1,5 +1,10 @@
 import { cloneElement, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type ReactNode, type Ref, type VideoHTMLAttributes } from "react";
 import { flushSync } from "react-dom";
+import { IconMinus, IconPlus, IconArrowsMinimize } from "@tabler/icons-react";
+import { IconActionButton } from "../components/IconActionButton";
+import { usePhotoPanZoom } from "./usePhotoPanZoom";
+import { cancelSharedElementMorph } from "../motion/primitives/sharedElement";
+import "../styles/photo-pan-zoom.css";
 import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackClip, mediaStackOpacity, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
 import { springElementTo, springTransformVelocity, type SpringElementHandle } from "../motion/springElement";
@@ -570,6 +575,20 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     else if ((!props.incomingId && !props.pendingId) || frontIncoming.current?.currentId !== props.currentId) frontIncoming.current = null;
   }, [props.incomingId, props.pendingId, props.currentId, targetReady]);
   const currentReady = ready(props.currentId);
+  const photoZoomEnabled = Boolean(active && props.fullscreen && props.gestureEnabled && currentReady
+    && !presentedVideo && !presentedNote && !props.incomingId && !props.pendingId && !movingId
+    && !props.pageOverlay);
+  const photoZoom = usePhotoPanZoom({
+    root, enabled: photoZoomEnabled, identity: `${props.scopeKey}:${presentedId ?? ""}`,
+    image: () => imageNodes.current[assigned.indexOf(presentedId)],
+    cancelPageGesture: () => {
+      cancelGesture();
+      // A new photo gesture supersedes the old full-screen geometry handoff.
+      cancelSharedElementMorph();
+    },
+    onHolding: (holding) => latest.current.onGestureHoldingChange(holding),
+    onConsumed: () => latest.current.onGestureConsumed(true),
+  });
   // #489 C/V8: a presentable target is painted in front of the page it
   // replaces, so it is already the media the viewer last saw. Shared-element
   // identity has to follow that painted foreground; publishing it from the
@@ -771,7 +790,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   }
 
   useImperativeHandle(stageRef, () => ({
-    cancelGesture,
+    cancelGesture: (commitDecided = false) => {
+      // Return morphs must capture the photo at fit, not a zoomed element box.
+      photoZoom.reset();
+      cancelGesture(commitDecided);
+    },
     heldVideo: () => {
       const held = renewal.current;
       const frame = held ? frames.current.get(held.id)?.canvas : null;
@@ -1188,7 +1211,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     onClick={handleBackdropClick}
     onPointerMove={(event) => {
       updateGesture(event);
-      if (presentedVideo || presentedNote || props.incomingId || !props.onNavigate) {
+      if (event.currentTarget.dataset.photoZoomed === "true" || presentedVideo || presentedNote || props.incomingId || !props.onNavigate) {
         delete event.currentTarget.dataset.clickDirection;
         return;
       }
@@ -1214,6 +1237,18 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     data-click-navigation={props.onNavigate ? "true" : undefined}
     data-current-media-kind={presentedId ? (presentedNote ? "note" : presentedVideo ? "video" : "image") : undefined}
     data-media-presentation={gesturePhase ?? (movingId ? "moving" : props.incomingId ? "waiting" : "settled")}>
+    {photoZoomEnabled ? <div className="photo-zoom-controls" role="group" aria-label="照片缩放">
+      <IconActionButton type="button" label="缩小照片" disabled={photoZoom.fitted} onClick={() => photoZoom.zoom(-1)}>
+        <IconMinus size={18} aria-hidden="true" />
+      </IconActionButton>
+      <output ref={photoZoom.output} aria-label="照片缩放比例">100%</output>
+      <IconActionButton type="button" label="放大照片" disabled={photoZoom.maximum} onClick={() => photoZoom.zoom(1)}>
+        <IconPlus size={18} aria-hidden="true" />
+      </IconActionButton>
+      <IconActionButton type="button" label="还原照片" disabled={photoZoom.fitted} onClick={photoZoom.reset}>
+        <IconArrowsMinimize size={18} aria-hidden="true" />
+      </IconActionButton>
+    </div> : null}
     {assigned.map((id, slot) => {
       const asset = props.media.find((item) => item.id === id);
       const read = id ? props.reads[id] : undefined;
