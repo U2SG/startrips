@@ -1,8 +1,8 @@
 .story-notes-editor {
   display: grid;
   min-width: 0;
-  gap: 1rem;
-  margin-top: 1.25rem;
+  gap: var(--story-space-lg);
+  margin-top: var(--story-space-xl);
   color: var(--startrips-starlight);
   font-family: var(--archive-sans);
 }
@@ -39,7 +39,7 @@
   color: var(--control-ink);
   color-scheme: dark;
   font: inherit;
-  line-height: 1.55;
+  line-height: 1.65;
   transition: border-color var(--motion-instant) ease-out;
 }
 
@@ -119,6 +119,14 @@
 .story-notes-editor__actions button:disabled {
   cursor: not-allowed;
   opacity: var(--control-disabled-opacity);
+}
+
+.story-notes-editor__field textarea:focus-visible { outline: 2px solid var(--control-focus); outline-offset: 2px; }
+@media (pointer: coarse) {
+  .story-notes-editor__field textarea { font-size: 16px; }
+}
+@media (forced-colors: active) {
+  .story-notes-editor__field textarea:focus-visible { outline-color: Highlight; }
 }
 
 .story-notes-editor__save {

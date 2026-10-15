@@ -1,3 +1,4 @@
+import { assertStoryScrollEdges } from "./qa-story-scroll-edges.mjs";
 import { revealStoryViewingOptions } from "./qa-browser.mjs";
 /**
  * #595 browser QA: grouped Route Point notes stay narrative beats.
@@ -261,6 +262,8 @@ async function toggleLongNote(session) {
       { cause: error });
   }
   const expanded = await storyState(page);
+  await assertStoryScrollEdges(page);
+
   // A drag on the sheet scrolls the sheet; it must never page the stage.
   await swipe(session, 1, ".story-point-note-sheet__body");
   await page.waitForTimeout(400);

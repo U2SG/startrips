@@ -1,0 +1,19 @@
+/* Background ink, not a mask: content, selections and focus remain readable. */
+[data-scroll-before][data-scroll-after] {
+  --scroll-edge-before: transparent;
+  --scroll-edge-after: transparent;
+  background-image:
+    linear-gradient(to right, transparent, var(--scroll-edge-before) 20%, var(--scroll-edge-before) 80%, transparent),
+    linear-gradient(to right, transparent, var(--scroll-edge-after) 20%, var(--scroll-edge-after) 80%, transparent);
+  background-position: center top, center bottom;
+  background-size: 100% 2px;
+  background-repeat: no-repeat;
+  background-attachment: scroll;
+}
+[data-scroll-before="true"] { --scroll-edge-before: var(--control-line-strong); }
+[data-scroll-after="true"] { --scroll-edge-after: var(--control-line-strong); }
+@media (forced-colors: active) {
+  [data-scroll-before][data-scroll-after] { background-image: none; border-block: 1px solid transparent; }
+  [data-scroll-before="true"] { border-top-color: CanvasText; }
+  [data-scroll-after="true"] { border-bottom-color: CanvasText; }
+}

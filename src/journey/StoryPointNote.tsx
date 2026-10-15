@@ -8,6 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import "../styles/story-point-note.css";
+import { useScrollEdges } from "../components/useScrollEdges";
 
 type Props = {
   /** The Route Point that owns the note. The block is keyed by it. */
@@ -36,6 +37,8 @@ export function StoryPointNote({ routePointId, label, text }: Props) {
   const [expanded, setExpanded] = useState(false);
   const returnFocus = useRef(false);
   const sheetId = useId();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useScrollEdges(scrollRef, expanded);
 
   useLayoutEffect(() => {
     const element = textRef.current;
@@ -131,7 +134,7 @@ export function StoryPointNote({ routePointId, label, text }: Props) {
           data-story-point-note-sheet={routePointId}
         >
           {label ? <p className="story-point-note-sheet__label">{label}</p> : null}
-          <div className="story-point-note-sheet__body">
+          <div ref={scrollRef} className="story-point-note-sheet__body" tabIndex={0} role="region" aria-label="完整感想内容">
             <p className="story-point-note-sheet__text">{text}</p>
           </div>
           <button

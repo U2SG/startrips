@@ -365,3 +365,35 @@
     scale: 0.97;
   }
 }
+
+/* Quiet controls on opaque Story content, never on the globe or media itself. */
+:is(.story-notes-editor, .story-point-note-sheet, .story-media-organizer, .story-media-rail) {
+  --control-fill: var(--story-control-fill);
+  --control-fill-hover: var(--story-control-hover);
+  --control-fill-press: var(--story-control-press);
+}
+:where(.journey-story-backdrop, .journey-book, .journey-book-3d, .journey-stream) :where(.icon-action-button) {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+:where(.journey-story-backdrop, .journey-book, .journey-book-3d, .journey-stream) .icon-action-button:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+:where(.journey-story-backdrop, .journey-book, .journey-book-3d, .journey-stream) .icon-action-button:disabled {
+  opacity: var(--control-disabled-opacity);
+  cursor: not-allowed;
+}
+@media (forced-colors: active) {
+  :where(.journey-story-backdrop, .journey-book, .journey-book-3d, .journey-stream) .icon-action-button {
+    border-color: ButtonText;
+    color: ButtonText;
+    background: ButtonFace;
+  }
+  :where(.journey-story-backdrop, .journey-book, .journey-book-3d, .journey-stream) .icon-action-button:disabled {
+    opacity: 1;
+    color: GrayText;
+  }
+  :where(.journey-story-backdrop, .journey-book, .journey-book-3d, .journey-stream) .icon-action-button:focus-visible { outline-color: Highlight; }
+}
