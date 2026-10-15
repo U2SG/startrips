@@ -2,10 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { createServer } from "vite";
 import { launchQaBrowser } from "./qa-browser.mjs";
-const baseline = process.argv.includes("--baseline");
 const width = Number(process.argv.find(arg=>/^\d+$/.test(arg)) ?? 390);
-const retryProof = process.argv.includes("--retry-baseline") ? "retry-baseline" : "retry-fixed";
-const out = `artifacts/story-repair/${baseline ? "baseline" : `${retryProof}-${width}`}`;
+const out = `artifacts/story-repair/editor-navigation-${width}`;
 await fs.mkdir(out, {recursive:true});
 const server = process.env.QA_ORIGIN ? null : await createServer({server:{host:"127.0.0.1",port:4297,strictPort:true},logLevel:"error"});
 if (server) await server.listen();
@@ -25,7 +23,9 @@ let rejectNextRead = false;
 let preferenceReads = 0;
 let holdNextSave = false;
 let releaseSave = () => {};
-const saves = [], errors = [], result = {baseline};
+const saves = [], errors = [], result = {width, presentationExits: [], layouts: []};
+let holdJourneyRead = false;
+const heldJourneyReads = new Set();
 const json = (body,status=200) => ({status,contentType:"application/json",body:JSON.stringify(body)});
 page.on("pageerror",e=>errors.push(e.message));
 await page.route("**/api/auth/**",route=>{const path=new URL(route.request().url()).pathname;return route.fulfill(json(path.endsWith("/get-session") ? session : path.endsWith("/organization/list") ? [{id:"qa-org",name:"QA Atlas",slug:"qa-atlas"}] : {}));});
@@ -33,6 +33,16 @@ await page.route("**/api/account-preferences/media-presentation",async route=>{i
 await page.route("**/api/account-preferences/earth-experience",route=>route.fulfill(json({earthExperience:"default",revision:0,updatedAt:null})));
 await page.route("**/api/atlases/current",route=>route.fulfill(json({atlas:{id:id(2),title:"QA Atlas",dedication:"同行"},role:"owner"})));
 await page.route("**/api/journeys",route=>route.fulfill(json({journeys:[journey]})));
+await page.route(`**/api/journeys/${journey.id}`, async route => {
+ if (holdJourneyRead) {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  heldJourneyReads.add(release);
+  await pending;
+  heldJourneyReads.delete(release);
+ }
+ await route.fulfill(json({journey})).catch(() => {});
+});
 await page.route("**/api/home-bases",route=>route.fulfill(json({periods:[]})));
 await page.route("**/api/media-evidence/*",route=>route.fulfill(json({evidence:{mediaAssetId:new URL(route.request().url()).pathname.split('/').at(-1),revision:0,recorded:{spatial:{source:"unknown",granularity:"unknown",latitude:null,longitude:null,accuracyMeters:null,label:null},captureTime:{source:"unknown",timezone:"unknown",local:null,instant:null,offsetMinutes:null}},display:{hidden:false,correction:null},effective:null,updatedAt:null}})));
 
@@ -48,181 +58,388 @@ async function swipeUp(element, distance=180){
  for(let i=1;i<=8;i++){await cdp.send("Input.dispatchTouchEvent",{type:"touchMove",touchPoints:[{x,y:y-distance*i/8}]});await page.waitForTimeout(16);}
  await cdp.send("Input.dispatchTouchEvent",{type:"touchEnd",touchPoints:[]});await cdp.detach();
 }
-async function choose(next){
- await page.getByRole("combobox",{name:"切换媒体呈现",exact:true}).selectOption(next);
+const story = page.locator('.journey-story');
+const account = page.locator('.account-sheet');
+const exit = () => page.getByRole('button', {name:'退出媒体呈现',exact:true});
+const enter = () => page.getByRole('button', {name:'进入媒体呈现',exact:true});
+const exportButton = () => story.getByRole('button', {name:'导出短片',exact:true});
+async function openAccount() {
+ await page.locator('.mobile-v2__account-trigger').click();
+ await account.waitFor({state:'visible'});
+}
+async function closeAccount() {
+ await account.locator('.account-sheet__handle').click();
+ await account.waitFor({state:'detached'});
+}
+async function waitStyle(next) {
+ await page.waitForFunction(expected => {
+  const selector = expected === 'book' ? '.journey-book' : expected === 'book-3d' ? '.journey-book-3d' : expected === 'stream' ? '.journey-stream' : '.journey-story';
+  const reader = document.querySelector(selector);
+  return reader && !reader.hasAttribute('data-story-editing')
+   && document.querySelector('button[aria-label="退出媒体呈现"]')
+   && (!['classic','note-overlay'].includes(expected) || reader.dataset.storyPresentation === expected);
+ }, next);
+}
+async function cycleAccountStyle() {
+ const previous = style;
+ await openAccount();
+ const entry = account.locator('[data-media-presentation-entry="sheet"]');
+ assert.equal(await entry.getAttribute('data-media-presentation-value'),previous);
+ await entry.click();
+ await account.waitFor({state:'detached'});
+ assert.notEqual(style,previous);
+ await waitStyle(style);
+}
+async function choose(next) {
+ for (let i=0; style!==next && i<5; i++) await cycleAccountStyle();
+ assert.equal(style,next);
  await waitStyle(next);
 }
-async function waitStyle(next){
- await page.waitForFunction(expected=>{
-  const picker=document.querySelector('select[aria-label="切换媒体呈现"]');
-  const selector=expected==="book"?".journey-book":expected==="book-3d"?".journey-book-3d":expected==="stream"?".journey-stream":".journey-story";
-  const reader=document.querySelector(selector);
-  return reader&&picker?.value===expected&&!picker.disabled&&(!["classic","note-overlay"].includes(expected)||reader.dataset.storyPresentation===expected);
- },next);
+async function assertIcon(button, label) {
+ await button.waitFor({state:'visible'});
+ assert.equal((await button.textContent()).trim(),'','presentation navigation must remain icon-only');
+ assert.equal(await button.getAttribute('data-tooltip'),label);
+ assert.equal(await button.locator('svg').count(),1);
+ const box=await button.boundingBox();
+ assert.ok(box && box.width>=43.5 && box.height>=43.5,`${label} must have a 44px touch target`);
+ assert.ok(box.x>=-1 && box.x+box.width<=page.viewportSize().width+1,`${label} is horizontally clipped`);
 }
+async function assertEditor() {
+ await page.waitForFunction(() => {
+  const reader=document.querySelector('.journey-story');
+  return reader?.dataset.storyEditing==='true'
+   && (reader.dataset.storyLayout==='desktop' || reader.dataset.mobileMode==='manage');
+ });
+ assert.equal(await story.getAttribute('data-story-presentation'),'classic');
+ assert.equal(await story.getByRole('textbox',{name:'旅程感想',exact:true}).isVisible(),true);
+ assert.equal(await story.getByRole('combobox',{name:'切换媒体呈现',exact:true}).count(),0);
+ await assertIcon(enter(),'进入媒体呈现');
+ const button=exportButton();
+ await button.waitFor({state:'visible'});
+ assert.equal(await button.evaluate(el=>Boolean(el.closest('.journey-story__editor-actions'))),true);
+ assert.equal(await button.evaluate(el=>Boolean(el.closest('footer'))),false);
+ const box=await button.boundingBox();
+ assert.ok(box && box.y>=0 && box.y+box.height<=page.viewportSize().height,'export must be discoverable without scrolling to the footer');
+ assert.ok(box.x>=0 && box.x+box.width<=page.viewportSize().width+1,'export control is clipped');
+}
+async function leavePresentation() {
+ const writes=saves.length, saved=style;
+ await assertIcon(exit(),'退出媒体呈现');
+ await exit().click();
+ await assertEditor();
+ assert.equal(style,saved,'local editor entry changed the account preference');
+ assert.equal(saves.length,writes,'local editor entry issued a preference write');
+}
+async function returnPresentation() {
+ const writes=saves.length, saved=style;
+ await enter().click();
+ await waitStyle(saved);
+ assert.equal(style,saved);
+ assert.equal(saves.length,writes,'local presentation re-entry issued a preference write');
+}
+async function waitExportFocus() {
+ await page.waitForFunction(() => {
+  const trigger=document.querySelector('.journey-story__editor-actions button[data-story-film-export-trigger]')
+   ?? [...document.querySelectorAll('.journey-story__editor-actions button')].find(el=>el.textContent.includes('导出短片'));
+  return trigger && document.activeElement===trigger && trigger.getClientRects().length>0;
+ });
+}
+let settings;
 try {
- await page.goto(`${origin}/?qaState=atlas-gateway&qaLite=1`,{waitUntil:"networkidle"});
+ await page.goto(`${origin}/?qaState=atlas-gateway&qaLite=1`,{waitUntil:'networkidle'});
  await page.locator('.mobile-v2__journey-chip').click();
  await page.locator('.mobile-v2__sheet').getByRole('button',{name:/打开故事/}).click();
- await page.locator('.journey-book').waitFor({state:"visible"});
+ await waitStyle('book');
  await page.screenshot({path:`${out}/01-book.png`});
  result.initialReader=await activeReader();
- if(baseline) await page.getByRole('button',{name:'经典视图',exact:true}).click();
- else await choose('classic');
- await page.locator('.journey-story').waitFor({state:"visible"});
- await page.locator('.mobile-v2__account-trigger').click();
- const account=page.locator('.account-sheet');
- await account.waitFor({state:'visible'});
- await account.locator('[data-media-presentation-entry="sheet"]').click();
- // The account and renderer must agree after the server-confirmed update.
- await page.waitForFunction(()=>!document.querySelector('[aria-label="切换媒体呈现"]')?.disabled);
- result.accountStyle=style;result.readerAfterAccount=await activeReader();
- if(!baseline)assert.equal(await page.locator('.journey-story').getAttribute('data-story-presentation'),style);
- await page.screenshot({path:`${out}/02-account-change.png`});
- if(baseline){await fs.writeFile(`${out}/result.json`,JSON.stringify({...result,saves,errors},null,2));console.log(JSON.stringify(result));}
- else {
-  await account.waitFor({state:'detached'});
-  assert.equal(await page.locator('[aria-label="切换媒体呈现"]').inputValue(),style);
-  assert.deepEqual(await page.getByRole('combobox',{name:'切换媒体呈现',exact:true}).locator('option').evaluateAll(nodes=>nodes.map(n=>n.value)),['classic','note-overlay','book','book-3d','stream']);
-  await choose('book'); await choose('book-3d'); await choose('stream'); await choose('classic');
-  result.bidirectional=true;
-  holdNextSave=true;
-  const heldRequest=page.waitForRequest(request=>request.url().endsWith('/api/account-preferences/media-presentation')&&request.method()==='PUT');
-  await page.getByRole('combobox',{name:'切换媒体呈现',exact:true}).selectOption('book');
-  await heldRequest;
-  assert.equal(await page.locator('.journey-story__layout').evaluate(el=>el.inert),true);
-  assert.equal(await page.locator('.journey-story > footer').evaluate(el=>el.inert),true);
-  assert.equal(await page.getByRole('button',{name:'退出旅程故事',exact:true}).isEnabled(),true);
-  releaseSave();
-  await page.locator('.journey-book').waitFor({state:'visible'});
-  await choose('classic');
-  assert.equal(await page.locator('.journey-story__layout').evaluate(el=>el.inert),false);
-  result.pendingChangeBlocksNewEdit=true;
-
-  const story=page.locator('.journey-story');
-  await story.getByRole('button',{name:'选择停靠点',exact:true}).click();
-  await story.locator(`[data-route-point-id="${id(5)}"]`).click();
-  const note=page.locator('.journey-story [data-current-media-kind="note"] .story-media-pages__note-text');
-  await note.waitFor({state:'visible'});
-  assert.ok((await note.textContent()).includes('这里没有拍照'));
-  result.note=await note.evaluate(el=>{const card=el.closest('.story-media-pages__note');return {background:getComputedStyle(card).backgroundColor,text:el.textContent.length,scroll:el.scrollHeight>el.clientHeight};});
-  assert.notEqual(result.note.background,'rgba(0, 0, 0, 0)');
-  const noteBefore=await note.evaluate(el=>el.scrollTop);
-  await swipeUp(note,130);
-  await page.waitForFunction(before=>document.querySelector('.journey-story [data-current-media-kind="note"] .story-media-pages__note-text')?.scrollTop>before+40,noteBefore);
-  result.noteNativeScroll=true;
-  const paintedNeighbours=await page.locator('.journey-story [data-current-media-kind="note"] > .story-media-pages__page:not([data-media-presented="true"])').evaluateAll(nodes=>nodes.filter(n=>getComputedStyle(n).visibility==='visible').length);
-  assert.equal(paintedNeighbours,0);
-
-  await page.screenshot({path:`${out}/03-note-only.png`});
-  await choose('book'); await choose('classic');
-  await note.waitFor({state:'visible'});result.notePositionPreserved=true;
-  // One failed intent must follow the user to the other surface. Do not call
-  // choose() to finish a retry: that would hide which request Retry emitted.
-  const accountRetryStart=saves.length;
-  rejectNextSave=true;
-  await page.locator('.mobile-v2__account-trigger').click();
-  await account.locator('[data-media-presentation-entry="sheet"]').click();
-  await account.getByRole('status').filter({hasText:'无法确认'}).waitFor({state:'visible'});
-  assert.deepEqual(saves.slice(accountRetryStart),['note-overlay']);
-  await account.locator('.account-sheet__handle').click();
-  await account.waitFor({state:'detached'});
-  const retryResponse=page.waitForResponse(response=>response.url().endsWith('/api/account-preferences/media-presentation')&&response.request().method()==='PUT');
-  await page.locator('.story-presentation-picker__error').getByRole('button',{name:'重试',exact:true}).click();
-  await retryResponse;
-  assert.deepEqual(saves.slice(accountRetryStart),['note-overlay','note-overlay'],
-    'Account failure was retried as a stale Story style');
-  await waitStyle('note-overlay');
-  result.accountFailureRetriedFromStory=true;
-  await choose('classic');
-  await note.waitFor({state:'visible'});
-
-  rejectNextSave=true;
-  await page.getByRole('combobox',{name:'切换媒体呈现',exact:true}).selectOption('stream');
-  await page.getByRole('status').filter({hasText:'无法确认'}).waitFor({state:'visible'});
-  assert.equal(await activeReader(),'classic');result.rejectedSavePreservesReader=true;
-  const pickerRetryStart=saves.length;
-  await page.locator('.mobile-v2__account-trigger').click();
-  await account.locator('[data-media-presentation-entry="sheet"]').click();
-  await account.waitFor({state:'detached'});
-  assert.deepEqual(saves.slice(pickerRetryStart),['stream'],
-    'Account retry advanced the cycle instead of retrying the failed Story choice');
-  await waitStyle('stream');
-  result.storyFailureRetriedFromAccount=true;
-  await choose('classic');
-  await note.waitFor({state:'visible'});
-  rejectNextSave=true;
-  await page.getByRole('combobox',{name:'切换媒体呈现',exact:true}).selectOption('stream');
-  await page.locator('.story-presentation-picker__error').waitFor({state:'visible'});
-  await choose('book');
-  assert.equal(await page.locator('.story-presentation-picker__error').count(),0);
-  result.newChoiceClearsOldRetry=true;
-  await choose('classic');
-  await note.waitFor({state:'visible'});
-
-  await story.getByRole('button',{name:'选择停靠点',exact:true}).click();
-  await story.locator(`[data-route-point-id="${id(4)}"]`).click();
-  await page.addStyleTag({content:'.journey-story[data-classic-view] { --story-safe-bottom: 34px; }'});
-  await page.emulateMedia({reducedMotion:"no-preference"});
-  await page.evaluate(()=>{window.__storyFrames=[];window.__storyTrace=true;window.__storyTracePhase="expand";let prior=performance.now();const frame=now=>{const story=document.querySelector('.journey-story');window.__storyFrames.push({phase:window.__storyTracePhase,dt:now-prior,scroll:story?.scrollTop,height:story?.getBoundingClientRect().height});prior=now;if(window.__storyTrace)requestAnimationFrame(frame);};requestAnimationFrame(frame);});
-  await story.getByRole('button',{name:'展开旅程故事',exact:true}).click();
-  await page.waitForFunction(()=>{const s=document.querySelector('.journey-story');return s?.dataset.mobilePresentation==='expanded'&&!s.getAnimations().some(a=>a.playState==='running');});
-  const expandedBox=await story.boundingBox();
-  assert.ok(Math.abs(expandedBox.height-844)<=1,`safe-area padding grew the sheet to ${expandedBox.height}`);
-  result.simulatedSafeBottom={px:34,expandedHeight:expandedBox.height};
-  const scrollBefore=await story.evaluate(el=>({top:el.scrollTop,copy:el.querySelector('.journey-story__copy').scrollTop,document:document.scrollingElement.scrollTop}));
-  await page.evaluate(()=>{window.__storyTracePhase="scroll";});
-  await swipeUp(story,230);
-  await page.waitForFunction(before=>document.querySelector('.journey-story')?.scrollTop>before+50,scrollBefore.top);
-  const scrollAfter=await story.evaluate(el=>({top:el.scrollTop,copy:el.querySelector('.journey-story__copy').scrollTop,document:document.scrollingElement.scrollTop,copyOverflow:getComputedStyle(el.querySelector('.journey-story__copy')).overflowY}));
-  assert.equal(scrollAfter.copy,scrollBefore.copy);assert.equal(scrollAfter.document,scrollBefore.document);assert.equal(scrollAfter.copyOverflow,'visible');
-  const frames=await page.evaluate(()=>{window.__storyTrace=false;return window.__storyFrames;});
-  const deltas=frames.filter(f=>f.phase==="scroll").map(f=>f.dt).sort((a,b)=>a-b);
-  result.nativeScroll={before:scrollBefore,after:scrollAfter,frames:frames.length,p95Ms:deltas[Math.floor(deltas.length*.95)],maxMs:Math.max(...deltas)};
-  await fs.writeFile(`${out}/scroll-frames.json`,JSON.stringify(frames));
-  await page.screenshot({path:`${out}/04-expanded-scroll.png`});
-  await story.getByRole('button',{name:'收起旅程故事',exact:true}).click();
-  await story.getByRole('button',{name:'更多查看选项',exact:true}).click();
-  await story.getByRole('button',{name:'管理旅程',exact:true}).click();
-  await page.getByRole('textbox',{name:'旅程感想',exact:true}).fill('这段尚未保存，切换呈现不能丢失。');
-  assert.equal(await page.getByRole('combobox',{name:'切换媒体呈现',exact:true}).isDisabled(),true);
-  const writesBefore=saves.length;
-  await page.locator('.mobile-v2__account-trigger').click();
-  await page.locator('.account-sheet [data-media-presentation-entry="sheet"]').click();
-  await page.locator('.account-sheet').getByRole('status').filter({hasText:'请先保存'}).waitFor({state:'visible'});
-  assert.equal(saves.length,writesBefore);
-  assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),'这段尚未保存，切换呈现不能丢失。');
-  result.unsavedEditProtected=true;
-  await account.locator('.account-sheet__handle').click();
-  await account.waitFor({state:'detached'});
-  await page.getByRole('button',{name:'放弃更改',exact:true}).click();
-  const guardedRetryStart=saves.length;
-  await page.locator('.story-presentation-picker__error').getByRole('button',{name:'重试',exact:true}).click();
-  await waitStyle('note-overlay');
-  assert.deepEqual(saves.slice(guardedRetryStart),['note-overlay']);
-  result.blockedAccountIntentRetriedAfterDiscard=true;
-  // A fresh provider read failure is not a failed selection. Its retry must
-  // never send a stale PUT from the preceding errors or reader instances.
-  rejectNextRead=true;
-  const writesBeforeReload=saves.length;
-  await page.reload({waitUntil:'networkidle'});
-  await page.locator('.mobile-v2__journey-chip').click();
-  await page.locator('.mobile-v2__sheet').getByRole('button',{name:/打开故事/}).click();
-  await page.locator('.story-presentation-picker__error').filter({hasText:'无法读取'}).waitFor({state:'visible'});
-  const readsBeforeRetry=preferenceReads;
-  await page.locator('.story-presentation-picker__error').getByRole('button',{name:'重试',exact:true}).click();
-  await waitStyle(style);
-  assert.equal(saves.length,writesBeforeReload,'read recovery wrote a preference');
-  assert.ok(preferenceReads>readsBeforeRetry);
-  result.readFailureRetriesOnlyGet=true;
-
-
-
-
-  assert.deepEqual(errors,[]);
-  await fs.writeFile(`${out}/result.json`,JSON.stringify({...result,saves,errors,ok:true},null,2));console.log(JSON.stringify({...result,ok:true}));
+ assert.equal(await page.getByRole('combobox',{name:'切换媒体呈现',exact:true}).count(),0);
+ // Every presentation exits to an editable session and re-enters the same saved reader.
+ for (const saved of ['book','book-3d','stream','classic','note-overlay']) {
+  await choose(saved);
+  await leavePresentation();
+  await page.screenshot({path:`${out}/editor-from-${saved}.png`});
+  await returnPresentation();
+  result.presentationExits.push(saved);
  }
+ await choose('classic');
+ // Real local preference controls in another tab exercise storage notifications,
+ // including changes while this owner is already in the editor.
+ settings=await page.context().newPage();
+ await settings.route('**/api/auth/get-session',route=>route.fulfill(json(null)));
+ await settings.route('**/api/uploads/assets/*/read-url',route=>route.fulfill(json({url:`${origin}/artworks/monet-water-lilies.jpg`,expiresAt:'2099-01-01T00:00:00.000Z'})));
+ await settings.goto(`${origin}/?qaState=journey-story&qaClassicControls=1`,{waitUntil:'networkidle'});
+ const localEntry=settings.locator('[data-mobile-classic-view-entry]');
+ const dialog=page.getByRole('dialog',{name:'导出旅程短片',exact:true});
+ const initialLocalPreference=await page.evaluate(()=>localStorage.getItem('startrips.mobile-classic-view.v1'));
+ for (const [index,layout] of ['light','thumb','photo','earth'].entries()) {
+  if (index) {
+   await settings.getByRole('button',{name:/切换经典视图/}).click();
+   assert.equal(await localEntry.getAttribute('data-mobile-classic-view-value'),layout);
+  }
+  await page.waitForFunction(view=>document.querySelector('.journey-story')?.dataset.classicView===view,layout);
+  await leavePresentation();
+  assert.equal(await story.getAttribute('data-classic-view'),layout);
+  await story.getByRole('button',{name:'管理当前媒体',exact:true}).click();
+  const mediaMenu=story.getByRole('dialog',{name:'媒体管理',exact:true});
+  await mediaMenu.waitFor({state:'visible'});
+  const mediaBox=await story.locator('.journey-story__media').boundingBox();
+  const menuBox=await mediaMenu.boundingBox();
+  const backdrop=story.getByRole('button',{name:'关闭媒体管理',exact:true});
+  const backdropBox=await backdrop.boundingBox();
+  assert.ok(menuBox.y>=mediaBox.y && menuBox.y+menuBox.height<=mediaBox.y+mediaBox.height+1,'media menu escapes the selected aperture');
+  assert.ok(Math.abs(backdropBox.width-mediaBox.width)<=2 && Math.abs(backdropBox.height-mediaBox.height)<=2,'management dismissal must cover the picture');
+  for (const command of ['整理媒体','移动媒体 / 重新归类','删除媒体']) {
+   const button=mediaMenu.getByRole('button',{name:command,exact:true});
+   await button.scrollIntoViewIfNeeded();
+   const box=await button.boundingBox();
+   const currentMenuBox=await mediaMenu.boundingBox();
+   assert.ok(box.y>=currentMenuBox.y && box.y+box.height<=currentMenuBox.y+currentMenuBox.height+1,`${command} is clipped`);
+   assert.equal(await button.isEnabled(),true);
+  }
+  // Native pointer dismissal in the exposed strip beside the menu.
+  await backdrop.click({position:{x:3,y:3}});
+  await mediaMenu.waitFor({state:'hidden'});
+  assert.equal(await story.getAttribute('data-story-editing'),'true');
+  // Closing with each supported route must restore focus to the visible operation row.
+  for (const close of ['button','Escape','Back']) {
+   await exportButton().click();
+   await dialog.waitFor({state:'visible'});
+   if (close==='button') await dialog.getByRole('button',{name:'关闭短片导出',exact:true}).click();
+   else if (close==='Escape') await page.keyboard.press('Escape');
+   else await page.goBack();
+   await dialog.waitFor({state:'hidden'});
+   await waitExportFocus();
+   assert.equal(await story.getAttribute('data-story-editing'),'true');
+  }
+  await page.screenshot({path:`${out}/layout-${layout}-editor.png`});
+  await returnPresentation();
+  assert.equal(await story.getAttribute('data-classic-view'),layout);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('startrips.mobile-classic-view.v1')),index===0 ? initialLocalPreference : layout);
+  result.layouts.push({layout,exportCloseFocus:true});
+ }
+ // Cycle back to A while the editor is open: no stage/account reset or hidden actions.
+ await leavePresentation();
+ const writesBeforeLayout=saves.length;
+ await settings.getByRole('button',{name:/切换经典视图/}).click();
+ await page.waitForFunction(()=>document.querySelector('.journey-story')?.dataset.classicView==='light');
+ await assertEditor();
+ assert.equal(saves.length,writesBeforeLayout);
+ result.liveEditorLayoutChange=true;
+ // Hold authorization before export work starts; cancellation must not publish an artifact.
+ holdJourneyRead=true;
+ await exportButton().click();
+ await dialog.waitFor({state:'visible'});
+ const exportRead=page.waitForRequest(request=>new URL(request.url()).pathname===`/api/journeys/${journey.id}`);
+ await dialog.getByRole('button',{name:'生成 MP4',exact:true}).click();
+ await exportRead;
+ await dialog.getByRole('button',{name:'取消导出',exact:true}).click();
+ holdJourneyRead=false;
+ for (const release of heldJourneyReads) release();
+ await dialog.getByText('已取消导出。',{exact:true}).waitFor({state:'visible'});
+ assert.equal(await dialog.getByRole('button',{name:'下载 MP4',exact:true}).count(),0);
+ await dialog.getByRole('button',{name:'关闭短片导出',exact:true}).click();
+ await dialog.waitFor({state:'hidden'});
+ await waitExportFocus();
+ result.exportCancelPreservesEditor=true;
+ await returnPresentation();
+
+ // Keep the note-only handoff and native single-scroller regressions from the
+ // original presentation flow. These run in the ordinary reader, then editor entry.
+ await story.getByRole('button',{name:'选择停靠点',exact:true}).click();
+ await story.locator(`[data-route-point-id="${id(5)}"]`).click();
+ const note=page.locator('.journey-story [data-current-media-kind="note"] .story-media-pages__note-text');
+ await note.waitFor({state:'visible'});
+ assert.ok((await note.textContent()).includes('这里没有拍照'));
+ result.note=await note.evaluate(el=>{const card=el.closest('.story-media-pages__note');return {background:getComputedStyle(card).backgroundColor,text:el.textContent.length,scroll:el.scrollHeight>el.clientHeight};});
+ assert.notEqual(result.note.background,'rgba(0, 0, 0, 0)');
+ const noteBefore=await note.evaluate(el=>el.scrollTop);
+ await swipeUp(note,130);
+ await page.waitForFunction(before=>document.querySelector('.journey-story [data-current-media-kind="note"] .story-media-pages__note-text')?.scrollTop>before+40,noteBefore);
+ const paintedNeighbours=await page.locator('.journey-story [data-current-media-kind="note"] > .story-media-pages__page:not([data-media-presented="true"])').evaluateAll(nodes=>nodes.filter(n=>getComputedStyle(n).visibility==='visible').length);
+ assert.equal(paintedNeighbours,0);
+ await leavePresentation();
+ await returnPresentation();
+ await note.waitFor({state:'visible'});
+ result.notePositionPreserved=true;
+ result.noteNativeScroll=true;
+ await page.screenshot({path:`${out}/03-note-only.png`});
+ await story.getByRole('button',{name:'选择停靠点',exact:true}).click();
+ await story.locator(`[data-route-point-id="${id(4)}"]`).click();
+ await page.addStyleTag({content:'.journey-story[data-classic-view] { --story-safe-bottom: 34px; }'});
+ await page.emulateMedia({reducedMotion:'no-preference'});
+ await page.evaluate(()=>{window.__storyFrames=[];window.__storyTrace=true;window.__storyTracePhase='expand';let prior=performance.now();const frame=now=>{const story=document.querySelector('.journey-story');window.__storyFrames.push({phase:window.__storyTracePhase,dt:now-prior,scroll:story?.scrollTop,height:story?.getBoundingClientRect().height});prior=now;if(window.__storyTrace)requestAnimationFrame(frame);};requestAnimationFrame(frame);});
+ await story.getByRole('button',{name:'展开旅程故事',exact:true}).click();
+ await page.waitForFunction(()=>{const s=document.querySelector('.journey-story');return s?.dataset.mobilePresentation==='expanded'&&!s.getAnimations().some(a=>a.playState==='running');});
+ const expandedBox=await story.boundingBox();
+ assert.ok(Math.abs(expandedBox.height-844)<=1,`safe-area padding grew the sheet to ${expandedBox.height}`);
+ result.simulatedSafeBottom={px:34,expandedHeight:expandedBox.height};
+ const scrollBefore=await story.evaluate(el=>({top:el.scrollTop,copy:el.querySelector('.journey-story__copy').scrollTop,document:document.scrollingElement.scrollTop}));
+ await page.evaluate(()=>{window.__storyTracePhase='scroll';});
+ await swipeUp(story,230);
+ await page.waitForFunction(before=>document.querySelector('.journey-story')?.scrollTop>before+50,scrollBefore.top);
+ const scrollAfter=await story.evaluate(el=>({top:el.scrollTop,copy:el.querySelector('.journey-story__copy').scrollTop,document:document.scrollingElement.scrollTop,copyOverflow:getComputedStyle(el.querySelector('.journey-story__copy')).overflowY}));
+ assert.equal(scrollAfter.copy,scrollBefore.copy);assert.equal(scrollAfter.document,scrollBefore.document);assert.equal(scrollAfter.copyOverflow,'visible');
+ const frames=await page.evaluate(()=>{window.__storyTrace=false;return window.__storyFrames;});
+ const deltas=frames.filter(f=>f.phase==='scroll').map(f=>f.dt).sort((a,b)=>a-b);
+ result.nativeScroll={before:scrollBefore,after:scrollAfter,frames:frames.length,p95Ms:deltas[Math.floor(deltas.length*.95)],maxMs:Math.max(...deltas)};
+ await fs.writeFile(`${out}/scroll-frames.json`,JSON.stringify(frames));
+ await page.screenshot({path:`${out}/04-expanded-scroll.png`});
+ await story.getByRole('button',{name:'收起旅程故事',exact:true}).click();
+ await page.emulateMedia({reducedMotion:'reduce'});
+ await leavePresentation();
+
+ // A rejected account choice remains retryable from the reader's status.
+ // Local exit/re-entry must neither clear the failed intent nor overwrite it.
+ const accountRetryStart=saves.length;
+ rejectNextSave=true;
+ await openAccount();
+ await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await account.getByRole('status').filter({hasText:'无法确认'}).waitFor({state:'visible'});
+ assert.deepEqual(saves.slice(accountRetryStart),['note-overlay']);
+ assert.equal(style,'classic');
+ await closeAccount();
+ await assertEditor();
+ await returnPresentation();
+ await page.locator('.story-presentation-picker__error').waitFor({state:'visible'});
+ await leavePresentation();
+ await page.locator('.story-presentation-picker__error').getByRole('button',{name:'重试',exact:true}).click();
+ await waitStyle('note-overlay');
+ assert.deepEqual(saves.slice(accountRetryStart),['note-overlay','note-overlay']);
+ result.accountFailureRetriedFromEditor=true;
+ // The account entry retries the same failed intent instead of advancing the cycle.
+ rejectNextSave=true;
+ const accountOwnRetryStart=saves.length;
+ await openAccount();
+ await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await account.getByRole('status').filter({hasText:'无法确认'}).waitFor({state:'visible'});
+ await closeAccount();
+ await openAccount();
+ await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await account.waitFor({state:'detached'});
+ await waitStyle('book');
+ assert.deepEqual(saves.slice(accountOwnRetryStart),['book','book']);
+ result.accountRetryPreservesFailedIntent=true;
+ await leavePresentation();
+ // Keep a pending confirmed account write from admitting new editor mutations.
+ holdNextSave=true;
+ const heldRequest=page.waitForRequest(request=>request.url().endsWith('/api/account-preferences/media-presentation')&&request.method()==='PUT');
+ await openAccount();
+ await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await heldRequest;
+ assert.equal(await story.locator('.journey-story__layout').evaluate(el=>el.inert),true);
+ assert.equal(await exportButton().evaluate(el=>el.disabled || Boolean(el.closest('[inert]'))),true);
+ releaseSave();
+ await account.waitFor({state:'detached'});
+ await waitStyle('book-3d');
+ result.pendingChangeBlocksNewEdit=true;
+ result.confirmedAccountChangeLeavesEditor=true;
+ await choose('classic');
+ await leavePresentation();
+ const draft='这段尚未保存，切换呈现不能丢失。';
+ await page.getByRole('textbox',{name:'旅程感想',exact:true}).fill(draft);
+ assert.equal(await enter().isDisabled(),true);
+ const writesBefore=saves.length;
+ await openAccount();
+ await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await account.getByRole('status').filter({hasText:'请先保存'}).waitFor({state:'visible'});
+ assert.equal(saves.length,writesBefore);
+ assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),draft);
+ await closeAccount();
+ await page.getByRole('button',{name:'放弃更改',exact:true}).click();
+ await page.locator('.story-presentation-picker__error').getByRole('button',{name:'重试',exact:true}).click();
+ await waitStyle('note-overlay');
+ assert.deepEqual(saves.slice(writesBefore),['note-overlay']);
+ result.unsavedEditProtected=true;
+ result.blockedAccountIntentRetriedAfterDiscard=true;
+ // Closing the editor and opening the same journey must recover the saved presentation.
+ await leavePresentation();
+ await story.getByRole('button',{name:'退出旅程故事',exact:true}).click();
+ // The first close may return from manage mode; the second closes Story itself.
+ if (await story.count()) await story.getByRole('button',{name:'退出旅程故事',exact:true}).click();
+ await story.waitFor({state:'detached'});
+ await page.locator('.mobile-v2__journey-chip').click();
+ await page.locator('.mobile-v2__sheet').getByRole('button',{name:/打开故事/}).click();
+ await waitStyle('note-overlay');
+ result.closeAndReopenRestoresSavedPresentation=true;
+ // A fresh read error retries GET only, even after earlier failed PUT intents.
+ rejectNextRead=true;
+ const writesBeforeReload=saves.length;
+ await page.reload({waitUntil:'networkidle'});
+ await page.locator('.mobile-v2__journey-chip').click();
+ await page.locator('.mobile-v2__sheet').getByRole('button',{name:/打开故事/}).click();
+ await page.locator('.story-presentation-picker__error').filter({hasText:'无法读取'}).waitFor({state:'visible'});
+ const readsBeforeRetry=preferenceReads;
+ await leavePresentation();
+ await page.getByRole('textbox',{name:'旅程感想',exact:true}).fill(draft);
+ await openAccount();
+ await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await account.getByRole('status').filter({hasText:'请先保存'}).waitFor({state:'visible'});
+ assert.equal(preferenceReads,readsBeforeRetry,'Account read-error retry bypassed the draft guard');
+ assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),draft);
+ await closeAccount();
+ await page.getByRole('button',{name:'放弃更改',exact:true}).click();
+ await page.locator('.story-presentation-picker__error').getByRole('button',{name:'重试',exact:true}).click();
+ await waitStyle(style);
+ assert.equal(saves.length,writesBeforeReload,'read recovery wrote a preference');
+ assert.ok(preferenceReads>readsBeforeRetry);
+ result.readFailureRetriesOnlyGet=true;
+ // Resize the real mounted product across the desktop breakpoint. Account writes
+ // still go through the verified mobile entry before each desktop scenario.
+ result.desktop=[];
+ for (const saved of ['book','classic']) {
+  await choose(saved);
+  await page.setViewportSize({width:1280,height:900});
+  await waitStyle(saved);
+  await leavePresentation();
+  assert.equal(await story.getAttribute('data-story-layout'),'desktop');
+  assert.equal(await story.getAttribute('data-classic-view'),null);
+  for (const close of ['button','Escape']) {
+   await exportButton().click();
+   await dialog.waitFor({state:'visible'});
+   if (close==='button') await dialog.getByRole('button',{name:'关闭短片导出',exact:true}).click();
+   else await page.keyboard.press('Escape');
+   await dialog.waitFor({state:'hidden'});
+   await waitExportFocus();
+  }
+  await page.getByRole('textbox',{name:'旅程感想',exact:true}).fill(draft);
+  assert.equal(await enter().isDisabled(),true);
+  await story.getByRole('button',{name:'退出旅程故事',exact:true}).click();
+  assert.equal(await story.getAttribute('data-story-editing'),'true');
+  assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),draft);
+  // Desktop ownership must register the parent Story before compact Manage.
+  // Back after rotation cannot consume the parent and bypass the dirty guard.
+  await page.setViewportSize({width,height:844});
+  await page.waitForFunction(()=>document.querySelector('.journey-story')?.dataset.mobileMode==='manage');
+  await page.goBack();
+  await page.waitForFunction(()=>document.querySelector('.story-notes-editor')?.textContent.includes('未保存'));
+  assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),draft);
+  assert.equal(await story.getAttribute('data-story-editing'),'true');
+  await page.setViewportSize({width:1280,height:900});
+  await page.waitForFunction(()=>document.querySelector('.journey-story')?.dataset.storyLayout==='desktop');
+  await page.getByRole('button',{name:'放弃更改',exact:true}).click();
+  await page.screenshot({path:`${out}/desktop-editor-from-${saved}.png`});
+  await returnPresentation();
+  await page.setViewportSize({width,height:844});
+  if (saved==='classic') {
+   await page.waitForFunction(()=>document.querySelector('.journey-story')?.dataset.storyLayout==='mobile');
+   assert.equal(await story.getAttribute('data-classic-view'),'light');
+  }
+  result.desktop.push({saved,editor:true,exportCloseFocus:true,dirtyDraftProtected:true});
+ }
+ assert.deepEqual(errors,[]);
+ await fs.writeFile(`${out}/result.json`,JSON.stringify({...result,saves,errors,ok:true},null,2));
+ console.log(JSON.stringify({...result,ok:true}));
 } catch(error) {
  await page.screenshot({path:`${out}/failure.png`}).catch(()=>{});
- await fs.writeFile(`${out}/failure.json`,JSON.stringify({message:error.message,result,saves,errors,body:(await page.locator('body').innerText()).slice(-5000)},null,2));throw error;
-} finally {const video=page.video();await page.close();if(video)await video.saveAs(`${out}/story-presentation-flow.webm`);await browser.close();if(server)await server.close();}
+ await fs.writeFile(`${out}/failure.json`,JSON.stringify({message:error.message,result,saves,errors,body:(await page.locator('body').innerText()).slice(-5000)},null,2));
+ throw error;
+} finally {
+ releaseSave();
+ for (const release of heldJourneyReads) release();
+ await settings?.close();
+ const video=page.video();
+ await page.close();
+ if(video) await video.saveAs(`${out}/story-presentation-flow.webm`);
+ await browser.close();
+ if(server) await server.close();
+}

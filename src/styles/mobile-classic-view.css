@@ -65,33 +65,33 @@
   justify-content: center; gap: var(--control-gap);
   pointer-events: none; background: var(--archive-bg);
 }
-.journey-story[data-classic-view] .journey-story__mobile-media-actions > :is(button, nav, .journey-story__playback-entry) {
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions > :is(button, nav, .journey-story__playback-entry) {
   position: relative; inset: auto; margin: 0; flex: 0 0 auto; order: 5;
   pointer-events: auto; width: auto; min-width: 44px;
 }
-.journey-story[data-classic-view] .journey-story__mobile-media-actions > button {
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions > button {
   display: grid; place-items: center; width: 44px; height: 44px; min-height: 44px;
   padding: 0; color: var(--control-muted); background: transparent;
   border: 1px solid transparent; border-radius: var(--control-radius);
   font: 400 12px/1 var(--archive-sans); box-shadow: none; backdrop-filter: none;
   touch-action: manipulation; cursor: pointer;
 }
-.journey-story[data-classic-view] .journey-story__mobile-media-actions .journey-story__mobile-video-nav { order: 0; }
-.journey-story[data-classic-view] .journey-story__mobile-media-actions > .journey-story__classic-chapters { order: 1; }
-.journey-story[data-classic-view] .journey-story__mobile-media-actions > :is(.journey-story__playback-entry, .journey-story__mobile-media-play) { order: 2; }
-.journey-story[data-classic-view] .journey-story__mobile-media-actions > .journey-story__classic-more { order: 3; }
-.journey-story[data-classic-view] .journey-story__mobile-media-actions .journey-story__mobile-quick-recap {
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions .journey-story__mobile-video-nav { order: 0; }
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions > .journey-story__classic-chapters { order: 1; }
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions > :is(.journey-story__playback-entry, .journey-story__mobile-media-play) { order: 2; }
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions > .journey-story__classic-more { order: 3; }
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions .journey-story__mobile-quick-recap {
   position: static; min-width: 44px; width: 44px; height: 44px; min-height: 44px;
   padding: 0; display: grid; place-items: center;
   border: 1px solid var(--control-line); border-radius: var(--control-radius);
   color: var(--control-ink); background: var(--control-fill); pointer-events: auto;
 }
-.journey-story[data-classic-view] .journey-story__mobile-quick-recap > span { display: none; }
-.journey-story[data-classic-view] .journey-story__classic-toolbar-break { display: none; }
-.journey-story[data-classic-view][data-classic-panel="more"] .journey-story__classic-toolbar-break {
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-quick-recap > span { display: none; }
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__classic-toolbar-break { display: none; }
+.journey-story[data-classic-view][data-mobile-mode="viewer"][data-classic-panel="more"] .journey-story__classic-toolbar-break {
   display: block; order: 4; flex-basis: 100%; height: 0;
 }
-.journey-story[data-classic-view]:not([data-classic-panel="more"]) :is(
+.journey-story[data-classic-view][data-mobile-mode="viewer"]:not([data-classic-panel="more"]) :is(
   .journey-story__mobile-media-fullscreen, .journey-story__mobile-autobrowse,
   .journey-story__mobile-media-menu-trigger, .story-media-rail,
   .journey-story__copy > dl, .journey-story__stops, .journey-story__soundtrack,
@@ -123,7 +123,7 @@
 }
 /* B: one thumb-sized dock. A keeps a quiet flat row; C gives the photo room;
    D keeps substantially more of the existing particle Earth visible. */
-.journey-story[data-classic-view="thumb"] .journey-story__mobile-media-actions {
+.journey-story[data-classic-view="thumb"][data-mobile-mode="viewer"] .journey-story__mobile-media-actions {
   border-block: 1px solid var(--control-line); background: var(--control-fill);
 }
 .journey-story[data-classic-view="thumb"] :is(.journey-story__mobile-quick-recap, .journey-story__mobile-media-play) {
@@ -148,7 +148,7 @@
 }
 
 /* Secondary autoplay retains its visible label, unlike the primary play icon. */
-.journey-story[data-classic-view] .journey-story__mobile-media-actions > .journey-story__mobile-autobrowse {
+.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions > .journey-story__mobile-autobrowse {
   width: auto; min-width: 88px; padding-inline: 12px;
 }
 
@@ -163,4 +163,16 @@
 /* Safe-area padding is inside this border-box height, unlike the old sheet. */
 .journey-story[data-classic-view][data-story-layout="mobile"][data-mobile-presentation="in-context"] {
   translate: 0 calc(100% - var(--journey-story-sheet-extent));
+}
+
+
+/* Manage keeps its full-picture dismissal backdrop and original overlay controls.
+   Only the selected picture aperture/sheet size carries over from the view. */
+.journey-story[data-classic-view][data-mobile-mode="manage"] .journey-story__media {
+  --classic-controls-height: 0px;
+}
+
+.journey-story[data-classic-view][data-mobile-mode="manage"] .journey-story__mobile-media-sheet {
+  box-sizing: border-box; max-height: calc(100% - 24px);
+  overflow-y: auto; overscroll-behavior: contain;
 }
