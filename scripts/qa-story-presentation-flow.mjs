@@ -64,6 +64,9 @@ const exit = () => page.getByRole('button', {name:'退出媒体呈现',exact:tru
 const enter = () => page.getByRole('button', {name:'进入媒体呈现',exact:true});
 const exportButton = () => story.getByRole('button', {name:'导出短片',exact:true});
 async function openAccount() {
+ // Immersive readers own the screen. Use the user's icon exit before opening
+ // Account from the editable in-context Story, never click behind a modal.
+ if (await enter().count() === 0) await leavePresentation();
  await page.locator('.mobile-v2__account-trigger').click();
  await account.waitFor({state:'visible'});
 }

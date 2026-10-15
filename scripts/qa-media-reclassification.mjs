@@ -379,8 +379,13 @@ try {
       await page.emulateMedia({ reducedMotion: "no-preference" });
       await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-layout") === "desktop");
       if (await storyRoot.getAttribute("data-story-editing") !== "true") {
-        await storyRoot.getByRole("button", { name: "编辑故事", exact: true }).click();
+        await storyRoot.getByRole("button", { name: "退出媒体呈现", exact: true }).click();
+        await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-editing") === "true");
       }
+      // Session entry preserves the current view. Keep an existing organizer,
+      // or explicitly open it instead of relying on the old edit-toggle side effect.
+      const openOrganizer = storyRoot.getByRole("button", { name: "全部照片", exact: true });
+      if (await openOrganizer.count()) await openOrganizer.click();
       await organizer.waitFor({ state: "visible" });
       if (await moveSelectToggle.getAttribute("aria-pressed") !== "true") await moveSelectToggle.click();
       await organizer.evaluate((element) => { element.scrollTop = 0; });

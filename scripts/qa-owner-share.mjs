@@ -815,7 +815,8 @@ try {
         `${viewport.name}/reading-keeps-share-in-edit-mode`,
         await page.locator(".journey-story [data-share-journey-trigger]").count() === 0,
       );
-      await page.locator(".journey-story").getByRole("button", { name: "编辑故事", exact: true }).click();
+      await page.locator(".journey-story").getByRole("button", { name: "退出媒体呈现", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-editing") === "true");
       await page.locator(".journey-story [data-share-journey-trigger]").waitFor({ timeout: 10_000 });
     }
 

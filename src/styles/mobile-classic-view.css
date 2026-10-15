@@ -176,3 +176,10 @@
   box-sizing: border-box; max-height: calc(100% - 24px);
   overflow-y: auto; overscroll-behavior: contain;
 }
+
+/* A selected picture aperture must not compress the organizer's sticky
+   destinations over its selectable tiles. The Story sheet can scroll this
+   task surface even on a short phone. */
+.journey-story[data-classic-view][data-mobile-mode="manage"] .journey-story__media.is-organizing {
+  min-height: max(440px, min(70dvh, 680px));
+}

@@ -1662,5 +1662,7 @@ describe("Story presentation editor navigation", () => {
     expect(css).toContain('[data-mobile-mode="manage"] .journey-story__mobile-media-sheet');
     expect(css).toContain('max-height: calc(100% - 24px)');
     expect(css).toContain('overflow-y: auto; overscroll-behavior: contain;');
+    expect(css).toContain('[data-mobile-mode="manage"] .journey-story__media.is-organizing');
+    expect(css).toContain('min-height: max(440px, min(70dvh, 680px))');
   });
 });
