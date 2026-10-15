@@ -1,48 +1,175 @@
 import assert from "node:assert/strict";
 
-/** Exercise the real note scroller, including keyboard input and a viewport resize. */
-export async function assertStoryScrollEdges(page) {
-  const selector = ".story-point-note-sheet__body";
-  const body = page.locator(selector);
-  const check = async () => {
-    await page.waitForFunction((selector) => {
-      const node = document.querySelector(selector);
-      if (!node) return false;
-      const maximum = Math.max(0, node.scrollHeight - node.clientHeight);
-      const position = Math.max(0, Math.min(maximum, node.scrollTop));
-      const before = maximum > 1 && position > 1;
-      const after = maximum > 1 && maximum - position > 1;
-      return node.dataset.scrollBefore === String(before) && node.dataset.scrollAfter === String(after);
-    }, selector, { polling: "raf", timeout: 3_000 });
-    return body.evaluate((node) => ({
-      before: node.dataset.scrollBefore, after: node.dataset.scrollAfter,
-      top: node.scrollTop, maximum: Math.max(0, node.scrollHeight - node.clientHeight),
-      mask: getComputedStyle(node).maskImage,
-    }));
-  };
-  await body.focus();
-  await page.keyboard.press("Home");
-  const start = await check();
-  assert.equal(start.before, "false", "Start of note must not suggest hidden earlier text");
-  assert.equal(start.mask, "none", "Scroll cues must not mask the author's text");
-  await page.keyboard.press("End");
-  if (start.maximum > 1) await page.waitForFunction((selector) => {
-    const node = document.querySelector(selector);
-    return node && node.scrollHeight - node.clientHeight - node.scrollTop <= 1;
-  }, selector, { polling: "raf", timeout: 3_000 });
-  const end = await check();
-  assert.equal(end.after, "false", "The bottom cue must clear at the last line");
-  const viewport = page.viewportSize();
-  if (viewport) {
-    await page.setViewportSize({ ...viewport, height: viewport.height + 24 });
-    await check();
-    await page.setViewportSize(viewport);
-    await check();
+const SELECTOR = ".story-point-note-sheet__body";
+const EXPECTED = {
+  top: { before: "false", after: "true" },
+  middle: { before: "true", after: "true" },
+  bottom: { before: "true", after: "false" },
+  fits: { before: "false", after: "false" },
+};
+
+async function readState(page, text) {
+  return page.locator(SELECTOR).evaluate((body, expectedText) => {
+    const style = getComputedStyle(body);
+    const rect = body.getBoundingClientRect();
+    const note = body.querySelector(".story-point-note-sheet__text");
+    return {
+      before: body.dataset.scrollBefore, after: body.dataset.scrollAfter,
+      top: body.scrollTop, maximum: Math.max(0, body.scrollHeight - body.clientHeight),
+      clientHeight: body.clientHeight, scrollHeight: body.scrollHeight,
+      textHeight: note?.getBoundingClientRect().height ?? 0,
+      textMatches: note?.textContent === expectedText,
+      viewport: { width: innerWidth, height: innerHeight },
+      rect: { top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height },
+      focused: document.activeElement === body,
+      mask: style.maskImage, background: style.backgroundImage,
+      beforeInk: style.getPropertyValue("--scroll-edge-before").trim(),
+      afterInk: style.getPropertyValue("--scroll-edge-after").trim(),
+      media: document.querySelector('.journey-story__media [data-media-presented="true"]')?.getAttribute("data-media-presentation-id"),
+    };
+  }, text);
+}
+
+async function expectState(page, text, state, phase) {
+  const expected = EXPECTED[state];
+  assert.ok(expected, `Unknown scroll expectation: ${state}`);
+  try {
+    // The expected state is chosen by the scenario, never inferred from the DOM.
+    await page.waitForFunction(({ selector, state, expected }) => {
+      const body = document.querySelector(selector);
+      if (!body || body.clientHeight <= 0) return false;
+      const maximum = Math.max(0, body.scrollHeight - body.clientHeight);
+      const geometry = state === "fits" ? maximum <= 1 && body.scrollTop <= 1
+        : maximum > 1 && (state === "top" ? body.scrollTop <= 1
+          : state === "bottom" ? maximum - body.scrollTop <= 1
+            : body.scrollTop > 1 && maximum - body.scrollTop > 1);
+      return geometry && body.dataset.scrollBefore === expected.before && body.dataset.scrollAfter === expected.after;
+    }, { selector: SELECTOR, state, expected }, { polling: "raf", timeout: 3_000 });
+    const actual = await readState(page, text);
+    assert.equal(actual.textMatches, true, `${phase}: render the exact fixed note, not another fixture`);
+    assert.ok(actual.clientHeight > 20 && actual.rect.top < actual.viewport.height && actual.rect.bottom > 0,
+      `${phase}: the actual note scroller must be visible and nonempty`);
+    assert.equal(actual.mask, "none", `${phase}: cues must not mask the author's text`);
+    assert.notEqual(actual.background, "none", `${phase}: the real scroll-cue stylesheet must be applied`);
+    const clear = (ink) => ink === "transparent" || ink === "rgba(0, 0, 0, 0)";
+    assert.equal(clear(actual.beforeInk), expected.before === "false", `${phase}: top cue paint must follow its state`);
+    assert.equal(clear(actual.afterInk), expected.after === "false", `${phase}: bottom cue paint must follow its state`);
+    return { phase, state, ...actual };
+  } catch (error) {
+    const actual = await readState(page, text).catch((readError) => ({ readError: String(readError) }));
+    throw new Error(`[scroll-edges/${phase}] expected ${state} ${JSON.stringify(expected)}; actual ${JSON.stringify(actual)}`,
+      { cause: error });
   }
-  await body.focus();
-  await page.keyboard.press("Home");
-  if (start.maximum > 1) await page.waitForFunction((selector) => (document.querySelector(selector)?.scrollTop ?? 1) <= 1,
-    selector, { polling: "raf", timeout: 3_000 });
-  await check();
-  console.log(JSON.stringify({ name: "story-note-scroll-edges", viewport, start, end }));
+}
+
+/** Native scrolling produces real browser scroll events; no geometry, flags,
+ * text, CSS, or observer functions are mocked or assigned by these helpers. */
+async function scrollTo(page, position) {
+  await page.locator(SELECTOR).evaluate((body, position) => {
+    const maximum = Math.max(0, body.scrollHeight - body.clientHeight);
+    const top = position === "top" ? 0 : position === "middle" ? maximum / 2 : maximum;
+    body.scrollTo({ top, behavior: "instant" });
+  }, position);
+}
+
+/** A fixed long note MUST overflow; a separate short note MUST NOT overflow. */
+export async function assertStoryScrollEdges(page, { text, scenario, overflow, pointer }) {
+  assert.equal(typeof overflow, "boolean", "Every fixture declares its expected overflow before it runs");
+  const states = [];
+  const first = await expectState(page, text, overflow ? "top" : "fits", `${scenario}/initial`);
+  states.push(first);
+  if (!overflow) {
+    assert.ok(first.textHeight + 8 <= first.clientHeight, `${scenario}: short text must fit with its padding`);
+    // A native attempt to scroll cannot invent an edge on the short note.
+    await scrollTo(page, "bottom");
+    states.push(await expectState(page, text, "fits", `${scenario}/unscrollable-bottom`));
+    await scrollTo(page, "top");
+    states.push(await expectState(page, text, "fits", `${scenario}/unscrollable-top`));
+    return states;
+  }
+  assert.ok(first.maximum >= 80, `${scenario}: the long fixture must have meaningful overflow, not silently skip scrolling`);
+  await scrollTo(page, "middle");
+  states.push(await expectState(page, text, "middle", `${scenario}/middle-both-cues`));
+  await scrollTo(page, "bottom");
+  states.push(await expectState(page, text, "bottom", `${scenario}/bottom-hides-after`));
+  await scrollTo(page, "top");
+  states.push(await expectState(page, text, "top", `${scenario}/return-top-hides-before`));
+
+  if (pointer.kind === "touch") {
+    // Mobile input is a real finger gesture, not an assumption that emulated
+    // phone Chrome implements the desktop Home/End default actions.
+    const box = await page.locator(SELECTOR).boundingBox();
+    assert.ok(box && box.height > 80, `${scenario}: touch scroll needs a usable visible aperture`);
+    const x = box.x + box.width / 2;
+    const y = Math.min(box.y + box.height * .7, page.viewportSize().height - 16);
+    await pointer.down(x, y);
+    try {
+      for (let step = 1; step <= 8; step += 1) {
+        await pointer.move(x, y - step * 6);
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+      }
+      states.push(await expectState(page, text, "middle", `${scenario}/touch-moves-real-content`));
+    } finally { await pointer.up(); }
+  } else {
+    // Retain desktop keyboard coverage alongside exact native boundary checks.
+    await page.locator(SELECTOR).focus();
+    assert.equal((await readState(page, text)).focused, true, `${scenario}: keyboard input belongs to the note`);
+    await page.keyboard.press("End");
+    states.push(await expectState(page, text, "bottom", `${scenario}/keyboard-end`));
+    await page.keyboard.press("Home");
+    states.push(await expectState(page, text, "top", `${scenario}/keyboard-home`));
+  }
+  await scrollTo(page, "top");
+  states.push(await expectState(page, text, "top", `${scenario}/input-cleanup`));
+  assert.ok(states.every((state) => state.media === first.media), `${scenario}: scrolling never navigates the media`);
+  return states;
+}
+
+/** Cross the real overflow threshold while retaining the SAME scroller and text.
+ * Both same-width height changes and portrait/landscape rotation must change cues. */
+export async function assertStoryScrollResize(page, { text, scenario, portrait, landscape }) {
+  assert.deepEqual(page.viewportSize(), portrait, "Resize fixture starts at its declared portrait size");
+  const original = await page.locator(SELECTOR).elementHandle();
+  assert.ok(original, "The note scroller exists before resizing");
+  const states = [];
+  const capture = async (state, phase) => {
+    assert.equal(await original.evaluate((body, selector) => body.isConnected && body === document.querySelector(selector), SELECTOR),
+      true, `${scenario}/${phase}: resize must not remount the scroller`);
+    const result = await expectState(page, text, state, `${scenario}/${phase}`);
+    states.push(result);
+    return result;
+  };
+  try {
+    const fitted = await capture("fits", "portrait-fits");
+    assert.ok(fitted.textHeight + 8 <= fitted.clientHeight, `${scenario}: the medium note fits the tall viewport`);
+    const compact = { width: portrait.width, height: 400 };
+    await page.setViewportSize(compact);
+    const shorter = await capture("top", "height-shrink-shows-after");
+    assert.ok(shorter.maximum >= 16 && fitted.clientHeight - shorter.clientHeight >= 16,
+      `${scenario}: shrinking height must genuinely cross the overflow boundary`);
+    await scrollTo(page, "bottom");
+    await capture("bottom", "height-shrink-bottom-shows-before");
+    await page.setViewportSize(portrait);
+    await capture("fits", "height-grow-clears-both");
+    await page.setViewportSize(landscape);
+    const rotated = await capture("top", "landscape-shows-after");
+    assert.ok(rotated.maximum >= 16, `${scenario}: landscape must actually overflow`);
+    assert.ok(rotated.viewport.width > rotated.viewport.height, `${scenario}: landscape is real, not just a label`);
+    await scrollTo(page, "middle");
+    await capture("middle", "landscape-middle-both-cues");
+    await scrollTo(page, "bottom");
+    await capture("bottom", "landscape-bottom-hides-after");
+    await page.setViewportSize(portrait);
+    await capture("fits", "rotate-back-clears-both");
+    // Repeating the boundary checks that the first resize did not detach observation.
+    await page.setViewportSize(landscape);
+    await capture("top", "landscape-again-shows-after");
+    await page.setViewportSize(portrait);
+    await capture("fits", "portrait-again-clears-both");
+    assert.ok(states.every((state) => state.media === fitted.media), `${scenario}: resizing never changes the media owner`);
+    return states;
+  } finally {
+    await original.dispose();
+    await page.setViewportSize(portrait);
+  }
 }

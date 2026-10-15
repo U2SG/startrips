@@ -1,3 +1,4 @@
+import storyScrollEdgeFixtures from "./storyScrollEdgeFixtures.json";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
 import type { StartripsRecoveryKind } from "../brand/recoverySurfaces";
@@ -771,7 +772,15 @@ function JourneyStoryQaPreview() {
   const coverOpeningLeadingMode = qaMode === "journey-cover-opening-leading";
   const coverOpeningIntroMode = qaMode === "journey-cover-opening-intro";
   const coverOpeningMode = qaMode === "journey-cover-opening" || coverOpeningLeadingMode || coverOpeningIntroMode;
-  const initialJourney = notesOnlyMode
+  // Fixed QA inputs, rendered through the real Story and note sheet. No geometry
+  // or observer flags are overridden; the browser must prove the expected overflow.
+  const scrollNoteFixture = Object.values(storyScrollEdgeFixtures).find((fixture) => fixture.mode === qaMode);
+  const scrollNoteJourney: Journey | null = scrollNoteFixture ? {
+    ...storyQaGroupedNotesJourney,
+    routePoints: storyQaGroupedNotesJourney.routePoints.map((point) => point.id === "nb-point-c"
+      ? { ...point, note: scrollNoteFixture.text } : point),
+  } : null;
+  const initialJourney = scrollNoteJourney ?? (notesOnlyMode
     ? storyQaNotesOnlyJourney
     : groupedNotesMode
     ? storyQaGroupedNotesJourney
@@ -798,7 +807,7 @@ function JourneyStoryQaPreview() {
       id: `00000000-0000-4000-8000-${String(100 + index).padStart(12, "0")}`,
       fileName: `seed-${index}.jpg`, sortOrder: index,
     })),
-  } : storyQaJourney;
+  } : storyQaJourney);
   const [open, setOpen] = useState(!preferenceControls);
   const [journeys, setJourneys] = useState<Journey[]>([initialJourney]);
   const [observation, setObservation] = useState<{ assetId: string | null; routePointId: string | null } | null>(null);

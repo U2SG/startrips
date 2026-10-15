@@ -1,4 +1,7 @@
-import { assertStoryScrollEdges } from "./qa-story-scroll-edges.mjs";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { assertStoryScrollEdges, assertStoryScrollResize } from "./qa-story-scroll-edges.mjs";
+const scrollNoteFixtures = JSON.parse(await readFile(new URL("../src/preview/storyScrollEdgeFixtures.json", import.meta.url), "utf8"));
 import { revealStoryViewingOptions } from "./qa-browser.mjs";
 /**
  * #595 browser QA: grouped Route Point notes stay narrative beats.
@@ -60,7 +63,14 @@ let failed = false;
 
 function record(entry) {
   checks.push(entry);
-  if (entry.failed) failed = true;
+  if (entry.failed) {
+    failed = true;
+    console.error(JSON.stringify({ failedScenario: entry.name, error: entry.error ?? "scenario invariant mismatch", stack: entry.stack }));
+    if (process.env.GITHUB_ACTIONS === "true") {
+      const escape = (value) => String(value).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+      console.error(`::error title=${escape(entry.name)}::${escape(entry.error ?? "scenario invariant mismatch; inspect the recorded scenario")}`);
+    }
+  }
 }
 
 async function touchDriver(page) {
@@ -262,7 +272,8 @@ async function toggleLongNote(session) {
       { cause: error });
   }
   const expanded = await storyState(page);
-  await assertStoryScrollEdges(page);
+  // Grouped-note continuity and scroll-boundary coverage have different inputs.
+  // The fixed long/short/resize matrix below owns mandatory overflow assertions.
 
   // A drag on the sheet scrolls the sheet; it must never page the stage.
   await swipe(session, 1, ".story-point-note-sheet__body");
@@ -290,6 +301,78 @@ async function toggleLongNote(session) {
 }
 
 try {
+  // ---------------------------------------------------------------- Deterministic scroll-edge matrix
+  // Native scrollTo exercises exact browser boundaries without faking dimensions
+  // or observer flags. Desktop keys and touch gestures are checked as well.
+  const scrollViewports = [
+    { viewport: { width: 1280, height: 800 }, mobile: false },
+    ...[{ width: 320, height: 740 }, { width: 360, height: 740 },
+      { width: 390, height: 844 }, { width: 430, height: 932 },
+      { width: 844, height: 390 }].map((viewport) => ({ viewport, mobile: true })),
+  ];
+  for (const { viewport, mobile } of scrollViewports) {
+    for (const kind of ["long", "short"]) {
+      const fixture = scrollNoteFixtures[kind];
+      const name = `story-scroll-${kind}-${viewport.width}x${viewport.height}`;
+      // A short note need not clamp on desktop. Open it through the real
+      // narrow preview first, then resize the still-open sheet to the test size.
+      const openingViewport = kind === "short" ? { width: 320, height: 1000 } : viewport;
+      const session = await openPage({
+        path: `/?qaState=journey-story&qaMode=${fixture.mode}&qaRoutePoint=nb-point-c`, viewport: openingViewport, mobile,
+      });
+      const progress = {};
+      try {
+        const { page } = session;
+        await waitForCurrent(page, C1);
+        await waitForStableStage(page);
+        assert.equal((await storyState(page)).blockText, fixture.text, `${name}: load the declared fixture`);
+        await tapSelector(session, ".story-point-note__expand");
+        await page.locator(".story-point-note-sheet").waitFor({ state: "visible", timeout: 5_000 });
+        if (kind === "short") {
+          await page.setViewportSize(viewport);
+          await waitForStableStage(page);
+        }
+        assert.deepEqual(page.viewportSize(), viewport, `${name}: use the declared viewport`);
+        progress.states = await assertStoryScrollEdges(page, {
+          text: fixture.text, scenario: name, overflow: kind === "long", pointer: session.pointer,
+        });
+        await tapSelector(session, ".story-point-note-sheet__close");
+        await page.locator(".story-point-note-sheet").waitFor({ state: "detached", timeout: 5_000 });
+        assert.equal(await page.locator(".story-point-note-sheet__body[data-scroll-before]").count(), 0,
+          `${name}: closing removes the observed surface`);
+        record({ name, ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+          failed: session.consoleErrors.length > 0 || session.pageErrors.length > 0 });
+      } catch (error) {
+        record({ name, ...progress, error: String(error), stack: error?.stack,
+          consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+      } finally { await session.page.close(); }
+    }
+  }
+  for (const width of [320, 360, 390, 430]) {
+    const portrait = { width, height: 1000 };
+    const landscape = { width: 1000, height: width };
+    const fixture = scrollNoteFixtures.resize;
+    const name = `story-scroll-resize-${width}`;
+    const session = await openPage({
+      path: `/?qaState=journey-story&qaMode=${fixture.mode}&qaRoutePoint=nb-point-c`, viewport: portrait, mobile: true,
+    });
+    const progress = {};
+    try {
+      const { page } = session;
+      await waitForCurrent(page, C1);
+      await waitForStableStage(page);
+      assert.equal((await storyState(page)).blockText, fixture.text, `${name}: load the declared resize fixture`);
+      await tapSelector(session, ".story-point-note__expand");
+      await page.locator(".story-point-note-sheet").waitFor({ state: "visible", timeout: 5_000 });
+      progress.states = await assertStoryScrollResize(page, { text: fixture.text, scenario: name, portrait, landscape });
+      record({ name, ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
+        failed: session.consoleErrors.length > 0 || session.pageErrors.length > 0 });
+    } catch (error) {
+      record({ name, ...progress, error: String(error), stack: error?.stack,
+        consoleErrors: session.consoleErrors, pageErrors: session.pageErrors, failed: true });
+    } finally { await session.page.close(); }
+  }
+
   // ---------------------------------------------------------------- Story desktop
   {
     const name = "story-grouped-notes-desktop";
