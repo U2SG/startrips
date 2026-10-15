@@ -105,7 +105,7 @@ async function assertIcon(button, label) {
  assert.equal(await button.locator('svg').count(),1);
  const box=await button.boundingBox();
  assert.ok(box && box.width>=43.5 && box.height>=43.5,`${label} must have a 44px touch target`);
- assert.ok(box.x>=-1 && box.x+box.width<=page.viewportSize().width+1,`${label} is horizontally clipped`);
+ assert.ok(box.x>=-1 && box.x+box.width<=page.viewportSize().width+1,`${label} is horizontally clipped: ${JSON.stringify({box,viewport:page.viewportSize(),handoff:await page.evaluate(()=>window.__qaEditorNavigationGeometry)})}`);
 }
 async function assertEditor() {
  await page.waitForFunction(() => {
@@ -129,6 +129,27 @@ async function leavePresentation() {
  const writes=saves.length, saved=style;
  await assertIcon(exit(),'退出媒体呈现');
  await exit().click();
+ // Mobile Manage intentionally commits focus across two animation frames. The
+ // classic reader can reuse the clicked button, so focus equality alone is not
+ // completion. Observe stable geometry, without accepting/retrying bad bounds.
+ await page.evaluate(()=>{window.__qaEditorNavigationGeometry=null;});
+ await page.waitForFunction(()=>{
+  const reader=document.querySelector('.journey-story');
+  if(reader?.dataset.storyEditing!=='true') return false;
+  if(reader.dataset.storyLayout!=='mobile') return true;
+  const button=reader.querySelector('button[aria-label="进入媒体呈现"]');
+  if(!button) return false;
+  const header=button.closest('header');
+  const rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};
+  const sample={button:rect(button),header:rect(header),story:rect(reader),
+   scrollLeft:reader.scrollLeft,scrollTop:reader.scrollTop,clientWidth:reader.clientWidth,scrollWidth:reader.scrollWidth,
+   headerScrollLeft:header.scrollLeft,headerWidth:header.clientWidth,headerScrollWidth:header.scrollWidth,
+   view:reader.dataset.classicView,mode:reader.dataset.mobileMode,focused:document.activeElement===button};
+  const signature=JSON.stringify(sample),prior=window.__qaEditorNavigationGeometry;
+  const stable=prior?.signature===signature ? prior.stable+1 : 0;
+  window.__qaEditorNavigationGeometry={signature,stable,sample};
+  return stable>=2 && sample.focused;
+ },null,{polling:'raf'});
  await assertEditor();
  assert.equal(style,saved,'local editor entry changed the account preference');
  assert.equal(saves.length,writes,'local editor entry issued a preference write');
@@ -330,7 +351,8 @@ try {
  await account.locator('[data-media-presentation-entry="sheet"]').click();
  await heldRequest;
  assert.equal(await story.locator('.journey-story__layout').evaluate(el=>el.inert),true);
- assert.equal(await exportButton().evaluate(el=>el.disabled || Boolean(el.closest('[inert]'))),true);
+ assert.equal(await story.locator('[data-story-film-export-trigger="true"]').evaluate(el=>el.disabled || Boolean(el.closest('[inert]'))),true);
+ assert.equal(await exportButton().count(),0,'pending export must leave the accessibility tree');
  releaseSave();
  await account.waitFor({state:'detached'});
  await waitStyle('book-3d');
