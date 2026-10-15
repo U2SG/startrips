@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JourneyFilmEncoderInput } from "./journeyFilmExport";
 
 const mock = vi.hoisted(() => ({
-  state: "pending", start: vi.fn(), cancel: vi.fn(), canEncode: vi.fn(),
+  state: "pending", start: vi.fn(), cancel: vi.fn(), canEncode: vi.fn(), disposeStorage: vi.fn(),
+}));
+vi.mock("./journeyFilmStorage", () => ({
+  createJourneyFilmStorage: async () => ({ target: {}, storageMode: "memory", dispose: mock.disposeStorage }),
 }));
 vi.mock("mediabunny", () => ({
   ALL_FORMATS: [], BlobSource: class {}, Input: class {}, CanvasSink: class {},
@@ -38,7 +41,7 @@ describe("encoder cancellation lifetime", () => {
     const controller = new AbortController();
     const input = {
       journey: { media: [], routePoints: [] }, sourcePlan: { scenes: [] },
-      film: { manifest: { output: { width: 1080, height: 1920 }, fps: 30, totalFrames: 0 }, captions: new Map() },
+      film: { manifest: { output: { width: 1080, height: 1920 }, fps: 30, totalFrames: 0, actualDurationMs: 15000 }, captions: new Map() },
       signal: controller.signal, readOpening: null, readMedia: vi.fn(), onFrame: vi.fn(),
     } as unknown as JourneyFilmEncoderInput;
     let settled = false;
@@ -55,6 +58,7 @@ describe("encoder cancellation lifetime", () => {
       expect(mock.cancel).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
       expect(canvas.width).toBe(1080);
+      expect(mock.disposeStorage).not.toHaveBeenCalled();
     } finally {
       starting.resolve();
       if (end === "resolve") disposal.resolve();
@@ -64,5 +68,7 @@ describe("encoder cancellation lifetime", () => {
     expect(canvas.width).toBe(1);
     expect(canvas.height).toBe(1);
     expect(mock.cancel).toHaveBeenCalledOnce();
+    expect(mock.disposeStorage).toHaveBeenCalledOnce();
   });
 });
+

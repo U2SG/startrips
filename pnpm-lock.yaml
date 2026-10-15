@@ -34,6 +34,9 @@ importers:
       '@hono/node-server':
         specifier: ^2.1.0
         version: 2.1.0(hono@4.13.1)
+      '@mediabunny/aac-encoder':
+        specifier: 1.61.3
+        version: 1.61.3(mediabunny@1.61.3)
       '@tabler/icons-react':
         specifier: ^3.46.0
         version: 3.46.0(react@19.2.8)
@@ -127,6 +130,11 @@ importers:
         version: 3.2.7(@types/node@26.2.0)(jiti@2.7.0)(tsx@4.23.12)
 
 packages:
+
+  '@mediabunny/aac-encoder@1.61.3':
+    resolution: {integrity: sha512-SH4DdqqUJRqIErXbuxIze0ACbSyi3Rau90skDwp8YbwopFYm2dgPidLPbwqdmTd/sESHwq7Nf3nDbczAxtcVmA==}
+    peerDependencies:
+      mediabunny: ^1.0.0
 
   '@aws-sdk/checksums@3.1000.27':
     resolution: {integrity: sha512-insWOqKKNUrbN/dohEG7BJ0U5GkyqhjbMb/NHNaLUtq+7my2M8C4EnZZZoxMmXRqCC+P9dEr+KyJA2JGGzoKLg==}
@@ -2225,6 +2233,10 @@ packages:
 
 snapshots:
 
+  '@mediabunny/aac-encoder@1.61.3(mediabunny@1.61.3)':
+    dependencies:
+      mediabunny: 1.61.3
+
   '@aws-sdk/checksums@3.1000.27':
     dependencies:
       '@aws-sdk/core': 3.977.7
@@ -4136,3 +4148,4 @@ snapshots:
   yoctocolors@2.2.0: {}
 
   zod@4.4.3: {}
+

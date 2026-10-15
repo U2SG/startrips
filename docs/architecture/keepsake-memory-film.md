@@ -1,8 +1,9 @@
 # Private Journey memory films (#693)
 
-The owner Story management footer exposes 导出短片 on desktop and phone.
+The owner Story editor operation area exposes 导出短片 on desktop and phone.
 It opens a native modal with portrait/landscape, 15/30/60-second target, optional
-Route Point notes (off by default), and an already-generated creative cover.
+Route Point notes (off by default), the Journey's existing soundtrack (on by
+default), and an already-generated creative cover.
 Guests/read-only views receive no exporter capability. Unsaved notes must be
 saved/discarded before export. Scope changes close the modal and cancel the job.
 
@@ -38,9 +39,56 @@ This adds no Stop, live note beat or new v1 scene. Missing note context is rejec
 instead of treated as empty. Captions are grapheme/newline paginated with enough
 reading time. Excessive text/size/duration is rejected with an actionable message,
 not silently omitted. Titles shrink to fit bounded heading space; the renderer
-refuses unrenderable text rather than clipping it. This version does not export
-standalone live note beats, generated narration, music or source video audio;
-the modal explicitly describes the file as a silent film.
+refuses unrenderable text rather than clipping it. Standalone live note beats,
+generated narration and source video audio are not exported. The selected
+owner-uploaded Journey soundtrack is decoded with a bounded queue, looped from
+its beginning, interleaved with video, and encoded as stereo 48 kHz AAC-LC.
+Browsers without native AAC load the official matching
+`@mediabunny/aac-encoder@1.61.3` extension. A missing track is disclosed as silent;
+an unreadable selected track fails closed rather than producing a silent substitute.
+The owner may explicitly switch music off. No external music is acquired.
+
+## Complete-film storage and duration
+
+15/30/60 seconds remain pacing targets. There is no two-minute rejection: every
+canonical scene and enabled caption remains in one complete video. Before media
+reads, the modal receives actual timeline duration and an approximate file size:
+4 Mbps video plus 128 kbps audio when selected, 20% encoding headroom and 2 MiB
+metadata allowance. This estimate is not a promise that variable-rate encoding
+will produce exactly that size.
+
+The encoder uses a positioned, backpressured `StreamTarget` with 1 MiB chunks
+and an ordinary MP4 with `fastStart: false`; it does not retain the whole movie
+for in-memory fast-start relocation. OPFS provides origin-private temporary
+disk staging. Admission uses at most half the reported remaining quota and a
+512 MiB aggregate staging ceiling, with at most eight active/retained exports.
+The ceiling bounds accumulated private staging, not film duration. Each output
+also has a runtime byte bound derived from its estimate plus 25% or 8 MiB
+headroom, whichever is larger, within the available aggregate/quota budget.
+Position plus write length is checked before a physical write; rewrites do not
+consume the cumulative-byte budget twice. Actual quota/write errors fail closed.
+
+Without OPFS plus Web Locks, a paged memory target is available only for an
+estimate within the existing 96 MiB limit, enforced again on every write. It
+does not grow one unbounded ArrayBuffer. Unsupported or insufficient storage
+produces an actionable error; no automatic truncation, quality reduction or
+multi-part output occurs.
+
+Random-ID staging directories contain only reservation/retention metadata and
+the private movie. Per-export Web Locks prevent another tab from deleting an
+active export; a registry lock serializes reservations. A future export may
+reclaim only unretained directories whose active-export lease is absent. Films
+retained for an anchor download are never age-deleted automatically. The dialog
+can show the retained count/bytes and explicitly clear them after the member
+confirms all downloads finished. This bounded registry survives navigation and
+crashes without logging Journey names, coordinates or signed URLs.
+
+Where a save picker is supported, the finished movie is streamed to the chosen
+destination, authorization is checked before and after copying, and destination
+close is awaited before deleting staging. Other browsers use a regular download;
+because it has no completion signal, its staging file and object URL survive
+dialog dismissal until explicit cleanup. A retained file is not proof of a
+successful download. No persistent-storage permission is requested.
 
 ## Privacy and cancellation
 
@@ -59,9 +107,13 @@ The renderer awaits the actual Output.cancel promise even when the library has
 already marked its state canceled, so disposal really completes before release.
 Images/video inputs/reveal contexts are released; original-byte caches
 are cleared and stale download URLs are revoked. No partial MP4 is offered.
-Caps: 128 MiB per source, 256 MiB combined input, 120 seconds, 96 MiB output.
-These caps are checked and exposed to the user rather than silently dropping
-scenes. Existing Keepsake v1 construction and live playback remain unchanged.
+Source caps remain 128 MiB per source and 256 MiB combined input, now including
+the selected soundtrack. The five-minute total timer is replaced with a
+two-minute no-progress watchdog; advancing frames, successful writes and source
+reads keep a healthy long export alive. Individual network reads retain their
+60-second timeout. Aborting requests disposal but does not falsely claim native
+codec or filesystem teardown has already settled; the page slot stays held
+until actual settlement. Existing Keepsake v1 and live playback are unchanged.
 
 ## CI evidence
 
@@ -74,15 +126,29 @@ Journey changes and guest omission. Synthetic photos/videos and mocked owner
 HTTP responses are used: this is browser/codec integration evidence, not a paid
 model-output aesthetic evaluation or a production account test.
 
+The portrait fixture now exceeds two minutes and includes a short synthetic
+soundtrack. CI requires the entire expected frame count and all caption text,
+an AAC track covering the movie (allowing codec padding), audible decoded PCM
+before/after a loop and near the end, retained OPFS storage across dialog remount,
+and explicit cleanup. Landscape verifies opt-out despite source-video audio;
+the no-track case verifies the truthful silent message. These synthetic fixtures
+do not claim reproduction on a member's private Journey.
+
+The unmodified AAC fallback is supplied by Mediabunny under MPL-2.0. Its
+[version-pinned source](https://github.com/Vanilagy/mediabunny/tree/v1.61.3/packages/aac-encoder)
+and [license](https://github.com/Vanilagy/mediabunny/blob/v1.61.3/packages/aac-encoder/LICENSE)
+remain available; this dependency supplies a codec, not licensed music content.
+
 A separate real-dialog unmount/remount test injects deliberately delayed encoder
 disposal through the actual export service. It verifies no second encoder starts
 until the previous exporter settles, then an explicit retry can start. Unit tests
 also cover a canceled output whose disposal promise is still pending. These
 controlled-lifetime tests supplement, not replace, native MP4 generation.
 
-#694 is merged into main and supplies the shared creative-cover registry and
-protocol. #695 now targets main after rebasing its export-only changes; the
-parent's final polling and Journey Book QA fixes stay inherited, not copied
-into the child diff. Rebased Source CI and independent review remain required
-before sealing. Code push does not change the installed worker, enable paid
-image calls, deploy or merge.
+The shared creative-cover registry, original owner film export and #707's
+validated editor-navigation implementation are inherited from main. This
+complete-film and soundtrack change preserves their integration fixtures and
+required CI coverage. Its Source is rebuilt onto the exact merged parent and
+requires fresh complete CI and independent review before the ledger-only final.
+Code push does not change the installed worker, enable paid image calls, deploy
+or merge.
