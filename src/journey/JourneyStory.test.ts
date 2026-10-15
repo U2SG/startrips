@@ -30,6 +30,7 @@ import {
   replaceJourneySoundtrack,
 } from "./JourneyStory";
 import { JourneyApiError, readMediaEvidence, writeMediaDisplayState } from "./journeyApi";
+import { AtlasViewProvider, GUEST_ATLAS_VIEW_CAPABILITIES, type AtlasView } from "./atlasView";
 import { createPlacementAnalysisAuthority, placementAnalysisScope, runPlacementAnalysisBatch } from "./placementAnalysisAuthority";
 import type { Journey, JourneyMediaAsset, MediaEvidenceRecord } from "./types";
 
@@ -1612,5 +1613,58 @@ describe("Story fullscreen shared-element wiring (#459)", () => {
     expect(presentFullscreen).not.toContain("reportStageMediaError");
     expect(presentFullscreen).not.toContain("keepTargetInteractive");
     expect(presentFullscreen).not.toMatch(/if \(mobileLayout\)[\s\S]{0,160}setFullscreen/);
+  });
+});
+
+
+
+describe("Story presentation editor navigation", () => {
+  const storyProps = {
+    journeys: [journey], journeyId: journey.id, editorSession: true,
+    onClose: () => undefined, onNavigate: () => undefined, onMediaAdded: () => null,
+    onOpenEditor: () => undefined, onReturnPresentation: () => undefined,
+  };
+
+  it("opens the owner editor with one visible export opener before the content", () => {
+    const markup = renderToStaticMarkup(createElement(JourneyStory, storyProps));
+    expect(markup).toContain('data-story-editing="true"');
+    expect(markup).toContain('aria-label="进入媒体呈现"');
+    expect(markup).not.toContain('aria-label="编辑故事"');
+    expect(markup).toContain('class="story-notes-editor"');
+    expect((markup.match(/data-story-film-export-trigger="true"/g) ?? []).length).toBe(1);
+    expect(markup.indexOf('class="journey-story__editor-actions"')).toBeLessThan(markup.indexOf('class="journey-story__layout"'));
+  });
+
+  it("never grants a shared reader edit or export authority on local exit", () => {
+    const guest: AtlasView = {
+      capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
+      listJourneys: async () => [journey], listHomeBasePeriods: null, listHomeBaseDismissals: null,
+      readMedia: async () => { throw new Error("No render-time media read"); },
+      mutations: null,
+      // Even a mistakenly supplied export adapter cannot override the capability gate.
+      exportJourneyFilm: async () => { throw new Error("No shared export"); },
+    };
+    const markup = renderToStaticMarkup(createElement(AtlasViewProvider, { value: guest,
+      children: createElement(JourneyStory, storyProps) }));
+    expect(markup).toContain('aria-label="进入媒体呈现"');
+    expect(markup).not.toContain('data-story-editing="true"');
+    expect(markup).not.toContain('class="story-notes-editor"');
+    expect(markup).not.toContain('data-story-film-export-trigger');
+    expect(markup).not.toContain('aria-label="编辑故事"');
+    expect(markup).not.toContain('aria-label="管理旅程"');
+    expect(markup).not.toContain('type="file"');
+  });
+
+  it("keeps management overlays independent of viewer-only disclosure styling", () => {
+    const css = readFileSync(new URL("../styles/mobile-classic-view.css", import.meta.url), "utf8");
+    expect(css).toContain('[data-mobile-mode="viewer"]:not([data-classic-panel="more"])');
+    expect(css).toContain('[data-mobile-mode="viewer"] .journey-story__mobile-media-actions > button');
+    expect(css).toContain('[data-mobile-mode="viewer"] .journey-story__mobile-media-actions.has-quick-recap > .journey-story__playback-entry');
+    expect(css).toContain('[data-mobile-mode="viewer"] .journey-story__mobile-media-actions .journey-story__quick-recap-status');
+    expect(css).toContain('[data-mobile-mode="manage"] .journey-story__mobile-media-sheet');
+    expect(css).toContain('max-height: calc(100% - 24px)');
+    expect(css).toContain('overflow-y: auto; overscroll-behavior: contain;');
+    expect(css).toContain('[data-mobile-mode="manage"] .journey-story__media.is-organizing');
+    expect(css).toContain('min-height: max(440px, min(70dvh, 680px))');
   });
 });

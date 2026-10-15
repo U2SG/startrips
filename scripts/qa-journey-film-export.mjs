@@ -50,6 +50,13 @@ import { createRoot } from "react-dom/client";
 import { JourneyStory } from "/src/journey/JourneyStory";
 import { exportPrivateJourneyFilm } from "/src/journey/journeyFilmExport";
 import { createOwnerAtlasView, AtlasViewProvider, GUEST_ATLAS_VIEW_CAPABILITIES } from "/src/journey/atlasView";
+// Match the production shell: absolute media tools need their positioned
+// media container and shared tokens, rather than the bare QA viewport.
+import "/src/styles/tokens.css";
+import "/src/styles/controls.css";
+import "/src/app.css";
+import "/src/styles/living-atlas.css";
+import "/src/styles/starlight-experience.css";
 import "/src/styles/story-experience.css";
 function Harness(){
  const [journey,setJourney]=useState(window.__filmFixture);
@@ -361,3 +368,4 @@ try {
   clearTimeout(watchdog);
   await rm(harnessPath, { force: true });
 }
+

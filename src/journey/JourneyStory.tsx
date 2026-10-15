@@ -255,6 +255,10 @@ type JourneyStoryProps = {
    */
   presentJourneyCoverOpening?: boolean;
   focusVisibleControlOnOpen?: boolean;
+  /** Local Story navigation; the account/share presentation preference stays intact. */
+  editorSession?: boolean;
+  onOpenEditor?: () => void;
+  onReturnPresentation?: () => void;
   onObservationChange?: (observation: StoryLogicalObservation | null) => void;
   onGlobeCoverChange?: (state: StoryGlobeCoverState) => void;
   onClose: (sharedSource?: HTMLElement | null) => void;
@@ -758,6 +762,9 @@ export function JourneyStory({
   initialSnapState = "in-context",
   presentJourneyCoverOpening = false,
   focusVisibleControlOnOpen = false,
+  editorSession = false,
+  onOpenEditor,
+  onReturnPresentation,
   onObservationChange,
   onGlobeCoverChange,
   onClose,
@@ -777,7 +784,9 @@ export function JourneyStory({
   // Before this contract an absent `onMediaDelete` fell through to the owner
   // API, which meant hiding the control left deletion reachable.
   const { capabilities, readMedia, listJourneys, mutations, creativeCover, exportJourneyFilm } = useAtlasView();
-  const mediaPresentation = useMediaPresentationStyle();
+  const preferredMediaPresentation = useMediaPresentationStyle();
+  const mediaPresentation = editorSession ? "classic" : preferredMediaPresentation;
+  const editorEnabled = editorSession && capabilities.canEditJourney;
   const presentationBusy = Boolean(useMediaPresentationAccess()?.busy);
   const manageMedia: AtlasMutations | null = capabilities.canManageMedia ? mutations : null;
   const removeMedia = onMediaDelete ?? manageMedia?.deleteMedia ?? null;
@@ -796,6 +805,8 @@ export function JourneyStory({
   }
   const filmExportKey = useMemo(() => journey ? JSON.stringify([journey.id, journey.atlasId, journey.revision, journey.title, journey.coverMediaAssetId, journey.routePoints, journey.routeSegments, journey.media]) : "", [journey]);
   const filmExportOpen = canExportJourney && filmExportTarget !== null && filmExportTarget === filmExportKey;
+  const filmExportOpenRef = useRef(filmExportOpen);
+  filmExportOpenRef.current = filmExportOpen;
   useEffect(() => { if (filmExportTarget !== null && !filmExportOpen) setFilmExportTarget(null); }, [filmExportTarget, filmExportOpen]);
   const initialMediaSelection = storyInitialMediaSelection(journey, routePointId, initialAssetId);
   // #555: the cursor is an entry index. Whether this open carries the Journey
@@ -971,8 +982,10 @@ export function JourneyStory({
   } | null>(null);
   const inlineStageRef = useRef<StoryMediaPagesHandle>(null);
   const fullscreenStageRef = useRef<StoryMediaPagesHandle>(null);
-  const [mobileManageMode, setMobileManageMode] = useState(false);
-  const classicActive = mobileLayout && mediaPresentation === "classic" && !mobileManageMode;
+  const [mobileManageMode, setMobileManageMode] = useState(mobileLayout && editorEnabled);
+  const classicLayout = mobileLayout && mediaPresentation === "classic";
+  const classicActive = classicLayout && !mobileManageMode;
+  const presentationNavigationRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { setClassicPanel(null); }, [classicActive, fullscreen, journeyId]);
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
   const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -988,7 +1001,12 @@ export function JourneyStory({
   // steal Tab focus back into the article).
   const fullscreenRef = useRef<HTMLDivElement>(null);
   const [overview, setOverview] = useState(false);
-  const [desktopEditing, setDesktopEditing] = useState(false);
+  const [desktopEditing, setDesktopEditing] = useState(editorEnabled);
+  useEffect(() => {
+    setMobileManageMode(mobileLayout && editorEnabled);
+    setDesktopEditing(editorEnabled);
+    setPlaying(false);
+  }, [editorEnabled]);
   const mediaEditing = mobileLayout ? mobileManageMode : desktopEditing;
   const notesEditing = desktopEditing || mobileManageMode;
   const [soundtrackUpload, setSoundtrackUpload] = useState<MediaUploadState>({ status: "idle" });
@@ -1109,7 +1127,7 @@ export function JourneyStory({
     });
   }
 
-  useMediaPresentationChangeGuard(notesDirty || mutationPending);
+  useMediaPresentationChangeGuard(notesDirty || mutationPending || placementAnalyzing || placementReview !== null);
 
   function notesPreventAction(savingMessage: string) {
     const message = notesSaveState === "saving"
@@ -1610,7 +1628,7 @@ export function JourneyStory({
 
   function exitMobileManageMode() {
     if (notesPreventAction("正在保存感想，完成后才能退出编辑。")) return false;
-    if (mutationPending) return false;
+    if (mutationPending || placementAnalyzing || placementReview !== null) return false;
     setDeleteState("idle");
     setDeleteMessage("");
     setMobileMediaMenuOpen(false);
@@ -1624,6 +1642,7 @@ export function JourneyStory({
     restoreMobileManageViewerFocusRef.current = true;
     setMobileManageMode(false);
     setDesktopEditing(false);
+    if (editorSession) onReturnPresentation?.();
     return true;
   }
 
@@ -1647,6 +1666,10 @@ export function JourneyStory({
     }
     if (mobileLayout && deleteState === "confirming") {
       closeJourneyDelete();
+      return;
+    }
+    if (placementAnalyzing || placementReview !== null) {
+      setCloseBlocked(true);
       return;
     }
     if (notesSaveState === "saving") setCloseBlocked(true);
@@ -1876,8 +1899,8 @@ export function JourneyStory({
     }
     setFullscreen(false);
     setFullscreenControlsHidden(false);
-    setMobileManageMode(false);
-    setDesktopEditing(false);
+    setMobileManageMode(mobileLayout && editorEnabled);
+    setDesktopEditing(editorEnabled);
     setMobileMediaMenuOpen(false);
     setOverview(false);
     setMoveSelectMode(false);
@@ -1949,7 +1972,7 @@ export function JourneyStory({
   useEffect(() => {
     if (!mobileLayout || typeof window === "undefined") return;
     const focusTarget = mobileManageMode
-      ? mobileManageDoneRef
+      ? editorSession ? presentationNavigationRef : mobileManageDoneRef
       : restoreMobileManageViewerFocusRef.current
         ? mobileManageViewerTriggerRef
         : null;
@@ -1957,7 +1980,7 @@ export function JourneyStory({
     if (!mobileManageMode) restoreMobileManageViewerFocusRef.current = false;
     const firstFrame = window.requestAnimationFrame(() => {
       const secondFrame = window.requestAnimationFrame(() => {
-        focusTarget.current?.focus(mobileManageMode ? undefined : { preventScroll: true });
+        if (!filmExportOpenRef.current) focusTarget.current?.focus(mobileManageMode ? undefined : { preventScroll: true });
       });
       mobileManageFocusFrameRef.current = secondFrame;
     });
@@ -1968,7 +1991,7 @@ export function JourneyStory({
         mobileManageFocusFrameRef.current = null;
       }
     };
-  }, [mobileLayout, mobileManageMode]);
+  }, [editorSession, mobileLayout, mobileManageMode]);
 
   useLayoutEffect(() => {
     const previousMediaDeleteState = previousMediaDeleteStateRef.current;
@@ -2570,6 +2593,7 @@ export function JourneyStory({
   useEffect(() => {
     if (!mobileLayout) {
       if (mobileManageMode) setDesktopEditing(true);
+      setMobileManageMode(false);
       setMobileStoryCoverTransitionActive(false);
       setMobileStoryExpanded((expanded) => mobileStoryExpandedForLayout(false, expanded));
       setMobileMediaMenuOpen(false);
@@ -4418,6 +4442,10 @@ export function JourneyStory({
 
   function toggleDesktopEditing() {
     if (mutationPending || placementAnalyzing) return;
+    if (desktopEditing && editorSession) {
+      exitMobileManageMode();
+      return;
+    }
     if (desktopEditing && notesDirty) {
       notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
       return;
@@ -4552,7 +4580,7 @@ export function JourneyStory({
         className={`journey-story motion-staged${mobileLayout && mobileManageMode ? " is-mobile-manage" : ""}`}
         data-story-layout={mobileLayout ? "mobile" : "desktop"}
         data-story-presentation={mediaPresentation}
-        data-classic-view={classicActive ? mobileClassicView : undefined}
+        data-classic-view={classicLayout ? mobileClassicView : undefined}
         data-classic-panel={classicActive ? classicPanel ?? "none" : undefined}
         data-classic-playing={classicActive && playing ? "true" : undefined}
         data-story-editing={mediaEditing ? "true" : undefined}
@@ -4601,7 +4629,7 @@ export function JourneyStory({
           {mobileLayout ? <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
             <h2 id="journey-story-title">{journey.title}</h2>
-          </div> : canEditStory ? <button
+          </div> : canEditStory && !onOpenEditor ? <button
             className="journey-story__edit-toggle"
             type="button"
             aria-label={desktopEditing ? "完成编辑故事" : "编辑故事"}
@@ -4609,7 +4637,14 @@ export function JourneyStory({
             disabled={mutationPending || placementAnalyzing}
             onClick={toggleDesktopEditing}
           >{desktopEditing ? "完成" : "编辑"}</button> : null}
-          <StoryPresentationPicker disabled={notesDirty || mutationPending || mediaGestureHolding || Boolean(videoHandoffRef.current)} />
+          <StoryPresentationPicker
+            buttonRef={presentationNavigationRef}
+            disabled={notesDirty || mutationPending || placementAnalyzing || placementReview !== null || mediaGestureHolding || Boolean(videoHandoffRef.current)}
+            onOpenClassic={onOpenEditor}
+            onReturnPresentation={editorSession ? () => {
+              exitMobileManageMode();
+            } : undefined}
+          />
           {/* An upload in flight keeps this button clickable so pressing it
               explains the wait instead of silently doing nothing. */}
           <button
@@ -4626,12 +4661,18 @@ export function JourneyStory({
           </button>
         </header>
 
-        {closeBlocked && (uploading || notesSaveState === "saving") ? (
+        {closeBlocked && (uploading || notesSaveState === "saving" || placementAnalyzing || placementReview !== null) ? (
           <p className="journey-story__close-blocked" role="status">
-            {notesSaveState === "saving" ? "正在保存感想，完成后即可安全退出。" : "正在完成分块上传，完成后即可安全退出。"}
+            {placementAnalyzing ? "正在分析所选媒体，请稍候。" : placementReview !== null ? "请先确认或取消媒体归类，再退出。" : notesSaveState === "saving" ? "正在保存感想，完成后即可安全退出。" : "正在完成分块上传，完成后即可安全退出。"}
           </p>
         ) : null}
 
+        {canExportJourney && mediaEditing ? <div className="journey-story__editor-actions" role="group" aria-label="故事操作" inert={presentationBusy || undefined}>
+          <button ref={filmExportTriggerRef} data-story-film-export-trigger="true" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => {
+            if (notesPreventAction("请先保存或放弃感想更改，再导出旅程。")) return;
+            setPlaying(false); setFilmExportTarget(filmExportKey);
+          }}><IconDownload size={16} stroke={1.35} aria-hidden="true" />导出短片</button>
+        </div> : null}
         {classicActive ? <p className="journey-story__classic-context">
           <span>{activeChapterRoutePoint?.label || (activeChapterRoutePoint ? "途径点" : "整段旅程")}</span>
           <small>{classicViewDefinition.label}</small>
@@ -5411,10 +5452,6 @@ export function JourneyStory({
             <div className="journey-story__manage">
               {canEditJourney ? <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={openJourneyComposer}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button> : null}
               {canShareJourney ? <button type="button" data-share-journey-trigger="true" disabled={mutationPending || deleteState !== "idle"} onClick={openJourneyShare}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享旅程</button> : null}
-              {canExportJourney ? <button ref={filmExportTriggerRef} type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => {
-                if (notesPreventAction("请先保存或放弃感想更改，再导出旅程。")) return;
-                setPlaying(false); setFilmExportTarget(filmExportKey);
-              }}><IconDownload size={16} stroke={1.35} aria-hidden="true" />导出短片</button> : null}
               {onDelete ? <button ref={journeyDeleteTriggerRef} className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => {
                 if (notesPreventAction("正在保存感想，完成后才能删除旅程。")) return;
                 setDeleteState("confirming");
@@ -5546,3 +5583,4 @@ export function JourneyStory({
   </Suspense> : null}</>;
   return typeof document === "undefined" ? surfaces : createPortal(surfaces, document.body);
 }
+

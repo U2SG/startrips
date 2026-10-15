@@ -7,15 +7,15 @@ const ci = read(".github/workflows/ci.yml");
 const reproduction = read(".github/workflows/story-autoplay-reproduction.yml");
 const job = (name) => ci.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0];
 
-test("all 39 suite commands are retained exactly once across at most eight shards", () => {
+test("all 40 suite commands are retained exactly once across at most eight shards", () => {
   const browser = job("browser-qa");
   const matrix = browser.slice(browser.indexOf("      matrix:"), browser.indexOf("\n    steps:"));
   const names = [...matrix.matchAll(/^          - name: (.+)$/gm)].map((m) => m[1]);
   assert.ok(names.length <= 8);
   assert.equal(new Set(names).size, names.length);
   const rows = [...matrix.matchAll(/^              ([a-z0-9-]+)::(.+)$/gm)];
-  assert.equal(rows.length, 39);
-  assert.equal(new Set(rows.map((m) => m[1])).size, 39);
+  assert.equal(rows.length, 40);
+  assert.equal(new Set(rows.map((m) => m[1])).size, 40);
   for (const [, suite, command] of rows) {
     const expected = suite === "login-media"
       ? "QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification"
@@ -29,6 +29,21 @@ test("all 39 suite commands are retained exactly once across at most eight shard
   }
   assert.match(browser, /fail-fast: false/);
   assert.match(browser, /QA_SUITE_TIMEOUT_MS: '720000'/);
+});
+
+test("editor navigation and compact layout checks remain mandatory independent suites", () => {
+  const scripts = JSON.parse(read("package.json")).scripts;
+  assert.equal(scripts["qa:story-presentation-navigation"],
+    "node scripts/qa-story-presentation-flow.mjs 320 && node scripts/qa-story-presentation-flow.mjs 390");
+  assert.equal(scripts["qa:mobile-classic-views"],
+    "node scripts/qa-mobile-classic-views.mjs 320 && node scripts/qa-mobile-classic-views.mjs 360 && node scripts/qa-mobile-classic-views.mjs 390 && node scripts/qa-mobile-classic-views.mjs 430 && node scripts/qa-mobile-classic-views.mjs 844 390 && node scripts/qa-page-flip-lifecycle.mjs");
+  const browser = job("browser-qa");
+  for (const suite of ["story-presentation-navigation", "mobile-classic-views"]) {
+    assert.equal((browser.match(new RegExp(`^              ${suite}::pnpm qa:${suite}$`, "gm")) || []).length, 1);
+    assert.ok(browser.includes(`contains(matrix.suites, '|${suite}|')`));
+  }
+  assert.match(browser, /path: artifacts\/story-repair\//);
+  assert.match(job("verify"), /BROWSER_QA_RESULT: \$\{\{ needs\.browser-qa\.result \}\}/);
 });
 
 test("hosted Chrome is reused without per-run Chromium or OS dependency installation", () => {
@@ -46,6 +61,7 @@ test("hosted Chrome is reused without per-run Chromium or OS dependency installa
 test("fast feedback runs once and final classification precedes expensive provisioning", () => {
   assert.equal((ci.match(/run: pnpm typecheck/g) || []).length, 1);
   assert.match(job("quick-checks"), /CLASSIFY_ONLY: '1'/);
+  assert.match(job("quick-checks"), /scripts\/ci-ledger-fast-path\.node-test\.mjs/);
   assert.match(job("quick-checks"), /run: pnpm typecheck/);
   for (const name of ["core", "browser-qa", "keepsake-render"]) {
     const block = job(name);
@@ -101,3 +117,4 @@ test("FFmpeg download routing stays on signed official repositories without glob
   assert.doesNotMatch(setup, /trusted=yes|--allow-unauthenticated|AllowInsecureRepositories/);
   assert.match(job("quick-checks"), /scripts\/ci-ensure-ffmpeg\.node-test\.mjs/);
 });
+

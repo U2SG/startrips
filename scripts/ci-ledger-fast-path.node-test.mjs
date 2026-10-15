@@ -95,7 +95,7 @@ test("fails closed when final uses more than one commit", () => {
   assert.equal(result.reason, "final-commit-count-2");
 });
 
-test("workflow keeps all 39 logical browser suites across at most eight shards", () => {
+test("workflow keeps all 40 logical browser suites across at most eight shards", () => {
   const workflow = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows", "ci.yml"), "utf8").replace(/\r\n/g, "\n");
   const matrixStart = workflow.indexOf("      matrix:\n        include:");
   const stepsStart = workflow.indexOf("\n    steps:", matrixStart);
@@ -105,7 +105,7 @@ test("workflow keeps all 39 logical browser suites across at most eight shards",
     "login-media", "post-login", "playback-prefetch", "playback-continuity", "playback-map-bridge", "final-acceptance",
     "route-anchoring", "city-label-anchoring", "earth-dive", "attention-hierarchy",
     "brand-signature-motion", "recovery-surfaces", "composer-route-points",
-    "composer-playback-preview", "composer-mobile-ia", "mobile-contract", "mobile-classic-views", "globe-focus-chrome",
+    "composer-playback-preview", "composer-mobile-ia", "mobile-contract", "story-presentation-navigation", "mobile-classic-views", "globe-focus-chrome",
     "route-point-context", "globe-render-budget", "recorded-track-lod", "guest-share", "home-base-suggestion",
     "home-base-context", "owner-share", "cover-reveal", "cover-reveal-opening", "entry-boundaries",
     "story-media-handoff", "playback-manual-camera", "media-motion-lab", "route-candidates",
@@ -120,8 +120,8 @@ test("workflow keeps all 39 logical browser suites across at most eight shards",
     for (const suite of match[1].split("|").filter(Boolean)) suites.add(suite);
   }
   assert.deepEqual(suites, expectedSuites);
-  assert.equal((matrixText.match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 41);
-  assert.equal((matrixText.match(/^\s+[a-z0-9][a-z0-9-]*::.+$/gm) ?? []).length, 39);
+  assert.equal((matrixText.match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 42);
+  assert.equal((matrixText.match(/^\s+[a-z0-9][a-z0-9-]*::.+$/gm) ?? []).length, 40);
 });
 
 function jobs({ productFailure = false, wrongLedgerFailure = false } = {}) {
@@ -215,3 +215,4 @@ test("rejects a cancelled real lane with no later success", () => {
   assert.equal(result.green, false);
   assert.equal(result.reason, "source-product-not-green:browser-qa / route-home-share");
 });
+

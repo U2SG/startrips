@@ -2562,8 +2562,9 @@ async function verifyFinalAcceptanceMobileFlow() {
     const editStoryJourney = async (touch) => {
       const story = page.locator(".journey-story");
       await pressStoryPlayback(story.getByRole("button", {
-        name: touch ? "管理旅程" : "编辑故事", exact: true,
+        name: touch ? "管理旅程" : "退出媒体呈现", exact: true,
       }), "Story management before editing", touch);
+      await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-editing") === "true");
       await pressStoryPlayback(story.getByRole("button", { name: "编辑旅程", exact: true }),
         "Edit Journey supersedes Story playback preparation", touch);
       const composer = page.locator(".journey-composer");

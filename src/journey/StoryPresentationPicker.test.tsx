@@ -1,9 +1,21 @@
 import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { StoryPresentationPicker } from "./StoryPresentationPicker";
+import * as presentationAccess from "./MediaPresentationProvider";
 import { SharedMediaPresentationProvider } from "./MediaPresentationProvider";
+
+afterEach(() => vi.restoreAllMocks());
+
+function expectIconOnlyAction(html: string, label: string) {
+  expect(html).toContain(`aria-label="${label}"`);
+  expect(html).toContain(`data-tooltip="${label}"`);
+  expect(html).toContain("<svg");
+  expect(html.replace(/<[^>]+>/g, "")).toBe("");
+  expect(html).not.toContain("<select");
+  expect(html).not.toContain("<option");
+}
 
 describe("Story presentation entry", () => {
   it("makes the exact render-loop patch available before Docker installs dependencies", () => {
@@ -15,22 +27,77 @@ describe("Story presentation entry", () => {
     expect(docker.indexOf("COPY patches ./patches")).toBeLessThan(docker.indexOf("RUN pnpm install --frozen-lockfile"));
   });
 
-  it("offers every presentation directly in the standalone owner-compatible entry", () => {
-    const html = renderToStaticMarkup(createElement(StoryPresentationPicker));
-    expect(html).toContain('aria-label="切换媒体呈现"');
-    for (const style of ["classic", "note-overlay", "book", "book-3d", "stream"]) expect(html).toContain(`value="${style}"`);
-    expect((html.match(/<option /g) ?? []).length).toBe(5);
+  it("offers an icon-only exit without a preference chooser", () => {
+    const html = renderToStaticMarkup(createElement(StoryPresentationPicker, { onOpenClassic: () => undefined }));
+    expectIconOnlyAction(html, "退出媒体呈现");
   });
+
+  it("offers an icon-only return to the saved presentation, taking precedence over exit", () => {
+    const html = renderToStaticMarkup(createElement(StoryPresentationPicker, {
+      onOpenClassic: () => undefined, onReturnPresentation: () => undefined,
+    }));
+    expectIconOnlyAction(html, "进入媒体呈现");
+    expect(html).not.toContain("退出媒体呈现");
+    expect((html.match(/<button /g) ?? []).length).toBe(1);
+  });
+
+  it("disables the local action while the Story has an unfinished operation", () => {
+    const html = renderToStaticMarkup(createElement(StoryPresentationPicker, {
+      disabled: true, onReturnPresentation: () => undefined,
+    }));
+    expectIconOnlyAction(html, "进入媒体呈现");
+    expect(html).toContain('disabled=""');
+  });
+
   it("does not expand a shared reader's presentation authority", () => {
     const html = renderToStaticMarkup(createElement(SharedMediaPresentationProvider, {
       style: "book", children: createElement(StoryPresentationPicker, { onOpenClassic: () => undefined }),
     }));
-    expect(html).not.toContain("<select");
-    expect(html).toContain("经典视图");
+    expectIconOnlyAction(html, "退出媒体呈现");
+    expect(html).not.toContain("编辑");
+    expect(html).not.toContain("导出");
   });
-  it("omits a shared entry with no recovery action", () => {
+
+  it("keeps shared local re-entry available without account mutation authority", () => {
+    const html = renderToStaticMarkup(createElement(SharedMediaPresentationProvider, {
+      style: "stream", children: createElement(StoryPresentationPicker, { onReturnPresentation: () => undefined }),
+    }));
+    expectIconOnlyAction(html, "进入媒体呈现");
+    expect(html).not.toContain('disabled=""');
+  });
+
+  it("omits an entry with no local navigation action or preference error", () => {
+    expect(renderToStaticMarkup(createElement(StoryPresentationPicker))).toBe("");
     expect(renderToStaticMarkup(createElement(SharedMediaPresentationProvider, {
       style: "classic", children: createElement(StoryPresentationPicker),
     }))).toBe("");
+  });
+
+  it("keeps an account failure retry visible even without a local navigation action", () => {
+    vi.spyOn(presentationAccess, "useMediaPresentationAccess").mockReturnValue({
+      style: "book", busy: false, error: "无法确认设置已保存，请重试。",
+      select: vi.fn(async () => undefined), retry: vi.fn(), recover: vi.fn(),
+    });
+    const html = renderToStaticMarkup(createElement(StoryPresentationPicker));
+    expect(html).toContain('role="status"');
+    expect(html).toContain('class="story-presentation-picker__error"');
+    expect(html).toContain("无法确认设置已保存，请重试。");
+    expect(html).toContain("重试");
+    expect(html).not.toContain("<select");
+    expect(html).not.toContain("退出媒体呈现");
+    expect(html).not.toContain("进入媒体呈现");
+  });
+
+  it("keeps a read failure retry disabled together with guarded navigation", () => {
+    vi.spyOn(presentationAccess, "useMediaPresentationAccess").mockReturnValue({
+      style: "classic", busy: false, error: "无法读取媒体呈现设置，请重试。",
+      select: null, retry: vi.fn(), recover: vi.fn(),
+    });
+    const html = renderToStaticMarkup(createElement(StoryPresentationPicker, {
+      disabled: true, onOpenClassic: () => undefined,
+    }));
+    expect(html).toContain("无法读取媒体呈现设置，请重试。");
+    expect((html.match(/disabled=""/g) ?? []).length).toBe(2);
+    expect(html).not.toContain("<select");
   });
 });

@@ -1,35 +1,29 @@
+import type { Ref } from "react";
+import { IconArrowBackUp, IconPlayerPlay } from "@tabler/icons-react";
+import { IconActionButton } from "../components/IconActionButton";
 import { useMediaPresentationAccess } from "./MediaPresentationProvider";
-import { MEDIA_PRESENTATION_STYLES, mediaPresentationLabel, useMediaPresentationStyle, writeMediaPresentationStyle } from "./mediaPresentation";
-import type { MediaPresentationStyle } from "./mediaPresentationStyle";
 import "../styles/story-presentation-picker.css";
 
-/** One direct chooser on every reader, using the same confirmed preference as Account. */
-export function StoryPresentationPicker({ disabled = false, onOpenClassic }: {
+/** Session navigation is independent of Account's saved media presentation. */
+export function StoryPresentationPicker({ disabled = false, onOpenClassic, onReturnPresentation, buttonRef }: {
   disabled?: boolean;
-  /** Read-only shared readers keep an explicit local recovery, never an account write. */
+  /** Shared readers use the same exit while their existing capabilities stay read-only. */
   onOpenClassic?: () => void;
+  onReturnPresentation?: () => void;
+  buttonRef?: Ref<HTMLButtonElement>;
 }) {
   const access = useMediaPresentationAccess();
-  const style = useMediaPresentationStyle();
-  const choose = (next: MediaPresentationStyle) => {
-    if (access?.select) void access.select(next);
-    else if (!access) {
-      writeMediaPresentationStyle(next);
-      if (next === "classic") onOpenClassic?.();
-    }
-  };
-  if (access && !access.select && !access.busy && !access.error) {
-    return onOpenClassic ? <button type="button" className="story-presentation-picker__fallback"
-      onClick={onOpenClassic}>经典视图</button> : null;
-  }
+  const navigate = onReturnPresentation ?? onOpenClassic;
+  if (!navigate && !access?.error) return null;
   return <div className="story-presentation-picker">
-    <select aria-label="切换媒体呈现" value={style}
-      disabled={disabled || Boolean(access?.busy) || Boolean(access && !access.select)}
-      onChange={(event) => choose(event.currentTarget.value as MediaPresentationStyle)}>
-      {MEDIA_PRESENTATION_STYLES.map((value) => <option key={value} value={value}>
-        {value === "classic" ? "经典视图" : mediaPresentationLabel(value)}
-      </option>)}
-    </select>
+    {navigate ? <IconActionButton type="button" className="story-presentation-picker__navigation"
+      buttonRef={buttonRef}
+      label={onReturnPresentation ? "进入媒体呈现" : "退出媒体呈现"}
+      disabled={disabled || Boolean(access?.busy)} onClick={navigate}>
+      {onReturnPresentation
+        ? <IconPlayerPlay size={19} stroke={1.5} aria-hidden="true" />
+        : <IconArrowBackUp size={19} stroke={1.5} aria-hidden="true" />}
+    </IconActionButton> : null}
     {access?.error ? <span role="status" className="story-presentation-picker__error">
       {access.error}<button type="button" disabled={disabled || access.busy}
         onClick={() => access.retry()}>重试</button>
