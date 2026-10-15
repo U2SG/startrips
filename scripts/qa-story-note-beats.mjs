@@ -1,3 +1,4 @@
+import { assertOrganizerScrollEdges } from "./qa-organizer-scroll-edges.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { assertStoryScrollEdges, assertStoryScrollResize } from "./qa-story-scroll-edges.mjs";
@@ -300,7 +301,16 @@ async function toggleLongNote(session) {
   };
 }
 
+async function assertExpandablePreview(page, text, scenario) {
+  const preview = await storyState(page);
+  assert.equal(preview.blockText, text, `${scenario}: exact fixture text`);
+  assert.equal(preview.blockClamped, true, `${scenario}: the preview must actually be clamped before asking to expand`);
+  assert.equal(preview.blockOverflow, true, `${scenario}: hidden preview content is required for an expand entry`);
+  assert.equal(preview.expandVisible, true, `${scenario}: a clipped preview must expose its existing expand entry`);
+}
+
 try {
+  for (const result of await assertOrganizerScrollEdges(browser, origin)) record(result);
   // ---------------------------------------------------------------- Deterministic scroll-edge matrix
   // Native scrollTo exercises exact browser boundaries without faking dimensions
   // or observer flags. Desktop keys and touch gestures are checked as well.
@@ -325,7 +335,7 @@ try {
         const { page } = session;
         await waitForCurrent(page, C1);
         await waitForStableStage(page);
-        assert.equal((await storyState(page)).blockText, fixture.text, `${name}: load the declared fixture`);
+        await assertExpandablePreview(page, fixture.text, name);
         await tapSelector(session, ".story-point-note__expand");
         await page.locator(".story-point-note-sheet").waitFor({ state: "visible", timeout: 5_000 });
         if (kind === "short") {
@@ -361,7 +371,7 @@ try {
       const { page } = session;
       await waitForCurrent(page, C1);
       await waitForStableStage(page);
-      assert.equal((await storyState(page)).blockText, fixture.text, `${name}: load the declared resize fixture`);
+      await assertExpandablePreview(page, fixture.text, name);
       await tapSelector(session, ".story-point-note__expand");
       await page.locator(".story-point-note-sheet").waitFor({ state: "visible", timeout: 5_000 });
       progress.states = await assertStoryScrollResize(page, { text: fixture.text, scenario: name, portrait, landscape });
