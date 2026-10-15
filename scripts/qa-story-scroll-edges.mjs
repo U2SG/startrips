@@ -100,16 +100,20 @@ async function assertForcedNotePixels(page, { text, scenario, overflow }) {
     for (const edge of ["before", "after"]) {
       // Existing inline padding is text-free even while the note is scrolled.
       const top = edge === "before";
-      const y = top ? Math.ceil(box.y) : Math.floor(box.y + box.height) - 3;
+      // Include both raster rows intersected by a fractional 1px border.
+      // ceil(top) skipped the upper row; floor(bottom)-1 skipped the lower.
+      const y = top ? Math.floor(box.y) : Math.floor(box.y + box.height) - 2;
       const image = await page.screenshot({path:`${output}/${scenario}-${phase}-${edge}.png`,
         clip:{x:Math.ceil(box.x)+2,y,width:1,height:3}});
       const {data,info} = await sharp(image).removeAlpha().raw().toBuffer({resolveWithObject:true});
       const color = row => [...data.subarray(row*info.channels,row*info.channels+3)];
-      const ink = color(top ? 0 : 2), base = color(top ? 2 : 0);
-      const difference = ink.reduce((sum,value,index)=>sum+Math.abs(value-base[index]),0);
+      const ink = (top ? [0, 1] : [1, 2]).map(color), base = color(top ? 2 : 0);
+      const difference = Math.max(...ink.map(pixel => pixel.reduce((sum,value,index)=>sum+Math.abs(value-base[index]),0)));
+      // Inactive means BOTH possible border rows are clear. Active still
+      // requires the original minimum contrast; no threshold is relaxed.
       assert.ok(expected[edge] === "true" ? difference >= 20 : difference <= 3,
-        `${scenario}/${phase}/${edge}: visible system-color pixels ${ink} vs padding ${base}, difference=${difference}`);
-      pixels[edge] = {ink,base,difference};
+        `${scenario}/${phase}/${edge}: visible border pixels ${JSON.stringify(ink)} vs padding ${base}, difference=${difference}; rect=${JSON.stringify(box)}`);
+      pixels[edge] = {ink,base,difference,rect:box};
     }
     states.push({...measured,pixels});
   };
@@ -128,6 +132,9 @@ async function assertForcedNotePixels(page, { text, scenario, overflow }) {
       await scrollTo(page, "bottom");
       await check("fits", "forced-fits-after-scroll");
     }
+  } catch (error) {
+    await page.screenshot({path:`${output}/${scenario}-failure-full.png`});
+    throw error;
   } finally { await page.emulateMedia({forcedColors:"none"}); }
   states.push(await expectState(page,text,overflow ? "top" : "fits",`${scenario}/restore-colors`));
   return states;
