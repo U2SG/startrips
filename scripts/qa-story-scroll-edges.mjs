@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import sharp from "sharp";
 
 const SELECTOR = ".story-point-note-sheet__body";
 const EXPECTED = {
@@ -22,6 +24,8 @@ async function readState(page, text) {
       viewport: { width: innerWidth, height: innerHeight },
       rect: { top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height },
       focused: document.activeElement === body,
+      forced: matchMedia("(forced-colors: active)").matches,
+      topWidth: style.borderTopWidth, bottomWidth: style.borderBottomWidth,
       mask: style.maskImage, background: style.backgroundImage,
       beforeInk: style.getPropertyValue("--scroll-edge-before").trim(),
       afterInk: style.getPropertyValue("--scroll-edge-after").trim(),
@@ -30,7 +34,7 @@ async function readState(page, text) {
   }, text);
 }
 
-async function expectState(page, text, state, phase) {
+async function expectState(page, text, state, phase, forced = false) {
   const expected = EXPECTED[state];
   assert.ok(expected, `Unknown scroll expectation: ${state}`);
   try {
@@ -50,10 +54,16 @@ async function expectState(page, text, state, phase) {
     assert.ok(actual.clientHeight > 20 && actual.rect.top < actual.viewport.height && actual.rect.bottom > 0,
       `${phase}: the actual note scroller must be visible and nonempty`);
     assert.equal(actual.mask, "none", `${phase}: cues must not mask the author's text`);
-    assert.notEqual(actual.background, "none", `${phase}: the real scroll-cue stylesheet must be applied`);
-    const clear = (ink) => ink === "transparent" || ink === "rgba(0, 0, 0, 0)";
-    assert.equal(clear(actual.beforeInk), expected.before === "false", `${phase}: top cue paint must follow its state`);
-    assert.equal(clear(actual.afterInk), expected.after === "false", `${phase}: bottom cue paint must follow its state`);
+    assert.equal(actual.forced, forced, `${phase}: test the explicitly requested color mode`);
+    if (forced) {
+      assert.equal(actual.topWidth, expected.before === "true" ? "1px" : "0px", `${phase}: inactive top cannot draw`);
+      assert.equal(actual.bottomWidth, expected.after === "true" ? "1px" : "0px", `${phase}: inactive bottom cannot draw`);
+    } else {
+      assert.notEqual(actual.background, "none", `${phase}: the real scroll-cue stylesheet must be applied`);
+      const clear = (ink) => ink === "transparent" || ink === "rgba(0, 0, 0, 0)";
+      assert.equal(clear(actual.beforeInk), expected.before === "false", `${phase}: top cue paint must follow its state`);
+      assert.equal(clear(actual.afterInk), expected.after === "false", `${phase}: bottom cue paint must follow its state`);
+    }
     return { phase, state, ...actual };
   } catch (error) {
     const actual = await readState(page, text).catch((readError) => ({ readError: String(readError) }));
@@ -72,6 +82,52 @@ async function scrollTo(page, position) {
   }, position);
 }
 
+async function assertForcedNotePixels(page, { text, scenario, overflow }) {
+  const output = "artifacts/story-media/note-scroll-edges";
+  await mkdir(output, { recursive: true });
+  const states = [];
+  const check = async (state, phase) => {
+    const measured = await expectState(page, text, state, `${scenario}/${phase}`, true);
+    const box = await page.locator(SELECTOR).boundingBox();
+    assert.ok(box && box.width > 8 && box.height > 8);
+    const expected = EXPECTED[state];
+    const pixels = {};
+    for (const edge of ["before", "after"]) {
+      // Existing inline padding is text-free even while the note is scrolled.
+      const top = edge === "before";
+      const y = top ? Math.ceil(box.y) : Math.floor(box.y + box.height) - 3;
+      const image = await page.screenshot({path:`${output}/${scenario}-${phase}-${edge}.png`,
+        clip:{x:Math.ceil(box.x)+2,y,width:1,height:3}});
+      const {data,info} = await sharp(image).removeAlpha().raw().toBuffer({resolveWithObject:true});
+      const color = row => [...data.subarray(row*info.channels,row*info.channels+3)];
+      const ink = color(top ? 0 : 2), base = color(top ? 2 : 0);
+      const difference = ink.reduce((sum,value,index)=>sum+Math.abs(value-base[index]),0);
+      assert.ok(expected[edge] === "true" ? difference >= 20 : difference <= 3,
+        `${scenario}/${phase}/${edge}: visible system-color pixels ${ink} vs padding ${base}, difference=${difference}`);
+      pixels[edge] = {ink,base,difference};
+    }
+    states.push({...measured,pixels});
+  };
+  await page.locator(".story-point-note-sheet__close").focus();
+  await page.emulateMedia({forcedColors:"active"});
+  try {
+    await check(overflow ? "top" : "fits", "forced-initial");
+    if (overflow) {
+      await scrollTo(page, "middle");
+      await check("middle", "forced-middle");
+      await scrollTo(page, "bottom");
+      await check("bottom", "forced-bottom");
+      await scrollTo(page, "top");
+      await check("top", "forced-return-top");
+    } else {
+      await scrollTo(page, "bottom");
+      await check("fits", "forced-fits-after-scroll");
+    }
+  } finally { await page.emulateMedia({forcedColors:"none"}); }
+  states.push(await expectState(page,text,overflow ? "top" : "fits",`${scenario}/restore-colors`));
+  return states;
+}
+
 /** A fixed long note MUST overflow; a separate short note MUST NOT overflow. */
 export async function assertStoryScrollEdges(page, { text, scenario, overflow, pointer }) {
   assert.equal(typeof overflow, "boolean", "Every fixture declares its expected overflow before it runs");
@@ -85,6 +141,7 @@ export async function assertStoryScrollEdges(page, { text, scenario, overflow, p
     states.push(await expectState(page, text, "fits", `${scenario}/unscrollable-bottom`));
     await scrollTo(page, "top");
     states.push(await expectState(page, text, "fits", `${scenario}/unscrollable-top`));
+    states.push(...await assertForcedNotePixels(page, {text,scenario,overflow}));
     return states;
   }
   assert.ok(first.maximum >= 80, `${scenario}: the long fixture must have meaningful overflow, not silently skip scrolling`);
@@ -102,6 +159,14 @@ export async function assertStoryScrollEdges(page, { text, scenario, overflow, p
     assert.ok(box && box.height > 80, `${scenario}: touch scroll needs a usable visible aperture`);
     const x = box.x + box.width / 2;
     const y = Math.min(box.y + box.height * .7, page.viewportSize().height - 16);
+    await page.locator(SELECTOR).evaluate(body => {
+      window.__noteScrollEnded = false;
+      window.__noteScrollEndTarget = body;
+      window.__noteScrollListener = () => { window.__noteScrollEnded = false; };
+      window.__noteScrollEndListener = () => { window.__noteScrollEnded = true; };
+      body.addEventListener("scroll", window.__noteScrollListener, {passive:true});
+      body.addEventListener("scrollend", window.__noteScrollEndListener);
+    });
     await pointer.down(x, y);
     try {
       for (let step = 1; step <= 8; step += 1) {
@@ -110,6 +175,20 @@ export async function assertStoryScrollEdges(page, { text, scenario, overflow, p
       }
       states.push(await expectState(page, text, "middle", `${scenario}/touch-moves-real-content`));
     } finally { await pointer.up(); }
+    try {
+      // TouchEnd dispatch can precede the compositor's last scroll delta.
+      // Do not issue a conflicting scrollTo until this real gesture has ended.
+      await page.waitForFunction(() => window.__noteScrollEnded === true, null, {polling:"raf",timeout:3_000});
+    } finally {
+      await page.evaluate(() => {
+        window.__noteScrollEndTarget?.removeEventListener("scrollend", window.__noteScrollEndListener);
+        window.__noteScrollEndTarget?.removeEventListener("scroll", window.__noteScrollListener);
+        delete window.__noteScrollListener;
+        delete window.__noteScrollEndTarget;
+        delete window.__noteScrollEndListener;
+        delete window.__noteScrollEnded;
+      });
+    }
   } else {
     // Retain desktop keyboard coverage alongside exact native boundary checks.
     await page.locator(SELECTOR).focus();
@@ -121,6 +200,7 @@ export async function assertStoryScrollEdges(page, { text, scenario, overflow, p
   }
   await scrollTo(page, "top");
   states.push(await expectState(page, text, "top", `${scenario}/input-cleanup`));
+  states.push(...await assertForcedNotePixels(page, {text,scenario,overflow}));
   assert.ok(states.every((state) => state.media === first.media), `${scenario}: scrolling never navigates the media`);
   return states;
 }

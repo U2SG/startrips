@@ -43,13 +43,19 @@
   background-repeat: no-repeat;
 }
 @media (forced-colors: active) {
-  .story-media-organizer[data-scroll-before][data-scroll-after] { border-top-color: transparent; }
+  .story-media-organizer[data-scroll-before][data-scroll-after] {
+    --scroll-edge-before-width: 0px;
+    padding-bottom: calc(16px - var(--scroll-edge-after-width));
+  }
   .story-media-organizer[data-scroll-before] > .story-media-organizer__destinations {
     background-image: none;
-    border-top: 2px solid transparent;
+    border-top: 0 solid CanvasText;
+    padding-top: 4px;
   }
   .story-media-organizer[data-scroll-before="true"] > .story-media-organizer__destinations {
-    border-top-color: CanvasText;
+    border-top-width: 2px;
+    /* Exchange padding for ink so targets and overflow geometry do not move. */
+    padding-top: 2px;
   }
 }
 .story-media-organizer__destination {

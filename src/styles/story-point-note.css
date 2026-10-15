@@ -130,6 +130,11 @@
 .story-point-note-sheet__body:focus-visible { outline: 2px solid var(--control-focus); outline-offset: -2px; }
 @media (forced-colors: active) {
   .story-point-note-sheet__body:focus-visible { outline-color: Highlight; }
+  .story-point-note-sheet__body[data-scroll-before][data-scroll-after] {
+    /* Keep content geometry invariant when a system-colored edge appears. */
+    padding-top: calc(var(--story-space-xs) - var(--scroll-edge-before-width));
+    padding-bottom: calc(var(--story-space-xs) - var(--scroll-edge-after-width));
+  }
 }
 
 @keyframes story-point-note-in {
