@@ -37,8 +37,11 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
   // This MUST enter the real desktop Story: its later background shorthand
   // previously erased the sticky gradient although isolated component QA passed.
   cases.push({viewport:{width:1280,height:800},count:48,host:"story"});
-  for (const {viewport,count,host} of cases) {
-      const name = `organizer-scroll-${host}-${count}-${viewport.width}x${viewport.height}`;
+  for (const width of [320,360,390,430]) {
+    cases.push({viewport:{width,height:600},count:9,host:"component",nearThreshold:true});
+  }
+  for (const {viewport,count,host,nearThreshold=false} of cases) {
+      const name = `organizer-scroll-${host}-${count}-${viewport.width}x${viewport.height}${nearThreshold ? "-near-threshold" : ""}`;
       const page = await browser.newPage({viewport,deviceScaleFactor:1,reducedMotion:"reduce",
         isMobile:viewport.width!==1280,hasTouch:viewport.width!==1280});
       const errors = [];
@@ -56,6 +59,21 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
         }
         const root = page.locator(ROOT), sticky = page.locator(STICKY);
         await root.waitFor({state:"visible",timeout:3_000});
+        if (nearThreshold) {
+          await page.evaluate(() => document.fonts.ready);
+          await page.waitForFunction(selector=>document.querySelector(selector)?.dataset.scrollAfter==="true",
+            ROOT,{polling:"raf",timeout:3_000});
+          const overflow=await root.evaluate(node=>node.scrollHeight-node.clientHeight);
+          assert.ok(overflow>=16,`${name}: the nine-item input must overflow before resizing`);
+          // Set a six-pixel range using only the real viewport. The expected
+          // range stays fixed; do not search for a geometry that passes.
+          await page.setViewportSize({width:viewport.width,height:viewport.height+overflow-6});
+          await page.waitForFunction(selector=>{
+            const node=document.querySelector(selector);
+            return node && node.scrollHeight-node.clientHeight===6;
+          },ROOT,{polling:"raf",timeout:3_000});
+        }
+        let expectedRange = nearThreshold ? 6 : null;
         const check = async (before, after, phase, forced = false) => {
           await page.waitForFunction(({selector,sticky,before,after,forced})=>{
             const node=document.querySelector(selector), header=document.querySelector(sticky);
@@ -67,6 +85,8 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
           },{selector:ROOT,sticky:STICKY,before,after,forced},{polling:"raf",timeout:3_000});
           const geometry = await root.evaluate(node=>({top:node.getBoundingClientRect().top+node.clientTop,
             maximum:node.scrollHeight-node.clientHeight,scrollTop:node.scrollTop}));
+          if (expectedRange!==null) assert.equal(geometry.maximum,expectedRange,
+            `${name}/${phase}: painting a cue must not change the scroll range`);
           const paint = await sticky.evaluate(node=>{
             const rect=node.getBoundingClientRect(),style=getComputedStyle(node);
             const x=Math.ceil(rect.left+rect.width/2),y=Math.ceil(rect.top);
@@ -77,7 +97,9 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
               hit:hit===node || node.contains(hit)};
           });
           assert.equal(paint.position,"sticky",`${name}/${phase}: test the real sticky destinations`);
-          if (before) assert.ok(Math.abs(paint.top-geometry.top)<=1,`${name}/${phase}: the header must cover the root's top edge`);
+          // Six pixels intentionally stays before sticky pinning; the existing
+          // long cases still MUST pin and exercise the original occlusion P2.
+          if (before && !nearThreshold) assert.ok(Math.abs(paint.top-geometry.top)<=1,`${name}/${phase}: the header must cover the root's top edge`);
           assert.equal(paint.hit,true,`${name}/${phase}: another layer covers the cue`);
           const path=`${output}/${name}-${phase}.png`;
           assert.equal(paint.forced,forced,`${name}/${phase}: verify the requested color mode`);
@@ -97,8 +119,29 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
           return {phase,before,after,geometry,paint,pixel,difference};
         };
         const states=[await check(false,count>0,"initial")];
-        assert.ok(count>0 ? states[0].geometry.maximum>=128 : states[0].geometry.maximum<=1,
+        if (nearThreshold) assert.equal(states[0].geometry.maximum,6,`${name}: exactly six pixels must overflow`);
+        else assert.ok(count>0 ? states[0].geometry.maximum>=128 : states[0].geometry.maximum<=1,
           `${name}: fixture must ${count>0 ? "overflow" : "fit"}, not skip its checks`);
+        expectedRange=states[0].geometry.maximum;
+        const stableBoundary = async (before,after,phase) => {
+          const samples=await root.evaluate(async node=>{
+            const values=[];
+            for(let i=0;i<8;i++) {
+              await new Promise(requestAnimationFrame);
+              values.push({before:node.dataset.scrollBefore,after:node.dataset.scrollAfter,
+                maximum:node.scrollHeight-node.clientHeight,top:node.scrollTop});
+            }
+            return values;
+          });
+          for (const sample of samples) {
+            assert.equal(sample.maximum,expectedRange,`${name}/${phase}: border feedback changed the scroll range`);
+            assert.equal(sample.before,String(before),`${name}/${phase}: top cue oscillated`);
+            assert.equal(sample.after,String(after),`${name}/${phase}: bottom cue oscillated`);
+            if (!after) assert.ok(sample.maximum-sample.top<=1,`${name}/${phase}: lost the actual bottom`);
+            if (!before) assert.ok(sample.top<=1,`${name}/${phase}: lost the actual top`);
+          }
+          states.push({phase,samples});
+        };
         if (count>0) {
           await root.evaluate(node=>node.scrollTo({top:(node.scrollHeight-node.clientHeight)/2,behavior:"instant"}));
           states.push(await check(true,true,"middle-sticky"));
@@ -110,6 +153,12 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
           states.push(await check(false,true,"forced-top-invisible",true));
           await root.evaluate(node=>node.scrollTo({top:(node.scrollHeight-node.clientHeight)/2,behavior:"instant"}));
           states.push(await check(true,true,"forced-middle-visible",true));
+          await root.evaluate(node=>node.scrollTo({top:node.scrollHeight,behavior:"instant"}));
+          states.push(await check(true,false,"forced-middle-to-bottom",true));
+          await stableBoundary(true,false,"forced-bottom-stays-settled");
+          await root.evaluate(node=>node.scrollTo({top:0,behavior:"instant"}));
+          states.push(await check(false,true,"forced-back-to-top",true));
+          await stableBoundary(false,true,"forced-top-stays-settled");
           await root.evaluate(node=>node.scrollTo({top:0,behavior:"instant"}));
           await page.emulateMedia({forcedColors:"none"});
           states.push(await check(false,true,"return-top"));
