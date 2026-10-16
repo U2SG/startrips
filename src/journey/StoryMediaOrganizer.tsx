@@ -1,3 +1,4 @@
+import { useScrollEdges } from "../components/useScrollEdges";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -159,6 +160,7 @@ function DestinationCard({ destination, props, moveCount, canDrop, busy, registe
 
 export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
   const rootRef = useRef<HTMLElement | null>(null);
+  useScrollEdges(rootRef);
   const latestMediaRef = useRef(props.allMedia);
   latestMediaRef.current = props.allMedia;
   const tileNodes = useRef(new Map<string, HTMLButtonElement>());

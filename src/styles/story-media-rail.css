@@ -1,7 +1,8 @@
 .story-media-rail {
-  margin-block: 20px 24px;
-  padding-block: 16px;
-  border-block: 1px solid var(--startrips-line);
+  margin-block: var(--story-space-lg) var(--story-space-xl);
+  padding-block: var(--story-space-lg);
+  border: 0;
+  border-top: 1px solid var(--startrips-line);
 }
 .story-media-rail__heading {
   display: flex;
@@ -31,7 +32,7 @@
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--startrips-line);
-  border-radius: 8px;
+  border-radius: var(--radius-field);
   background: var(--startrips-space);
   color: var(--startrips-starlight);
   cursor: pointer;

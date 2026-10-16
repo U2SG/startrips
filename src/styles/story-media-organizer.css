@@ -31,6 +31,35 @@
   padding: 4px 2px 8px;
   background: #101b17;
 }
+/* The top cue belongs on the opaque sticky surface, not underneath it.
+   It occupies existing top padding and cannot obscure controls or intercept input. */
+.story-media-organizer[data-scroll-before][data-scroll-after] {
+  background-size: 0 0, 100% 2px;
+}
+.story-media-organizer[data-scroll-before] > .story-media-organizer__destinations {
+  background-image: linear-gradient(to right, transparent, var(--scroll-edge-before) 20%, var(--scroll-edge-before) 80%, transparent);
+  background-size: 100% 2px;
+  background-position: center top;
+  background-repeat: no-repeat;
+}
+@media (forced-colors: active) {
+  .story-media-organizer[data-scroll-before][data-scroll-after] {
+    border-top-width: 0;
+  }
+  .story-media-organizer[data-scroll-before][data-scroll-after="true"] {
+    padding-bottom: 15px;
+  }
+  .story-media-organizer[data-scroll-before] > .story-media-organizer__destinations {
+    background-image: none;
+    border-top: 0 solid CanvasText;
+    padding-top: 4px;
+  }
+  .story-media-organizer[data-scroll-before="true"] > .story-media-organizer__destinations {
+    border-top-width: 2px;
+    /* Exchange padding for ink so targets and overflow geometry do not move. */
+    padding-top: 2px;
+  }
+}
 .story-media-organizer__destination {
   appearance: none;
   min-width: 0;

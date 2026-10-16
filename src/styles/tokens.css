@@ -32,6 +32,15 @@
      colour already in the Atlas: text, muted, cyan, acid, panel lines and the
      dark glass fills. Primitives read their shape from --control-radius, so a
      surface switches register (for example to sharp) by setting one variable. */
+  --story-space-xs: 4px;
+  --story-space-sm: 8px;
+  --story-space-md: 12px;
+  --story-space-lg: 16px;
+  --story-space-xl: 24px;
+  --story-surface: color-mix(in srgb, var(--archive-bg) 92%, var(--startrips-space));
+  --story-control-fill: color-mix(in srgb, var(--control-ink) 4%, transparent);
+  --story-control-hover: color-mix(in srgb, var(--control-ink) 7%, transparent);
+  --story-control-press: color-mix(in srgb, var(--control-ink) 10%, transparent);
   --control-height: 44px;
   --control-radius: 999px;
   --control-gap: 8px;

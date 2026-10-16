@@ -262,7 +262,7 @@
   border: 0;
   background: transparent;
 }
-.journey-story[data-story-layout="desktop"] .story-media-organizer__destinations { background: rgb(15 22 23 / 92%); }
+.journey-story[data-story-layout="desktop"] .story-media-organizer__destinations { background-color: rgb(15 22 23 / 92%); }
 .story-visually-hidden,
 .journey-story[data-story-layout="desktop"] .story-media-pages > .starlight-media-state strong {
   position: absolute;

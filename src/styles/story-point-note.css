@@ -91,9 +91,9 @@
   max-height: min(100%, 92dvh);
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 20px clamp(16px, 5%, 56px) max(16px, env(safe-area-inset-bottom));
-  background: rgb(3 8 8 / 94%);
+  gap: var(--story-space-md);
+  padding: var(--story-space-xl) clamp(16px, 5%, 56px) max(16px, env(safe-area-inset-bottom));
+  background: var(--story-surface);
   /* The sheet scrolls its own note; a scroll never reaches the page, and a
      drag on it never becomes a stage swipe. */
   overscroll-behavior: contain;
@@ -113,6 +113,8 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+  padding: var(--story-space-xs);
 }
 .story-point-note-sheet__text {
   margin: 0;
@@ -125,6 +127,20 @@
   user-select: text;
 }
 .story-point-note-sheet__close { align-self: flex-end; }
+.story-point-note-sheet__body:focus-visible { outline: 2px solid var(--control-focus); outline-offset: -2px; }
+@media (forced-colors: active) {
+  .story-point-note-sheet__body:focus-visible { outline-color: Highlight; }
+  .story-point-note-sheet__body[data-scroll-before][data-scroll-after] {
+    /* Keep content geometry invariant when a system-colored edge appears. */
+    padding-block: var(--story-space-xs);
+  }
+  .story-point-note-sheet__body[data-scroll-before="true"][data-scroll-after] {
+    padding-top: calc(var(--story-space-xs) - 1px);
+  }
+  .story-point-note-sheet__body[data-scroll-before][data-scroll-after="true"] {
+    padding-bottom: calc(var(--story-space-xs) - 1px);
+  }
+}
 
 @keyframes story-point-note-in {
   from { opacity: 0; }
