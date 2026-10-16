@@ -82,14 +82,39 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
         }
         let expectedRange = nearThreshold ? 6 : null;
         const check = async (before, after, phase, forced = false) => {
-          await page.waitForFunction(({selector,sticky,before,after,forced})=>{
-            const node=document.querySelector(selector), header=document.querySelector(sticky);
-            if (!node || !header || node.dataset.scrollBefore!==String(before) || node.dataset.scrollAfter!==String(after)
-              || matchMedia("(forced-colors: active)").matches!==forced) return false;
-            const style=getComputedStyle(node), ink=getComputedStyle(header);
-            return !forced || (style.borderTopWidth==="0px" && style.borderBottomWidth===(after ? "1px" : "0px")
-              && ink.borderTopWidth===(before ? "2px" : "0px"));
-          },{selector:ROOT,sticky:STICKY,before,after,forced},{polling:"raf",timeout:3_000});
+          await page.evaluate(()=>{
+            window.__organizerStyleReadiness={startedAt:performance.now(),first:null,last:null,samples:0};
+          });
+          try {
+            await page.waitForFunction(({selector,sticky,before,after,forced})=>{
+              const node=document.querySelector(selector), header=document.querySelector(sticky);
+              if (!node || !header) return false;
+              const style=getComputedStyle(node), ink=getComputedStyle(header);
+              const trace=window.__organizerStyleReadiness;
+              const sample={elapsedMs:performance.now()-trace.startedAt,
+                before:node.dataset.scrollBefore,after:node.dataset.scrollAfter,
+                forced:matchMedia("(forced-colors: active)").matches,
+                borderTop:style.borderTopWidth,borderBottom:style.borderBottomWidth,
+                paddingBottom:style.paddingBottom,headerBorderTop:ink.borderTopWidth,
+                headerPaddingTop:ink.paddingTop,headerPaddingBottom:ink.paddingBottom,
+                maximum:node.scrollHeight-node.clientHeight};
+              trace.first ??= sample;
+              trace.last=sample;
+              trace.samples+=1;
+              // matchMedia alone does not prove the whole border/padding pair
+              // is applied. Wait for exact paint state, never a passing range.
+              return sample.before===String(before) && sample.after===String(after)
+                && sample.forced===forced && sample.borderTop==="0px"
+                && sample.borderBottom===(forced && after ? "1px" : "0px")
+                && sample.paddingBottom===(forced && after ? "15px" : "16px")
+                && sample.headerBorderTop===(forced && before ? "2px" : "0px")
+                && sample.headerPaddingTop===(forced && before ? "2px" : "4px")
+                && sample.headerPaddingBottom==="8px";
+            },{selector:ROOT,sticky:STICKY,before,after,forced},{polling:"raf",timeout:3_000});
+          } finally {
+            observations.push({phase:`${phase}-style-readiness`,before,after,forced,
+              trace:await page.evaluate(()=>window.__organizerStyleReadiness)});
+          }
           const geometry = await root.evaluate(node=>{
             const rect=node.getBoundingClientRect(),style=getComputedStyle(node);
             const header=node.querySelector(".story-media-organizer__destinations");
@@ -108,7 +133,7 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
               headerPaddingTop:headerStyle.paddingTop,headerPaddingBottom:headerStyle.paddingBottom,
               headerBorderTop:headerStyle.borderTopWidth,
               gridHeight:grid?.getBoundingClientRect().height,
-              shellHeight:node.closest(".living-atlas").getBoundingClientRect().height,
+              shellHeight:node.closest(".living-atlas")?.getBoundingClientRect().height ?? null,
               viewportHeight:innerHeight};
           });
           observations.push({phase,before,after,forced,geometry});
@@ -189,6 +214,7 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
           await root.evaluate(node=>node.scrollTo({top:0,behavior:"instant"}));
           await page.emulateMedia({forcedColors:"none"});
           states.push(await check(false,true,"return-top"));
+          await stableBoundary(false,true,"normal-top-stays-settled");
         } else {
           await root.evaluate(node=>node.scrollTo({top:node.scrollHeight,behavior:"instant"}));
           states.push(await check(false,false,"fits-after-scroll"));
