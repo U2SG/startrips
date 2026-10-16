@@ -82,6 +82,9 @@
   align-items: center;
   gap: var(--gap);
   will-change: transform;
+  /* The RAF integrator is the sole transform owner, including cancellation.
+     A global reduced-motion duration must not start a second CSS interpolator. */
+  transition-property: none;
 }
 
 .journey-stream__item {

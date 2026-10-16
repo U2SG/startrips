@@ -36,7 +36,7 @@ test("editor navigation and compact layout checks remain mandatory independent s
   assert.equal(scripts["qa:story-presentation-navigation"],
     "node scripts/qa-story-presentation-flow.mjs 320 && node scripts/qa-story-presentation-flow.mjs 390");
   assert.equal(scripts["qa:mobile-classic-views"],
-    "node scripts/qa-mobile-classic-views.mjs 320 && node scripts/qa-mobile-classic-views.mjs 360 && node scripts/qa-mobile-classic-views.mjs 390 && node scripts/qa-mobile-classic-views.mjs 430 && node scripts/qa-mobile-classic-views.mjs 844 390 && node scripts/qa-page-flip-lifecycle.mjs");
+    "node scripts/qa-mobile-classic-views.mjs 320 && node scripts/qa-mobile-classic-views.mjs 360 && node scripts/qa-mobile-classic-views.mjs 390 && node scripts/qa-mobile-classic-views.mjs 430 && node scripts/qa-mobile-classic-views.mjs 844 390 && node scripts/qa-page-flip-lifecycle.mjs && node scripts/qa-stream-input.mjs");
   const browser = job("browser-qa");
   for (const suite of ["story-presentation-navigation", "mobile-classic-views"]) {
     assert.equal((browser.match(new RegExp(`^              ${suite}::pnpm qa:${suite}$`, "gm")) || []).length, 1);
