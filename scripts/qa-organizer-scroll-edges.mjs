@@ -45,6 +45,7 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
       const page = await browser.newPage({viewport,deviceScaleFactor:1,reducedMotion:"reduce",
         isMobile:viewport.width!==1280,hasTouch:viewport.width!==1280});
       const errors = [];
+      const observations = [];
       page.on("pageerror", (error)=>errors.push(error.message));
       try {
         await page.route("**/__organizer_scroll_edges?*", route=>route.fulfill({contentType:"text/html",body:
@@ -63,11 +64,17 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
           await page.evaluate(() => document.fonts.ready);
           await page.waitForFunction(selector=>document.querySelector(selector)?.dataset.scrollAfter==="true",
             ROOT,{polling:"raf",timeout:3_000});
-          const overflow=await root.evaluate(node=>node.scrollHeight-node.clientHeight);
-          assert.ok(overflow>=16,`${name}: the nine-item input must overflow before resizing`);
-          // Set a six-pixel range using only the real viewport. The expected
-          // range stays fixed; do not search for a geometry that passes.
-          await page.setViewportSize({width:viewport.width,height:viewport.height+overflow-6});
+          const sizing=await root.evaluate(node=>({
+            overflow:node.scrollHeight-node.clientHeight,
+            shellHeight:node.closest(".living-atlas").getBoundingClientRect().height,
+            viewportHeight:innerHeight,
+          }));
+          assert.ok(sizing.overflow>=16,`${name}: the nine-item input must overflow before resizing`);
+          // The mobile shell can be taller than the viewport (min-height:680px).
+          // Grow from its actual height, retaining the fixed six-pixel target.
+          const targetHeight=Math.round(sizing.shellHeight)+sizing.overflow-6;
+          observations.push({phase:"near-threshold-sizing",...sizing,targetHeight});
+          await page.setViewportSize({width:viewport.width,height:targetHeight});
           await page.waitForFunction(selector=>{
             const node=document.querySelector(selector);
             return node && node.scrollHeight-node.clientHeight===6;
@@ -83,8 +90,28 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
             return !forced || (style.borderTopWidth==="0px" && style.borderBottomWidth===(after ? "1px" : "0px")
               && ink.borderTopWidth===(before ? "2px" : "0px"));
           },{selector:ROOT,sticky:STICKY,before,after,forced},{polling:"raf",timeout:3_000});
-          const geometry = await root.evaluate(node=>({top:node.getBoundingClientRect().top+node.clientTop,
-            maximum:node.scrollHeight-node.clientHeight,scrollTop:node.scrollTop}));
+          const geometry = await root.evaluate(node=>{
+            const rect=node.getBoundingClientRect(),style=getComputedStyle(node);
+            const header=node.querySelector(".story-media-organizer__destinations");
+            const headerStyle=getComputedStyle(header);
+            const grid=node.querySelector(".story-media-organizer__grid");
+            return {top:rect.top+node.clientTop,maximum:node.scrollHeight-node.clientHeight,
+              scrollTop:node.scrollTop,scrollHeight:node.scrollHeight,clientHeight:node.clientHeight,
+              offsetHeight:node.offsetHeight,height:rect.height,width:rect.width,
+              clientWidth:node.clientWidth,offsetWidth:node.offsetWidth,
+              paddingTop:style.paddingTop,paddingBottom:style.paddingBottom,
+              borderTopWidth:style.borderTopWidth,borderBottomWidth:style.borderBottomWidth,
+              borderTopStyle:style.borderTopStyle,borderBottomStyle:style.borderBottomStyle,
+              overflowY:style.overflowY,font:style.font,fontStatus:document.fonts.status,
+              forced:matchMedia("(forced-colors: active)").matches,
+              headerHeight:header.getBoundingClientRect().height,
+              headerPaddingTop:headerStyle.paddingTop,headerPaddingBottom:headerStyle.paddingBottom,
+              headerBorderTop:headerStyle.borderTopWidth,
+              gridHeight:grid?.getBoundingClientRect().height,
+              shellHeight:node.closest(".living-atlas").getBoundingClientRect().height,
+              viewportHeight:innerHeight};
+          });
+          observations.push({phase,before,after,forced,geometry});
           if (expectedRange!==null) assert.equal(geometry.maximum,expectedRange,
             `${name}/${phase}: painting a cue must not change the scroll range`);
           const paint = await sticky.evaluate(node=>{
@@ -169,9 +196,11 @@ createRoot(document.getElementById("root")).render(<main className="living-atlas
           states.push(await check(false,false,"forced-fits-invisible",true));
         }
         assert.deepEqual(errors,[],`${name}: browser exceptions`);
-        results.push({name,states,failed:false});
+        results.push({name,states,observations,failed:false});
       } catch(error) {
-        results.push({name,error:String(error),stack:error?.stack,failed:true});
+        const failureScreenshot=`${output}/${name}-failure.png`;
+        await page.screenshot({path:failureScreenshot,fullPage:true}).catch(()=>{});
+        results.push({name,error:String(error),stack:error?.stack,observations,failureScreenshot,failed:true});
       } finally {await page.close();}
   }
   await writeFile(`${output}/results.json`,JSON.stringify(results,null,2));
