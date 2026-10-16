@@ -1,5 +1,8 @@
 import { cloneElement, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type ReactNode, type Ref, type VideoHTMLAttributes } from "react";
 import { flushSync } from "react-dom";
+import { usePhotoPanZoom } from "./usePhotoPanZoom";
+import { cancelSharedElementMorph } from "../motion/primitives/sharedElement";
+import "../styles/photo-pan-zoom.css";
 import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackClip, mediaStackOpacity, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
 import { springElementTo, springTransformVelocity, type SpringElementHandle } from "../motion/springElement";
@@ -570,6 +573,20 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     else if ((!props.incomingId && !props.pendingId) || frontIncoming.current?.currentId !== props.currentId) frontIncoming.current = null;
   }, [props.incomingId, props.pendingId, props.currentId, targetReady]);
   const currentReady = ready(props.currentId);
+  const photoZoomEnabled = Boolean(active && props.fullscreen && props.gestureEnabled && currentReady
+    && !presentedVideo && !presentedNote && !props.incomingId && !props.pendingId && !movingId
+    && !props.pageOverlay);
+  const photoZoom = usePhotoPanZoom({
+    root, enabled: photoZoomEnabled, identity: `${props.scopeKey}:${presentedId ?? ""}`,
+    image: () => imageNodes.current[assigned.indexOf(presentedId)],
+    cancelPageGesture: () => {
+      cancelGesture();
+      // A new photo gesture supersedes the old full-screen geometry handoff.
+      cancelSharedElementMorph();
+    },
+    onHolding: (holding) => latest.current.onGestureHoldingChange(holding),
+    onConsumed: () => latest.current.onGestureConsumed(true),
+  });
   // #489 C/V8: a presentable target is painted in front of the page it
   // replaces, so it is already the media the viewer last saw. Shared-element
   // identity has to follow that painted foreground; publishing it from the
@@ -771,7 +788,11 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
   }
 
   useImperativeHandle(stageRef, () => ({
-    cancelGesture,
+    cancelGesture: (commitDecided = false) => {
+      // Return morphs must capture the photo at fit, not a zoomed element box.
+      photoZoom.reset();
+      cancelGesture(commitDecided);
+    },
     heldVideo: () => {
       const held = renewal.current;
       const frame = held ? frames.current.get(held.id)?.canvas : null;
@@ -1188,7 +1209,7 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
     onClick={handleBackdropClick}
     onPointerMove={(event) => {
       updateGesture(event);
-      if (presentedVideo || presentedNote || props.incomingId || !props.onNavigate) {
+      if (event.currentTarget.dataset.photoZoomed === "true" || presentedVideo || presentedNote || props.incomingId || !props.onNavigate) {
         delete event.currentTarget.dataset.clickDirection;
         return;
       }
@@ -1272,7 +1293,8 @@ export const StoryMediaPages = forwardRef<StoryMediaPagesHandle, Props>(function
           alt={presented ? asset?.fileName ?? "" : ""}
           draggable={false} decoding="async"
           role={presented && !note && (canNavigate || props.onImageClick) ? "button" : undefined}
-          tabIndex={presented && !note && pageReady && (canNavigate || props.onImageClick) ? 0 : -1}
+          tabIndex={presented && !note && pageReady && (canNavigate || props.onImageClick || photoZoomEnabled) ? 0 : -1}
+          aria-description={presented && photoZoomEnabled ? "滚轮或双指缩放照片；加号放大，减号缩小，0 还原。" : undefined}
           aria-label={presented && canNavigate
             ? `${asset?.fileName ?? "照片"}。左侧上一张，右侧下一张，方向键切换`
             : presented && props.onImageClick ? `${props.imageActionLabel ?? "沉浸查看"}：${asset?.fileName ?? "照片"}` : undefined}

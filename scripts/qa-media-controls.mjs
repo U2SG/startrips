@@ -1,3 +1,4 @@
+import { assertPhotoZoom } from "./qa-photo-zoom.mjs";
 import { launchQaBrowser, revealStoryChapters, revealStoryViewingOptions, storyViewerReturnLabel } from "./qa-browser.mjs";
 import { apertureSeamId, attributeApertureJumps, expectedApertureSeams, gradeApertureContinuity } from "./qa-aperture-continuity.mjs";
 import { storyPaintReady } from "./qa-story-paint-ready.mjs";
@@ -1471,6 +1472,7 @@ try {
     const fullscreenGestureStage = fullscreen.locator(storyMediaPagesSelector);
     await fullscreen.waitFor({ state: "visible" });
     const fullscreenInitiallyImmersive = await fullscreen.evaluate((root) => root.classList.contains("is-controls-hidden"));
+    await assertPhotoZoom(story.page, true);
     const fullscreenBox = await fullscreen.boundingBox();
     if (!fullscreenBox) throw new Error("mobile fullscreen has no bounds");
     const fullX = fullscreenBox.x + fullscreenBox.width * 0.5;
@@ -1705,6 +1707,7 @@ try {
     await desktopStory.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
     await photoFullscreen.waitFor({ state: "visible" });
     await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
+    await assertPhotoZoom(storyDesktop.page);
     const fullscreenNavigationButtons = await photoFullscreen.locator(".journey-story-fullscreen__nav button")
       .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
     await clickStoryPicture(storyDesktop.page, 1, ".journey-story-fullscreen");

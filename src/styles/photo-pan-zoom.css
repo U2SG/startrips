@@ -1,0 +1,5 @@
+/* Photo gestures add no visible controls or toolbar. */
+.story-media-pages[data-photo-zoomed="true"] :is(.story-media-pages__hit-surface, .story-media-pages__page[data-media-presented="true"] > img) { cursor: grab; }
+.story-media-pages[data-photo-panning="true"] :is(.story-media-pages__hit-surface, .story-media-pages__page[data-media-presented="true"] > img) { cursor: grabbing; }
+/* Direct manipulation, never a CSS transition or a second spring. */
+.story-media-pages[data-photo-zoom-enabled="true"] .story-media-pages__page[data-media-presented="true"] > img { transition: none; transform-origin: center; }
