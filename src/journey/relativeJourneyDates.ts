@@ -17,6 +17,8 @@ export type RelativeJourneyDates = {
   phrase: string;
 };
 
+type DateRange = { startDate: string; endDate: string };
+
 /** The browser's local calendar date; `toISOString` would give UTC's. */
 export function localCalendarToday(now = new Date()): string {
   return isoDate(now.getFullYear(), now.getMonth() + 1, now.getDate());
@@ -68,9 +70,8 @@ function readMonth(token: string) {
 function inYear(
   today: string,
   yearWord: string | undefined,
-  period: (year: number) => { startDate: string; endDate: string } | null,
-  phrase: string,
-): RelativeJourneyDates | null {
+  period: (year: number) => DateRange | null,
+): DateRange | null {
   const { year } = parts(today);
   const target = yearWord === "去年" ? year - 1 : year;
   let range = period(target);
@@ -79,76 +80,126 @@ function inYear(
   return {
     startDate: range.startDate,
     endDate: range.endDate > today ? today : range.endDate,
-    phrase,
   };
 }
 
 const MONTH_TOKEN = "(\\d{1,2}|十[一二]?|[一二三四五六七八九])";
 
-/**
- * Read the first supported relative phrase in `sentence`, resolved against
- * `today` (YYYY-MM-DD, the member's local date). Returns null when the
- * sentence carries a four-digit year — the source then states its own date —
- * or when no supported phrase is present.
- */
-export function relativeJourneyDates(sentence: string, today: string): RelativeJourneyDates | null {
-  const text = sentence.replace(/\s+/g, "");
-  if (/\d{4}(?:年|[-/.]\d)/.test(text)) return null;
-  const { year, month } = parts(today);
+/** One supported phrase: where it may appear and how it resolves. */
+type PhraseReader = {
+  pattern: RegExp;
+  /** False when the words match but name no real period (13月). */
+  valid?: (match: RegExpMatchArray) => boolean;
+  resolve: (match: RegExpMatchArray, today: string) => DateRange | null;
+};
 
-  const day = text.match(/前天|昨天/);
-  if (day) {
-    const date = addDays(today, day[0] === "前天" ? -2 : -1);
-    return { startDate: date, endDate: date, phrase: day[0] };
-  }
-
-  const weekend = text.match(/上个?周末/);
-  if (weekend) {
-    const saturday = addDays(weekStart(today), -2);
-    return { startDate: saturday, endDate: addDays(saturday, 1), phrase: weekend[0] };
-  }
-
-  const lastWeek = text.match(/上个?(?:周|星期|礼拜)(?![一二三四五六日天])/);
-  if (lastWeek) {
-    const monday = addDays(weekStart(today), -7);
-    return { startDate: monday, endDate: addDays(monday, 6), phrase: lastWeek[0] };
-  }
-
-  const thisWeek = text.match(/这周|本周|这个星期/);
-  if (thisWeek) return { startDate: weekStart(today), endDate: today, phrase: thisWeek[0] };
-
-  const lastMonth = text.match(/上个?月/);
-  if (lastMonth) {
-    const startDate = isoDate(year, month - 1, 1);
-    const { year: y, month: m } = parts(startDate);
-    return { startDate, endDate: lastDayOfMonth(y, m), phrase: lastMonth[0] };
-  }
-
-  const thisMonth = text.match(/这个月|本月/);
-  if (thisMonth) return { startDate: isoDate(year, month, 1), endDate: today, phrase: thisMonth[0] };
-
-  const holiday = text.match(/(去年|今年)?国庆/);
-  if (holiday) {
-    return inYear(today, holiday[1], (y) => ({
+const READERS: readonly PhraseReader[] = [
+  {
+    pattern: /前天|昨天/g,
+    resolve: (match, today) => {
+      const date = addDays(today, match[0] === "前天" ? -2 : -1);
+      return { startDate: date, endDate: date };
+    },
+  },
+  {
+    pattern: /上个?周末/g,
+    resolve: (_match, today) => {
+      const saturday = addDays(weekStart(today), -2);
+      return { startDate: saturday, endDate: addDays(saturday, 1) };
+    },
+  },
+  {
+    pattern: /上个?(?:周|星期|礼拜)(?![一二三四五六日天])/g,
+    resolve: (_match, today) => {
+      const monday = addDays(weekStart(today), -7);
+      return { startDate: monday, endDate: addDays(monday, 6) };
+    },
+  },
+  {
+    pattern: /这周|本周|这个星期/g,
+    resolve: (_match, today) => ({ startDate: weekStart(today), endDate: today }),
+  },
+  {
+    pattern: /上个?月/g,
+    resolve: (_match, today) => {
+      const { year, month } = parts(today);
+      const startDate = isoDate(year, month - 1, 1);
+      const { year: y, month: m } = parts(startDate);
+      return { startDate, endDate: lastDayOfMonth(y, m) };
+    },
+  },
+  {
+    pattern: /这个月|本月/g,
+    resolve: (_match, today) => {
+      const { year, month } = parts(today);
+      return { startDate: isoDate(year, month, 1), endDate: today };
+    },
+  },
+  {
+    pattern: /(去年|今年)?国庆/g,
+    resolve: (match, today) => inYear(today, match[1], (y) => ({
       startDate: isoDate(y, 10, 1),
       endDate: isoDate(y, 10, 7),
-    }), holiday[0]);
-  }
+    })),
+  },
+  {
+    pattern: new RegExp(`(去年|今年)?(?<!\\d年|\\d)${MONTH_TOKEN}月(?:(\\d{1,2})[日号])?`, "g"),
+    valid: (match) => readMonth(match[2]) !== null,
+    resolve: (match, today) => {
+      const namedMonth = readMonth(match[2]) as number;
+      const date = match[3] ? Number(match[3]) : null;
+      return inYear(today, match[1], (y) => {
+        if (date === null) return { startDate: isoDate(y, namedMonth, 1), endDate: lastDayOfMonth(y, namedMonth) };
+        const single = isoDate(y, namedMonth, date);
+        // 2月30日 is not a day; never roll it into March.
+        return parts(single).month === namedMonth ? { startDate: single, endDate: single } : null;
+      });
+    },
+  },
+];
 
-  const named = text.match(new RegExp(`(去年|今年)?(?<!\\d年|\\d)${MONTH_TOKEN}月(?:(\\d{1,2})[日号])?`));
-  if (named) {
-    const namedMonth = readMonth(named[2]);
-    if (namedMonth === null) return null;
-    const date = named[3] ? Number(named[3]) : null;
-    return inYear(today, named[1], (y) => {
-      if (date === null) return { startDate: isoDate(y, namedMonth, 1), endDate: lastDayOfMonth(y, namedMonth) };
-      const single = isoDate(y, namedMonth, date);
-      // 2月30日 is not a day; never roll it into March.
-      return parts(single).month === namedMonth ? { startDate: single, endDate: single } : null;
-    }, named[0]);
-  }
+/** Several time phrases in one sentence: none of them is applied. */
+export type AmbiguousJourneyDates = {
+  /** Each distinct phrase once, in the order the sentence says them. */
+  ambiguousPhrases: string[];
+};
 
-  return null;
+export type RelativeJourneyDatesReading = RelativeJourneyDates | AmbiguousJourneyDates;
+
+/**
+ * Every supported phrase in `text`, in source order. A phrase inside a longer
+ * one (上周 in 上周末, 国庆 in 去年国庆) is the same expression, not another.
+ */
+function supportedPhrases(text: string) {
+  const found = READERS.flatMap((reader) => [...text.matchAll(reader.pattern)]
+    .filter((match) => !reader.valid || reader.valid(match))
+    .map((match) => ({ reader, match, start: match.index ?? 0, end: (match.index ?? 0) + match[0].length })));
+  found.sort((a, b) => a.start - b.start || b.end - a.end);
+  const kept: typeof found = [];
+  for (const phrase of found) {
+    if (kept.length === 0 || phrase.start >= kept[kept.length - 1].end) kept.push(phrase);
+  }
+  return kept;
+}
+
+/**
+ * Read the supported relative phrase in `sentence`, resolved against `today`
+ * (YYYY-MM-DD, the member's local date). Returns null when the sentence
+ * carries a four-digit year — the source then states its own date — or when
+ * no supported phrase is present. When it names more than one distinct
+ * phrase (上个月 … 昨天) nothing is inferred: which one dates the Journey is
+ * the member's call, so the phrases come back for the review to show.
+ */
+export function relativeJourneyDates(sentence: string, today: string): RelativeJourneyDatesReading | null {
+  const text = sentence.replace(/\s+/g, "");
+  if (/\d{4}(?:年|[-/.]\d)/.test(text)) return null;
+  const phrases = supportedPhrases(text);
+  const distinct = [...new Set(phrases.map(({ match }) => match[0]))];
+  if (distinct.length === 0) return null;
+  if (distinct.length > 1) return { ambiguousPhrases: distinct };
+  const [{ reader, match }] = phrases;
+  const range = reader.resolve(match, today);
+  return range ? { ...range, phrase: match[0] } : null;
 }
 
 /**
@@ -159,7 +210,7 @@ export function inferJourneyDates(
   days: readonly { calendarDate: string | null }[],
   sentence: string,
   today: string,
-): RelativeJourneyDates | null {
+): RelativeJourneyDatesReading | null {
   if (days.some((day) => day.calendarDate)) return null;
   return relativeJourneyDates(sentence, today);
 }

@@ -7,6 +7,7 @@ const TODAY = "2026-10-20";
 
 function range(sentence: string, today = TODAY) {
   const dates = relativeJourneyDates(sentence, today);
+  if (dates && "ambiguousPhrases" in dates) return { ambiguous: dates.ambiguousPhrases };
   return dates ? [dates.startDate, dates.endDate, dates.phrase] : null;
 }
 
@@ -46,6 +47,23 @@ describe("relativeJourneyDates", () => {
     expect(range("从成都到拉萨")).toBeNull();
   });
 
+  it("infers nothing when the sentence names more than one time", () => {
+    expect(range("上个月从成都去稻城，昨天回深圳")).toEqual({ ambiguous: ["上个月", "昨天"] });
+    expect(range("昨天回深圳，上个月从成都去稻城")).toEqual({ ambiguous: ["昨天", "上个月"] });
+    expect(range("国庆去西安，上周末去莫干山，3月去京都")).toEqual({ ambiguous: ["国庆", "上周末", "3月"] });
+    expect(range("前天到杭州，昨天到上海")).toEqual({ ambiguous: ["前天", "昨天"] });
+    // A phrase that cannot resolve is still a second time in the sentence.
+    expect(range("上个月去稻城，今年11月去冰岛")).toEqual({ ambiguous: ["上个月", "今年11月"] });
+  });
+
+  it("counts a phrase inside a longer one, or said twice, as one time", () => {
+    expect(range("上周末去莫干山")).toEqual(["2026-10-17", "2026-10-18", "上周末"]);
+    expect(range("去年国庆去了西安")).toEqual(["2025-10-01", "2025-10-07", "去年国庆"]);
+    expect(range("5月3日在青岛")).toEqual(["2026-05-03", "2026-05-03", "5月3日"]);
+    expect(range("十一月在大理", "2026-11-20")).toEqual(["2026-11-01", "2026-11-20", "十一月"]);
+    expect(range("昨天去成都，昨天又回了重庆")).toEqual(["2026-10-19", "2026-10-19", "昨天"]);
+  });
+
   it("uses the local calendar date, not UTC", () => {
     expect(localCalendarToday(new Date(2026, 9, 20, 23, 30))).toBe("2026-10-20");
     expect(localCalendarToday(new Date(2026, 0, 1, 0, 5))).toBe("2026-01-01");
@@ -65,6 +83,11 @@ describe("inferJourneyDates", () => {
     expect(inferJourneyDates([{ calendarDate: null }], "上个月从成都去稻城", TODAY))
       .toEqual({ startDate: "2026-09-01", endDate: "2026-09-30", phrase: "上个月" });
     expect(inferJourneyDates([], "从成都去稻城", TODAY)).toBeNull();
+  });
+
+  it("passes the phrases on when the sentence names several times", () => {
+    expect(inferJourneyDates([{ calendarDate: null }], "上个月从成都去稻城，昨天回深圳", TODAY))
+      .toEqual({ ambiguousPhrases: ["上个月", "昨天"] });
   });
 });
 

@@ -674,9 +674,13 @@ export function ItineraryImportPanel({
   // Only the draft this sentence produced may borrow its relative dates.
   const fromSentence = Boolean(sentence && draft
     && draft.jobKey === itineraryImportJobKey("text", sentence.text));
-  const sentenceDates = fromSentence && draft && sentence
+  const sentenceReading = fromSentence && draft && sentence
     ? inferJourneyDates(draft.days, sentence.text, localCalendarToday())
     : null;
+  // Several time phrases date nothing: the member fills the dates in.
+  const ambiguousDatePhrases = sentenceReading && "ambiguousPhrases" in sentenceReading
+    ? sentenceReading.ambiguousPhrases : null;
+  const sentenceDates = sentenceReading && !("ambiguousPhrases" in sentenceReading) ? sentenceReading : null;
 
   const apply = useCallback(() => {
     if (!draft) return;
@@ -903,6 +907,11 @@ export function ItineraryImportPanel({
               <p className="journey-itinerary-import__notice">
                 {capabilities?.recognition.configured === false ? "识别服务没有开启" : "这次没有经过识别服务"}
                 ：这里只按句子读出了地点和先后顺序，请逐个确认位置。
+              </p>
+            ) : null}
+            {ambiguousDatePhrases ? (
+              <p className="journey-itinerary-import__notice">
+                句子里有多个时间（{ambiguousDatePhrases.join("、")}），请手动填写日期。
               </p>
             ) : null}
             {sentenceDates ? (
