@@ -358,6 +358,107 @@ async function verifyImportedJourney({ label, width, height, editing }) {
   }
 }
 
+// One sentence in create mode -> read -> review -> apply. The page clock is
+// fixed to Tuesday 2026-10-20 (Asia/Shanghai), so 上个月 is September 2026.
+async function verifySentenceImport({ label, sentence, configured, names }) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true,
+    reducedMotion: "reduce", timezoneId: "Asia/Shanghai" });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.clock.setFixedTime(new Date("2026-10-20T04:00:00Z"));
+  const recognition = { contractVersion: 1, recognizerVersion: "synthetic/1", sourceTitle: "川西小环线",
+    sourceReportedDayCount: 1, sourceReportedPlaceCount: names.length,
+    days: [{ dayNumber: 1, sourceDayTitle: "Day 1", calendarDate: null, partialDate: null, regionContext: "Sichuan" }],
+    entries: names.map((name, index) => ({ sourceEntryId: `sentence-${index}`, dayNumber: 1, orderInDay: index + 1,
+      name, role: "attraction", aliases: [], countryCode: "QA", searchArea: "Sichuan", regionContext: "Sichuan" })),
+  };
+  let recognitionCalls = 0;
+  try {
+    await page.route("**/api/itinerary-import/capabilities", (route) => route.fulfill({ status: 200,
+      contentType: "application/json", body: JSON.stringify({
+        recognition: { configured, recognizerVersion: configured ? "synthetic/1" : null, timeoutMs: 1_000 },
+        linkFetch: { configured: false, driver: null, timeoutMs: 1_000 },
+      }),
+    }));
+    await page.route("**/api/itinerary-import", async (route) => {
+      recognitionCalls += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ recognition,
+        sourceRead: { readVia: "synthetic-text", contentType: "text/plain" } }) });
+    });
+    await page.route("**/api/itinerary-import/review", async (route) => {
+      const { plan } = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        decisions: plan.entries.map((entry) => ({ index: entry.index, candidateId: entry.candidates[0]?.id ?? null,
+          correctedQuery: null, isStop: true, stayAnchorIndex: null, regionContext: entry.searchArea ?? null })),
+      }) });
+    });
+    await page.route("**/api/locations/search?*", (route) => {
+      const name = new URL(route.request().url()).searchParams.get("q");
+      const index = Math.max(names.indexOf(name), 0);
+      return route.fulfill({ status: 200, contentType: "application/json", body: locationSearchPayload({
+        id: `map-${name}`, label: name, context: "Sichuan", latitude: 30 + index / 10, longitude: 100 + index / 10,
+      }) });
+    });
+
+    await page.goto(new URL("/?qaState=journey-composer", baseUrl).toString(), { waitUntil: "domcontentloaded" });
+    await page.locator(".journey-composer").waitFor({ state: "visible" });
+    const readDates = async () => {
+      await page.locator('[data-composer-task-entry="journey-info"]').click();
+      const dates = {
+        startedOn: await page.getByLabel("开始日期", { exact: true }).inputValue(),
+        endedOn: await page.getByLabel(/结束日期/).inputValue(),
+        inferredHint: await page.locator(".journey-story-fields__inferred").count(),
+      };
+      await page.locator("[data-composer-task-back]").click();
+      await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+      return dates;
+    };
+    const before = await readDates();
+    await page.locator(".journey-sentence textarea").fill(sentence);
+    const reviewResponse = page.waitForResponse((response) => response.request().method() === "POST"
+      && new URL(response.url()).pathname === "/api/itinerary-import/review");
+    await page.locator(".journey-sentence").getByRole("button", { name: "整理成路线", exact: true }).click();
+    await page.locator('[data-composer-task="location"]').waitFor({ state: "visible" });
+    await reviewResponse;
+    await page.locator(".journey-itinerary-import__busy").waitFor({ state: "detached" });
+    const review = await page.evaluate(() => ({
+      entries: [...document.querySelectorAll(".journey-itinerary-import__entry-main")]
+        .map((main) => main.querySelector("strong, .journey-checkbox span")?.textContent?.trim() ?? ""),
+      notices: [...document.querySelectorAll(".journey-itinerary-import__notice")].map((notice) => notice.textContent?.trim() ?? ""),
+    }));
+    const hasNotice = (text) => review.notices.some((notice) => notice.includes(text));
+    if (!configured) {
+      record(`composer-sentence:${label}:fallback-reader`, { review, recognitionCalls, pageErrors },
+        recognitionCalls === 0 && hasNotice("识别服务没有开启：这里只按句子读出了地点和先后顺序")
+        && JSON.stringify(review.entries) === JSON.stringify(names) && pageErrors.length === 0);
+      return;
+    }
+    await page.getByRole("button", { name: `添加 ${names.length} 个地点到路线`, exact: true }).click();
+    await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+    const routeLabels = await page.locator(".journey-route-draft > li:not(.is-empty) .journey-route-draft__summary strong")
+      .evaluateAll((labels) => labels.map((node) => node.textContent?.trim() ?? ""));
+    const title = await page.getByLabel("旅程标题", { exact: true }).inputValue();
+    const after = await readDates();
+    const routeInOrder = JSON.stringify(routeLabels) === JSON.stringify(names);
+    if (label === "ambiguous") {
+      record(`composer-sentence:${label}:multiple-times-date-nothing`, { review, before, after, routeLabels, pageErrors },
+        recognitionCalls === 1 && hasNotice("句子里有多个时间（上个月、昨天），请手动填写日期。") && !hasNotice("按今天推算")
+        && routeInOrder && after.startedOn === before.startedOn && after.endedOn === before.endedOn
+        && after.inferredHint === 0 && pageErrors.length === 0);
+      return;
+    }
+    record(`composer-sentence:${label}:read-review-apply`, { review, before, after, routeLabels, title, pageErrors },
+      recognitionCalls === 1 && JSON.stringify(review.entries) === JSON.stringify(names)
+      && hasNotice("「上个月」按今天推算为 2026-09-01 至 2026-09-30") && !hasNotice("句子里有多个时间")
+      && routeInOrder && title === recognition.sourceTitle
+      && after.startedOn === "2026-09-01" && after.endedOn === "2026-09-30" && after.inferredHint === 1
+      && pageErrors.length === 0);
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   await verifyImportedJourney({ label: "desktop", width: 1280, height: 900, editing: true });
   await verifyImportedJourney({ label: "mobile", width: 390, height: 844, editing: false });
@@ -943,6 +1044,19 @@ try {
       && reduced.pageErrors.length === 0);
   } finally {
     await reduced.context.close();
+  }
+  // Last, and each on its own, so a failure here cannot hide the checks above.
+  for (const scenario of [
+    { label: "recognized", sentence: "上个月从成都自驾去稻城，在理塘住一晚", configured: true, names: ["成都", "稻城", "理塘"] },
+    // The deterministic reader must produce these names from the sentence itself.
+    { label: "fallback", sentence: "上个月从成都自驾去稻城，在理塘住一晚", configured: false, names: ["成都", "稻城", "理塘"] },
+    { label: "ambiguous", sentence: "上个月从成都去稻城，昨天回深圳", configured: true, names: ["成都", "稻城", "深圳"] },
+  ]) {
+    try {
+      await verifySentenceImport(scenario);
+    } catch (error) {
+      record(`composer-sentence:${scenario.label}:fatal`, { error: error instanceof Error ? error.message : String(error) }, false);
+    }
   }
 } catch (error) {
   fatalError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
