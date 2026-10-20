@@ -84,6 +84,16 @@ describe("journeySentenceToItineraryText", () => {
     expect(reading.entries.map((entry) => entry.name)).toEqual(["上海", "杭州"]);
   });
 
+  it("drops the particles that follow 去 and keeps a date written with 号", () => {
+    expect(readTextItinerary(journeySentenceToItineraryText("国庆去了西安")).entries.map((entry) => entry.name))
+      .toEqual(["西安"]);
+    expect(readTextItinerary(journeySentenceToItineraryText("昨天去了趟青城山")).entries.map((entry) => entry.name))
+      .toEqual(["青城山"]);
+    const reading = readTextItinerary(journeySentenceToItineraryText("2025年10月1号从上海去杭州"));
+    expect(reading.days[0].calendarDate).toBe("2025-10-01");
+    expect(reading.entries.map((entry) => entry.name)).toEqual(["上海", "杭州"]);
+  });
+
   it("returns a day-structured plan unchanged", () => {
     const plan = "Day 1 · 2026-03-14 · 成都\n景点 宽窄巷子";
     expect(journeySentenceToItineraryText(plan)).toBe(plan);
