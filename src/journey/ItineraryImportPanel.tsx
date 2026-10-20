@@ -49,7 +49,12 @@ import {
   type ItineraryImageSegmentPlan,
   type ItinerarySegmentReading,
 } from "./itineraryImageSegments";
-import { readTextItinerary } from "./itineraryText";
+import {
+  journeySentenceToItineraryText,
+  readTextItinerary,
+  TEXT_ITINERARY_RECOGNIZER_VERSION,
+} from "./itineraryText";
+import { inferJourneyDates, localCalendarToday } from "./relativeJourneyDates";
 import type { LocationSearchResult } from "./types";
 
 /**
@@ -85,7 +90,13 @@ type Props = {
   onApply: (
     imported: readonly ItineraryRoutePointDraft[],
     insertAfterDraftId: string | null,
-    details: { title: string | null; startedOn: string | null; endedOn: string | null },
+    details: {
+      title: string | null;
+      startedOn: string | null;
+      endedOn: string | null;
+      /** Set when the dates were inferred from today, never read from the source. */
+      inferredDatePhrase?: string | null;
+    },
   ) => void;
   onMessage: (message: string) => void;
   mobileLayout?: boolean;
@@ -93,6 +104,11 @@ type Props = {
   onWorkStateChange?: (state: { busy: boolean; ready: boolean }) => void;
   /** The draft this import would join, so a position can be chosen in it. */
   existingPoints?: readonly { draftId: string; label: string }[];
+  /**
+   * A one-sentence Journey description to read as pasted text right away. A
+   * new nonce reads it again; the review and apply steps stay the same.
+   */
+  sentence?: { text: string; nonce: number } | null;
 };
 
 /** One screenshot the member chose, in the order they arranged it. */
@@ -153,6 +169,7 @@ export function ItineraryImportPanel({
   standalone = false,
   onWorkStateChange,
   existingPoints = [],
+  sentence = null,
 }: Props) {
   const [mode, setMode] = useState<"text" | "link" | "image">("link");
   const [expanded, setExpanded] = useState(Boolean(mobileLayout || standalone));
@@ -451,23 +468,36 @@ export function ItineraryImportPanel({
     );
   }, []);
 
-  const readText = useCallback(async () => {
-    if (!text.trim()) return;
+  const readText = useCallback(async (source: string = text) => {
+    if (!source.trim()) return;
     const { generation, signal } = beginReading();
     try {
       const available = capabilities ?? await readItineraryCapabilities(fetch, signal).catch(() => null);
       if (readingGeneration.current !== generation) return;
       if (available) setCapabilities(available);
       const recognition = available?.recognition.configured
-        ? await readItineraryFromText(text, fetch, signal) : readTextItinerary(text);
+        ? await readItineraryFromText(source, fetch, signal)
+        : readTextItinerary(journeySentenceToItineraryText(source));
       if (readingGeneration.current !== generation) return;
-      receive(buildItineraryImportDraft(recognition, itineraryImportJobKey("text", text)));
+      receive(buildItineraryImportDraft(recognition, itineraryImportJobKey("text", source)));
     } catch (cause) {
       if (readingGeneration.current === generation) fail(cause);
     } finally {
       if (readingGeneration.current === generation) setReading(false);
     }
   }, [beginReading, capabilities, fail, receive, text]);
+  const readTextRef = useRef(readText);
+  readTextRef.current = readText;
+  useEffect(() => {
+    if (!sentence) return;
+    setMode("text");
+    setText(sentence.text);
+    setExpanded(true);
+    setCapabilitiesRequested(true);
+    void readTextRef.current(sentence.text);
+    // Only a new request reads again; the text alone is not a request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sentence?.nonce]);
 
   const readLink = useCallback(async () => {
     if (!link.trim()) return;
@@ -641,6 +671,13 @@ export function ItineraryImportPanel({
     ? insertAfterDraftId
     : null;
 
+  // Only the draft this sentence produced may borrow its relative dates.
+  const fromSentence = Boolean(sentence && draft
+    && draft.jobKey === itineraryImportJobKey("text", sentence.text));
+  const sentenceDates = fromSentence && draft && sentence
+    ? inferJourneyDates(draft.days, sentence.text, localCalendarToday())
+    : null;
+
   const apply = useCallback(() => {
     if (!draft) return;
     const imported = itineraryDraftToRoutePoints(draft, selected);
@@ -651,10 +688,11 @@ export function ItineraryImportPanel({
     const dates = draft.days.map((day) => day.calendarDate).filter((date): date is string => Boolean(date));
     onApply(imported, insertAfter, {
       title: draft.sourceTitle,
-      startedOn: dates[0] ?? null,
-      endedOn: dates.at(-1) ?? null,
+      startedOn: dates[0] ?? sentenceDates?.startDate ?? null,
+      endedOn: dates.at(-1) ?? sentenceDates?.endDate ?? null,
+      inferredDatePhrase: dates.length === 0 ? sentenceDates?.phrase ?? null : null,
     });
-  }, [draft, insertAfter, onApply, selected]);
+  }, [draft, insertAfter, onApply, selected, sentenceDates]);
 
   const toggle = useCallback((entryId: string) => {
     manuallyEditing.current.add(entryId);
@@ -861,6 +899,21 @@ export function ItineraryImportPanel({
                 <em className="journey-itinerary-import__flag">{draft.counts.pendingConfirmationCount} 处待处理</em>
               ) : null}
             </div>
+            {fromSentence && draft.recognizerVersion === TEXT_ITINERARY_RECOGNIZER_VERSION ? (
+              <p className="journey-itinerary-import__notice">
+                {capabilities?.recognition.configured === false ? "识别服务没有开启" : "这次没有经过识别服务"}
+                ：这里只按句子读出了地点和先后顺序，请逐个确认位置。
+              </p>
+            ) : null}
+            {sentenceDates ? (
+              <p className="journey-itinerary-import__notice">
+                「{sentenceDates.phrase}」按今天推算为 {sentenceDates.startDate}
+                {sentenceDates.endDate !== sentenceDates.startDate ? ` 至 ${sentenceDates.endDate}` : ""}
+                {existingPoints.length === 0
+                  ? "，加入后会填入旅程日期，可以再修改。"
+                  : "；路线里已有地点，旅程日期不会自动改动。"}
+              </p>
+            ) : null}
             <details className="journey-itinerary-import__source-notes">
               <summary>原始行程说明</summary>
               <p className="journey-itinerary-import__counts">

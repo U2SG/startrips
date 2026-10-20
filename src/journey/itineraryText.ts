@@ -348,3 +348,29 @@ export function readTextItinerary(text: string): ItineraryRecognition {
     entries,
   };
 }
+
+const SENTENCE_DATE = /\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\s*月\s*\d{1,2}\s*日/;
+const SENTENCE_TIME_WORDS = /(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{4}-\d{1,2}-\d{1,2}|(?:去年|今年)?(?:国庆|\d{1,2}\s*月|十[一二]?月|[一二三四五六七八九]月)|上个?周末|上个?(?:周|星期|礼拜)|这周|本周|这个星期|上个?月|这个月|本月|昨天|前天|去年|今年/g;
+const SENTENCE_TRAVEL_WORDS = /自驾|开车|骑行|徒步|一路|(?:坐|搭|乘)(?:火车|高铁|动车|飞机|大巴|船)|(?:住|待|玩|呆)了?[一两二三四五六七八九十\d]*[晚夜天]/g;
+const SENTENCE_SEPARATOR = /\s*(?:→|->|、|，|,|；|;|。|！|!|从|到|去|经过|途经|然后|再|最后|在)\s*/;
+
+/**
+ * Shape a one-sentence Journey description into a plan this reader can read.
+ *
+ * Used only when no recognition service is configured. It keeps the places in
+ * the order the sentence names them and drops the time and travel words
+ * between them — nothing more: no role, no stay, no coordinate is guessed, and
+ * an explicit date stays in the day heading exactly as written. Text that is
+ * already a day-structured plan is returned unchanged.
+ */
+export function journeySentenceToItineraryText(sentence: string): string {
+  if (sentence.split(/\r?\n/).some((line) => DAY_HEADING.test(line.trim()))) return sentence;
+  const date = sentence.match(SENTENCE_DATE)?.[0];
+  const places = sentence
+    .replace(SENTENCE_TIME_WORDS, "，")
+    .replace(SENTENCE_TRAVEL_WORDS, "，")
+    .split(SENTENCE_SEPARATOR)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 2);
+  return `Day 1${date ? ` · ${date}` : ""}\n${places.join(" → ")}`;
+}
