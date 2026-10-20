@@ -468,7 +468,7 @@ export function ItineraryImportPanel({
     );
   }, []);
 
-  const readText = useCallback(async (source: string = text) => {
+  const readText = useCallback(async (source: string = text, fromSentence = false) => {
     if (!source.trim()) return;
     const { generation, signal } = beginReading();
     try {
@@ -477,7 +477,7 @@ export function ItineraryImportPanel({
       if (available) setCapabilities(available);
       const recognition = available?.recognition.configured
         ? await readItineraryFromText(source, fetch, signal)
-        : readTextItinerary(journeySentenceToItineraryText(source));
+        : readTextItinerary(fromSentence ? journeySentenceToItineraryText(source) : source);
       if (readingGeneration.current !== generation) return;
       receive(buildItineraryImportDraft(recognition, itineraryImportJobKey("text", source)));
     } catch (cause) {
@@ -494,7 +494,7 @@ export function ItineraryImportPanel({
     setText(sentence.text);
     setExpanded(true);
     setCapabilitiesRequested(true);
-    void readTextRef.current(sentence.text);
+    void readTextRef.current(sentence.text, true);
     // Only a new request reads again; the text alone is not a request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sentence?.nonce]);
