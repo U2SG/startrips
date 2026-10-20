@@ -182,6 +182,28 @@ function supportedPhrases(text: string) {
   return kept;
 }
 
+const RANGE_JOINER = /^(?:到|至|~|～|-|—|–)$/;
+
+/**
+ * Two days joined as a span (5月3日到5月5日) are one stated range, not two
+ * competing times. Anything else — a third phrase, a month without a day, a
+ * span that would run backwards — stays ambiguous.
+ */
+function explicitDayRange(
+  text: string,
+  phrases: ReturnType<typeof supportedPhrases>,
+  today: string,
+): RelativeJourneyDates | null {
+  if (phrases.length !== 2) return null;
+  const [first, second] = phrases;
+  if (!RANGE_JOINER.test(text.slice(first.end, second.start))) return null;
+  const from = first.reader.resolve(first.match, today);
+  const to = second.reader.resolve(second.match, today);
+  if (!from || !to || from.startDate !== from.endDate || to.startDate !== to.endDate) return null;
+  if (to.startDate < from.startDate) return null;
+  return { startDate: from.startDate, endDate: to.endDate, phrase: text.slice(first.start, second.end) };
+}
+
 /**
  * Read the supported relative phrase in `sentence`, resolved against `today`
  * (YYYY-MM-DD, the member's local date). Returns null when the sentence
@@ -196,7 +218,7 @@ export function relativeJourneyDates(sentence: string, today: string): RelativeJ
   const phrases = supportedPhrases(text);
   const distinct = [...new Set(phrases.map(({ match }) => match[0]))];
   if (distinct.length === 0) return null;
-  if (distinct.length > 1) return { ambiguousPhrases: distinct };
+  if (distinct.length > 1) return explicitDayRange(text, phrases, today) ?? { ambiguousPhrases: distinct };
   const [{ reader, match }] = phrases;
   const range = reader.resolve(match, today);
   return range ? { ...range, phrase: match[0] } : null;

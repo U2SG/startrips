@@ -56,6 +56,16 @@ describe("relativeJourneyDates", () => {
     expect(range("上个月去稻城，今年11月去冰岛")).toEqual({ ambiguous: ["上个月", "今年11月"] });
   });
 
+  it("reads two days joined as a span as one range", () => {
+    expect(range("5月3日到5月5日在青岛")).toEqual(["2026-05-03", "2026-05-05", "5月3日到5月5日"]);
+    expect(range("9月28号至10月2号去西安")).toEqual(["2026-09-28", "2026-10-02", "9月28号至10月2号"]);
+    expect(range("前天到昨天在杭州")).toEqual(["2026-10-18", "2026-10-19", "前天到昨天"]);
+    // A month is not a day, a backwards span is not a span, and words between are not a joiner.
+    expect(range("5月到6月在青岛")).toEqual({ ambiguous: ["5月", "6月"] });
+    expect(range("昨天到前天")).toEqual({ ambiguous: ["昨天", "前天"] });
+    expect(range("5月3日去青岛，5月5日回来")).toEqual({ ambiguous: ["5月3日", "5月5日"] });
+  });
+
   it("counts a phrase inside a longer one, or said twice, as one time", () => {
     expect(range("上周末去莫干山")).toEqual(["2026-10-17", "2026-10-18", "上周末"]);
     expect(range("去年国庆去了西安")).toEqual(["2025-10-01", "2025-10-07", "去年国庆"]);
