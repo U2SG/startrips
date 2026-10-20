@@ -186,9 +186,19 @@ try {
   await page.getByRole("button", { name: "导出短片", exact: true }).click();
   let dialog = page.getByRole("dialog", { name: "导出旅程短片", exact: true });
   await dialog.waitFor({ state: "visible" });
+  const duration = dialog.getByLabel("基础时长（非上限）", { exact: true });
+  const durationHint = "完整导出全部场景和已启用字幕，不按 60 秒截断；实际时长随内容增加。";
+  assert.deepEqual(await duration.locator("option").evaluateAll((options) => options.map((option) => ({ value: option.value, text: option.textContent }))), [
+    { value: "15", text: "15 秒基准" }, { value: "30", text: "30 秒基准" }, { value: "60", text: "60 秒基准" },
+  ]);
+  assert.equal(await duration.inputValue(), "30");
+  assert.equal(await duration.getAttribute("aria-describedby"), "journey-film-duration-hint");
+  assert.equal(await dialog.locator("#journey-film-duration-hint").innerText(), durationHint);
+  assert.equal(await dialog.getByText(durationHint, { exact: true }).isVisible(), true);
+  evidence.checks.push("duration presets are explicitly baselines, with accessible non-cap guidance");
   assert.equal(await dialog.getByLabel("包含途径点感想字幕").isChecked(), false);
   assert.equal(await dialog.getByLabel("包含旅程配乐").isChecked(), true);
-  await dialog.getByLabel("目标时长").selectOption("15");
+  await dialog.getByLabel("基础时长（非上限）", { exact: true }).selectOption("15");
   await dialog.getByLabel("包含途径点感想字幕").check();
   await page.screenshot({ path: `${outputDir}/desktop-settings.png` });
   evidence.screenshots.push(`${outputDir}/desktop-settings.png`);
@@ -309,7 +319,7 @@ try {
   await dialog.getByRole("status").filter({ hasText: "已清理导出临时文件。" }).waitFor();
   assert.deepEqual(await retainedDownloads(), { count: 0, bytes: 0 });
   evidence.checks.push("long film uses bounded private disk staging", "download backing file survives dialog remount until explicit completed-download cleanup");
-  await dialog.getByLabel("目标时长").selectOption("15");
+  await dialog.getByLabel("基础时长（非上限）", { exact: true }).selectOption("15");
   await dialog.getByLabel("包含途径点感想字幕").check();
   await dialog.getByLabel("包含旅程配乐").uncheck();
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -400,6 +410,12 @@ try {
     await phoneButton.click();
     await dialog.waitFor({ state: "visible" });
     const box = await dialog.boundingBox(); assert(box && box.x >= 0 && box.width <= 390);
+    assert.equal(await dialog.getByText(durationHint, { exact: true }).isVisible(), true);
+    assert.equal(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth), true,
+      "phone settings must not overflow horizontally with the baseline label");
+    const durationBox = await duration.boundingBox();
+    assert(durationBox && durationBox.x >= box.x && durationBox.x + durationBox.width <= box.x + box.width,
+      "phone duration selector must fit inside the dialog");
     await page.screenshot({ path: `${outputDir}/phone-settings.png` });
     evidence.screenshots.push(`${outputDir}/phone-settings.png`);
     await dialog.getByRole("button", { name: "关闭短片导出", exact: true }).click();
@@ -440,7 +456,7 @@ try {
   const oversizedNote = "🌍".repeat(4000) + "长"; // 8001 UTF-16 code units, not 8001 code points
   current.routePoints.find((point) => point.id === "p-via").note = oversizedNote;
   await page.getByRole("button", { name: "导出短片", exact: true }).click();
-  await dialog.getByLabel("目标时长").selectOption("15");
+  await dialog.getByLabel("基础时长（非上限）", { exact: true }).selectOption("15");
   assert.equal(await dialog.getByLabel("包含旅程配乐").isChecked(), true);
   await dialog.getByLabel("包含途径点感想字幕").check();
   await dialog.getByRole("button", { name: "生成 MP4", exact: true }).click();

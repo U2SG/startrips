@@ -161,7 +161,7 @@ try {
   await page.keyboard.press("Tab");
   assert.equal(await dialog.evaluate(el=>el.contains(document.activeElement)),true,"export modal lost keyboard ownership");
   assert.equal(requests.length,savesBefore);
-  await dialog.getByLabel("目标时长").selectOption("15");
+  await dialog.getByLabel("基础时长（非上限）", { exact: true }).selectOption("15");
   await dialog.getByLabel("包含途径点感想字幕").check();
   await dialog.getByLabel("使用已生成的艺术封面（没有则使用原图）").uncheck();
   await dialog.getByRole("button",{name:"生成 MP4",exact:true}).click();

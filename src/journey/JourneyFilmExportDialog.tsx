@@ -146,15 +146,16 @@ export function JourneyFilmExportDialog({ journeyId, title, exporter, onClose }:
           <label>画面比例<select value={aspect} onChange={(e) => { setAspect(e.target.value as KeepsakeAspect); clearArtifact(); }}>
             <option value="portrait">竖屏 9:16</option><option value="landscape">横屏 16:9</option>
           </select></label>
-          <label>目标时长<select value={presetSeconds} onChange={(e) => { setPreset(Number(e.target.value) as KeepsakeDurationPreset); clearArtifact(); }}>
-            <option value={15}>15 秒</option><option value={30}>30 秒</option><option value={60}>60 秒</option>
+          <label>基础时长（非上限）<select aria-label="基础时长（非上限）" aria-describedby="journey-film-duration-hint" value={presetSeconds} onChange={(e) => { setPreset(Number(e.target.value) as KeepsakeDurationPreset); clearArtifact(); }}>
+            <option value={15}>15 秒基准</option><option value={30}>30 秒基准</option><option value={60}>60 秒基准</option>
           </select></label>
         </div>
+        <p id="journey-film-duration-hint" className="journey-film-export__hint">完整导出全部场景和已启用字幕，不按 60 秒截断；实际时长随内容增加。</p>
         <label className="journey-film-export__check"><input type="checkbox" checked={includeSoundtrack} onChange={(e) => { setSoundtrack(e.target.checked); clearArtifact(); }} />包含旅程配乐</label>
         <label className="journey-film-export__check"><input type="checkbox" checked={includeNotes} onChange={(e) => { setNotes(e.target.checked); clearArtifact(); }} />包含途径点感想字幕</label>
         <label className="journey-film-export__check"><input type="checkbox" checked={includeCover} onChange={(e) => { setCover(e.target.checked); clearArtifact(); }} />使用已生成的艺术封面（没有则使用原图）</label>
       </fieldset>
-      <p className="journey-film-export__hint">保留全部场景和字幕，生成一部完整视频，实际时长可超过目标和两分钟。配乐从开头循环至片尾，不混入素材视频原声。短视频取开头片段，较短的片段停留在末帧。使用设备临时存储；成片及待清理文件合计最多 512 MiB、8 份，且预留一半可用空间；浏览器不支持时内存导出最多 96 MiB。导出期间请保持页面打开。</p>
+      <p className="journey-film-export__hint">配乐从开头循环至片尾，不混入素材视频原声。短视频取开头片段，较短的片段停留在末帧。使用设备临时存储；成片及待清理文件合计最多 512 MiB、8 份，且预留一半可用空间；浏览器不支持时内存导出最多 96 MiB。导出期间请保持页面打开。</p>
       {plan ? <p role="status">完整视频预计 {Math.ceil(plan.durationMs / 1000)} 秒，文件约 {Math.ceil(plan.estimatedOutputBytes / 1024 / 1024)} MiB（大小为估算）。{plan.soundtrackIncluded ? "包含旅程配乐。" : "未设置或已关闭配乐。"}</p> : null}
       {retained.count > 0 ? <div><p>设备保留了 {retained.count} 份导出临时文件，约 {Math.ceil(retained.bytes / 1024 / 1024)} MiB。请确认所有下载均已完成后再清理。</p><button type="button" disabled={busy} onClick={() => void clearSavedDownloads()}>所有下载已完成，清理临时文件</button></div> : null}
       {busy ? <div role="status" aria-live="polite"><p>{progressText}</p>
