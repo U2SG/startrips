@@ -140,6 +140,31 @@ ticks Journeys in the dialog: the member reviews it and creates the link with
 the existing Create button, so nothing is written by the model call. The key
 is never sent to a browser.
 
+### Sharing photos without people
+
+A sentence such as "只分享风景图，不分享人像图" can ask the link to leave out
+photos with people. This needs `INTENT_VISION_MODEL`, a vision-capable model on
+the same `INTENT_BASE_URL` with the same `INTENT_API_KEY`. Unset (the default),
+the dialog never offers the filter and nothing about photos is sent.
+
+What is sent, and when: only after the member's sentence asks for the filter,
+and only for the Journeys then selected, the existing stored preview (the
+small still derived on upload, at most `MEDIA_PREVIEW_MAX_BYTES`) of each photo
+that has not been judged before is sent inline as a base64 data URL — never a
+URL the provider could fetch. This includes photos that do show people;
+judging them is the point. Originals, videos, notes, coordinates and share
+tokens are never sent. Nothing is sent when the filter is not used.
+
+Each answer is one boolean, cached per photo and model in
+`media_person_classifications` and deleted with the photo. A photo that could
+not be judged (no ready preview, provider error or timeout) is excluded, as is
+every video and other non-photo media; the dialog counts them before the
+member creates the link. At most 48 not-yet-judged photos are sent per request,
+3 at a time, each bounded by `INTENT_TIMEOUT_MS`; more answers
+`SHARE_MEDIA_FILTER_TOO_MANY` (400) instead of judging only some. A link created
+this way shares only the chosen photos: guests cannot list, count or read the
+others, and a cover photo that was left out is not shown.
+
 ## Detailed earth map
 
 The Living Atlas keeps its particle globe in Three.js and preloads a MapLibre
