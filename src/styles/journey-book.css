@@ -1,7 +1,7 @@
 /*
  * #393 Journey Book trial.
  *
- * Page proportions, paper and cloth colours, spine shading and plate layout
+ * Page proportions, paper colours, spine shading and plate layout
  * follow create-photo-flipbook-ui (https://github.com/HaichaoLihc/create-photo-flipbook-ui),
  * MIT License, Copyright (c) 2026 Haichao Li. No reference media, fonts or
  * texture files are carried over.
@@ -9,7 +9,15 @@
 .journey-book {
   --book-paper: #f7f6f0;
   --book-ink: #292c26;
-  --book-cloth: #5f6b73;
+  /* Cover colours: journeyBookCover.ts. */
+  --book-night: #0b1222;
+  --book-star: #8fd3e8;
+  --book-star-bright: #eaf6f9;
+  --book-gold: #d9b97a;
+  --book-gold-end: #f0d9a0;
+  --book-cover-ink: #ece6d6;
+  --book-route-core: #f6f1e4;
+  --book-route-halo: #080b12;
   --book-endpaper: #e9e9dc;
   --book-muted: #73766c;
   position: fixed;
@@ -172,24 +180,81 @@
   container-type: inline-size;
 }
 
-.journey-book__sheet--cloth {
-  background: var(--book-cloth);
-  color: #f2efdf;
+/* The hard covers' board: the starry cover's night (journeyBookCover.ts
+   COVER_NIGHT), also the back cover. */
+.journey-book__sheet--board {
+  background: var(--book-night);
+  color: var(--book-cover-ink);
 }
 
 .journey-book__sheet--endpaper {
   background: var(--book-endpaper);
 }
 
-/* Front cover, "route deboss": title top left, the Route blind-debossed into
-   the cloth across the middle, the mark and a tipped-in plate along the foot.
-   Proportions follow the 504 × 600 reference; the band matches
-   COVER_ROUTE_BAND in coverRouteGeometry.ts. */
+/* Front cover (owner decision 2026-10-21): the Journey's cover photo across
+   the whole cover, or with none a starry night. Title top left, the Route
+   across the middle. Proportions follow the 504 × 600 reference; the band
+   matches COVER_ROUTE_BAND in coverRouteGeometry.ts. Colours and sizes are
+   shared with the 3D painter through journeyBookCover.ts. */
+.journey-book__sheet--cover.is-starry {
+  /* COVER_LIFT: a barely visible lift of the star colour around the Route. */
+  background: radial-gradient(70% 70% at 50% 45%, rgb(143 211 232 / 0.07), transparent), var(--book-night);
+}
+
+.journey-book__cover-stars {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: var(--book-star);
+}
+
+.journey-book__cover-stars .is-bright { fill: var(--book-star-bright); }
+
+.journey-book__cover-photo {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.journey-book__cover-photo .journey-book__picture {
+  object-fit: cover;
+}
+
+/* A photo that cannot be read says so at the foot, in the cover's ink, over
+   the sky that shows in its place. */
+.journey-book__cover-photo .journey-book__plate-state {
+  position: absolute;
+  right: 9.5%;
+  bottom: 7.3%;
+  left: 9.5%;
+  padding: 0;
+  font-size: max(10px, 2cqw);
+  color: var(--book-cover-ink);
+  opacity: 0.75;
+}
+
+/* COVER_SCRIM: the night at 38% at the top edge, gone by 34% of the height,
+   just past the head (it ends near 26%). Functional only; the Route band
+   needs none because the photo Route carries its own dark halo. */
+.journey-book__cover-scrim {
+  position: absolute;
+  inset: 0 0 66%;
+  background: linear-gradient(rgb(11 18 34 / 0.38), rgb(11 18 34 / 0));
+  pointer-events: none;
+}
+
 .journey-book__cover-head {
   position: absolute;
   top: 8.7%;
   right: 9.5%;
   left: 9.5%;
+}
+
+/* COVER_TEXT_SHADOW: the head's text keeps a soft dark shadow on a photo. */
+.journey-book__sheet--cover.is-photo .journey-book__cover-head {
+  text-shadow: 0 0 0.6cqw rgb(6 9 16 / 0.45);
 }
 
 .journey-book__cover-title {
@@ -237,56 +302,37 @@
   overflow: visible;
 }
 
-.journey-book__cover-route-deboss,
-.journey-book__cover-route-highlight {
+.journey-book__cover-route path {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.journey-book__cover-route-deboss { stroke: rgb(0 0 0 / 0.45); }
-.journey-book__cover-route-highlight { stroke: rgb(255 255 255 / 0.07); }
-.journey-book__cover-route-dot { fill: rgb(0 0 0 / 0.45); }
-.journey-book__cover-route-start { fill: rgb(0 0 0 / 0.55); }
-.journey-book__cover-route-end { fill: #e4cf98; }
+/* Starry: the Route in gold, its end a paler gold (COVER_GOLD, COVER_GOLD_END). */
+.journey-book__cover-route-gold { fill: var(--book-gold); }
+.journey-book__cover-route-gold path { stroke: var(--book-gold); }
+.journey-book__cover-route-gold .journey-book__cover-route-end { fill: var(--book-gold-end); }
 
-/* The v12 mark, blind-embossed: one tone, the cutouts show the cloth. */
+/* Photo: a light core over a dark halo (COVER_PHOTO_ROUTE). */
+.journey-book__cover-route-halo { fill: var(--book-route-halo); }
+.journey-book__cover-route-halo path { stroke: var(--book-route-halo); }
+.journey-book__cover-route-core { fill: var(--book-route-core); }
+.journey-book__cover-route-core path { stroke: var(--book-route-core); }
+
+/* The v12 mark on the starry cover, in gold; the cutouts show the night. */
 .journey-book__cover-mark {
-  --startrips-brand-cutout: var(--book-cloth);
+  --startrips-brand-cutout: var(--book-night);
   position: absolute;
   bottom: 7.3%;
   left: 9.5%;
   width: 6.75%;
   height: 5%;
-  color: #000;
-  opacity: 0.18;
+  color: var(--book-gold);
+  opacity: 0.6;
 }
 
 .journey-book__cover-mark .goat-fill { fill: currentColor; }
 .journey-book__cover-mark .far-fill { fill: currentColor; opacity: 0.72; }
-
-.journey-book__cover-plate {
-  position: absolute;
-  right: 9.5%;
-  bottom: 7.3%;
-  box-sizing: border-box;
-  width: 30%;
-  height: 18.7%;
-  margin: 0;
-  overflow: hidden;
-  border: 1cqw solid #ece7d6;
-  background: #ece7d6;
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.2);
-}
-
-.journey-book__cover-plate .journey-book__picture {
-  object-fit: cover;
-}
-
-.journey-book__cover-plate .journey-book__plate-state {
-  padding: 4px;
-  font-size: 10px;
-}
 
 .journey-book__back-mark {
   position: absolute;

@@ -22,15 +22,18 @@ import {
   coverRouteGeometry,
   coverRouteSvgPath,
 } from "./coverRouteGeometry";
+import { COVER_GOLD_LINE, COVER_PHOTO_ROUTE, coverStarField } from "./journeyBookCover";
 import { useAtlasView } from "./atlasView";
 import { journeySoundtrack } from "./journeyModel";
 import {
+  journeyBookCoverStyle,
   journeyBookPageRoutePointId,
   journeyBookPages,
   journeyBookStartPage,
   type JourneyBookPage,
 } from "./journeyBookPages";
 import {
+  BOOK_PAGE_RATIO,
   journeyBookBlockWidth,
   journeyBookFlipMinWidth,
   journeyBookLayout,
@@ -756,33 +759,45 @@ function JourneyBookPageContent({
   // Far pages keep their layout and notes but release their pictures.
   const read = near ? pageRead : undefined;
   if (page.kind === "cover") {
+    const style = journeyBookCoverStyle(page);
     return (
-      <div className={`journey-book__sheet journey-book__sheet--cloth journey-book__sheet--cover${page.asset ? " has-plate" : ""}`}>
+      <div className={`journey-book__sheet journey-book__sheet--board journey-book__sheet--cover is-${style}`}>
+        {/* The sky is drawn under a photo too: it is what shows while the
+            photo loads, after it is released far from the reader, or when it
+            cannot be read. */}
+        <CoverStars />
+        {page.asset ? (
+          <figure className="journey-book__cover-photo">
+            {isVideo(page.asset)
+              ? <VideoFrame asset={page.asset} read={read} still={still} live={false} onChoose={null} />
+              : read && read.status !== "loading"
+                ? <BookPicture asset={page.asset} read={read} onExpired={onExpired} onLoaded={onLoaded} />
+                : null}
+          </figure>
+        ) : null}
+        {style === "photo" ? <div className="journey-book__cover-scrim" aria-hidden="true" /> : null}
         <header className="journey-book__cover-head">
           <h1 className="journey-book__cover-title">{journey.title}</h1>
           <p className="journey-book__cover-dates"><span>{journeyRange(journey)}</span>{coverDateCount(journey.routePoints.length) ? <span>{coverDateCount(journey.routePoints.length)}</span> : null}</p>
         </header>
-        <CoverRoute routePoints={journey.routePoints} />
-        <svg
-          className="journey-book__cover-mark"
-          viewBox={STARTRIPS_V12_MARK_VIEWBOX}
-          aria-hidden="true"
-          focusable="false"
-          dangerouslySetInnerHTML={{ __html: STARTRIPS_V12_MARK_MARKUP }}
-        />
-        {page.asset ? (
-          <figure className="journey-book__cover-plate">
-            {isVideo(page.asset)
-              ? <VideoFrame asset={page.asset} read={read} still={still} live={false} onChoose={null} />
-              : <BookPicture asset={page.asset} read={read} onExpired={onExpired} onLoaded={onLoaded} />}
-          </figure>
+        <CoverRoute routePoints={journey.routePoints} style={style} />
+        {/* The mark's cutouts are painted in the night colour, so on a photo
+            they would show as dark patches; the photo cover goes without it. */}
+        {style === "starry" ? (
+          <svg
+            className="journey-book__cover-mark"
+            viewBox={STARTRIPS_V12_MARK_VIEWBOX}
+            aria-hidden="true"
+            focusable="false"
+            dangerouslySetInnerHTML={{ __html: STARTRIPS_V12_MARK_MARKUP }}
+          />
         ) : null}
       </div>
     );
   }
   if (page.kind === "end") {
     return (
-      <div className="journey-book__sheet journey-book__sheet--cloth">
+      <div className="journey-book__sheet journey-book__sheet--board">
         {journeyLinks && (journeyLinks.previous || journeyLinks.next) ? (
           <div className="journey-book__journey-links">
             {journeyLinks.next ? (
@@ -838,42 +853,73 @@ const COVER_BAND_WIDTH = COVER_ROUTE_ASPECT * COVER_BAND_HEIGHT;
 /** Band units per cover width, for the stroke sizes given as fractions of it. */
 const COVER_UNITS = COVER_BAND_WIDTH / COVER_ROUTE_BAND.width;
 
-/** The Journey's Route, blind-debossed into the cover cloth (start dark, end foil). */
-function CoverRoute({ routePoints }: { routePoints: Journey["routePoints"] }) {
+/** Cover units: the star field is drawn 1000 wide on a page of `BOOK_PAGE_RATIO`. */
+const COVER_SKY_WIDTH = 1000;
+const COVER_SKY_HEIGHT = COVER_SKY_WIDTH / BOOK_PAGE_RATIO;
+const COVER_STARS = coverStarField();
+
+/** The starry cover's seeded sky; the same stars on every render. */
+function CoverStars() {
+  return (
+    <svg className="journey-book__cover-stars" viewBox={`0 0 ${COVER_SKY_WIDTH} ${COVER_SKY_HEIGHT}`} aria-hidden="true" focusable="false">
+      {COVER_STARS.map((star, index) => (
+        <circle
+          key={index}
+          className={star.bright ? "is-bright" : undefined}
+          cx={star.x * COVER_SKY_WIDTH}
+          cy={star.y * COVER_SKY_HEIGHT}
+          r={star.radius * COVER_SKY_WIDTH}
+          opacity={star.alpha}
+        />
+      ))}
+    </svg>
+  );
+}
+
+/**
+ * The Journey's Route on the cover: in gold on the starry cover, and on a
+ * photo as a light core over a dark halo, so it reads on any picture.
+ */
+function CoverRoute({ routePoints, style }: { routePoints: Journey["routePoints"]; style: "photo" | "starry" }) {
   const geometry = useMemo(() => coverRouteGeometry(routePoints), [routePoints]);
   if (geometry.kind === "none") return null;
   const d = coverRouteSvgPath(geometry, COVER_BAND_WIDTH, COVER_BAND_HEIGHT);
-  const offset = -COVER_ROUTE_STROKE.highlightOffset * COVER_UNITS;
   const square = (vec: { x: number; y: number }, size: number) => ({
     x: vec.x * COVER_BAND_WIDTH - (size * COVER_UNITS) / 2,
     y: vec.y * COVER_BAND_HEIGHT - (size * COVER_UNITS) / 2,
     width: size * COVER_UNITS,
     height: size * COVER_UNITS,
   });
+  const dot = (vec: { x: number; y: number }, size: number) => ({
+    cx: vec.x * COVER_BAND_WIDTH,
+    cy: vec.y * COVER_BAND_HEIGHT,
+    r: (size * COVER_UNITS) / 2,
+  });
+  const dots = geometry.kind === "path" ? coverRouteDots(geometry) : [];
+  // Photo: every halo first, then every core, so a crossing halo never cuts a core.
+  const layers = style === "photo"
+    ? (["halo", "core"] as const).map((layer) => ({
+      layer,
+      line: COVER_PHOTO_ROUTE.line[layer],
+      dot: COVER_PHOTO_ROUTE.dot[layer],
+      start: COVER_PHOTO_ROUTE.start[layer],
+      end: COVER_PHOTO_ROUTE.end[layer],
+    }))
+    : [{ layer: "gold" as const, line: COVER_GOLD_LINE, dot: COVER_ROUTE_STROKE.dot, start: COVER_ROUTE_STROKE.start, end: COVER_ROUTE_STROKE.end }];
   return (
-    <svg className="journey-book__cover-route" viewBox={`0 0 ${COVER_BAND_WIDTH} ${COVER_BAND_HEIGHT}`} aria-hidden="true" focusable="false">
-      {geometry.kind === "path" ? (
-        <>
-          <path className="journey-book__cover-route-deboss" d={d} strokeWidth={COVER_ROUTE_STROKE.deboss * COVER_UNITS} />
-          <path
-            className="journey-book__cover-route-highlight"
-            d={d}
-            strokeWidth={COVER_ROUTE_STROKE.highlight * COVER_UNITS}
-            transform={`translate(${offset} ${offset})`}
-          />
-          {coverRouteDots(geometry).map((dot, index) => (
-            <circle
-              key={index}
-              className="journey-book__cover-route-dot"
-              cx={dot.x * COVER_BAND_WIDTH}
-              cy={dot.y * COVER_BAND_HEIGHT}
-              r={(COVER_ROUTE_STROKE.dot * COVER_UNITS) / 2}
-            />
-          ))}
-          <rect className="journey-book__cover-route-start" {...square(geometry.start, COVER_ROUTE_STROKE.start)} />
-        </>
-      ) : null}
-      <rect className="journey-book__cover-route-end" {...square(geometry.end, COVER_ROUTE_STROKE.end)} />
+    <svg className={`journey-book__cover-route is-${style}`} viewBox={`0 0 ${COVER_BAND_WIDTH} ${COVER_BAND_HEIGHT}`} aria-hidden="true" focusable="false">
+      {layers.map((sizes) => (
+        <g key={sizes.layer} className={`journey-book__cover-route-${sizes.layer}`}>
+          {geometry.kind === "path" ? (
+            <>
+              <path d={d} strokeWidth={sizes.line * COVER_UNITS} />
+              {dots.map((vec, index) => <circle key={index} {...dot(vec, sizes.dot)} />)}
+              <rect {...square(geometry.start, sizes.start)} />
+            </>
+          ) : null}
+          <rect className="journey-book__cover-route-end" {...square(geometry.end, sizes.end)} />
+        </g>
+      ))}
     </svg>
   );
 }
