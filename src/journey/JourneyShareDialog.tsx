@@ -76,6 +76,9 @@ type CreatedLink = {
 type MediaFilterState =
   | { status: "pending"; journeyIds: string[] }
   | { status: "error"; journeyIds: string[]; text: string }
+  // The sentence asked to leave people out but this server cannot look:
+  // Create waits until the owner explicitly chooses to share everything.
+  | { status: "unavailable" }
   | { status: "ready"; assetIds: string[]; excludedCount: number };
 
 type MediaThumbnail = { id: string; url: string };
@@ -85,7 +88,6 @@ const MAX_MEDIA_THUMBNAILS = 12;
 
 const MEDIA_FILTER_CLEARED_BY_SELECTION = "旅程选择已改动，照片筛选已取消，将分享所选旅程的全部照片与视频。";
 const MEDIA_FILTER_REMOVED = "已取消照片筛选，将分享所选旅程的全部照片与视频。";
-const MEDIA_FILTER_NOT_OFFERED = "这台服务器不能按照片内容筛选，将分享所选旅程的全部照片与视频。";
 
 function shareMediaFilterErrorMessage(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error
@@ -403,7 +405,7 @@ export function JourneyShareDialog({
         if (mediaFilterCapable && mutations.proposeShareMedia) {
           void startMediaFilter(journeyIds);
         } else {
-          setMediaFilterNotice(MEDIA_FILTER_NOT_OFFERED);
+          setMediaFilter({ status: "unavailable" });
         }
       }
     } catch (error) {
@@ -561,6 +563,9 @@ export function JourneyShareDialog({
                   </>
                 ) : null}
                 {mediaFilter.status === "error" ? <p>{mediaFilter.text}</p> : null}
+                {mediaFilter.status === "unavailable" ? (
+                  <p>这台服务器不能按照片内容筛选，没有排除任何照片。如需继续，请改为分享全部照片。</p>
+                ) : null}
                 {mediaFilter.status !== "pending" ? (
                   <div className="journey-share__media-filter-actions">
                     {mediaFilter.status === "error" ? (
