@@ -488,6 +488,12 @@ export const shareGrants = pgTable(
       .notNull()
       .defaultNow(),
     lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true }),
+    // One-sentence share: true when this grant shares only the media listed in
+    // `share_grant_media`. A flag rather than "has scope rows", because an
+    // empty scope (no photo passed the filter) and a scope whose every asset
+    // was later deleted must both keep sharing no media, never fall back to
+    // all of it. False is the original behaviour: every media of the Journeys.
+    mediaScoped: boolean("media_scoped").notNull().default(false),
   },
   (table) => [
     uniqueIndex("share_grants_token_hash_unique").on(table.tokenHash),
@@ -516,6 +522,48 @@ export const shareGrantJourneys = pgTable(
     }),
     index("share_grant_journeys_journey_idx").on(table.journeyId),
   ],
+);
+
+// One-sentence share: the media a scoped grant may show. Read only when
+// `share_grants.media_scoped` is true; every other media of the granted
+// Journeys is then invisible to the guest. Both sides cascade, so a deleted
+// asset leaves the scope rather than blocking its own deletion.
+export const shareGrantMedia = pgTable(
+  "share_grant_media",
+  {
+    shareGrantId: uuid("share_grant_id")
+      .notNull()
+      .references(() => shareGrants.id, { onDelete: "cascade" }),
+    assetId: uuid("asset_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({
+      name: "share_grant_media_pk",
+      columns: [table.shareGrantId, table.assetId],
+    }),
+    index("share_grant_media_asset_idx").on(table.assetId),
+  ],
+);
+
+// One-sentence share: whether a photo shows a recognizable person, as one
+// vision model judged its preview. Written only on a successful answer, so an
+// asset that failed to classify is asked again next time. Keyed by asset and
+// cascaded with it; `model` lets a changed model re-ask instead of trusting
+// another model's answer.
+export const mediaPersonClassifications = pgTable(
+  "media_person_classifications",
+  {
+    assetId: uuid("asset_id")
+      .primaryKey()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    hasPerson: boolean("has_person").notNull(),
+    model: text("model").notNull(),
+    classifiedAt: timestamp("classified_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
 );
 
 export const mediaUploads = pgTable(
