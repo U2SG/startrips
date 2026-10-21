@@ -200,6 +200,8 @@ try {
   await page.waitForFunction(() => window.__particleEarthDebug?.().journeyRouteProjectionReady
     && document.querySelectorAll(".particle-earth-route__recorded-track").length === 5,
   null, { timeout: 25_000 });
+  // 只看地球 lives in the desktop header 更多 menu.
+  await page.locator("[data-atlas-desktop-more-trigger]").click();
   await page.locator(".living-atlas__globe-focus").click();
   await page.waitForFunction(() => document.querySelector(".living-atlas")?.dataset.globeFocus === "on");
   const initial = await particleSnapshot();

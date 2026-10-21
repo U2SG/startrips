@@ -683,6 +683,8 @@ async function openFocusAtlas({
       ), revisionBeforeSelection, { timeout: 5_000 });
     }
     if (focusMode) {
+      // 只看地球 lives in the desktop header 更多 menu.
+      await page.locator("[data-atlas-desktop-more-trigger]").click();
       await page.locator(".living-atlas__globe-focus").click();
       await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
     }

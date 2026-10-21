@@ -318,12 +318,20 @@ async function verifyAtlasShell() {
           };
         });
         const wrappedLabels = header.labels.filter((entry) => entry.lines !== 1);
+        // Only the view switch, 记录旅程 and 分享 stay in the bar; import,
+        // Everyday and 只看地球 live behind one 更多 menu.
+        const secondaryInBar = header.labels.filter((entry) => /导入|日常|只看地球/.test(entry.label));
+        const moreTriggers = header.labels.filter((entry) => entry.label === "更多").length;
         record(`atlas-${label}-header-nav`, await scanButtons(page, ".living-atlas__header"), {
           ...header,
           wrappedLabels,
+          secondaryInBar,
+          moreTriggers,
           failed: header.brandNavOverlap !== 0
             || header.labels.length === 0
-            || wrappedLabels.length > 0,
+            || wrappedLabels.length > 0
+            || secondaryInBar.length > 0
+            || moreTriggers !== 1,
         });
         continue;
       }
@@ -1879,6 +1887,10 @@ async function verifyAccountDock() {
       ["mobile-compact", 360, 800, true],
       ["mobile", 390, 844, true],
       ["tablet", 768, 1024, false],
+      // The slimmed desktop header must stay clear of the pinned account dock.
+      ["desktop-1280", 1280, 800, false],
+      ["desktop-1440", 1440, 900, false],
+      ["desktop-1920", 1920, 1080, false],
     ]) {
       await page.setViewportSize({ width, height });
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -2562,7 +2574,7 @@ async function verifyFinalAcceptanceMobileFlow() {
     const editStoryJourney = async (touch) => {
       const story = page.locator(".journey-story");
       await pressStoryPlayback(story.getByRole("button", {
-        name: touch ? "管理旅程" : "退出媒体呈现", exact: true,
+        name: touch ? "管理旅程" : "编辑故事", exact: true,
       }), "Story management before editing", touch);
       await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-editing") === "true");
       await pressStoryPlayback(story.getByRole("button", { name: "编辑旅程", exact: true }),

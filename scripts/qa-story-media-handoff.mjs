@@ -2272,6 +2272,8 @@ async function scrubberDragRefusal() {
     }));
     await page.goto(`${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1`, { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 20_000 });
+    // 只看地球 lives in the desktop header 更多 menu.
+    await page.locator("[data-atlas-desktop-more-trigger]").click();
     await page.locator(".living-atlas__globe-focus").click();
     await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on",
       null, { timeout: 5_000 });
