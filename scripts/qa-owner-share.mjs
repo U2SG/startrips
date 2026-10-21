@@ -763,6 +763,7 @@ async function verifyShareMediaFilter(browser, viewport) {
     await page.locator(".journey-share__intent-row > button").click();
 
     await page.locator('[data-share-media-filter="pending"]').waitFor({ timeout: 10_000 });
+    await waitForStubRequest(page, state, "media-filter");
     const filterRequest = state.requests.find((entry) => entry.kind === "media-filter");
     check(`${name}/asks-for-the-proposed-journeys`,
       filterRequest?.body.journeyIds?.length === 2

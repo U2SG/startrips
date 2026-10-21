@@ -131,6 +131,7 @@ describe("POST /api/intents/share", () => {
     upstream.mockResolvedValueOnce(answer({
       journeyIds: ["j-1", "not-a-candidate", "j-3", "j-1"],
       expiry: "30d",
+      mediaFilter: null,
       unmatched: null,
     }));
     const response = await propose("  分享今年的两段旅程，30 天有效  ");
