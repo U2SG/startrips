@@ -140,6 +140,22 @@ describe("shared journey view scope closure", () => {
     expect(JSON.stringify(view)).not.toContain(UNSHARED);
   });
 
+  it("keeps a cover the payload carries and drops one it does not", () => {
+    const listed = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const excluded = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const view = buildSharedJourneyView(GRANT, rows({
+      journeys: [
+        { ...journeyRow(SHARED_A, "Listed cover"), coverMediaAssetId: listed },
+        // A media-scoped grant left this Journey's cover out of the rows.
+        { ...journeyRow(SHARED_B, "Excluded cover"), coverMediaAssetId: excluded },
+      ],
+      media: [mediaRow(SHARED_A, listed)],
+    }));
+
+    expect(view.journeys.map((journey) => journey.coverMediaAssetId)).toEqual([listed, null]);
+    expect(JSON.stringify(view)).not.toContain(excluded);
+  });
+
   it("answers an emptied grant scope with an empty set, not a partial one", () => {
     const view = buildSharedJourneyView(GRANT, rows({
       routePoints: [routePointRow(UNSHARED, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")],

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, exists, inArray, isNull } from "drizzle-orm";
 import { currentRouteSegmentRecord } from "../../src/journey/journeyModel";
 import type { RouteSegmentRecord } from "../../src/journey/types";
 import {
@@ -12,6 +12,7 @@ import {
   journeys,
   mediaAssets,
   shareGrantJourneys,
+  shareGrantMedia,
   shareGrants,
 } from "../db/app-schema";
 import { db } from "../db/client";
@@ -173,15 +174,24 @@ export function buildSharedJourneyView(
           } : null,
         }];
       });
+      const media = mediaByJourney.get(journey.id) ?? [];
       return {
         ...sharedJourney,
+        // A cover the payload does not carry is no cover: a media-scoped
+        // grant may have excluded it, and naming its id would disclose that
+        // an excluded asset exists. The viewer then falls back exactly as for
+        // a Journey without an explicit cover, to its first listed photo.
+        coverMediaAssetId: journey.coverMediaAssetId !== null
+          && media.some((asset) => asset.id === journey.coverMediaAssetId)
+          ? journey.coverMediaAssetId
+          : null,
         previousJourneyId: index > 0 ? rows.journeys[index - 1].id : null,
         nextJourneyId: index < rows.journeys.length - 1
           ? rows.journeys[index + 1].id
           : null,
         routePoints,
         routeSegments,
-        media: mediaByJourney.get(journey.id) ?? [],
+        media,
       };
     }),
   };
@@ -229,6 +239,24 @@ export async function loadSharedJourneyView(
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/**
+ * The media-scope predicate of one grant, as a correlated `exists` over the
+ * current `media_assets` row. Shared with the media read resolver so the
+ * listing and the signed read can never disagree about what a scoped grant
+ * shows.
+ */
+export function sharedMediaScope(transaction: Transaction, shareGrantId: string) {
+  return exists(
+    transaction
+      .select({ assetId: shareGrantMedia.assetId })
+      .from(shareGrantMedia)
+      .where(and(
+        eq(shareGrantMedia.shareGrantId, shareGrantId),
+        eq(shareGrantMedia.assetId, mediaAssets.id),
+      )),
+  );
+}
+
 async function readSharedJourneyView(
   transaction: Transaction,
   grant: ActiveShareGrant,
@@ -242,6 +270,7 @@ async function readSharedJourneyView(
       revokedAt: shareGrants.revokedAt,
       atlasDeletionStartedAt: atlases.deletionStartedAt,
       mediaPresentation: accountMediaPresentations.style,
+      mediaScoped: shareGrants.mediaScoped,
     })
     .from(shareGrants)
     .innerJoin(atlases, eq(atlases.id, shareGrants.atlasId))
@@ -313,7 +342,14 @@ async function readSharedJourneyView(
       bytes: mediaAssets.bytes,
     })
     .from(mediaAssets)
-    .where(inArray(mediaAssets.journeyId, journeyIds))
+    .where(and(
+      inArray(mediaAssets.journeyId, journeyIds),
+      // A media-scoped grant lists only its scope. Every other asset of the
+      // granted Journeys is absent from the payload — no row, no count, no
+      // placeholder — exactly as if it did not exist. Read from the same
+      // snapshot as the grant itself, so the flag and the rows agree.
+      current.mediaScoped ? sharedMediaScope(transaction, grant.id) : undefined,
+    ))
     .orderBy(asc(mediaAssets.journeyId), asc(mediaAssets.sortOrder));
 
   return buildSharedJourneyView(current, {
