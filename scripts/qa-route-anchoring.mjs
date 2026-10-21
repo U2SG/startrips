@@ -215,7 +215,6 @@ async function measureLegShape(page, routeIdentifier) {
   return page.evaluate((identifier) => {
     const group = document.querySelector(`[data-journey-route="${identifier}"]`);
     if (!group) return { error: "short-leg route group not rendered" };
-    const host = document.querySelector(".particle-earth-scene");
     const legs = [...group.querySelectorAll(".particle-earth-route__leg")];
     if (legs.length === 0) return { error: "short-leg route drew no legs" };
 
@@ -278,7 +277,6 @@ async function measureLegShape(page, routeIdentifier) {
       widestStepPx,
       worstBulge,
       projectedGlobeRadiusPx: window.__particleEarthDebug?.().projectedGlobeRadiusPx ?? 0,
-      arcLift: Number(host?.dataset.routeArcLift),
     };
   }, routeIdentifier);
 }
@@ -535,10 +533,6 @@ async function measureRoute(page, id) {
         (largest, entry) => Math.max(largest, entry.distancePx),
         0,
       ),
-      arcProfile: host?.dataset.routeArcProfile ?? null,
-      arcLift: Number(host?.dataset.routeArcLift),
-      arcLiftPx: Number(host?.dataset.routeArcLiftPx),
-      arcLiftCapPx: Number(host?.dataset.routeArcLiftCapPx),
       sceneEndpointMaxErrorPx: Number(host?.dataset.routeEndpointMaxErrorPx),
     };
   }, id);
@@ -761,9 +755,6 @@ try {
       `markers=${sample.markerCount}`,
       `legs=${sample.legCount}`,
       `graphicMismatchPx=${sample.graphicMismatchPx.toFixed(3)} (${sample.checkedGraphics} graphics)`,
-      `arcProfile=${sample.arcProfile}`,
-      `arcLift=${sample.arcLift.toFixed(4)}`,
-      `arcLiftPx=${sample.arcLiftPx.toFixed(2)}/${sample.arcLiftCapPx.toFixed(2)}`,
       `sceneEndpointMaxErrorPx=${sample.sceneEndpointMaxErrorPx.toFixed(3)}`,
     ].join(" "));
   }
@@ -779,19 +770,6 @@ try {
     if (!(sample.graphicMismatchPx <= 0.08)) {
       failures.push(`zoom ${sample.zoom.toFixed(2)}: marker graphic is ${sample.graphicMismatchPx.toFixed(3)}px off its own anchor`);
     }
-    if (!(sample.arcLiftPx <= sample.arcLiftCapPx + 0.01)) {
-      failures.push(`zoom ${sample.zoom.toFixed(2)}: arc lift ${sample.arcLiftPx.toFixed(1)}px exceeds the ${sample.arcLiftCapPx.toFixed(1)}px screen ceiling`);
-    }
-  }
-  // Semantic zoom: closer must mean more geographic, never more theatrical.
-  if (!(samples[1].arcLift < samples[0].arcLift)) {
-    failures.push(`arc lift did not attenuate from 1x (${samples[0].arcLift}) to 2x (${samples[1].arcLift})`);
-  }
-  if (!(samples[2].arcLift < samples[1].arcLift)) {
-    failures.push(`arc lift did not attenuate from 2x (${samples[1].arcLift}) to 3x (${samples[2].arcLift})`);
-  }
-  if (!(samples[2].arcLiftPx <= samples[0].arcLiftPx)) {
-    failures.push(`projected arc altitude grew with zoom: ${samples[0].arcLiftPx}px -> ${samples[2].arcLiftPx}px`);
   }
   if (pageErrors.length > 0 || consoleErrors.length > 0) {
     failures.push(`page errors: ${JSON.stringify({ pageErrors, consoleErrors })}`);
@@ -946,10 +924,10 @@ try {
   }
   for (const measurement of anchorPassage.measurements) {
     if (measurement.incomingCrossPx > ANCHOR_HALF_PLANE_TOLERANCE_PX) {
-      failures.push(`southwest Route Point ${measurement.anchorIndex}: incoming spline crossed ${measurement.incomingCrossPx.toFixed(2)}px past the shared anchor half-plane`);
+      failures.push(`southwest Route Point ${measurement.anchorIndex}: incoming leg crossed ${measurement.incomingCrossPx.toFixed(2)}px past the shared anchor half-plane`);
     }
     if (measurement.outgoingCrossPx > ANCHOR_HALF_PLANE_TOLERANCE_PX) {
-      failures.push(`southwest Route Point ${measurement.anchorIndex}: outgoing spline crossed ${measurement.outgoingCrossPx.toFixed(2)}px back across the shared anchor half-plane`);
+      failures.push(`southwest Route Point ${measurement.anchorIndex}: outgoing leg crossed ${measurement.outgoingCrossPx.toFixed(2)}px back across the shared anchor half-plane`);
     }
   }
   if (pageErrors.length > 0 || consoleErrors.length > 0) {
@@ -1055,8 +1033,9 @@ try {
       break;
     }
   }
-  // A lifted leg is never one or two straight segments through a peak.
-  if (!(leastSegments >= 2)) {
+  // Owner decision 2026-10-21: a short leg is a plain great circle, so one
+  // straight segment is a truthful drawing of it; only emptiness fails.
+  if (!(leastSegments >= 1)) {
     failures.push(`short-leg rotation drew a fragment of ${leastSegments} segments`);
   }
   // No visible fragment is joined across an occluded span.
@@ -1074,7 +1053,7 @@ try {
   if (failures.length > 0) {
     throw new Error(`[qa-route-anchoring] ${failures.join("; ")}`);
   }
-  console.log("[qa-route-anchoring] route endpoints stay anchored, the arc attenuates with zoom, and short legs stay restrained out to the limb");
+  console.log("[qa-route-anchoring] route endpoints stay anchored and short great-circle legs stay restrained out to the limb");
 } finally {
   await context.close();
   await browser.close();
