@@ -116,6 +116,27 @@ async function installOwnerApi(page, state) {
     contentType: "application/json",
     body: JSON.stringify({ journeys }),
   }));
+  // One-sentence share. Off unless a pass sets `state.intentProposal`, so the
+  // default passes also prove the sentence entry is absent when unconfigured.
+  await page.route("**/api/intents/capabilities", async (route) => {
+    requests.push({ kind: "intent-capabilities" });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ share: { configured: Boolean(state.intentProposal) } }),
+    });
+  });
+  await page.route("**/api/intents/share", async (route) => {
+    const body = JSON.parse(route.request().postData() ?? "{}");
+    requests.push({ kind: "intent", body });
+    await route.fulfill({
+      status: state.intentProposal ? 200 : 503,
+      contentType: "application/json",
+      body: JSON.stringify(state.intentProposal
+        ? { proposal: state.intentProposal, model: "qa-intent" }
+        : { error: "INTENT_UNAVAILABLE", message: "Share intent reading is not configured" }),
+    });
+  });
   await page.route("**/api/shares", async (route) => {
     const request = route.request();
     if (request.method() === "POST") {
@@ -171,6 +192,16 @@ async function installOwnerApi(page, state) {
       body: JSON.stringify({ share: share ?? null }),
     });
   });
+}
+
+/** Whether a stubbed request of `kind` arrived within the timeout. */
+async function waitForStubRequest(page, state, kind, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (state.requests.some((entry) => entry.kind === kind)) return true;
+    await page.waitForTimeout(50);
+  }
+  return false;
 }
 
 /** Click an icon-only control, which carries its name as `aria-label`. */
@@ -363,6 +394,8 @@ async function ornamentScan(page) {
       ".journey-share__links li > button.is-destructive",
       ".journey-share__expiry > label",
       ".journey-share__custom-expiry",
+      ".journey-share__intent-input",
+      ".journey-share__intent-row > button",
       '.journey-share__expiry input[type="radio"] + span[aria-hidden]',
       '.journey-share__selection input[type="checkbox"] + span[aria-hidden]',
       '.startrips-brand-mark > .startrips-brand-mark__orbit[aria-hidden="true"]',
@@ -556,6 +589,96 @@ async function verifyAccountDockYieldsToShare(browser) {
   }
 }
 
+/**
+ * One-sentence share, configured. The stubbed model proposes two of the three
+ * Journeys and 30 days; the dialog must tick exactly those, choose 30d, say
+ * so, and still create nothing until the owner presses Create.
+ */
+async function verifyShareIntentProposal(browser, viewport) {
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height },
+    hasTouch: viewport.compact,
+    isMobile: viewport.compact,
+    deviceScaleFactor: 1,
+  });
+  const page = await context.newPage();
+  const name = `${viewport.name}/sentence`;
+  try {
+    await page.addInitScript(() => {
+      localStorage.setItem("startrips.media-presentation", "note-overlay");
+    });
+    const proposedIds = [journeys[0].id, journeys[2].id];
+    const state = {
+      shares: [],
+      requests: [],
+      createGate: null,
+      intentProposal: { journeyIds: proposedIds, expiry: "30d", unmatched: null },
+    };
+    await installOwnerApi(page, state);
+    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+    await page.locator(".living-atlas").waitFor({ timeout: 20_000 });
+    await page.waitForFunction(
+      () => document.body.textContent?.includes("海风经过深圳湾"),
+      undefined,
+      { timeout: 20_000 },
+    );
+    if (viewport.compact) await openAtlasMore(page);
+    await clickNamed(page, "分享多段旅程");
+    await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
+
+    const input = page.locator(".journey-share__intent-input");
+    await input.waitFor({ state: "visible", timeout: 10_000 });
+    check(`${name}/entry-offered-when-configured`,
+      (await input.getAttribute("placeholder")) === "分享今年的三段旅程，7 天有效");
+
+    const sentence = "分享深圳湾和东京那两段，30 天有效";
+    await input.fill(sentence);
+    await page.locator(".journey-share__intent-row > button").click();
+    await page.locator('[data-share-intent-status="proposed"]').waitFor({ timeout: 10_000 });
+
+    const reading = await page.evaluate(() => ({
+      checked: [...document.querySelectorAll('.journey-share__selection input[type="checkbox"]')]
+        .filter((box) => box.checked)
+        .map((box) => box.value),
+      preset: [...document.querySelectorAll('input[name="journey-share-expiry"]')]
+        .find((radio) => radio.checked)?.value ?? null,
+      status: document.querySelector('[data-share-intent-status="proposed"]')?.textContent ?? "",
+    }));
+    const intentRequest = state.requests.find((entry) => entry.kind === "intent");
+    check(`${name}/sends-the-sentence`, intentRequest?.body.text === sentence, intentRequest?.body);
+    check(`${name}/ticks-exactly-the-proposed-journeys`,
+      reading.checked.length === 2 && proposedIds.every((id) => reading.checked.includes(id)),
+      reading.checked);
+    check(`${name}/selects-the-proposed-expiry`, reading.preset === "30d", reading.preset);
+    check(`${name}/says-what-it-selected`,
+      reading.status.includes("已按这句话选好 2 段旅程，确认后再创建链接"),
+      reading.status);
+    check(`${name}/creates-nothing-before-create`,
+      !state.requests.some((entry) => entry.kind === "create"),
+      state.requests.map((entry) => entry.kind));
+
+    const ornament = await ornamentScan(page);
+    check(`${name}/no-decorative-rounding`, ornament?.offenders.rounding.length === 0, ornament?.offenders.rounding);
+    check(`${name}/shadow-only-on-dialog`, ornament?.offenders.shadow.length === 0, ornament?.offenders.shadow);
+    check(`${name}/touch-targets-at-least-44px`, ornament?.smallTargets.length === 0, ornament?.smallTargets);
+    const overflow = await page.evaluate(() => {
+      const dialog = document.querySelector(".journey-share__dialog");
+      return dialog ? dialog.scrollWidth - dialog.clientWidth : null;
+    });
+    check(`${name}/no-horizontal-overflow`, overflow === 0, { overflow });
+
+    await clickText(page, "创建分享链接");
+    await page.locator("[data-share-link]").waitFor({ timeout: 10_000 });
+    const createRequest = state.requests.find((entry) => entry.kind === "create");
+    check(`${name}/create-carries-the-proposed-set`,
+      createRequest?.body.journeyIds.length === 2
+        && proposedIds.every((id) => createRequest.body.journeyIds.includes(id)),
+      createRequest?.body.journeyIds);
+  } finally {
+    await context.close();
+  }
+}
+
 const browser = await launchQaBrowser({
   headless: true,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
@@ -616,6 +739,15 @@ try {
     await clickNamed(page, "分享多段旅程");
     await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
     check(`${viewport.name}/multi-entry-reachable`, true);
+
+    // One-sentence share, unconfigured: only after the dialog has heard the
+    // capability answer does "no sentence entry" prove anything.
+    const capabilityAnswered = await waitForStubRequest(page, state, "intent-capabilities");
+    await page.waitForTimeout(120);
+    const intentEntryCount = await page.locator(".journey-share__intent").count();
+    check(`${viewport.name}/sentence-entry-absent-when-unconfigured`,
+      capabilityAnswered && intentEntryCount === 0,
+      { capabilityAnswered, intentEntryCount });
 
     // 2026-10-05: the dialog belongs to the control family. Centred it is a
     // --radius-surface floating layer, as the compact sheet only its top
@@ -1054,6 +1186,9 @@ try {
   }
 
   await verifyAccountDockYieldsToShare(browser);
+  for (const viewport of [VIEWPORTS[0], VIEWPORTS[1]]) {
+    await verifyShareIntentProposal(browser, viewport);
+  }
 } catch (error) {
   // The accumulated results are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439). Print first, then rethrow so

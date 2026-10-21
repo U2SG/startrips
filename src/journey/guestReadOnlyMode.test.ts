@@ -174,6 +174,9 @@ const OWNER_MUTATION_EXPORTS = [
   "createShare",
   "listShares",
   "revokeShare",
+  // One-sentence share reads owner-private Journey titles through a model.
+  "readShareIntentCapability",
+  "proposeShareIntent",
 ];
 
 const GUEST_REACHABLE_MODULES = [

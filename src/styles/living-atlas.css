@@ -9238,8 +9238,9 @@ body:has(.journey-share) .account-dock {
   outline-offset: 2px;
 }
 
-/* The custom expiry is a family field. */
-.journey-share__custom-expiry {
+/* The custom expiry and the one-sentence entry are family fields. */
+.journey-share__custom-expiry,
+.journey-share__intent-input {
   grid-column: 1 / -1;
   min-height: var(--control-height);
   padding: 0 14px;
@@ -9252,17 +9253,45 @@ body:has(.journey-share) .account-dock {
   transition: border-color var(--motion-instant) ease-out;
 }
 
-.journey-share__custom-expiry:focus {
+.journey-share__custom-expiry:focus,
+.journey-share__intent-input:focus {
   border-color: var(--control-line-strong);
 }
 
 .journey-share__selection-count,
+.journey-share__intent-status,
 .journey-share__notice,
 .journey-share__message,
 .journey-share__links-empty {
   margin: 0;
   color: var(--archive-muted);
   font: 400 12px/1.55 var(--archive-sans);
+}
+
+/* One-sentence share: a field and its pill on one row, wrapping to two on a
+   narrow sheet. The proposal status reads in ink, its unmatched note below. */
+.journey-share__intent-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.journey-share__intent-input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.journey-share__intent-row > button {
+  flex: none;
+}
+
+.journey-share__dialog .journey-share__intent-status {
+  color: var(--archive-ink);
+}
+
+.journey-share__intent-status > span {
+  display: block;
+  color: var(--archive-muted);
 }
 
 .journey-share__message {
@@ -9365,7 +9394,8 @@ body:has(.journey-share) .account-dock {
 }
 
 .journey-share__dialog button:focus-visible,
-.journey-share__expiry > .journey-share__custom-expiry:focus-visible {
+.journey-share__expiry > .journey-share__custom-expiry:focus-visible,
+.journey-share__intent-input:focus-visible {
   outline: 2px solid var(--control-focus);
   outline-offset: 2px;
 }
@@ -9386,7 +9416,8 @@ body:has(.journey-share) .account-dock {
 @media (hover: hover) and (pointer: fine) {
   .journey-share__dialog button:not(.journey-share__create, .is-destructive):hover:not(:disabled),
   .journey-share__expiry label:not(:has(input:checked)):hover,
-  .journey-share__custom-expiry:hover {
+  .journey-share__custom-expiry:hover,
+  .journey-share__intent-input:hover:not(:disabled) {
     border-color: var(--control-line-strong);
   }
 
@@ -9429,6 +9460,11 @@ body:has(.journey-share) .account-dock {
   border-bottom: 0;
   border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
   overscroll-behavior: contain;
+}
+
+/* 16px keeps iOS from zooming the sheet when the field takes focus. */
+.living-atlas[data-mobile-v2="on"] .journey-share__intent-input {
+  font-size: 16px;
 }
 
 .living-atlas[data-mobile-v2="on"] .journey-share__selection ol {
