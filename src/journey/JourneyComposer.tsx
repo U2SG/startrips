@@ -558,6 +558,7 @@ export function JourneyComposer({
     unmatched: string | null;
   } | null>(null);
   const routeOrderSequenceRef = useRef(0);
+  const routeOrderInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     if (!open) return;
     let active = true;
@@ -1445,6 +1446,8 @@ export function JourneyComposer({
     setRouteOrderStatus(applied
       ? { tone: "applied", text: "已应用新顺序，保存后生效。", unmatched: null }
       : { tone: "error", text: "路线已经改动过，这次的建议已作废，请重新提交。", unmatched: null });
+    // The preview that held focus is gone; keep focus inside the dialog.
+    routeOrderInputRef.current?.focus();
   }
 
   function cancelRouteOrderProposal() {
@@ -1452,6 +1455,7 @@ export function JourneyComposer({
     setRouteOrderPending(false);
     setRouteOrderProposal(null);
     setRouteOrderStatus(null);
+    routeOrderInputRef.current?.focus();
   }
 
   function closeRoutePointMenu(draftPointId: string) {
@@ -2113,6 +2117,7 @@ export function JourneyComposer({
         <label>
           <span>用一句话调整顺序</span>
           <input
+            ref={routeOrderInputRef}
             value={routeOrderText}
             onChange={(event) => setRouteOrderText(event.target.value)}
             maxLength={MAX_ROUTE_ORDER_TEXT_LENGTH}
