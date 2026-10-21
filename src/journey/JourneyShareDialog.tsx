@@ -241,6 +241,16 @@ export function JourneyShareDialog({
    * narrowed to the Journeys this dialog lists, so a proposal can never select
    * something the owner cannot see.
    */
+  /**
+   * A hand edit outranks any proposal still in flight: the late answer is
+   * dropped instead of overwriting what the member just chose.
+   */
+  function supersedeProposal() {
+    intentSequence.current += 1;
+    setIntentPending(false);
+    setIntentStatus(null);
+  }
+
   async function proposeFromSentence() {
     const propose = mutations.proposeShareIntent;
     if (!propose || intentPending || closeBlocked) return;
@@ -416,7 +426,7 @@ export function JourneyShareDialog({
                             onChange={() => {
                               setSelected((current) => toggleShareSelection(current, journey.id));
                               // A hand edit makes "已按这句话选好 N 段" untrue.
-                              setIntentStatus(null);
+                              supersedeProposal();
                             }}
                           />
                           <span aria-hidden="true" />
@@ -442,7 +452,10 @@ export function JourneyShareDialog({
                     name="journey-share-expiry"
                     value={preset.id}
                     checked={presetId === preset.id}
-                    onChange={() => setPresetId(preset.id)}
+                    onChange={() => {
+                      setPresetId(preset.id);
+                      supersedeProposal();
+                    }}
                   />
                   <span aria-hidden="true" />
                   {preset.label}

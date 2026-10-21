@@ -158,6 +158,14 @@ type HttpModelOptions = {
   fetcher?: typeof fetch;
 };
 
+function isDashScope(baseUrl: string) {
+  try {
+    return new URL(baseUrl).hostname.endsWith(".aliyuncs.com");
+  } catch {
+    return false;
+  }
+}
+
 /** An OpenAI-compatible `chat/completions` endpoint with JSON-schema output. */
 export class HttpModelShareIntentReader implements ShareIntentReader {
   readonly driver = "http-model";
@@ -194,7 +202,9 @@ export class HttpModelShareIntentReader implements ShareIntentReader {
                 }),
               },
             ],
-            enable_thinking: false,
+            // DashScope's own switch; strict OpenAI-compatible services
+            // reject unknown request fields, so only DashScope receives it.
+            ...(isDashScope(baseUrl) ? { enable_thinking: false } : {}),
             response_format: {
               type: "json_schema",
               json_schema: {

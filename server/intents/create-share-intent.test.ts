@@ -24,10 +24,10 @@ function completion(answer: unknown, status = 200) {
   }), { status, headers: { "content-type": "application/json" } });
 }
 
-function reader(fetcher: typeof fetch, timeoutMs = 30_000) {
+function reader(fetcher: typeof fetch, timeoutMs = 30_000, baseUrl = "https://model.example/compatible-mode/v1/") {
   return createShareIntentReader({
     driver: "http-model",
-    baseUrl: "https://model.example/compatible-mode/v1/",
+    baseUrl,
     apiKey: "intent-key",
     model: "intent-1",
     timeoutMs,
@@ -38,6 +38,14 @@ function reader(fetcher: typeof fetch, timeoutMs = 30_000) {
 const REQUEST = { text: "分享今年的两段旅程，30 天有效", today: "2026-10-21", candidates: CANDIDATES };
 
 describe("http-model share intent reader", () => {
+  it("sends enable_thinking only to DashScope", async () => {
+    const fetcher = vi.fn(async (_url: string, _init: RequestInit) =>
+      completion({ journeyIds: [], expiry: null, unmatched: null }));
+    await reader(fetcher as unknown as typeof fetch, 30_000, "https://dashscope.aliyuncs.com/compatible-mode/v1")
+      .read(REQUEST);
+    expect(JSON.parse(String(fetcher.mock.calls[0][1].body)).enable_thinking).toBe(false);
+  });
+
   it("posts an OpenAI-compatible strict json_schema request with the candidates as data", async () => {
     const fetcher = vi.fn(async (_url: string, _init: RequestInit) =>
       completion({ journeyIds: ["j-3", "j-2"], expiry: "30d", unmatched: null }));
@@ -52,7 +60,8 @@ describe("http-model share intent reader", () => {
     expect((init.headers as Record<string, string>).authorization).toBe("Bearer intent-key");
     const body = JSON.parse(String(init.body));
     expect(body.model).toBe("intent-1");
-    expect(body.enable_thinking).toBe(false);
+    // A non-DashScope endpoint never receives the vendor-only switch.
+    expect("enable_thinking" in body).toBe(false);
     expect(body.response_format.type).toBe("json_schema");
     expect(body.response_format.json_schema.strict).toBe(true);
     expect(body.messages[0].role).toBe("system");
