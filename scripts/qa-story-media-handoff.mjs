@@ -718,11 +718,17 @@ function installStageSampler() {
     const aligned = correlation(source, screen);
     const wrongRotation = correlation(rotated, screen);
     const wrongShift = correlation(shifted, screen);
+    // A frame that already looks like itself turned 90 degrees (a near
+    // rotation-symmetric star field) cannot tell a rotated paint from a
+    // correct one, so only the shift control separates right from wrong.
+    const selfRotation = correlation(source, rotated);
+    const rotationInformative = selfRotation <= 0.75;
     const sourceEnergy = source.reduce((sum, value) => sum + value, 0);
     const visibleEnergy = screen.reduce((sum, value) => sum + value, 0);
     return { aligned: Number(aligned.toFixed(3)), wrongRotation: Number(wrongRotation.toFixed(3)),
       wrongShift: Number(wrongShift.toFixed(3)),
-      margin: Number((aligned - Math.max(wrongRotation, wrongShift)).toFixed(3)),
+      selfRotation: Number(selfRotation.toFixed(3)), rotationInformative,
+      margin: Number((aligned - (rotationInformative ? Math.max(wrongRotation, wrongShift) : wrongShift)).toFixed(3)),
       sourceEnergy: Math.round(sourceEnergy), visibleEnergy: Math.round(visibleEnergy),
       energyRatio: sourceEnergy ? Number((visibleEnergy / sourceEnergy).toFixed(3)) : 0,
       sourceCells: source.filter((value) => value > 48).length,
