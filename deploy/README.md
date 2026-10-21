@@ -117,6 +117,29 @@ newer build is a configuration change rather than a code change. The credential
 is never sent to a browser, and only what the member submitted for this import
 is sent to the provider.
 
+## One-sentence share
+
+The multi-Journey share dialog can offer a single sentence entry, such as
+"分享今年的三段旅程，7 天有效". It is `disabled` by default, and then the entry
+is not rendered at all; sharing by ticking Journeys is unchanged.
+
+`INTENT_DRIVER=http-model` posts to `${INTENT_BASE_URL}/chat/completions` on
+any OpenAI-compatible endpoint (for example DashScope compatible mode) with
+`INTENT_API_KEY` and `INTENT_MODEL`, using a strict JSON-schema response.
+All three are required, and an unknown driver or a missing value stops the API
+at startup. `INTENT_TIMEOUT_MS` (default 30000, 1000-300000) bounds one call;
+a slow provider is reported as `INTENT_TIMEOUT` (504), an unconfigured one as
+`INTENT_UNAVAILABLE` (503).
+
+What is sent: the member's sentence, the server's UTC date, and the id,
+title, start date and end date of at most the 200 most recent live Journeys
+of the active Atlas. No coordinates, Route Points, notes, media or share
+tokens are sent. The model may only propose ids from that list and an expiry
+of 1d, 7d or 30d; anything else is dropped or refused. The proposal only
+ticks Journeys in the dialog: the member reviews it and creates the link with
+the existing Create button, so nothing is written by the model call. The key
+is never sent to a browser.
+
 ## Detailed earth map
 
 The Living Atlas keeps its particle globe in Three.js and preloads a MapLibre

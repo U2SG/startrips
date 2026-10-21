@@ -435,3 +435,42 @@ describe("location search fallback configuration", () => {
     })).toThrow("LOCATION_SEARCH_FALLBACK_BASE_URL must use HTTPS in production");
   });
 });
+
+describe("share intent configuration", () => {
+  const httpModel = {
+    INTENT_DRIVER: "http-model",
+    INTENT_BASE_URL: "https://model.example/compatible-mode/v1/",
+    INTENT_API_KEY: "intent-key",
+    INTENT_MODEL: "intent-1",
+  };
+
+  it("is disabled by default with a 30 second timeout", () => {
+    const config = loadServerConfig(productionEnvironment);
+    expect(config.intentDriver).toBe("disabled");
+    expect(config.intentTimeoutMs).toBe(30_000);
+  });
+
+  it("reads the http-model provider and trims the base URL", () => {
+    const config = loadServerConfig({ ...productionEnvironment, ...httpModel });
+    expect(config.intentBaseUrl).toBe("https://model.example/compatible-mode/v1");
+    expect(config.intentModel).toBe("intent-1");
+  });
+
+  it("refuses an unknown driver at boot", () => {
+    expect(() => loadServerConfig({ ...productionEnvironment, INTENT_DRIVER: "magic" }))
+      .toThrow("INTENT_DRIVER");
+  });
+
+  it.each(["INTENT_BASE_URL", "INTENT_API_KEY", "INTENT_MODEL"])(
+    "refuses http-model without %s",
+    (name) => {
+      expect(() => loadServerConfig({ ...productionEnvironment, ...httpModel, [name]: "" }))
+        .toThrow(name);
+    },
+  );
+
+  it.each(["999", "300001", "abc"])("refuses INTENT_TIMEOUT_MS=%s", (value) => {
+    expect(() => loadServerConfig({ ...productionEnvironment, INTENT_TIMEOUT_MS: value }))
+      .toThrow("INTENT_TIMEOUT_MS");
+  });
+});

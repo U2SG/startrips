@@ -19,6 +19,8 @@ import {
   recordHomeBaseDismissal,
   listShares,
   moveJourneyMedia,
+  proposeShareIntent,
+  readShareIntentCapability,
   reorderJourneyMedia,
   restoreJourney,
   revokeShare,
@@ -26,6 +28,7 @@ import {
   updateJourney,
   undoJourneyMediaMove,
   type JourneyMediaMoveUndo,
+  type ShareIntentProposal,
 } from "./journeyApi";
 import { uploadJourneyMedia } from "./journeyMediaUpload";
 import { readJourneyRecordedTrackGeometry } from "./journeyRecordedTracksApi";
@@ -176,6 +179,12 @@ export type AtlasMutations = {
   ) => Promise<CreatedShareGrant>;
   listShares: () => Promise<ShareGrantSummary[]>;
   revokeShare: (shareId: string) => Promise<void>;
+  /**
+   * One-sentence share. Optional because only the owner client has it: a
+   * view without these simply offers no sentence entry.
+   */
+  readShareIntentCapability?: () => Promise<boolean>;
+  proposeShareIntent?: (text: string) => Promise<{ proposal: ShareIntentProposal; model: string }>;
 };
 
 /**
@@ -220,6 +229,8 @@ export function createOwnerAtlasMutations(canEditJourney = true): AtlasMutations
     createShare,
     listShares,
     revokeShare,
+    readShareIntentCapability: () => readShareIntentCapability(),
+    proposeShareIntent: (text) => proposeShareIntent(text),
   };
   if (canEditJourney) {
     mutations.updateJourneyNotes = updateJourney;

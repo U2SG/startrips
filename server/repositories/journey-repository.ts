@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   and,
   asc,
+  desc,
   eq,
   gt,
   inArray,
@@ -206,6 +207,27 @@ async function loadJourneys(atlasId: string, requestedIds?: readonly string[]) {
 
 export function listJourneysForAtlas(atlasId: string) {
   return loadJourneys(atlasId);
+}
+
+/**
+ * The bare facts a share-intent model may see about this Atlas's live
+ * Journeys: id, title and dates, most recent first. Deliberately not
+ * `loadJourneys`, which also loads every Route Point and media row and marks
+ * the Journeys for priority road snapping, a side effect a read-only proposal
+ * must not cause.
+ */
+export function listJourneyShareCandidatesForAtlas(atlasId: string, limit: number) {
+  return db
+    .select({
+      id: journeys.id,
+      title: journeys.title,
+      startedOn: journeys.startedOn,
+      endedOn: journeys.endedOn,
+    })
+    .from(journeys)
+    .where(and(eq(journeys.atlasId, atlasId), isNull(journeys.deletionStartedAt)))
+    .orderBy(desc(journeys.startedOn), desc(journeys.createdAt))
+    .limit(limit);
 }
 
 export async function getJourneyForAtlas(journeyId: string, atlasId: string) {

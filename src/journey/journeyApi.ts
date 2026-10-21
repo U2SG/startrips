@@ -602,6 +602,44 @@ export async function createShare(
   );
 }
 
+export type ShareIntentProposal = {
+  journeyIds: string[];
+  expiry: "1d" | "7d" | "30d" | null;
+  unmatched: string | null;
+};
+
+/**
+ * Whether this deployment can read a one-sentence share. Any failure reads as
+ * "not configured": the sentence entry is optional, and an Atlas whose server
+ * cannot answer this still shares by hand.
+ */
+export async function readShareIntentCapability(
+  fetcher: Fetcher = fetch,
+): Promise<boolean> {
+  try {
+    const payload = await requestJson<{ share?: { configured?: unknown } }>(
+      "/api/intents/capabilities",
+      { cache: "no-store" },
+      fetcher,
+    );
+    return payload?.share?.configured === true;
+  } catch {
+    return false;
+  }
+}
+
+/** A proposal only: it selects nothing on the server and creates no share. */
+export async function proposeShareIntent(
+  text: string,
+  fetcher: Fetcher = fetch,
+): Promise<{ proposal: ShareIntentProposal; model: string }> {
+  return requestJson<{ proposal: ShareIntentProposal; model: string }>(
+    "/api/intents/share",
+    { method: "POST", body: JSON.stringify({ text }) },
+    fetcher,
+  );
+}
+
 export async function listShares(
   fetcher: Fetcher = fetch,
 ): Promise<ShareGrantSummary[]> {
