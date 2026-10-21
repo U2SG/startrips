@@ -430,6 +430,11 @@ export function JourneyComposer({
   );
   const [endedOn, setEndedOn] = useState(journey?.endedOn ?? recoveryInput?.endedOn ?? initialImport?.endedOn ?? "");
   const metadataEditedRef = useRef({ title: false, startedOn: false, endedOn: false });
+  // Create mode starts from one sentence; it is read by the import panel below.
+  const [journeySentence, setJourneySentence] = useState("");
+  const [sentenceRequest, setSentenceRequest] = useState<{ text: string; nonce: number } | null>(null);
+  // The phrase the prefilled dates were inferred from, until the member edits them.
+  const [inferredDatePhrase, setInferredDatePhrase] = useState<string | null>(null);
   const [note, setNote] = useState(journey?.note ?? recoveryInput?.note ?? "");
   const [lightColor, setLightColor] = useState(journey?.lightColor ?? recoveryInput?.lightColor ?? LIGHT_COLORS[0]);
   const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? recoveryInput?.lightEffect ?? null);
@@ -1751,15 +1756,47 @@ export function JourneyComposer({
                 ) : null}
               </div>
   );
+  const journeySentenceFragment = journey ? null : (
+    <form
+      className="journey-sentence"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const text = journeySentence.trim();
+        if (!text) return;
+        setSentenceRequest((current) => ({ text, nonce: (current?.nonce ?? 0) + 1 }));
+        enterMobileTask("location", true);
+      }}
+    >
+      <label className="journey-itinerary-import__field">
+        <span>用一句话描述这段旅程</span>
+        <textarea
+          className="st-field"
+          rows={2}
+          maxLength={500}
+          value={journeySentence}
+          onChange={(event) => setJourneySentence(event.target.value)}
+          placeholder="上个月从成都自驾去稻城，在理塘住一晚"
+        />
+        <button type="submit" disabled={!journeySentence.trim()}>
+          <IconSearch size={16} stroke={1.4} aria-hidden="true" />
+          整理成路线
+        </button>
+      </label>
+      <small>先读出地点和日期给你核对，确认后才加入路线；也可以在下方手动填写。</small>
+    </form>
+  );
   const journeyTitleFragment = (
                 <label className="journey-title-field"><span>旅程标题</span><input required maxLength={80} value={title} onChange={(event) => { metadataEditedRef.current.title = true; setTitle(event.target.value); }} placeholder="穿过北方的夜车" /></label>
   );
   const journeyMetaFragment = (
     <>
                 <div className="journey-story-fields__dates">
-                  <label><span>开始日期</span><input type="date" required value={startedOn} onChange={(event) => { metadataEditedRef.current.startedOn = true; setStartedOn(event.target.value); }} /></label>
-                  <label><span>结束日期 <small>可选</small></span><input type="date" min={startedOn} value={endedOn} onChange={(event) => { metadataEditedRef.current.endedOn = true; setEndedOn(event.target.value); }} /></label>
+                  <label><span>开始日期</span><input type="date" required value={startedOn} onChange={(event) => { metadataEditedRef.current.startedOn = true; setInferredDatePhrase(null); setStartedOn(event.target.value); }} /></label>
+                  <label><span>结束日期 <small>可选</small></span><input type="date" min={startedOn} value={endedOn} onChange={(event) => { metadataEditedRef.current.endedOn = true; setInferredDatePhrase(null); setEndedOn(event.target.value); }} /></label>
                 </div>
+                {inferredDatePhrase ? (
+                  <small className="journey-story-fields__inferred">日期按今天推算（「{inferredDatePhrase}」），可以直接修改。</small>
+                ) : null}
                 <label><span>旅程故事 <small>可选</small></span><textarea rows={5} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="记下沿途发生了什么，也可以留白。" /></label>
     </>
   );
@@ -2192,11 +2229,19 @@ export function JourneyComposer({
   const applyItineraryDraft = useCallback((
     imported: readonly ItineraryRoutePointDraft[],
     insertAfterDraftId: string | null,
-    details: { title: string | null; startedOn: string | null; endedOn: string | null },
+    details: {
+      title: string | null;
+      startedOn: string | null;
+      endedOn: string | null;
+      inferredDatePhrase?: string | null;
+    },
   ) => {
     if (!journey && routePointsRef.current.length === 0) {
       if (!metadataEditedRef.current.title && details.title) setTitle(details.title.slice(0, 80));
-      if (!metadataEditedRef.current.startedOn && details.startedOn) setStartedOn(details.startedOn);
+      if (!metadataEditedRef.current.startedOn && details.startedOn) {
+        setStartedOn(details.startedOn);
+        setInferredDatePhrase(details.inferredDatePhrase ?? null);
+      }
       if (!metadataEditedRef.current.endedOn && details.endedOn) setEndedOn(details.endedOn);
     }
     setRoutePoints((current) => {
@@ -2224,6 +2269,7 @@ export function JourneyComposer({
       standalone
       mobileLayout={mobileLayout}
       existingPoints={routePoints}
+      sentence={sentenceRequest}
     />
   );
   const preciseLocationFragment = (
@@ -2314,6 +2360,7 @@ export function JourneyComposer({
                   data-composer-task="primary"
                   aria-labelledby="journey-composer-title"
                 >
+                  {journeySentenceFragment}
                   <div className="journey-story-fields">
                     {journeyTitleFragment}
                   </div>
