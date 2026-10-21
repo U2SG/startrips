@@ -14,8 +14,15 @@ const config = vi.hoisted(() => ({
     intentBaseUrl: null as string | null,
     intentApiKey: null as string | null,
     intentModel: null as string | null,
+    intentVisionModel: null as string | null,
     intentTimeoutMs: 30_000,
+    mediaPreviewMaxBytes: 1024,
   },
+}));
+
+const mediaFilter = vi.hoisted(() => ({
+  list: vi.fn(async (_atlasId: string, _journeyIds: readonly string[], _model: string): Promise<unknown[] | null> => []),
+  save: vi.fn(async (_results: unknown, _model: string) => undefined),
 }));
 
 const candidates = vi.hoisted(() => ({
@@ -33,7 +40,14 @@ vi.mock("../authorization/atlas-access", () => ({
 vi.mock("../repositories/journey-repository", () => ({
   listJourneyShareCandidatesForAtlas: candidates.list,
 }));
-vi.mock("./shares", () => ({ MAX_SHARE_JOURNEYS: 64 }));
+vi.mock("../repositories/share-media-filter-repository", () => ({
+  listShareMediaFilterAssets: mediaFilter.list,
+  saveShareMediaClassifications: mediaFilter.save,
+}));
+vi.mock("../storage/storage-registry", () => ({
+  getMultipartStorage: () => { throw new Error("tests hand in storage"); },
+}));
+vi.mock("./shares", () => ({ MAX_SHARE_JOURNEYS: 64, MAX_SHARE_MEDIA_ASSETS: 2000 }));
 
 const { intentRoutes, shareIntentDependencies, MAX_SHARE_INTENT_CANDIDATES } = await import("./intents");
 const { ShareIntentError } = await import("../intents/create-share-intent");
@@ -81,21 +95,34 @@ beforeEach(() => {
 afterEach(() => {
   upstream.mockReset();
   candidates.list.mockClear();
+  mediaFilter.list.mockReset();
+  mediaFilter.save.mockClear();
+  config.serverConfig.intentVisionModel = null;
   delete shareIntentDependencies.fetcher;
   delete shareIntentDependencies.now;
+  delete shareIntentDependencies.storage;
 });
 
 describe("GET /api/intents/capabilities", () => {
   it("reports a configured provider", async () => {
     const response = await app.request("/api/intents/capabilities");
-    expect(await response.json()).toEqual({ share: { configured: true } });
+    expect(await response.json()).toEqual({ share: { configured: true, mediaFilter: false } });
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
 
   it("reports a disabled provider truthfully", async () => {
     config.serverConfig.intentDriver = "disabled";
     const response = await app.request("/api/intents/capabilities");
-    expect(await response.json()).toEqual({ share: { configured: false } });
+    expect(await response.json()).toEqual({ share: { configured: false, mediaFilter: false } });
+  });
+
+  it("offers the media filter only with a vision model on an http-model provider", async () => {
+    config.serverConfig.intentVisionModel = "vision-1";
+    expect(await (await app.request("/api/intents/capabilities")).json())
+      .toEqual({ share: { configured: true, mediaFilter: true } });
+    config.serverConfig.intentDriver = "disabled";
+    expect(await (await app.request("/api/intents/capabilities")).json())
+      .toEqual({ share: { configured: false, mediaFilter: false } });
   });
 });
 
@@ -110,7 +137,7 @@ describe("POST /api/intents/share", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      proposal: { journeyIds: ["j-3", "j-1"], expiry: "30d", unmatched: null },
+      proposal: { journeyIds: ["j-3", "j-1"], expiry: "30d", mediaFilter: null, unmatched: null },
       model: "intent-1",
     });
     expect(candidates.list).toHaveBeenCalledWith("atlas-1", MAX_SHARE_INTENT_CANDIDATES);
@@ -140,9 +167,112 @@ describe("POST /api/intents/share", () => {
   });
 
   it("refuses an expiry outside the presets as a 502", async () => {
-    upstream.mockResolvedValueOnce(answer({ journeyIds: ["j-3"], expiry: "1y", unmatched: null }));
+    upstream.mockResolvedValueOnce(answer({ journeyIds: ["j-3"], expiry: "1y", mediaFilter: null, unmatched: null }));
     const response = await propose("分享深圳湾，一年有效");
     expect(response.status).toBe(502);
     expect(await response.json()).toMatchObject({ error: "INTENT_MALFORMED" });
+  });
+});
+
+describe("POST /api/intents/share/media", () => {
+  const JOURNEY = "11111111-1111-4111-8111-111111111111";
+  const readObjectHead = vi.fn(async (input: { key: string; maxBytes: number }) =>
+    ({ exists: true as const, bytes: new Uint8Array([input.key.length, 1, 2]) }));
+
+  function asset(id: string, overrides: Record<string, unknown> = {}) {
+    return {
+      id,
+      mimeType: "image/jpeg",
+      storageDriver: "s3",
+      previewStorageKey: `previews/${id}.jpg`,
+      previewMimeType: "image/jpeg",
+      previewState: "ready",
+      cachedHasPerson: null,
+      ...overrides,
+    };
+  }
+
+  function filter(journeyIds: unknown) {
+    return app.request("/api/intents/share/media", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ journeyIds }),
+    });
+  }
+
+  beforeEach(() => {
+    config.serverConfig.intentVisionModel = "vision-1";
+    readObjectHead.mockClear();
+    shareIntentDependencies.storage = () => ({ readObjectHead });
+  });
+
+  it.each([["none", []], ["a malformed id", ["j-1"]], ["a duplicate", [JOURNEY, JOURNEY]], ["not an array", JOURNEY]])(
+    "refuses %s with 400 before reading any media",
+    async (_label, journeyIds) => {
+      const response = await filter(journeyIds);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: "INVALID_SHARE_MEDIA_FILTER" });
+      expect(mediaFilter.list).not.toHaveBeenCalled();
+    },
+  );
+
+  it("answers 503 without a vision model and reads nothing", async () => {
+    config.serverConfig.intentVisionModel = null;
+    const response = await filter([JOURNEY]);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: "MEDIA_FILTER_UNAVAILABLE", stage: "share-intent" });
+    expect(mediaFilter.list).not.toHaveBeenCalled();
+  });
+
+  it("answers 404 when a Journey is not a live Journey of the session Atlas", async () => {
+    mediaFilter.list.mockResolvedValueOnce(null);
+    const response = await filter([JOURNEY]);
+    expect(response.status).toBe(404);
+    expect(mediaFilter.list).toHaveBeenCalledWith("atlas-1", [JOURNEY], "vision-1");
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("judges uncached photos from their previews and excludes people, failures and videos", async () => {
+    mediaFilter.list.mockResolvedValueOnce([
+      asset("landscape"),
+      asset("portrait"),
+      asset("broken"),
+      asset("cached-landscape", { cachedHasPerson: false }),
+      asset("clip", { mimeType: "video/mp4" }),
+    ]);
+    upstream.mockImplementation(async (_url, init) => {
+      const image = JSON.parse(String(init?.body)).messages[1].content[0].image_url.url as string;
+      expect(image.startsWith("data:image/jpeg;base64,")).toBe(true);
+      const bytes = Buffer.from(image.split(",")[1], "base64");
+      const key = bytes[0]; // the stub writes the key length as the first byte
+      if (key === "previews/broken.jpg".length) return new Response("{}", { status: 500 });
+      return answer({ hasRecognizablePerson: key === "previews/portrait.jpg".length });
+    });
+
+    const response = await filter([JOURNEY]);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({
+      assetIds: ["landscape", "cached-landscape"],
+      excludedCount: 3,
+      unclassifiedCount: 1,
+    });
+    expect(upstream).toHaveBeenCalledTimes(3);
+    expect(readObjectHead).toHaveBeenCalledWith({ key: "previews/landscape.jpg", maxBytes: 1025 });
+    expect(mediaFilter.save).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        { assetId: "landscape", hasPerson: false },
+        { assetId: "portrait", hasPerson: true },
+      ]),
+      "vision-1",
+    );
+  });
+
+  it("does not judge a preview larger than the ceiling", async () => {
+    mediaFilter.list.mockResolvedValueOnce([asset("oversized")]);
+    readObjectHead.mockResolvedValueOnce({ exists: true, bytes: new Uint8Array(1025) });
+    expect(await (await filter([JOURNEY])).json())
+      .toEqual({ assetIds: [], excludedCount: 1, unclassifiedCount: 1 });
+    expect(upstream).not.toHaveBeenCalled();
   });
 });

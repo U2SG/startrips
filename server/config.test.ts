@@ -456,6 +456,15 @@ describe("share intent configuration", () => {
     expect(config.intentModel).toBe("intent-1");
   });
 
+  it("reads an optional vision model and leaves it unset by default", () => {
+    expect(loadServerConfig({ ...productionEnvironment, ...httpModel }).intentVisionModel).toBeNull();
+    expect(loadServerConfig({
+      ...productionEnvironment,
+      ...httpModel,
+      INTENT_VISION_MODEL: " vision-1 ",
+    }).intentVisionModel).toBe("vision-1");
+  });
+
   it("refuses an unknown driver at boot", () => {
     expect(() => loadServerConfig({ ...productionEnvironment, INTENT_DRIVER: "magic" }))
       .toThrow("INTENT_DRIVER");
