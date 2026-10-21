@@ -81,6 +81,7 @@ import {
   buildRouteArcLegSamples,
   buildRouteArcSamples,
   GEOGRAPHIC_SURFACE_RADIUS,
+  latLonToVector3,
   ROUTE_ANCHOR_RADIUS,
   routeArcVertexCount,
   routePointAnchor,
@@ -143,6 +144,29 @@ describe("ParticleEarthScene contracts", () => {
     expect(recordedTrackVisibleSampleCount(tracks[1].levels[0].sampleTimes!, instant + 30_000)).toBe(0);
     expect(tracks.slice(2).every((track) => track.levels.every((level) => level.sampleTimes === null)))
       .toBe(true);
+  });
+
+  it("keeps recorded tracks on their own points, unresampled and unlifted", () => {
+    // Owner decision 2026-10-21 changes Journey legs only: a recorded GPS
+    // track keeps its real geometry, sharp turns included.
+    const zigzag = Array.from({ length: 9 }, (_, index) => ({
+      lat: 30 + (index % 2 ? 0.4 : 0),
+      lon: 120 + index * 0.05,
+    }));
+    const [track] = buildRecordedTrackOverviewSamples([{ id: "zigzag", points: zigzag }]);
+    const level = track.levels[0];
+    expect(level.maxAngularErrorRad).toBe(0);
+    expect(level.samples.lifts).toHaveLength(zigzag.length);
+    expect([...level.samples.lifts].every((lift) => lift === 0)).toBe(true);
+    zigzag.forEach((point, index) => {
+      const expected = latLonToVector3(point.lat, point.lon, 1);
+      const offset = index * 3;
+      expect(Math.hypot(
+        level.samples.directions[offset] - expected.x,
+        level.samples.directions[offset + 1] - expected.y,
+        level.samples.directions[offset + 2] - expected.z,
+      )).toBeLessThan(1e-6);
+    });
   });
 
   it("keeps LOD error bounds truthful when a tight point budget needs extra simplification", () => {
