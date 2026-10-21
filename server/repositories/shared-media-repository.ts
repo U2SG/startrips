@@ -13,6 +13,7 @@ import {
 } from "../db/app-schema";
 import { db } from "../db/client";
 import type { PreviewColumns } from "../media/preview-derivation";
+import { sharedMediaScope } from "./shared-journey-repository";
 
 /**
  * What the route needs to sign one guest media read: which backend holds the
@@ -105,7 +106,8 @@ export function capShareMediaTtlSeconds(
  * - that journey belongs to the atlas that issued the grant, so a grant can
  *   never reach a second atlas even if the join table were wrong;
  * - that journey has not started deleting;
- * - the grant itself still evaluates as active, atlas deletion included.
+ * - the grant itself still evaluates as active, atlas deletion included;
+ * - when the grant is media-scoped, the asset is in its `share_grant_media`.
  *
  * `null` is returned for every asset-side reason — unknown id, an id in
  * another journey of the same atlas, an id in another atlas, a journey inside
@@ -136,6 +138,7 @@ export async function resolveSharedMediaRead(
           expiresAt: shareGrants.expiresAt,
           revokedAt: shareGrants.revokedAt,
           atlasDeletionStartedAt: atlases.deletionStartedAt,
+          mediaScoped: shareGrants.mediaScoped,
         })
         .from(shareGrants)
         .innerJoin(atlases, eq(atlases.id, shareGrants.atlasId))
@@ -166,6 +169,12 @@ export async function resolveSharedMediaRead(
           eq(shareGrantJourneys.shareGrantId, grant.id),
           eq(journeys.atlasId, grant.atlasId),
           isNull(journeys.deletionStartedAt),
+          // A media-scoped grant signs only its scope; an excluded asset
+          // resolves to `null` like an unknown id, so the route answers the
+          // same `MEDIA_UNAVAILABLE` 404 and discloses nothing.
+          current.mediaScoped
+            ? sharedMediaScope(transaction, grant.id)
+            : undefined,
         ))
         .limit(1);
       if (!row) return null;

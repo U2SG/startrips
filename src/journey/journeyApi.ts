@@ -584,10 +584,16 @@ export async function reverseGeocode(
  * directly would be the exact fall-through phase D removed: a share affordance
  * that keeps working after the capability that gates it is turned off.
  */
+/**
+ * `mediaAssetIds`, when given, is the link's whole media scope: only those
+ * media are shown, and an empty list shows none. Leaving it out shares every
+ * media of the Journeys, as before.
+ */
 export async function createShare(
   journeyIds: readonly string[],
   expiresAt: Date,
   fetcher: Fetcher = fetch,
+  mediaAssetIds?: readonly string[],
 ): Promise<CreatedShareGrant> {
   return requestJson<CreatedShareGrant>(
     "/api/shares",
@@ -596,6 +602,7 @@ export async function createShare(
       body: JSON.stringify({
         journeyIds: [...journeyIds],
         expiresAt: expiresAt.toISOString(),
+        ...(mediaAssetIds ? { mediaAssetIds: [...mediaAssetIds] } : {}),
       }),
     },
     fetcher,
@@ -605,7 +612,15 @@ export async function createShare(
 export type ShareIntentProposal = {
   journeyIds: string[];
   expiry: "1d" | "7d" | "30d" | null;
+  /** "只分享风景图": leave out photos with people. */
+  mediaFilter: "no-people" | null;
   unmatched: string | null;
+};
+
+export type ShareIntentCapability = {
+  configured: boolean;
+  /** Whether this deployment can judge photos for the no-people filter. */
+  mediaFilter: boolean;
 };
 
 /**
@@ -615,17 +630,57 @@ export type ShareIntentProposal = {
  */
 export async function readShareIntentCapability(
   fetcher: Fetcher = fetch,
-): Promise<boolean> {
+): Promise<ShareIntentCapability> {
   try {
-    const payload = await requestJson<{ share?: { configured?: unknown } }>(
+    const payload = await requestJson<{ share?: { configured?: unknown; mediaFilter?: unknown } }>(
       "/api/intents/capabilities",
       { cache: "no-store" },
       fetcher,
     );
-    return payload?.share?.configured === true;
+    const configured = payload?.share?.configured === true;
+    return { configured, mediaFilter: configured && payload?.share?.mediaFilter === true };
   } catch {
-    return false;
+    return { configured: false, mediaFilter: false };
   }
+}
+
+export type ShareMediaFilterResult = {
+  /**
+   * The media that may be shared: photos judged to show no person. Empty and
+   * not shareable while `remaining > 0`.
+   */
+  assetIds: string[];
+  /** Everything left out: people, photos that could not be judged, videos. */
+  excludedCount: number;
+  unclassifiedCount: number;
+  /** Photos a later call still has to judge; the answer is final at 0. */
+  remaining: number;
+  /** Photos this call sent for judging. */
+  checkedCount: number;
+  /** Photos this call could not settle; send them back as `skipAssetIds`. */
+  failedAssetIds: string[];
+};
+
+/**
+ * Judges one batch only; it selects nothing and creates no share. The caller
+ * repeats it with the failures so far as `skipAssetIds` until `remaining` is 0.
+ */
+export async function proposeShareMedia(
+  journeyIds: readonly string[],
+  skipAssetIds: readonly string[] = [],
+  fetcher: Fetcher = fetch,
+): Promise<ShareMediaFilterResult> {
+  return requestJson<ShareMediaFilterResult>(
+    "/api/intents/share/media",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        journeyIds: [...journeyIds],
+        ...(skipAssetIds.length > 0 ? { skipAssetIds: [...skipAssetIds] } : {}),
+      }),
+    },
+    fetcher,
+  );
 }
 
 /** A proposal only: it selects nothing on the server and creates no share. */

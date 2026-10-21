@@ -9,6 +9,11 @@
  * The Atlas comes from the session only. The model sees the Atlas's live
  * Journeys as id, title and dates — no coordinates, notes or media — and its
  * answer is narrowed to ids from that same list before the member sees it.
+ *
+ * `POST /share/media` is the "只分享风景图" step: on request only, it judges
+ * the photos of the Journeys the member chose and answers which may be
+ * shared. It writes only its own per-asset cache and never creates a share;
+ * the result reaches a link only as `mediaAssetIds` on `POST /api/shares`.
  */
 
 import { Hono } from "hono";
@@ -17,11 +22,22 @@ import { serverConfig } from "../config";
 import {
   boundShareIntentProposal,
   createShareIntentReader,
+  ShareIntentError,
   ShareIntentUnavailableError,
 } from "../intents/create-share-intent";
+import {
+  createHttpPersonClassifier,
+  filterShareMediaWithoutPeople,
+} from "../intents/share-media-filter";
 import { listJourneyShareCandidatesForAtlas } from "../repositories/journey-repository";
+import {
+  listShareMediaFilterAssets,
+  saveShareMediaClassifications,
+} from "../repositories/share-media-filter-repository";
+import type { MultipartStorage } from "../storage/multipart-storage";
+import { getMultipartStorage } from "../storage/storage-registry";
 import { readJsonObject } from "./json-body";
-import { MAX_SHARE_JOURNEYS } from "./shares";
+import { MAX_SHARE_JOURNEYS, MAX_SHARE_MEDIA_ASSETS } from "./shares";
 
 /** A sentence, not a document. */
 export const MAX_SHARE_INTENT_TEXT_LENGTH = 300;
@@ -36,11 +52,19 @@ export const MAX_SHARE_INTENT_CANDIDATES = 200;
 /** Journey titles are owner-private, and so is any proposal built from them. */
 export const SHARE_INTENT_CACHE_CONTROL = "private, no-store";
 
-/** Overridable only so a test can hand in a fetcher and a clock. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Overridable only so a test can hand in a fetcher, a clock and storage. */
 export const shareIntentDependencies: {
   fetcher?: typeof fetch;
   now?: () => Date;
+  storage?: (driver: string) => Pick<MultipartStorage, "readObjectHead">;
 } = {};
+
+/** The media filter needs the text provider and a vision model on it. */
+function mediaFilterConfigured() {
+  return serverConfig.intentDriver === "http-model" && serverConfig.intentVisionModel !== null;
+}
 
 export const intentRoutes = new Hono();
 
@@ -48,7 +72,10 @@ intentRoutes.get("/capabilities", async (context) => {
   await requireAtlasAccess(context.req.raw, "read");
   context.header("Cache-Control", SHARE_INTENT_CACHE_CONTROL);
   return context.json({
-    share: { configured: serverConfig.intentDriver !== "disabled" },
+    share: {
+      configured: serverConfig.intentDriver !== "disabled",
+      mediaFilter: mediaFilterConfigured(),
+    },
   });
 });
 
@@ -90,4 +117,101 @@ intentRoutes.post("/share", async (context) => {
     proposal: boundShareIntentProposal(reading.proposal, candidates, MAX_SHARE_JOURNEYS),
     model: reading.model,
   });
+});
+
+/**
+ * One media classification at a time per Atlas, in this process. A second
+ * request while one runs answers 409 instead of doubling provider calls.
+ */
+const mediaFilterInFlight = new Set<string>();
+
+/**
+ * Which media of these Journeys may be shared without people. Same `create`
+ * guard as the proposal; the Atlas is the session's, and every Journey id is
+ * re-checked against it before any media is read or sent.
+ *
+ * Only a stored preview is ever sent, inline as a data URL. A photo that
+ * could not be judged, and every video or other media, is excluded.
+ *
+ * Batched: one call judges at most `MAX_SHARE_MEDIA_FILTER_UNCLASSIFIED`
+ * photos and answers `{ assetIds, excludedCount, unclassifiedCount,
+ * remaining, checkedCount, failedAssetIds }`. The caller repeats the same
+ * request, adding every `failedAssetIds` to `skipAssetIds`, until
+ * `remaining` is 0; only that last answer's `assetIds` may be shared.
+ */
+intentRoutes.post("/share/media", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "create");
+  context.header("Cache-Control", SHARE_INTENT_CACHE_CONTROL);
+  const body = await readJsonObject(() => context.req.json());
+  const journeyIds = body?.journeyIds;
+  const skipAssetIds = body?.skipAssetIds ?? [];
+  if (
+    !Array.isArray(journeyIds)
+    || journeyIds.length < 1
+    || journeyIds.length > MAX_SHARE_JOURNEYS
+    || journeyIds.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
+    || new Set(journeyIds).size !== journeyIds.length
+    || !Array.isArray(skipAssetIds)
+    || skipAssetIds.length > MAX_SHARE_MEDIA_ASSETS
+    || skipAssetIds.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
+  ) {
+    return context.json(
+      { error: "INVALID_SHARE_MEDIA_FILTER", message: "Choose between 1 and 64 Journeys" },
+      400,
+    );
+  }
+  const visionModel = serverConfig.intentVisionModel;
+  if (!mediaFilterConfigured() || !visionModel) {
+    throw new ShareIntentError(
+      "MEDIA_FILTER_UNAVAILABLE",
+      "Filtering shared media by content is not configured",
+      503,
+    );
+  }
+  if (mediaFilterInFlight.has(atlas.id)) {
+    throw new ShareIntentError(
+      "SHARE_MEDIA_FILTER_BUSY",
+      "Photos of this Atlas are already being checked",
+      409,
+    );
+  }
+  mediaFilterInFlight.add(atlas.id);
+  try {
+    const assets = await listShareMediaFilterAssets(atlas.id, journeyIds as string[], visionModel);
+    if (!assets) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+    if (assets.length > MAX_SHARE_MEDIA_ASSETS) {
+      throw new ShareIntentError(
+        "SHARE_MEDIA_FILTER_TOO_MANY",
+        `At most ${MAX_SHARE_MEDIA_ASSETS} media can be shared in one link`,
+        400,
+      );
+    }
+
+    const storage = shareIntentDependencies.storage ?? getMultipartStorage;
+    const result = await filterShareMediaWithoutPeople(assets, {
+      readPreview: async (asset) => {
+        if (!asset.previewStorageKey) return null;
+        // One byte past the ceiling: a preview larger than the current ceiling
+        // would arrive cut off, and a cut-off image must not be judged.
+        const maxBytes = serverConfig.mediaPreviewMaxBytes;
+        const head = await storage(asset.storageDriver).readObjectHead({
+          key: asset.previewStorageKey,
+          maxBytes: maxBytes + 1,
+        });
+        return head.exists && head.bytes.length <= maxBytes ? head.bytes : null;
+      },
+      classify: createHttpPersonClassifier({
+        baseUrl: serverConfig.intentBaseUrl!,
+        apiKey: serverConfig.intentApiKey!,
+        model: visionModel,
+        timeoutMs: serverConfig.intentTimeoutMs,
+        fetcher: shareIntentDependencies.fetcher,
+      }),
+      saveResults: (results) => saveShareMediaClassifications(results, visionModel),
+      skipAssetIds: new Set(skipAssetIds as string[]),
+    });
+    return context.json(result);
+  } finally {
+    mediaFilterInFlight.delete(atlas.id);
+  }
 });

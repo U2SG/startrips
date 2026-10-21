@@ -177,6 +177,7 @@ const OWNER_MUTATION_EXPORTS = [
   // One-sentence share reads owner-private Journey titles through a model.
   "readShareIntentCapability",
   "proposeShareIntent",
+  "proposeShareMedia",
 ];
 
 const GUEST_REACHABLE_MODULES = [

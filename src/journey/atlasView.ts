@@ -20,6 +20,7 @@ import {
   listShares,
   moveJourneyMedia,
   proposeShareIntent,
+  proposeShareMedia,
   readShareIntentCapability,
   reorderJourneyMedia,
   restoreJourney,
@@ -28,7 +29,9 @@ import {
   updateJourney,
   undoJourneyMediaMove,
   type JourneyMediaMoveUndo,
+  type ShareIntentCapability,
   type ShareIntentProposal,
+  type ShareMediaFilterResult,
 } from "./journeyApi";
 import { uploadJourneyMedia } from "./journeyMediaUpload";
 import { readJourneyRecordedTrackGeometry } from "./journeyRecordedTracksApi";
@@ -176,6 +179,8 @@ export type AtlasMutations = {
   createShare: (
     journeyIds: readonly string[],
     expiresAt: Date,
+    /** A media scope; absent shares every media of the Journeys. */
+    mediaAssetIds?: readonly string[],
   ) => Promise<CreatedShareGrant>;
   listShares: () => Promise<ShareGrantSummary[]>;
   revokeShare: (shareId: string) => Promise<void>;
@@ -183,8 +188,15 @@ export type AtlasMutations = {
    * One-sentence share. Optional because only the owner client has it: a
    * view without these simply offers no sentence entry.
    */
-  readShareIntentCapability?: () => Promise<boolean>;
+  readShareIntentCapability?: () => Promise<ShareIntentCapability>;
   proposeShareIntent?: (text: string) => Promise<{ proposal: ShareIntentProposal; model: string }>;
+  /** "只分享风景图": which media of these Journeys may be shared without people. */
+  proposeShareMedia?: (
+    journeyIds: readonly string[],
+    skipAssetIds?: readonly string[],
+  ) => Promise<ShareMediaFilterResult>;
+  /** The owner's own authorized read, for the confirmation thumbnails. */
+  readShareMediaPreview?: (assetId: string) => Promise<PrivateMediaRead>;
 };
 
 /**
@@ -226,11 +238,14 @@ export function createOwnerAtlasMutations(canEditJourney = true): AtlasMutations
     writeMediaDisplayState,
     confirmHomeBasePeriod: createHomeBasePeriod,
     recordHomeBaseDismissal,
-    createShare,
+    createShare: (journeyIds, expiresAt, mediaAssetIds) =>
+      createShare(journeyIds, expiresAt, undefined, mediaAssetIds),
     listShares,
     revokeShare,
     readShareIntentCapability: () => readShareIntentCapability(),
     proposeShareIntent: (text) => proposeShareIntent(text),
+    proposeShareMedia: (journeyIds, skipAssetIds) => proposeShareMedia(journeyIds, skipAssetIds),
+    readShareMediaPreview: (assetId) => getPrivateMediaRead(assetId),
   };
   if (canEditJourney) {
     mutations.updateJourneyNotes = updateJourney;

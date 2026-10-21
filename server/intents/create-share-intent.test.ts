@@ -3,6 +3,7 @@ import {
   boundShareIntentProposal,
   createShareIntentReader,
   parseShareIntentAnswer,
+  SHARE_INTENT_RESPONSE_SCHEMA,
   ShareIntentError,
   type ShareIntentCandidate,
 } from "./create-share-intent";
@@ -40,7 +41,7 @@ const REQUEST = { text: "分享今年的两段旅程，30 天有效", today: "20
 describe("http-model share intent reader", () => {
   it("sends enable_thinking only to DashScope", async () => {
     const fetcher = vi.fn(async (_url: string, _init: RequestInit) =>
-      completion({ journeyIds: [], expiry: null, unmatched: null }));
+      completion({ journeyIds: [], expiry: null, mediaFilter: null, unmatched: null }));
     await reader(fetcher as unknown as typeof fetch, 30_000, "https://dashscope.aliyuncs.com/compatible-mode/v1")
       .read(REQUEST);
     expect(JSON.parse(String(fetcher.mock.calls[0][1].body)).enable_thinking).toBe(false);
@@ -48,11 +49,11 @@ describe("http-model share intent reader", () => {
 
   it("posts an OpenAI-compatible strict json_schema request with the candidates as data", async () => {
     const fetcher = vi.fn(async (_url: string, _init: RequestInit) =>
-      completion({ journeyIds: ["j-3", "j-2"], expiry: "30d", unmatched: null }));
+      completion({ journeyIds: ["j-3", "j-2"], expiry: "30d", mediaFilter: null, unmatched: null }));
     const reading = await reader(fetcher as unknown as typeof fetch).read(REQUEST);
 
     expect(reading).toEqual({
-      proposal: { journeyIds: ["j-3", "j-2"], expiry: "30d", unmatched: null },
+      proposal: { journeyIds: ["j-3", "j-2"], expiry: "30d", mediaFilter: null, unmatched: null },
       model: "intent-1",
     });
     const [url, init] = fetcher.mock.calls[0];
@@ -71,7 +72,7 @@ describe("http-model share intent reader", () => {
   });
 
   it("refuses an expiry outside the presets as a malformed answer", async () => {
-    const fetcher = vi.fn(async () => completion({ journeyIds: ["j-3"], expiry: "90d", unmatched: null }));
+    const fetcher = vi.fn(async () => completion({ journeyIds: ["j-3"], expiry: "90d", mediaFilter: null, unmatched: null }));
     await expect(reader(fetcher as unknown as typeof fetch).read(REQUEST))
       .rejects.toMatchObject({ code: "INTENT_MALFORMED", status: 502 });
   });
@@ -122,32 +123,48 @@ describe("disabled share intent reader", () => {
 
 describe("share intent answer validation", () => {
   it("accepts null expiry and trims an empty note to null", () => {
-    expect(parseShareIntentAnswer({ journeyIds: [], expiry: null, unmatched: "  " }))
-      .toEqual({ journeyIds: [], expiry: null, unmatched: null });
+    expect(parseShareIntentAnswer({ journeyIds: [], expiry: null, mediaFilter: null, unmatched: "  " }))
+      .toEqual({ journeyIds: [], expiry: null, mediaFilter: null, unmatched: null });
   });
 
   it.each([
     null,
     [],
-    { journeyIds: "j-1", expiry: null, unmatched: null },
-    { journeyIds: [1], expiry: null, unmatched: null },
-    { journeyIds: [], expiry: "forever", unmatched: null },
-    { journeyIds: [], expiry: null, unmatched: 7 },
+    { journeyIds: "j-1", expiry: null, mediaFilter: null, unmatched: null },
+    { journeyIds: [1], expiry: null, mediaFilter: null, unmatched: null },
+    { journeyIds: [], expiry: "forever", mediaFilter: null, unmatched: null },
+    { journeyIds: [], expiry: null, mediaFilter: null, unmatched: 7 },
+    { journeyIds: [], expiry: null, mediaFilter: "landscape", unmatched: null },
+    { journeyIds: [], expiry: null, mediaFilter: true, unmatched: null },
+    { journeyIds: [], expiry: null, unmatched: null },
   ])("refuses %j", (answer) => {
     expect(() => parseShareIntentAnswer(answer)).toThrow(ShareIntentError);
   });
 
+  it("accepts the no-people media filter and carries it through the bound", () => {
+    const proposal = parseShareIntentAnswer(
+      { journeyIds: ["j-3"], expiry: null, mediaFilter: "no-people", unmatched: null },
+    );
+    expect(proposal.mediaFilter).toBe("no-people");
+    expect(boundShareIntentProposal(proposal, CANDIDATES, 64).mediaFilter).toBe("no-people");
+  });
+
+  it("asks the provider for a required, nullable media filter without an enum", () => {
+    expect(SHARE_INTENT_RESPONSE_SCHEMA.required).toContain("mediaFilter");
+    expect(SHARE_INTENT_RESPONSE_SCHEMA.properties.mediaFilter).toEqual({ type: ["string", "null"] });
+  });
+
   it("drops ids outside the candidates, de-duplicates and keeps candidate order", () => {
     expect(boundShareIntentProposal(
-      { journeyIds: ["j-1", "invented", "j-3", "j-1"], expiry: "7d", unmatched: null },
+      { journeyIds: ["j-1", "invented", "j-3", "j-1"], expiry: "7d", mediaFilter: null, unmatched: null },
       CANDIDATES,
       64,
-    )).toEqual({ journeyIds: ["j-3", "j-1"], expiry: "7d", unmatched: null });
+    )).toEqual({ journeyIds: ["j-3", "j-1"], expiry: "7d", mediaFilter: null, unmatched: null });
   });
 
   it("caps the proposal at what one link can carry", () => {
     expect(boundShareIntentProposal(
-      { journeyIds: ["j-1", "j-2", "j-3"], expiry: null, unmatched: null },
+      { journeyIds: ["j-1", "j-2", "j-3"], expiry: null, mediaFilter: null, unmatched: null },
       CANDIDATES,
       2,
     ).journeyIds).toEqual(["j-3", "j-2"]);

@@ -320,6 +320,10 @@ export function loadServerConfig(
     environment.INTENT_BASE_URL?.trim().replace(/\/+$/, "") || null;
   const intentApiKey = environment.INTENT_API_KEY?.trim() || null;
   const intentModel = environment.INTENT_MODEL?.trim() || null;
+  // Optional: the vision model that judges whether a photo shows a person,
+  // for "只分享风景图". Unset, the media filter is reported unavailable and the
+  // share dialog never offers it. Same endpoint and key as INTENT_MODEL.
+  const intentVisionModel = environment.INTENT_VISION_MODEL?.trim() || null;
   const intentTimeoutMs = Number(environment.INTENT_TIMEOUT_MS ?? 30_000);
 
   if (production && (!smtpUrl || !mailFrom)) {
@@ -710,6 +714,7 @@ export function loadServerConfig(
     intentBaseUrl,
     intentApiKey,
     intentModel,
+    intentVisionModel,
     intentTimeoutMs,
   } as const;
 }

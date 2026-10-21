@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
-import { eq, inArray } from "drizzle-orm";
+import { count, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { routeSegmentSourceKey } from "../../src/journey/journeyModel";
 import type { RouteSegmentRecord } from "../../src/journey/types";
@@ -19,6 +19,7 @@ import {
   mediaAssetEvidence,
   mediaAssets,
   shareGrantJourneys,
+  shareGrantMedia,
   shareGrants,
 } from "../db/app-schema";
 import {
@@ -2224,5 +2225,218 @@ describe("share hardening", () => {
       });
       expect(response.status).toBe(401);
     }
+  });
+});
+
+// One-sentence share: a link that shares only the media the owner kept. The
+// excluded media of a granted Journey must be invisible to the guest on every
+// guest path, exactly like media that does not exist.
+describe("media-scoped share grant", () => {
+  const ADDRESS = "198.51.100.215";
+  const MEDIA_UNAVAILABLE_BODY = JSON.stringify({
+    error: "MEDIA_UNAVAILABLE",
+    message: "Media unavailable",
+  });
+  type ScopedPayload = {
+    share: { journeyCount: number };
+    journeys: Array<{ id: string; coverMediaAssetId: string | null; media: Array<{ id: string }> }>;
+  };
+
+  let scopedJourney = "";
+  let otherJourney = "";
+
+  async function insertScopedAsset(journeyId: string, label: string, mimeType = "image/jpeg") {
+    const [asset] = await db
+      .insert(mediaAssets)
+      .values({
+        journeyId,
+        storageDriver: "s3",
+        storageKey: `share-media-scope/${randomUUID()}/${label}`,
+        fileName: `${label}.jpg`,
+        mimeType,
+        bytes: 2048,
+        uploadedByUserId: identity.userId,
+      })
+      .returning({ id: mediaAssets.id });
+    return asset.id;
+  }
+
+  function requestShare(journeyIds: string[], mediaAssetIds?: string[]) {
+    return app.request(`${TEST_ORIGIN}/api/shares`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyIds,
+        expiresAt: inDays(7),
+        ...(mediaAssetIds ? { mediaAssetIds } : {}),
+      }),
+    });
+  }
+
+  async function createScopedShare(journeyIds: string[], mediaAssetIds: string[]) {
+    const response = await requestShare(journeyIds, mediaAssetIds);
+    expect(response.status).toBe(201);
+    return (await response.json() as { token: string }).token;
+  }
+
+  async function guestView(token: string) {
+    const response = await app.request(`${TEST_ORIGIN}/api/shared/journeys`, {
+      headers: { authorization: `Bearer ${token}`, "x-forwarded-for": ADDRESS },
+    });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    return { text, payload: JSON.parse(text) as ScopedPayload };
+  }
+
+  function guestRead(token: string, assetId: string) {
+    return app.request(`${TEST_ORIGIN}/api/shared/assets/${assetId}/read-url`, {
+      headers: { authorization: `Bearer ${token}`, "x-forwarded-for": ADDRESS },
+    });
+  }
+
+  async function grantFor(token: string) {
+    const [row] = await db
+      .select({ id: shareGrants.id, atlasId: shareGrants.atlasId, expiresAt: shareGrants.expiresAt })
+      .from(shareGrants)
+      .where(eq(shareGrants.tokenHash, hashShareToken(token)));
+    return row;
+  }
+
+  beforeAll(async () => {
+    const [scoped, other] = await Promise.all([
+      createJourneyForAtlas(identity.atlasId, identity.userId, {
+        ...baseJourney,
+        startedOn: "2026-07-01",
+        title: "Scoped landscapes",
+      }),
+      createJourneyForAtlas(identity.atlasId, identity.userId, {
+        ...baseJourney,
+        startedOn: "2026-07-05",
+        title: "Not in this link",
+      }),
+    ]);
+    if (!scoped || !other) throw new Error("Scoped journey fixtures were not created");
+    scopedJourney = scoped.id;
+    otherJourney = other.id;
+  });
+
+  it("lists only the scoped media and answers an excluded asset like a missing one", async () => {
+    const landscape = await insertScopedAsset(scopedJourney, "landscape");
+    const portrait = await insertScopedAsset(scopedJourney, "portrait");
+    const video = await insertScopedAsset(scopedJourney, "clip", "video/mp4");
+    const token = await createScopedShare([scopedJourney], [landscape]);
+
+    const { text, payload } = await guestView(token);
+    const journey = payload.journeys.find((entry) => entry.id === scopedJourney);
+    expect(journey?.media.map((asset) => asset.id)).toEqual([landscape]);
+    // Not listed, not counted, not named anywhere in the payload.
+    expect(text).not.toContain(portrait);
+    expect(text).not.toContain(video);
+
+    for (const excluded of [portrait, video]) {
+      const response = await guestRead(token, excluded);
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe(MEDIA_UNAVAILABLE_BODY);
+    }
+    // The same answer a never-existing asset gets.
+    const missing = await guestRead(token, randomUUID());
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toBe(MEDIA_UNAVAILABLE_BODY);
+
+    // The included asset passes authorization and reaches the presign, which
+    // is as far as it gets with storage unconfigured here.
+    expect((await guestRead(token, landscape)).status).toBe(503);
+    const grant = await grantFor(token);
+    expect(await resolveSharedMediaRead(grant, landscape)).not.toBeNull();
+    expect(await resolveSharedMediaRead(grant, portrait)).toBeNull();
+  });
+
+  it("drops an excluded cover and keeps an included one", async () => {
+    const kept = await insertScopedAsset(scopedJourney, "kept-cover");
+    const excluded = await insertScopedAsset(scopedJourney, "excluded-cover");
+    await db.update(journeys).set({ coverMediaAssetId: excluded }).where(eq(journeys.id, scopedJourney));
+    try {
+      const token = await createScopedShare([scopedJourney], [kept]);
+      const first = await guestView(token);
+      expect(first.payload.journeys[0].coverMediaAssetId).toBeNull();
+      expect(first.text).not.toContain(excluded);
+
+      await db.update(journeys).set({ coverMediaAssetId: kept }).where(eq(journeys.id, scopedJourney));
+      const second = await guestView(token);
+      expect(second.payload.journeys[0].coverMediaAssetId).toBe(kept);
+    } finally {
+      await db.update(journeys).set({ coverMediaAssetId: null }).where(eq(journeys.id, scopedJourney));
+    }
+  });
+
+  it("shares no media at all for an empty scope, including media added later", async () => {
+    await insertScopedAsset(scopedJourney, "before-empty");
+    const token = await createScopedShare([scopedJourney], []);
+    const [grant] = await db
+      .select({ mediaScoped: shareGrants.mediaScoped })
+      .from(shareGrants)
+      .where(eq(shareGrants.tokenHash, hashShareToken(token)));
+    expect(grant.mediaScoped).toBe(true);
+
+    const later = await insertScopedAsset(scopedJourney, "after-empty");
+    const { text, payload } = await guestView(token);
+    expect(payload.journeys[0].media).toEqual([]);
+    expect(text).not.toContain(later);
+    expect((await guestRead(token, later)).status).toBe(404);
+  });
+
+  it("never widens back to all media once every scoped asset is deleted", async () => {
+    const only = await insertScopedAsset(scopedJourney, "only-scoped");
+    const token = await createScopedShare([scopedJourney], [only]);
+    const grant = await grantFor(token);
+    await db.delete(mediaAssets).where(eq(mediaAssets.id, only));
+    // The scope row cascaded away with its asset.
+    expect(await db
+      .select()
+      .from(shareGrantMedia)
+      .where(eq(shareGrantMedia.shareGrantId, grant.id))).toEqual([]);
+
+    const added = await insertScopedAsset(scopedJourney, "added-after-delete");
+    const { payload } = await guestView(token);
+    expect(payload.journeys[0].media).toEqual([]);
+    expect(await resolveSharedMediaRead(grant, added)).toBeNull();
+  });
+
+  it("leaves an unscoped grant sharing every media of its Journeys", async () => {
+    const first = await insertScopedAsset(otherJourney, "unscoped-first");
+    const response = await requestShare([otherJourney]);
+    expect(response.status).toBe(201);
+    const { token } = await response.json() as { token: string };
+    const second = await insertScopedAsset(otherJourney, "unscoped-second");
+
+    const [grant] = await db
+      .select({ mediaScoped: shareGrants.mediaScoped })
+      .from(shareGrants)
+      .where(eq(shareGrants.tokenHash, hashShareToken(token)));
+    expect(grant.mediaScoped).toBe(false);
+    const ids = (await guestView(token)).payload.journeys[0].media.map((asset) => asset.id);
+    expect(ids).toEqual(expect.arrayContaining([first, second]));
+    expect((await guestRead(token, second)).status).toBe(503);
+  });
+
+  it("refuses a scope naming media outside the shared Journeys", async () => {
+    const inside = await insertScopedAsset(scopedJourney, "inside");
+    const neighbour = await insertScopedAsset(otherJourney, "neighbour");
+    const foreign = await insertScopedAsset(foreignJourneyId, "foreign");
+    const [{ value: before }] = await db
+      .select({ value: count() })
+      .from(shareGrants)
+      .where(eq(shareGrants.atlasId, identity.atlasId));
+
+    for (const mediaAssetIds of [[inside, neighbour], [inside, foreign], [inside, randomUUID()]]) {
+      const response = await requestShare([scopedJourney], mediaAssetIds);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: "INVALID_SHARE" });
+    }
+    const [{ value: after }] = await db
+      .select({ value: count() })
+      .from(shareGrants)
+      .where(eq(shareGrants.atlasId, identity.atlasId));
+    expect(after).toBe(before);
   });
 });

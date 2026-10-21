@@ -9294,6 +9294,52 @@ body:has(.journey-share) .account-dock {
   color: var(--archive-muted);
 }
 
+/* "只分享风景图": the filter answer reads in ink like the proposal status.
+   The thumbnails are content, not controls, so they stay square and flat;
+   the strip scrolls inside itself rather than widening the sheet. */
+.journey-share__media-filter {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.journey-share__media-filter > p {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--archive-ink);
+  font: 400 12px/1.55 var(--archive-sans);
+}
+
+.journey-share__media-strip {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.journey-share__media-strip li {
+  flex: none;
+}
+
+.journey-share__media-strip img {
+  display: block;
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  background: var(--control-fill);
+}
+
+.journey-share__media-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .journey-share__message {
   border-top: 1px solid var(--archive-line);
   padding-top: 12px;

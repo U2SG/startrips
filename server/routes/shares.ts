@@ -11,7 +11,13 @@ import {
   type ShareGrantStatus,
 } from "../authorization/share-access";
 import { serverConfig } from "../config";
-import { journeys, shareGrantJourneys, shareGrants } from "../db/app-schema";
+import {
+  journeys,
+  mediaAssets,
+  shareGrantJourneys,
+  shareGrantMedia,
+  shareGrants,
+} from "../db/app-schema";
 import { db } from "../db/client";
 import { lockActiveAtlas } from "../repositories/journey-repository";
 import { loadSharedJourneyView } from "../repositories/shared-journey-repository";
@@ -33,6 +39,13 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 export const MAX_SHARE_JOURNEYS = 64;
 
 /**
+ * The most media one scoped link may list. A bound on one insert and on one
+ * request body (2000 uuids is under 80 KB of the 512 KB limit), and the same
+ * bound the media filter answers within, so a filter result always fits.
+ */
+export const MAX_SHARE_MEDIA_ASSETS = 2000;
+
+/**
  * A share response carries a bearer capability (the raw token) or the owner's
  * private link inventory. Neither may ever sit in a shared cache.
  */
@@ -41,12 +54,27 @@ export const SHARE_CACHE_CONTROL = "private, no-store";
 type ShareInput = {
   journeyIds?: unknown;
   expiresAt?: unknown;
+  mediaAssetIds?: unknown;
 };
 
 export type ShareValues = {
   journeyIds: string[];
   expiresAt: Date;
+  /**
+   * Present only for a media-scoped link: exactly the media it may show,
+   * possibly none. Absent means every media of the shared Journeys, which is
+   * the original behaviour, so absent and `[]` are never the same thing.
+   */
+  mediaAssetIds?: string[];
 };
+
+function isUniqueUuidList(value: unknown, min: number, max: number): value is string[] {
+  return Array.isArray(value)
+    && value.length >= min
+    && value.length <= max
+    && value.every((id) => typeof id === "string" && UUID_PATTERN.test(id))
+    && new Set(value as string[]).size === value.length;
+}
 
 /**
  * Body validation only: shape, uniqueness, and an expiry the server clock
@@ -67,12 +95,11 @@ export function parseShareInput(
   if (typeof parsed !== "object" || parsed === null) return null;
   const body = parsed as ShareInput;
   const journeyIds = body.journeyIds;
+  if (!isUniqueUuidList(journeyIds, 1, MAX_SHARE_JOURNEYS)) return null;
+  const mediaAssetIds = body.mediaAssetIds;
   if (
-    !Array.isArray(journeyIds)
-    || journeyIds.length < 1
-    || journeyIds.length > MAX_SHARE_JOURNEYS
-    || journeyIds.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
-    || new Set(journeyIds as string[]).size !== journeyIds.length
+    mediaAssetIds !== undefined
+    && !isUniqueUuidList(mediaAssetIds, 0, MAX_SHARE_MEDIA_ASSETS)
   ) {
     return null;
   }
@@ -85,7 +112,9 @@ export function parseShareInput(
   ) {
     return null;
   }
-  return { journeyIds: journeyIds as string[], expiresAt };
+  return mediaAssetIds === undefined
+    ? { journeyIds, expiresAt }
+    : { journeyIds, expiresAt, mediaAssetIds };
 }
 
 /**
@@ -184,6 +213,26 @@ shareRoutes.post("/", async (context) => {
       return { error: "JOURNEY_NOT_FOUND" } as const;
     }
 
+    // A media scope may name only media of the Journeys this link shares,
+    // which are by now locked live rows of this Atlas. `FOR SHARE` holds the
+    // named assets until the scope rows are written, so a concurrent delete
+    // waits instead of turning the insert into a foreign-key 500.
+    const mediaAssetIds = input.mediaAssetIds;
+    if (mediaAssetIds && mediaAssetIds.length > 0) {
+      const scoped = await transaction
+        .select({ id: mediaAssets.id })
+        .from(mediaAssets)
+        .where(and(
+          inArray(mediaAssets.id, mediaAssetIds),
+          inArray(mediaAssets.journeyId, input.journeyIds),
+        ))
+        .orderBy(asc(mediaAssets.id))
+        .for("share");
+      if (scoped.length !== mediaAssetIds.length) {
+        return { error: "INVALID_SHARE" } as const;
+      }
+    }
+
     // Lock order is an implementation detail; the stored sortOrder is not.
     // Canonical Journey chronology is the one deterministic order #200 asks
     // for, so the locked rows are re-ordered here and the recorded order
@@ -203,6 +252,7 @@ shareRoutes.post("/", async (context) => {
         createdByUserId: session.user.id,
         tokenHash: hashShareToken(rawToken),
         expiresAt: input.expiresAt,
+        mediaScoped: mediaAssetIds !== undefined,
       })
       .returning({
         id: shareGrants.id,
@@ -216,9 +266,22 @@ shareRoutes.post("/", async (context) => {
         sortOrder: index,
       })),
     );
+    if (mediaAssetIds && mediaAssetIds.length > 0) {
+      await transaction.insert(shareGrantMedia).values(
+        mediaAssetIds.map((assetId) => ({ shareGrantId: created.id, assetId })),
+      );
+    }
     return { share: created, journeyCount: selected.length } as const;
   });
-  if ("error" in outcome) return context.json({ error: outcome.error }, 404);
+  if ("error" in outcome) {
+    if (outcome.error === "INVALID_SHARE") {
+      return context.json(
+        { error: "INVALID_SHARE", message: "Invalid share selection or expiry" },
+        400,
+      );
+    }
+    return context.json({ error: outcome.error }, 404);
+  }
   const share = outcome.share;
 
   context.header("Cache-Control", SHARE_CACHE_CONTROL);
