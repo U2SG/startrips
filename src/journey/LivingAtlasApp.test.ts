@@ -1655,9 +1655,10 @@ describe("Mobile V2 particle-earth pointer ownership", () => {
     expect(definition).toContain("atlasEverydaySurfaceVisible");
     expect(definition).toContain("routePointContextVisible");
     // The cards render from the very same booleans, so the hero cannot drift
-    // from what is actually on screen.
-    expect(source).toContain("{homeBaseContextSurfaceVisible && homeBaseContext ? (");
-    expect(source).toContain("{atlasEverydaySurfaceVisible && everydayFragments ? (");
+    // from what is actually on screen. Desktop additionally gives the single
+    // right-hand column to one surface at a time.
+    expect(source).toContain('{homeBaseContextSurfaceVisible && homeBaseContext && (isMobileV2 || desktopRightSurface === "home-base") ? (');
+    expect(source).toContain('{atlasEverydaySurfaceVisible && everydayFragments && (isMobileV2 || desktopRightSurface === "everyday") ? (');
   });
 });
 
