@@ -14,6 +14,10 @@
  * the photos of the Journeys the member chose and answers which may be
  * shared. It writes only its own per-asset cache and never creates a share;
  * the result reaches a link only as `mediaAssetIds` on `POST /api/shares`.
+ *
+ * `POST /route-order` is the Composer's one-sentence reorder: it answers a
+ * proposed order of the Route Points the member is editing and writes
+ * nothing; the member applies it to the draft and saves the Journey.
  */
 
 import { Hono } from "hono";
@@ -29,6 +33,11 @@ import {
   createHttpPersonClassifier,
   filterShareMediaWithoutPeople,
 } from "../intents/share-media-filter";
+import {
+  createRouteOrderIntentReader,
+  parseRouteOrderRequest,
+  RouteOrderIntentUnavailableError,
+} from "../intents/route-order-intent";
 import { listJourneyShareCandidatesForAtlas } from "../repositories/journey-repository";
 import {
   listShareMediaFilterAssets,
@@ -76,6 +85,7 @@ intentRoutes.get("/capabilities", async (context) => {
       configured: serverConfig.intentDriver !== "disabled",
       mediaFilter: mediaFilterConfigured(),
     },
+    routeOrder: { configured: serverConfig.intentDriver === "http-model" },
   });
 });
 
@@ -214,4 +224,39 @@ intentRoutes.post("/share/media", async (context) => {
   } finally {
     mediaFilterInFlight.delete(atlas.id);
   }
+});
+
+/**
+ * A proposed order for the Route Points of the Journey being edited. `update`,
+ * the same permission as saving a Journey (`PATCH /api/journeys/:id`), so a
+ * member who could not save the order cannot spend the provider on one. Only
+ * the sentence and the point labels reach the provider; the answer is an
+ * exact permutation of the supplied ids, or `order: null`.
+ */
+intentRoutes.post("/route-order", async (context) => {
+  await requireAtlasAccess(context.req.raw, "update");
+  context.header("Cache-Control", SHARE_INTENT_CACHE_CONTROL);
+  const body = await readJsonObject(() => context.req.json());
+  const input = parseRouteOrderRequest(body);
+  if (!input) {
+    return context.json(
+      {
+        error: "INVALID_ROUTE_ORDER_INTENT",
+        message: "Write one sentence of up to 200 characters about 2 to 64 Route Points",
+      },
+      400,
+    );
+  }
+  if (serverConfig.intentDriver !== "http-model") throw new RouteOrderIntentUnavailableError();
+
+  const reader = createRouteOrderIntentReader({
+    driver: serverConfig.intentDriver,
+    baseUrl: serverConfig.intentBaseUrl,
+    apiKey: serverConfig.intentApiKey,
+    model: serverConfig.intentModel,
+    timeoutMs: serverConfig.intentTimeoutMs,
+    fetcher: shareIntentDependencies.fetcher,
+  });
+  const reading = await reader.read(input);
+  return context.json({ proposal: reading.proposal, model: reading.model });
 });
