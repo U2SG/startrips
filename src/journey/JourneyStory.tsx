@@ -4474,6 +4474,9 @@ export function JourneyStory({
   const browsableEntryCount = scopedMedia.length + storyCursor.notePageIds.size;
   const showDesktopChapterRail = !mobileLayout && visualMedia.length > 0;
   const canEditStory = Boolean(manageMedia || updateJourneyNotes || canEditJourney || canShareJourney || canExportJourney || onDelete);
+  // Desktop 编辑 enters the host's editor session (classic reader + editing)
+  // whenever the host offers one and the member may edit the Journey.
+  const desktopEditOpensEditorSession = Boolean(onOpenEditor) && capabilities.canEditJourney;
   const showSoundtrack = Boolean(soundtrack || (manageMedia && mediaEditing));
   const routePointNavigation = (
     <nav
@@ -4629,18 +4632,26 @@ export function JourneyStory({
           {mobileLayout ? <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
             <h2 id="journey-story-title">{journey.title}</h2>
-          </div> : canEditStory && !onOpenEditor ? <button
+          </div> : canEditStory ? <button
             className="journey-story__edit-toggle"
             type="button"
             aria-label={desktopEditing ? "完成编辑故事" : "编辑故事"}
             aria-pressed={desktopEditing}
             disabled={mutationPending || placementAnalyzing}
-            onClick={toggleDesktopEditing}
+            onClick={() => {
+              // The host's editor session is the one desktop edit path: it
+              // switches to the classic reader and grants editing together.
+              if (!desktopEditing && desktopEditOpensEditorSession && !editorSession) onOpenEditor?.();
+              else toggleDesktopEditing();
+            }}
           >{desktopEditing ? "完成" : "编辑"}</button> : null}
           <StoryPresentationPicker
             buttonRef={presentationNavigationRef}
             disabled={notesDirty || mutationPending || placementAnalyzing || placementReview !== null || mediaGestureHolding || Boolean(videoHandoffRef.current)}
-            onOpenClassic={onOpenEditor}
+            // On desktop a member who can edit enters editing through 编辑, so
+            // 退出媒体呈现 is not offered as a second, unlabelled edit entry.
+            // Readers keep it: for them it only leaves the media presentation.
+            onOpenClassic={!mobileLayout && desktopEditOpensEditorSession ? undefined : onOpenEditor}
             onReturnPresentation={editorSession ? () => {
               exitMobileManageMode();
             } : undefined}

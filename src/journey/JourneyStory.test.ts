@@ -1635,6 +1635,26 @@ describe("Story presentation editor navigation", () => {
     expect(markup.indexOf('class="journey-story__editor-actions"')).toBeLessThan(markup.indexOf('class="journey-story__layout"'));
   });
 
+  it("gives a desktop editor one labelled 编辑 entry instead of the presentation exit", () => {
+    const markup = renderToStaticMarkup(createElement(JourneyStory, { ...storyProps, editorSession: false }));
+    expect(markup).toContain('aria-label="编辑故事"');
+    expect(markup).not.toContain('aria-label="退出媒体呈现"');
+    expect(markup).not.toContain('data-story-editing="true"');
+  });
+
+  it("keeps 退出媒体呈现 for a shared reader, for whom it only leaves the presentation", () => {
+    const guest: AtlasView = {
+      capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
+      listJourneys: async () => [journey], listHomeBasePeriods: null, listHomeBaseDismissals: null,
+      readMedia: async () => { throw new Error("No render-time media read"); },
+      mutations: null,
+    };
+    const markup = renderToStaticMarkup(createElement(AtlasViewProvider, { value: guest,
+      children: createElement(JourneyStory, { ...storyProps, editorSession: false }) }));
+    expect(markup).toContain('aria-label="退出媒体呈现"');
+    expect(markup).not.toContain('aria-label="编辑故事"');
+  });
+
   it("never grants a shared reader edit or export authority on local exit", () => {
     const guest: AtlasView = {
       capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
