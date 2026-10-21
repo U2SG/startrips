@@ -18,6 +18,7 @@ import {
   COVER_ROUTE_BAND,
   COVER_ROUTE_STROKE,
   coverDateCount,
+  coverRouteDots,
   coverRouteGeometry,
   coverRouteSvgPath,
 } from "./coverRouteGeometry";
@@ -860,6 +861,15 @@ function CoverRoute({ routePoints }: { routePoints: Journey["routePoints"] }) {
             strokeWidth={COVER_ROUTE_STROKE.highlight * COVER_UNITS}
             transform={`translate(${offset} ${offset})`}
           />
+          {coverRouteDots(geometry).map((dot, index) => (
+            <circle
+              key={index}
+              className="journey-book__cover-route-dot"
+              cx={dot.x * COVER_BAND_WIDTH}
+              cy={dot.y * COVER_BAND_HEIGHT}
+              r={(COVER_ROUTE_STROKE.dot * COVER_UNITS) / 2}
+            />
+          ))}
           <rect className="journey-book__cover-route-start" {...square(geometry.start, COVER_ROUTE_STROKE.start)} />
         </>
       ) : null}
