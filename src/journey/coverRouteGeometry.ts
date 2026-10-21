@@ -17,9 +17,11 @@ import type { RoutePoint } from "./types";
  * and the dates line) ends near 26% of the cover height on a 0.8-wide page,
  * and the tipped-in plate starts at 74% (bottom 7.3% + 18.7%). The band keeps
  * about 1% clear of both, which also holds the half stroke of a curve that
- * bulges to the band edge.
+ * bulges to the band edge. The top stays at 30%, not 27%, because the dates
+ * line keeps a 9 px floor: on a cover narrower than about 253 px (a phone in
+ * landscape) the head grows past 27.5% of the cover height.
  */
-export const COVER_ROUTE_BAND = { left: 0.07, top: 0.28, width: 0.86, height: 0.45 } as const;
+export const COVER_ROUTE_BAND = { left: 0.07, top: 0.3, width: 0.86, height: 0.43 } as const;
 
 /** Band width / band height on a page of `BOOK_PAGE_RATIO`. */
 export const COVER_ROUTE_ASPECT = (COVER_ROUTE_BAND.width * BOOK_PAGE_RATIO) / COVER_ROUTE_BAND.height;
