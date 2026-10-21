@@ -199,7 +199,10 @@ app.onError((error, context) => {
   // A share-intent refusal: 503 when unconfigured, 502/504 when the provider
   // fails or is slow. The proposal is optional, so the dialog says so inline.
   if (error instanceof ShareIntentError) {
-    return context.json({ error: error.code, message: error.message }, error.status as 400);
+    return context.json(
+      { error: error.code, stage: error.stage, message: error.message },
+      error.status as 400,
+    );
   }
   if (error instanceof StorageUnavailableError) {
     return context.json(

@@ -413,7 +413,11 @@ export function JourneyShareDialog({
                             type="checkbox"
                             value={journey.id}
                             checked={checked}
-                            onChange={() => setSelected((current) => toggleShareSelection(current, journey.id))}
+                            onChange={() => {
+                              setSelected((current) => toggleShareSelection(current, journey.id));
+                              // A hand edit makes "已按这句话选好 N 段" untrue.
+                              setIntentStatus(null);
+                            }}
                           />
                           <span aria-hidden="true" />
                           <strong>{journey.title}</strong>

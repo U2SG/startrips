@@ -43,7 +43,10 @@ const app = new Hono()
   .route("/api/intents", intentRoutes)
   .onError((error, context) => {
     if (error instanceof ShareIntentError) {
-      return context.json({ error: error.code, message: error.message }, error.status as 400);
+      return context.json(
+        { error: error.code, stage: error.stage, message: error.message },
+        error.status as 400,
+      );
     }
     throw error;
   });
@@ -131,7 +134,7 @@ describe("POST /api/intents/share", () => {
     config.serverConfig.intentDriver = "disabled";
     const response = await propose("分享最近的旅程");
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ error: "INTENT_UNAVAILABLE" });
+    expect(await response.json()).toMatchObject({ error: "INTENT_UNAVAILABLE", stage: "share-intent" });
     expect(candidates.list).not.toHaveBeenCalled();
     expect(upstream).not.toHaveBeenCalled();
   });
