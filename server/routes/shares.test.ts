@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { MAX_SHARE_LIFETIME_MS } from "../authorization/share-access";
-import { MAX_SHARE_JOURNEYS, parseShareInput, readShareInput } from "./shares";
+import {
+  MAX_SHARE_JOURNEYS,
+  MAX_SHARE_MEDIA_ASSETS,
+  parseShareInput,
+  readShareInput,
+} from "./shares";
 
 const NOW = new Date("2026-09-03T12:00:00.000Z");
 const JOURNEY_A = "11111111-1111-4111-8111-111111111111";
@@ -114,6 +119,51 @@ describe("share creation input", () => {
         NOW,
       ),
     ).toMatchObject({ expiresAt: new Date("2026-09-10T12:00:00.000Z") });
+  });
+});
+
+describe("share creation media scope", () => {
+  const ASSET_A = "44444444-4444-4444-8444-444444444444";
+  const ASSET_B = "55555555-5555-4555-8555-555555555555";
+
+  it("leaves an unscoped body exactly as before, with no media key at all", () => {
+    const parsed = parseShareInput({ journeyIds: [JOURNEY_A], expiresAt: IN_A_WEEK }, NOW);
+    expect(parsed).not.toBeNull();
+    expect(Object.keys(parsed!).sort()).toEqual(["expiresAt", "journeyIds"]);
+  });
+
+  it("keeps a scope of some media and an empty scope distinct from no scope", () => {
+    expect(parseShareInput(
+      { journeyIds: [JOURNEY_A], expiresAt: IN_A_WEEK, mediaAssetIds: [ASSET_A, ASSET_B] },
+      NOW,
+    )).toMatchObject({ mediaAssetIds: [ASSET_A, ASSET_B] });
+    // No photo passed the filter: the link shares no media, not all of it.
+    expect(parseShareInput(
+      { journeyIds: [JOURNEY_A], expiresAt: IN_A_WEEK, mediaAssetIds: [] },
+      NOW,
+    )).toMatchObject({ mediaAssetIds: [] });
+  });
+
+  it.each([
+    ["not an array", ASSET_A],
+    ["null", null],
+    ["a malformed id", ["not-a-uuid"]],
+    ["a non-string id", [42]],
+    ["a duplicated id", [ASSET_A, ASSET_A]],
+    ["more than the cap", Array.from({ length: MAX_SHARE_MEDIA_ASSETS + 1 }, (_, index) => uuidAt(index))],
+  ])("rejects a media scope that is %s", (_label, mediaAssetIds) => {
+    expect(parseShareInput(
+      { journeyIds: [JOURNEY_A], expiresAt: IN_A_WEEK, mediaAssetIds },
+      NOW,
+    )).toBeNull();
+  });
+
+  it("accepts a scope of exactly the cap", () => {
+    const mediaAssetIds = Array.from({ length: MAX_SHARE_MEDIA_ASSETS }, (_, index) => uuidAt(index));
+    expect(parseShareInput(
+      { journeyIds: [JOURNEY_A], expiresAt: IN_A_WEEK, mediaAssetIds },
+      NOW,
+    )?.mediaAssetIds).toHaveLength(MAX_SHARE_MEDIA_ASSETS);
   });
 });
 
