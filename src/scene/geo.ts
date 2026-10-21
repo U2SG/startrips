@@ -81,311 +81,14 @@ function slerpUnitVectors(start: Vector3, end: Vector3, progress: number) {
     .normalize();
 }
 
-/** #352: each spherical spline handle is a bounded fraction of its leg. */
-export const MAX_ROUTE_SPLINE_HANDLE_RATIO = 0.5;
-
-/** #352: no spline handle may rotate farther than fifteen degrees from its anchor. */
-export const MAX_ROUTE_SPLINE_HANDLE_ANGLE = Math.PI / 12;
-
-/** #352: presentation smoothing never strays more than two degrees from the leg geodesic. */
-export const MAX_ROUTE_SPLINE_DEVIATION = Math.PI / 90;
-
-/** #352: sample densely enough that a polyline join follows the shared tangent within ~1 degree. */
-export const ROUTE_SPLINE_JOIN_TOLERANCE = Math.PI / 180;
-
 function angularDistance(start: Vector3, end: Vector3) {
   return Math.acos(Math.min(1, Math.max(-1, start.dot(end))));
 }
 
-/** Unit direction from an anchor toward a neighbour, projected into its tangent plane. */
-function tangentToward(anchor: Vector3, neighbour: Vector3) {
-  const tangent = neighbour.clone().addScaledVector(anchor, -anchor.dot(neighbour));
-  if (tangent.lengthSq() < 1e-18) return new Vector3();
-  return tangent.normalize();
-}
-
-type RouteSplineAnchor = {
-  direction: Vector3;
-  tangent: Vector3;
-  turnScale: number;
-  /**
-   * Shorter of the two legs meeting this anchor. An interior handle may not
-   * borrow more room than both adjacent legs can support (#478).
-   */
-  adjacentLegAngle: number;
-};
-
-/**
- * #352: derive one forward-travel tangent per Route Point. Interior tangents
- * live in the anchor's tangent plane and weight each neighbouring direction by
- * that leg's angular length, so a tiny side leg cannot throw a long leg
- * sideways. Near a U-turn the handle scale tends to zero instead of drawing a
- * decorative loop.
- */
-function buildRouteSplineAnchors(directions: readonly Vector3[]) {
-  return directions.map((direction, index): RouteSplineAnchor => {
-    if (directions.length < 2) {
-      return {
-        direction,
-        tangent: new Vector3(),
-        turnScale: 0,
-        adjacentLegAngle: 0,
-      };
-    }
-    if (index === 0) {
-      return {
-        direction,
-        tangent: tangentToward(direction, directions[1]),
-        turnScale: 1,
-        adjacentLegAngle: angularDistance(direction, directions[1]),
-      };
-    }
-    if (index === directions.length - 1) {
-      return {
-        direction,
-        tangent: tangentToward(direction, directions[index - 1]).multiplyScalar(-1),
-        turnScale: 1,
-        adjacentLegAngle: angularDistance(directions[index - 1], direction),
-      };
-    }
-
-    const previous = directions[index - 1];
-    const next = directions[index + 1];
-    const incoming = tangentToward(direction, previous).multiplyScalar(-1);
-    const outgoing = tangentToward(direction, next);
-    const previousAngle = angularDistance(previous, direction);
-    const nextAngle = angularDistance(direction, next);
-    const turnDot = Math.min(1, Math.max(-1, incoming.dot(outgoing)));
-    const turnScale = Math.sqrt(Math.max(0, (1 + turnDot) / 2));
-    const tangent = incoming
-      .clone()
-      .multiplyScalar(previousAngle)
-      .addScaledVector(outgoing, nextAngle);
-
-    if (tangent.lengthSq() < 1e-18) {
-      tangent.copy(outgoing.lengthSq() > 0 ? outgoing : incoming);
-    }
-    if (tangent.lengthSq() > 0) tangent.normalize();
-    return {
-      direction,
-      tangent,
-      turnScale,
-      adjacentLegAngle: Math.min(previousAngle, nextAngle),
-    };
-  });
-}
-
-function splineHandleAngle(
-  legAngle: number,
-  adjacentLegAngle: number,
-  turnScale: number,
-) {
-  return Math.min(
-    MAX_ROUTE_SPLINE_HANDLE_ANGLE,
-    legAngle * MAX_ROUTE_SPLINE_HANDLE_RATIO,
-    adjacentLegAngle * MAX_ROUTE_SPLINE_HANDLE_RATIO,
-  ) * turnScale;
-}
-
-function routeSplineSegmentCount(
-  start: Vector3,
-  end: Vector3,
-  startTangent: Vector3,
-  endTangent: Vector3,
-  startHandleAngle: number,
-  endHandleAngle: number,
-  legAngle: number,
-) {
-  const geodesicStart = tangentToward(start, end);
-  const geodesicEnd = tangentToward(end, start).multiplyScalar(-1);
-  const fullHandle = Math.min(
-    MAX_ROUTE_SPLINE_HANDLE_ANGLE,
-    legAngle * MAX_ROUTE_SPLINE_HANDLE_RATIO,
-  );
-  const startScale = fullHandle > 0 ? startHandleAngle / fullHandle : 0;
-  const endScale = fullHandle > 0 ? endHandleAngle / fullHandle : 0;
-  const startDeflection = geodesicStart.lengthSq() > 0 && startTangent.lengthSq() > 0
-    ? geodesicStart.angleTo(startTangent) * startScale
-    : 0;
-  const endDeflection = geodesicEnd.lengthSq() > 0 && endTangent.lengthSq() > 0
-    ? geodesicEnd.angleTo(endTangent) * endScale
-    : 0;
-  const count = Math.ceil(
-    Math.max(startDeflection, endDeflection) / ROUTE_SPLINE_JOIN_TOLERANCE,
-  );
-  if (count <= 1) return 1;
-  return count % 2 === 0 ? count : count + 1;
-}
-
-function routeLegSplineFrame(start: Vector3, end: Vector3) {
-  const normal = start.clone().cross(end);
-  if (normal.lengthSq() >= 1e-18) {
-    normal.normalize();
-    return {
-      normal,
-      startTravel: normal.clone().cross(start).normalize(),
-      endTravel: normal.clone().cross(end).normalize(),
-    };
-  }
-
-  const reference = Math.abs(start.y) < 0.9
-    ? new Vector3(0, 1, 0)
-    : new Vector3(1, 0, 0);
-  const startTravel = reference.cross(start).normalize();
-  return {
-    normal: start.clone().cross(startTravel).normalize(),
-    startTravel,
-    endTravel: startTravel.clone().multiplyScalar(-1),
-  };
-}
-
-type RouteSplineDesiredCrossTrackSlope = {
-  slope: number;
-  representable: boolean;
-};
-
-function splineDesiredCrossTrackSlope(
-  tangent: Vector3,
-  travel: Vector3,
-  normal: Vector3,
-  handleAngle: number,
-  legAngle: number,
-): RouteSplineDesiredCrossTrackSlope {
-  if (!(handleAngle > 0)) return { slope: 0, representable: true };
-  if (tangent.lengthSq() < 1e-18) return { slope: 0, representable: false };
-  const along = tangent.dot(travel);
-  if (!(along > 1e-9)) return { slope: 0, representable: false };
-  return {
-    slope: legAngle * tangent.dot(normal) / along,
-    representable: true,
-  };
-}
-
-type RouteSplineCrossTrackSlopes = {
-  start: number;
-  end: number;
-  startPreservesTangent: boolean;
-  endPreservesTangent: boolean;
-};
-
-function boundedSplineCrossTrackSlopes(
-  startTangent: Vector3,
-  endTangent: Vector3,
-  frame: ReturnType<typeof routeLegSplineFrame>,
-  startHandleAngle: number,
-  endHandleAngle: number,
-  legAngle: number,
-): RouteSplineCrossTrackSlopes {
-  const desiredStart = splineDesiredCrossTrackSlope(
-    startTangent,
-    frame.startTravel,
-    frame.normal,
-    startHandleAngle,
-    legAngle,
-  );
-  const desiredEnd = splineDesiredCrossTrackSlope(
-    endTangent,
-    frame.endTravel,
-    frame.normal,
-    endHandleAngle,
-    legAngle,
-  );
-  let start = Math.max(
-    -3 * startHandleAngle,
-    Math.min(3 * startHandleAngle, desiredStart.slope),
-  );
-  let end = Math.max(
-    -3 * endHandleAngle,
-    Math.min(3 * endHandleAngle, desiredEnd.slope),
-  );
-
-  // Both Hermite basis functions peak at 4/27 in magnitude. Scale endpoint
-  // slopes together so the entire span stays inside the existing 2° truth
-  // boundary without a per-sample hard clamp that could introduce a kink.
-  const conservativeDeviation = (4 / 27) * (Math.abs(start) + Math.abs(end));
-  if (conservativeDeviation > MAX_ROUTE_SPLINE_DEVIATION) {
-    const scale = MAX_ROUTE_SPLINE_DEVIATION / conservativeDeviation;
-    start *= scale;
-    end *= scale;
-  }
-
-  return {
-    start,
-    end,
-    startPreservesTangent: desiredStart.representable
-      && Math.abs(start - desiredStart.slope) <= 1e-12,
-    endPreservesTangent: desiredEnd.representable
-      && Math.abs(end - desiredEnd.slope) <= 1e-12,
-  };
-}
-
-/**
- * #352: a spherical cubic Hermite span expressed as a bounded cross-track
- * offset from the leg geodesic. This avoids the near-antipodal normalization
- * singularity of a Euclidean cubic while retaining the shared endpoint tangent
- * direction wherever that direction advances along the leg. A reversal that
- * would point backward collapses that endpoint handle to a stop instead of
- * overshooting the Route Point.
- */
-function sampleSphericalSpline(
-  start: Vector3,
-  end: Vector3,
-  startTangent: Vector3,
-  endTangent: Vector3,
-  startHandleAngle: number,
-  endHandleAngle: number,
-  progress: number,
-) {
-  if (progress <= 0) return start.clone();
-  if (progress >= 1) return end.clone();
-
-  const legAngle = angularDistance(start, end);
-  if (!(legAngle > 1e-12)) return start.clone();
-  const frame = routeLegSplineFrame(start, end);
-  const slopes = boundedSplineCrossTrackSlopes(
-    startTangent,
-    endTangent,
-    frame,
-    startHandleAngle,
-    endHandleAngle,
-    legAngle,
-  );
-
-  const t2 = progress * progress;
-  const t3 = t2 * progress;
-  const crossTrackAngle = (t3 - 2 * t2 + progress) * slopes.start
-    + (t3 - t2) * slopes.end;
-  const geodesic = slerpUnitVectors(start, end, progress);
-  return geodesic
-    .multiplyScalar(Math.cos(crossTrackAngle))
-    .addScaledVector(frame.normal, Math.sin(crossTrackAngle))
-    .normalize();
-}
-
-/**
- * #15 route arc options. A route is a great circle with an altitude hump:
- * long legs lift off the surface with a natural spatial curve, short legs
- * hug the globe like a glowing thread.
- */
-export type RouteArcOptions = {
-  /**
-   * Max arc height as a fraction of the globe radius (0..~0.6). 0 disables
-   * the hump entirely and keeps the old flat spherical arc.
-   */
-  arcHeightRatio?: number;
-  /**
-   * Angular distance (radians) at which the cinematic hump saturates. #242:
-   * the resulting height is then bounded against the leg's own chord, so a
-   * local hop hugs geography instead of standing taller than it is long.
-   */
-  arcSaturationAngle?: number;
-};
-
 /**
  * The canonical geographic surface radius used whenever a latitude/longitude
- * is projected for product semantics. Visual glow/lift may render slightly
- * above this surface, but labels, route endpoints and focus geometry must not
- * invent a different geographic shell.
+ * is projected for product semantics. Labels, route endpoints and focus
+ * geometry must not invent a different geographic shell.
  */
 export const GEOGRAPHIC_SURFACE_RADIUS = 1.39;
 
@@ -410,16 +113,15 @@ export function routePointAnchor(
 }
 
 /**
- * #193: route geometry is stored as unit directions plus a decorative lift per
- * vertex instead of baked world positions. The lift is a fraction of the anchor
- * radius, so a frame can pick its own lift strength - see resolveRouteArcLift -
- * without rebuilding the route, and both ends of every leg carry lift 0 and
- * therefore land exactly on the Route Point anchor.
+ * Route geometry is stored as unit directions plus a per-vertex lift, a
+ * fraction of the anchor radius. Journey legs and recorded tracks both lie on
+ * the surface, so every lift they carry is 0; the field remains so projection
+ * reads one sample shape for both.
  */
 export type RouteArcSamples = {
   /** Unit direction per vertex; two vertices (6 floats) per drawn segment. */
   directions: Float32Array;
-  /** Decorative lift per vertex as a fraction of the anchor radius. */
+  /** Lift per vertex as a fraction of the anchor radius. */
   lifts: Float32Array;
 };
 
@@ -428,122 +130,6 @@ const EMPTY_ROUTE_ARC_SAMPLES: RouteArcSamples = {
   lifts: new Float32Array(),
 };
 
-/**
- * #242: decorative lift is bounded relative to the leg it decorates.
- *
- * The sqrt policy alone made peak lift divided by endpoint chord length grow
- * without bound as legs shortened - about 1.18 chord lengths at 1.9 degrees -
- * so a chain of local stops rendered as a row of steep takeoffs. The cap below
- * is the highest a hump may stand relative to its own chord, and the ramp
- * takes that fraction smoothly to zero as a leg becomes local, which is what
- * "short hops stay flat" always meant but never enforced.
- */
-export const MAX_ROUTE_ARC_LIFT_PER_CHORD = 0.25;
-
-/** Below this leg angle the chord-relative bound ramps toward a flat trace. */
-export const ROUTE_ARC_SHORT_LEG_ANGLE = Math.PI / 9;
-
-/**
- * #242: how far the drawn polyline may depart from the lifted curve it stands
- * for, as a fraction of the anchor radius. It is the quality policy the sample
- * count is solved for, rather than a vertex count chosen by hand.
- */
-export const ROUTE_ARC_CHORD_TOLERANCE = 5e-5;
-
-/**
- * A lifted leg is never drawn as one or two straight segments. Two segments
- * through one elevated midpoint IS the reported sawtooth: the midpoint is a
- * literal triangular peak, and crossing the old one-segment threshold made a
- * flat leg jump straight to it.
- */
-export const MIN_LIFTED_ROUTE_ARC_SEGMENTS = 4;
-
-/**
- * Bound on the second derivative of the sin^1.6 hump in the leg parameter,
- * around its peak: |d2/dt2 of h*sin(pi*t)^1.6| is 1.6*pi^2*h there, and the
- * margin covers the sharper shoulders of the profile.
- */
-const ROUTE_ARC_LIFT_CURVATURE = 20;
-
-const ROUTE_ARC_EXPONENT = 1.6;
-
-function smoothstep(edge0: number, edge1: number, value: number) {
-  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
-
-function arcHeightRatioFor(angle: number, options: RouteArcOptions) {
-  const ratio = options.arcHeightRatio ?? 0;
-  if (ratio <= 0 || angle <= 0) return 0;
-  const saturation = options.arcSaturationAngle ?? Math.PI / 3;
-  const cinematic = ratio * Math.min(1, Math.sqrt(angle / saturation));
-  // The chord between the two Route Points, in the same units as the lift.
-  const chord = 2 * Math.sin(angle / 2);
-  const localBound = MAX_ROUTE_ARC_LIFT_PER_CHORD
-    * chord
-    * smoothstep(0, ROUTE_ARC_SHORT_LEG_ANGLE, angle);
-  return Math.min(cinematic, localBound);
-}
-
-/**
- * #242: how many straight segments the lifted curve of one leg needs.
- *
- * The old rule counted angular distance alone, so it could not see the
- * curvature the radial lift itself introduces. Here the leg is a curve in its
- * own plane whose parameter-space acceleration has an angular term and a lift
- * term; the chord error of an n-segment polyline through a curve of
- * acceleration a is at most a / (8 n^2), which inverts to the count below.
- *
- * The count is even so the peak at t = 0.5 is always sampled - an odd count
- * reads the hump about 8 percent low and makes the sampled peak depend on
- * parity rather than on policy.
- */
-export function routeArcSegmentCount(
-  angle: number,
-  heightRatio: number,
-  maxSegmentAngle: number,
-  liftRequested: boolean,
-) {
-  if (!(angle > 0)) return 1;
-  const angular = Math.ceil(angle / maxSegmentAngle);
-  const acceleration = angle * angle * (1 + heightRatio)
-    + ROUTE_ARC_LIFT_CURVATURE * heightRatio;
-  const curvature = Math.ceil(
-    Math.sqrt(acceleration / (8 * ROUTE_ARC_CHORD_TOLERANCE)),
-  );
-  let count = Math.max(1, angular, curvature);
-  if (liftRequested) count = Math.max(count, MIN_LIFTED_ROUTE_ARC_SEGMENTS);
-  return count % 2 === 0 ? count : count + 1;
-}
-
-/**
- * #242 review: the inverse of routeArcSegmentCount - the tallest hump a leg
- * drawn with `segmentCount` straight segments can carry and still meet
- * ROUTE_ARC_CHORD_TOLERANCE.
- *
- * Under budget pressure a leg can be granted far fewer segments than its hump
- * asked for. Keeping the full height at that density draws the coarse raised
- * polygon this change exists to remove, so the decoration is what gives way,
- * never the fidelity of the path.
- */
-export function maxRepresentableArcLift(angle: number, segmentCount: number) {
-  if (!(angle > 0) || segmentCount < MIN_LIFTED_ROUTE_ARC_SEGMENTS) return 0;
-  const affordable = 8 * ROUTE_ARC_CHORD_TOLERANCE * segmentCount * segmentCount;
-  const angular = angle * angle;
-  if (affordable <= angular) return 0;
-  return (affordable - angular) / (angular + ROUTE_ARC_LIFT_CURVATURE);
-}
-
-/**
- * The hump peaks mid-leg and is exactly zero at both ends, so a leg endpoint
- * always resolves to the Route Point anchor itself rather than to a value a
- * sine rounds to 1e-26.
- */
-function liftAt(progress: number, heightRatio: number, exponent: number) {
-  if (progress <= 0 || progress >= 1 || heightRatio <= 0) return 0;
-  return Math.pow(Math.sin(Math.PI * progress), exponent) * heightRatio;
-}
-
 export function routeArcVertexCount(samples: RouteArcSamples) {
   return samples.lifts.length;
 }
@@ -551,366 +137,61 @@ export function routeArcVertexCount(samples: RouteArcSamples) {
 export type RouteArcLegPlan = {
   start: Vector3;
   end: Vector3;
-  /** Shared forward-travel tangents at the two canonical Route Point anchors. */
-  startTangent: Vector3;
-  endTangent: Vector3;
-  /** Bounded spherical handle angles; near U-turns shrink toward zero. */
-  startHandleAngle: number;
-  endHandleAngle: number;
-  /** Angular length of the leg in radians; sizes both the count and the lift. */
+  /** Angular length of the leg in radians. */
   angle: number;
-  heightRatio: number;
   segmentCount: number;
 };
 
-type RouteSplineLegShape = Pick<
-  RouteArcLegPlan,
-  | "start"
-  | "end"
-  | "startTangent"
-  | "endTangent"
-  | "startHandleAngle"
-  | "endHandleAngle"
-  | "angle"
->;
-
-function sampleBoundedSplineDirections(
-  shape: RouteSplineLegShape,
-  segmentCount: number,
-) {
-  const {
-    start,
-    end,
-    startTangent,
-    endTangent,
-    startHandleAngle,
-    endHandleAngle,
-  } = shape;
-  const directions = [start.clone()];
-  for (let step = 1; step <= segmentCount; step += 1) {
-    const progress = step / segmentCount;
-    directions.push(sampleSphericalSpline(
-      start,
-      end,
-      startTangent,
-      endTangent,
-      startHandleAngle,
-      endHandleAngle,
-      progress,
-    ));
-  }
-  return directions;
-}
-
-function routeSplineSamplingWithinTolerance(
-  directions: readonly Vector3[],
-  maxSegmentAngle: number,
-) {
-  const distinct: Vector3[] = [];
-  for (const direction of directions) {
-    if (distinct.length === 0
-      || angularDistance(distinct[distinct.length - 1], direction) > 1e-10) {
-      distinct.push(direction);
-    }
-  }
-  for (let index = 1; index < distinct.length; index += 1) {
-    if (angularDistance(distinct[index - 1], distinct[index])
-      > maxSegmentAngle + 1e-9) return false;
-  }
-  for (let index = 1; index < distinct.length - 1; index += 1) {
-    const anchor = distinct[index];
-    const incoming = tangentToward(anchor, distinct[index - 1]).multiplyScalar(-1);
-    const outgoing = tangentToward(anchor, distinct[index + 1]);
-    if (incoming.lengthSq() > 0
-      && outgoing.lengthSq() > 0
-      && incoming.angleTo(outgoing) > ROUTE_SPLINE_JOIN_TOLERANCE + 1e-9) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Endpoint deflection alone can miss a spherical Hermite span's interior
- * speed/curvature peak on a long near-antipodal leg. Verify the actual sample sequence and
- * double the uniform density until both angular step and heading change meet
- * the existing sampling tolerances, never asking for more than the route's
- * hard #242 segment budget can provide.
- */
-function routeSplineInteriorSegmentCount(
-  shape: RouteSplineLegShape,
-  baseCount: number,
-  maxSegmentAngle: number,
-  maxSegments: number,
-) {
-  let count = Math.max(1, Math.min(baseCount, maxSegments));
-  while (true) {
-    const directions = sampleBoundedSplineDirections(shape, count);
-    if (routeSplineSamplingWithinTolerance(directions, maxSegmentAngle)
-      || count >= maxSegments) return count;
-    count = Math.min(maxSegments, Math.max(count + 1, count * 2));
-  }
-}
-
-/**
- * Find the smallest uniformly sampled count that satisfies the spline's
- * angular-step and heading-change policy without walking every intermediate
- * count. The bounded span gets an exponential bracket and then a binary
- * refinement, keeping dense-route planning O(n log n) instead of quadratic.
- */
-function routeSplineMinimumCompliantSegmentCount(
-  shape: RouteSplineLegShape,
-  maxSegmentAngle: number,
-  maxSegments: number,
-) {
-  const limit = Math.max(1, maxSegments);
-  const cache = new Map<number, boolean>();
-  const withinTolerance = (count: number) => {
-    const cached = cache.get(count);
-    if (cached !== undefined) return cached;
-    const result = routeSplineSamplingWithinTolerance(
-      sampleBoundedSplineDirections(shape, count),
-      maxSegmentAngle,
-    );
-    cache.set(count, result);
-    return result;
-  };
-
-  // A duplicate Route Point is truthfully represented by its unavoidable
-  // one-segment degenerate leg. Do not let that special case invalidate the
-  // route-wide rebalance for the non-degenerate legs around it.
-  if (!(shape.angle > 1e-12)) return 1;
-
-  // Coarse uniform samples can alias the spline's interior curvature: one
-  // candidate count may pass while its immediate neighbours fail. A compliant
-  // floor therefore has to remain compliant across a small consecutive window
-  // rather than being inferred from one lucky sample grid. The requested
-  // pre-budget count remains the hard upper bound and is verified directly.
-  if (limit < 2) return null;
-  const stableWithinTolerance = (count: number) => {
-    const last = Math.min(limit, count + 2);
-    for (let candidate = count; candidate <= last; candidate += 1) {
-      if (!withinTolerance(candidate)) return false;
-    }
-    return true;
-  };
-
-  let failed = 1;
-  let passing = Math.min(limit, 2);
-  if (stableWithinTolerance(passing)) return passing;
-  failed = passing;
-  passing = Math.min(limit, 4);
-  while (passing < limit && !stableWithinTolerance(passing)) {
-    failed = passing;
-    passing = Math.min(limit, passing * 2);
-  }
-  if (!stableWithinTolerance(passing)) return null;
-
-  while (failed + 1 < passing) {
-    const midpoint = Math.floor((failed + passing) / 2);
-    if (stableWithinTolerance(midpoint)) passing = midpoint;
-    else failed = midpoint;
-  }
-  return passing;
-}
-
 /**
  * #242: ONE decision about the geometry of a route, shared by the whole-route
- * stroke and the per-leg rewind paths.
+ * stroke and the per-leg rewind paths, so the two are identical rather than
+ * merely similar.
  *
- * Both used to build their own samples with their own vertex budget from the
- * same Route Points, so the static stroke and the leg that redraws it could
- * disagree. They now read the same plan, and because the plan is a pure
- * function of the route's points and its budget, the two are identical rather
- * than merely similar.
+ * Owner decision (2026-10-21): a leg between two Route Points is the plain
+ * great circle between them, on the surface - no sideways spline, no altitude
+ * hump. The renderer dashes the legs that cannot claim an actual route, and a
+ * corner at each Route Point is the honest join.
  *
- * The budget is spread across legs instead of being spent front to back: the
- * old build returned early when it ran out, which silently dropped the tail of
- * a dense route and with it the Route Points on it. Every leg keeps at least
- * one segment, so every stored Route Point survives and the returned leg count
- * always matches the route's own legs one for one; a leg granted fewer segments
- * than its hump needs gives up as much of the hump as it cannot draw
- * faithfully. Degradation order is fixed: decorative lift first, then interior
- * subdivision down to one segment per stored leg, and only then - when even
- * that will not fit - the route is not drawn at all. A Route Point is never
- * omitted from a route that IS drawn.
+ * The budget is spread across legs instead of being spent front to back, so
+ * the tail of a dense route is never dropped. Every leg keeps at least one
+ * segment, so every stored Route Point survives; when even one segment per leg
+ * will not fit, the route is not drawn at all rather than shortcut across
+ * omitted Route Points.
  */
 export function planRouteArcLegs(
   points: readonly GeographicPoint[],
   maxSegmentAngle: number,
   maxVertices: number,
-  arc: RouteArcOptions,
 ): RouteArcLegPlan[] {
   if (points.length < 2 || maxVertices < 2) return [];
-  const liftRequested = (arc.arcHeightRatio ?? 0) > 0;
   const availableSegments = Math.floor(maxVertices / 2);
-  const plans: RouteArcLegPlan[] = [];
+  // #242 review: a budget below one segment per leg cannot render this route
+  // truthfully. The scene reserves this floor for every route it renders.
+  if (points.length - 1 > availableSegments) return [];
+
   const directions = points.map((point) => latLonToVector3(
     point.lat,
     point.lon,
     1,
   ).normalize());
-  const splineAnchors = buildRouteSplineAnchors(directions);
-
-  // #242 review: maxVertices is a hard ceiling, and one straight segment per
-  // leg is the least a route can be drawn as while still passing through every
-  // Route Point it stores. A budget below that cannot render this route
-  // truthfully, so it renders none of it: dropping a route at the selection
-  // level is a policy the viewer can be told about, while a stroke that
-  // shortcuts across omitted Route Points is a quiet lie about the Journey.
-  // The scene reserves this floor for every route it renders, so a rendered
-  // route never reaches this guard.
-  if (points.length - 1 > availableSegments) return [];
-
-  for (let index = 1; index < points.length; index += 1) {
-    const startAnchor = splineAnchors[index - 1];
-    const endAnchor = splineAnchors[index];
-    const start = startAnchor.direction;
-    const end = endAnchor.direction;
+  const plans: RouteArcLegPlan[] = [];
+  for (let index = 1; index < directions.length; index += 1) {
+    const start = directions[index - 1];
+    const end = directions[index];
     const angle = angularDistance(start, end);
-    const heightRatio = arcHeightRatioFor(angle, arc);
-    const geodesicStart = tangentToward(start, end);
-    const geodesicEnd = tangentToward(end, start).multiplyScalar(-1);
-    const startHandleAngle = startAnchor.tangent.dot(geodesicStart) > 0
-      ? splineHandleAngle(
-        angle,
-        startAnchor.adjacentLegAngle,
-        startAnchor.turnScale,
-      )
-      : 0;
-    const endHandleAngle = endAnchor.tangent.dot(geodesicEnd) > 0
-      ? splineHandleAngle(
-        angle,
-        endAnchor.adjacentLegAngle,
-        endAnchor.turnScale,
-      )
-      : 0;
-    const shape: RouteSplineLegShape = {
+    plans.push({
       start,
       end,
-      startTangent: startAnchor.tangent.clone(),
-      endTangent: endAnchor.tangent.clone(),
-      startHandleAngle,
-      endHandleAngle,
       angle,
-    };
-    const baseSegmentCount = Math.max(
-      routeArcSegmentCount(
-        angle,
-        heightRatio,
-        maxSegmentAngle,
-        liftRequested,
-      ),
-      routeSplineSegmentCount(
-        start,
-        end,
-        startAnchor.tangent,
-        endAnchor.tangent,
-        startHandleAngle,
-        endHandleAngle,
-        angle,
-      ),
-    );
-    plans.push({
-      ...shape,
-      heightRatio,
-      segmentCount: routeSplineInteriorSegmentCount(
-        shape,
-        baseSegmentCount,
-        maxSegmentAngle,
-        availableSegments,
-      ),
+      segmentCount: Math.max(1, Math.ceil(angle / maxSegmentAngle)),
     });
   }
 
   let requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
-  // Budget rebalancing keeps the pre-collapse spline as its density witness.
-  // Collapsing presentation handles may simplify the rendered shape, but it
-  // must never weaken the already-reviewed post-budget sampling floor.
-  const densityValidationShapes: RouteSplineLegShape[] = plans.map((plan) => ({
-    start: plan.start,
-    end: plan.end,
-    startTangent: plan.startTangent,
-    endTangent: plan.endTangent,
-    startHandleAngle: plan.startHandleAngle,
-    endHandleAngle: plan.endHandleAngle,
-    angle: plan.angle,
-  }));
-  const preCollapseSegmentCounts = plans.map((plan) => plan.segmentCount);
-
-  // A bounded cross-track slope can rotate an active endpoint away from the
-  // route-wide shared tangent. Detect that before #242 budget scaling: a reduced
-  // remainingVertices allocation can make even a two-leg route enter the budget
-  // branch. Smoothing is decorative, so if either side of an interior anchor
-  // cannot express the shared tangent inside the existing handle/deviation
-  // bounds, collapse that shared handle on BOTH adjacent legs and retain the
-  // exact Route Point corner. Keep the pre-collapse requested density as the
-  // budget-allocation input so this fallback does not weaken the already-proven
-  // post-budget spline-density floors on dense routes.
-  const anchorsToCollapse = new Set<number>();
-  for (let index = 0; index < plans.length; index += 1) {
-    const plan = plans[index];
-    const slopes = boundedSplineCrossTrackSlopes(
-      plan.startTangent,
-      plan.endTangent,
-      routeLegSplineFrame(plan.start, plan.end),
-      plan.startHandleAngle,
-      plan.endHandleAngle,
-      plan.angle,
-    );
-    if (index > 0
-      && plan.startHandleAngle > 0
-      && !slopes.startPreservesTangent) {
-      anchorsToCollapse.add(index);
-    }
-    if (index < plans.length - 1
-      && plan.endHandleAngle > 0
-      && !slopes.endPreservesTangent) {
-      anchorsToCollapse.add(index + 1);
-    }
-  }
-
-  // Shared tangency is also unrepresentable when one adjacent leg already had
-  // to drop its handle because the requested tangent cannot advance along that
-  // leg while the other side still retains an active handle. Leaving an
-  // active/zero pair would make the two sampled directions disagree at the
-  // Route Point while pretending the join is still smoothed. Collapse both
-  // sides to the intentional geodesic corner instead.
-  for (let anchorIndex = 1; anchorIndex < plans.length; anchorIndex += 1) {
-    const incomingActive = plans[anchorIndex - 1].endHandleAngle > 0;
-    const outgoingActive = plans[anchorIndex].startHandleAngle > 0;
-    if (incomingActive !== outgoingActive) anchorsToCollapse.add(anchorIndex);
-  }
-
-  const collapsedLegIndexes = new Set<number>();
-  for (const anchorIndex of anchorsToCollapse) {
-    plans[anchorIndex - 1].endHandleAngle = 0;
-    plans[anchorIndex].startHandleAngle = 0;
-    collapsedLegIndexes.add(anchorIndex - 1);
-    collapsedLegIndexes.add(anchorIndex);
-  }
-
-  // Handle collapse changes the rendered Hermite span. Keep the pre-collapse
-  // request as a lower bound, but revalidate every mutated span before the
-  // early return or budget scaling: removing one endpoint slope can move the
-  // remaining curvature inward and require MORE samples than the old shape.
-  for (const index of collapsedLegIndexes) {
-    plans[index].segmentCount = routeSplineInteriorSegmentCount(
-      plans[index],
-      preCollapseSegmentCounts[index],
-      maxSegmentAngle,
-      availableSegments,
-    );
-  }
-  requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
-
   if (requested <= availableSegments) return plans;
 
-  // Not enough budget for the curve every leg asked for. Scale proportionally,
-  // never below one segment, then shave the widest remaining allocations until
-  // the total fits. The guard above already established that there are no more
-  // legs than segments, so flooring at one segment cannot breach the ceiling.
-  const requestedSegmentCounts = plans.map((plan) => plan.segmentCount);
+  // Not enough budget: scale proportionally, never below one segment, then
+  // shave the widest remaining allocations until the total fits.
   const scale = availableSegments / requested;
   for (const plan of plans) {
     plan.segmentCount = Math.max(1, Math.floor(plan.segmentCount * scale));
@@ -925,125 +206,6 @@ export function planRouteArcLegs(
     widest.segmentCount -= 1;
     requested -= 1;
   }
-
-  // #352 review: proportional #242 scaling can invalidate the spline sampling
-  // policy that chose the pre-budget counts. Compute each leg's compliant floor
-  // with logarithmic refinement, then rebalance the scaled allocation above
-  // those floors. If the floors themselves do not fit, preserve the existing
-  // best-effort budget degradation rather than breaching the hard ceiling.
-  const scaledSegmentCounts = plans.map((plan) => plan.segmentCount);
-  // Floor discovery itself can be expensive on near-antipodal spans. The caller
-  // only needs the complete floor vector when it can fit the hard route budget,
-  // so stop searching as soon as the accumulated rendered floors make that
-  // impossible. This keeps the supported 512-point cap from paying an O(n)
-  // sequence of logarithmic spline searches for an allocation that will be
-  // discarded as best-effort anyway.
-  const renderedMinimumCounts: number[] = [];
-  let renderedMinimumTotal = 0;
-  let renderedFloorsFit = true;
-  for (let index = 0; index < plans.length; index += 1) {
-    const count = routeSplineMinimumCompliantSegmentCount(
-      plans[index],
-      maxSegmentAngle,
-      requestedSegmentCounts[index],
-    );
-    if (count === null) {
-      renderedFloorsFit = false;
-      break;
-    }
-    renderedMinimumCounts.push(count);
-    renderedMinimumTotal += count;
-    if (renderedMinimumTotal > availableSegments) {
-      renderedFloorsFit = false;
-      break;
-    }
-  }
-
-  let selectedMinimumCounts: number[] | null = null;
-  if (renderedFloorsFit && renderedMinimumCounts.length === plans.length) {
-    const historicalMinimumCounts = [...renderedMinimumCounts];
-    let historicalMinimumTotal = renderedMinimumTotal;
-    let historicalFloorsFit = true;
-
-    // A collapsed span can legitimately need fewer samples than the old shape.
-    // Preserve the old-shape floor when the complete historical allocation fits,
-    // but stop those searches as soon as it cannot. At that point the already
-    // proven rendered-shape floors are the exact fallback selected by the prior
-    // behavior, so no remaining historical search can change the result.
-    for (let index = 0; index < plans.length; index += 1) {
-      if (!collapsedLegIndexes.has(index)) continue;
-      const preCollapseCount = routeSplineMinimumCompliantSegmentCount(
-        densityValidationShapes[index],
-        maxSegmentAngle,
-        preCollapseSegmentCounts[index],
-      );
-      if (preCollapseCount === null) {
-        historicalFloorsFit = false;
-        break;
-      }
-      const combinedCount = Math.max(renderedMinimumCounts[index], preCollapseCount);
-      historicalMinimumTotal += combinedCount - historicalMinimumCounts[index];
-      historicalMinimumCounts[index] = combinedCount;
-      if (historicalMinimumTotal > availableSegments) {
-        historicalFloorsFit = false;
-        break;
-      }
-    }
-
-    selectedMinimumCounts = historicalFloorsFit
-      ? historicalMinimumCounts
-      : renderedMinimumCounts;
-  }
-
-  if (selectedMinimumCounts) {
-    const rebalanced = scaledSegmentCounts.map((count, index) => (
-      Math.max(count, selectedMinimumCounts[index])
-    ));
-    let rebalancedTotal = rebalanced.reduce((sum, count) => sum + count, 0);
-
-    while (rebalancedTotal > availableSegments) {
-      let donorIndex = -1;
-      let donorSurplus = 0;
-      for (let index = 0; index < rebalanced.length; index += 1) {
-        const surplus = rebalanced[index] - selectedMinimumCounts[index];
-        if (surplus > donorSurplus) {
-          donorIndex = index;
-          donorSurplus = surplus;
-        }
-      }
-      if (donorIndex < 0) break;
-      const transfer = Math.min(
-        donorSurplus,
-        rebalancedTotal - availableSegments,
-      );
-      rebalanced[donorIndex] -= transfer;
-      rebalancedTotal -= transfer;
-    }
-
-    const rebalancedIsCompliant = rebalanced.every((count, index) => (
-      routeSplineSamplingWithinTolerance(
-        sampleBoundedSplineDirections(plans[index], count),
-        maxSegmentAngle,
-      )
-    ));
-    const selectedCounts = rebalancedIsCompliant
-      ? rebalanced
-      : selectedMinimumCounts;
-    for (let index = 0; index < plans.length; index += 1) {
-      plans[index].segmentCount = selectedCounts[index];
-    }
-  }
-
-  // #242 review: a leg keeps only the hump the segments it was granted can
-  // draw faithfully. The four-segment floor is not the test - a 20 degree leg
-  // that asked for 70 segments and got 10 would clear that floor while drawing
-  // exactly the coarse raised polygon this change removes.
-  for (const plan of plans) {
-    plan.heightRatio = Math.min(
-      plan.heightRatio,
-      maxRepresentableArcLift(plan.angle, plan.segmentCount),
-    );
-  }
   return plans;
 }
 
@@ -1051,18 +213,16 @@ function appendLegSamples(
   plan: RouteArcLegPlan,
   into: { directions: number[]; lifts: number[] },
 ) {
-  const { heightRatio, segmentCount } = plan;
-  const directions = sampleBoundedSplineDirections(plan, segmentCount);
+  const { start, end, segmentCount } = plan;
+  let previous = start;
   for (let step = 1; step <= segmentCount; step += 1) {
-    const previousProgress = (step - 1) / segmentCount;
-    const currentProgress = step / segmentCount;
-    const previous = directions[step - 1];
-    const current = directions[step];
+    // Both ends are the Route Points themselves, not a slerp that rounds to them.
+    const current = step === segmentCount
+      ? end
+      : slerpUnitVectors(start, end, step / segmentCount);
     into.directions.push(...previous.toArray(), ...current.toArray());
-    into.lifts.push(
-      liftAt(previousProgress, heightRatio, ROUTE_ARC_EXPONENT),
-      liftAt(currentProgress, heightRatio, ROUTE_ARC_EXPONENT),
-    );
+    into.lifts.push(0, 0);
+    previous = current;
   }
 }
 
@@ -1077,12 +237,9 @@ export function buildRouteArcSamples(
   points: readonly GeographicPoint[],
   maxSegmentAngle = Math.PI / 24,
   maxVertices = 8192,
-  arc: RouteArcOptions = {},
 ): RouteArcSamples {
-  const plans = planRouteArcLegs(points, maxSegmentAngle, maxVertices, arc);
+  const plans = planRouteArcLegs(points, maxSegmentAngle, maxVertices);
   if (plans.length === 0) return EMPTY_ROUTE_ARC_SAMPLES;
-  // #15: the hump peaks mid-leg and touches the surface at both ends, so a
-  // multi-stop route reads as a continuous trail, not disconnected arcs.
   const buffer = { directions: [] as number[], lifts: [] as number[] };
   for (const plan of plans) appendLegSamples(plan, buffer);
   return toSamples(buffer);
@@ -1101,9 +258,8 @@ export function buildRouteArcLegSamples(
   points: readonly GeographicPoint[],
   maxSegmentAngle = Math.PI / 24,
   maxVertices = 8192,
-  arc: RouteArcOptions = {},
 ): RouteArcSamples[] {
-  return planRouteArcLegs(points, maxSegmentAngle, maxVertices, arc).map((plan) => {
+  return planRouteArcLegs(points, maxSegmentAngle, maxVertices).map((plan) => {
     const buffer = { directions: [] as number[], lifts: [] as number[] };
     appendLegSamples(plan, buffer);
     return toSamples(buffer);

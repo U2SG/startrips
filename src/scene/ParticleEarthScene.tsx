@@ -47,6 +47,7 @@ import { compactMobileLayoutMarker } from "../journey/mobileLayout";
 import type { JourneyRoute, RouteProvenanceTier } from "../journey/types";
 import {
   buildRecordedTrackLodLevels,
+  canClaimActualRoute,
   recordedTrackLodConstructionCount,
   recordedTrackSampleTimes,
   recordedTrackVisibleSampleCount,
@@ -90,12 +91,6 @@ import {
   type RouteLabelCandidate,
   type RouteLabelPositionRole,
 } from "./labelArbitration";
-import {
-  resolveRouteArcLift,
-  routeArcPixelsPerWorldUnit,
-  ROUTE_ARC_HEIGHT_RATIO,
-  ROUTE_ARC_SATURATION_ANGLE,
-} from "./routeArcLift";
 import {
   canTrackGlobePointer,
   clampGlobeZoom,
@@ -990,6 +985,15 @@ export function isIdleRotationSuppressed(
   // Pause idle rotation only while that flight is actively settling; once the
   // destination arrives, normal self-rotation owns the globe again.
   return !dragToRotate || isFocusFlightActive(pointFocusSettling, routeFocusSettling);
+}
+
+/**
+ * Owner decision 2026-10-21: a Journey leg that cannot claim an actual route
+ * (#352 honesty intent) is drawn dashed on the particle globe. Recorded
+ * tracks and member-confirmed routes stay solid.
+ */
+export function isDashedJourneyLeg(provenance: RouteProvenanceTier) {
+  return !canClaimActualRoute(provenance);
 }
 
 export function selectRenderableJourneyRoutes(
@@ -2809,6 +2813,8 @@ export function ParticleEarthScene({
         toPointIndex: number;
         samples: RouteArcSamples;
         provenance: RouteProvenanceTier;
+        /** Dashed legs grow in through this mask path instead of their own dash. */
+        reveal: { mask: SVGMaskElement; path: SVGPathElement } | null;
       }>;
       recordedTracks: Array<{
         path: SVGPathElement;
@@ -3014,9 +3020,8 @@ export function ParticleEarthScene({
       return isLocalPointInsideClipViewport(geoFrame.clip.elements, x, y, z);
     };
     // Slots 10..13 carry the active card's bounds so a still globe still
-    // redraws the connector when the card moves or the layout changes; the
-    // last slot carries the frame's route arc lift (#193).
-    const lastRouteProjectionState = new Float64Array(15).fill(Number.NaN);
+    // redraws the connector when the card moves or the layout changes.
+    const lastRouteProjectionState = new Float64Array(14).fill(Number.NaN);
     let routeProjectionRevision = 0;
     let renderedRouteProjectionRevision = -1;
     const journeyConnectorPath = document.createElementNS(
@@ -3096,12 +3101,22 @@ export function ParticleEarthScene({
           );
         }
         // Each leg reads its destination's reveal without changing the clock.
+        const journeyRevealing = reveal?.journeys.get(entry.routeId) !== undefined;
         for (const leg of entry.legs) {
+          const legProgress = reveal?.points.get(`${entry.routeId}:${leg.toPointIndex}`);
           applyTemporalProgress(
             leg.path,
             "--journey-leg-temporal-progress",
-            reveal?.points.get(`${entry.routeId}:${leg.toPointIndex}`),
+            legProgress,
           );
+          if (!leg.reveal) continue;
+          applyTemporalProgress(
+            leg.reveal.path,
+            "--journey-leg-temporal-progress",
+            legProgress,
+          );
+          if (journeyRevealing) leg.path.setAttribute("mask", `url(#${leg.reveal.mask.id})`);
+          else leg.path.removeAttribute("mask");
         }
       }
       syncRoutePresentations();
@@ -3299,17 +3314,12 @@ export function ParticleEarthScene({
           routeTopologyFloors[routeIndex],
           routeTopologyFloorsAfter[routeIndex],
         );
-        // #15: long legs lift off the surface as a natural spatial arc
-        // (great circle + altitude hump); short legs hug the globe. The
-        // hump scales nonlinearly with angular distance and is clamped.
+        // Owner decision 2026-10-21: each leg is the plain great circle
+        // between its Route Points, on the surface; no spline, no hump.
         const routeSamples = buildRouteArcSamples(
           route.points,
           Math.PI / 96,
           remainingVertices,
-          {
-            arcHeightRatio: ROUTE_ARC_HEIGHT_RATIO,
-            arcSaturationAngle: ROUTE_ARC_SATURATION_ANGLE,
-          },
         );
         routeVertexCount += routeArcVertexCount(routeSamples);
         // #21 review: build one path per leg so the rewind reveals the trail
@@ -3325,10 +3335,6 @@ export function ParticleEarthScene({
           route.points,
           Math.PI / 96,
           remainingVertices,
-          {
-            arcHeightRatio: ROUTE_ARC_HEIGHT_RATIO,
-            arcSaturationAngle: ROUTE_ARC_SATURATION_ANGLE,
-          },
         );
         const legs = legSamples.map((leg, legIndex) => {
           const path = document.createElementNS(
@@ -3342,9 +3348,39 @@ export function ParticleEarthScene({
           path.setAttribute("fill", "none");
           path.setAttribute("stroke-linecap", "round");
           path.setAttribute("stroke-linejoin", "round");
-          path.setAttribute("pathLength", "1");
+          if (!isDashedJourneyLeg(provenance)) {
+            path.setAttribute("pathLength", "1");
+            group.appendChild(path);
+            return { path, toPointIndex: legIndex + 1, samples: leg, provenance, reveal: null };
+          }
+          // Owner decision 2026-10-21: a leg that cannot claim an actual
+          // route is a dashed great circle. `pathLength=1` would rescale the
+          // pixel dash pattern, so the leg's own dash stays static and the
+          // temporal grow-in moves to a normalized path inside a
+          // user-space mask, attached only while the Journey is revealing.
+          path.dataset.routeDash = "dashed";
+          const mask = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "mask",
+          );
+          mask.id = `route-leg-reveal-${sceneToken}-${routeIndex}-${legIndex}`;
+          mask.setAttribute("maskUnits", "userSpaceOnUse");
+          const revealPath = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "path",
+          );
+          revealPath.classList.add("particle-earth-route__leg-reveal");
+          revealPath.setAttribute("pathLength", "1");
+          mask.appendChild(revealPath);
+          group.appendChild(mask);
           group.appendChild(path);
-          return { path, toPointIndex: legIndex + 1, samples: leg, provenance };
+          return {
+            path,
+            toPointIndex: legIndex + 1,
+            samples: leg,
+            provenance,
+            reveal: { mask, path: revealPath },
+          };
         });
         const recordedTracks = buildRecordedTrackOverviewSamples(route.recordedTrackSegments ?? []).map((track) => {
           const path = document.createElementNS(
@@ -3668,27 +3704,6 @@ export function ParticleEarthScene({
         cardRect?.right ?? 0,
         cardRect?.bottom ?? 0,
       ];
-      const pixelsPerWorldUnit = routeArcPixelsPerWorldUnit({
-        focalLengthPx: targetSize.y / (2 * Math.tan((camera.fov * Math.PI) / 360)),
-        cameraDistance: Math.abs(camera.position.z - globe.position.z),
-        anchorRadius: ROUTE_ANCHOR_RADIUS,
-        globeScale: globe.scale.x,
-      });
-      // #193: decorative altitude is resolved per frame from the geometry's
-      // stored per-vertex lift, so semantic zoom can flatten the arc without
-      // rebuilding a single route.
-      const arcLift = resolveRouteArcLift({
-        // Derived from the rendered scale rather than the zoom target, so the
-        // attenuation curve and the two ceilings always describe the same
-        // frame while a wheel step is still interpolating.
-        zoom: globe.scale.x / GLOBE_MODE_CONFIG[currentMode].scale,
-        globeScale: globe.scale.x,
-        anchorRadius: ROUTE_ANCHOR_RADIUS,
-        pixelsPerWorldUnit,
-        viewportMinPx: Math.min(targetSize.x, targetSize.y),
-        semanticZoom: semanticZoomState.state,
-      });
-      projectionState.push(arcLift.liftScale);
       const projectionChanged = projectionState.some((value, index) => (
         Math.abs(value - lastRouteProjectionState[index]) > 0.00001
       ));
@@ -3723,7 +3738,7 @@ export function ParticleEarthScene({
 
       const arcWorld = {
         radius: ROUTE_ANCHOR_RADIUS,
-        liftScale: arcLift.liftScale,
+        liftScale: 0,
       };
       let routeEndpointMaxErrorPx = 0;
 
@@ -3750,6 +3765,7 @@ export function ParticleEarthScene({
             arcWorld,
           );
           leg.path.setAttribute("d", legPath.d);
+          leg.reveal?.path.setAttribute("d", legPath.d);
           if (legPath.start) {
             projectedLegEnds.push([leg.toPointIndex - 1, legPath.start]);
           }
@@ -4000,13 +4016,7 @@ export function ParticleEarthScene({
           }
         }
       });
-      // #193 QA instrumentation: the arc profile, the decorative altitude the
-      // frame actually drew, the screen ceiling it was measured against, and
-      // the endpoint read-back guard.
-      host.dataset.routeArcProfile = arcLift.profile;
-      host.dataset.routeArcLift = arcLift.liftScale.toFixed(4);
-      host.dataset.routeArcLiftPx = arcLift.screenLiftPx.toFixed(2);
-      host.dataset.routeArcLiftCapPx = arcLift.screenLiftCapPx.toFixed(2);
+      // #193 QA instrumentation: the endpoint read-back guard.
       host.dataset.routeEndpointMaxErrorPx = routeEndpointMaxErrorPx.toFixed(3);
       host.dataset.cityLabelAnchorRadius = ROUTE_ANCHOR_RADIUS.toFixed(3);
       host.dataset.geographicSurfaceRadius = GLOBE_SURFACE_RADIUS.toFixed(3);

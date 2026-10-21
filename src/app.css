@@ -295,6 +295,26 @@ button {
   transition: stroke-dashoffset var(--motion-ui, 260ms) linear;
 }
 
+/* Owner decision 2026-10-21: a leg that cannot claim an actual route is a
+   dashed great circle; the dash says "not a real road". It has no pathLength,
+   so this pixel pattern holds in every state, and its grow-in is drawn by the
+   normalized reveal path in its mask (attached only while revealing). Placed
+   after the rest and reveal rules above so it wins their specificity tie. */
+.particle-earth-route.has-provenance-legs .particle-earth-route__leg[data-route-dash="dashed"] {
+  stroke-dasharray: 4 3;
+  stroke-dashoffset: 0;
+}
+
+.particle-earth-route__leg-reveal {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 6px;
+  stroke-linecap: butt;
+  stroke-dasharray: 1;
+  stroke-dashoffset: calc(1 - var(--journey-leg-temporal-progress, 0));
+  transition: stroke-dashoffset var(--motion-ui, 260ms) linear;
+}
+
 /* One deterministic leader describes direction while the timeline is between
    a Journey's start/end. It reads the existing journey progress; it owns no
    rAF, timer, state machine, or geometry. */
@@ -313,16 +333,6 @@ button {
 
 /* Browse selection changes optical emphasis only. Directional route draw,
    leader movement and arrival are reserved for the temporal reveal authority. */
-.particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__glow {
-  opacity: 0.025;
-}
-
-.particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__core {
-  opacity: 0.38;
-}
-
 .particle-earth-scene[data-route-focus-phase="flying"]
   .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__point {
   opacity: 0.34;
@@ -344,7 +354,8 @@ button {
     opacity: 0 !important;
   }
 
-  .particle-earth-route__leg {
+  .particle-earth-route__leg,
+  .particle-earth-route__leg-reveal {
     transition: none !important;
   }
 }

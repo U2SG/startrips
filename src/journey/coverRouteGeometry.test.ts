@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { BOOK_PAGE_RATIO } from "./journeyBookLayout";
 import {
   COVER_ROUTE_ASPECT,
+  COVER_ROUTE_BAND,
+  COVER_ROUTE_MAX_DOTS,
   COVER_ROUTE_MAX_POINTS,
+  COVER_ROUTE_PADDING,
+  COVER_ROUTE_STROKE,
+  coverRouteDots,
   coverDateCount,
   coverDateLine,
   fitCoverDateLine,
@@ -72,12 +78,12 @@ describe("coverRouteGeometry", () => {
     const zigzag = Array.from({ length: 12 }, (_, index) => point(index % 2 ? 40 : -10, index * 15 - 80));
     const geometry = coverRouteGeometry(zigzag);
     if (geometry.kind !== "path") throw new Error("expected a path");
-    const padX = 0.08 / COVER_ROUTE_ASPECT;
+    const padX = COVER_ROUTE_PADDING / COVER_ROUTE_ASPECT;
     for (const vec of anchors(geometry)) {
       expect(vec.x).toBeGreaterThanOrEqual(padX - 1e-9);
       expect(vec.x).toBeLessThanOrEqual(1 - padX + 1e-9);
-      expect(vec.y).toBeGreaterThanOrEqual(0.08 - 1e-9);
-      expect(vec.y).toBeLessThanOrEqual(0.92 + 1e-9);
+      expect(vec.y).toBeGreaterThanOrEqual(COVER_ROUTE_PADDING - 1e-9);
+      expect(vec.y).toBeLessThanOrEqual(1 - COVER_ROUTE_PADDING + 1e-9);
     }
     for (const curve of geometry.curves) {
       for (const vec of [curve.c1, curve.c2]) {
@@ -89,7 +95,7 @@ describe("coverRouteGeometry", () => {
     }
     // The fit fills the band on the limiting axis.
     const size = extent(geometry);
-    expect(Math.max(size.width / (COVER_ROUTE_ASPECT - 0.16), size.height / 0.84)).toBeCloseTo(1, 6);
+    expect(Math.max(size.width / (COVER_ROUTE_ASPECT - 2 * COVER_ROUTE_PADDING), size.height / (1 - 2 * COVER_ROUTE_PADDING))).toBeCloseTo(1, 6);
   });
 
   it("thins very long routes and keeps both ends", () => {
@@ -98,8 +104,49 @@ describe("coverRouteGeometry", () => {
     const list = anchors(geometry);
     expect(list).toHaveLength(COVER_ROUTE_MAX_POINTS);
     if (geometry.kind !== "path") throw new Error("expected a path");
-    expect(geometry.start.x).toBeCloseTo(0.08 / COVER_ROUTE_ASPECT, 6);
-    expect(geometry.end.x).toBeCloseTo(1 - 0.08 / COVER_ROUTE_ASPECT, 6);
+    expect(geometry.start.x).toBeCloseTo(COVER_ROUTE_PADDING / COVER_ROUTE_ASPECT, 6);
+    expect(geometry.end.x).toBeCloseTo(1 - COVER_ROUTE_PADDING / COVER_ROUTE_ASPECT, 6);
+  });
+
+  it("enlarges the band without reaching the cover title or the photo plate", () => {
+    // Layout constants of the cover (journey-book.css and the 3D painter's COVER).
+    const widthPerHeight = BOOK_PAGE_RATIO;
+    const titleTop = 0.087;
+    const twoTitleLines = 2 * 0.067 * 1.2 * widthPerHeight;
+    const datesLine = (0.028 + 0.022 * 1.3) * widthPerHeight;
+    const headBottom = titleTop + twoTitleLines + datesLine;
+    const plateTop = 1 - 0.073 - 0.187;
+    const plateLeft = 1 - 0.095 - 0.3;
+    // Half the deboss stroke, which a curve bulging to the band edge can carry past it.
+    const halfStroke = (COVER_ROUTE_STROKE.deboss / 2) * widthPerHeight;
+
+    expect(COVER_ROUTE_BAND.top - halfStroke).toBeGreaterThan(headBottom);
+    // The band is a full-width rectangle, so it must clear the plate's top edge.
+    expect(COVER_ROUTE_BAND.left + COVER_ROUTE_BAND.width).toBeGreaterThan(plateLeft);
+    expect(COVER_ROUTE_BAND.top + COVER_ROUTE_BAND.height + halfStroke).toBeLessThan(plateTop);
+    // Larger than the previous 0.84 x 0.42 band with 8% padding.
+    expect(COVER_ROUTE_BAND.width).toBeGreaterThan(0.84);
+    expect(COVER_ROUTE_BAND.height * (1 - 2 * COVER_ROUTE_PADDING)).toBeGreaterThan(0.42 * 0.84);
+    // The padding still holds the largest marker inside the band.
+    const bandHeightInWidths = COVER_ROUTE_BAND.height / widthPerHeight;
+    expect(COVER_ROUTE_PADDING * bandHeightInWidths).toBeGreaterThanOrEqual(COVER_ROUTE_STROKE.end / 2);
+    expect(COVER_ROUTE_PADDING * bandHeightInWidths).toBeGreaterThanOrEqual(COVER_ROUTE_STROKE.dot / 2);
+  });
+
+  it("draws the route darker and thicker than the original 3 px sketch", () => {
+    expect(COVER_ROUTE_STROKE.deboss).toBeGreaterThanOrEqual(6 / 504);
+    expect(COVER_ROUTE_STROKE.dot).toBeGreaterThan(COVER_ROUTE_STROKE.deboss);
+    expect(COVER_ROUTE_STROKE.start).toBeGreaterThan(COVER_ROUTE_STROKE.dot);
+  });
+
+  it("dots each interior Route Point unless there are too many to read", () => {
+    const geometry = coverRouteGeometry([point(0, 0), point(0, 10), point(10, 10), point(10, 20)]);
+    if (geometry.kind !== "path") throw new Error("expected a path");
+    expect(coverRouteDots(geometry)).toEqual([geometry.curves[0].to, geometry.curves[1].to]);
+    expect(coverRouteDots(coverRouteGeometry([point(0, 0), point(0, 10)]))).toEqual([]);
+    expect(coverRouteDots({ kind: "point", end: { x: 0.5, y: 0.5 } })).toEqual([]);
+    const dense = Array.from({ length: COVER_ROUTE_MAX_DOTS + 3 }, (_, index) => point(index % 2, index));
+    expect(coverRouteDots(coverRouteGeometry(dense))).toEqual([]);
   });
 
   it("writes SVG path data with one cubic per segment", () => {

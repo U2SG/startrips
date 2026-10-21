@@ -75,11 +75,13 @@ import {
   journeyRoutePointTargetEligible,
   selectJourneyRoutePointScreenTarget,
   selectHomeBasePointerTarget,
+  isDashedJourneyLeg,
 } from "./ParticleEarthScene";
 import {
   buildRouteArcLegSamples,
   buildRouteArcSamples,
   GEOGRAPHIC_SURFACE_RADIUS,
+  latLonToVector3,
   ROUTE_ANCHOR_RADIUS,
   routeArcVertexCount,
   routePointAnchor,
@@ -144,6 +146,29 @@ describe("ParticleEarthScene contracts", () => {
       .toBe(true);
   });
 
+  it("keeps recorded tracks on their own points, unresampled and unlifted", () => {
+    // Owner decision 2026-10-21 changes Journey legs only: a recorded GPS
+    // track keeps its real geometry, sharp turns included.
+    const zigzag = Array.from({ length: 9 }, (_, index) => ({
+      lat: 30 + (index % 2 ? 0.4 : 0),
+      lon: 120 + index * 0.05,
+    }));
+    const [track] = buildRecordedTrackOverviewSamples([{ id: "zigzag", points: zigzag }]);
+    const level = track.levels[0];
+    expect(level.maxAngularErrorRad).toBe(0);
+    expect(level.samples.lifts).toHaveLength(zigzag.length);
+    expect([...level.samples.lifts].every((lift) => lift === 0)).toBe(true);
+    zigzag.forEach((point, index) => {
+      const expected = latLonToVector3(point.lat, point.lon, 1);
+      const offset = index * 3;
+      expect(Math.hypot(
+        level.samples.directions[offset] - expected.x,
+        level.samples.directions[offset + 1] - expected.y,
+        level.samples.directions[offset + 2] - expected.z,
+      )).toBeLessThan(1e-6);
+    });
+  });
+
   it("keeps LOD error bounds truthful when a tight point budget needs extra simplification", () => {
     const dense = Array.from({ length: 300 }, (_, index) => ({
       lat: 20 + index * 0.001,
@@ -156,6 +181,33 @@ describe("ParticleEarthScene contracts", () => {
     // truncation while still advertising that bound.
     expect(track.levels.every((level) => level.maxAngularErrorRad > 0)).toBe(true);
     expect(track.samples.lifts.length).toBeLessThanOrEqual(8);
+  });
+
+  it("dashes every leg that cannot claim an actual route and keeps real geometry solid", () => {
+    // Owner decision 2026-10-21: sparse legs are dashed great circles.
+    expect(isDashedJourneyLeg("sparse-relation")).toBe(true);
+    expect(isDashedJourneyLeg("user-shaped-route")).toBe(true);
+    expect(isDashedJourneyLeg("suggested-route")).toBe(true);
+    expect(isDashedJourneyLeg("user-confirmed-route")).toBe(false);
+    expect(isDashedJourneyLeg("recorded-track")).toBe(false);
+
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    // A dashed leg keeps a static pixel dash and grows in through a
+    // normalized reveal path inside a user-space mask.
+    expect(css).toMatch(
+      /\.particle-earth-route\.has-provenance-legs \.particle-earth-route__leg\[data-route-dash="dashed"\] \{\s*stroke-dasharray: 4 3;\s*stroke-dashoffset: 0;/,
+    );
+    expect(css).toMatch(
+      /\.particle-earth-route__leg-reveal \{[^}]*stroke-dashoffset: calc\(1 - var\(--journey-leg-temporal-progress, 0\)\);/,
+    );
+    expect(source).toContain('mask.setAttribute("maskUnits", "userSpaceOnUse")');
+    expect(source).toContain('revealPath.setAttribute("pathLength", "1")');
+    expect(source).toContain('leg.reveal?.path.setAttribute("d", legPath.d)');
+    // Recorded tracks keep their real, solid geometry.
+    expect(css).toMatch(/\.particle-earth-route__recorded-track \{[^}]*stroke-dasharray: none;/);
+    // A focus flight may not resurrect the solid whole-route core over the legs.
+    expect(css).not.toMatch(/data-route-focus-phase="flying"\][^{]*particle-earth-route__core/);
   });
 
   it("keeps all five provenance tiers visible in the particle route treatment", () => {
@@ -987,7 +1039,6 @@ describe("ParticleEarthScene contracts", () => {
       [{ lat: 0, lon: -90 }, { lat: 0, lon: 80 }],
       Math.PI / 96,
       8192,
-      { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
     );
     const project = (x: number, y: number, z: number, target: { x: number; y: number }) => {
       if (!isSphericalPointVisible(camera, new Vector3(x, y, z))) return false;
@@ -1395,7 +1446,6 @@ describe("#219 the focus signal shares the Route Point anchor", () => {
 // geometry stands for.
 describe("#242 route curve fidelity", () => {
   const camera = new Vector3(0, 0, 5.4);
-  const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
   const SEGMENT_ANGLE = Math.PI / 96;
   const scale = 900;
 
@@ -1455,15 +1505,15 @@ describe("#242 route curve fidelity", () => {
 
   function drawPath(points: typeof mixedRoute, segmentAngle: number, budget: number, liftScale: number) {
     return buildProjectedRoutePath(
-      buildRouteArcSamples(points, segmentAngle, budget, arc),
+      buildRouteArcSamples(points, segmentAngle, budget),
       project,
       { radius: ROUTE_ANCHOR_RADIUS, liftScale },
     );
   }
 
   /**
-   * Worst screen distance from a high-resolution sampling of the SAME lifted
-   * curve to the polyline actually drawn. The reference comes from the same
+   * Worst screen distance from a high-resolution sampling of the SAME great
+   * circle to the polyline actually drawn. The reference comes from the same
    * builder at a far finer segment angle, so it is that curve at a density the
    * drawn path is graded against, not a second model of it. Both are in curve
    * order, so the search walks forward with a window instead of comparing
@@ -1579,13 +1629,11 @@ describe("#242 route curve fidelity", () => {
         points,
         SEGMENT_ANGLE,
         MAX_RENDERED_ROUTE_LINE_VERTICES,
-        arc,
       );
       const legs = buildRouteArcLegSamples(
         points,
         SEGMENT_ANGLE,
         MAX_RENDERED_ROUTE_LINE_VERTICES,
-        arc,
       );
       expect(legs).toHaveLength(points.length - 1);
       expect(routeArcVertexCount(whole))
@@ -1617,10 +1665,8 @@ describe("#242 route curve fidelity", () => {
   });
 
   it("stays within a CSS pixel of the curve it stands for", () => {
-    for (const liftScale of [1, 0.25]) {
-      expect(referenceErrorPx(shortLegRoute, liftScale)).toBeLessThanOrEqual(1);
-      expect(referenceErrorPx(mixedRoute, liftScale)).toBeLessThanOrEqual(1);
-    }
+    expect(referenceErrorPx(shortLegRoute, 0)).toBeLessThanOrEqual(1);
+    expect(referenceErrorPx(mixedRoute, 0)).toBeLessThanOrEqual(1);
   });
 
   it("holds that tolerance for a dense route inside the vertex budget", () => {
@@ -1635,7 +1681,6 @@ describe("#242 route curve fidelity", () => {
       dense,
       SEGMENT_ANGLE,
       MAX_RENDERED_ROUTE_LINE_VERTICES,
-      arc,
     );
     expect(routeArcVertexCount(samples))
       .toBeLessThanOrEqual(MAX_RENDERED_ROUTE_LINE_VERTICES);
@@ -1654,7 +1699,7 @@ describe("#242 route curve fidelity", () => {
       }
       expect(nearest).toBeLessThan(1e-5);
     }
-    expect(referenceErrorPx(dense, 1)).toBeLessThanOrEqual(1);
+    expect(referenceErrorPx(dense, 0)).toBeLessThanOrEqual(1);
   });
 
   it("never bridges two visible fragments across an occluded span", () => {

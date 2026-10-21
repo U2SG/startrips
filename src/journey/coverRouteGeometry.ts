@@ -11,26 +11,44 @@ import type { RoutePoint } from "./types";
  * smoothed into cubic Bézier segments. Pure; no DOM.
  */
 
-/** The route band on the cover, as fractions of the cover width and height. */
-export const COVER_ROUTE_BAND = { left: 0.08, top: 0.3, width: 0.84, height: 0.42 } as const;
+/**
+ * The route band on the cover, as fractions of the cover width and height.
+ * As large as the cover allows: the head (top 8.7%, a two-line 6.7cqw title
+ * and the dates line) ends near 26% of the cover height on a 0.8-wide page,
+ * and the tipped-in plate starts at 74% (bottom 7.3% + 18.7%). The band keeps
+ * about 1% clear of both, which also holds the half stroke of a curve that
+ * bulges to the band edge. The top stays at 30%, not 27%, because the dates
+ * line keeps a 9 px floor: on a cover narrower than about 253 px (a phone in
+ * landscape) the head grows past 27.5% of the cover height.
+ */
+export const COVER_ROUTE_BAND = { left: 0.07, top: 0.3, width: 0.86, height: 0.43 } as const;
 
 /** Band width / band height on a page of `BOOK_PAGE_RATIO`. */
 export const COVER_ROUTE_ASPECT = (COVER_ROUTE_BAND.width * BOOK_PAGE_RATIO) / COVER_ROUTE_BAND.height;
 
-/** Stroke and marker sizes, as fractions of the cover width (reference: 3 px, 1 px, 6 px, 8 px on 504 px). */
+/** Stroke and marker sizes, as fractions of the cover width (reference: on a 504 px cover). */
 export const COVER_ROUTE_STROKE = {
-  deboss: 3 / 504,
-  highlight: 1 / 504,
-  highlightOffset: 1 / 504,
-  start: 6 / 504,
-  end: 8 / 504,
+  deboss: 6 / 504,
+  highlight: 1.5 / 504,
+  highlightOffset: 1.5 / 504,
+  /** Diameter of the dot at each interior Route Point. */
+  dot: 9 / 504,
+  start: 11 / 504,
+  end: 12 / 504,
 } as const;
+
+/** Above this many interior Route Points the dots would merge into beads, so none are drawn. */
+export const COVER_ROUTE_MAX_DOTS = 24;
 
 /** Longer routes are thinned to this many points; the cover is a sketch, not the saved Route. */
 export const COVER_ROUTE_MAX_POINTS = 64;
 
-/** Inset of the anchors inside the band, as a fraction of the band height on every side. */
-const PADDING = 0.08;
+/**
+ * Inset of the anchors inside the band, as a fraction of the band height on
+ * every side: just enough to hold half the end square (the largest marker).
+ */
+export const COVER_ROUTE_PADDING = 0.03;
+const PADDING = COVER_ROUTE_PADDING;
 
 export type CoverRouteVec = { x: number; y: number };
 export type CoverRouteCurve = { c1: CoverRouteVec; c2: CoverRouteVec; to: CoverRouteVec };
@@ -135,6 +153,16 @@ export function coverRouteGeometry(
     });
   }
   return { kind: "path", start: anchors[0], end: anchors[anchors.length - 1], curves };
+}
+
+/**
+ * The interior Route Points that carry a dot: every anchor between the start
+ * and the end, or none when the route has too many to read as separate dots.
+ */
+export function coverRouteDots(geometry: CoverRouteGeometry): CoverRouteVec[] {
+  if (geometry.kind !== "path") return [];
+  const interior = geometry.curves.slice(0, -1).map((curve) => curve.to);
+  return interior.length <= COVER_ROUTE_MAX_DOTS ? interior : [];
 }
 
 /** SVG path data for a band drawn `width` × `height` units. */

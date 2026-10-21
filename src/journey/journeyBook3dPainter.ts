@@ -2,6 +2,7 @@ import { STARTRIPS_V12_MARK_MARKUP, STARTRIPS_V12_MARK_VIEWBOX } from "../brand/
 import {
   COVER_ROUTE_BAND,
   COVER_ROUTE_STROKE,
+  coverRouteDots,
   fitCoverDateLine,
   type CoverRouteGeometry,
   type CoverRouteVec,
@@ -99,6 +100,8 @@ const MUTED = "#73766c";
 const CLOTH = "#5f6b73";
 const PLATE_MOUNT = "#ece7d6";
 const FOIL = "#e4cf98";
+/** The cover Route's line and dots on the colour face; the material map adds the relief. */
+const COVER_ROUTE_INK = "rgb(0 0 0 / 0.25)";
 const CLOTH_INK = "#f2efdf";
 const ENDPAPER = "#e9e9dc";
 const SERIF = 'Georgia, "Songti SC", "STSong", "Noto Serif CJK SC", serif';
@@ -428,6 +431,13 @@ function coverRoutePen(context: CanvasRenderingContext2D, width: number, height:
   };
   const at = (vec: CoverRouteVec) => [band.x + vec.x * band.width, band.y + vec.y * band.height] as const;
   return {
+    dot(vec: CoverRouteVec, size: number, color: string) {
+      const [x, y] = at(vec);
+      context.fillStyle = color;
+      context.beginPath();
+      context.arc(x, y, (size * width) / 2, 0, Math.PI * 2);
+      context.fill();
+    },
     square(vec: CoverRouteVec, size: number, color: string) {
       const [x, y] = at(vec);
       const side = size * width;
@@ -460,7 +470,7 @@ function drawCoverRoute(context: CanvasRenderingContext2D, route: CoverRouteGeom
   const pen = coverRoutePen(context, width, height);
   if (route.kind === "path") {
     pen.trace(route);
-    context.strokeStyle = "rgb(0 0 0 / 0.07)";
+    context.strokeStyle = COVER_ROUTE_INK;
     context.lineWidth = COVER_ROUTE_STROKE.deboss * width;
     context.stroke();
     const offset = -COVER_ROUTE_STROKE.highlightOffset * width;
@@ -468,7 +478,8 @@ function drawCoverRoute(context: CanvasRenderingContext2D, route: CoverRouteGeom
     context.strokeStyle = "rgb(255 255 255 / 0.07)";
     context.lineWidth = COVER_ROUTE_STROKE.highlight * width;
     context.stroke();
-    pen.square(route.start, COVER_ROUTE_STROKE.start, "rgb(0 0 0 / 0.12)");
+    for (const dot of coverRouteDots(route)) pen.dot(dot, COVER_ROUTE_STROKE.dot, COVER_ROUTE_INK);
+    pen.square(route.start, COVER_ROUTE_STROKE.start, "rgb(0 0 0 / 0.32)");
   }
   pen.square(route.end, COVER_ROUTE_STROKE.end, FOIL);
 }
@@ -494,6 +505,9 @@ export function paintCoverMaterial(canvas: HTMLCanvasElement, input: Pick<PaintI
         context.strokeStyle = coverMaterialColor(COVER_MATERIAL.deboss, step.depth);
         context.lineWidth = COVER_ROUTE_STROKE.deboss * width * step.width;
         context.stroke();
+      }
+      for (const dot of coverRouteDots(route)) {
+        pen.dot(dot, COVER_ROUTE_STROKE.dot, coverMaterialColor(COVER_MATERIAL.deboss));
       }
       // A one-texel shoulder, then the floor, so the square's walls ramp too.
       const texel = 1 / width;
