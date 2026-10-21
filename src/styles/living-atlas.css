@@ -3765,6 +3765,14 @@ button.living-atlas-globe__pick {
   pointer-events: none;
 }
 
+/* The header is its own stacking context, so the open menu lifts the whole
+   header above the right-hand context cards (z-chrome-72/73) it can overlap
+   on a narrower desktop. Outside pointerdown closes the menu, so the raise is
+   short-lived. */
+.living-atlas__header:has(> .living-atlas__more-menu) {
+  z-index: var(--z-chrome-75);
+}
+
 .living-atlas__more-menu {
   position: absolute;
   z-index: var(--z-surface-40);

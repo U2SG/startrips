@@ -2280,7 +2280,9 @@ export function LivingAtlasApp({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog']")) return;
+      // Escape from inside the fragments list must never unmount unsaved or
+      // in-flight fragment work; only Escape from outside it closes the card.
+      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [data-everyday-fragments]")) return;
       event.preventDefault();
       if (desktopRightSurface === "everyday") closeAtlasEveryday(true);
       else clearHomeBaseContext();
@@ -3836,14 +3838,16 @@ export function LivingAtlasApp({
               type="button"
               className="living-atlas__more-trigger"
               data-atlas-desktop-more-trigger="true"
-              aria-label={importStatus.busy ? "更多操作（行程导入处理中）" : "更多操作"}
+              aria-label={importStatus.busy
+                ? "更多操作（行程导入处理中）"
+                : importStatus.ready ? "更多操作（行程导入结果待查看）" : "更多操作"}
               aria-expanded={desktopMoreOpen}
               aria-controls={desktopMoreOpen ? "living-atlas-more-menu" : undefined}
               onClick={() => setDesktopMoreOpen((open) => !open)}
             >
               <IconDots size={16} stroke={1.35} aria-hidden="true" />
               更多
-              {importStatus.busy ? <span className="living-atlas__more-status" aria-hidden="true" /> : null}
+              {importStatus.busy || importStatus.ready ? <span className="living-atlas__more-status" aria-hidden="true" /> : null}
             </button>
           </nav>
           {desktopMoreOpen && !desktopHeaderInert ? (
