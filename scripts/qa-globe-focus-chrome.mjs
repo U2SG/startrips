@@ -1918,9 +1918,13 @@ try {
   //      更多 → 日常 replaces that context instead of stacking beside it, the
   //      current-journey card stays hidden until the column is free, and
   //      Escape returns the column to the card. 更多 holds the only desktop
-  //      import entry.
-  {
-    const viewport = { name: "1280x800", width: 1280, height: 800 };
+  //      import entry. On narrower desktops the menu overlaps the context card
+  //      column, so every item must own its own hit there.
+  for (const viewport of [
+    { name: "1280x800", width: 1280, height: 800 },
+    { name: "1024x768", width: 1024, height: 768 },
+    { name: "800x700", width: 800, height: 700 },
+  ]) {
     let session = null;
     const visibleRightSurfaces = (page) => page.evaluate(() => [
       ".living-atlas__active",
@@ -1956,6 +1960,15 @@ try {
       const menu = page.locator("#living-atlas-more-menu");
       await menu.waitFor({ state: "visible", timeout: 5_000 });
       const menuItems = (await menu.locator("button").allTextContents()).map((text) => text.trim());
+      const menuItemHits = await menu.evaluate((element) => [...element.querySelectorAll("button")].map((button) => {
+        const rect = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return {
+          label: button.textContent?.trim() ?? "",
+          height: Math.round(rect.height),
+          owned: Boolean(hit && button.contains(hit)),
+        };
+      }));
       const importEntries = await page.locator('[data-atlas-more-action="import"]').count();
       const headerImportOutsideMenu = await page.evaluate(() => [
         ...document.querySelectorAll(".living-atlas__header button"),
@@ -1980,6 +1993,7 @@ try {
         restingSurfaces,
         routePointSurfaces,
         menuItems,
+        menuItemHits,
         importEntries,
         headerImportOutsideMenu,
         menuAfterChoice,
@@ -1990,6 +2004,8 @@ try {
         failed: JSON.stringify(restingSurfaces) !== JSON.stringify([".living-atlas__active"])
           || JSON.stringify(routePointSurfaces) !== JSON.stringify(["[data-route-point-context]"])
           || !menuItems.some((text) => text.includes("导入已有行程"))
+          || menuItemHits.length === 0
+          || menuItemHits.some((item) => !item.owned || item.height < 44)
           || importEntries !== 1
           || headerImportOutsideMenu !== 0
           || menuAfterChoice !== 0

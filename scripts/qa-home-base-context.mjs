@@ -1114,9 +1114,10 @@ try {
   ));
   await noHomeSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
   await noHomeSurface.waitFor({ state: "detached" });
-  record("closing zero-Home Everyday restores the Atlas action", {}, await noHomeTrigger.evaluate(
-    (node) => document.activeElement === node,
-  ));
+  // The menu item that opened Everyday left with the menu; focus returns to
+  // 更多, the header control it lives behind.
+  record("closing zero-Home Everyday restores the Atlas action", {}, await noHomePage
+    .locator("[data-atlas-desktop-more-trigger]").evaluate((node) => document.activeElement === node));
   await noHomePage.close();
 
   const noHomeMobile = await openOwner({ width: 390, height: 844 }, { homePeriods: [] });
