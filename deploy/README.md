@@ -159,9 +159,15 @@ Each answer is one boolean, cached per photo and model in
 `media_person_classifications` and deleted with the photo. A photo that could
 not be judged (no ready preview, provider error or timeout) is excluded, as is
 every video and other non-photo media; the dialog counts them before the
-member creates the link. At most 48 not-yet-judged photos are sent per request,
-3 at a time, each bounded by `INTENT_TIMEOUT_MS`; more answers
-`SHARE_MEDIA_FILTER_TOO_MANY` (400) instead of judging only some. A link created
+member creates the link. Each `POST /api/intents/share/media` sends at most 48
+not-yet-judged photos, 3 at a time, each bounded by `INTENT_TIMEOUT_MS`, and
+answers `remaining`; the dialog repeats the request (showing 已检查 X / Y) until
+nothing remains, and only that final answer can scope a link. A photo that
+failed is sent back as a skip, stays excluded and is not retried in the same
+run, so the run always ends. A selection with more than 2000 media answers
+`SHARE_MEDIA_FILTER_TOO_MANY` (400) before anything is sent, and a second
+concurrent request for the same Atlas answers `SHARE_MEDIA_FILTER_BUSY` (409)
+on that API process. A link created
 this way shares only the chosen photos: guests cannot list, count or read the
 others, and a cover photo that was left out is not shown.
 

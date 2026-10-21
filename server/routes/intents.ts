@@ -120,24 +120,40 @@ intentRoutes.post("/share", async (context) => {
 });
 
 /**
+ * One media classification at a time per Atlas, in this process. A second
+ * request while one runs answers 409 instead of doubling provider calls.
+ */
+const mediaFilterInFlight = new Set<string>();
+
+/**
  * Which media of these Journeys may be shared without people. Same `create`
  * guard as the proposal; the Atlas is the session's, and every Journey id is
  * re-checked against it before any media is read or sent.
  *
  * Only a stored preview is ever sent, inline as a data URL. A photo that
  * could not be judged, and every video or other media, is excluded.
+ *
+ * Batched: one call judges at most `MAX_SHARE_MEDIA_FILTER_UNCLASSIFIED`
+ * photos and answers `{ assetIds, excludedCount, unclassifiedCount,
+ * remaining, checkedCount, failedAssetIds }`. The caller repeats the same
+ * request, adding every `failedAssetIds` to `skipAssetIds`, until
+ * `remaining` is 0; only that last answer's `assetIds` may be shared.
  */
 intentRoutes.post("/share/media", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "create");
   context.header("Cache-Control", SHARE_INTENT_CACHE_CONTROL);
   const body = await readJsonObject(() => context.req.json());
   const journeyIds = body?.journeyIds;
+  const skipAssetIds = body?.skipAssetIds ?? [];
   if (
     !Array.isArray(journeyIds)
     || journeyIds.length < 1
     || journeyIds.length > MAX_SHARE_JOURNEYS
     || journeyIds.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
     || new Set(journeyIds).size !== journeyIds.length
+    || !Array.isArray(skipAssetIds)
+    || skipAssetIds.length > MAX_SHARE_MEDIA_ASSETS
+    || skipAssetIds.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
   ) {
     return context.json(
       { error: "INVALID_SHARE_MEDIA_FILTER", message: "Choose between 1 and 64 Journeys" },
@@ -152,38 +168,50 @@ intentRoutes.post("/share/media", async (context) => {
       503,
     );
   }
-
-  const assets = await listShareMediaFilterAssets(atlas.id, journeyIds as string[], visionModel);
-  if (!assets) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
-  if (assets.length > MAX_SHARE_MEDIA_ASSETS) {
+  if (mediaFilterInFlight.has(atlas.id)) {
     throw new ShareIntentError(
-      "SHARE_MEDIA_FILTER_TOO_MANY",
-      `At most ${MAX_SHARE_MEDIA_ASSETS} media can be shared in one link`,
-      400,
+      "SHARE_MEDIA_FILTER_BUSY",
+      "Photos of this Atlas are already being checked",
+      409,
     );
   }
+  mediaFilterInFlight.add(atlas.id);
+  try {
+    const assets = await listShareMediaFilterAssets(atlas.id, journeyIds as string[], visionModel);
+    if (!assets) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+    if (assets.length > MAX_SHARE_MEDIA_ASSETS) {
+      throw new ShareIntentError(
+        "SHARE_MEDIA_FILTER_TOO_MANY",
+        `At most ${MAX_SHARE_MEDIA_ASSETS} media can be shared in one link`,
+        400,
+      );
+    }
 
-  const storage = shareIntentDependencies.storage ?? getMultipartStorage;
-  const result = await filterShareMediaWithoutPeople(assets, {
-    readPreview: async (asset) => {
-      if (!asset.previewStorageKey) return null;
-      // One byte past the ceiling: a preview larger than the current ceiling
-      // would arrive cut off, and a cut-off image must not be judged.
-      const maxBytes = serverConfig.mediaPreviewMaxBytes;
-      const head = await storage(asset.storageDriver).readObjectHead({
-        key: asset.previewStorageKey,
-        maxBytes: maxBytes + 1,
-      });
-      return head.exists && head.bytes.length <= maxBytes ? head.bytes : null;
-    },
-    classify: createHttpPersonClassifier({
-      baseUrl: serverConfig.intentBaseUrl!,
-      apiKey: serverConfig.intentApiKey!,
-      model: visionModel,
-      timeoutMs: serverConfig.intentTimeoutMs,
-      fetcher: shareIntentDependencies.fetcher,
-    }),
-    saveResults: (results) => saveShareMediaClassifications(results, visionModel),
-  });
-  return context.json(result);
+    const storage = shareIntentDependencies.storage ?? getMultipartStorage;
+    const result = await filterShareMediaWithoutPeople(assets, {
+      readPreview: async (asset) => {
+        if (!asset.previewStorageKey) return null;
+        // One byte past the ceiling: a preview larger than the current ceiling
+        // would arrive cut off, and a cut-off image must not be judged.
+        const maxBytes = serverConfig.mediaPreviewMaxBytes;
+        const head = await storage(asset.storageDriver).readObjectHead({
+          key: asset.previewStorageKey,
+          maxBytes: maxBytes + 1,
+        });
+        return head.exists && head.bytes.length <= maxBytes ? head.bytes : null;
+      },
+      classify: createHttpPersonClassifier({
+        baseUrl: serverConfig.intentBaseUrl!,
+        apiKey: serverConfig.intentApiKey!,
+        model: visionModel,
+        timeoutMs: serverConfig.intentTimeoutMs,
+        fetcher: shareIntentDependencies.fetcher,
+      }),
+      saveResults: (results) => saveShareMediaClassifications(results, visionModel),
+      skipAssetIds: new Set(skipAssetIds as string[]),
+    });
+    return context.json(result);
+  } finally {
+    mediaFilterInFlight.delete(atlas.id);
+  }
 });

@@ -134,16 +134,20 @@ async function installOwnerApi(page, state) {
       }),
     });
   });
-  // "只分享风景图". Answered from `state.mediaFilterResult`, held behind
-  // `state.mediaFilterGate` so a pass can observe the pending state.
+  // "只分享风景图". Each call answers the next of `state.mediaFilterBatches`
+  // (provisional batches with `remaining > 0`), then `state.mediaFilterResult`;
+  // each waits on the next of `state.mediaFilterGates` so a pass can observe
+  // the pending and progress states.
   await page.route("**/api/intents/share/media", async (route) => {
     const body = JSON.parse(route.request().postData() ?? "{}");
     requests.push({ kind: "media-filter", body });
-    if (state.mediaFilterGate) await state.mediaFilterGate;
+    const gate = state.mediaFilterGates?.shift();
+    if (gate) await gate;
+    const result = state.mediaFilterBatches?.shift() ?? state.mediaFilterResult;
     await route.fulfill({
-      status: state.mediaFilterResult ? 200 : 503,
+      status: result ? 200 : 503,
       contentType: "application/json",
-      body: JSON.stringify(state.mediaFilterResult
+      body: JSON.stringify(result
         ?? { error: "MEDIA_FILTER_UNAVAILABLE", message: "Filtering shared media by content is not configured" }),
     });
   });
@@ -163,6 +167,15 @@ async function installOwnerApi(page, state) {
   await page.route("**/api/intents/share", async (route) => {
     const body = JSON.parse(route.request().postData() ?? "{}");
     requests.push({ kind: "intent", body });
+    if (state.intentFailNext) {
+      state.intentFailNext = false;
+      await route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "INTENT_FAILED", message: "The intent provider failed" }),
+      });
+      return;
+    }
     await route.fulfill({
       status: state.intentProposal ? 200 : 503,
       contentType: "application/json",
@@ -716,10 +729,13 @@ async function verifyShareIntentProposal(browser, viewport) {
 
 /**
  * "只分享风景图": the stubbed model asks for the no-people filter. The dialog
- * must ask the media endpoint for exactly the proposed Journeys, hold Create
- * while it waits, state the server's counts, show the included thumbnails and
- * send exactly those ids as `mediaAssetIds`. A hand edit of the selection must
- * then drop the filter, say so, and create an unscoped link.
+ * must ask the media endpoint for exactly the proposed Journeys, keep asking
+ * (with the failures as skips) while the server reports photos remaining,
+ * show progress and hold Create until the final answer, state the server's
+ * counts, show the included thumbnails and send exactly those ids as
+ * `mediaAssetIds`. A re-submitted sentence that fails must keep the filter.
+ * A hand edit of the selection must then drop the filter, say so, and create
+ * an unscoped link.
  */
 async function verifyShareMediaFilter(browser, viewport) {
   const context = await browser.newContext({
@@ -736,14 +752,34 @@ async function verifyShareMediaFilter(browser, viewport) {
     });
     const proposedIds = [journeys[0].id, journeys[2].id];
     const includedIds = ["qa-asset-landscape-1", "qa-asset-landscape-2", "qa-asset-landscape-3"];
-    let releaseFilter = () => {};
+    let releaseFirstBatch = () => {};
+    let releaseLastBatch = () => {};
     const state = {
       shares: [],
       requests: [],
       createGate: null,
       intentProposal: { journeyIds: proposedIds, expiry: null, mediaFilter: "no-people", unmatched: null },
-      mediaFilterResult: { assetIds: includedIds, excludedCount: 4, unclassifiedCount: 1 },
-      mediaFilterGate: new Promise((resolve) => { releaseFilter = resolve; }),
+      mediaFilterBatches: [{
+        assetIds: [],
+        excludedCount: 7,
+        unclassifiedCount: 6,
+        remaining: 12,
+        checkedCount: 48,
+        failedAssetIds: ["qa-asset-failed"],
+      }],
+      mediaFilterResult: {
+        assetIds: includedIds,
+        excludedCount: 4,
+        unclassifiedCount: 1,
+        remaining: 0,
+        checkedCount: 12,
+        failedAssetIds: [],
+      },
+      mediaFilterGates: [
+        new Promise((resolve) => { releaseFirstBatch = resolve; }),
+        new Promise((resolve) => { releaseLastBatch = resolve; }),
+      ],
+      intentFailNext: false,
     };
     await installOwnerApi(page, state);
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
@@ -772,8 +808,23 @@ async function verifyShareMediaFilter(browser, viewport) {
     check(`${name}/holds-create-while-pending`,
       await page.locator(".journey-share__create").isDisabled());
 
-    releaseFilter();
+    releaseFirstBatch();
+    await page.waitForFunction(
+      () => document.querySelector('[data-share-media-filter="pending"]')?.textContent?.includes("已检查 48 / 60"),
+      undefined,
+      { timeout: 10_000 },
+    ).catch(() => {});
+    const progress = (await page.locator('[data-share-media-filter="pending"]').textContent().catch(() => ""))?.trim() ?? "";
+    check(`${name}/shows-batch-progress`, progress.includes("已检查 48 / 60"), progress);
+    check(`${name}/holds-create-while-batches-remain`,
+      await page.locator(".journey-share__create").isDisabled());
+    releaseLastBatch();
     await page.locator('[data-share-media-filter="ready"]').waitFor({ timeout: 10_000 });
+    const followUp = state.requests.filter((entry) => entry.kind === "media-filter")[1];
+    check(`${name}/next-batch-skips-the-failures`,
+      JSON.stringify(followUp?.body.skipAssetIds) === JSON.stringify(["qa-asset-failed"])
+        && followUp?.body.journeyIds?.length === 2,
+      followUp?.body);
     const summary = (await page.locator("[data-share-media-summary]").textContent())?.trim() ?? "";
     check(`${name}/states-the-counts`,
       summary === "将分享 3 张风景照（已排除 4 张含人物或无法确认的照片与视频）",
@@ -798,6 +849,18 @@ async function verifyShareMediaFilter(browser, viewport) {
       return dialog ? dialog.scrollWidth - dialog.clientWidth : null;
     });
     check(`${name}/no-horizontal-overflow`, overflow === 0, { overflow });
+
+    // A re-submitted sentence that fails changes nothing: the filter stays.
+    state.intentFailNext = true;
+    const intentsBefore = state.requests.filter((entry) => entry.kind === "intent").length;
+    await page.locator(".journey-share__intent-row > button").click();
+    await page.locator('[data-share-intent-status="error"]').waitFor({ timeout: 10_000 });
+    check(`${name}/failed-resubmission-sent`,
+      state.requests.filter((entry) => entry.kind === "intent").length === intentsBefore + 1);
+    check(`${name}/failed-resubmission-keeps-the-filter`,
+      await page.locator('[data-share-media-filter="ready"]').count() === 1
+        && await page.locator("[data-share-media-filter-notice]").count() === 0
+        && !(await page.locator(".journey-share__create").isDisabled()));
 
     await clickText(page, "创建分享链接");
     await page.locator("[data-share-link]").waitFor({ timeout: 10_000 });

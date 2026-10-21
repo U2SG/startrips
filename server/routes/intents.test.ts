@@ -193,11 +193,11 @@ describe("POST /api/intents/share/media", () => {
     };
   }
 
-  function filter(journeyIds: unknown) {
+  function filter(journeyIds: unknown, skipAssetIds?: unknown) {
     return app.request("/api/intents/share/media", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ journeyIds }),
+      body: JSON.stringify({ journeyIds, ...(skipAssetIds === undefined ? {} : { skipAssetIds }) }),
     });
   }
 
@@ -213,6 +213,15 @@ describe("POST /api/intents/share/media", () => {
       const response = await filter(journeyIds);
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({ error: "INVALID_SHARE_MEDIA_FILTER" });
+      expect(mediaFilter.list).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([["not an array", "x"], ["a malformed id", ["broken"]]])(
+    "refuses skipAssetIds that is %s with 400 before reading any media",
+    async (_label, skipAssetIds) => {
+      const response = await filter([JOURNEY], skipAssetIds);
+      expect(response.status).toBe(400);
       expect(mediaFilter.list).not.toHaveBeenCalled();
     },
   );
@@ -257,6 +266,9 @@ describe("POST /api/intents/share/media", () => {
       assetIds: ["landscape", "cached-landscape"],
       excludedCount: 3,
       unclassifiedCount: 1,
+      remaining: 0,
+      checkedCount: 3,
+      failedAssetIds: ["broken"],
     });
     expect(upstream).toHaveBeenCalledTimes(3);
     expect(readObjectHead).toHaveBeenCalledWith({ key: "previews/landscape.jpg", maxBytes: 1025 });
@@ -272,8 +284,46 @@ describe("POST /api/intents/share/media", () => {
   it("does not judge a preview larger than the ceiling", async () => {
     mediaFilter.list.mockResolvedValueOnce([asset("oversized")]);
     readObjectHead.mockResolvedValueOnce({ exists: true, bytes: new Uint8Array(1025) });
-    expect(await (await filter([JOURNEY])).json())
-      .toEqual({ assetIds: [], excludedCount: 1, unclassifiedCount: 1 });
+    expect(await (await filter([JOURNEY])).json()).toEqual({
+      assetIds: [],
+      excludedCount: 1,
+      unclassifiedCount: 1,
+      remaining: 0,
+      checkedCount: 1,
+      failedAssetIds: ["oversized"],
+    });
     expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("does not send a skipped photo again and excludes it", async () => {
+    const SKIPPED = "22222222-2222-4222-8222-222222222222";
+    mediaFilter.list.mockResolvedValueOnce([asset(SKIPPED)]);
+    expect(await (await filter([JOURNEY], [SKIPPED])).json()).toMatchObject({
+      assetIds: [],
+      unclassifiedCount: 1,
+      remaining: 0,
+      checkedCount: 0,
+    });
+    expect(readObjectHead).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("answers 409 while the same Atlas is already being checked, and releases the guard", async () => {
+    let release: (assets: unknown[]) => void = () => undefined;
+    mediaFilter.list.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = filter([JOURNEY]);
+    await vi.waitFor(() => expect(mediaFilter.list).toHaveBeenCalledTimes(1));
+
+    const busy = await filter([JOURNEY]);
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toMatchObject({ error: "SHARE_MEDIA_FILTER_BUSY" });
+    expect(mediaFilter.list).toHaveBeenCalledTimes(1);
+
+    release([]);
+    expect((await first).status).toBe(200);
+    mediaFilter.list.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    // Released on every exit, the 404 included.
+    expect((await filter([JOURNEY])).status).toBe(404);
+    expect((await filter([JOURNEY])).status).toBe(404);
   });
 });

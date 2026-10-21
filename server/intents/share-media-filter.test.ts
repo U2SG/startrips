@@ -48,7 +48,14 @@ describe("share media filter", () => {
       [photo("a"), photo("b"), photo("c")],
       { ...deps, concurrency: 1 },
     );
-    expect(result).toEqual({ assetIds: ["a", "c"], excludedCount: 1, unclassifiedCount: 0 });
+    expect(result).toEqual({
+      assetIds: ["a", "c"],
+      excludedCount: 1,
+      unclassifiedCount: 0,
+      remaining: 0,
+      checkedCount: 3,
+      failedAssetIds: [],
+    });
     expect(deps.saveResults).toHaveBeenCalledWith([
       { assetId: "a", hasPerson: false },
       { assetId: "b", hasPerson: true },
@@ -71,7 +78,7 @@ describe("share media filter", () => {
       photo("clip", { mimeType: "video/mp4" }),
       photo("song", { mimeType: "audio/mpeg", previewState: "none", previewStorageKey: null }),
     ], deps);
-    expect(result).toEqual({ assetIds: ["a"], excludedCount: 2, unclassifiedCount: 0 });
+    expect(result).toMatchObject({ assetIds: ["a"], excludedCount: 2, unclassifiedCount: 0, remaining: 0 });
     expect(deps.readPreview).toHaveBeenCalledTimes(1);
     expect(deps.classify).toHaveBeenCalledTimes(1);
   });
@@ -82,7 +89,13 @@ describe("share media filter", () => {
       photo("landscape", { cachedHasPerson: false }),
       photo("portrait", { cachedHasPerson: true }),
     ], deps);
-    expect(result).toEqual({ assetIds: ["landscape"], excludedCount: 1, unclassifiedCount: 0 });
+    expect(result).toMatchObject({
+      assetIds: ["landscape"],
+      excludedCount: 1,
+      unclassifiedCount: 0,
+      remaining: 0,
+      checkedCount: 0,
+    });
     expect(deps.readPreview).not.toHaveBeenCalled();
     expect(deps.classify).not.toHaveBeenCalled();
     expect(deps.saveResults).not.toHaveBeenCalled();
@@ -95,7 +108,12 @@ describe("share media filter", () => {
       [photo("failed"), photo("fine")],
       { ...deps, concurrency: 1 },
     );
-    expect(result).toEqual({ assetIds: ["fine"], excludedCount: 1, unclassifiedCount: 1 });
+    expect(result).toMatchObject({
+      assetIds: ["fine"],
+      excludedCount: 1,
+      unclassifiedCount: 1,
+      failedAssetIds: ["failed"],
+    });
     expect(deps.saveResults).toHaveBeenCalledWith([{ assetId: "fine", hasPerson: false }]);
   });
 
@@ -106,32 +124,72 @@ describe("share media filter", () => {
       photo("not-ready", { previewState: "pending" }),
       photo("missing-object"),
     ], deps);
-    expect(result).toEqual({ assetIds: [], excludedCount: 2, unclassifiedCount: 2 });
+    expect(result).toMatchObject({ assetIds: [], excludedCount: 2, unclassifiedCount: 2, remaining: 0 });
+    // The preview that could not be read is reported, so a loop skips it;
+    // the one that was never ready was never part of a batch.
+    expect(result.failedAssetIds).toEqual(["missing-object"]);
     expect(deps.classify).not.toHaveBeenCalled();
   });
 
-  it("keeps the result when the cache write fails", async () => {
+  it("treats answers the cache could not keep as failures, so a loop does not ask again", async () => {
     const deps = dependencies();
     deps.saveResults.mockRejectedValue(new Error("db"));
     const result = await filterShareMediaWithoutPeople([photo("a")], deps);
-    expect(result.assetIds).toEqual(["a"]);
+    expect(result).toMatchObject({ assetIds: [], unclassifiedCount: 1, failedAssetIds: ["a"] });
   });
 
-  it("refuses more unjudged photos than the cap before any provider call", async () => {
+  it("judges one batch per call and shares nothing until none remain", async () => {
     const deps = dependencies();
-    const assets = Array.from({ length: MAX_SHARE_MEDIA_FILTER_UNCLASSIFIED + 1 }, (_, index) => photo(`p-${index}`));
-    // Cached photos do not count toward the cap.
+    const assets = Array.from({ length: 60 }, (_, index) => photo(`p-${index}`));
+    // Cached photos are never part of a batch.
     assets.push(photo("cached", { cachedHasPerson: false }));
-    const error = await filterShareMediaWithoutPeople(assets, deps).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(ShareIntentError);
-    expect(error).toMatchObject({ code: "SHARE_MEDIA_FILTER_TOO_MANY", status: 400 });
-    expect(deps.readPreview).not.toHaveBeenCalled();
-    expect(deps.classify).not.toHaveBeenCalled();
 
-    const atCap = assets.slice(1);
-    await expect(filterShareMediaWithoutPeople(atCap, deps)).resolves.toMatchObject({
-      unclassifiedCount: 0,
+    const first = await filterShareMediaWithoutPeople(assets, deps);
+    expect(first).toMatchObject({
+      assetIds: [],
+      remaining: 12,
+      checkedCount: MAX_SHARE_MEDIA_FILTER_UNCLASSIFIED,
+      failedAssetIds: [],
     });
+    expect(first.excludedCount).toBe(assets.length);
+    expect(deps.classify).toHaveBeenCalledTimes(48);
+    // The first 48 in list order, all written to the cache.
+    expect(deps.saveResults.mock.calls[0][0].map((entry) => entry.assetId))
+      .toEqual(assets.slice(0, 48).map((asset) => asset.id));
+
+    // The next call sees those answers cached and judges the last 12.
+    const answered = new Set(deps.saveResults.mock.calls[0][0].map((entry) => entry.assetId));
+    const second = await filterShareMediaWithoutPeople(
+      assets.map((asset) => answered.has(asset.id) ? { ...asset, cachedHasPerson: false } : asset),
+      deps,
+    );
+    expect(second).toMatchObject({ remaining: 0, checkedCount: 12, unclassifiedCount: 0 });
+    expect(second.assetIds).toHaveLength(61);
+    expect(deps.classify).toHaveBeenCalledTimes(60);
+  });
+
+  it("excludes skipped failures without asking again or counting them as remaining", async () => {
+    const deps = dependencies();
+    deps.classify.mockRejectedValueOnce(new Error("timeout"));
+    const assets = [photo("broken"), photo("fine")];
+    const first = await filterShareMediaWithoutPeople(assets, { ...deps, concurrency: 1, maxUnclassified: 1 });
+    expect(first).toMatchObject({ assetIds: [], remaining: 1, failedAssetIds: ["broken"] });
+
+    const second = await filterShareMediaWithoutPeople(assets, {
+      ...deps,
+      concurrency: 1,
+      maxUnclassified: 1,
+      skipAssetIds: new Set(first.failedAssetIds),
+    });
+    expect(second).toEqual({
+      assetIds: ["fine"],
+      excludedCount: 1,
+      unclassifiedCount: 1,
+      remaining: 0,
+      checkedCount: 1,
+      failedAssetIds: [],
+    });
+    expect(deps.classify).toHaveBeenCalledTimes(2);
   });
 
   it("never has more provider calls in flight than the concurrency bound", async () => {

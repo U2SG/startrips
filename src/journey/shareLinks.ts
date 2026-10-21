@@ -1,4 +1,5 @@
 import { SHARE_VIEW_PATHNAME } from "./sharedAtlas";
+import type { ShareMediaFilterResult } from "./journeyApi";
 import type { ShareGrantStatus, ShareGrantSummary } from "./types";
 
 /**
@@ -306,4 +307,54 @@ export function nextShareExpiryDelay(
     .sort((left, right) => left - right)[0];
   if (soonest === undefined) return null;
   return Math.min(soonest - current + 1_000, MAX_TIMEOUT_DELAY_MS);
+}
+
+/** Whether a media filter answer still describes the current selection. */
+export function sameShareSelection(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const set = new Set(left);
+  return right.every((id) => set.has(id));
+}
+
+export type ShareMediaFilterProgress = { checked: number; total: number };
+
+/**
+ * "只分享风景图" over a selection with more unjudged photos than one request
+ * judges: repeat the request, sending back every photo that failed so far as
+ * a skip, until the server says nothing remains. Only that final answer is
+ * returned; a provisional one is never shareable.
+ *
+ * `null` when `isCurrent` turns false before or after any call: the answer
+ * belonged to a filter the owner has since replaced or ended. A call that
+ * reports work remaining but judged nothing is a server fault, not a reason
+ * to loop forever, and throws.
+ */
+export async function collectShareMediaFilter(
+  journeyIds: readonly string[],
+  propose: (
+    journeyIds: readonly string[],
+    skipAssetIds: readonly string[],
+  ) => Promise<ShareMediaFilterResult>,
+  options: {
+    isCurrent: () => boolean;
+    onProgress: (progress: ShareMediaFilterProgress) => void;
+  },
+): Promise<ShareMediaFilterResult | null> {
+  const skip: string[] = [];
+  let checked = 0;
+  for (;;) {
+    if (!options.isCurrent()) return null;
+    const result = await propose(journeyIds, [...skip]);
+    if (!options.isCurrent()) return null;
+    if (result.remaining <= 0) return result;
+    if (result.checkedCount <= 0) {
+      throw new Error("The media filter reported work remaining but checked nothing");
+    }
+    checked += result.checkedCount;
+    skip.push(...result.failedAssetIds);
+    options.onProgress({ checked, total: checked + result.remaining });
+  }
 }

@@ -14,10 +14,12 @@ import {
   SHARE_EXPIRY_PRESETS,
   SHARE_TOKEN_ONCE_NOTICE,
   activeShareRows,
+  collectShareMediaFilter,
   formatShareExpiry,
   maxCustomExpiry,
   nextShareExpiryDelay,
   resolveShareExpiry,
+  sameShareSelection,
   shareExpiryMessage,
   shareLinkUrl,
   shareSelectionMessage,
@@ -25,6 +27,7 @@ import {
   toggleShareSelection,
   type ShareExpiryPresetId,
   type ShareLinkRow,
+  type ShareMediaFilterProgress,
 } from "./shareLinks";
 import { useModalFocus } from "./useModalFocus";
 import type { Journey, ShareGrantSummary } from "./types";
@@ -74,12 +77,14 @@ type CreatedLink = {
  * selected Journeys, exactly as without a sentence.
  */
 type MediaFilterState =
-  | { status: "pending"; journeyIds: string[] }
+  | { status: "pending"; journeyIds: string[]; progress: ShareMediaFilterProgress | null }
   | { status: "error"; journeyIds: string[]; text: string }
   // The sentence asked to leave people out but this server cannot look:
   // Create waits until the owner explicitly chooses to share everything.
   | { status: "unavailable" }
-  | { status: "ready"; assetIds: string[]; excludedCount: number };
+  // `journeyIds` is the selection the answer was judged for; Create refuses
+  // it for any other selection.
+  | { status: "ready"; journeyIds: string[]; assetIds: string[]; excludedCount: number };
 
 type MediaThumbnail = { id: string; url: string };
 
@@ -88,6 +93,8 @@ const MAX_MEDIA_THUMBNAILS = 12;
 
 const MEDIA_FILTER_CLEARED_BY_SELECTION = "旅程选择已改动，照片筛选已取消，将分享所选旅程的全部照片与视频。";
 const MEDIA_FILTER_REMOVED = "已取消照片筛选，将分享所选旅程的全部照片与视频。";
+const MEDIA_FILTER_NOT_REQUESTED = "新的描述没有要求筛选照片，将分享所选旅程的全部照片与视频。";
+const MEDIA_FILTER_NO_JOURNEYS = "这句话没有对应到任何旅程，照片筛选未生效；手动勾选的旅程将分享全部照片与视频。";
 
 function shareMediaFilterErrorMessage(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error
@@ -95,7 +102,9 @@ function shareMediaFilterErrorMessage(error: unknown): string {
     : null;
   switch (code) {
     case "SHARE_MEDIA_FILTER_TOO_MANY":
-      return "要检查的照片太多了，请先少选几段旅程；检查过的照片下次不会再等。";
+      return "所选旅程的照片与视频超过一个链接的上限，请少选几段旅程。";
+    case "SHARE_MEDIA_FILTER_BUSY":
+      return "上一次挑选还在进行，请稍等片刻再点「重新挑选」。";
     case "MEDIA_FILTER_UNAVAILABLE":
       return "这台服务器暂时不能按照片内容筛选。";
     default:
@@ -171,7 +180,14 @@ export function JourneyShareDialog({
   // The same supersede rule as the sentence: only the latest filter request
   // may land, and any change that ends the filter drops a late answer.
   const mediaSequence = useRef(0);
-  const mediaFilterBlocksCreate = mediaFilter !== null && mediaFilter.status !== "ready";
+  // Read by a sentence that resolves later, so it sees the filter as it is
+  // then, not as it was when the sentence was sent.
+  const mediaFilterRef = useRef(mediaFilter);
+  mediaFilterRef.current = mediaFilter;
+  // Once the owner asked to leave people out, Create stays shut until the
+  // answer is final and judged for exactly the Journeys now selected.
+  const mediaFilterBlocksCreate = mediaFilter !== null
+    && (mediaFilter.status !== "ready" || !sameShareSelection(mediaFilter.journeyIds, selected));
   const closeBlocked = pending || revokingId !== null;
   const requestClose = useCallback(() => {
     if (closeBlocked) return false;
@@ -328,14 +344,21 @@ export function JourneyShareDialog({
     if (!proposeMedia) return;
     const sequence = mediaSequence.current + 1;
     mediaSequence.current = sequence;
-    setMediaFilter({ status: "pending", journeyIds });
+    setMediaFilter({ status: "pending", journeyIds, progress: null });
     setMediaThumbnails([]);
     setMediaFilterNotice(null);
+    const isCurrent = () => sequence === mediaSequence.current;
     try {
-      const result = await proposeMedia(journeyIds);
-      if (sequence !== mediaSequence.current) return;
+      const result = await collectShareMediaFilter(journeyIds, proposeMedia, {
+        isCurrent,
+        onProgress: (progress) => {
+          if (isCurrent()) setMediaFilter({ status: "pending", journeyIds, progress });
+        },
+      });
+      if (!result || !isCurrent()) return;
       setMediaFilter({
         status: "ready",
+        journeyIds,
         assetIds: result.assetIds,
         excludedCount: result.excludedCount,
       });
@@ -378,8 +401,9 @@ export function JourneyShareDialog({
     intentSequence.current = sequence;
     setIntentPending(true);
     setIntentStatus(null);
-    // A new sentence replaces whatever the last one filtered.
-    clearMediaFilter(null);
+    // The current filter stays until the new sentence succeeds: a sentence
+    // that fails or is superseded changes nothing, so it can never widen the
+    // share to media the owner asked to leave out.
     try {
       const { proposal } = await propose(text);
       if (sequence !== intentSequence.current) return;
@@ -401,12 +425,21 @@ export function JourneyShareDialog({
           text: "这句话没有对应到任何旅程，请换个说法，或直接在下面勾选。",
           unmatched: proposal.unmatched,
         });
-      if (proposal.mediaFilter === "no-people" && journeyIds.length > 0) {
+      // The new sentence replaces whatever the last one filtered.
+      const wantsFilter = proposal.mediaFilter === "no-people";
+      if (wantsFilter && journeyIds.length > 0) {
         if (mediaFilterCapable && mutations.proposeShareMedia) {
           void startMediaFilter(journeyIds);
         } else {
+          mediaSequence.current += 1;
           setMediaFilter({ status: "unavailable" });
+          setMediaThumbnails([]);
+          setMediaFilterNotice(null);
         }
+      } else if (wantsFilter) {
+        clearMediaFilter(MEDIA_FILTER_NO_JOURNEYS);
+      } else if (mediaFilterRef.current) {
+        clearMediaFilter(MEDIA_FILTER_NOT_REQUESTED);
       }
     } catch (error) {
       if (sequence !== intentSequence.current) return;
@@ -543,7 +576,9 @@ export function JourneyShareDialog({
                 {mediaFilter.status === "pending" ? (
                   <p>
                     <StartripsJourneyCue state="waiting" size={28} />
-                    正在挑选不含人物的照片，照片较多时需要一点时间…
+                    {mediaFilter.progress
+                      ? `正在挑选不含人物的照片（已检查 ${mediaFilter.progress.checked} / ${mediaFilter.progress.total}）`
+                      : "正在挑选不含人物的照片，照片较多时需要一点时间…"}
                   </p>
                 ) : null}
                 {mediaFilter.status === "ready" ? (

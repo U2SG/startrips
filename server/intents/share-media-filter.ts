@@ -12,6 +12,17 @@
  * be judged (no preview, unreadable preview, provider error or timeout) is
  * excluded, and so is every video and every other non-photo media, because
  * nothing here can verify them.
+ *
+ * One request judges one batch. A selection with more unjudged photos than
+ * a batch is worked through by repeating the same request: each call judges
+ * the next batch in list order, caches what it answered, and reports
+ * `remaining`. While `remaining > 0` the answer is provisional and shares
+ * nothing (`assetIds` is empty). A photo this call could not settle — no
+ * readable preview, provider error or timeout, or an answer the cache could
+ * not keep — is returned in `failedAssetIds`; the caller sends those back as
+ * `skipAssetIds`, and a skipped photo is excluded and never counted in
+ * `remaining`. Every call therefore settles its whole batch one way or the
+ * other, so the loop ends after at most `ceil(unjudged / batch)` calls.
  */
 
 import { ShareIntentError } from "./create-share-intent";
@@ -20,9 +31,7 @@ import { ShareIntentError } from "./create-share-intent";
  * The most photos one request may send to the provider. A normal answer
  * takes 2–4 s, so 48 photos 3 at a time take well under a minute; the bound
  * only matters when every call hangs, where it is `ceil(48 / 3)` = 16 rounds
- * of `INTENT_TIMEOUT_MS` (8 minutes at the default 30 s). Only successes are
- * cached, so a member over the cap shares fewer Journeys first and the next
- * request finds those photos already answered.
+ * of `INTENT_TIMEOUT_MS` (8 minutes at the default 30 s).
  */
 export const MAX_SHARE_MEDIA_FILTER_UNCLASSIFIED = 48;
 
@@ -42,12 +51,21 @@ export type ShareMediaFilterAsset = {
 };
 
 export type ShareMediaFilterResult = {
-  /** Shareable media, in the order given: photos answered "no person". */
+  /**
+   * Shareable media, in the order given: photos answered "no person". Always
+   * empty while `remaining > 0`: a provisional answer shares nothing.
+   */
   assetIds: string[];
   /** Everything left out: people, could-not-judge, videos and other media. */
   excludedCount: number;
-  /** The part of `excludedCount` that could not be judged at all. */
+  /** The part of `excludedCount` that could not be judged (yet). */
   unclassifiedCount: number;
+  /** Photos still waiting for a later call; the result is final at 0. */
+  remaining: number;
+  /** Photos this call sent for judging, settled or not. */
+  checkedCount: number;
+  /** Photos of this call's batch with no kept answer; send back as skips. */
+  failedAssetIds: string[];
 };
 
 export type ShareMediaFilterDependencies = {
@@ -55,8 +73,14 @@ export type ShareMediaFilterDependencies = {
   readPreview: (asset: ShareMediaFilterAsset) => Promise<Uint8Array | null>;
   /** One vision call: true when the photo shows a recognizable person. */
   classify: (imageDataUrl: string) => Promise<boolean>;
-  /** Records successful answers. Best effort: a failed write keeps the result. */
+  /**
+   * Records successful answers. A failed write turns this call's answers
+   * into failures: an answer that was not kept would be asked again by the
+   * next call, and the loop would never end.
+   */
   saveResults: (results: Array<{ assetId: string; hasPerson: boolean }>) => Promise<void>;
+  /** Photos an earlier call of the same loop failed on: excluded, not retried. */
+  skipAssetIds?: ReadonlySet<string>;
   concurrency?: number;
   maxUnclassified?: number;
 };
@@ -77,27 +101,22 @@ export async function filterShareMediaWithoutPeople(
   dependencies: ShareMediaFilterDependencies,
 ): Promise<ShareMediaFilterResult> {
   const concurrency = Math.max(1, dependencies.concurrency ?? SHARE_MEDIA_FILTER_CONCURRENCY);
-  const maxUnclassified = dependencies.maxUnclassified ?? MAX_SHARE_MEDIA_FILTER_UNCLASSIFIED;
+  const batchSize = Math.max(1, dependencies.maxUnclassified ?? MAX_SHARE_MEDIA_FILTER_UNCLASSIFIED);
+  const skip = dependencies.skipAssetIds ?? new Set<string>();
 
   const pending = assets.filter((asset) =>
     isShareMediaFilterPhoto(asset.mimeType)
     && asset.cachedHasPerson === null
-    && readablePreview(asset));
-  // Refused before any provider call, never silently truncated: judging only
-  // the first N and excluding the rest would read as "these had people".
-  if (pending.length > maxUnclassified) {
-    throw new ShareIntentError(
-      "SHARE_MEDIA_FILTER_TOO_MANY",
-      `At most ${maxUnclassified} photos can be checked at once; ${pending.length} have not been checked yet`,
-      400,
-    );
-  }
+    && readablePreview(asset)
+    && !skip.has(asset.id));
+  const batch = pending.slice(0, batchSize);
+  const remaining = pending.length - batch.length;
 
   const answers = new Map<string, boolean>();
   let next = 0;
   async function worker() {
-    while (next < pending.length) {
-      const asset = pending[next];
+    while (next < batch.length) {
+      const asset = batch[next];
       next += 1;
       try {
         const bytes = await dependencies.readPreview(asset);
@@ -110,7 +129,7 @@ export async function filterShareMediaWithoutPeople(
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(concurrency, batch.length) }, worker));
 
   if (answers.size > 0) {
     try {
@@ -118,9 +137,12 @@ export async function filterShareMediaWithoutPeople(
         [...answers].map(([assetId, hasPerson]) => ({ assetId, hasPerson })),
       );
     } catch {
-      // The answers are still true for this request; the next one asks again.
+      // Not kept, so not used: reported as failed below, never asked again
+      // within this loop, and excluded from the final answer.
+      answers.clear();
     }
   }
+  const failedAssetIds = batch.filter((asset) => !answers.has(asset.id)).map((asset) => asset.id);
 
   const assetIds: string[] = [];
   let unclassifiedCount = 0;
@@ -130,10 +152,15 @@ export async function filterShareMediaWithoutPeople(
     if (hasPerson === null) unclassifiedCount += 1;
     else if (!hasPerson) assetIds.push(asset.id);
   }
+  // Provisional: nothing is shareable until every photo has been settled.
+  const shareable = remaining > 0 ? [] : assetIds;
   return {
-    assetIds,
-    excludedCount: assets.length - assetIds.length,
+    assetIds: shareable,
+    excludedCount: assets.length - shareable.length,
     unclassifiedCount,
+    remaining,
+    checkedCount: batch.length,
+    failedAssetIds,
   };
 }
 

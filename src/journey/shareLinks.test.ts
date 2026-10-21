@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MAX_SHARE_JOURNEYS,
   MAX_SHARE_LIFETIME_MS,
@@ -6,6 +6,7 @@ import {
   SHARE_EXPIRY_PRESETS,
   SHARE_TOKEN_ONCE_NOTICE,
   activeShareRows,
+  collectShareMediaFilter,
   deriveShareStatus,
   MAX_TIMEOUT_DELAY_MS,
   formatShareExpiry,
@@ -16,10 +17,12 @@ import {
   shareLinkRow,
   shareLinkUrl,
   shareScopeLabel,
+  sameShareSelection,
   shareSelectionMessage,
   toDateTimeLocalValue,
   toggleShareSelection,
 } from "./shareLinks";
+import type { ShareMediaFilterResult } from "./journeyApi";
 import type { ShareGrantSummary } from "./types";
 
 const NOW = new Date("2026-09-05T04:00:00.000Z");
@@ -275,5 +278,62 @@ describe("nextShareExpiryDelay", () => {
     );
     expect(delay).toBe(MAX_TIMEOUT_DELAY_MS);
     expect(MAX_SHARE_LIFETIME_MS).toBeGreaterThan(MAX_TIMEOUT_DELAY_MS);
+  });
+});
+
+describe("share media filter loop", () => {
+  function batch(overrides: Partial<ShareMediaFilterResult>): ShareMediaFilterResult {
+    return {
+      assetIds: [],
+      excludedCount: 0,
+      unclassifiedCount: 0,
+      remaining: 0,
+      checkedCount: 0,
+      failedAssetIds: [],
+      ...overrides,
+    };
+  }
+
+  it("repeats with the failures as skips until nothing remains, reporting progress", async () => {
+    const propose = vi.fn<(ids: readonly string[], skip: readonly string[]) => Promise<ShareMediaFilterResult>>()
+      .mockResolvedValueOnce(batch({ remaining: 12, checkedCount: 48, failedAssetIds: ["f1"] }))
+      .mockResolvedValueOnce(batch({ assetIds: ["a"], excludedCount: 59, remaining: 0, checkedCount: 12 }));
+    const progress: Array<{ checked: number; total: number }> = [];
+    const result = await collectShareMediaFilter(["j1"], propose, {
+      isCurrent: () => true,
+      onProgress: (value) => progress.push(value),
+    });
+    expect(result?.assetIds).toEqual(["a"]);
+    expect(propose.mock.calls).toEqual([[["j1"], []], [["j1"], ["f1"]]]);
+    expect(progress).toEqual([{ checked: 48, total: 60 }]);
+  });
+
+  it("drops the answer once the filter is no longer current", async () => {
+    let current = true;
+    const propose = vi.fn(async () => {
+      current = false;
+      return batch({ remaining: 3, checkedCount: 48 });
+    });
+    const result = await collectShareMediaFilter(["j1"], propose, {
+      isCurrent: () => current,
+      onProgress: () => undefined,
+    });
+    expect(result).toBeNull();
+    expect(propose).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to loop on a call that checked nothing", async () => {
+    const propose = vi.fn(async () => batch({ remaining: 3, checkedCount: 0 }));
+    await expect(collectShareMediaFilter(["j1"], propose, {
+      isCurrent: () => true,
+      onProgress: () => undefined,
+    })).rejects.toThrow();
+    expect(propose).toHaveBeenCalledTimes(1);
+  });
+
+  it("compares selections as sets", () => {
+    expect(sameShareSelection(["a", "b"], ["b", "a"])).toBe(true);
+    expect(sameShareSelection(["a"], ["a", "b"])).toBe(false);
+    expect(sameShareSelection(["a", "c"], ["a", "b"])).toBe(false);
   });
 });

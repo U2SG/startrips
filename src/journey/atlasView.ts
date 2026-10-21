@@ -191,7 +191,10 @@ export type AtlasMutations = {
   readShareIntentCapability?: () => Promise<ShareIntentCapability>;
   proposeShareIntent?: (text: string) => Promise<{ proposal: ShareIntentProposal; model: string }>;
   /** "只分享风景图": which media of these Journeys may be shared without people. */
-  proposeShareMedia?: (journeyIds: readonly string[]) => Promise<ShareMediaFilterResult>;
+  proposeShareMedia?: (
+    journeyIds: readonly string[],
+    skipAssetIds?: readonly string[],
+  ) => Promise<ShareMediaFilterResult>;
   /** The owner's own authorized read, for the confirmation thumbnails. */
   readShareMediaPreview?: (assetId: string) => Promise<PrivateMediaRead>;
 };
@@ -241,7 +244,7 @@ export function createOwnerAtlasMutations(canEditJourney = true): AtlasMutations
     revokeShare,
     readShareIntentCapability: () => readShareIntentCapability(),
     proposeShareIntent: (text) => proposeShareIntent(text),
-    proposeShareMedia: (journeyIds) => proposeShareMedia(journeyIds),
+    proposeShareMedia: (journeyIds, skipAssetIds) => proposeShareMedia(journeyIds, skipAssetIds),
     readShareMediaPreview: (assetId) => getPrivateMediaRead(assetId),
   };
   if (canEditJourney) {

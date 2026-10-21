@@ -645,21 +645,40 @@ export async function readShareIntentCapability(
 }
 
 export type ShareMediaFilterResult = {
-  /** The media that may be shared: photos judged to show no person. */
+  /**
+   * The media that may be shared: photos judged to show no person. Empty and
+   * not shareable while `remaining > 0`.
+   */
   assetIds: string[];
   /** Everything left out: people, photos that could not be judged, videos. */
   excludedCount: number;
   unclassifiedCount: number;
+  /** Photos a later call still has to judge; the answer is final at 0. */
+  remaining: number;
+  /** Photos this call sent for judging. */
+  checkedCount: number;
+  /** Photos this call could not settle; send them back as `skipAssetIds`. */
+  failedAssetIds: string[];
 };
 
-/** Judges only; it selects nothing and creates no share. */
+/**
+ * Judges one batch only; it selects nothing and creates no share. The caller
+ * repeats it with the failures so far as `skipAssetIds` until `remaining` is 0.
+ */
 export async function proposeShareMedia(
   journeyIds: readonly string[],
+  skipAssetIds: readonly string[] = [],
   fetcher: Fetcher = fetch,
 ): Promise<ShareMediaFilterResult> {
   return requestJson<ShareMediaFilterResult>(
     "/api/intents/share/media",
-    { method: "POST", body: JSON.stringify({ journeyIds: [...journeyIds] }) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        journeyIds: [...journeyIds],
+        ...(skipAssetIds.length > 0 ? { skipAssetIds: [...skipAssetIds] } : {}),
+      }),
+    },
     fetcher,
   );
 }
