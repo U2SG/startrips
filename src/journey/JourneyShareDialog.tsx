@@ -468,7 +468,10 @@ export function JourneyShareDialog({
                   aria-label="自定义失效时间"
                   value={customValue}
                   max={maxCustom}
-                  onChange={(event) => setCustomValue(event.target.value)}
+                  onChange={(event) => {
+                    setCustomValue(event.target.value);
+                    supersedeProposal();
+                  }}
                 />
               ) : null}
             </fieldset>
