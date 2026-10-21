@@ -25,6 +25,9 @@ const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 
 const TOKEN = "qaOwnerShareToken00000000000000000000000000";
 
+/** A one-pixel still, so a thumbnail never reaches the network. */
+const QA_THUMBNAIL = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/%3E";
+
 /**
  * The expiry the stubbed server answers with.
  *
@@ -123,7 +126,38 @@ async function installOwnerApi(page, state) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ share: { configured: Boolean(state.intentProposal) } }),
+      body: JSON.stringify({
+        share: {
+          configured: Boolean(state.intentProposal),
+          mediaFilter: Boolean(state.intentProposal && state.mediaFilterResult),
+        },
+      }),
+    });
+  });
+  // "只分享风景图". Answered from `state.mediaFilterResult`, held behind
+  // `state.mediaFilterGate` so a pass can observe the pending state.
+  await page.route("**/api/intents/share/media", async (route) => {
+    const body = JSON.parse(route.request().postData() ?? "{}");
+    requests.push({ kind: "media-filter", body });
+    if (state.mediaFilterGate) await state.mediaFilterGate;
+    await route.fulfill({
+      status: state.mediaFilterResult ? 200 : 503,
+      contentType: "application/json",
+      body: JSON.stringify(state.mediaFilterResult
+        ?? { error: "MEDIA_FILTER_UNAVAILABLE", message: "Filtering shared media by content is not configured" }),
+    });
+  });
+  // The owner's own preview reads behind the confirmation thumbnails.
+  await page.route("**/api/uploads/assets/*/read-url", async (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-2);
+    requests.push({ kind: "media-read", id });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        url: QA_THUMBNAIL,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
     });
   });
   await page.route("**/api/intents/share", async (route) => {
@@ -396,6 +430,7 @@ async function ornamentScan(page) {
       ".journey-share__custom-expiry",
       ".journey-share__intent-input",
       ".journey-share__intent-row > button",
+      ".journey-share__media-filter-actions > button",
       '.journey-share__expiry input[type="radio"] + span[aria-hidden]',
       '.journey-share__selection input[type="checkbox"] + span[aria-hidden]',
       '.startrips-brand-mark > .startrips-brand-mark__orbit[aria-hidden="true"]',
@@ -612,7 +647,7 @@ async function verifyShareIntentProposal(browser, viewport) {
       shares: [],
       requests: [],
       createGate: null,
-      intentProposal: { journeyIds: proposedIds, expiry: "30d", unmatched: null },
+      intentProposal: { journeyIds: proposedIds, expiry: "30d", mediaFilter: null, unmatched: null },
     };
     await installOwnerApi(page, state);
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
@@ -674,6 +709,121 @@ async function verifyShareIntentProposal(browser, viewport) {
       createRequest?.body.journeyIds.length === 2
         && proposedIds.every((id) => createRequest.body.journeyIds.includes(id)),
       createRequest?.body.journeyIds);
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * "只分享风景图": the stubbed model asks for the no-people filter. The dialog
+ * must ask the media endpoint for exactly the proposed Journeys, hold Create
+ * while it waits, state the server's counts, show the included thumbnails and
+ * send exactly those ids as `mediaAssetIds`. A hand edit of the selection must
+ * then drop the filter, say so, and create an unscoped link.
+ */
+async function verifyShareMediaFilter(browser, viewport) {
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height },
+    hasTouch: viewport.compact,
+    isMobile: viewport.compact,
+    deviceScaleFactor: 1,
+  });
+  const page = await context.newPage();
+  const name = `${viewport.name}/media-filter`;
+  try {
+    await page.addInitScript(() => {
+      localStorage.setItem("startrips.media-presentation", "note-overlay");
+    });
+    const proposedIds = [journeys[0].id, journeys[2].id];
+    const includedIds = ["qa-asset-landscape-1", "qa-asset-landscape-2", "qa-asset-landscape-3"];
+    let releaseFilter = () => {};
+    const state = {
+      shares: [],
+      requests: [],
+      createGate: null,
+      intentProposal: { journeyIds: proposedIds, expiry: null, mediaFilter: "no-people", unmatched: null },
+      mediaFilterResult: { assetIds: includedIds, excludedCount: 4, unclassifiedCount: 1 },
+      mediaFilterGate: new Promise((resolve) => { releaseFilter = resolve; }),
+    };
+    await installOwnerApi(page, state);
+    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+    await page.locator(".living-atlas").waitFor({ timeout: 20_000 });
+    await page.waitForFunction(
+      () => document.body.textContent?.includes("海风经过深圳湾"),
+      undefined,
+      { timeout: 20_000 },
+    );
+    if (viewport.compact) await openAtlasMore(page);
+    await clickNamed(page, "分享多段旅程");
+    await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
+
+    const input = page.locator(".journey-share__intent-input");
+    await input.waitFor({ state: "visible", timeout: 10_000 });
+    await input.fill("分享深圳湾和东京那两段，只分享风景图，不分享人像图");
+    await page.locator(".journey-share__intent-row > button").click();
+
+    await page.locator('[data-share-media-filter="pending"]').waitFor({ timeout: 10_000 });
+    const filterRequest = state.requests.find((entry) => entry.kind === "media-filter");
+    check(`${name}/asks-for-the-proposed-journeys`,
+      filterRequest?.body.journeyIds?.length === 2
+        && proposedIds.every((id) => filterRequest.body.journeyIds.includes(id)),
+      filterRequest?.body);
+    check(`${name}/holds-create-while-pending`,
+      await page.locator(".journey-share__create").isDisabled());
+
+    releaseFilter();
+    await page.locator('[data-share-media-filter="ready"]').waitFor({ timeout: 10_000 });
+    const summary = (await page.locator("[data-share-media-summary]").textContent())?.trim() ?? "";
+    check(`${name}/states-the-counts`,
+      summary === "将分享 3 张风景照（已排除 4 张含人物或无法确认的照片与视频）",
+      summary);
+    await page.waitForFunction(
+      (count) => document.querySelectorAll(".journey-share__media-strip img").length === count,
+      includedIds.length,
+      { timeout: 10_000 },
+    ).catch(() => {});
+    const thumbnails = await page.locator(".journey-share__media-strip img").count();
+    check(`${name}/shows-the-included-thumbnails`, thumbnails === includedIds.length, { thumbnails });
+    const readIds = state.requests.filter((entry) => entry.kind === "media-read").map((entry) => entry.id);
+    check(`${name}/reads-only-included-previews`,
+      readIds.every((id) => includedIds.includes(id)),
+      readIds);
+
+    const ornament = await ornamentScan(page);
+    check(`${name}/no-decorative-rounding`, ornament?.offenders.rounding.length === 0, ornament?.offenders.rounding);
+    check(`${name}/touch-targets-at-least-44px`, ornament?.smallTargets.length === 0, ornament?.smallTargets);
+    const overflow = await page.evaluate(() => {
+      const dialog = document.querySelector(".journey-share__dialog");
+      return dialog ? dialog.scrollWidth - dialog.clientWidth : null;
+    });
+    check(`${name}/no-horizontal-overflow`, overflow === 0, { overflow });
+
+    await clickText(page, "创建分享链接");
+    await page.locator("[data-share-link]").waitFor({ timeout: 10_000 });
+    const scopedCreate = state.requests.filter((entry) => entry.kind === "create").at(-1);
+    check(`${name}/create-carries-media-asset-ids`,
+      JSON.stringify(scopedCreate?.body.mediaAssetIds) === JSON.stringify(includedIds),
+      scopedCreate?.body);
+
+    // A hand edit of the selection ends the filter and says so.
+    await clickText(page, "完成");
+    await input.fill("分享深圳湾和东京那两段，只分享风景图，不分享人像图");
+    await page.locator(".journey-share__intent-row > button").click();
+    await page.locator('[data-share-media-filter="ready"]').waitFor({ timeout: 10_000 });
+    await page.evaluate((id) => {
+      document.querySelector(`.journey-share__selection input[value="${id}"]`)?.click();
+    }, journeys[1].id);
+    await page.locator("[data-share-media-filter-notice]").waitFor({ timeout: 10_000 });
+    const notice = (await page.locator("[data-share-media-filter-notice]").textContent())?.trim() ?? "";
+    check(`${name}/selection-edit-clears-the-filter`,
+      notice.includes("照片筛选已取消") && await page.locator("[data-share-media-filter]").count() === 0,
+      notice);
+    await clickText(page, "创建分享链接");
+    await page.locator("[data-share-link]").waitFor({ timeout: 10_000 });
+    const unscopedCreate = state.requests.filter((entry) => entry.kind === "create").at(-1);
+    check(`${name}/cleared-filter-creates-an-unscoped-link`,
+      unscopedCreate !== scopedCreate && !("mediaAssetIds" in (unscopedCreate?.body ?? {})),
+      unscopedCreate?.body);
   } finally {
     await context.close();
   }
@@ -1188,6 +1338,7 @@ try {
   await verifyAccountDockYieldsToShare(browser);
   for (const viewport of [VIEWPORTS[0], VIEWPORTS[1]]) {
     await verifyShareIntentProposal(browser, viewport);
+    await verifyShareMediaFilter(browser, viewport);
   }
 } catch (error) {
   // The accumulated results are this lane's only diagnostic record; a thrown

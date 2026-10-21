@@ -46,7 +46,13 @@ export type JourneyShareDialogProps = {
   lockedJourneyId: string | null;
   mutations: Pick<
     AtlasMutations,
-    "createShare" | "listShares" | "revokeShare" | "readShareIntentCapability" | "proposeShareIntent"
+    | "createShare"
+    | "listShares"
+    | "revokeShare"
+    | "readShareIntentCapability"
+    | "proposeShareIntent"
+    | "proposeShareMedia"
+    | "readShareMediaPreview"
   >;
   onClose: () => boolean | void;
   onMutationPendingChange?: (pending: boolean) => void;
@@ -59,7 +65,41 @@ type CreatedLink = {
   url: string;
   expiresAt: string;
   journeyCount: number;
+  /** Set only for a link created with the no-people media filter. */
+  mediaCount: number | null;
 };
+
+/**
+ * "只分享风景图". `null` means no filter: the link shares every media of the
+ * selected Journeys, exactly as without a sentence.
+ */
+type MediaFilterState =
+  | { status: "pending"; journeyIds: string[] }
+  | { status: "error"; journeyIds: string[]; text: string }
+  | { status: "ready"; assetIds: string[]; excludedCount: number };
+
+type MediaThumbnail = { id: string; url: string };
+
+/** A strip, not a browser: the count above already says how many. */
+const MAX_MEDIA_THUMBNAILS = 12;
+
+const MEDIA_FILTER_CLEARED_BY_SELECTION = "旅程选择已改动，照片筛选已取消，将分享所选旅程的全部照片与视频。";
+const MEDIA_FILTER_REMOVED = "已取消照片筛选，将分享所选旅程的全部照片与视频。";
+const MEDIA_FILTER_NOT_OFFERED = "这台服务器不能按照片内容筛选，将分享所选旅程的全部照片与视频。";
+
+function shareMediaFilterErrorMessage(error: unknown): string {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? (error as { code?: unknown }).code
+    : null;
+  switch (code) {
+    case "SHARE_MEDIA_FILTER_TOO_MANY":
+      return "要检查的照片太多了，请先少选几段旅程；检查过的照片下次不会再等。";
+    case "MEDIA_FILTER_UNAVAILABLE":
+      return "这台服务器暂时不能按照片内容筛选。";
+    default:
+      return "暂时无法挑选照片，请重试，或改为分享全部照片。";
+  }
+}
 
 type Phase = "compose" | "created";
 
@@ -122,6 +162,14 @@ export function JourneyShareDialog({
   // Only the latest sentence may change the selection: an answer that
   // arrives after a newer submission is dropped.
   const intentSequence = useRef(0);
+  const [mediaFilterCapable, setMediaFilterCapable] = useState(false);
+  const [mediaFilter, setMediaFilter] = useState<MediaFilterState | null>(null);
+  const [mediaFilterNotice, setMediaFilterNotice] = useState<string | null>(null);
+  const [mediaThumbnails, setMediaThumbnails] = useState<MediaThumbnail[]>([]);
+  // The same supersede rule as the sentence: only the latest filter request
+  // may land, and any change that ends the filter drops a late answer.
+  const mediaSequence = useRef(0);
+  const mediaFilterBlocksCreate = mediaFilter !== null && mediaFilter.status !== "ready";
   const closeBlocked = pending || revokingId !== null;
   const requestClose = useCallback(() => {
     if (closeBlocked) return false;
@@ -163,8 +211,16 @@ export function JourneyShareDialog({
     if (lockedJourneyId || !readIntentCapability) return;
     let active = true;
     readIntentCapability().then(
-      (configured) => { if (active) setIntentConfigured(configured); },
-      () => { if (active) setIntentConfigured(false); },
+      (capability) => {
+        if (!active) return;
+        setIntentConfigured(capability.configured);
+        setMediaFilterCapable(capability.mediaFilter);
+      },
+      () => {
+        if (!active) return;
+        setIntentConfigured(false);
+        setMediaFilterCapable(false);
+      },
     );
     return () => { active = false; };
   }, [lockedJourneyId, readIntentCapability]);
@@ -200,7 +256,7 @@ export function JourneyShareDialog({
   const maxCustom = toDateTimeLocalValue(maxCustomExpiry(now()));
 
   async function createLink() {
-    if (pending || revokingId || intentPending) return;
+    if (pending || revokingId || intentPending || mediaFilterBlocksCreate) return;
     if (selectionMessage) {
       setMessage(selectionMessage);
       return;
@@ -214,13 +270,15 @@ export function JourneyShareDialog({
     setPending(true);
     setMessage("");
     try {
-      const response = await mutations.createShare(selected, expiry.expiresAt);
+      const mediaAssetIds = mediaFilter?.status === "ready" ? mediaFilter.assetIds : undefined;
+      const response = await mutations.createShare(selected, expiry.expiresAt, mediaAssetIds);
       setCreated({
         url: shareLinkUrl(linkOrigin, response.token),
         // The server's own value, not the one just requested: #200 makes the
         // server clock the authority for what "有效至" means.
         expiresAt: response.share.expiresAt,
         journeyCount: response.share.journeyCount,
+        mediaCount: mediaAssetIds ? mediaAssetIds.length : null,
       });
       setPhase("created");
       setCopied(false);
@@ -251,6 +309,61 @@ export function JourneyShareDialog({
     setIntentStatus(null);
   }
 
+  /**
+   * End the media filter: the link goes back to sharing every media of the
+   * selection. A late answer is dropped, and `notice` says why when the
+   * member did not ask for this directly.
+   */
+  function clearMediaFilter(notice: string | null) {
+    mediaSequence.current += 1;
+    setMediaFilter(null);
+    setMediaThumbnails([]);
+    setMediaFilterNotice(notice);
+  }
+
+  async function startMediaFilter(journeyIds: string[]) {
+    const proposeMedia = mutations.proposeShareMedia;
+    if (!proposeMedia) return;
+    const sequence = mediaSequence.current + 1;
+    mediaSequence.current = sequence;
+    setMediaFilter({ status: "pending", journeyIds });
+    setMediaThumbnails([]);
+    setMediaFilterNotice(null);
+    try {
+      const result = await proposeMedia(journeyIds);
+      if (sequence !== mediaSequence.current) return;
+      setMediaFilter({
+        status: "ready",
+        assetIds: result.assetIds,
+        excludedCount: result.excludedCount,
+      });
+      void loadMediaThumbnails(sequence, result.assetIds.slice(0, MAX_MEDIA_THUMBNAILS));
+    } catch (error) {
+      if (sequence !== mediaSequence.current) return;
+      setMediaFilter({ status: "error", journeyIds, text: shareMediaFilterErrorMessage(error) });
+    }
+  }
+
+  /**
+   * The owner's own authorized previews. A thumbnail that cannot be read is
+   * left out of the strip; the count above it is the server's answer and
+   * stays true either way.
+   */
+  async function loadMediaThumbnails(sequence: number, assetIds: string[]) {
+    const readPreview = mutations.readShareMediaPreview;
+    if (!readPreview || assetIds.length === 0) return;
+    const reads = await Promise.all(assetIds.map(async (id) => {
+      try {
+        const read = await readPreview(id);
+        return { id, url: read.preview?.url ?? read.url };
+      } catch {
+        return null;
+      }
+    }));
+    if (sequence !== mediaSequence.current) return;
+    setMediaThumbnails(reads.filter((read): read is MediaThumbnail => read !== null));
+  }
+
   async function proposeFromSentence() {
     const propose = mutations.proposeShareIntent;
     if (!propose || intentPending || closeBlocked) return;
@@ -263,6 +376,8 @@ export function JourneyShareDialog({
     intentSequence.current = sequence;
     setIntentPending(true);
     setIntentStatus(null);
+    // A new sentence replaces whatever the last one filtered.
+    clearMediaFilter(null);
     try {
       const { proposal } = await propose(text);
       if (sequence !== intentSequence.current) return;
@@ -284,6 +399,13 @@ export function JourneyShareDialog({
           text: "这句话没有对应到任何旅程，请换个说法，或直接在下面勾选。",
           unmatched: proposal.unmatched,
         });
+      if (proposal.mediaFilter === "no-people" && journeyIds.length > 0) {
+        if (mediaFilterCapable && mutations.proposeShareMedia) {
+          void startMediaFilter(journeyIds);
+        } else {
+          setMediaFilterNotice(MEDIA_FILTER_NOT_OFFERED);
+        }
+      }
     } catch (error) {
       if (sequence !== intentSequence.current) return;
       setIntentStatus({ tone: "error", text: shareIntentErrorMessage(error), unmatched: null });
@@ -410,6 +532,59 @@ export function JourneyShareDialog({
               </form>
             ) : null}
 
+            {mediaFilter ? (
+              <div
+                className="journey-share__media-filter"
+                role="status"
+                data-share-media-filter={mediaFilter.status}
+              >
+                {mediaFilter.status === "pending" ? (
+                  <p>
+                    <StartripsJourneyCue state="waiting" size={28} />
+                    正在挑选不含人物的照片，照片较多时需要一点时间…
+                  </p>
+                ) : null}
+                {mediaFilter.status === "ready" ? (
+                  <>
+                    <p data-share-media-summary="true">
+                      将分享 {mediaFilter.assetIds.length} 张风景照（已排除 {mediaFilter.excludedCount} 张含人物或无法确认的照片与视频）
+                    </p>
+                    {mediaThumbnails.length > 0 ? (
+                      <ul className="journey-share__media-strip" aria-label="将分享的风景照">
+                        {mediaThumbnails.map((thumbnail) => (
+                          <li key={thumbnail.id}>
+                            <img src={thumbnail.url} alt="" loading="lazy" decoding="async" />
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </>
+                ) : null}
+                {mediaFilter.status === "error" ? <p>{mediaFilter.text}</p> : null}
+                {mediaFilter.status !== "pending" ? (
+                  <div className="journey-share__media-filter-actions">
+                    {mediaFilter.status === "error" ? (
+                      <button
+                        type="button"
+                        disabled={closeBlocked}
+                        onClick={() => void startMediaFilter(mediaFilter.journeyIds)}
+                      >重新挑选</button>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={closeBlocked}
+                      onClick={() => clearMediaFilter(MEDIA_FILTER_REMOVED)}
+                    >改为分享全部照片</button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {mediaFilterNotice ? (
+              <p className="journey-share__intent-status" role="status" data-share-media-filter-notice="true">
+                {mediaFilterNotice}
+              </p>
+            ) : null}
+
             {lockedJourney ? null : (
               <fieldset className="journey-share__selection">
                 <legend>选择旅程</legend>
@@ -427,6 +602,9 @@ export function JourneyShareDialog({
                               setSelected((current) => toggleShareSelection(current, journey.id));
                               // A hand edit makes "已按这句话选好 N 段" untrue.
                               supersedeProposal();
+                              // ...and the filtered photos described the old
+                              // selection, so the link goes back to all media.
+                              if (mediaFilter) clearMediaFilter(MEDIA_FILTER_CLEARED_BY_SELECTION);
                             }}
                           />
                           <span aria-hidden="true" />
@@ -482,7 +660,7 @@ export function JourneyShareDialog({
             <button
               className="journey-share__create"
               type="button"
-              disabled={closeBlocked || intentPending || selected.length === 0}
+              disabled={closeBlocked || intentPending || mediaFilterBlocksCreate || selected.length === 0}
               onClick={() => void createLink()}
             >
               {pending ? <StartripsJourneyCue state="waiting" size={28} /> : <IconLink size={17} stroke={1.35} aria-hidden="true" />}
@@ -499,6 +677,7 @@ export function JourneyShareDialog({
             </p>
             <p className="journey-share__created-scope">
               包含 {created.journeyCount} 段旅程
+              {created.mediaCount !== null ? `，只分享其中 ${created.mediaCount} 张风景照` : null}
             </p>
             <output className="journey-share__link" data-share-link="true">{created.url}</output>
             <p className="journey-share__notice">{SHARE_BEARER_NOTICE}</p>
@@ -527,6 +706,7 @@ export function JourneyShareDialog({
                   if (!lockedJourneyId) setSelected([]);
                   // The proposal described the selection just cleared.
                   setIntentStatus(null);
+                  clearMediaFilter(null);
                 }}
               >完成</button>
             </div>
