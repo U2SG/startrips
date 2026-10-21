@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BOOK_OVERLAY_NOTE_LIMIT,
+  journeyBookCoverStyle,
   journeyBookPageRoutePointId,
   journeyBookPages,
   journeyBookStartPage,
@@ -136,6 +137,42 @@ describe("journeyBookPages", () => {
       media: [asset("photo", "a", 0), asset("song", null, 0, "audio/mpeg")],
     };
     expect(shape(journeyBookPages(journey))).toEqual(["cover", "media:photo", "blank", "end"]);
+  });
+});
+
+describe("journeyBookCoverStyle", () => {
+  const cover = (journey: Journey) => journeyBookPages(journey)[0] as Extract<JourneyBookPage, { kind: "cover" }>;
+
+  it("fills the cover with the explicit cover photo", () => {
+    const page = cover({
+      ...base,
+      coverMediaAssetId: "photo-b",
+      routePoints: [point("a")],
+      media: [asset("photo-a", "a", 0), asset("photo-b", "a", 1)],
+    });
+    expect(page.asset?.id).toBe("photo-b");
+    expect(journeyBookCoverStyle(page)).toBe("photo");
+  });
+
+  it("falls back to the first visual asset, never a soundtrack", () => {
+    const page = cover({
+      ...base,
+      routePoints: [point("a")],
+      media: [asset("song", null, 0, "audio/mpeg"), asset("photo-a", "a", 1)],
+    });
+    expect(page.asset?.id).toBe("photo-a");
+    expect(journeyBookCoverStyle(page)).toBe("photo");
+  });
+
+  it("is starry when the payload has no visual media, as a share without it", () => {
+    const page = cover({
+      ...base,
+      coverMediaAssetId: "photo-gone",
+      routePoints: [point("a")],
+      media: [asset("song", null, 0, "audio/mpeg")],
+    });
+    expect(page.asset).toBeNull();
+    expect(journeyBookCoverStyle(page)).toBe("starry");
   });
 });
 
