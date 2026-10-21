@@ -695,6 +695,45 @@ export async function proposeShareIntent(
   );
 }
 
+/**
+ * Whether this deployment can read a one-sentence Route Point reorder. Any
+ * failure reads as "not configured": the Composer then simply does not offer
+ * the sentence entry, and reordering by hand is unchanged.
+ */
+export async function readRouteOrderIntentCapability(
+  fetcher: Fetcher = fetch,
+): Promise<boolean> {
+  try {
+    const payload = await requestJson<{ routeOrder?: { configured?: unknown } }>(
+      "/api/intents/capabilities",
+      { cache: "no-store" },
+      fetcher,
+    );
+    return payload?.routeOrder?.configured === true;
+  } catch {
+    return false;
+  }
+}
+
+export type RouteOrderIntentProposal = {
+  /** Every sent id exactly once, in the proposed order; or no proposal. */
+  order: string[] | null;
+  unmatched: string | null;
+};
+
+/** A proposal only: nothing is written; the member applies and saves it. */
+export async function proposeRouteOrder(
+  text: string,
+  points: readonly { id: string; label: string }[],
+  fetcher: Fetcher = fetch,
+): Promise<{ proposal: RouteOrderIntentProposal; model: string }> {
+  return requestJson<{ proposal: RouteOrderIntentProposal; model: string }>(
+    "/api/intents/route-order",
+    { method: "POST", body: JSON.stringify({ text, points }) },
+    fetcher,
+  );
+}
+
 export async function listShares(
   fetcher: Fetcher = fetch,
 ): Promise<ShareGrantSummary[]> {

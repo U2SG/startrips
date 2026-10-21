@@ -35,10 +35,23 @@ import {
   createJourney,
   JourneyApiError,
   listJourneys,
+  proposeRouteOrder,
+  readRouteOrderIntentCapability,
   reverseGeocode,
   searchLocations,
   updateJourney,
 } from "./journeyApi";
+import {
+  applyRouteOrder,
+  MAX_ROUTE_ORDER_POINTS,
+  MAX_ROUTE_ORDER_TEXT_LENGTH,
+  MIN_ROUTE_ORDER_POINTS,
+  routeOrderConsequences,
+  routeOrderErrorMessage,
+  routeOrderIntentPoints,
+  routeOrderPreviewRows,
+  sameRouteDraftOrder,
+} from "./routeOrderIntent";
 import {
   clearRemovedMediaTarget,
   composerMediaSummary,
@@ -529,6 +542,30 @@ export function JourneyComposer({
   const composerMountedRef = useRef(true);
   const routePointsRef = useRef(routePoints);
   routePointsRef.current = routePoints;
+  // One-sentence reorder: a proposal is shown against the exact draft order
+  // it was made for (`basis`) and is void once that order changes.
+  const [routeOrderCapable, setRouteOrderCapable] = useState(false);
+  const [routeOrderText, setRouteOrderText] = useState("");
+  const [routeOrderPending, setRouteOrderPending] = useState(false);
+  const [routeOrderStatus, setRouteOrderStatus] = useState<{
+    tone: "error" | "empty" | "applied";
+    text: string;
+    unmatched: string | null;
+  } | null>(null);
+  const [routeOrderProposal, setRouteOrderProposal] = useState<{
+    basis: string[];
+    order: string[];
+    unmatched: string | null;
+  } | null>(null);
+  const routeOrderSequenceRef = useRef(0);
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    void readRouteOrderIntentCapability().then((configured) => {
+      if (active) setRouteOrderCapable(configured);
+    });
+    return () => { active = false; };
+  }, [open]);
   const existingSearchMatches = useMemo(
     () => matchRouteDraftPoints(routePoints, searchQuery),
     [routePoints, searchQuery],
@@ -1341,6 +1378,82 @@ export function JourneyComposer({
     });
   }
 
+  async function proposeRouteOrderFromSentence() {
+    const text = routeOrderText.trim();
+    if (!text) {
+      setRouteOrderStatus({ tone: "error", text: "请先写一句想怎么调整顺序。", unmatched: null });
+      return;
+    }
+    const points = routePointsRef.current;
+    const basis = points.map((point) => point.draftId);
+    const sequence = routeOrderSequenceRef.current + 1;
+    routeOrderSequenceRef.current = sequence;
+    setRouteOrderPending(true);
+    setRouteOrderStatus(null);
+    setRouteOrderProposal(null);
+    try {
+      const { proposal } = await proposeRouteOrder(text, routeOrderIntentPoints(points));
+      if (!composerMountedRef.current || sequence !== routeOrderSequenceRef.current) return;
+      if (!sameRouteDraftOrder(routePointsRef.current, basis)) {
+        setRouteOrderStatus({
+          tone: "error",
+          text: "路线在等待期间改动过，这次的建议已作废，请重新提交。",
+          unmatched: null,
+        });
+        return;
+      }
+      // The server checks the permutation too; this is the draft's own guard.
+      if (!proposal.order || !applyRouteOrder(points, proposal.order)) {
+        setRouteOrderStatus({
+          tone: "empty",
+          text: "没能从这句话得到完整的新顺序，路线没有改变。",
+          unmatched: proposal.unmatched,
+        });
+        return;
+      }
+      if (sameRouteDraftOrder(points, proposal.order)) {
+        setRouteOrderStatus({ tone: "empty", text: "按这句话，顺序没有变化。", unmatched: proposal.unmatched });
+        return;
+      }
+      setRouteOrderProposal({ basis, order: proposal.order, unmatched: proposal.unmatched });
+    } catch (error) {
+      if (!composerMountedRef.current || sequence !== routeOrderSequenceRef.current) return;
+      setRouteOrderStatus({ tone: "error", text: routeOrderErrorMessage(error), unmatched: null });
+    } finally {
+      if (composerMountedRef.current && sequence === routeOrderSequenceRef.current) setRouteOrderPending(false);
+    }
+  }
+
+  function applyRouteOrderProposal() {
+    const proposal = routeOrderProposal;
+    if (!proposal) return;
+    const applies = (points: readonly RouteDraftPoint[]) => (
+      sameRouteDraftOrder(points, proposal.basis) ? applyRouteOrder(points, proposal.order) : null
+    );
+    const applied = applies(routePointsRef.current) !== null;
+    if (applied) {
+      setRoutePoints((current) => {
+        const next = applies(current);
+        if (!next) return current;
+        routePointsRef.current = next;
+        return next;
+      });
+    }
+    routeOrderSequenceRef.current += 1;
+    setRouteOrderPending(false);
+    setRouteOrderProposal(null);
+    setRouteOrderStatus(applied
+      ? { tone: "applied", text: "已应用新顺序，保存后生效。", unmatched: null }
+      : { tone: "error", text: "路线已经改动过，这次的建议已作废，请重新提交。", unmatched: null });
+  }
+
+  function cancelRouteOrderProposal() {
+    routeOrderSequenceRef.current += 1;
+    setRouteOrderPending(false);
+    setRouteOrderProposal(null);
+    setRouteOrderStatus(null);
+  }
+
   function closeRoutePointMenu(draftPointId: string) {
     pendingRoutePointMenuFocusDraftIdRef.current = draftPointId;
     setRoutePointMenuDraftId(null);
@@ -1976,6 +2089,77 @@ export function JourneyComposer({
                 ) : null}
     </>
   );
+  // Recomputed from the draft as it is now, so a Stop or time edited while
+  // the preview is open is reflected; a changed order voids the proposal.
+  const routeOrderLive = routeOrderProposal && sameRouteDraftOrder(routePoints, routeOrderProposal.basis)
+    ? routeOrderProposal
+    : null;
+  const routeOrderRows = routeOrderLive ? routeOrderPreviewRows(routePoints, routeOrderLive.order) : null;
+  const routeOrderProposedPoints = routeOrderLive ? applyRouteOrder(routePoints, routeOrderLive.order) : null;
+  const routeOrderNotes = routeOrderProposedPoints
+    ? routeOrderConsequences(input, routePoints, routeOrderProposedPoints)
+    : [];
+  const routeOrderFragment = routeOrderCapable
+    && routePoints.length >= MIN_ROUTE_ORDER_POINTS
+    && routePoints.length <= MAX_ROUTE_ORDER_POINTS ? (
+      <form
+        className="journey-route-order"
+        data-route-order-intent
+        onSubmit={(event) => {
+          event.preventDefault();
+          void proposeRouteOrderFromSentence();
+        }}
+      >
+        <label>
+          <span>用一句话调整顺序</span>
+          <input
+            value={routeOrderText}
+            onChange={(event) => setRouteOrderText(event.target.value)}
+            maxLength={MAX_ROUTE_ORDER_TEXT_LENGTH}
+            enterKeyHint="send"
+            placeholder="例如：把最后一站放到开头"
+            disabled={routeOrderPending || editorLocked}
+          />
+        </label>
+        <button type="submit" disabled={routeOrderPending || editorLocked}>
+          {routeOrderPending ? "正在理解…" : "调整顺序"}
+        </button>
+        {routeOrderStatus ? (
+          <p className="journey-route-order__status" role="status" data-route-order-status={routeOrderStatus.tone}>
+            {routeOrderStatus.text}
+            {routeOrderStatus.unmatched ? <span>{routeOrderStatus.unmatched}</span> : null}
+          </p>
+        ) : null}
+        {routeOrderProposal && !routeOrderLive ? (
+          <p className="journey-route-order__status" role="status" data-route-order-status="void">
+            路线已经改动过，这次的建议已作废，请重新提交。
+          </p>
+        ) : null}
+        {routeOrderLive && routeOrderRows ? (
+          <section className="journey-route-order__preview" aria-label="新顺序预览" data-route-order-preview>
+            <ol>
+              {routeOrderRows.map((row) => (
+                <li key={row.draftId} data-route-order-moved={row.moved ? "true" : "false"}>
+                  <span>{row.to}</span>
+                  <strong>{row.label}</strong>
+                  <small>{row.moved ? `原第 ${row.from} 站` : "位置不变"}</small>
+                </li>
+              ))}
+            </ol>
+            {routeOrderNotes.length > 0 ? (
+              <ul className="journey-route-order__consequences" data-route-order-consequences>
+                {routeOrderNotes.map((note) => <li key={note}>{note}</li>)}
+              </ul>
+            ) : null}
+            {routeOrderLive.unmatched ? <p className="journey-route-order__status">{routeOrderLive.unmatched}</p> : null}
+            <div className="journey-route-order__actions">
+              <button type="button" onClick={applyRouteOrderProposal} disabled={editorLocked}>应用新顺序</button>
+              <button type="button" onClick={cancelRouteOrderProposal}>取消</button>
+            </div>
+          </section>
+        ) : null}
+      </form>
+    ) : null;
   const routeListFragment = (
               <ol className="journey-route-draft" aria-label="已添加的地点">
                 {routePoints.length === 0 ? <li className="is-empty"><IconMapPin size={22} stroke={1.15} aria-hidden="true" /><span>还没有地点</span><small>先搜索一个地点，或直接在地球上取点。</small></li> : null}
@@ -2430,6 +2614,7 @@ export function JourneyComposer({
                     {routeSearchFragment}
                     {reverseAttributionFragment}
                   </div>
+                  {routeOrderFragment}
                   {routeListFragment}
                 </section>
               ) : activeMobileTask !== "location" ? (

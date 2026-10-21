@@ -602,6 +602,9 @@ function autoRouteSegmentsByLeg(journey: Journey) {
   });
 }
 
+/** The validation error a Route Point order whose times go backwards answers. */
+export const ROUTE_POINT_TIME_ORDER_ERROR = "路线点时间必须按旅程顺序递增";
+
 export function validateJourneyInput(input: JourneyInput): ValidationResult {
   const errors: string[] = [];
   if (!input.title.trim() || input.title.length > 80) {
@@ -665,7 +668,7 @@ export function validateJourneyInput(input: JourneyInput): ValidationResult {
       } else {
         const canonical = timestamp.toISOString();
         if (lastOccurredAt && canonical < lastOccurredAt) {
-          errors.push("路线点时间必须按旅程顺序递增");
+          errors.push(ROUTE_POINT_TIME_ORDER_ERROR);
         }
         lastOccurredAt = canonical;
       }
