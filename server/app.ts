@@ -14,6 +14,7 @@ import {
   ItineraryImportStageError,
   itineraryImportStageFailure,
 } from "./itinerary/itinerary-recognition";
+import { ShareIntentError } from "./intents/create-share-intent";
 import { HomeBasePeriodConflictError } from "./repositories/home-base-repository";
 import { requestLog } from "./request-log";
 import { accountEmailChangeRoutes } from "./routes/account-email-change";
@@ -30,6 +31,7 @@ import {
   EverydayFragmentInvalidError,
 } from "./routes/everyday-fragments";
 import { homeBaseRoutes } from "./routes/home-bases";
+import { intentRoutes } from "./routes/intents";
 import { itineraryImportRoutes } from "./routes/itinerary-import";
 import { journeyRecordedTrackRoutes } from "./routes/journey-recorded-tracks";
 import { journeyRoutes } from "./routes/journeys";
@@ -113,6 +115,9 @@ app.route("/api/everyday-fragments", everydayFragmentRoutes);
 // under the same authorization and the same revision guard as a hand-built
 // Route.
 app.route("/api/itinerary-import", itineraryImportRoutes);
+// One-sentence share: a model proposes a share selection from what a member
+// wrote. It writes nothing; the link is still created through /api/shares.
+app.route("/api/intents", intentRoutes);
 app.route("/api/journeys", journeyRoutes);
 app.route("/api/journey-route-segments", journeyRouteSegmentRoutes);
 // The GitHub Actions routing worker's signed result callback: a machine
@@ -190,6 +195,11 @@ app.onError((error, context) => {
   if (error instanceof ItineraryImportStageError) {
     const failure = itineraryImportStageFailure(error);
     return context.json(failure.body, failure.status as 400);
+  }
+  // A share-intent refusal: 503 when unconfigured, 502/504 when the provider
+  // fails or is slow. The proposal is optional, so the dialog says so inline.
+  if (error instanceof ShareIntentError) {
+    return context.json({ error: error.code, message: error.message }, error.status as 400);
   }
   if (error instanceof StorageUnavailableError) {
     return context.json(

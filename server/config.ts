@@ -312,6 +312,15 @@ export function loadServerConfig(
   const itinerarySourceMaxBytes = Number(
     environment.ITINERARY_SOURCE_MAX_BYTES ?? 4 * 1024 * 1024,
   );
+  // One-sentence share: a model that proposes which Journeys and which expiry
+  // a member's sentence means. `disabled` by default; the dialog then offers no
+  // sentence entry at all. The key is server-only, like the recogniser's.
+  const intentDriver = environment.INTENT_DRIVER?.trim() || "disabled";
+  const intentBaseUrl =
+    environment.INTENT_BASE_URL?.trim().replace(/\/+$/, "") || null;
+  const intentApiKey = environment.INTENT_API_KEY?.trim() || null;
+  const intentModel = environment.INTENT_MODEL?.trim() || null;
+  const intentTimeoutMs = Number(environment.INTENT_TIMEOUT_MS ?? 30_000);
 
   if (production && (!smtpUrl || !mailFrom)) {
     throw new Error("SMTP_URL and MAIL_FROM are required in production");
@@ -564,10 +573,22 @@ export function loadServerConfig(
       "ITINERARY_SOURCE_RENDER_URL required when ITINERARY_SOURCE_FETCH_DRIVER=render",
     );
   }
+  if (intentDriver !== "disabled" && intentDriver !== "http-model") {
+    throw new Error(`INTENT_DRIVER "${intentDriver}" is not installed`);
+  }
+  if (
+    intentDriver === "http-model"
+    && (!intentBaseUrl || !intentModel || !intentApiKey)
+  ) {
+    throw new Error(
+      "INTENT_BASE_URL, INTENT_MODEL and INTENT_API_KEY are required when INTENT_DRIVER=http-model",
+    );
+  }
   for (
     const [name, value] of [
       ["ITINERARY_RECOGNITION_TIMEOUT_MS", itineraryRecognitionTimeoutMs],
       ["ITINERARY_SOURCE_FETCH_TIMEOUT_MS", itinerarySourceFetchTimeoutMs],
+      ["INTENT_TIMEOUT_MS", intentTimeoutMs],
     ] as const
   ) {
     if (!Number.isInteger(value) || value < 1_000 || value > 300_000) {
@@ -685,6 +706,11 @@ export function loadServerConfig(
     itinerarySourceRenderUrl,
     itinerarySourceFetchTimeoutMs,
     itinerarySourceMaxBytes,
+    intentDriver,
+    intentBaseUrl,
+    intentApiKey,
+    intentModel,
+    intentTimeoutMs,
   } as const;
 }
 
