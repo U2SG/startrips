@@ -7,12 +7,27 @@ import {
   type CoverRouteGeometry,
   type CoverRouteVec,
 } from "./coverRouteGeometry";
-import type { JourneyBookPage } from "./journeyBookPages";
+import {
+  COVER_GOLD,
+  COVER_GOLD_END,
+  COVER_GOLD_LINE,
+  COVER_INK,
+  COVER_LIFT,
+  COVER_MARK_OPACITY,
+  COVER_NIGHT,
+  COVER_PHOTO_ROUTE,
+  COVER_SCRIM,
+  COVER_STAR,
+  COVER_STAR_BRIGHT,
+  COVER_TEXT_SHADOW,
+  coverStarField,
+} from "./journeyBookCover";
+import { journeyBookCoverStyle, type JourneyBookPage } from "./journeyBookPages";
 
 /**
  * #393 3D Journey Book: each page face is painted on a canvas and used as
  * the texture of that face, so pictures and words bend with the paper. The
- * layout follows the 2D book (reference proportions, paper, cloth, plate).
+ * layout follows the 2D book (reference proportions, paper, cover).
  */
 
 /** Punctuation that may not begin a line. */
@@ -84,7 +99,7 @@ export type PaintInput = {
   dates: string;
   /** The Journey's Route Points, counted on the cover. */
   routePointCount: number;
-  /** The cover's debossed Route (`coverRouteGeometry`). */
+  /** The cover's Route (`coverRouteGeometry`). */
   route: CoverRouteGeometry;
   source: PageSource | null;
   /** Characters of the page's note shown so far; Infinity shows it all. */
@@ -97,12 +112,6 @@ const INK = "#292c26";
 const NOTE_INK = "#1d1f1b";
 const NOTE_WEIGHT = 600;
 const MUTED = "#73766c";
-const CLOTH = "#5f6b73";
-const PLATE_MOUNT = "#ece7d6";
-const FOIL = "#e4cf98";
-/** The cover Route's line and dots on the colour face; the material map adds the relief. */
-const COVER_ROUTE_INK = "rgb(0 0 0 / 0.25)";
-const CLOTH_INK = "#f2efdf";
 const ENDPAPER = "#e9e9dc";
 const SERIF = 'Georgia, "Songti SC", "STSong", "Noto Serif CJK SC", serif';
 const SANS = 'Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -279,7 +288,6 @@ const COVER = {
   datesGap: 0.028,
   datesSize: 0.022,
   mark: { width: 0.0675, height: 0.05 },
-  plate: { width: 0.3, height: 0.187, mount: 0.01 },
 } as const;
 
 /** Raster height of the mark; it is drawn at about a tenth of this. */
@@ -290,29 +298,29 @@ let markLoad: Promise<void> | null = null;
 
 /**
  * Cover material channels (0–255), packed into one texture beside the colour
- * face: R height (128 is the cloth surface, lower is pressed in), G roughness,
- * B metalness. The foil is a satin metal: with no environment map a metal is
+ * face: R height (128 is the board's surface, lower is pressed in), G
+ * roughness, B metalness. A photo cover is the plain surface throughout: no
+ * relief over the photo. The starry cover gives its gold Route a gentle
+ * groove and its end square a satin foil. With no environment map a metal is
  * lit only by the key light's highlight, and at roughness 0.3 that lobe is too
  * narrow to reach a camera looking down on the book, so the square would read
- * darker than the cloth; at 0.5 it stays brighter than the cloth in both light
- * poses and keeps its warm colour.
+ * darker than the board; at 0.5 it stays brighter in both light poses and
+ * keeps its warm colour.
  */
 export const COVER_MATERIAL = {
-  cloth: [128, 230, 0],
-  /** Floor of the Route groove and the start square: a fine impression, a little smoother than the cloth. */
+  surface: [128, 230, 0],
+  /** Floor of the Route groove and the start square: a fine impression, a little smoother than the board. */
   deboss: [96, 217, 0],
   /** The blind-stamped mark, shallower than the Route. */
   mark: [104, 217, 0],
   foil: [104, 128, 217],
-  /** The tipped-in plate stands slightly proud of the cloth; the photo stays matte. */
-  plate: [144, 230, 0],
 } as const satisfies Record<string, readonly [number, number, number]>;
 
 /**
  * The Route groove as concentric strokes, widest and shallowest first, so its
  * walls ramp over a few texels instead of a one-texel step. `width` is a
- * multiple of the colour deboss stroke, `depth` the fraction of the way from
- * cloth to the groove floor.
+ * multiple of `COVER_ROUTE_STROKE.deboss`, `depth` the fraction of the way
+ * from the surface to the groove floor.
  */
 export const COVER_GROOVE = [
   { width: 1.1, depth: 1 / 3 },
@@ -322,9 +330,9 @@ export const COVER_GROOVE = [
 
 type MaterialChannels = readonly [number, number, number];
 
-/** A material colour `depth` of the way from cloth to `to`, as a canvas colour. */
+/** A material colour `depth` of the way from the surface to `to`, as a canvas colour. */
 export function coverMaterialColor(to: MaterialChannels, depth = 1): string {
-  const [r, g, b] = COVER_MATERIAL.cloth.map((from, index) => Math.round(from + (to[index] - from) * depth));
+  const [r, g, b] = COVER_MATERIAL.surface.map((from, index) => Math.round(from + (to[index] - from) * depth));
   return `rgb(${r} ${g} ${b})`;
 }
 
@@ -350,15 +358,15 @@ function loadImage(url: string): Promise<HTMLImageElement | null> {
 }
 
 /**
- * The v12 mark rasterised once for the cover's blind stamp, twice over: for
- * the colour face one opaque tone (drawn at low alpha, so overlapping parts
- * do not darken) with cutouts in the cloth colour, and for the material map
- * the mark's channels with cutouts in the cloth's. Resolves when both settle.
+ * The v12 mark rasterised once for the starry cover, twice over: for the
+ * colour face in gold (drawn at `COVER_MARK_OPACITY`, so overlapping parts do
+ * not brighten) with cutouts in the night colour, and for the material map
+ * the mark's channels with cutouts in the surface's. Resolves when both settle.
  */
 export function loadCoverMark(): Promise<void> {
   markLoad ??= Promise.all([
-    loadImage(markUrl("#000", CLOTH)),
-    loadImage(markUrl(coverMaterialColor(COVER_MATERIAL.mark), coverMaterialColor(COVER_MATERIAL.cloth))),
+    loadImage(markUrl(COVER_GOLD, COVER_NIGHT)),
+    loadImage(markUrl(coverMaterialColor(COVER_MATERIAL.mark), coverMaterialColor(COVER_MATERIAL.surface))),
   ]).then(([colour, material]) => {
     markImage = colour;
     markMaterialImage = material;
@@ -379,43 +387,63 @@ function coverMarkRect(image: HTMLImageElement, width: number, height: number) {
   return { ...rect, y: box.y + box.height - rect.height };
 }
 
-/** The tipped-in plate, bottom right. */
-function coverPlateRect(width: number, height: number) {
-  const foot = height * (1 - COVER.bottom);
-  return {
-    x: width * (1 - COVER.inset - COVER.plate.width),
-    y: foot - height * COVER.plate.height,
-    width: width * COVER.plate.width,
-    height: height * COVER.plate.height,
-  };
+const COVER_STARS = coverStarField();
+
+/** The starry cover's sky: the faint lift, then the seeded stars. */
+function drawCoverSky(context: CanvasRenderingContext2D, width: number, height: number) {
+  context.save();
+  context.translate(width * COVER_LIFT.x, height * COVER_LIFT.y);
+  context.scale(width * COVER_LIFT.radius, height * COVER_LIFT.radius);
+  const lift = context.createRadialGradient(0, 0, 0, 0, 0, 1);
+  lift.addColorStop(0, COVER_LIFT.color);
+  lift.addColorStop(1, "rgb(143 211 232 / 0)");
+  context.fillStyle = lift;
+  context.fillRect(-2, -2, 4, 4);
+  context.restore();
+
+  context.save();
+  for (const star of COVER_STARS) {
+    context.globalAlpha = star.alpha;
+    context.fillStyle = star.bright ? COVER_STAR_BRIGHT : COVER_STAR;
+    context.beginPath();
+    context.arc(star.x * width, star.y * height, star.radius * width, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
 }
 
-/** Cover-fit `source` into `box`, clipped to it. */
-function drawCovered(
-  context: CanvasRenderingContext2D,
-  source: PageSource | null,
-  box: { x: number; y: number; width: number; height: number },
-  scale: number,
-) {
+/**
+ * The cover photo across the whole cover, cover-fit and centred. While it
+ * loads the sky beneath shows; a photo that cannot be read says so at the
+ * foot, in the cover's ink.
+ */
+function drawCoverPhoto(context: CanvasRenderingContext2D, source: PageSource | null, width: number, height: number, scale: number) {
   if (source?.status === "ready") {
-    const fit = Math.max(box.width / source.width, box.height / source.height);
-    const width = source.width * fit;
-    const height = source.height * fit;
-    context.save();
-    context.beginPath();
-    context.rect(box.x, box.y, box.width, box.height);
-    context.clip();
-    context.drawImage(source.image, box.x + (box.width - width) / 2, box.y + (box.height - height) / 2, width, height);
-    context.restore();
+    const fit = Math.max(width / source.width, height / source.height);
+    const drawnWidth = source.width * fit;
+    const drawnHeight = source.height * fit;
+    context.drawImage(source.image, (width - drawnWidth) / 2, (height - drawnHeight) / 2, drawnWidth, drawnHeight);
     return;
   }
-  const label = source?.status === "error" ? source.message : source ? "正在翻到这一页…" : "";
-  if (!label) return;
-  context.fillStyle = MUTED;
-  context.font = `${Math.round(16 * scale)}px ${SANS}`;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText(label, box.x + box.width / 2, box.y + box.height / 2, box.width * 0.9);
+  if (source?.status !== "error") return;
+  context.save();
+  context.globalAlpha = 0.75;
+  context.fillStyle = COVER_INK;
+  context.font = `${Math.round(18 * scale)}px ${SANS}`;
+  context.textAlign = "left";
+  context.textBaseline = "alphabetic";
+  context.fillText(source.message, width * COVER.inset, height * (1 - COVER.bottom), width * (1 - 2 * COVER.inset));
+  context.restore();
+}
+
+/** `COVER_SCRIM`: the night fading down from the top edge, behind the head only. */
+function drawCoverScrim(context: CanvasRenderingContext2D, width: number, height: number) {
+  const bottom = height * COVER_SCRIM.height;
+  const scrim = context.createLinearGradient(0, 0, 0, bottom);
+  scrim.addColorStop(0, `rgb(${COVER_SCRIM.color} / ${COVER_SCRIM.alpha})`);
+  scrim.addColorStop(1, `rgb(${COVER_SCRIM.color} / 0)`);
+  context.fillStyle = scrim;
+  context.fillRect(0, 0, width, bottom);
 }
 
 /**
@@ -444,15 +472,15 @@ function coverRoutePen(context: CanvasRenderingContext2D, width: number, height:
       context.fillStyle = color;
       context.fillRect(x - side / 2, y - side / 2, side, side);
     },
-    trace(route: Extract<CoverRouteGeometry, { kind: "path" }>, dx = 0, dy = 0) {
+    trace(route: Extract<CoverRouteGeometry, { kind: "path" }>) {
       context.beginPath();
       const [startX, startY] = at(route.start);
-      context.moveTo(startX + dx, startY + dy);
+      context.moveTo(startX, startY);
       for (const curve of route.curves) {
         const [c1x, c1y] = at(curve.c1);
         const [c2x, c2y] = at(curve.c2);
         const [toX, toY] = at(curve.to);
-        context.bezierCurveTo(c1x + dx, c1y + dy, c2x + dx, c2y + dy, toX + dx, toY + dy);
+        context.bezierCurveTo(c1x, c1y, c2x, c2y, toX, toY);
       }
       context.lineCap = "round";
       context.lineJoin = "round";
@@ -460,41 +488,74 @@ function coverRoutePen(context: CanvasRenderingContext2D, width: number, height:
   };
 }
 
+type CoverRouteLayer = { color: string; endColor: string; line: number; dot: number; start: number; end: number };
+
 /**
- * The Journey's Route, blind-debossed into the cloth: start dark, end in foil.
- * The relief itself comes from the material map's height under the light;
- * these soft strokes keep the Route legible where that relief is faint.
+ * The layers the cover's Route is drawn in: on a photo a dark halo, then a
+ * light core over it (every halo first, so a crossing never cuts a core); on
+ * the starry cover one gold layer, its end square a paler gold.
  */
-function drawCoverRoute(context: CanvasRenderingContext2D, route: CoverRouteGeometry, width: number, height: number) {
+export function coverRouteLayers(style: "photo" | "starry"): CoverRouteLayer[] {
+  if (style === "starry") {
+    return [{
+      color: COVER_GOLD,
+      endColor: COVER_GOLD_END,
+      line: COVER_GOLD_LINE,
+      dot: COVER_ROUTE_STROKE.dot,
+      start: COVER_ROUTE_STROKE.start,
+      end: COVER_ROUTE_STROKE.end,
+    }];
+  }
+  return (["halo", "core"] as const).map((layer) => ({
+    color: COVER_PHOTO_ROUTE[layer],
+    endColor: COVER_PHOTO_ROUTE[layer],
+    line: COVER_PHOTO_ROUTE.line[layer],
+    dot: COVER_PHOTO_ROUTE.dot[layer],
+    start: COVER_PHOTO_ROUTE.start[layer],
+    end: COVER_PHOTO_ROUTE.end[layer],
+  }));
+}
+
+/** The Journey's Route on the cover's colour face, in `coverRouteLayers`. */
+function drawCoverRoute(
+  context: CanvasRenderingContext2D,
+  route: CoverRouteGeometry,
+  width: number,
+  height: number,
+  style: "photo" | "starry",
+) {
   if (route.kind === "none") return;
   const pen = coverRoutePen(context, width, height);
-  if (route.kind === "path") {
-    pen.trace(route);
-    context.strokeStyle = COVER_ROUTE_INK;
-    context.lineWidth = COVER_ROUTE_STROKE.deboss * width;
-    context.stroke();
-    const offset = -COVER_ROUTE_STROKE.highlightOffset * width;
-    pen.trace(route, offset, offset);
-    context.strokeStyle = "rgb(255 255 255 / 0.07)";
-    context.lineWidth = COVER_ROUTE_STROKE.highlight * width;
-    context.stroke();
-    for (const dot of coverRouteDots(route)) pen.dot(dot, COVER_ROUTE_STROKE.dot, COVER_ROUTE_INK);
-    pen.square(route.start, COVER_ROUTE_STROKE.start, "rgb(0 0 0 / 0.32)");
+  for (const layer of coverRouteLayers(style)) {
+    if (route.kind === "path") {
+      pen.trace(route);
+      context.strokeStyle = layer.color;
+      context.lineWidth = layer.line * width;
+      context.stroke();
+      for (const dot of coverRouteDots(route)) pen.dot(dot, layer.dot, layer.color);
+      pen.square(route.start, layer.start, layer.color);
+    }
+    pen.square(route.end, layer.end, layer.endColor);
   }
-  pen.square(route.end, COVER_ROUTE_STROKE.end, FOIL);
 }
 
 /**
  * The front cover's material map (`COVER_MATERIAL`), the same size as its
- * colour face and drawn from the same Route, mark and plate geometry. Every
- * pixel is opaque, so no channel is premultiplied away.
+ * colour face and drawn from the same Route and mark geometry. A photo cover
+ * is flat; the starry cover's gold Route sits in a gentle groove, its end in
+ * foil, and the mark is blind-stamped. Every pixel is opaque, so no channel
+ * is premultiplied away.
  */
 export function paintCoverMaterial(canvas: HTMLCanvasElement, input: Pick<PaintInput, "page" | "route">) {
   const context = canvas.getContext("2d")!;
   const { width, height } = canvas;
   context.save();
-  context.fillStyle = coverMaterialColor(COVER_MATERIAL.cloth);
+  context.fillStyle = coverMaterialColor(COVER_MATERIAL.surface);
   context.fillRect(0, 0, width, height);
+  if (input.page.kind !== "cover" || journeyBookCoverStyle(input.page) === "photo") {
+    context.restore();
+    return;
+  }
 
   const { route } = input;
   if (route.kind !== "none") {
@@ -521,26 +582,35 @@ export function paintCoverMaterial(canvas: HTMLCanvasElement, input: Pick<PaintI
     const rect = coverMarkRect(markMaterialImage, width, height);
     context.drawImage(markMaterialImage, rect.x, rect.y, rect.width, rect.height);
   }
-
-  if (input.page.kind === "cover" && input.page.asset) {
-    const plate = coverPlateRect(width, height);
-    context.fillStyle = coverMaterialColor(COVER_MATERIAL.plate);
-    context.fillRect(plate.x, plate.y, plate.width, plate.height);
-  }
   context.restore();
 }
 
 /**
- * The front cover, "route deboss": title and dates top left, the Route across
- * the middle, the embossed mark and a tipped-in plate along the foot. The
- * Journey note is on the book's first page, never on the cover.
+ * The front cover: the Journey's cover photo across the whole cover under a
+ * head scrim, or with none the starry night; title and dates top left, the
+ * Route across the middle, and on the starry cover the gold mark at the foot.
+ * The Journey note is on the book's first page, never on the cover.
  */
 function paintCover(context: CanvasRenderingContext2D, width: number, height: number, input: PaintInput, scale: number): PaintResult {
   const page = input.page as Extract<JourneyBookPage, { kind: "cover" }>;
+  const style = journeyBookCoverStyle(page);
   const left = width * COVER.inset;
   const top = height * COVER.top;
 
-  context.fillStyle = CLOTH_INK;
+  // The sky is drawn under a photo too: it shows while the photo loads, or
+  // when the photo cannot be read.
+  drawCoverSky(context, width, height);
+  if (style === "photo") {
+    drawCoverPhoto(context, input.source, width, height, scale);
+    drawCoverScrim(context, width, height);
+  }
+
+  context.save();
+  if (style === "photo") {
+    context.shadowColor = COVER_TEXT_SHADOW.color;
+    context.shadowBlur = COVER_TEXT_SHADOW.blur * width;
+  }
+  context.fillStyle = COVER_INK;
   const titleSize = Math.round(width * COVER.titleSize);
   const titleBlock = fitText(context, input.title, width * COVER.titleWidth, titleSize * 1.2 * 2, titleSize, Math.round(titleSize * 0.7), 1.2);
   context.font = `600 ${titleBlock.fontSize}px ${SERIF}`;
@@ -551,7 +621,6 @@ function paintCover(context: CanvasRenderingContext2D, width: number, height: nu
   });
 
   const datesSize = Math.round(width * COVER.datesSize);
-  context.save();
   context.globalAlpha = 0.75;
   context.font = `500 ${datesSize}px ${SANS}`;
   context.letterSpacing = `${(datesSize * 0.26).toFixed(1)}px`;
@@ -565,30 +634,14 @@ function paintCover(context: CanvasRenderingContext2D, width: number, height: nu
   );
   context.restore();
 
-  drawCoverRoute(context, input.route, width, height);
+  drawCoverRoute(context, input.route, width, height, style);
 
-  if (markImage) {
+  if (style === "starry" && markImage) {
     const rect = coverMarkRect(markImage, width, height);
     context.save();
-    context.globalAlpha = 0.18;
+    context.globalAlpha = COVER_MARK_OPACITY;
     context.drawImage(markImage, rect.x, rect.y, rect.width, rect.height);
     context.restore();
-  }
-
-  if (page.asset) {
-    const plate = coverPlateRect(width, height);
-    context.fillStyle = PLATE_MOUNT;
-    context.fillRect(plate.x, plate.y, plate.width, plate.height);
-    context.strokeStyle = "rgb(0 0 0 / 0.2)";
-    context.lineWidth = Math.max(1, width / 504);
-    context.strokeRect(plate.x - context.lineWidth / 2, plate.y - context.lineWidth / 2, plate.width + context.lineWidth, plate.height + context.lineWidth);
-    const mount = width * COVER.plate.mount;
-    drawCovered(context, input.source, {
-      x: plate.x + mount,
-      y: plate.y + mount,
-      width: plate.width - 2 * mount,
-      height: plate.height - 2 * mount,
-    }, scale);
   }
 
   return { noteLength: 0, noteOverflow: false };
@@ -611,8 +664,8 @@ export function paintFace(canvas: HTMLCanvasElement, input: PaintInput): PaintRe
   context.clearRect(0, 0, width, height);
 
   if (page.kind === "cover" || page.kind === "end") {
-    fillPaper(context, width, height, CLOTH);
-    context.fillStyle = CLOTH_INK;
+    fillPaper(context, width, height, COVER_NIGHT);
+    context.fillStyle = COVER_INK;
     if (page.kind === "end") {
       context.font = `${Math.round(26 * scale)}px ${SERIF}`;
       context.textAlign = "left";

@@ -2,7 +2,7 @@ import { BOOK_PAGE_RATIO } from "./journeyBookLayout";
 import type { RoutePoint } from "./types";
 
 /**
- * Journey Book front cover: the Journey's Route blind-debossed into the cloth.
+ * Journey Book front cover: the Journey's Route drawn across the cover.
  *
  * Both renderers (the 2D book and the 3D book's canvas painter) draw the same
  * geometry: the ordered Route Points projected equirectangularly (longitude
@@ -14,23 +14,25 @@ import type { RoutePoint } from "./types";
 /**
  * The route band on the cover, as fractions of the cover width and height.
  * As large as the cover allows: the head (top 8.7%, a two-line 6.7cqw title
- * and the dates line) ends near 26% of the cover height on a 0.8-wide page,
- * and the tipped-in plate starts at 74% (bottom 7.3% + 18.7%). The band keeps
- * about 1% clear of both, which also holds the half stroke of a curve that
- * bulges to the band edge. The top stays at 30%, not 27%, because the dates
- * line keeps a 9 px floor: on a cover narrower than about 253 px (a phone in
- * landscape) the head grows past 27.5% of the cover height.
+ * and the dates line) ends near 26% of the cover height on a 0.8-wide page;
+ * the band ends at 73%, clear of the mark at the foot (from 87.7% down). The
+ * band keeps about 1% clear of the head, which also holds the half stroke of
+ * a curve that bulges to the band edge. The top stays at 30%, not 27%,
+ * because the dates line keeps a 9 px floor: on a cover narrower than about
+ * 253 px (a phone in landscape) the head grows past 27.5% of the cover height.
  */
 export const COVER_ROUTE_BAND = { left: 0.07, top: 0.3, width: 0.86, height: 0.43 } as const;
 
 /** Band width / band height on a page of `BOOK_PAGE_RATIO`. */
 export const COVER_ROUTE_ASPECT = (COVER_ROUTE_BAND.width * BOOK_PAGE_RATIO) / COVER_ROUTE_BAND.height;
 
-/** Stroke and marker sizes, as fractions of the cover width (reference: on a 504 px cover). */
+/**
+ * Stroke and marker sizes, as fractions of the cover width (reference: on a
+ * 504 px cover). `deboss` is the width of the starry cover's groove in the 3D
+ * book's material map; the drawn line widths are in journeyBookCover.ts.
+ */
 export const COVER_ROUTE_STROKE = {
   deboss: 6 / 504,
-  highlight: 1.5 / 504,
-  highlightOffset: 1.5 / 504,
   /** Diameter of the dot at each interior Route Point. */
   dot: 9 / 504,
   start: 11 / 504,
