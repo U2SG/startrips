@@ -86,7 +86,9 @@ export const SHARE_INTENT_RESPONSE_SCHEMA = {
   required: ["journeyIds", "expiry", "unmatched"],
   properties: {
     journeyIds: { type: "array", items: { type: "string" } },
-    expiry: { type: ["string", "null"], enum: ["1d", "7d", "30d", null] },
+    // No enum here: strict-mode providers differ on a nullable enum, and
+    // `parseShareIntentAnswer` refuses any value outside the presets anyway.
+    expiry: { type: ["string", "null"] },
     unmatched: { type: ["string", "null"] },
   },
 } as const;
