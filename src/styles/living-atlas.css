@@ -9144,6 +9144,10 @@ body:has(.journey-share) .account-dock {
   height: 1px;
   opacity: 0;
   pointer-events: none;
+  /* The native control is never drawn; keep its UA shape out of the computed
+     style too (Chrome 156 gives radios a 50% border-radius by default). */
+  appearance: none;
+  border-radius: 0;
 }
 
 .journey-share label > span[aria-hidden] {
