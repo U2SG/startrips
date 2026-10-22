@@ -101,7 +101,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/ci-ledger-fast-path.mjs
       - name: Test CI execution and fail-closed gate contracts
-        run: node --test scripts/ci-validation-results.node-test.mjs scripts/ci-browser-runtime.node-test.mjs scripts/ci-latency.node-test.mjs scripts/ci-ledger-fast-path.node-test.mjs scripts/ci-ensure-ffmpeg.node-test.mjs scripts/qa-chapter-rail-observation.node-test.mjs scripts/browser-qa-shard.node-test.mjs
+        run: node --test scripts/ci-validation-results.node-test.mjs scripts/ci-browser-runtime.node-test.mjs scripts/ci-latency.node-test.mjs scripts/ci-ledger-fast-path.node-test.mjs scripts/ci-ensure-ffmpeg.node-test.mjs scripts/ci-ensure-cjk-font.node-test.mjs scripts/qa-chapter-rail-observation.node-test.mjs scripts/browser-qa-shard.node-test.mjs
       - uses: pnpm/action-setup@v6
         if: steps.final-plan.outputs.ledger_only_final != 'true'
         with:
@@ -221,10 +221,16 @@ jobs:
         run: |
           pnpm exec playwright-core install ffmpeg
           node scripts/ci-browser-runtime.mjs
-          if [ -z "$(fc-list :lang=zh | head -n 1)" ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y fonts-noto-cjk
-          fi
+      - name: Restore pinned Noto Sans SC archive
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/startrips-cjk-font
+          key: cjk-font-18_NotoSansSC-4d107c09ada479d3e48b6e78c83835773cbd9214bf6e12cdb7b60f8e068292ec
+      - name: Ensure a CJK font is available
+        # Pinned download (90 s) plus the bounded APT fallback (~185 s) must
+        # surface the script's own error label before this step times out.
+        timeout-minutes: 5
+        run: bash scripts/ci-ensure-cjk-font.sh
       - name: Verify owner button, private MP4 pixels and cancellation
         env:
           QA_ORIGIN: http://127.0.0.1:4173
