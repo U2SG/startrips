@@ -1002,6 +1002,25 @@ function collectRouteLabelLayoutEvidence(label) {
       placeLabelLayoutFrame: scene.getAttribute("data-place-label-layout-frame"),
       globeFocus: atlas?.getAttribute("data-globe-focus") ?? null,
     } : null,
+    // A fresh rect in the same route layer: computed x 100px means only the
+    // label hit rects are stale; 0px means the whole SVG subtree is.
+    freshRect: (() => {
+      if (!layer) return null;
+      const probe = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      probe.setAttribute("x", "100");
+      probe.setAttribute("y", "50");
+      probe.setAttribute("width", "10");
+      probe.setAttribute("height", "10");
+      layer.append(probe);
+      const style = getComputedStyle(probe);
+      const result = { computed: [style.x, style.y], rect: rect(probe) };
+      probe.remove();
+      return result;
+    })(),
+    documentAnimations: document.getAnimations?.().map((animation) => {
+      const target = animation.effect?.target;
+      return target instanceof Element ? `${target.tagName.toLowerCase()}.${target.getAttribute("class") ?? ""}` : String(target);
+    }) ?? null,
     markers,
   };
 }

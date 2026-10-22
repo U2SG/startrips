@@ -3906,7 +3906,10 @@ export function LivingAtlasApp({
                         data-atlas-more-action={action}
                         aria-pressed={globeFocusMode}
                         onClick={() => {
-                          setDesktopMoreOpen(false);
+                          // Return focus to 更多 before the menu unmounts, so
+                          // the focused control is not removed in the same
+                          // commit that makes the header inert.
+                          closeDesktopMore();
                           setView("planet");
                           setGlobeFocusMode(true);
                         }}
