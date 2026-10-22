@@ -147,6 +147,12 @@ function EarthDiveQaPreview() {
   const [focusRevision, setFocusRevision] = useState(0);
   const [activeRouteIndex, setActiveRouteIndex] = useState(0);
   const [activatedRoutePoint, setActivatedRoutePoint] = useState("");
+  // QA-only evidence of when the renderer reports a focus flight finished, so
+  // browser QA can wait on settled camera truth instead of a moving projection.
+  const [focusSettled, setFocusSettled] = useState({ count: 0, revision: -1 });
+  const handleFocusSettled = useCallback((revision: number) => {
+    setFocusSettled((current) => ({ count: current.count + 1, revision }));
+  }, []);
   const routeCandidateQa = qaParams.get("qaRouteCandidates") === "true";
   const [routeCandidateRecords, setRouteCandidateRecords] = useState<Record<string, RouteSegmentRecord[]>>({});
   const shareScope = qaParams.get("qaScope") === "share";
@@ -188,12 +194,19 @@ function EarthDiveQaPreview() {
       lon: Number.isFinite(requestedLon) ? requestedLon : routePoint.lon,
     };
   return (
-    <main className="living-atlas" data-qa-earth-dive-focus={routeFocus ? "route" : "route-point"}>
+    <main
+      className="living-atlas"
+      data-qa-earth-dive-focus={routeFocus ? "route" : "route-point"}
+      data-qa-earth-dive-focus-revision={focusRevision}
+      data-qa-earth-dive-focus-settled={focusSettled.count}
+      data-qa-earth-dive-focus-settled-revision={focusSettled.revision}
+    >
       <div className="living-atlas__globe">
         <LivingAtlasGlobe
           focusPoint={focusPoint}
           focusRoute={routeFocus ? focusRoute : null}
           focusRevision={focusRevision}
+          onFocusSettled={handleFocusSettled}
           journeyRoutes={authorizedRoutes}
           routeEditingEnabled={routeCandidateQa}
           onRouteSegmentSaved={routeCandidateQa ? (journeyId, segment) => {
