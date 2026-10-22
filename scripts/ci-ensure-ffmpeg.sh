@@ -8,9 +8,9 @@ trap 'echo "::error::FFmpeg infrastructure setup failed (not a render assertion)
 # longer depends on archive.ubuntu.com. BtbN keeps month-end autobuilds long
 # term. The workflow caches the verified archive under this key/path; the SHA
 # is checked again before every extraction, including cache hits.
-FFMPEG_RELEASE=autobuild-2026-03-31-13-11
-FFMPEG_ASSET=ffmpeg-n7.1.3-43-g5a1f107b4c-linux64-gpl-7.1
-FFMPEG_SHA256=c2bffbc1e827ca735f756dc3d2ccd33d4c2c15362566932ced4bb7686f034d08
+FFMPEG_RELEASE=autobuild-2025-08-31-13-00
+FFMPEG_ASSET=ffmpeg-n6.1.3-linux64-gpl-6.1
+FFMPEG_SHA256=400f9ca9d8ea3f812660cf7a00b9bfed944175cd9d6bd0c9b6257cf99376a75c
 FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_RELEASE/$FFMPEG_ASSET.tar.xz"
 FFMPEG_CACHE_DIR="$HOME/.cache/startrips-ffmpeg"
 work_root="${RUNNER_TEMP:-/tmp}"

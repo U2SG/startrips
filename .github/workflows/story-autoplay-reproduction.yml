@@ -82,7 +82,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/startrips-ffmpeg
-          key: ffmpeg-static-ffmpeg-n7.1.3-43-g5a1f107b4c-linux64-gpl-7.1-c2bffbc1e827ca735f756dc3d2ccd33d4c2c15362566932ced4bb7686f034d08
+          key: ffmpeg-static-ffmpeg-n6.1.3-linux64-gpl-6.1-400f9ca9d8ea3f812660cf7a00b9bfed944175cd9d6bd0c9b6257cf99376a75c
       - name: Ensure FFmpeg is available for public fixtures and recorded keyframes
         timeout-minutes: 5
         run: bash scripts/ci-ensure-ffmpeg.sh
