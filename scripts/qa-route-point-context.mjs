@@ -1019,7 +1019,15 @@ function collectRouteLabelLayoutEvidence(label) {
     })(),
     documentAnimations: document.getAnimations?.().map((animation) => {
       const target = animation.effect?.target;
-      return target instanceof Element ? `${target.tagName.toLowerCase()}.${target.getAttribute("class") ?? ""}` : String(target);
+      return {
+        target: target instanceof Element ? `${target.tagName.toLowerCase()}.${target.getAttribute("class") ?? ""}` : String(target),
+        kind: animation.constructor.name,
+        property: "transitionProperty" in animation ? animation.transitionProperty
+          : "animationName" in animation ? animation.animationName : null,
+        playState: animation.playState,
+        currentTime: animation.currentTime === null ? null : Number(animation.currentTime),
+        timing: (() => { const t = animation.effect?.getComputedTiming?.(); return t ? { duration: t.duration, delay: t.delay, progress: t.progress } : null; })(),
+      };
     }) ?? null,
     markers,
   };
