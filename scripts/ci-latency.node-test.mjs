@@ -84,7 +84,9 @@ test("production baseline and candidate retain the same current harness and boun
     assert.ok(reproduction.includes(`cp "$RUNNER_TEMP/${temporary}" scripts/${file}`));
   }
   for (const workflow of [job("keepsake-render"), reproduction]) {
-    assert.match(workflow, /timeout-minutes: 3\n        run: bash scripts\/ci-ensure-ffmpeg.sh/);
+    // 5 minutes: the static download/verify plus the bounded APT fallback
+    // (60 s + 90 s) still surface the script's own error before GitHub's.
+    assert.match(workflow, /timeout-minutes: 5\n        run: bash scripts\/ci-ensure-ffmpeg.sh/);
   }
   const setup = read("scripts/ci-ensure-ffmpeg.sh");
   assert.match(setup, /timeout --kill-after=5s 60s/);
