@@ -501,7 +501,16 @@ function validatePrototypeOutput(
     || Number(stream.nb_frames) !== expectedFrameCount
     || Math.abs(Number(stream.duration) - expectedDurationSeconds) > (1 / PROTOTYPE_FPS / 10)
   ) {
-    throw new Error("keepsake_render_probe_semantics_mismatch");
+    // Name the stream that failed, so an encoder or ffprobe version change
+    // shows which field moved instead of only that one did.
+    throw new Error(`keepsake_render_probe_semantics_mismatch ${JSON.stringify({
+      stream: {
+        codec_name: stream.codec_name, width: stream.width, height: stream.height,
+        pix_fmt: stream.pix_fmt, avg_frame_rate: stream.avg_frame_rate,
+        nb_frames: stream.nb_frames, duration: stream.duration,
+      },
+      expected: { expectedFrameCount, expectedDurationSeconds },
+    })}`);
   }
 
   let expectedStartMs = 0;
