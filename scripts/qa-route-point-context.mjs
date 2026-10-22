@@ -910,7 +910,133 @@ async function routeLabelInteractionState(page, routeId, pointId) {
   }, { routeId, pointId });
 }
 
-async function clickRoutePointLabel(page, routeId, pointId, touch = false) {
+// Page-side evidence for where a Place Label really sits: every scroll offset
+// between it and the document, the scene host and route layer geometry, the
+// label's own placement attributes, the scene's layout state and each marker's
+// rendered state. It is serialised into the page, so it uses no outer scope.
+function collectRouteLabelLayoutEvidence(label) {
+  const rect = (element) => {
+    if (!element) return null;
+    const box = element.getBoundingClientRect();
+    return [box.left, box.top, box.width, box.height].map((value) => Math.round(value * 10) / 10);
+  };
+  const describe = (element) => (element instanceof Element ? {
+    tag: element.tagName.toLowerCase(),
+    className: element.getAttribute("class"),
+    routePointId: element.getAttribute("data-route-point-id"),
+    ariaLabel: element.getAttribute("aria-label"),
+  } : null);
+  const scrolled = [];
+  for (let node = label?.parentElement ?? null; node; node = node.parentElement) {
+    if (node.scrollTop !== 0 || node.scrollLeft !== 0) {
+      scrolled.push({ ...describe(node), scrollTop: node.scrollTop, scrollLeft: node.scrollLeft });
+    }
+  }
+  const scrolling = document.scrollingElement;
+  const atlas = document.querySelector(".living-atlas");
+  const scene = document.querySelector(".particle-earth-scene");
+  const layer = document.querySelector(".particle-earth-route-layer");
+  const header = document.querySelector(".living-atlas__header");
+  const card = document.querySelector(".living-atlas__active");
+  const hit = label?.querySelector(".particle-earth-route__label-hit") ?? null;
+  const text = label?.querySelector("text") ?? null;
+  const routeId = label?.getAttribute("data-journey-route");
+  const markers = routeId
+    ? [...document.querySelectorAll(`.particle-earth-route__point[data-journey-route="${routeId}"][data-route-point-id]`)]
+      .map((marker) => ({
+        id: marker.getAttribute("data-route-point-id"),
+        display: getComputedStyle(marker).display,
+        inlineDisplay: marker.style.display || null,
+        cx: marker.getAttribute("cx"),
+        cy: marker.getAttribute("cy"),
+        rect: rect(marker),
+      }))
+    : [];
+  return {
+    at: performance.now(),
+    documentScroll: scrolling ? { top: scrolling.scrollTop, left: scrolling.scrollLeft } : null,
+    windowScroll: { x: window.scrollX, y: window.scrollY },
+    atlasScroll: atlas ? { top: atlas.scrollTop, left: atlas.scrollLeft } : null,
+    scrolledAncestors: scrolled,
+    activeElement: describe(document.activeElement),
+    viewport: [window.innerWidth, window.innerHeight],
+    atlasRect: rect(atlas),
+    hostRect: rect(scene),
+    layerRect: rect(layer),
+    layerViewBox: layer?.getAttribute("viewBox") ?? null,
+    headerRect: rect(header),
+    headerTransform: header ? getComputedStyle(header).transform : null,
+    cardRect: rect(card),
+    cardHidden: card ? card.hidden : null,
+    label: label ? {
+      display: getComputedStyle(label).display,
+      transformAttr: label.getAttribute("transform"),
+      computedTransform: getComputedStyle(label).transform,
+      x: label.getAttribute("x"),
+      y: label.getAttribute("y"),
+      rect: rect(label),
+      hit: hit ? {
+        x: hit.getAttribute("x"),
+        y: hit.getAttribute("y"),
+        width: hit.getAttribute("width"),
+        height: hit.getAttribute("height"),
+        rect: rect(hit),
+        // Discriminates a style-layer override (computed x is 0px) from a
+        // layout box that was never refreshed (computed x matches the attribute).
+        computed: (() => {
+          const style = getComputedStyle(hit);
+          return { x: style.x, y: style.y, width: style.width, height: style.height,
+            display: style.display, transform: style.transform };
+        })(),
+        baseVal: "x" in hit ? { x: hit.x.baseVal.value, y: hit.y.baseVal.value } : null,
+        bbox: (() => { try { const box = hit.getBBox(); return [box.x, box.y, box.width, box.height]; } catch { return null; } })(),
+        style: hit.getAttribute("style"),
+      } : null,
+      text: text ? { x: text.getAttribute("x"), y: text.getAttribute("y"), rect: rect(text) } : null,
+    } : null,
+    scene: scene ? {
+      placeLabelLayout: scene.getAttribute("data-place-label-layout"),
+      placeLabelLayoutRevision: scene.getAttribute("data-place-label-layout-revision"),
+      placeLabelLayoutFrame: scene.getAttribute("data-place-label-layout-frame"),
+      globeFocus: atlas?.getAttribute("data-globe-focus") ?? null,
+    } : null,
+    // Every Route Point label's hit rect: attribute vs computed vs rendered
+    // geometry, plus any animation touching it, so a stale x/y shows up on
+    // whichever label the scenario happens to pick.
+    allLabelHits: [...document.querySelectorAll(".particle-earth-route__label[data-route-point-id]")].map((node) => {
+      const box = node.querySelector(".particle-earth-route__label-hit");
+      if (!box) return { id: node.getAttribute("data-route-point-id"), hit: null };
+      const style = getComputedStyle(box);
+      return {
+        id: node.getAttribute("data-route-point-id"),
+        display: getComputedStyle(node).display,
+        attr: [box.getAttribute("x"), box.getAttribute("y")],
+        computed: [style.x, style.y],
+        rect: rect(box),
+        animations: box.getAnimations?.().map((animation) => animation.constructor.name) ?? null,
+        groupAnimations: node.getAnimations?.({ subtree: true }).length ?? null,
+      };
+    }),
+    markers,
+  };
+}
+
+// Installs the collector as a page global so a later in-page evaluation can
+// read the evidence in the very frame it measures a hit pixel.
+async function installRouteLabelLayoutEvidence(page) {
+  await page.evaluate(`window.__qaRouteLabelLayoutEvidence = ${collectRouteLabelLayoutEvidence.toString()}; true`);
+}
+
+async function routeLabelLayoutEvidence(page, routeId, pointId) {
+  const selector = `.particle-earth-route__label[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`;
+  try {
+    return await page.evaluate(`(${collectRouteLabelLayoutEvidence.toString()})(document.querySelector(${JSON.stringify(selector)}))`);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function clickRoutePointLabel(page, routeId, pointId, touch = false, { evidence = false } = {}) {
   const label = page.locator(`.particle-earth-route__label[data-journey-route="${routeId}"][data-route-point-id="${pointId}"]`);
   const hitTarget = label.locator(".particle-earth-route__label-hit");
   await hitTarget.waitFor({ state: "visible", timeout: 5_000 });
@@ -919,7 +1045,8 @@ async function clickRoutePointLabel(page, routeId, pointId, touch = false) {
   // through a real browser-hit pixel that belongs to this label and is not
   // physically occupied by any marker. If no such pixel exists, the product
   // label is effectively unclickable and this still fails closed.
-  const geometry = await label.evaluate((node) => {
+  if (evidence) await installRouteLabelLayoutEvidence(page);
+  const geometry = await label.evaluate((node, withEvidence) => {
     const hit = node.querySelector(".particle-earth-route__label-hit");
     if (!(hit instanceof SVGGraphicsElement)) return null;
     const rect = hit.getBoundingClientRect();
@@ -934,18 +1061,38 @@ async function clickRoutePointLabel(page, routeId, pointId, touch = false) {
         ) <= 22)) continue;
         const hitElement = document.elementFromPoint(x, y);
         if (hitElement?.closest(".particle-earth-route__label") === node) {
-          return { box: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }, target: { x, y } };
+          const result = { box: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }, target: { x, y } };
+          if (withEvidence) {
+            result.hitElement = { tag: hitElement.tagName.toLowerCase(), className: hitElement.getAttribute("class") };
+            try {
+              result.layoutAtMeasure = window.__qaRouteLabelLayoutEvidence?.(node) ?? null;
+            } catch (error) {
+              result.layoutAtMeasure = { error: String(error) };
+            }
+          }
+          return result;
         }
       }
     }
     return null;
-  });
+  }, evidence);
   if (!geometry) {
     const state = await routeLabelInteractionState(page, routeId, pointId);
     throw new Error(`Route Point ${pointId} has no unambiguous label-owned hit pixel: ${JSON.stringify(state)}`);
   }
+  if (evidence) {
+    // Which element owns the chosen pixel just before the pointer goes down,
+    // and where the label sits then: a label that moved between measuring and
+    // clicking reads differently here than in layoutAtMeasure.
+    geometry.hitElementBeforeClick = await page.evaluate(({ x, y }) => {
+      const element = document.elementFromPoint(x, y);
+      return element ? { tag: element.tagName.toLowerCase(), className: element.getAttribute("class") } : null;
+    }, geometry.target);
+    geometry.layoutBeforeClick = await routeLabelLayoutEvidence(page, routeId, pointId);
+  }
   if (touch) await page.touchscreen.tap(geometry.target.x, geometry.target.y);
   else await page.mouse.click(geometry.target.x, geometry.target.y);
+  if (evidence) geometry.layoutAfterClick = await routeLabelLayoutEvidence(page, routeId, pointId);
   return geometry;
 }
 
@@ -1315,10 +1462,15 @@ try {
   let labelPointId = null;
   let labelClick = null;
   const labelCandidates = await visibleLabels.evaluateAll((labels) => labels.map((label) => label.getAttribute("data-route-point-id")));
+  // Evidence only: the settled layout before any pointer input, so a label
+  // that is offset statically reads the same here as at measure time.
+  const labelLayoutBeforeCandidates = labelCandidates[0]
+    ? await routeLabelLayoutEvidence(labelPage, journeyId, labelCandidates[0])
+    : null;
   for (const candidatePointId of labelCandidates) {
     if (!candidatePointId) continue;
     try {
-      labelClick = await clickRoutePointLabel(labelPage, journeyId, candidatePointId);
+      labelClick = await clickRoutePointLabel(labelPage, journeyId, candidatePointId, false, { evidence: true });
       labelPointId = candidatePointId;
       break;
     } catch (error) {
@@ -1330,7 +1482,7 @@ try {
   }
   await labelContext.waitFor({ state: "visible", timeout: 5_000 });
   const labelActivation = await routePointActivationEvidence(labelPage);
-  record("actual label hit preserves stable Route Point identity", { labelPointId, labelClick, labelActivation },
+  record("actual label hit preserves stable Route Point identity", { labelPointId, labelClick, labelActivation, labelCandidates, labelLayoutBeforeCandidates },
     labelActivation.source === "label"
     && labelActivation.journeyId === journeyId
     && labelActivation.routePointId === labelPointId);
