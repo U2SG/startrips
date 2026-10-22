@@ -3768,10 +3768,8 @@ button.living-atlas-globe__pick {
 /* The header is its own stacking context, so the open menu lifts the whole
    header above the right-hand context cards (z-chrome-72/73) it can overlap
    on a narrower desktop. Outside pointerdown closes the menu, so the raise is
-   short-lived. A class set by React, not `:has()`: with the `:has()` raise,
-   Chromium left every route label hit rect at computed x/y 0 after the menu
-   closed (CI route-point-context evidence), so the label drawn on the globe
-   was not where it could be clicked. */
+   short-lived. React sets the class from the same state that mounts the
+   menu, so the raise and the menu always change together. */
 .living-atlas__header.has-more-menu {
   z-index: var(--z-chrome-75);
 }
