@@ -2313,7 +2313,7 @@ export function LivingAtlasApp({
       event.preventDefault();
       event.stopPropagation();
       setDesktopMoreOpen(false);
-      globeFocusTriggerRef.current?.focus();
+      globeFocusTriggerRef.current?.focus({ preventScroll: true });
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     // Capture, so the menu consumes Escape before a right-surface handler.
