@@ -371,6 +371,23 @@ async function verifyRouteOrderSentence(page, pageErrors, names, routeOrderAnswe
   await entry.getByRole("button", { name: "调整顺序", exact: true }).click();
   const preview = entry.locator("[data-route-order-preview]");
   await preview.waitFor({ state: "visible" });
+
+  // Editing the sentence voids the preview it produced: the old answer can
+  // no longer be applied, and nothing is sent until the new one is submitted.
+  await entry.getByLabel("用一句话调整顺序").fill("把第一站放到最后");
+  await preview.waitFor({ state: "detached" });
+  const staleApply = await entry.getByRole("button", { name: "应用新顺序", exact: true }).count();
+  const staleLabels = await routeOrderLabels(page);
+  record("composer-sentence:route-order:edited-sentence-voids-preview", { staleApply, staleLabels,
+    sent: routeOrderAnswers.sent.length, pageErrors },
+    staleApply === 0
+    && JSON.stringify(staleLabels) === JSON.stringify(names)
+    && routeOrderAnswers.sent.length === 1
+    && pageErrors.length === 0);
+
+  await entry.getByLabel("用一句话调整顺序").fill("倒过来");
+  await entry.getByRole("button", { name: "调整顺序", exact: true }).click();
+  await preview.waitFor({ state: "visible" });
   const previewRows = await preview.locator("li").evaluateAll((rows) => rows.map((row) => ({
     label: row.querySelector("strong")?.textContent?.trim() ?? "",
     moved: row.getAttribute("data-route-order-moved") === "true",
@@ -399,7 +416,7 @@ async function verifyRouteOrderSentence(page, pageErrors, names, routeOrderAnswe
     JSON.stringify(afterRefusal) === JSON.stringify(reversed)
     && (await status.textContent())?.includes("路线没有改变")
     && await entry.locator("[data-route-order-preview]").count() === 0
-    && routeOrderAnswers.sent.length === 2
+    && routeOrderAnswers.sent.length === 3
     && pageErrors.length === 0);
 }
 
@@ -455,8 +472,8 @@ async function verifySentenceImport({ label, sentence, configured, names, routeO
         const body = route.request().postDataJSON();
         routeOrderAnswers.sent.push(body);
         const ids = body.points.map((point) => point.id);
-        // First a reversal, then a duplicate id: not a permutation.
-        const order = routeOrderAnswers.sent.length === 1 ? [...ids].reverse() : [ids[0], ids[0], ids[1]];
+        // 「倒过来」 is a reversal; anything else repeats an id: not a permutation.
+        const order = body.text === "倒过来" ? [...ids].reverse() : [ids[0], ids[0], ids[1]];
         await route.fulfill({ status: 200, contentType: "application/json",
           body: JSON.stringify({ proposal: { order, unmatched: null }, model: "synthetic/1" }) });
       });

@@ -553,6 +553,8 @@ export function JourneyComposer({
     unmatched: string | null;
   } | null>(null);
   const [routeOrderProposal, setRouteOrderProposal] = useState<{
+    /** The sentence this proposal answers; editing it voids the proposal. */
+    text: string;
     basis: string[];
     order: string[];
     unmatched: string | null;
@@ -1416,7 +1418,7 @@ export function JourneyComposer({
         setRouteOrderStatus({ tone: "empty", text: "按这句话，顺序没有变化。", unmatched: proposal.unmatched });
         return;
       }
-      setRouteOrderProposal({ basis, order: proposal.order, unmatched: proposal.unmatched });
+      setRouteOrderProposal({ text, basis, order: proposal.order, unmatched: proposal.unmatched });
     } catch (error) {
       if (!composerMountedRef.current || sequence !== routeOrderSequenceRef.current) return;
       setRouteOrderStatus({ tone: "error", text: routeOrderErrorMessage(error), unmatched: null });
@@ -1427,7 +1429,7 @@ export function JourneyComposer({
 
   function applyRouteOrderProposal() {
     const proposal = routeOrderProposal;
-    if (!proposal) return;
+    if (!proposal || proposal.text !== routeOrderText.trim()) return;
     const applies = (points: readonly RouteDraftPoint[]) => (
       sameRouteDraftOrder(points, proposal.basis) ? applyRouteOrder(points, proposal.order) : null
     );
@@ -2119,7 +2121,17 @@ export function JourneyComposer({
           <input
             ref={routeOrderInputRef}
             value={routeOrderText}
-            onChange={(event) => setRouteOrderText(event.target.value)}
+            onChange={(event) => {
+              const next = event.target.value;
+              setRouteOrderText(next);
+              // A preview answers the sentence it was asked; a new sentence
+              // must be submitted again before anything can be applied.
+              if (routeOrderProposal && routeOrderProposal.text !== next.trim()) {
+                routeOrderSequenceRef.current += 1;
+                setRouteOrderProposal(null);
+                setRouteOrderStatus(null);
+              }
+            }}
             maxLength={MAX_ROUTE_ORDER_TEXT_LENGTH}
             enterKeyHint="send"
             placeholder="例如：把最后一站放到开头"
