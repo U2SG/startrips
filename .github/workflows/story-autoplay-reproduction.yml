@@ -78,8 +78,13 @@ jobs:
       - name: Verify preinstalled browser runtime
         timeout-minutes: 1
         run: node scripts/ci-browser-runtime.mjs
+      - name: Restore pinned static FFmpeg archive
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/startrips-ffmpeg
+          key: ffmpeg-static-ffmpeg-n7.1.3-43-g5a1f107b4c-linux64-gpl-7.1-c2bffbc1e827ca735f756dc3d2ccd33d4c2c15362566932ced4bb7686f034d08
       - name: Ensure FFmpeg is available for public fixtures and recorded keyframes
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: bash scripts/ci-ensure-ffmpeg.sh
       - name: Build selected production source
         # The harness fetches /artworks/* fixtures from `vite preview`; keep the

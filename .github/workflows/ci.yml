@@ -184,7 +184,7 @@ jobs:
     needs: quick-checks
     if: needs.quick-checks.outputs.ledger_only_final != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -200,8 +200,15 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 3
         run: pnpm install --frozen-lockfile
+      - name: Restore pinned static FFmpeg archive
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/startrips-ffmpeg
+          key: ffmpeg-static-ffmpeg-n7.1.3-43-g5a1f107b4c-linux64-gpl-7.1-c2bffbc1e827ca735f756dc3d2ccd33d4c2c15362566932ced4bb7686f034d08
       - name: Ensure FFmpeg is available
-        timeout-minutes: 3
+        # Static download (60 s) plus the bounded APT fallback (~160 s) must
+        # surface the script's own error label before this step times out.
+        timeout-minutes: 5
         run: bash scripts/ci-ensure-ffmpeg.sh
       - name: Render deterministic private Keepsake fixture twice
         run: |
