@@ -3977,6 +3977,12 @@ export function ParticleEarthScene({
             );
             label.hitTarget.setAttribute("x", placement.hitBox.left.toFixed(1));
             label.hitTarget.setAttribute("y", placement.hitBox.top.toFixed(1));
+            // A rect's x/y are CSS geometry properties. Chromium can keep the
+            // first computed x/y after later attribute writes (CI evidence:
+            // attributes 696.6/301.7, computed 0px), drawing every label's hit
+            // area at the layer origin. The inline style always restyles.
+            label.hitTarget.style.setProperty("x", `${placement.hitBox.left.toFixed(1)}px`);
+            label.hitTarget.style.setProperty("y", `${placement.hitBox.top.toFixed(1)}px`);
             label.hitTarget.setAttribute("width", (placement.hitBox.right - placement.hitBox.left).toFixed(1));
             label.hitTarget.setAttribute("height", (placement.hitBox.bottom - placement.hitBox.top).toFixed(1));
             label.hitTarget.setAttribute("rx", "8");
