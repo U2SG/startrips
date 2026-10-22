@@ -983,6 +983,16 @@ function collectRouteLabelLayoutEvidence(label) {
         width: hit.getAttribute("width"),
         height: hit.getAttribute("height"),
         rect: rect(hit),
+        // Discriminates a style-layer override (computed x is 0px) from a
+        // layout box that was never refreshed (computed x matches the attribute).
+        computed: (() => {
+          const style = getComputedStyle(hit);
+          return { x: style.x, y: style.y, width: style.width, height: style.height,
+            display: style.display, transform: style.transform };
+        })(),
+        baseVal: "x" in hit ? { x: hit.x.baseVal.value, y: hit.y.baseVal.value } : null,
+        bbox: (() => { try { const box = hit.getBBox(); return [box.x, box.y, box.width, box.height]; } catch { return null; } })(),
+        style: hit.getAttribute("style"),
       } : null,
       text: text ? { x: text.getAttribute("x"), y: text.getAttribute("y"), rect: rect(text) } : null,
     } : null,
