@@ -3822,7 +3822,7 @@ export function LivingAtlasApp({
           </nav>
         </header>
       ) : (
-        <header className="living-atlas__header" inert={desktopHeaderInert || undefined}>
+        <header className={`living-atlas__header${desktopMoreOpen && !desktopHeaderInert ? " has-more-menu" : ""}`} inert={desktopHeaderInert || undefined}>
           <div className="living-atlas__brand"><StartripsWordmarkSignatureButton size={34} state={brandState} /><div><p>PRIVATE JOURNEY ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
           <nav aria-label="图谱视图">
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
