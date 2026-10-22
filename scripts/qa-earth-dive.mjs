@@ -144,9 +144,30 @@ async function readRoutePoint(page) {
 }
 
 /** Resolve a pointer-reachable sample inside the Route Point's 44px hit area. */
-async function activateDetailedRoutePoint(page, routePoint) {
-  const target = await page.evaluate(({ lon, lat }) => {
-    const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
+async function activateDetailedRoutePoint(page, routePoint, { refocused = false } = {}) {
+  const target = await page.evaluate(async ({ lon, lat }) => {
+    // The capture-phase activation re-projects with the camera at click time
+    // and a 22px radius, so a still-easing camera makes the sampled point stale
+    // before the pointer lands. Sample only once the projection holds across two
+    // consecutive animation frames (bounded; instability is reported, not hidden).
+    const project = () => window.__detailedEarthMapProject?.(lon, lat) ?? null;
+    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    let previous = project();
+    let stableFrames = 0;
+    let frames = 0;
+    for (; frames < 120 && stableFrames < 2; frames += 1) {
+      await nextFrame();
+      const current = project();
+      const steady = Boolean(
+        previous && current
+        && Math.abs(current.x - previous.x) < 0.5
+        && Math.abs(current.y - previous.y) < 0.5
+      );
+      stableFrames = steady ? stableFrames + 1 : 0;
+      previous = current;
+    }
+    const stability = { stable: stableFrames >= 2, frames };
+    const projected = project();
     if (!projected || !Number.isFinite(projected.x) || !Number.isFinite(projected.y)) return null;
 
     // Floating Atlas chrome can legitimately cover the centre of a rendered
@@ -175,6 +196,7 @@ async function activateDetailedRoutePoint(page, routePoint) {
         return {
           ...sample,
           projected,
+          stability,
           hit: { tag: hit.tagName, className: hit.getAttribute("class") },
         };
       }
@@ -183,6 +205,7 @@ async function activateDetailedRoutePoint(page, routePoint) {
     return {
       ...projected,
       projected,
+      stability,
       blocked: true,
       hit: centreHit instanceof Element
         ? { tag: centreHit.tagName, className: centreHit.getAttribute("class") }
@@ -197,10 +220,29 @@ async function activateDetailedRoutePoint(page, routePoint) {
   }
   await page.mouse.click(target.x, target.y);
   const expected = `${routePoint.journeyId}:${routePoint.id}`;
-  await page.waitForFunction((value) => (
-    document.querySelector("[data-qa-earth-dive-activated-route-point]")
-      ?.getAttribute("data-qa-earth-dive-activated-route-point") === value
-  ), expected, { timeout: 5_000 });
+  try {
+    await page.waitForFunction((value) => (
+      document.querySelector("[data-qa-earth-dive-activated-route-point]")
+        ?.getAttribute("data-qa-earth-dive-activated-route-point") === value
+    ), expected, { timeout: 5_000 });
+  } catch (error) {
+    const atFailure = await page.evaluate(({ lon, lat }) => {
+      const atlas = document.querySelector(".living-atlas");
+      return {
+        projected: window.__detailedEarthMapProject?.(lon, lat) ?? null,
+        activated: document.querySelector("[data-qa-earth-dive-activated-route-point]")
+          ?.getAttribute("data-qa-earth-dive-activated-route-point") ?? null,
+        focusRevision: atlas?.getAttribute("data-qa-earth-dive-focus-revision") ?? null,
+        focusSettled: atlas?.getAttribute("data-qa-earth-dive-focus-settled") ?? null,
+        focusSettledRevision: atlas?.getAttribute("data-qa-earth-dive-focus-settled-revision") ?? null,
+      };
+    }, routePoint).catch(() => null);
+    throw new Error(
+      `Detailed Earth Route Point ${routePoint.id} click did not activate: `
+      + JSON.stringify({ expected, refocused, target, atFailure }),
+      { cause: error },
+    );
+  }
   return {
     target,
     activated: await page.locator("[data-qa-earth-dive-activated-route-point]")
@@ -985,11 +1027,25 @@ try {
     );
   }, routePoint);
   if (!routePointOnScreen) {
+    // Entering the band is not the end of the refocus flight: wait for the
+    // renderer's own focus-settled report for the new revision as well.
+    const settledBefore = await forward.page.evaluate(() => {
+      const atlas = document.querySelector(".living-atlas");
+      return {
+        revision: Number(atlas?.getAttribute("data-qa-earth-dive-focus-revision")),
+        count: Number(atlas?.getAttribute("data-qa-earth-dive-focus-settled")),
+      };
+    });
     await activateButton(forward.page, forward.page.locator("[data-qa-earth-dive-refocus]"));
-    await forward.page.waitForFunction(({ lon, lat }) => {
+    await forward.page.waitForFunction(({ lon, lat, before }) => {
+      const atlas = document.querySelector(".living-atlas");
+      const settledCount = Number(atlas?.getAttribute("data-qa-earth-dive-focus-settled"));
+      const settledRevision = Number(atlas?.getAttribute("data-qa-earth-dive-focus-settled-revision"));
       const projected = window.__detailedEarthMapProject?.(lon, lat) ?? null;
       return Boolean(
-        projected
+        settledCount > before.count
+        && settledRevision > before.revision
+        && projected
         && Number.isFinite(projected.x)
         && Number.isFinite(projected.y)
         && projected.x >= 22
@@ -997,14 +1053,16 @@ try {
         && projected.x <= window.innerWidth - 22
         && projected.y <= window.innerHeight - 22
       );
-    }, routePoint, { timeout: 5_000 });
+    }, { lon: routePoint.lon, lat: routePoint.lat, before: settledBefore }, { timeout: 5_000 });
   }
 
   // The Detailed Earth source is not decorative: its hit target must resolve
   // through the existing Route Point activation callback, and a rapid Journey
   // switch must replace the exact same source without rebuilding the map or
   // leaving the previous Journey's features behind.
-  const routePointActivation = await activateDetailedRoutePoint(forward.page, routePoint);
+  const routePointActivation = await activateDetailedRoutePoint(forward.page, routePoint, {
+    refocused: !routePointOnScreen,
+  });
   const overlayBeforeSwitch = await readDive(forward.page);
   await activateButton(forward.page, forward.page.locator('[data-qa-earth-dive-route-switch="next"]'));
   await forward.page.waitForFunction((previousJourneyId) => {
