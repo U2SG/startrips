@@ -222,6 +222,11 @@
   object-fit: cover;
 }
 
+/* A video cover without a readable poster lets the sky show through. */
+.journey-book__cover-photo .journey-book__video-frame {
+  background: transparent;
+}
+
 /* A photo that cannot be read says so at the foot, in the cover's ink, over
    the sky that shows in its place. */
 .journey-book__cover-photo .journey-book__plate-state {
