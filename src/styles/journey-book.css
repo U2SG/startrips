@@ -240,13 +240,13 @@
   opacity: 0.75;
 }
 
-/* COVER_SCRIM: the night at 38% at the top edge, gone by 34% of the height,
+/* COVER_SCRIM: the night at 55% at the top edge, gone by 34% of the height,
    just past the head (it ends near 26%). Functional only; the Route band
    needs none because the photo Route carries its own dark halo. */
 .journey-book__cover-scrim {
   position: absolute;
   inset: 0 0 66%;
-  background: linear-gradient(rgb(11 18 34 / 0.38), rgb(11 18 34 / 0));
+  background: linear-gradient(rgb(11 18 34 / 0.55), rgb(11 18 34 / 0));
   pointer-events: none;
 }
 

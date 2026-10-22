@@ -21,7 +21,9 @@ describe("cover colours", () => {
   });
 
   it("keeps the head scrim restrained, ending past the head and short of the Route band middle", () => {
-    expect(COVER_SCRIM.alpha).toBeLessThanOrEqual(0.4);
+    // Strong enough for the dates on a pale sky, short of hiding the photo.
+    expect(COVER_SCRIM.alpha).toBeGreaterThanOrEqual(0.5);
+    expect(COVER_SCRIM.alpha).toBeLessThanOrEqual(0.6);
     // The head ends near 26% of the cover; the Route band runs 30% to 73%.
     expect(COVER_SCRIM.height).toBeGreaterThan(0.26);
     expect(COVER_SCRIM.height).toBeLessThan(0.4);

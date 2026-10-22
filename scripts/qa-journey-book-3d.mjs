@@ -110,9 +110,9 @@ function record(name, detail, ok) {
 // 5000, china-handscroll.jpg, cover-fit: the light silk mount top and bottom,
 // pale paper and grey ink at the sides), so the cover test is only "brighter
 // than the table". Its top probes sit under the head scrim (journeyBookCover
-// COVER_SCRIM, the night at 0.38): silk near 230 stays about 230 × 0.62 ≈ 143
-// before shading, about 86-114 under the closed cover's raking light, clear of
-// 60. Before the photo is painted the cover is the starry night (#0b1222),
+// COVER_SCRIM, the night at 0.55): silk near 230 stays about 230 × 0.45 + 34 ×
+// 0.55 ≈ 122 before shading, about 73-98 under the closed cover's raking
+// light, still clear of 60. Before the photo is painted the cover is the starry night (#0b1222),
 // which reads as table, so a cover probe failing that way means the photo
 // was not on the cover when the book settled.
 const isPaper = ([r, g, b]) => Math.min(r, g, b) >= 120;

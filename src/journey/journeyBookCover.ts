@@ -29,12 +29,12 @@ export const COVER_LIFT = { x: 0.5, y: 0.45, radius: 0.7, color: "rgb(143 211 23
  * The head scrim on a photo cover: the night base at `alpha` at the top edge,
  * fading to nothing by `height` (a fraction of the cover height). The head
  * (top 8.7%, two title lines and the dates) ends near 26%; the fade runs a
- * little past it so the dates never sit on its edge. 0.38 is the least that
- * separates the light ink from a pale sky together with the text's own soft
- * shadow (`COVER_TEXT_SHADOW`), while a light photo still reads light at the
- * top: white silk under the peak stays near 230 × 0.62 ≈ 143 before shading.
+ * little past it so the dates never sit on its edge. Owner review (CI
+ * screenshots): at 0.38 the dates all but vanished on a pale sky, so the scrim
+ * is 0.55 — the light ink then reads on white silk, which stays near
+ * 230 × 0.45 + 34 × 0.55 ≈ 122 before shading.
  */
-export const COVER_SCRIM = { height: 0.34, alpha: 0.38, color: "11 18 34" } as const;
+export const COVER_SCRIM = { height: 0.34, alpha: 0.55, color: "11 18 34" } as const;
 
 /** A soft dark shadow under the head's text on a photo, as a fraction of the cover width. */
 export const COVER_TEXT_SHADOW = { blur: 3 / 504, color: "rgb(6 9 16 / 0.45)" } as const;
