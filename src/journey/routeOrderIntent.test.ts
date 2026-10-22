@@ -7,6 +7,7 @@ import {
   routeOrderIntentPoints,
   routeOrderPreviewRows,
   sameRouteDraftOrder,
+  sameRouteOrderBasis,
 } from "./routeOrderIntent";
 import type { JourneyInput } from "./types";
 
@@ -35,6 +36,15 @@ describe("route order request points", () => {
       { id: "a", label: "成都" },
       { id: "d", label: "长".repeat(80) },
     ]);
+  });
+
+  it("matches a basis only while ids, order and sent labels are unchanged", () => {
+    const basis = routeOrderIntentPoints(POINTS);
+    expect(sameRouteOrderBasis(POINTS, basis)).toBe(true);
+    expect(sameRouteOrderBasis([point("a", " 成都 "), LITANG, DAOCHENG], basis)).toBe(true);
+    expect(sameRouteOrderBasis([CHENGDU, point("b", "新都桥"), DAOCHENG], basis)).toBe(false);
+    expect(sameRouteOrderBasis([CHENGDU, DAOCHENG, LITANG], basis)).toBe(false);
+    expect(sameRouteOrderBasis([CHENGDU, LITANG], basis)).toBe(false);
   });
 });
 

@@ -10850,7 +10850,7 @@ body:has(.journey-share) .account-dock {
   list-style: none;
 }
 
-.journey-route-order__preview li {
+.journey-route-order__preview ol > li {
   display: grid;
   grid-template-columns: 2ch minmax(0, 1fr) auto;
   align-items: baseline;
@@ -10860,11 +10860,11 @@ body:has(.journey-share) .account-dock {
   font-size: 12px;
 }
 
-.journey-route-order__preview li[data-route-order-moved="true"] {
+.journey-route-order__preview ol > li[data-route-order-moved="true"] {
   color: var(--control-ink);
 }
 
-.journey-route-order__preview li strong {
+.journey-route-order__preview ol > li strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

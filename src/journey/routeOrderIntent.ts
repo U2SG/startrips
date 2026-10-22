@@ -36,6 +36,21 @@ export function routeOrderIntentPoints(points: readonly RouteDraftPoint[]) {
   }));
 }
 
+export type RouteOrderIntentPoint = ReturnType<typeof routeOrderIntentPoints>[number];
+
+/**
+ * Whether `points` would still send exactly `basis`: same drafts, same order,
+ * same labels. A proposal read against other labels is void.
+ */
+export function sameRouteOrderBasis(
+  points: readonly RouteDraftPoint[],
+  basis: readonly RouteOrderIntentPoint[],
+) {
+  const current = routeOrderIntentPoints(points);
+  return current.length === basis.length
+    && current.every((point, index) => point.id === basis[index].id && point.label === basis[index].label);
+}
+
 /** Whether `points` are still exactly the drafts `draftIds` was taken from. */
 export function sameRouteDraftOrder(
   points: readonly RouteDraftPoint[],

@@ -51,6 +51,8 @@ import {
   routeOrderIntentPoints,
   routeOrderPreviewRows,
   sameRouteDraftOrder,
+  sameRouteOrderBasis,
+  type RouteOrderIntentPoint,
 } from "./routeOrderIntent";
 import {
   clearRemovedMediaTarget,
@@ -542,8 +544,9 @@ export function JourneyComposer({
   const composerMountedRef = useRef(true);
   const routePointsRef = useRef(routePoints);
   routePointsRef.current = routePoints;
-  // One-sentence reorder: a proposal is shown against the exact draft order
-  // it was made for (`basis`) and is void once that order changes.
+  // One-sentence reorder: a proposal is shown against the exact draft
+  // it was made for (`basis`: the exact ids and labels sent) and is void once
+  // any of them changes.
   const [routeOrderCapable, setRouteOrderCapable] = useState(false);
   const [routeOrderText, setRouteOrderText] = useState("");
   const [routeOrderPending, setRouteOrderPending] = useState(false);
@@ -555,7 +558,7 @@ export function JourneyComposer({
   const [routeOrderProposal, setRouteOrderProposal] = useState<{
     /** The sentence this proposal answers; editing it voids the proposal. */
     text: string;
-    basis: string[];
+    basis: RouteOrderIntentPoint[];
     order: string[];
     unmatched: string | null;
   } | null>(null);
@@ -1388,16 +1391,16 @@ export function JourneyComposer({
       return;
     }
     const points = routePointsRef.current;
-    const basis = points.map((point) => point.draftId);
+    const basis = routeOrderIntentPoints(points);
     const sequence = routeOrderSequenceRef.current + 1;
     routeOrderSequenceRef.current = sequence;
     setRouteOrderPending(true);
     setRouteOrderStatus(null);
     setRouteOrderProposal(null);
     try {
-      const { proposal } = await proposeRouteOrder(text, routeOrderIntentPoints(points));
+      const { proposal } = await proposeRouteOrder(text, basis);
       if (!composerMountedRef.current || sequence !== routeOrderSequenceRef.current) return;
-      if (!sameRouteDraftOrder(routePointsRef.current, basis)) {
+      if (!sameRouteOrderBasis(routePointsRef.current, basis)) {
         setRouteOrderStatus({
           tone: "error",
           text: "路线在等待期间改动过，这次的建议已作废，请重新提交。",
@@ -1431,7 +1434,7 @@ export function JourneyComposer({
     const proposal = routeOrderProposal;
     if (!proposal || proposal.text !== routeOrderText.trim()) return;
     const applies = (points: readonly RouteDraftPoint[]) => (
-      sameRouteDraftOrder(points, proposal.basis) ? applyRouteOrder(points, proposal.order) : null
+      sameRouteOrderBasis(points, proposal.basis) ? applyRouteOrder(points, proposal.order) : null
     );
     const applied = applies(routePointsRef.current) !== null;
     if (applied) {
@@ -2096,8 +2099,8 @@ export function JourneyComposer({
     </>
   );
   // Recomputed from the draft as it is now, so a Stop or time edited while
-  // the preview is open is reflected; a changed order voids the proposal.
-  const routeOrderLive = routeOrderProposal && sameRouteDraftOrder(routePoints, routeOrderProposal.basis)
+  // the preview is open is reflected; a changed order or label voids it.
+  const routeOrderLive = routeOrderProposal && sameRouteOrderBasis(routePoints, routeOrderProposal.basis)
     ? routeOrderProposal
     : null;
   const routeOrderRows = routeOrderLive ? routeOrderPreviewRows(routePoints, routeOrderLive.order) : null;
