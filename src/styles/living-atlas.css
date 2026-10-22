@@ -786,10 +786,12 @@ button.living-atlas-globe__pick {
   letter-spacing: 0.08em;
 }
 
-/* Six labelled items are about 573px wide, so the nav takes its content width
-   and never wraps a label. Centred, it clears the 189px wordmark from 981px
-   and the 344px brand block once that block shows from 1301px (starlight-
-   experience.css); the 60px account dock stays to its right up to 2560px. */
+/* At most five labelled items (地球, 时间线, 记录旅程, 分享多段旅程, 更多) are
+   narrower than the six this bar once held (~573px), so the nav takes its
+   content width and never wraps a label. Centred, it clears the 189px wordmark
+   from 981px and the 344px brand block once that block shows from 1301px
+   (starlight-experience.css); the 60px account dock stays to its right up to
+   2560px. Secondary actions live in the 更多 menu below the bar. */
 .living-atlas__header nav {
   position: absolute;
   top: 14px;
@@ -3745,23 +3747,87 @@ button.living-atlas-globe__pick {
   line-height: 1.7;
 }
 
-.living-atlas__header > .living-atlas__import {
+/* Desktop 更多: the header's secondary Atlas actions (import, Everyday, 只看地球)
+   in one floating disclosure, right-aligned under its trigger. It sits outside
+   the nav so none of the nav's pill/icon-only button rules reach its items. */
+.living-atlas__header nav .living-atlas__more-trigger {
+  color: var(--atlas-muted);
+}
+
+.living-atlas__more-status {
   position: absolute;
-  top: calc(100% + 10px);
-  left: 50%;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px;
-  transform: translateX(-50%);
-  border: 1px solid rgba(122, 244, 237, 0.28);
+  top: 9px;
+  right: 9px;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
-  background: rgba(2, 15, 16, 0.9);
-  color: var(--atlas-cyan);
+  background: var(--atlas-acid);
+  pointer-events: none;
+}
+
+/* The header is its own stacking context, so the open menu lifts the whole
+   header above the right-hand context cards (z-chrome-72/73) it can overlap
+   on a narrower desktop. Outside pointerdown closes the menu, so the raise is
+   short-lived. React sets the class from the same state that mounts the
+   menu, so the raise and the menu always change together. */
+.living-atlas__header.has-more-menu {
+  z-index: var(--z-chrome-75);
+}
+
+.living-atlas__more-menu {
+  position: absolute;
+  z-index: var(--z-surface-40);
+  min-width: 188px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--atlas-line);
+  border-radius: var(--radius-tile);
+  background: var(--atlas-panel);
+  box-shadow: var(--elev-2);
+  backdrop-filter: blur(18px);
+}
+
+.living-atlas__more-menu[data-columns="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.living-atlas__more-menu > button {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-field);
+  background: transparent;
+  color: var(--atlas-text);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-align: left;
   white-space: nowrap;
+}
+
+.living-atlas__more-menu > button svg {
+  flex: none;
+  color: var(--atlas-muted);
+}
+
+.living-atlas__more-menu > button[aria-pressed="true"] svg {
+  color: var(--atlas-cyan);
+}
+
+.living-atlas__more-menu > button:focus-visible {
+  outline: 2px solid var(--atlas-cyan);
+  outline-offset: -2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .living-atlas__more-menu > button:hover {
+    background: color-mix(in srgb, var(--atlas-cyan) 8%, transparent);
+  }
 }
 
 .living-atlas__import-backdrop {
@@ -6085,10 +6151,6 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    Three scene is never remounted, preserving camera/rotation/focus. The exit
    control stays visible and keyboard-reachable. */
 
-.living-atlas__globe-focus {
-  color: var(--atlas-muted);
-}
-
 /* Focus-mode layers recede with opacity + pointer-events and the header
    slides away; the globe is raised above everything else. */
 .living-atlas.is-globe-focus .living-atlas__header {
@@ -6936,14 +6998,6 @@ button.living-atlas__globe-focus-exit {
     margin-left: 3px;
     padding: 0 10px;
     font-size: 9px;
-  }
-
-  /* #8: the globe-focus entry becomes an icon-only 44px tap target on mobile. */
-  .living-atlas__header nav .living-atlas__globe-focus {
-    width: 44px;
-    justify-content: center;
-    padding: 0;
-    font-size: 0;
   }
 
   button.living-atlas__globe-focus-exit {

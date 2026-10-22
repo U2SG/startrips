@@ -382,6 +382,12 @@ button {
 .particle-earth-route__label-hit {
   fill: transparent;
   pointer-events: all;
+  /* The hit area's x/y are CSS geometry properties. Under the global reduced-
+     motion rule every property gets a 0.01ms transition, and CI caught those
+     transitions stuck at their start value (x/y 0) after entering globe focus
+     from the 更多 menu, so every label was clickable only at the origin. A hit
+     area must sit where its label is drawn, never animate there. */
+  transition-property: none !important;
 }
 
 .particle-earth-route__label .particle-earth-route__leader,

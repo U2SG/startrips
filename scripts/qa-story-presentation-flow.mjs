@@ -63,6 +63,11 @@ const story = page.locator('.journey-story');
 const account = page.locator('.account-sheet');
 const exit = () => page.getByRole('button', {name:'退出媒体呈现',exact:true});
 const enter = () => page.getByRole('button', {name:'进入媒体呈现',exact:true});
+// Desktop classic Story gives a member who can edit one labelled 编辑 entry;
+// 退出媒体呈现 there is reserved for read-only viewers.
+const editEntry = () => story.getByRole('button', {name:'编辑故事',exact:true});
+const desktopClassicReader = () => page.evaluate(()=>Boolean(document.querySelector('.journey-story[data-story-layout="desktop"]'))
+ && !document.querySelector('.journey-book, .journey-book-3d, .journey-stream'));
 const exportButton = () => story.getByRole('button', {name:'导出短片',exact:true});
 async function openCurrentStory() {
  // Returning from Story keeps the observed stop. Its context card owns the
@@ -92,7 +97,10 @@ async function waitStyle(next) {
   const selector = expected === 'book' ? '.journey-book' : expected === 'book-3d' ? '.journey-book-3d' : expected === 'stream' ? '.journey-stream' : '.journey-story';
   const reader = document.querySelector(selector);
   return reader && !reader.hasAttribute('data-story-editing')
-   && document.querySelector('button[aria-label="退出媒体呈现"]')
+   && (document.querySelector('button[aria-label="退出媒体呈现"]')
+    // Desktop classic: an editing member's entry is the labelled 编辑 toggle.
+    || (selector === '.journey-story' && reader.dataset.storyLayout === 'desktop'
+     && reader.querySelector('button.journey-story__edit-toggle[aria-label="编辑故事"]')))
    && (!['classic','note-overlay'].includes(expected) || reader.dataset.storyPresentation === expected);
  }, next);
 }
@@ -140,8 +148,19 @@ async function assertEditor() {
 }
 async function leavePresentation() {
  const writes=saves.length, saved=style;
- await assertIcon(exit(),'退出媒体呈现');
- await exit().click();
+ if (await desktopClassicReader()) {
+  const edit=editEntry();
+  await edit.waitFor({state:'visible'});
+  assert.equal((await edit.textContent()).trim(),'编辑','desktop editing members enter the editor through a labelled 编辑 entry');
+  assert.equal(await edit.getAttribute('aria-pressed'),'false');
+  assert.equal(await exit().count(),0,'desktop editing members must not get 退出媒体呈现 as a second edit entry');
+  const box=await edit.boundingBox();
+  assert.ok(box && box.x>=-1 && box.x+box.width<=page.viewportSize().width+1,`编辑 is horizontally clipped: ${JSON.stringify(box)}`);
+  await edit.click();
+ } else {
+  await assertIcon(exit(),'退出媒体呈现');
+  await exit().click();
+ }
  // Mobile Manage intentionally commits focus across two animation frames. The
  // classic reader can reuse the clicked button, so focus equality alone is not
  // completion. Observe stable geometry, without accepting/retrying bad bounds.
@@ -458,6 +477,9 @@ try {
   await choose(saved);
   await page.setViewportSize({width:1280,height:900});
   await waitStyle(saved);
+  // Settle the resized layout first so the desktop entry is graded, not the
+  // mobile reader that was mounted before the resize.
+  if (saved==='classic') await page.locator('.journey-story[data-story-layout="desktop"]').waitFor({state:'visible'});
   await leavePresentation();
   assert.equal(await story.getAttribute('data-story-layout'),'desktop');
   assert.equal(await story.getAttribute('data-classic-view'),null);

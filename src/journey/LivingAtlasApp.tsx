@@ -132,6 +132,7 @@ import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
 import { useModalFocus } from "./useModalFocus";
+import { desktopHeaderMoreActions, desktopMoreMenuColumns, resolveDesktopRightSurface } from "./desktopAtlasChrome";
 import { useAutoRouteRefresh } from "./useAutoRouteRefresh";
 import { mergeAutoRouteRefresh } from "./autoRouteSnapping";
 import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayout";
@@ -1539,6 +1540,12 @@ export function LivingAtlasApp({
   // lands again once a surface opened from the sheet closes.
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const mobileMoreTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // The desktop header's 更多 menu: a non-modal disclosure anchored under its
+  // trigger. That trigger is also where focus returns for every action living
+  // in the menu, including 只看地球 and the Atlas Everyday panel.
+  const [desktopMoreOpen, setDesktopMoreOpen] = useState(false);
+  const [desktopMoreAnchor, setDesktopMoreAnchor] = useState<{ top: number; right: number } | null>(null);
+  const desktopMoreMenuRef = useRef<HTMLDivElement | null>(null);
   // #325: the rail is released by removing the Atlas lifecycle class, and the
   // released state must not depend on restoring a property that isolation took
   // over. Isolation therefore never touches `visibility`, and every layout commit
@@ -2232,6 +2239,111 @@ export function LivingAtlasApp({
     canImport: canCreateJourney,
     canShare: shareClient !== null,
   });
+  // The desktop 更多 menu may open Everyday while a Route Point context is
+  // showing: the panel replaces that context in the one right-hand column, so
+  // only the Route Point term is dropped from the narrative guard here.
+  const desktopEverydayAvailable = !isMobileV2 && atlasEverydayEntryAvailable({
+    hasClient: Boolean(everydayFragments),
+    canCreate: canCreateJourney,
+    canEdit: canEditJourney,
+    view,
+    narrativeActive: storyJourneyId !== null
+      || playbackActive
+      || playbackModeMenuJourneyId !== null
+      || globePickActive,
+  });
+  // The two context cards render from these exact conditions below, so the
+  // compact empty-state hero can yield to them without a second copy.
+  const homeBaseContextSurfaceVisible = Boolean(
+    view === "planet" && homeBaseContext && !storyJourneyId && !playbackActive && !routePointContextSelection.context,
+  );
+  const atlasEverydaySurfaceVisible = Boolean(
+    atlasEverydayMode !== null && atlasEverydayAvailable && everydayFragments && !homeBaseContext,
+  );
+  // Desktop has one right-hand column: the current-journey card rests there and
+  // yields completely to whichever context surface is open.
+  const desktopRightSurface = isMobileV2 ? null : resolveDesktopRightSurface({
+    routePoint: routePointContextVisible,
+    homeBase: homeBaseContextSurfaceVisible,
+    everyday: atlasEverydaySurfaceVisible,
+    journey: view === "planet" && journeys.some((journey) => journey.id === activeJourneyId),
+  });
+  const desktopMoreActions = desktopHeaderMoreActions({
+    canImport: canCreateJourney,
+    everydayAvailable: desktopEverydayAvailable,
+  });
+  // Escape closes the open Everyday or Home Base card the way it already
+  // closes a Route Point context. Text fields keep Escape for themselves, and
+  // a handler that already consumed the key (a menu, a dialog) wins.
+  useEffect(() => {
+    if (desktopRightSurface !== "everyday" && desktopRightSurface !== "home-base") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target instanceof Element ? event.target : null;
+      // Escape from inside the fragments list must never unmount unsaved or
+      // in-flight fragment work; only Escape from outside it closes the card.
+      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [data-everyday-fragments]")) return;
+      event.preventDefault();
+      if (desktopRightSurface === "everyday") closeAtlasEveryday(true);
+      else clearHomeBaseContext();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clearHomeBaseContext, closeAtlasEveryday, desktopRightSurface]);
+  // The menu lives in the header, which turns inert under focus mode, globe
+  // picking and Playback; any of those, or Story/Composer taking over, closes it.
+  const desktopHeaderInert = globeFocusMode || globePickActive || playbackActive;
+  useEffect(() => {
+    if (isMobileV2 || desktopHeaderInert || storyJourneyId !== null || composerOpen || importOpen) {
+      setDesktopMoreOpen(false);
+    }
+  }, [composerOpen, desktopHeaderInert, importOpen, isMobileV2, storyJourneyId]);
+  useEffect(() => {
+    if (!desktopMoreOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (!target) return;
+      if (desktopMoreMenuRef.current?.contains(target) || globeFocusTriggerRef.current?.contains(target)) return;
+      setDesktopMoreOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      // An open menu owns Escape outright: it must not also close the Route
+      // Point or Everyday card underneath it.
+      event.preventDefault();
+      event.stopPropagation();
+      setDesktopMoreOpen(false);
+      globeFocusTriggerRef.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    // Capture, so the menu consumes Escape before a right-surface handler.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [desktopMoreOpen]);
+  useLayoutEffect(() => {
+    if (!desktopMoreOpen) return;
+    const place = () => {
+      const trigger = globeFocusTriggerRef.current;
+      const header = trigger?.closest(".living-atlas__header");
+      if (!trigger || !header) return;
+      const triggerRect = trigger.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      setDesktopMoreAnchor({
+        top: Math.round(triggerRect.bottom - headerRect.top + 8),
+        right: Math.round(headerRect.right - triggerRect.right),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [desktopMoreOpen]);
+  function closeDesktopMore() {
+    setDesktopMoreOpen(false);
+    globeFocusTriggerRef.current?.focus({ preventScroll: true });
+  }
   useEffect(() => {
     if (
       view !== "planet"
@@ -2244,10 +2356,9 @@ export function LivingAtlasApp({
       clearHomeBaseContext();
     }
     if (atlasEverydayMode !== null && !atlasEverydayAvailable) {
-      // A narrative or pick owner took over, and it owns focus now. The
-      // desktop 日常 trigger unmounts in this same commit, so it never took
-      // focus back here; the compact opener is the 更多 trigger, which stays
-      // mounted and would otherwise pull focus away from that new owner.
+      // A narrative or pick owner took over, and it owns focus now. On both
+      // layouts the opener is a 更多 trigger, which stays mounted and would
+      // otherwise pull focus away from that new owner.
       closeAtlasEveryday(false);
     }
   }, [
@@ -2850,8 +2961,12 @@ export function LivingAtlasApp({
   function openAtlasEveryday(
     mode: Exclude<EverydayFragmentsMode, null>,
     opener?: HTMLButtonElement,
+    { replaceRoutePoint = false }: { replaceRoutePoint?: boolean } = {},
   ) {
-    if (!atlasEverydayAvailable) return;
+    if (!(replaceRoutePoint ? desktopEverydayAvailable : atlasEverydayAvailable)) return;
+    // Desktop 更多 → 日常 replaces an open Route Point context instead of
+    // stacking beside it; its focus returns to the 更多 trigger, not the label.
+    if (replaceRoutePoint && routePointContextSelection.intent !== null) closeRoutePointContext(false);
     atlasEverydayOpenerRef.current = opener ?? null;
     clearHomeBaseContext();
     setAtlasEverydayMode(mode);
@@ -3529,14 +3644,6 @@ export function LivingAtlasApp({
   }
 
   const railIsolation = journeyRailIsolation(playbackActive, globePickActive, globeFocusMode);
-  // The two context cards render from these exact conditions below, so the
-  // compact empty-state hero can yield to them without a second copy.
-  const homeBaseContextSurfaceVisible = Boolean(
-    view === "planet" && homeBaseContext && !storyJourneyId && !playbackActive && !routePointContextSelection.context,
-  );
-  const atlasEverydaySurfaceVisible = Boolean(
-    atlasEverydayMode !== null && atlasEverydayAvailable && everydayFragments && !homeBaseContext,
-  );
   // Compact mobile has one band between the header and the dock. The empty
   // hero and its CTA share it with every context card, so while any card is
   // open the hero yields: it stays mounted, so its signature clip does not
@@ -3715,39 +3822,106 @@ export function LivingAtlasApp({
           </nav>
         </header>
       ) : (
-        <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
+        <header className={`living-atlas__header${desktopMoreOpen && !desktopHeaderInert ? " has-more-menu" : ""}`} inert={desktopHeaderInert || undefined}>
           <div className="living-atlas__brand"><StartripsWordmarkSignatureButton size={34} state={brandState} /><div><p>PRIVATE JOURNEY ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
           <nav aria-label="图谱视图">
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
             {canCreateJourney ? <button ref={createMagnet.ref} onPointerMove={createMagnet.onPointerMove} onPointerLeave={createMagnet.onPointerLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button> : null}
-            {atlasEverydayAvailable ? (
-              <button
-                type="button"
-                data-atlas-everyday-trigger
-                aria-expanded={atlasEverydayMode !== null}
-                aria-controls={atlasEverydayMode ? "atlas-everyday-fragments-list" : undefined}
-                onClick={(event) => atlasEverydayMode !== null ? closeAtlasEveryday(true) : openAtlasEveryday("list", event.currentTarget)}
-              ><IconPhoto size={16} stroke={1.35} aria-hidden="true" />日常</button>
-            ) : null}
             {shareClient && journeys.length > 0 ? (
               <button type="button" className="living-atlas__share" data-atlas-share-trigger="true" onClick={() => openShareSurface(null)}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享多段旅程</button>
             ) : null}
+            {/* Secondary Atlas actions share one 更多 disclosure. Its trigger is
+                also the focus return point for 只看地球 and Atlas Everyday. */}
             <button
               ref={globeFocusTriggerRef}
               type="button"
-              className="living-atlas__globe-focus"
-              aria-pressed={globeFocusMode}
-              onClick={() => {
-                setView("planet");
-                setGlobeFocusMode(true);
-              }}
+              className="living-atlas__more-trigger"
+              data-atlas-desktop-more-trigger="true"
+              aria-label={importStatus.busy
+                ? "更多操作（行程导入处理中）"
+                : importStatus.ready ? "更多操作（行程导入结果待查看）" : "更多操作"}
+              aria-expanded={desktopMoreOpen}
+              aria-controls={desktopMoreOpen ? "living-atlas-more-menu" : undefined}
+              onClick={() => setDesktopMoreOpen((open) => !open)}
             >
-              <IconWorld size={16} stroke={1.35} aria-hidden="true" />
-              只看地球
+              <IconDots size={16} stroke={1.35} aria-hidden="true" />
+              更多
+              {importStatus.busy || importStatus.ready ? <span className="living-atlas__more-status" aria-hidden="true" /> : null}
             </button>
           </nav>
-          {canCreateJourney ? <button type="button" className="living-atlas__import" onClick={openImport}><IconUpload size={17} stroke={1.4} aria-hidden="true" />{importStatus.busy ? "导入处理中" : importStatus.ready ? "查看导入结果" : "导入已有行程"}</button> : null}
+          {desktopMoreOpen && !desktopHeaderInert ? (
+            <div
+              ref={desktopMoreMenuRef}
+              id="living-atlas-more-menu"
+              className="living-atlas__more-menu motion-fade-through"
+              role="group"
+              aria-label="更多操作"
+              data-columns={desktopMoreMenuColumns(desktopMoreActions.length)}
+              style={desktopMoreAnchor ? { top: desktopMoreAnchor.top, right: desktopMoreAnchor.right } : { visibility: "hidden" }}
+            >
+              {desktopMoreActions.map((action) => {
+                switch (action) {
+                  case "import":
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        className="living-atlas__import"
+                        data-atlas-more-action={action}
+                        onClick={() => {
+                          closeDesktopMore();
+                          openImport();
+                        }}
+                      >
+                        <IconUpload size={16} stroke={1.35} aria-hidden="true" />
+                        <span>{importStatus.busy ? "导入处理中" : importStatus.ready ? "查看导入结果" : "导入已有行程"}</span>
+                      </button>
+                    );
+                  case "everyday":
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        data-atlas-more-action={action}
+                        data-atlas-everyday-trigger
+                        aria-pressed={atlasEverydaySurfaceVisible}
+                        onClick={() => {
+                          const opener = globeFocusTriggerRef.current ?? undefined;
+                          closeDesktopMore();
+                          if (atlasEverydaySurfaceVisible) closeAtlasEveryday(true);
+                          else openAtlasEveryday("list", opener, { replaceRoutePoint: true });
+                        }}
+                      >
+                        <IconPhoto size={16} stroke={1.35} aria-hidden="true" />
+                        <span>日常</span>
+                      </button>
+                    );
+                  case "globe-focus":
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        className="living-atlas__globe-focus"
+                        data-atlas-more-action={action}
+                        aria-pressed={globeFocusMode}
+                        onClick={() => {
+                          // Return focus to 更多 before the menu unmounts, so
+                          // the focused control is not removed in the same
+                          // commit that makes the header inert.
+                          closeDesktopMore();
+                          setView("planet");
+                          setGlobeFocusMode(true);
+                        }}
+                      >
+                        <IconWorld size={16} stroke={1.35} aria-hidden="true" />
+                        <span>只看地球</span>
+                      </button>
+                    );
+                }
+              })}
+            </div>
+          ) : null}
         </header>
       )}
 
@@ -3868,9 +4042,10 @@ export function LivingAtlasApp({
       {!isMobileV2 && view === "planet" && activeJourney ? (
         <aside
           className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id && !arrivalIsSwitch ? " is-arriving" : ""}${playbackModeMenuJourneyId === activeJourney.id ? " has-playback-menu" : ""}`}
-          hidden={routePointContextVisible}
-          aria-hidden={routePointContextVisible || undefined}
-          inert={routePointContextVisible || globeFocusMode || globePickActive || playbackActive || undefined}
+          hidden={desktopRightSurface !== "journey"}
+          aria-hidden={desktopRightSurface !== "journey" || undefined}
+          inert={desktopRightSurface !== "journey" || globeFocusMode || globePickActive || playbackActive || undefined}
+          data-right-surface={desktopRightSurface ?? undefined}
           style={{
             "--journey-color": activeJourney.lightColor,
             "--journey-gradient": getLightEffectGradient(activeJourney.lightEffect, activeJourney.lightColor),
@@ -4300,7 +4475,7 @@ export function LivingAtlasApp({
         </div>
       ) : null}
 
-      {atlasEverydaySurfaceVisible && everydayFragments ? (
+      {atlasEverydaySurfaceVisible && everydayFragments && (isMobileV2 || desktopRightSurface === "everyday") ? (
         <aside
           className="living-atlas__everyday-context motion-fade-through"
           data-atlas-everyday-context
@@ -4334,7 +4509,7 @@ export function LivingAtlasApp({
         </div>
       ) : null}
 
-      {homeBaseContextSurfaceVisible && homeBaseContext ? (
+      {homeBaseContextSurfaceVisible && homeBaseContext && (isMobileV2 || desktopRightSurface === "home-base") ? (
         <aside
           id="home-base-context"
           className="living-atlas__home-base-context motion-fade-through"

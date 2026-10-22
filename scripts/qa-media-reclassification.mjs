@@ -379,7 +379,7 @@ try {
       await page.emulateMedia({ reducedMotion: "no-preference" });
       await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-layout") === "desktop");
       if (await storyRoot.getAttribute("data-story-editing") !== "true") {
-        await storyRoot.getByRole("button", { name: "退出媒体呈现", exact: true }).click();
+        await storyRoot.getByRole("button", { name: "编辑故事", exact: true }).click();
         await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-editing") === "true");
       }
       // Session entry preserves the current view. Keep an existing organizer,

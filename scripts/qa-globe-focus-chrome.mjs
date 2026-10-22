@@ -470,13 +470,19 @@ async function readDetailUtilities(page) {
 }
 
 async function enterFocus(page, { keyboard = false } = {}) {
+  // 只看地球 lives in the desktop header 更多 menu.
+  const more = page.locator("[data-atlas-desktop-more-trigger]");
   const trigger = page.locator(".living-atlas__globe-focus");
   if (keyboard) {
     // Focus the trigger through the keyboard so the return control it hands
     // focus to resolves `:focus-visible`, which is what the acceptance grades.
+    await more.focus();
+    await page.keyboard.press("Enter");
+    await trigger.waitFor({ state: "visible", timeout: 5_000 });
     await trigger.focus();
     await page.keyboard.press("Enter");
   } else {
+    await more.click();
     await trigger.click();
   }
   await page.waitForFunction(() => (
@@ -1855,6 +1861,8 @@ try {
 
       await context.locator("[data-route-point-context-close]").click();
       await context.waitFor({ state: "detached", timeout: 5_000 });
+      // 日常 lives in the desktop header 更多 menu.
+      await page.locator("[data-atlas-desktop-more-trigger]").click();
       await page.locator("[data-atlas-everyday-trigger]").click();
       const everyday = page.locator("[data-atlas-everyday-context]");
       await everyday.waitFor({ state: "visible", timeout: 5_000 });
@@ -1903,6 +1911,119 @@ try {
     } finally {
       await session?.page.close();
       await homeSession?.page.close();
+    }
+  }
+
+  // 7b'. Desktop has one right-hand column. With a Route Point context open,
+  //      更多 → 日常 replaces that context instead of stacking beside it, the
+  //      current-journey card stays hidden until the column is free, and
+  //      Escape returns the column to the card. 更多 holds the only desktop
+  //      import entry. On narrower desktops the menu overlaps the context card
+  //      column, so every item must own its own hit there.
+  for (const viewport of [
+    { name: "1280x800", width: 1280, height: 800 },
+    { name: "1024x768", width: 1024, height: 768 },
+    { name: "800x700", width: 800, height: 700 },
+  ]) {
+    let session = null;
+    const visibleRightSurfaces = (page) => page.evaluate(() => [
+      ".living-atlas__active",
+      "[data-route-point-context]",
+      "[data-atlas-everyday-context]",
+      "[data-home-base-context]",
+    ].filter((selector) => [...document.querySelectorAll(selector)].some((element) => {
+      if (element.closest("[hidden]")) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    })));
+    try {
+      session = await openAtlas(viewport);
+      const { page } = session;
+      await page.route(/\/api\/everyday-fragments(?:\/[^/?]+)?(?:\?.*)?$/, (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ fragments: [] }),
+      }));
+      const selection = await selectNonDefaultJourney(page);
+      const routePointId = journeys.find((journey) => journey.title === selection.selectedTitle)
+        ?.routePoints[0]?.id;
+      if (!routePointId) throw new Error("selected QA Journey has no Route Point");
+      const restingSurfaces = await visibleRightSurfaces(page);
+      await page.locator(`[data-qa-globe-route-point-activate="${routePointId}"]`).evaluate((button) => button.click());
+      const context = page.locator(`[data-route-point-context][data-route-point-id="${routePointId}"]`);
+      await context.waitFor({ state: "visible", timeout: 5_000 });
+      const routePointSurfaces = await visibleRightSurfaces(page);
+
+      const more = page.locator("[data-atlas-desktop-more-trigger]");
+      await more.click();
+      const menu = page.locator("#living-atlas-more-menu");
+      await menu.waitFor({ state: "visible", timeout: 5_000 });
+      const menuItems = (await menu.locator("button").allTextContents()).map((text) => text.trim());
+      const menuItemHits = await menu.evaluate((element) => [...element.querySelectorAll("button")].map((button) => {
+        const rect = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return {
+          label: button.textContent?.trim() ?? "",
+          height: Math.round(rect.height),
+          owned: Boolean(hit && button.contains(hit)),
+        };
+      }));
+      const importEntries = await page.locator('[data-atlas-more-action="import"]').count();
+      const headerImportOutsideMenu = await page.evaluate(() => [
+        ...document.querySelectorAll(".living-atlas__header button"),
+      ].filter((button) => !button.closest("#living-atlas-more-menu")
+        && /导入/.test(button.textContent ?? "")).length);
+      await menu.locator("[data-atlas-everyday-trigger]").click();
+      const everyday = page.locator("[data-atlas-everyday-context]");
+      await everyday.waitFor({ state: "visible", timeout: 5_000 });
+      await context.waitFor({ state: "detached", timeout: 5_000 });
+      const menuAfterChoice = await menu.count();
+      const everydaySurfaces = await visibleRightSurfaces(page);
+
+      await page.keyboard.press("Escape");
+      await everyday.waitFor({ state: "detached", timeout: 5_000 });
+      await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 5_000 });
+      const returnedSurfaces = await visibleRightSurfaces(page);
+      const focusOnMore = await more.evaluate((button) => document.activeElement === button);
+
+      record({
+        name: `desktop-one-right-surface/${viewport.name}`,
+        viewport: viewport.name,
+        restingSurfaces,
+        routePointSurfaces,
+        menuItems,
+        menuItemHits,
+        importEntries,
+        headerImportOutsideMenu,
+        menuAfterChoice,
+        everydaySurfaces,
+        returnedSurfaces,
+        focusOnMore,
+        pageErrors: session.pageErrors,
+        failed: JSON.stringify(restingSurfaces) !== JSON.stringify([".living-atlas__active"])
+          || JSON.stringify(routePointSurfaces) !== JSON.stringify(["[data-route-point-context]"])
+          || !menuItems.some((text) => text.includes("导入已有行程"))
+          || menuItemHits.length === 0
+          || menuItemHits.some((item) => !item.owned || item.height < 44)
+          || importEntries !== 1
+          || headerImportOutsideMenu !== 0
+          || menuAfterChoice !== 0
+          || JSON.stringify(everydaySurfaces) !== JSON.stringify(["[data-atlas-everyday-context]"])
+          || JSON.stringify(returnedSurfaces) !== JSON.stringify([".living-atlas__active"])
+          || !focusOnMore
+          || session.pageErrors.length > 0,
+      });
+    } catch (error) {
+      record({
+        name: `desktop-one-right-surface/${viewport.name}`,
+        viewport: viewport.name,
+        error: error instanceof Error ? error.message : String(error),
+        pageErrors: session?.pageErrors ?? [],
+        failed: true,
+      });
+    } finally {
+      await session?.page.close();
     }
   }
 

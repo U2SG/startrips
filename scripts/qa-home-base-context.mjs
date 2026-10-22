@@ -645,6 +645,8 @@ try {
   // ordinary desktop active card legitimately sits above part of the globe;
   // globe-focus removes that competing UI without changing the projected Home
   // anchor or inventing a second interaction path.
+  // 只看地球 lives in the desktop header 更多 menu.
+  await page.locator("[data-atlas-desktop-more-trigger]").click();
   await page.locator(".living-atlas__globe-focus").click();
   await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
   const desktopPointerOwner = await clickProjectedHome(page, marker);
@@ -696,7 +698,10 @@ try {
   const homeEverydaySurface = context.locator("[data-everyday-fragments]");
   await homeEverydaySurface.getByRole("button", { name: "日常", exact: true }).click();
   await context.locator("#everyday-fragments-list").waitFor({ state: "visible" });
+  // Desktop Atlas Everyday lives in the header 更多 menu.
+  const desktopMoreTrigger = page.locator("[data-atlas-desktop-more-trigger]");
   const desktopEverydayTrigger = page.locator("[data-atlas-everyday-trigger]");
+  await desktopMoreTrigger.click();
   await desktopEverydayTrigger.click();
   await context.waitFor({ state: "detached" });
   const desktopEverydayContext = page.locator("[data-atlas-everyday-context]");
@@ -716,8 +721,20 @@ try {
   }, (await page.locator("[data-atlas-everyday-context]").count()) === 0
     && (await page.locator("[data-home-base-context]").count()) === 1);
 
-  // Story is a newer narrative owner. It closes Home context and closing Story
-  // does not resurrect an old Home intent.
+  // Desktop has one right-hand column: while Home context owns it the current
+  // Journey card is hidden, so Story and Playback cannot start beside it.
+  // Escape hands the column back to the card.
+  const activeCard = page.locator(".living-atlas__active");
+  const cardHiddenBesideHome = await activeCard.evaluate((element) => element.hidden);
+  await page.keyboard.press("Escape");
+  await context.waitFor({ state: "detached", timeout: 5_000 });
+  await activeCard.waitFor({ state: "visible", timeout: 5_000 });
+  record("Home context owns the desktop right column and Escape returns it to the Journey card", {
+    cardHiddenBesideHome,
+  }, cardHiddenBesideHome === true);
+
+  // Story is a newer narrative owner. Home targets yield to it and closing
+  // Story does not resurrect an old Home intent.
   await page.locator(".living-atlas__active-actions button", { hasText: "打开故事" }).click();
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
   const duringStory = await page.locator("[data-home-base-context]").count();
@@ -730,13 +747,14 @@ try {
   }, duringStory === 0 && homeTargetsDuringStory === 0 && afterStory === 0);
 
   // Playback is the same ownership boundary. Pointer Home activation was
-  // already proven on an unobscured globe above; the active Journey card is a
-  // legitimate higher visual layer here, so use Home's keyboard target to open
-  // context before Playback takes ownership rather than clicking through UI.
+  // already proven on an unobscured globe above, so use Home's keyboard target
+  // to open context. The Journey card (and its Playback entry) only returns
+  // once that context hands the column back, so close it before Playback.
   const playbackHomeMarker = await currentHomeMarker(page);
   await playbackHomeMarker.focus();
   await page.keyboard.press("Enter");
   await context.waitFor({ state: "visible", timeout: 5_000 });
+  await closeContext(page);
   await page.locator(".living-atlas__active-play").click();
   await page.locator(".living-atlas__playback-mode-menu button", { hasText: "完整播放" }).first().click();
   await page.locator(".journey-playback").waitFor({ state: "visible", timeout: 20_000 });
@@ -752,13 +770,15 @@ try {
     await returnedStory.waitFor({ state: "detached", timeout: 10_000 });
   }
   const afterPlayback = await page.locator("[data-home-base-context]").count();
-  record("Playback immediately wins context ownership and Home does not auto-return", {
+  record("Playback owns the Atlas while it runs and Home context does not auto-return", {
     duringPlayback, afterPlayback,
   }, duringPlayback === 0 && afterPlayback === 0);
 
   // Rewind to the earliest dated Journey while globe focus owns the composition.
   // That date falls inside the historical Guangzhou Home period. The same marker
   // activation must now resolve the historical period rather than today's Home.
+  // 只看地球 lives in the desktop header 更多 menu.
+  await page.locator("[data-atlas-desktop-more-trigger]").click();
   await page.locator(".living-atlas__globe-focus").click();
   const scrubber = page.locator(".globe-time-scrubber__track");
   await scrubber.waitFor({ state: "visible", timeout: 10_000 });
@@ -809,6 +829,8 @@ try {
   // hit inside Home's 44 px target to use the renderer's one arbitration path.
   const arbitration = await openOwner({ width: 1280, height: 800 });
   const arbitrationPage = arbitration.page;
+  // 只看地球 lives in the desktop header 更多 menu.
+  await arbitrationPage.locator("[data-atlas-desktop-more-trigger]").click();
   await arbitrationPage.locator(".living-atlas__globe-focus").click();
   await arbitrationPage.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
   const arbitrationMarker = await currentHomeMarker(arbitrationPage);
@@ -876,6 +898,8 @@ try {
   // the city coordinate is accepted without ever opening Home context.
   const globePick = await openOwner({ width: 1280, height: 800 });
   const globePickPage = globePick.page;
+  // 只看地球 lives in the desktop header 更多 menu.
+  await globePickPage.locator("[data-atlas-desktop-more-trigger]").click();
   await globePickPage.locator(".living-atlas__globe-focus").click();
   await globePickPage.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
   const globePickMarker = await currentHomeMarker(globePickPage);
@@ -1063,6 +1087,8 @@ try {
   const noHome = await openOwner({ width: 1280, height: 800 }, { homePeriods: [] });
   const noHomePage = noHome.page;
   const noHomeTrigger = noHomePage.locator("[data-atlas-everyday-trigger]");
+  // Desktop Atlas Everyday lives in the header 更多 menu.
+  await noHomePage.locator("[data-atlas-desktop-more-trigger]").click();
   await noHomeTrigger.waitFor({ state: "visible" });
   record("zero-Home Atlas exposes Everyday without a Home marker", {
     homeMarkers: await noHomePage.locator("[data-home-base-period-id]").count(),
@@ -1088,9 +1114,10 @@ try {
   ));
   await noHomeSurface.getByRole("button", { name: "关闭日常", exact: true }).click();
   await noHomeSurface.waitFor({ state: "detached" });
-  record("closing zero-Home Everyday restores the Atlas action", {}, await noHomeTrigger.evaluate(
-    (node) => document.activeElement === node,
-  ));
+  // The menu item that opened Everyday left with the menu; focus returns to
+  // 更多, the header control it lives behind.
+  record("closing zero-Home Everyday restores the Atlas action", {}, await noHomePage
+    .locator("[data-atlas-desktop-more-trigger]").evaluate((node) => document.activeElement === node));
   await noHomePage.close();
 
   const noHomeMobile = await openOwner({ width: 390, height: 844 }, { homePeriods: [] });
