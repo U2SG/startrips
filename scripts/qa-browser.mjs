@@ -43,6 +43,18 @@ async function installHarnessRoutes(context) {
   await context.route("**/api/cover-reveal/journeys/*/status", (route) => route.fulfill({
     status: 200, contentType: "application/json", body: JSON.stringify({ state: "unavailable", recipeId: null, sourceMediaAssetId: null }),
   }));
+  // No intent provider in the harness: the truthful answer an unconfigured
+  // deployment gives, so the desktop command bar does not render. Suites that
+  // exercise it route this path on the page, which takes precedence.
+  await context.route("**/api/intents/capabilities", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      share: { configured: false, mediaFilter: false },
+      routeOrder: { configured: false },
+      router: { configured: false, intents: [] },
+    }),
+  }));
   return context;
 }
 
