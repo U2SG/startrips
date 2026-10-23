@@ -10783,6 +10783,14 @@ body:has(.journey-share) .account-dock {
   letter-spacing: 0.08em;
 }
 
+/* The shortcut hint stays only where the pill has room beside the brand
+   block; the shortcut itself works at every desktop width. */
+@media (max-width: 1439px) {
+  .living-atlas__command-trigger kbd {
+    display: none;
+  }
+}
+
 .command-bar {
   position: fixed;
   z-index: var(--z-modal-300);

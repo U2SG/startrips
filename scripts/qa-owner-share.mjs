@@ -119,8 +119,8 @@ async function installOwnerApi(page, state) {
     contentType: "application/json",
     body: JSON.stringify({ journeys }),
   }));
-  // One-sentence share. Off unless a pass sets `state.intentProposal`, so the
-  // default passes also prove the sentence entry is absent when unconfigured.
+  // The command bar. Off unless a pass sets `state.intentProposal`, so the
+  // default passes also prove the bar is absent when unconfigured.
   await page.route("**/api/intents/capabilities", async (route) => {
     requests.push({ kind: "intent-capabilities" });
     await route.fulfill({
@@ -131,7 +131,41 @@ async function installOwnerApi(page, state) {
           configured: Boolean(state.intentProposal),
           mediaFilter: Boolean(state.intentProposal && state.mediaFilterResult),
         },
+        routeOrder: { configured: Boolean(state.intentProposal) },
+        router: {
+          configured: Boolean(state.intentProposal),
+          intents: state.intentProposal
+            ? ["share", ...(state.mediaFilterResult ? ["share-photos-filter"] : []), "navigate", "globe-focus"]
+            : [],
+        },
       }),
+    });
+  });
+  // `POST /api/intents/route`: the stubbed router answers the share the pass
+  // set up, as `share-photos-filter` when it asks to leave people out.
+  await page.route("**/api/intents/route", async (route) => {
+    const body = JSON.parse(route.request().postData() ?? "{}");
+    requests.push({ kind: "route", body });
+    if (state.intentFailNext) {
+      state.intentFailNext = false;
+      await route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "INTENT_FAILED", stage: "intent-router", message: "The intent router answered 500" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: state.intentProposal ? 200 : 503,
+      contentType: "application/json",
+      body: JSON.stringify(state.intentProposal
+        ? {
+          intent: state.intentProposal.mediaFilter === "no-people" ? "share-photos-filter" : "share",
+          proposal: state.intentProposal,
+          unmatched: null,
+          model: "qa-intent",
+        }
+        : { error: "INTENT_UNAVAILABLE", message: "The command bar is not configured" }),
     });
   });
   // "只分享风景图". Each call answers the next of `state.mediaFilterBatches`
@@ -441,8 +475,6 @@ async function ornamentScan(page) {
       ".journey-share__links li > button.is-destructive",
       ".journey-share__expiry > label",
       ".journey-share__custom-expiry",
-      ".journey-share__intent-input",
-      ".journey-share__intent-row > button",
       ".journey-share__media-filter-actions > button",
       '.journey-share__expiry input[type="radio"] + span[aria-hidden]',
       '.journey-share__selection input[type="checkbox"] + span[aria-hidden]',
@@ -637,12 +669,18 @@ async function verifyAccountDockYieldsToShare(browser) {
   }
 }
 
-/**
- * One-sentence share, configured. The stubbed model proposes two of the three
- * Journeys and 30 days; the dialog must tick exactly those, choose 30d, say
- * so, and still create nothing until the owner presses Create.
- */
-async function verifyShareIntentProposal(browser, viewport) {
+/** The command bar: its header trigger, a sentence, and the one card it answers. */
+async function submitCommand(page, sentence) {
+  if (await page.locator(".command-bar").count() === 0) {
+    await page.locator("[data-command-bar-trigger]").click();
+  }
+  const input = page.locator(".command-bar__input");
+  await input.waitFor({ state: "visible", timeout: 10_000 });
+  await input.fill(sentence);
+  await input.press("Enter");
+}
+
+async function openOwnerAtlas(browser, viewport, state) {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
     hasTouch: viewport.compact,
@@ -650,230 +688,237 @@ async function verifyShareIntentProposal(browser, viewport) {
     deviceScaleFactor: 1,
   });
   const page = await context.newPage();
+  await page.addInitScript(() => {
+    localStorage.setItem("startrips.media-presentation", "note-overlay");
+  });
+  await installOwnerApi(page, state);
+  await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+  await page.locator(".living-atlas").waitFor({ timeout: 20_000 });
+  await page.waitForFunction(
+    () => document.body.textContent?.includes("海风经过深圳湾"),
+    undefined,
+    { timeout: 20_000 },
+  );
+  return { context, page };
+}
+
+/**
+ * One-sentence share through the command bar, configured. The stubbed router
+ * answers `share` with two of the three Journeys and 30 days. The card must
+ * list exactly those, create nothing until 确认, open the share dialog
+ * prefilled on 修改, and create exactly that set on 确认. Compact layouts do
+ * not render the bar (the mobile shell is restructured separately).
+ */
+async function verifyShareIntentProposal(browser, viewport) {
   const name = `${viewport.name}/sentence`;
+  const proposedIds = [journeys[0].id, journeys[2].id];
+  const state = {
+    shares: [],
+    requests: [],
+    createGate: null,
+    intentProposal: { journeyIds: proposedIds, expiry: "30d", mediaFilter: null, unmatched: null },
+  };
+  const { context, page } = await openOwnerAtlas(browser, viewport, state);
   try {
-    await page.addInitScript(() => {
-      localStorage.setItem("startrips.media-presentation", "note-overlay");
-    });
-    const proposedIds = [journeys[0].id, journeys[2].id];
-    const state = {
-      shares: [],
-      requests: [],
-      createGate: null,
-      intentProposal: { journeyIds: proposedIds, expiry: "30d", mediaFilter: null, unmatched: null },
-    };
-    await installOwnerApi(page, state);
-    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
-    await page.locator(".living-atlas").waitFor({ timeout: 20_000 });
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("海风经过深圳湾"),
-      undefined,
-      { timeout: 20_000 },
-    );
-    if (viewport.compact) await openAtlasMore(page);
-    await clickNamed(page, "分享多段旅程");
-    await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
-
-    const input = page.locator(".journey-share__intent-input");
-    await input.waitFor({ state: "visible", timeout: 10_000 });
-    check(`${name}/entry-offered-when-configured`,
-      (await input.getAttribute("placeholder")) === "分享今年的三段旅程，7 天有效");
-
+    await waitForStubRequest(page, state, "intent-capabilities");
+    if (viewport.compact) {
+      await page.waitForTimeout(120);
+      check(`${name}/command-bar-absent-on-compact`,
+        await page.locator("[data-command-bar-trigger], .command-bar").count() === 0);
+      return;
+    }
+    await page.locator("[data-command-bar-trigger]").waitFor({ timeout: 10_000 });
     const sentence = "分享深圳湾和东京那两段，30 天有效";
-    await input.fill(sentence);
-    await page.locator(".journey-share__intent-row > button").click();
-    await page.locator('[data-share-intent-status="proposed"]').waitFor({ timeout: 10_000 });
+    await submitCommand(page, sentence);
+    await page.locator('[data-command-card="share"]').waitFor({ timeout: 10_000 });
 
+    const routeRequest = state.requests.find((entry) => entry.kind === "route");
+    check(`${name}/sends-the-sentence`, routeRequest?.body.text === sentence, routeRequest?.body);
+    check(`${name}/offers-share-from-the-atlas`,
+      routeRequest?.body.context?.surface === "atlas"
+        && routeRequest.body.context.intents.includes("share"),
+      routeRequest?.body.context);
+    const card = await page.evaluate(() => {
+      const element = document.querySelector('[data-command-card="share"]');
+      return {
+        titles: [...(element?.querySelectorAll(".command-card__list strong") ?? [])].map((node) => node.textContent),
+        text: element?.textContent ?? "",
+      };
+    });
+    check(`${name}/card-lists-exactly-the-proposed-journeys`,
+      card.titles.length === 2
+        && [journeys[0].title, journeys[2].title].every((title) => card.titles.includes(title)),
+      card.titles);
+    check(`${name}/card-states-the-expiry`, card.text.includes("有效期 30 天"), card.text);
+    check(`${name}/creates-nothing-before-confirm`,
+      !state.requests.some((entry) => entry.kind === "create"),
+      state.requests.map((entry) => entry.kind));
+    const targets = await page.evaluate(() => [...document.querySelectorAll(".command-bar button")]
+      .map((button) => button.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 && (rect.height < 44 || rect.width < 44)).length);
+    check(`${name}/card-targets-at-least-44px`, targets === 0, { targets });
+
+    // 修改: the share dialog opens with the proposal, and still creates nothing.
+    await page.locator('[data-command-card="share"] button', { hasText: "修改" }).click();
+    await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
     const reading = await page.evaluate(() => ({
       checked: [...document.querySelectorAll('.journey-share__selection input[type="checkbox"]')]
         .filter((box) => box.checked)
         .map((box) => box.value),
       preset: [...document.querySelectorAll('input[name="journey-share-expiry"]')]
         .find((radio) => radio.checked)?.value ?? null,
-      status: document.querySelector('[data-share-intent-status="proposed"]')?.textContent ?? "",
+      sentenceForm: document.querySelectorAll(".journey-share__intent").length,
     }));
-    const intentRequest = state.requests.find((entry) => entry.kind === "intent");
-    check(`${name}/sends-the-sentence`, intentRequest?.body.text === sentence, intentRequest?.body);
-    check(`${name}/ticks-exactly-the-proposed-journeys`,
+    check(`${name}/edit-ticks-exactly-the-proposed-journeys`,
       reading.checked.length === 2 && proposedIds.every((id) => reading.checked.includes(id)),
       reading.checked);
-    check(`${name}/selects-the-proposed-expiry`, reading.preset === "30d", reading.preset);
-    check(`${name}/says-what-it-selected`,
-      reading.status.includes("已按这句话选好 2 段旅程，确认后再创建链接"),
-      reading.status);
-    check(`${name}/creates-nothing-before-create`,
-      !state.requests.some((entry) => entry.kind === "create"),
-      state.requests.map((entry) => entry.kind));
-
+    check(`${name}/edit-selects-the-proposed-expiry`, reading.preset === "30d", reading.preset);
+    check(`${name}/dialog-has-no-sentence-form`, reading.sentenceForm === 0, reading);
+    check(`${name}/edit-creates-nothing`, !state.requests.some((entry) => entry.kind === "create"));
     const ornament = await ornamentScan(page);
     check(`${name}/no-decorative-rounding`, ornament?.offenders.rounding.length === 0, ornament?.offenders.rounding);
     check(`${name}/shadow-only-on-dialog`, ornament?.offenders.shadow.length === 0, ornament?.offenders.shadow);
     check(`${name}/touch-targets-at-least-44px`, ornament?.smallTargets.length === 0, ornament?.smallTargets);
-    const overflow = await page.evaluate(() => {
-      const dialog = document.querySelector(".journey-share__dialog");
-      return dialog ? dialog.scrollWidth - dialog.clientWidth : null;
-    });
-    check(`${name}/no-horizontal-overflow`, overflow === 0, { overflow });
+    await page.keyboard.press("Escape");
+    await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
 
-    await clickText(page, "创建分享链接");
-    await page.locator("[data-share-link]").waitFor({ timeout: 10_000 });
+    // 确认: the card creates the link itself (owner decision) and shows it once.
+    await submitCommand(page, sentence);
+    await page.locator('[data-command-card="share"]').waitFor({ timeout: 10_000 });
+    await page.locator('[data-command-card="share"] .command-card__confirm').click();
+    await page.locator("[data-command-share-created] [data-share-link]").waitFor({ timeout: 10_000 });
     const createRequest = state.requests.find((entry) => entry.kind === "create");
     check(`${name}/create-carries-the-proposed-set`,
       createRequest?.body.journeyIds.length === 2
-        && proposedIds.every((id) => createRequest.body.journeyIds.includes(id)),
-      createRequest?.body.journeyIds);
+        && proposedIds.every((id) => createRequest.body.journeyIds.includes(id))
+        && !("mediaAssetIds" in createRequest.body),
+      createRequest?.body);
   } finally {
     await context.close();
   }
 }
 
 /**
- * "只分享风景图": the stubbed model asks for the no-people filter. The dialog
- * must ask the media endpoint for exactly the proposed Journeys, keep asking
- * (with the failures as skips) while the server reports photos remaining,
- * show progress and hold Create until the final answer, state the server's
- * counts, show the included thumbnails and send exactly those ids as
- * `mediaAssetIds`. A re-submitted sentence that fails must keep the filter.
- * A hand edit of the selection must then drop the filter, say so, and create
- * an unscoped link.
+ * "只分享风景图" through the command bar: the router answers
+ * `share-photos-filter`. The card must ask the media endpoint for exactly the
+ * proposed Journeys, keep asking (with the failures as skips) while photos
+ * remain, show progress and hold 确认 until the final answer, state the
+ * server's counts, show the included thumbnails and create with exactly those
+ * ids. A failed sentence creates nothing and says so in Chinese. 修改 hands
+ * the judged filter to the share dialog, where a hand edit of the selection
+ * drops it, says so, and creates an unscoped link.
  */
 async function verifyShareMediaFilter(browser, viewport) {
-  const context = await browser.newContext({
-    viewport: { width: viewport.width, height: viewport.height },
-    hasTouch: viewport.compact,
-    isMobile: viewport.compact,
-    deviceScaleFactor: 1,
-  });
-  const page = await context.newPage();
+  if (viewport.compact) return;
   const name = `${viewport.name}/media-filter`;
+  const proposedIds = [journeys[0].id, journeys[2].id];
+  const includedIds = ["qa-asset-landscape-1", "qa-asset-landscape-2", "qa-asset-landscape-3"];
+  let releaseFirstBatch = () => {};
+  let releaseLastBatch = () => {};
+  const finalResult = {
+    assetIds: includedIds,
+    excludedCount: 4,
+    unclassifiedCount: 1,
+    remaining: 0,
+    checkedCount: 12,
+    failedAssetIds: [],
+  };
+  const state = {
+    shares: [],
+    requests: [],
+    createGate: null,
+    intentProposal: { journeyIds: proposedIds, expiry: null, mediaFilter: "no-people", unmatched: null },
+    mediaFilterBatches: [{
+      assetIds: [],
+      excludedCount: 7,
+      unclassifiedCount: 6,
+      remaining: 12,
+      checkedCount: 48,
+      failedAssetIds: ["qa-asset-failed"],
+    }],
+    mediaFilterResult: finalResult,
+    mediaFilterGates: [
+      new Promise((resolve) => { releaseFirstBatch = resolve; }),
+      new Promise((resolve) => { releaseLastBatch = resolve; }),
+    ],
+    intentFailNext: false,
+  };
+  const { context, page } = await openOwnerAtlas(browser, viewport, state);
   try {
-    await page.addInitScript(() => {
-      localStorage.setItem("startrips.media-presentation", "note-overlay");
-    });
-    const proposedIds = [journeys[0].id, journeys[2].id];
-    const includedIds = ["qa-asset-landscape-1", "qa-asset-landscape-2", "qa-asset-landscape-3"];
-    let releaseFirstBatch = () => {};
-    let releaseLastBatch = () => {};
-    const state = {
-      shares: [],
-      requests: [],
-      createGate: null,
-      intentProposal: { journeyIds: proposedIds, expiry: null, mediaFilter: "no-people", unmatched: null },
-      mediaFilterBatches: [{
-        assetIds: [],
-        excludedCount: 7,
-        unclassifiedCount: 6,
-        remaining: 12,
-        checkedCount: 48,
-        failedAssetIds: ["qa-asset-failed"],
-      }],
-      mediaFilterResult: {
-        assetIds: includedIds,
-        excludedCount: 4,
-        unclassifiedCount: 1,
-        remaining: 0,
-        checkedCount: 12,
-        failedAssetIds: [],
-      },
-      mediaFilterGates: [
-        new Promise((resolve) => { releaseFirstBatch = resolve; }),
-        new Promise((resolve) => { releaseLastBatch = resolve; }),
-      ],
-      intentFailNext: false,
-    };
-    await installOwnerApi(page, state);
-    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
-    await page.locator(".living-atlas").waitFor({ timeout: 20_000 });
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("海风经过深圳湾"),
-      undefined,
-      { timeout: 20_000 },
-    );
-    if (viewport.compact) await openAtlasMore(page);
-    await clickNamed(page, "分享多段旅程");
-    await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
-
-    const input = page.locator(".journey-share__intent-input");
-    await input.waitFor({ state: "visible", timeout: 10_000 });
-    await input.fill("分享深圳湾和东京那两段，只分享风景图，不分享人像图");
-    await page.locator(".journey-share__intent-row > button").click();
-
-    await page.locator('[data-share-media-filter="pending"]').waitFor({ timeout: 10_000 });
+    await page.locator("[data-command-bar-trigger]").waitFor({ timeout: 10_000 });
+    const sentence = "分享深圳湾和东京那两段，只分享风景图，不分享人像图";
+    await submitCommand(page, sentence);
+    await page.locator('[data-command-media-filter="pending"]').waitFor({ timeout: 10_000 });
+    const routeRequest = state.requests.find((entry) => entry.kind === "route");
+    check(`${name}/offers-the-photo-filter`,
+      routeRequest?.body.context?.intents?.includes("share-photos-filter"),
+      routeRequest?.body.context);
     await waitForStubRequest(page, state, "media-filter");
     const filterRequest = state.requests.find((entry) => entry.kind === "media-filter");
     check(`${name}/asks-for-the-proposed-journeys`,
       filterRequest?.body.journeyIds?.length === 2
         && proposedIds.every((id) => filterRequest.body.journeyIds.includes(id)),
       filterRequest?.body);
-    check(`${name}/holds-create-while-pending`,
-      await page.locator(".journey-share__create").isDisabled());
+    const confirm = page.locator('[data-command-card="share"] .command-card__confirm');
+    check(`${name}/holds-confirm-while-pending`, await confirm.isDisabled());
 
     releaseFirstBatch();
     await page.waitForFunction(
-      () => document.querySelector('[data-share-media-filter="pending"]')?.textContent?.includes("已检查 48 / 60"),
+      () => document.querySelector('[data-command-media-filter="pending"]')?.textContent?.includes("已检查 48 / 60"),
       undefined,
       { timeout: 10_000 },
     ).catch(() => {});
-    const progress = (await page.locator('[data-share-media-filter="pending"]').textContent().catch(() => ""))?.trim() ?? "";
+    const progress = (await page.locator('[data-command-media-filter="pending"]').textContent().catch(() => ""))?.trim() ?? "";
     check(`${name}/shows-batch-progress`, progress.includes("已检查 48 / 60"), progress);
-    check(`${name}/holds-create-while-batches-remain`,
-      await page.locator(".journey-share__create").isDisabled());
+    check(`${name}/holds-confirm-while-batches-remain`, await confirm.isDisabled());
     releaseLastBatch();
-    await page.locator('[data-share-media-filter="ready"]').waitFor({ timeout: 10_000 });
+    await page.locator('[data-command-media-filter="ready"]').waitFor({ timeout: 10_000 });
     const followUp = state.requests.filter((entry) => entry.kind === "media-filter")[1];
     check(`${name}/next-batch-skips-the-failures`,
       JSON.stringify(followUp?.body.skipAssetIds) === JSON.stringify(["qa-asset-failed"])
         && followUp?.body.journeyIds?.length === 2,
       followUp?.body);
-    const summary = (await page.locator("[data-share-media-summary]").textContent())?.trim() ?? "";
+    const summary = (await page.locator('[data-command-media-filter="ready"]').textContent())?.trim() ?? "";
     check(`${name}/states-the-counts`,
       summary === "将分享 3 张风景照（已排除 4 张含人物或无法确认的照片与视频）",
       summary);
     await page.waitForFunction(
-      (count) => document.querySelectorAll(".journey-share__media-strip img").length === count,
+      (count) => document.querySelectorAll(".command-card__strip img").length === count,
       includedIds.length,
       { timeout: 10_000 },
     ).catch(() => {});
-    const thumbnails = await page.locator(".journey-share__media-strip img").count();
+    const thumbnails = await page.locator(".command-card__strip img").count();
     check(`${name}/shows-the-included-thumbnails`, thumbnails === includedIds.length, { thumbnails });
     const readIds = state.requests.filter((entry) => entry.kind === "media-read").map((entry) => entry.id);
-    check(`${name}/reads-only-included-previews`,
-      readIds.every((id) => includedIds.includes(id)),
-      readIds);
+    check(`${name}/reads-only-included-previews`, readIds.every((id) => includedIds.includes(id)), readIds);
 
-    const ornament = await ornamentScan(page);
-    check(`${name}/no-decorative-rounding`, ornament?.offenders.rounding.length === 0, ornament?.offenders.rounding);
-    check(`${name}/touch-targets-at-least-44px`, ornament?.smallTargets.length === 0, ornament?.smallTargets);
-    const overflow = await page.evaluate(() => {
-      const dialog = document.querySelector(".journey-share__dialog");
-      return dialog ? dialog.scrollWidth - dialog.clientWidth : null;
-    });
-    check(`${name}/no-horizontal-overflow`, overflow === 0, { overflow });
-
-    // A re-submitted sentence that fails changes nothing: the filter stays.
-    state.intentFailNext = true;
-    const intentsBefore = state.requests.filter((entry) => entry.kind === "intent").length;
-    await page.locator(".journey-share__intent-row > button").click();
-    await page.locator('[data-share-intent-status="error"]').waitFor({ timeout: 10_000 });
-    check(`${name}/failed-resubmission-sent`,
-      state.requests.filter((entry) => entry.kind === "intent").length === intentsBefore + 1);
-    check(`${name}/failed-resubmission-keeps-the-filter`,
-      await page.locator('[data-share-media-filter="ready"]').count() === 1
-        && await page.locator("[data-share-media-filter-notice]").count() === 0
-        && !(await page.locator(".journey-share__create").isDisabled()));
-
-    await clickText(page, "创建分享链接");
-    await page.locator("[data-share-link]").waitFor({ timeout: 10_000 });
+    await confirm.click();
+    await page.locator("[data-command-share-created] [data-share-link]").waitFor({ timeout: 10_000 });
     const scopedCreate = state.requests.filter((entry) => entry.kind === "create").at(-1);
     check(`${name}/create-carries-media-asset-ids`,
       JSON.stringify(scopedCreate?.body.mediaAssetIds) === JSON.stringify(includedIds),
       scopedCreate?.body);
 
-    // A hand edit of the selection ends the filter and says so.
-    await clickText(page, "完成");
-    await input.fill("分享深圳湾和东京那两段，只分享风景图，不分享人像图");
-    await page.locator(".journey-share__intent-row > button").click();
-    await page.locator('[data-share-media-filter="ready"]').waitFor({ timeout: 10_000 });
+    // A failed sentence replaces the card with a Chinese reason and creates nothing.
+    state.intentFailNext = true;
+    const createsBefore = state.requests.filter((entry) => entry.kind === "create").length;
+    await submitCommand(page, sentence);
+    await page.locator(".command-bar__failure").waitFor({ timeout: 10_000 });
+    const failure = (await page.locator(".command-bar__failure").textContent())?.trim() ?? "";
+    check(`${name}/failed-sentence-says-why-in-chinese`,
+      failure.includes("「") && !/provider|intent/i.test(failure)
+        && await page.locator("[data-command-card]").count() === 0
+        && state.requests.filter((entry) => entry.kind === "create").length === createsBefore,
+      failure);
+
+    // 修改 hands the judged filter to the dialog; a hand edit there ends it.
+    state.mediaFilterResult = finalResult;
+    await submitCommand(page, sentence);
+    await page.locator('[data-command-media-filter="ready"]').waitFor({ timeout: 10_000 });
+    await page.locator('[data-command-card="share"] button', { hasText: "修改" }).click();
+    await page.locator('.journey-share__dialog [data-share-media-filter="ready"]').waitFor({ timeout: 10_000 });
+    check(`${name}/edit-keeps-the-judged-filter`,
+      !(await page.locator(".journey-share__create").isDisabled()));
     await page.evaluate((id) => {
       document.querySelector(`.journey-share__selection input[value="${id}"]`)?.click();
     }, journeys[1].id);
@@ -883,7 +928,7 @@ async function verifyShareMediaFilter(browser, viewport) {
       notice.includes("照片筛选已取消") && await page.locator("[data-share-media-filter]").count() === 0,
       notice);
     await clickText(page, "创建分享链接");
-    await page.locator("[data-share-link]").waitFor({ timeout: 10_000 });
+    await page.locator(".journey-share [data-share-link]").waitFor({ timeout: 10_000 });
     const unscopedCreate = state.requests.filter((entry) => entry.kind === "create").at(-1);
     check(`${name}/cleared-filter-creates-an-unscoped-link`,
       unscopedCreate !== scopedCreate && !("mediaAssetIds" in (unscopedCreate?.body ?? {})),
@@ -954,11 +999,11 @@ try {
     await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
     check(`${viewport.name}/multi-entry-reachable`, true);
 
-    // One-sentence share, unconfigured: only after the dialog has heard the
-    // capability answer does "no sentence entry" prove anything.
+    // Unconfigured: only after the Atlas has heard the capability answer does
+    // "no sentence entry" (no command bar, no dialog sentence form) prove anything.
     const capabilityAnswered = await waitForStubRequest(page, state, "intent-capabilities");
     await page.waitForTimeout(120);
-    const intentEntryCount = await page.locator(".journey-share__intent").count();
+    const intentEntryCount = await page.locator(".journey-share__intent, [data-command-bar-trigger]").count();
     check(`${viewport.name}/sentence-entry-absent-when-unconfigured`,
       capabilityAnswered && intentEntryCount === 0,
       { capabilityAnswered, intentEntryCount });

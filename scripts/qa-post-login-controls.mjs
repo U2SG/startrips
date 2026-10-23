@@ -143,6 +143,17 @@ async function verifyAtlasShell() {
       contentType: "application/json",
       body: JSON.stringify({ journeys }),
     }));
+    // A deployment that routes sentences, so the desktop header carries the
+    // command-bar trigger and the nav checks below measure it too.
+    await page.route("**/api/intents/capabilities", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        share: { configured: true, mediaFilter: false },
+        routeOrder: { configured: true },
+        router: { configured: true, intents: ["share", "route-order", "navigate", "globe-focus"] },
+      }),
+    }));
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas").waitFor({ state: "visible" });
 
@@ -304,7 +315,11 @@ async function verifyAtlasShell() {
                 if (rect.width > 0) lineTops.add(Math.round(rect.top));
               }
             }
-            return { label: button.textContent?.trim() ?? "", lines: lineTops.size };
+            return {
+              label: button.textContent?.trim() ?? "",
+              lines: lineTops.size,
+              command: button.hasAttribute("data-command-bar-trigger"),
+            };
           });
           return {
             brandNavOverlap: brand && nav
@@ -322,12 +337,18 @@ async function verifyAtlasShell() {
         // Everyday and 只看地球 live behind one 更多 menu.
         const secondaryInBar = header.labels.filter((entry) => /导入|日常|只看地球/.test(entry.label));
         const moreTriggers = header.labels.filter((entry) => entry.label === "更多").length;
+        // The command bar's trigger leads the pill, left of the view switch.
+        const commandTriggerFirst = header.labels[0]?.command === true
+          && header.labels[1]?.label === "地球"
+          && header.labels.filter((entry) => entry.command).length === 1;
         record(`atlas-${label}-header-nav`, await scanButtons(page, ".living-atlas__header"), {
           ...header,
           wrappedLabels,
           secondaryInBar,
           moreTriggers,
+          commandTriggerFirst,
           failed: header.brandNavOverlap !== 0
+            || !commandTriggerFirst
             || header.labels.length === 0
             || wrappedLabels.length > 0
             || secondaryInBar.length > 0
@@ -2732,7 +2753,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         contentType: "application/json",
         body: JSON.stringify({ earthExperience: "default", revision: 0, updatedAt: null }),
       }));
-      // The Composer reads the Route Point reorder capability every time it opens.
+      // The Atlas reads the command-bar capability on every desktop owner mount.
       // Unstubbed it falls through to no API and logs a 500 the console assertions catch.
       await page.route("**/api/intents/capabilities", (route) => route.fulfill({
         status: 200,

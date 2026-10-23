@@ -361,61 +361,74 @@ async function verifyImportedJourney({ label, width, height, editing }) {
 const routeOrderLabels = (page) => page.locator(".journey-route-draft > li:not(.is-empty) .journey-route-draft__summary strong")
   .evaluateAll((labels) => labels.map((node) => node.textContent?.trim() ?? ""));
 
-// One-sentence reorder on the imported route: the stubbed provider first
-// reverses the points (preview -> apply), then answers a non-permutation,
-// which must change nothing and say so.
+// One-sentence reorder on the imported route, through the command bar over
+// the Composer. The bar is a desktop surface, so the page crosses to desktop
+// with the draft kept. The stubbed router first reverses the points (card
+// preview -> 确认 -> 撤销 -> 确认), then answers a non-permutation, which
+// must change nothing and say so.
 async function verifyRouteOrderSentence(page, pageErrors, names, routeOrderAnswers) {
-  const entry = page.locator("[data-route-order-intent]");
-  await entry.waitFor({ state: "visible" });
-  await entry.getByLabel("用一句话调整顺序").fill("倒过来");
-  await entry.getByRole("button", { name: "调整顺序", exact: true }).click();
-  const preview = entry.locator("[data-route-order-preview]");
-  await preview.waitFor({ state: "visible" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.locator(".journey-route-draft").waitFor({ state: "visible" });
+  const sendCommand = async (text) => {
+    if (await page.locator(".command-bar").count() === 0) await page.keyboard.press("Control+K");
+    const input = page.locator(".command-bar__input");
+    await input.waitFor({ state: "visible" });
+    await input.fill(text);
+    await input.press("Enter");
+  };
+  const card = page.locator('[data-command-card="route-order"]');
 
-  // Editing the sentence voids the preview it produced: the old answer can
-  // no longer be applied, and nothing is sent until the new one is submitted.
-  await entry.getByLabel("用一句话调整顺序").fill("把第一站放到最后");
-  await preview.waitFor({ state: "detached" });
-  const staleApply = await entry.getByRole("button", { name: "应用新顺序", exact: true }).count();
-  const staleLabels = await routeOrderLabels(page);
-  record("composer-sentence:route-order:edited-sentence-voids-preview", { staleApply, staleLabels,
+  // 取消 dismisses the card and changes nothing.
+  await sendCommand("倒过来");
+  await card.waitFor({ state: "visible" });
+  await card.getByRole("button", { name: "取消", exact: true }).click();
+  await card.waitFor({ state: "detached" });
+  const cancelledLabels = await routeOrderLabels(page);
+  record("composer-sentence:route-order:cancel-changes-nothing", { cancelledLabels,
     sent: routeOrderAnswers.sent.length, pageErrors },
-    staleApply === 0
-    && JSON.stringify(staleLabels) === JSON.stringify(names)
+    JSON.stringify(cancelledLabels) === JSON.stringify(names)
     && routeOrderAnswers.sent.length === 1
     && pageErrors.length === 0);
 
-  await entry.getByLabel("用一句话调整顺序").fill("倒过来");
-  await entry.getByRole("button", { name: "调整顺序", exact: true }).click();
-  await preview.waitFor({ state: "visible" });
-  const previewRows = await preview.locator("li").evaluateAll((rows) => rows.map((row) => ({
-    label: row.querySelector("strong")?.textContent?.trim() ?? "",
+  await sendCommand("倒过来");
+  await card.waitFor({ state: "visible" });
+  const previewRows = await card.locator(".command-card__list li").evaluateAll((rows) => rows.map((row) => ({
+    label: (row.querySelector("strong")?.textContent ?? "").replace(/^\d+\.\s*/, "").trim(),
     moved: row.getAttribute("data-route-order-moved") === "true",
   })));
   const beforeApply = await routeOrderLabels(page);
-  await preview.getByRole("button", { name: "应用新顺序", exact: true }).click();
-  await preview.waitFor({ state: "detached" });
+  await card.locator(".command-card__confirm").click();
+  await card.locator('[data-command-route-order="applied"]').waitFor({ state: "visible" });
   const afterApply = await routeOrderLabels(page);
   const reversed = [...names].reverse();
-  record("composer-sentence:route-order:preview-apply", { previewRows, beforeApply, afterApply,
-    sent: routeOrderAnswers.sent[0], pageErrors },
+  const sent = routeOrderAnswers.sent[1];
+  record("composer-sentence:route-order:preview-apply", { previewRows, beforeApply, afterApply, sent, pageErrors },
     JSON.stringify(previewRows.map((row) => row.label)) === JSON.stringify(reversed)
     && JSON.stringify(previewRows.map((row) => row.moved)) === JSON.stringify([true, false, true])
     && JSON.stringify(beforeApply) === JSON.stringify(names)
     && JSON.stringify(afterApply) === JSON.stringify(reversed)
-    && routeOrderAnswers.sent[0]?.points.every((point) => Object.keys(point).sort().join() === "id,label")
+    && sent?.context?.surface === "composer"
+    && JSON.stringify(sent?.context?.intents) === JSON.stringify(["route-order"])
+    && sent?.context?.composerPoints.every((point) => Object.keys(point).sort().join() === "id,label")
     && pageErrors.length === 0);
 
-  await entry.getByLabel("用一句话调整顺序").fill("把第一站放到最后");
-  await entry.getByRole("button", { name: "调整顺序", exact: true }).click();
-  const status = entry.locator('[data-route-order-status="empty"]');
-  await status.waitFor({ state: "visible" });
+  // 撤销 on the card restores the draft's previous order.
+  await card.getByRole("button", { name: "撤销", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[data-command-card="route-order"]')
+    ?.textContent?.includes("已撤销"));
+  const afterUndo = await routeOrderLabels(page);
+  record("composer-sentence:route-order:undo", { afterUndo, pageErrors },
+    JSON.stringify(afterUndo) === JSON.stringify(names) && pageErrors.length === 0);
+
+  await sendCommand("把第一站放到最后");
+  const note = page.locator('[data-command-card="note"]');
+  await note.waitFor({ state: "visible" });
   const afterRefusal = await routeOrderLabels(page);
-  record("composer-sentence:route-order:non-permutation-no-change", { afterRefusal,
-    status: await status.textContent(), pageErrors },
-    JSON.stringify(afterRefusal) === JSON.stringify(reversed)
-    && (await status.textContent())?.includes("路线没有改变")
-    && await entry.locator("[data-route-order-preview]").count() === 0
+  const noteText = await note.textContent();
+  record("composer-sentence:route-order:non-permutation-no-change", { afterRefusal, noteText, pageErrors },
+    JSON.stringify(afterRefusal) === JSON.stringify(names)
+    && noteText?.includes("路线没有改变")
+    && await note.locator(".command-card__confirm").count() === 0
     && routeOrderAnswers.sent.length === 3
     && pageErrors.length === 0);
 }
@@ -467,15 +480,18 @@ async function verifySentenceImport({ label, sentence, configured, names, routeO
       await page.route("**/api/intents/capabilities", (route) => route.fulfill({ status: 200,
         contentType: "application/json", body: JSON.stringify({
           share: { configured: true, mediaFilter: false }, routeOrder: { configured: true },
+          router: { configured: true, intents: ["share", "route-order", "navigate", "globe-focus"] },
         }) }));
-      await page.route("**/api/intents/route-order", async (route) => {
+      // The command bar's router, answering route-order against the draft it was sent.
+      await page.route("**/api/intents/route", async (route) => {
         const body = route.request().postDataJSON();
         routeOrderAnswers.sent.push(body);
-        const ids = body.points.map((point) => point.id);
+        const ids = (body.context?.composerPoints ?? []).map((point) => point.id);
         // 「倒过来」 is a reversal; anything else repeats an id: not a permutation.
         const order = body.text === "倒过来" ? [...ids].reverse() : [ids[0], ids[0], ids[1]];
         await route.fulfill({ status: 200, contentType: "application/json",
-          body: JSON.stringify({ proposal: { order, unmatched: null }, model: "synthetic/1" }) });
+          body: JSON.stringify({ intent: "route-order", proposal: { order, unmatched: null }, unmatched: null,
+            model: "synthetic/1" }) });
       });
     }
 
@@ -531,8 +547,10 @@ async function verifySentenceImport({ label, sentence, configured, names, routeO
       && hasNotice("「上个月」按今天推算为 2026-09-01 至 2026-09-30") && !hasNotice("句子里有多个时间")
       && routeInOrder && title === recognition.sourceTitle
       && after.startedOn === "2026-09-01" && after.endedOn === "2026-09-30" && after.inferredHint === 1
-      // Without the capability the reorder sentence is not rendered at all.
-      && (routeOrder || await page.locator("[data-route-order-intent]").count() === 0)
+      // The Composer has no reorder form of its own any more, and without the
+      // router capability the command bar does not open over it either.
+      && await page.locator("[data-route-order-intent], .journey-route-order").count() === 0
+      && (routeOrder || await page.locator(".command-bar").count() === 0)
       && pageErrors.length === 0);
     if (routeOrder) await verifyRouteOrderSentence(page, pageErrors, names, routeOrderAnswers);
   } finally {
