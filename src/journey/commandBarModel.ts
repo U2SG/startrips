@@ -37,6 +37,8 @@ export type CommandSurfaceContext = {
   composerPointCount: number;
   /** Media the open Story has selected to move; 0 when it is not selecting. */
   storySelectionCount?: number;
+  /** The compact (mobile) layout, which has no globe-only focus mode. */
+  compact?: boolean;
 };
 
 /**
@@ -68,7 +70,9 @@ export function commandBarOfferedIntents(
           case "share":
           case "share-photos-filter": return canShare;
           case "navigate": return context.journeyCount > 0;
-          case "globe-focus": return true;
+          // Globe-only focus is a desktop state: the compact shell does not
+          // hide its header and dock for it, so it is not offered there.
+          case "globe-focus": return !context.compact;
           case "route-order":
           case "assign-photos": return false;
         }

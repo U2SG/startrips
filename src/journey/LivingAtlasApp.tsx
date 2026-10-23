@@ -3784,7 +3784,7 @@ export function LivingAtlasApp({
       variant="dock"
       placeholder={MOBILE_COMMAND_PLACEHOLDER}
       {...commandBarShared}
-      context={{ ...commandBarContext, surface: "atlas" }}
+      context={{ ...commandBarContext, surface: "atlas", compact: true }}
       onCreateJourney={(sentence) => {
         finishCommand();
         closeJourneyStory(null, () => openCreateComposerWithSentence(sentence));
@@ -4423,7 +4423,7 @@ export function LivingAtlasApp({
               variant="dock"
               placeholder={MOBILE_COMMAND_PLACEHOLDER}
               {...commandBarShared}
-              context={{ ...commandBarContext, surface: "atlas" }}
+              context={{ ...commandBarContext, surface: "atlas", compact: true }}
               onCreateJourney={(sentence) => {
                 finishCommand();
                 openCreateComposerWithSentence(sentence);
