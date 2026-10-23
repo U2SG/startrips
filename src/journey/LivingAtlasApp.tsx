@@ -1,6 +1,7 @@
 import { type ComponentType, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowNarrowLeft,
+  IconCommand,
   IconArrowRight,
   IconDots,
   IconMapPin,
@@ -2330,7 +2331,7 @@ export function LivingAtlasApp({
   const commandBarVisible = commandBarEligible && commandIntents.length > 0;
   // Over the Atlas only while its header is live; over the Composer and the
   // share dialog as an overlay inside their focus trap.
-  const commandBarReachable = commandBarVisible && (
+  const commandBarReachable = commandBarVisible && !globePickActive && !playbackActive && (
     commandSurface !== "atlas"
     || !(desktopHeaderInert || storyJourneyId !== null || importOpen)
   );
@@ -3906,9 +3907,11 @@ export function LivingAtlasApp({
                 data-command-bar-trigger="true"
                 aria-haspopup="dialog"
                 aria-expanded={commandBarOpen}
+                aria-label="一句话操作"
                 aria-keyshortcuts="Meta+K Control+K"
                 onClick={() => setCommandBarOpen((open) => !open)}
               >
+                <IconCommand size={16} stroke={1.35} aria-hidden="true" />
                 一句话
                 <kbd>{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K"}</kbd>
               </button>

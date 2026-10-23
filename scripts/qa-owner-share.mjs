@@ -720,11 +720,11 @@ async function verifyShareIntentProposal(browser, viewport) {
   };
   const { context, page } = await openOwnerAtlas(browser, viewport, state);
   try {
-    await waitForStubRequest(page, state, "intent-capabilities");
     if (viewport.compact) {
       await page.waitForTimeout(120);
       check(`${name}/command-bar-absent-on-compact`,
-        await page.locator("[data-command-bar-trigger], .command-bar").count() === 0);
+        await page.locator("[data-command-bar-trigger], .command-bar").count() === 0
+          && !state.requests.some((entry) => entry.kind === "intent-capabilities"));
       return;
     }
     await page.locator("[data-command-bar-trigger]").waitFor({ timeout: 10_000 });
@@ -1001,7 +1001,10 @@ try {
 
     // Unconfigured: only after the Atlas has heard the capability answer does
     // "no sentence entry" (no command bar, no dialog sentence form) prove anything.
-    const capabilityAnswered = await waitForStubRequest(page, state, "intent-capabilities");
+    // A compact layout never constructs the bar, so it never asks at all.
+    const capabilityAnswered = viewport.compact
+      ? !state.requests.some((entry) => entry.kind === "intent-capabilities")
+      : await waitForStubRequest(page, state, "intent-capabilities");
     await page.waitForTimeout(120);
     const intentEntryCount = await page.locator(".journey-share__intent, [data-command-bar-trigger]").count();
     check(`${viewport.name}/sentence-entry-absent-when-unconfigured`,
