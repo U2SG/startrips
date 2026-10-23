@@ -695,41 +695,82 @@ export async function proposeShareIntent(
   );
 }
 
-/**
- * Whether this deployment can read a one-sentence Route Point reorder. Any
- * failure reads as "not configured": the Composer then simply does not offer
- * the sentence entry, and reordering by hand is unchanged.
- */
-export async function readRouteOrderIntentCapability(
-  fetcher: Fetcher = fetch,
-): Promise<boolean> {
-  try {
-    const payload = await requestJson<{ routeOrder?: { configured?: unknown } }>(
-      "/api/intents/capabilities",
-      { cache: "no-store" },
-      fetcher,
-    );
-    return payload?.routeOrder?.configured === true;
-  } catch {
-    return false;
-  }
-}
-
 export type RouteOrderIntentProposal = {
   /** Every sent id exactly once, in the proposed order; or no proposal. */
   order: string[] | null;
   unmatched: string | null;
 };
 
-/** A proposal only: nothing is written; the member applies and saves it. */
-export async function proposeRouteOrder(
-  text: string,
-  points: readonly { id: string; label: string }[],
+/** The intents the command bar can route today (`POST /api/intents/route`). */
+export type CommandIntent =
+  | "create-journey"
+  | "share"
+  | "share-photos-filter"
+  | "route-order"
+  | "navigate"
+  | "globe-focus";
+
+const COMMAND_INTENTS: readonly CommandIntent[] = [
+  "create-journey",
+  "share",
+  "share-photos-filter",
+  "route-order",
+  "navigate",
+  "globe-focus",
+];
+
+/**
+ * The intents this deployment routes. Any failure reads as none: the command
+ * bar is then not shown and every manual entry is unchanged.
+ */
+export async function readCommandRouterIntents(
   fetcher: Fetcher = fetch,
-): Promise<{ proposal: RouteOrderIntentProposal; model: string }> {
-  return requestJson<{ proposal: RouteOrderIntentProposal; model: string }>(
-    "/api/intents/route-order",
-    { method: "POST", body: JSON.stringify({ text, points }) },
+): Promise<CommandIntent[]> {
+  try {
+    const payload = await requestJson<{ router?: { configured?: unknown; intents?: unknown } }>(
+      "/api/intents/capabilities",
+      { cache: "no-store" },
+      fetcher,
+    );
+    const intents = payload?.router?.configured === true && Array.isArray(payload.router.intents)
+      ? payload.router.intents
+      : [];
+    return COMMAND_INTENTS.filter((intent) => intents.includes(intent));
+  } catch {
+    return [];
+  }
+}
+
+export type CommandRouteContext = {
+  surface: "atlas" | "composer" | "share";
+  /** What the member's surface offers; the server narrows it again. */
+  intents: CommandIntent[];
+  activeJourneyId?: string | null;
+  /** The Composer's draft, only when route-order is offered. */
+  composerPoints?: readonly { id: string; label: string }[];
+};
+
+type CommandRouteMeta = { unmatched: string | null; model: string };
+
+export type CommandRouteAnswer = CommandRouteMeta & (
+  | { intent: "share" | "share-photos-filter"; proposal: ShareIntentProposal }
+  | { intent: "route-order"; proposal: RouteOrderIntentProposal }
+  | { intent: "create-journey"; proposal: { sentence: string } }
+  | { intent: "navigate"; proposal: { journeyId: string | null; unmatched: string | null } }
+  | { intent: "globe-focus"; proposal: Record<string, never> }
+  | { intent: "unsupported"; proposal: null }
+);
+
+/** A proposal only: nothing is written until the member confirms the card. */
+export async function routeCommand(
+  text: string,
+  context: CommandRouteContext,
+  signal?: AbortSignal,
+  fetcher: Fetcher = fetch,
+): Promise<CommandRouteAnswer> {
+  return requestJson<CommandRouteAnswer>(
+    "/api/intents/route",
+    { method: "POST", body: JSON.stringify({ text, context }), signal },
     fetcher,
   );
 }

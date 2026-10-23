@@ -1,0 +1,176 @@
+import { describe, expect, it } from "vitest";
+import {
+  COMMAND_BAR_TIMEOUT_TEXT,
+  commandBarExpiryLabel,
+  commandBarFailure,
+  commandBarLatencyStage,
+  commandBarOfferedIntents,
+  commandBarShareExpiry,
+  commandBarShareJourneys,
+  commandBarWaitCopy,
+  commandCardFromAnswer,
+  type CommandSurfaceContext,
+} from "./commandBarModel";
+import type { CommandIntent } from "./journeyApi";
+import { JourneyApiError } from "./journeyApi";
+import { undoRouteOrder } from "./routeOrderIntent";
+import type { RouteDraftPoint } from "./routeDraft";
+
+const ROUTED: CommandIntent[] = [
+  "create-journey",
+  "share",
+  "share-photos-filter",
+  "route-order",
+  "navigate",
+  "globe-focus",
+];
+
+const ATLAS: CommandSurfaceContext = {
+  surface: "atlas",
+  canCreateJourney: true,
+  canShare: true,
+  journeyCount: 3,
+  composerPointCount: 0,
+};
+
+describe("commandBarOfferedIntents", () => {
+  it("offers everything but the reorder on the Atlas", () => {
+    expect(commandBarOfferedIntents(ROUTED, ATLAS))
+      .toEqual(["create-journey", "share", "share-photos-filter", "navigate", "globe-focus"]);
+  });
+
+  it("offers only what the server routes", () => {
+    expect(commandBarOfferedIntents(["share", "globe-focus"], ATLAS)).toEqual(["share", "globe-focus"]);
+  });
+
+  it("drops what the member cannot do or has nothing to act on", () => {
+    expect(commandBarOfferedIntents(ROUTED, { ...ATLAS, canCreateJourney: false, canShare: false }))
+      .toEqual(["navigate", "globe-focus"]);
+    expect(commandBarOfferedIntents(ROUTED, { ...ATLAS, journeyCount: 0 }))
+      .toEqual(["create-journey", "globe-focus"]);
+  });
+
+  it("offers only the reorder in the Composer, and only for 2 to 64 Route Points", () => {
+    const composer = { ...ATLAS, surface: "composer" as const };
+    expect(commandBarOfferedIntents(ROUTED, { ...composer, composerPointCount: 2 })).toEqual(["route-order"]);
+    expect(commandBarOfferedIntents(ROUTED, { ...composer, composerPointCount: 1 })).toEqual([]);
+    expect(commandBarOfferedIntents(ROUTED, { ...composer, composerPointCount: 65 })).toEqual([]);
+  });
+
+  it("offers only sharing over the share dialog", () => {
+    expect(commandBarOfferedIntents(ROUTED, { ...ATLAS, surface: "share" }))
+      .toEqual(["share", "share-photos-filter"]);
+  });
+});
+
+describe("command bar latency", () => {
+  it("stays quiet under 300ms, cues until 2s, then stages", () => {
+    expect(commandBarLatencyStage(0)).toBe("quiet");
+    expect(commandBarLatencyStage(299)).toBe("quiet");
+    expect(commandBarLatencyStage(300)).toBe("cue");
+    expect(commandBarLatencyStage(1_999)).toBe("cue");
+    expect(commandBarLatencyStage(2_000)).toBe("staged");
+    expect(commandBarWaitCopy(100)).toBeNull();
+    expect(commandBarWaitCopy(500)).toBe("正在理解…");
+    expect(commandBarWaitCopy(3_000)).not.toBe("正在理解…");
+    expect(commandBarWaitCopy(40_000)).toContain("手动");
+  });
+});
+
+describe("commandBarFailure", () => {
+  it("hides the bar on 503 and names the busy and provider failures in Chinese", () => {
+    expect(commandBarFailure(new JourneyApiError(503, "INTENT_UNAVAILABLE", "x")).refetchCapabilities).toBe(true);
+    expect(commandBarFailure(new JourneyApiError(409, "INTENT_ROUTE_BUSY", "x")))
+      .toEqual({ text: "正在处理上一张，请稍候再试。", refetchCapabilities: false });
+    for (const status of [502, 504]) {
+      const failure = commandBarFailure(new JourneyApiError(status, "INTENT_FAILED", "The intent router answered 500"));
+      expect(failure.refetchCapabilities).toBe(false);
+      expect(failure.text).not.toContain("intent");
+      expect(failure.text).toContain("「");
+    }
+    expect(COMMAND_BAR_TIMEOUT_TEXT).toContain("「");
+  });
+});
+
+describe("share proposals on the card", () => {
+  const journeys = [{ id: "a" }, { id: "b" }, { id: "c" }];
+
+  it("narrows to the listed Journeys in list order", () => {
+    expect(commandBarShareJourneys({ journeyIds: ["c", "x", "a", "a"] }, journeys))
+      .toEqual([{ id: "a" }, { id: "c" }]);
+  });
+
+  it("defaults the expiry to 7 days and labels it as the dialog does", () => {
+    expect(commandBarShareExpiry({ expiry: null })).toBe("7d");
+    expect(commandBarExpiryLabel("30d")).toBe("有效期 30 天");
+  });
+});
+
+describe("commandCardFromAnswer", () => {
+  const journeys = [{ id: "a" }, { id: "b" }];
+  const points = [{ id: "p-a", label: "成都" }, { id: "p-b", label: "理塘" }];
+  const preview = () => ({
+    rows: [
+      { draftId: "p-b", label: "理塘", from: 2, to: 1, moved: true },
+      { draftId: "p-a", label: "成都", from: 1, to: 2, moved: true },
+    ],
+    notes: [],
+  });
+  const context = { journeys, composerPoints: points, preview };
+  const meta = { unmatched: null, model: "m" };
+
+  it("narrows a share to listed Journeys and turns an empty one into a note", () => {
+    expect(commandCardFromAnswer({
+      ...meta,
+      intent: "share-photos-filter",
+      proposal: { journeyIds: ["b", "x"], expiry: null, mediaFilter: "no-people", unmatched: null },
+    }, context)).toEqual({ kind: "share", filter: true, journeyIds: ["b"], expiry: "7d", unmatched: null });
+    expect(commandCardFromAnswer({
+      ...meta,
+      intent: "share",
+      proposal: { journeyIds: ["x"], expiry: "1d", mediaFilter: null, unmatched: null },
+    }, context)).toMatchObject({ kind: "note" });
+  });
+
+  it("previews a changed order and notes an unchanged or missing one", () => {
+    expect(commandCardFromAnswer({ ...meta, intent: "route-order", proposal: { order: ["p-b", "p-a"], unmatched: null } }, context))
+      .toMatchObject({ kind: "route-order", basis: points, order: ["p-b", "p-a"] });
+    expect(commandCardFromAnswer({ ...meta, intent: "route-order", proposal: { order: ["p-a", "p-b"], unmatched: null } }, context))
+      .toMatchObject({ kind: "note", text: "按这句话，顺序没有变化。" });
+    expect(commandCardFromAnswer({ ...meta, intent: "route-order", proposal: { order: null, unmatched: "按距离排不了" } }, context))
+      .toMatchObject({ kind: "note" });
+  });
+
+  it("opens only a listed Journey and explains an unsupported sentence", () => {
+    expect(commandCardFromAnswer({ ...meta, intent: "navigate", proposal: { journeyId: "a", unmatched: null } }, context))
+      .toEqual({ kind: "navigate", journeyId: "a", unmatched: null });
+    expect(commandCardFromAnswer({ ...meta, intent: "navigate", proposal: { journeyId: "zz", unmatched: null } }, context))
+      .toMatchObject({ kind: "note" });
+    expect(commandCardFromAnswer({ ...meta, intent: "unsupported", proposal: null }, context))
+      .toMatchObject({ kind: "note", manual: expect.stringContaining("「") });
+  });
+
+  it("hands a Journey sentence to the Composer and globe focus straight through", () => {
+    expect(commandCardFromAnswer({ ...meta, intent: "create-journey", proposal: { sentence: "去稻城" } }, context))
+      .toEqual({ kind: "create-journey", sentence: "去稻城" });
+    expect(commandCardFromAnswer({ ...meta, intent: "globe-focus", proposal: {} }, context))
+      .toEqual({ kind: "globe-focus" });
+  });
+});
+
+describe("undoRouteOrder", () => {
+  const point = (draftId: string): RouteDraftPoint => ({
+    draftId, latitude: 30, longitude: 100, label: draftId, isStop: true, occurredAt: null,
+  });
+  const [a, b, c] = [point("a"), point("b"), point("c")];
+
+  it("restores the previous order while the applied order still stands", () => {
+    expect(undoRouteOrder([c, a, b], ["c", "a", "b"], ["a", "b", "c"])?.map((p) => p.draftId))
+      .toEqual(["a", "b", "c"]);
+  });
+
+  it("is void once the draft changed after applying", () => {
+    expect(undoRouteOrder([a, c, b], ["c", "a", "b"], ["a", "b", "c"])).toBeNull();
+    expect(undoRouteOrder([c, a], ["c", "a", "b"], ["a", "b", "c"])).toBeNull();
+  });
+});

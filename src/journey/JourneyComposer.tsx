@@ -35,25 +35,19 @@ import {
   createJourney,
   JourneyApiError,
   listJourneys,
-  proposeRouteOrder,
-  readRouteOrderIntentCapability,
   reverseGeocode,
   searchLocations,
   updateJourney,
 } from "./journeyApi";
 import {
   applyRouteOrder,
-  MAX_ROUTE_ORDER_POINTS,
-  MAX_ROUTE_ORDER_TEXT_LENGTH,
-  MIN_ROUTE_ORDER_POINTS,
   routeOrderConsequences,
-  routeOrderErrorMessage,
   routeOrderIntentPoints,
   routeOrderPreviewRows,
-  sameRouteDraftOrder,
   sameRouteOrderBasis,
-  type RouteOrderIntentPoint,
+  undoRouteOrder,
 } from "./routeOrderIntent";
+import type { CommandBarComposerBridge } from "./ProposalCard";
 import {
   clearRemovedMediaTarget,
   composerMediaSummary,
@@ -211,6 +205,12 @@ type JourneyComposerProps = {
   playbackPreviewPreparing?: boolean;
   /** Reports an in-flight save or media retry, so the Atlas wordmark can wait with it. */
   onMutationPendingChange?: (pending: boolean) => void;
+  /** A command-bar Journey sentence, read once as the Composer opens. */
+  initialSentence?: string | null;
+  /** The command bar reads Journey sentences, so this entry is not offered here. */
+  sentenceEntryRouted?: boolean;
+  /** Registered while open, so a command-bar card can reorder this draft. */
+  commandBarBridgeRef?: { current: CommandBarComposerBridge | null };
 };
 
 type PlaybackPreviewReturnFocusKind = "editor" | "route-point" | "none";
@@ -408,6 +408,9 @@ export function JourneyComposer({
   playbackPreviewActive = false,
   playbackPreviewPreparing = false,
   onMutationPendingChange,
+  initialSentence = null,
+  sentenceEntryRouted = false,
+  commandBarBridgeRef,
 }: JourneyComposerProps) {
   const recoveryInput = !journey ? initialUnknownCreateAttempt?.input : undefined;
   const recoveryRoutePoints = !journey ? initialUnknownCreateAttempt?.routePoints : undefined;
@@ -544,34 +547,6 @@ export function JourneyComposer({
   const composerMountedRef = useRef(true);
   const routePointsRef = useRef(routePoints);
   routePointsRef.current = routePoints;
-  // One-sentence reorder: a proposal is shown against the exact draft
-  // it was made for (`basis`: the exact ids and labels sent) and is void once
-  // any of them changes.
-  const [routeOrderCapable, setRouteOrderCapable] = useState(false);
-  const [routeOrderText, setRouteOrderText] = useState("");
-  const [routeOrderPending, setRouteOrderPending] = useState(false);
-  const [routeOrderStatus, setRouteOrderStatus] = useState<{
-    tone: "error" | "empty" | "applied";
-    text: string;
-    unmatched: string | null;
-  } | null>(null);
-  const [routeOrderProposal, setRouteOrderProposal] = useState<{
-    /** The sentence this proposal answers; editing it voids the proposal. */
-    text: string;
-    basis: RouteOrderIntentPoint[];
-    order: string[];
-    unmatched: string | null;
-  } | null>(null);
-  const routeOrderSequenceRef = useRef(0);
-  const routeOrderInputRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    let active = true;
-    void readRouteOrderIntentCapability().then((configured) => {
-      if (active) setRouteOrderCapable(configured);
-    });
-    return () => { active = false; };
-  }, [open]);
   const existingSearchMatches = useMemo(
     () => matchRouteDraftPoints(routePoints, searchQuery),
     [routePoints, searchQuery],
@@ -806,6 +781,60 @@ export function JourneyComposer({
     revision: journey?.revision,
     routePoints: routeDraftToInput(routePoints),
   }), [endedOn, journey?.revision, lightColor, lightEffect, note, routePoints, startedOn, title]);
+  const inputRef = useRef(input);
+  inputRef.current = input;
+
+  // A command-bar Journey sentence is read once, as the form's own was.
+  useEffect(() => {
+    if (initialSentence) setSentenceRequest({ text: initialSentence, nonce: 1 });
+    // Mount only: the Composer remounts for every new Journey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * The command bar's route-order card, against this draft. A proposal is
+   * read against `basis` (the exact ids and labels sent) and is void once
+   * any of them changes; points move as whole objects; 撤销 holds only while
+   * the applied order still stands.
+   */
+  const commandBarEditableRef = useRef(true);
+  useEffect(() => {
+    if (!commandBarBridgeRef) return;
+    const bridge: CommandBarComposerBridge = {
+      points: () => routeOrderIntentPoints(routePointsRef.current),
+      preview: (basis, order) => {
+        const current = routePointsRef.current;
+        if (!sameRouteOrderBasis(current, basis)) return null;
+        const rows = routeOrderPreviewRows(current, order);
+        const proposed = applyRouteOrder(current, order);
+        if (!rows || !proposed) return null;
+        return { rows, notes: routeOrderConsequences(inputRef.current, current, proposed) };
+      },
+      apply: (basis, order) => {
+        const current = routePointsRef.current;
+        if (!commandBarEditableRef.current || !sameRouteOrderBasis(current, basis)) return null;
+        const next = applyRouteOrder(current, order);
+        if (!next) return null;
+        const previousOrder = current.map((point) => point.draftId);
+        routePointsRef.current = next;
+        setRoutePoints(next);
+        return {
+          undo: () => {
+            if (!commandBarEditableRef.current) return false;
+            const restored = undoRouteOrder(routePointsRef.current, order, previousOrder);
+            if (!restored) return false;
+            routePointsRef.current = restored;
+            setRoutePoints(restored);
+            return true;
+          },
+        };
+      },
+    };
+    commandBarBridgeRef.current = bridge;
+    return () => {
+      if (commandBarBridgeRef.current === bridge) commandBarBridgeRef.current = null;
+    };
+  }, [commandBarBridgeRef]);
 
   function requestPlaybackPreview() {
     if (!onPlaybackPreview || saving || routePoints.length === 0 || playbackPreviewActive) return;
@@ -1384,85 +1413,6 @@ export function JourneyComposer({
     });
   }
 
-  async function proposeRouteOrderFromSentence() {
-    const text = routeOrderText.trim();
-    if (!text) {
-      setRouteOrderStatus({ tone: "error", text: "请先写一句想怎么调整顺序。", unmatched: null });
-      return;
-    }
-    const points = routePointsRef.current;
-    const basis = routeOrderIntentPoints(points);
-    const sequence = routeOrderSequenceRef.current + 1;
-    routeOrderSequenceRef.current = sequence;
-    setRouteOrderPending(true);
-    setRouteOrderStatus(null);
-    setRouteOrderProposal(null);
-    try {
-      const { proposal } = await proposeRouteOrder(text, basis);
-      if (!composerMountedRef.current || sequence !== routeOrderSequenceRef.current) return;
-      if (!sameRouteOrderBasis(routePointsRef.current, basis)) {
-        setRouteOrderStatus({
-          tone: "error",
-          text: "路线在等待期间改动过，这次的建议已作废，请重新提交。",
-          unmatched: null,
-        });
-        return;
-      }
-      // The server checks the permutation too; this is the draft's own guard.
-      if (!proposal.order || !applyRouteOrder(points, proposal.order)) {
-        setRouteOrderStatus({
-          tone: "empty",
-          text: "没能从这句话得到完整的新顺序，路线没有改变。",
-          unmatched: proposal.unmatched,
-        });
-        return;
-      }
-      if (sameRouteDraftOrder(points, proposal.order)) {
-        setRouteOrderStatus({ tone: "empty", text: "按这句话，顺序没有变化。", unmatched: proposal.unmatched });
-        return;
-      }
-      setRouteOrderProposal({ text, basis, order: proposal.order, unmatched: proposal.unmatched });
-    } catch (error) {
-      if (!composerMountedRef.current || sequence !== routeOrderSequenceRef.current) return;
-      setRouteOrderStatus({ tone: "error", text: routeOrderErrorMessage(error), unmatched: null });
-    } finally {
-      if (composerMountedRef.current && sequence === routeOrderSequenceRef.current) setRouteOrderPending(false);
-    }
-  }
-
-  function applyRouteOrderProposal() {
-    const proposal = routeOrderProposal;
-    if (!proposal || proposal.text !== routeOrderText.trim()) return;
-    const applies = (points: readonly RouteDraftPoint[]) => (
-      sameRouteOrderBasis(points, proposal.basis) ? applyRouteOrder(points, proposal.order) : null
-    );
-    const applied = applies(routePointsRef.current) !== null;
-    if (applied) {
-      setRoutePoints((current) => {
-        const next = applies(current);
-        if (!next) return current;
-        routePointsRef.current = next;
-        return next;
-      });
-    }
-    routeOrderSequenceRef.current += 1;
-    setRouteOrderPending(false);
-    setRouteOrderProposal(null);
-    setRouteOrderStatus(applied
-      ? { tone: "applied", text: "已应用新顺序，保存后生效。", unmatched: null }
-      : { tone: "error", text: "路线已经改动过，这次的建议已作废，请重新提交。", unmatched: null });
-    // The preview that held focus is gone; keep focus inside the dialog.
-    routeOrderInputRef.current?.focus();
-  }
-
-  function cancelRouteOrderProposal() {
-    routeOrderSequenceRef.current += 1;
-    setRouteOrderPending(false);
-    setRouteOrderProposal(null);
-    setRouteOrderStatus(null);
-    routeOrderInputRef.current?.focus();
-  }
-
   function closeRoutePointMenu(draftPointId: string) {
     pendingRoutePointMenuFocusDraftIdRef.current = draftPointId;
     setRoutePointMenuDraftId(null);
@@ -1676,6 +1626,7 @@ export function JourneyComposer({
     : 0;
   const isEditing = Boolean(journey);
   const editorLocked = saving || savedResult !== null || unknownCreateAttempt !== null;
+  commandBarEditableRef.current = !editorLocked;
   const mobileMenuMedia = mobileMediaMenuIndex === null ? null : mediaFiles[mobileMediaMenuIndex] ?? null;
   const mobileAssignmentMedia = mobileMediaAssignmentIndex === null ? null : mediaFiles[mobileMediaAssignmentIndex] ?? null;
   const mobileDeleteMedia = mobileMediaDeleteIndex === null ? null : mediaFiles[mobileMediaDeleteIndex] ?? null;
@@ -1878,7 +1829,7 @@ export function JourneyComposer({
                 ) : null}
               </div>
   );
-  const journeySentenceFragment = journey ? null : (
+  const journeySentenceFragment = journey || sentenceEntryRouted ? null : (
     <form
       className="journey-sentence"
       onSubmit={(event) => {
@@ -2098,88 +2049,6 @@ export function JourneyComposer({
                 ) : null}
     </>
   );
-  // Recomputed from the draft as it is now, so a Stop or time edited while
-  // the preview is open is reflected; a changed order or label voids it.
-  const routeOrderLive = routeOrderProposal && sameRouteOrderBasis(routePoints, routeOrderProposal.basis)
-    ? routeOrderProposal
-    : null;
-  const routeOrderRows = routeOrderLive ? routeOrderPreviewRows(routePoints, routeOrderLive.order) : null;
-  const routeOrderProposedPoints = routeOrderLive ? applyRouteOrder(routePoints, routeOrderLive.order) : null;
-  const routeOrderNotes = routeOrderProposedPoints
-    ? routeOrderConsequences(input, routePoints, routeOrderProposedPoints)
-    : [];
-  const routeOrderFragment = routeOrderCapable
-    && routePoints.length >= MIN_ROUTE_ORDER_POINTS
-    && routePoints.length <= MAX_ROUTE_ORDER_POINTS ? (
-      <form
-        className="journey-route-order"
-        data-route-order-intent
-        onSubmit={(event) => {
-          event.preventDefault();
-          void proposeRouteOrderFromSentence();
-        }}
-      >
-        <label>
-          <span>用一句话调整顺序</span>
-          <input
-            ref={routeOrderInputRef}
-            value={routeOrderText}
-            onChange={(event) => {
-              const next = event.target.value;
-              setRouteOrderText(next);
-              // A preview answers the sentence it was asked; a new sentence
-              // must be submitted again before anything can be applied.
-              if (routeOrderProposal && routeOrderProposal.text !== next.trim()) {
-                routeOrderSequenceRef.current += 1;
-                setRouteOrderProposal(null);
-                setRouteOrderStatus(null);
-              }
-            }}
-            maxLength={MAX_ROUTE_ORDER_TEXT_LENGTH}
-            enterKeyHint="send"
-            placeholder="例如：把最后一站放到开头"
-            disabled={routeOrderPending || editorLocked}
-          />
-        </label>
-        <button type="submit" disabled={routeOrderPending || editorLocked}>
-          {routeOrderPending ? "正在理解…" : "调整顺序"}
-        </button>
-        {routeOrderStatus ? (
-          <p className="journey-route-order__status" role="status" data-route-order-status={routeOrderStatus.tone}>
-            {routeOrderStatus.text}
-            {routeOrderStatus.unmatched ? <span>{routeOrderStatus.unmatched}</span> : null}
-          </p>
-        ) : null}
-        {routeOrderProposal && !routeOrderLive ? (
-          <p className="journey-route-order__status" role="status" data-route-order-status="void">
-            路线已经改动过，这次的建议已作废，请重新提交。
-          </p>
-        ) : null}
-        {routeOrderLive && routeOrderRows ? (
-          <section className="journey-route-order__preview" aria-label="新顺序预览" data-route-order-preview>
-            <ol>
-              {routeOrderRows.map((row) => (
-                <li key={row.draftId} data-route-order-moved={row.moved ? "true" : "false"}>
-                  <span>{row.to}</span>
-                  <strong>{row.label}</strong>
-                  <small>{row.moved ? `原第 ${row.from} 站` : "位置不变"}</small>
-                </li>
-              ))}
-            </ol>
-            {routeOrderNotes.length > 0 ? (
-              <ul className="journey-route-order__consequences" data-route-order-consequences>
-                {routeOrderNotes.map((note) => <li key={note}>{note}</li>)}
-              </ul>
-            ) : null}
-            {routeOrderLive.unmatched ? <p className="journey-route-order__status">{routeOrderLive.unmatched}</p> : null}
-            <div className="journey-route-order__actions">
-              <button type="button" onClick={applyRouteOrderProposal} disabled={editorLocked}>应用新顺序</button>
-              <button type="button" onClick={cancelRouteOrderProposal}>取消</button>
-            </div>
-          </section>
-        ) : null}
-      </form>
-    ) : null;
   const routeListFragment = (
               <ol className="journey-route-draft" aria-label="已添加的地点">
                 {routePoints.length === 0 ? <li className="is-empty"><IconMapPin size={22} stroke={1.15} aria-hidden="true" /><span>还没有地点</span><small>先搜索一个地点，或直接在地球上取点。</small></li> : null}
@@ -2634,7 +2503,6 @@ export function JourneyComposer({
                     {routeSearchFragment}
                     {reverseAttributionFragment}
                   </div>
-                  {routeOrderFragment}
                   {routeListFragment}
                 </section>
               ) : activeMobileTask !== "location" ? (

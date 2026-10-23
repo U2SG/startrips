@@ -158,7 +158,7 @@ const QA_HOME_BASE = {
   source: "manual",
 };
 
-async function openAtlas(viewport, { reducedMotion = "no-preference", homeBase = false } = {}) {
+async function openAtlas(viewport, { reducedMotion = "no-preference", homeBase = false, commandBar = false } = {}) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     // A viewport may declare its own scale factor: that is how browser zoom is
@@ -174,6 +174,24 @@ async function openAtlas(viewport, { reducedMotion = "no-preference", homeBase =
     body: "null",
   }));
   await stubAtlasApi(page);
+  if (commandBar) {
+    // A deployment that routes sentences: the header gains the command-bar
+    // trigger, and the stubbed router answers `globe-focus`.
+    await page.route("**/api/intents/capabilities", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        share: { configured: true, mediaFilter: false },
+        routeOrder: { configured: true },
+        router: { configured: true, intents: ["share", "route-order", "navigate", "globe-focus"] },
+      }),
+    }));
+    await page.route("**/api/intents/route", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ intent: "globe-focus", proposal: {}, unmatched: null, model: "qa" }),
+    }));
+  }
   if (homeBase) {
     await page.route("**/api/home-bases/dismissal", (route) => route.fulfill({
       status: 200,
@@ -1032,6 +1050,69 @@ try {
           || returned.controlsCount !== 1
           || returned.modeNoteCount !== 1
           || returned.historyLength !== historyBefore
+          || pageErrors.length > 0,
+      });
+    } finally {
+      await page.close();
+    }
+  }
+
+  // 3b. The command bar enters the same focus composition: its trigger leads
+  //     the header pill, left of the view switch; Ctrl+K opens it; a
+  //     globe-focus card arrives with 确认 focused, so one Enter enters focus.
+  //     In focus the header is inert and Ctrl+K opens nothing; Escape exits.
+  {
+    const viewport = VIEWPORTS[0];
+    const { page, pageErrors } = await openAtlas(viewport, { commandBar: true });
+    try {
+      const trigger = page.locator("[data-command-bar-trigger]");
+      await trigger.waitFor({ state: "visible", timeout: 10_000 });
+      const header = await page.evaluate(() => {
+        const buttons = [...document.querySelectorAll(".living-atlas__header nav > button")];
+        const triggerIndex = buttons.findIndex((button) => button.hasAttribute("data-command-bar-trigger"));
+        const viewIndex = buttons.findIndex((button) => (button.textContent ?? "").trim() === "地球");
+        const rect = buttons[triggerIndex]?.getBoundingClientRect();
+        return { triggerIndex, viewIndex, height: rect ? Math.round(rect.height) : 0 };
+      });
+      await page.keyboard.press("Control+K");
+      const input = page.locator(".command-bar__input");
+      await input.waitFor({ state: "visible", timeout: 5_000 });
+      const inputFocused = await input.evaluate((element) => document.activeElement === element);
+      await input.fill("只看地球");
+      await input.press("Enter");
+      const confirm = page.locator('[data-command-card="globe-focus"] .command-card__confirm');
+      await confirm.waitFor({ state: "visible", timeout: 5_000 });
+      const confirmFocused = await confirm.evaluate((element) => document.activeElement === element);
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => (
+        document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on"
+      ), null, { timeout: 5_000 });
+      await settle(page);
+      const barClosed = await page.locator(".command-bar").count() === 0;
+      const triggerInert = await trigger.evaluate((element) => Boolean(element.closest("[inert]")));
+      await page.keyboard.press("Control+K");
+      await page.waitForTimeout(200);
+      const barInFocus = await page.locator(".command-bar").count();
+      await page.keyboard.press("Escape");
+      await waitForExitedFocus(page);
+      record({
+        name: "globe-focus-command-bar",
+        viewport: viewport.name,
+        header,
+        inputFocused,
+        confirmFocused,
+        barClosed,
+        triggerInert,
+        barInFocus,
+        pageErrors,
+        failed: header.triggerIndex !== 0
+          || header.viewIndex !== 1
+          || header.height < 44
+          || !inputFocused
+          || !confirmFocused
+          || !barClosed
+          || !triggerInert
+          || barInFocus !== 0
           || pageErrors.length > 0,
       });
     } finally {

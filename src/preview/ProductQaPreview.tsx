@@ -5,6 +5,10 @@ import type { StartripsRecoveryKind } from "../brand/recoverySurfaces";
 import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
 import { LivingAtlasApp } from "../journey/LivingAtlasApp";
 import { JourneyComposer } from "../journey/JourneyComposer";
+import { CommandBar } from "../journey/CommandBar";
+import type { CommandBarComposerBridge } from "../journey/ProposalCard";
+import { readCommandRouterIntents, type CommandIntent } from "../journey/journeyApi";
+import { useCompactMobileLayout } from "../journey/mobileLayout";
 import { JourneyStory } from "../journey/JourneyStory";
 import { MobileClassicViewMenuEntry } from "../journey/MobileClassicViewMenuEntry";
 import { JourneyBook3d } from "../journey/JourneyBook3d";
@@ -413,6 +417,31 @@ function JourneyComposerQaPreview() {
       : undefined;
   const [open, setOpen] = useState(true);
   const [savedResult, setSavedResult] = useState<JourneySaveResult | null>(null);
+  // The command bar over the Composer, wired as LivingAtlasApp wires it:
+  // desktop only, Ctrl/Cmd+K, the Composer's own bridge for route-order cards.
+  const compact = useCompactMobileLayout();
+  const commandBridgeRef = useRef<CommandBarComposerBridge | null>(null);
+  const [commandIntents, setCommandIntents] = useState<CommandIntent[]>([]);
+  const [commandOpen, setCommandOpen] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void readCommandRouterIntents().then((intents) => { if (active) setCommandIntents(intents); });
+    return () => { active = false; };
+  }, []);
+  const commandReachable = open && !compact && commandIntents.length > 0;
+  useEffect(() => {
+    if (!commandReachable) {
+      setCommandOpen(false);
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "k" || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      setCommandOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [commandReachable]);
   const savedProjection = useMemo(() => {
     if (!savedResult) return null;
     const savedJourney = savedResult.journey;
@@ -472,6 +501,23 @@ function JourneyComposerQaPreview() {
           onClose={() => setOpen(false)}
           onSaved={(result) => setSavedResult(result)}
           onGlobePickRequest={() => undefined}
+          commandBarBridgeRef={commandBridgeRef}
+        />
+      ) : null}
+      {commandOpen && commandReachable ? (
+        <CommandBar
+          routed={commandIntents}
+          context={{ surface: "composer", canCreateJourney: true, canShare: false, journeyCount: 0 }}
+          activeJourneyId={null}
+          journeys={[]}
+          shareClient={null}
+          composerBridge={commandBridgeRef}
+          onCapabilitiesStale={() => setCommandIntents([])}
+          onClose={() => setCommandOpen(false)}
+          onCreateJourney={() => undefined}
+          onEditShare={() => undefined}
+          onNavigate={() => undefined}
+          onGlobeFocus={() => undefined}
         />
       ) : null}
     </main>

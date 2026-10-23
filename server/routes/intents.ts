@@ -15,6 +15,9 @@
  * shared. It writes only its own per-asset cache and never creates a share;
  * the result reaches a link only as `mediaAssetIds` on `POST /api/shares`.
  *
+ * `POST /route` is the command bar: it classifies one sentence among the
+ * intents the member's surface offers, then calls that intent's reader under
+ * the intent's own permission. It writes nothing either.
  * `POST /route-order` is the Composer's one-sentence reorder: it answers a
  * proposed order of the Route Points the member is editing and writes
  * nothing; the member applies it to the draft and saves the Journey.
@@ -22,6 +25,7 @@
 
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
+import type { AtlasAction } from "../authorization/permissions";
 import { serverConfig } from "../config";
 import {
   boundShareIntentProposal,
@@ -35,9 +39,21 @@ import {
 } from "../intents/share-media-filter";
 import {
   createRouteOrderIntentReader,
+  MAX_ROUTE_ORDER_TEXT_LENGTH,
   parseRouteOrderRequest,
   RouteOrderIntentUnavailableError,
 } from "../intents/route-order-intent";
+import {
+  availableRouterIntents,
+  classifyCommand,
+  MAX_JOURNEY_SENTENCE_LENGTH,
+  narrowOfferedIntents,
+  readNavigateIntent,
+  RouterIntentError,
+  RouterIntentUnavailableError,
+  UNSUPPORTED_INTENT,
+  type RoutedIntent,
+} from "../intents/intent-router";
 import { listJourneyShareCandidatesForAtlas } from "../repositories/journey-repository";
 import {
   listShareMediaFilterAssets,
@@ -86,6 +102,11 @@ intentRoutes.get("/capabilities", async (context) => {
       mediaFilter: mediaFilterConfigured(),
     },
     routeOrder: { configured: serverConfig.intentDriver === "http-model" },
+    // The command bar renders only when at least one intent can be routed.
+    router: (() => {
+      const intents = availableRouterIntents(routerConfig());
+      return { configured: intents.length > 0, intents };
+    })(),
   });
 });
 
@@ -259,4 +280,176 @@ intentRoutes.post("/route-order", async (context) => {
   });
   const reading = await reader.read(input);
   return context.json({ proposal: reading.proposal, model: reading.model });
+});
+
+/**
+ * The longest sentence each routed intent's own reader accepts. The router
+ * refuses a sentence longer than every offered intent allows before any
+ * provider call, and re-checks the chosen intent's own bound after stage 1.
+ */
+export const ROUTED_INTENT_TEXT_LIMITS: Record<RoutedIntent, number> = {
+  "create-journey": MAX_JOURNEY_SENTENCE_LENGTH,
+  share: MAX_SHARE_INTENT_TEXT_LENGTH,
+  "share-photos-filter": MAX_SHARE_INTENT_TEXT_LENGTH,
+  "route-order": MAX_ROUTE_ORDER_TEXT_LENGTH,
+  navigate: MAX_SHARE_INTENT_TEXT_LENGTH,
+  "globe-focus": MAX_SHARE_INTENT_TEXT_LENGTH,
+};
+
+/**
+ * The permission of the route each intent's proposal is applied through,
+ * checked again before stage 2: a member who could not apply the proposal
+ * cannot spend the provider on reading it.
+ */
+export const ROUTED_INTENT_PERMISSIONS: Record<RoutedIntent, AtlasAction> = {
+  // The Composer creates the Journey (`POST /api/journeys`).
+  "create-journey": "create",
+  share: "create",
+  "share-photos-filter": "create",
+  // Saving the reordered draft is `PATCH /api/journeys/:id`.
+  "route-order": "update",
+  navigate: "read",
+  "globe-focus": "read",
+};
+
+function routerConfig() {
+  return {
+    intentDriver: serverConfig.intentDriver,
+    intentVisionModel: serverConfig.intentVisionModel,
+    itineraryRecognitionDriver: serverConfig.itineraryRecognitionDriver,
+  };
+}
+
+function intentModelOptions() {
+  return {
+    baseUrl: serverConfig.intentBaseUrl!,
+    apiKey: serverConfig.intentApiKey!,
+    model: serverConfig.intentModel!,
+    timeoutMs: serverConfig.intentTimeoutMs,
+    fetcher: shareIntentDependencies.fetcher,
+  };
+}
+
+function textTooLong(limit: number) {
+  return {
+    error: "INTENT_TEXT_TOO_LONG",
+    message: `Write one sentence of up to ${limit} characters`,
+    limit,
+  };
+}
+
+/** One routed sentence at a time per Atlas, in this process. */
+const routerInFlight = new Set<string>();
+
+/**
+ * The command bar: one sentence, two stages. Stage 1 (`read`) sends only the
+ * sentence and the offered intents; stage 2 re-checks the chosen intent's own
+ * permission and calls its existing reader. The answer is a proposal only.
+ */
+intentRoutes.post("/route", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  context.header("Cache-Control", SHARE_INTENT_CACHE_CONTROL);
+  const body = await readJsonObject(() => context.req.json());
+  const text = typeof body?.text === "string" ? body.text.trim() : "";
+  const commandContext = body?.context && typeof body.context === "object" && !Array.isArray(body.context)
+    ? body.context as Record<string, unknown>
+    : null;
+  const available = availableRouterIntents(routerConfig());
+  if (available.length === 0) throw new RouterIntentUnavailableError();
+  const offered = narrowOfferedIntents(commandContext?.intents, available);
+  if (!offered || offered.length === 0) {
+    return context.json(
+      { error: "INVALID_INTENT_ROUTE", message: "Offer at least one available intent" },
+      400,
+    );
+  }
+  const limit = Math.max(...offered.map((intent) => ROUTED_INTENT_TEXT_LIMITS[intent]));
+  if (text.length < 1) {
+    return context.json({ error: "INVALID_INTENT_ROUTE", message: "Write one sentence" }, 400);
+  }
+  if (text.length > limit) return context.json(textTooLong(limit), 400);
+  if (routerInFlight.has(atlas.id)) {
+    throw new RouterIntentError("INTENT_ROUTE_BUSY", "A sentence of this Atlas is already being read", 409);
+  }
+
+  routerInFlight.add(atlas.id);
+  try {
+    const model = serverConfig.intentModel!;
+    const classification = await classifyCommand(intentModelOptions(), { text, offered });
+    const intent = classification.intent;
+    if (intent === UNSUPPORTED_INTENT) {
+      return context.json({ intent, proposal: null, unmatched: classification.unmatched, model });
+    }
+    // The chosen intent's own permission, before its reader runs.
+    await requireAtlasAccess(context.req.raw, ROUTED_INTENT_PERMISSIONS[intent]);
+    if (text.length > ROUTED_INTENT_TEXT_LIMITS[intent]) {
+      return context.json({ intent, ...textTooLong(ROUTED_INTENT_TEXT_LIMITS[intent]) }, 400);
+    }
+    const answer = (proposal: unknown) => context.json({
+      intent,
+      proposal,
+      unmatched: classification.unmatched,
+      model,
+    });
+
+    switch (intent) {
+      case "create-journey":
+        // The Composer reads it through its existing sentence import.
+        return answer({ sentence: text });
+      case "globe-focus":
+        return answer({});
+      case "route-order": {
+        const input = parseRouteOrderRequest({ text, points: commandContext?.composerPoints });
+        if (!input) {
+          return context.json(
+            {
+              intent,
+              error: "INVALID_ROUTE_ORDER_INTENT",
+              message: "Write one sentence of up to 200 characters about 2 to 64 Route Points",
+            },
+            400,
+          );
+        }
+        const reader = createRouteOrderIntentReader({
+          driver: serverConfig.intentDriver,
+          baseUrl: serverConfig.intentBaseUrl,
+          apiKey: serverConfig.intentApiKey,
+          model: serverConfig.intentModel,
+          timeoutMs: serverConfig.intentTimeoutMs,
+          fetcher: shareIntentDependencies.fetcher,
+        });
+        return answer((await reader.read(input)).proposal);
+      }
+      case "navigate": {
+        const candidates = await listJourneyShareCandidatesForAtlas(atlas.id, MAX_SHARE_INTENT_CANDIDATES);
+        const now = shareIntentDependencies.now?.() ?? new Date();
+        return answer(await readNavigateIntent(intentModelOptions(), {
+          text,
+          today: now.toISOString().slice(0, 10),
+          candidates,
+        }));
+      }
+      case "share":
+      case "share-photos-filter": {
+        const reader = createShareIntentReader({
+          driver: serverConfig.intentDriver,
+          baseUrl: serverConfig.intentBaseUrl,
+          apiKey: serverConfig.intentApiKey,
+          model: serverConfig.intentModel,
+          timeoutMs: serverConfig.intentTimeoutMs,
+          fetcher: shareIntentDependencies.fetcher,
+        });
+        const candidates = await listJourneyShareCandidatesForAtlas(atlas.id, MAX_SHARE_INTENT_CANDIDATES);
+        const now = shareIntentDependencies.now?.() ?? new Date();
+        const reading = await reader.read({ text, today: now.toISOString().slice(0, 10), candidates });
+        const proposal = boundShareIntentProposal(reading.proposal, candidates, MAX_SHARE_JOURNEYS);
+        // The router chose the filter; the card then runs `/share/media`.
+        return answer(intent === "share-photos-filter"
+          ? { ...proposal, mediaFilter: "no-people" }
+          : proposal);
+      }
+    }
+  } finally {
+    routerInFlight.delete(atlas.id);
+  }
 });
