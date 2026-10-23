@@ -53,7 +53,9 @@ import {
   type HomeBaseDismissal,
   type HomeBaseInferenceResult,
 } from "./homeBaseInference";
-import { JourneyApiError } from "./journeyApi";
+import { JourneyApiError, readCommandRouterIntents, type CommandIntent } from "./journeyApi";
+import { CommandBar } from "./CommandBar";
+import type { CommandBarComposerBridge, ShareDialogPrefill } from "./ProposalCard";
 import {
   homeBaseConfirmationDraft,
   homeBaseConfirmationRequest,
@@ -1560,7 +1562,12 @@ export function LivingAtlasApp({
    * multi-select: #200 says sharing Journeys is its own operation, and a
    * selection whose entries mean "asset" cannot also mean "Journey".
    */
-  const [shareTarget, setShareTarget] = useState<{ lockedJourneyId: string | null } | null>(null);
+  const [shareTarget, setShareTarget] = useState<{
+    lockedJourneyId: string | null;
+    /** From a command-bar card's 修改; each one remounts the dialog. */
+    prefill?: ShareDialogPrefill;
+    prefillKey?: number;
+  } | null>(null);
   const shareCloseBlockedRef = useRef(false);
   const setShareMutationPending = useCallback((pending: boolean) => {
     shareCloseBlockedRef.current = pending;
@@ -2298,6 +2305,52 @@ export function LivingAtlasApp({
       setDesktopMoreOpen(false);
     }
   }, [composerOpen, desktopHeaderInert, importOpen, isMobileV2, storyJourneyId]);
+
+  // The command bar: the owner's desktop only (mobile is restructured
+  // separately), and only while the deployment routes at least one intent.
+  // Guests and shared views have no `mutations`, so it never exists there.
+  const commandBarEligible = mutations !== null && !isReadOnlyAtlasView(capabilities) && !isMobileV2;
+  const [commandIntents, setCommandIntents] = useState<CommandIntent[]>([]);
+  const [commandCapabilityTick, setCommandCapabilityTick] = useState(0);
+  const [commandBarOpen, setCommandBarOpen] = useState(false);
+  const commandComposerBridgeRef = useRef<CommandBarComposerBridge | null>(null);
+  const [composerSentence, setComposerSentence] = useState<string | null>(null);
+  useEffect(() => {
+    if (!commandBarEligible) {
+      setCommandIntents([]);
+      return;
+    }
+    let active = true;
+    void readCommandRouterIntents().then((intents) => {
+      if (active) setCommandIntents(intents);
+    });
+    return () => { active = false; };
+  }, [commandBarEligible, commandCapabilityTick]);
+  const commandSurface = composerOpen ? "composer" : shareTarget ? "share" : "atlas";
+  const commandBarVisible = commandBarEligible && commandIntents.length > 0;
+  // Over the Atlas only while its header is live; over the Composer and the
+  // share dialog as an overlay inside their focus trap.
+  const commandBarReachable = commandBarVisible && (
+    commandSurface !== "atlas"
+    || !(desktopHeaderInert || storyJourneyId !== null || importOpen)
+  );
+  useEffect(() => {
+    setCommandBarOpen(false);
+  }, [commandSurface]);
+  useEffect(() => {
+    if (!commandBarReachable) setCommandBarOpen(false);
+  }, [commandBarReachable]);
+  useEffect(() => {
+    if (!commandBarReachable) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "k" || !(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      setCommandBarOpen(true);
+      document.querySelector<HTMLInputElement>(".command-bar__input")?.focus({ preventScroll: true });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [commandBarReachable]);
   useEffect(() => {
     if (!desktopMoreOpen) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -2955,7 +3008,27 @@ export function LivingAtlasApp({
     closeAtlasEveryday(false);
     setInitialImport(null);
     setEditingJourneyId(null);
+    setComposerSentence(null);
     setComposerOpen(true);
+  }
+
+  /** A command-bar card: the Composer opens reading this sentence. */
+  function openCreateComposerWithSentence(sentence: string) {
+    if (!canCreateJourney) return;
+    openCreateComposer();
+    setComposerSentence(sentence);
+  }
+
+  /** A command-bar card: the Story of this Journey, as its timeline card opens it. */
+  function openJourneyStoryFromCommand(journeyId: string) {
+    claimPlaybackReturnIntent();
+    timeCursor.selectJourney(journeyId);
+    setStoryRoutePointId(null);
+    setStoryInitialAssetId(null);
+    setStoryPresentsJourneyCoverOpening(true);
+    setStoryInitialSnapState("in-context");
+    setStoryFocusVisibleControlOnOpen(false);
+    setStoryJourneyId(journeyId);
   }
 
   function openAtlasEveryday(
@@ -3202,14 +3275,15 @@ export function LivingAtlasApp({
     });
   }
 
-  function openShareSurface(lockedJourneyId: string | null) {
+  function openShareSurface(lockedJourneyId: string | null, prefill?: ShareDialogPrefill) {
     shareRestoreAtlasTriggerRef.current = true;
     setMobileSheetJourneyId(null);
+    const target = prefill ? { lockedJourneyId, prefill, prefillKey: Date.now() } : { lockedJourneyId };
     if (storyJourneyId !== null) {
-      closeJourneyStory(null, () => setShareTarget({ lockedJourneyId }));
+      closeJourneyStory(null, () => setShareTarget(target));
       return;
     }
-    setShareTarget({ lockedJourneyId });
+    setShareTarget(target);
   }
 
   /**
@@ -3825,6 +3899,20 @@ export function LivingAtlasApp({
         <header className={`living-atlas__header${desktopMoreOpen && !desktopHeaderInert ? " has-more-menu" : ""}`} inert={desktopHeaderInert || undefined}>
           <div className="living-atlas__brand"><StartripsWordmarkSignatureButton size={34} state={brandState} /><div><p>PRIVATE JOURNEY ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
           <nav aria-label="图谱视图">
+            {commandBarVisible ? (
+              <button
+                type="button"
+                className="living-atlas__command-trigger"
+                data-command-bar-trigger="true"
+                aria-haspopup="dialog"
+                aria-expanded={commandBarOpen}
+                aria-keyshortcuts="Meta+K Control+K"
+                onClick={() => setCommandBarOpen((open) => !open)}
+              >
+                一句话
+                <kbd>{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K"}</kbd>
+              </button>
+            ) : null}
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
             {canCreateJourney ? <button ref={createMagnet.ref} onPointerMove={createMagnet.onPointerMove} onPointerLeave={createMagnet.onPointerLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button> : null}
@@ -4901,6 +4989,11 @@ export function LivingAtlasApp({
           journey={editingJourney}
           initialUnknownCreateAttempt={editingJourney ? null : pendingUnknownCreateAttempt}
           initialImport={editingJourney ? null : initialImport}
+          initialSentence={editingJourney ? null : composerSentence}
+          // Its own sentence entry gives way only where the bar reads
+          // Journey sentences (desktop, with itinerary recognition).
+          sentenceEntryRouted={commandIntents.includes("create-journey")}
+          commandBarBridgeRef={commandComposerBridgeRef}
           onClose={(unknownCreateAttempt) => {
             cancelGlobePick();
             setDraftRoute(null);
@@ -5054,8 +5147,10 @@ export function LivingAtlasApp({
 
       {shareTarget && shareClient ? (
         <JourneyShareDialog
+          key={shareTarget.prefillKey ?? "share"}
           journeys={journeyRail}
           lockedJourneyId={shareTarget.lockedJourneyId}
+          prefill={shareTarget.prefill ?? null}
           mutations={shareClient}
           onClose={requestShareClose}
           onMutationPendingChange={setShareMutationPending}
@@ -5131,6 +5226,44 @@ export function LivingAtlasApp({
               : "草稿预览 · 尚未保存"
             : playbackFallbackMessage}
           reduceMotion={reduceMotion}
+        />
+      ) : null}
+
+      {/* Last in the Atlas, so it is not inside the inert background of a
+          Composer or share dialog opened before it; it is its own nested
+          focus layer and hands focus back when it closes. */}
+      {commandBarOpen && commandBarReachable ? (
+        <CommandBar
+          routed={commandIntents}
+          context={{
+            surface: commandSurface,
+            canCreateJourney,
+            canShare: shareClient !== null,
+            journeyCount: journeyRail.length,
+          }}
+          activeJourneyId={activeJourneyId}
+          journeys={journeyRail}
+          shareClient={shareClient}
+          composerBridge={commandComposerBridgeRef}
+          onCapabilitiesStale={() => setCommandCapabilityTick((tick) => tick + 1)}
+          onClose={() => setCommandBarOpen(false)}
+          onCreateJourney={(sentence) => {
+            setCommandBarOpen(false);
+            openCreateComposerWithSentence(sentence);
+          }}
+          onEditShare={(prefill) => {
+            setCommandBarOpen(false);
+            if (shareClient) openShareSurface(null, prefill);
+          }}
+          onNavigate={(journeyId) => {
+            setCommandBarOpen(false);
+            openJourneyStoryFromCommand(journeyId);
+          }}
+          onGlobeFocus={() => {
+            setCommandBarOpen(false);
+            setView("planet");
+            setGlobeFocusMode(true);
+          }}
         />
       ) : null}
     </main>

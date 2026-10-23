@@ -1,0 +1,425 @@
+import { useEffect, useRef, useState } from "react";
+import { IconCheck, IconCopy } from "@tabler/icons-react";
+import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
+import type { AtlasMutations } from "./atlasView";
+import {
+  commandBarExpiryLabel,
+  commandBarManualEntry,
+  commandBarShareJourneys,
+  type CommandShareExpiry,
+} from "./commandBarModel";
+import type { RouteOrderIntentPoint, RouteOrderPreviewRow } from "./routeOrderIntent";
+import {
+  collectShareMediaFilter,
+  formatShareExpiry,
+  resolveShareExpiry,
+  SHARE_BEARER_NOTICE,
+  SHARE_TOKEN_ONCE_NOTICE,
+  shareLinkUrl,
+  type ShareMediaFilterProgress,
+} from "./shareLinks";
+import type { Journey } from "./types";
+
+/**
+ * The open Composer's half of a route-order card: the draft as sent, a
+ * preview against the draft as it is now, and an apply that answers its own
+ * 撤销. All three run inside the Composer, against its live draft.
+ */
+export type CommandBarComposerBridge = {
+  points: () => RouteOrderIntentPoint[];
+  preview: (
+    basis: readonly RouteOrderIntentPoint[],
+    order: readonly string[],
+  ) => { rows: RouteOrderPreviewRow[]; notes: string[] } | null;
+  apply: (
+    basis: readonly RouteOrderIntentPoint[],
+    order: readonly string[],
+  ) => { undo: () => boolean } | null;
+};
+
+/** What 修改 hands the share dialog. */
+export type ShareDialogPrefill = {
+  journeyIds: string[];
+  expiry: CommandShareExpiry;
+  /** Ready photos, a filter still to run, or every media. */
+  mediaFilter: { assetIds: string[]; excludedCount: number } | "request" | null;
+};
+
+export type ProposalCardModel =
+  | {
+    kind: "share";
+    filter: boolean;
+    journeyIds: string[];
+    expiry: CommandShareExpiry;
+    unmatched: string | null;
+  }
+  | {
+    kind: "route-order";
+    basis: RouteOrderIntentPoint[];
+    order: string[];
+    rows: RouteOrderPreviewRow[];
+    notes: string[];
+    unmatched: string | null;
+  }
+  | { kind: "create-journey"; sentence: string }
+  | { kind: "navigate"; journeyId: string; unmatched: string | null }
+  | { kind: "globe-focus" }
+  /** Nothing to confirm: what was not understood, and where to do it by hand. */
+  | { kind: "note"; text: string; manual: string };
+
+export type ProposalCardProps = {
+  card: ProposalCardModel;
+  journeys: readonly Journey[];
+  shareClient: Pick<AtlasMutations, "createShare" | "proposeShareMedia" | "readShareMediaPreview"> | null;
+  composerBridge: { current: CommandBarComposerBridge | null };
+  onCreateJourney: (sentence: string) => void;
+  onEditShare: (prefill: ShareDialogPrefill) => void;
+  onNavigate: (journeyId: string) => void;
+  onGlobeFocus: () => void;
+  /** 修改 without a dialog: the sentence goes back into the bar. */
+  onRevise: () => void;
+  onDismiss: () => void;
+};
+
+type MediaFilter =
+  | { status: "pending"; progress: ShareMediaFilterProgress | null }
+  | { status: "ready"; assetIds: string[]; excludedCount: number }
+  | { status: "error" | "unavailable" };
+
+type Outcome =
+  | { status: "idle" }
+  | { status: "working" }
+  | { status: "done"; text: string }
+  | { status: "failed"; text: string }
+  | { status: "created"; url: string; expiresAt: string; journeyCount: number; mediaCount: number | null }
+  | { status: "applied"; undo: () => boolean };
+
+const MAX_THUMBNAILS = 12;
+
+function cardTitle(card: ProposalCardModel, journeys: readonly Journey[]) {
+  switch (card.kind) {
+    case "share": return card.filter ? "只分享风景照" : "创建分享链接";
+    case "route-order": return "调整途径点顺序";
+    case "create-journey": return "记录一段新旅程";
+    case "navigate": {
+      const journey = journeys.find((candidate) => candidate.id === card.journeyId);
+      return journey ? `打开「${journey.title}」` : "打开旅程";
+    }
+    case "globe-focus": return "只看地球";
+    case "note": return "没有可以确认的操作";
+  }
+}
+
+/**
+ * One card per reply: 确认 / 修改 / 取消. Enter on the card confirms, Esc
+ * (handled by the bar) dismisses it, Tab moves between its buttons. Every
+ * confirm reuses an existing path; nothing is written before it.
+ */
+export function ProposalCard({
+  card,
+  journeys,
+  shareClient,
+  composerBridge,
+  onCreateJourney,
+  onEditShare,
+  onNavigate,
+  onGlobeFocus,
+  onRevise,
+  onDismiss,
+}: ProposalCardProps) {
+  const rootRef = useRef<HTMLElement | null>(null);
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const [outcome, setOutcome] = useState<Outcome>({ status: "idle" });
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const shareFilter = card.kind === "share" && card.filter;
+  const [media, setMedia] = useState<MediaFilter | null>(
+    shareFilter ? { status: "pending", progress: null } : null,
+  );
+  const [thumbnails, setThumbnails] = useState<Array<{ id: string; url: string }>>([]);
+  const shareJourneys = card.kind === "share" ? commandBarShareJourneys(card, journeys) : [];
+
+  // A globe-focus card is one Enter away; the others take focus as a whole.
+  useEffect(() => {
+    if (card.kind === "globe-focus") confirmRef.current?.focus({ preventScroll: true });
+    else rootRef.current?.focus({ preventScroll: true });
+  }, [card]);
+
+  // "只分享风景照": the existing batched check runs before confirm is allowed.
+  useEffect(() => {
+    if (!shareFilter) return;
+    const propose = shareClient?.proposeShareMedia;
+    if (!propose) {
+      setMedia({ status: "unavailable" });
+      return;
+    }
+    let current = true;
+    const journeyIds = shareJourneys.map((journey) => journey.id);
+    void collectShareMediaFilter(journeyIds, propose, {
+      isCurrent: () => current,
+      onProgress: (progress) => { if (current) setMedia({ status: "pending", progress }); },
+    }).then(
+      async (result) => {
+        if (!result || !current) return;
+        setMedia({ status: "ready", assetIds: result.assetIds, excludedCount: result.excludedCount });
+        const readPreview = shareClient?.readShareMediaPreview;
+        if (!readPreview) return;
+        const reads = await Promise.all(result.assetIds.slice(0, MAX_THUMBNAILS).map(async (id) => {
+          try {
+            const read = await readPreview(id);
+            return { id, url: read.preview?.url ?? read.url };
+          } catch {
+            return null;
+          }
+        }));
+        if (current) setThumbnails(reads.filter((read): read is { id: string; url: string } => read !== null));
+      },
+      () => { if (current) setMedia({ status: "error" }); },
+    );
+    return () => { current = false; };
+    // The card is replaced, never updated, so it runs once per card.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card]);
+
+  const confirmable = (() => {
+    if (outcome.status !== "idle" && outcome.status !== "failed") return false;
+    if (card.kind === "note") return false;
+    if (card.kind === "share") {
+      return shareClient !== null && shareJourneys.length > 0 && (!card.filter || media?.status === "ready");
+    }
+    return true;
+  })();
+
+  async function confirm() {
+    if (!confirmable) return;
+    switch (card.kind) {
+      case "share": {
+        if (!shareClient) return;
+        const expiry = resolveShareExpiry(card.expiry, new Date());
+        if (!expiry.ok) return;
+        const mediaAssetIds = card.filter && media?.status === "ready" ? media.assetIds : undefined;
+        setOutcome({ status: "working" });
+        try {
+          const created = await shareClient.createShare(
+            shareJourneys.map((journey) => journey.id),
+            expiry.expiresAt,
+            mediaAssetIds,
+          );
+          setOutcome({
+            status: "created",
+            url: shareLinkUrl(window.location.origin, created.token),
+            expiresAt: created.share.expiresAt,
+            journeyCount: created.share.journeyCount,
+            mediaCount: mediaAssetIds ? mediaAssetIds.length : null,
+          });
+        } catch (error) {
+          setOutcome({
+            status: "failed",
+            text: error instanceof Error && error.message ? error.message : "创建分享链接失败，请重试。",
+          });
+        }
+        return;
+      }
+      case "route-order": {
+        const applied = composerBridge.current?.apply(card.basis, card.order) ?? null;
+        setOutcome(applied
+          ? { status: "applied", undo: applied.undo }
+          : { status: "failed", text: "路线在等待期间改动过，这次的建议已作废，请重新描述。" });
+        return;
+      }
+      case "create-journey":
+        onCreateJourney(card.sentence);
+        return;
+      case "navigate":
+        onNavigate(card.journeyId);
+        return;
+      case "globe-focus":
+        onGlobeFocus();
+        return;
+    }
+  }
+
+  function revise() {
+    if (card.kind === "share") {
+      onEditShare({
+        journeyIds: shareJourneys.map((journey) => journey.id),
+        expiry: card.expiry,
+        mediaFilter: !card.filter
+          ? null
+          : media?.status === "ready"
+            ? { assetIds: media.assetIds, excludedCount: media.excludedCount }
+            : "request",
+      });
+      return;
+    }
+    onRevise();
+  }
+
+  async function copy(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      setCopyFailed(true);
+    }
+  }
+
+  const working = outcome.status === "working";
+
+  return (
+    <section
+      ref={rootRef}
+      className="command-card motion-fade-through"
+      tabIndex={-1}
+      aria-label={cardTitle(card, journeys)}
+      data-command-card={card.kind}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && event.target === event.currentTarget) {
+          event.preventDefault();
+          void confirm();
+        }
+      }}
+    >
+      <h3>{cardTitle(card, journeys)}</h3>
+
+      {card.kind === "share" ? (
+        <>
+          {shareJourneys.length > 0 ? (
+            <ol className="command-card__list">
+              {shareJourneys.map((journey) => (
+                <li key={journey.id}><strong>{journey.title}</strong><small>{journey.startedOn}</small></li>
+              ))}
+            </ol>
+          ) : <p>这句话没有对应到任何旅程。{commandBarManualEntry("share")}</p>}
+          <p className="command-card__meta">{commandBarExpiryLabel(card.expiry)}</p>
+          {media?.status === "pending" ? (
+            <p className="command-card__status" role="status" data-command-media-filter="pending">
+              <StartripsJourneyCue state="waiting" size={28} />
+              {media.progress
+                ? `正在挑选不含人物的照片（已检查 ${media.progress.checked} / ${media.progress.total}）`
+                : "正在挑选不含人物的照片，照片较多时需要一点时间…"}
+            </p>
+          ) : null}
+          {media?.status === "ready" ? (
+            <>
+              <p className="command-card__status" data-command-media-filter="ready">
+                将分享 {media.assetIds.length} 张风景照（已排除 {media.excludedCount} 张含人物或无法确认的照片与视频）
+              </p>
+              {thumbnails.length > 0 ? (
+                <ul className="command-card__strip" aria-label="将分享的风景照">
+                  {thumbnails.map((thumbnail) => (
+                    <li key={thumbnail.id}><img src={thumbnail.url} alt="" loading="lazy" decoding="async" /></li>
+                  ))}
+                </ul>
+              ) : null}
+            </>
+          ) : null}
+          {media?.status === "error" ? (
+            <p className="command-card__status" data-command-media-filter="error">暂时无法挑选照片。可以点「修改」在分享窗口里重试，或改为分享全部照片。</p>
+          ) : null}
+          {media?.status === "unavailable" ? (
+            <p className="command-card__status" data-command-media-filter="unavailable">这台服务器不能按照片内容筛选。可以点「修改」改为分享全部照片。</p>
+          ) : null}
+        </>
+      ) : null}
+
+      {card.kind === "route-order" ? (
+        <>
+          <ol className="command-card__list" aria-label="新顺序预览">
+            {card.rows.map((row) => (
+              <li key={row.draftId} data-route-order-moved={row.moved ? "true" : undefined}>
+                <strong>{row.to}. {row.label}</strong>
+                {row.moved ? <small>原第 {row.from} 个</small> : null}
+              </li>
+            ))}
+          </ol>
+          {card.notes.length > 0 ? (
+            <ul className="command-card__notes">{card.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+          ) : null}
+        </>
+      ) : null}
+
+      {card.kind === "create-journey" ? (
+        <>
+          <blockquote className="command-card__quote">{card.sentence}</blockquote>
+          <p className="command-card__meta">确认后打开「记录旅程」，先读出地点和日期给你核对，确认后才加入路线。</p>
+        </>
+      ) : null}
+
+      {card.kind === "navigate" ? (
+        <p className="command-card__meta">
+          {journeys.find((journey) => journey.id === card.journeyId)?.startedOn ?? ""}
+        </p>
+      ) : null}
+
+      {card.kind === "globe-focus" ? (
+        <p className="command-card__meta">隐藏界面，只看地球；按 Esc 退出。</p>
+      ) : null}
+
+      {card.kind === "note" ? (
+        <p>{card.text}<span className="command-card__meta">{card.manual}</span></p>
+      ) : null}
+
+      {"unmatched" in card && card.unmatched ? <p className="command-card__meta">{card.unmatched}</p> : null}
+
+      {outcome.status === "failed" ? <p className="command-card__status" role="alert">{outcome.text}</p> : null}
+
+      {outcome.status === "created" ? (
+        <div className="command-card__created" data-command-share-created="true">
+          <p>
+            链接有效至 <strong data-share-expires-at={outcome.expiresAt}>{formatShareExpiry(outcome.expiresAt)}</strong>
+            ，包含 {outcome.journeyCount} 段旅程
+            {outcome.mediaCount !== null ? `，只分享其中 ${outcome.mediaCount} 张风景照` : null}
+          </p>
+          <output className="command-card__link" data-share-link="true">{outcome.url}</output>
+          <p className="command-card__meta">{SHARE_BEARER_NOTICE}</p>
+          <p className="command-card__meta">{SHARE_TOKEN_ONCE_NOTICE}</p>
+          {copyFailed ? <p className="command-card__status" role="alert">复制失败，请手动选择链接文本。</p> : null}
+          <div className="command-card__actions">
+            <button type="button" onClick={() => void copy(outcome.url)}>
+              {copied ? <IconCheck size={16} stroke={1.35} aria-hidden="true" /> : <IconCopy size={16} stroke={1.35} aria-hidden="true" />}
+              {copied ? "已复制链接" : "复制链接"}
+            </button>
+            <button type="button" onClick={onDismiss}>完成</button>
+          </div>
+        </div>
+      ) : null}
+
+      {outcome.status === "applied" ? (
+        <div className="command-card__actions" data-command-route-order="applied">
+          <p className="command-card__status" role="status">已应用新顺序，保存后生效。</p>
+          <button
+            type="button"
+            onClick={() => {
+              setOutcome(outcome.undo()
+                ? { status: "done", text: "已撤销，路线恢复原来的顺序。" }
+                : { status: "done", text: "路线之后又改动过，无法撤销；可以在路线列表里逐个移动。" });
+            }}
+          >撤销</button>
+          <button type="button" onClick={onDismiss}>完成</button>
+        </div>
+      ) : null}
+
+      {outcome.status === "done" ? <p className="command-card__status" role="status">{outcome.text}</p> : null}
+
+      {outcome.status === "idle" || outcome.status === "working" || outcome.status === "failed" ? (
+        <div className="command-card__actions">
+          {card.kind !== "note" ? (
+            <button
+              ref={confirmRef}
+              type="button"
+              className="command-card__confirm"
+              disabled={!confirmable}
+              onClick={() => void confirm()}
+            >
+              {working ? <StartripsJourneyCue state="waiting" size={24} /> : null}
+              {working ? "正在创建…" : "确认"}
+            </button>
+          ) : null}
+          <button type="button" disabled={working} onClick={revise}>修改</button>
+          <button type="button" disabled={working} onClick={onDismiss}>取消</button>
+        </div>
+      ) : null}
+    </section>
+  );
+}

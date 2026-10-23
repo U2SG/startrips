@@ -4,8 +4,14 @@
  * The server classifies and proposes; nothing here writes.
  */
 
-import type { CommandIntent, ShareIntentProposal } from "./journeyApi";
-import { MAX_ROUTE_ORDER_POINTS, MIN_ROUTE_ORDER_POINTS } from "./routeOrderIntent";
+import type { CommandIntent, CommandRouteAnswer, ShareIntentProposal } from "./journeyApi";
+import type { ProposalCardModel } from "./ProposalCard";
+import {
+  MAX_ROUTE_ORDER_POINTS,
+  MIN_ROUTE_ORDER_POINTS,
+  type RouteOrderIntentPoint,
+  type RouteOrderPreviewRow,
+} from "./routeOrderIntent";
 import { MAX_SHARE_JOURNEYS, SHARE_EXPIRY_PRESETS } from "./shareLinks";
 
 /** Nothing is shown for a reply faster than this. */
@@ -162,4 +168,71 @@ export function commandBarShareExpiry(proposal: Pick<ShareIntentProposal, "expir
 export function commandBarExpiryLabel(expiry: CommandShareExpiry) {
   const preset = SHARE_EXPIRY_PRESETS.find((entry) => entry.id === expiry);
   return `有效期 ${preset?.label ?? expiry}`;
+}
+
+/** Said when the surface offers nothing the server routes. */
+export const COMMAND_BAR_NOTHING_HERE = "这里暂时没有可以用一句话完成的操作。";
+
+/**
+ * The one card a reply becomes. A proposal that cannot be confirmed (no
+ * Journey matched, no complete order, nothing changes) becomes a note that
+ * says so and names the manual entry instead.
+ */
+export function commandCardFromAnswer(
+  answer: CommandRouteAnswer,
+  context: {
+    journeys: readonly { id: string }[];
+    composerPoints: RouteOrderIntentPoint[];
+    preview: (order: readonly string[]) => { rows: RouteOrderPreviewRow[]; notes: string[] } | null;
+  },
+): ProposalCardModel {
+  const note = (text: string, intent: CommandIntent | "unsupported", unmatched: string | null) => ({
+    kind: "note" as const,
+    text: unmatched ? `${text}${unmatched}` : text,
+    manual: commandBarManualEntry(intent),
+  });
+  switch (answer.intent) {
+    case "unsupported":
+      return note("暂时不能用一句话完成这件事。", "unsupported", answer.unmatched);
+    case "share":
+    case "share-photos-filter": {
+      const listed = commandBarShareJourneys(answer.proposal, context.journeys);
+      if (listed.length === 0) {
+        return note("这句话没有对应到任何旅程。", answer.intent, answer.proposal.unmatched);
+      }
+      return {
+        kind: "share",
+        filter: answer.intent === "share-photos-filter" || answer.proposal.mediaFilter === "no-people",
+        journeyIds: listed.map((journey) => journey.id),
+        expiry: commandBarShareExpiry(answer.proposal),
+        unmatched: answer.proposal.unmatched ?? answer.unmatched,
+      };
+    }
+    case "route-order": {
+      const { order, unmatched } = answer.proposal;
+      const preview = order ? context.preview(order) : null;
+      if (!order || !preview) {
+        return note("没能从这句话得到完整的新顺序，路线没有改变。", "route-order", unmatched);
+      }
+      if (sameRouteOrder(context.composerPoints, order)) {
+        return note("按这句话，顺序没有变化。", "route-order", unmatched);
+      }
+      return { kind: "route-order", basis: context.composerPoints, order, ...preview, unmatched };
+    }
+    case "create-journey":
+      return { kind: "create-journey", sentence: answer.proposal.sentence };
+    case "navigate": {
+      const { journeyId, unmatched } = answer.proposal;
+      if (!journeyId || !context.journeys.some((journey) => journey.id === journeyId)) {
+        return note("没有找到对应的旅程。", "navigate", unmatched);
+      }
+      return { kind: "navigate", journeyId, unmatched: unmatched ?? answer.unmatched };
+    }
+    case "globe-focus":
+      return { kind: "globe-focus" };
+  }
+}
+
+function sameRouteOrder(points: readonly RouteOrderIntentPoint[], order: readonly string[]) {
+  return points.length === order.length && points.every((point, index) => point.id === order[index]);
 }

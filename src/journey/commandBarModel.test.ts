@@ -8,8 +8,9 @@ import {
   commandBarShareExpiry,
   commandBarShareJourneys,
   commandBarWaitCopy,
+  commandCardFromAnswer,
   type CommandSurfaceContext,
-} from "./commandBar";
+} from "./commandBarModel";
 import type { CommandIntent } from "./journeyApi";
 import { JourneyApiError } from "./journeyApi";
 import { undoRouteOrder } from "./routeOrderIntent";
@@ -102,6 +103,58 @@ describe("share proposals on the card", () => {
   it("defaults the expiry to 7 days and labels it as the dialog does", () => {
     expect(commandBarShareExpiry({ expiry: null })).toBe("7d");
     expect(commandBarExpiryLabel("30d")).toBe("有效期 30 天");
+  });
+});
+
+describe("commandCardFromAnswer", () => {
+  const journeys = [{ id: "a" }, { id: "b" }];
+  const points = [{ id: "p-a", label: "成都" }, { id: "p-b", label: "理塘" }];
+  const preview = () => ({
+    rows: [
+      { draftId: "p-b", label: "理塘", from: 2, to: 1, moved: true },
+      { draftId: "p-a", label: "成都", from: 1, to: 2, moved: true },
+    ],
+    notes: [],
+  });
+  const context = { journeys, composerPoints: points, preview };
+  const meta = { unmatched: null, model: "m" };
+
+  it("narrows a share to listed Journeys and turns an empty one into a note", () => {
+    expect(commandCardFromAnswer({
+      ...meta,
+      intent: "share-photos-filter",
+      proposal: { journeyIds: ["b", "x"], expiry: null, mediaFilter: "no-people", unmatched: null },
+    }, context)).toEqual({ kind: "share", filter: true, journeyIds: ["b"], expiry: "7d", unmatched: null });
+    expect(commandCardFromAnswer({
+      ...meta,
+      intent: "share",
+      proposal: { journeyIds: ["x"], expiry: "1d", mediaFilter: null, unmatched: null },
+    }, context)).toMatchObject({ kind: "note" });
+  });
+
+  it("previews a changed order and notes an unchanged or missing one", () => {
+    expect(commandCardFromAnswer({ ...meta, intent: "route-order", proposal: { order: ["p-b", "p-a"], unmatched: null } }, context))
+      .toMatchObject({ kind: "route-order", basis: points, order: ["p-b", "p-a"] });
+    expect(commandCardFromAnswer({ ...meta, intent: "route-order", proposal: { order: ["p-a", "p-b"], unmatched: null } }, context))
+      .toMatchObject({ kind: "note", text: "按这句话，顺序没有变化。" });
+    expect(commandCardFromAnswer({ ...meta, intent: "route-order", proposal: { order: null, unmatched: "按距离排不了" } }, context))
+      .toMatchObject({ kind: "note" });
+  });
+
+  it("opens only a listed Journey and explains an unsupported sentence", () => {
+    expect(commandCardFromAnswer({ ...meta, intent: "navigate", proposal: { journeyId: "a", unmatched: null } }, context))
+      .toEqual({ kind: "navigate", journeyId: "a", unmatched: null });
+    expect(commandCardFromAnswer({ ...meta, intent: "navigate", proposal: { journeyId: "zz", unmatched: null } }, context))
+      .toMatchObject({ kind: "note" });
+    expect(commandCardFromAnswer({ ...meta, intent: "unsupported", proposal: null }, context))
+      .toMatchObject({ kind: "note", manual: expect.stringContaining("「") });
+  });
+
+  it("hands a Journey sentence to the Composer and globe focus straight through", () => {
+    expect(commandCardFromAnswer({ ...meta, intent: "create-journey", proposal: { sentence: "去稻城" } }, context))
+      .toEqual({ kind: "create-journey", sentence: "去稻城" });
+    expect(commandCardFromAnswer({ ...meta, intent: "globe-focus", proposal: {} }, context))
+      .toEqual({ kind: "globe-focus" });
   });
 });
 

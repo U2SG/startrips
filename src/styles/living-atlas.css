@@ -786,8 +786,9 @@ button.living-atlas-globe__pick {
   letter-spacing: 0.08em;
 }
 
-/* At most five labelled items (地球, 时间线, 记录旅程, 分享多段旅程, 更多) are
-   narrower than the six this bar once held (~573px), so the nav takes its
+/* At most six labelled items (一句话, 地球, 时间线, 记录旅程, 分享多段旅程, 更多);
+   the command-bar trigger appears only where the deployment routes sentences.
+   The five without it are narrower than the six this bar once held (~573px), so the nav takes its
    content width and never wraps a label. Centred, it clears the 189px wordmark
    from 981px and the 344px brand block once that block shows from 1301px
    (starlight-experience.css); the 60px account dock stays to its right up to
@@ -9296,9 +9297,8 @@ body:has(.journey-share) .account-dock {
   outline-offset: 2px;
 }
 
-/* The custom expiry and the one-sentence entry are family fields. */
-.journey-share__custom-expiry,
-.journey-share__intent-input {
+/* The custom expiry is a family field. */
+.journey-share__custom-expiry {
   grid-column: 1 / -1;
   min-height: var(--control-height);
   padding: 0 14px;
@@ -9311,8 +9311,7 @@ body:has(.journey-share) .account-dock {
   transition: border-color var(--motion-instant) ease-out;
 }
 
-.journey-share__custom-expiry:focus,
-.journey-share__intent-input:focus {
+.journey-share__custom-expiry:focus {
   border-color: var(--control-line-strong);
 }
 
@@ -9326,30 +9325,9 @@ body:has(.journey-share) .account-dock {
   font: 400 12px/1.55 var(--archive-sans);
 }
 
-/* One-sentence share: a field and its pill on one row, wrapping to two on a
-   narrow sheet. The proposal status reads in ink, its unmatched note below. */
-.journey-share__intent-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.journey-share__intent-input {
-  flex: 1 1 200px;
-  min-width: 0;
-}
-
-.journey-share__intent-row > button {
-  flex: none;
-}
-
+/* The media-filter notice reads in ink. */
 .journey-share__dialog .journey-share__intent-status {
   color: var(--archive-ink);
-}
-
-.journey-share__intent-status > span {
-  display: block;
-  color: var(--archive-muted);
 }
 
 /* "只分享风景图": the filter answer reads in ink like the proposal status.
@@ -9498,8 +9476,7 @@ body:has(.journey-share) .account-dock {
 }
 
 .journey-share__dialog button:focus-visible,
-.journey-share__expiry > .journey-share__custom-expiry:focus-visible,
-.journey-share__intent-input:focus-visible {
+.journey-share__expiry > .journey-share__custom-expiry:focus-visible {
   outline: 2px solid var(--control-focus);
   outline-offset: 2px;
 }
@@ -9520,8 +9497,7 @@ body:has(.journey-share) .account-dock {
 @media (hover: hover) and (pointer: fine) {
   .journey-share__dialog button:not(.journey-share__create, .is-destructive):hover:not(:disabled),
   .journey-share__expiry label:not(:has(input:checked)):hover,
-  .journey-share__custom-expiry:hover,
-  .journey-share__intent-input:hover:not(:disabled) {
+  .journey-share__custom-expiry:hover {
     border-color: var(--control-line-strong);
   }
 
@@ -9564,11 +9540,6 @@ body:has(.journey-share) .account-dock {
   border-bottom: 0;
   border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
   overscroll-behavior: contain;
-}
-
-/* 16px keeps iOS from zooming the sheet when the field takes focus. */
-.living-atlas[data-mobile-v2="on"] .journey-share__intent-input {
-  font-size: 16px;
 }
 
 .living-atlas[data-mobile-v2="on"] .journey-share__selection ol {
@@ -10794,92 +10765,227 @@ body:has(.journey-share) .account-dock {
   background-color: var(--control-fill-press);
 }
 
-/* One-sentence Route Point reorder: the field and its pill share the search
-   form's grid; the proposal previews as a flat numbered list (data, sharp),
-   moved rows in ink, with the consequences and the two actions below. */
-.journey-route-order {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 8px 10px;
+
+/* The command bar. Its trigger leads the header pill, left of the view
+   switch; the panel below it is one nested focus layer, also over the
+   Composer and the share dialog. Pill-family fields and buttons, a flat
+   bordered card, no shadow: the proposal is content, not chrome. */
+.living-atlas__header nav .living-atlas__command-trigger {
+  margin-right: 4px;
+  border-right: 1px solid var(--atlas-line);
+  border-radius: 999px 0 0 999px;
+  color: var(--atlas-text);
 }
 
-.journey-route-order > button,
-.journey-route-order__actions > button {
+.living-atlas__command-trigger kbd {
+  color: var(--atlas-muted);
+  font: 500 9px/1 var(--archive-sans);
+  letter-spacing: 0.08em;
+}
+
+.command-bar {
+  position: fixed;
+  z-index: var(--z-modal-300);
+  top: 92px;
+  left: 50%;
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 116px);
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--atlas-line);
+  border-radius: var(--radius-tile);
+  background: var(--atlas-panel-solid);
+  color: var(--atlas-text);
+  transform: translateX(-50%);
+}
+
+.command-bar__form {
+  display: flex;
+  gap: 8px;
+}
+
+.command-bar__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--control-height);
+  padding: 0 16px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  font: 500 14px/1 var(--archive-sans);
+}
+
+.command-bar__input:focus {
+  border-color: var(--control-line-strong);
+  outline: none;
+}
+
+.command-bar button,
+.command-card button {
   min-height: var(--control-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 14px;
+  gap: var(--control-gap);
+  padding: 0 var(--control-pad-x);
   border: 1px solid var(--control-line);
   border-radius: var(--control-radius);
   background: var(--control-fill);
   color: var(--control-ink);
   cursor: pointer;
-  font-size: 11px;
+  font: 500 var(--control-font-size)/1 var(--archive-sans);
+  letter-spacing: var(--control-tracking);
 }
 
-.journey-route-order__status,
-.journey-route-order__preview,
-.journey-route-order__consequences {
-  grid-column: 1 / -1;
+.command-bar button:disabled,
+.command-card button:disabled {
+  cursor: default;
+  opacity: var(--control-disabled-opacity);
+}
+
+.command-bar button:focus-visible,
+.command-bar__input:focus-visible,
+.command-card:focus-visible,
+.command-card button:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+.command-card .command-card__confirm {
+  border-color: var(--control-primary);
+  background: var(--control-primary);
+  color: var(--control-primary-ink);
+}
+
+.command-bar__wait {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--atlas-muted);
+  font: 400 12px/1.55 var(--archive-sans);
+}
+
+.command-bar__wait > button {
+  margin-left: auto;
+}
+
+.command-bar__failure {
   margin: 0;
+  color: var(--archive-ink);
+  font: 400 12px/1.55 var(--archive-sans);
 }
 
-.journey-route-order__status {
-  color: var(--archive-muted);
-  font-size: 12px;
-  line-height: 1.55;
+.command-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--atlas-line);
+  border-radius: var(--radius-field);
 }
 
-.journey-route-order__status > span {
+.command-card h3 {
+  margin: 0;
+  font: 400 15px/1.4 var(--archive-serif);
+  letter-spacing: 0.04em;
+}
+
+.command-card p {
+  margin: 0;
+  font: 400 12px/1.55 var(--archive-sans);
+}
+
+.command-card__meta,
+.command-card__status {
+  color: var(--atlas-muted);
+}
+
+.command-card__meta {
   display: block;
 }
 
-.journey-route-order__preview {
-  display: grid;
-  gap: 8px;
+.command-card__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.journey-route-order__preview ol,
-.journey-route-order__consequences {
+/* Data rows stay sharp and flat; moved points read in ink. */
+.command-card__list,
+.command-card__notes {
   display: grid;
-  gap: 2px;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: 400 12px/1.5 var(--archive-sans);
+}
+
+.command-card__list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--atlas-muted);
+}
+
+.command-card__list li strong {
+  font-weight: 500;
+  color: var(--atlas-text);
+}
+
+.command-card__list li[data-route-order-moved="true"] strong {
+  color: var(--atlas-cyan);
+}
+
+.command-card__quote {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--atlas-line-strong);
+  font: 400 13px/1.6 var(--archive-sans);
+}
+
+.command-card__strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.journey-route-order__preview ol > li {
+.command-card__strip img {
+  width: 56px;
+  height: 56px;
+  display: block;
+  object-fit: cover;
+}
+
+.command-card__link {
+  display: block;
+  overflow-wrap: anywhere;
+  font: 500 12px/1.5 var(--archive-sans);
+}
+
+.command-card__created {
   display: grid;
-  grid-template-columns: 2ch minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: 10px;
-  padding: 6px 2px;
-  color: var(--archive-muted);
-  font-size: 12px;
+  gap: 8px;
 }
 
-.journey-route-order__preview ol > li[data-route-order-moved="true"] {
-  color: var(--control-ink);
-}
-
-.journey-route-order__preview ol > li strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 520;
-}
-
-.journey-route-order__consequences li {
-  color: var(--control-ink);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.journey-route-order__actions {
+.command-card__actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .command-bar button:not(:disabled):hover,
+  .command-card button:not(.command-card__confirm):not(:disabled):hover {
+    border-color: var(--control-line-strong);
+    background-color: var(--control-fill-hover);
+  }
 }
