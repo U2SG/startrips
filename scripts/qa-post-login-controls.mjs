@@ -181,11 +181,12 @@ async function verifyAtlasShell() {
           const chrome = document.querySelector(".mobile-v2__chrome");
           const chromeRect = chrome?.getBoundingClientRect();
           // The dock's own floors, apart from the header's: one card holding a
-          // >=56px journey row over a time row with a >=44px play control.
+          // time row with a >=44px play control over a >=56px dock row
+          // (记录新旅程, the journey chip and, when routed, the one-sentence field).
           const dockPlayRect = document.querySelector(".mobile-v2__timeline .globe-time-scrubber__play")?.getBoundingClientRect();
           const dockJourneyRowRect = document.querySelector(".mobile-v2__journey-chip")?.getBoundingClientRect();
           const primaryTouchTargets = [...document.querySelectorAll(
-            ".mobile-v2__header button, .mobile-v2__timeline .globe-time-scrubber__play",
+            ".mobile-v2__header button, .mobile-v2__timeline .globe-time-scrubber__play, .mobile-v2__dock-create, .mobile-v2__dock .command-bar__input",
           )].map((element) => {
             const rect = element.getBoundingClientRect();
             return Math.min(rect.width, rect.height);
@@ -201,12 +202,21 @@ async function verifyAtlasShell() {
             dockPlayTarget: dockPlayRect ? Math.min(dockPlayRect.width, dockPlayRect.height) : null,
             dockJourneyRowHeight: dockJourneyRowRect ? Math.round(dockJourneyRowRect.height) : null,
             minPrimaryTouchTarget: primaryTouchTargets.length > 0 ? Math.min(...primaryTouchTargets) : null,
-            // Beside the wordmark an owner's compact header holds at most three
-            // icon controls (account, 记录新旅程, 更多); every other Atlas action
-            // lives in the 更多 sheet. This fixture has no account slot, so the
-            // count here is 2; the account lane below measures the real 3.
+            // Beside the wordmark an owner's compact header holds at most two
+            // icon controls (account, 更多); 记录新旅程 is the dock's left
+            // control and every other Atlas action lives in the 更多 sheet.
+            // This fixture has no account slot, so the count here is 1; the
+            // account lane below measures the real 2.
             headerIconControls: document.querySelectorAll(".mobile-v2__header nav button").length,
             headerMoreTriggers: document.querySelectorAll('.mobile-v2__header nav [data-atlas-more-trigger="true"]').length,
+            headerCreate: document.querySelectorAll('.mobile-v2__header [aria-label="记录新旅程"]').length,
+            dockCreate: document.querySelectorAll('.mobile-v2__dock > .mobile-v2__dock-create[aria-label="记录新旅程"]').length,
+            // The time row sits above the dock row.
+            timeAboveDock: (() => {
+              const time = document.querySelector(".mobile-v2__timeline")?.getBoundingClientRect();
+              const dock = document.querySelector(".mobile-v2__dock")?.getBoundingClientRect();
+              return Boolean(time && dock && time.bottom <= dock.top + 1);
+            })(),
           };
         });
         record(`atlas-${label}-earth-first`, await scanButtons(page, ".living-atlas"), {
@@ -225,8 +235,11 @@ async function verifyAtlasShell() {
             || mobileShell.dockJourneyRowHeight < 56
             || mobileShell.minPrimaryTouchTarget === null
             || mobileShell.minPrimaryTouchTarget < 44
-            || mobileShell.headerIconControls > 3
-            || mobileShell.headerMoreTriggers !== 1,
+            || mobileShell.headerIconControls > 2
+            || mobileShell.headerMoreTriggers !== 1
+            || mobileShell.headerCreate !== 0
+            || mobileShell.dockCreate !== 1
+            || !mobileShell.timeAboveDock,
         });
 
         // The 更多 sheet fits this viewport: inside it, no sideways scroll, a
@@ -1447,7 +1460,7 @@ async function verifyComposerGlobeRoundTrip() {
     const focusExitHitTest = await page.evaluate((mobile) => {
       const exit = document.querySelector(".living-atlas__globe-focus-exit");
       const create = document.querySelector(".living-atlas__create")
-        ?? document.querySelector('.mobile-v2__header button[aria-label="记录新旅程"]');
+        ?? document.querySelector('.mobile-v2__dock-create[aria-label="记录新旅程"]');
       if (!(create instanceof HTMLElement)) return null;
       const rect = create.getBoundingClientRect();
       const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
@@ -1938,8 +1951,9 @@ async function verifyAccountDock() {
         const nav = document.querySelector(".living-atlas__header nav")?.getBoundingClientRect();
         return nav ? overlapArea(nav) : -1;
       }, { selector: accountTriggerSelector, isMobile: mobile });
-      // The full owner header (account, 记录新旅程, 更多) at its narrowest:
-      // at most three icon controls beside the wordmark, none under 44px.
+      // The full owner header (account, 更多) at its narrowest: at most two
+      // icon controls beside the wordmark, none under 44px. 记录新旅程 is
+      // the bottom dock's left control.
       const compactHeader = mobile ? await page.evaluate(() => {
         const targets = [...document.querySelectorAll(".mobile-v2__header button")].map((element) => {
           const rect = element.getBoundingClientRect();
@@ -1968,7 +1982,7 @@ async function verifyAccountDock() {
           || accountTrigger.height < 44
           || accountTrigger.radius < accountTrigger.height / 2
           || (compactHeader !== null && (
-            compactHeader.headerIconControls > 3
+            compactHeader.headerIconControls > 2
             || compactHeader.headerMinTouchTarget === null
             || compactHeader.headerMinTouchTarget < 44
           )),
@@ -4044,7 +4058,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       console.error(`[qa-post-login] final:${viewportLabel}:playback-exited`);
 
       await activateControl(
-        page.locator('.mobile-v2__header button[aria-label="记录新旅程"]'),
+        page.locator('.mobile-v2__dock-create[aria-label="记录新旅程"]'),
         "create journey control",
       );
       await page.locator(".journey-composer").waitFor({ state: "visible" });

@@ -1035,7 +1035,10 @@ describe("Mobile V2 playback presentation", () => {
     expect(dockStart).toBeGreaterThan(0);
     // The dock is drawn from the same token every surface that clears it reads.
     expect(mobileChrome).toContain("height: var(--mobile-dock-height);");
-    expect(mobileChrome).toContain("grid-template-rows: var(--mobile-dock-journey-row) minmax(0, 1fr);");
+    // The time row sits above the dock row (记录新旅程, the journey chip, the field).
+    expect(mobileChrome).toContain("grid-template-rows: minmax(0, 1fr) var(--mobile-dock-journey-row);");
+    // The box rides on the soft keyboard only through the published inset.
+    expect(mobileChrome).toContain("var(--mobile-keyboard-inset, 0px)");
     expect(mobileChrome).toContain("env(safe-area-inset-bottom)");
     const dockHeight = Number(css.match(/--mobile-dock-height:\s*(\d+)px;/)?.[1]);
     const journeyRow = Number(css.match(/--mobile-dock-journey-row:\s*(\d+)px;/)?.[1]);
@@ -1047,7 +1050,7 @@ describe("Mobile V2 playback presentation", () => {
     expect(dockHeight - journeyRow - 3).toBeGreaterThanOrEqual(44);
   });
 
-  it("keeps the dock box still while a Route Point context hides the journey row", () => {
+  it("keeps the dock box still while a Route Point context hides the journey chip", () => {
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
     const ruleOf = (selector: string) => {
       const start = css.indexOf(`${selector} {`);
@@ -1056,15 +1059,20 @@ describe("Mobile V2 playback presentation", () => {
     };
     // Only the painted card shrinks; the measured box keeps its height, so the
     // globe framing and the route editor never see the dock move.
-    expect(ruleOf(".mobile-v2__chrome:has(> .mobile-v2__journey-chip[hidden])::before"))
-      .toContain("top: var(--mobile-dock-journey-row);");
+    // Only a dock row the hidden chip leaves empty (a read-only view) is unpainted.
+    expect(ruleOf(".mobile-v2__chrome:has(> .mobile-v2__dock > .mobile-v2__journey-chip[hidden]:only-child)::before"))
+      .toContain("bottom: var(--mobile-dock-journey-row);");
     // Playback and point-picking hide the scrubber: the card frames the
-    // journey row alone instead of leaving an empty time row behind.
+    // dock row alone instead of leaving an empty time row behind.
     expect(ruleOf(".living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__chrome::before"))
-      .toContain("bottom: calc(100% - var(--mobile-dock-journey-row) - 2px);");
+      .toContain("top: calc(100% - var(--mobile-dock-journey-row) - 2px);");
+    expect(ruleOf(".living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__dock-create"))
+      .toContain("pointer-events: none;");
+    expect(ruleOf(".mobile-v2__dock")).toContain("grid-row: 2;");
+    expect(ruleOf(".mobile-v2__dock")).toContain("pointer-events: auto;");
     expect(ruleOf(".living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__timeline"))
       .toContain("pointer-events: none;");
-    expect(ruleOf(".mobile-v2__timeline")).toContain("grid-row: 2;");
+    expect(ruleOf(".mobile-v2__timeline")).toContain("grid-row: 1;");
     expect(ruleOf('.living-atlas[data-mobile-v2="on"] > .mobile-v2__chrome')).toContain("pointer-events: none;");
     expect(ruleOf(".mobile-v2__journey-chip")).toContain("pointer-events: auto;");
     expect(ruleOf(".mobile-v2__timeline")).toContain("pointer-events: auto;");

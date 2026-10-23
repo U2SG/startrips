@@ -41,6 +41,8 @@ describe("commandBarOfferedIntents", () => {
 
   it("offers only what the server routes", () => {
     expect(commandBarOfferedIntents(["share", "globe-focus"], ATLAS)).toEqual(["share", "globe-focus"]);
+    // The compact shell has no globe-only focus mode.
+    expect(commandBarOfferedIntents(["share", "globe-focus"], { ...ATLAS, compact: true })).toEqual(["share"]);
   });
 
   it("drops what the member cannot do or has nothing to act on", () => {

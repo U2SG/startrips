@@ -51,6 +51,9 @@ const FORBIDDEN_CONTROL_TEXT = [
   "记录日常",
   "记录旅程",
   "记录新旅程",
+  // The one-sentence field (desktop overlay or mobile dock) is the owner's.
+  "一句话操作",
+  "用一句话说想做什么",
   "记录第一段旅程",
   "下一段旅程",
   "管理旅程",
