@@ -91,6 +91,16 @@ export function journeyBookPages(journey: Journey): JourneyBookPage[] {
 }
 
 /**
+ * How the front cover is dressed: its photo across the whole cover when the
+ * Journey has one in this payload (the explicit cover, else the first visual
+ * asset), otherwise the starry night. A shared or guest payload without that
+ * media has no cover asset, so it gets the starry cover.
+ */
+export function journeyBookCoverStyle(page: Extract<JourneyBookPage, { kind: "cover" }>): "photo" | "starry" {
+  return page.asset ? "photo" : "starry";
+}
+
+/**
  * The page a reader opening at a Route Point or asset should land on. An
  * asset wins over its point; an unknown target opens at the cover.
  */

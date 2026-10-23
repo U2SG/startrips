@@ -528,7 +528,7 @@ const READING_POSE: KeyLightPose = { ...READING_KEY, shadowNormalBias: KEY_SHADO
  * cover lies open (progress 1) and staying there. Elevation and azimuth are
  * interpolated at a fixed distance, so the shadow camera keeps its range;
  * the intensity keeps the irradiance on flat paper constant, so the lowered
- * light changes the relief, not the colour of the cloth. The shadow's normal
+ * light changes the relief, not the colour of the cover. The shadow's normal
  * offset is the tuned reading value scaled by `acneGuard`, so the same margin
  * keeps the flat cover from shadowing itself (acne) at the lower angle; at
  * 30° it is about 0.021, short of the book's thickness, so the book's shadow

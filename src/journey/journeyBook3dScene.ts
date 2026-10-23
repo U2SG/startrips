@@ -75,7 +75,7 @@ const CONTACT_LIFT = 0.0015;
  * derivatives, so this is a slope, not a depth. The fine groove falls about
  * 0.035 per texel, so 4 tilts its walls roughly 10–16° at the cover's
  * on-screen sizes: under the 30° raking light that is a thin lit wall and a
- * thin shaded wall, while the groove floor keeps the cloth's colour.
+ * thin shaded wall, while the groove floor keeps the cover's colour.
  */
 const COVER_BUMP_SCALE = 4;
 

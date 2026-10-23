@@ -103,10 +103,23 @@ function record(name, detail, ok) {
   if (!ok) failed = true;
 }
 
-// Lit paper and cloth are bright; the table is #020706, darker still under the
-// contact shadow. Anything between is neither and fails both tests.
+// Lit paper is bright; the table is #020706, darker still under the contact
+// shadow. Anything between is neither and fails both tests.
+//
+// The fixture's front cover is its cover photo across the whole cover (asset
+// 5000, china-handscroll.jpg, cover-fit: the light silk mount top and bottom,
+// pale paper and grey ink at the sides), so the cover test is only "brighter
+// than the table". Its top probes sit just inside the cover's top edge, on the
+// strip of photo left above the title band on purpose (journeyBookCover
+// COVER_TITLE_BAND starts at 5% of the height): the bare silk there stays
+// well clear of 60 under the closed cover's raking light. The band itself,
+// the night at 0.8, would bring silk down to about 230 × 0.2 + 34 × 0.8 ≈ 73
+// before shading, about 44-58 under that raking light, and read as table,
+// which is why it starts below the probes. Before the photo is painted the cover is the starry night (#0b1222),
+// which reads as table, so a cover probe failing that way means the photo
+// was not on the cover when the book settled.
 const isPaper = ([r, g, b]) => Math.min(r, g, b) >= 120;
-const isCloth = ([r, g, b]) => Math.min(r, g, b) >= 60;
+const isCover = ([r, g, b]) => Math.max(r, g, b) > 60;
 const isTable = ([r, g, b]) => Math.max(r, g, b) <= 60;
 const isBlock = ([r, g, b]) => Math.max(r, g, b) >= 90;
 
@@ -454,7 +467,7 @@ async function desktopSession(browser, part, body) {
  */
 async function desktopTurns(browser) {
   await desktopSession(browser, "turns", async (session, cover) => {
-    await session.checkAlignment("cover", cover, ["closed-front"], isCloth);
+    await session.checkAlignment("cover", cover, ["closed-front"], isCover);
 
     const first = await checkAutoTurn(session, "cover", 0, 2, [0.25, 0.5, 0.75]);
     await session.checkOuterMargin("first-spread", first, "left");
@@ -556,7 +569,7 @@ async function phoneSession(browser) {
     const cover = await session.settledAt(0);
     record("phone fixture: the book has 40 sheets in portrait", { sheets: cover.sheets, orientation: cover.orientation },
       cover.sheets === SHEETS && cover.orientation === "portrait");
-    await session.checkAlignment("cover", cover, ["closed-front"], isCloth);
+    await session.checkAlignment("cover", cover, ["closed-front"], isCover);
 
     // A touch drag from the cover's right side to its left turns the cover;
     // the reader lands on the first page (the left page of spread 1).
