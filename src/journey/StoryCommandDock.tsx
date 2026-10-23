@@ -1,5 +1,6 @@
 import { IconCommand } from "@tabler/icons-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { useKeyboardInset } from "./useKeyboardInset";
 
 /**
@@ -21,11 +22,6 @@ export function StoryCommandDock({ pill, children }: { pill: boolean; children: 
   }, [pill]);
 
   const folded = pill && !expanded;
-
-  useEffect(() => {
-    if (!expanded || !element) return;
-    element.querySelector<HTMLInputElement>(".command-bar__input")?.focus({ preventScroll: true });
-  }, [element, expanded]);
 
   // A press outside folds an idle pill. The field's own outside-press rule
   // puts its card away first, so the check waits a frame for that commit.
@@ -60,7 +56,11 @@ export function StoryCommandDock({ pill, children }: { pill: boolean; children: 
           className="story-command-dock__pill"
           aria-label="展开一句话操作"
           aria-expanded="false"
-          onClick={() => setExpanded(true)}
+          onClick={() => {
+            // Focus inside the tap itself, so iOS raises the keyboard.
+            flushSync(() => setExpanded(true));
+            element?.querySelector<HTMLInputElement>(".command-bar__input")?.focus({ preventScroll: true });
+          }}
         >
           <IconCommand size={16} stroke={1.35} aria-hidden="true" />
           一句话
