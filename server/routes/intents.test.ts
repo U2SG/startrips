@@ -15,6 +15,7 @@ const config = vi.hoisted(() => ({
     intentApiKey: null as string | null,
     intentModel: null as string | null,
     intentVisionModel: null as string | null,
+    itineraryRecognitionDriver: "disabled",
     intentTimeoutMs: 30_000,
     mediaPreviewMaxBytes: 1024,
   },
@@ -99,6 +100,8 @@ afterEach(() => {
   mediaFilter.list.mockReset();
   mediaFilter.save.mockClear();
   config.serverConfig.intentVisionModel = null;
+  config.serverConfig.itineraryRecognitionDriver = "disabled";
+  vi.mocked(requireAtlasAccess).mockClear();
   delete shareIntentDependencies.fetcher;
   delete shareIntentDependencies.now;
   delete shareIntentDependencies.storage;
@@ -107,23 +110,42 @@ afterEach(() => {
 describe("GET /api/intents/capabilities", () => {
   it("reports a configured provider", async () => {
     const response = await app.request("/api/intents/capabilities");
-    expect(await response.json()).toEqual({ share: { configured: true, mediaFilter: false }, routeOrder: { configured: true } });
+    expect(await response.json()).toEqual({
+      share: { configured: true, mediaFilter: false },
+      routeOrder: { configured: true },
+      router: { configured: true, intents: ["share", "route-order", "navigate", "globe-focus"] },
+    });
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
 
   it("reports a disabled provider truthfully", async () => {
     config.serverConfig.intentDriver = "disabled";
     const response = await app.request("/api/intents/capabilities");
-    expect(await response.json()).toEqual({ share: { configured: false, mediaFilter: false }, routeOrder: { configured: false } });
+    expect(await response.json()).toEqual({
+      share: { configured: false, mediaFilter: false },
+      routeOrder: { configured: false },
+      router: { configured: false, intents: [] },
+    });
   });
 
   it("offers the media filter only with a vision model on an http-model provider", async () => {
     config.serverConfig.intentVisionModel = "vision-1";
     expect(await (await app.request("/api/intents/capabilities")).json())
-      .toEqual({ share: { configured: true, mediaFilter: true }, routeOrder: { configured: true } });
+      .toEqual({
+        share: { configured: true, mediaFilter: true },
+        routeOrder: { configured: true },
+        router: {
+          configured: true,
+          intents: ["share", "share-photos-filter", "route-order", "navigate", "globe-focus"],
+        },
+      });
     config.serverConfig.intentDriver = "disabled";
     expect(await (await app.request("/api/intents/capabilities")).json())
-      .toEqual({ share: { configured: false, mediaFilter: false }, routeOrder: { configured: false } });
+      .toEqual({
+        share: { configured: false, mediaFilter: false },
+        routeOrder: { configured: false },
+        router: { configured: false, intents: [] },
+      });
   });
 });
 
@@ -405,5 +427,226 @@ describe("POST /api/intents/route-order", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ error: "INTENT_UNAVAILABLE", stage: "route-order-intent" });
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/intents/route", () => {
+  const ALL = ["create-journey", "share", "share-photos-filter", "route-order", "navigate", "globe-focus"];
+
+  function route(text: unknown, context: Record<string, unknown> = { intents: ALL }) {
+    return app.request("/api/intents/route", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, context }),
+    });
+  }
+
+  function sentBody(call: number) {
+    return JSON.parse(String(upstream.mock.calls[call][1]?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+      response_format: { json_schema: { schema: unknown } };
+    };
+  }
+
+  function stageOneInput() {
+    return JSON.parse(sentBody(0).messages[1].content) as {
+      intents: Array<{ id: string; description: string }>;
+      sentence: string;
+    };
+  }
+
+  function checkedPermissions() {
+    return vi.mocked(requireAtlasAccess).mock.calls.map((call) => call[1]);
+  }
+
+  beforeEach(() => {
+    config.serverConfig.itineraryRecognitionDriver = "http-model";
+    config.serverConfig.intentVisionModel = "vision-1";
+  });
+
+  it("classifies with only the sentence and the offered intents, then reads the share under create", async () => {
+    upstream
+      .mockResolvedValueOnce(answer({ intent: "share", unmatched: null }))
+      .mockResolvedValueOnce(answer({ journeyIds: ["j-2", "nope"], expiry: "7d", mediaFilter: null, unmatched: null }));
+    const response = await route("  分享上海那段，7 天  ");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      intent: "share",
+      proposal: { journeyIds: ["j-2"], expiry: "7d", mediaFilter: null, unmatched: null },
+      unmatched: null,
+      model: "intent-1",
+    });
+    const stageOne = stageOneInput();
+    expect(stageOne.sentence).toBe("分享上海那段，7 天");
+    expect(stageOne.intents.map((intent) => intent.id)).toEqual(ALL);
+    // No title, date or id of a Journey reaches stage 1.
+    const raw = sentBody(0).messages[1].content;
+    expect(raw).not.toContain("夏夜抵达上海");
+    expect(raw).not.toContain("j-2");
+    expect(raw).not.toContain("2026-06-12");
+    expect(sentBody(0).response_format.json_schema.schema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["intent", "unmatched"],
+      properties: { intent: { type: "string" }, unmatched: { type: ["string", "null"] } },
+    });
+    expect(checkedPermissions()).toEqual(["read", "create"]);
+  });
+
+  it("re-checks each intent's own permission before its stage", async () => {
+    const expected: Array<[string, string, unknown]> = [
+      ["create-journey", "create", { sentence: "上个月从成都去稻城" }],
+      ["globe-focus", "read", {}],
+    ];
+    for (const [intent, permission, proposal] of expected) {
+      vi.mocked(requireAtlasAccess).mockClear();
+      upstream.mockReset();
+      upstream.mockResolvedValueOnce(answer({ intent, unmatched: null }));
+      const response = await route("上个月从成都去稻城");
+      expect(await response.json()).toMatchObject({ intent, proposal });
+      expect(checkedPermissions()).toEqual(["read", permission]);
+      // Neither needs a second provider call.
+      expect(upstream).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("never calls the second stage when the intent's permission is refused", async () => {
+    upstream.mockResolvedValueOnce(answer({ intent: "route-order", unmatched: null }));
+    vi.mocked(requireAtlasAccess)
+      .mockImplementationOnce(async () => ({ atlas: { id: "atlas-1" } }) as never)
+      .mockImplementationOnce(async () => { throw new ShareIntentError("FORBIDDEN", "No", 403); });
+    const response = await route("把成都放到最后", {
+      intents: ALL,
+      composerPoints: [{ id: "a", label: "成都" }, { id: "b", label: "理塘" }],
+    });
+
+    expect(response.status).toBe(403);
+    expect(checkedPermissions()).toEqual(["read", "update"]);
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a route order against the client's draft points", async () => {
+    upstream
+      .mockResolvedValueOnce(answer({ intent: "route-order", unmatched: null }))
+      .mockResolvedValueOnce(answer({ order: ["p2", "p1"], unmatched: null }));
+    const response = await route("把成都放到最后", {
+      intents: ALL,
+      composerPoints: [{ id: "draft-a", label: "成都" }, { id: "draft-b", label: "理塘" }],
+    });
+
+    expect(await response.json()).toMatchObject({
+      intent: "route-order",
+      proposal: { order: ["draft-b", "draft-a"], unmatched: null },
+    });
+    // Stage 1 never saw the labels.
+    expect(sentBody(0).messages[1].content).not.toContain("理塘");
+  });
+
+  it("refuses a route order without a valid draft as a 400 after classifying", async () => {
+    upstream.mockResolvedValueOnce(answer({ intent: "route-order", unmatched: null }));
+    const response = await route("倒过来", { intents: ALL, composerPoints: [{ id: "a", label: "x" }] });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "INVALID_ROUTE_ORDER_INTENT" });
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("narrows navigation to the candidates it was shown", async () => {
+    upstream
+      .mockResolvedValueOnce(answer({ intent: "navigate", unmatched: null }))
+      .mockResolvedValueOnce(answer({ journeyId: "j-1", unmatched: null }));
+    expect(await (await route("打开东京那段")).json()).toMatchObject({
+      intent: "navigate",
+      proposal: { journeyId: "j-1", unmatched: null },
+    });
+    expect(checkedPermissions()).toEqual(["read", "read"]);
+    const stageTwo = JSON.parse(sentBody(1).messages[1].content) as { candidates: unknown };
+    expect(stageTwo.candidates).toEqual([
+      { id: "j-3", title: "海风经过深圳湾", startedOn: "2026-08-20", endedOn: null },
+      { id: "j-2", title: "夏夜抵达上海", startedOn: "2026-06-12", endedOn: null },
+      { id: "j-1", title: "东京冬日散步", startedOn: "2025-12-28", endedOn: null },
+    ]);
+
+    upstream.mockReset();
+    upstream
+      .mockResolvedValueOnce(answer({ intent: "navigate", unmatched: null }))
+      .mockResolvedValueOnce(answer({ journeyId: "invented", unmatched: null }));
+    const narrowed = await (await route("打开巴黎那段")).json() as {
+      proposal: { journeyId: string | null; unmatched: string | null };
+    };
+    expect(narrowed.proposal.journeyId).toBeNull();
+    expect(narrowed.proposal.unmatched).toBeTruthy();
+  });
+
+  it("forces the no-people filter for share-photos-filter", async () => {
+    upstream
+      .mockResolvedValueOnce(answer({ intent: "share-photos-filter", unmatched: null }))
+      .mockResolvedValueOnce(answer({ journeyIds: ["j-3"], expiry: null, mediaFilter: null, unmatched: null }));
+    const body = await (await route("只分享深圳湾的风景照")).json() as { proposal: unknown };
+    expect(body.proposal).toEqual({ journeyIds: ["j-3"], expiry: null, mediaFilter: "no-people", unmatched: null });
+  });
+
+  it("drops intents the server does not route, and never offers them to the model", async () => {
+    config.serverConfig.intentVisionModel = null;
+    config.serverConfig.itineraryRecognitionDriver = "disabled";
+    upstream.mockResolvedValueOnce(answer({ intent: "unsupported", unmatched: "暂不支持" }));
+    const response = await route("把这些照片放到第二站", {
+      intents: ["assign-photos", "everyday-fragment", "create-journey", "share-photos-filter", "share", "share"],
+    });
+
+    expect(await response.json()).toEqual({ intent: "unsupported", proposal: null, unmatched: "暂不支持", model: "intent-1" });
+    expect(stageOneInput().intents.map((intent) => intent.id)).toEqual(["share"]);
+  });
+
+  it("refuses a request that offers nothing this server routes, before any provider call", async () => {
+    const response = await route("随便", { intents: ["assign-photos", "everyday-fragment"] });
+    expect(response.status).toBe(400);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("treats an intent that was not offered as a malformed answer", async () => {
+    upstream.mockResolvedValueOnce(answer({ intent: "navigate", unmatched: null }));
+    const response = await route("打开东京", { intents: ["share"] });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: "INTENT_MALFORMED", stage: "intent-router" });
+    expect(checkedPermissions()).toEqual(["read"]);
+  });
+
+  it("refuses a sentence longer than every offered intent allows, before any provider call", async () => {
+    const response = await route("长".repeat(301), { intents: ["share", "navigate"] });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "INTENT_TEXT_TOO_LONG", limit: 300 });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("re-validates the chosen intent's own length limit", async () => {
+    upstream.mockResolvedValueOnce(answer({ intent: "share", unmatched: null }));
+    const response = await route("长".repeat(400));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ intent: "share", error: "INTENT_TEXT_TOO_LONG", limit: 300 });
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 503 when the router is not configured", async () => {
+    config.serverConfig.intentDriver = "disabled";
+    const response = await route("分享");
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: "INTENT_UNAVAILABLE" });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("answers 409 while a sentence of the same Atlas is being read, and releases the guard", async () => {
+    let release!: (response: Response) => void;
+    upstream.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = resolve; }));
+    const first = route("只看地球");
+    await vi.waitFor(() => expect(upstream).toHaveBeenCalledTimes(1));
+    const second = await route("只看地球");
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({ error: "INTENT_ROUTE_BUSY" });
+    release(answer({ intent: "globe-focus", unmatched: null }));
+    expect((await first).status).toBe(200);
+
+    upstream.mockResolvedValueOnce(answer({ intent: "globe-focus", unmatched: null }));
+    expect((await route("只看地球")).status).toBe(200);
   });
 });
