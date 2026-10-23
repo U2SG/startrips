@@ -358,9 +358,71 @@ async function verifyImportedJourney({ label, width, height, editing }) {
   }
 }
 
+const routeOrderLabels = (page) => page.locator(".journey-route-draft > li:not(.is-empty) .journey-route-draft__summary strong")
+  .evaluateAll((labels) => labels.map((node) => node.textContent?.trim() ?? ""));
+
+// One-sentence reorder on the imported route: the stubbed provider first
+// reverses the points (preview -> apply), then answers a non-permutation,
+// which must change nothing and say so.
+async function verifyRouteOrderSentence(page, pageErrors, names, routeOrderAnswers) {
+  const entry = page.locator("[data-route-order-intent]");
+  await entry.waitFor({ state: "visible" });
+  await entry.getByLabel("用一句话调整顺序").fill("倒过来");
+  await entry.getByRole("button", { name: "调整顺序", exact: true }).click();
+  const preview = entry.locator("[data-route-order-preview]");
+  await preview.waitFor({ state: "visible" });
+
+  // Editing the sentence voids the preview it produced: the old answer can
+  // no longer be applied, and nothing is sent until the new one is submitted.
+  await entry.getByLabel("用一句话调整顺序").fill("把第一站放到最后");
+  await preview.waitFor({ state: "detached" });
+  const staleApply = await entry.getByRole("button", { name: "应用新顺序", exact: true }).count();
+  const staleLabels = await routeOrderLabels(page);
+  record("composer-sentence:route-order:edited-sentence-voids-preview", { staleApply, staleLabels,
+    sent: routeOrderAnswers.sent.length, pageErrors },
+    staleApply === 0
+    && JSON.stringify(staleLabels) === JSON.stringify(names)
+    && routeOrderAnswers.sent.length === 1
+    && pageErrors.length === 0);
+
+  await entry.getByLabel("用一句话调整顺序").fill("倒过来");
+  await entry.getByRole("button", { name: "调整顺序", exact: true }).click();
+  await preview.waitFor({ state: "visible" });
+  const previewRows = await preview.locator("li").evaluateAll((rows) => rows.map((row) => ({
+    label: row.querySelector("strong")?.textContent?.trim() ?? "",
+    moved: row.getAttribute("data-route-order-moved") === "true",
+  })));
+  const beforeApply = await routeOrderLabels(page);
+  await preview.getByRole("button", { name: "应用新顺序", exact: true }).click();
+  await preview.waitFor({ state: "detached" });
+  const afterApply = await routeOrderLabels(page);
+  const reversed = [...names].reverse();
+  record("composer-sentence:route-order:preview-apply", { previewRows, beforeApply, afterApply,
+    sent: routeOrderAnswers.sent[0], pageErrors },
+    JSON.stringify(previewRows.map((row) => row.label)) === JSON.stringify(reversed)
+    && JSON.stringify(previewRows.map((row) => row.moved)) === JSON.stringify([true, false, true])
+    && JSON.stringify(beforeApply) === JSON.stringify(names)
+    && JSON.stringify(afterApply) === JSON.stringify(reversed)
+    && routeOrderAnswers.sent[0]?.points.every((point) => Object.keys(point).sort().join() === "id,label")
+    && pageErrors.length === 0);
+
+  await entry.getByLabel("用一句话调整顺序").fill("把第一站放到最后");
+  await entry.getByRole("button", { name: "调整顺序", exact: true }).click();
+  const status = entry.locator('[data-route-order-status="empty"]');
+  await status.waitFor({ state: "visible" });
+  const afterRefusal = await routeOrderLabels(page);
+  record("composer-sentence:route-order:non-permutation-no-change", { afterRefusal,
+    status: await status.textContent(), pageErrors },
+    JSON.stringify(afterRefusal) === JSON.stringify(reversed)
+    && (await status.textContent())?.includes("路线没有改变")
+    && await entry.locator("[data-route-order-preview]").count() === 0
+    && routeOrderAnswers.sent.length === 3
+    && pageErrors.length === 0);
+}
+
 // One sentence in create mode -> read -> review -> apply. The page clock is
 // fixed to Tuesday 2026-10-20 (Asia/Shanghai), so 上个月 is September 2026.
-async function verifySentenceImport({ label, sentence, configured, names }) {
+async function verifySentenceImport({ label, sentence, configured, names, routeOrder = false }) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true,
     reducedMotion: "reduce", timezoneId: "Asia/Shanghai" });
   const page = await context.newPage();
@@ -400,6 +462,22 @@ async function verifySentenceImport({ label, sentence, configured, names }) {
         id: `map-${name}`, label: name, context: "Sichuan", latitude: 30 + index / 10, longitude: 100 + index / 10,
       }) });
     });
+    const routeOrderAnswers = { sent: [] };
+    if (routeOrder) {
+      await page.route("**/api/intents/capabilities", (route) => route.fulfill({ status: 200,
+        contentType: "application/json", body: JSON.stringify({
+          share: { configured: true, mediaFilter: false }, routeOrder: { configured: true },
+        }) }));
+      await page.route("**/api/intents/route-order", async (route) => {
+        const body = route.request().postDataJSON();
+        routeOrderAnswers.sent.push(body);
+        const ids = body.points.map((point) => point.id);
+        // 「倒过来」 is a reversal; anything else repeats an id: not a permutation.
+        const order = body.text === "倒过来" ? [...ids].reverse() : [ids[0], ids[0], ids[1]];
+        await route.fulfill({ status: 200, contentType: "application/json",
+          body: JSON.stringify({ proposal: { order, unmatched: null }, model: "synthetic/1" }) });
+      });
+    }
 
     await page.goto(new URL("/?qaState=journey-composer", baseUrl).toString(), { waitUntil: "domcontentloaded" });
     await page.locator(".journey-composer").waitFor({ state: "visible" });
@@ -453,7 +531,10 @@ async function verifySentenceImport({ label, sentence, configured, names }) {
       && hasNotice("「上个月」按今天推算为 2026-09-01 至 2026-09-30") && !hasNotice("句子里有多个时间")
       && routeInOrder && title === recognition.sourceTitle
       && after.startedOn === "2026-09-01" && after.endedOn === "2026-09-30" && after.inferredHint === 1
+      // Without the capability the reorder sentence is not rendered at all.
+      && (routeOrder || await page.locator("[data-route-order-intent]").count() === 0)
       && pageErrors.length === 0);
+    if (routeOrder) await verifyRouteOrderSentence(page, pageErrors, names, routeOrderAnswers);
   } finally {
     await context.close();
   }
@@ -1051,6 +1132,9 @@ try {
     // The deterministic reader must produce these names from the sentence itself.
     { label: "fallback", sentence: "上个月从成都自驾去稻城，在理塘住一晚", configured: false, names: ["成都", "稻城", "理塘"] },
     { label: "ambiguous", sentence: "上个月从成都去稻城，昨天回深圳", configured: true, names: ["成都", "稻城", "深圳"] },
+    // The same imported route, then reordered by one sentence.
+    { label: "route-order", sentence: "上个月从成都自驾去稻城，在理塘住一晚", configured: true, names: ["成都", "稻城", "理塘"],
+      routeOrder: true },
   ]) {
     try {
       await verifySentenceImport(scenario);

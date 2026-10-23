@@ -2732,6 +2732,16 @@ async function verifyFinalAcceptanceMobileFlow() {
         contentType: "application/json",
         body: JSON.stringify({ earthExperience: "default", revision: 0, updatedAt: null }),
       }));
+      // The Composer reads the Route Point reorder capability every time it opens.
+      // Unstubbed it falls through to no API and logs a 500 the console assertions catch.
+      await page.route("**/api/intents/capabilities", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          share: { configured: false, mediaFilter: false },
+          routeOrder: { configured: false },
+        }),
+      }));
       await page.route("**/api/atlases/current", (route) => route.fulfill({
         status: 200,
         contentType: "application/json",

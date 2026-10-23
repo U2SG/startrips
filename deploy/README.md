@@ -140,6 +140,25 @@ ticks Journeys in the dialog: the member reviews it and creates the link with
 the existing Create button, so nothing is written by the model call. The key
 is never sent to a browser.
 
+### Reordering Route Points by one sentence
+
+With `INTENT_DRIVER=http-model` the Journey Composer also offers
+「用一句话调整顺序」 above a route of 2 to 64 Route Points, for example
+"把稻城移到理塘前面" or "倒过来". It uses the same endpoint, key, model and
+timeout; with `disabled` the entry is not rendered and reordering by hand is
+unchanged. `POST /api/intents/route-order` needs the same permission as saving
+a Journey.
+
+What is sent: the member's sentence and, for each Route Point in its current
+order, its position, a positional id (`p1`, `p2`, …) and its label. No
+coordinates, times, notes, Stops, media or the client's own ids are sent. The
+model may only follow what the sentence says, never reorder by geography or
+distance; an answer that is not every point exactly once is dropped as "no
+proposal". The Composer previews the new order and what it would break
+(times going backwards, stays no longer next to their Stop); the member
+applies it to the draft and still saves the Journey, so nothing is written by
+the model call.
+
 ### Sharing photos without people
 
 A sentence such as "只分享风景图，不分享人像图" can ask the link to leave out

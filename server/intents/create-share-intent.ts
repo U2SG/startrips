@@ -12,6 +12,8 @@
  * credential is read on the server and never leaves it.
  */
 
+import { requestIntentModelAnswer, type IntentModelOptions } from "./intent-model-request";
+
 export type ShareIntentExpiry = "1d" | "7d" | "30d";
 
 const SHARE_INTENT_EXPIRIES: readonly ShareIntentExpiry[] = ["1d", "7d", "30d"];
@@ -57,9 +59,12 @@ export interface ShareIntentReader {
   read(request: ShareIntentRequest): Promise<ShareIntentReading>;
 }
 
-/** Every refusal names itself; `server/app.ts` maps it to `{ error, message }`. */
+/**
+ * Every refusal names itself; `server/app.ts` maps it to `{ error, message }`.
+ * The base of every intent stage error: a subclass names its own `stage`.
+ */
 export class ShareIntentError extends Error {
-  readonly stage = "share-intent";
+  readonly stage: string = "share-intent";
   readonly code: string;
   readonly status: number;
 
@@ -163,110 +168,29 @@ export class DisabledShareIntentReader implements ShareIntentReader {
   }
 }
 
-type HttpModelOptions = {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  timeoutMs: number;
-  fetcher?: typeof fetch;
-};
-
-function isDashScope(baseUrl: string) {
-  try {
-    return new URL(baseUrl).hostname.endsWith(".aliyuncs.com");
-  } catch {
-    return false;
-  }
-}
-
 /** An OpenAI-compatible `chat/completions` endpoint with JSON-schema output. */
 export class HttpModelShareIntentReader implements ShareIntentReader {
   readonly driver = "http-model";
-  readonly #options: HttpModelOptions;
+  readonly #options: IntentModelOptions;
 
-  constructor(options: HttpModelOptions) {
+  constructor(options: IntentModelOptions) {
     this.#options = options;
   }
 
   async read(request: ShareIntentRequest): Promise<ShareIntentReading> {
-    const { baseUrl, apiKey, model, timeoutMs } = this.#options;
-    const fetcher = this.#options.fetcher ?? fetch;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      let response: Response;
-      try {
-        response = await fetcher(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: SHARE_INTENT_SYSTEM_PROMPT },
-              {
-                role: "user",
-                content: JSON.stringify({
-                  today: request.today,
-                  candidates: request.candidates,
-                  sentence: request.text,
-                }),
-              },
-            ],
-            // DashScope's own switch; strict OpenAI-compatible services
-            // reject unknown request fields, so only DashScope receives it.
-            ...(isDashScope(baseUrl) ? { enable_thinking: false } : {}),
-            response_format: {
-              type: "json_schema",
-              json_schema: {
-                name: "share_intent",
-                strict: true,
-                schema: SHARE_INTENT_RESPONSE_SCHEMA,
-              },
-            },
-          }),
-          signal: controller.signal,
-        });
-      } catch (error) {
-        if (controller.signal.aborted) throw error;
-        throw new ShareIntentError(
-          "INTENT_UNREACHABLE",
-          "The share intent provider could not be reached",
-        );
-      }
-      if (!response.ok) {
-        throw new ShareIntentError(
-          "INTENT_FAILED",
-          `The share intent provider answered ${response.status}`,
-        );
-      }
-      const payload = await response.json().catch(() => null) as {
-        choices?: Array<{ message?: { content?: unknown } }>;
-      } | null;
-      const content = payload?.choices?.[0]?.message?.content;
-      let answer: unknown = null;
-      if (typeof content === "string") {
-        try {
-          answer = JSON.parse(content);
-        } catch {
-          answer = null;
-        }
-      }
-      return { proposal: parseShareIntentAnswer(answer), model };
-    } catch (error) {
-      if (controller.signal.aborted) {
-        throw new ShareIntentError(
-          "INTENT_TIMEOUT",
-          `The share intent provider did not answer within ${timeoutMs}ms`,
-          504,
-        );
-      }
-      throw error;
-    } finally {
-      clearTimeout(timer);
-    }
+    const answer = await requestIntentModelAnswer(this.#options, {
+      systemPrompt: SHARE_INTENT_SYSTEM_PROMPT,
+      userContent: JSON.stringify({
+        today: request.today,
+        candidates: request.candidates,
+        sentence: request.text,
+      }),
+      schemaName: "share_intent",
+      schema: SHARE_INTENT_RESPONSE_SCHEMA,
+      providerName: "share intent provider",
+      fail: (code, message, status) => new ShareIntentError(code, message, status),
+    });
+    return { proposal: parseShareIntentAnswer(answer), model: this.#options.model };
   }
 }
 

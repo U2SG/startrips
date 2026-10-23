@@ -10793,3 +10793,93 @@ body:has(.journey-share) .account-dock {
 ):active:not(:disabled) {
   background-color: var(--control-fill-press);
 }
+
+/* One-sentence Route Point reorder: the field and its pill share the search
+   form's grid; the proposal previews as a flat numbered list (data, sharp),
+   moved rows in ink, with the consequences and the two actions below. */
+.journey-route-order {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px 10px;
+}
+
+.journey-route-order > button,
+.journey-route-order__actions > button {
+  min-height: var(--control-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--control-radius);
+  background: var(--control-fill);
+  color: var(--control-ink);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.journey-route-order__status,
+.journey-route-order__preview,
+.journey-route-order__consequences {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.journey-route-order__status {
+  color: var(--archive-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.journey-route-order__status > span {
+  display: block;
+}
+
+.journey-route-order__preview {
+  display: grid;
+  gap: 8px;
+}
+
+.journey-route-order__preview ol,
+.journey-route-order__consequences {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.journey-route-order__preview ol > li {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 2px;
+  color: var(--archive-muted);
+  font-size: 12px;
+}
+
+.journey-route-order__preview ol > li[data-route-order-moved="true"] {
+  color: var(--control-ink);
+}
+
+.journey-route-order__preview ol > li strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 520;
+}
+
+.journey-route-order__consequences li {
+  color: var(--control-ink);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.journey-route-order__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
