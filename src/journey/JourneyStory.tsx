@@ -61,9 +61,11 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
+import { StoryCommandDock } from "./StoryCommandDock";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import {
@@ -288,6 +290,12 @@ type JourneyStoryProps = {
    * holds a share client of its own.
    */
   onShare?: (journeyId: string) => void;
+  /**
+   * Compact mobile: the host's one-sentence dock. The Story is portaled over
+   * the Atlas, so it places the dock itself, at the bottom of its own layer;
+   * the photo-first classic view folds it into a pill.
+   */
+  commandDock?: ReactNode;
   onMediaAdded: (journeyId: string) => Journey | null | Promise<Journey | null>;
   onMediaDelete?: (assetId: string) => void | Promise<void>;
   onMediaReorder?: (
@@ -781,6 +789,7 @@ export function JourneyStory({
   onJourneyUpdated,
   onDelete,
   onShare,
+  commandDock,
   onMediaAdded,
   onMediaDelete,
   onMediaReorder,
@@ -4619,6 +4628,10 @@ export function JourneyStory({
     <span className="journey-story__classic-toolbar-break" aria-hidden="true" />
   </> : null;
 
+  // Compact mobile only, and never over immersive media or media management.
+  const commandDockShown = Boolean(commandDock) && mobileLayout && !fullscreen && !mobileManageMode;
+  const commandDockPill = classicActive && mobileClassicView === "photo";
+
   const content = (
     <div
       className={`journey-story-backdrop${mobileLayout ? " is-mobile-context" : ""}${mobileLayout && mobileStoryExpanded ? " is-story-expanded" : ""}`}
@@ -4628,6 +4641,7 @@ export function JourneyStory({
       <article
         ref={dialogRef}
         tabIndex={-1}
+        data-story-command-dock={commandDockShown ? (commandDockPill ? "pill" : "bar") : undefined}
         className={`journey-story motion-staged${mobileLayout && mobileManageMode ? " is-mobile-manage" : ""}`}
         data-story-layout={mobileLayout ? "mobile" : "desktop"}
         data-story-presentation={mediaPresentation}
@@ -5524,6 +5538,8 @@ export function JourneyStory({
           </div>
         </footer>
       </article>
+
+      {commandDockShown ? <StoryCommandDock pill={commandDockPill}>{commandDock}</StoryCommandDock> : null}
 
       {activeEntry && fullscreenAvailable ? (
         <div
