@@ -734,6 +734,80 @@ export async function proposeRouteOrder(
   );
 }
 
+/** The intents the command bar can route today (`POST /api/intents/route`). */
+export type CommandIntent =
+  | "create-journey"
+  | "share"
+  | "share-photos-filter"
+  | "route-order"
+  | "navigate"
+  | "globe-focus";
+
+const COMMAND_INTENTS: readonly CommandIntent[] = [
+  "create-journey",
+  "share",
+  "share-photos-filter",
+  "route-order",
+  "navigate",
+  "globe-focus",
+];
+
+/**
+ * The intents this deployment routes. Any failure reads as none: the command
+ * bar is then not shown and every manual entry is unchanged.
+ */
+export async function readCommandRouterIntents(
+  fetcher: Fetcher = fetch,
+): Promise<CommandIntent[]> {
+  try {
+    const payload = await requestJson<{ router?: { configured?: unknown; intents?: unknown } }>(
+      "/api/intents/capabilities",
+      { cache: "no-store" },
+      fetcher,
+    );
+    const intents = payload?.router?.configured === true && Array.isArray(payload.router.intents)
+      ? payload.router.intents
+      : [];
+    return COMMAND_INTENTS.filter((intent) => intents.includes(intent));
+  } catch {
+    return [];
+  }
+}
+
+export type CommandRouteContext = {
+  surface: "atlas" | "composer" | "share";
+  /** What the member's surface offers; the server narrows it again. */
+  intents: CommandIntent[];
+  activeJourneyId?: string | null;
+  /** The Composer's draft, only when route-order is offered. */
+  composerPoints?: readonly { id: string; label: string }[];
+};
+
+type CommandRouteMeta = { unmatched: string | null; model: string };
+
+export type CommandRouteAnswer = CommandRouteMeta & (
+  | { intent: "share" | "share-photos-filter"; proposal: ShareIntentProposal }
+  | { intent: "route-order"; proposal: RouteOrderIntentProposal }
+  | { intent: "create-journey"; proposal: { sentence: string } }
+  | { intent: "navigate"; proposal: { journeyId: string | null; unmatched: string | null } }
+  | { intent: "globe-focus"; proposal: Record<string, never> }
+  | { intent: "unsupported"; proposal: null }
+);
+
+/** A proposal only: nothing is written until the member confirms the card. */
+export async function routeCommand(
+  text: string,
+  context: CommandRouteContext,
+  signal?: AbortSignal,
+  fetcher: Fetcher = fetch,
+): Promise<CommandRouteAnswer> {
+  return requestJson<CommandRouteAnswer>(
+    "/api/intents/route",
+    { method: "POST", body: JSON.stringify({ text, context }), signal },
+    fetcher,
+  );
+}
+
 export async function listShares(
   fetcher: Fetcher = fetch,
 ): Promise<ShareGrantSummary[]> {

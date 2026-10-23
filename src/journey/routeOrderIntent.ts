@@ -82,6 +82,20 @@ export function applyRouteOrder(
   return next;
 }
 
+/**
+ * The command bar's 撤销: the draft back in `previousOrder`, only while it is
+ * still exactly the order that was applied. Any later move, addition or
+ * removal makes the undo void (`null`) rather than reverting over it.
+ */
+export function undoRouteOrder(
+  points: readonly RouteDraftPoint[],
+  appliedOrder: readonly string[],
+  previousOrder: readonly string[],
+): RouteDraftPoint[] | null {
+  if (!sameRouteDraftOrder(points, appliedOrder)) return null;
+  return applyRouteOrder(points, previousOrder);
+}
+
 export type RouteOrderPreviewRow = {
   draftId: string;
   label: string;
