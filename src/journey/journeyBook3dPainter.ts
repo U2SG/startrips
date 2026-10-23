@@ -16,10 +16,9 @@ import {
   COVER_MARK_OPACITY,
   COVER_NIGHT,
   COVER_PHOTO_ROUTE,
-  COVER_SCRIM,
   COVER_STAR,
   COVER_STAR_BRIGHT,
-  COVER_TEXT_SHADOW,
+  COVER_TITLE_BAND,
   coverStarField,
 } from "./journeyBookCover";
 import { journeyBookCoverStyle, type JourneyBookPage } from "./journeyBookPages";
@@ -436,14 +435,11 @@ function drawCoverPhoto(context: CanvasRenderingContext2D, source: PageSource | 
   context.restore();
 }
 
-/** `COVER_SCRIM`: the night fading down from the top edge, behind the head only. */
-function drawCoverScrim(context: CanvasRenderingContext2D, width: number, height: number) {
-  const bottom = height * COVER_SCRIM.height;
-  const scrim = context.createLinearGradient(0, 0, 0, bottom);
-  scrim.addColorStop(0, `rgb(${COVER_SCRIM.color} / ${COVER_SCRIM.alpha})`);
-  scrim.addColorStop(1, `rgb(${COVER_SCRIM.color} / 0)`);
-  context.fillStyle = scrim;
-  context.fillRect(0, 0, width, bottom);
+/** `COVER_TITLE_BAND`: a solid band of the night behind the head, full width, sharp edged. */
+function drawCoverTitleBand(context: CanvasRenderingContext2D, width: number, height: number) {
+  const top = height * COVER_TITLE_BAND.top;
+  context.fillStyle = `rgb(${COVER_TITLE_BAND.color} / ${COVER_TITLE_BAND.alpha})`;
+  context.fillRect(0, top, width, height * COVER_TITLE_BAND.bottom - top);
 }
 
 /**
@@ -587,7 +583,7 @@ export function paintCoverMaterial(canvas: HTMLCanvasElement, input: Pick<PaintI
 
 /**
  * The front cover: the Journey's cover photo across the whole cover under a
- * head scrim, or with none the starry night; title and dates top left, the
+ * solid title band, or with none the starry night; title and dates top left, the
  * Route across the middle, and on the starry cover the gold mark at the foot.
  * The Journey note is on the book's first page, never on the cover.
  */
@@ -602,14 +598,10 @@ function paintCover(context: CanvasRenderingContext2D, width: number, height: nu
   drawCoverSky(context, width, height);
   if (style === "photo") {
     drawCoverPhoto(context, input.source, width, height, scale);
-    drawCoverScrim(context, width, height);
+    drawCoverTitleBand(context, width, height);
   }
 
   context.save();
-  if (style === "photo") {
-    context.shadowColor = COVER_TEXT_SHADOW.color;
-    context.shadowBlur = COVER_TEXT_SHADOW.blur * width;
-  }
   context.fillStyle = COVER_INK;
   const titleSize = Math.round(width * COVER.titleSize);
   const titleBlock = fitText(context, input.title, width * COVER.titleWidth, titleSize * 1.2 * 2, titleSize, Math.round(titleSize * 0.7), 1.2);

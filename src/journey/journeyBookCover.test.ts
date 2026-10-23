@@ -5,11 +5,12 @@ import {
   COVER_INK,
   COVER_NIGHT,
   COVER_PHOTO_ROUTE,
-  COVER_SCRIM,
   COVER_STAR,
   COVER_STAR_COUNT,
+  COVER_TITLE_BAND,
   coverStarField,
 } from "./journeyBookCover";
+import { COVER_ROUTE_BAND } from "./coverRouteGeometry";
 
 describe("cover colours", () => {
   it("uses the owner's starry palette", () => {
@@ -20,13 +21,19 @@ describe("cover colours", () => {
     expect(COVER_INK).toBe("#ece6d6");
   });
 
-  it("keeps the head scrim restrained, ending past the head and short of the Route band middle", () => {
-    // Strong enough for the dates on a pale sky, short of hiding the photo.
-    expect(COVER_SCRIM.alpha).toBeGreaterThanOrEqual(0.5);
-    expect(COVER_SCRIM.alpha).toBeLessThanOrEqual(0.6);
-    // The head ends near 26% of the cover; the Route band runs 30% to 73%.
-    expect(COVER_SCRIM.height).toBeGreaterThan(0.26);
-    expect(COVER_SCRIM.height).toBeLessThan(0.4);
+  it("sets the photo cover's title band solid behind the head, clear of the top edge and the Route band", () => {
+    // Strong enough for the title on a bright photo, short of an opaque block.
+    expect(COVER_TITLE_BAND.alpha).toBeGreaterThanOrEqual(0.75);
+    expect(COVER_TITLE_BAND.alpha).toBeLessThanOrEqual(0.85);
+    expect(COVER_TITLE_BAND.color).toBe("11 18 34");
+    // A strip of photo stays above it for the 3D QA's top-edge cover probes.
+    expect(COVER_TITLE_BAND.top).toBeGreaterThanOrEqual(0.04);
+    // Below the title top (8.7%) and past the dates (near 27%).
+    expect(COVER_TITLE_BAND.top).toBeLessThan(0.087);
+    expect(COVER_TITLE_BAND.bottom).toBeGreaterThan(0.27);
+    // Short of the Route band, which starts at 30%.
+    expect(COVER_TITLE_BAND.bottom).toBeLessThanOrEqual(0.29);
+    expect(COVER_TITLE_BAND.bottom).toBeLessThan(COVER_ROUTE_BAND.top);
   });
 
   it("draws the photo Route light on dark", () => {

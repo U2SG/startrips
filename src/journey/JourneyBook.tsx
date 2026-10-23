@@ -775,7 +775,7 @@ function JourneyBookPageContent({
                 : null}
           </figure>
         ) : null}
-        {style === "photo" ? <div className="journey-book__cover-scrim" aria-hidden="true" /> : null}
+        {style === "photo" ? <div className="journey-book__cover-band" aria-hidden="true" /> : null}
         <header className="journey-book__cover-head">
           <h1 className="journey-book__cover-title">{journey.title}</h1>
           <p className="journey-book__cover-dates"><span>{journeyRange(journey)}</span>{coverDateCount(journey.routePoints.length) ? <span>{coverDateCount(journey.routePoints.length)}</span> : null}</p>

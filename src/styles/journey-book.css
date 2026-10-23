@@ -240,13 +240,14 @@
   opacity: 0.75;
 }
 
-/* COVER_SCRIM: the night at 55% at the top edge, gone by 34% of the height,
-   just past the head (it ends near 26%). Functional only; the Route band
-   needs none because the photo Route carries its own dark halo. */
-.journey-book__cover-scrim {
+/* COVER_TITLE_BAND: a solid band of the night at 80%, full width, from 5% to
+   29% of the height, sharp edged, behind the head (about 10% to 27%). A thin
+   strip of photo stays above it on purpose, and it stops short of the Route
+   band (30%), which needs none because the photo Route has its own halo. */
+.journey-book__cover-band {
   position: absolute;
-  inset: 0 0 66%;
-  background: linear-gradient(rgb(11 18 34 / 0.55), rgb(11 18 34 / 0));
+  inset: 5% 0 71%;
+  background: rgb(11 18 34 / 0.8);
   pointer-events: none;
 }
 
@@ -255,11 +256,6 @@
   top: 8.7%;
   right: 9.5%;
   left: 9.5%;
-}
-
-/* COVER_TEXT_SHADOW: the head's text keeps a soft dark shadow on a photo. */
-.journey-book__sheet--cover.is-photo .journey-book__cover-head {
-  text-shadow: 0 0 0.6cqw rgb(6 9 16 / 0.45);
 }
 
 .journey-book__cover-title {

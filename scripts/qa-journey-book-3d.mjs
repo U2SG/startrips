@@ -109,10 +109,13 @@ function record(name, detail, ok) {
 // The fixture's front cover is its cover photo across the whole cover (asset
 // 5000, china-handscroll.jpg, cover-fit: the light silk mount top and bottom,
 // pale paper and grey ink at the sides), so the cover test is only "brighter
-// than the table". Its top probes sit under the head scrim (journeyBookCover
-// COVER_SCRIM, the night at 0.55): silk near 230 stays about 230 × 0.45 + 34 ×
-// 0.55 ≈ 122 before shading, about 73-98 under the closed cover's raking
-// light, still clear of 60. Before the photo is painted the cover is the starry night (#0b1222),
+// than the table". Its top probes sit just inside the cover's top edge, on the
+// strip of photo left above the title band on purpose (journeyBookCover
+// COVER_TITLE_BAND starts at 5% of the height): the bare silk there stays
+// well clear of 60 under the closed cover's raking light. The band itself,
+// the night at 0.8, would bring silk down to about 230 × 0.2 + 34 × 0.8 ≈ 73
+// before shading, about 44-58 under that raking light, and read as table,
+// which is why it starts below the probes. Before the photo is painted the cover is the starry night (#0b1222),
 // which reads as table, so a cover probe failing that way means the photo
 // was not on the cover when the book settled.
 const isPaper = ([r, g, b]) => Math.min(r, g, b) >= 120;

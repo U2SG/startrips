@@ -26,18 +26,20 @@ export const COVER_INK = "#ece6d6";
 export const COVER_LIFT = { x: 0.5, y: 0.45, radius: 0.7, color: "rgb(143 211 232 / 0.07)" } as const;
 
 /**
- * The head scrim on a photo cover: the night base at `alpha` at the top edge,
- * fading to nothing by `height` (a fraction of the cover height). The head
- * (top 8.7%, two title lines and the dates) ends near 26%; the fade runs a
- * little past it so the dates never sit on its edge. Owner review (CI
- * screenshots): at 0.38 the dates all but vanished on a pale sky, so the scrim
- * is 0.55 — the light ink then reads on white silk, which stays near
- * 230 × 0.45 + 34 × 0.55 ≈ 122 before shading.
+ * The title band on a photo cover (owner decision 2026-10-23, replacing the
+ * gradient scrim that left the title unreadable on bright photos): a solid
+ * band of the night at `alpha`, the full cover width, from `top` to `bottom`
+ * (fractions of the cover height), sharp edged. On the 504 × 600 reference
+ * the head's glyphs run from about 10% (title cap line, top 8.7%) to about
+ * 26-27% (the dates under two title lines), so the band leaves about 5% of
+ * padding above the title and 2-3% below the dates, and stops 1% short of
+ * the Route band (COVER_ROUTE_BAND top 0.3). The strip of photo above
+ * `top` is on purpose: the 3D QA's closed-front probes sample just inside
+ * the cover's top edge and read the cover as brighter than the table. At
+ * 0.8, white silk under the band stays near 230 × 0.2 + 34 × 0.8 ≈ 73, so
+ * the light ink reads without a text shadow.
  */
-export const COVER_SCRIM = { height: 0.34, alpha: 0.55, color: "11 18 34" } as const;
-
-/** A soft dark shadow under the head's text on a photo, as a fraction of the cover width. */
-export const COVER_TEXT_SHADOW = { blur: 3 / 504, color: "rgb(6 9 16 / 0.45)" } as const;
+export const COVER_TITLE_BAND = { top: 0.05, bottom: 0.29, alpha: 0.8, color: "11 18 34" } as const;
 
 /**
  * The Route on a photo: a light core over a dark halo, so it reads on any
