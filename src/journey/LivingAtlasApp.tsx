@@ -3757,7 +3757,9 @@ export function LivingAtlasApp({
   // Compact mobile's bottom dock: 记录新旅程, the current Journey and the
   // one-sentence field share one row under the time row. Without the router
   // the row keeps 「+」 and the Journey; a read-only view keeps the Journey.
-  const mobileDockShown = isMobileV2 && view === "planet"
+  // An Atlas with no Journey yet has no dock: its empty hero holds that band
+  // and its own 记录第一段旅程 action.
+  const mobileDockShown = isMobileV2 && view === "planet" && journeys.length > 0
     && (Boolean(mobileJourney) || canCreateJourney || atlasCommandDockLive);
   const commandBarShared = {
     routed: commandIntents,

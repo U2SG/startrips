@@ -8347,7 +8347,8 @@ button.living-atlas__globe-focus-exit {
   top: calc(100% - var(--mobile-dock-journey-row) - 2px);
 }
 
-/* No Journey yet: the dock is its row alone (记录新旅程 and the field). */
+/* No current Journey to show (none is focused): the dock is its row alone
+   (记录新旅程 and the field). An Atlas with no Journeys has no dock. */
 .living-atlas:has(> .mobile-v2__chrome[data-dock-only]) {
   --mobile-dock-height: calc(var(--mobile-dock-journey-row) + 2px);
 }
