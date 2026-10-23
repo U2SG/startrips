@@ -23,7 +23,10 @@ export const COMMAND_BAR_TIMEOUT_MS = 65_000;
 /** The longest sentence any routed intent accepts (the Composer's own bound). */
 export const MAX_COMMAND_TEXT_LENGTH = 500;
 
-export type CommandSurface = "atlas" | "composer" | "share";
+export type CommandSurface = "atlas" | "composer" | "share" | "story";
+
+/** The media move route's own bound on one batch. */
+export const MAX_ASSIGN_PHOTOS_SELECTION = 256;
 
 export type CommandSurfaceContext = {
   surface: CommandSurface;
@@ -32,12 +35,15 @@ export type CommandSurfaceContext = {
   journeyCount: number;
   /** Route Points of the open Composer's draft; ignored elsewhere. */
   composerPointCount: number;
+  /** Media the open Story has selected to move; 0 when it is not selecting. */
+  storySelectionCount?: number;
 };
 
 /**
  * What the member can ask for here, narrowed to what the server routes. The
  * Composer offers only its own reorder; the share dialog only sharing; the
- * Atlas everything that does not need an open draft.
+ * Atlas everything that does not need an open draft; the Story only moving
+ * the media it has selected.
  */
 export function commandBarOfferedIntents(
   routed: readonly CommandIntent[],
@@ -52,6 +58,10 @@ export function commandBarOfferedIntents(
           && context.composerPointCount <= MAX_ROUTE_ORDER_POINTS;
       case "share":
         return canShare && (intent === "share" || intent === "share-photos-filter");
+      case "story":
+        return intent === "assign-photos"
+          && (context.storySelectionCount ?? 0) > 0
+          && (context.storySelectionCount ?? 0) <= MAX_ASSIGN_PHOTOS_SELECTION;
       case "atlas":
         switch (intent) {
           case "create-journey": return context.canCreateJourney;
@@ -59,7 +69,8 @@ export function commandBarOfferedIntents(
           case "share-photos-filter": return canShare;
           case "navigate": return context.journeyCount > 0;
           case "globe-focus": return true;
-          case "route-order": return false;
+          case "route-order":
+          case "assign-photos": return false;
         }
     }
     return false;
@@ -91,6 +102,7 @@ export function commandBarManualEntry(intent: CommandIntent | "unsupported" | nu
     case "share":
     case "share-photos-filter": return "也可以点顶部的「分享多段旅程」手动勾选。";
     case "route-order": return "也可以在路线列表里逐个移动途径点。";
+    case "assign-photos": return "也可以把选中的照片拖到目标途径点卡片上。";
     case "navigate": return "也可以在旅程列表里直接打开。";
     case "globe-focus": return "也可以在「更多」里选择「只看地球」。";
     default: return "可以使用顶部的「记录旅程」「分享多段旅程」或「更多」菜单。";
@@ -136,6 +148,9 @@ export function commandBarFailure(error: unknown): CommandBarFailure {
   if (status === 502) {
     return { text: "理解服务暂时没有给出可用的回答，请重试。" + manual, refetchCapabilities: false };
   }
+  if (status === 404) {
+    return { text: "这段旅程已经不可用，请关闭故事后重新打开。", refetchCapabilities: false };
+  }
   if (status === 401 || status === 403) {
     return { text: "当前账户不能执行这项操作。", refetchCapabilities: false };
   }
@@ -173,6 +188,9 @@ export function commandBarExpiryLabel(expiry: CommandShareExpiry) {
 /** Said when the surface offers nothing the server routes. */
 export const COMMAND_BAR_NOTHING_HERE = "这里暂时没有可以用一句话完成的操作。";
 
+/** Said over a Story that is not selecting media (or cannot move them). */
+export const COMMAND_BAR_STORY_NOTHING_HERE = "在故事的全部媒体里点「选择」选中照片后，可以用一句话说要移到哪里。";
+
 /**
  * The one card a reply becomes. A proposal that cannot be confirmed (no
  * Journey matched, no complete order, nothing changes) becomes a note that
@@ -183,6 +201,8 @@ export function commandCardFromAnswer(
   context: {
     journeys: readonly { id: string }[];
     composerPoints: RouteOrderIntentPoint[];
+    /** The Story selection the sentence was sent with, if any. */
+    story?: { journeyId: string; selectionCount: number } | null;
     preview: (order: readonly string[]) => { rows: RouteOrderPreviewRow[]; notes: string[] } | null;
   },
 ): ProposalCardModel {
@@ -218,6 +238,19 @@ export function commandCardFromAnswer(
         return note("按这句话，顺序没有变化。", "route-order", unmatched);
       }
       return { kind: "route-order", basis: context.composerPoints, order, ...preview, unmatched };
+    }
+    case "assign-photos": {
+      const { target, alternatives, unmatched } = answer.proposal;
+      if (!target || !context.story) {
+        return note("没能确定要移到哪里，照片没有移动。", "assign-photos", unmatched);
+      }
+      return {
+        kind: "assign-photos",
+        journeyId: context.story.journeyId,
+        selectionCount: context.story.selectionCount,
+        targets: [target, ...alternatives],
+        unmatched: unmatched ?? answer.unmatched,
+      };
     }
     case "create-journey":
       return { kind: "create-journey", sentence: answer.proposal.sentence };

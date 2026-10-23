@@ -11001,6 +11001,29 @@ body:has(.journey-share) .account-dock {
   gap: 8px;
 }
 
+/* assign-photos: the proposed Route Point and its alternatives, one pick. */
+.command-card__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.command-card__choices button[aria-pressed="true"] {
+  border-color: var(--control-select);
+  background: color-mix(in srgb, var(--control-select) 12%, transparent);
+}
+
+/* Over the Story the bar is portaled to <body>, outside `.living-atlas`, so
+   the Atlas variables it reads are restated from the same values. */
+.command-bar[data-command-bar-surface="story"] {
+  --atlas-panel-solid: #051011;
+  --atlas-line: var(--control-line);
+  --atlas-line-strong: var(--control-line-strong);
+  --atlas-text: var(--control-ink);
+  --atlas-muted: var(--control-muted);
+  --atlas-cyan: var(--control-select);
+}
+
 @media (hover: hover) and (pointer: fine) {
   .command-bar button:not(:disabled):hover,
   .command-card button:not(.command-card__confirm):not(:disabled):hover {

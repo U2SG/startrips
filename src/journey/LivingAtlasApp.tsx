@@ -1,4 +1,4 @@
-import { type ComponentType, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, type ReactNode, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowNarrowLeft,
   IconCommand,
@@ -56,7 +56,8 @@ import {
 } from "./homeBaseInference";
 import { JourneyApiError, readCommandRouterIntents, type CommandIntent } from "./journeyApi";
 import { CommandBar } from "./CommandBar";
-import type { CommandBarComposerBridge, ShareDialogPrefill } from "./ProposalCard";
+import { createPortal } from "react-dom";
+import type { CommandBarComposerBridge, CommandBarStoryBridge, ShareDialogPrefill } from "./ProposalCard";
 import {
   homeBaseConfirmationDraft,
   homeBaseConfirmationRequest,
@@ -2315,6 +2316,7 @@ export function LivingAtlasApp({
   const [commandCapabilityTick, setCommandCapabilityTick] = useState(0);
   const [commandBarOpen, setCommandBarOpen] = useState(false);
   const commandComposerBridgeRef = useRef<CommandBarComposerBridge | null>(null);
+  const commandStoryBridgeRef = useRef<CommandBarStoryBridge | null>(null);
   const [composerSentence, setComposerSentence] = useState<string | null>(null);
   useEffect(() => {
     if (!commandBarEligible) {
@@ -2327,10 +2329,13 @@ export function LivingAtlasApp({
     });
     return () => { active = false; };
   }, [commandBarEligible, commandCapabilityTick]);
-  const commandSurface = composerOpen ? "composer" : shareTarget ? "share" : "atlas";
+  const commandSurface = composerOpen
+    ? "composer"
+    : shareTarget ? "share" : storyJourneyId !== null ? "story" : "atlas";
   const commandBarVisible = commandBarEligible && commandIntents.length > 0;
   // Over the Atlas only while its header is live; over the Composer and the
-  // share dialog as an overlay inside their focus trap.
+  // share dialog as an overlay inside their focus trap; over the Story (which
+  // covers the header) by ⌘K only, portaled above it.
   const commandBarReachable = commandBarVisible && !globePickActive && !playbackActive && (
     commandSurface !== "atlas"
     || !(desktopHeaderInert || storyJourneyId !== null || importOpen)
@@ -2338,6 +2343,8 @@ export function LivingAtlasApp({
   useEffect(() => {
     setCommandBarOpen(false);
   }, [commandSurface]);
+  const hostCommandBar = (bar: ReactNode) =>
+    commandSurface === "story" && typeof document !== "undefined" ? createPortal(bar, document.body) : bar;
   useEffect(() => {
     if (!commandBarReachable) setCommandBarOpen(false);
   }, [commandBarReachable]);
@@ -5098,6 +5105,7 @@ export function LivingAtlasApp({
         </Suspense>
       ) : storyJourneyId ? (
         <JourneyStory
+          commandBarStoryBridgeRef={commandStoryBridgeRef}
           journeys={journeys}
           journeyId={storyJourneyId}
           routePointId={storyRoutePointId}
@@ -5234,8 +5242,10 @@ export function LivingAtlasApp({
 
       {/* Last in the Atlas, so it is not inside the inert background of a
           Composer or share dialog opened before it; it is its own nested
-          focus layer and hands focus back when it closes. */}
-      {commandBarOpen && commandBarReachable ? (
+          focus layer and hands focus back when it closes. Over the Story it is
+          portaled after the body-level Story: the Atlas root isolates its
+          stacking, so nothing inside it can paint above the Story. */}
+      {commandBarOpen && commandBarReachable ? hostCommandBar(
         <CommandBar
           routed={commandIntents}
           context={{
@@ -5248,6 +5258,7 @@ export function LivingAtlasApp({
           journeys={journeyRail}
           shareClient={shareClient}
           composerBridge={commandComposerBridgeRef}
+          storyBridge={commandStoryBridgeRef}
           onCapabilitiesStale={() => setCommandCapabilityTick((tick) => tick + 1)}
           onClose={() => setCommandBarOpen(false)}
           onCreateJourney={(sentence) => {
@@ -5267,7 +5278,7 @@ export function LivingAtlasApp({
             setView("planet");
             setGlobeFocusMode(true);
           }}
-        />
+        />,
       ) : null}
     </main>
   );

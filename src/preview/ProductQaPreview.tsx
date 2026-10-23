@@ -512,6 +512,7 @@ function JourneyComposerQaPreview() {
           journeys={[]}
           shareClient={null}
           composerBridge={commandBridgeRef}
+          storyBridge={{ current: null }}
           onCapabilitiesStale={() => setCommandIntents([])}
           onClose={() => setCommandOpen(false)}
           onCreateJourney={() => undefined}

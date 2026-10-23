@@ -707,6 +707,7 @@ export type CommandIntent =
   | "share"
   | "share-photos-filter"
   | "route-order"
+  | "assign-photos"
   | "navigate"
   | "globe-focus";
 
@@ -715,6 +716,7 @@ const COMMAND_INTENTS: readonly CommandIntent[] = [
   "share",
   "share-photos-filter",
   "route-order",
+  "assign-photos",
   "navigate",
   "globe-focus",
 ];
@@ -742,12 +744,23 @@ export async function readCommandRouterIntents(
 }
 
 export type CommandRouteContext = {
-  surface: "atlas" | "composer" | "share";
+  surface: "atlas" | "composer" | "share" | "story";
   /** What the member's surface offers; the server narrows it again. */
   intents: CommandIntent[];
   activeJourneyId?: string | null;
   /** The Composer's draft, only when route-order is offered. */
   composerPoints?: readonly { id: string; label: string }[];
+  /** How many media the open Story has selected; assign-photos needs one or more. */
+  selectionCount?: number;
+};
+
+/** One place the Story's selected media may go; `routePointId: null` is the loose pages. */
+export type AssignMediaTarget = { routePointId: string | null; label: string };
+
+export type AssignMediaProposal = {
+  target: AssignMediaTarget | null;
+  alternatives: AssignMediaTarget[];
+  unmatched: string | null;
 };
 
 type CommandRouteMeta = { unmatched: string | null; model: string };
@@ -755,6 +768,7 @@ type CommandRouteMeta = { unmatched: string | null; model: string };
 export type CommandRouteAnswer = CommandRouteMeta & (
   | { intent: "share" | "share-photos-filter"; proposal: ShareIntentProposal }
   | { intent: "route-order"; proposal: RouteOrderIntentProposal }
+  | { intent: "assign-photos"; proposal: AssignMediaProposal }
   | { intent: "create-journey"; proposal: { sentence: string } }
   | { intent: "navigate"; proposal: { journeyId: string | null; unmatched: string | null } }
   | { intent: "globe-focus"; proposal: Record<string, never> }
