@@ -117,11 +117,23 @@ newer build is a configuration change rather than a code change. The credential
 is never sent to a browser, and only what the member submitted for this import
 is sent to the provider.
 
-## One-sentence share
+## The command bar (one sentence)
 
-The multi-Journey share dialog can offer a single sentence entry, such as
-"分享今年的三段旅程，7 天有效". It is `disabled` by default, and then the entry
-is not rendered at all; sharing by ticking Journeys is unchanged.
+On desktop, the owner's Atlas header can offer 「一句话」 (also Ctrl+K / ⌘K, and
+as an overlay over the Journey Composer and the share dialog). One sentence,
+such as "分享今年的三段旅程，7 天有效", "把理塘放到最后" or "只看地球", becomes one
+proposal card with 确认 / 修改 / 取消; nothing is written before 确认, and every
+confirm goes through the existing authorized route. It is `disabled` by
+default, and then the bar is not rendered at all; every manual entry (记录旅程,
+分享多段旅程, the route list, 更多) is unchanged. Guest and shared views never
+show it. `GET /api/intents/capabilities` reports
+`router: { configured, intents }`: `share`, `route-order`, `navigate` and
+`globe-focus` with `INTENT_DRIVER=http-model`; `share-photos-filter` only
+with `INTENT_VISION_MODEL`; `create-journey` only when
+`ITINERARY_RECOGNITION_DRIVER` is not `disabled` (the Composer reads the
+sentence). Where the bar reads Journey sentences, the Composer's own
+「用一句话描述这段旅程」 entry is not shown; elsewhere (including the mobile
+layout) it stays.
 
 `INTENT_DRIVER=http-model` posts to `${INTENT_BASE_URL}/chat/completions` on
 any OpenAI-compatible endpoint (for example DashScope compatible mode) with
@@ -131,43 +143,66 @@ at startup. `INTENT_TIMEOUT_MS` (default 30000, 1000-300000) bounds one call;
 a slow provider is reported as `INTENT_TIMEOUT` (504), an unconfigured one as
 `INTENT_UNAVAILABLE` (503).
 
-What is sent: the member's sentence, the server's UTC date, and the id,
-title, start date and end date of at most the 200 most recent live Journeys
-of the active Atlas. No coordinates, Route Points, notes, media or share
-tokens are sent. The model may only propose ids from that list and an expiry
-of 1d, 7d or 30d; anything else is dropped or refused. The proposal only
-ticks Journeys in the dialog: the member reviews it and creates the link with
-the existing Create button, so nothing is written by the model call. The key
-is never sent to a browser.
+`POST /api/intents/route` reads a sentence in two stages, one provider call
+each, with one sentence per Atlas at a time on an API process (a second
+answers `INTENT_ROUTE_BUSY`, 409). The sentence is at most 500 characters,
+and is re-checked against the chosen intent's own limit (300 for sharing and
+navigation, 200 for reordering).
+
+- Stage 1 (`read` permission) sends only the sentence and the intents the
+  member's surface offers, as ids with fixed descriptions. No title, date,
+  label, coordinate or media is sent. The answer must be one of those ids or
+  `unsupported`; anything else is refused as `INTENT_MALFORMED` (502).
+- Stage 2 checks the chosen intent's own permission again, then:
+  - `share` and `share-photos-filter` (`create`) send the sentence, the
+    server's UTC date, and the id, title, start date and end date of at most
+    the 200 most recent live Journeys of the active Atlas, as below.
+  - `route-order` (`update`) sends what the reorder section below
+    describes, for the Composer's current draft.
+  - `navigate` (`read`) sends the same Journey list as sharing. The answer is
+    narrowed to one id from that list.
+  - `create-journey` (`create`) and `globe-focus` (`read`) make no second
+    call. The Journey sentence goes to the Composer's existing itinerary
+    reading (see Itinerary import).
+
+What the share stage sends: no coordinates, Route Points, notes, media or
+share tokens. The model may only propose ids from the Journey list and an
+expiry of 1d, 7d or 30d; anything else is dropped or refused. The card lists
+the proposed Journeys. 确认 creates the link through `POST /api/shares` and
+shows it once. 修改 opens the share dialog with that selection ticked. The
+model call writes nothing, and the key is never sent to a browser.
+`POST /api/intents/share` still answers the same proposal on its own.
 
 ### Reordering Route Points by one sentence
 
-With `INTENT_DRIVER=http-model` the Journey Composer also offers
-「用一句话调整顺序」 above a route of 2 to 64 Route Points, for example
-"把稻城移到理塘前面" or "倒过来". It uses the same endpoint, key, model and
-timeout; with `disabled` the entry is not rendered and reordering by hand is
-unchanged. `POST /api/intents/route-order` needs the same permission as saving
-a Journey.
+With `INTENT_DRIVER=http-model`, the command bar opened over the Journey
+Composer reorders a route of 2 to 64 Route Points from one sentence, for
+example "把稻城移到理塘前面" or "倒过来". It uses the same endpoint, key, model
+and timeout. With `disabled` the bar is not shown and reordering by hand is
+unchanged. Stage 2 of `POST /api/intents/route` (and
+`POST /api/intents/route-order`) needs the same permission as saving a
+Journey.
 
 What is sent: the member's sentence and, for each Route Point in its current
 order, its position, a positional id (`p1`, `p2`, …) and its label. No
 coordinates, times, notes, Stops, media or the client's own ids are sent. The
 model may only follow what the sentence says, never reorder by geography or
 distance; an answer that is not every point exactly once is dropped as "no
-proposal". The Composer previews the new order and what it would break
-(times going backwards, stays no longer next to their Stop); the member
-applies it to the draft and still saves the Journey, so nothing is written by
-the model call.
+proposal". The card previews the new order and what it would break
+(times going backwards, stays no longer next to their Stop). 确认 applies it
+to the draft only, with 撤销 on the card while that order still stands. The
+member still saves the Journey, so the model call writes nothing.
 
 ### Sharing photos without people
 
 A sentence such as "只分享风景图，不分享人像图" can ask the link to leave out
 photos with people. This needs `INTENT_VISION_MODEL`, a vision-capable model on
 the same `INTENT_BASE_URL` with the same `INTENT_API_KEY`. Unset (the default),
-the dialog never offers the filter and nothing about photos is sent.
+the command bar never offers the filter and nothing about photos is sent.
 
-What is sent, and when: only after the member's sentence asks for the filter,
-and only for the Journeys then selected, the existing stored preview (the
+What is sent, and when: only after the member's sentence asks for the filter
+(the command bar's `share-photos-filter` card, which checks before 确认 is
+allowed), and only for the Journeys it proposed, the existing stored preview (the
 small still derived on upload, at most `MEDIA_PREVIEW_MAX_BYTES`) of each photo
 that has not been judged before is sent inline as a base64 data URL — never a
 URL the provider could fetch. This includes photos that do show people;
@@ -180,7 +215,7 @@ not be judged (no ready preview, provider error or timeout) is excluded, as is
 every video and other non-photo media; the dialog counts them before the
 member creates the link. Each `POST /api/intents/share/media` sends at most 48
 not-yet-judged photos, 3 at a time, each bounded by `INTENT_TIMEOUT_MS`, and
-answers `remaining`; the dialog repeats the request (showing 已检查 X / Y) until
+answers `remaining`; the card (or the dialog after 修改) repeats the request (showing 已检查 X / Y) until
 nothing remains, and only that final answer can scope a link. A photo that
 failed is sent back as a skip, stays excluded and is not retried in the same
 run, so the run always ends. A selection with more than 2000 media answers
