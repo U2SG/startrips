@@ -102,6 +102,11 @@ intentRoutes.get("/capabilities", async (context) => {
       mediaFilter: mediaFilterConfigured(),
     },
     routeOrder: { configured: serverConfig.intentDriver === "http-model" },
+    // The command bar renders only when at least one intent can be routed.
+    router: (() => {
+      const intents = availableRouterIntents(routerConfig());
+      return { configured: intents.length > 0, intents };
+    })(),
   });
 });
 
