@@ -248,6 +248,8 @@ async function tapSelector(session, selector) {
     return {
       hit: Boolean(target?.contains(at)),
       hitClass: at instanceof Element ? String(at.className).slice(0, 80) : null,
+      // Page age at the tap (#718 triage).
+      pageAgeMs: Math.round(performance.now()),
     };
   }, { query: selector, x: box.x + box.width / 2, y: box.y + box.height / 2 });
   if (session.pointer.kind === "touch") await session.page.locator(selector).tap();
@@ -260,10 +262,9 @@ async function tapSelector(session, selector) {
 const sameRect = (left, right, tolerance = 0.5) => Boolean(left && right
   && ["top", "left", "width", "height"].every((key) => Math.abs(left[key] - right[key]) <= tolerance));
 
-/** Expanding and collapsing the long note must not touch the stage at all. */
-async function toggleLongNote(session) {
+/** Tap the note's expand entry; on a miss, say what the tap hit and delivered. */
+async function openNoteSheet(session) {
   const { page } = session;
-  const before = await storyState(page);
   const expand = await tapSelector(session, ".story-point-note__expand");
   try {
     await page.locator(".story-point-note-sheet").waitFor({ state: "visible", timeout: 5_000 });
@@ -272,6 +273,14 @@ async function toggleLongNote(session) {
     throw new Error(`expand did not open the sheet: ${JSON.stringify({ expand, delivered, state: await storyState(page) })}`,
       { cause: error });
   }
+  return expand;
+}
+
+/** Expanding and collapsing the long note must not touch the stage at all. */
+async function toggleLongNote(session) {
+  const { page } = session;
+  const before = await storyState(page);
+  const expand = await openNoteSheet(session);
   const expanded = await storyState(page);
   // Grouped-note continuity and scroll-boundary coverage have different inputs.
   // The fixed long/short/resize matrix below owns mandatory overflow assertions.
@@ -336,8 +345,7 @@ try {
         await waitForCurrent(page, C1);
         await waitForStableStage(page);
         await assertExpandablePreview(page, fixture.text, name);
-        await tapSelector(session, ".story-point-note__expand");
-        await page.locator(".story-point-note-sheet").waitFor({ state: "visible", timeout: 5_000 });
+        await openNoteSheet(session);
         if (kind === "short") {
           await page.setViewportSize(viewport);
           await waitForStableStage(page);
@@ -372,8 +380,7 @@ try {
       await waitForCurrent(page, C1);
       await waitForStableStage(page);
       await assertExpandablePreview(page, fixture.text, name);
-      await tapSelector(session, ".story-point-note__expand");
-      await page.locator(".story-point-note-sheet").waitFor({ state: "visible", timeout: 5_000 });
+      await openNoteSheet(session);
       progress.states = await assertStoryScrollResize(page, { text: fixture.text, scenario: name, portrait, landscape });
       record({ name, ...progress, consoleErrors: session.consoleErrors, pageErrors: session.pageErrors,
         failed: session.consoleErrors.length > 0 || session.pageErrors.length > 0 });

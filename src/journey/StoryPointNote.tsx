@@ -86,7 +86,9 @@ export function StoryPointNote({ routePointId, label, text }: Props) {
   // the Story sheet a finger's compatibility click is not guaranteed to arrive
   // (`mediaButtonInput` in JourneyStory). These two buttons follow the same
   // rule, and swallow the click that may still follow so it cannot act twice.
-  const touchClickAt = useRef(0);
+  // Null until a touch completes: performance.now() starts at navigation, so a
+  // zero sentinel would swallow every mouse click in a page's first second.
+  const touchClickAt = useRef<number | null>(null);
   const touchActivation = (activate: () => void) => ({
     onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
       if (event.pointerType !== "touch" || !event.isPrimary) return;
@@ -97,8 +99,8 @@ export function StoryPointNote({ routePointId, label, text }: Props) {
       activate();
     },
     onClick: (event: MouseEvent<HTMLButtonElement>) => {
-      if (event.detail > 0 && performance.now() - touchClickAt.current < 1_000) {
-        touchClickAt.current = 0;
+      if (event.detail > 0 && touchClickAt.current !== null && performance.now() - touchClickAt.current < 1_000) {
+        touchClickAt.current = null;
         return;
       }
       activate();
