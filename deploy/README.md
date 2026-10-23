@@ -127,8 +127,8 @@ confirm goes through the existing authorized route. It is `disabled` by
 default, and then the bar is not rendered at all; every manual entry (记录旅程,
 分享多段旅程, the route list, 更多) is unchanged. Guest and shared views never
 show it. `GET /api/intents/capabilities` reports
-`router: { configured, intents }`: `share`, `route-order`, `navigate` and
-`globe-focus` with `INTENT_DRIVER=http-model`; `share-photos-filter` only
+`router: { configured, intents }`: `share`, `route-order`, `assign-photos`,
+`navigate` and `globe-focus` with `INTENT_DRIVER=http-model`; `share-photos-filter` only
 with `INTENT_VISION_MODEL`; `create-journey` only when
 `ITINERARY_RECOGNITION_DRIVER` is not `disabled` (the Composer reads the
 sentence). Where the bar reads Journey sentences, the Composer's own
@@ -147,7 +147,7 @@ a slow provider is reported as `INTENT_TIMEOUT` (504), an unconfigured one as
 each, with one sentence per Atlas at a time on an API process (a second
 answers `INTENT_ROUTE_BUSY`, 409). The sentence is at most 500 characters,
 and is re-checked against the chosen intent's own limit (300 for sharing and
-navigation, 200 for reordering).
+navigation, 200 for reordering and photo assignment).
 
 - Stage 1 (`read` permission) sends only the sentence and the intents the
   member's surface offers, as ids with fixed descriptions. No title, date,
@@ -159,6 +159,8 @@ navigation, 200 for reordering).
     the 200 most recent live Journeys of the active Atlas, as below.
   - `route-order` (`update`) sends what the reorder section below
     describes, for the Composer's current draft.
+  - `assign-photos` (`update`) sends what the photo assignment section
+    below describes. It is offered only while the Story has media selected.
   - `navigate` (`read`) sends the same Journey list as sharing. The answer is
     narrowed to one id from that list.
   - `create-journey` (`create`) and `globe-focus` (`read`) make no second
@@ -192,6 +194,28 @@ proposal". The card previews the new order and what it would break
 (times going backwards, stays no longer next to their Stop). 确认 applies it
 to the draft only, with 撤销 on the card while that order still stands. The
 member still saves the Journey, so the model call writes nothing.
+
+### Moving selected photos by one sentence
+
+With `INTENT_DRIVER=http-model`, the command bar opened by ⌘K / Ctrl+K over
+the desktop Story, while its 「全部照片」 view has media selected (「选择」), moves
+that selection to one Route Point of the Journey, for example
+"这两张是在理塘拍的", or to the Journey's loose pages (旅程散页). It uses the
+same endpoint, key, model and timeout. With `disabled` the bar is not shown and
+moving by hand is unchanged. Stage 2 of `POST /api/intents/route` (and
+`POST /api/intents/assign-media`, body `{ text, journeyId, selectionCount }`)
+needs the same permission as the move itself, and a Journey outside the
+session's Atlas answers 404 before any provider call.
+
+What is sent: the member's sentence and, for each Route Point of that Journey
+as the server reads it, its position, a positional id (`p1`, `p2`, …) and its
+label, plus the fixed id `journey` for the loose pages. No photo, preview,
+file name, media or Route Point id, coordinate, time, note or selection size
+is sent. The answer must name only ids that were sent, or there is no
+proposal. The card shows 「把 N 张移到 · <label>」 with any alternatives as
+choices. 确认 moves the selection through the Story's own
+`POST /api/uploads/assets/move`, and 撤销 on the card runs the Story's existing
+undo, so the model call writes nothing.
 
 ### Sharing photos without people
 

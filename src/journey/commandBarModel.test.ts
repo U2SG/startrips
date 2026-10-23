@@ -174,3 +174,52 @@ describe("undoRouteOrder", () => {
     expect(undoRouteOrder([c, a], ["c", "a", "b"], ["a", "b", "c"])).toBeNull();
   });
 });
+
+describe("assign-photos over the Story", () => {
+  const routed: CommandIntent[] = [...ROUTED, "assign-photos"];
+  const story = { ...ATLAS, surface: "story" as const };
+  const meta = { unmatched: null, model: "m" };
+  const context = { journeys: [], composerPoints: [], preview: () => null };
+  const target = { routePointId: "rp-2", label: "理塘" };
+
+  it("is offered only over a Story selection, and never on the Atlas", () => {
+    expect(commandBarOfferedIntents(routed, { ...story, storySelectionCount: 2 })).toEqual(["assign-photos"]);
+    expect(commandBarOfferedIntents(routed, { ...story, storySelectionCount: 0 })).toEqual([]);
+    expect(commandBarOfferedIntents(routed, story)).toEqual([]);
+    expect(commandBarOfferedIntents(routed, { ...story, storySelectionCount: 257 })).toEqual([]);
+    expect(commandBarOfferedIntents(routed, { ...ATLAS, storySelectionCount: 2 })).not.toContain("assign-photos");
+  });
+
+  it("puts the proposed target first, then the alternatives, for the selection that was sent", () => {
+    expect(commandCardFromAnswer({
+      ...meta,
+      intent: "assign-photos",
+      proposal: { target, alternatives: [{ routePointId: null, label: "旅程散页" }], unmatched: null },
+    }, { ...context, story: { journeyId: "j-1", selectionCount: 2 } })).toEqual({
+      kind: "assign-photos",
+      journeyId: "j-1",
+      selectionCount: 2,
+      targets: [target, { routePointId: null, label: "旅程散页" }],
+      unmatched: null,
+    });
+  });
+
+  it("is a note without a target, or without the Story it was asked over", () => {
+    expect(commandCardFromAnswer({
+      ...meta,
+      intent: "assign-photos",
+      proposal: { target: null, alternatives: [], unmatched: "没有提到地点" },
+    }, { ...context, story: { journeyId: "j-1", selectionCount: 2 } }))
+      .toMatchObject({ kind: "note", text: expect.stringContaining("没有提到地点") });
+    expect(commandCardFromAnswer({
+      ...meta,
+      intent: "assign-photos",
+      proposal: { target, alternatives: [], unmatched: null },
+    }, { ...context, story: null })).toMatchObject({ kind: "note" });
+  });
+
+  it("says a Journey that is gone is gone", () => {
+    expect(commandBarFailure(new JourneyApiError(404, "JOURNEY_NOT_FOUND", "x")).text)
+      .toContain("旅程已经不可用");
+  });
+});

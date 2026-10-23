@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import {
   COMMAND_BAR_NOTHING_HERE,
+  COMMAND_BAR_STORY_NOTHING_HERE,
   COMMAND_BAR_TIMEOUT_MS,
   COMMAND_BAR_TIMEOUT_TEXT,
   commandBarFailure,
@@ -21,11 +22,12 @@ const PLACEHOLDERS: Record<CommandSurfaceContext["surface"], string> = {
   atlas: "说一句话：记录、分享或打开一段旅程",
   composer: "调整途径点顺序，例如：把理塘放到最后",
   share: "例如：分享今年的三段旅程，7 天有效",
+  story: "说说选中的照片属于哪里，例如：这些是在理塘拍的",
 };
 
 export type CommandBarProps = Omit<ProposalCardProps, "card" | "onRevise" | "onDismiss"> & {
   routed: readonly CommandIntent[];
-  context: Omit<CommandSurfaceContext, "composerPointCount">;
+  context: Omit<CommandSurfaceContext, "composerPointCount" | "storySelectionCount">;
   activeJourneyId: string | null;
   /** 503: the deployment stopped routing; the host refetches and hides the bar. */
   onCapabilitiesStale: () => void;
@@ -123,14 +125,21 @@ export function CommandBar({
     if (!sentence) return;
     const bridge = cardProps.composerBridge.current;
     const composerPoints = context.surface === "composer" ? bridge?.points() ?? [] : [];
+    const storyBridge = context.surface === "story" ? cardProps.storyBridge.current : null;
+    const story = storyBridge
+      ? { journeyId: storyBridge.journeyId, selectionCount: storyBridge.selectionCount() }
+      : null;
     const offered = commandBarOfferedIntents(routed, {
       ...context,
       composerPointCount: composerPoints.length,
+      storySelectionCount: story?.selectionCount ?? 0,
     });
     stop(null);
     setCard(null);
     if (offered.length === 0) {
-      showCard({ kind: "note", text: COMMAND_BAR_NOTHING_HERE, manual: commandBarManualEntry(null) });
+      showCard(context.surface === "story"
+        ? { kind: "note", text: COMMAND_BAR_STORY_NOTHING_HERE, manual: commandBarManualEntry("assign-photos") }
+        : { kind: "note", text: COMMAND_BAR_NOTHING_HERE, manual: commandBarManualEntry(null) });
       return;
     }
     const sequence = sequenceRef.current;
@@ -145,13 +154,16 @@ export function CommandBar({
       const answer = await routeCommand(sentence, {
         surface: context.surface,
         intents: offered,
-        activeJourneyId,
+        // Over the Story, the Journey is the one whose media are selected.
+        activeJourneyId: story?.journeyId ?? activeJourneyId,
         ...(offered.includes("route-order") ? { composerPoints } : {}),
+        ...(offered.includes("assign-photos") && story ? { selectionCount: story.selectionCount } : {}),
       }, controller.signal);
       if (sequence !== sequenceRef.current) return;
       showCard(commandCardFromAnswer(answer, {
         journeys: cardProps.journeys,
         composerPoints,
+        story,
         preview: (order) => cardProps.composerBridge.current?.preview(composerPoints, order) ?? null,
       }));
     } catch (error) {

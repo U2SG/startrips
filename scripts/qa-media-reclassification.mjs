@@ -42,6 +42,136 @@ function record(name, details) {
   if (details.failed) failed = true;
 }
 
+/**
+ * One sentence over the desktop Story: with two photos selected, ⌘K opens the
+ * command bar above the Story, the stubbed router answers assign-photos, and
+ * 确认 moves exactly the selection to the proposed Route Point through the
+ * Story's own move; the card's 撤销 then restores the original placement.
+ */
+async function verifyCommandBarAssignPhotos() {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, reducedMotion: "reduce" });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const original = structuredClone(fixture);
+  let currentJourney = structuredClone(fixture);
+  const moveRequests = [], undoRequests = [], routeRequests = [];
+  const fulfill = (route, body, status = 200) => route.fulfill({
+    status, contentType: "application/json", body: JSON.stringify(body),
+  });
+  const placement = (journey) => journey.media.map(({ id, routePointId }) => ({ id, routePointId }));
+  await page.route("**/api/auth/get-session", (route) => fulfill(route, null));
+  await page.route("**/api/journeys", (route) => fulfill(route, { journeys: [currentJourney] }));
+  await page.route("**/api/uploads/assets/*/read-url", (route) => fulfill(route, {
+    url: onePixelGif, expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+  }));
+  await page.route("**/api/media-evidence/*", (route) => fulfill(route, { evidence: {
+    mediaAssetId: decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1) ?? "qa-media"),
+    revision: 0,
+    recorded: {
+      spatial: { source: "unknown", granularity: "unknown", latitude: null, longitude: null, accuracyMeters: null, label: null },
+      captureTime: { source: "unknown", timezone: "unknown", local: null, instant: null, offsetMinutes: null },
+    },
+    display: { hidden: false, correction: null }, effective: null, updatedAt: null,
+  } }));
+  await page.route("**/api/uploads/assets/move", async (route) => {
+    const input = route.request().postDataJSON();
+    moveRequests.push(input);
+    const moving = new Set(input.assetIds);
+    const media = [...currentJourney.media].sort((left, right) => left.sortOrder - right.sortOrder);
+    currentJourney = { ...currentJourney, revision: currentJourney.revision + 1, media: [
+      ...media.filter((asset) => !moving.has(asset.id)),
+      ...media.filter((asset) => moving.has(asset.id)).map((asset) => ({ ...asset, routePointId: input.routePointId })),
+    ].map((asset, sortOrder) => ({ ...asset, sortOrder })) };
+    await fulfill(route, { journey: currentJourney });
+  });
+  await page.route("**/api/uploads/assets/move/undo", async (route) => {
+    undoRequests.push(route.request().postDataJSON());
+    currentJourney = { ...structuredClone(original), revision: currentJourney.revision + 1 };
+    await fulfill(route, { journey: currentJourney });
+  });
+  await page.route("**/api/intents/capabilities", (route) => fulfill(route, {
+    share: { configured: true, mediaFilter: false },
+    routeOrder: { configured: true },
+    router: { configured: true, intents: ["assign-photos", "globe-focus"] },
+  }));
+  await page.route("**/api/intents/route", async (route) => {
+    routeRequests.push(route.request().postDataJSON());
+    await fulfill(route, {
+      intent: "assign-photos",
+      proposal: {
+        target: { routePointId: destinationPointId, label: "城市终点" },
+        alternatives: [{ routePointId: null, label: "旅程散页" }],
+        unmatched: null,
+      },
+      unmatched: null,
+      model: "qa-intent",
+    });
+  });
+
+  try {
+    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+    await page.locator(".living-atlas__active-actions button", { hasText: "打开故事" }).click();
+    const storyRoot = page.locator(".journey-story");
+    await storyRoot.waitFor({ state: "visible", timeout: 15_000 });
+    if (await storyRoot.getAttribute("data-story-editing") !== "true") {
+      await storyRoot.getByRole("button", { name: "编辑故事", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-editing") === "true");
+    }
+    const openOrganizer = storyRoot.getByRole("button", { name: "全部照片", exact: true });
+    if (await openOrganizer.count()) await openOrganizer.click();
+    await page.locator(organizerSelector).waitFor({ state: "visible" });
+    const selectToggle = page.locator(".journey-story__media-select-toggle");
+    if (await selectToggle.getAttribute("aria-pressed") !== "true") await selectToggle.click();
+    await page.locator(`${tileSelector}[aria-label*="seed-0.png"]`).click();
+    await page.locator(`${tileSelector}[aria-label*="seed-2.png"]`).click();
+
+    await page.keyboard.press("Control+k");
+    const bar = page.locator('.command-bar[data-command-bar-surface="story"]');
+    await bar.waitFor({ state: "visible", timeout: 5_000 });
+    const barOnTop = await bar.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return element.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + 24));
+    });
+    await page.locator(".command-bar__input").fill("这两张是在城市终点拍的");
+    await page.keyboard.press("Enter");
+    const card = page.locator('[data-command-card="assign-photos"]');
+    await card.waitFor({ state: "visible", timeout: 10_000 });
+    const title = (await card.locator("h3").textContent())?.trim() ?? "";
+    const choices = await card.locator(".command-card__choices button").evaluateAll((buttons) => buttons.map((button) => ({
+      label: button.textContent?.trim(), pressed: button.getAttribute("aria-pressed"),
+      height: button.getBoundingClientRect().height,
+    })));
+    const sent = routeRequests[0] ?? {};
+    record("story-command-bar-assign-photos-proposal", {
+      barOnTop, title, choices, context: sent.context,
+      failed: !barOnTop || title !== "把 2 张移到 · 城市终点" || moveRequests.length !== 0
+        || choices.length !== 2 || choices[0].pressed !== "true" || choices.some((choice) => choice.height < 44)
+        || sent.context?.surface !== "story" || sent.context?.selectionCount !== 2
+        || sent.context?.activeJourneyId !== journeyId || !sent.context?.intents?.includes("assign-photos"),
+    });
+
+    await card.getByRole("button", { name: "确认", exact: true }).click();
+    await card.locator('[data-command-assign-photos="moved"]').waitFor({ timeout: 10_000 });
+    const move = moveRequests[0] ?? {};
+    const movedPlacement = placement(currentJourney);
+    record("story-command-bar-assign-photos-confirm-moves-selection", {
+      move, movedPlacement,
+      failed: moveRequests.length !== 1 || move.journeyId !== journeyId || move.routePointId !== destinationPointId
+        || !same([...(move.assetIds ?? [])].sort(), [assetId(0), assetId(2)].sort()),
+    });
+
+    await card.getByRole("button", { name: "撤销", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[data-command-card="assign-photos"]')?.textContent?.includes("已撤销"));
+    record("story-command-bar-assign-photos-undo-restores", {
+      undoRequests: undoRequests.length, placement: placement(currentJourney), pageErrors,
+      failed: undoRequests.length !== 1 || !same(placement(currentJourney), placement(original)) || pageErrors.length > 0,
+    });
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   const page = await browser.newPage({
     viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
@@ -421,6 +551,7 @@ try {
       await video.delete();
     }
   }
+  await verifyCommandBarAssignPhotos();
 } catch (error) {
   // The accumulated checks are this lane's only diagnostic record; a thrown
   // step must not take them down with it (#439). Print first, then rethrow so

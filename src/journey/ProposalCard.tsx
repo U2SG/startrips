@@ -8,6 +8,7 @@ import {
   commandBarShareJourneys,
   type CommandShareExpiry,
 } from "./commandBarModel";
+import type { AssignMediaTarget } from "./journeyApi";
 import type { RouteOrderIntentPoint, RouteOrderPreviewRow } from "./routeOrderIntent";
 import {
   collectShareMediaFilter,
@@ -38,6 +39,23 @@ export type CommandBarComposerBridge = {
   ) => { undo: () => boolean } | null;
 };
 
+/**
+ * The open Story's half of an assign-photos card: registered only while its
+ * overview is selecting media to move. `apply` and `undo` run the Story's own
+ * move and 撤销 (selection, refresh and the stale-undo reconcile stay there);
+ * the card never calls the media API itself.
+ */
+export type CommandBarStoryBridge = {
+  journeyId: string;
+  /** Read at submit and again at confirm. */
+  selectionCount: () => number;
+  /** `changed`: the selection is no longer the one the sentence was about. */
+  apply: (targetRoutePointId: string | null, expected: { journeyId: string; selectionCount: number }) =>
+    Promise<"moved" | "changed" | "failed">;
+  /** `none`: nothing left to undo (already undone, or the selection mode ended). */
+  undo: () => Promise<"undone" | "stale" | "failed" | "none">;
+};
+
 /** What 修改 hands the share dialog. */
 export type ShareDialogPrefill = {
   journeyIds: string[];
@@ -62,6 +80,14 @@ export type ProposalCardModel =
     notes: string[];
     unmatched: string | null;
   }
+  | {
+    kind: "assign-photos";
+    journeyId: string;
+    selectionCount: number;
+    /** The proposed target first, then the alternatives the member may pick. */
+    targets: AssignMediaTarget[];
+    unmatched: string | null;
+  }
   | { kind: "create-journey"; sentence: string }
   | { kind: "navigate"; journeyId: string; unmatched: string | null }
   | { kind: "globe-focus" }
@@ -73,6 +99,7 @@ export type ProposalCardProps = {
   journeys: readonly Journey[];
   shareClient: Pick<AtlasMutations, "createShare" | "proposeShareMedia" | "readShareMediaPreview"> | null;
   composerBridge: { current: CommandBarComposerBridge | null };
+  storyBridge: { current: CommandBarStoryBridge | null };
   onCreateJourney: (sentence: string) => void;
   onEditShare: (prefill: ShareDialogPrefill) => void;
   onNavigate: (journeyId: string) => void;
@@ -96,7 +123,9 @@ type Outcome =
   | { status: "done"; text: string }
   | { status: "failed"; text: string }
   | { status: "created"; url: string; expiresAt: string; journeyCount: number; mediaCount: number | null }
-  | { status: "applied"; undo: () => boolean };
+  | { status: "applied"; undo: () => boolean }
+  /** The Story moved the selection; 撤销 runs the Story's own undo. */
+  | { status: "moved"; label: string; undoing: boolean; text: string | null };
 
 const MAX_THUMBNAILS = 12;
 
@@ -104,6 +133,7 @@ function cardTitle(card: ProposalCardModel, journeys: readonly Journey[]) {
   switch (card.kind) {
     case "share": return card.filter ? "只分享风景照" : "创建分享链接";
     case "route-order": return "调整途径点顺序";
+    case "assign-photos": return `把 ${card.selectionCount} 张移到`;
     case "create-journey": return "记录一段新旅程";
     case "navigate": {
       const journey = journeys.find((candidate) => candidate.id === card.journeyId);
@@ -124,6 +154,7 @@ export function ProposalCard({
   journeys,
   shareClient,
   composerBridge,
+  storyBridge,
   onCreateJourney,
   onEditShare,
   onNavigate,
@@ -142,6 +173,11 @@ export function ProposalCard({
     shareFilter ? { status: "pending", progress: null } : null,
   );
   const [thumbnails, setThumbnails] = useState<Array<{ id: string; url: string }>>([]);
+  const [targetIndex, setTargetIndex] = useState(0);
+  const chosenTarget = card.kind === "assign-photos" ? card.targets[targetIndex] ?? card.targets[0] : null;
+  const title = card.kind === "assign-photos" && chosenTarget
+    ? `把 ${card.selectionCount} 张移到 · ${chosenTarget.label}`
+    : cardTitle(card, journeys);
   const shareJourneys = card.kind === "share" ? commandBarShareJourneys(card, journeys) : [];
 
   // A globe-focus card is one Enter away; the others take focus as a whole.
@@ -245,6 +281,28 @@ export function ProposalCard({
         }
         return;
       }
+      case "assign-photos": {
+        const bridge = storyBridge.current;
+        if (!chosenTarget) return;
+        if (!bridge) {
+          setOutcome({ status: "failed", text: "故事里的选择已经结束，这次的建议已作废，请重新选择照片。" });
+          return;
+        }
+        setOutcome({ status: "working" });
+        const result = await bridge.apply(chosenTarget.routePointId, {
+          journeyId: card.journeyId,
+          selectionCount: card.selectionCount,
+        });
+        setOutcome(result === "moved"
+          ? { status: "moved", label: chosenTarget.label, undoing: false, text: null }
+          : {
+            status: "failed",
+            text: result === "changed"
+              ? "所选照片在等待期间有变化，这次的建议已作废，请重新描述。"
+              : "没能移动这些照片，原因见故事里的提示；可以重试。",
+          });
+        return;
+      }
       case "route-order": {
         const applied = composerBridge.current?.apply(card.basis, card.order) ?? null;
         setOutcome(applied
@@ -262,6 +320,31 @@ export function ProposalCard({
         onGlobeFocus();
         return;
     }
+  }
+
+  async function undoMove() {
+    if (outcome.status !== "moved" || outcome.undoing) return;
+    const moved = outcome;
+    const bridge = storyBridge.current;
+    if (!bridge) {
+      setOutcome({ status: "done", text: "故事里的选择已经结束，这次移动无法再从这里撤销。" });
+      return;
+    }
+    setOutcome({ ...moved, undoing: true });
+    const result = await bridge.undo();
+    if (result === "failed") {
+      // The Story keeps a retryable undo; 撤销 stays here for another try.
+      setOutcome({ ...moved, undoing: false, text: "撤销失败，可以再试一次。" });
+      return;
+    }
+    setOutcome({
+      status: "done",
+      text: result === "undone"
+        ? "已撤销，照片回到原来的位置。"
+        : result === "stale"
+          ? "照片之后又有变动，无法撤销；已按服务器上的状态更新。"
+          : "这次移动已经撤销或结束，无法再撤销。",
+    });
   }
 
   function revise() {
@@ -289,7 +372,7 @@ export function ProposalCard({
     }
   }
 
-  const working = outcome.status === "working";
+  const working = outcome.status === "working" || (outcome.status === "moved" && outcome.undoing);
   useEffect(() => {
     onWorkingChange?.(working);
   }, [onWorkingChange, working]);
@@ -299,7 +382,7 @@ export function ProposalCard({
       ref={rootRef}
       className="command-card motion-fade-through"
       tabIndex={-1}
-      aria-label={cardTitle(card, journeys)}
+      aria-label={title}
       data-command-card={card.kind}
       onKeyDown={(event) => {
         if (event.key === "Enter" && event.target === event.currentTarget) {
@@ -308,7 +391,7 @@ export function ProposalCard({
         }
       }}
     >
-      <h3>{cardTitle(card, journeys)}</h3>
+      <h3>{title}</h3>
 
       {card.kind === "share" ? (
         <>
@@ -368,6 +451,20 @@ export function ProposalCard({
             <ul className="command-card__notes">{card.notes.map((note) => <li key={note}>{note}</li>)}</ul>
           ) : null}
         </>
+      ) : null}
+
+      {card.kind === "assign-photos" && card.targets.length > 1 ? (
+        <div className="command-card__choices" role="group" aria-label="也可能是这些位置">
+          {card.targets.map((target, index) => (
+            <button
+              key={target.routePointId ?? "journey"}
+              type="button"
+              aria-pressed={index === targetIndex}
+              disabled={outcome.status !== "idle" && outcome.status !== "failed"}
+              onClick={() => setTargetIndex(index)}
+            >{target.label}</button>
+          ))}
+        </div>
       ) : null}
 
       {card.kind === "create-journey" ? (
@@ -431,6 +528,17 @@ export function ProposalCard({
         </div>
       ) : null}
 
+      {outcome.status === "moved" ? (
+        <div className="command-card__actions" data-command-assign-photos="moved">
+          <p className="command-card__status" role="status">{outcome.text ?? `已移动到 ${outcome.label}`}</p>
+          <button type="button" disabled={outcome.undoing} onClick={() => void undoMove()}>
+            {outcome.undoing ? <StartripsJourneyCue state="waiting" size={24} /> : null}
+            {outcome.undoing ? "正在撤销…" : "撤销"}
+          </button>
+          <button type="button" disabled={outcome.undoing} onClick={onDismiss}>完成</button>
+        </div>
+      ) : null}
+
       {outcome.status === "done" ? <p className="command-card__status" role="status">{outcome.text}</p> : null}
 
       {outcome.status === "idle" || outcome.status === "working" || outcome.status === "failed" ? (
@@ -444,7 +552,7 @@ export function ProposalCard({
               onClick={() => void confirm()}
             >
               {working ? <StartripsJourneyCue state="waiting" size={24} /> : null}
-              {working ? "正在创建…" : "确认"}
+              {working ? (card.kind === "assign-photos" ? "正在移动…" : "正在创建…") : "确认"}
             </button>
           ) : null}
           <button type="button" disabled={working} onClick={revise}>修改</button>

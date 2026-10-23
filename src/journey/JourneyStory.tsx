@@ -158,6 +158,7 @@ import {
 } from "./mediaPlacement";
 import { createPlacementAnalysisAuthority, placementAnalysisScope, runPlacementAnalysisBatch, type PlacementAnalysisIntent } from "./placementAnalysisAuthority";
 import { isModalFocusCandidate, useModalFocus, useNestedModalFocus } from "./useModalFocus";
+import type { CommandBarStoryBridge } from "./ProposalCard";
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import "../styles/story-notes.css";
@@ -243,6 +244,11 @@ export function cancelPendingStoryMediaOwners(
 }
 
 type JourneyStoryProps = {
+  /**
+   * The command bar's assign-photos card, registered while the overview is
+   * selecting media to move; it runs this Story's own move and 撤销.
+   */
+  commandBarStoryBridgeRef?: { current: CommandBarStoryBridge | null };
   journeys: readonly Journey[];
   journeyId: string;
   routePointId?: string | null;
@@ -755,6 +761,7 @@ function StoryMediaTile({
 }
 
 export function JourneyStory({
+  commandBarStoryBridgeRef,
   journeys,
   journeyId,
   routePointId = null,
@@ -3058,6 +3065,40 @@ export function JourneyStory({
     };
   }, [activeChapterRoutePointId, journey?.id, mobileLayout, visualMedia.length]);
 
+  // The command bar's assign-photos bridge. Registered for the whole
+  // selection mode (a move clears the selection, and 撤销 must still reach
+  // it); every call goes through the latest render's move and undo.
+  const storyCommandRef = useRef<{
+    count: () => number;
+    move: (target: string | null) => Promise<boolean>;
+    undo: () => Promise<"undone" | "stale" | "failed" | "none">;
+  } | null>(null);
+  const storyCommandJourneyId = journey?.id ?? null;
+  const storyCommandOffered = Boolean(overview && moveSelectMode && manageMedia && storyCommandJourneyId);
+  useEffect(() => {
+    if (!commandBarStoryBridgeRef || !storyCommandOffered || !storyCommandJourneyId) return;
+    const bridge: CommandBarStoryBridge = {
+      journeyId: storyCommandJourneyId,
+      selectionCount: () => storyCommandRef.current?.count() ?? 0,
+      apply: async (target, expected) => {
+        const live = storyCommandRef.current;
+        if (
+          !live
+          || expected.journeyId !== storyCommandJourneyId
+          || live.count() !== expected.selectionCount
+        ) {
+          return "changed";
+        }
+        return await live.move(target) ? "moved" : "failed";
+      },
+      undo: async () => storyCommandRef.current?.undo() ?? "none",
+    };
+    commandBarStoryBridgeRef.current = bridge;
+    return () => {
+      if (commandBarStoryBridgeRef.current === bridge) commandBarStoryBridgeRef.current = null;
+    };
+  }, [commandBarStoryBridgeRef, storyCommandJourneyId, storyCommandOffered]);
+
   if (!journey) return null;
   const selectedRoutePoint = selectedRoutePointId
     ? journey.routePoints.find((point) => point.id === selectedRoutePointId) ?? null
@@ -4193,8 +4234,8 @@ export function JourneyStory({
     return true;
   }
 
-  async function undoLastMediaMove() {
-    if (!moveUndo || mutationPending || !manageMedia) return;
+  async function undoLastMediaMove(): Promise<"undone" | "stale" | "failed" | "none"> {
+    if (!moveUndo || mutationPending || !manageMedia) return "none";
     const undo = moveUndo;
     setMovePending(true);
     try {
@@ -4217,12 +4258,12 @@ export function JourneyStory({
           setMoveMessage("撤销状态已变化，但当前列表刷新失败。重新打开旅程即可看到服务器状态。");
         }
         setMovePending(false);
-        return;
+        return "stale";
       }
       setMoveMessage(error instanceof Error ? error.message : "撤销失败，请稍后重试。");
       if (!retainMediaMoveUndoAfterError(error)) setMoveUndo(null);
       setMovePending(false);
-      return;
+      return "failed";
     }
 
     setMoveUndo(null);
@@ -4237,7 +4278,14 @@ export function JourneyStory({
     } finally {
       setMovePending(false);
     }
+    return "undone";
   }
+
+  storyCommandRef.current = {
+    count: () => moveSelection.size,
+    move: (target) => moveSelectedMediaTo(target),
+    undo: undoLastMediaMove,
+  };
 
   // #14: set this journey's cover media. The parent owns journey state; after
   // the API call we ask it to refresh, so the card updates immediately and a

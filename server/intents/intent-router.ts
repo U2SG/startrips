@@ -38,6 +38,7 @@ export const ROUTED_INTENTS = [
   "share",
   "share-photos-filter",
   "route-order",
+  "assign-photos",
   "navigate",
   "globe-focus",
 ] as const satisfies readonly CommandIntent[];
@@ -59,6 +60,7 @@ export const ROUTED_INTENT_DESCRIPTIONS: Record<RoutedIntent, string> = {
   share: "Create a share link for some of the member's journeys, optionally with a duration.",
   "share-photos-filter": "Share journeys but leave out photos of people: only scenery or landscapes.",
   "route-order": "Reorder the stops of the journey the member is editing right now.",
+  "assign-photos": "Move the photos the member has selected in the open journey to one of its route points, or off every point.",
   navigate: "Open or go to one of the member's existing journeys.",
   "globe-focus": "Hide the interface and look only at the globe.",
 };

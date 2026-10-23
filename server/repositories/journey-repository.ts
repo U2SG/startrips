@@ -230,6 +230,30 @@ export function listJourneyShareCandidatesForAtlas(atlasId: string, limit: numbe
     .limit(limit);
 }
 
+/**
+ * The Route Point labels of one live Journey of this Atlas, in route order,
+ * for the photo-assignment intent; `null` when the Journey is not this
+ * Atlas's or is being deleted. Only id and label: no coordinates, and not
+ * `loadJourneys`, whose road-snapping side effect a proposal must not cause.
+ */
+export async function listJourneyRoutePointLabelsForAtlas(atlasId: string, journeyId: string) {
+  const [journey] = await db
+    .select({ id: journeys.id })
+    .from(journeys)
+    .where(and(
+      eq(journeys.id, journeyId),
+      eq(journeys.atlasId, atlasId),
+      isNull(journeys.deletionStartedAt),
+    ))
+    .limit(1);
+  if (!journey) return null;
+  return db
+    .select({ id: journeyRoutePoints.id, label: journeyRoutePoints.label })
+    .from(journeyRoutePoints)
+    .where(eq(journeyRoutePoints.journeyId, journey.id))
+    .orderBy(asc(journeyRoutePoints.sortOrder));
+}
+
 export async function getJourneyForAtlas(journeyId: string, atlasId: string) {
   return (await loadJourneys(atlasId, [journeyId]))[0];
 }
