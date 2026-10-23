@@ -52,7 +52,7 @@ describe("compact mobile command dock", () => {
     expect(app).toContain("const storyCommandDock = commandDockLive && storyJourneyId !== null ? (");
     // Without the router the dock still holds 记录新旅程 and the Journey chip;
     // with no Journey yet the empty hero owns the band instead.
-    expect(app).toMatch(/mobileDockShown = isMobileV2 && view === "planet" && journeys.length > 0\s+&&\(Boolean\(mobileJourney\) \|\| canCreateJourney \|\| atlasCommandDockLive\)/);
+    expect(app).toMatch(/mobileDockShown = isMobileV2 && view === "planet" && journeys.length > 0\s+&& \(Boolean\(mobileJourney\) \|\| canCreateJourney \|\| atlasCommandDockLive\)/);
   });
 
   it("lets the Story place its own dock, folded to a pill in the photo-first classic view", () => {
