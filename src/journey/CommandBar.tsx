@@ -83,7 +83,11 @@ export function CommandBar({
     setFailure(message);
   }
 
+  // A confirm in flight (e.g. a share link being created) cannot be dismissed:
+  // its result must be seen, so Escape waits like 取消 does.
+  const cardWorkingRef = useRef(false);
   function dismissCard() {
+    if (cardWorkingRef.current) return;
     setCard(null);
     inputRef.current?.focus({ preventScroll: true });
   }
@@ -232,6 +236,7 @@ export function CommandBar({
             inputRef.current?.select();
           }}
           onDismiss={dismissCard}
+          onWorkingChange={(working) => { cardWorkingRef.current = working; }}
         />
       ) : null}
     </div>

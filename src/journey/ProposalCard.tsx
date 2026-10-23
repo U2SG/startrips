@@ -80,6 +80,8 @@ export type ProposalCardProps = {
   /** 修改 without a dialog: the sentence goes back into the bar. */
   onRevise: () => void;
   onDismiss: () => void;
+  /** Told while a confirm is in flight, so Escape cannot hide its outcome. */
+  onWorkingChange?: (working: boolean) => void;
 };
 
 type MediaFilter =
@@ -128,6 +130,7 @@ export function ProposalCard({
   onGlobeFocus,
   onRevise,
   onDismiss,
+  onWorkingChange,
 }: ProposalCardProps) {
   const rootRef = useRef<HTMLElement | null>(null);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
@@ -287,6 +290,9 @@ export function ProposalCard({
   }
 
   const working = outcome.status === "working";
+  useEffect(() => {
+    onWorkingChange?.(working);
+  }, [onWorkingChange, working]);
 
   return (
     <section
