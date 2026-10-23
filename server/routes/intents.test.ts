@@ -34,12 +34,21 @@ const candidates = vi.hoisted(() => ({
   ]),
 }));
 
+const STORY_JOURNEY_ID = "5e3c1a2b-0000-4000-8000-0000000000aa";
+const routePointLabels = vi.hoisted(() => ({
+  list: vi.fn(async (_atlasId: string, _journeyId: string): Promise<Array<{ id: string; label: string }> | null> => [
+    { id: "7b0b6f1e-0000-4000-8000-000000000001", label: "成都" },
+    { id: "7b0b6f1e-0000-4000-8000-000000000002", label: "理塘" },
+  ]),
+}));
+
 vi.mock("../config", () => config);
 vi.mock("../authorization/atlas-access", () => ({
   requireAtlasAccess: vi.fn(async () => ({ atlas: { id: "atlas-1" } })),
 }));
 vi.mock("../repositories/journey-repository", () => ({
   listJourneyShareCandidatesForAtlas: candidates.list,
+  listJourneyRoutePointLabelsForAtlas: routePointLabels.list,
 }));
 vi.mock("../repositories/share-media-filter-repository", () => ({
   listShareMediaFilterAssets: mediaFilter.list,
@@ -97,6 +106,7 @@ beforeEach(() => {
 afterEach(() => {
   upstream.mockReset();
   candidates.list.mockClear();
+  routePointLabels.list.mockClear();
   mediaFilter.list.mockReset();
   mediaFilter.save.mockClear();
   config.serverConfig.intentVisionModel = null;
@@ -113,7 +123,7 @@ describe("GET /api/intents/capabilities", () => {
     expect(await response.json()).toEqual({
       share: { configured: true, mediaFilter: false },
       routeOrder: { configured: true },
-      router: { configured: true, intents: ["share", "route-order", "navigate", "globe-focus"] },
+      router: { configured: true, intents: ["share", "route-order", "assign-photos", "navigate", "globe-focus"] },
     });
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
@@ -136,7 +146,7 @@ describe("GET /api/intents/capabilities", () => {
         routeOrder: { configured: true },
         router: {
           configured: true,
-          intents: ["share", "share-photos-filter", "route-order", "navigate", "globe-focus"],
+          intents: ["share", "share-photos-filter", "route-order", "assign-photos", "navigate", "globe-focus"],
         },
       });
     config.serverConfig.intentDriver = "disabled";
@@ -430,6 +440,56 @@ describe("POST /api/intents/route-order", () => {
   });
 });
 
+describe("POST /api/intents/assign-media", () => {
+  function assign(body: unknown) {
+    return app.request("/api/intents/assign-media", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("answers a Route Point of the session Atlas's Journey, under the move permission", async () => {
+    upstream.mockResolvedValueOnce(answer({ target: "p2", alternatives: ["p1"], unmatched: null }));
+    const response = await assign({ text: "这两张是在理塘拍的", journeyId: STORY_JOURNEY_ID, selectionCount: 2 });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({
+      proposal: {
+        target: { routePointId: "7b0b6f1e-0000-4000-8000-000000000002", label: "理塘" },
+        alternatives: [{ routePointId: "7b0b6f1e-0000-4000-8000-000000000001", label: "成都" }],
+        unmatched: null,
+      },
+      model: "intent-1",
+    });
+    expect(requireAtlasAccess).toHaveBeenLastCalledWith(expect.anything(), "update");
+    expect(routePointLabels.list).toHaveBeenCalledWith("atlas-1", STORY_JOURNEY_ID);
+    const raw = JSON.parse(String(upstream.mock.calls[0][1]?.body)).messages[1].content as string;
+    expect(raw).not.toContain("7b0b6f1e");
+    expect(raw).not.toContain(STORY_JOURNEY_ID);
+  });
+
+  it("answers 404 for a Journey of another Atlas, before any provider call", async () => {
+    routePointLabels.list.mockResolvedValueOnce(null);
+    const response = await assign({ text: "理塘", journeyId: STORY_JOURNEY_ID, selectionCount: 2 });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: "JOURNEY_NOT_FOUND" });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("refuses an invalid request and a disabled provider before any provider call", async () => {
+    const invalid = await assign({ text: "理塘", journeyId: STORY_JOURNEY_ID, selectionCount: 0 });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ error: "INVALID_ASSIGN_MEDIA_INTENT" });
+    config.serverConfig.intentDriver = "disabled";
+    const disabled = await assign({ text: "理塘", journeyId: STORY_JOURNEY_ID, selectionCount: 2 });
+    expect(disabled.status).toBe(503);
+    expect(upstream).not.toHaveBeenCalled();
+    expect(routePointLabels.list).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /api/intents/route", () => {
   const ALL = ["create-journey", "share", "share-photos-filter", "route-order", "navigate", "globe-focus"];
 
@@ -648,5 +708,51 @@ describe("POST /api/intents/route", () => {
 
     upstream.mockResolvedValueOnce(answer({ intent: "globe-focus", unmatched: null }));
     expect((await route("只看地球")).status).toBe(200);
+  });
+
+  describe("assign-photos", () => {
+    const STORY = { intents: ["assign-photos", "globe-focus"], activeJourneyId: STORY_JOURNEY_ID, selectionCount: 2 };
+
+    it("reads the Story selection's target under update, with labels only in stage 2", async () => {
+      upstream
+        .mockResolvedValueOnce(answer({ intent: "assign-photos", unmatched: null }))
+        .mockResolvedValueOnce(answer({ target: "journey", alternatives: [], unmatched: null }));
+      const response = await route("这两张不属于任何地点", STORY);
+
+      expect(await response.json()).toEqual({
+        intent: "assign-photos",
+        proposal: { target: { routePointId: null, label: "旅程散页" }, alternatives: [], unmatched: null },
+        unmatched: null,
+        model: "intent-1",
+      });
+      expect(checkedPermissions()).toEqual(["read", "update"]);
+      expect(stageOneInput().intents.map((intent) => intent.id)).toEqual(["assign-photos", "globe-focus"]);
+      expect(sentBody(0).messages[1].content).not.toContain("成都");
+      expect(sentBody(1).messages[1].content).toContain("成都");
+    });
+
+    it("is never offered without a Story selection", async () => {
+      for (const context of [
+        { intents: ["assign-photos", "globe-focus"] },
+        { ...STORY, selectionCount: 0 },
+        { ...STORY, activeJourneyId: null },
+      ]) {
+        upstream.mockReset();
+        upstream.mockResolvedValueOnce(answer({ intent: "globe-focus", unmatched: null }));
+        await route("只看地球", context);
+        expect(stageOneInput().intents.map((intent) => intent.id)).toEqual(["globe-focus"]);
+      }
+      const nothing = await route("放到理塘", { intents: ["assign-photos"] });
+      expect(nothing.status).toBe(400);
+    });
+
+    it("answers 404 for a Journey of another Atlas, before stage 2", async () => {
+      upstream.mockResolvedValueOnce(answer({ intent: "assign-photos", unmatched: null }));
+      routePointLabels.list.mockResolvedValueOnce(null);
+      const response = await route("放到理塘", STORY);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ intent: "assign-photos", error: "JOURNEY_NOT_FOUND" });
+      expect(upstream).toHaveBeenCalledTimes(1);
+    });
   });
 });

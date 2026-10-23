@@ -21,6 +21,10 @@
  * `POST /route-order` is the Composer's one-sentence reorder: it answers a
  * proposed order of the Route Points the member is editing and writes
  * nothing; the member applies it to the draft and saves the Journey.
+ * `POST /assign-media` is the Story's one-sentence photo assignment: it
+ * answers one Route Point of a Journey of this Atlas for the photos the
+ * member selected (which it never sees) and writes nothing; the Story moves
+ * them through `POST /api/uploads/assets/move`.
  */
 
 import { Hono } from "hono";
@@ -44,6 +48,13 @@ import {
   RouteOrderIntentUnavailableError,
 } from "../intents/route-order-intent";
 import {
+  AssignMediaIntentUnavailableError,
+  MAX_ASSIGN_MEDIA_TEXT_LENGTH,
+  parseAssignMediaRequest,
+  parseAssignMediaSelection,
+  readAssignMediaIntent,
+} from "../intents/assign-media-intent";
+import {
   availableRouterIntents,
   classifyCommand,
   MAX_JOURNEY_SENTENCE_LENGTH,
@@ -54,7 +65,10 @@ import {
   UNSUPPORTED_INTENT,
   type RoutedIntent,
 } from "../intents/intent-router";
-import { listJourneyShareCandidatesForAtlas } from "../repositories/journey-repository";
+import {
+  listJourneyRoutePointLabelsForAtlas,
+  listJourneyShareCandidatesForAtlas,
+} from "../repositories/journey-repository";
 import {
   listShareMediaFilterAssets,
   saveShareMediaClassifications,
@@ -283,6 +297,44 @@ intentRoutes.post("/route-order", async (context) => {
 });
 
 /**
+ * The Route Point labels of a Journey of the session's Atlas, read on the
+ * server; `null` (a 404) for any other Journey, before any provider call.
+ */
+async function assignMediaProposal(atlasId: string, input: { text: string; journeyId: string }) {
+  const points = await listJourneyRoutePointLabelsForAtlas(atlasId, input.journeyId);
+  if (!points) return null;
+  return readAssignMediaIntent(intentModelOptions(), { text: input.text, points });
+}
+
+const JOURNEY_NOT_FOUND = { error: "JOURNEY_NOT_FOUND", message: "Journey not found" } as const;
+
+/**
+ * A proposed Route Point for the photos selected in the Story. `update`, the
+ * same permission as the move it is for (`POST /api/uploads/assets/move`).
+ * Only the sentence and the Journey's labels reach the provider; the answer
+ * names Route Points of that Journey only, or no proposal.
+ */
+intentRoutes.post("/assign-media", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  context.header("Cache-Control", SHARE_INTENT_CACHE_CONTROL);
+  const body = await readJsonObject(() => context.req.json());
+  const input = parseAssignMediaRequest(body);
+  if (!input) {
+    return context.json(
+      {
+        error: "INVALID_ASSIGN_MEDIA_INTENT",
+        message: "Write one sentence of up to 200 characters about 1 to 256 selected media",
+      },
+      400,
+    );
+  }
+  if (serverConfig.intentDriver !== "http-model") throw new AssignMediaIntentUnavailableError();
+  const proposal = await assignMediaProposal(atlas.id, input);
+  if (!proposal) return context.json(JOURNEY_NOT_FOUND, 404);
+  return context.json({ proposal, model: serverConfig.intentModel! });
+});
+
+/**
  * The longest sentence each routed intent's own reader accepts. The router
  * refuses a sentence longer than every offered intent allows before any
  * provider call, and re-checks the chosen intent's own bound after stage 1.
@@ -292,6 +344,7 @@ export const ROUTED_INTENT_TEXT_LIMITS: Record<RoutedIntent, number> = {
   share: MAX_SHARE_INTENT_TEXT_LENGTH,
   "share-photos-filter": MAX_SHARE_INTENT_TEXT_LENGTH,
   "route-order": MAX_ROUTE_ORDER_TEXT_LENGTH,
+  "assign-photos": MAX_ASSIGN_MEDIA_TEXT_LENGTH,
   navigate: MAX_SHARE_INTENT_TEXT_LENGTH,
   "globe-focus": MAX_SHARE_INTENT_TEXT_LENGTH,
 };
@@ -308,6 +361,8 @@ export const ROUTED_INTENT_PERMISSIONS: Record<RoutedIntent, AtlasAction> = {
   "share-photos-filter": "create",
   // Saving the reordered draft is `PATCH /api/journeys/:id`.
   "route-order": "update",
+  // The selected photos move through `POST /api/uploads/assets/move`.
+  "assign-photos": "update",
   navigate: "read",
   "globe-focus": "read",
 };
@@ -356,7 +411,14 @@ intentRoutes.post("/route", async (context) => {
     : null;
   const available = availableRouterIntents(routerConfig());
   if (available.length === 0) throw new RouterIntentUnavailableError();
-  const offered = narrowOfferedIntents(commandContext?.intents, available);
+  // Photo assignment exists only over a Story selection the move route could
+  // carry; without one it is never offered to stage 1, whatever the client says.
+  const selection = parseAssignMediaSelection(
+    commandContext?.activeJourneyId,
+    commandContext?.selectionCount,
+  );
+  const offered = narrowOfferedIntents(commandContext?.intents, available)
+    ?.filter((intent) => intent !== "assign-photos" || selection !== null) ?? null;
   if (!offered || offered.length === 0) {
     return context.json(
       { error: "INVALID_INTENT_ROUTE", message: "Offer at least one available intent" },
@@ -419,6 +481,12 @@ intentRoutes.post("/route", async (context) => {
           fetcher: shareIntentDependencies.fetcher,
         });
         return answer((await reader.read(input)).proposal);
+      }
+      case "assign-photos": {
+        // Offered only with a valid selection (narrowed above).
+        const proposal = await assignMediaProposal(atlas.id, { text, journeyId: selection!.journeyId });
+        if (!proposal) return context.json({ intent, ...JOURNEY_NOT_FOUND }, 404);
+        return answer(proposal);
       }
       case "navigate": {
         const candidates = await listJourneyShareCandidatesForAtlas(atlas.id, MAX_SHARE_INTENT_CANDIDATES);
