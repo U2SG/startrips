@@ -22,6 +22,7 @@ import {
   sameShareSelection,
   shareExpiryMessage,
   shareLinkUrl,
+  shareMediaFilterErrorMessage,
   shareSelectionMessage,
   toDateTimeLocalValue,
   toggleShareSelection,
@@ -97,22 +98,6 @@ const MAX_MEDIA_THUMBNAILS = 12;
 
 const MEDIA_FILTER_CLEARED_BY_SELECTION = "旅程选择已改动，照片筛选已取消，将分享所选旅程的全部照片与视频。";
 const MEDIA_FILTER_REMOVED = "已取消照片筛选，将分享所选旅程的全部照片与视频。";
-
-function shareMediaFilterErrorMessage(error: unknown): string {
-  const code = typeof error === "object" && error !== null && "code" in error
-    ? (error as { code?: unknown }).code
-    : null;
-  switch (code) {
-    case "SHARE_MEDIA_FILTER_TOO_MANY":
-      return "所选旅程的照片与视频超过一个链接的上限，请少选几段旅程。";
-    case "SHARE_MEDIA_FILTER_BUSY":
-      return "上一次挑选还在进行，请稍等片刻再点「重新挑选」。";
-    case "MEDIA_FILTER_UNAVAILABLE":
-      return "这台服务器暂时不能按照片内容筛选。";
-    default:
-      return "暂时无法挑选照片，请重试，或改为分享全部照片。";
-  }
-}
 
 type Phase = "compose" | "created";
 

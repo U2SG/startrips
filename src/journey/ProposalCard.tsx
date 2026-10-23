@@ -16,6 +16,7 @@ import {
   SHARE_BEARER_NOTICE,
   SHARE_TOKEN_ONCE_NOTICE,
   shareLinkUrl,
+  shareMediaFilterErrorMessage,
   type ShareMediaFilterProgress,
 } from "./shareLinks";
 import type { Journey } from "./types";
@@ -84,7 +85,8 @@ export type ProposalCardProps = {
 type MediaFilter =
   | { status: "pending"; progress: ShareMediaFilterProgress | null }
   | { status: "ready"; assetIds: string[]; excludedCount: number }
-  | { status: "error" | "unavailable" };
+  | { status: "error"; text: string }
+  | { status: "unavailable" };
 
 type Outcome =
   | { status: "idle" }
@@ -145,41 +147,61 @@ export function ProposalCard({
     else rootRef.current?.focus({ preventScroll: true });
   }, [card]);
 
-  // "只分享风景照": the existing batched check runs before confirm is allowed.
+  // "只分享风景照": the share dialog's batched check (skips, progress,
+  // supersede) runs before confirm is allowed. A run belongs to its sequence
+  // number, so a retry or an unmount drops late answers; a remount of the
+  // same instance (React's development double effect) keeps the run going
+  // instead of restarting it without the skips gathered so far.
+  const mountedRef = useRef(false);
+  const mediaSequence = useRef(0);
   useEffect(() => {
-    if (!shareFilter) return;
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  async function startMediaFilter() {
     const propose = shareClient?.proposeShareMedia;
     if (!propose) {
       setMedia({ status: "unavailable" });
       return;
     }
-    let current = true;
+    const sequence = mediaSequence.current + 1;
+    mediaSequence.current = sequence;
+    const isCurrent = () => mountedRef.current && sequence === mediaSequence.current;
+    setMedia({ status: "pending", progress: null });
+    setThumbnails([]);
     const journeyIds = shareJourneys.map((journey) => journey.id);
-    void collectShareMediaFilter(journeyIds, propose, {
-      isCurrent: () => current,
-      onProgress: (progress) => { if (current) setMedia({ status: "pending", progress }); },
-    }).then(
-      async (result) => {
-        if (!result || !current) return;
-        setMedia({ status: "ready", assetIds: result.assetIds, excludedCount: result.excludedCount });
-        const readPreview = shareClient?.readShareMediaPreview;
-        if (!readPreview) return;
-        const reads = await Promise.all(result.assetIds.slice(0, MAX_THUMBNAILS).map(async (id) => {
-          try {
-            const read = await readPreview(id);
-            return { id, url: read.preview?.url ?? read.url };
-          } catch {
-            return null;
-          }
-        }));
-        if (current) setThumbnails(reads.filter((read): read is { id: string; url: string } => read !== null));
-      },
-      () => { if (current) setMedia({ status: "error" }); },
-    );
-    return () => { current = false; };
-    // The card is replaced, never updated, so it runs once per card.
+    let result;
+    try {
+      result = await collectShareMediaFilter(journeyIds, propose, {
+        isCurrent,
+        onProgress: (progress) => { if (isCurrent()) setMedia({ status: "pending", progress }); },
+      });
+    } catch (error) {
+      if (isCurrent()) setMedia({ status: "error", text: shareMediaFilterErrorMessage(error) });
+      return;
+    }
+    if (!result || !isCurrent()) return;
+    setMedia({ status: "ready", assetIds: result.assetIds, excludedCount: result.excludedCount });
+    const readPreview = shareClient?.readShareMediaPreview;
+    if (!readPreview) return;
+    const reads = await Promise.all(result.assetIds.slice(0, MAX_THUMBNAILS).map(async (id) => {
+      try {
+        const read = await readPreview(id);
+        return { id, url: read.preview?.url ?? read.url };
+      } catch {
+        return null;
+      }
+    }));
+    if (isCurrent()) setThumbnails(reads.filter((read): read is { id: string; url: string } => read !== null));
+  }
+
+  useEffect(() => {
+    if (!shareFilter || mediaSequence.current > 0) return;
+    void startMediaFilter();
+    // The card is replaced (keyed), never updated, so it runs once per card.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [card]);
+  }, []);
 
   const confirmable = (() => {
     if (outcome.status !== "idle" && outcome.status !== "failed") return false;
@@ -315,7 +337,10 @@ export function ProposalCard({
             </>
           ) : null}
           {media?.status === "error" ? (
-            <p className="command-card__status" data-command-media-filter="error">暂时无法挑选照片。可以点「修改」在分享窗口里重试，或改为分享全部照片。</p>
+            <div className="command-card__status" role="alert" data-command-media-filter="error">
+              <p>{media.text}</p>
+              <button type="button" onClick={() => void startMediaFilter()}>重新挑选</button>
+            </div>
           ) : null}
           {media?.status === "unavailable" ? (
             <p className="command-card__status" data-command-media-filter="unavailable">这台服务器不能按照片内容筛选。可以点「修改」改为分享全部照片。</p>
