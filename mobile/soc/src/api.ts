@@ -86,6 +86,6 @@ export async function append(path: string, content: string): Promise<void> {
 export async function extractPdf(path: string, start: number, end: number): Promise<{ numPages: number; pages: { page: number; text: string }[] }> {
   return (await request(`${fileUrl('/extract', path)}&start=${start}&end=${end}`)).json();
 }
-export async function studyJson<T>(endpoint: string, body?: unknown): Promise<T> {
-  return (await request(endpoint, body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+export async function studyJson<T>(endpoint: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  return (await request(endpoint, body === undefined ? { signal } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })).json();
 }

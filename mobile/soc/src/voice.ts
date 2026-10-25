@@ -53,14 +53,14 @@ export async function setCompanionVoice(worldId: string, c: Co, voice: string): 
 
 /** 语音输入（STT）：把一段本地录音（base64）交给 qwen3-asr-flash 识别成文字。
  *  请求结构已实测：OpenAI 兼容 /compatible-mode/v1/chat/completions + input_audio data URL。
- *  复用 TTS 同一把 dashscope key（creds.host/apiKey），仅模型换成 qwen3-asr-flash。 */
-export async function transcribeAudio(_creds: VoiceCreds, base64: string, format = 'm4a'): Promise<string> {
-  const result = await api.studyJson<{ text: string }>('/voice', { action: 'transcribe', audio: `data:audio/${format};base64,${base64}` });
+ *  由服务器选择 DashScope 配置，客户端只发送录音。 */
+export async function transcribeAudio(_creds: VoiceCreds, base64: string, format = 'm4a', signal?: AbortSignal): Promise<string> {
+  const result = await api.studyJson<{ text: string }>('/voice', { action: 'transcribe', audio: `data:audio/${format};base64,${base64}` }, signal);
   return result.text.trim();
 }
 
-export async function resolveVoiceCreds(): Promise<VoiceCreds | null> {
-  const result = await api.studyJson<{ available: boolean }>('/voice');
+export async function resolveVoiceCreds(signal?: AbortSignal): Promise<VoiceCreds | null> {
+  const result = await api.studyJson<{ available: boolean }>('/voice', undefined, signal);
   return result.available ? { model: 'qwen3-tts-flash' } : null;
 }
 
@@ -106,7 +106,7 @@ export function chunkForSpeech(text: string, targetChars = 60): string[] {
 }
 
 /** 合成一块（已清洗）文本，返回可直接播放的音频 url。http→https 升级以规避 Android 明文流量拦截 */
-export async function synthesizeChunk(_creds: VoiceCreds, cleanText: string, voice: string): Promise<string> {
-  const result = await api.studyJson<{ url: string }>('/voice', { action: 'synthesize', text: cleanText.slice(0, 4000), voice });
+export async function synthesizeChunk(_creds: VoiceCreds, cleanText: string, voice: string, signal?: AbortSignal): Promise<string> {
+  const result = await api.studyJson<{ url: string }>('/voice', { action: 'synthesize', text: cleanText.slice(0, 4000), voice }, signal);
   return result.url;
 }

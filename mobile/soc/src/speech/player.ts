@@ -12,6 +12,7 @@
 // 单条朗读不 pin，播完即清。
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio';
 import { cacheAudio, removeAudio } from './audioCache';
+import { fetchChunkFile } from './chunkFile';
 import { prepareForSpeech, synthesizeChunk, type VoiceCreds } from '../voice';
 
 export type MediaMeta = { title: string; artist?: string; albumTitle?: string };
@@ -28,6 +29,7 @@ const FETCH_TIMEOUT_MS = 30000; // 单次合成+下载的硬超时：fetch 网�
                                 // playChunk 会卡在 await 上且 watchdog 不覆盖（等下载期间 watch=null）
 
 type Session = {
+  controller: AbortController;
   msgId: string;
   jobs: Promise<string | null>[]; // 每块：合成+下载完成后的本地文件 uri（重试后仍失败 = null）
   idx: number;
@@ -186,7 +188,10 @@ function flushIdle() {
 
 /** 立即停止当前播报（用户打断/切换）。pinned（听课中）时保留媒体会话。 */
 export function stop(): void {
+  const stopped = session;
   session = null;
+  stopped?.controller.abort();
+  stopped?.jobs.forEach((job) => { void job.then((uri) => { if (uri && uri !== lastPlayedUri) removeAudio(uri); }); });
   advancing = false;
   watch = null;
   draining = false;
@@ -213,32 +218,10 @@ export function unpinMediaSession(): void {
   if (!session) { try { player?.clearLockScreenControls(); } catch {} }
 }
 
-// ── 合成 + 落盘（各一次重试）────────────────────────────────
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('tts fetch timeout')), ms);
-    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
-  });
-}
-
-async function fetchChunkFile(creds: VoiceCreds, text: string, voice: string, name: string): Promise<string | null> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await withTimeout((async () => {
-        const url = await synthesizeChunk(creds, text, voice);
-        return cacheAudio(url, name);
-      })(), FETCH_TIMEOUT_MS);
-    } catch {
-      if (attempt === 0) await new Promise((r) => setTimeout(r, 600));
-    }
-  }
-  return null;
-}
-
 function newSession(msgId: string): Session {
   stop();
   sessionSeq += 1;
-  const st: Session = { msgId, jobs: [], idx: 0, streaming: false, waiting: false };
+  const st: Session = { controller: new AbortController(), msgId, jobs: [], idx: 0, streaming: false, waiting: false };
   session = st;
   ensureWatchdog();
   return st;
@@ -250,7 +233,10 @@ export function speakChunks(msgId: string, chunks: string[], creds: VoiceCreds, 
   setState({ msgId, status: 'preparing' });
   try { getPlayer().setActiveForLockScreen(true, meta); } catch {}
   const seq = sessionSeq;
-  st.jobs = chunks.map((c, i) => fetchChunkFile(creds, c, voice, `s${seq}_${i}.wav`));
+  st.jobs = chunks.map((text, i) => fetchChunkFile(`s${seq}_${i}.wav`, {
+    synthesize: (signal) => synthesizeChunk(creds, text, voice, signal),
+    cache: cacheAudio, remove: removeAudio, signal: st.controller.signal,
+  }, FETCH_TIMEOUT_MS));
   playChunk(0);
 }
 
@@ -270,7 +256,10 @@ export function startStreamingSpeech(
 
   const enqueue = (text: string) => {
     if (session !== st || !text) return;
-    st.jobs.push(fetchChunkFile(creds, text, voice, `s${seq}_${st.jobs.length}.wav`));
+    st.jobs.push(fetchChunkFile(`s${seq}_${st.jobs.length}.wav`, {
+      synthesize: (signal) => synthesizeChunk(creds, text, voice, signal),
+      cache: cacheAudio, remove: removeAudio, signal: st.controller.signal,
+    }, FETCH_TIMEOUT_MS));
     if (st.waiting) { st.waiting = false; playChunk(st.idx); } // 唤醒等待中的播放指针
     else if (st.jobs.length === 1) playChunk(0); // 首块启动
   };
