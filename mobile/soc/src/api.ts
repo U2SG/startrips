@@ -32,7 +32,11 @@ export async function authFetch(endpoint: string, init: RequestInit & { signal: 
   if (generation !== accountGeneration()) { await response.body?.cancel(); throw new Error('账号已切换'); }
   const refreshed = response.headers.get('set-auth-token');
   if (Platform.OS !== 'web' && refreshed && current === cfg) { cfg = { ...cfg, token: refreshed }; await writeToken(cfg.serverUrl, refreshed); }
-  if (response.status === 401 && !endpoint.startsWith('/api/auth/')) await Promise.all([...unauthorized].map((listener) => listener()));
+  // An anonymous browser session probe is expected to return 401. Expiring it
+  // would abort its own response body and report a false connection failure.
+  if (response.status === 401 && !endpoint.startsWith('/api/auth/') && (Platform.OS !== 'web' || sessionUser)) {
+    await Promise.all([...unauthorized].map((listener) => listener()));
+  }
   return response;
 }
 

@@ -19,6 +19,7 @@ try {
   await page.getByLabel('邮箱', { exact: true }).waitFor({ timeout: 15000 });
   await page.getByTestId('soc-splash').waitFor({ state: 'detached', timeout: 15000 });
   await page.getByRole('button', { name: '登录', exact: true }).waitFor();
+  assert.equal(await page.getByRole('alert').count(), 0, 'Anonymous visitors must not see a false connection failure');
   assert.ok(blockedFonts > 0);
   assert.deepEqual(errors, []);
   await page.screenshot({ path: `${artifacts}/sign-in.png` });
