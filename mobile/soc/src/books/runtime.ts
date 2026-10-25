@@ -1,5 +1,5 @@
 import { AppState } from 'react-native';
-import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio';
+import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import * as api from '../api';
 import * as data from '../data';
 import { chatJson } from '../llm';
@@ -9,6 +9,7 @@ import { fetchChunkFile } from '../speech/chunkFile';
 import { synthesizeChunk } from '../voice';
 import { claimAudioFocus, registerAudioFocus } from '../audioFocus';
 import { BookEngine } from './engine';
+import { createBookAudio } from './audio';
 import { annotatePassages, splitBookText, type BookPage, type Bookmark } from './model';
 
 export type ListeningBook = { worldId: string; textbook: data.TextbookEntry; engine: BookEngine };
@@ -46,12 +47,18 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
   try { local = stored ? JSON.parse(stored) : null; } catch { /* An invalid device cache never replaces server progress. */ }
   const bookmark = local?.version === 1 && local.savedAt > (remote?.savedAt || 0) ? local : remote;
   active?.engine.dispose();
-  let player: AudioPlayer | null = null;
   let engine: BookEngine;
   let ticker: ReturnType<typeof setInterval> | undefined;
   let serverSaved = 0;
   let syncConflict = false;
   const castPath = `${dir}/listening-cast.json`;
+  const audio = createBookAudio({
+    create: () => createAudioPlayer(null, { updateInterval: 250 }),
+    configure: () => setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' }),
+    guard,
+    status: (s) => engine.tick(s.currentTime, s.duration, s.playing, s.didJustFinish),
+    metadata: () => ({ title: textbook.title, artist: `第 ${engine.getState().page?.page || 1} 页`, albumTitle: '听书' }),
+  });
   engine = new BookEngine({
     focus: () => { guard(); claimAudioFocus('book'); },
     async page(number, dramatic, signal) {
@@ -118,32 +125,8 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       }
     },
     player: {
-      async load(uri, seconds, rate) {
-        guard();
-        player?.remove();
-        const current = createAudioPlayer({ uri }, { updateInterval: 250 });
-        player = current;
-        current.addListener('playbackStatusUpdate', (s) => {
-          if (player === current) engine.tick(s.currentTime, s.duration, s.playing, s.didJustFinish);
-        });
-        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' });
-        const start = Date.now();
-        while (!current.isLoaded && player === current && Date.now() - start < 10000) await new Promise((done) => setTimeout(done, 50));
-        guard();
-        if (player !== current || !current.isLoaded) throw new Error('音频加载失败，请重试');
-        current.setPlaybackRate(rate);
-        await current.seekTo(Math.max(0, Math.min(seconds, Math.max(0, current.duration - 0.1))));
-        current.setActiveForLockScreen(true, { title: textbook.title, artist: `第 ${engine.getState().page?.page || 1} 页`, albumTitle: '听书' });
-      },
-      play() {
-        guard();
-        player?.setActiveForLockScreen(true, { title: textbook.title, artist: '听书' });
-        player?.play();
-      },
-      pause() { player?.pause(); },
-      async seek(seconds) { if (player) await player.seekTo(seconds); },
-      rate(value) { player?.setPlaybackRate(value); },
-      release() { clearInterval(ticker); const old = player; player = null; try { old?.clearLockScreenControls(); old?.remove(); } catch {} },
+      ...audio,
+      release() { clearInterval(ticker); audio.release(); },
     },
   });
   ticker = setInterval(() => engine.poll(), 1000);

@@ -98,6 +98,7 @@ export class BookEngine {
         if (!this.current(seq)) return;
         this.loaded = key;
       }
+      this.deps.player.rate((this.state.bookmark?.speed || b.speed) * toneRate(page.passages[b.passage].tone));
       this.deps.player.play();
       this.movedAt = Date.now(); this.lastPosition = b.seconds;
       this.patch({ status: 'playing' }); this.transition = false;
