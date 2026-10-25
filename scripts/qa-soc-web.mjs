@@ -213,12 +213,19 @@ try {
   await page.getByRole('button', { name: '暂停听书', exact: true }).click();
   await page.getByRole('button', { name: '播放听书', exact: true }).waitFor();
   await page.getByRole('button', { name: '听书设置', exact: true }).click();
-  await page.getByRole('button', { name: '1.5 倍速', exact: true }).click();
-  await page.getByRole('button', { name: '30 分钟后停止', exact: true }).click();
+  await page.getByRole('radio', { name: '1.5 倍速', exact: true }).click();
+  await page.getByRole('radio', { name: '30 分钟后停止', exact: true }).click();
   await page.screenshot({ path: path.join(artifacts, 'listening-reader.png') });
   await page.getByLabel('听书页码', { exact: true }).fill('2');
   await page.getByRole('button', { name: '跳转到页码', exact: true }).click();
   await page.getByText('第二页原文。', { exact: true }).waitFor();
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const bookmark = [...listeningFiles.entries()].find(([name]) => name.endsWith('/listening-progress.json'))?.[1];
+    if (bookmark?.page === 2 && bookmark.speed === 1.5) break;
+    await page.waitForTimeout(50);
+  }
+  const checkpoint = [...listeningFiles.entries()].find(([name]) => name.endsWith('/listening-progress.json'))?.[1];
+  assert.equal(checkpoint?.page, 2); assert.equal(checkpoint?.speed, 1.5);
   await page.getByRole('button', { name: '收起听书', exact: true }).click();
   await page.getByTestId('listening-mini').waitFor();
   // A full reload must restore the independent listening checkpoint, never lesson progress.
@@ -228,7 +235,7 @@ try {
   await page.getByText('第二页原文。', { exact: true }).waitFor();
   assert.equal(await page.getByLabel('听书页码', { exact: true }).inputValue(), '2');
   await page.getByRole('button', { name: '听书设置', exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: '1.5 倍速', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.getByRole('radio', { name: '1.5 倍速', exact: true }).getAttribute('aria-checked'), 'true');
   assert.ok(listeningWrites > 0);
   await page.getByRole('button', { name: '收起听书', exact: true }).click();
   await page.getByRole('button', { name: '闪卡', exact: true }).click();

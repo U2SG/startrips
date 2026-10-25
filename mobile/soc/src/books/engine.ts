@@ -25,6 +25,7 @@ export class BookEngine {
   private disposed = false;
   private loaded = '';
   private jobs = new Map<string, Promise<string | null>>();
+  private ready = new Set<string>();
   private uris = new Set<string>();
   private saveQueue: Promise<void> = Promise.resolve();
   private lastSaved = 0;
@@ -38,16 +39,17 @@ export class BookEngine {
   private patch(next: Partial<BookState>) { if (this.disposed) return; this.state = { ...this.state, ...next }; this.listeners.forEach((fn) => fn()); }
   private current(seq: number) { return !this.disposed && seq === this.sequence && !this.controller.signal.aborted; }
   private invalidate() { ++this.sequence; this.controller.abort(); this.controller = new AbortController(); this.deps.player.pause(); this.transition = false; }
-  private clearBuffer() { this.jobs.clear(); this.uris.forEach(this.deps.remove); this.uris.clear(); this.loaded = ''; }
+  private clearBuffer() { this.jobs.clear(); this.ready.clear(); this.uris.forEach(this.deps.remove); this.uris.clear(); this.loaded = ''; }
   private key(page: BookPage, index: number) { return `${page.signature}/${page.page}/${index}/${this.state.bookmark?.dramatic}`; }
   private prepare(page: BookPage, index: number) {
     const key = this.key(page, index);
     if (!this.jobs.has(key)) {
       const signal = this.controller.signal;
-      this.jobs.set(key, this.deps.audio(page, index, signal).then((uri) => {
+      const job = this.deps.audio(page, index, signal).then((uri) => {
         if (signal.aborted || this.disposed) { if (uri) this.deps.remove(uri); return null; }
-        if (uri) this.uris.add(uri); return uri;
-      }).catch(() => null));
+        if (uri) { this.uris.add(uri); this.ready.add(key); } return uri;
+      }).catch(() => null);
+      this.jobs.set(key, job);
     }
     return this.jobs.get(key)!;
   }
@@ -98,7 +100,7 @@ export class BookEngine {
       if (b.passage + 1 < page.passages.length) void this.prepare(page, b.passage + 1);
       // Keep just the current and next audio files; books can be thousands of phrases.
       for (const [old, promise] of this.jobs) if (old !== key && old !== this.key(page, b.passage + 1)) {
-        this.jobs.delete(old); void promise.then((file) => { if (file) { this.uris.delete(file); this.deps.remove(file); } });
+        this.jobs.delete(old); this.ready.delete(old); void promise.then((file) => { if (file) { this.uris.delete(file); this.deps.remove(file); } });
       }
     } catch (error) { if (this.current(seq)) this.fail(error); }
   }
@@ -107,6 +109,7 @@ export class BookEngine {
     // Cancel preparation too: a paused pending request must never start playing later.
     const loading = this.state.status === 'loading';
     this.invalidate();
+    for (const key of this.jobs.keys()) if (!this.ready.has(key)) this.jobs.delete(key);
     if (loading) this.clearBuffer();
     this.patch({ status: 'paused' }); this.checkpoint();
   }

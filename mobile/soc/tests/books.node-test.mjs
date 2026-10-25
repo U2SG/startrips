@@ -106,3 +106,13 @@ test('a seek completing after a page change cannot overwrite the new checkpoint'
   assert.equal(engine.getState().bookmark.page, 2); assert.equal(engine.getState().bookmark.seconds, 0);
   engine.dispose();
 });
+
+test('pause cancels look-ahead; resuming can generate that phrase again without losing it', async () => {
+  const pending = deferred(); let calls = 0;
+  const { engine } = fixture({ audio: async (_page, index) => index === 1 && ++calls === 1 ? pending.promise : `phrase-${index}.wav` });
+  await engine.open(); await engine.play(); engine.pause();
+  pending.resolve('cancelled-buffer.wav'); await setImmediate();
+  await engine.play(); await engine.next(1);
+  assert.equal(engine.getState().status, 'playing'); assert.equal(engine.getState().bookmark.passage, 1);
+  engine.dispose();
+});

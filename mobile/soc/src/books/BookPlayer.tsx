@@ -23,11 +23,11 @@ export function BookPlayer({ expanded, onExpand, onCollapse, busy, error, retry 
   </>;
 }
 
-function Control({ children, label, onPress, primary, disabled, selected }: {
-  children: React.ReactNode; label: string; onPress(): void; primary?: boolean; disabled?: boolean; selected?: boolean;
+function Control({ children, label, onPress, primary, disabled, selected, choice, toggle }: {
+  children: React.ReactNode; label: string; onPress(): void; primary?: boolean; disabled?: boolean; selected?: boolean; choice?: boolean; toggle?: boolean;
 }) {
   const { ink } = useTheme();
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: !!disabled, selected: !!selected }}
+  return <Pressable accessibilityRole={choice ? 'radio' : toggle ? 'switch' : 'button'} accessibilityLabel={label} accessibilityState={{ disabled: !!disabled, checked: choice || toggle ? !!selected : undefined }}
     disabled={disabled} onPress={onPress} style={({ pressed }) => ({
       minHeight: primary ? 64 : 44, minWidth: primary ? 64 : 44, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center',
       borderRadius: primary ? 32 : 12, backgroundColor: primary ? ink.accent : selected ? ink.accentSoft : 'transparent', opacity: disabled || pressed ? 0.45 : 1,
@@ -97,11 +97,11 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
       {state.error || state.syncError || jumpError ? <Text accessibilityRole="alert" style={{ color: ink.red, fontFamily: font.sans, fontSize: 13 }}>{state.error || state.syncError || jumpError}</Text> : null}
       {page?.notice ? <Text style={{ color: ink.muted, fontFamily: font.sans, fontSize: 12 }}>{page.notice}</Text> : null}
       {settings ? <View style={{ gap: 8 }}>
-        <View style={styles.row}>{[0.75, 1, 1.25, 1.5, 2].map((speed) => <Control key={speed} label={`${speed} 倍速`} selected={b?.speed === speed} onPress={() => engine.speed(speed)}>{speed}×</Control>)}</View>
-        <View style={styles.row}>{[0, 15, 30, 60].map((minutes) => <Control key={minutes} label={minutes ? `${minutes} 分钟后停止` : '关闭定时'} selected={minutes === 0 ? !state.sleepAt : !!state.sleepAt && Math.abs((state.sleepAt - Date.now()) / 60000 - minutes) < 1}
+        <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="播放速度">{[0.75, 1, 1.25, 1.5, 2].map((speed) => <Control choice key={speed} label={`${speed} 倍速`} selected={b?.speed === speed} onPress={() => engine.speed(speed)}>{speed}×</Control>)}</View>
+        <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="定时停止">{[0, 15, 30, 60].map((minutes) => <Control choice key={minutes} label={minutes ? `${minutes} 分钟后停止` : '关闭定时'} selected={minutes === 0 ? !state.sleepAt : !!state.sleepAt && Math.abs((state.sleepAt - Date.now()) / 60000 - minutes) < 1}
           onPress={() => engine.sleep(minutes)}>{minutes ? `${minutes} 分钟` : '不定时'}</Control>)}</View>
         <View style={styles.row}>
-          <Control label="切换人物分声" disabled={busy} selected={b?.dramatic} onPress={() => void engine.mode(!b?.dramatic)}>人物分声 {b?.dramatic ? '开' : '关'}</Control>
+          <Control toggle label="切换人物分声" disabled={busy} selected={b?.dramatic} onPress={() => void engine.mode(!b?.dramatic)}>人物分声 {b?.dramatic ? '开' : '关'}</Control>
           <Control label="从头重听" disabled={busy} onPress={() => void engine.go(1, 0, true)}>从头重听</Control>
         </View>
       </View> : null}
