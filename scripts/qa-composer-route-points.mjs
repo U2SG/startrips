@@ -369,9 +369,16 @@ const routeOrderLabels = (page) => page.locator(".journey-route-draft > li:not(.
 async function verifyRouteOrderSentence(page, pageErrors, names, routeOrderAnswers) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.locator(".journey-route-draft").waitFor({ state: "visible" });
+  // The preview attaches its Ctrl+K listener only after React commits the
+  // compact -> desktop switch, which can land after the resize returns: a
+  // press before that commit is lost, so press again until the bar opens.
   const sendCommand = async (text) => {
-    if (await page.locator(".command-bar").count() === 0) await page.keyboard.press("Control+K");
     const input = page.locator(".command-bar__input");
+    for (let attempt = 0; await page.locator(".command-bar").count() === 0; attempt += 1) {
+      if (attempt === 20) throw new Error("command bar did not open with Ctrl+K");
+      await page.keyboard.press("Control+K");
+      await input.waitFor({ state: "visible", timeout: 1_000 }).catch(() => undefined);
+    }
     await input.waitFor({ state: "visible" });
     await input.fill(text);
     await input.press("Enter");

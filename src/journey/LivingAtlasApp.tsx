@@ -140,6 +140,7 @@ import { desktopHeaderMoreActions, desktopMoreMenuColumns, resolveDesktopRightSu
 import { useAutoRouteRefresh } from "./useAutoRouteRefresh";
 import { mergeAutoRouteRefresh } from "./autoRouteSnapping";
 import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayout";
+import { useKeyboardInset } from "./useKeyboardInset";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import {
   mediaReadRefreshDelayMs,
@@ -206,14 +207,18 @@ export function atlasEverydayEntryAvailable({
 
 export type CompactMoreAction = "journeys" | "everyday" | "import" | "share";
 
+/** The dock field is one line at 320px, so it says less than the overlay. */
+export const MOBILE_COMMAND_PLACEHOLDER = "说一句话…";
+
 /**
- * The compact header holds the wordmark plus at most three icon controls:
- * account, 记录新旅程 and one overflow. The Atlas-level actions that used to
- * sit beside them as separate icons live in the 更多 sheet, in this order,
- * each under the same condition its icon had. Whether the overflow exists
- * follows the view mode, not the current rows, so an owner's header keeps the
- * same three controls in every state. A read-only view can only browse, so it
- * keeps its single 全部旅程 icon rather than a sheet with one row.
+ * The compact header holds the wordmark plus at most two icon controls:
+ * account and one overflow (记录新旅程 sits at the left of the bottom dock).
+ * The Atlas-level actions that used to sit beside them as separate icons live
+ * in the 更多 sheet, in this order, each under the same condition its icon
+ * had. Whether the overflow exists follows the view mode, not the current
+ * rows, so an owner's header keeps the same controls in every state. A
+ * read-only view can only browse, so it keeps its single 全部旅程 icon rather
+ * than a sheet with one row.
  */
 export function compactHeaderOverflow({
   readOnly,
@@ -2308,13 +2313,20 @@ export function LivingAtlasApp({
     }
   }, [composerOpen, desktopHeaderInert, importOpen, isMobileV2, storyJourneyId]);
 
-  // The command bar: the owner's desktop only (mobile is restructured
-  // separately), and only while the deployment routes at least one intent.
-  // Guests and shared views have no `mutations`, so it never exists there.
-  const commandBarEligible = mutations !== null && !isReadOnlyAtlasView(capabilities) && !isMobileV2;
+  // The command bar: the owner's, and only while the deployment routes at
+  // least one intent. Guests and shared views have no `mutations`, so it never
+  // exists there. Desktop opens it as an overlay; compact mobile keeps it as
+  // a one-line field in the bottom dock (and in the Story's own dock).
+  const commandBarEligible = mutations !== null && !isReadOnlyAtlasView(capabilities);
   const [commandIntents, setCommandIntents] = useState<CommandIntent[]>([]);
   const [commandCapabilityTick, setCommandCapabilityTick] = useState(0);
   const [commandBarOpen, setCommandBarOpen] = useState(false);
+  // A dock never closes; finishing a card remounts it empty instead.
+  const [commandDockKey, setCommandDockKey] = useState(0);
+  const finishCommand = useCallback(() => {
+    setCommandBarOpen(false);
+    setCommandDockKey((key) => key + 1);
+  }, []);
   const commandComposerBridgeRef = useRef<CommandBarComposerBridge | null>(null);
   const commandStoryBridgeRef = useRef<CommandBarStoryBridge | null>(null);
   const [composerSentence, setComposerSentence] = useState<string | null>(null);
@@ -2333,13 +2345,21 @@ export function LivingAtlasApp({
     ? "composer"
     : shareTarget ? "share" : storyJourneyId !== null ? "story" : "atlas";
   const commandBarVisible = commandBarEligible && commandIntents.length > 0;
-  // Over the Atlas only while its header is live; over the Composer and the
-  // share dialog as an overlay inside their focus trap; over the Story (which
-  // covers the header) by ⌘K only, portaled above it.
-  const commandBarReachable = commandBarVisible && !globePickActive && !playbackActive && (
+  // Desktop: over the Atlas only while its header is live; over the Composer
+  // and the share dialog as an overlay inside their focus trap; over the
+  // Story (which covers the header) by ⌘K only, portaled above it.
+  const commandBarReachable = !isMobileV2 && commandBarVisible && !globePickActive && !playbackActive && (
     commandSurface !== "atlas"
     || !(desktopHeaderInert || storyJourneyId !== null || importOpen)
   );
+  // Compact mobile: the Atlas dock holds the field while the Atlas itself is
+  // the surface. A Story renders its own dock over the Atlas, so the Atlas
+  // one is not mounted underneath it (one field, one request in flight).
+  const commandDockLive = isMobileV2 && commandBarVisible && !globePickActive && !playbackActive;
+  const atlasCommandDockLive = commandDockLive && commandSurface === "atlas"
+    && storyJourneyId === null && !importOpen;
+  const [mobileDockElement, setMobileDockElement] = useState<HTMLElement | null>(null);
+  useKeyboardInset(mobileDockElement);
   useEffect(() => {
     setCommandBarOpen(false);
   }, [commandSurface]);
@@ -3734,6 +3754,59 @@ export function LivingAtlasApp({
   const compactContextSurfaceOpen = isMobileV2
     && (homeBaseContextSurfaceVisible || atlasEverydaySurfaceVisible || routePointContextVisible);
 
+  // Compact mobile's bottom dock: 记录新旅程, the current Journey and the
+  // one-sentence field share one row under the time row. Without the router
+  // the row keeps 「+」 and the Journey; a read-only view keeps the Journey.
+  // An Atlas with no Journey yet has no dock: its empty hero holds that band
+  // and its own 记录第一段旅程 action.
+  const mobileDockShown = isMobileV2 && view === "planet" && journeys.length > 0
+    && (Boolean(mobileJourney) || canCreateJourney || atlasCommandDockLive);
+  const commandBarShared = {
+    routed: commandIntents,
+    activeJourneyId,
+    journeys: journeyRail,
+    shareClient,
+    composerBridge: commandComposerBridgeRef,
+    storyBridge: commandStoryBridgeRef,
+    onCapabilitiesStale: () => setCommandCapabilityTick((tick) => tick + 1),
+  };
+  const commandBarContext = {
+    canCreateJourney,
+    canShare: shareClient !== null,
+    journeyCount: journeyRail.length,
+  };
+  // A Story on compact mobile is portaled over the Atlas, so it carries its
+  // own dock. Anything that leaves the Story closes it first; switching to
+  // another Journey stays inside it.
+  const storyCommandDock = commandDockLive && storyJourneyId !== null ? (
+    <CommandBar
+      key={commandDockKey}
+      variant="dock"
+      placeholder={MOBILE_COMMAND_PLACEHOLDER}
+      {...commandBarShared}
+      context={{ ...commandBarContext, surface: "atlas", compact: true }}
+      onCreateJourney={(sentence) => {
+        finishCommand();
+        closeJourneyStory(null, () => openCreateComposerWithSentence(sentence));
+      }}
+      onEditShare={(prefill) => {
+        finishCommand();
+        if (shareClient) openShareSurface(null, prefill);
+      }}
+      onNavigate={(journeyId) => {
+        finishCommand();
+        if (journeyId !== storyJourneyId) navigateStoryJourney(journeyId);
+      }}
+      onGlobeFocus={() => {
+        finishCommand();
+        closeJourneyStory(null, () => {
+          setView("planet");
+          setGlobeFocusMode(true);
+        });
+      }}
+    />
+  ) : null;
+
   return (
     <main
       className={`living-atlas${isMobileV2 ? " is-mobile-v2" : ""}${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}${playbackActive ? " is-playback" : ""}${globeFocusState(globeFocusMode).className}`}
@@ -3871,8 +3944,8 @@ export function LivingAtlasApp({
         <header className="mobile-v2__header">
           <div className="mobile-v2__brand"><StartripsWordmarkSignatureButton size={27} state={brandState} /></div>
           <nav aria-label="移动端旅程操作">
+            {/* 记录新旅程 lives at the left of the bottom dock. */}
             {canManageAtlas ? <MobileAccountActionSlot /> : null}
-            {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
             {compactHeader.trigger === "more" ? (
               <button
                 ref={mobileMoreTriggerRef}
@@ -4270,22 +4343,40 @@ export function LivingAtlasApp({
         </aside>
       ) : null}
 
-      {isMobileV2 && view === "planet" && mobileJourney ? (
+      {mobileDockShown ? (
         <section
+          ref={setMobileDockElement}
           className="mobile-v2__chrome"
-          aria-label="当前旅程与时间轴"
-          style={{
+          aria-label={mobileJourney ? "当前旅程与时间轴" : "记录与一句话操作"}
+          data-dock-only={mobileJourney ? undefined : "true"}
+          style={mobileJourney ? {
             "--journey-color": mobileJourney.lightColor,
             "--journey-gradient": getLightEffectGradient(mobileJourney.lightEffect, mobileJourney.lightColor),
-          } as React.CSSProperties}
+          } as React.CSSProperties : undefined}
         >
-          {timeCursor.scrub !== null ? (
+          {mobileJourney && timeCursor.scrub !== null ? (
             <div className="mobile-v2__scrub-bubble" aria-live="polite">
               <strong>{formatCursorDate(timeCursor.cursor, timeCursor.timeDomain)}</strong>
               <span>{mobilePoint?.label || mobileJourney.title}</span>
             </div>
           ) : null}
-          <button
+          {/* The time row sits above the dock row. */}
+          {mobileJourney ? (
+            <div className="mobile-v2__timeline" data-scrubbing={timeCursor.scrub !== null ? "true" : "false"}>
+              <GlobeTimeScrubber {...timeCursor} />
+            </div>
+          ) : null}
+          <div className="mobile-v2__dock" data-command-dock={atlasCommandDockLive ? "true" : undefined}>
+          {canCreateJourney ? (
+            <button
+              type="button"
+              className="mobile-v2__dock-create"
+              onClick={openCreateComposer}
+              inert={globePickActive || playbackActive || undefined}
+              aria-label="记录新旅程"
+            ><IconPlus size={19} stroke={1.4} aria-hidden="true" /></button>
+          ) : null}
+          {mobileJourney ? <button
             type="button"
             className="mobile-v2__journey-chip"
             hidden={routePointContextVisible}
@@ -4325,9 +4416,33 @@ export function LivingAtlasApp({
               <span>{mobilePoint?.label || `${mobileJourney.routePoints.length} 个路线点`}</span>
             </span>
             <IconArrowRight size={17} stroke={1.35} aria-hidden="true" />
-          </button>
-          <div className="mobile-v2__timeline" data-scrubbing={timeCursor.scrub !== null ? "true" : "false"}>
-            <GlobeTimeScrubber {...timeCursor} />
+          </button> : null}
+          {atlasCommandDockLive ? (
+            <CommandBar
+              key={commandDockKey}
+              variant="dock"
+              placeholder={MOBILE_COMMAND_PLACEHOLDER}
+              {...commandBarShared}
+              context={{ ...commandBarContext, surface: "atlas", compact: true }}
+              onCreateJourney={(sentence) => {
+                finishCommand();
+                openCreateComposerWithSentence(sentence);
+              }}
+              onEditShare={(prefill) => {
+                finishCommand();
+                if (shareClient) openShareSurface(null, prefill);
+              }}
+              onNavigate={(journeyId) => {
+                finishCommand();
+                openJourneyStoryFromCommand(journeyId);
+              }}
+              onGlobeFocus={() => {
+                finishCommand();
+                setView("planet");
+                setGlobeFocusMode(true);
+              }}
+            />
+          ) : null}
           </div>
         </section>
       ) : null}
@@ -5153,6 +5268,7 @@ export function LivingAtlasApp({
             const loaded = await load(true);
             return loaded?.find((journey) => journey.id === id) ?? null;
           }}
+          commandDock={storyCommandDock}
         />
       ) : null}
 
@@ -5247,19 +5363,8 @@ export function LivingAtlasApp({
           stacking, so nothing inside it can paint above the Story. */}
       {commandBarOpen && commandBarReachable ? hostCommandBar(
         <CommandBar
-          routed={commandIntents}
-          context={{
-            surface: commandSurface,
-            canCreateJourney,
-            canShare: shareClient !== null,
-            journeyCount: journeyRail.length,
-          }}
-          activeJourneyId={activeJourneyId}
-          journeys={journeyRail}
-          shareClient={shareClient}
-          composerBridge={commandComposerBridgeRef}
-          storyBridge={commandStoryBridgeRef}
-          onCapabilitiesStale={() => setCommandCapabilityTick((tick) => tick + 1)}
+          {...commandBarShared}
+          context={{ ...commandBarContext, surface: commandSurface }}
           onClose={() => setCommandBarOpen(false)}
           onCreateJourney={(sentence) => {
             setCommandBarOpen(false);

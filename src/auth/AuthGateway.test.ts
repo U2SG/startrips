@@ -198,10 +198,14 @@ describe("mobile account surface", () => {
     const atlasCss = readFileSync("src/styles/living-atlas.css", "utf8");
     const authCss = readFileSync("src/styles/auth-gate.css", "utf8");
 
+    // The slot leads the compact header's controls; 更多 follows it, and
+    // 记录新旅程 has moved to the bottom dock.
     const accountSlot = app.indexOf("<MobileAccountActionSlot />");
-    const createAction = app.indexOf("onClick={openCreateComposer}", accountSlot);
+    const moreAction = app.indexOf('data-atlas-more-trigger="true"', accountSlot);
+    const dockCreate = app.indexOf('className="mobile-v2__dock-create"');
     expect(accountSlot).toBeGreaterThan(-1);
-    expect(createAction).toBeGreaterThan(accountSlot);
+    expect(moreAction).toBeGreaterThan(accountSlot);
+    expect(dockCreate).toBeGreaterThan(moreAction);
     expect(auth).toContain("createPortal(");
     expect(auth).toContain('"account-sheet"');
     expect(auth).toContain('"account-form"');

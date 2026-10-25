@@ -706,8 +706,9 @@ async function openOwnerAtlas(browser, viewport, state) {
  * One-sentence share through the command bar, configured. The stubbed router
  * answers `share` with two of the three Journeys and 30 days. The card must
  * list exactly those, create nothing until 确认, open the share dialog
- * prefilled on 修改, and create exactly that set on 确认. Compact layouts do
- * not render the bar (the mobile shell is restructured separately).
+ * prefilled on 修改, and create exactly that set on 确认. Compact layouts
+ * carry the field in the Atlas bottom dock instead; that pass asserts the
+ * docked contract only.
  */
 async function verifyShareIntentProposal(browser, viewport) {
   const name = `${viewport.name}/sentence`;
@@ -721,10 +722,23 @@ async function verifyShareIntentProposal(browser, viewport) {
   const { context, page } = await openOwnerAtlas(browser, viewport, state);
   try {
     if (viewport.compact) {
-      await page.waitForTimeout(120);
-      check(`${name}/command-bar-absent-on-compact`,
-        await page.locator("[data-command-bar-trigger], .command-bar").count() === 0
-          && !state.requests.some((entry) => entry.kind === "intent-capabilities"));
+      // Compact layouts read the router capabilities too, and with the router
+      // configured the field lives in the Atlas bottom dock: no ⌘K trigger,
+      // no overlay bar, exactly one docked field.
+      const capabilityAnswered = await waitForStubRequest(page, state, "intent-capabilities");
+      const dock = page.locator('.mobile-v2__dock .command-bar[data-command-bar-variant="dock"]');
+      const dockShown = await dock.waitFor({ state: "visible", timeout: 10_000 }).then(() => true, () => false);
+      const contract = {
+        capabilityAnswered,
+        dockShown,
+        dockFields: await page.locator(".command-bar").count(),
+        triggers: await page.locator("[data-command-bar-trigger]").count(),
+        overlays: await page.locator('.command-bar[data-command-bar-variant="overlay"]').count(),
+      };
+      check(`${name}/command-field-docked-on-compact`,
+        capabilityAnswered && dockShown && contract.dockFields === 1
+          && contract.triggers === 0 && contract.overlays === 0,
+        contract);
       return;
     }
     await page.locator("[data-command-bar-trigger]").waitFor({ timeout: 10_000 });
@@ -1000,13 +1014,12 @@ try {
     check(`${viewport.name}/multi-entry-reachable`, true);
 
     // Unconfigured: only after the Atlas has heard the capability answer does
-    // "no sentence entry" (no command bar, no dialog sentence form) prove anything.
-    // A compact layout never constructs the bar, so it never asks at all.
-    const capabilityAnswered = viewport.compact
-      ? !state.requests.some((entry) => entry.kind === "intent-capabilities")
-      : await waitForStubRequest(page, state, "intent-capabilities");
+    // "no sentence entry" (no command bar or dock field, no dialog sentence
+    // form) prove anything. Compact layouts ask too: their bottom dock holds
+    // the field only when the router is configured.
+    const capabilityAnswered = await waitForStubRequest(page, state, "intent-capabilities");
     await page.waitForTimeout(120);
-    const intentEntryCount = await page.locator(".journey-share__intent, [data-command-bar-trigger]").count();
+    const intentEntryCount = await page.locator(".journey-share__intent, [data-command-bar-trigger], .command-bar").count();
     check(`${viewport.name}/sentence-entry-absent-when-unconfigured`,
       capabilityAnswered && intentEntryCount === 0,
       { capabilityAnswered, intentEntryCount });

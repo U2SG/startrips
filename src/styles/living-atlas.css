@@ -8193,10 +8193,10 @@ button.living-atlas__globe-focus-exit {
   pointer-events: none;
 }
 
-/* The header holds the wordmark and at most three 44px circles (account,
-   记录新旅程, 更多): 120 + 3 * 44 + 2 * 6 + 28 = 292px, inside the narrowest
-   320px phone. Neither side may shrink, so no control ever measures under its
-   hit size when space runs short. */
+/* The header holds the wordmark and at most two 44px circles (account and
+   更多; 记录新旅程 sits at the left of the bottom dock): 120 + 2 * 44 + 6 + 28
+   = 242px, inside the narrowest 320px phone. Neither side may shrink, so no
+   control ever measures under its hit size when space runs short. */
 .mobile-v2__brand {
   flex: none;
   display: flex;
@@ -8286,10 +8286,12 @@ button.living-atlas__globe-focus-exit {
   backdrop-filter: none;
 }
 
-/* The dock is one card: the journey row and the time row share one hairline,
-   one radius and one glass, with a hairline divider between them. The rows
-   are transparent, so no glass is stacked on glass.
-   The box keeps its height while a Route Point context hides the journey row.
+/* The dock is one card: the time row and, under it, the dock row (记录新旅程,
+   the journey chip and the one-sentence field) share one hairline, one radius
+   and one glass, with a hairline divider between them. The rows are
+   transparent, so no glass is stacked on glass. While the field holds focus
+   the box rides on top of the soft keyboard (--mobile-keyboard-inset).
+   The box keeps its height while a Route Point context hides the journey chip.
    ParticleEarthScene frames the globe between the header and this box, and
    the route editor clears it, so a box that collapsed would re-aim the camera
    whenever a point opened. Only the painted card shrinks to the time row,
@@ -8298,11 +8300,17 @@ button.living-atlas__globe-focus-exit {
   position: absolute;
   z-index: var(--z-chrome-90);
   right: calc(12px + env(safe-area-inset-right, 0px));
-  bottom: calc(env(safe-area-inset-bottom) + var(--mobile-dock-inset));
+  bottom: max(
+    calc(env(safe-area-inset-bottom) + var(--mobile-dock-inset)),
+    calc(var(--mobile-keyboard-inset, 0px) + var(--mobile-dock-inset))
+  );
   left: calc(12px + env(safe-area-inset-left, 0px));
   height: var(--mobile-dock-height);
   display: grid;
-  grid-template-rows: var(--mobile-dock-journey-row) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) var(--mobile-dock-journey-row);
+  /* The command card floats above the box, inside the band under the header. */
+  --command-float-clear-top: var(--mobile-surface-top);
+  --command-float-clear-bottom: var(--mobile-surface-bottom);
   padding: 1px;
   pointer-events: none;
 }
@@ -8325,17 +8333,77 @@ button.living-atlas__globe-focus-exit {
   backdrop-filter: blur(18px) saturate(120%);
 }
 
-/* A Route Point context holds the journey slot, so the card is the time row
-   alone. The box itself does not move. */
-.mobile-v2__chrome:has(> .mobile-v2__journey-chip[hidden])::before {
-  top: var(--mobile-dock-journey-row);
+/* A Route Point context holds the journey chip. Where that leaves the dock
+   row empty (a read-only view), the card is the time row alone. The box
+   itself does not move. */
+.mobile-v2__chrome:has(> .mobile-v2__dock > .mobile-v2__journey-chip[hidden]:only-child)::before {
+  bottom: var(--mobile-dock-journey-row);
 }
 
 /* Playback and point-picking hide the scrubber (their isolation rules above),
-   so the card frames the journey row alone, as the journey bar did before the
+   so the card frames the dock row alone, as the journey bar did before the
    dock became one card. */
 .living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__chrome::before {
-  bottom: calc(100% - var(--mobile-dock-journey-row) - 2px);
+  top: calc(100% - var(--mobile-dock-journey-row) - 2px);
+}
+
+/* No current Journey to show (none is focused): the dock is its row alone
+   (记录新旅程 and the field). An Atlas with no Journeys has no dock. */
+.living-atlas:has(> .mobile-v2__chrome[data-dock-only]) {
+  --mobile-dock-height: calc(var(--mobile-dock-journey-row) + 2px);
+}
+
+.mobile-v2__chrome[data-dock-only] {
+  --journey-color: rgba(118, 198, 188, 0.6);
+}
+
+.mobile-v2__dock {
+  grid-row: 2;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  pointer-events: auto;
+}
+
+.mobile-v2__dock-create {
+  flex: none;
+  width: var(--mobile-control-hit-size, 44px);
+  height: var(--mobile-control-hit-size, 44px);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(118, 198, 188, 0.2);
+  border-radius: var(--mobile-control-radius, 999px);
+  background: rgba(6, 28, 27, 0.4);
+  color: rgba(225, 240, 234, 0.9);
+  transition:
+    scale var(--motion-instant, 120ms) var(--motion-ease-out),
+    border-color var(--motion-instant, 120ms) ease-out;
+}
+
+.mobile-v2__dock-create:active {
+  scale: 0.97;
+  border-color: var(--atlas-line-strong);
+}
+
+.mobile-v2__dock-create:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-v2__dock-create:active {
+    scale: none;
+  }
+}
+
+/* Playback and point-picking own the stage: the dock row keeps the journey
+   chip only (the button is also inert there). */
+.living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__dock-create {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* An Atlas without a dock (no Journeys yet): surfaces only clear the home
@@ -8345,6 +8413,7 @@ button.living-atlas__globe-focus-exit {
 }
 
 .mobile-v2__journey-chip {
+  flex: 1 1 0;
   width: 100%;
   min-width: 0;
   height: 100%;
@@ -8352,9 +8421,9 @@ button.living-atlas__globe-focus-exit {
   grid-template-columns: 5px minmax(0, 1fr) 24px;
   align-items: center;
   gap: 10px;
-  padding: 7px 12px 7px 8px;
+  padding: 7px 8px 7px 4px;
   border: 0;
-  border-radius: 17px 17px 0 0;
+  border-radius: 12px;
   background: transparent;
   color: #edf7f2;
   pointer-events: auto;
@@ -8408,21 +8477,22 @@ button.living-atlas__globe-focus-exit {
 /* The time row keeps the second row even while the journey row is hidden, so
    the scrubber never jumps. Its top edge is the card's divider. */
 .mobile-v2__timeline {
-  grid-row: 2;
+  grid-row: 1;
   min-width: 0;
   min-height: 0;
-  border-top: 1px solid rgba(118, 198, 188, 0.1);
+  border-bottom: 1px solid rgba(118, 198, 188, 0.1);
   pointer-events: auto;
 }
 
-.mobile-v2__journey-chip[hidden] + .mobile-v2__timeline {
-  border-top-color: transparent;
+/* A read-only dock row emptied by a Route Point context loses the divider. */
+.mobile-v2__chrome:has(> .mobile-v2__dock > .mobile-v2__journey-chip[hidden]:only-child) > .mobile-v2__timeline {
+  border-bottom-color: transparent;
 }
 
 /* The row whose scrubber playback or point-picking has hidden stops taking
    pointers, and its divider goes with it. */
 .living-atlas:is(.is-playback, .is-globe-picking) .mobile-v2__timeline {
-  border-top-color: transparent;
+  border-bottom-color: transparent;
   pointer-events: none;
 }
 
@@ -8523,10 +8593,10 @@ button.living-atlas__globe-focus-exit {
   pointer-events: none;
 }
 
-/* With the time row alone, the bubble rides just above that card, inside the
-   unpainted part of the box, instead of over the Route Point context. */
-.mobile-v2__chrome:has(> .mobile-v2__journey-chip[hidden]) > .mobile-v2__scrub-bubble {
-  bottom: calc(100% - var(--mobile-dock-journey-row) + var(--mobile-surface-gap));
+/* A Route Point context grows up from the box, so while it is open the bubble
+   rides inside the card over the dock row instead of over that context. */
+.mobile-v2__chrome:has(> .mobile-v2__dock > .mobile-v2__journey-chip[hidden]) > .mobile-v2__scrub-bubble {
+  bottom: calc(var(--mobile-dock-journey-row) / 2 - 16px);
 }
 
 .mobile-v2__scrub-bubble strong {
@@ -11030,4 +11100,161 @@ body:has(.journey-share) .account-dock {
     border-color: var(--control-line-strong);
     background-color: var(--control-fill-hover);
   }
+}
+
+/* Compact mobile: the command bar is one line in a bottom dock (the Atlas
+   dock row, or the Story's own dock). Its wait, failure and card float above
+   the dock, one card at a time, inside the band the host clears for it. */
+.command-bar.command-bar--dock {
+  position: static;
+  z-index: auto;
+  top: auto;
+  left: auto;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  max-height: none;
+  overflow: visible;
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  transform: none;
+}
+
+.command-bar--dock .command-bar__form {
+  gap: 6px;
+}
+
+/* 16px keeps iOS from zooming the page when the field takes focus. */
+.command-bar--dock .command-bar__input {
+  min-height: var(--mobile-control-hit-size, 44px);
+  padding: 0 14px;
+  border-radius: var(--mobile-control-radius, 999px);
+  font-size: 16px;
+}
+
+.command-bar--dock .command-bar__input::placeholder {
+  color: var(--atlas-muted);
+}
+
+.command-bar--dock .command-bar__submit {
+  flex: none;
+  min-height: var(--mobile-control-hit-size, 44px);
+  padding: 0 14px;
+  border-radius: var(--mobile-control-radius, 999px);
+}
+
+.command-bar__float {
+  position: absolute;
+  z-index: var(--z-content-3);
+  right: 0;
+  bottom: calc(100% + var(--mobile-surface-gap, 8px));
+  left: 0;
+  max-height: max(120px, calc(
+    100dvh
+    - var(--command-float-clear-top, 72px)
+    - var(--command-float-clear-bottom, 128px)
+    - var(--mobile-keyboard-inset, 0px)
+  ));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--atlas-line);
+  border-radius: var(--radius-tile);
+  background: var(--atlas-panel-solid);
+  color: var(--atlas-text);
+  pointer-events: auto;
+}
+
+.command-bar__float .command-card {
+  padding: 4px 2px 2px;
+  border: 0;
+}
+
+/* The journey chip sits beside the field: without its arrow while the field
+   is there, and folded to its light while the field is in use (it still opens
+   the Journey sheet). */
+.mobile-v2__dock[data-command-dock] .mobile-v2__journey-chip {
+  grid-template-columns: 5px minmax(0, 1fr);
+}
+
+.mobile-v2__dock[data-command-dock] .mobile-v2__journey-chip > svg {
+  display: none;
+}
+
+.mobile-v2__dock[data-command-dock]:has(> .command-bar:focus-within, > .command-bar[data-command-active="true"]) .mobile-v2__journey-chip {
+  flex: 0 0 var(--mobile-control-hit-size, 44px);
+  grid-template-columns: 5px;
+  justify-content: center;
+  padding: 0;
+}
+
+.mobile-v2__dock[data-command-dock]:has(> .command-bar:focus-within, > .command-bar[data-command-active="true"]) .mobile-v2__journey-copy {
+  display: none;
+}
+
+/* The Story's dock: a sibling of the Story sheet inside its fixed layer, so
+   it sits at the bottom of the viewport above the sheet. The sheet keeps the
+   dock's height free at the end of its own scroll. */
+.story-command-dock {
+  position: absolute;
+  z-index: var(--z-content-3);
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  bottom: max(
+    calc(env(safe-area-inset-bottom, 0px) + 8px),
+    calc(var(--mobile-keyboard-inset, 0px) + 8px)
+  );
+  left: calc(12px + env(safe-area-inset-left, 0px));
+  height: 56px;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px solid rgba(118, 198, 188, 0.18);
+  border-radius: 18px;
+  background: rgba(2, 10, 11, 0.86);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(18px) saturate(120%);
+  pointer-events: auto;
+  --command-float-clear-top: calc(env(safe-area-inset-top, 0px) + 16px);
+  --command-float-clear-bottom: calc(env(safe-area-inset-bottom, 0px) + 72px);
+}
+
+/* Photo-first: a pill at the bottom right; a tap opens the field. */
+.story-command-dock[data-story-command-dock="pill"] {
+  left: auto;
+  height: auto;
+  padding: 0;
+  border-radius: var(--mobile-control-radius, 999px);
+}
+
+.story-command-dock__pill {
+  min-width: var(--mobile-control-hit-size, 44px);
+  min-height: var(--mobile-control-hit-size, 44px);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: rgba(225, 240, 234, 0.9);
+  font: 500 13px/1 var(--archive-sans);
+  letter-spacing: 0.04em;
+}
+
+.story-command-dock__pill:focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+.journey-story-backdrop .journey-story[data-story-command-dock="bar"] {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 72px);
+}
+
+.journey-story-backdrop .journey-story[data-story-command-dock="pill"] {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 60px);
 }

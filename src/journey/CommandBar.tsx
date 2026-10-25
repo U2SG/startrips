@@ -31,15 +31,24 @@ export type CommandBarProps = Omit<ProposalCardProps, "card" | "onRevise" | "onD
   activeJourneyId: string | null;
   /** 503: the deployment stopped routing; the host refetches and hides the bar. */
   onCapabilitiesStale: () => void;
-  onClose: () => void;
+  /** The overlay's own close; a dock never closes, its host remounts it. */
+  onClose?: () => void;
+  /**
+   * `overlay` (desktop): a nested modal layer opened by its trigger or ⌘K.
+   * `dock` (compact mobile): a one-line field that always sits in the bottom
+   * dock; its wait, failure and card float above the dock.
+   */
+  variant?: "overlay" | "dock";
+  placeholder?: string;
 };
 
 type Pending = { sequence: number; startedAt: number };
 
 /**
- * The one-sentence entry. It is a nested focus layer (`data-focus-trap-exempt`)
- * so it works over the Atlas and, as an overlay, over the Composer or the
- * share dialog; closing it returns focus to whatever held it.
+ * The one-sentence entry. As an overlay it is a nested focus layer
+ * (`data-focus-trap-exempt`) so it works over the Atlas and over the Composer
+ * or the share dialog; closing it returns focus to whatever held it. As a dock
+ * it traps nothing: it is one more control of the page it sits on.
  *
  * One reply, one card: a new reply replaces the card, and a new sentence
  * supersedes (and aborts) the one still waiting.
@@ -50,9 +59,12 @@ export function CommandBar({
   activeJourneyId,
   onCapabilitiesStale,
   onClose,
+  variant = "overlay",
+  placeholder,
   ...cardProps
 }: CommandBarProps) {
-  const rootRef = useNestedModalFocus<HTMLDivElement>(true);
+  const docked = variant === "dock";
+  const rootRef = useNestedModalFocus<HTMLDivElement>(!docked);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [text, setText] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
@@ -88,37 +100,47 @@ export function CommandBar({
   // A confirm in flight (e.g. a share link being created) cannot be dismissed:
   // its result must be seen, so Escape waits like 取消 does.
   const cardWorkingRef = useRef(false);
-  function dismissCard() {
+  function dismissCard(refocus = true) {
     if (cardWorkingRef.current) return;
     setCard(null);
-    inputRef.current?.focus({ preventScroll: true });
+    if (refocus) inputRef.current?.focus({ preventScroll: true });
   }
 
   // Esc belongs to this layer while focus is in it: the modal underneath
   // listens on `document` in the capture phase, so this runs on `window`.
+  // An idle dock has nothing of its own to close, so Esc passes through to
+  // the surface it sits on (a Story closes as it always did).
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || !rootRef.current?.contains(document.activeElement)) return;
+      if (docked && !cardRef.current && !pendingRef.current) return;
       event.preventDefault();
       event.stopPropagation();
       if (cardRef.current) dismissCard();
       else if (pendingRef.current) stop(null);
-      else onClose();
+      else onClose?.();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   });
 
-  // A press outside closes it, except on its own header trigger (which toggles).
+  // A press outside closes the overlay, except on its own header trigger
+  // (which toggles). A dock stays; the press only puts its card away, without
+  // pulling the soft keyboard back up.
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target instanceof Element ? event.target : null;
       if (!target || rootRef.current?.contains(target) || target.closest("[data-command-bar-trigger]")) return;
-      onClose();
+      if (docked) {
+        if (cardRef.current) dismissCard(false);
+        setFailure(null);
+        return;
+      }
+      onClose?.();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [onClose, rootRef]);
+  });
 
   async function submit() {
     const sentence = text.trim();
@@ -192,39 +214,8 @@ export function CommandBar({
   const stage = pending ? commandBarLatencyStage(elapsed) : "quiet";
   const waitCopy = pending ? commandBarWaitCopy(elapsed) : null;
 
-  return (
-    <div
-      ref={rootRef}
-      className="command-bar motion-fade-through"
-      data-focus-trap-exempt="true"
-      data-command-bar-surface={context.surface}
-      role="dialog"
-      aria-modal="true"
-      aria-label="一句话操作"
-      tabIndex={-1}
-    >
-      <form
-        className="command-bar__form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
-      >
-        <input
-          ref={inputRef}
-          className="command-bar__input"
-          type="text"
-          aria-label="用一句话说想做什么"
-          placeholder={PLACEHOLDERS[context.surface]}
-          maxLength={MAX_COMMAND_TEXT_LENGTH}
-          enterKeyHint="send"
-          autoComplete="off"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-        />
-        <button type="submit" className="command-bar__submit" disabled={!text.trim()}>理解</button>
-      </form>
-
+  const floating = (
+    <>
       {pending && stage !== "quiet" ? (
         <div className="command-bar__wait" role="status" data-command-bar-wait={stage}>
           <StartripsJourneyCue state="waiting" size={28} />
@@ -247,10 +238,57 @@ export function CommandBar({
             inputRef.current?.focus({ preventScroll: true });
             inputRef.current?.select();
           }}
-          onDismiss={dismissCard}
+          onDismiss={() => dismissCard()}
           onWorkingChange={(working) => { cardWorkingRef.current = working; }}
         />
       ) : null}
+    </>
+  );
+  const floatingShown = Boolean((pending && stage !== "quiet") || failure || card);
+
+  return (
+    <div
+      ref={rootRef}
+      className={`command-bar${docked ? " command-bar--dock" : " motion-fade-through"}`}
+      data-focus-trap-exempt={docked ? undefined : "true"}
+      data-command-bar-surface={context.surface}
+      data-command-bar-variant={variant}
+      // A dock in use widens over the Journey chip beside it.
+      data-command-active={docked && (text.trim() || pending || floatingShown) ? "true" : undefined}
+      role={docked ? "group" : "dialog"}
+      aria-modal={docked ? undefined : "true"}
+      aria-label="一句话操作"
+      tabIndex={-1}
+    >
+      <form
+        className="command-bar__form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <input
+          ref={inputRef}
+          className="command-bar__input"
+          type="text"
+          aria-label="用一句话说想做什么"
+          placeholder={placeholder ?? PLACEHOLDERS[context.surface]}
+          maxLength={MAX_COMMAND_TEXT_LENGTH}
+          enterKeyHint="send"
+          autoComplete="off"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+        {/* One line in the dock: Enter sends, and the button appears only
+            once there is something to send. */}
+        {!docked || text.trim() ? (
+          <button type="submit" className="command-bar__submit" disabled={!text.trim()}>理解</button>
+        ) : null}
+      </form>
+
+      {docked
+        ? floatingShown ? <div className="command-bar__float" data-command-bar-float="true">{floating}</div> : null
+        : floating}
     </div>
   );
 }

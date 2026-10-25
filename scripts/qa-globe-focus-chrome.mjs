@@ -158,7 +158,7 @@ const QA_HOME_BASE = {
   source: "manual",
 };
 
-async function openAtlas(viewport, { reducedMotion = "no-preference", homeBase = false, commandBar = false } = {}) {
+async function openAtlas(viewport, { reducedMotion = "no-preference", homeBase = false, commandBar = false, compact = false } = {}) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     // A viewport may declare its own scale factor: that is how browser zoom is
@@ -208,6 +208,12 @@ async function openAtlas(viewport, { reducedMotion = "no-preference", homeBase =
     `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1${homeBase ? "&qaHomeBaseSuggestion=1" : ""}`,
     { waitUntil: "domcontentloaded" },
   );
+  if (compact) {
+    // Compact mobile has no Journey card or globe controls; its bottom dock is
+    // the persistent chrome.
+    await page.locator(".mobile-v2__chrome").waitFor({ state: "visible", timeout: 20_000 });
+    return { page, pageErrors };
+  }
   await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 20_000 });
   await page.locator(".living-atlas-globe__controls").waitFor({ state: "attached", timeout: 20_000 });
   return { page, pageErrors };
@@ -1117,6 +1123,123 @@ try {
       });
     } finally {
       await page.close();
+    }
+  }
+
+  // 3c. Compact mobile: the command bar is a one-line field in the bottom
+  //     dock, right of 记录新旅程 and the Journey chip, under the time row.
+  //     One sentence brings one card, floating above the dock; 「+」 opens the
+  //     Composer; at 320px nothing in the dock overflows the viewport.
+  {
+    const viewport = { name: "390x844", width: 390, height: 844 };
+    const { page, pageErrors } = await openAtlas(viewport, { commandBar: true, compact: true, reducedMotion: "reduce" });
+    try {
+      const input = page.locator(".mobile-v2__dock .command-bar__input");
+      await input.waitFor({ state: "visible", timeout: 10_000 });
+      await settle(page);
+      const dock = await page.evaluate(() => {
+        const rect = (selector) => {
+          const box = document.querySelector(selector)?.getBoundingClientRect();
+          return box ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height } : null;
+        };
+        return {
+          headerCreate: document.querySelectorAll('.mobile-v2__header [aria-label="记录新旅程"]').length,
+          create: rect(".mobile-v2__dock-create"),
+          chip: rect(".mobile-v2__dock .mobile-v2__journey-chip"),
+          input: rect(".mobile-v2__dock .command-bar__input"),
+          timeline: rect(".mobile-v2__timeline"),
+          chrome: rect(".mobile-v2__chrome"),
+          inputFontSize: Number.parseFloat(getComputedStyle(document.querySelector(".mobile-v2__dock .command-bar__input")).fontSize),
+          viewportHeight: innerHeight,
+        };
+      });
+      await input.fill("只看地球");
+      await input.press("Enter");
+      const card = page.locator(".command-bar__float [data-command-card]");
+      await card.first().waitFor({ state: "visible", timeout: 5_000 });
+      await settle(page);
+      const cardState = await page.evaluate(() => {
+        const cards = document.querySelectorAll("[data-command-card]");
+        const float = document.querySelector(".command-bar__float")?.getBoundingClientRect();
+        const chrome = document.querySelector(".mobile-v2__chrome")?.getBoundingClientRect();
+        const header = document.querySelector(".mobile-v2__header")?.getBoundingClientRect();
+        return {
+          cards: cards.length,
+          kind: cards[0]?.getAttribute("data-command-card") ?? null,
+          aboveDock: Boolean(float && chrome && float.bottom <= chrome.top + 0.5),
+          belowHeaderTop: Boolean(float && header && float.top >= header.top),
+          inViewport: Boolean(float && float.left >= 0 && float.right <= innerWidth),
+          chipFolded: (document.querySelector(".mobile-v2__dock .mobile-v2__journey-chip")?.getBoundingClientRect().width ?? 0) <= 45,
+        };
+      });
+      await page.keyboard.press("Escape");
+      await page.locator(".command-bar__float").waitFor({ state: "detached", timeout: 5_000 });
+      await page.locator(".mobile-v2__dock-create").click();
+      await page.locator(".journey-composer").waitFor({ state: "visible", timeout: 10_000 });
+      const composerOpened = true;
+      await page.close();
+
+      // The narrowest phone, router configured: the dock row holds all three.
+      const narrow = await openAtlas({ name: "320x640", width: 320, height: 640 }, { commandBar: true, compact: true, reducedMotion: "reduce" });
+      try {
+        await narrow.page.locator(".mobile-v2__dock .command-bar__input").waitFor({ state: "visible", timeout: 10_000 });
+        await settle(narrow.page);
+        const overflow = await narrow.page.evaluate(() => {
+          const offenders = [...document.querySelectorAll(
+            ".mobile-v2__header, .mobile-v2__header button, .mobile-v2__chrome, .mobile-v2__dock > *, .mobile-v2__dock .command-bar__input",
+          )].filter((element) => {
+            const box = element.getBoundingClientRect();
+            return box.width > 0 && (box.left < -0.5 || box.right > innerWidth + 0.5);
+          }).map((element) => element.className || element.tagName);
+          const targets = [...document.querySelectorAll(".mobile-v2__dock-create, .mobile-v2__dock .command-bar__input, .mobile-v2__header button")]
+            .map((element) => {
+              const box = element.getBoundingClientRect();
+              return Math.min(box.width, box.height);
+            });
+          return {
+            scrollWidth: document.documentElement.scrollWidth,
+            innerWidth,
+            offenders,
+            minTarget: targets.length > 0 ? Math.min(...targets) : null,
+          };
+        });
+        record({
+          name: "compact-command-dock",
+          viewport: viewport.name,
+          dock,
+          cardState,
+          composerOpened,
+          overflow,
+          pageErrors: [...pageErrors, ...narrow.pageErrors],
+          failed: dock.headerCreate !== 0
+            || !dock.create || !dock.chip || !dock.input || !dock.timeline || !dock.chrome
+            || dock.create.width < 44 || dock.create.height < 44
+            || dock.input.height < 44
+            || dock.inputFontSize < 16
+            // 「+」, then the Journey chip, then the field, on one row.
+            || !(dock.create.right <= dock.chip.left + 0.5 && dock.chip.right <= dock.input.left + 0.5)
+            || Math.abs((dock.create.top + dock.create.bottom) / 2 - (dock.input.top + dock.input.bottom) / 2) > 2
+            // The time row sits above the dock row, and the dock clears the bottom.
+            || dock.timeline.bottom > dock.create.top + 0.5
+            || dock.chrome.bottom > dock.viewportHeight
+            || cardState.cards !== 1
+            || cardState.kind !== "globe-focus"
+            || !cardState.aboveDock
+            || !cardState.belowHeaderTop
+            || !cardState.inViewport
+            || !cardState.chipFolded
+            || overflow.scrollWidth > overflow.innerWidth
+            || overflow.offenders.length > 0
+            || overflow.minTarget === null
+            || overflow.minTarget < 44
+            || pageErrors.length > 0
+            || narrow.pageErrors.length > 0,
+        });
+      } finally {
+        await narrow.page.close();
+      }
+    } finally {
+      if (!page.isClosed()) await page.close();
     }
   }
 
