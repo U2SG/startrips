@@ -37,5 +37,9 @@ it("extracts real PDF page text and reuses its private page cache", async () => 
     expect(result).toEqual({ numPages: 1, pages: [{ page: 1, text: "Hello Soc" }] });
     expect(JSON.parse((await files.read("project-data/books/test/pages.json")).toString()).sourceSig).toMatch(/^[a-f0-9]{64}$/);
     expect(await extractStudyPdf(files, file, 1, 1)).toEqual(result);
+    const signed = await extractStudyPdf(files, file, 1, 1, true);
+    expect(signed.sourceSig).toMatch(/^[a-f0-9]{64}$/);
+    expect(signed.pages).toEqual(result.pages);
+    expect(Object.keys(signed).sort()).toEqual(["numPages", "pages", "sourceSig"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

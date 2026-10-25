@@ -7,6 +7,7 @@ import { sendLessonMessage, type LessonContext } from '../lesson';
 import { getCompanionVoice, resolveVoiceCreds } from '../voice';
 import * as speech from './player';
 import type { MediaMeta } from './player';
+import { registerAudioFocus } from '../audioFocus';
 
 export type LectureDeps = { ctx: LessonContext; profile: LlmProfile };
 
@@ -174,3 +175,5 @@ export function reset(): void {
   setStream('');
   patch({ lecturing: false, turnActive: false, error: '', rev: 0 });
 }
+
+registerAudioFocus('speech', reset);

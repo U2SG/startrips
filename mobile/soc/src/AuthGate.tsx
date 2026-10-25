@@ -9,6 +9,7 @@ import { setStorageScope } from './storage';
 import { font, useTheme } from './theme';
 import { writeToken } from './tokenStore';
 import { cancelReminders } from './notify';
+import * as listening from './books/runtime';
 
 type User = { id: string; name: string; email: string };
 const signOutListeners = new Set<() => Promise<void>>();
@@ -30,6 +31,7 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
     setUser(next);
   }
   async function clearSession() {
+    listening.reset();
     api.clearCredentials();
     session.reset();
     await cancelReminders();

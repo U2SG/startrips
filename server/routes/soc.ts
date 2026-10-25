@@ -70,7 +70,7 @@ socRoutes.get("/extract", async (c) => {
   const start = Number(c.req.query("start") || 1);
   const end = Number(c.req.query("end") || start + 18);
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end - start > 100) throw new SocError(400, "STUDY_PAGE_RANGE", "请选择有效页码，单次不超过 100 页");
-  return c.json(await extractStudyPdf(c.get("files"), c.req.query("path") || "", start, end));
+  return c.json(await extractStudyPdf(c.get("files"), c.req.query("path") || "", start, end, c.req.query("signature") === "1"));
 });
 
 socRoutes.get("/models", async (c) => {
