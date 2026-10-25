@@ -12,6 +12,10 @@ const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 const cardsPath = 'project-data/accounts/local/profiles/default/worlds/ci-world/flashcards/book.json';
 let cardVersion = 0;
 let expireSession = false;
+const studyBase = 'project-data/accounts/local/profiles/default/worlds/ci-world';
+let importedBook = null;
+let importFailure = true;
+const uploads = [];
 let cards = { textbookId: 'book', updatedAt: new Date().toISOString(), cards: [1, 2].map((number) => ({
   id: `card-${number}`, question: `CI question ${number}`, choices: [`CI answer ${number}`, 'Other'], correctIndex: 0,
   explanation: 'CI explanation', source: { textbook: 'CI book', chapter: 'CI chapter', textbookSlug: 'book' },
@@ -48,11 +52,24 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname.endsWith('/session')) return json(200, { user: { id: 'ci-study', name: 'Study', email: 'study@example.test' } });
     if (url.pathname.endsWith('/ping')) return json(200, { ok: true, root: '' });
     if (url.pathname.endsWith('/models')) return json(200, { active: '', profiles: [] });
-    if (url.pathname.endsWith('/list')) return json(200, { entries: url.searchParams.get('path')?.endsWith('/flashcards') ? [{ name: 'book.json', dir: false, size: 0, mtime: 0 }] : [] });
+    if (url.pathname.endsWith('/textbooks/import')) {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      uploads.push({ name: url.searchParams.get('name'), world: url.searchParams.get('world'), body: Buffer.concat(chunks) });
+      if (importFailure) return json(400, { error: 'STUDY_EPUB_INVALID', message: 'EPUB 文件损坏，请重新选择' });
+      importedBook = { id: 'phone-book', title: '手机教材', fileName: 'source.epub', format: 'epub', numPages: 2, currentPage: 0 };
+      return json(201, importedBook);
+    }
+    if (url.pathname.endsWith('/list')) {
+      const relative = url.searchParams.get('path');
+      return json(200, { entries: relative?.endsWith('/flashcards') ? [{ name: 'book.json', dir: false, size: 0, mtime: 0 }]
+        : relative?.endsWith('/worlds') ? [{ name: 'ci-world', dir: true, size: 0, mtime: 0 }] : [] });
+    }
     if (url.pathname.endsWith('/file')) {
       const relative = url.searchParams.get('path');
       if (relative?.endsWith('/worlds/active.json')) return json(200, { worldId: 'ci-world', textbookId: 'book' });
-      if (relative?.endsWith('/textbook_index.json')) return json(200, { worldId: 'ci-world', updatedAt: '', textbooks: [] });
+      if (relative?.endsWith('/world_meta.json')) return json(200, { worldId: 'ci-world', name: '学习', companions: [] });
+      if (relative?.endsWith('/textbook_index.json')) return json(200, { worldId: 'ci-world', updatedAt: '', textbooks: importedBook ? [importedBook] : [] });
       if (relative === cardsPath) {
         if (request.method === 'PUT') {
           let text = '';
@@ -142,6 +159,29 @@ try {
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await page.getByRole('button', { name: '教材', exact: true }).waitFor();
   assert.equal(await page.getByLabel('访问令牌', { exact: true }).count(), 0);
+  await page.getByRole('button', { name: '教材', exact: true }).click();
+  const uploadButton = page.getByRole('button', { name: '上传教材', exact: true });
+  const payload = Buffer.from('CI phone EPUB bytes');
+  const selectBook = async () => {
+    await uploadButton.waitFor();
+    await page.waitForFunction(() => !document.querySelector('[aria-label="上传教材"]')?.getAttribute('aria-disabled'));
+    const chooser = page.waitForEvent('filechooser');
+    await uploadButton.click();
+    await (await chooser).setFiles({ name: '手机教材.epub', mimeType: 'application/epub+zip', buffer: payload });
+  };
+  await selectBook();
+  await page.getByText('EPUB 文件损坏，请重新选择', { exact: true }).waitFor();
+  importFailure = false;
+  await selectBook();
+  await page.getByText('上传并解析教材…', { exact: true }).waitFor({ state: 'detached' });
+  await page.getByText('手机教材', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '教材', exact: true }).click();
+  await page.getByText('手机教材', { exact: true }).waitFor();
+  assert.equal(uploads.length, 2);
+  assert.equal(uploads[1].world, studyBase);
+  assert.equal(uploads[1].name, '手机教材.epub');
+  assert.deepEqual(uploads[1].body, payload, 'Phone selection must upload the original binary bytes');
+  await page.screenshot({ path: path.join(artifacts, 'textbook-upload.png') });
   await page.getByRole('button', { name: '闪卡', exact: true }).click();
   await page.getByText('CI question 1', { exact: true }).waitFor();
   await page.getByText('CI answer 1', { exact: true }).click();

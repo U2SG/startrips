@@ -17,6 +17,21 @@ and model identifiers. LLM and Qwen speech requests use server-owned credentials
 Supported model endpoints are HTTPS OpenAI, DeepSeek, DashScope and OpenRouter.
 Provider connectivity must be checked on the chosen server before selecting it.
 
+## Textbook uploads
+
+The **上传教材** button on the textbook screen opens the system document picker
+on Android, iOS and mobile web. PDF and EPUB uploads up to 128 MiB are private to
+the signed-in user. A new reader gets a learning world and a default Socratic
+companion; existing worlds and model configuration are preserved. The importer
+parses the source before registering it and removes failed, unregistered uploads.
+
+PDFs retain their printed page sequence. Unencrypted EPUBs follow the package
+spine and split each chapter into text pages of at most 2,200 characters. These
+are study positions, not printed page numbers. EPUB scripts and styles are never
+executed, external URLs are not fetched, and ZIP entry/count/expanded-size limits
+apply. DRM-protected text and image-only textbooks require a text edition;
+OCR and reproduction of EPUB illustrations, equations and layout are not included.
+
 To import existing data, first sign in as the intended owner and obtain their
 ID from `GET /api/soc/session`. Transfer a private copy of the desktop data
 directory to the server, then run as the API container's user:

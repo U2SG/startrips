@@ -58,7 +58,7 @@ const apiBodyLimit = bodyLimit({
 });
 // The routing worker callback carries its own, larger limit (route geometry).
 app.use("/api/*", (context, next) =>
-  (context.req.path === ROUTING_WORKER_RESULTS_PATH || context.req.path === "/api/soc/file" || context.req.path === "/api/soc/voice") ? next() : apiBodyLimit(context, next));
+  (context.req.path === ROUTING_WORKER_RESULTS_PATH || context.req.path === "/api/soc/file" || context.req.path === "/api/soc/voice" || context.req.path === "/api/soc/textbooks/import") ? next() : apiBodyLimit(context, next));
 
 app.get("/api/health", async (context) => {
   try {

@@ -109,3 +109,7 @@ export async function extractPdf(path: string, start: number, end: number): Prom
 export async function studyJson<T>(endpoint: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   return request(endpoint, body === undefined ? { signal } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
 }
+export async function uploadTextbook<T>(world: string, name: string, body: BodyInit): Promise<T> {
+  return request(`/textbooks/import?world=${encodeURIComponent(world)}&name=${encodeURIComponent(name)}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body }, 300000);
+}

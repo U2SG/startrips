@@ -7,6 +7,7 @@ vi.mock("../auth", () => ({ auth: { api: { getSession: session } } }));
 vi.mock("../config", () => ({ serverConfig: configuration }));
 import { socRoutes, studyModelEndpoint } from "../routes/soc";
 import { SocFiles } from "./files";
+import { epubFixture } from "./epub.fixture";
 
 let root: string;
 beforeEach(async () => {
@@ -19,9 +20,23 @@ afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, 
 describe("study authentication and provider boundary", () => {
   it("refuses every unauthenticated file and paid API call", async () => {
     session.mockResolvedValue(null);
-    for (const [method, url] of [["GET", "/session"], ["GET", "/file?path=rules.md"], ["POST", "/llm"], ["POST", "/voice"]]) {
+    for (const [method, url] of [["GET", "/session"], ["GET", "/file?path=rules.md"], ["POST", "/llm"], ["POST", "/voice"], ["POST", "/textbooks/import"]]) {
       expect((await socRoutes.request(url, { method })).status).toBe(401);
     }
+  });
+  it("imports a binary phone upload and serves private EPUB bytes with the correct MIME", async () => {
+    const files = new SocFiles(root, "alice");
+    const world = "project-data/accounts/local/profiles/default/worlds/study";
+    await files.write(`${world}/world_meta.json`, Buffer.from('{}'), null, true);
+    const result = await socRoutes.request(`/textbooks/import?world=${world}&name=lesson.epub`, { method: "POST", body: new Uint8Array(epubFixture()) });
+    expect(result.status).toBe(201);
+    const book = await result.json();
+    const source = `${world}/textbooks/${book.id}/source.epub`;
+    const download = await socRoutes.request(`/file?path=${source}`);
+    expect(download.headers.get("content-type")).toBe("application/epub+zip");
+    expect(Buffer.from(await download.arrayBuffer())).toEqual(epubFixture());
+    const extract = await socRoutes.request(`/extract?path=${source}&start=2&end=2`);
+    expect(await extract.json()).toMatchObject({ numPages: 2, pages: [{ page: 2, text: "第一章\n理解 & 推理" }] });
   });
   it("uses the session user even when a client supplies another user's id", async () => {
     const alice = new SocFiles(root, "alice");

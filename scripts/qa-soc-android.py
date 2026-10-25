@@ -16,7 +16,7 @@ def adb(*args, binary=False):
 
 
 try:
-    adb("install", "-r", str(Path(os.environ["RUNNER_TEMP"]) / "Soc-android-1.0.1.apk"))
+    adb("install", "-r", str(Path(os.environ["RUNNER_TEMP"]) / "Soc-android-1.0.2.apk"))
     adb("logcat", "-c")
     adb("shell", "am", "start", "-W", "-n", package + "/.MainActivity")
     deadline = time.monotonic() + 60

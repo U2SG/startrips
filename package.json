@@ -95,10 +95,12 @@
     "better-auth": "1.6.23",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.1",
+    "htmlparser2": "^12.0.0",
     "maplibre-gl": "^6.3.0",
     "mediabunny": "1.61.3",
     "nodemailer": "^9.0.5",
     "page-flip": "2.0.7",
+    "pdfjs-dist": "4.10.38",
     "pg": "^8.23.0",
     "pmtiles": "^4.5.0",
     "quick_flipbook": "1.1.3",
@@ -107,7 +109,7 @@
     "sharp": "^0.35.5",
     "three": "^0.179.1",
     "xstate": "^5.33.2",
-    "pdfjs-dist": "4.10.38"
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@types/geojson": "^7946.0.16",
@@ -117,6 +119,7 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@types/three": "^0.179.0",
+    "@types/yauzl": "^3.4.0",
     "auth": "1.6.23",
     "drizzle-kit": "^0.31.10",
     "playwright-core": "1.55.0",

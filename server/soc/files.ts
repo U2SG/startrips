@@ -92,7 +92,7 @@ export class SocFiles {
 
   async write(relative: string, body: Buffer, expected: string | null, createOnly: boolean) {
     const target = await this.resolve(relative);
-    if (!/\.(?:json|md|txt|pdf|png|jpe?g)$/i.test(relative)) throw new SocError(400, "STUDY_FILE_TYPE", "不支持这个文件类型");
+    if (!/\.(?:json|md|txt|pdf|epub|png|jpe?g)$/i.test(relative)) throw new SocError(400, "STUDY_FILE_TYPE", "不支持这个文件类型");
     return serialize(target, async () => {
       let old: Buffer | null = null;
       try { old = await this.read(relative); } catch (error) { if (!(error instanceof SocError && error.status === 404)) throw error; }
