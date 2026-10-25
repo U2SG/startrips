@@ -29,6 +29,8 @@ import SettingsScreen from './src/screens/SettingsScreen';
 import TextbooksScreen, { ActiveSel } from './src/screens/TextbooksScreen';
 import { loadSettings, saveSettings, Settings } from './src/settings';
 import { font, Ink, motion, ThemeMode, ThemeProvider, useTheme } from './src/theme';
+import { BookPlayer } from './src/books/BookPlayer';
+import * as listening from './src/books/runtime';
 
 const TABS = ['教材', '上课', '群聊', '闪卡', '设置'] as const;
 type Tab = (typeof TABS)[number];
@@ -181,6 +183,17 @@ function AppInner(props: {
   }, []);
 
   const profile = llmConfig?.profiles.find((p) => p.name === profileName) || null;
+  const [listeningOpen, setListeningOpen] = useState(false);
+  const [listeningBusy, setListeningBusy] = useState(false);
+  const [listeningError, setListeningError] = useState('');
+  const listeningTarget = useRef<{ sel: ActiveSel; tb: data.TextbookEntry } | null>(null);
+  async function listen(sel: ActiveSel, tb: data.TextbookEntry) {
+    listeningTarget.current = { sel, tb };
+    setListeningOpen(true); setListeningBusy(true); setListeningError('');
+    try { await listening.openBook(sel.worldId, tb, profile); }
+    catch (error) { setListeningError(error instanceof Error ? error.message : '听书打开失败，请重试'); }
+    finally { setListeningBusy(false); }
+  }
 
   return (
     <TabBarHeightCtx.Provider value={tabBarH}>
@@ -192,6 +205,7 @@ function AppInner(props: {
             {tab === '教材' ? (
               <TextbooksScreen
                 active={active}
+                onListen={(sel, tb) => void listen(sel, tb)}
                 onActivated={(sel, tb) => {
                   setActive(sel);
                   setTextbook(tb);
@@ -203,6 +217,7 @@ function AppInner(props: {
             {/* 上课页常驻挂载、display 隐藏：切 tab 不丢输入草稿/滚动位置，回来不重拉交接卡 */}
             <View style={{ flex: 1, display: tab === '上课' ? 'flex' : 'none' }}>
               <LessonScreen
+                onListen={() => { if (active && textbook) void listen(active, textbook); }}
                 worldId={active?.worldId || null}
                 textbook={textbook}
                 profile={profile}
@@ -234,6 +249,7 @@ function AppInner(props: {
               />
             ) : null}
           </View>
+          <BookPlayer expanded={listeningOpen} onExpand={() => setListeningOpen(true)} onCollapse={() => setListeningOpen(false)} busy={listeningBusy} error={listeningError} retry={() => { const target = listeningTarget.current; if (target) void listen(target.sel, target.tb); }} />
           <View
             onLayout={(e) => setTabBarH(e.nativeEvent.layout.height)}
             style={[s.tabBarWrap, { paddingBottom: Math.max(insets.bottom, 8) + 6, paddingHorizontal: compactNav ? 10 : 16 }]}

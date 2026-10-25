@@ -3,7 +3,7 @@ import { SocError, type SocFiles } from "./files";
 import { readEpub } from "./epub";
 
 let extracting = false;
-export async function extractStudyPdf(files: SocFiles, relative: string, start: number, end: number) {
+export async function extractStudyPdf(files: SocFiles, relative: string, start: number, end: number, withSignature = false) {
   const epub = relative.toLowerCase().endsWith(".epub");
   if (!epub && !relative.toLowerCase().endsWith(".pdf")) throw new SocError(400, "STUDY_PDF_REQUIRED", "请选择 PDF 或 EPUB 教材");
   if (extracting) throw new SocError(429, "STUDY_EXTRACTION_BUSY", "正在处理教材，请稍后重试");
@@ -60,5 +60,5 @@ export async function extractStudyPdf(files: SocFiles, relative: string, start: 
   }
   const first = Math.max(1, start);
   const last = Math.min(cached.numPages, end);
-  return { numPages: cached.numPages, pages: cached.pages.slice(first - 1, last).map((text, index) => ({ page: first + index, text })) };
+  return { numPages: cached.numPages, pages: cached.pages.slice(first - 1, last).map((text, index) => ({ page: first + index, text })), ...(withSignature ? { sourceSig: signature } : {}) };
 }

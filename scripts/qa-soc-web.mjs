@@ -16,6 +16,13 @@ const studyBase = 'project-data/accounts/local/profiles/default/worlds/ci-world'
 let importedBook = null;
 let importFailure = true;
 const uploads = [];
+const listeningFiles = new Map();
+let listeningWrites = 0;
+const wav = Buffer.alloc(44 + 8000 * 2 * 8);
+wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
 let cards = { textbookId: 'book', updatedAt: new Date().toISOString(), cards: [1, 2].map((number) => ({
   id: `card-${number}`, question: `CI question ${number}`, choices: [`CI answer ${number}`, 'Other'], correctIndex: 0,
   explanation: 'CI explanation', source: { textbook: 'CI book', chapter: 'CI chapter', textbookSlug: 'book' },
@@ -31,6 +38,7 @@ const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
   const authenticated = !expireSession && request.headers.cookie?.includes('ci-study=1');
   function json(status, value) { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); }
+  if (url.pathname === '/ci-book.wav') { response.writeHead(200, { 'Content-Type': 'audio/wav' }); response.end(wav); return; }
   if (url.pathname === '/api/auth/sign-in/email') {
     response.setHeader('Set-Cookie', 'ci-study=1; HttpOnly; SameSite=Lax; Path=/');
     return json(200, {});
@@ -63,10 +71,24 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname.endsWith('/list')) {
       const relative = url.searchParams.get('path');
       return json(200, { entries: relative?.endsWith('/flashcards') ? [{ name: 'book.json', dir: false, size: 0, mtime: 0 }]
-        : relative?.endsWith('/worlds') ? [{ name: 'ci-world', dir: true, size: 0, mtime: 0 }] : [] });
+        : relative?.endsWith('/worlds') ? [{ name: 'ci-world', dir: true, size: 0, mtime: 0 }]
+        : relative?.endsWith('/textbooks/phone-book') ? [{ name: 'source.epub', dir: false, size: 0, mtime: 0 }] : [] });
+    }
+    if (url.pathname.endsWith('/extract')) {
+      const number = Number(url.searchParams.get('start'));
+      return json(200, { numPages: 2, sourceSig: 'ci-book-source', pages: [{ page: number, text: number === 1 ? '第一段原文。第二段原文！' : '第二页原文。最后一段。' }] });
     }
     if (url.pathname.endsWith('/file')) {
       const relative = url.searchParams.get('path');
+      if (relative?.includes('/listening-')) {
+        if (request.method === 'PUT') {
+          let text = ''; for await (const chunk of request) text += chunk;
+          listeningFiles.set(relative, JSON.parse(text)); listeningWrites++;
+          response.setHeader('ETag', `"listening-${listeningWrites}"`); return json(200, { ok: true });
+        }
+        if (!listeningFiles.has(relative)) return json(404, { error: 'STUDY_FILE_NOT_FOUND' });
+        response.setHeader('ETag', `"listening-${listeningWrites}"`); return json(200, listeningFiles.get(relative));
+      }
       if (relative?.endsWith('/worlds/active.json')) return json(200, { worldId: 'ci-world', textbookId: 'book' });
       if (relative?.endsWith('/world_meta.json')) return json(200, { worldId: 'ci-world', name: '学习', companions: [] });
       if (relative?.endsWith('/textbook_index.json')) return json(200, { worldId: 'ci-world', updatedAt: '', textbooks: importedBook ? [importedBook] : [] });
@@ -91,7 +113,7 @@ const server = http.createServer(async (request, response) => {
         return json(200, cards);
       }
     }
-    if (url.pathname.endsWith('/voice')) return json(200, { available: false });
+    if (url.pathname.endsWith('/voice')) return json(200, request.method === 'POST' ? { url: `http://${request.headers.host}/ci-book.wav` } : { available: true });
     return json(404, { error: 'STUDY_FILE_NOT_FOUND' });
   }
   try {
@@ -182,6 +204,33 @@ try {
   assert.equal(uploads[1].name, '手机教材.epub');
   assert.deepEqual(uploads[1].body, payload, 'Phone selection must upload the original binary bytes');
   await page.screenshot({ path: path.join(artifacts, 'textbook-upload.png') });
+  await page.getByRole('button', { name: '听书：手机教材', exact: true }).click();
+  await page.getByTestId('listening-reader').waitFor();
+  await page.getByRole('button', { name: '从第 2 段朗读', exact: true }).waitFor();
+  await page.getByRole('button', { name: '从第 2 段朗读', exact: true }).click();
+  await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
+  await page.waitForTimeout(600);
+  await page.getByRole('button', { name: '暂停听书', exact: true }).click();
+  await page.getByRole('button', { name: '播放听书', exact: true }).waitFor();
+  await page.getByRole('button', { name: '听书设置', exact: true }).click();
+  await page.getByRole('button', { name: '1.5 倍速', exact: true }).click();
+  await page.getByRole('button', { name: '30 分钟后停止', exact: true }).click();
+  await page.screenshot({ path: path.join(artifacts, 'listening-reader.png') });
+  await page.getByLabel('听书页码', { exact: true }).fill('2');
+  await page.getByRole('button', { name: '跳转到页码', exact: true }).click();
+  await page.getByText('第二页原文。', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '收起听书', exact: true }).click();
+  await page.getByTestId('listening-mini').waitFor();
+  // A full reload must restore the independent listening checkpoint, never lesson progress.
+  await page.reload();
+  await page.getByRole('button', { name: '教材', exact: true }).click();
+  await page.getByRole('button', { name: '听书：手机教材', exact: true }).click();
+  await page.getByText('第二页原文。', { exact: true }).waitFor();
+  assert.equal(await page.getByLabel('听书页码', { exact: true }).inputValue(), '2');
+  await page.getByRole('button', { name: '听书设置', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: '1.5 倍速', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.ok(listeningWrites > 0);
+  await page.getByRole('button', { name: '收起听书', exact: true }).click();
   await page.getByRole('button', { name: '闪卡', exact: true }).click();
   await page.getByText('CI question 1', { exact: true }).waitFor();
   await page.getByText('CI answer 1', { exact: true }).click();

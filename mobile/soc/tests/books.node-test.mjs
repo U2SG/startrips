@@ -1,0 +1,99 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { setImmediate } from 'node:timers/promises';
+import { splitBookText, annotatePassages, restoreBookmark } from '../src/books/model.ts';
+import { BookEngine } from '../src/books/engine.ts';
+
+const page = (number = 1) => ({ page: number, total: 2, signature: 'book-a', passages: ['第一句。', '第二句！', '第三句？'].map((text) => ({ text, speaker: '旁白', voice: 'Cherry', tone: 'neutral' })) });
+const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
+function fixture(overrides = {}) {
+  const saved = [], played = [], removed = [], sought = [];
+  const engine = new BookEngine({
+    page: async (n) => page(n), audio: async (p, i) => `${p.page}-${i}.wav`, remove: (uri) => removed.push(uri),
+    save: async (b) => { saved.push(b); }, focus() {},
+    player: { async load(uri, seconds, rate) { played.push({ uri, seconds, rate }); }, play() {}, pause() {}, async seek(n) { sought.push(n); }, rate() {}, release() {} },
+    ...overrides,
+  });
+  return { engine, saved, played, removed, sought };
+}
+
+test('book segmentation preserves every non-whitespace character, including Markdown and emoji', () => {
+  const text = '\n*轻声说*：“你好！”\n' + '🙂长段落'.repeat(180) + '。最后一页\n';
+  const chunks = splitBookText(text);
+  assert.equal(chunks.join('').replace(/\s/gu, ''), text.replace(/\s/gu, ''));
+  assert.ok(chunks.every((chunk) => Array.from(chunk.trim()).length <= 240));
+  assert.ok(chunks.some((chunk) => chunk.includes('*轻声说*')));
+});
+
+test('LLM text cannot change narration; duplicate/missing indices fall back to original text', () => {
+  const original = ['张三说：“你好。”', '李四说：“再见。”'];
+  const bad = [{ index: 0, speaker: '张三', tone: 'excited', text: '篡改' }, { index: 0, speaker: '李四', tone: 'sad' }];
+  const fallback = annotatePassages(original, bad, {});
+  assert.equal(fallback.valid, false);
+  assert.deepEqual(fallback.passages.map((p) => p.text), original);
+  assert.ok(fallback.passages.every((p) => p.speaker === '旁白'));
+  const annotations = [{ index: 1, speaker: '李四', tone: 'sad' }, { index: 0, speaker: '张三', tone: 'excited', text: '篡改' }];
+  const first = annotatePassages(original, annotations, {});
+  const next = annotatePassages(['新页'], [{ index: 0, speaker: '张三', tone: 'gentle' }], first.cast);
+  assert.deepEqual(first.passages.map((p) => p.text), original);
+  assert.equal(next.passages[0].voice, first.passages[0].voice);
+  assert.notEqual(first.passages[0].voice, first.passages[1].voice);
+});
+
+test('invalid and replaced-source checkpoints cannot seek beyond the book', () => {
+  assert.equal(restoreBookmark({ version: 1, signature: 'old', page: 1, passage: 2, seconds: 90 }, page()).passage, 0);
+  const bookmark = restoreBookmark({ version: 1, signature: 'book-a', page: 1, passage: 100, seconds: Infinity, speed: NaN }, page());
+  assert.equal(bookmark.passage, 2); assert.equal(bookmark.seconds, 0); assert.equal(bookmark.speed, 1);
+});
+
+test('resume restores page, phrase, seconds and speed without automatically playing', async () => {
+  const { engine, played, saved } = fixture();
+  await engine.open({ version: 1, page: 2, passage: 1, seconds: 7, signature: 'book-a', speed: 1.5 });
+  assert.equal(engine.getState().status, 'paused'); assert.equal(played.length, 0);
+  await engine.play();
+  assert.deepEqual(played[0], { uri: '2-1.wav', seconds: 7, rate: 1.5 });
+  engine.tick(8, 20, true, false); engine.pause(); await setImmediate();
+  assert.equal(saved.at(-1).seconds, 8); assert.equal(saved.at(-1).page, 2);
+  engine.dispose();
+});
+
+test('pause while synthesizing prevents late playback and releases the late audio file', async () => {
+  const pending = deferred();
+  const { engine, played, removed } = fixture({ audio: () => pending.promise });
+  await engine.open(); const task = engine.play(); engine.pause();
+  pending.resolve('late.wav'); await task;
+  assert.equal(engine.getState().status, 'paused'); assert.deepEqual(played, []); assert.deepEqual(removed, ['late.wav']);
+  engine.dispose();
+});
+
+test('seek supersedes a slow page request and a failed phrase never advances', async () => {
+  const slow = deferred();
+  const { engine } = fixture({ page: (n) => n === 1 ? slow.promise : Promise.resolve(page(n)), audio: async () => null });
+  const old = engine.open(); await engine.go(2); slow.resolve(page(1)); await old;
+  assert.equal(engine.getState().page.page, 2);
+  await engine.play();
+  assert.equal(engine.getState().status, 'error'); assert.equal(engine.getState().bookmark.passage, 0);
+  engine.dispose();
+});
+
+test('completion advances exactly once, page turns preserve source order, and sleep pauses', async () => {
+  const { engine, played, sought } = fixture();
+  await engine.open(); await engine.play();
+  engine.tick(5, 5, false, true); engine.tick(5, 5, false, true); await setImmediate();
+  assert.equal(engine.getState().bookmark.passage, 1);
+  assert.deepEqual(played.map((p) => p.uri), ['1-0.wav', '1-1.wav']);
+  engine.tick(3, 10, true, false); await engine.seek(500);
+  assert.deepEqual(sought, [9.9]);
+  await engine.next(1); await engine.next(1);
+  assert.equal(engine.getState().page.page, 2); assert.equal(engine.getState().bookmark.passage, 0);
+  engine.sleep(0.000001); await new Promise((done) => setTimeout(done, 2));
+  engine.tick(1, 10, true, false); assert.equal(engine.getState().status, 'paused');
+  engine.dispose();
+});
+
+test('disposal invalidates pending work and never reactivates playback', async () => {
+  const pending = deferred();
+  const { engine, played } = fixture({ audio: () => pending.promise });
+  await engine.open(); const task = engine.play(); engine.dispose(); pending.resolve('old-account.wav'); await task;
+  assert.deepEqual(played, []);
+});

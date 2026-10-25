@@ -21,8 +21,10 @@ import { useVoiceCapture } from '../stt';
 import { accentGrad, font, Ink, motion, radius, space, tnum, type_, useTheme } from '../theme';
 import { Busy, ErrorNote } from '../ui';
 import { chunkForSpeech, getCompanionVoice, prepareForSpeech, resolveVoiceCreds } from '../voice';
+import { claimAudioFocus, registerAudioFocus } from '../audioFocus';
 
 type Props = {
+  onListen: () => void;
   worldId: string | null;
   textbook: TextbookEntry | null;
   profile: LlmProfile | null;
@@ -134,7 +136,7 @@ function VoiceStreamPreview({ s }: { s: Styles }) {
   return <Text style={s.voiceStream} numberOfLines={4}>{prepareForSpeech(text)}</Text>;
 }
 
-export default function LessonScreen({ worldId, textbook, profile, onEnded }: Props) {
+export default function LessonScreen({ worldId, textbook, profile, onEnded, onListen }: Props) {
   const { ink, isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const kb = useKeyboardHeight();
@@ -225,6 +227,9 @@ export default function LessonScreen({ worldId, textbook, profile, onEnded }: Pr
   // 卸载时只停语音对话循环（录音依赖本组件的 recorder hook）；
   // 朗读与听课在模块级引擎里，切 tab 卸载本组件也继续播、继续讲——不要在这里停它们。
   useEffect(() => () => { voiceActive.current = false; voiceAbort.current?.abort(); capture.cancel(); }, []);
+  useEffect(() => registerAudioFocus('speech', () => {
+    voiceActive.current = false; voiceAbort.current?.abort(); capture.cancel(); setVoiceOn(false);
+  }), []);
 
   // 重进 app 时检查有没有未下课的课（桌面版同规则：没下课不能开新课）
   useEffect(() => {
@@ -362,6 +367,7 @@ export default function LessonScreen({ worldId, textbook, profile, onEnded }: Pr
 
   function startVoiceMode() {
     if (!ctx || !profile) return;
+    claimAudioFocus('speech');
     lecture.stopLecture(); // 与连续听课互斥
     setVoiceErr('');
     setVoiceOn(true);
@@ -427,7 +433,10 @@ export default function LessonScreen({ worldId, textbook, profile, onEnded }: Pr
             <Text style={s.startBook} numberOfLines={1}>
               {textbook ? `《${textbook.title}》` : '先在「教材」里选一本'}
             </Text>
-            <Text style={s.startTitle}>准备上课</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={s.startTitle}>准备上课</Text>
+              {textbook ? <Pressable accessibilityRole="button" accessibilityLabel="听这本教材" onPress={onListen} style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 16 }}><Text style={{ color: ink.accent, fontFamily: font.med }}>听书</Text></Pressable> : null}
+            </View>
           </View>
 
           {notice ? (

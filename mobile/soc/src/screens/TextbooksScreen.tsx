@@ -14,6 +14,7 @@ export type ActiveSel = { worldId: string; textbookId: string };
 export default function TextbooksScreen(props: {
   active: ActiveSel | null;
   onActivated: (sel: ActiveSel, tb: data.TextbookEntry) => void;
+  onListen: (sel: ActiveSel, tb: data.TextbookEntry) => void;
 }) {
   const { ink } = useTheme();
   const s = useMemo(() => makeStyles(ink), [ink]);
@@ -154,11 +155,7 @@ export default function TextbooksScreen(props: {
           const started = item.currentPage > 0;
           const pct = item.numPages ? Math.min(100, Math.round((item.currentPage / item.numPages) * 100)) : 0;
           return (
-            <Pressable
-              disabled={!!busy}
-              onPress={() => activate(item)}
-              style={({ pressed }) => [s.card, isActive && s.cardActive, pressed && { opacity: 0.85 }]}
-            >
+            <View style={[s.card, isActive && s.cardActive]}>
               <View style={s.cardHead}>
                 <Text style={s.title} numberOfLines={2}>{item.title}</Text>
                 {isActive ? <View style={s.badge}><Text style={s.badgeText}>在读</Text></View> : null}
@@ -180,7 +177,11 @@ export default function TextbooksScreen(props: {
                   {started ? `${item.currentPage}/${item.numPages} · ${pct}%` : '未开始'}
                 </Text>
               </View>
-            </Pressable>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                <Pressable accessibilityRole="button" accessibilityLabel={`上课：${item.title}`} disabled={!!busy} onPress={() => activate(item)} style={[s.upload, { flex: 1, alignItems: 'center', backgroundColor: ink.sunken }]}><Text style={[s.uploadText, { color: ink.fg }]}>上课</Text></Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel={`听书：${item.title}`} disabled={!!busy || !worldId} onPress={() => props.onListen({ worldId: worldId!, textbookId: item.id }, item)} style={[s.upload, { flex: 1, alignItems: 'center' }]}><Text style={s.uploadText}>听书</Text></Pressable>
+              </View>
+            </View>
           );
         }}
         ListEmptyComponent={busy ? null : <Text style={s.empty}>上传一本 PDF 或 EPUB，开始学习。</Text>}

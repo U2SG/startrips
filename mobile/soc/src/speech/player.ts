@@ -14,6 +14,7 @@ import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-aud
 import { cacheAudio, removeAudio } from './audioCache';
 import { fetchChunkFile } from './chunkFile';
 import { prepareForSpeech, synthesizeChunk, type VoiceCreds } from '../voice';
+import { claimAudioFocus } from '../audioFocus';
 
 export type MediaMeta = { title: string; artist?: string; albumTitle?: string };
 /** 给 UI 的播报状态：null=没在播；preparing=首块合成中（按钮显示「合成…」） */
@@ -210,6 +211,7 @@ export function waitUntilIdle(): Promise<void> {
 
 // ── 媒体会话 pin（听课整堂课持有，段间不清）──────────────────
 export function pinMediaSession(meta: MediaMeta): void {
+  claimAudioFocus('speech');
   pinned = true;
   try { getPlayer().setActiveForLockScreen(true, meta); } catch {}
 }
@@ -219,6 +221,7 @@ export function unpinMediaSession(): void {
 }
 
 function newSession(msgId: string): Session {
+  claimAudioFocus('speech');
   stop();
   sessionSeq += 1;
   const st: Session = { controller: new AbortController(), msgId, jobs: [], idx: 0, streaming: false, waiting: false };
