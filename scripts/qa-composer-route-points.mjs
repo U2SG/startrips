@@ -369,6 +369,9 @@ const routeOrderLabels = (page) => page.locator(".journey-route-draft > li:not(.
 async function verifyRouteOrderSentence(page, pageErrors, names, routeOrderAnswers) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.locator(".journey-route-draft").waitFor({ state: "visible" });
+  // Desktop command capabilities load after the viewport transition; the
+  // existing draft is already visible before the shortcut becomes available.
+  await page.locator("[data-command-bar-trigger]").waitFor({ state: "attached" });
   const sendCommand = async (text) => {
     if (await page.locator(".command-bar").count() === 0) await page.keyboard.press("Control+K");
     const input = page.locator(".command-bar__input");
