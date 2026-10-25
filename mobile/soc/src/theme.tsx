@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react';
-import { useColorScheme } from 'react-native';
+import { Platform, useColorScheme } from 'react-native';
 
 // ── Apple Glass 令牌（来自 v1.1 设计稿 · 暖纸 + 蓝）──────────────────────
 // 浅深两套同构（键一一对应）。玻璃 / 渐变是 v1.1 新增项。
@@ -71,18 +71,19 @@ export const space = (n: number) => n * 8;
 
 // 字体族名 = @expo-google-fonts 导出的 key。v1.1 全部走 Noto Sans SC（含 800/900），
 // 不再用衬线 / 等宽体；数字统一加 `tnum` 取 tabular-nums。
+const fontFamily = (name: string) => Platform.OS === 'web' ? `${name}, system-ui, sans-serif` : name;
 export const font = {
-  sans: 'NotoSansSC_400Regular',
-  med: 'NotoSansSC_500Medium',
-  bold: 'NotoSansSC_700Bold',
-  extra: 'NotoSansSC_800ExtraBold',
-  black: 'NotoSansSC_900Black',
+  sans: fontFamily('NotoSansSC_400Regular'),
+  med: fontFamily('NotoSansSC_500Medium'),
+  bold: fontFamily('NotoSansSC_700Bold'),
+  extra: fontFamily('NotoSansSC_800ExtraBold'),
+  black: fontFamily('NotoSansSC_900Black'),
   // 向后兼容别名（旧屏引用，已重映射到 Noto Sans；serif/mono 不再有衬线/等宽含义）
-  sansMed: 'NotoSansSC_500Medium',
-  sansBold: 'NotoSansSC_700Bold',
-  serif: 'NotoSansSC_700Bold',
-  serifBlack: 'NotoSansSC_900Black',
-  mono: 'NotoSansSC_500Medium',
+  sansMed: fontFamily('NotoSansSC_500Medium'),
+  sansBold: fontFamily('NotoSansSC_700Bold'),
+  serif: fontFamily('NotoSansSC_700Bold'),
+  serifBlack: fontFamily('NotoSansSC_900Black'),
+  mono: fontFamily('NotoSansSC_500Medium'),
 } as const;
 
 // 字号：大标题 30/900 · 卡标题 18/800 · headline 15/600 · 正文 14/400 · 副标 11/500

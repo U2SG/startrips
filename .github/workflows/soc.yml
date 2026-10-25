@@ -50,7 +50,9 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify mobile browser sign-in and sign-out
         working-directory: .
-        run: node scripts/qa-soc-web.mjs
+        run: |
+          bash scripts/ci-ensure-cjk-font.sh
+          node scripts/qa-soc-web.mjs
       - name: Verify production access logs exclude session credentials
         working-directory: .
         run: node scripts/qa-soc-caddy.mjs
@@ -251,7 +253,9 @@ jobs:
       - name: Check deployed sign-in with failed font downloads
         env:
           SOC_LIVE_ORIGIN: ${{ vars.SOCRATOPIA_API_ORIGIN }}
-        run: node scripts/qa-soc-live.mjs
+        run: |
+          bash scripts/ci-ensure-cjk-font.sh
+          node scripts/qa-soc-live.mjs
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
