@@ -2,11 +2,16 @@ name: soc
 
 on:
   pull_request:
-    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'deploy/Caddyfile']
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-android.py', 'deploy/Caddyfile']
   push:
     branches: [main]
-    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'deploy/Caddyfile']
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-android.py', 'deploy/Caddyfile']
   workflow_dispatch:
+    inputs:
+      live:
+        description: Check the deployed page without rebuilding native apps
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,6 +22,7 @@ concurrency:
 
 jobs:
   web:
+    if: ${{ !inputs.live }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -44,7 +50,9 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify mobile browser sign-in and sign-out
         working-directory: .
-        run: node scripts/qa-soc-web.mjs
+        run: |
+          bash scripts/ci-ensure-cjk-font.sh
+          node scripts/qa-soc-web.mjs
       - name: Verify production access logs exclude session credentials
         working-directory: .
         run: node scripts/qa-soc-caddy.mjs
@@ -66,7 +74,107 @@ jobs:
           path: mobile/soc/dist
           retention-days: 14
 
+  android:
+    if: ${{ !inputs.live }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      EXPO_PUBLIC_STARTRIPS_ORIGIN: ${{ vars.SOCRATOPIA_API_ORIGIN }}
+      CI: '1'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+    defaults:
+      run:
+        working-directory: mobile/soc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/soc/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci --ignore-scripts
+      - run: npx expo prebuild --platform android --no-install
+      - name: Restore the existing personal Android signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SOC_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/debug.keystore
+          chmod 600 android/app/debug.keystore
+      - name: Build a standalone signed APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64 --max-workers=2 --no-daemon
+      - name: Verify the update signature and packaged native capabilities
+        run: |
+          set -euo pipefail
+          tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          "$tools/apksigner" verify --print-certs "$apk" | tee "$RUNNER_TEMP/soc-android-signature.txt"
+          grep -iq 'fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c' "$RUNNER_TEMP/soc-android-signature.txt"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest print "$apk" > "$RUNNER_TEMP/soc-android-manifest.xml"
+          python3 - <<'PY'
+          import os, pathlib, xml.etree.ElementTree as ET, zipfile
+          a = '{http://schemas.android.com/apk/res/android}'
+          root = ET.parse(pathlib.Path(os.environ['RUNNER_TEMP']) / 'soc-android-manifest.xml').getroot()
+          assert root.get('package') == 'com.socratopia.mobile'
+          assert int(root.get(a + 'versionCode')) == 2
+          assert root.find('application').get(a + 'debuggable') != 'true'
+          permissions = {p.get(a + 'name') for p in root.findall('uses-permission')}
+          assert 'android.permission.RECORD_AUDIO' in permissions
+          assert 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK' in permissions
+          playback = next(s for s in root.findall('application/service') if s.get(a + 'name') == 'expo.modules.audio.service.AudioControlsService')
+          service_type = playback.get(a + 'foregroundServiceType', '')
+          # Compiled manifests may render the enum as its numeric bit mask.
+          assert service_type == 'mediaPlayback' or int(service_type, 0) & 2, f'Invalid playback service type: {service_type}'
+          with zipfile.ZipFile('android/app/build/outputs/apk/release/app-release.apk') as apk:
+              assert 'assets/index.android.bundle' in apk.namelist(), 'Release must run without Metro'
+          PY
+          cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.1.apk"
+          sha256sum "$RUNNER_TEMP/Soc-android-1.0.1.apk" > "$RUNNER_TEMP/Soc-android-1.0.1.apk.sha256"
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Soc-android
+          path: |
+            ${{ runner.temp }}/Soc-android-1.0.1.apk
+            ${{ runner.temp }}/Soc-android-1.0.1.apk.sha256
+            ${{ runner.temp }}/soc-android-signature.txt
+            ${{ runner.temp }}/soc-android-manifest.xml
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enable KVM for the release smoke check
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install and launch the release on Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: python3 scripts/qa-soc-android.py
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: soc-android-qa
+          path: |
+            artifacts/soc-android
+            ${{ runner.temp }}/soc-android-signature.txt
+            ${{ runner.temp }}/soc-android-manifest.xml
+          retention-days: 14
+
   ios:
+    if: ${{ !inputs.live }}
     runs-on: macos-26
     timeout-minutes: 60
     env:
@@ -133,3 +241,30 @@ jobs:
           name: soc-ios-build-log
           path: ${{ runner.temp }}/soc-xcodebuild.log
           retention-days: 7
+
+  live:
+    if: ${{ inputs.live }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check deployed sign-in with failed font downloads
+        env:
+          SOC_LIVE_ORIGIN: ${{ vars.SOCRATOPIA_API_ORIGIN }}
+        run: |
+          bash scripts/ci-ensure-cjk-font.sh
+          node scripts/qa-soc-live.mjs
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: soc-live-qa
+          path: artifacts/soc-live
+          retention-days: 14

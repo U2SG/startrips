@@ -208,6 +208,7 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+      - soc_downloads:/srv/soc/downloads:ro
       - ${ATLAS_BASEMAP_DIR:-./basemap}:/srv/basemap:ro
     mem_limit: 256m
     logging: *default-logging
@@ -216,6 +217,7 @@ services:
 
 volumes:
   soc_data:
+  soc_downloads:
   postgres_data:
   caddy_data:
   caddy_config:

@@ -81,6 +81,43 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const address = server.address();
 const browser = await chromium.launch({ executablePath: selectHostedBrowser(), headless: true, args: ['--no-sandbox'] });
 try {
+  // A phone must reach and use the app even while every CJK font is unavailable.
+  for (const mode of ['pending', 'failed']) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    const page = await context.newPage();
+    const errors = [];
+    const releaseFonts = [];
+    let fontRequests = 0;
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.route('**/*.ttf', async (route) => {
+      fontRequests++;
+      if (mode === 'pending') await new Promise((resolve) => releaseFonts.push(resolve));
+      await route.abort();
+    });
+    try {
+      await page.goto(`http://127.0.0.1:${address.port}/soc/`, { waitUntil: 'domcontentloaded' });
+      await page.getByLabel('邮箱', { exact: true }).waitFor({ timeout: 8000 });
+      await page.getByTestId('soc-splash').waitFor({ state: 'detached', timeout: 8000 });
+      assert.ok(fontRequests > 0, 'The regression must intercept actual font downloads');
+      assert.equal(await page.evaluate(() => document.fonts.check('16px NotoSansSC_400Regular')), false);
+      await page.getByLabel('邮箱', { exact: true }).fill('study@example.test');
+      await page.getByLabel('密码', { exact: true }).fill('ci-only-password');
+      await page.getByRole('button', { name: '登录', exact: true }).click();
+      await page.getByRole('button', { name: '教材', exact: true }).waitFor({ timeout: 8000 });
+      await page.getByRole('button', { name: '设置', exact: true }).click();
+      await page.getByText('刷新', { exact: true }).waitFor();
+      // Playwright screenshots wait for fonts; CDP captures the visible fallback.
+      const cdp = await context.newCDPSession(page);
+      const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });
+      await fs.writeFile(path.join(artifacts, `fonts-${mode}.png`), Buffer.from(data, 'base64'));
+      await cdp.detach();
+      assert.deepEqual(errors, [], `Font ${mode} must not crash the app`);
+    } finally {
+      releaseFonts.forEach((release) => release());
+      await page.unrouteAll({ behavior: 'wait' });
+      await context.close();
+    }
+  }
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
   const page = await context.newPage();
   const errors = [];
