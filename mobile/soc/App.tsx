@@ -7,13 +7,13 @@ import { NotoSansSC_500Medium } from '@expo-google-fonts/noto-sans-sc/500Medium'
 import { NotoSansSC_700Bold } from '@expo-google-fonts/noto-sans-sc/700Bold';
 import { NotoSansSC_800ExtraBold } from '@expo-google-fonts/noto-sans-sc/800ExtraBold';
 import { NotoSansSC_900Black } from '@expo-google-fonts/noto-sans-sc/900Black';
-import { useFonts } from 'expo-font';
+import { FontDisplay, useFonts } from 'expo-font';
 import AsyncStorage from './src/storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, AppState, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, AppState, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as api from './src/api';
 import { AuthGate } from './src/AuthGate';
@@ -35,18 +35,23 @@ type Tab = (typeof TABS)[number];
 
 const PROFILE_KEY = 'socratopia.llmProfile';
 
-// 保持原生开屏一直显示，直到字体就绪 + 首屏数据连接完成，再由 AnimatedSplash 接管退场动画
+// 原生等待包内字体；网页先用系统字体，下载完成后替换，不阻塞登录。
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function App() {
-  const [fontsLoaded] = useFonts({
-    NotoSansSC_400Regular, NotoSansSC_500Medium, NotoSansSC_700Bold,
-    NotoSansSC_800ExtraBold, NotoSansSC_900Black,
+  const [fontsLoaded, fontError] = useFonts({
+    NotoSansSC_400Regular: { uri: NotoSansSC_400Regular, display: FontDisplay.SWAP },
+    NotoSansSC_500Medium: { uri: NotoSansSC_500Medium, display: FontDisplay.SWAP },
+    NotoSansSC_700Bold: { uri: NotoSansSC_700Bold, display: FontDisplay.SWAP },
+    NotoSansSC_800ExtraBold: { uri: NotoSansSC_800ExtraBold, display: FontDisplay.SWAP },
+    NotoSansSC_900Black: { uri: NotoSansSC_900Black, display: FontDisplay.SWAP },
   });
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
   const [settings, setSettings] = useState<Settings | null>(null);
   const [appReady, setAppReady] = useState(false); // AppInner 首屏就绪信号
   const [splashGone, setSplashGone] = useState(false); // 退场动画跑完才卸载开屏层
+  const [startupExpired, setStartupExpired] = useState(false);
+  const fontsReady = Platform.OS === 'web' || fontsLoaded || !!fontError || startupExpired;
 
   function changeTheme(m: ThemeMode) {
     setThemeMode(m);
@@ -55,14 +60,14 @@ export default function App() {
 
   // 兜底：连接卡住（如网络不通 ping 不返回）也不让开屏永久挂着
   useEffect(() => {
-    const t = setTimeout(() => setAppReady(true), 6000);
+    const t = setTimeout(() => { setAppReady(true); setStartupExpired(true); }, 6000);
     return () => clearTimeout(t);
   }, []);
 
   return (
     <ThemeProvider mode={themeMode} setMode={changeTheme}>
       <SafeAreaProvider>
-        {fontsLoaded ? (
+        {fontsReady ? (
           <AuthGate onReady={() => setAppReady(true)}>
           <AppInner
             settings={settings}
@@ -73,7 +78,7 @@ export default function App() {
         </AuthGate>
         ) : null}
         {!splashGone ? (
-          <AnimatedSplash exit={fontsLoaded && appReady} onDone={() => setSplashGone(true)} />
+          <AnimatedSplash exit={fontsReady && appReady} onDone={() => setSplashGone(true)} />
         ) : null}
       </SafeAreaProvider>
     </ThemeProvider>

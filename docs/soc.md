@@ -60,16 +60,28 @@ network change, including the gap while the next explanation is generated.
 An iOS background audio entitlement alone does not promise uninterrupted
 arbitrary JavaScript work during silent gaps.
 
+## Android personal installation
+
+The `soc` workflow builds the standalone `Soc-android` APK for ARM64 phones and
+x86-64 emulators, then installs and launches it in an Android emulator. The APK
+uses the existing personal Android signing key kept in the repository secret
+`SOC_ANDROID_KEYSTORE_BASE64`, retains `com.socratopia.mobile`, and increments
+the version code so it can update the previous personal APK without uninstalling.
+No Expo development server or Tailscale connection is required. Background audio
+and local reminders remain native; lock-screen behavior still needs device testing.
+
 ## Web
 
 `npm ci --prefix mobile/soc` then `npm --prefix mobile/soc run export:web`
 produces the `/soc/` assets. Docker performs this alongside the existing Vite
-build. The web client keeps the same learning layout, uses browser recording and
+build. Web fonts load with system-font fallback and never block sign-in, including
+when their download stalls or fails. The web client keeps the same learning layout, uses browser recording and
 HTTPS media URLs, and does not schedule native local notifications. Browser
 background generation and continuous playback require separate device testing;
 the native apps remain the intended clients for locked-screen lessons.
 
 Code checks and builds run in GitHub CI. The `soc` workflow typechecks the
-client, exports web and Android bundles, and archives the iOS device app. Core
+client, exports web and Android bundles, builds and launches the Android APK,
+and archives the iOS device app. Core
 CI tests file isolation, revision conflicts, traversal/link refusal, model-key
 redaction and authenticated provider routing.
