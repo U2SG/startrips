@@ -1286,6 +1286,12 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
 .account-sheet__actions button span,
 .account-dock__actions button span,
 .mobile-v2__more-actions button span { font-size: 13px; }
+.account-sheet__actions button {
+  min-height: 48px;
+  gap: 2px;
+  padding: 6px 2px;
+  line-height: 1.35;
+}
 .account-sheet__actions button small,
 .account-dock__actions button small,
 .mobile-v2__more-actions button small { color: rgba(153, 184, 174, 0.56); font-size: 10px; }
