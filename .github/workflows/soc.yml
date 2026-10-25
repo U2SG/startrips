@@ -130,7 +130,10 @@ jobs:
           permissions = {p.get(a + 'name') for p in root.findall('uses-permission')}
           assert 'android.permission.RECORD_AUDIO' in permissions
           assert 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK' in permissions
-          assert any(s.get(a + 'foregroundServiceType') == 'mediaPlayback' for s in root.findall('application/service'))
+          playback = next(s for s in root.findall('application/service') if s.get(a + 'name') == 'expo.modules.audio.service.AudioControlsService')
+          service_type = playback.get(a + 'foregroundServiceType', '')
+          # Compiled manifests may render the enum as its numeric bit mask.
+          assert service_type == 'mediaPlayback' or int(service_type, 0) & 2, f'Invalid playback service type: {service_type}'
           with zipfile.ZipFile('android/app/build/outputs/apk/release/app-release.apk') as apk:
               assert 'assets/index.android.bundle' in apk.namelist(), 'Release must run without Metro'
           PY
@@ -164,7 +167,10 @@ jobs:
         if: always()
         with:
           name: soc-android-qa
-          path: artifacts/soc-android
+          path: |
+            artifacts/soc-android
+            ${{ runner.temp }}/soc-android-signature.txt
+            ${{ runner.temp }}/soc-android-manifest.xml
           retention-days: 14
 
   ios:
