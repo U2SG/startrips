@@ -156,7 +156,8 @@ export async function writeWorldMeta(worldId: string, meta: WorldMeta): Promise<
 // ---------- 教材 ----------
 
 export async function readTextbookIndex(worldId: string): Promise<TextbookIndex> {
-  return api.readJson(`${await worldPath(worldId)}/textbooks/textbook_index.json`);
+  return (await api.readJsonOrNull<TextbookIndex>(`${await worldPath(worldId)}/textbooks/textbook_index.json`))
+    || { worldId, updatedAt: '', textbooks: [] };
 }
 
 export async function writeTextbookIndex(worldId: string, idx: TextbookIndex): Promise<void> {
@@ -176,9 +177,29 @@ async function findPdfFileName(worldId: string, tb: TextbookEntry): Promise<stri
   // 实际文件名带上传时间戳后缀（如 “书名 1769311171849.pdf”），按目录扫描匹配
   const dir = await textbookDir(worldId, tb);
   const entries = await api.list(dir);
-  const pdf = entries.find((e) => !e.dir && e.name.toLowerCase().endsWith('.pdf'));
-  if (!pdf) throw new Error(`教材 ${tb.title} 目录下没有 PDF 文件`);
+  const pdf = entries.find((e) => !e.dir && /\.(pdf|epub)$/i.test(e.name));
+  if (!pdf) throw new Error(`教材 ${tb.title} 目录下没有 PDF 或 EPUB 文件`);
   return pdf.name;
+}
+
+export async function importTextbook(worldId: string, name: string, body: BodyInit): Promise<TextbookEntry> {
+  const guard = api.sessionGuard();
+  const world = await worldPath(worldId);
+  guard();
+  const metaPath = `${world}/world_meta.json`;
+  const existing = await api.readJsonOrNull<WorldMeta>(metaPath);
+  guard();
+  if (!existing) {
+    const meta: WorldMeta = {
+      worldId, name: '我的学习', createdAt: new Date().toISOString(), language: 'zh',
+      companions: [{ candidateId: 'socrates', name: '苏格拉底', customName: null,
+        bio: '通过提问和讨论陪你理解教材。', pronoun: '他', nicknames: [], avatar: null, color: 'teal' }],
+    };
+    try { await api.writeJson(metaPath, meta); }
+    catch (error) { if ((error as { status?: number }).status !== 409) throw error; }
+  }
+  guard();
+  return api.uploadTextbook<TextbookEntry>(world, name, body);
 }
 
 export async function readPreface(worldId: string, tb: TextbookEntry): Promise<{ contentStartPage: number } | null> {
@@ -358,8 +379,7 @@ export async function appendGroupChat(worldId: string, msgs: { speaker: string; 
 
 export async function readRules(): Promise<string> {
   const r = await api.readTextOrNull('rules.md');
-  if (!r) throw new Error('数据根目录缺少 rules.md');
-  return r;
+  return r || '你是耐心的苏格拉底式学习伙伴。严格依据提供的教材内容，用中文提问，引导学习者自己推理。一次只讨论一个问题，先听回答，再给提示和反馈。不要编造教材之外的结论。';
 }
 
 export async function readLlmConfig(): Promise<LlmConfig> {

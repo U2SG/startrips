@@ -2,10 +2,10 @@ name: soc
 
 on:
   pull_request:
-    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-android.py', 'deploy/Caddyfile']
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', 'server/app.ts', 'server/tests/soc-auth.integration.test.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-android.py', 'deploy/Caddyfile']
   push:
     branches: [main]
-    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-android.py', 'deploy/Caddyfile']
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', 'server/app.ts', 'server/tests/soc-auth.integration.test.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-android.py', 'deploy/Caddyfile']
   workflow_dispatch:
     inputs:
       live:
@@ -125,7 +125,7 @@ jobs:
           a = '{http://schemas.android.com/apk/res/android}'
           root = ET.parse(pathlib.Path(os.environ['RUNNER_TEMP']) / 'soc-android-manifest.xml').getroot()
           assert root.get('package') == 'com.socratopia.mobile'
-          assert int(root.get(a + 'versionCode')) == 2
+          assert int(root.get(a + 'versionCode')) == 3
           assert root.find('application').get(a + 'debuggable') != 'true'
           permissions = {p.get(a + 'name') for p in root.findall('uses-permission')}
           assert 'android.permission.RECORD_AUDIO' in permissions
@@ -137,14 +137,14 @@ jobs:
           with zipfile.ZipFile('android/app/build/outputs/apk/release/app-release.apk') as apk:
               assert 'assets/index.android.bundle' in apk.namelist(), 'Release must run without Metro'
           PY
-          cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.1.apk"
-          sha256sum "$RUNNER_TEMP/Soc-android-1.0.1.apk" > "$RUNNER_TEMP/Soc-android-1.0.1.apk.sha256"
+          cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.2.apk"
+          sha256sum "$RUNNER_TEMP/Soc-android-1.0.2.apk" > "$RUNNER_TEMP/Soc-android-1.0.2.apk.sha256"
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: Soc-android
           path: |
-            ${{ runner.temp }}/Soc-android-1.0.1.apk
-            ${{ runner.temp }}/Soc-android-1.0.1.apk.sha256
+            ${{ runner.temp }}/Soc-android-1.0.2.apk
+            ${{ runner.temp }}/Soc-android-1.0.2.apk.sha256
             ${{ runner.temp }}/soc-android-signature.txt
             ${{ runner.temp }}/soc-android-manifest.xml
           if-no-files-found: error

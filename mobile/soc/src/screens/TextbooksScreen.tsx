@@ -3,6 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { GlassHeader, GlowLayer } from '../components/Glass';
 import * as data from '../data';
+import { sessionGuard } from '../api';
+import { pickTextbook } from '../textbookPicker';
 import { useResource } from '../hooks';
 import { accentGrad, font, Ink, radius, space, tnum, type_, useTheme } from '../theme';
 import { Busy, ErrorNote } from '../ui';
@@ -20,7 +22,7 @@ export default function TextbooksScreen(props: {
   const [activateError, setActivateError] = useState('');
 
   // 第一步：读取所有世界列表
-  const { data: worlds, busy: worldsBusy, error: worldsError } = useResource<{ id: string; name: string }[]>(
+  const { data: worlds, busy: worldsBusy, error: worldsError, reload: reloadWorlds } = useResource<{ id: string; name: string }[]>(
     async () => {
       const ids = await data.listWorlds();
       const metas = await Promise.all(ids.map((id) => data.readWorldMeta(id).catch(() => null)));
@@ -56,6 +58,28 @@ export default function TextbooksScreen(props: {
   const busy = activateBusy || worldsBusy || indexBusy;
   const error = activateError || worldsError || indexError;
 
+  async function upload() {
+    const guard = sessionGuard();
+    try {
+      setActivateError('');
+      const picked = await pickTextbook();
+      if (!picked) return;
+      guard();
+      setActivateBusy('上传并解析教材…');
+      const targetWorld = worldId || 'study';
+      const textbook = await data.importTextbook(targetWorld, picked.name, picked.body);
+      guard();
+      setWorldId(targetWorld);
+      await reloadWorlds();
+      guard();
+      if (targetWorld === worldId) await reloadIndex();
+      await data.setActive(targetWorld, textbook.id);
+      guard();
+      props.onActivated({ worldId: targetWorld, textbookId: textbook.id }, textbook);
+    } catch (error: any) { setActivateError(String(error.message)); }
+    finally { setActivateBusy(''); }
+  }
+
   async function activate(tb: data.TextbookEntry) {
     if (!worldId) return;
     setActivateBusy('激活教材…');
@@ -80,7 +104,13 @@ export default function TextbooksScreen(props: {
       <GlowLayer />
       <GlassHeader>
         <View>
-          <Text style={s.navTitle}>教材</Text>
+          <View style={s.titleRow}>
+            <Text style={s.navTitle}>教材</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="上传教材" disabled={!!busy}
+              onPress={upload} style={({ pressed }) => [s.upload, { opacity: busy || pressed ? 0.5 : 1 }]}>
+              <Text style={s.uploadText}>上传教材</Text>
+            </Pressable>
+          </View>
           {worldList.length > 1 ? (
             <ScrollView
               horizontal
@@ -125,6 +155,7 @@ export default function TextbooksScreen(props: {
           const pct = item.numPages ? Math.min(100, Math.round((item.currentPage / item.numPages) * 100)) : 0;
           return (
             <Pressable
+              disabled={!!busy}
               onPress={() => activate(item)}
               style={({ pressed }) => [s.card, isActive && s.cardActive, pressed && { opacity: 0.85 }]}
             >
@@ -133,7 +164,7 @@ export default function TextbooksScreen(props: {
                 {isActive ? <View style={s.badge}><Text style={s.badgeText}>在读</Text></View> : null}
               </View>
               <Text style={s.meta} numberOfLines={1}>
-                {[item.author, item.year, item.field].filter(Boolean).join(' · ') || 'PDF'}
+                {[item.author, item.year, item.field].filter(Boolean).join(' · ') || item.format?.toUpperCase() || 'PDF'}
               </Text>
               <View style={s.progressRow}>
                 <View style={s.track}>
@@ -152,7 +183,7 @@ export default function TextbooksScreen(props: {
             </Pressable>
           );
         }}
-        ListEmptyComponent={busy ? null : <Text style={s.empty}>这个世界还没有教材，请先在桌面版导入。</Text>}
+        ListEmptyComponent={busy ? null : <Text style={s.empty}>上传一本 PDF 或 EPUB，开始学习。</Text>}
       />
     </View>
   );
@@ -160,6 +191,9 @@ export default function TextbooksScreen(props: {
 
 const makeStyles = (ink: Ink) => StyleSheet.create({
   root: { flex: 1, backgroundColor: ink.canvas },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16 },
+  upload: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, backgroundColor: ink.accentSoft, borderRadius: 14 },
+  uploadText: { color: ink.accent, fontSize: type_.body, fontFamily: font.med },
   navTitle: { fontSize: 30, fontFamily: font.black, letterSpacing: -0.5, color: ink.fg },
   navSub: { fontSize: type_.xs, color: ink.muted, marginTop: 4, fontFamily: font.sans },
   worldRow: { flexDirection: 'row', gap: 6, paddingHorizontal: 18 },

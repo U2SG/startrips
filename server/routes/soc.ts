@@ -4,6 +4,7 @@ import { auth } from "../auth";
 import { serverConfig } from "../config";
 import { contentTag, SocError, SocFiles, type SocModel } from "../soc/files";
 import { extractStudyPdf } from "../soc/pdf";
+import { importTextbook } from "../soc/import";
 
 type StudyEnvironment = { Variables: { files: SocFiles; user: { id: string; name: string; email: string } } };
 export const socRoutes = new Hono<StudyEnvironment>();
@@ -35,13 +36,17 @@ socRoutes.onError((error, context) => {
 
 socRoutes.get("/session", (c) => c.json({ user: c.get("user") }));
 socRoutes.get("/ping", (c) => c.json({ ok: true, root: "" }));
+socRoutes.post("/textbooks/import", async (c) => c.json(await importTextbook(
+  c.get("files"), c.req.query("world") || "", c.req.query("name") || "",
+  Buffer.from(await c.req.arrayBuffer()),
+), 201));
 socRoutes.get("/list", async (c) => c.json({ entries: await c.get("files").list(c.req.query("path") || "") }));
 
 socRoutes.get("/file", async (c) => {
   const relative = c.req.query("path") || "";
   const bytes = await c.get("files").read(relative);
   c.header("ETag", contentTag(bytes));
-  const type = relative.endsWith(".pdf") ? "application/pdf" : /\.png$/i.test(relative) ? "image/png"
+  const type = /\.epub$/i.test(relative) ? "application/epub+zip" : relative.endsWith(".pdf") ? "application/pdf" : /\.png$/i.test(relative) ? "image/png"
     : /\.jpe?g$/i.test(relative) ? "image/jpeg" : relative.endsWith(".json") ? "application/json; charset=utf-8" : "text/plain; charset=utf-8";
   const headers = new Headers(c.res.headers);
   headers.set("Content-Type", type);
