@@ -50,7 +50,9 @@ credentials. Download the `Soc-ios-unsigned` artifact, extract the IPA and sign
 it for your own iPhone using your Apple Account and a sideloading tool, or use
 Xcode on a Mac. Enable Developer Mode when iOS requests it. No App Store
 submission is part of this workflow. Free Personal Team provisioning expires
-after seven days; renew the signature to continue using the app.
+after seven days; renew the signature to continue using the app. The personal
+build removes the unused APNs entitlement while retaining local reminders and
+background audio, so it does not require paid push-notification provisioning.
 
 CI verifies compilation and packaging, not real iPhone behavior. On the device,
 check a continuous lesson across lock, app switching, a phone interruption and a

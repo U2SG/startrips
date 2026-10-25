@@ -67,7 +67,8 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "./plugins/withPersonalIOS.cjs"
     ],
     "scheme": "startrips-soc",
     "experiments": {

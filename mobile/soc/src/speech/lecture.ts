@@ -58,6 +58,7 @@ function lectureMeta(ctx: LessonContext): MediaMeta {
 }
 
 let turnSeq = 0;
+let lectureSeq = 0;
 let lastReply = '';
 
 /** 发送一个回合并流式接收：节流刷 streamText；speak 时边生成边按句合成播放。
@@ -100,6 +101,7 @@ export async function runTurn(
     vs?.finish(buf, last?.role === 'assistant' ? last.id : undefined);
   } catch (e: any) {
     ok = false;
+    if (turnSeq !== my) return false;
     // 语音打断（abort）属预期中止：不报错、保留已说的内容
     if (!opts.signal?.aborted) {
       patch({ error: String(e?.message || e) });
@@ -111,8 +113,8 @@ export async function runTurn(
     speech.stop();
   } finally {
     clearInterval(timer);
-    lastReply = buf;
     if (turnSeq === my) {
+      lastReply = buf;
       setStream('');
       patch({ turnActive: false, rev: state.rev + 1 });
     }
@@ -124,6 +126,7 @@ export async function runTurn(
  *  段与段之间（LLM 生成期）也持有前台服务，息屏不会被系统冻结。 */
 export async function startLecture(deps: LectureDeps): Promise<void> {
   if (state.lecturing || state.turnActive) return;
+  const generation = ++lectureSeq;
   patch({ lecturing: true });
   let pinnedHere = false;
   try {
@@ -134,16 +137,18 @@ export async function startLecture(deps: LectureDeps): Promise<void> {
     }
     let turns = 0;
     let ok = await runTurn(deps, '给我讲课', { speak });
-    while (ok && state.lecturing) {
+    while (ok && state.lecturing && generation === lectureSeq) {
       if (lastReply.replace(/\s/g, '').includes(END_MARK) || turns >= MAX_TURNS) break;
       await speech.waitUntilIdle(); // 等本段朗读真正播完（事件驱动，无轮询）
-      if (!state.lecturing) break;
+      if (!state.lecturing || generation !== lectureSeq) break;
       turns += 1;
       ok = await runTurn(deps, '继续讲下一页', { speak });
     }
   } finally {
-    if (pinnedHere) speech.unpinMediaSession();
-    patch({ lecturing: false });
+    if (generation === lectureSeq) {
+      if (pinnedHere) speech.unpinMediaSession();
+      patch({ lecturing: false });
+    }
   }
 }
 
@@ -153,4 +158,14 @@ export function stopLecture(): void {
   patch({ lecturing: false });
   speech.unpinMediaSession();
   speech.stop();
+}
+
+export function reset(): void {
+  turnSeq += 1;
+  lectureSeq += 1;
+  lastReply = '';
+  speech.unpinMediaSession();
+  speech.stop();
+  setStream('');
+  patch({ lecturing: false, turnActive: false, error: '', rev: 0 });
 }

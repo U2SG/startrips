@@ -76,6 +76,16 @@ jobs:
           cache-dependency-path: mobile/soc/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npx expo prebuild --platform ios --no-install
+      - name: Verify personal signing does not require push entitlements
+        run: |
+          python3 - <<'PY'
+          import pathlib, plistlib
+          files = list(pathlib.Path('ios').glob('*/*.entitlements'))
+          assert files, 'Generated signing entitlements are missing'
+          for file in files:
+              with file.open('rb') as stream:
+                  assert 'aps-environment' not in plistlib.load(stream), 'APNs requires a paid signing team'
+          PY
       - name: Install iOS dependencies
         run: pod install --project-directory=ios
       - name: Archive for personal signing
