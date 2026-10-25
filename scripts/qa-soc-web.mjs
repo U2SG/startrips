@@ -114,6 +114,7 @@ try {
       assert.deepEqual(errors, [], `Font ${mode} must not crash the app`);
     } finally {
       releaseFonts.forEach((release) => release());
+      await page.unrouteAll({ behavior: 'wait' });
       await context.close();
     }
   }

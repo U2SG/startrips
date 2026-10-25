@@ -7,6 +7,11 @@ on:
     branches: [main]
     paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-android.py', 'deploy/Caddyfile']
   workflow_dispatch:
+    inputs:
+      live:
+        description: Check the deployed page without rebuilding native apps
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,6 +22,7 @@ concurrency:
 
 jobs:
   web:
+    if: ${{ !inputs.live }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -67,6 +73,7 @@ jobs:
           retention-days: 14
 
   android:
+    if: ${{ !inputs.live }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -159,6 +166,7 @@ jobs:
           retention-days: 14
 
   ios:
+    if: ${{ !inputs.live }}
     runs-on: macos-26
     timeout-minutes: 60
     env:
@@ -225,3 +233,28 @@ jobs:
           name: soc-ios-build-log
           path: ${{ runner.temp }}/soc-xcodebuild.log
           retention-days: 7
+
+  live:
+    if: ${{ inputs.live }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check deployed sign-in with failed font downloads
+        env:
+          SOC_LIVE_ORIGIN: ${{ vars.SOCRATOPIA_API_ORIGIN }}
+        run: node scripts/qa-soc-live.mjs
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: soc-live-qa
+          path: artifacts/soc-live
+          retention-days: 14
