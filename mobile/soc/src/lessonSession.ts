@@ -1,14 +1,14 @@
 // 课程会话引擎（模块级）：持有「这节课」本身——ctx / 未下课指针 / 备课-恢复-下课的忙碌状态。
 // 之前 ctx 挂在 App.tsx 的 useRef + force 计数上、pending/busy 散在 LessonScreen 本地 state，
 // 组件卸载即丢、跨组件读写靠 props 钻传。引擎化后 UI 只订阅（与 speech/lecture 同款模式）。
-// 错误不进引擎状态：start/resume/end 直接 throw，由调用方（页面）决定怎么呈现。
+// 操作错误交给页面；指针读取失败保留在状态中，让未知状态可见并可重试。
 import { sessionGuard } from './api';
 import type { LlmProfile, TextbookEntry } from './data';
 import {
   clearLessonPointer, endLesson, LessonContext, LessonPointer,
   loadLessonPointer, resumeLesson, startLesson,
 } from './lesson';
-import { pendingAfterResumeFailure } from './lessonRecovery';
+import { pendingAfterResumeFailure, startAfterPointer } from './lessonRecovery';
 import * as lecture from './speech/lecture';
 import * as speech from './speech/player';
 
@@ -16,9 +16,12 @@ export type SessionState = {
   ctx: LessonContext | null;      // 进行中的课（null = 未上课）
   pending: LessonPointer | null;  // 未下课的课指针（仅 ctx 为 null 时有意义）
   busy: string;                   // 备课/恢复/下课的状态文案（'' = 空闲）
+  pointerReady: boolean;
+  pointerError: string;
 };
 
-let state: SessionState = { ctx: null, pending: null, busy: '' };
+let state: SessionState = { ctx: null, pending: null, busy: '', pointerReady: false, pointerError: '' };
+let pendingRead = 0;
 const listeners = new Set<() => void>();
 
 function patch(p: Partial<SessionState>) {
@@ -35,23 +38,37 @@ export function getState(): SessionState { return state; }
 export async function refreshPending(): Promise<void> {
   if (state.ctx) return;
   const guard = sessionGuard();
-  const p = await loadLessonPointer().catch(() => null);
-  guard();
-  patch({ pending: p });
+  const read = ++pendingRead;
+  patch({ pointerReady: false, pointerError: '' });
+  try {
+    const p = await loadLessonPointer();
+    if (read !== pendingRead || state.ctx) return;
+    guard();
+    patch({ pending: p, pointerReady: true });
+  } catch (error) {
+    if (read !== pendingRead || state.ctx) return;
+    patch({ pointerReady: false, pointerError: error instanceof Error ? error.message : '课程状态读取失败，请重试' });
+  }
 }
 
 /** 开始一节课。失败 throw，busy 自行复位。 */
 export async function start(worldId: string, textbook: TextbookEntry, preferSlot?: string): Promise<LessonContext> {
-  if (state.busy) throw new Error('正在处理上一个操作');
+  if (state.busy || state.ctx) throw new Error('正在处理上一个操作');
   const guard = sessionGuard();
+  let pointerRead = false;
+  ++pendingRead;
+  patch({ busy: '检查未完成课程…', pointerReady: false, pointerError: '' });
   try {
-    const ctx = await startLesson(worldId, textbook, (s) => patch({ busy: s }), preferSlot);
+    const ctx = await startAfterPointer(loadLessonPointer, guard, (pending) => {
+      pointerRead = true;
+      patch({ pending, pointerReady: true });
+    }, () => startLesson(worldId, textbook, (s) => { guard(); patch({ busy: s }); }, preferSlot));
     guard();
     patch({ ctx, pending: null, busy: '' });
     return ctx;
   } catch (e) {
     guard();
-    patch({ busy: '' });
+    patch({ busy: '', ...(!pointerRead ? { pointerReady: false, pointerError: e instanceof Error ? e.message : '课程状态读取失败，请重试' } : {}) });
     throw e;
   }
 }
@@ -85,6 +102,7 @@ export async function end(profile: LlmProfile): Promise<{ convId: string; ending
   lecture.stopLecture();
   speech.stop();
   const convId = ctx.chat.id; // ctx 清空前先存，给课后小测用
+  patch({ busy: '正在下课…' });
   try {
     const { endingPage } = await endLesson(ctx, profile, (s) => { if (state.ctx === ctx) patch({ busy: s }); });
     guard();
@@ -110,8 +128,9 @@ export function discard(): void {
 }
 
 export function reset(): void {
+  ++pendingRead;
   state.ctx?.controller.abort();
   lecture.reset();
   speech.stop();
-  patch({ ctx: null, pending: null, busy: '' });
+  patch({ ctx: null, pending: null, busy: '', pointerReady: false, pointerError: '' });
 }

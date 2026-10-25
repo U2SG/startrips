@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MissingLessonDataError, requiredLessonData, pendingAfterResumeFailure } from '../src/lessonRecovery.ts';
+import { MissingLessonDataError, requiredLessonData, pendingAfterResumeFailure, parseLessonPointer, startAfterPointer } from '../src/lessonRecovery.ts';
 import { nextReviewAfter, saveFlashcardAnswer } from '../src/flashcardReview.ts';
 
 const pending = { worldId: 'world', convId: 'lesson' };
@@ -61,4 +61,32 @@ test('a failed review save cannot advance the durable schedule or mutate the loa
   await assert.rejects(saveFlashcardAnswer(file, entry, 0, now, async () => { throw new Error('conflict'); }), /conflict/);
   assert.equal(entry.history.length, 0);
   assert.equal(entry.nextReview, undefined);
+});
+
+test('a delayed saved-pointer read cannot start or overwrite an unfinished lesson', async () => {
+  let resolve, began = 0;
+  const loading = new Promise((done) => { resolve = done; });
+  const task = startAfterPointer(() => loading, guard, () => {}, async () => { began++; });
+  const rejected = assert.rejects(task, /未下课/);
+  assert.equal(began, 0);
+  resolve(pending);
+  await rejected;
+  assert.equal(began, 0);
+});
+test('a rejected pointer-store read fails closed at the actual start boundary', async () => {
+  await assert.rejects(startAfterPointer(async () => { throw new Error('getItem offline'); }, guard, () => {}, async () => assert.fail('Must not begin')), /getItem offline/);
+});
+test('only a confirmed absent pointer allows new lesson initialization', async () => {
+  let began = 0;
+  assert.equal(await startAfterPointer(async () => null, guard, (p) => assert.equal(p, null), async () => { began++; return 'new lesson'; }), 'new lesson');
+  assert.equal(began, 1);
+});
+test('malformed stored pointers are unknown rather than silently absent', () => {
+  assert.equal(parseLessonPointer(null), null);
+  for (const raw of ['', 'null', 'false', '{}', '{"worldId":"world"}']) assert.throws(() => parseLessonPointer(raw));
+  const value = { worldId: 'world', textbookId: 'book', convId: 'lesson' };
+  assert.deepEqual(parseLessonPointer(JSON.stringify(value)), value);
+});
+test('a pointer read completing for a retired account cannot begin a lesson', async () => {
+  await assert.rejects(startAfterPointer(async () => null, () => { throw new Error('retired'); }, () => assert.fail('Must not publish'), async () => assert.fail('Must not begin')), /retired/);
 });

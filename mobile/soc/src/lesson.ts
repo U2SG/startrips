@@ -1,4 +1,5 @@
-import { MissingLessonDataError, requiredLessonData } from './lessonRecovery';
+import { MissingLessonDataError, requiredLessonData, parseLessonPointer, type LessonPointer } from './lessonRecovery';
+export type { LessonPointer } from './lessonRecovery';
 // 上课 / 下课核心编排：提示词装配与课后更新管线。
 // 写入的所有文件与桌面版格式一致，保证两端接续上课。
 // 与桌面版同规则：一节课没下课就不能开新课——进行中的课通过指针持久化，重启后恢复继续。
@@ -12,13 +13,12 @@ const WINDOW_SIZE = 18; // 每节课加载的教材页数窗口（桌面版约 1
 
 // ---------- 进行中课程指针（下课前不允许开新课） ----------
 
-export type LessonPointer = { worldId: string; textbookId: string; convId: string };
 
 const POINTER_KEY = 'socratopia.activeLesson';
 
 export async function loadLessonPointer(): Promise<LessonPointer | null> {
   const raw = await AsyncStorage.getItem(POINTER_KEY);
-  return raw ? JSON.parse(raw) : null;
+  return parseLessonPointer(raw);
 }
 
 async function saveLessonPointer(p: LessonPointer): Promise<void> {

@@ -142,7 +142,7 @@ export default function LessonScreen({ worldId, textbook, profile, onEnded }: Pr
   const s = useMemo(() => makeStyles(ink), [ink]);
   // 课程会话（ctx / 未下课指针 / 备课-下课忙碌态）在模块级引擎里，本组件只订阅
   const ses = useSyncExternalStore(session.subscribe, session.getState);
-  const { ctx, pending, busy } = ses;
+  const { ctx, pending, busy, pointerReady, pointerError } = ses;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [input, setInput] = useState('');
@@ -419,7 +419,8 @@ export default function LessonScreen({ worldId, textbook, profile, onEnded }: Pr
     return (
       <View style={s.root}>
         <GlowLayer />
-        <ErrorNote text={error} />
+        <ErrorNote text={pointerError || error} />
+        {pointerError ? <Pressable accessibilityRole="button" accessibilityLabel="重试课程状态" onPress={() => { setError(''); void session.refreshPending(); }}><Text style={{ color: ink.accent, textAlign: 'center', padding: 12 }}>重试</Text></Pressable> : null}
         {busy ? <Busy text={busy} /> : null}
         <ScrollView contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 18, paddingBottom: showDock ? 96 : 24 }}>
           <View style={{ paddingTop: insets.top + 10, paddingBottom: 12 }}>
@@ -499,8 +500,8 @@ export default function LessonScreen({ worldId, textbook, profile, onEnded }: Pr
                     <Pressable
                       key={o}
                       onPress={() => onStart(o)}
-                      disabled={!!busy || !profile}
-                      style={({ pressed }) => [pressed && { opacity: 0.7 }, (!!busy || !profile) && { opacity: 0.5 }]}
+                      disabled={!!busy || !profile || !pointerReady}
+                      style={({ pressed }) => [pressed && { opacity: 0.7 }, (!!busy || !profile || !pointerReady) && { opacity: 0.5 }]}
                     >
                       <GlassPanel tone="bubble" rounded={16} contentStyle={s.openerInner}>
                         <Text style={s.openerText}>{o}</Text>
@@ -522,8 +523,8 @@ export default function LessonScreen({ worldId, textbook, profile, onEnded }: Pr
               height={54}
               rounded={18}
               onPress={pending ? onResume : () => onStart()}
-              disabled={!!busy || !profile}
-              label={busy ? (pending ? '正在恢复…' : '正在备课…') : pending ? '继续上课' : '上课'}
+              disabled={!!busy || !profile || !pointerReady}
+              label={!pointerReady && !pointerError ? '读取中…' : busy ? (pending ? '正在恢复…' : '正在备课…') : pending ? '继续上课' : '上课'}
               sub={!pending && startPage && !busy ? `从 p.${startPage}` : undefined}
             />
           </View>
