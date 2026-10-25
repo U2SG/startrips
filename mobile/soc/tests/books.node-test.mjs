@@ -128,3 +128,14 @@ test('finishing a book allows replay and idle status events do not keep writing 
   t.mock.timers.tick(10000); engine.tick(0, 8, false, false); await engine.flush();
   assert.equal(saved.length, count); engine.dispose();
 });
+
+test('pausing the initial resume load retains the saved position for retry', async () => {
+  const pending = deferred(); let requests = 0;
+  const { engine, played } = fixture({ page: async (n) => { requests++; assert.equal(n, 2); return requests === 1 ? pending.promise : page(n); } });
+  const bookmark = { version: 1, page: 2, passage: 1, seconds: 7, signature: 'book-a', speed: 1.5 };
+  const opening = engine.open(bookmark); engine.pause(); pending.resolve(page(2)); await opening;
+  assert.equal(engine.getState().page, null);
+  await engine.open(engine.getState().bookmark); await engine.play();
+  assert.equal(engine.getState().bookmark.page, 2); assert.equal(engine.getState().bookmark.passage, 1);
+  assert.deepEqual(played[0], { uri: '2-1.wav', seconds: 7, rate: 1.5 }); engine.dispose();
+});
