@@ -1518,6 +1518,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
               />
               <MediaPresentationMenuEntry surface="dock" onConfirmed={() => setDockOpen(false)} />
               <MobileClassicViewMenuEntry surface="dock" />
+              <button type="button" onClick={() => window.location.assign("/soc/")}>学习</button>
               <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
             </div>
             {inviteOpen ? (
@@ -1565,6 +1566,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
                   />
                   <MediaPresentationMenuEntry surface="sheet" onConfirmed={() => setAccountSurface(null)} />
                   <MobileClassicViewMenuEntry surface="sheet" />
+                  <button type="button" onClick={() => window.location.assign("/soc/")}><span>学习</span></button>
                   <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}><span>退出</span><small>退出当前账户</small></button>
                 </div>
               </>

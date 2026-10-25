@@ -12,6 +12,15 @@
 
 	encode zstd gzip
 
+	redir /soc /soc/ 308
+	handle /soc/* {
+		root * /srv
+		try_files {path} {path}/index.html
+		file_server
+		header Cache-Control "no-cache"
+		header Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+	}
+
 	@api path /api/*
 	handle @api {
 		reverse_proxy api:8787
@@ -49,12 +58,14 @@
 		header Cache-Control "no-cache"
 	}
 
+	@restrictMedia not path /soc/*
+	header @restrictMedia Permissions-Policy "camera=(), microphone=(), geolocation=()"
+
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-Server
 	}
 
@@ -71,6 +82,8 @@
 	log {
 		format filter {
 			fields {
+				# The native sign-in header is a credential too.
+				resp_headers>Set-Auth-Token delete
 				request>uri regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL)=)[^/?&#]*" "${1}REDACTED"
 				request>headers>Referer regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL)=)[^/?&#]*" "${1}REDACTED"
 			}

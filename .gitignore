@@ -24,3 +24,6 @@ coverage/
 # Python bytecode from the control-plane tooling and its tests
 __pycache__/
 *.pyc
+
+# Private study files and credentials
+.data/

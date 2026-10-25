@@ -1,7 +1,7 @@
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { betterAuth } from "better-auth";
 import { eq } from "drizzle-orm";
-import { organization } from "better-auth/plugins";
+import { bearer, organization } from "better-auth/plugins";
 import { recordProviderSignInOwnership } from "./account-identities/account-identity-repository";
 import { appleSignInOptions } from "./account-identities/apple-provider";
 import {
@@ -200,6 +200,7 @@ export const auth = betterAuth({
     },
   },
   plugins: [
+    bearer({ requireSignature: true }),
     organization({
       organizationLimit: 1,
       membershipLimit: 2,

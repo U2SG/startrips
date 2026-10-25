@@ -1,0 +1,135 @@
+name: soc
+
+on:
+  pull_request:
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'deploy/Caddyfile']
+  push:
+    branches: [main]
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'deploy/Caddyfile']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soc-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: mobile/soc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/soc/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run export:web -- --max-workers 2
+      - run: npx expo export --platform android --output-dir android-bundle --max-workers 2
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - name: Install browser QA dependencies
+        working-directory: .
+        run: pnpm install --frozen-lockfile
+      - name: Verify mobile browser sign-in and sign-out
+        working-directory: .
+        run: node scripts/qa-soc-web.mjs
+      - name: Verify production access logs exclude session credentials
+        working-directory: .
+        run: node scripts/qa-soc-caddy.mjs
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: soc-caddy-qa
+          path: artifacts/soc-caddy
+          retention-days: 7
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: soc-browser-qa
+          path: artifacts/soc
+          retention-days: 14
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: soc-web
+          path: mobile/soc/dist
+          retention-days: 14
+
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      EXPO_PUBLIC_STARTRIPS_ORIGIN: ${{ vars.SOCRATOPIA_API_ORIGIN }}
+      CI: '1'
+    defaults:
+      run:
+        working-directory: mobile/soc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/soc/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npx expo prebuild --platform ios --no-install
+      - name: Verify personal signing does not require push entitlements
+        run: |
+          python3 - <<'PY'
+          import pathlib, plistlib
+          files = list(pathlib.Path('ios').glob('*/*.entitlements'))
+          assert files, 'Generated signing entitlements are missing'
+          for file in files:
+              with file.open('rb') as stream:
+                  assert 'aps-environment' not in plistlib.load(stream), 'APNs requires a paid signing team'
+          PY
+      - name: Install iOS dependencies
+        run: pod install --project-directory=ios
+      - name: Archive for personal signing
+        run: |
+          set -euo pipefail
+          project=$(find ios -maxdepth 1 -name '*.xcodeproj' -print -quit)
+          scheme=$(basename "$project" .xcodeproj)
+          workspace=$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)
+          xcodebuild -workspace "$workspace" -scheme "$scheme" -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Soc.xcarchive" archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
+            > "$RUNNER_TEMP/soc-xcodebuild.log" 2>&1 || { tail -n 100 "$RUNNER_TEMP/soc-xcodebuild.log"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/soc-export/Payload"
+          cp -R "$RUNNER_TEMP/Soc.xcarchive/Products/Applications/"*.app "$RUNNER_TEMP/soc-export/Payload/"
+          python3 - <<'PY'
+          import os, pathlib, plistlib
+          app = next((pathlib.Path(os.environ['RUNNER_TEMP']) / 'soc-export/Payload').glob('*.app'))
+          with (app / 'Info.plist').open('rb') as stream:
+              info = plistlib.load(stream)
+          assert 'audio' in info.get('UIBackgroundModes', []), 'Background audio capability is missing'
+          assert info.get('NSMicrophoneUsageDescription'), 'Microphone permission text is missing'
+          assert info['CFBundleIdentifier'] == 'app.startrips.soc'
+          PY
+          ditto -c -k --keepParent "$RUNNER_TEMP/soc-export/Payload" "$RUNNER_TEMP/Soc-ios-unsigned.ipa"
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Soc-ios-unsigned
+          path: ${{ runner.temp }}/Soc-ios-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v7.0.1
+        if: failure()
+        with:
+          name: soc-ios-build-log
+          path: ${{ runner.temp }}/soc-xcodebuild.log
+          retention-days: 7
