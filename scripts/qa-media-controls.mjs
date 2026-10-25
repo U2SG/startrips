@@ -4630,12 +4630,35 @@ try {
     const presentation = opened.page.locator(".playback-media-presentation");
     const next = opened.page.getByRole("button", { name: "下一个章节" });
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      if (await presentation.count() === 1 && await presentation.locator("video").count() === 1) break;
+      // The requested asset changes with the director. Its native <video> may
+      // mount later, so counting video nodes can click past the intended beat.
+      if (await presentation.count() === 1
+        && await presentation.getAttribute("data-requested-asset") === trimVideoAssetId) break;
+      const previousStep = await opened.page.locator(".journey-playback").getAttribute("data-playback-step");
       await next.click();
-      await opened.page.waitForTimeout(80);
+      await opened.page.waitForFunction((previous) => {
+        const overlay = document.querySelector(".journey-playback");
+        return overlay && overlay.getAttribute("data-playback-step") !== previous;
+      }, previousStep, { timeout: 5_000 });
     }
-    await opened.page.locator('.journey-playback[data-video-trim="playing"]')
-      .waitFor({ timeout: 15_000 });
+    try {
+      await opened.page.locator('.journey-playback[data-video-trim="playing"]')
+        .waitFor({ timeout: 15_000 });
+    } catch (error) {
+      const state = await opened.page.evaluate(() => {
+        const overlay = document.querySelector(".journey-playback");
+        const stage = document.querySelector(".playback-media-presentation");
+        return {
+          phase: overlay?.getAttribute("data-playback-phase"),
+          step: overlay?.getAttribute("data-playback-step"),
+          trim: overlay?.getAttribute("data-video-trim"),
+          requested: stage?.getAttribute("data-requested-asset"),
+          presented: stage?.getAttribute("data-presented-asset"),
+          samples: window.__qaVideoTimeline?.samples.slice(-12),
+        };
+      });
+      throw new Error(`Trimmed video did not enter playing: ${JSON.stringify(state)}`, { cause: error });
+    }
     await opened.page.locator('.playback-media-presentation[data-media-presentation="settled"]')
       .waitFor({ state: "attached", timeout: 8_000 });
     const presentedAsset = await presentation.getAttribute("data-presented-asset");
