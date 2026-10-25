@@ -94,7 +94,7 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
         {Platform.OS !== 'web' ? <TextInput accessibilityLabel="服务器地址" style={input} placeholder="https://example.com" placeholderTextColor={ink.muted} value={origin} onChangeText={setOrigin} autoCapitalize="none" keyboardType="url" /> : null}
         <TextInput accessibilityLabel="邮箱" style={input} placeholder="邮箱" placeholderTextColor={ink.muted} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" />
         <TextInput accessibilityLabel="密码" style={input} placeholder="密码" placeholderTextColor={ink.muted} value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password" onSubmitEditing={() => void signIn()} />
-        {error ? <Text accessibilityRole="alert" style={{ color: ink.red }}>{error}</Text> : null}
+        {error ? <Text accessibilityRole="alert" style={{ color: ink.red, fontFamily: font.sans }}>{error}</Text> : null}
         <Pressable accessibilityRole="button" disabled={busy || !email || !password} onPress={() => void signIn()} style={[styles.button, { backgroundColor: ink.accent, opacity: busy ? 0.5 : 1 }]}>
           <Text style={{ color: ink.canvas, fontFamily: font.bold }}>{busy ? '连接中…' : '登录'}</Text>
         </Pressable>
@@ -106,6 +106,6 @@ const styles = StyleSheet.create({
   root: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
   form: { width: '100%', maxWidth: 360, gap: 16 },
   title: { fontSize: 32, fontFamily: font.bold, marginBottom: 16 },
-  input: { minHeight: 48, borderRadius: 12, borderWidth: 1, paddingHorizontal: 16, fontSize: 16 },
+  input: { minHeight: 48, borderRadius: 12, borderWidth: 1, paddingHorizontal: 16, fontSize: 16, fontFamily: font.sans },
   button: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
 });
