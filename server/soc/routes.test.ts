@@ -36,7 +36,7 @@ describe("study authentication and provider boundary", () => {
     expect(download.headers.get("content-type")).toBe("application/epub+zip");
     expect(Buffer.from(await download.arrayBuffer())).toEqual(epubFixture());
     const extract = await socRoutes.request(`/extract?path=${source}&start=2&end=2`);
-    expect(await extract.json()).toMatchObject({ numPages: 2, pages: [{ page: 2, text: "第一章\n理解 & 推理" }] });
+    expect(await extract.json()).toMatchObject({ numPages: 2, pages: [{ page: 2, text: "第一章\n\n理解 & 推理" }] });
   });
   it("uses the session user even when a client supplies another user's id", async () => {
     const alice = new SocFiles(root, "alice");

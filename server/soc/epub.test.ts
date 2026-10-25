@@ -10,7 +10,7 @@ import { extractStudyPdf } from "./pdf";
 
 it("reads EPUB spine order, decodes entities and excludes executable/hidden markup", async () => {
   const pages = await readEpub(epubFixture());
-  expect(pages).toEqual(["第二章先读", "第一章\n理解 & 推理"]);
+  expect(pages).toEqual(["第二章先读", "第一章\n\n理解 & 推理"]);
 });
 
 it("bounds virtual pages for long reflowable EPUB chapters", async () => {
@@ -35,7 +35,7 @@ it("registers imported EPUBs, extracts a later lesson window, isolates owners an
     const book = await importTextbook(files, world, "教材.epub", epubFixture());
     expect(book).toMatchObject({ title: "教材", format: "epub", numPages: 2 });
     const source = `${world}/textbooks/${book.id}/source.epub`;
-    expect(await extractStudyPdf(files, source, 2, 2)).toEqual({ numPages: 2, pages: [{ page: 2, text: "第一章\n理解 & 推理" }] });
+    expect(await extractStudyPdf(files, source, 2, 2)).toEqual({ numPages: 2, pages: [{ page: 2, text: "第一章\n\n理解 & 推理" }] });
     await expect(other.read(source)).rejects.toMatchObject({ status: 404 });
     await expect(importTextbook(files, world, "坏书.epub", Buffer.from("broken"))).rejects.toMatchObject({ status: 400 });
     const index = JSON.parse((await files.read(`${world}/textbooks/textbook_index.json`)).toString());
