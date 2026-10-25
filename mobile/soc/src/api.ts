@@ -1,20 +1,23 @@
 import { activateAccountScope, accountGeneration } from './accountScope';
 export { sessionGuard } from './accountScope';
 import { fetch as expoFetch } from 'expo/fetch';
+import { Platform } from 'react-native';
 import type { Settings } from './settings';
 import { writeToken } from './tokenStore';
 
 export type Entry = { name: string; dir: boolean; size: number; mtime: number };
 let cfg: Pick<Settings, 'serverUrl' | 'token'> = { serverUrl: '', token: '' };
+let sessionUser = '';
 const revisions = new Map<string, string | null>();
-const unauthorized = new Set<() => void>();
+const unauthorized = new Set<() => void | Promise<void>>();
 export function configureApi(settings: Pick<Settings, 'serverUrl' | 'token'>) {
   if (cfg.serverUrl !== settings.serverUrl || cfg.token !== settings.token) revisions.clear();
   cfg = settings;
 }
 export function serverCfg() { return cfg; }
-export function onUnauthorized(listener: () => void) { unauthorized.add(listener); return () => { unauthorized.delete(listener); }; }
-export function clearCredentials() { activateAccountScope(''); for (const controller of pendingRequests) controller.abort(); cfg = { ...cfg, token: '' }; revisions.clear(); }
+export function bindSessionUser(userId: string) { sessionUser = userId; }
+export function onUnauthorized(listener: () => void | Promise<void>) { unauthorized.add(listener); return () => { unauthorized.delete(listener); }; }
+export function clearCredentials() { sessionUser = ''; activateAccountScope(''); for (const controller of pendingRequests) controller.abort(); cfg = { ...cfg, token: '' }; revisions.clear(); }
 
 const pendingRequests = new Set<AbortController>();
 export async function authFetch(endpoint: string, init: RequestInit = {}): Promise<Response> {
@@ -27,12 +30,13 @@ export async function authFetch(endpoint: string, init: RequestInit = {}): Promi
   pendingRequests.add(controller);
   const deadline = setTimeout(() => { controller.abort(); pendingRequests.delete(controller); init.signal?.removeEventListener('abort', abort); }, 180000);
   const headers = new Headers(init.headers);
-  if (current.token) headers.set('Authorization', `Bearer ${current.token}`);
+  if (Platform.OS !== 'web' && current.token) headers.set('Authorization', `Bearer ${current.token}`);
+  if (sessionUser && endpoint.startsWith('/api/soc/')) headers.set('X-Soc-User', sessionUser);
   const response = await expoFetch(`${current.serverUrl}${endpoint}`, { ...init, headers, credentials: 'include', signal: controller.signal });
   if (generation !== accountGeneration()) { clearTimeout(deadline); pendingRequests.delete(controller); throw new Error('账号已切换'); }
   const refreshed = response.headers.get('set-auth-token');
-  if (refreshed && current === cfg) { cfg = { ...cfg, token: refreshed }; await writeToken(cfg.serverUrl, refreshed); }
-  if (response.status === 401 && !endpoint.startsWith('/api/auth/')) unauthorized.forEach((listener) => listener());
+  if (Platform.OS !== 'web' && refreshed && current === cfg) { cfg = { ...cfg, token: refreshed }; await writeToken(cfg.serverUrl, refreshed); }
+  if (response.status === 401 && !endpoint.startsWith('/api/auth/')) await Promise.all([...unauthorized].map((listener) => listener()));
   return response;
 }
 

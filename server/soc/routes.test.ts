@@ -37,6 +37,19 @@ describe("study authentication and provider boundary", () => {
     const response = await socRoutes.request("/session", { headers: { origin: "https://other.example.test" } });
     expect(response.status).toBe(403);
   });
+  it("refuses an old tab's write after the shared cookie changes accounts", async () => {
+    const alice = new SocFiles(root, "alice"), bob = new SocFiles(root, "bob");
+    await alice.write("rules.md", Buffer.from("alice only"), null, true);
+    session.mockResolvedValue({ user: { id: "bob", name: "Bob", email: "bob@example.test" } });
+    const stale = await socRoutes.request("/file?path=rules.md", { method: "PUT", headers: { "X-Soc-User": "alice", "If-None-Match": "*" }, body: "old tab data" });
+    expect(stale.status).toBe(401);
+    expect((await stale.json()).error).toBe("STUDY_ACCOUNT_CHANGED");
+    await expect(bob.read("rules.md")).rejects.toMatchObject({ status: 404 });
+    const current = await socRoutes.request("/file?path=rules.md", { method: "PUT", headers: { "X-Soc-User": "bob", "If-None-Match": "*" }, body: "bob only" });
+    expect(current.status).toBe(200);
+    expect((await alice.read("rules.md")).toString()).toBe("alice only");
+    expect((await bob.read("rules.md")).toString()).toBe("bob only");
+  });
   it("returns model names without keys or endpoints and controls the upstream model", async () => {
     const files = new SocFiles(root, "alice");
     await mkdir(files.root, { recursive: true });

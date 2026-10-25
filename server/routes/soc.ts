@@ -12,6 +12,9 @@ socRoutes.use("*", async (context, next) => {
   context.header("Cache-Control", "no-store");
   const session = await auth.api.getSession({ headers: context.req.raw.headers });
   if (!session) return context.json({ error: "AUTH_REQUIRED", message: "请先登录" }, 401);
+  // The hint rejects stale tabs; authentication alone still selects the owner.
+  const expectedUser = context.req.header("X-Soc-User");
+  if (expectedUser && expectedUser !== session.user.id) return context.json({ error: "STUDY_ACCOUNT_CHANGED", message: "账号已切换，请刷新后重试" }, 401);
   const origin = context.req.header("origin");
   if (origin && origin !== serverConfig.appOrigin) return context.json({ error: "ORIGIN_DENIED" }, 403);
   context.set("user", session.user);

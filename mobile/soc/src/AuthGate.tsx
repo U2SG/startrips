@@ -23,6 +23,7 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   async function acceptUser(next: User) {
+    api.bindSessionUser(next.id);
     activateAccountScope(`${api.serverCfg().serverUrl}/${next.id}`);
     setStorageScope(api.serverCfg().serverUrl, next.id);
     data.clearProfileCache();
@@ -51,7 +52,10 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
       } catch { if (live) setError('连接失败，请检查网络后重试'); }
       finally { if (live) { setBusy(false); onReady(); } }
     })();
-    const expired = api.onUnauthorized(() => { void clearSession(); });
+    const expired = api.onUnauthorized(async () => {
+      setError(Platform.OS === 'web' ? '登录状态已变化，请刷新网页' : '登录已失效，请重新登录');
+      await clearSession();
+    });
     const signOut = async () => {
       const response = await api.authFetch('/api/auth/sign-out', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: api.serverCfg().serverUrl }, body: '{}' });
       if (!response.ok) throw new Error('退出失败，请检查网络后重试');
