@@ -423,6 +423,7 @@ function JourneyComposerQaPreview() {
   const commandBridgeRef = useRef<CommandBarComposerBridge | null>(null);
   const [commandIntents, setCommandIntents] = useState<CommandIntent[]>([]);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [commandReady, setCommandReady] = useState(false);
   useEffect(() => {
     let active = true;
     void readCommandRouterIntents().then((intents) => { if (active) setCommandIntents(intents); });
@@ -431,6 +432,7 @@ function JourneyComposerQaPreview() {
   const commandReachable = open && !compact && commandIntents.length > 0;
   useEffect(() => {
     if (!commandReachable) {
+      setCommandReady(false);
       setCommandOpen(false);
       return;
     }
@@ -440,6 +442,7 @@ function JourneyComposerQaPreview() {
       setCommandOpen(true);
     };
     window.addEventListener("keydown", onKeyDown);
+    setCommandReady(true);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [commandReachable]);
   const savedProjection = useMemo(() => {
@@ -482,7 +485,7 @@ function JourneyComposerQaPreview() {
     };
   }, [savedResult]);
   return (
-    <main className="living-atlas">
+    <main className="living-atlas" data-qa-command-ready={commandReady ? "true" : "false"}>
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       <button type="button" data-qa-composer-reopen onClick={() => setOpen(true)}>重新打开编辑器</button>
       {savedProjection ? (
