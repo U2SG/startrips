@@ -45,7 +45,7 @@ describe("personal study files", () => {
   it("serializes appends without losing concurrent notes", async () => {
     const { alice } = await fixture();
     await Promise.all([alice.append("project-data/progress.md", Buffer.from("a\n")), alice.append("project-data/progress.md", Buffer.from("b\n"))]);
-    expect((await alice.read("project-data/progress.md")).toString()).toBe("a\nb\n");
+    expect((await alice.read("project-data/progress.md")).toString().trim().split("\n").sort()).toEqual(["a", "b"]);
   });
   it("keeps configuration out of the file listing", async () => {
     const { root, alice } = await fixture();

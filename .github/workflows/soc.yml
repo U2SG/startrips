@@ -33,6 +33,7 @@ jobs:
           cache-dependency-path: mobile/soc/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
+      - run: npm test
       - run: npm run export:web -- --max-workers 2
       - run: npx expo export --platform android --output-dir android-bundle --max-workers 2
       - uses: pnpm/action-setup@v6
