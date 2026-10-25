@@ -76,6 +76,7 @@ export class BookEngine {
   async play() {
     const { page, bookmark: b } = this.state;
     if (!page || !b || this.disposed || this.state.status === 'loading') return;
+    if (this.state.status === 'ended') { await this.go(1, 0, true); return; }
     this.deps.focus();
     if (!page.passages.length) {
       if (page.page < page.total) { await this.go(page.page + 1, 0, true); return; }
@@ -171,7 +172,7 @@ export class BookEngine {
     // Reflect lock-screen controls and audio interruptions without automatic restart.
     if (playing && this.state.status === 'paused') { this.deps.focus(); this.patch({ status: 'playing' }); }
     else if (!playing && this.state.status === 'playing') { this.patch({ status: 'paused' }); this.checkpoint(); }
-    if (Date.now() - this.lastSaved > 5000) this.checkpoint();
+    if (this.state.status === 'playing' && Date.now() - this.lastSaved > 5000) this.checkpoint();
   }
   checkpoint() {
     const b = this.state.bookmark;

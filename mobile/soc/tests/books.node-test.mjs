@@ -116,3 +116,15 @@ test('pause cancels look-ahead; resuming can generate that phrase again without 
   assert.equal(engine.getState().status, 'playing'); assert.equal(engine.getState().bookmark.passage, 1);
   engine.dispose();
 });
+
+test('finishing a book allows replay and idle status events do not keep writing checkpoints', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  const { engine, saved } = fixture();
+  await engine.go(2, 2, true); await engine.next(1);
+  assert.equal(engine.getState().status, 'ended');
+  await engine.play();
+  assert.equal(engine.getState().page.page, 1); assert.equal(engine.getState().bookmark.passage, 0);
+  engine.pause(); await engine.flush(); const count = saved.length;
+  t.mock.timers.tick(10000); engine.tick(0, 8, false, false); await engine.flush();
+  assert.equal(saved.length, count); engine.dispose();
+});

@@ -47,7 +47,11 @@ function MiniPlayer({ book, onExpand }: { book: ListeningBook; onExpand(): void 
       <Text numberOfLines={1} style={{ color: ink.muted, fontSize: 12, marginTop: 2 }}>
         {state.error || state.syncError || (state.status === 'loading' ? '准备朗读…' : `第 ${state.page?.page || 1} 页`)}</Text>
     </Pressable>
-    <Control label={playing ? '暂停听书' : '继续听书'} onPress={() => playing ? book.engine.pause() : void book.engine.play()}>{playing ? 'Ⅱ' : '▶'}</Control>
+    <Control label={playing ? '暂停听书' : '继续听书'} onPress={() => {
+      if (playing) book.engine.pause();
+      else if (!state.page) { onExpand(); void book.engine.open(state.bookmark); }
+      else void book.engine.play();
+    }}>{playing ? 'Ⅱ' : '▶'}</Control>
   </View>;
 }
 

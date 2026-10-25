@@ -24,9 +24,10 @@ AppState.addEventListener('change', (state) => { if (state !== 'active') active?
 export function reset() { ++opening; active?.engine.dispose(); active = null; notify(); }
 
 export async function openBook(worldId: string, textbook: data.TextbookEntry, profile: data.LlmProfile | null) {
+  const guard = api.sessionGuard();
+  claimAudioFocus('book');
   if (active?.worldId === worldId && active.textbook.id === textbook.id) return active;
   const seq = ++opening;
-  const guard = api.sessionGuard();
   active?.engine.pause();
   await active?.engine.flush();
   guard(); if (seq !== opening) return null;
