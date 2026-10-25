@@ -1,4 +1,4 @@
-import { MissingLessonDataError } from './lessonRecovery';
+import { MissingLessonDataError, requiredLessonData } from './lessonRecovery';
 // 上课 / 下课核心编排：提示词装配与课后更新管线。
 // 写入的所有文件与桌面版格式一致，保证两端接续上课。
 // 与桌面版同规则：一节课没下课就不能开新课——进行中的课通过指针持久化，重启后恢复继续。
@@ -175,14 +175,14 @@ export async function resumeLesson(
   const { assertSession, controller } = lessonScope();
   const { worldId, convId } = pointer;
   onStatus('恢复未下课的课…');
-  const idx = await data.readTextbookIndex(worldId);
+  const idx = await requiredLessonData(data.readTextbookIndex(worldId), '找不到这节课对应的教材');
   const textbook = idx.textbooks.find((t) => t.id === pointer.textbookId);
   if (!textbook) throw new MissingLessonDataError('找不到这节课对应的教材');
 
   const [chat, reading, meta, rules, learner, handoff] = await Promise.all([
-    data.readChat(worldId, convId),
+    requiredLessonData(data.readChat(worldId, convId), '这节课的对话记录已不存在'),
     data.readCurrentReading(worldId, convId),
-    data.readWorldMeta(worldId),
+    requiredLessonData(data.readWorldMeta(worldId), '这节课的学习世界已不存在'),
     data.readRules(),
     data.readLearnerProfile(worldId),
     data.readHandoff(worldId, textbook),

@@ -1,27 +1,32 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MissingLessonDataError, pendingAfterResumeFailure } from '../src/lessonRecovery.ts';
+import { MissingLessonDataError, requiredLessonData, pendingAfterResumeFailure } from '../src/lessonRecovery.ts';
 import { nextReviewAfter, saveFlashcardAnswer } from '../src/flashcardReview.ts';
 
 const pending = { worldId: 'world', convId: 'lesson' };
 const guard = () => {};
 test('network, timeout and provider failures retain the persisted lesson continuation', async () => {
-  for (const error of [new Error('offline'), new Error('timeout'), { status: 503 }, { status: 401 }]) {
+  for (const error of [new Error('offline'), new Error('timeout'), { status: 503 }, { status: 401 }, { status: 404 }]) {
     assert.equal(await pendingAfterResumeFailure(error, pending, async () => assert.fail('Must preserve pointer'), guard), pending);
   }
 });
 test('confirmed missing lesson data clears its pointer exactly once', async () => {
-  for (const error of [new MissingLessonDataError('missing textbook'), { status: 404 }]) {
+  for (const error of [new MissingLessonDataError('missing textbook'), new MissingLessonDataError('missing chat')]) {
     let cleared = 0;
     assert.equal(await pendingAfterResumeFailure(error, pending, async () => { cleared++; }, guard), null);
     assert.equal(cleared, 1);
   }
 });
+test('only missing required course files are classified as unrecoverable', async () => {
+  await assert.rejects(requiredLessonData(Promise.reject({ status: 404 }), 'missing chat'), MissingLessonDataError);
+  const unavailable = { status: 503 };
+  await assert.rejects(requiredLessonData(Promise.reject(unavailable), 'missing chat'), (error) => error === unavailable);
+});
 test('an unavailable pointer store retains the resume action', async () => {
-  assert.equal(await pendingAfterResumeFailure({ status: 404 }, pending, async () => { throw new Error('storage offline'); }, guard), pending);
+  assert.equal(await pendingAfterResumeFailure(new MissingLessonDataError('missing'), pending, async () => { throw new Error('storage offline'); }, guard), pending);
 });
 test('a retired account cannot clear another account continuation', async () => {
-  await assert.rejects(pendingAfterResumeFailure({ status: 404 }, pending, async () => assert.fail('Must not clear'), () => { throw new Error('retired'); }), /retired/);
+  await assert.rejects(pendingAfterResumeFailure(new MissingLessonDataError('missing'), pending, async () => assert.fail('Must not clear'), () => { throw new Error('retired'); }), /retired/);
 });
 
 const now = new Date('2026-10-25T08:00:00.000Z');
