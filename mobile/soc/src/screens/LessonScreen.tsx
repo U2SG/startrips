@@ -281,6 +281,7 @@ export default function LessonScreen({ worldId, textbook, profile, onEnded, onLi
 
   async function onStart(openerText?: string) {
     if (!worldId || !textbook) return;
+    claimAudioFocus('speech');
     setError('');
     setNotice('');
     try {

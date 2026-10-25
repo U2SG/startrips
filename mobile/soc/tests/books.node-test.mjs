@@ -97,3 +97,12 @@ test('disposal invalidates pending work and never reactivates playback', async (
   await engine.open(); const task = engine.play(); engine.dispose(); pending.resolve('old-account.wav'); await task;
   assert.deepEqual(played, []);
 });
+
+test('a seek completing after a page change cannot overwrite the new checkpoint', async () => {
+  const pending = deferred();
+  const { engine } = fixture({ player: { async load() {}, play() {}, pause() {}, seek: () => pending.promise, rate() {}, release() {} } });
+  await engine.open(); await engine.play(); engine.tick(1, 10, true, false);
+  const old = engine.seek(4); await engine.go(2); pending.resolve(); await old;
+  assert.equal(engine.getState().bookmark.page, 2); assert.equal(engine.getState().bookmark.seconds, 0);
+  engine.dispose();
+});

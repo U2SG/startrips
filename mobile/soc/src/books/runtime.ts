@@ -28,6 +28,8 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
   const seq = ++opening;
   const guard = api.sessionGuard();
   active?.engine.pause();
+  await active?.engine.flush();
+  guard(); if (seq !== opening) return null;
   const dir = await data.textbookDir(worldId, textbook);
   guard();
   const path = await data.textbookPdfPath(worldId, textbook);
@@ -45,6 +47,7 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
   active?.engine.dispose();
   let player: AudioPlayer | null = null;
   let engine: BookEngine;
+  let ticker: ReturnType<typeof setInterval> | undefined;
   let serverSaved = 0;
   let syncConflict = false;
   const castPath = `${dir}/listening-cast.json`;
@@ -139,9 +142,10 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       pause() { player?.pause(); },
       async seek(seconds) { if (player) await player.seekTo(seconds); },
       rate(value) { player?.setPlaybackRate(value); },
-      release() { const old = player; player = null; try { old?.clearLockScreenControls(); old?.remove(); } catch {} },
+      release() { clearInterval(ticker); const old = player; player = null; try { old?.clearLockScreenControls(); old?.remove(); } catch {} },
     },
   });
+  ticker = setInterval(() => engine.poll(), 1000);
   active = { worldId, textbook, engine }; notify();
   await engine.open(bookmark);
   guard(); return seq === opening ? active : null;

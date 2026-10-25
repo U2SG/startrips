@@ -29,6 +29,8 @@ export class BookEngine {
   private saveQueue: Promise<void> = Promise.resolve();
   private lastSaved = 0;
   private transition = false;
+  private movedAt = Date.now();
+  private lastPosition = 0;
   private deps: BookDependencies;
   constructor(deps: BookDependencies) { this.deps = deps; }
   getState = () => this.state;
@@ -91,6 +93,7 @@ export class BookEngine {
         this.loaded = key;
       }
       this.deps.player.play();
+      this.movedAt = Date.now(); this.lastPosition = b.seconds;
       this.patch({ status: 'playing' }); this.transition = false;
       if (b.passage + 1 < page.passages.length) void this.prepare(page, b.passage + 1);
       // Keep just the current and next audio files; books can be thousands of phrases.
@@ -110,6 +113,7 @@ export class BookEngine {
   async next(delta: number) {
     const { page, bookmark: b } = this.state;
     if (!page || !b) return;
+    ++this.sequence;
     const index = b.passage + delta;
     if (index < 0) { if (page.page > 1) await this.go(page.page - 1, 0, true); return; }
     if (index >= page.passages.length) {
@@ -125,8 +129,13 @@ export class BookEngine {
     const b = this.state.bookmark;
     if (!b || !Number.isFinite(seconds) || this.state.status === 'loading') return;
     const target = Math.max(0, Math.min(seconds, Math.max(0, this.state.duration - 0.1)));
-    try { await this.deps.player.seek(target); this.patch({ bookmark: { ...b, seconds: target } }); this.checkpoint(); }
-    catch (error) { this.fail(error); }
+    const seq = this.sequence;
+    try {
+      await this.deps.player.seek(target);
+      if (!this.current(seq)) return;
+      this.movedAt = Date.now(); this.lastPosition = target;
+      this.patch({ bookmark: { ...b, seconds: target } }); this.checkpoint();
+    } catch (error) { if (this.current(seq)) this.fail(error); }
   }
   speed(value: number) {
     const { bookmark: b, page } = this.state;
@@ -141,10 +150,18 @@ export class BookEngine {
     await this.go(b.page, b.passage, false, { ...b, dramatic });
   }
   sleep(minutes: number) { this.patch({ sleepAt: minutes > 0 ? Date.now() + minutes * 60000 : null }); }
+  poll() {
+    if (this.disposed) return;
+    if (this.state.sleepAt && Date.now() >= this.state.sleepAt) { this.patch({ sleepAt: null }); this.pause(); return; }
+    if (this.state.status === 'playing' && Date.now() - this.movedAt > 15000) {
+      this.loaded = ''; this.fail(new Error('音频播放中断，请重试，进度已保留'));
+    }
+  }
   tick(seconds: number, duration: number, playing: boolean, finished: boolean) {
     if (this.disposed || this.transition || this.state.status === 'loading') return;
     const b = this.state.bookmark;
     if (!b || !this.loaded) return;
+    if (Math.abs(seconds - this.lastPosition) > 0.05 || !playing) { this.lastPosition = seconds; this.movedAt = Date.now(); }
     this.patch({ bookmark: { ...b, seconds: Math.max(0, seconds) }, duration: Math.max(0, duration) });
     if (this.state.sleepAt && Date.now() >= this.state.sleepAt) { this.patch({ sleepAt: null }); this.pause(); return; }
     if (finished && this.state.status === 'playing') { this.transition = true; void this.next(1); return; }
@@ -163,6 +180,7 @@ export class BookEngine {
       catch (error) { this.patch({ syncError: error instanceof Error ? error.message : '进度同步失败' }); }
     });
   }
+  flush() { return this.saveQueue; }
   private fail(error: unknown) { this.deps.player.pause(); this.transition = false; this.patch({ status: 'error', error: error instanceof Error ? error.message : '听书暂时不可用' }); this.checkpoint(); }
   dispose() { if (this.disposed) return; this.disposed = true; this.invalidate(); this.clearBuffer(); this.deps.player.release(); this.listeners.clear(); }
 }
