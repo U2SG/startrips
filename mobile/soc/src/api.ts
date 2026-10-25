@@ -1,3 +1,5 @@
+import { activateAccountScope, accountGeneration } from './accountScope';
+export { sessionGuard } from './accountScope';
 import { fetch as expoFetch } from 'expo/fetch';
 import type { Settings } from './settings';
 import { writeToken } from './tokenStore';
@@ -12,13 +14,22 @@ export function configureApi(settings: Pick<Settings, 'serverUrl' | 'token'>) {
 }
 export function serverCfg() { return cfg; }
 export function onUnauthorized(listener: () => void) { unauthorized.add(listener); return () => { unauthorized.delete(listener); }; }
-export function clearCredentials() { cfg = { ...cfg, token: '' }; revisions.clear(); }
+export function clearCredentials() { activateAccountScope(''); for (const controller of pendingRequests) controller.abort(); cfg = { ...cfg, token: '' }; revisions.clear(); }
 
+const pendingRequests = new Set<AbortController>();
 export async function authFetch(endpoint: string, init: RequestInit = {}): Promise<Response> {
   const current = cfg;
+  const generation = accountGeneration();
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (init.signal?.aborted) controller.abort();
+  init.signal?.addEventListener('abort', abort, { once: true });
+  pendingRequests.add(controller);
+  const deadline = setTimeout(() => { controller.abort(); pendingRequests.delete(controller); init.signal?.removeEventListener('abort', abort); }, 180000);
   const headers = new Headers(init.headers);
   if (current.token) headers.set('Authorization', `Bearer ${current.token}`);
-  const response = await expoFetch(`${current.serverUrl}${endpoint}`, { ...init, headers, credentials: 'include' });
+  const response = await expoFetch(`${current.serverUrl}${endpoint}`, { ...init, headers, credentials: 'include', signal: controller.signal });
+  if (generation !== accountGeneration()) { clearTimeout(deadline); pendingRequests.delete(controller); throw new Error('账号已切换'); }
   const refreshed = response.headers.get('set-auth-token');
   if (refreshed && current === cfg) { cfg = { ...cfg, token: refreshed }; await writeToken(cfg.serverUrl, refreshed); }
   if (response.status === 401 && !endpoint.startsWith('/api/auth/')) unauthorized.forEach((listener) => listener());

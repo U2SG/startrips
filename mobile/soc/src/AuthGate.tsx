@@ -1,6 +1,7 @@
 import React, { useEffect, useState, type ReactNode } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as api from './api';
+import { activateAccountScope } from './accountScope';
 import * as data from './data';
 import * as session from './lessonSession';
 import { loadSettings, saveSettings } from './settings';
@@ -22,15 +23,16 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   async function acceptUser(next: User) {
+    activateAccountScope(`${api.serverCfg().serverUrl}/${next.id}`);
     setStorageScope(api.serverCfg().serverUrl, next.id);
     data.clearProfileCache();
     setUser(next);
   }
   async function clearSession() {
-    session.discard();
+    api.clearCredentials();
+    session.reset();
     await cancelReminders();
     await writeToken(api.serverCfg().serverUrl, '');
-    api.clearCredentials();
     data.clearProfileCache();
     setUser(null);
     setPassword('');

@@ -29,6 +29,7 @@ export async function clearLessonPointer(): Promise<void> {
 }
 
 export type LessonContext = {
+  assertSession: () => void;
   worldId: string;
   textbook: TextbookEntry;
   chat: Chat;
@@ -90,6 +91,7 @@ export async function startLesson(
   onStatus: (s: string) => void,
   preferSlot?: string,
 ): Promise<LessonContext> {
+  const assertSession = api.sessionGuard();
   onStatus('读取世界与交接…');
   const [meta, rules, learner, handoff, preface, progressMd] = await Promise.all([
     data.readWorldMeta(worldId),
@@ -136,7 +138,9 @@ export async function startLesson(
   };
 
   onStatus('写入课程上下文…');
+  assertSession();
   await data.writeCurrentReading(worldId, chat.id, windowStart, windowEnd, extracted.pages);
+  assertSession();
   await data.writeChat(worldId, chat);
   await saveLessonPointer({ worldId, textbookId: textbook.id, convId: chat.id });
 
@@ -146,7 +150,7 @@ export async function startLesson(
   });
 
   return {
-    worldId, textbook, chat, companion, companionSlot: slot, windowStart, windowEnd, systemPrompt,
+    assertSession, worldId, textbook, chat, companion, companionSlot: slot, windowStart, windowEnd, systemPrompt,
     startedAt: new Date().toISOString(),
   };
 }
@@ -156,6 +160,7 @@ export async function resumeLesson(
   pointer: LessonPointer,
   onStatus: (s: string) => void,
 ): Promise<LessonContext> {
+  const assertSession = api.sessionGuard();
   const { worldId, convId } = pointer;
   onStatus('恢复未下课的课…');
   const idx = await data.readTextbookIndex(worldId);
@@ -183,7 +188,7 @@ export async function resumeLesson(
   });
 
   return {
-    worldId, textbook, chat, companion, companionSlot: slot,
+    assertSession, worldId, textbook, chat, companion, companionSlot: slot,
     windowStart: reading.startPage, windowEnd: reading.endPage, systemPrompt,
     startedAt: new Date().toISOString(), // 恢复 = 新一次落座，计本次时长
   };
@@ -197,6 +202,8 @@ export async function sendLessonMessage(
   onDelta: (full: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  const assertSession = ctx.assertSession;
+  assertSession();
   const now = new Date().toISOString();
   ctx.chat.messages.push({ id: data.nanoid(), role: 'user', content: userText, timestamp: now });
 
@@ -206,6 +213,7 @@ export async function sendLessonMessage(
   ];
   const reply = await chatStream(profile, messages, (_d, full) => onDelta(full), signal);
   ctx.chat.messages.push({ id: data.nanoid(), role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+  assertSession();
   await data.writeChat(ctx.worldId, ctx.chat);
 }
 
@@ -241,6 +249,8 @@ export async function endLesson(
   profile: LlmProfile,
   onStatus: (s: string) => void,
 ): Promise<{ endingPage: number }> {
+  const assertSession = ctx.assertSession;
+  assertSession();
   if (!ctx.chat.messages.length) throw new Error('这节课还没有任何对话');
 
   const meta = await data.readWorldMeta(ctx.worldId);
@@ -257,8 +267,10 @@ export async function endLesson(
 
   let wrap: WrapupResult;
   const done = checkpoint?.done ?? {};
-  const saveCheckpoint = () =>
-    AsyncStorage.setItem(ckKey, JSON.stringify({ wrap, done } satisfies EndCheckpoint)).catch(() => {});
+  const saveCheckpoint = () => {
+    assertSession();
+    return AsyncStorage.setItem(ckKey, JSON.stringify({ wrap, done } satisfies EndCheckpoint));
+  };
 
   if (checkpoint) {
     onStatus('恢复上次的课后总结…');
@@ -312,6 +324,7 @@ export async function endLesson(
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   onStatus('写入课程小结…');
+  assertSession();
   await data.writeLessonSummary(ctx.worldId, ctx.chat.id, ctx.windowStart, wrap.lessonSummary);
 
   onStatus('更新教材进度…');
@@ -321,6 +334,7 @@ export async function endLesson(
   if (!done.progress) {
     const section = `## ${today} | ${ctx.companion.name}\np.${ctx.windowStart}-${endingPage} | ${wrap.topics}\n\n${wrap.progressParagraph}\n`;
     const oldBody = progressMd ? progressMd.replace(/^# 当前页码：第\s*\d+\s*页\s*\n/, '') : '';
+    assertSession();
     await data.writeProgress(ctx.worldId, ctx.textbook, `# 当前页码：第 ${headPage} 页\n\n${section}\n${oldBody}`.trimEnd() + '\n');
     done.progress = true;
     await saveCheckpoint();
@@ -330,9 +344,11 @@ export async function endLesson(
   const entry = idx.textbooks.find((t) => t.id === ctx.textbook.id);
   if (entry) {
     entry.currentPage = headPage;
+    assertSession();
     await data.writeTextbookIndex(ctx.worldId, idx);
   }
   meta.lastStudyDate = today;
+  assertSession();
   await data.writeWorldMeta(ctx.worldId, meta);
 
   onStatus('生成闪卡…');
@@ -356,6 +372,7 @@ export async function endLesson(
           nextReview: data.nextReviewAfter({ history: [] } as unknown as data.Flashcard, true, now),
         });
       }
+      assertSession();
       await data.writeFlashcards(ctx.worldId, fcFile);
     }
     done.flashcards = true;
@@ -366,6 +383,7 @@ export async function endLesson(
   if (!done.learner) {
     if (wrap.learnerProfilePatch?.trim()) {
       const updated = `${(learner || '# 学习者档案').trimEnd()}\n\n## ${today} 课后观察（${ctx.companion.name}）\n${wrap.learnerProfilePatch.trim()}\n`;
+      assertSession();
       await data.writeLearnerProfile(ctx.worldId, updated);
     }
     done.learner = true;
@@ -376,6 +394,7 @@ export async function endLesson(
   if (!done.groupchat) {
     if (wrap.groupchatLines?.length) {
       const valid = wrap.groupchatLines.filter((l) => l.speaker && l.text);
+      assertSession();
       await data.appendGroupChat(ctx.worldId, valid, now);
     }
     done.groupchat = true;
@@ -392,6 +411,7 @@ export async function endLesson(
     teachingLanguage: meta.language || 'chinese',
   };
   const tailMsgs = ctx.chat.messages.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+  assertSession();
   await data.writeHandoff(ctx.worldId, ctx.textbook, handoffMeta, { savedAt: now.toISOString(), messages: tailMsgs });
 
   // 写入桌面端的「下课」结束标记：桌面侧边栏靠 chat 里是否存在以「[下课]」开头的 user 消息
@@ -405,6 +425,7 @@ export async function endLesson(
       timestamp: now.toISOString(),
     });
   }
+  assertSession();
   await data.writeChat(ctx.worldId, ctx.chat);
 
   await clearLessonPointer(); // 课已完成，解锁开新课

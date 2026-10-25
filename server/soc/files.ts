@@ -63,7 +63,7 @@ export class SocFiles {
       try {
         const info = await file.stat();
         if (!info.isFile()) throw new SocError(400, "STUDY_NOT_FILE", "请选择文件");
-        if (info.size > 32 * 1024 * 1024) throw new SocError(413, "STUDY_FILE_TOO_LARGE", "文件超过 32 MB");
+        if (info.size > 128 * 1024 * 1024) throw new SocError(413, "STUDY_FILE_TOO_LARGE", "文件超过 128 MB");
         return await file.readFile();
       } finally { await file.close(); }
     } catch (error) {

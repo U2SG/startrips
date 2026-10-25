@@ -21,7 +21,7 @@ socRoutes.use("*", async (context, next) => {
   await next();
 });
 
-socRoutes.use("*", bodyLimit({ maxSize: 32 * 1024 * 1024, onError: (c) => c.json({ error: "STUDY_FILE_TOO_LARGE", message: "文件超过 32 MB" }, 413) }));
+socRoutes.use("*", bodyLimit({ maxSize: 128 * 1024 * 1024, onError: (c) => c.json({ error: "STUDY_FILE_TOO_LARGE", message: "文件超过 128 MB" }, 413) }));
 
 socRoutes.onError((error, context) => {
   if (error instanceof SocError) return context.json({ error: error.code, message: error.message }, error.status);
@@ -40,7 +40,10 @@ socRoutes.get("/file", async (c) => {
   c.header("ETag", contentTag(bytes));
   const type = relative.endsWith(".pdf") ? "application/pdf" : /\.png$/i.test(relative) ? "image/png"
     : /\.jpe?g$/i.test(relative) ? "image/jpeg" : relative.endsWith(".json") ? "application/json; charset=utf-8" : "text/plain; charset=utf-8";
-  return new Response(new Uint8Array(bytes), { headers: { ...Object.fromEntries(c.res.headers), "Content-Type": type, "X-Content-Type-Options": "nosniff" } });
+  const headers = new Headers(c.res.headers);
+  headers.set("Content-Type", type);
+  headers.set("X-Content-Type-Options", "nosniff");
+  return new Response(new Uint8Array(bytes), { headers });
 });
 
 socRoutes.put("/file", async (c) => {

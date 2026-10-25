@@ -2,21 +2,19 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const { session } = vi.hoisted(() => ({ session: vi.fn() }));
+const { session, configuration } = vi.hoisted(() => ({ session: vi.fn(), configuration: { socDataRoot: "", appOrigin: "http://127.0.0.1:5173" } }));
 vi.mock("../auth", () => ({ auth: { api: { getSession: session } } }));
+vi.mock("../config", () => ({ serverConfig: configuration }));
 import { socRoutes, studyModelEndpoint } from "../routes/soc";
-import { serverConfig } from "../config";
 import { SocFiles } from "./files";
 
 let root: string;
-let previous: string;
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "soc-route-"));
-  previous = serverConfig.socDataRoot;
-  serverConfig.socDataRoot = root;
+  configuration.socDataRoot = root;
   session.mockResolvedValue({ user: { id: "alice", name: "Alice", email: "alice@example.test" } });
 });
-afterEach(async () => { serverConfig.socDataRoot = previous; vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
 
 describe("study authentication and provider boundary", () => {
   it("refuses every unauthenticated file and paid API call", async () => {

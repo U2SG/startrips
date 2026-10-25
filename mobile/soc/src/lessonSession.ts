@@ -91,3 +91,9 @@ export function discard(): void {
   patch({ ctx: null });
   refreshPending();
 }
+
+export function reset(): void {
+  lecture.stopLecture();
+  speech.stop();
+  patch({ ctx: null, pending: null, busy: '' });
+}

@@ -4,6 +4,7 @@ import { SocError, type SocFiles } from "./files";
 let extracting = false;
 export async function extractStudyPdf(files: SocFiles, relative: string, start: number, end: number) {
   if (!relative.toLowerCase().endsWith(".pdf")) throw new SocError(400, "STUDY_PDF_REQUIRED", "请选择 PDF 教材");
+  if (extracting) throw new SocError(429, "STUDY_EXTRACTION_BUSY", "正在处理教材，请稍后重试");
   const bytes = await files.read(relative);
   const signature = createHash("sha256").update(bytes).digest("hex");
   const cachePath = relative.replace(/[^/]+$/, "pages.json");

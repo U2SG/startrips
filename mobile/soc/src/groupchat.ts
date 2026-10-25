@@ -1,3 +1,4 @@
+import { sessionGuard } from './api';
 // 群聊：学习者发言后，由 LLM 以各 NPC 口吻续聊，追加到 recent.md（桌面版同格式）。
 import * as data from './data';
 import { chatJson } from './llm';
@@ -27,6 +28,7 @@ export async function sendGroupMessage(
   profile: LlmProfile,
   userText: string,
 ): Promise<data.GroupMessage[]> {
+  const assertSession = sessionGuard();
   const meta = await data.readWorldMeta(worldId);
   const companions = meta.companions.filter((c): c is NonNullable<Companion> => !!c);
   if (!companions.length) throw new Error('这个世界没有伙伴');
@@ -38,6 +40,8 @@ export async function sendGroupMessage(
   ]);
   const me = learnerName(profileMd);
   const now = new Date();
+
+  assertSession();
 
   await data.appendGroupChat(worldId, [{ speaker: me, text: userText }], now);
 
@@ -67,6 +71,7 @@ export async function sendGroupMessage(
     .filter((r) => r.speaker && r.text && companions.some((c) => c.name === r.speaker))
     .slice(0, 3);
   if (valid.length) {
+    assertSession();
     await data.appendGroupChat(worldId, valid, new Date(now.getTime() + 5000));
   }
   return data.readGroupChat(worldId);
