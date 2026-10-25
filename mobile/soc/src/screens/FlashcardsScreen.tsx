@@ -5,6 +5,8 @@ import { Confetti } from '../components/Confetti';
 import { Flame } from '../components/Flame';
 import { GlassHeader, GlassPanel, GlowLayer, GradientButton } from '../components/Glass';
 import * as data from '../data';
+import { saveFlashcardAnswer } from '../flashcardReview';
+import { sessionGuard } from '../accountScope';
 import { dayStreakOf, localDay, nextBatchOf } from '../stats';
 import { haptic } from '../haptics';
 import { useResource } from '../hooks';
@@ -49,6 +51,11 @@ export default function FlashcardsScreen(props: {
   const [cur, setCur] = useState<DueCard | null>(null);
   const [chosen, setChosen] = useState<number | null>(null);
   const [answerError, setAnswerError] = useState(''); // answer() 写盘失败的动作错误
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const chosenRef = useRef<number | null>(null);
+  const epoch = useRef(0);
+  useEffect(() => { epoch.current++; return () => { epoch.current++; }; }, [worldId, quizConvId]);
   const [streak, setStreak] = useState(0); // 本次复习的连对数，答错归零
   const [sessionDone, setSessionDone] = useState(0); // 本次已答张数
   const [sessionCorrect, setSessionCorrect] = useState(0); // 本次答对张数
@@ -88,6 +95,11 @@ export default function FlashcardsScreen(props: {
   // 新数据到达后重置会话状态并初始化队列
   useEffect(() => {
     if (!loadResult) return;
+    epoch.current++;
+    chosenRef.current = null;
+    savingRef.current = false;
+    setSaving(false);
+    setAnswerError('');
     filesRef.current = loadResult.files;
     setQueue(loadResult.picked);
     setCur(loadResult.picked[0] || null);
@@ -100,16 +112,12 @@ export default function FlashcardsScreen(props: {
   }, [loadResult]);
 
   async function answer(i: number) {
-    if (!worldId || !cur || chosen !== null) return;
+    if (!worldId || !cur || chosenRef.current !== null || savingRef.current) return;
+    const guard = sessionGuard();
+    const currentEpoch = epoch.current;
+    chosenRef.current = i;
     const correct = i === cur.card.correctIndex;
     setChosen(i);
-    setStreak((v) => {
-      const nv = correct ? v + 1 : 0;
-      if (nv > maxStreak) setMaxStreak(nv);
-      return nv;
-    });
-    setSessionDone((n) => n + 1);
-    if (correct) setSessionCorrect((n) => n + 1);
 
     if (correct) {
       Animated.spring(popScale, { toValue: 1, friction: 5, useNativeDriver: true }).start();
@@ -125,21 +133,37 @@ export default function FlashcardsScreen(props: {
     }
     Animated.timing(explainY, { toValue: 1, duration: 260, useNativeDriver: true }).start();
 
-    // 课后小测：纯自测，不写复习历史、不改到期日（这批卡仍按原计划明天正式到期）
-    if (quiz) return;
-
-    // —— 以下为现有 SRS 逻辑，原样保留 ——
-    const now = new Date();
-    cur.card.history.push({ time: now.toISOString(), chosen: i, correct });
-    cur.card.nextReview = data.nextReviewAfter(cur.card, correct, now);
+    const countAnswer = () => {
+      setStreak((v) => {
+        const nv = correct ? v + 1 : 0;
+        if (nv > maxStreak) setMaxStreak(nv);
+        return nv;
+      });
+      setSessionDone((n) => n + 1);
+      if (correct) setSessionCorrect((n) => n + 1);
+    };
+    // Quiz answers are local; scheduled reviews count only after persistence.
+    if (quiz) { countAnswer(); return; }
+    savingRef.current = true;
+    setSaving(true);
+    setAnswerError('');
     try {
-      await data.writeFlashcards(worldId, cur.file);
-    } catch (e: any) {
-      setAnswerError(`保存失败：${e.message}`);
+      await saveFlashcardAnswer(cur.file, cur.card, i, new Date(), (updated) => {
+        guard();
+        return data.writeFlashcards(worldId, updated);
+      });
+      guard();
+      if (epoch.current === currentEpoch) countAnswer();
+    } catch (e: unknown) {
+      if (epoch.current === currentEpoch) setAnswerError(`保存失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      if (epoch.current === currentEpoch) { savingRef.current = false; setSaving(false); }
     }
   }
 
   function next() {
+    if (savingRef.current || saving || answerError || busy) return;
+    chosenRef.current = null;
     popScale.setValue(0); shakeX.setValue(0); explainY.setValue(0); // 复位动画
     const rest = queue.slice(1);
     setQueue(rest);
@@ -149,7 +173,7 @@ export default function FlashcardsScreen(props: {
 
   const answered = chosen !== null;
   const gotIt = cur && chosen === cur.card.correctIndex;
-  const total = sessionDone + queue.length;
+  const total = loadResult?.picked.length ?? 0;
   const pctDone = total ? Math.round((sessionDone / total) * 100) : 0;
 
   // 完成庆祝：本次答完了全部到期卡片
@@ -271,7 +295,7 @@ export default function FlashcardsScreen(props: {
                 <Text style={s.explainTxt}>{cur.card.explanation}</Text>
                 <Text style={s.nextReview}>下次复习 {cur.card.nextReview?.slice(0, 10)}</Text>
               </Animated.View>
-              <GradientButton label={queue.length > 1 ? '下一张' : '完成'} onPress={next} height={46} rounded={radius.lg} />
+              <GradientButton label={answerError ? '重试' : saving ? '保存中…' : queue.length > 1 ? '下一张' : '完成'} onPress={answerError ? reload : next} disabled={saving || !!busy} height={46} rounded={radius.lg} />
             </>
           ) : null}
         </ScrollView>

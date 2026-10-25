@@ -318,20 +318,7 @@ export async function writeFlashcards(worldId: string, file: FlashcardFile): Pro
   await api.writeJson(`${await worldPath(worldId)}/flashcards/${file.textbookId}.json`, file);
 }
 
-/** 连续答对次数 → 间隔天数；答错回到 1 天 */
-const SRS_INTERVALS = [1, 3, 7, 14, 30, 60];
-
-export function nextReviewAfter(card: Flashcard, correct: boolean, now: Date): string {
-  let streak = 0;
-  if (correct) {
-    streak = 1;
-    for (let i = card.history.length - 1; i >= 0 && card.history[i].correct; i--) streak++;
-  }
-  const days = correct ? SRS_INTERVALS[Math.min(streak - 1, SRS_INTERVALS.length - 1)] : 1;
-  // 对齐桌面版习惯：UTC 16:00（即北京时间次日 0 点）
-  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + days, 16, 0, 0));
-  return d.toISOString();
-}
+export { nextReviewAfter } from './flashcardReview';
 
 // ---------- 群聊 ----------
 

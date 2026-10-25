@@ -1,3 +1,4 @@
+import { MissingLessonDataError } from './lessonRecovery';
 // 上课 / 下课核心编排：提示词装配与课后更新管线。
 // 写入的所有文件与桌面版格式一致，保证两端接续上课。
 // 与桌面版同规则：一节课没下课就不能开新课——进行中的课通过指针持久化，重启后恢复继续。
@@ -176,7 +177,7 @@ export async function resumeLesson(
   onStatus('恢复未下课的课…');
   const idx = await data.readTextbookIndex(worldId);
   const textbook = idx.textbooks.find((t) => t.id === pointer.textbookId);
-  if (!textbook) throw new Error('找不到这节课对应的教材');
+  if (!textbook) throw new MissingLessonDataError('找不到这节课对应的教材');
 
   const [chat, reading, meta, rules, learner, handoff] = await Promise.all([
     data.readChat(worldId, convId),
@@ -186,11 +187,11 @@ export async function resumeLesson(
     data.readLearnerProfile(worldId),
     data.readHandoff(worldId, textbook),
   ]);
-  if (!reading) throw new Error('这节课的教材窗口（current_reading.md）丢失');
+  if (!reading) throw new MissingLessonDataError('这节课的教材窗口（current_reading.md）丢失');
 
   const slot = chat.character || 'npc_a';
   const companion = companionBySlot(meta, slot);
-  if (!companion) throw new Error('这节课的学习伙伴已不存在');
+  if (!companion) throw new MissingLessonDataError('这节课的学习伙伴已不存在');
   const persona = await data.readNpc(worldId, slot);
 
   const systemPrompt = buildSystemPrompt({

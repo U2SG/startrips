@@ -8,6 +8,7 @@ import {
   clearLessonPointer, endLesson, LessonContext, LessonPointer,
   loadLessonPointer, resumeLesson, startLesson,
 } from './lesson';
+import { pendingAfterResumeFailure } from './lessonRecovery';
 import * as lecture from './speech/lecture';
 import * as speech from './speech/player';
 
@@ -68,9 +69,9 @@ export async function resume(): Promise<LessonContext> {
     return ctx;
   } catch (e) {
     guard();
-    await clearLessonPointer().catch(() => {});
+    const retained = await pendingAfterResumeFailure(e, pending, clearLessonPointer, guard);
     guard();
-    patch({ pending: null, busy: '' });
+    patch({ pending: retained, busy: '' });
     throw e;
   }
 }
