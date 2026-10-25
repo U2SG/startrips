@@ -69,6 +69,9 @@ uses the existing personal Android signing key kept in the repository secret
 the version code so it can update the previous personal APK without uninstalling.
 No Expo development server or Tailscale connection is required. Background audio
 and local reminders remain native; lock-screen behavior still needs device testing.
+The web container serves versioned APK files from the persistent `soc_downloads`
+volume at `/soc/downloads/`. Upload only verified CI-built installers there;
+never upload signing keys or user data. App deployments preserve this volume.
 
 ## Web
 
