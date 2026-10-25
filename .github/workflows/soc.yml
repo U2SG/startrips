@@ -2,10 +2,10 @@ name: soc
 
 on:
   pull_request:
-    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-web.mjs']
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'deploy/Caddyfile']
   push:
     branches: [main]
-    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml']
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'deploy/Caddyfile']
   workflow_dispatch:
 
 permissions:
@@ -45,6 +45,15 @@ jobs:
       - name: Verify mobile browser sign-in and sign-out
         working-directory: .
         run: node scripts/qa-soc-web.mjs
+      - name: Verify production access logs exclude session credentials
+        working-directory: .
+        run: node scripts/qa-soc-caddy.mjs
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: soc-caddy-qa
+          path: artifacts/soc-caddy
+          retention-days: 7
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:

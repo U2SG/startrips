@@ -80,6 +80,8 @@
 	log {
 		format filter {
 			fields {
+				# The native sign-in header is a credential too.
+				resp_headers>Set-Auth-Token delete
 				request>uri regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL)=)[^/?&#]*" "${1}REDACTED"
 				request>headers>Referer regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL)=)[^/?&#]*" "${1}REDACTED"
 			}
