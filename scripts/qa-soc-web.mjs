@@ -174,7 +174,7 @@ try {
   importFailure = false;
   await selectBook();
   await page.getByText('上传并解析教材…', { exact: true }).waitFor({ state: 'detached' });
-  await page.getByText('手机教材', { exact: true }).waitFor();
+  await page.getByText('《手机教材》', { exact: true }).waitFor();
   await page.getByRole('button', { name: '教材', exact: true }).click();
   await page.getByText('手机教材', { exact: true }).waitFor();
   assert.equal(uploads.length, 2);
