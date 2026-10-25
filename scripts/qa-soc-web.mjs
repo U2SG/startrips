@@ -17,6 +17,7 @@ let importedBook = null;
 let importFailure = true;
 const uploads = [];
 const listeningFiles = new Map();
+const narrations = [];
 let listeningWrites = 0;
 const wav = Buffer.alloc(44 + 8000 * 2 * 8);
 wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
@@ -113,7 +114,10 @@ const server = http.createServer(async (request, response) => {
         return json(200, cards);
       }
     }
-    if (url.pathname.endsWith('/voice')) return json(200, request.method === 'POST' ? { url: `http://${request.headers.host}/ci-book.wav` } : { available: true });
+    if (url.pathname.endsWith('/voice')) {
+      if (request.method === 'POST') { let text = ''; for await (const chunk of request) text += chunk; narrations.push(JSON.parse(text)); }
+      return json(200, request.method === 'POST' ? { url: `http://${request.headers.host}/ci-book.wav` } : { available: true });
+    }
     return json(404, { error: 'STUDY_FILE_NOT_FOUND' });
   }
   try {
@@ -209,7 +213,7 @@ try {
   await page.getByRole('button', { name: '从第 2 段朗读', exact: true }).waitFor();
   await page.getByRole('button', { name: '从第 2 段朗读', exact: true }).click();
   await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
-  await page.waitForTimeout(600);
+  await page.waitForFunction(() => Number(document.querySelector('[aria-label="本句播放进度"]')?.getAttribute('aria-valuenow')) >= 1);
   await page.getByRole('button', { name: '暂停听书', exact: true }).click();
   await page.getByRole('button', { name: '播放听书', exact: true }).waitFor();
   await page.getByRole('button', { name: '听书设置', exact: true }).click();
@@ -237,6 +241,7 @@ try {
   await page.getByRole('button', { name: '听书设置', exact: true }).click();
   assert.equal(await page.getByRole('radio', { name: '1.5 倍速', exact: true }).getAttribute('aria-checked'), 'true');
   assert.ok(listeningWrites > 0);
+  assert.ok(narrations.some((request) => request.text === '第二段原文！'), 'The actual TTS request must preserve the source phrase');
   await page.getByRole('button', { name: '收起听书', exact: true }).click();
   await page.getByRole('button', { name: '闪卡', exact: true }).click();
   await page.getByText('CI question 1', { exact: true }).waitFor();
@@ -270,11 +275,15 @@ try {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByText('刷新', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(artifacts, 'settings.png') });
+  await page.getByRole('button', { name: '继续听书', exact: true }).click();
+  await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
   expireSession = true;
   await page.getByText('刷新', { exact: true }).click();
   await page.getByLabel('邮箱', { exact: true }).waitFor();
   await page.getByRole('alert').waitFor();
+  assert.equal(await page.getByTestId('listening-mini').count(), 0, 'Session expiry must remove the old book player');
   expireSession = false;
+  await page.getByLabel('邮箱', { exact: true }).fill('study@example.test');
   await page.getByLabel('密码', { exact: true }).fill('ci-only-password');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
