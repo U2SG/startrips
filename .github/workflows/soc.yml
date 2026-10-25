@@ -91,6 +91,15 @@ jobs:
             > "$RUNNER_TEMP/soc-xcodebuild.log" 2>&1 || { tail -n 100 "$RUNNER_TEMP/soc-xcodebuild.log"; exit 1; }
           mkdir -p "$RUNNER_TEMP/soc-export/Payload"
           cp -R "$RUNNER_TEMP/Soc.xcarchive/Products/Applications/"*.app "$RUNNER_TEMP/soc-export/Payload/"
+          python3 - <<'PY'
+          import os, pathlib, plistlib
+          app = next((pathlib.Path(os.environ['RUNNER_TEMP']) / 'soc-export/Payload').glob('*.app'))
+          with (app / 'Info.plist').open('rb') as stream:
+              info = plistlib.load(stream)
+          assert 'audio' in info.get('UIBackgroundModes', []), 'Background audio capability is missing'
+          assert info.get('NSMicrophoneUsageDescription'), 'Microphone permission text is missing'
+          assert info['CFBundleIdentifier'] == 'app.startrips.soc'
+          PY
           ditto -c -k --keepParent "$RUNNER_TEMP/soc-export/Payload" "$RUNNER_TEMP/Soc-ios-unsigned.ipa"
       - uses: actions/upload-artifact@v7.0.1
         with:

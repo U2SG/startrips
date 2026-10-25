@@ -49,6 +49,7 @@ try {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${address.port}/soc/`);
   await page.getByLabel('邮箱', { exact: true }).waitFor({ timeout: 60000 });
+  await page.getByTestId('soc-splash').waitFor({ state: 'detached' });
   await page.screenshot({ path: path.join(artifacts, 'sign-in.png') });
   await page.getByLabel('邮箱', { exact: true }).fill('study@example.test');
   await page.getByLabel('密码', { exact: true }).fill('ci-only-password');

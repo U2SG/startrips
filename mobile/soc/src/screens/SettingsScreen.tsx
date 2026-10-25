@@ -92,7 +92,6 @@ export default function SettingsScreen({ settings, worldId, llmConfig, profileNa
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: space(2), paddingBottom: space(4) }}>
         {/* 学习数据入口 */}
         <View>
-          <Text style={s.groupLabel}>学习</Text>
           <Pressable
             onPress={() => setShowStats(true)}
             style={({ pressed }) => [s.group, s.navRow, pressed && { opacity: 0.7 }]}
@@ -105,14 +104,13 @@ export default function SettingsScreen({ settings, worldId, llmConfig, profileNa
         <View style={s.group}>
           <Pressable style={s.navRow} onPress={() => void onSave()}><Text style={s.navRowText}>刷新</Text></Pressable>
           <Pressable style={s.navRow} onPress={() => void Linking.openURL(settings.serverUrl)}><Text style={s.navRowText}>Startrips</Text></Pressable>
-          <Pressable style={s.navRow} onPress={requestSignOut}><Text style={[s.navRowText, { color: ink.red }]}>退出</Text></Pressable>
+          <Pressable style={s.navRow} onPress={() => void requestSignOut().catch((failure: Error) => setError(failure.message))}><Text style={[s.navRowText, { color: ink.red }]}>退出</Text></Pressable>
         </View>
         {status ? <Text style={s.status}>{status}</Text> : null}
         <ErrorNote text={error} />
 
         {/* 外观 */}
         <View>
-          <Text style={s.groupLabel}>外观</Text>
           <View style={s.segment}>
             {THEME_OPTS.map((o) => {
               const on = mode === o.v;

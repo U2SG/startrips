@@ -98,6 +98,7 @@ function AnimatedSplash({ exit, onDone }: { exit: boolean; onDone: () => void })
   }, [exit]);
   return (
     <Animated.View
+      testID="soc-splash"
       pointerEvents={exit ? 'none' : 'auto'}
       style={[StyleSheet.absoluteFill, {
         backgroundColor: ink.canvas, alignItems: 'center', justifyContent: 'center', zIndex: 100, opacity,

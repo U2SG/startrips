@@ -11,8 +11,8 @@ import { writeToken } from './tokenStore';
 import { cancelReminders } from './notify';
 
 type User = { id: string; name: string; email: string };
-const signOutListeners = new Set<() => void>();
-export function requestSignOut() { signOutListeners.forEach((listener) => listener()); }
+const signOutListeners = new Set<() => Promise<void>>();
+export async function requestSignOut() { await Promise.all([...signOutListeners].map((listener) => listener())); }
 
 export function AuthGate({ children, onReady }: { children: ReactNode; onReady: () => void }) {
   const { ink } = useTheme();
@@ -52,7 +52,11 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
       finally { if (live) { setBusy(false); onReady(); } }
     })();
     const expired = api.onUnauthorized(() => { void clearSession(); });
-    const signOut = () => { void api.authFetch('/api/auth/sign-out', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).finally(clearSession); };
+    const signOut = async () => {
+      const response = await api.authFetch('/api/auth/sign-out', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (!response.ok) throw new Error('退出失败，请检查网络后重试');
+      await clearSession();
+    };
     signOutListeners.add(signOut);
     return () => { live = false; expired(); signOutListeners.delete(signOut); };
   }, []);
