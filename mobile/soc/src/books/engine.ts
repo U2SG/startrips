@@ -32,6 +32,7 @@ export class BookEngine {
   private transition = false;
   private movedAt = Date.now();
   private lastPosition = 0;
+  private resumeFrom: unknown = null;
   private deps: BookDependencies;
   constructor(deps: BookDependencies) { this.deps = deps; }
   getState = () => this.state;
@@ -54,8 +55,10 @@ export class BookEngine {
     return this.jobs.get(key)!;
   }
   async open(raw?: unknown) {
-    const b = raw as Partial<Bookmark> | undefined;
-    await this.go(typeof b?.page === 'number' && Number.isInteger(b.page) && b.page > 0 ? b.page : 1, 0, false, raw);
+    const checkpoint = raw ?? this.state.bookmark ?? this.resumeFrom;
+    this.resumeFrom = checkpoint;
+    const b = checkpoint as Partial<Bookmark> | undefined;
+    await this.go(typeof b?.page === 'number' && Number.isInteger(b.page) && b.page > 0 ? b.page : 1, 0, false, checkpoint);
   }
   async go(number: number, index = 0, play = this.state.status === 'playing', raw?: unknown) {
     if (this.disposed) return;
@@ -95,6 +98,7 @@ export class BookEngine {
         if (!this.current(seq)) return;
         this.loaded = key;
       }
+      this.deps.player.rate((this.state.bookmark?.speed || b.speed) * toneRate(page.passages[b.passage].tone));
       this.deps.player.play();
       this.movedAt = Date.now(); this.lastPosition = b.seconds;
       this.patch({ status: 'playing' }); this.transition = false;

@@ -144,7 +144,10 @@ function AppInner(props: {
   async function connect(ns: Settings) {
     api.configureApi(ns);
     await api.ping();
-    const [cfg, act] = await Promise.all([data.readLlmConfig(), data.getActive()]);
+    const [cfg, act] = await Promise.all([data.readLlmConfig(), data.getActive().catch((error: unknown) => {
+      if ((error as { status?: number } | null)?.status === 404) return null;
+      throw error;
+    })]);
     setLlmConfig(cfg);
     const saved = await AsyncStorage.getItem(PROFILE_KEY);
     setProfileName(saved && cfg.profiles.some((p) => p.name === saved) ? saved : cfg.active);

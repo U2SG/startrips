@@ -14,6 +14,8 @@ let cardVersion = 0;
 let expireSession = false;
 const studyBase = 'project-data/accounts/local/profiles/default/worlds/ci-world';
 let importedBook = null;
+let activeSelection = null;
+let activeVersion = 0;
 let importFailure = true;
 const uploads = [];
 const listeningFiles = new Map();
@@ -90,7 +92,15 @@ const server = http.createServer(async (request, response) => {
         if (!listeningFiles.has(relative)) return json(404, { error: 'STUDY_FILE_NOT_FOUND' });
         response.setHeader('ETag', `"listening-${listeningWrites}"`); return json(200, listeningFiles.get(relative));
       }
-      if (relative?.endsWith('/worlds/active.json')) return json(200, { worldId: 'ci-world', textbookId: 'book' });
+      if (relative?.endsWith('/worlds/active.json')) {
+        if (request.method === 'PUT') {
+          let text = ''; for await (const chunk of request) text += chunk;
+          activeSelection = JSON.parse(text); activeVersion++;
+          response.setHeader('ETag', `"active-${activeVersion}"`); return json(200, { ok: true });
+        }
+        if (!activeSelection) return json(404, { error: 'STUDY_FILE_NOT_FOUND' });
+        response.setHeader('ETag', `"active-${activeVersion}"`); return json(200, activeSelection);
+      }
       if (relative?.endsWith('/world_meta.json')) return json(200, { worldId: 'ci-world', name: '学习', companions: [] });
       if (relative?.endsWith('/textbook_index.json')) return json(200, { worldId: 'ci-world', updatedAt: '', textbooks: importedBook ? [importedBook] : [] });
       if (relative === cardsPath) {
@@ -157,6 +167,7 @@ try {
       await page.getByLabel('密码', { exact: true }).fill('ci-only-password');
       await page.getByRole('button', { name: '登录', exact: true }).click();
       await page.getByRole('button', { name: '教材', exact: true }).waitFor({ timeout: 8000 });
+      await page.getByText('准备上课', { exact: true }).waitFor();
       await page.getByRole('button', { name: '设置', exact: true }).click();
       await page.getByText('刷新', { exact: true }).waitFor();
       // Playwright screenshots wait for fonts; CDP captures the visible fallback.
@@ -184,6 +195,7 @@ try {
   await page.getByLabel('密码', { exact: true }).fill('ci-only-password');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await page.getByRole('button', { name: '教材', exact: true }).waitFor();
+  await page.getByText('准备上课', { exact: true }).waitFor();
   assert.equal(await page.getByLabel('访问令牌', { exact: true }).count(), 0);
   await page.getByRole('button', { name: '教材', exact: true }).click();
   const uploadButton = page.getByRole('button', { name: '上传教材', exact: true });

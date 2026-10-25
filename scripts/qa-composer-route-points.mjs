@@ -44,6 +44,9 @@ async function openComposer(browser, { width, height, reducedMotion = "no-prefer
 
 async function snapshotRows(page) {
   return page.evaluate(() => {
+    // Transform settlement can report 43.999969 for a 44px target. Keep the
+    // 44px contract, comparing DOM geometry at millipixel precision.
+    const cssPixels = (value) => Math.round(value * 1000) / 1000;
     const rows = [...document.querySelectorAll(".journey-route-draft > li:not(.is-empty)")];
     return rows.map((row) => {
       const summary = row.querySelector(".journey-route-draft__summary");
@@ -53,8 +56,8 @@ async function snapshotRows(page) {
         return {
           label: button.getAttribute("aria-label"),
           disabled: button.disabled,
-          width: rect.width,
-          height: rect.height,
+          width: cssPixels(rect.width),
+          height: cssPixels(rect.height),
         };
       });
       return {
@@ -63,7 +66,7 @@ async function snapshotRows(page) {
         expanded: row.getAttribute("data-route-point-expanded") === "true",
         label: summary?.querySelector("strong")?.textContent?.trim() ?? "",
         meta: summary?.querySelector("small")?.textContent?.trim() ?? "",
-        summaryHeight: summary?.getBoundingClientRect().height ?? 0,
+        summaryHeight: cssPixels(summary?.getBoundingClientRect().height ?? 0),
         actionTargets,
       };
     });
@@ -369,6 +372,9 @@ const routeOrderLabels = (page) => page.locator(".journey-route-draft > li:not(.
 async function verifyRouteOrderSentence(page, pageErrors, names, routeOrderAnswers) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.locator(".journey-route-draft").waitFor({ state: "visible" });
+  // The fixture has no production header trigger. Wait until its own desktop
+  // shortcut listener is attached after the viewport transition.
+  await page.locator('[data-qa-command-ready="true"]').waitFor({ state: "attached" });
   const sendCommand = async (text) => {
     if (await page.locator(".command-bar").count() === 0) await page.keyboard.press("Control+K");
     const input = page.locator(".command-bar__input");
