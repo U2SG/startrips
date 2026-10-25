@@ -152,6 +152,7 @@ export async function startLesson(
   await data.writeCurrentReading(worldId, chat.id, windowStart, windowEnd, extracted.pages);
   assertSession();
   await data.writeChat(worldId, chat);
+  assertSession();
   await saveLessonPointer({ worldId, textbookId: textbook.id, convId: chat.id });
 
   const windowText = extracted.pages.map((p) => `--- 第 ${p.page} 页 ---\n${p.text}`).join('\n\n');
@@ -440,7 +441,9 @@ export async function endLesson(
   assertSession();
   await data.writeChat(ctx.worldId, ctx.chat);
 
+  assertSession();
   await clearLessonPointer(); // 课已完成，解锁开新课
+  assertSession();
   await AsyncStorage.removeItem(ckKey).catch(() => {}); // 全部落盘成功，清掉断点
   return { endingPage };
 }

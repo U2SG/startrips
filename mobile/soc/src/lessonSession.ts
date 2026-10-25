@@ -69,6 +69,7 @@ export async function resume(): Promise<LessonContext> {
   } catch (e) {
     guard();
     await clearLessonPointer().catch(() => {});
+    guard();
     patch({ pending: null, busy: '' });
     throw e;
   }
