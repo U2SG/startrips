@@ -84,13 +84,15 @@ export async function end(profile: LlmProfile): Promise<{ convId: string; ending
   speech.stop();
   const convId = ctx.chat.id; // ctx 清空前先存，给课后小测用
   try {
-    const { endingPage } = await endLesson(ctx, profile, (s) => patch({ busy: s }));
+    const { endingPage } = await endLesson(ctx, profile, (s) => { if (state.ctx === ctx) patch({ busy: s }); });
     guard();
+    ctx.assertSession();
+    ctx.controller.abort();
     patch({ ctx: null, busy: '' });
     return { convId, endingPage };
   } catch (e) {
     guard();
-    patch({ busy: '' });
+    if (state.ctx === ctx) patch({ busy: '' });
     throw e;
   }
 }
@@ -98,13 +100,15 @@ export async function end(profile: LlmProfile): Promise<{ convId: string; ending
 /** 丢弃当前课上下文（换教材/换世界）：必须显式停掉听课与朗读引擎——
  *  它们不随组件卸载而死，否则会拿着旧 ctx 继续讲课写文件。不清 lesson 指针，之后仍可恢复。 */
 export function discard(): void {
-  lecture.stopLecture();
+  state.ctx?.controller.abort();
+  lecture.reset();
   speech.stop();
-  patch({ ctx: null });
+  patch({ ctx: null, busy: '' });
   refreshPending();
 }
 
 export function reset(): void {
+  state.ctx?.controller.abort();
   lecture.reset();
   speech.stop();
   patch({ ctx: null, pending: null, busy: '' });

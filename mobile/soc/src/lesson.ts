@@ -30,6 +30,7 @@ export async function clearLessonPointer(): Promise<void> {
 
 export type LessonContext = {
   assertSession: () => void;
+  controller: AbortController;
   worldId: string;
   textbook: TextbookEntry;
   chat: Chat;
@@ -40,6 +41,15 @@ export type LessonContext = {
   systemPrompt: string;
   startedAt: string; // 本次落座开始（ISO），仅用于计时，不落盘
 };
+
+function lessonScope() {
+  const guard = api.sessionGuard();
+  const controller = new AbortController();
+  return { controller, assertSession: () => {
+    guard();
+    if (controller.signal.aborted) throw new Error('这节课已取消，请重新打开');
+  } };
+}
 
 function companionBySlot(meta: WorldMeta, slot: string): NonNullable<Companion> | null {
   const idx = { npc_a: 0, npc_b: 1, npc_c: 2 }[slot];
@@ -91,7 +101,7 @@ export async function startLesson(
   onStatus: (s: string) => void,
   preferSlot?: string,
 ): Promise<LessonContext> {
-  const assertSession = api.sessionGuard();
+  const { assertSession, controller } = lessonScope();
   onStatus('读取世界与交接…');
   const [meta, rules, learner, handoff, preface, progressMd] = await Promise.all([
     data.readWorldMeta(worldId),
@@ -150,7 +160,7 @@ export async function startLesson(
   });
 
   return {
-    assertSession, worldId, textbook, chat, companion, companionSlot: slot, windowStart, windowEnd, systemPrompt,
+    assertSession, controller, worldId, textbook, chat, companion, companionSlot: slot, windowStart, windowEnd, systemPrompt,
     startedAt: new Date().toISOString(),
   };
 }
@@ -160,7 +170,7 @@ export async function resumeLesson(
   pointer: LessonPointer,
   onStatus: (s: string) => void,
 ): Promise<LessonContext> {
-  const assertSession = api.sessionGuard();
+  const { assertSession, controller } = lessonScope();
   const { worldId, convId } = pointer;
   onStatus('恢复未下课的课…');
   const idx = await data.readTextbookIndex(worldId);
@@ -188,7 +198,7 @@ export async function resumeLesson(
   });
 
   return {
-    assertSession, worldId, textbook, chat, companion, companionSlot: slot,
+    assertSession, controller, worldId, textbook, chat, companion, companionSlot: slot,
     windowStart: reading.startPage, windowEnd: reading.endPage, systemPrompt,
     startedAt: new Date().toISOString(), // 恢复 = 新一次落座，计本次时长
   };
@@ -211,7 +221,7 @@ export async function sendLessonMessage(
     { role: 'system', content: ctx.systemPrompt },
     ...ctx.chat.messages.map((m) => ({ role: m.role, content: m.content }) as LlmMessage),
   ];
-  const reply = await chatStream(profile, messages, (_d, full) => onDelta(full), signal);
+  const reply = await chatStream(profile, messages, (_d, full) => onDelta(full), [ctx.controller.signal, ...(signal ? [signal] : [])]);
   ctx.chat.messages.push({ id: data.nanoid(), role: 'assistant', content: reply, timestamp: new Date().toISOString() });
   assertSession();
   await data.writeChat(ctx.worldId, ctx.chat);
@@ -290,16 +300,18 @@ export async function endLesson(
       { role: 'system' as const, content: sys },
       { role: 'user' as const, content: [context, '', '请输出 JSON：', '{', ...spec, '}'].join('\n') },
     ];
+    const batch = new AbortController();
+    const cancellation = [ctx.controller.signal, batch.signal];
     const [core, cards, social] = await Promise.all([
       chatJson<Pick<WrapupResult, 'endingPage' | 'topics' | 'lessonSummary' | 'progressParagraph'>>(profile, ask([
         ' "endingPage": 本节课实际推进到的页码（整数，介于窗口起止之间，按对话实际覆盖内容判断）,',
         ' "topics": "本节课主题关键词，顿号分隔，15 字内",',
         ' "lessonSummary": "2-3 段课程小结：学习者掌握了什么、卡在哪里、推进路径（第三人称，称\'学习者\'）",',
         ' "progressParagraph": "1 段教学交接记录：下一位老师需要知道的掌握情况与薄弱点（第一人称，以授课伙伴口吻）"',
-      ])),
+      ]), cancellation),
       chatJson<Pick<WrapupResult, 'flashcards'>>(profile, ask([
         ' "flashcards": [4 道复习选择题 {"question","choices":[4 个选项],"correctIndex":0-3,"explanation","chapter":"所属章节名"}，考察本节课易错点]',
-      ])),
+      ]), cancellation),
       chatJson<Pick<WrapupResult, 'groupchatLines' | 'learnerProfilePatch'>>(profile, [
         { role: 'system' as const, content: sys },
         {
@@ -313,8 +325,8 @@ export async function endLesson(
             '}',
           ].join('\n'),
         },
-      ]),
-    ]);
+      ], cancellation),
+    ]).finally(() => batch.abort());
     wrap = { ...core, ...cards, ...social };
     await saveCheckpoint(); // LLM 结果先落地：后续任何一步失败，重试都不再重花这三次调用
   }

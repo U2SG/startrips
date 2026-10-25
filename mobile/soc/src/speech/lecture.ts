@@ -70,6 +70,7 @@ export async function runTurn(
 ): Promise<boolean> {
   if (state.turnActive) return false; // 已有回合进行中
   const my = ++turnSeq;
+  const fromLecture = state.lecturing;
   patch({ turnActive: true, error: '' });
   setStream(' ');
   let buf = '';
@@ -82,10 +83,14 @@ export async function runTurn(
       const creds = await resolveVoiceCreds();
       if (creds) {
         const voice = await getCompanionVoice(deps.ctx.worldId, deps.ctx.companion);
-        vs = speech.startStreamingSpeech(creds, voice, lectureMeta(deps.ctx));
+        if (turnSeq === my && !deps.ctx.controller.signal.aborted && !opts.signal?.aborted && (!fromLecture || state.lecturing)) {
+          vs = speech.startStreamingSpeech(creds, voice, lectureMeta(deps.ctx));
+        }
       }
     } catch { /* 朗读不可用不挡对话 */ }
   }
+
+  if (turnSeq !== my || deps.ctx.controller.signal.aborted) { clearInterval(timer); return false; }
 
   let ok = true;
   try {
