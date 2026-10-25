@@ -44,6 +44,7 @@ import { locationRoutes } from "./routes/locations";
 import { mapStyleRoutes } from "./routes/mapstyle";
 import { mediaEvidenceRoutes } from "./routes/media-evidence";
 import { shareRoutes, sharedRoutes } from "./routes/shares";
+import { socRoutes } from "./routes/soc";
 import { uploadRoutes } from "./routes/uploads";
 import { StorageUnavailableError } from "./storage/multipart-storage";
 
@@ -57,7 +58,7 @@ const apiBodyLimit = bodyLimit({
 });
 // The routing worker callback carries its own, larger limit (route geometry).
 app.use("/api/*", (context, next) =>
-  context.req.path === ROUTING_WORKER_RESULTS_PATH ? next() : apiBodyLimit(context, next));
+  (context.req.path === ROUTING_WORKER_RESULTS_PATH || context.req.path === "/api/soc/file" || context.req.path === "/api/soc/voice") ? next() : apiBodyLimit(context, next));
 
 app.get("/api/health", async (context) => {
   try {
@@ -97,6 +98,7 @@ app.route("/api/account-identities", accountIdentityRoutes);
 // session owns the value, so there is no atlasId in the path and none is read
 // from the body.
 app.route("/api/account-preferences", accountPreferenceRoutes);
+app.route("/api/soc", socRoutes);
 app.route("/api/atlases", atlasRoutes);
 // #368: the owner's enqueue verb and the machine worker's protocol, mounted
 // apart so no route can serve both an Atlas member and a worker credential.

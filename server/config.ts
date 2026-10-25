@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 const DEVELOPMENT_SECRET =
   "development-only-startrips-secret-change-before-production";
 
@@ -634,6 +635,7 @@ export function loadServerConfig(
 
   return {
     production,
+    socDataRoot: resolve(environment.SOC_DATA_ROOT?.trim() || ".data/soc"),
     appOrigin,
     apiHost:
       environment.API_HOST?.trim() || (production ? "0.0.0.0" : "127.0.0.1"),

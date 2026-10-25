@@ -13,3 +13,10 @@ scripts
 **/*.test.ts
 **/*.test.tsx
 server/tests
+
+**/node_modules
+mobile/soc/.expo
+mobile/soc/dist
+mobile/soc/ios
+mobile/soc/android
+.data

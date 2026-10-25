@@ -12,6 +12,15 @@
 
 	encode zstd gzip
 
+	redir /soc /soc/ 308
+	handle /soc/* {
+		root * /srv
+		try_files {path} {path}/index.html
+		file_server
+		header Cache-Control "no-cache"
+		header Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+	}
+
 	@api path /api/*
 	handle @api {
 		reverse_proxy api:8787

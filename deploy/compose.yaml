@@ -10,6 +10,7 @@ x-api-environment: &api-environment
   NODE_ENV: production
   APP_ORIGIN: https://${APP_HOST}
   API_HOST: 0.0.0.0
+  SOC_DATA_ROOT: /app/data/soc
   API_PORT: 8787
   DATABASE_URL: postgresql://startrips:${POSTGRES_PASSWORD}@postgres:5432/startrips
   DATABASE_SSL: "false"
@@ -135,6 +136,8 @@ services:
       target: api
     restart: unless-stopped
     environment: *api-environment
+    volumes:
+      - soc_data:/app/data/soc
     depends_on:
       postgres:
         condition: service_healthy
@@ -212,6 +215,7 @@ services:
       - edge
 
 volumes:
+  soc_data:
   postgres_data:
   caddy_data:
   caddy_config:
