@@ -11,6 +11,7 @@ await fs.mkdir(artifacts, { recursive: true });
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.ttf': 'font/ttf', '.woff2': 'font/woff2' };
 const cardsPath = 'project-data/accounts/local/profiles/default/worlds/ci-world/flashcards/book.json';
 let cardVersion = 0;
+let expireSession = false;
 let cards = { textbookId: 'book', updatedAt: new Date().toISOString(), cards: [1, 2].map((number) => ({
   id: `card-${number}`, question: `CI question ${number}`, choices: [`CI answer ${number}`, 'Other'], correctIndex: 0,
   explanation: 'CI explanation', source: { textbook: 'CI book', chapter: 'CI chapter', textbookSlug: 'book' },
@@ -24,7 +25,7 @@ const waitForWrite = async (count) => {
 };
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
-  const authenticated = request.headers.cookie?.includes('ci-study=1');
+  const authenticated = !expireSession && request.headers.cookie?.includes('ci-study=1');
   function json(status, value) { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); }
   if (url.pathname === '/api/auth/sign-in/email') {
     response.setHeader('Set-Cookie', 'ci-study=1; HttpOnly; SameSite=Lax; Path=/');
@@ -35,6 +36,14 @@ const server = http.createServer(async (request, response) => {
     return json(200, {});
   }
   if (url.pathname.startsWith('/api/soc/')) {
+    if (!authenticated && url.pathname.endsWith('/session')) {
+      // Real connections may deliver headers before the anonymous JSON body.
+      response.writeHead(401, { 'Content-Type': 'application/json' });
+      response.flushHeaders();
+      const timer = setTimeout(() => response.end(JSON.stringify({ error: 'AUTH_REQUIRED' })), 200);
+      response.once('close', () => clearTimeout(timer));
+      return;
+    }
     if (!authenticated) return json(401, { error: 'AUTH_REQUIRED' });
     if (url.pathname.endsWith('/session')) return json(200, { user: { id: 'ci-study', name: 'Study', email: 'study@example.test' } });
     if (url.pathname.endsWith('/ping')) return json(200, { ok: true, root: '' });
@@ -98,6 +107,7 @@ try {
       await page.goto(`http://127.0.0.1:${address.port}/soc/`, { waitUntil: 'domcontentloaded' });
       await page.getByLabel('邮箱', { exact: true }).waitFor({ timeout: 8000 });
       await page.getByTestId('soc-splash').waitFor({ state: 'detached', timeout: 8000 });
+      assert.equal(await page.getByRole('alert').count(), 0, 'Anonymous sign-in must not report a connection error');
       assert.ok(fontRequests > 0, 'The regression must intercept actual font downloads');
       assert.equal(await page.evaluate(() => document.fonts.check('16px NotoSansSC_400Regular')), false);
       await page.getByLabel('邮箱', { exact: true }).fill('study@example.test');
@@ -125,6 +135,7 @@ try {
   await page.goto(`http://127.0.0.1:${address.port}/soc/`);
   await page.getByLabel('邮箱', { exact: true }).waitFor({ timeout: 60000 });
   await page.getByTestId('soc-splash').waitFor({ state: 'detached' });
+  assert.equal(await page.getByRole('alert').count(), 0, 'A delayed anonymous 401 body must remain readable');
   await page.screenshot({ path: path.join(artifacts, 'sign-in.png') });
   await page.getByLabel('邮箱', { exact: true }).fill('study@example.test');
   await page.getByLabel('密码', { exact: true }).fill('ci-only-password');
@@ -163,6 +174,15 @@ try {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByText('刷新', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(artifacts, 'settings.png') });
+  expireSession = true;
+  await page.getByText('刷新', { exact: true }).click();
+  await page.getByLabel('邮箱', { exact: true }).waitFor();
+  await page.getByRole('alert').waitFor();
+  expireSession = false;
+  await page.getByLabel('密码', { exact: true }).fill('ci-only-password');
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByText('刷新', { exact: true }).waitFor();
   await page.getByText('退出', { exact: true }).click();
   await page.getByLabel('邮箱', { exact: true }).waitFor();
   assert.deepEqual(errors, [], 'The shared learning UI must not crash in a mobile browser');
