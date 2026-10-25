@@ -53,7 +53,7 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
     })();
     const expired = api.onUnauthorized(() => { void clearSession(); });
     const signOut = async () => {
-      const response = await api.authFetch('/api/auth/sign-out', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const response = await api.authFetch('/api/auth/sign-out', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: api.serverCfg().serverUrl }, body: '{}' });
       if (!response.ok) throw new Error('退出失败，请检查网络后重试');
       await clearSession();
     };
