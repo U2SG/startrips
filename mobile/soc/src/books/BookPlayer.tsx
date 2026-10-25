@@ -28,6 +28,7 @@ function Control({ children, label, onPress, primary, disabled, selected, choice
 }) {
   const { ink } = useTheme();
   return <Pressable accessibilityRole={choice ? 'radio' : toggle ? 'switch' : 'button'} accessibilityLabel={label} accessibilityState={{ disabled: !!disabled, checked: choice || toggle ? !!selected : undefined }}
+    aria-checked={choice || toggle ? !!selected : undefined} aria-disabled={!!disabled}
     disabled={disabled} onPress={onPress} style={({ pressed }) => ({
       minHeight: primary ? 64 : 44, minWidth: primary ? 64 : 44, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center',
       borderRadius: primary ? 32 : 12, backgroundColor: primary ? ink.accent : selected ? ink.accentSoft : 'transparent', opacity: disabled || pressed ? 0.45 : 1,
@@ -115,6 +116,7 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
         <Control label="下一页" disabled={busy || !page || page.page >= page.total} onPress={() => void engine.go((page?.page || 1) + 1, 0, playing)}>›</Control>
       </View>
       <Pressable accessibilityRole="adjustable" accessibilityLabel="本句播放进度" accessibilityValue={{ min: 0, max: Math.round(state.duration), now: Math.round(b?.seconds || 0) }}
+        aria-valuemin={0} aria-valuemax={Math.round(state.duration)} aria-valuenow={Math.round(b?.seconds || 0)}
         accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]} onAccessibilityAction={(e) => void engine.seek((b?.seconds || 0) + (e.nativeEvent.actionName === 'increment' ? 5 : -5))}
         disabled={busy || !state.duration} onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
         onPress={(e) => void engine.seek((e.nativeEvent.locationX / trackWidth) * state.duration)} style={{ minHeight: 44, justifyContent: 'center' }}>

@@ -118,7 +118,7 @@ export class BookEngine {
     if (!page || !b) return;
     ++this.sequence;
     const index = b.passage + delta;
-    if (index < 0) { if (page.page > 1) await this.go(page.page - 1, 0, true); return; }
+    if (index < 0) { if (page.page > 1) await this.go(page.page - 1, Number.MAX_SAFE_INTEGER, true); return; }
     if (index >= page.passages.length) {
       if (page.page < page.total) await this.go(page.page + 1, 0, true);
       else { this.deps.player.pause(); this.patch({ status: 'ended' }); this.checkpoint(); }
