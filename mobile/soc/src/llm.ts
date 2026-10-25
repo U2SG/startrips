@@ -5,7 +5,7 @@ import { modelRequest, type ModelCancellation } from './modelRequest';
 
 export type LlmMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
-function llmFetch(profile: LlmProfile, body: object, signal?: AbortSignal) {
+function llmFetch(profile: LlmProfile, body: object, signal: AbortSignal) {
   return api.authFetch('/api/soc/llm', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...body, profile: profile.name }),

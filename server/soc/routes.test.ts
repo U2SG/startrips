@@ -64,6 +64,34 @@ describe("study authentication and provider boundary", () => {
     expect((upstream.mock.calls[0][1]?.headers as Record<string, string>).Authorization).toBe("Bearer test-server-key");
     expect((await socRoutes.request("/file?path=llm-config.json")).status).toBe(403);
   });
+  it("preserves a healthy streamed body beyond its connection deadline and forwards client cancellation", async () => {
+    const files = new SocFiles(root, "alice");
+    await mkdir(files.root, { recursive: true });
+    await writeFile(path.join(files.root, "llm-config.json"), JSON.stringify({ active: "model", profiles: [{ name: "model", model: "test", baseURL: "https://api.deepseek.com/v1", apiKey: "ci-fake-key" }] }));
+    let upstreamSignal: AbortSignal | undefined;
+    let output!: ReadableStreamDefaultController<Uint8Array>;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      upstreamSignal = init?.signal as AbortSignal;
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { output = controller; } }));
+    });
+    vi.useFakeTimers();
+    const client = new AbortController();
+    try {
+      const response = await socRoutes.request("/llm", { method: "POST", signal: client.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: "model", stream: true, messages: [{ role: "user", content: "test" }] }) });
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      for (let index = 0; index < 6; index++) {
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(upstreamSignal?.aborted).toBe(false);
+        output.enqueue(new TextEncoder().encode("data: chunk\n"));
+        expect((await reader.read()).done).toBe(false);
+      }
+      client.abort();
+      expect(upstreamSignal?.aborted).toBe(true);
+      await reader.cancel();
+      reader.releaseLock();
+    } finally { vi.useRealTimers(); }
+  });
   it("does not leak provider error bodies", async () => {
     const files = new SocFiles(root, "alice");
     await mkdir(files.root, { recursive: true });

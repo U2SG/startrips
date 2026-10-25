@@ -91,11 +91,14 @@ async function modelFor(files: SocFiles, name: unknown) {
 }
 
 async function upstreamFetch(url: URL | string, key: string, body: unknown, signal: AbortSignal) {
+  const connection = new AbortController();
+  const deadline = setTimeout(() => connection.abort(), 180_000);
   try {
     const result = await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(180_000)]), redirect: "error",
+      body: JSON.stringify(body), signal: AbortSignal.any([signal, connection.signal]), redirect: "error",
     });
+    clearTimeout(deadline);
     if (!result.ok) {
       await result.body?.cancel();
       throw new SocError(503, "STUDY_PROVIDER_UNAVAILABLE", `模型服务返回 ${result.status}，请检查配置后重试`);
@@ -104,7 +107,7 @@ async function upstreamFetch(url: URL | string, key: string, body: unknown, sign
   } catch (error) {
     if (error instanceof SocError) throw error;
     throw new SocError(503, "STUDY_PROVIDER_UNAVAILABLE", "模型服务连接失败，请稍后重试");
-  }
+  } finally { clearTimeout(deadline); }
 }
 
 socRoutes.post("/llm", async (c) => {

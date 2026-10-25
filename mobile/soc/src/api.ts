@@ -4,6 +4,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 import { Platform } from 'react-native';
 import type { Settings } from './settings';
 import { writeToken } from './tokenStore';
+import { fetchWithLifetime } from './fetchLifetime';
 
 export type Entry = { name: string; dir: boolean; size: number; mtime: number };
 let cfg: Pick<Settings, 'serverUrl' | 'token'> = { serverUrl: '', token: '' };
@@ -20,27 +21,33 @@ export function onUnauthorized(listener: () => void | Promise<void>) { unauthori
 export function clearCredentials() { sessionUser = ''; activateAccountScope(''); for (const controller of pendingRequests) controller.abort(); cfg = { ...cfg, token: '' }; revisions.clear(); }
 
 const pendingRequests = new Set<AbortController>();
-export async function authFetch(endpoint: string, init: RequestInit = {}): Promise<Response> {
+// Callers must abort their owner signal after consuming the response body.
+export async function authFetch(endpoint: string, init: RequestInit & { signal: AbortSignal }): Promise<Response> {
   const current = cfg;
   const generation = accountGeneration();
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  if (init.signal?.aborted) controller.abort();
-  init.signal?.addEventListener('abort', abort, { once: true });
-  pendingRequests.add(controller);
-  const deadline = setTimeout(() => { controller.abort(); pendingRequests.delete(controller); init.signal?.removeEventListener('abort', abort); }, 180000);
   const headers = new Headers(init.headers);
   if (Platform.OS !== 'web' && current.token) headers.set('Authorization', `Bearer ${current.token}`);
   if (sessionUser && endpoint.startsWith('/api/soc/')) headers.set('X-Soc-User', sessionUser);
-  const response = await expoFetch(`${current.serverUrl}${endpoint}`, { ...init, headers, credentials: 'include', signal: controller.signal });
-  if (generation !== accountGeneration()) { clearTimeout(deadline); pendingRequests.delete(controller); throw new Error('账号已切换'); }
+  const response = await fetchWithLifetime((signal) => expoFetch(`${current.serverUrl}${endpoint}`, { ...init, headers, credentials: 'include', signal }), init.signal, pendingRequests);
+  if (generation !== accountGeneration()) { await response.body?.cancel(); throw new Error('账号已切换'); }
   const refreshed = response.headers.get('set-auth-token');
   if (Platform.OS !== 'web' && refreshed && current === cfg) { cfg = { ...cfg, token: refreshed }; await writeToken(cfg.serverUrl, refreshed); }
   if (response.status === 401 && !endpoint.startsWith('/api/auth/')) await Promise.all([...unauthorized].map((listener) => listener()));
   return response;
 }
 
-export async function request(endpoint: string, init: RequestInit = {}, timeoutMs = 180000): Promise<Response> {
+export async function authJson<T>(endpoint: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; value: T }> {
+  const owner = new AbortController();
+  const deadline = setTimeout(() => owner.abort(), 180000);
+  try {
+    const response = await authFetch(endpoint, { ...init, signal: owner.signal });
+    return { ok: response.ok, status: response.status, value: await response.json() as T };
+  } finally { clearTimeout(deadline); owner.abort(); }
+}
+
+async function request<T>(endpoint: string, init: RequestInit = {}, timeoutMs = 180000,
+  consume: (response: Response) => Promise<T> = (response) => response.json(),
+): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const abort = () => controller.abort();
@@ -55,20 +62,21 @@ export async function request(endpoint: string, init: RequestInit = {}, timeoutM
       const failure = Object.assign(new Error(message), { status: response.status });
       throw failure;
     }
-    return response;
+    return await consume(response);
   } catch (error) {
     if (controller.signal.aborted) throw new Error('连接超时，请检查网络后重试');
     throw error;
-  } finally { clearTimeout(timer); init.signal?.removeEventListener('abort', abort); }
+  } finally { clearTimeout(timer); init.signal?.removeEventListener('abort', abort); controller.abort(); }
 }
 
 const fileUrl = (endpoint: string, path: string) => `${endpoint}?path=${encodeURIComponent(path)}`;
-export async function ping(): Promise<{ ok: boolean; root: string }> { return (await request('/ping', {}, 15000)).json(); }
-export async function list(path: string): Promise<Entry[]> { return (await (await request(fileUrl('/list', path), {}, 15000)).json()).entries; }
+export async function ping(): Promise<{ ok: boolean; root: string }> { return request('/ping', {}, 15000); }
+export async function list(path: string): Promise<Entry[]> { return (await request<{ entries: Entry[] }>(fileUrl('/list', path), {}, 15000)).entries; }
 export async function readText(path: string): Promise<string> {
-  const response = await request(fileUrl('/file', path), {}, 15000);
-  revisions.set(path, response.headers.get('etag'));
-  return response.text();
+  return request(fileUrl('/file', path), {}, 15000, async (response) => {
+    revisions.set(path, response.headers.get('etag'));
+    return response.text();
+  });
 }
 export async function readTextOrNull(path: string): Promise<string | null> {
   try { return await readText(path); } catch (error) { if ((error as { status?: number }).status === 404) { revisions.set(path, null); return null; } throw error; }
@@ -79,17 +87,21 @@ export async function writeText(path: string, content: string): Promise<void> {
   if (!revisions.has(path)) await readTextOrNull(path);
   const revision = revisions.get(path);
   const headers: Record<string, string> = revision ? { 'If-Match': revision } : { 'If-None-Match': '*' };
-  const response = await request(fileUrl('/file', path), { method: 'PUT', headers, body: content }, 15000);
-  revisions.set(path, response.headers.get('etag'));
+  await request(fileUrl('/file', path), { method: 'PUT', headers, body: content }, 15000, async (response) => {
+    revisions.set(path, response.headers.get('etag'));
+    await response.text();
+  });
 }
 export async function writeJson(path: string, value: unknown): Promise<void> { await writeText(path, JSON.stringify(value, null, 2)); }
 export async function append(path: string, content: string): Promise<void> {
-  const response = await request(fileUrl('/append', path), { method: 'POST', body: content }, 15000);
-  revisions.set(path, response.headers.get('etag'));
+  await request(fileUrl('/append', path), { method: 'POST', body: content }, 15000, async (response) => {
+    revisions.set(path, response.headers.get('etag'));
+    await response.text();
+  });
 }
 export async function extractPdf(path: string, start: number, end: number): Promise<{ numPages: number; pages: { page: number; text: string }[] }> {
-  return (await request(`${fileUrl('/extract', path)}&start=${start}&end=${end}`)).json();
+  return request(`${fileUrl('/extract', path)}&start=${start}&end=${end}`);
 }
 export async function studyJson<T>(endpoint: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  return (await request(endpoint, body === undefined ? { signal } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })).json();
+  return request(endpoint, body === undefined ? { signal } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
 }

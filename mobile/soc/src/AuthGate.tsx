@@ -46,8 +46,8 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
         api.configureApi(settings);
         setOrigin(settings.serverUrl);
         if (settings.serverUrl && (settings.token || Platform.OS === 'web')) {
-          const response = await api.authFetch('/api/soc/session');
-          if (response.ok && live) await acceptUser((await response.json()).user);
+          const response = await api.authJson<{ user: User }>('/api/soc/session');
+          if (response.ok && live) await acceptUser(response.value.user);
         }
       } catch { if (live) setError('连接失败，请检查网络后重试'); }
       finally { if (live) { setBusy(false); onReady(); } }
@@ -57,7 +57,7 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
       await clearSession();
     });
     const signOut = async () => {
-      const response = await api.authFetch('/api/auth/sign-out', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: api.serverCfg().serverUrl }, body: '{}' });
+      const response = await api.authJson('/api/auth/sign-out', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: api.serverCfg().serverUrl }, body: '{}' });
       if (!response.ok) throw new Error('退出失败，请检查网络后重试');
       await clearSession();
     };
@@ -72,19 +72,19 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
       if (server.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(server.hostname)) throw new Error('服务器地址需要使用 HTTPS');
       const settings = await loadSettings();
       api.configureApi({ serverUrl: server.origin, token: '' });
-      const response = await api.authFetch('/api/auth/sign-in/email', {
+      const response = await api.authJson<{ code?: string }>('/api/auth/sign-in/email', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Origin: server.origin },
         body: JSON.stringify({ email: email.trim(), password, rememberMe: true }),
       });
       if (!response.ok) {
-        const value = await response.json();
+        const value = response.value;
         throw new Error(value.code === 'EMAIL_NOT_VERIFIED' ? '请先验证邮箱' : '登录失败，请检查邮箱和密码');
       }
       if (Platform.OS !== 'web' && !api.serverCfg().token) throw new Error('服务器尚未支持 App 登录，请更新服务器');
       await saveSettings({ ...settings, ...api.serverCfg() });
-      const check = await api.authFetch('/api/soc/session');
+      const check = await api.authJson<{ user: User }>('/api/soc/session');
       if (!check.ok) throw new Error('登录已失效，请重试');
-      await acceptUser((await check.json()).user);
+      await acceptUser(check.value.user);
       setPassword('');
     } catch (failure) { setError(failure instanceof Error ? failure.message : '登录失败'); }
     finally { setBusy(false); }
