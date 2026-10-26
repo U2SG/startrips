@@ -7,9 +7,10 @@ import * as session from './lessonSession';
 import { loadSettings, saveSettings } from './settings';
 import { setStorageScope } from './storage';
 import { font, useTheme } from './theme';
-import { writeToken } from './tokenStore';
+import { readOfflineUser, writeOfflineUser, writeToken, type OfflineUser } from './tokenStore';
 import { cancelReminders } from './notify';
 import * as listening from './books/runtime';
+import { OfflineApp } from './books/OfflineApp';
 
 type User = { id: string; name: string; email: string };
 const signOutListeners = new Set<() => Promise<void>>();
@@ -23,11 +24,14 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
+  const [offlineUser, setOfflineUser] = useState<OfflineUser | null>(null);
+  const [offline, setOffline] = useState(false);
   async function acceptUser(next: User) {
     api.bindSessionUser(next.id);
     activateAccountScope(`${api.serverCfg().serverUrl}/${next.id}`);
     setStorageScope(api.serverCfg().serverUrl, next.id);
     data.clearProfileCache();
+    await writeOfflineUser(api.serverCfg().serverUrl, next);
     setUser(next);
   }
   async function clearSession() {
@@ -36,6 +40,8 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
     session.reset();
     await cancelReminders();
     await writeToken(api.serverCfg().serverUrl, '');
+    await writeOfflineUser(api.serverCfg().serverUrl, null);
+    setOfflineUser(null); setOffline(false);
     data.clearProfileCache();
     setUser(null);
     setPassword('');
@@ -47,9 +53,12 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
         const settings = await loadSettings();
         api.configureApi(settings);
         setOrigin(settings.serverUrl);
+        const cached = await readOfflineUser(settings.serverUrl);
+        if (live && settings.token) setOfflineUser(cached);
         if (settings.serverUrl && (settings.token || Platform.OS === 'web')) {
-          const response = await api.authJson<{ user: User }>('/api/soc/session');
+          const response = await api.authJson<{ user: User }>('/api/soc/session', {}, 6000);
           if (response.ok && live) await acceptUser(response.value.user);
+          else if (response.status === 401) { await writeOfflineUser(settings.serverUrl, null); if (live) setOfflineUser(null); }
         }
       } catch { if (live) setError('连接失败，请检查网络后重试'); }
       finally { if (live) { setBusy(false); onReady(); } }
@@ -92,6 +101,7 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
     finally { setBusy(false); }
   }
   if (user) return <React.Fragment key={user.id}>{children}</React.Fragment>;
+  if (offline) return <OfflineApp onClose={() => { listening.reset(); activateAccountScope(''); setOffline(false); }} />;
   const input = [styles.input, { backgroundColor: ink.raised, color: ink.fg, borderColor: ink.border }];
   return (
     <KeyboardAvoidingView style={[styles.root, { backgroundColor: ink.canvas }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -104,6 +114,11 @@ export function AuthGate({ children, onReady }: { children: ReactNode; onReady: 
         <Pressable accessibilityRole="button" disabled={busy || !email || !password} onPress={() => void signIn()} style={[styles.button, { backgroundColor: ink.accent, opacity: busy ? 0.5 : 1 }]}>
           <Text style={{ color: ink.canvas, fontFamily: font.bold }}>{busy ? '连接中…' : '登录'}</Text>
         </Pressable>
+        {offlineUser && !busy ? <Pressable accessibilityRole="button" accessibilityLabel="离线书库" onPress={() => {
+          activateAccountScope(`${api.serverCfg().serverUrl}/${offlineUser.id}`);
+          setStorageScope(api.serverCfg().serverUrl, offlineUser.id);
+          setOffline(true);
+        }} style={styles.button}><Text style={{ color: ink.accent, fontFamily: font.med }}>离线书库</Text></Pressable> : null}
       </View>
     </KeyboardAvoidingView>
   );

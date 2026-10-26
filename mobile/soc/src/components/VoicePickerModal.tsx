@@ -1,11 +1,12 @@
 // 逐伙伴音色选择弹窗（仅本机覆盖，不回写桌面）。设置页用；自带试听播放器。
 import { useAudioPlayer } from 'expo-audio';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Companion } from '../data';
 import { font, Ink, tnum, useTheme } from '../theme';
 import { getCompanionVoice, resolveVoiceCreds, setCompanionVoice, synthesizeChunk, VOICE_GROUPS } from '../voice';
 import { GlassPanel, GradientButton } from './Glass';
+import { claimAudioFocus, registerAudioFocus } from '../audioFocus';
 
 type Co = NonNullable<Companion>;
 
@@ -14,43 +15,55 @@ export function VoicePickerModal(props: {
   worldId: string | null;
   companion: Co | null;
   onClose: () => void;
+  target?: { name: string; voice: string; save(voice: string): Promise<void> };
 }) {
-  const { visible, worldId, companion, onClose } = props;
+  const { visible, worldId, companion, onClose, target } = props;
   const { ink } = useTheme();
   const s = React.useMemo(() => makeStyles(ink), [ink]);
   const player = useAudioPlayer();
   const [cur, setCur] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [err, setErr] = useState('');
+  const generation = useRef(0);
+  useEffect(() => registerAudioFocus('preview', () => { ++generation.current; player.pause(); }), [player]);
 
   useEffect(() => {
-    if (visible && worldId && companion) getCompanionVoice(worldId, companion).then(setCur).catch(() => {});
+    const seq = ++generation.current;
+    if (visible && target) setCur(target.voice);
+    else if (visible && worldId && companion) getCompanionVoice(worldId, companion).then((voice) => { if (seq === generation.current) setCur(voice); }).catch(() => {});
     if (!visible) { setErr(''); setPreview(null); }
-  }, [visible, worldId, companion]);
+    return () => { ++generation.current; try { player.pause(); } catch {} };
+  }, [visible, worldId, companion, target?.name]);
 
   function stop() { try { player.pause(); } catch { /* ignore */ } }
-  function close() { stop(); onClose(); }
+  function close() { ++generation.current; stop(); onClose(); }
 
   async function pick(v: string) {
-    if (!worldId || !companion) return;
-    setCur(v);
-    await setCompanionVoice(worldId, companion, v);
+    setErr('');
+    try {
+      if (target) await target.save(v);
+      else if (worldId && companion) await setCompanionVoice(worldId, companion, v);
+      setCur(v);
+    } catch (error) { setErr(error instanceof Error ? error.message : '音色保存失败'); }
   }
   async function play(v: string) {
-    if (!companion) return;
+    if (!companion && !target) return;
     stop();
+    claimAudioFocus('preview');
+    const seq = ++generation.current;
     setPreview(v);
     setErr('');
     try {
       const creds = await resolveVoiceCreds();
       if (!creds) throw new Error('未配置 Qwen / DashScope，无法试听');
-      const url = await synthesizeChunk(creds, `你好，我是${companion.name}。`, v);
+      const url = await synthesizeChunk(creds, target ? '你好，接下来由我为你朗读。' : `你好，我是${companion!.name}。`, v);
+      if (seq !== generation.current) return;
       player.replace(url);
       player.play();
     } catch (e: any) {
-      setErr(String(e.message));
+      if (seq === generation.current) setErr(String(e.message));
     } finally {
-      setPreview(null);
+      if (seq === generation.current) setPreview(null);
     }
   }
 
@@ -59,7 +72,7 @@ export function VoicePickerModal(props: {
       <Pressable style={s.backdrop} onPress={close} />
       <GlassPanel rounded={28} style={s.sheet} contentStyle={s.inner}>
         <View style={s.handle} />
-        <Text style={s.title}>{companion?.name} 的音色 · 仅本机</Text>
+        <Text style={s.title}>{target?.name || companion?.name}</Text>
         {err ? <Text style={s.err}>{err}</Text> : null}
         <ScrollView style={{ flexGrow: 0, maxHeight: 380 }} contentContainerStyle={{ paddingBottom: 8 }}>
           {VOICE_GROUPS.map((g) => (
@@ -70,10 +83,10 @@ export function VoicePickerModal(props: {
                   const on = cur === v;
                   return (
                     <View key={v} style={[s.chip, on && s.chipOn]}>
-                      <Pressable onPress={() => pick(v)} hitSlop={4}>
+                      <Pressable accessibilityRole="radio" accessibilityLabel={`选择 ${v}`} aria-checked={on} accessibilityState={{ checked: on }} onPress={() => void pick(v)} style={{ minHeight: 44, justifyContent: 'center' }}>
                         <Text style={[s.chipTxt, on && { color: '#fff', fontFamily: font.bold }]}>{v}</Text>
                       </Pressable>
-                      <Pressable onPress={() => play(v)} hitSlop={6} style={s.playBtn}>
+                      <Pressable accessibilityRole="button" accessibilityLabel={`试听 ${v}`} onPress={() => void play(v)} style={s.playBtn}>
                         <Text style={[s.playTxt, on && { color: '#fff' }]}>{preview === v ? '…' : '▷'}</Text>
                       </Pressable>
                     </View>
@@ -99,11 +112,11 @@ const makeStyles = (ink: Ink) => StyleSheet.create({
   groupLabel: { fontFamily: font.med, fontSize: 11, color: ink.muted, marginBottom: 7 },
   wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 12, paddingRight: 8, height: 36,
+    flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 12, paddingRight: 0, minHeight: 44,
     borderRadius: 12, backgroundColor: ink.sunken,
   },
   chipOn: { backgroundColor: ink.accent },
   chipTxt: { fontFamily: font.med, fontSize: 13, color: ink.fg, ...tnum },
-  playBtn: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.06)' },
+  playBtn: { width: 44, height: 44, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.06)' },
   playTxt: { fontSize: 11, color: ink.accent },
 });

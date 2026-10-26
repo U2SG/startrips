@@ -40,9 +40,9 @@ export async function authFetch(endpoint: string, init: RequestInit & { signal: 
   return response;
 }
 
-export async function authJson<T>(endpoint: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; value: T }> {
+export async function authJson<T>(endpoint: string, init: RequestInit = {}, timeoutMs = 180000): Promise<{ ok: boolean; status: number; value: T }> {
   const owner = new AbortController();
-  const deadline = setTimeout(() => owner.abort(), 180000);
+  const deadline = setTimeout(() => owner.abort(), timeoutMs);
   try {
     const response = await authFetch(endpoint, { ...init, signal: owner.signal });
     return { ok: response.ok, status: response.status, value: await response.json() as T };
@@ -87,24 +87,24 @@ export async function readTextOrNull(path: string): Promise<string | null> {
 }
 export async function readJson<T>(path: string): Promise<T> { return JSON.parse(await readText(path)); }
 export async function readJsonOrNull<T>(path: string): Promise<T | null> { const text = await readTextOrNull(path); return text === null ? null : JSON.parse(text); }
-export async function writeText(path: string, content: string): Promise<void> {
+export async function writeText(path: string, content: string, signal?: AbortSignal): Promise<void> {
   if (!revisions.has(path)) await readTextOrNull(path);
   const revision = revisions.get(path);
   const headers: Record<string, string> = revision ? { 'If-Match': revision } : { 'If-None-Match': '*' };
-  await request(fileUrl('/file', path), { method: 'PUT', headers, body: content }, 15000, async (response) => {
+  await request(fileUrl('/file', path), { method: 'PUT', headers, body: content, signal }, 15000, async (response) => {
     revisions.set(path, response.headers.get('etag'));
     await response.text();
   });
 }
-export async function writeJson(path: string, value: unknown): Promise<void> { await writeText(path, JSON.stringify(value, null, 2)); }
+export async function writeJson(path: string, value: unknown, signal?: AbortSignal): Promise<void> { await writeText(path, JSON.stringify(value, null, 2), signal); }
 export async function append(path: string, content: string): Promise<void> {
   await request(fileUrl('/append', path), { method: 'POST', body: content }, 15000, async (response) => {
     revisions.set(path, response.headers.get('etag'));
     await response.text();
   });
 }
-export async function extractPdf(path: string, start: number, end: number, withSignature = false): Promise<{ numPages: number; pages: { page: number; text: string }[]; sourceSig?: string }> {
-  return request(`${fileUrl('/extract', path)}&start=${start}&end=${end}${withSignature ? '&signature=1' : ''}`);
+export async function extractPdf(path: string, start: number, end: number, withSignature = false, signal?: AbortSignal): Promise<{ numPages: number; pages: { page: number; text: string }[]; sourceSig?: string }> {
+  return request(`${fileUrl('/extract', path)}&start=${start}&end=${end}${withSignature ? '&signature=1' : ''}`, { signal });
 }
 export async function studyJson<T>(endpoint: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   return request(endpoint, body === undefined ? { signal } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });

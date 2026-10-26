@@ -1,4 +1,4 @@
-import { restoreBookmark, toneRate, type BookPage, type Bookmark } from './model.ts';
+import { restoreBookmark, toneRate, isSpeakable, type BookPage, type Bookmark } from './model.ts';
 
 type Status = 'paused' | 'loading' | 'playing' | 'ended' | 'error';
 export type BookState = { page: BookPage | null; bookmark: Bookmark | null; status: Status; duration: number; error: string; syncError: string; sleepAt: number | null };
@@ -11,7 +11,7 @@ export type BookDependencies = {
   page(number: number, dramatic: boolean, signal: AbortSignal): Promise<BookPage>;
   audio(page: BookPage, index: number, signal: AbortSignal): Promise<string | null>;
   remove(uri: string): void;
-  save(bookmark: Bookmark): Promise<void>;
+  save(bookmark: Bookmark, localOnly?: boolean): Promise<void>;
   focus(): void;
   player: BookAudio;
 };
@@ -49,7 +49,7 @@ export class BookEngine {
       const job = this.deps.audio(page, index, signal).then((uri) => {
         if (signal.aborted || this.disposed) { if (uri) this.deps.remove(uri); return null; }
         if (uri) { this.uris.add(uri); this.ready.add(key); } return uri;
-      }).catch(() => null);
+      });
       this.jobs.set(key, job);
     }
     return this.jobs.get(key)!;
@@ -85,6 +85,7 @@ export class BookEngine {
       if (page.page < page.total) { await this.go(page.page + 1, 0, true); return; }
       this.patch({ status: 'ended' }); return;
     }
+    if (!isSpeakable(page.passages[b.passage].text)) { await this.next(1); return; }
     const seq = this.sequence;
     const key = this.key(page, b.passage);
     this.transition = true;
@@ -102,21 +103,21 @@ export class BookEngine {
       this.deps.player.play();
       this.movedAt = Date.now(); this.lastPosition = b.seconds;
       this.patch({ status: 'playing' }); this.transition = false;
-      if (b.passage + 1 < page.passages.length) void this.prepare(page, b.passage + 1);
+      if (b.passage + 1 < page.passages.length) void this.prepare(page, b.passage + 1).catch(() => {});
       // Keep just the current and next audio files; books can be thousands of phrases.
       for (const [old, promise] of this.jobs) if (old !== key && old !== this.key(page, b.passage + 1)) {
-        this.jobs.delete(old); this.ready.delete(old); void promise.then((file) => { if (file) { this.uris.delete(file); this.deps.remove(file); } });
+        this.jobs.delete(old); this.ready.delete(old); void promise.then((file) => { if (file) { this.uris.delete(file); this.deps.remove(file); } }).catch(() => {});
       }
-    } catch (error) { if (this.current(seq)) this.fail(error); }
+    } catch (error) { this.jobs.delete(key); if (this.current(seq)) this.fail(error); }
   }
-  pause() {
+  pause(localOnly = false) {
     if (this.disposed) return;
     // Cancel preparation too: a paused pending request must never start playing later.
     const loading = this.state.status === 'loading';
     this.invalidate();
     for (const key of this.jobs.keys()) if (!this.ready.has(key)) this.jobs.delete(key);
     if (loading) this.clearBuffer();
-    this.patch({ status: 'paused' }); this.checkpoint();
+    this.patch({ status: 'paused' }); return this.checkpoint(localOnly);
   }
   async next(delta: number) {
     const { page, bookmark: b } = this.state;
@@ -152,6 +153,13 @@ export class BookEngine {
     this.deps.player.rate(speed * toneRate(page.passages[b.passage]?.tone || 'neutral'));
     this.patch({ bookmark: { ...b, speed } }); this.checkpoint();
   }
+  async refreshAudio() {
+    if (this.disposed) return;
+    const playing = this.state.status === 'playing' || this.state.status === 'loading';
+    this.invalidate(); this.clearBuffer();
+    this.patch({ status: 'paused', duration: 0, error: '' });
+    if (playing && this.state.page) await this.play();
+  }
   async mode(dramatic: boolean) {
     const b = this.state.bookmark;
     if (!b) return;
@@ -178,15 +186,17 @@ export class BookEngine {
     else if (!playing && this.state.status === 'playing') { this.patch({ status: 'paused' }); this.checkpoint(); }
     if (this.state.status === 'playing' && Date.now() - this.lastSaved > 5000) this.checkpoint();
   }
-  checkpoint() {
+  checkpoint(localOnly = false) {
     const b = this.state.bookmark;
     if (!b || this.disposed) return;
     this.lastSaved = Date.now();
     const snapshot = { ...b, savedAt: this.lastSaved };
+    if (localOnly) return this.deps.save(snapshot, true).catch((error) => { this.patch({ syncError: error instanceof Error ? error.message : '本机进度保存失败' }); });
     this.saveQueue = this.saveQueue.then(async () => {
       try { await this.deps.save(snapshot); this.patch({ syncError: '' }); }
       catch (error) { this.patch({ syncError: error instanceof Error ? error.message : '进度同步失败' }); }
     });
+    return this.saveQueue;
   }
   flush() { return this.saveQueue; }
   private fail(error: unknown) { this.deps.player.pause(); this.transition = false; this.patch({ status: 'error', error: error instanceof Error ? error.message : '听书暂时不可用' }); this.checkpoint(); }

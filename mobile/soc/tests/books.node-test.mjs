@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
-import { splitBookText, annotatePassages, restoreBookmark } from '../src/books/model.ts';
+import { splitBookText, annotatePassages, restoreBookmark, isSpeakable, legacyPassageIndices } from '../src/books/model.ts';
 import { BookEngine } from '../src/books/engine.ts';
 
 const page = (number = 1) => ({ page: number, total: 2, signature: 'book-a', passages: ['第一句。', '第二句！', '第三句？'].map((text) => ({ text, speaker: '旁白', voice: 'Cherry', tone: 'neutral' })) });
@@ -23,6 +23,58 @@ test('book segmentation preserves every non-whitespace character, including Mark
   assert.equal(chunks.join('').replace(/\s/gu, ''), text.replace(/\s/gu, ''));
   assert.ok(chunks.every((chunk) => Array.from(chunk.trim()).length <= 240));
   assert.ok(chunks.some((chunk) => chunk.includes('*轻声说*')));
+});
+
+test('closing quotes and punctuation-only paragraphs never become TTS jobs', () => {
+  const source = '“好，你还好吗？\n”\n你还好吗？\n她不知道。\n她站在那里，拿着电话。\n“喂，喂，你听到了吗？\n”';
+  const texts = splitBookText(source);
+  assert.ok(texts.every(isSpeakable));
+  assert.equal(texts.join('').replace(/\s/gu, ''), source.replace(/\s/gu, ''));
+  assert.ok(texts[0].includes('”'));
+  assert.deepEqual(splitBookText('”\n……！？'), []);
+  for (const text of ['中'.repeat(240) + '。', '中'.repeat(240) + '\n”']) {
+    const parts = splitBookText(text);
+    assert.ok(parts.every((part) => Array.from(part.trim()).length <= 240));
+    assert.ok(parts.every(isSpeakable)); assert.equal(parts.join(''), text);
+  }
+  const current = { ...page(), passages: texts.map((text) => ({ text, speaker: '旁白', voice: 'Cherry', tone: 'neutral' })), legacyIndices: legacyPassageIndices(source, texts) };
+  const restored = restoreBookmark({ version: 1, signature: 'book-a', page: 1, passage: 2, seconds: 3 }, current);
+  assert.equal(restored.passage, 1); assert.equal(restored.seconds, 0);
+  const next = restoreBookmark({ ...restored, seconds: 4 }, current);
+  assert.equal(next.passage, 1); assert.equal(next.seconds, 4);
+});
+
+test('an old punctuation-only checkpoint is advanced without sending punctuation to TTS', async () => {
+  const requests = [];
+  const p = page(); p.passages[0].text = '”';
+  const { engine } = fixture({ page: async () => p, audio: async (_, i) => { requests.push(i); return `${i}.wav`; } });
+  await engine.open(); await engine.play();
+  assert.equal(engine.getState().bookmark.passage, 1);
+  assert.ok(!requests.includes(0)); engine.dispose();
+});
+
+test('hot voice changes discard current and prefetched audio, preserve position, and cancel stale loads', async () => {
+  let voice = 'Cherry';
+  const pending = deferred();
+  const { engine, played, removed } = fixture({ audio: async (_, i) => i === 0 && voice === 'Cherry' ? pending.promise : `${voice}-${i}.wav` });
+  await engine.open(); const old = engine.play();
+  voice = 'Ryan'; await engine.refreshAudio(); pending.resolve('old-Cherry.wav'); await old;
+  assert.equal(engine.getState().status, 'playing');
+  assert.equal(played[0].uri, 'Ryan-0.wav');
+  assert.ok(removed.includes('old-Cherry.wav'));
+  engine.tick(3, 10, true, false); voice = 'Serena'; await engine.refreshAudio();
+  assert.equal(played.at(-1).uri, 'Serena-0.wav'); assert.equal(played.at(-1).seconds, 3);
+  engine.pause(); voice = 'Ethan'; await engine.refreshAudio();
+  assert.equal(engine.getState().status, 'paused'); engine.dispose();
+});
+
+test('local-only pause checkpoints without waiting for a blocked remote save queue', async () => {
+  const remote = deferred(); const local = [];
+  const { engine } = fixture({ save: async (b, localOnly) => { if (localOnly) local.push(b); else await remote.promise; } });
+  await engine.open(); await engine.play(); engine.tick(3, 10, true, false);
+  await engine.pause(true);
+  assert.equal(local.at(-1).seconds, 3);
+  remote.resolve(); await engine.flush(); engine.dispose();
 });
 
 test('LLM text cannot change narration; duplicate/missing indices fall back to original text', () => {

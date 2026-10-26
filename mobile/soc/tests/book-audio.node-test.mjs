@@ -53,3 +53,13 @@ test('pause during preparation prevents late native seeking and activation', asy
   f.audio.rate(2.12); assert.deepEqual(f.events.at(-1), ['rate', 2]);
   f.audio.release();
 });
+
+test('delayed replace pauses cannot stop a new source before its first playing event', async () => {
+  const f = setup(); await f.audio.load('book.wav', 2, 1); f.audio.play();
+  f.emit({ currentTime: 0, duration: 12, playing: true, didJustFinish: false });
+  f.emit({ currentTime: 2, duration: 12, playing: false, didJustFinish: false });
+  assert.equal(f.status.length, 1);
+  f.emit({ currentTime: 2.2, duration: 12, playing: true, didJustFinish: false });
+  f.emit({ currentTime: 3, duration: 12, playing: false, didJustFinish: false });
+  assert.deepEqual(f.status.map((s) => s.playing), [true, true, false]); f.audio.release();
+});

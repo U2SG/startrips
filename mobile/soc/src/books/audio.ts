@@ -19,6 +19,8 @@ export function createBookAudio(deps: {
   let subscription: { remove(): void } | null = null;
   let generation = 0;
   let released = false;
+  let loading = false;
+  let starting = false;
   const valid = (version: number) => !released && version === generation;
   const assertCurrent = (version: number) => { if (!valid(version)) throw new Error('音频加载已取消'); deps.guard(); };
   const rate = (value: number) => player?.setPlaybackRate(Math.max(0.1, Math.min(2, value)));
@@ -26,11 +28,16 @@ export function createBookAudio(deps: {
     async load(uri, seconds, speed) {
       const version = ++generation;
       assertCurrent(version);
+      loading = true; starting = false;
       if (!player) {
         const created = deps.create();
         player = created;
         subscription = created.addListener('playbackStatusUpdate', (status) => {
-          if (player === created && !released) deps.status(status);
+          if (player !== created || released || loading) return;
+          // replace/seek can deliver a delayed pause after play() was requested.
+          if (starting && !status.playing && !status.didJustFinish) return;
+          if ((status.playing && status.currentTime > 0.05) || status.didJustFinish) starting = false;
+          deps.status(status);
         });
       }
       const current = player;
@@ -46,9 +53,10 @@ export function createBookAudio(deps: {
       await current.seekTo(Math.max(0, Math.min(seconds, Math.max(0, current.duration - 0.1))));
       assertCurrent(version);
       current.setActiveForLockScreen(true, deps.metadata());
+      loading = false;
     },
-    play() { if (released) return; deps.guard(); player?.setActiveForLockScreen(true, deps.metadata()); player?.play(); },
-    pause() { ++generation; player?.pause(); },
+    play() { if (released) return; deps.guard(); starting = true; player?.setActiveForLockScreen(true, deps.metadata()); player?.play(); },
+    pause() { ++generation; loading = false; starting = false; player?.pause(); },
     async seek(seconds) { if (player && !released) await player.seekTo(seconds); },
     rate,
     release() {
