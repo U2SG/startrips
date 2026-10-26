@@ -32,7 +32,14 @@ export function splitBookText(text: string): string[] {
       else prefix += part;
     }
   }
-  return result;
+  // A standalone quote on the next line can also push a full chunk over the limit.
+  return result.flatMap((part) => {
+    const chars = Array.from(part);
+    if (chars.length <= 240) return [part];
+    let cut = 240;
+    while (cut > 0 && !isSpeakable(chars.slice(cut).join(''))) --cut;
+    return cut > 0 ? [chars.slice(0, cut).join(''), chars.slice(cut).join('')] : [part];
+  });
 }
 
 /** Map checkpoints written by the old splitter without replaying the whole page. */

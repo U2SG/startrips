@@ -16,7 +16,7 @@ import { resetShelf, shelf } from './offline';
 import { audioKey, pageKey, completePages, type DownloadedBook } from './offlineStore';
 import * as offlineFiles from './offlineFiles';
 
-export type ListeningBook = { worldId: string; textbook: data.TextbookEntry; engine: BookEngine; offline: boolean; download(start: number, end: number): Promise<void> };
+export type ListeningBook = { worldId: string; textbook: data.TextbookEntry; engine: BookEngine; offline: boolean; stopSync(): void; download(start: number, end: number): Promise<void> };
 type DownloadState = { active: boolean; page: number; end: number; done: number; total: number; error: string };
 let downloadState: DownloadState = { active: false, page: 0, end: 0, done: 0, total: 0, error: '' };
 let downloadController: AbortController | null = null;
@@ -46,8 +46,8 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
   if (active?.worldId === worldId && active.textbook.id === textbook.id && active.offline === !!downloaded) return active;
   const seq = ++opening;
   cancelDownload();
-  active?.engine.pause();
-  await active?.engine.flush();
+  if (downloaded) { active?.stopSync(); await active?.engine.pause(true); }
+  else { active?.engine.pause(); await active?.engine.flush(); }
   guard(); if (seq !== opening) return null;
   await loadVoices(); guard();
   const localShelf = shelf();
@@ -78,6 +78,8 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
   let ticker: ReturnType<typeof setInterval> | undefined;
   let serverSaved = 0;
   let syncConflict = false;
+  let allowRemote = !downloaded;
+  const syncController = new AbortController();
   const castPath = `${dir}/listening-cast.json`;
   const audio = createBookAudio({
     create: () => createAudioPlayer(null, { updateInterval: 250 }),
@@ -157,15 +159,16 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       }, 45000);
     },
     remove: (uri) => { offlineFiles.releaseAudio(uri); if (!uri.includes('/listening/')) removeAudio(uri); },
-    async save(next) {
+    async save(next, localOnly) {
       guard();
       await Storage.setItem(localKey, JSON.stringify(next));
       guard();
-      if (downloaded) return;
+      if (downloaded || localOnly || !allowRemote) return;
       if (syncConflict) throw new Error('另一台设备更新了进度，请重新打开教材；本机位置已保存');
       if (engine.getState().status === 'playing' && Date.now() - serverSaved < 15000) return;
-      try { await api.writeJson(progressPath, next); serverSaved = Date.now(); }
+      try { await api.writeJson(progressPath, next, syncController.signal); serverSaved = Date.now(); }
       catch (error) {
+        if (!allowRemote) return;
         if ((error as { status?: number }).status === 409) syncConflict = true;
         throw new Error('进度已保存在本机，服务器同步失败，请检查网络后重试');
       }
@@ -176,7 +179,7 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
     },
   });
   ticker = setInterval(() => engine.poll(), 1000);
-  active = { worldId, textbook, engine, offline: !!downloaded, async download(start, end) {
+  active = { worldId, textbook, engine, offline: !!downloaded, stopSync() { allowRemote = false; syncController.abort(); }, async download(start, end) {
     if (downloaded || downloadState.active) return;
     if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end > (engine.getState().page?.total || textbook.numPages)) throw new Error('请输入有效下载范围');
     const controller = new AbortController(); downloadController = controller;
@@ -191,7 +194,6 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
         const page = await loadPage(number, dramatic, signal);
         const book = await localShelf.ensure(worldId, textbook, dir, page.signature);
         const localPage = { ...page, passages: page.passages.map((p) => ({ ...p, voice: dramatic ? selected[p.speaker] || (p.speaker === '旁白' ? selected['旁白'] || p.voice : p.voice) : selected['旁白'] || 'Cherry' })) };
-        await localShelf.putPage(book, localPage, dramatic);
         updateDownload({ page: number, done: 0, total: localPage.passages.length });
         for (let index = 0; index < localPage.passages.length; index++) {
           guard(); if (signal.aborted) break;
@@ -205,6 +207,7 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
           }
           updateDownload({ done: index + 1 });
         }
+        if (!signal.aborted) await localShelf.putPage(book, localPage, dramatic);
       }
     } catch (error) {
       if (!signal.aborted) updateDownload({ error: error instanceof Error ? error.message : '下载失败，请重试' });

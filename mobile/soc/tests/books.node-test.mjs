@@ -32,6 +32,11 @@ test('closing quotes and punctuation-only paragraphs never become TTS jobs', () 
   assert.equal(texts.join('').replace(/\s/gu, ''), source.replace(/\s/gu, ''));
   assert.ok(texts[0].includes('”'));
   assert.deepEqual(splitBookText('”\n……！？'), []);
+  for (const text of ['中'.repeat(240) + '。', '中'.repeat(240) + '\n”']) {
+    const parts = splitBookText(text);
+    assert.ok(parts.every((part) => Array.from(part.trim()).length <= 240));
+    assert.ok(parts.every(isSpeakable)); assert.equal(parts.join(''), text);
+  }
   const current = { ...page(), passages: texts.map((text) => ({ text, speaker: '旁白', voice: 'Cherry', tone: 'neutral' })), legacyIndices: legacyPassageIndices(source, texts) };
   const restored = restoreBookmark({ version: 1, signature: 'book-a', page: 1, passage: 2, seconds: 3 }, current);
   assert.equal(restored.passage, 1); assert.equal(restored.seconds, 0);
@@ -61,6 +66,15 @@ test('hot voice changes discard current and prefetched audio, preserve position,
   assert.equal(played.at(-1).uri, 'Serena-0.wav'); assert.equal(played.at(-1).seconds, 3);
   engine.pause(); voice = 'Ethan'; await engine.refreshAudio();
   assert.equal(engine.getState().status, 'paused'); engine.dispose();
+});
+
+test('local-only pause checkpoints without waiting for a blocked remote save queue', async () => {
+  const remote = deferred(); const local = [];
+  const { engine } = fixture({ save: async (b, localOnly) => { if (localOnly) local.push(b); else await remote.promise; } });
+  await engine.open(); await engine.play(); engine.tick(3, 10, true, false);
+  await engine.pause(true);
+  assert.equal(local.at(-1).seconds, 3);
+  remote.resolve(); await engine.flush(); engine.dispose();
 });
 
 test('LLM text cannot change narration; duplicate/missing indices fall back to original text', () => {

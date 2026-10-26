@@ -47,6 +47,7 @@ export class OfflineShelf {
   }
   async putPage(book: DownloadedBook, page: BookPage, dramatic: boolean) {
     if (page.signature !== book.signature) throw new Error('教材已更新，下载已停止');
+    if (!page.passages.every((passage, index) => book.audio[audioKey(page, index, passage.voice)])) throw new Error('本页语音尚未下载完整');
     await this.commit(() => { book.pages[pageKey(page.page, dramatic)] = page; });
   }
   async putAudio(book: DownloadedBook, key: string, url: string, signal: AbortSignal) {

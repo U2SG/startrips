@@ -11,7 +11,7 @@ export type BookDependencies = {
   page(number: number, dramatic: boolean, signal: AbortSignal): Promise<BookPage>;
   audio(page: BookPage, index: number, signal: AbortSignal): Promise<string | null>;
   remove(uri: string): void;
-  save(bookmark: Bookmark): Promise<void>;
+  save(bookmark: Bookmark, localOnly?: boolean): Promise<void>;
   focus(): void;
   player: BookAudio;
 };
@@ -110,14 +110,14 @@ export class BookEngine {
       }
     } catch (error) { this.jobs.delete(key); if (this.current(seq)) this.fail(error); }
   }
-  pause() {
+  pause(localOnly = false) {
     if (this.disposed) return;
     // Cancel preparation too: a paused pending request must never start playing later.
     const loading = this.state.status === 'loading';
     this.invalidate();
     for (const key of this.jobs.keys()) if (!this.ready.has(key)) this.jobs.delete(key);
     if (loading) this.clearBuffer();
-    this.patch({ status: 'paused' }); this.checkpoint();
+    this.patch({ status: 'paused' }); return this.checkpoint(localOnly);
   }
   async next(delta: number) {
     const { page, bookmark: b } = this.state;
@@ -186,15 +186,17 @@ export class BookEngine {
     else if (!playing && this.state.status === 'playing') { this.patch({ status: 'paused' }); this.checkpoint(); }
     if (this.state.status === 'playing' && Date.now() - this.lastSaved > 5000) this.checkpoint();
   }
-  checkpoint() {
+  checkpoint(localOnly = false) {
     const b = this.state.bookmark;
     if (!b || this.disposed) return;
     this.lastSaved = Date.now();
     const snapshot = { ...b, savedAt: this.lastSaved };
+    if (localOnly) return this.deps.save(snapshot, true).catch((error) => { this.patch({ syncError: error instanceof Error ? error.message : '本机进度保存失败' }); });
     this.saveQueue = this.saveQueue.then(async () => {
       try { await this.deps.save(snapshot); this.patch({ syncError: '' }); }
       catch (error) { this.patch({ syncError: error instanceof Error ? error.message : '进度同步失败' }); }
     });
+    return this.saveQueue;
   }
   flush() { return this.saveQueue; }
   private fail(error: unknown) { this.deps.player.pause(); this.transition = false; this.patch({ status: 'error', error: error instanceof Error ? error.message : '听书暂时不可用' }); this.checkpoint(); }
