@@ -93,7 +93,7 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
         if (!page) throw new Error(`第 ${number} 页尚未下载，请联网下载后再听`);
         return page;
       }
-      const result = await api.extractPdf(path, number, number, true);
+      const result = await api.extractPdf(path, number, number, true, signal);
       guard(); if (signal.aborted) throw new Error('已取消');
       if (number > result.numPages) throw new Error(`教材共 ${result.numPages} 页，请重新选择页码`);
       const source = result.pages[0]?.text || '';

@@ -19,8 +19,14 @@ export function splitBookText(text: string): string[] {
       continue;
     }
     const chars = Array.from(prefix + piece); prefix = '';
-    for (let i = 0; i < chars.length; i += 240) {
-      const part = chars.slice(i, i + 240).join('');
+    for (let i = 0; i < chars.length;) {
+      let end = Math.min(i + 240, chars.length);
+      // Reserve a spoken character for a trailing punctuation tail at the limit.
+      if (end < chars.length && !isSpeakable(chars.slice(end).join(''))) {
+        while (end > i && !isSpeakable(chars.slice(end).join(''))) --end;
+        if (end === i) end = Math.min(i + 240, chars.length);
+      }
+      const part = chars.slice(i, end).join(''); i = end;
       if (isSpeakable(part)) result.push(part);
       else if (result.length) result[result.length - 1] += part;
       else prefix += part;

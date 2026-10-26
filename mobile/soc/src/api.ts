@@ -103,8 +103,8 @@ export async function append(path: string, content: string): Promise<void> {
     await response.text();
   });
 }
-export async function extractPdf(path: string, start: number, end: number, withSignature = false): Promise<{ numPages: number; pages: { page: number; text: string }[]; sourceSig?: string }> {
-  return request(`${fileUrl('/extract', path)}&start=${start}&end=${end}${withSignature ? '&signature=1' : ''}`);
+export async function extractPdf(path: string, start: number, end: number, withSignature = false, signal?: AbortSignal): Promise<{ numPages: number; pages: { page: number; text: string }[]; sourceSig?: string }> {
+  return request(`${fileUrl('/extract', path)}&start=${start}&end=${end}${withSignature ? '&signature=1' : ''}`, { signal });
 }
 export async function studyJson<T>(endpoint: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   return request(endpoint, body === undefined ? { signal } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
